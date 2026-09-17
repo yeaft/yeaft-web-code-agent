@@ -47,15 +47,17 @@ export default {
   props: {
     modelValue: { type: String, default: '' },
     min: { type: String, default: '' },
+    today: { type: String, default: '' },
     max: { type: String, default: '' },
     disabled: { type: Boolean, default: false },
     ariaLabel: { type: String, default: '' },
   },
   emits: ['update:modelValue'],
   data() {
-    return { open: false, focusedDate: '', visibleMonth: '', todayDate: localToday(), pickerId: `schedule-date-picker-${++pickerId}` };
+    return { open: false, focusedDate: '', visibleMonth: '', localTodayDate: localToday(), pickerId: `schedule-date-picker-${++pickerId}` };
   },
   computed: {
+    todayDate() { return dateFromISO(this.today) ? this.today : this.localTodayDate; },
     locale() {
       // createI18n exposes a reactive $locale ref; support older host aliases too.
       const value = ('$locale' in this ? this.$locale : null) ?? ('$i18nLocale' in this ? this.$i18nLocale : null);
@@ -117,7 +119,7 @@ export default {
     isAllowed(value) { return !this.disabled && !this.emptyRange && value >= this.lowerBound && value <= this.upperBound; },
     clamp(value) { return value < this.lowerBound ? this.lowerBound : value > this.upperBound ? this.upperBound : value; },
     resetView() {
-      this.todayDate = localToday();
+      this.localTodayDate = localToday();
       this.focusedDate = this.clamp(dateFromISO(this.modelValue) ? this.modelValue : this.todayDate);
       this.visibleMonth = this.focusedDate.slice(0, 7);
     },

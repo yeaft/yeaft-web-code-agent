@@ -101,6 +101,17 @@ describe('ScheduleDatePicker', () => {
     expect(wrapper.emitted('update:modelValue')).toBeUndefined();
   });
 
+  it('uses the caller time zone Today for highlighting and selection', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2024, 1, 28, 12));
+    const wrapper = mountPicker({ modelValue: '2024-02-29', min: '2024-02-29', today: '2024-02-29' });
+    await open(wrapper);
+    expect(day(wrapper, '2024-02-29').attributes('aria-current')).toBe('date');
+    expect(wrapper.get('.schedule-date-picker__today').element.disabled).toBe(false);
+    await wrapper.get('.schedule-date-picker__today').trigger('click');
+    expect(wrapper.emitted('update:modelValue')).toEqual([['2024-02-29']]);
+  });
+
   it('uses local Today and handles empty, invalid and externally updated dates', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2024, 1, 29, 12));

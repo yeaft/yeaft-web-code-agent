@@ -14,6 +14,8 @@ import ModernSelect from './ModernSelect.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import PaneResizeHandle from './PaneResizeHandle.js';
 import WorkCenterSidebar from './WorkCenterSidebar.js';
+import WorkCenterScheduleEditor from './WorkCenterScheduleEditor.js';
+import { scheduleDraft, scheduleFormResult } from '../utils/work-center-schedule.js';
 import { createWorkCenterWorkbenchContext, workCenterOutputTarget } from '../utils/work-center-workbench.js';
 import folderPickerMixin from './mixins/folder-picker-mixin.js';
 import { normalizeSessionMessageQuote } from '../utils/session-message-quote.js';
@@ -42,7 +44,7 @@ export default {
   name: 'WorkCenterPage',
   components: { FolderPickerDialog, NavigationIcon,
     MessageComposer, UserTurnBlock, VpTurnBlock, WorkCenterActionDetail, WorkCenterActionReference,
-    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle, WorkCenterSidebar,
+    WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle, WorkCenterSidebar, WorkCenterScheduleEditor,
   },
   mixins: [folderPickerMixin],
   data() {
@@ -75,6 +77,10 @@ export default {
       createOpen: false,
       settingsOpen: false,
       saving: false,
+      createError: '',
+      scheduleSaving: false,
+      scheduleDraftStarted: false,
+      scheduleError: '',
       createGeneration: 0,
       llmConfigOpen: false,
       agentSettingsOpen: false,
@@ -109,7 +115,7 @@ export default {
         reuseMemory: true,
         start: true,
         scheduled: false,
-        scheduleAt: '',
+        scheduleDraft: scheduleDraft(),
       },
     };
   },
@@ -170,6 +176,9 @@ export default {
     boardLoadingMore() { return !!this.store.workCenterListMoreLoadingByAgent[this.agentId]; },
     settings() { return this.store.workCenterSettingsByAgent[this.agentId] || null; },
     runtime() { return this.store.workCenterRuntimeByAgent[this.agentId] || null; },
+    recurringSchedulesSupported() { return this.runtime?.recurringSchedules === true; },
+    createScheduleResult() { return this.form.scheduled ? scheduleFormResult(this.form.scheduleDraft, this.actionNowMs) : {}; },
+    executionMode() { return this.form.scheduled ? 'scheduled' : this.form.start ? 'now' : 'draft'; },
     workItemTypes() { return Array.isArray(this.runtime?.workItemTypes) ? this.runtime.workItemTypes : []; },
     workItemAttachmentsSupported() {
       const agent = this.agents.find(candidate => candidate?.id === this.agentId);
@@ -424,7 +433,7 @@ export default {
       ));
     },
     coordinatorReadOnly() {
-      return ['done', 'cancelled'].includes(this.selected?.status);
+      return !!this.selected?.schedule?.recurrence || ['done', 'cancelled'].includes(this.selected?.status);
     },
     actionMessages() {
       const current = Array.isArray(this.selectedAction?.messages) ? this.selectedAction.messages : [];
@@ -492,7 +501,7 @@ export default {
     },
   },
   watch: {
-    selectedId() { this.infoTab = 'requirement'; },
+    selectedId() { this.infoTab = 'requirement'; this.scheduleError = ''; },
     'workbenchContext.workspaceGeneration'() { this.workbenchExpanded = false; },
     agents: {
       immediate: true,
@@ -1258,6 +1267,10 @@ export default {
       }
       this.form.workDir = '';
       this.form.start = true;
+      this.form.scheduled = false;
+      this.form.scheduleDraft = scheduleDraft();
+      this.scheduleDraftStarted = false;
+      this.createError = '';
       this.workDirTouched = false;
       this.startTouched = false;
       if (hadUserExecutionInput) this.createOpen = false;
@@ -1278,27 +1291,41 @@ export default {
     onCreateWorkDirInput() {
       this.workDirTouched = true;
     },
-    onCreateStartInput() {
+    setExecutionMode(mode) {
+      if (mode === 'scheduled' && !this.scheduleDraftStarted) {
+        this.form.scheduleDraft = scheduleDraft();
+        this.scheduleDraftStarted = true;
+      }
+      this.form.scheduled = mode === 'scheduled';
+      this.form.start = mode === 'now';
       this.startTouched = true;
     },
-    onCreateScheduledInput() {
-      if (!this.form.scheduled) return;
-      this.form.start = false;
-      this.startTouched = true;
-      if (!this.form.scheduleAt) {
-        const defaultTime = new Date(Date.now() + 60 * 60 * 1000);
-        defaultTime.setSeconds(0, 0);
-        const local = new Date(defaultTime.getTime() - defaultTime.getTimezoneOffset() * 60 * 1000);
-        this.form.scheduleAt = local.toISOString().slice(0, 16);
+    scheduleStatusLabel(schedule) {
+      return this.$t('workCenter.scheduling.status.' + (schedule?.status || 'scheduled'));
+    },
+    scheduleSummary(schedule) {
+      if (!schedule) return '';
+      const parts = [this.scheduleStatusLabel(schedule)];
+      if (schedule.recurrence) parts.push(this.$t('workCenter.scheduling.' + schedule.recurrence.frequency));
+      if (schedule.scheduledFor && !['completed', 'cancelled'].includes(schedule.status)) {
+        const timeZone = schedule.recurrence?.timeZone;
+        parts.push(new Intl.DateTimeFormat(this.$locale?.value || this.$locale || 'en', { timeZone, dateStyle: 'medium', timeStyle: 'short', hour12: false }).format(schedule.scheduledFor));
+        if (timeZone) parts.push(timeZone.replaceAll('_', ' '));
       }
+      return parts.join(' · ');
     },
     async setSelectedScheduleEnabled(enabled) {
       const schedule = this.selected?.schedule;
-      if (!this.selected || !schedule || this.selected.status !== 'draft') return;
-      await this.store.updateWorkItemSchedule(this.selected.id, {
-        scheduledFor: schedule.scheduledFor,
-        enabled,
-      }, this.agentId);
+      if (!this.selected || !schedule || this.selected.status !== 'draft' || this.scheduleSaving) return;
+      const agentId = this.agentId;
+      const id = this.selected.id;
+      this.scheduleSaving = true;
+      this.scheduleError = '';
+      try {
+        await this.store.updateWorkItemSchedule(id, { enabled, revision: this.selected.revision }, agentId);
+      } catch (error) {
+        if (this.agentId === agentId && this.selectedId === id) this.scheduleError = error?.message || String(error);
+      } finally { this.scheduleSaving = false; }
     },
     clipboardFiles(event) {
       return Array.from(event?.clipboardData?.items || [])
@@ -1522,11 +1549,15 @@ export default {
       this.createOpen = false;
       this.createAttachments = [];
       this.createAttachmentError = '';
+      this.createError = '';
       this.store.workCenterCreateDraft = null;
     },
     async submitCreate() {
       const requirement = String(this.form.requirement || this.form.goal || this.form.title || '').trim();
       if (!requirement || !this.form.workDir.trim()) return;
+      const schedule = this.form.scheduled ? scheduleFormResult(this.form.scheduleDraft) : {};
+      if (schedule.error || (schedule.recurrence && !this.recurringSchedulesSupported)) return;
+      this.createError = '';
       const requestAgentId = this.agentId;
       const requestGeneration = (Number(this.createGeneration) || 0) + 1;
       this.createGeneration = requestGeneration;
@@ -1556,7 +1587,8 @@ export default {
             : [],
           reuseMemory: this.form.reuseMemory,
           start: this.form.scheduled ? false : this.form.start,
-          scheduledFor: this.form.scheduled ? new Date(this.form.scheduleAt).getTime() : null,
+          scheduledFor: schedule.scheduledFor || null,
+          recurrence: schedule.recurrence || null,
         }, requestAgentId);
         if (this.agentId !== requestAgentId || this.createGeneration !== requestGeneration) return;
         this.openWorkItem(detail.id);
@@ -1567,13 +1599,16 @@ export default {
           reuseMemory: true,
           start: this.settings?.startImmediately !== false,
           scheduled: false,
-          scheduleAt: '',
+          scheduleDraft: scheduleDraft(),
         };
         this.store.workCenterCreateDraft = null;
         this.createAttachments = [];
         this.workDirTouched = false;
         this.startTouched = false;
+        this.scheduleDraftStarted = false;
         this.createOpen = false;
+      } catch (error) {
+        if (this.agentId === requestAgentId && this.createGeneration === requestGeneration) this.createError = error?.message || String(error);
       } finally {
         if (this.agentId === requestAgentId && this.createGeneration === requestGeneration) {
           this.saving = false;
@@ -1763,11 +1798,11 @@ export default {
               </div>
               <div class="work-center-header-actions">
                 <template v-if="narrowPane !== 'items' && selected">
-                  <button v-if="selected.status === 'draft'" class="work-center-icon-button" type="button" @click="startSelected"
+                  <button v-if="selected.status === 'draft' && !selected.schedule?.recurrence" class="work-center-icon-button" type="button" @click="startSelected"
                     :title="tr('workCenter.start', 'Start')" :aria-label="tr('workCenter.start', 'Start')">
                     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m8 5 11 7-11 7V5Z"/></svg>
                   </button>
-                  <button v-else-if="selected.status === 'cancelled' && !selected.executionControl" class="work-center-icon-button work-center-resume-action" type="button" @click="resumeSelected"
+                  <button v-else-if="selected.status === 'cancelled' && !selected.executionControl && !selected.schedule?.recurrence" class="work-center-icon-button work-center-resume-action" type="button" @click="resumeSelected"
                     :title="tr('workCenter.resumeWorkItem', 'Resume work item')" :aria-label="tr('workCenter.resumeWorkItem', 'Resume work item')">
                     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6a6 6 0 0 1-9.81 4.62l-1.42 1.42A8 8 0 1 0 12 5Z"/></svg>
                   </button>
@@ -1900,7 +1935,7 @@ export default {
                         {{ boardAction(item).objective || actionLabel(boardAction(item).type) }}
                       </span>
                       <span v-if="item.schedule" class="work-center-card-current-action">
-                        {{ item.schedule.status === 'scheduled' ? tr('workCenter.scheduleRunsAt', 'Scheduled for') : item.schedule.status === 'paused' ? tr('workCenter.schedulePaused', 'Schedule paused') : tr('workCenter.scheduleTriggered', 'Schedule triggered') }} {{ time(item.schedule.scheduledFor) }}
+                        {{ scheduleSummary(item.schedule) }}
                       </span>
                       <span v-else-if="item.goal && item.goal !== item.title" class="work-center-card-goal">{{ item.goal }}</span>
                       <span class="work-center-card-meta">
@@ -1989,13 +2024,17 @@ export default {
                             <div v-if="selected.workDir" class="work-center-meta-wide"><dt>{{ tr('workCenter.workDir', 'Working directory') }}</dt><dd :title="selected.workDir">{{ selected.workDir }}</dd></div>
                             <div><dt>{{ tr('workCenter.created', 'Created') }}</dt><dd>{{ time(selected.createdAt) || '—' }}</dd></div>
                             <div><dt>{{ tr('workCenter.updated', 'Updated') }}</dt><dd>{{ time(selected.updatedAt) || '—' }}</dd></div>
-                            <div v-if="selected.schedule"><dt>{{ tr('workCenter.schedule', 'Schedule') }}</dt><dd>{{ time(selected.schedule.scheduledFor) }}</dd></div>
-                            <div v-if="selected.schedule"><dt>{{ tr('workCenter.scheduleStatus', 'Schedule status') }}</dt><dd>{{ selected.schedule.status === 'scheduled' ? tr('workCenter.scheduleEnabled', 'Enabled') : selected.schedule.status === 'paused' ? tr('workCenter.scheduleDisabled', 'Disabled') : tr('workCenter.scheduleTriggered', 'Triggered') }}</dd></div>
+                            <div v-if="selected.schedule"><dt>{{ tr('workCenter.schedule', 'Schedule') }}</dt><dd>{{ scheduleSummary(selected.schedule) }}</dd></div>
+                            <div v-if="selected.schedule"><dt>{{ tr('workCenter.scheduleStatus', 'Schedule status') }}</dt><dd>{{ scheduleStatusLabel(selected.schedule) }}</dd></div>
                             <div v-if="!selected.workItemType && selected.planningMode === 'ai'"><dt>{{ tr('workCenter.workItemType', 'Type') }}</dt><dd>{{ tr('workCenter.planning', 'Planning') }}</dd></div>
                           </dl>
-                          <div v-if="selected.schedule && selected.status === 'draft'" class="work-center-usage-summary work-center-detail-usage">
-                            <button v-if="selected.schedule.status === 'scheduled'" class="btn-secondary" type="button" @click="setSelectedScheduleEnabled(false)">{{ tr('workCenter.disableSchedule', 'Disable schedule') }}</button>
-                            <button v-else class="btn-secondary" type="button" @click="setSelectedScheduleEnabled(true)">{{ tr('workCenter.enableSchedule', 'Enable schedule') }}</button>
+                          <p v-if="selected.schedule?.recurrence" class="work-center-field-help">{{ $t('workCenter.scheduling.executions', { count: selected.schedule.runCount || 0 }) }}</p>
+                          <button v-if="selected.schedule?.lastWorkItemId" class="btn-ghost" type="button" @click="openWorkItem(selected.schedule.lastWorkItemId)">{{ $t('workCenter.scheduling.lastExecution') }}</button>
+                          <button v-if="selected.sourceScheduleId" class="btn-ghost" type="button" @click="openWorkItem(selected.sourceScheduleId)">{{ $t('workCenter.scheduling.sourcePlan') }}</button>
+                          <p v-if="scheduleError" class="work-center-error" role="alert">{{ scheduleError }}</p>
+                          <div v-if="selected.schedule && selected.status === 'draft' && ['scheduled', 'paused'].includes(selected.schedule.status)" class="work-center-usage-summary work-center-detail-usage">
+                            <button v-if="selected.schedule.status === 'scheduled'" class="btn-secondary" type="button" :disabled="scheduleSaving || !agentId" @click="setSelectedScheduleEnabled(false)">{{ $t('workCenter.scheduling.pause') }}</button>
+                            <button v-else class="btn-secondary" type="button" :disabled="scheduleSaving || !agentId" @click="setSelectedScheduleEnabled(true)">{{ $t('workCenter.scheduling.resume') }}</button>
                           </div>
                         </div>
                         <div v-show="infoTab === 'progress'" id="work-item-info-panel-progress" class="work-center-info-panel" role="tabpanel" aria-labelledby="work-item-info-tab-progress" tabindex="0">
@@ -2167,7 +2206,7 @@ export default {
                             </label>
                             <button type="button" class="btn-ghost" @click="discardPendingMessageEnvelope">{{ tr('workCenter.discardPendingEnvelope', 'Discard pending request') }}</button>
                           </div>
-                          <p v-if="coordinatorReadOnly" class="work-center-conversation-readonly">{{ tr('workCenter.conversationReadOnly', 'This work item is closed. The conversation remains available.') }}</p>
+                          <p v-if="coordinatorReadOnly" class="work-center-conversation-readonly">{{ selected.schedule?.recurrence ? $t('workCenter.scheduling.planHint') : tr('workCenter.conversationReadOnly', 'This work item is closed. The conversation remains available.') }}</p>
                           <template v-else>
                             <p v-if="composerTargetIsStale" class="work-center-error work-center-stale-target" role="alert">
                               {{ tr('workCenter.targetUnavailableHelp', 'Choose another target before sending. This draft was not redirected.') }}
@@ -2361,10 +2400,15 @@ export default {
               <div class="work-center-create-options">
                 <label><span>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</span><select v-model="form.deliveryTarget"><option value="">{{ tr('workCenter.deliveryTargetAsk', 'Ask me before delivery') }}</option><option value="response">{{ tr('workCenter.deliveryTargetResponse', 'Response') }}</option><option value="workspace_files">{{ tr('workCenter.deliveryTargetFiles', 'Workspace files') }}</option><option value="pull_request">{{ tr('workCenter.deliveryTargetPr', 'Open a pull request') }}</option><option value="merge">{{ tr('workCenter.deliveryTargetMerge', 'Merge an approved pull request') }}</option></select><small class="work-center-field-help">{{ tr('workCenter.deliveryTargetHelp', 'This is the completion boundary, not permission to bypass review or merge policy.') }}</small></label>
                 <label class="work-center-checkbox"><input v-model="form.reuseMemory" type="checkbox"><span><strong>{{ tr('workCenter.reuseMemory', 'Use relevant Agent memory and completed work from this project') }}</strong><small>{{ tr('workCenter.reuseMemoryHelp', 'Uses scope-bounded Agent memory and structured results from completed WorkItems in the same project.') }}</small></span></label>
-                <label class="work-center-checkbox"><input v-model="form.scheduled" type="checkbox" @change="onCreateScheduledInput"><span><strong>{{ tr('workCenter.scheduleWorkItem', 'Schedule this work item') }}</strong><small>{{ tr('workCenter.scheduleWorkItemHint', 'Keep it as a persisted draft and start it once at the selected local time.') }}</small></span></label>
-                <label v-if="form.scheduled"><span>{{ tr('workCenter.scheduleAt', 'Start at') }}</span><input v-model="form.scheduleAt" type="datetime-local" required></label>
-                <label class="work-center-checkbox"><input v-model="form.start" type="checkbox" :disabled="form.scheduled" @change="onCreateStartInput"><span><strong>{{ tr('workCenter.startImmediately', 'Start immediately') }}</strong><small>{{ tr('workCenter.startImmediatelyHint', 'Turn this off to create a draft you can review first.') }}</small></span></label>
               </div>
+            </section>
+            <section class="work-center-form-section work-center-scheduling-section">
+              <div class="work-center-form-section-heading"><h3>{{ $t('workCenter.scheduling.heading') }}</h3></div>
+              <div class="work-center-execution-modes" role="group" :aria-label="$t('workCenter.scheduling.heading')">
+                <button v-for="mode in ['now', 'draft', 'scheduled']" :key="mode" type="button" class="btn-secondary" :aria-pressed="executionMode === mode" :disabled="saving" @click="setExecutionMode(mode)">{{ $t('workCenter.scheduling.mode.' + mode) }}</button>
+              </div>
+              <WorkCenterScheduleEditor v-if="form.scheduled" v-model="form.scheduleDraft" :disabled="saving" :recurring-supported="recurringSchedulesSupported" />
+              <p v-else class="work-center-field-help">{{ $t('workCenter.scheduling.modeHint.' + executionMode) }}</p>
             </section>
             <section class="work-center-plan-preview">
               <div class="work-center-plan-preview-heading">
@@ -2373,10 +2417,11 @@ export default {
               </div>
             </section>
           </div>
+          <p v-if="createError" class="work-center-error work-center-create-error" role="alert">{{ createError }}</p>
           <footer class="work-center-modal-footer">
             <button class="btn-secondary" type="button" @click="closeCreate">{{ tr('common.cancel', 'Cancel') }}</button>
-            <button class="btn-primary" type="submit" :disabled="saving || attachmentsUploading || !form.requirement.trim() || !form.workDir.trim() || (form.scheduled && !form.scheduleAt)">
-              {{ saving ? tr('workCenter.creating', 'Creating…') : tr('workCenter.create', 'Create') }}
+            <button class="btn-primary" type="submit" :disabled="saving || attachmentsUploading || !form.requirement.trim() || !form.workDir.trim() || !!createScheduleResult.error || (form.scheduled && form.scheduleDraft.frequency !== 'once' && !recurringSchedulesSupported)">
+              {{ saving ? tr('workCenter.creating', 'Creating…') : form.scheduled ? $t('workCenter.scheduling.create') : tr('workCenter.create', 'Create') }}
             </button>
           </footer>
 

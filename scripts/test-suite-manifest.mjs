@@ -67,6 +67,8 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/work-center/capabilities.test.js',
   'test/agent/yeaft/work-center/goal-control-integration.test.js',
   'test/web/work-center-general-settings.test.js',
+  'test/web/work-center-schedule.test.js',
+  'test/web/schedule-date-picker.test.js',
   'test/web/work-center-activity-store.test.js',
   'test/web/work-center-user-input.test.js',
   'test/web/work-center-workbench.test.js',
