@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { scheduleFormResult, wallTimeToEpoch, validDate, normalizeScheduleTime, scheduleDateBounds } from '../../web/utils/work-center-schedule.js';
 
+import { mergeWorkItemSummary, applyWorkItemSummary } from '../../web/stores/helpers/work-center.js';
+
 const now = Date.parse('2026-09-17T00:00:00Z');
 const draft = overrides => ({ date: '2026-09-18', time: '09:30', timeZone: 'Asia/Shanghai', frequency: 'once', weekdays: [1, 3], dayOfMonth: 31, end: 'never', maxRuns: 10, ...overrides });
 
 describe('Work Center schedule form projection', () => {
+  it('projects real-time schedule failure and clearing into open detail with stale-event fences', () => {
+    const current = { id: 'plan', revision: 1, updatedAt: 100, status: 'draft', actions: [],
+      schedule: { status: 'scheduled', lastError: null, runCount: 0 } };
+    const failure = { ...current, actions: undefined, actionStats: [], revision: 2, updatedAt: 101,
+      schedule: { ...current.schedule, lastError: { code: 'schedule_dispatch_failed', at: 101 } } };
+    const failed = mergeWorkItemSummary(current, failure);
+    expect(failed.schedule.lastError).toEqual(failure.schedule.lastError);
+    expect(applyWorkItemSummary([current], failure)[0].schedule).toEqual(failed.schedule);
+    const cleared = mergeWorkItemSummary(failed, { ...failure, revision: 3, updatedAt: 102,
+      schedule: { ...failure.schedule, lastError: null, runCount: 1, lastWorkItemId: 'run' } });
+    expect(cleared.schedule.lastError).toBeNull();
+    expect(cleared.schedule.runCount).toBe(1);
+    expect(mergeWorkItemSummary(cleared, failure).schedule).toEqual(cleared.schedule);
+    expect(mergeWorkItemSummary(cleared, { id: 'plan', revision: 4, updatedAt: 103 }).schedule).toEqual(cleared.schedule);
+  });
   it('normalizes mobile numeric entry without accepting invalid hours', () => {
     expect(normalizeScheduleTime('0930')).toBe('09:30');
     expect(normalizeScheduleTime('09:30')).toBe('09:30');

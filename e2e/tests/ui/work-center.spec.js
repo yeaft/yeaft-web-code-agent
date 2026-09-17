@@ -3975,14 +3975,24 @@ test.describe('Work Center scheduling', () => {
   test('recurring plan is read-only and pause/resume retain its revision', async ({ chatPage, mockAgent }) => {
     let detail = { ...OPEN_ITEM_DETAIL, id: 'recurring-plan', title: 'Weekly check', status: 'draft', actions: [], currentAction: null, currentActionId: null,
       schedule: { status: 'scheduled', scheduledFor: Date.now() + 3600000, recurrence: { frequency: 'weekly', timeZone: 'Asia/Shanghai', time: '09:00', weekdays: [1] }, runCount: 2, lastWorkItemId: 'latest-run',
-        lastError: { code: 'schedule_dispatch_failed', message: 'Do not render raw server diagnostics', at: Date.now() } } };
+        lastError: null } };
     await openWorkCenter(chatPage, mockAgent, [detail]);
     const select = chatPage.locator('.work-center-card-open').click();
     await respondToWorkCenterOp(mockAgent, 'get', detail, [detail]);
     await select;
     await expect(chatPage.locator('.work-center-conversation-readonly')).toContainText('This is a schedule');
-    await expect(chatPage.locator('.work-center-error[role="status"]')).toContainText('It will retry automatically');
+    const retryNotice = chatPage.locator('.work-center-error[role="status"]');
+    await expect(retryNotice).toHaveCount(0);
+    const failed = { ...detail, revision: detail.revision + 1, updatedAt: Date.now(), actionStats: [],
+      schedule: { ...detail.schedule, lastError: { code: 'schedule_dispatch_failed', message: 'Do not render raw server diagnostics', at: Date.now() } } };
+    mockAgent.send({ type: 'work_center_event', event: { type: 'work_item.schedule_failed', workItem: failed } });
+    await expect(retryNotice).toContainText('It will retry automatically');
     await expect(chatPage.locator('.work-center-main')).not.toContainText('Do not render raw server diagnostics');
+    detail = { ...failed, revision: failed.revision + 1, updatedAt: Date.now(), schedule: { ...failed.schedule, lastError: null } };
+    mockAgent.send({ type: 'work_center_event', event: { type: 'work_item.schedule_advanced', workItem: detail } });
+    await expect(retryNotice).toHaveCount(0);
+    mockAgent.send({ type: 'work_center_event', event: { type: 'work_item.schedule_failed', workItem: failed } });
+    await expect(retryNotice).toHaveCount(0);
     await expect(chatPage.locator('.work-center-item-message-input')).toHaveCount(0);
     await expect(chatPage.locator('.work-center-header-actions').getByRole('button', { name: 'Start', exact: true })).toHaveCount(0);
     for (const enabled of [false, true]) {
