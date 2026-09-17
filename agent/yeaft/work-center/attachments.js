@@ -392,6 +392,34 @@ function resolveAttachmentPath(root, workItemId, attachment) {
   return { filePath: actualPath, size: stat.size, itemDirectory: itemRoot };
 }
 
+/** Copy verified bytes into a new owner directory; never share source paths. */
+export function cloneWorkItemAttachments(workItem, workItemId, options = {}) {
+  if (!workItem.attachments?.length) return [];
+  const state = openAttachmentDirectory(options.root, workItem.id);
+  try {
+    const files = workItem.attachments.map(attachment => {
+      const storageName = attachment.storageName;
+      if (typeof storageName !== 'string' || !/^[A-Za-z0-9_-]+(?:\.[a-z0-9]{1,10})?$/.test(storageName)) {
+        throw new Error('WorkItem attachment metadata is invalid');
+      }
+      assertDescriptorMatchesPath(state.rootDescriptor, state.attachmentRoot, 'WorkItem attachment root');
+      assertDescriptorMatchesPath(state.itemDescriptor, state.itemDirectory, 'WorkItem attachment owner directory');
+      const fd = openSync(`/proc/self/fd/${state.itemDescriptor}/${storageName}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const stat = fstatSync(fd);
+        if (!stat.isFile()) throw new Error('WorkItem attachment is not a regular file');
+        assertWorkItemAttachmentSize(stat.size);
+        const buffer = readFileSync(fd);
+        if (buffer.length !== Number(attachment.size) || digest(buffer) !== attachment.sha256) {
+          throw new Error('WorkItem attachment changed after creation');
+        }
+        return { name: attachment.name, mimeType: attachment.mimeType, data: buffer.toString('base64') };
+      } finally { closeSync(fd); }
+    });
+    return persistWorkItemAttachments(files, { root: options.root, workItemId });
+  } finally { closeDirectoryState(state); }
+}
+
 export function readWorkItemAttachment(workItem, attachmentId, options = {}) {
   const attachment = Array.isArray(workItem?.attachments)
     ? workItem.attachments.find(item => item?.id === attachmentId)

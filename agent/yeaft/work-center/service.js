@@ -1,3 +1,4 @@
+import { normalizeRecurrence, validateScheduleTimestamp } from './recurrence.js';
 import { realpathSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -6,6 +7,7 @@ import { WorkflowController } from './controller.js';
 import { WorkItemWatcher } from './watcher.js';
 import {
   appendWorkItemAttachments,
+  cloneWorkItemAttachments,
   persistWorkItemAttachments,
   readWorkItemAttachment,
   removeWorkItemAttachmentFiles,
@@ -248,10 +250,14 @@ export class WorkCenterService {
             workItemId,
           });
           const scheduledFor = payload.scheduledFor == null || payload.scheduledFor === ''
-            ? null : Number(payload.scheduledFor);
+            ? null : payload.scheduledFor;
           if (scheduledFor != null && (!Number.isSafeInteger(scheduledFor) || scheduledFor <= this.now())) {
             throw new Error('scheduledFor must be in the future');
           }
+          if (scheduledFor != null) validateScheduleTimestamp(scheduledFor);
+          if (payload.scheduleEnabled !== undefined && typeof payload.scheduleEnabled !== 'boolean') throw new Error('scheduleEnabled must be a boolean');
+          const recurrence = normalizeRecurrence(payload.recurrence);
+          if (recurrence && scheduledFor == null) throw new Error('recurrence requires scheduledFor');
           const shouldStart = scheduledFor == null
             && (payload.start === undefined ? settings.startImmediately : payload.start !== false);
           const goal = requiredString(payload.goal, 'goal');
@@ -299,6 +305,7 @@ export class WorkCenterService {
             schedule: scheduledFor == null ? null : {
               status: payload.scheduleEnabled === false ? 'paused' : 'scheduled',
               scheduledFor,
+              recurrence,
             },
             start: false,
           });
@@ -736,8 +743,22 @@ export class WorkCenterService {
   #scanSchedules() {
     const now = this.now();
     for (const id of this.store.listDueScheduledWorkItemIds(now)) {
-      const detail = this.controller.startScheduled(id, now);
-      if (detail) this.#emit({ type: 'work_item.schedule_triggered', workItem: detail });
+      const createdAttachmentOwners = [];
+      try {
+        const detail = this.controller.startScheduled(id, now, (source, occurrenceId) => {
+          const attachments = cloneWorkItemAttachments(source, occurrenceId, { root: this.attachmentRoot });
+          createdAttachmentOwners.push(occurrenceId);
+          return attachments;
+        });
+        const source = this.store.getWorkItemDetail(id);
+        this.#emit({ type: 'work_item.schedule_triggered', workItem: source });
+        if (detail && detail.id !== id) this.#emit({ type: 'work_item.created', workItem: detail });
+      } catch (error) {
+        for (const owner of createdAttachmentOwners) {
+          if (!this.store.getWorkItem(owner)) removeWorkItemAttachments(this.attachmentRoot, owner);
+        }
+        this.#emit({ type: 'work_item.schedule_failed', workItemId: id, error: error.message });
+      }
     }
   }
 

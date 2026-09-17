@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-export const WORK_CENTER_SCHEMA_VERSION = 40;
+export const WORK_CENTER_SCHEMA_VERSION = 41;
 
 const MIGRATIONS = [
   ['23-conversation-stream', migrateConversationStream],
@@ -21,6 +21,7 @@ const MIGRATIONS = [
   ['38-action-closure-and-outputs', migrateActionClosureAndOutputs],
   ['39-action-creation-source', migrateActionCreationSource],
   ['40-work-item-schedules', migrateWorkItemSchedules],
+  ['41-recurring-schedules', migrateRecurringSchedules],
 ];
 
 const MIGRATION_ALIASES = new Map([
@@ -565,6 +566,20 @@ function migrateActionClosureAndOutputs(db) {
       SELECT RAISE(ABORT, 'terminal Run result is immutable');
     END;
   `);
+}
+
+function migrateRecurringSchedules(db) {
+  for (const [column, definition] of [
+    ['schedule_recurrence', 'TEXT'],
+    ['schedule_run_count', 'INTEGER NOT NULL DEFAULT 0'],
+    ['schedule_last_work_item_id', 'TEXT'],
+    ['source_schedule_id', 'TEXT'],
+    ['scheduled_occurrence_at', 'INTEGER'],
+  ]) {
+    if (!hasColumn(db, 'work_items', column)) db.exec(`ALTER TABLE work_items ADD COLUMN ${column} ${definition}`);
+  }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_schedule_occurrence
+    ON work_items(source_schedule_id, scheduled_occurrence_at) WHERE source_schedule_id IS NOT NULL`);
 }
 
 function migrateWorkItemSchedules(db) {
