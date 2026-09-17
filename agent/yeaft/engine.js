@@ -5271,7 +5271,9 @@ export class Engine {
         turnId: info.originatingTurnId || null,
         trigger,
         status: 'ready',
-        loopRange: [startIdx, endIdx],
+        // Wire identity must match the original pending card, even if the
+        // history window shifted or evicted its internal replacement range.
+        loopRange: info.loopRange,
         toolCount: info.count || 0,
         content,
         durationMs,

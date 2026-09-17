@@ -4037,7 +4037,7 @@ describe('Engine', () => {
       }
     });
 
-    it('persists a T2 carry-forward reflection even when the next request cannot retain recent history', async () => {
+    it.each(['prepended', 'evicted'])('persists a T2 carry-forward reflection with stable wire identity when history is %s', async historyMode => {
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-t2-fold-persist-'));
       try {
         const conversationStore = new ConversationStore(yeaftDir);
@@ -4081,13 +4081,12 @@ describe('Engine', () => {
           },
         });
 
-        for await (const _event of engine.query({
+        const firstEvents = [];
+        for await (const event of engine.query({
           prompt: 'run nine tools',
           sessionId: 'session-t2-fold',
           causalRootId: 'root-t2-origin',
-        })) {
-          // consume
-        }
+        })) firstEvents.push(event);
         await Promise.resolve();
         const firstTurn = [
           { role: 'user', content: 'Unrelated historical prompt must survive' },
@@ -4097,7 +4096,7 @@ describe('Engine', () => {
         const secondEvents = [];
         for await (const event of engine.query({
           prompt: 'continue after t2',
-          messages: firstTurn,
+          messages: historyMode === 'evicted' ? firstTurn.slice(0, 2) : firstTurn,
           sessionId: 'session-t2-fold',
           causalRootId: 'root-t2-current',
         })) secondEvents.push(event);
@@ -4106,6 +4105,11 @@ describe('Engine', () => {
         expect(secondEvents.find(event => event.type === 'error')).toBeUndefined();
         expect(secondEvents.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
         expect(adapter.callLog).toHaveLength(4);
+        const pending = firstEvents.find(event => event.type === 'reflection' && event.trigger === 't2' && event.status === 'pending');
+        const ready = secondEvents.find(event => event.type === 'reflection' && event.trigger === 't2' && event.status === 'ready');
+        expect(pending).toBeTruthy();
+        expect(ready).toMatchObject({ turnId: pending.turnId, trigger: pending.trigger, loopRange: pending.loopRange });
+        expect(ready.loopRange.every(index => index >= 0)).toBe(true);
 
         const restarted = new ConversationStore(yeaftDir);
         const durable = restarted.loadRecentBySession(
