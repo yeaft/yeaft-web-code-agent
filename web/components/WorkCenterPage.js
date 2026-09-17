@@ -107,6 +107,8 @@ export default {
         deliveryTarget: '',
         reuseMemory: true,
         start: true,
+        scheduled: false,
+        scheduleAt: '',
       },
     };
   },
@@ -1278,6 +1280,25 @@ export default {
     onCreateStartInput() {
       this.startTouched = true;
     },
+    onCreateScheduledInput() {
+      if (!this.form.scheduled) return;
+      this.form.start = false;
+      this.startTouched = true;
+      if (!this.form.scheduleAt) {
+        const defaultTime = new Date(Date.now() + 60 * 60 * 1000);
+        defaultTime.setSeconds(0, 0);
+        const local = new Date(defaultTime.getTime() - defaultTime.getTimezoneOffset() * 60 * 1000);
+        this.form.scheduleAt = local.toISOString().slice(0, 16);
+      }
+    },
+    async setSelectedScheduleEnabled(enabled) {
+      const schedule = this.selected?.schedule;
+      if (!this.selected || !schedule || this.selected.status !== 'draft') return;
+      await this.store.updateWorkItemSchedule(this.selected.id, {
+        scheduledFor: schedule.scheduledFor,
+        enabled,
+      }, this.agentId);
+    },
     clipboardFiles(event) {
       return Array.from(event?.clipboardData?.items || [])
         .filter(item => item?.kind === 'file')
@@ -1533,7 +1554,8 @@ export default {
           }))
             : [],
           reuseMemory: this.form.reuseMemory,
-          start: this.form.start,
+          start: this.form.scheduled ? false : this.form.start,
+          scheduledFor: this.form.scheduled ? new Date(this.form.scheduleAt).getTime() : null,
         }, requestAgentId);
         if (this.agentId !== requestAgentId || this.createGeneration !== requestGeneration) return;
         this.openWorkItem(detail.id);
@@ -1543,6 +1565,8 @@ export default {
           deliveryTarget: '',
           reuseMemory: true,
           start: this.settings?.startImmediately !== false,
+          scheduled: false,
+          scheduleAt: '',
         };
         this.store.workCenterCreateDraft = null;
         this.createAttachments = [];
@@ -1874,6 +1898,9 @@ export default {
                       <span v-if="boardAction(item)" class="work-center-card-current-action">
                         {{ boardAction(item).objective || actionLabel(boardAction(item).type) }}
                       </span>
+                      <span v-if="item.schedule" class="work-center-card-current-action">
+                        {{ item.schedule.status === 'scheduled' ? tr('workCenter.scheduleRunsAt', 'Scheduled for') : item.schedule.status === 'paused' ? tr('workCenter.schedulePaused', 'Schedule paused') : tr('workCenter.scheduleTriggered', 'Schedule triggered') }} {{ time(item.schedule.scheduledFor) }}
+                      </span>
                       <span v-else-if="item.goal && item.goal !== item.title" class="work-center-card-goal">{{ item.goal }}</span>
                       <span class="work-center-card-meta">
                         <span>{{ boardExecutorLabel(item) }}</span>
@@ -1961,8 +1988,14 @@ export default {
                             <div v-if="selected.workDir" class="work-center-meta-wide"><dt>{{ tr('workCenter.workDir', 'Working directory') }}</dt><dd :title="selected.workDir">{{ selected.workDir }}</dd></div>
                             <div><dt>{{ tr('workCenter.created', 'Created') }}</dt><dd>{{ time(selected.createdAt) || '—' }}</dd></div>
                             <div><dt>{{ tr('workCenter.updated', 'Updated') }}</dt><dd>{{ time(selected.updatedAt) || '—' }}</dd></div>
+                            <div v-if="selected.schedule"><dt>{{ tr('workCenter.schedule', 'Schedule') }}</dt><dd>{{ time(selected.schedule.scheduledFor) }}</dd></div>
+                            <div v-if="selected.schedule"><dt>{{ tr('workCenter.scheduleStatus', 'Schedule status') }}</dt><dd>{{ selected.schedule.status === 'scheduled' ? tr('workCenter.scheduleEnabled', 'Enabled') : selected.schedule.status === 'paused' ? tr('workCenter.scheduleDisabled', 'Disabled') : tr('workCenter.scheduleTriggered', 'Triggered') }}</dd></div>
                             <div v-if="!selected.workItemType && selected.planningMode === 'ai'"><dt>{{ tr('workCenter.workItemType', 'Type') }}</dt><dd>{{ tr('workCenter.planning', 'Planning') }}</dd></div>
                           </dl>
+                          <div v-if="selected.schedule && selected.status === 'draft'" class="work-center-usage-summary work-center-detail-usage">
+                            <button v-if="selected.schedule.status === 'scheduled'" class="btn-secondary" type="button" @click="setSelectedScheduleEnabled(false)">{{ tr('workCenter.disableSchedule', 'Disable schedule') }}</button>
+                            <button v-else class="btn-secondary" type="button" @click="setSelectedScheduleEnabled(true)">{{ tr('workCenter.enableSchedule', 'Enable schedule') }}</button>
+                          </div>
                         </div>
                         <div v-show="infoTab === 'progress'" id="work-item-info-panel-progress" class="work-center-info-panel" role="tabpanel" aria-labelledby="work-item-info-tab-progress" tabindex="0">
                           <ul v-if="orderedActions.length" class="work-center-info-actions">
@@ -2327,7 +2360,9 @@ export default {
               <div class="work-center-create-options">
                 <label><span>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</span><select v-model="form.deliveryTarget"><option value="">{{ tr('workCenter.deliveryTargetAsk', 'Ask me before delivery') }}</option><option value="response">{{ tr('workCenter.deliveryTargetResponse', 'Response') }}</option><option value="workspace_files">{{ tr('workCenter.deliveryTargetFiles', 'Workspace files') }}</option><option value="pull_request">{{ tr('workCenter.deliveryTargetPr', 'Open a pull request') }}</option><option value="merge">{{ tr('workCenter.deliveryTargetMerge', 'Merge an approved pull request') }}</option></select><small class="work-center-field-help">{{ tr('workCenter.deliveryTargetHelp', 'This is the completion boundary, not permission to bypass review or merge policy.') }}</small></label>
                 <label class="work-center-checkbox"><input v-model="form.reuseMemory" type="checkbox"><span><strong>{{ tr('workCenter.reuseMemory', 'Use relevant Agent memory and completed work from this project') }}</strong><small>{{ tr('workCenter.reuseMemoryHelp', 'Uses scope-bounded Agent memory and structured results from completed WorkItems in the same project.') }}</small></span></label>
-                <label class="work-center-checkbox"><input v-model="form.start" type="checkbox" @change="onCreateStartInput"><span><strong>{{ tr('workCenter.startImmediately', 'Start immediately') }}</strong><small>{{ tr('workCenter.startImmediatelyHint', 'Turn this off to create a draft you can review first.') }}</small></span></label>
+                <label class="work-center-checkbox"><input v-model="form.scheduled" type="checkbox" @change="onCreateScheduledInput"><span><strong>{{ tr('workCenter.scheduleWorkItem', 'Schedule this work item') }}</strong><small>{{ tr('workCenter.scheduleWorkItemHint', 'Keep it as a persisted draft and start it once at the selected local time.') }}</small></span></label>
+                <label v-if="form.scheduled"><span>{{ tr('workCenter.scheduleAt', 'Start at') }}</span><input v-model="form.scheduleAt" type="datetime-local" required></label>
+                <label class="work-center-checkbox"><input v-model="form.start" type="checkbox" :disabled="form.scheduled" @change="onCreateStartInput"><span><strong>{{ tr('workCenter.startImmediately', 'Start immediately') }}</strong><small>{{ tr('workCenter.startImmediatelyHint', 'Turn this off to create a draft you can review first.') }}</small></span></label>
               </div>
             </section>
             <section class="work-center-plan-preview">
@@ -2339,7 +2374,7 @@ export default {
           </div>
           <footer class="work-center-modal-footer">
             <button class="btn-secondary" type="button" @click="closeCreate">{{ tr('common.cancel', 'Cancel') }}</button>
-            <button class="btn-primary" type="submit" :disabled="saving || attachmentsUploading || !form.requirement.trim() || !form.workDir.trim()">
+            <button class="btn-primary" type="submit" :disabled="saving || attachmentsUploading || !form.requirement.trim() || !form.workDir.trim() || (form.scheduled && !form.scheduleAt)">
               {{ saving ? tr('workCenter.creating', 'Creating…') : tr('workCenter.create', 'Create') }}
             </button>
           </footer>

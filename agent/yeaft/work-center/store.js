@@ -112,6 +112,11 @@ function mapWorkItem(row) {
     coordinationMode: row.coordination_mode || 'legacy',
     finalResult: parseJson(row.final_result, null),
     deliveryTarget: row.delivery_target || null,
+    schedule: row.schedule_status ? {
+      status: row.schedule_status,
+      scheduledFor: Number(row.scheduled_for) || null,
+      triggeredAt: Number(row.schedule_triggered_at) || null,
+    } : null,
     title: row.title,
     titleSource: row.title_source || 'explicit',
     requirement: row.requirement ?? row.goal,
@@ -858,6 +863,9 @@ export class WorkItemStore {
         coordination_mode TEXT NOT NULL DEFAULT 'legacy',
         final_result TEXT,
         delivery_target TEXT,
+        schedule_status TEXT,
+        scheduled_for INTEGER,
+        schedule_triggered_at INTEGER,
         title TEXT NOT NULL,
         title_source TEXT NOT NULL DEFAULT 'explicit',
         requirement TEXT,
@@ -1022,6 +1030,16 @@ export class WorkItemStore {
 
     // The feature shipped first as an unmerged PR, but keep the store tolerant
     // of databases created by review builds.
+    if (!hasColumn(this.db, 'work_items', 'schedule_status')) {
+      this.db.exec('ALTER TABLE work_items ADD COLUMN schedule_status TEXT');
+    }
+    if (!hasColumn(this.db, 'work_items', 'scheduled_for')) {
+      this.db.exec('ALTER TABLE work_items ADD COLUMN scheduled_for INTEGER');
+    }
+    if (!hasColumn(this.db, 'work_items', 'schedule_triggered_at')) {
+      this.db.exec('ALTER TABLE work_items ADD COLUMN schedule_triggered_at INTEGER');
+    }
+
     if (!hasColumn(this.db, 'work_items', 'workspace_key')) {
       withTransaction(this.db, () => {
         this.db.exec("ALTER TABLE work_items ADD COLUMN workspace_key TEXT NOT NULL DEFAULT ''");
@@ -2407,14 +2425,16 @@ export class WorkItemStore {
       const workspaceKey = canonicalWorkspaceKey(input.workDir);
       this.db.prepare(`INSERT INTO work_items
         (id, revision, execution_schema_version, ledger_revision, coordination_mode, final_result, delivery_target,
-         title, title_source, requirement, goal, acceptance_criteria, workflow_template, workflow_snapshot, status,
+         schedule_status, scheduled_for, schedule_triggered_at, title, title_source, requirement, goal, acceptance_criteria, workflow_template, workflow_snapshot, status,
          current_action_id, current_run_id, work_dir, workspace_key, reuse_memory, origin, linked_session_ids,
          session_context, attachments, created_at, updated_at)
-        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id,
         Number.isInteger(input.executionSchemaVersion) ? input.executionSchemaVersion : 2,
         input.coordinationMode || 'legacy',
         input.deliveryTarget || null,
+        input.schedule?.status || null,
+        input.schedule?.scheduledFor || null,
         input.title,
         input.titleSource === 'coordinator_pending' ? 'coordinator_pending' : 'explicit',
         input.goal,
@@ -3097,6 +3117,32 @@ export class WorkItemStore {
         recoveryAttempts: Math.max(0, Number(row.recovery_attempts) || 0),
         lastRecoveryAt: Math.max(0, Number(row.last_recovery_at) || 0),
       }));
+  }
+
+  listDueScheduledWorkItemIds(now = this.now()) {
+    return this.db.prepare(`SELECT id FROM work_items
+      WHERE schedule_status = 'scheduled' AND scheduled_for <= ? AND status = 'draft'
+      ORDER BY scheduled_for, id`).all(now).map(row => row.id);
+  }
+
+  updateWorkItemSchedule(id, input = {}) {
+    return withTransaction(this.db, () => {
+      const row = this.db.prepare('SELECT * FROM work_items WHERE id = ?').get(id);
+      if (!row) return null;
+      if (row.status !== 'draft' || !['scheduled', 'paused'].includes(row.schedule_status)) {
+        throw new Error('Only pending scheduled WorkItems can be changed');
+      }
+      const scheduledFor = input.scheduledFor == null ? Number(row.scheduled_for) : Number(input.scheduledFor);
+      if (!Number.isSafeInteger(scheduledFor) || scheduledFor <= this.now()) {
+        throw new Error('scheduledFor must be in the future');
+      }
+      const status = input.enabled === false ? 'paused' : 'scheduled';
+      const now = this.now();
+      this.db.prepare(`UPDATE work_items SET schedule_status = ?, scheduled_for = ?,
+        revision = revision + 1, updated_at = ? WHERE id = ?`).run(status, scheduledFor, now, id);
+      this.appendEvent(id, 'work_item.schedule_updated', { status, scheduledFor });
+      return this.getWorkItemDetail(id);
+    });
   }
 
   listWorkItems(filters = {}) {
@@ -4492,10 +4538,14 @@ export class WorkItemStore {
     });
   }
 
-  startWorkItemAtomic(id, makeInitialAction) {
+  startWorkItemAtomic(id, makeInitialAction, options = {}) {
     return withTransaction(this.db, () => {
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
+      const scheduledAt = Number(options.scheduledAt);
+      const scheduledStart = Number.isSafeInteger(scheduledAt);
+      if (scheduledStart && (workItem.status !== 'draft' || workItem.schedule?.status !== 'scheduled'
+          || workItem.schedule.scheduledFor > scheduledAt)) return null;
       if (['done', 'cancelled'].includes(workItem.status)) {
         throw new Error(`Cannot start WorkItem in ${workItem.status}`);
       }
@@ -4505,13 +4555,18 @@ export class WorkItemStore {
         throw new Error(`WorkItem in ${workItem.status} must be resumed with retry`);
       }
       const now = this.now();
+      if (scheduledStart) {
+        this.db.prepare(`UPDATE work_items SET schedule_status = 'triggered',
+          schedule_triggered_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
+          .run(scheduledAt, now, id);
+      }
       if (isDynamicWorkItem(workItem)) {
         this.db.prepare(`UPDATE work_items SET status = 'running', current_action_id = NULL,
           current_run_id = NULL, updated_at = ? WHERE id = ?`).run(now, id);
         this.enqueueCoordinatorMailbox(id, 'work_item_started', {
           trigger: { workItemId: id },
         }, `dynamic:start:${id}:${workItem.revision}`);
-        this.appendEvent(id, 'work_item.started');
+        this.appendEvent(id, 'work_item.started', scheduledStart ? { scheduled: true } : {});
         return this.getWorkItemDetail(id);
       }
       const action = this.#insertAction(id, {
@@ -4520,7 +4575,7 @@ export class WorkItemStore {
       }, this.#nextSequence(id), now);
       this.db.prepare(`UPDATE work_items SET status = 'ready', current_action_id = ?,
         current_run_id = NULL, updated_at = ? WHERE id = ?`).run(action.id, now, id);
-      this.appendEvent(id, 'work_item.started', {}, { actionId: action.id });
+      this.appendEvent(id, 'work_item.started', scheduledStart ? { scheduled: true } : {}, { actionId: action.id });
       return this.getWorkItemDetail(id);
     });
   }

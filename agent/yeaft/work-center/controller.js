@@ -164,6 +164,19 @@ export class WorkflowController {
     return detail;
   }
 
+  startScheduled(id, scheduledAt) {
+    return this.store.startWorkItemAtomic(id, workItem => {
+      const action = initialActionFor(workItem);
+      if (workItem.reuseMemory === false) return action;
+      const context = this.store.getReusableContext(workItem.workDir, workItem.id);
+      return {
+        ...action,
+        context,
+        instruction: actionInstruction(action, workItem, context, renderSessionContextSnapshot(workItem.sessionContext)),
+      };
+    }, { scheduledAt });
+  }
+
   update(id, patch) {
     const updated = this.store.updateWorkItemAtomic(id, patch, initialActionFor);
     if (!updated) throw new Error(`WorkItem not found: ${id}`);

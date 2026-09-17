@@ -1094,6 +1094,7 @@ export function projectWorkItemDetail(detail, options = {}) {
     executionControl: detail.executionControl,
     executionStats: combinedExecutionStats(detail),
     reuseMemory: detail.reuseMemory !== false,
+    schedule: detail.schedule || null,
     deliveryTarget: ['response', 'workspace_files', 'pull_request', 'merge'].includes(detail.deliveryTarget)
       ? detail.deliveryTarget : null,
     waitingReason: sanitizeDiagnosticText(waitingReason(detail), MAX_ACTION_DIAGNOSTIC_CHARS),
@@ -1204,6 +1205,7 @@ export function projectWorkItemSummary(detail) {
       executionStats: combinedExecutionStats(detail),
       executionControl: detail.executionControl,
       origin: detail.origin?.sessionId ? { sessionId: detail.origin.sessionId } : null,
+      schedule: detail.schedule || null,
       linkedSessionIds: Array.isArray(detail.linkedSessionIds) ? detail.linkedSessionIds : [],
       attachmentCount: Array.isArray(detail.attachments) ? detail.attachments.length : 0,
       createdAt: detail.createdAt,
@@ -1244,6 +1246,7 @@ export function projectWorkItemSummary(detail) {
     currentAction: projectCurrentActionSummary(action, projectedAction),
     actionStats: projectActionStats(detail, null),
     origin: detail.origin?.sessionId ? { sessionId: detail.origin.sessionId } : null,
+    schedule: detail.schedule || null,
     linkedSessionIds: Array.isArray(detail.linkedSessionIds) ? detail.linkedSessionIds : [],
     attachmentCount: Array.isArray(detail.attachments) ? detail.attachments.length : 0,
     createdAt: detail.createdAt,

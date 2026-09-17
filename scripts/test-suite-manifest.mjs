@@ -78,6 +78,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/work-center/resource-control.test.js',
   'test/agent/yeaft/work-center/resource-control-fences.test.js',
   'test/agent/yeaft/work-center/runner-policy.test.js',
+  'test/agent/yeaft/work-center/schedule.test.js',
   'test/agent/yeaft/work-center/store-migration.test.js',
   'test/agent/yeaft/work-center/watcher.test.js',
   'test/server/agent-access-error.test.js',

@@ -20,6 +20,7 @@ const MIGRATIONS = [
   ['37-run-acceptance-checks', migrateRunAcceptanceChecks],
   ['38-action-closure-and-outputs', migrateActionClosureAndOutputs],
   ['39-action-creation-source', migrateActionCreationSource],
+  ['40-work-item-schedules', migrateWorkItemSchedules],
 ];
 
 const MIGRATION_ALIASES = new Map([
@@ -564,6 +565,21 @@ function migrateActionClosureAndOutputs(db) {
       SELECT RAISE(ABORT, 'terminal Run result is immutable');
     END;
   `);
+}
+
+function migrateWorkItemSchedules(db) {
+  for (const [column, definition] of [
+    ['schedule_status', 'TEXT'],
+    ['scheduled_for', 'INTEGER'],
+    ['schedule_triggered_at', 'INTEGER'],
+  ]) {
+    if (!hasColumn(db, 'work_items', column)) {
+      db.exec(`ALTER TABLE work_items ADD COLUMN ${column} ${definition}`);
+    }
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_work_items_schedule_due
+    ON work_items(schedule_status, scheduled_for)
+    WHERE schedule_status = 'scheduled'`);
 }
 
 function migrateActionCreationSource(db) {
