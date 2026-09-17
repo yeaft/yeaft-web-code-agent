@@ -61,6 +61,77 @@ export function appendTurnResponseSegment(turn, message) {
 }
 
 /**
+ * Asset uploads can finish after later text, or even after another user turn.
+ * Project anchored images immediately after their source tool before grouping
+ * turns. Never mutate stored rows; legacy/unavailable anchors keep arrival order.
+ */
+export function orderResponseImageMessages(messages = []) {
+  const anchorKey = (message, toolId) => JSON.stringify([
+    message.sessionId || message.groupId || '',
+    message.speakerVpId || message.vpId || '',
+    message.turnId || '',
+    toolId,
+  ]);
+  const tools = new Map();
+  for (const message of messages) {
+    if (message.type === 'tool-use' && message.toolId) tools.set(anchorKey(message, message.toolId), message);
+  }
+  const anchored = new Map();
+  const relocated = new Set();
+  for (const message of messages) {
+    if (message.type !== 'chat-image' || !message.sourceToolCallId) continue;
+    const tool = tools.get(anchorKey(message, message.sourceToolCallId));
+    if (!tool) continue;
+    if (!anchored.has(tool)) anchored.set(tool, []);
+    anchored.get(tool).push(message);
+    relocated.add(message);
+  }
+  if (relocated.size === 0) return messages;
+  const ordered = [];
+  for (const message of messages) {
+    if (relocated.has(message)) continue;
+    ordered.push(message);
+    if (anchored.has(message)) ordered.push(...anchored.get(message));
+  }
+  return ordered;
+}
+
+export function responseImageKey(image) {
+  return JSON.stringify([image.assetId || image.id, image.sourceToolCallId || '', image.turnId || '']);
+}
+
+/** Interleave compact image groups with the surrounding response text. */
+export function buildTurnResponseBlocks(turn, textSegments = []) {
+  const images = Array.isArray(turn?.imageMsgs) ? turn.imageMsgs : [];
+  const segmentsByKey = new Map(textSegments.map(segment => [segment.key, segment]));
+  const imagesByKey = new Map(images.map(image => [responseImageKey(image), image]));
+  const seen = new Set();
+  const blocks = [];
+  const append = (kind, item) => {
+    if (!item || seen.has(item)) return;
+    seen.add(item);
+    const previous = blocks[blocks.length - 1];
+    if (kind !== 'result' && previous?.kind === kind) previous.items.push(item);
+    else blocks.push({ kind, key: `${kind}:${kind === 'images' ? responseImageKey(item) : item.key || blocks.length}`, items: [item] });
+  };
+  let textIndex = 0;
+  for (const message of orderResponseImageMessages(Array.isArray(turn?.messages) ? turn.messages : [])) {
+    if (message.type === 'assistant' && responseText(message.content)) {
+      const key = message.messageId || message.id || `response-${textIndex}`;
+      const segment = segmentsByKey.get(key);
+      if (segment) append(segment.kind === 'result' ? 'result' : 'progress', segment);
+      textIndex += 1;
+    } else if (message.type === 'chat-image') {
+      append('images', imagesByKey.get(responseImageKey(message)));
+    }
+  }
+  // Legacy consumers may supply only textContent/textSegments and imageMsgs.
+  for (const segment of textSegments) append(segment.kind === 'result' ? 'result' : 'progress', segment);
+  for (const image of images) append('images', image);
+  return blocks;
+}
+
+/**
  * Old persisted rows have no responseKind. Treat their last text row as the
  * result only after history replay or an explicit end_turn lifecycle stamp.
  */

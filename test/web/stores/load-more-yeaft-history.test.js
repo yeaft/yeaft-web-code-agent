@@ -704,7 +704,7 @@ describe('Yeaft conversation loading state', () => {
         content: '',
         sessionId: 'g1',
         turnId: 'turn-image',
-        images: [{ assetId: 'asset-1', mimeType: 'image/png', filename: 'result.png', src: '/api/yeaft/assets/scope/asset?token=secret' }],
+        images: [{ assetId: 'asset-1', sourceToolCallId: 'source-image-tool', mimeType: 'image/png', filename: 'result.png', src: '/api/yeaft/assets/scope/asset?token=secret' }],
       }],
       oldestSeq: 1,
       hasMore: false,
@@ -714,6 +714,7 @@ describe('Yeaft conversation loading state', () => {
       expect.objectContaining({
         type: 'chat-image',
         assetId: 'asset-1',
+        sourceToolCallId: 'source-image-tool',
         sessionId: 'g1',
         turnId: 'turn-image',
         src: '/api/yeaft/assets/scope/asset?token=secret',

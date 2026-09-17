@@ -32,7 +32,7 @@ import {
 } from '../utils/message-turn-collapse.js';
 import { navigateToPersistedMessage } from '../utils/message-search-navigation.js';
 import { formatSessionMessageDateTime } from '../utils/session-message-quote.js';
-import { appendTurnResponseSegment, finalizeTurnResponseSegments } from '../utils/turn-response.js';
+import { appendTurnResponseSegment, finalizeTurnResponseSegments, orderResponseImageMessages } from '../utils/turn-response.js';
 import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.js';
 // task-757: appendTypingPlaceholders removed from the pipeline.
 // The standalone typing card it produced (at the bottom of the
@@ -923,9 +923,10 @@ export default {
 
     // Turn aggregation: group flat messages into turn groups
     const turnGroups = Vue.computed(() => {
+      const inlineMessages = orderResponseImageMessages(store.messages);
       const messages = store.currentView === 'yeaft'
-        ? orderYeaftVpTurnMessagesByExecution(store.messages)
-        : store.messages;
+        ? orderYeaftVpTurnMessagesByExecution(inlineMessages)
+        : inlineMessages;
       const result = [];
       let currentTurn = null;
 
