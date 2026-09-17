@@ -746,13 +746,17 @@ export class WorkCenterService {
     for (const id of this.store.listDueScheduledWorkItemIds(now)) {
       const createdAttachmentOwners = [];
       try {
+        const before = this.store.getWorkItem(id);
         const detail = this.controller.startScheduled(id, now, (source, occurrenceId) => {
           const attachments = cloneWorkItemAttachments(source, occurrenceId, { root: this.attachmentRoot });
           createdAttachmentOwners.push(occurrenceId);
           return attachments;
         });
         const source = this.store.getWorkItemDetail(id);
-        this.#emit({ type: 'work_item.schedule_triggered', workItem: source });
+        if (detail) this.#emit({ type: 'work_item.schedule_triggered', workItem: source });
+        else if (source && source.revision !== before?.revision) {
+          this.#emit({ type: 'work_item.schedule_advanced', workItem: source });
+        }
         if (detail && detail.id !== id) this.#emit({ type: 'work_item.created', workItem: detail });
       } catch (error) {
         for (const owner of createdAttachmentOwners) {

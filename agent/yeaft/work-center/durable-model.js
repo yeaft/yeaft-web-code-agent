@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { withTransaction } from './transaction.js';
 
 export const WORK_CENTER_SCHEMA_VERSION = 41;
 
@@ -83,15 +84,7 @@ function runMigration(db, now, name, migration) {
     db.prepare(`INSERT INTO schema_migrations(name, checksum, applied_at)
       VALUES (?, ?, ?)`).run(name, checksum, now);
   };
-  if (db.isTransaction) return apply();
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    apply();
-    db.exec('COMMIT');
-  } catch (error) {
-    try { db.exec('ROLLBACK'); } catch {}
-    throw error;
-  }
+  return withTransaction(db, apply);
 }
 
 export function migrateDurableWorkCenterModel(db, now = Date.now(), sourceSchemaVersion = 22) {

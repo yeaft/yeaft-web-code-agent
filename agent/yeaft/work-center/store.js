@@ -1,5 +1,6 @@
 import { normalizeRecurrence, validateScheduleTimestamp, initialOccurrence, nextOccurrence, latestOccurrence } from './recurrence.js';
 import { DatabaseSync } from 'node:sqlite';
+import { withTransaction } from './transaction.js';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -344,20 +345,6 @@ function mapEvent(row) {
     data: parseJson(row.data, {}),
     createdAt: row.created_at,
   };
-}
-
-function withTransaction(db, fn) {
-  const nested = db.isTransaction;
-  const savepoint = nested ? `wc_${randomUUID().replaceAll('-', '')}` : null;
-  db.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec(nested ? `RELEASE ${savepoint}` : 'COMMIT');
-    return result;
-  } catch (err) {
-    try { db.exec(nested ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK'); } catch {}
-    throw err;
-  }
 }
 
 function hasColumn(db, table, column) {
@@ -1368,7 +1355,7 @@ export class WorkItemStore {
       );
       return this.db.prepare('SELECT * FROM action_entries WHERE id = ?').get(id);
     };
-    return this.db.isTransaction ? append() : withTransaction(this.db, append);
+    return withTransaction(this.db, append);
   }
 
   appendActionControl(workItemId, actionId, command, options = {}) {
@@ -1407,7 +1394,7 @@ export class WorkItemStore {
       );
       return this.db.prepare('SELECT * FROM coordinator_mailbox_entries WHERE id = ?').get(id);
     };
-    return this.db.isTransaction ? enqueue() : withTransaction(this.db, enqueue);
+    return withTransaction(this.db, enqueue);
   }
 
   claimCoordinatorTurn(workItemId, turnId, owner, leaseMs = 60_000) {

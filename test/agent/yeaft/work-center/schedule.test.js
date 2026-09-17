@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, mkdirSync, symlinkSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkItemStore } from '../../../../agent/yeaft/work-center/store.js';
 import { WorkflowController } from '../../../../agent/yeaft/work-center/controller.js';
 import { WorkCenterService } from '../../../../agent/yeaft/work-center/service.js';
@@ -39,7 +39,12 @@ describe('scheduled WorkItems', () => {
     expect(item).toMatchObject({ status: 'draft', schedule: { status: 'scheduled', scheduledFor: 2_000 } });
     expect(store.listDueScheduledWorkItemIds(1_999)).toEqual([]);
     setNow(2_000);
+    const events = [];
+    service.onEvent = event => events.push(event);
     service.start();
+    expect(events.filter(event => event.type.startsWith('work_item.schedule_')).map(event => event.type))
+      .toEqual(['work_item.schedule_triggered']);
+    expect(events.filter(event => event.type === 'work_item.created')).toEqual([]);
     const triggered = store.getWorkItemDetail(item.id);
     expect(triggered).toMatchObject({ status: 'running', schedule: { status: 'triggered', triggeredAt: 2_000 } });
     expect(store.listDueScheduledWorkItemIds(2_000)).toEqual([]);
@@ -111,6 +116,51 @@ describe('recurring schedules', () => {
   const createPlan = (service, recurrence = daily, extra = {}, context = {}) => service.handle('create', {
     goal: 'Daily report', workDir: '/tmp', scheduledFor: epoch('2026-03-06T14:00:00Z'), recurrence, ...extra,
   }, context);
+
+  it.each(['spawn', 'overlap', 'expired', 'exhausted', 'consumed'])(
+    'emits schedule events only for the actual scan outcome: %s', async outcome => {
+      const { service, controller, store, setNow } = fixture();
+      const plan = await createPlan(service, {
+        ...daily,
+        ...(outcome === 'expired' ? { endsAt: epoch('2026-03-06T14:00:00Z') } : {}),
+        ...(outcome === 'exhausted' ? { maxRuns: 1 } : {}),
+      });
+      if (outcome === 'overlap') controller.startScheduled(plan.id, epoch('2026-03-06T14:00:00Z'));
+      if (outcome === 'exhausted') {
+        store.db.prepare('UPDATE work_items SET schedule_run_count = 1 WHERE id = ?').run(plan.id);
+      }
+      if (outcome === 'consumed') {
+        // Another scanner consumes the due plan after this scan selected its IDs.
+        const listDue = store.listDueScheduledWorkItemIds.bind(store);
+        vi.spyOn(store, 'listDueScheduledWorkItemIds').mockImplementationOnce(now => {
+          const ids = listDue(now);
+          controller.startScheduled(plan.id, now);
+          return ids;
+        });
+      }
+      const events = [];
+      service.onEvent = event => events.push(event);
+      setNow('2026-03-07T14:00:00Z');
+      service.start();
+      const scheduleEvents = events.filter(event => event.type.startsWith('work_item.schedule_'));
+      const expected = outcome === 'spawn' ? ['work_item.schedule_triggered']
+        : outcome === 'consumed' ? [] : ['work_item.schedule_advanced'];
+      expect(scheduleEvents.map(event => event.type)).toEqual(expected);
+      const created = events.filter(event => event.type === 'work_item.created');
+      expect(created).toHaveLength(outcome === 'spawn' ? 1 : 0);
+      if (outcome === 'spawn') expect(created[0].workItem.sourceScheduleId).toBe(plan.id);
+      if (['expired', 'exhausted'].includes(outcome)) {
+        expect(scheduleEvents[0].workItem.schedule.status).toBe('completed');
+      }
+      if (outcome === 'overlap') {
+        expect(scheduleEvents[0].workItem.schedule).toMatchObject({ runCount: 1,
+          scheduledFor: epoch('2026-03-08T13:00:00Z') });
+      }
+      await service.shutdown();
+      cleanups.pop();
+      rmSync(service.yeaftDir, { recursive: true, force: true });
+    },
+  );
 
   it('pauses overdue plans, resumes in the future, fences stale edits, and cannot restart cancelled plans', async () => {
     const { service, controller, store, setNow } = fixture();
