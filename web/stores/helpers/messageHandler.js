@@ -477,6 +477,7 @@ export function handleMessage(store, msg) {
       const duplicate = store.messagesMap[conversationId].some(row =>
         row?.type === 'chat-image' && row.assetId === msg.image.assetId
         && row.sessionId === msg.sessionId && row.turnId === msg.turnId
+        && (row.speakerVpId || row.vpId || '') === (msg.vpId || '')
         && (row.sourceToolCallId || '') === (msg.image.sourceToolCallId || '')
       );
       if (!duplicate) store.addMessageToConversation(conversationId, {

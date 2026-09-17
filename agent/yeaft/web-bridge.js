@@ -4296,6 +4296,7 @@ function handleEngineEvent(event, hctx) {
           if (!ctx.assetOutbox) throw new Error('asset outbox is unavailable');
           const deliveryId = ctx.assetOutbox.enqueue({
             conversationId: yeaftConversationId,
+            sourceToolCallId: event.id,
             metadata: persistedImage,
             sessionId: hctx.sessionId,
             vpId: hctx.vpId,

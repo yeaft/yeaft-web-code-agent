@@ -196,7 +196,7 @@ export function createYeaftAssetStore({
   collectGarbage();
 
   return {
-    put({ ownerId, agentId, sessionId, assetId, data, mimeType, filename, width = null, height = null, turnId = null, vpId = null, threadId = null }) {
+    put({ ownerId, agentId, sessionId, assetId, data, mimeType, filename, width = null, height = null, turnId = null, vpId = null, threadId = null, sourceToolCallId = null }) {
       if (!ownerId || !agentId || !sessionId) throw new Error('Asset owner, agent, and Session are required');
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data || ''), 'base64');
       if (!buffer.length || buffer.length > MAX_ASSET_BYTES) throw new Error(`Image asset must be between 1 byte and ${MAX_ASSET_BYTES} bytes`);
@@ -222,6 +222,23 @@ export function createYeaftAssetStore({
       if (duplicate) {
         try { existing = JSON.parse(readFileSync(paths.meta, 'utf8')); } catch { /* rewrite below */ }
       }
+      // An asset is content-addressed, but each use owns its own turn/tool/VP
+      // anchor. Preserve old unanchored uses when the same pixels are uploaded again.
+      const turnAssociations = Array.isArray(existing?.turnAssociations)
+        ? existing.turnAssociations.filter(association => association
+          && typeof association.turnId === 'string' && association.turnId)
+        : [...new Set([existing?.turnId, ...(existing?.turnIds || [])].filter(Boolean))]
+          .map(legacyTurnId => ({ turnId: legacyTurnId }));
+      if (turnId) {
+        const association = {
+          turnId,
+          ...(typeof sourceToolCallId === 'string' && sourceToolCallId ? { sourceToolCallId } : {}),
+          ...(vpId ? { vpId } : {}),
+        };
+        if (!turnAssociations.some(item => item.turnId === association.turnId
+          && item.sourceToolCallId === association.sourceToolCallId
+          && item.vpId === association.vpId)) turnAssociations.push(association);
+      }
       const metadata = {
         assetId: computedAssetId,
         scopeId,
@@ -238,6 +255,7 @@ export function createYeaftAssetStore({
           ...(existing?.turnId ? [existing.turnId] : []),
           ...(turnId ? [turnId] : []),
         ])],
+        turnAssociations,
         vpId: vpId || existing?.vpId || null,
         threadId: threadId || existing?.threadId || null,
         createdAt: Number(existing?.createdAt) || now(),
@@ -305,12 +323,30 @@ export function createYeaftAssetStore({
         const associatedTurns = new Set([
           ...(row.metadata.turnId ? [row.metadata.turnId] : []),
           ...(Array.isArray(row.metadata.turnIds) ? row.metadata.turnIds : []),
+          ...(Array.isArray(row.metadata.turnAssociations)
+            ? row.metadata.turnAssociations.map(association => association?.turnId)
+            : []),
         ]);
         const matches = Array.from(associatedTurns).filter(turnId => requested.has(turnId));
         if (matches.length === 0) continue;
         const image = this.describe({ ownerId, agentId, sessionId, assetId: row.metadata.assetId });
         if (!image) continue;
-        for (const turnId of matches) result.get(turnId).push(image);
+        for (const turnId of matches) {
+          const associations = Array.isArray(row.metadata.turnAssociations)
+            ? row.metadata.turnAssociations.filter(association => association?.turnId === turnId)
+            : [];
+          if (associations.length > 0) {
+            for (const association of associations) {
+              result.get(turnId).push({
+                ...image,
+                ...(association.sourceToolCallId ? { sourceToolCallId: association.sourceToolCallId } : {}),
+                ...(association.vpId ? { vpId: association.vpId } : {}),
+              });
+            }
+          } else {
+            result.get(turnId).push(image);
+          }
+        }
       }
       return result;
     },

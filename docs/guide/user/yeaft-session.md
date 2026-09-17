@@ -87,6 +87,10 @@ The Yeaft page provides:
 
 Debug output can contain project text and tool results. It is for the current owner and should not be exported or shared casually.
 
+### Images in responses
+
+Tool images appear as compact thumbnails between response text segments. Click to enlarge and browse the other images in that response. Newly generated Yeaft images stay anchored to their source tool even when the upload finishes after later text or history is reloaded. Older images without source metadata retain their existing position rather than guessing which text they belong to.
+
 ### Answer AskUser questions
 
 A VP's `AskUser` call appears as an interactive card. You can switch Sessions and return to answer while the request remains active on the Agent.

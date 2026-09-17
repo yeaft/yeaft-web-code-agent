@@ -60,6 +60,47 @@ describe('Yeaft asset store', () => {
   });
 
 
+  it('keeps source tool call anchors isolated per turn for duplicate assets', () => {
+    const assets = store();
+    assets.put({
+      ownerId: 'u', agentId: 'a', sessionId: 's', data: PNG,
+      turnId: 'turn-1', sourceToolCallId: 'tool-1',
+    });
+    assets.put({
+      ownerId: 'u', agentId: 'a', sessionId: 's', data: PNG,
+      turnId: 'turn-2', sourceToolCallId: 'tool-2',
+    });
+
+    const described = assets.describeTurns({
+      ownerId: 'u', agentId: 'a', sessionId: 's', turnIds: ['turn-1', 'turn-2'],
+    });
+    expect(described.get('turn-1')).toEqual([
+      expect.objectContaining({ sourceToolCallId: 'tool-1' }),
+    ]);
+    expect(described.get('turn-2')).toEqual([
+      expect.objectContaining({ sourceToolCallId: 'tool-2' }),
+    ]);
+  });
+
+  it('keeps legacy and repeated tool occurrences after reopening the asset store', () => {
+    const assets = store();
+    const scope = { ownerId: 'u', agentId: 'a', sessionId: 's' };
+    assets.put({ ...scope, data: PNG, turnId: 'legacy-turn' });
+    for (const sourceToolCallId of ['call-1', 'call-2', 'call-2']) {
+      assets.put({ ...scope, data: PNG, turnId: 'legacy-turn', sourceToolCallId, vpId: 'vp1' });
+    }
+    const reopened = createYeaftAssetStore({ root: dirs.at(-1), secret: 'test-secret' });
+    const images = reopened.describeTurn({ ...scope, turnId: 'legacy-turn' });
+    expect(images).toHaveLength(3);
+    expect(images[0]).not.toHaveProperty('sourceToolCallId');
+    expect(images.slice(1)).toEqual([
+      expect.objectContaining({ sourceToolCallId: 'call-1', vpId: 'vp1' }),
+      expect.objectContaining({ sourceToolCallId: 'call-2', vpId: 'vp1' }),
+    ]);
+    expect(reopened.describeTurn({ ...scope, agentId: 'other', turnId: 'legacy-turn' })).toEqual([]);
+  });
+
+
   it('deletes only the requested Session scope', () => {
     const assets = store();
     const first = assets.put({ ownerId: 'u', agentId: 'a', sessionId: 's1', data: PNG });
