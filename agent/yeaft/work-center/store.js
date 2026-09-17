@@ -3767,12 +3767,10 @@ export class WorkItemStore {
   }) {
     const decision = result?.decision || {};
     const generatedTitle = workItem.titleSource === 'coordinator_pending'
-      && typeof decision.title === 'string' && decision.title.trim()
-      ? decision.title.trim().slice(0, 200)
+      ? (typeof decision.title === 'string' && decision.title.trim()
+        ? decision.title.trim().slice(0, 200)
+        : String(workItem.goal || workItem.title || 'Work Item').trim().replace(/\s+/g, ' ').slice(0, 200))
       : null;
-    if (workItem.titleSource === 'coordinator_pending' && !generatedTitle) {
-      throw new Error('Initial Coordinator decision requires a concise WorkItem title');
-    }
     if (generatedTitle) {
       const changedTitle = this.db.prepare(`UPDATE work_items SET title = ?, title_source = 'coordinator',
         updated_at = ? WHERE id = ? AND title_source = 'coordinator_pending'`).run(
@@ -3805,17 +3803,23 @@ export class WorkItemStore {
       throw new Error('WorkItem delivery target must be confirmed before creating mutating or delivery Actions');
     }
     const refined = { ...workItem, ...(contractPatch || {}) };
+    const hasExplicitTitle = Object.hasOwn(contractPatch || {}, 'title');
     const contractChanged = ['title', 'goal', 'deliveryTarget', 'acceptanceCriteria']
       .some(key => JSON.stringify(refined[key]) !== JSON.stringify(workItem[key]));
     if (contractChanged) {
       this.#invalidateExecution(workItem, 'superseded', 'superseded', 'User refined the WorkItem contract', now);
       this.db.prepare(`UPDATE work_items SET title = ?, goal = ?, acceptance_criteria = ?,
-        delivery_target = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?`).run(
+        delivery_target = ?, title_source = CASE WHEN ? THEN 'explicit' ELSE title_source END,
+        revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?`).run(
         refined.title, refined.goal, stringify(refined.acceptanceCriteria), refined.deliveryTarget,
-        now, workItem.id, workItem.revision,
+        hasExplicitTitle ? 1 : 0, now, workItem.id, workItem.revision,
       );
       workItem = this.getWorkItem(workItem.id);
       activeActions = [];
+    } else if (hasExplicitTitle && workItem.titleSource !== 'explicit') {
+      this.db.prepare(`UPDATE work_items SET title_source = 'explicit', updated_at = ?
+        WHERE id = ? AND revision = ?`).run(now, workItem.id, workItem.revision);
+      workItem = this.getWorkItem(workItem.id);
     }
 
     if (decision.kind === 'create_actions') {

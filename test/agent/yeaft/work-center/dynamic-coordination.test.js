@@ -247,17 +247,21 @@ describe('Work Center dynamic coordination contract', () => {
       },
     }, pending, { automatic: true, availableVpIds: ['linus'] });
     expect(normalized.decision.title).toBe('Derive a concise WorkItem title');
-    expect(() => normalizeCoordinatorResponse({
+    const fallback = normalizeCoordinatorResponse({
       reply: 'The request is ready for coordination.',
       decision: {
         kind: 'request_human',
         reason: 'The delivery boundary still needs confirmation.',
         question: 'Which delivery target should be used?',
       },
-    }, pending, { automatic: true, availableVpIds: ['linus'] })).toThrow(/decision title/);
+    }, pending, { automatic: true, availableVpIds: ['linus'] });
+    expect(fallback.decision.title).toBe(pending.goal);
+    expect(normalizeCoordinatorResponse({ ...fallback, decision: {
+      ...fallback.decision, title: 'x'.repeat(300),
+    } }, pending, { automatic: true, availableVpIds: ['linus'] }).decision.title).toHaveLength(200);
   });
 
-  it('persists a generated title once and keeps pending state across a failed retry', () => {
+  it('persists a generated title without rejecting an otherwise valid decision', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'yeaft-dynamic-title-'));
     store = new WorkItemStore(join(tempDir, 'work-center.db'));
     const controller = new WorkflowController(store);
@@ -283,20 +287,35 @@ describe('Work Center dynamic coordination contract', () => {
         question: 'Which delivery target should be used?',
       },
     };
-    expect(() => store.completeCoordinatorTurn(turn.turnId, response, turn.fence))
-      .toThrow(/requires a concise WorkItem title/);
-    expect(store.getWorkItem(created.id)).toMatchObject({
-      title: originalGoal, titleSource: 'coordinator_pending', goal: originalGoal,
-    });
-
-    const titled = store.completeCoordinatorTurn(turn.turnId, {
-      ...response,
-      decision: { ...response.decision, title: 'Preserve requirements through retries' },
-    }, turn.fence);
+    const titled = store.completeCoordinatorTurn(turn.turnId, response, turn.fence);
     expect(titled).toMatchObject({
-      title: 'Preserve requirements through retries',
+      title: originalGoal,
       titleSource: 'coordinator',
       goal: originalGoal,
+    });
+
+    const current = store.getWorkItem(created.id);
+    const refinement = store.claimStartedCoordinatorTurn(store.beginCoordinatorTurn(
+      created.id,
+      'Use my explicit title.',
+      {
+        revision: current.revision,
+        planRevision: current.planRevision,
+        ledgerRevision: current.ledgerRevision,
+        coordinatorRevision: current.coordinatorRevision,
+      },
+    ), 'coordinator-owner');
+    const contractPatch = { title: originalGoal };
+    const refined = store.completeCoordinatorTurn(refinement.turnId, {
+      reply: 'The explicit title is saved.',
+      decision: {
+        kind: 'request_human', reason: 'Apply the user refinement.',
+        question: 'What should happen next?', contractPatch,
+      },
+      mutation: { contractPatch },
+    }, refinement.fence);
+    expect(refined).toMatchObject({
+      title: originalGoal, titleSource: 'explicit', goal: originalGoal,
     });
   });
 
