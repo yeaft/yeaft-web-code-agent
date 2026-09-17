@@ -7,6 +7,8 @@ const sendToWebClient = vi.fn(async (client, msg) => {
 const forwardToAgent = vi.fn(async () => true);
 const broadcastAgentList = vi.fn(async () => {});
 const broadcastSessionCatalog = vi.fn(async () => {});
+const forwardToClients = vi.fn();
+const sendToAgent = vi.fn();
 const buildSessionCatalog = vi.fn(() => []);
 const buildHiddenSessionCatalog = vi.fn(() => []);
 const getByUser = vi.fn(() => []);
@@ -41,6 +43,8 @@ const verifyAgentOwnership = vi.fn(() => true);
 vi.mock('../../server/ws-utils.js', () => ({
   sendToWebClient,
   forwardToAgent,
+  forwardToClients,
+  sendToAgent,
   broadcastAgentList,
   broadcastSessionCatalog,
   buildSessionCatalog,
@@ -97,7 +101,7 @@ vi.mock('../../server/handlers/session-pin-router.js', () => ({
 
 const { CONFIG } = await import('../../server/config.js');
 const { agents, pendingYeaftDebugRequests, webClients } = await import('../../server/context.js');
-const { handleAgentOutput } = await import('../../server/handlers/agent-output.js');
+const { handleAgentOutput, projectConfirmedAssetImages } = await import('../../server/handlers/agent-output.js');
 const {
   groupOnlineYeaftSessions,
   handleClientConversation,
@@ -159,6 +163,60 @@ afterEach(() => {
 });
 
 describe('Yeaft Session online Agent filtering', () => {
+  it('projects confirmed images at source tools, including tool-only pages, without crossing VP ownership', () => {
+    const scope = { ownerId: 'owner', agentId: 'agent', sessionId: 'session' };
+    const source = { assetId: 'same-pixels', sourceToolCallId: 'call-image', vpId: 'vp1' };
+    const legacy = { assetId: 'old-image' };
+    const assets = { describeTurns: vi.fn(() => new Map([['turn', [source, legacy]]])) };
+    const messages = [
+      { id: 'm1', role: 'assistant', turnId: 'turn', speakerVpId: 'vp1', content: '', toolCalls: [{ id: 'call-image' }] },
+      { id: 'm2', role: 'assistant', turnId: 'turn', speakerVpId: 'vp2', content: 'Other VP', toolCalls: [{ id: 'call-image' }] },
+      { id: 'm3', role: 'assistant', turnId: 'turn', speakerVpId: 'vp1', content: 'Summary', imageAssetAnchor: true, images: [{ assetId: 'unconfirmed' }] },
+    ];
+    const projected = projectConfirmedAssetImages(messages, scope, assets);
+    expect(projected[0].images).toEqual([source]);
+    expect(projected[1]).not.toHaveProperty('images');
+    expect(projected[2].images).toEqual([legacy]);
+    expect(assets.describeTurns).toHaveBeenCalledWith({ ...scope, turnIds: ['turn'] });
+    expect(projectConfirmedAssetImages([messages[0]], scope, assets)[0].images).toEqual([source]);
+    expect(projectConfirmedAssetImages([messages[2]], scope, assets)[0].images).toEqual([legacy]);
+    expect(messages[0]).not.toHaveProperty('images');
+    // Asset creation order is A/B; this tool returned B/A/A.
+    assets.describeTurns.mockReturnValue(new Map([['turn', [
+      { ...source, assetId: 'a', sourceImageIndex: 1 },
+      { ...source, assetId: 'a', sourceImageIndex: 2 },
+      { ...source, assetId: 'b', sourceImageIndex: 0 },
+    ]]]));
+    expect(projectConfirmedAssetImages([messages[0]], scope, assets)[0].images.map(image => [image.assetId, image.sourceImageIndex]))
+      .toEqual([['b', 0], ['a', 1], ['a', 2]]);
+  });
+
+  it('relays each uploaded image source in the live asset-ready frame', async () => {
+    const { yeaftAssetStore } = await import('../../server/yeaft-asset-store.js');
+    const put = vi.spyOn(yeaftAssetStore, 'put').mockReturnValue({ assetId: 'asset', src: '/asset.png' });
+    forwardToClients.mockClear();
+    sendToAgent.mockClear();
+    try {
+      await handleAgentOutput('agent', { ownerId: 'owner' }, {
+        type: 'yeaft_asset_put', conversationId: 'conversation', sessionId: 'session',
+        vpId: 'vp', turnId: 'turn', sourceToolCallId: 'call-image', sourceImageIndex: 0, deliveryId: 'delivery',
+        image: { previewData: { data: 'png', mimeType: 'image/png' } },
+      });
+      expect(put).toHaveBeenCalledWith(expect.objectContaining({
+        ownerId: 'owner', agentId: 'agent', sessionId: 'session',
+        turnId: 'turn', vpId: 'vp', sourceToolCallId: 'call-image', sourceImageIndex: 0,
+      }));
+      expect(forwardToClients).toHaveBeenCalledWith('agent', 'conversation', expect.objectContaining({
+        type: 'yeaft_asset_ready', image: { assetId: 'asset', src: '/asset.png', sourceToolCallId: 'call-image', sourceImageIndex: 0 },
+        _requestUserId: 'owner',
+      }));
+    } finally {
+      put.mockRestore();
+      forwardToClients.mockClear();
+      sendToAgent.mockClear();
+    }
+  });
+
   it('registers a fork and inherits its Project atomically using real SQLite, without crossing owner/Agent scopes', async () => {
     const { yeaftProjectDb: projects, yeaftSessionDb: sessions, userDb } = await vi.importActual('../../server/database.js');
     const { transaction } = await import('../../server/db/connection.js');

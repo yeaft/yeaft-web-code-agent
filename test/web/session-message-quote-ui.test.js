@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import {
   appendTurnResponseSegment,
+  buildTurnResponseBlocks,
   finalizeTurnResponseSegments,
   markTurnResponseKinds,
+  orderResponseImageMessages,
 } from '../../web/utils/turn-response.js';
 import {
   messageVpOwner,
@@ -87,6 +89,121 @@ describe('Session message quote UI wiring', () => {
     expect(withoutOrigin.find('.turn-footer').exists()).toBe(false);
     withoutOrigin.unmount();
     wrapper.unmount();
+  });
+
+  it('keeps response images between surrounding text in live and replayed turns', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({}) });
+    vi.stubGlobal('marked', { setOptions() {}, parse: text => `<p>${text}</p>` });
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const rows = [
+      { id: 'intro', type: 'assistant', content: 'First screenshot', responseKind: 'progress' },
+      { id: 'tool', type: 'tool-use', toolName: 'ViewImage' },
+      { id: 'img-a', assetId: 'asset-a', type: 'chat-image', src: '/a.png' },
+      { id: 'img-b', type: 'chat-image', src: '/b.png' },
+      { id: 'more', type: 'assistant', content: 'Another detail', responseKind: 'progress' },
+      { id: 'img-c', type: 'chat-image', src: '/c.png' },
+      { id: 'result', type: 'assistant', content: 'Unrelated final summary', responseKind: 'result' },
+    ];
+    const makeTurn = messages => {
+      const turn = { messages, imageMsgs: messages.filter(row => row.type === 'chat-image'), toolMsgs: [], textSegments: [] };
+      messages.filter(row => row.type === 'assistant').forEach(row => appendTurnResponseSegment(turn, row));
+      return turn;
+    };
+    const turn = makeTurn(rows.slice(0, 4));
+    const wrapper = mount(AssistantTurn, {
+      props: { turn },
+      global: { mocks: { $t: key => key }, provide: { t: key => key } },
+    });
+    try {
+      const order = () => wrapper.findAll('.turn-content > :not(.turn-header)').map(node => (
+        node.classes().includes('turn-images') ? node.findAll('img').map(img => img.attributes('src')).join(',') : node.text()
+      ));
+      expect(order()).toEqual(['First screenshot', '/a.png,/b.png']);
+      await wrapper.setProps({ turn: makeTurn(rows) });
+      const expected = ['First screenshot', '/a.png,/b.png', 'Another detail', '/c.png', 'Unrelated final summary'];
+      expect(order()).toEqual(expected);
+      // History deserialization must not rely on shared message object identity.
+      const replay = makeTurn(JSON.parse(JSON.stringify(rows)));
+      replay.imageMsgs = JSON.parse(JSON.stringify(replay.imageMsgs));
+      replay.isHistory = true;
+      finalizeTurnResponseSegments(replay);
+      await wrapper.setProps({ turn: replay });
+      expect(order()).toEqual(expected);
+      expect(wrapper.findAll('.turn-image-item')).toHaveLength(3);
+      await wrapper.get('img[src="/c.png"]').trigger('error');
+      expect(wrapper.findAll('.turn-image-fallback')).toHaveLength(1);
+      expect(order().at(-1)).toBe('Unrelated final summary');
+      // Existing text-only, image-only and old callers without a transcript.
+      expect(buildTurnResponseBlocks({}, [])).toEqual([]);
+      expect(buildTurnResponseBlocks({ imageMsgs: replay.imageMsgs }, []).map(block => block.items.length)).toEqual([3]);
+      expect(buildTurnResponseBlocks({}, replay.textSegments).map(block => block.kind)).toEqual(['progress', 'result']);
+      expect(buildTurnResponseBlocks({ imageMsgs: replay.imageMsgs }, replay.textSegments).map(block => block.kind)).toEqual(['progress', 'result', 'images']);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('anchors delayed assets without crossing Session/VP ownership or moving later user turns', () => {
+    const scope = { sessionId: 's1', speakerVpId: 'vp1', turnId: 'turn1' };
+    const intro = { ...scope, id: 'intro', type: 'assistant', content: 'Screenshot below', responseKind: 'progress' };
+    const tool = { ...scope, id: 'tool', type: 'tool-use', toolId: 'call-image' };
+    const result = { ...scope, id: 'result', type: 'assistant', content: 'Unrelated conclusion', responseKind: 'result' };
+    const nextUser = { id: 'next-user', type: 'user', content: 'Next question' };
+    const image = { ...scope, id: 'image', type: 'chat-image', sourceToolCallId: 'call-image', src: '/late.png' };
+    const otherSession = { ...image, id: 'other-session-image', sessionId: 's2' };
+    const otherVp = { ...image, id: 'other-vp-image', speakerVpId: 'vp2' };
+    const noAnchor = { ...image, id: 'unloaded-tool-image', sourceToolCallId: 'missing' };
+    const legacy = { ...image, id: 'legacy-image', sourceToolCallId: undefined };
+    const rows = [intro, tool, result, nextUser, image, otherSession, otherVp, noAnchor, legacy];
+    expect(orderResponseImageMessages(rows).map(row => row.id)).toEqual([
+      'intro', 'tool', 'image', 'result', 'next-user', 'other-session-image', 'other-vp-image', 'unloaded-tool-image', 'legacy-image',
+    ]);
+    expect(rows[4]).toBe(image);
+    expect(orderResponseImageMessages([intro, result])).toEqual([intro, result]);
+    const turn = { messages: [intro, tool, result, image], imageMsgs: [image], textSegments: [] };
+    [intro, result].forEach(row => appendTurnResponseSegment(turn, row));
+    expect(buildTurnResponseBlocks(turn, turn.textSegments).map(block => block.kind)).toEqual(['progress', 'images', 'result']);
+    const history = JSON.parse(JSON.stringify(turn));
+    expect(buildTurnResponseBlocks(history, history.textSegments).map(block => block.kind)).toEqual(['progress', 'images', 'result']);
+  });
+
+  it('preserves asset-ready source anchors and distinct occurrences while deduplicating delivery retries', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}) });
+    const { handleMessage } = await import('../../web/stores/helpers/messageHandler.js');
+    const store = {
+      messagesMap: { conv: [] },
+      addMessageToConversation(id, row) { this.messagesMap[id].push(row); },
+    };
+    const frame = {
+      type: 'yeaft_asset_ready', conversationId: 'conv', agentId: 'agent1',
+      sessionId: 's1', vpId: 'vp1', turnId: 'turn1',
+      image: { assetId: 'same-pixels', src: '/image.png', sourceToolCallId: 'call1' },
+    };
+    handleMessage(store, frame);
+    handleMessage(store, frame);
+    handleMessage(store, { ...frame, image: { ...frame.image, sourceToolCallId: 'call2' } });
+    expect(store.messagesMap.conv).toHaveLength(2);
+    expect(store.messagesMap.conv.map(row => row.sourceToolCallId)).toEqual(['call1', 'call2']);
+    const scope = { sessionId: 's1', speakerVpId: 'vp1', turnId: 'turn1' };
+    const intro = { ...scope, id: 'intro', type: 'assistant', content: 'One' };
+    const middle = { ...scope, id: 'middle', type: 'assistant', content: 'Two' };
+    const turn = { messages: [intro, { ...scope, type: 'tool-use', toolId: 'call1' }, middle,
+      { ...scope, type: 'tool-use', toolId: 'call2' }, ...store.messagesMap.conv], imageMsgs: store.messagesMap.conv, textSegments: [] };
+    [intro, middle].forEach(row => appendTurnResponseSegment(turn, row));
+    expect(buildTurnResponseBlocks(turn, turn.textSegments).map(block => block.kind)).toEqual(['progress', 'images', 'progress', 'images']);
+    const first = { ...frame, image: { ...frame.image, sourceImageIndex: 0 } };
+    const second = { ...frame, image: { ...frame.image, sourceImageIndex: 1 } };
+    store.messagesMap.conv = [];
+    handleMessage(store, second);
+    handleMessage(store, first);
+    handleMessage(store, first);
+    expect(store.messagesMap.conv).toHaveLength(2);
+    const reordered = orderResponseImageMessages([{ ...scope, type: 'tool-use', toolId: 'call1' }, ...store.messagesMap.conv]);
+    expect(reordered.slice(1).map(row => row.sourceImageIndex)).toEqual([0, 1]);
+    expect(buildTurnResponseBlocks({ messages: reordered, imageMsgs: store.messagesMap.conv }, [])[0].items.map(image => image.sourceImageIndex))
+      .toEqual([0, 1]);
   });
 
   it('keeps user attachments inside the bubble and separates turn progress from the final Markdown result', async () => {

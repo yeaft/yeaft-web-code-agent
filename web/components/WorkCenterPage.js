@@ -2095,8 +2095,8 @@ export default {
                                 </span>
                                 <small class="work-center-action-vp">{{ actionExecutor(action) }}</small>
                                 <small class="work-center-action-timing">
-                                  <span>{{ tr('workCenter.created', 'Created') }} {{ time(action.createdAt) || '—' }}</span>
-                                  <span>{{ tr('workCenter.executionDuration', 'Runtime') }} {{ actionDuration(action) }}</span>
+                                  <span><span class="work-center-action-timing-label">{{ tr('workCenter.created', 'Created') }} </span><span>{{ time(action.createdAt) || '—' }}</span></span>
+                                  <span><span class="work-center-action-timing-label">{{ tr('workCenter.executionDuration', 'Runtime') }} </span><span>{{ actionDuration(action) }}</span></span>
                                 </small>
                               </span>
                               <span class="work-center-action-chevron" aria-hidden="true"></span>

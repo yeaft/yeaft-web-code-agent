@@ -4290,12 +4290,14 @@ function handleEngineEvent(event, hctx) {
     case 'tool_end': {
       const images = Array.isArray(event.displayImages) ? event.displayImages : [];
       const displayOutput = typeof event.output === 'string' ? event.output : JSON.stringify(event.output ?? '');
-      for (const image of images) {
+      for (const [sourceImageIndex, image] of images.entries()) {
         const persistedImage = imageMetadataForPersistence(image);
         try {
           if (!ctx.assetOutbox) throw new Error('asset outbox is unavailable');
           const deliveryId = ctx.assetOutbox.enqueue({
             conversationId: yeaftConversationId,
+            sourceToolCallId: event.id,
+            sourceImageIndex,
             metadata: persistedImage,
             sessionId: hctx.sessionId,
             vpId: hctx.vpId,

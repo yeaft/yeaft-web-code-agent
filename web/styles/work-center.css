@@ -1766,6 +1766,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+.work-center-action-timing > :last-child {
+  margin-left: auto;
+  text-align: right;
+}
+
+.work-center-action-timing-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .work-center-action-description {
   color: var(--text-secondary);
   font-size: 11px;
