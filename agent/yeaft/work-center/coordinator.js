@@ -295,9 +295,8 @@ function cleanText(value, limit, name) {
 function conciseDisplayTitle(value) {
   const text = String(value || '').trim().replace(/\s+/g, ' ');
   if (!text) return '';
-  const sentence = text.split(/(?<=[。！？.!?])\s*/u)[0] || text;
-  const words = sentence.split(' ');
-  const concise = words.length > 12 ? `${words.slice(0, 12).join(' ')}…` : sentence;
+  const words = text.split(' ');
+  const concise = words.length > 12 ? `${words.slice(0, 12).join(' ')}…` : text;
   const characters = [...concise];
   return characters.length > 80 ? `${characters.slice(0, 79).join('')}…` : concise;
 }

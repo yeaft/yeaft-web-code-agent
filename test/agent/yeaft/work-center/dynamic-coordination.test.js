@@ -270,6 +270,16 @@ describe('Work Center dynamic coordination contract', () => {
       },
     }, longGoal, { automatic: true, availableVpIds: ['linus'] }).decision.title)
       .toBe('Implement a detailed Work Center experience that keeps the original requirement…');
+    expect(normalizeCoordinatorResponse({
+      reply: 'The request is ready for coordination.',
+      decision: {
+        kind: 'request_human',
+        reason: 'The delivery boundary still needs confirmation.',
+        title: 'Fix Node.js build for v1.2 release',
+        question: 'Which delivery target should be used?',
+      },
+    }, pending, { automatic: true, availableVpIds: ['linus'] }).decision.title)
+      .toBe('Fix Node.js build for v1.2 release');
   });
 
   it('persists a generated title without rejecting an otherwise valid decision', () => {
