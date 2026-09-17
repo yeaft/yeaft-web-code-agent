@@ -44,6 +44,8 @@ For a new WorkItem, provide:
 5. the delivery target (or ask before delivery);
 6. whether execution should start immediately.
 
+The title is a short display label, separate from the original requirement or goal. An explicitly supplied title is preserved. When it is omitted, the existing initial Coordinator decision generates one without another model call; retries keep the original goal unchanged, and older WorkItems keep their stored titles.
+
 When created from a Session, the runtime stamps the source Session; model input cannot replace that identity.
 
 ## Planning and execution

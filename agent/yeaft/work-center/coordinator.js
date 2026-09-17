@@ -230,6 +230,7 @@ Return exactly one JSON object and no surrounding prose:
   "decision": {
     "kind": "answer|create_actions|guide_actions|request_human|complete",
     "reason": "short audit reason",
+    "title": null,
     "question": null,
     "workItemType": null,
     "contractPatch": null,
@@ -242,6 +243,7 @@ Return exactly one JSON object and no surrounding prose:
 }
 
 Rules:
+- When workItem.titleSource is coordinator_pending, include a concise title (at most 200 characters) in decision.title. This display label summarizes the original goal; it is not a contractPatch and must not rewrite or shorten the goal. Otherwise leave decision.title null.
 - answer: explain state only. Never use it for an automatic advance trigger.
 - Never mutate title, goal, acceptanceCriteria, or deliveryTarget during automatic advance/recovery. contractPatch is allowed only for explicit user-originated refinement, never to make existing evidence pass. For an older WorkItem with no acceptance criteria, request_human to establish its completion condition before commissioning new work.
 - create_actions: create 1..8 currently runnable Actions. Every Action needs type, objective, approach, expectedOutcome, capability, candidateVpIds, assignmentReason, sourceActionIds, workspaceMode, and optional maxAttempts/separateFromActionTypes. sourceActionIds are context/audit references, never scheduling dependencies. Do not include dependsOnActionIds, dependsOnStageIds, stages, or a graph.
@@ -460,8 +462,11 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
   const kind = allowedKinds.includes(source.kind) ? source.kind : '';
   if (!kind) throw new Error('Work Center Coordinator decision kind is invalid');
   const reason = cleanText(source.reason, 2_000, 'decision reason');
+  const generatedTitle = detail.titleSource === 'coordinator_pending'
+    ? cleanText(source.title, 200, 'decision title')
+    : null;
   if (kind === 'answer') {
-    return { reply, decision: { kind, reason, contractPatch: null, guidance: [], actions: [] } };
+    return { reply, decision: { kind, reason, title: generatedTitle, contractPatch: null, guidance: [], actions: [] } };
   }
   if (kind === 'guide_actions') {
     const guidance = normalizeGuidance(source.guidance, detail);
@@ -478,6 +483,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
       decision: {
         kind,
         reason,
+        title: generatedTitle,
         contractPatch: null,
         guidance,
         actions: [],
@@ -491,6 +497,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
       decision: {
         kind,
         reason,
+        title: generatedTitle,
         question: cleanText(source.question, COORDINATOR_MAX_REPLY_CHARS, 'human question'),
         contractPatch: dynamic && options.automatic !== true ? contractPatch : null,
         guidance: [],
@@ -504,6 +511,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
       decision: {
         kind,
         reason,
+        title: generatedTitle,
         closeActions: normalizeDynamicActionClosures(source.closeActions, detail.actions || []),
         completion: source.completion,
         contractPatch: null,
@@ -520,6 +528,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
     const decision = {
       kind,
       reason,
+      title: generatedTitle,
       workItemType: source.workItemType,
       contractPatch,
       closeActions: source.closeActions,
@@ -551,6 +560,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
     decision: {
       kind,
       reason,
+      title: generatedTitle,
       contractPatch,
       guidance: [],
       actions: normalizeCoordinatorActionReferences(source.actions, detail),
@@ -616,6 +626,7 @@ export function coordinatorSnapshot(detail) {
     ledgerRevision: detail.ledgerRevision,
     status: truncateUtf8(detail.status, 64),
     title: truncateUtf8(detail.title, 1 * 1024),
+    titleSource: detail.titleSource || 'explicit',
     goal: truncateUtf8(detail.goal, 4 * 1024),
     deliveryTarget: detail.deliveryTarget || null,
     acceptanceCriteria,

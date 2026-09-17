@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-export const WORK_CENTER_SCHEMA_VERSION = 39;
+export const WORK_CENTER_SCHEMA_VERSION = 40;
 
 const MIGRATIONS = [
   ['23-conversation-stream', migrateConversationStream],

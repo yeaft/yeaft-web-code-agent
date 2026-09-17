@@ -44,6 +44,8 @@ Item 的「工作项 / 标题」面包屑与快捷图标放在唯一顶栏，起
 5. 交付目标（或选择交付前询问）；
 6. 是否立即开始执行。
 
+标题是简短的展示标签，与用户原始 requirement 或 goal 分开保存。显式提供的标题会原样保留；省略标题时，由已有的首次 Coordinator 决策一并生成，不增加独立 model 调用。重试不会改写原始 goal，旧 WorkItem 也继续保留已有标题。
+
 从 Session 创建时，runtime 会强制写入来源 Session；model input 不能替换这个 identity。
 
 ## 规划与执行

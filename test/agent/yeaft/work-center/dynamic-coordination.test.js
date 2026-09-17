@@ -10,7 +10,11 @@ import {
   prepareDynamicActionMutation,
   resolveDynamicActionPolicySnapshot,
 } from '../../../../agent/yeaft/work-center/dynamic-coordination.js';
-import { WorkItemCoordinator, normalizeCoordinatorResponse } from '../../../../agent/yeaft/work-center/coordinator.js';
+import {
+  WorkItemCoordinator,
+  coordinatorSnapshot,
+  normalizeCoordinatorResponse,
+} from '../../../../agent/yeaft/work-center/coordinator.js';
 import { Registry } from '../../../../agent/yeaft/vp/registry.js';
 import { WorkItemStore } from '../../../../agent/yeaft/work-center/store.js';
 import { WorkCenterService } from '../../../../agent/yeaft/work-center/service.js';
@@ -220,6 +224,82 @@ describe('Work Center dynamic coordination contract', () => {
     }, detail, { automatic: true, availableVpIds: ['linus'] })).toThrow(/decision kind is invalid/);
   });
 
+  it('generates a pending title in the existing Coordinator decision without changing the goal', () => {
+    const pending = workItem({
+      title: 'Keep this original requirement intact while deriving a short display label',
+      titleSource: 'coordinator_pending',
+      goal: 'Keep this original requirement intact while deriving a short display label',
+      actions: [],
+      runs: [],
+    });
+    expect(coordinatorSnapshot(pending).workItem).toMatchObject({
+      titleSource: 'coordinator_pending',
+      goal: pending.goal,
+    });
+
+    const normalized = normalizeCoordinatorResponse({
+      reply: 'The request is ready for coordination.',
+      decision: {
+        kind: 'request_human',
+        reason: 'The delivery boundary still needs confirmation.',
+        title: 'Derive a concise WorkItem title',
+        question: 'Which delivery target should be used?',
+      },
+    }, pending, { automatic: true, availableVpIds: ['linus'] });
+    expect(normalized.decision.title).toBe('Derive a concise WorkItem title');
+    expect(() => normalizeCoordinatorResponse({
+      reply: 'The request is ready for coordination.',
+      decision: {
+        kind: 'request_human',
+        reason: 'The delivery boundary still needs confirmation.',
+        question: 'Which delivery target should be used?',
+      },
+    }, pending, { automatic: true, availableVpIds: ['linus'] })).toThrow(/decision title/);
+  });
+
+  it('persists a generated title once and keeps pending state across a failed retry', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'yeaft-dynamic-title-'));
+    store = new WorkItemStore(join(tempDir, 'work-center.db'));
+    const controller = new WorkflowController(store);
+    const originalGoal = 'Preserve this detailed original requirement through Coordinator retries';
+    const created = controller.create({
+      ...workItem(),
+      title: originalGoal,
+      titleSource: 'coordinator_pending',
+      goal: originalGoal,
+      workDir: tempDir,
+      workflowTemplate: 'coordinator-driven',
+      start: true,
+    });
+    const mailbox = store.enqueueCoordinatorMailbox(created.id, 'work_item_created', {}, 'dynamic:title:test');
+    const claim = store.claimCoordinatorMailbox(created.id, 'coordinator-owner');
+    const turn = store.beginDynamicCoordinatorTurn(mailbox.id, {
+      ownerBootId: 'coordinator-owner', claimEpoch: claim.claim_epoch,
+    });
+    const response = {
+      reply: 'Delivery needs confirmation.',
+      decision: {
+        kind: 'request_human', reason: 'The delivery boundary is ambiguous.',
+        question: 'Which delivery target should be used?',
+      },
+    };
+    expect(() => store.completeCoordinatorTurn(turn.turnId, response, turn.fence))
+      .toThrow(/requires a concise WorkItem title/);
+    expect(store.getWorkItem(created.id)).toMatchObject({
+      title: originalGoal, titleSource: 'coordinator_pending', goal: originalGoal,
+    });
+
+    const titled = store.completeCoordinatorTurn(turn.turnId, {
+      ...response,
+      decision: { ...response.decision, title: 'Preserve requirements through retries' },
+    }, turn.fence);
+    expect(titled).toMatchObject({
+      title: 'Preserve requirements through retries',
+      titleSource: 'coordinator',
+      goal: originalGoal,
+    });
+  });
+
   it('persists dynamic Actions and automatically reconciles only after the runnable batch settles', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'yeaft-dynamic-loop-'));
     let now = 1_000;
@@ -413,15 +493,18 @@ describe('Work Center dynamic coordination contract', () => {
       }),
     });
     try {
+      const originalGoal = 'Preserve the existing Work Center UX without replacing this requirement';
       const created = await service.handle('create', {
-        title: 'Coordinator-driven service item',
-        goal: 'Preserve the existing Work Center UX',
+        goal: originalGoal,
         acceptanceCriteria: ['The detail DTO stays compatible'],
         workDir: tempDir,
         start: true,
       });
       expect(created).toMatchObject({
         status: 'running',
+        title: originalGoal,
+        titleSource: 'coordinator_pending',
+        goal: originalGoal,
         coordinationMode: 'dynamic',
         workflowSnapshot: { planningMode: 'coordinator', executionMode: 'dynamic' },
         actions: [],
@@ -433,6 +516,19 @@ describe('Work Center dynamic coordination contract', () => {
       expect(store.listPendingDynamicCoordinatorWakes()).toEqual([
         expect.objectContaining({ workItemId: created.id, kind: 'work_item_started' }),
       ]);
+
+      const explicit = await service.handle('create', {
+        title: 'Keep this explicit title',
+        goal: 'This separate requirement must remain unchanged',
+        acceptanceCriteria: ['The title is explicit'],
+        workDir: tempDir,
+        start: false,
+      });
+      expect(explicit).toMatchObject({
+        title: 'Keep this explicit title',
+        titleSource: 'explicit',
+        goal: 'This separate requirement must remain unchanged',
+      });
     } finally {
       await service.shutdown();
     }

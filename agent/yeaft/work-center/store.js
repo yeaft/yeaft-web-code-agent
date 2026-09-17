@@ -113,6 +113,7 @@ function mapWorkItem(row) {
     finalResult: parseJson(row.final_result, null),
     deliveryTarget: row.delivery_target || null,
     title: row.title,
+    titleSource: row.title_source || 'explicit',
     goal: row.goal,
     acceptanceCriteria: parseJson(row.acceptance_criteria, []),
     workflowTemplate: row.workflow_template,
@@ -857,6 +858,7 @@ export class WorkItemStore {
         final_result TEXT,
         delivery_target TEXT,
         title TEXT NOT NULL,
+        title_source TEXT NOT NULL DEFAULT 'explicit',
         goal TEXT NOT NULL,
         acceptance_criteria TEXT NOT NULL,
         workflow_template TEXT NOT NULL,
@@ -1138,6 +1140,10 @@ export class WorkItemStore {
     }
     if (!hasColumn(this.db, 'work_items', 'delivery_target')) {
       this.db.exec('ALTER TABLE work_items ADD COLUMN delivery_target TEXT');
+    }
+    if (!hasColumn(this.db, 'work_items', 'title_source')) {
+      // Old titles were explicit under the previous creation contract.
+      this.db.exec("ALTER TABLE work_items ADD COLUMN title_source TEXT NOT NULL DEFAULT 'explicit'");
     }
     if (!hasColumn(this.db, 'actions', 'source_action_ids')) {
       this.db.exec("ALTER TABLE actions ADD COLUMN source_action_ids TEXT NOT NULL DEFAULT '[]'");
@@ -2387,15 +2393,16 @@ export class WorkItemStore {
       const workspaceKey = canonicalWorkspaceKey(input.workDir);
       this.db.prepare(`INSERT INTO work_items
         (id, revision, execution_schema_version, ledger_revision, coordination_mode, final_result, delivery_target,
-         title, goal, acceptance_criteria, workflow_template, workflow_snapshot, status,
+         title, title_source, goal, acceptance_criteria, workflow_template, workflow_snapshot, status,
          current_action_id, current_run_id, work_dir, workspace_key, reuse_memory, origin, linked_session_ids,
          session_context, attachments, created_at, updated_at)
-        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id,
         Number.isInteger(input.executionSchemaVersion) ? input.executionSchemaVersion : 2,
         input.coordinationMode || 'legacy',
         input.deliveryTarget || null,
         input.title,
+        input.titleSource === 'coordinator_pending' ? 'coordinator_pending' : 'explicit',
         input.goal,
         stringify(input.acceptanceCriteria || []),
         input.workflowTemplate || 'software-change',
@@ -3759,6 +3766,21 @@ export class WorkItemStore {
     turnId, result, expected, workItem, messages, assistantIndex, activeActions, now,
   }) {
     const decision = result?.decision || {};
+    const generatedTitle = workItem.titleSource === 'coordinator_pending'
+      && typeof decision.title === 'string' && decision.title.trim()
+      ? decision.title.trim().slice(0, 200)
+      : null;
+    if (workItem.titleSource === 'coordinator_pending' && !generatedTitle) {
+      throw new Error('Initial Coordinator decision requires a concise WorkItem title');
+    }
+    if (generatedTitle) {
+      const changedTitle = this.db.prepare(`UPDATE work_items SET title = ?, title_source = 'coordinator',
+        updated_at = ? WHERE id = ? AND title_source = 'coordinator_pending'`).run(
+        generatedTitle, now, workItem.id,
+      );
+      if (Number(changedTitle.changes) !== 1) throw new Error('Coordinator title generation lost its fence');
+      workItem = this.getWorkItem(workItem.id);
+    }
     const decisionPatch = normalizeContractPatch(decision.contractPatch);
     const mutationPatch = normalizeContractPatch(result?.mutation?.contractPatch);
     if (JSON.stringify(decisionPatch) !== JSON.stringify(mutationPatch) && mutationPatch) {
