@@ -112,6 +112,7 @@ function mapWorkItem(row) {
     coordinationMode: row.coordination_mode || 'legacy',
     finalResult: parseJson(row.final_result, null),
     deliveryTarget: row.delivery_target || null,
+    deliveryInstructions: row.delivery_instructions || '',
     schedule: row.schedule_status ? {
       status: row.schedule_status,
       scheduledFor: Number(row.scheduled_for) || null,
@@ -863,6 +864,7 @@ export class WorkItemStore {
         coordination_mode TEXT NOT NULL DEFAULT 'legacy',
         final_result TEXT,
         delivery_target TEXT,
+        delivery_instructions TEXT,
         schedule_status TEXT,
         scheduled_for INTEGER,
         schedule_triggered_at INTEGER,
@@ -1160,6 +1162,9 @@ export class WorkItemStore {
     }
     if (!hasColumn(this.db, 'work_items', 'delivery_target')) {
       this.db.exec('ALTER TABLE work_items ADD COLUMN delivery_target TEXT');
+    }
+    if (!hasColumn(this.db, 'work_items', 'delivery_instructions')) {
+      this.db.exec('ALTER TABLE work_items ADD COLUMN delivery_instructions TEXT');
     }
     if (!hasColumn(this.db, 'work_items', 'title_source')) {
       // Old titles were explicit under the previous creation contract.
@@ -2424,15 +2429,16 @@ export class WorkItemStore {
       const id = input.id || randomUUID();
       const workspaceKey = canonicalWorkspaceKey(input.workDir);
       this.db.prepare(`INSERT INTO work_items
-        (id, revision, execution_schema_version, ledger_revision, coordination_mode, final_result, delivery_target,
+        (id, revision, execution_schema_version, ledger_revision, coordination_mode, final_result, delivery_target, delivery_instructions,
          schedule_status, scheduled_for, schedule_triggered_at, title, title_source, requirement, goal, acceptance_criteria, workflow_template, workflow_snapshot, status,
          current_action_id, current_run_id, work_dir, workspace_key, reuse_memory, origin, linked_session_ids,
          session_context, attachments, created_at, updated_at)
-        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id,
         Number.isInteger(input.executionSchemaVersion) ? input.executionSchemaVersion : 2,
         input.coordinationMode || 'legacy',
         input.deliveryTarget || null,
+        input.deliveryInstructions || null,
         input.schedule?.status || null,
         input.schedule?.scheduledFor || null,
         input.title,
@@ -2461,6 +2467,16 @@ export class WorkItemStore {
       this.appendEvent(id, 'work_item.created', { status: firstAction ? 'ready' : 'draft' }, { actionId: action?.id });
       return this.getWorkItem(id);
     });
+  }
+
+  listRecentDeliveryInstructions(limit = 12) {
+    const boundedLimit = Math.min(Math.max(Number(limit) || 12, 1), 24);
+    return this.db.prepare(`SELECT delivery_instructions AS value, MAX(created_at) AS last_used_at
+      FROM work_items
+      WHERE delivery_instructions IS NOT NULL AND trim(delivery_instructions) != ''
+      GROUP BY delivery_instructions
+      ORDER BY last_used_at DESC, value ASC
+      LIMIT ?`).all(boundedLimit).map(row => row.value);
   }
 
   #insertAction(workItemId, input, sequence, now = this.now(), options = {}) {

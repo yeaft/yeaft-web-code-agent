@@ -1015,6 +1015,8 @@ export const useChatStore = defineStore('chat', {
     workCenterWatcherByAgent: {},
     workCenterSettingsByAgent: {},
     workCenterRuntimeByAgent: {},
+    workCenterDeliveryInstructionsByAgent: {},
+    _workCenterDeliveryInstructionsGenerationByAgent: {},
     workCenterSettingsLoadingByAgent: {},
     workCenterSettingsErrorByAgent: {},
     _workCenterSettingsGenerationByAgent: {},
@@ -2681,6 +2683,23 @@ export const useChatStore = defineStore('chat', {
     previewWorkCenterPlan(payload = {}, agentId = null) {
       const target = agentId || this.workCenterAgentId || this.currentAgent;
       return this.workCenterRequest('preview', payload, target);
+    },
+    async loadWorkCenterDeliveryInstructions(agentId = null) {
+      const target = agentId || this.workCenterAgentId || this.currentAgent;
+      if (!target) return [];
+      const generation = Number(this._workCenterDeliveryInstructionsGenerationByAgent[target] || 0) + 1;
+      this._workCenterDeliveryInstructionsGenerationByAgent = {
+        ...this._workCenterDeliveryInstructionsGenerationByAgent,
+        [target]: generation,
+      };
+      const data = await this.workCenterRequest('list_delivery_instructions', { limit: 12 }, target);
+      if (this._workCenterDeliveryInstructionsGenerationByAgent[target] === generation) {
+        this.workCenterDeliveryInstructionsByAgent = {
+          ...this.workCenterDeliveryInstructionsByAgent,
+          [target]: Array.isArray(data?.values) ? data.values : [],
+        };
+      }
+      return this.workCenterDeliveryInstructionsByAgent[target] || [];
     },
     async createWorkItem(payload, agentId = null) {
       const target = agentId || this.workCenterAgentId || this.currentAgent;

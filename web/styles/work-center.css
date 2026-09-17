@@ -114,8 +114,6 @@
 }
 
 .work-center-main .work-center-content-workbench { display: none; }
-.showing-detail .work-center-header-create { display: none; }
-.showing-detail .work-center-header-popover .work-center-menu-create { display: block; }
 
 .work-center-heading {
   display: flex;
@@ -336,8 +334,7 @@
   background: var(--sidebar-hover);
 }
 
-.work-center-header-popover .work-center-mobile-search,
-.work-center-header-popover .work-center-menu-create {
+.work-center-header-popover .work-center-mobile-search {
   display: none;
 }
 
@@ -3105,7 +3102,23 @@
 }
 
 @container work-center (max-width: 600px) {
-  .showing-detail .work-center-header-main-inner { gap: 4px; padding-left: 10px; }
+  .showing-detail .work-center-header-main-inner {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 10px;
+  }
+  .showing-detail .work-center-header-main { align-items: stretch; }
+  .showing-detail .work-center-header { min-height: 100px; }
+  .showing-detail .work-center-detail-breadcrumb {
+    min-width: 0;
+    flex: 1 1 calc(100% - 48px);
+    order: 0;
+  }
+  .showing-detail .work-center-header-actions {
+    width: 100%;
+    order: 1;
+    justify-content: flex-end;
+  }
   .work-center-detail-heading-copy,
   .work-center-detail-breadcrumb > .work-center-breadcrumb-separator { display: none; }
   .work-center-detail-breadcrumb { flex: 1 1 auto; }
@@ -3250,16 +3263,6 @@
   .work-center-vp-pool {
     grid-column: auto;
     grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 480px) {
-  .work-center-header-create {
-    display: none;
-  }
-
-  .work-center-header-popover .work-center-menu-create {
-    display: block;
   }
 }
 

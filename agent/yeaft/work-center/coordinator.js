@@ -243,7 +243,7 @@ Return exactly one JSON object and no surrounding prose:
 }
 
 Rules:
-- When workItem.titleSource is coordinator_pending, include a concise title (prefer 6–12 words or a short Chinese phrase; at most 200 characters) in decision.title. This display label summarizes the original goal; it is not a contractPatch and must not rewrite or shorten the goal. Otherwise leave decision.title null. A missing or oversized display title is normalized by the runtime and must not change the substantive decision.
+- When workItem.titleSource is coordinator_pending, include a concise title (prefer 6–12 words or a short Chinese phrase; at most 80 characters) in decision.title. This display label summarizes the original goal; it is not a contractPatch and must not rewrite or shorten the goal. Otherwise leave decision.title null. A missing or oversized display title is normalized by the runtime and must not change the substantive decision.
 - answer: explain state only. Never use it for an automatic advance trigger.
 - Never mutate goal, acceptanceCriteria, or deliveryTarget during automatic advance/recovery. decision.title is the only automatic title-generation path and is allowed only while titleSource is coordinator_pending; contractPatch (including a user-specified title) is allowed only for explicit user-originated refinement, never to make existing evidence pass. For an older WorkItem with no acceptance criteria, request_human to establish its completion condition before commissioning new work.
 - create_actions: create 1..8 currently runnable Actions. Every Action needs type, objective, approach, expectedOutcome, capability, candidateVpIds, assignmentReason, sourceActionIds, workspaceMode, and optional maxAttempts/separateFromActionTypes. sourceActionIds are context/audit references, never scheduling dependencies. Do not include dependsOnActionIds, dependsOnStageIds, stages, or a graph.
@@ -292,11 +292,21 @@ function cleanText(value, limit, name) {
   return text;
 }
 
+function conciseDisplayTitle(value) {
+  const text = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!text) return '';
+  const words = text.split(' ');
+  const concise = words.length > 12 ? `${words.slice(0, 12).join(' ')}…` : text;
+  const characters = [...concise];
+  return characters.length > 80 ? `${characters.slice(0, 79).join('')}…` : concise;
+}
+
 function coordinatorDisplayTitle(value, detail) {
   if (detail.titleSource !== 'coordinator_pending') return null;
   const proposed = typeof value === 'string' ? value.trim() : '';
-  const fallback = String(detail.goal || detail.title || 'Work Item').trim().replace(/\s+/g, ' ');
-  return (proposed || fallback || 'Work Item').slice(0, 200);
+  return conciseDisplayTitle(proposed)
+    || conciseDisplayTitle(detail.goal || detail.title)
+    || 'Work Item';
 }
 
 function requiresDeliveryBoundaryDecision(detail, actions) {
@@ -634,6 +644,7 @@ export function coordinatorSnapshot(detail) {
     titleSource: detail.titleSource || 'explicit',
     goal: truncateUtf8(detail.goal, 4 * 1024),
     deliveryTarget: detail.deliveryTarget || null,
+    deliveryInstructions: truncateUtf8(detail.deliveryInstructions || '', 500) || null,
     acceptanceCriteria,
     workItemType: truncateUtf8(detail.workflowSnapshot?.workItemType, 256) || null,
   };
