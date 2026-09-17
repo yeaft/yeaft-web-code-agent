@@ -50,7 +50,7 @@ When created from a Session, the runtime stamps the source Session; model input 
 
 ## Scheduled and recurring execution
 
-Choose **Start now, Save as draft, or Schedule** under **When to run**. Scheduling uses a theme-aware inline calendar and a 24-hour time field instead of the operating system's date popup. Select a time zone to preview the first run in that zone.
+Choose **Start now, Save draft, or Schedule** under **When to run**. Scheduling uses a theme-aware inline calendar and a 24-hour time field instead of the operating system's date popup. Select a time zone to preview the first run in that zone.
 
 - **Once** starts this work item when it is due.
 - **Every day / Weekdays / Every week / Every month** saves a separate schedule. Each occurrence creates a new work item with its own conversation, Actions, results, and usage. Weekdays means Monday–Friday, not a holiday calendar. Weekly schedules support multiple days; monthly schedules support days 1–31, using the last day in shorter months.

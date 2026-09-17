@@ -62,6 +62,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/work-center/assignment.test.js',
   'test/agent/yeaft/work-center/core.test.js',
   'test/agent/yeaft/work-center/schedule-bridge.test.js',
+  'test/agent/yeaft/work-center/transaction.test.js',
   'test/agent/yeaft/work-center/dynamic-coordination.test.js',
   'test/agent/yeaft/work-center/feature-settings.test.js',
   'test/agent/yeaft/work-center/goal-state.test.js',
