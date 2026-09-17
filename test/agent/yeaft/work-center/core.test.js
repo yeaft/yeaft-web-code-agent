@@ -373,6 +373,26 @@ describe('Work Center core', () => {
     });
   });
 
+  it('transmits only a known pre-apply input rejection code to the browser', async () => {
+    const frames = [];
+    ctx.ws = { readyState: 1, send: value => frames.push(JSON.parse(value)) };
+    globalThis.WebSocket = { OPEN: 1 };
+    const service = { start: vi.fn(), handle: vi.fn() };
+    __testSetWorkCenterService(service);
+    try {
+      for (const code of ['WORK_CENTER_INPUT_STALE', 'UNEXPECTED_INTERNAL_ERROR']) {
+        service.handle.mockRejectedValueOnce(Object.assign(new Error('Rejected'), { code }));
+        await handleWorkCenterRequest({ requestId: code, op: 'action_input', payload: {} });
+      }
+      await new Promise(resolve => setImmediate(resolve));
+      expect(frames[0]).toMatchObject({ ok: false, errorCode: 'WORK_CENTER_INPUT_STALE' });
+      expect(frames[1]).not.toHaveProperty('errorCode');
+    } finally {
+      __testSetWorkCenterService(null);
+      ctx.ws = null;
+    }
+  });
+
   it('persists Run identity and projects one continuous Action conversation', async () => {
     const bridgeDetail = { id: 'wi', actions: [] };
     const projectedBridgeDetail = { id: 'wi', status: 'ready', actions: [] };

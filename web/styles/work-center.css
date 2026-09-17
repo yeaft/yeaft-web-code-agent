@@ -1917,6 +1917,22 @@
   background: var(--bg-sidebar);
 }
 
+.work-center-reply-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.work-center-reply-heading > h3 {
+  margin: 0;
+}
+
+.work-center-reply-heading > button {
+  flex-shrink: 0;
+}
+
 .work-center-action-failure strong {
   color: var(--error-text);
 }

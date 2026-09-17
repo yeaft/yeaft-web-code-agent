@@ -1944,7 +1944,9 @@ export class WorkItemStore {
         ? ['ready', 'running', 'waiting', 'needs_attention']
         : ['ready', 'running'];
       if (!inputStatuses.includes(workItem.status)) {
-        throw new Error(`WorkItem in ${workItem.status} cannot accept Action input`);
+        const error = new Error(`WorkItem in ${workItem.status} cannot accept Action input`);
+        error.code = 'WORK_CENTER_INPUT_STALE';
+        throw error;
       }
       const action = this.getAction(expected.actionId);
       const actionMatches = action?.workItemId === id
@@ -1956,7 +1958,9 @@ export class WorkItemStore {
         || (activeRun?.status === 'running' && activeRun.acceptingInput !== false
           && runMatchesActionIdentity(activeRun, action));
       if (!actionMatches || !runMatches || workItem.revision !== expected.revision) {
-        throw new Error('Action changed before input was applied; refresh and try again');
+        const error = new Error('Action changed before input was applied; refresh and try again');
+        error.code = 'WORK_CENTER_INPUT_STALE';
+        throw error;
       }
       const projectedAttachments = (Array.isArray(addedAttachments) ? addedAttachments : []).map(attachment => ({
         id: attachment.id,
@@ -1998,7 +2002,7 @@ export class WorkItemStore {
         const changedAction = this.db.prepare(`UPDATE actions SET context = ?, instruction = ?, attempt = 0,
           generation = generation + 1, spec_hash = ?, identity_history = ?, result_run_id = NULL,
           workspace = NULL, updated_at = ? WHERE id = ? AND status = 'ready' AND current_run_id IS NULL
-          AND generation = ? AND spec_hash = ?`).run(
+          AND generation = ? AND spec_hash = ? AND contract_revision = ?`).run(
           stringify(context),
           nextAction.instruction,
           nextAction.specHash,
@@ -2007,9 +2011,12 @@ export class WorkItemStore {
           action.id,
           action.generation,
           action.specHash,
+          action.contractRevision,
         );
         if (Number(changedAction.changes) !== 1) {
-          throw new Error('Action changed before input was applied; refresh and try again');
+          const error = new Error('Action changed before input was applied; refresh and try again');
+          error.code = 'WORK_CENTER_INPUT_STALE';
+          throw error;
         }
         this.#supersedePendingActionInputs(
           [action],
@@ -4536,12 +4543,15 @@ export class WorkItemStore {
       }
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
+      const dynamicMode = isDynamicWorkItem(workItem);
       const graphMode = usesLegacyGraph(workItem);
-      const retryableWorkItemStatuses = graphMode
+      const retryableWorkItemStatuses = graphMode || dynamicMode
         ? ['ready', 'running', 'waiting', 'needs_attention']
         : ['waiting', 'needs_attention'];
       if (!retryableWorkItemStatuses.includes(workItem.status)) {
-        throw new Error(`WorkItem in ${workItem.status} does not need retry`);
+        const error = new Error(`WorkItem in ${workItem.status} does not need retry`);
+        error.code = 'WORK_CENTER_INPUT_STALE';
+        throw error;
       }
       let previous = workItem.currentActionId ? this.getAction(workItem.currentActionId) : null;
       if (options.expected) {
@@ -4553,10 +4563,12 @@ export class WorkItemStore {
         const hasExpectedGeneration = Number.isInteger(expectedGeneration) && expectedGeneration > 0;
         const expectedMatches = expectedAction?.workItemId === id
           && allowedExpectedStatuses.includes(expectedAction.status)
-          && (graphMode || workItem.currentActionId === options.expected.actionId)
-          && (hasExpectedGeneration ? expectedAction.generation === expectedGeneration : !graphMode);
+          && (graphMode || dynamicMode || workItem.currentActionId === options.expected.actionId)
+          && (hasExpectedGeneration ? expectedAction.generation === expectedGeneration : !(graphMode || dynamicMode));
         if (!expectedMatches || workItem.revision !== options.expected.revision) {
-          throw new Error('Action changed before input was applied; refresh and try again');
+          const error = new Error('Action changed before input was applied; refresh and try again');
+          error.code = 'WORK_CENTER_INPUT_STALE';
+          throw error;
         }
         previous = expectedAction;
       }
@@ -4565,7 +4577,7 @@ export class WorkItemStore {
             AND status != 'running' ORDER BY ended_at DESC, started_at DESC LIMIT 1`).get(id, previous.id))
         : null;
       const now = this.now();
-      const revision = options.expected ? workItem.revision + 1 : workItem.revision;
+      const revision = options.expected && !dynamicMode ? workItem.revision + 1 : workItem.revision;
       const replacement = {
         ...makeAction(workItem, previous, previousRun),
         contractRevision: previous?.contractRevision ?? workItem.revision,
@@ -4573,6 +4585,55 @@ export class WorkItemStore {
       const inputEvent = options.inputEvent && typeof options.inputEvent === 'object'
         ? options.inputEvent
         : null;
+      if (dynamicMode) {
+        if (!previous) throw new Error('Dynamic WorkItem retry target is missing');
+        const candidate = {
+          ...previous,
+          ...replacement,
+          id: previous.id,
+          generation: previous.generation + 1,
+          attempt: 0,
+          currentRunId: null,
+          resultRunId: null,
+          workspace: null,
+        };
+        candidate.instruction = canonicalActionInstruction(workItem, candidate, candidate.context);
+        candidate.specHash = actionSpecHash(candidate);
+        const changed = this.db.prepare(`UPDATE actions SET status = 'ready', attempt = 0,
+          current_run_id = NULL, context = ?, instruction = ?, generation = generation + 1,
+          spec_hash = ?, identity_history = ?, result_run_id = NULL, workspace = NULL, updated_at = ?
+          WHERE id = ? AND work_item_id = ? AND status IN ('waiting', 'failed')
+            AND current_run_id IS NULL AND generation = ? AND spec_hash = ? AND contract_revision = ?`).run(
+          stringify(candidate.context), candidate.instruction, candidate.specHash,
+          stringify(actionIdentityHistory(previous, candidate.generation, candidate.specHash)),
+          now, previous.id, id, previous.generation, previous.specHash, previous.contractRevision,
+        );
+        if (Number(changed.changes) !== 1) {
+          const error = new Error('Action changed before input was applied; refresh and try again');
+          error.code = 'WORK_CENTER_INPUT_STALE';
+          throw error;
+        }
+        const changedWorkItem = this.db.prepare(`UPDATE work_items SET attachments = ?, updated_at = ?
+          WHERE id = ? AND revision = ? AND status NOT IN ('done', 'cancelled')`).run(
+          stringify(Array.isArray(options.attachments) ? options.attachments : workItem.attachments),
+          now, id, workItem.revision,
+        );
+        if (Number(changedWorkItem.changes) !== 1) {
+          const error = new Error('Action changed before input was applied; refresh and try again');
+          error.code = 'WORK_CENTER_INPUT_STALE';
+          throw error;
+        }
+        const action = this.getAction(previous.id);
+        if (inputEvent) {
+          this.appendEvent(id, 'action.input_added', inputEvent, {
+            actionId: action.id,
+            actionGeneration: action.generation,
+          });
+        } else {
+          this.appendEvent(id, 'work_item.retried', {}, { actionId: action.id });
+        }
+        return this.getWorkItemDetail(id);
+      }
       if (graphMode) {
         if (!previous) throw new Error('WorkItem graph retry target is missing');
         const action = this.#resetGraphFromStage(
