@@ -84,7 +84,7 @@ export default {
           <NavigationIcon :name="expanded ? 'collapse' : 'menu'" :size="18" />
         </button>
       </div>
-      <button class="btn-secondary work-center-sidebar-create" type="button" :disabled="!agentId || !agents.some(agent => agent.online)"
+      <button class="btn-ghost new-chat-btn work-center-sidebar-create" type="button" :disabled="!agentId || !agents.some(agent => agent.online)"
               :title="$t('workCenter.newWorkItem')" :aria-label="$t('workCenter.newWorkItem')" @click="$emit('create')">
         <NavigationIcon name="add" :size="18" />
         <span v-if="expanded">{{ $t('workCenter.newWorkItem') }}</span>

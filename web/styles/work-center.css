@@ -2564,11 +2564,21 @@
   .work-center-execution-modes .btn-secondary { padding-inline: var(--work-center-space-1); }
 }
 
-.work-center-create-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.work-center-delivery-row {
+  display: flex;
+  align-items: center;
+  gap: var(--work-center-space-2);
+  min-width: 0;
 }
+.work-center-delivery-row > .modern-select { flex: 1; min-width: 0; }
+.work-center-delivery-row.is-custom > .modern-select { flex: 0 0 100px; }
+.work-center-delivery-row > input { flex: 1; min-width: 0; width: 0; }
+.work-center-delivery-menu .modern-select-option-label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.work-center-delivery-row .modern-select-trigger,
+.work-center-create-agent .modern-select-trigger { min-height: 40px; }
 
 .work-center-checkbox {
   display: flex;
@@ -3305,10 +3315,6 @@
     height: calc(100dvh - 16px);
   }
 
-  .work-center-create-options {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .work-center-settings-card {
     width: calc(100vw - 16px);
     height: calc(100dvh - 16px);
@@ -3432,6 +3438,7 @@
 .work-center-sidebar-header > strong { flex: 1; font-size: 13px; font-weight: 600; }
 .work-center-sidebar.collapsed .work-center-sidebar-header { flex-direction: column; padding: 10px 6px; }
 .work-center-sidebar-create {
+  width: auto;
   display: flex;
   flex: 0 0 auto;
   align-items: center;

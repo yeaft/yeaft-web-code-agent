@@ -2113,6 +2113,8 @@ export default {
   'workCenter.attachments': '附件',
   'workCenter.outputs': '产出',
   'workCenter.deliveryTarget': '交付目标',
+  'workCenter.deliveryTargetCustom': '自定义',
+  'workCenter.deliveryCustomHelp': '合并、发布仍需按规则授权。',
   'workCenter.deliveryTargetAsk': '交付前询问我',
   'workCenter.deliveryTargetResponse': '回复',
   'workCenter.deliveryTargetFiles': '工作目录中的文件',

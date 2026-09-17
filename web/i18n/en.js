@@ -2116,6 +2116,8 @@ export default {
   'workCenter.attachments': 'Attachments',
   'workCenter.outputs': 'Outputs',
   'workCenter.deliveryTarget': 'Delivery target',
+  'workCenter.deliveryTargetCustom': 'Custom',
+  'workCenter.deliveryCustomHelp': 'Merge and release still require authorization.',
   'workCenter.deliveryTargetAsk': 'Ask me before delivery',
   'workCenter.deliveryTargetResponse': 'Response',
   'workCenter.deliveryTargetFiles': 'Workspace files',

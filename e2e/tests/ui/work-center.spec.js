@@ -2643,6 +2643,7 @@ test.describe('Work Center responsive UI', () => {
     await respondToWorkCenterOp(mockAgent, 'list', { items: [OPEN_ITEM], watcher: { enabled: true } });
     expect(request.payload.workDir).toBe('/tmp/test');
     expect(request.payload.workItemType).toBe('auto');
+    expect(request.payload.reuseMemory).toBe(true);
     expect(request.payload.titleSource).toBe('coordinator_pending');
     expect(request.payload.goal).toBe('Use the directory shown in the form');
   });
@@ -2893,6 +2894,7 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.getByRole('button', { name: 'Create', exact: true }).click();
     const request = await createRequest;
     expect(request.payload.workItemType).toBe('auto');
+    expect(request.payload.reuseMemory).toBe(true);
     expect(request.payload).not.toHaveProperty('workflowTemplate');
     expect(request.payload).not.toHaveProperty('stageOverrides');
   });
@@ -2910,11 +2912,14 @@ test.describe('Work Center responsive UI', () => {
     await openCreateFromSidebar(chatPage);
     await historyRequest;
     const modal = chatPage.locator('.work-center-modal');
-    const goal = modal.getByRole('combobox', { name: /Delivery goal/ });
-    await expect(goal).toHaveAttribute('list', 'work-center-delivery-instructions');
-    await expect(modal.locator('#work-center-delivery-instructions option')).toHaveAttribute(
-      'value', 'Publish a release and summarize the changes',
-    );
+    await expect(chatPage.locator('.work-center-sidebar-create')).toHaveCSS('border-top-width', '0px');
+    await expect(modal.getByRole('checkbox')).toHaveCount(0);
+    const target = modal.getByRole('combobox', { name: 'Delivery target', exact: true });
+    await target.click();
+    await chatPage.getByRole('option', { name: 'Publish a release and summarize the changes', exact: true }).click();
+    const goal = modal.getByRole('textbox', { name: 'Custom', exact: true });
+    await expect(goal).toHaveValue('Publish a release and summarize the changes');
+    await expect(goal).toBeFocused();
     await goal.fill('Send the signed package to the release channel');
     await modal.getByRole('textbox', { name: /Requirement/ }).fill('Prepare the release package');
     const createRequest = respondToWorkCenterOp(mockAgent, 'create', OPEN_ITEM_DETAIL);
@@ -2936,15 +2941,16 @@ test.describe('Work Center responsive UI', () => {
     const transport = mockAgent.__workCenterTransport;
     await openCreateFromSidebar(chatPage);
     const modal = chatPage.locator('.work-center-modal');
-    const agents = modal.locator('.work-center-create-agent');
+    const agents = modal.locator('.work-center-create-agent [role=combobox]');
     const requirement = modal.getByRole('textbox', { name: /Requirement/ });
     const workDir = modal.getByRole('textbox', { name: /Working directory/ });
-    await expect(agents).toHaveValue(mockAgent.agentId);
-    await expect(agents.locator('option[value="create-agent-offline"]')).toHaveAttribute('disabled', '');
+    await expect(agents).toContainText(mockAgent.agentName);
     await expect(requirement).toBeFocused();
     await requirement.fill('Keep this requirement when selecting another Agent');
     await workDir.fill('/first/private');
-    await agents.selectOption('create-agent-b');
+    await agents.click();
+    await expect(chatPage.getByRole('option', { name: /Offline Agent/ })).toHaveAttribute('aria-disabled', 'true');
+    await chatPage.getByRole('option', { name: 'Second Agent', exact: true }).click();
     await expect(modal).toBeVisible();
     await expect(requirement).toHaveValue('Keep this requirement when selecting another Agent');
     await expect(workDir).toHaveValue('/second/project');
@@ -2963,8 +2969,10 @@ test.describe('Work Center responsive UI', () => {
     expect(histories.map(request => request.agentId)).toEqual([mockAgent.agentId, 'create-agent-b']);
     await transport.resolve(histories[1], { values: ['Second Agent goal'] });
     await transport.resolve(histories[0], { values: ['Old Agent goal'] });
-    await expect(modal.locator('datalist option')).toHaveCount(1);
-    await expect(modal.locator('datalist option')).toHaveAttribute('value', 'Second Agent goal');
+    await modal.getByRole('combobox', { name: 'Delivery target', exact: true }).click();
+    await expect(chatPage.getByRole('option', { name: 'Second Agent goal', exact: true })).toBeVisible();
+    await expect(chatPage.getByRole('option', { name: 'Old Agent goal', exact: true })).toHaveCount(0);
+    await modal.getByRole('combobox', { name: 'Delivery target', exact: true }).press('Escape');
     for (const [width, theme, locale] of [[1280, 'light', 'en'], [320, 'dark', 'zh-CN']]) {
       await chatPage.setViewportSize({ width, height: 720 });
       await chatPage.evaluate(({ theme, locale }) => {
@@ -2986,8 +2994,76 @@ test.describe('Work Center responsive UI', () => {
     await expect(agents).toBeEnabled();
     await modal.locator('.modal-close').click();
     await openCreateFromSidebar(chatPage);
-    await expect(agents).toHaveValue('create-agent-b');
+    await expect(agents).toContainText('Second Agent');
     await expect(chatPage.locator('.work-center-sidebar-scrim')).toHaveCount(0);
+  });
+
+  test('custom delivery stays one row with themed Agent menus and keyboard access', async ({ chatPage, mockAgent }, testInfo) => {
+    await openWorkCenter(chatPage, mockAgent);
+    const historyLabel = 'Summarize the verified result with distinct deployment evidence and recovery instructions';
+    const historyRequest = respondToWorkCenterOp(mockAgent, 'list_delivery_instructions', { values: [historyLabel] });
+    await openCreateFromSidebar(chatPage);
+    await historyRequest;
+    const modal = chatPage.locator('.work-center-modal');
+    await modal.getByRole('textbox', { name: /Requirement/ }).fill('Review the requested outcome');
+    for (const width of [1280, 320]) {
+      for (const theme of ['light', 'dark']) {
+        for (const locale of ['en', 'zh-CN']) {
+          await chatPage.setViewportSize({ width, height: 800 });
+          await chatPage.evaluate(({ theme, locale }) => {
+            document.documentElement.setAttribute('data-theme', theme);
+            window.Pinia.useChatStore().changeLocale(locale);
+          }, { theme, locale });
+          const agent = modal.locator('.work-center-create-agent [role=combobox]');
+          await agent.click();
+          const menuId = await agent.getAttribute('aria-controls');
+          const menu = chatPage.locator('.modern-select-menu').filter({ has: chatPage.locator(`[id="${menuId}"]`) });
+          await expect(menu).toBeVisible();
+          expect(await menu.evaluate(el => parseFloat(getComputedStyle(el).borderRadius))).toBeGreaterThan(0);
+          await agent.press('Escape');
+          await expect(menu).toHaveCount(0);
+          await expect(agent).toBeFocused();
+          const target = modal.locator('.work-center-delivery-row [role=combobox]');
+          await target.click();
+          await chatPage.getByRole('option', { name: locale === 'en' ? 'Custom' : '自定义', exact: true }).click();
+          const input = modal.locator('.work-center-delivery-row input');
+          await input.fill('');
+          await expect(modal.locator('.work-center-modal-footer .btn-primary')).toBeDisabled();
+          await input.fill('Summarize the verified result '.repeat(8));
+          await target.click();
+          const deliveryMenu = chatPage.locator('.work-center-delivery-menu');
+          await expect(deliveryMenu).toBeVisible();
+          const candidate = deliveryMenu.getByRole('option', { name: historyLabel, exact: true });
+          await candidate.scrollIntoViewIfNeeded();
+          const candidateMetrics = await candidate.locator('.modern-select-option-label').evaluate(el => ({
+            wrapping: getComputedStyle(el).whiteSpace, width: el.clientWidth, scrollWidth: el.scrollWidth,
+          }));
+          expect(candidateMetrics.wrapping).toBe('normal');
+          expect(candidateMetrics.scrollWidth).toBeLessThanOrEqual(candidateMetrics.width);
+          const menuBox = await deliveryMenu.boundingBox();
+          expect(menuBox.width).toBeGreaterThanOrEqual(Math.min(360, width - 16));
+          expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(width);
+          await target.press('Escape');
+          await expect(deliveryMenu).toHaveCount(0);
+          await expect(modal.locator('.work-center-delivery-field .work-center-field-help')).toBeVisible();
+          await expect(modal.locator('.work-center-modal-footer .btn-primary')).toBeEnabled();
+          const boxes = await modal.locator('.work-center-delivery-row').evaluate(el => {
+            const select = el.querySelector('.modern-select').getBoundingClientRect();
+            const input = el.querySelector('input').getBoundingClientRect();
+            return { delta: Math.abs(select.top - input.top), right: input.right, width: window.innerWidth,
+              overflow: el.scrollWidth > el.clientWidth };
+          });
+          expect(boxes.delta).toBeLessThan(3);
+          expect(boxes.right).toBeLessThanOrEqual(boxes.width);
+          expect(boxes.overflow).toBe(false);
+          await chatPage.screenshot({ path: testInfo.outputPath(`custom-delivery-${width}-${theme}-${locale}.png`) });
+        }
+      }
+    }
+    const create = respondToWorkCenterOp(mockAgent, 'create', OPEN_ITEM_DETAIL);
+    await modal.locator('.work-center-modal-footer .btn-primary').click();
+    expect((await create).payload).toMatchObject({ deliveryTarget: null, reuseMemory: true,
+      deliveryInstructions: 'Summarize the verified result '.repeat(8).trim() });
   });
 
   test('creates a response delivery without requesting code artifacts', async ({ chatPage, mockAgent }) => {
@@ -2995,7 +3071,8 @@ test.describe('Work Center responsive UI', () => {
     await openCreateFromSidebar(chatPage);
     const modal = chatPage.locator('.work-center-modal');
     await modal.getByRole('textbox', { name: /Requirement/ }).fill('Explain the failure with supporting evidence');
-    await modal.getByRole('combobox', { name: /Delivery target/ }).selectOption('response');
+    await modal.getByRole('combobox', { name: /Delivery target/ }).click();
+    await chatPage.getByRole('option', { name: 'Response', exact: true }).click();
     const createRequest = respondToWorkCenterOp(mockAgent, 'create', OPEN_ITEM_DETAIL);
     await modal.getByRole('button', { name: 'Create', exact: true }).click();
     expect((await createRequest).payload.deliveryTarget).toBe('response');
