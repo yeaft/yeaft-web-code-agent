@@ -31,7 +31,7 @@ import {
 import { buildPluginCatalog, createPluginSkillManager } from '../../../agent/yeaft/plugins.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
 import { MCPManager } from '../../../agent/yeaft/mcp.js';
-import { __testGetOrCreateVpEngine, __testHooks, __testLoadPluginCatalogMcpConfig, __testResetVpState, __testResolveVpEffectiveConfig, __testSetSession, handleYeaftCopySession, handleYeaftCreateSession, handleYeaftLoadHistoryOutline, handleYeaftManagedSkill, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftUpdateSessionConfig, handleYeaftVpSubscribe, refreshLiveSessionConfig } from '../../../agent/yeaft/web-bridge.js';
+import { __testGetOrCreateVpEngine, __testHooks, __testLoadPluginCatalogMcpConfig, __testResetVpState, __testResolveVpEffectiveConfig, __testSetSession, handleYeaftCopySession, handleYeaftCreateSession, handleYeaftLoadHistoryOutline, handleYeaftPluginCatalog, handleYeaftManagedSkill, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftUpdateSessionConfig, handleYeaftVpSubscribe, refreshLiveSessionConfig } from '../../../agent/yeaft/web-bridge.js';
 import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
@@ -121,6 +121,70 @@ describe('Yeaft Session context lifetime', () => {
     expect(unused.close).toHaveBeenCalledTimes(1);
     __testHooks.clearSessionContextForTest(sessionId);
     expect(first.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Yeaft Plugin catalog discovery', () => {
+  it('discovers cold-start assets and fresh project scopes without starting inference or MCP', () => {
+    const root = makeDir();
+    const workDir = tempRoot('yeaft-catalog-project-');
+    mkdirSync(join(root, 'skills'), { recursive: true });
+    mkdirSync(join(workDir, '.yeaft', 'skills'), { recursive: true });
+    const skill = description => `---\nname: catalog-check\ndescription: ${description}\n---\nCheck the catalog.\n`;
+    writeFileSync(join(root, 'skills', 'catalog-check.md'), skill('User version'));
+    writeFileSync(join(workDir, '.yeaft', 'skills', 'catalog-check.md'), skill('Project version'));
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      plugins: { tools: [], skills: [], mcpServers: [] },
+      mcpServers: [{ name: 'catalog-mcp', command: 'must-not-start' }],
+    }));
+    const savedContext = {
+      ws: ctx.ws, serverEncryptionRequired: ctx.serverEncryptionRequired,
+      messageBuffer: ctx.messageBuffer, outboundSendQueue: ctx.outboundSendQueue,
+      outboundSendQueueActive: ctx.outboundSendQueueActive,
+    };
+    const connect = vi.spyOn(MCPManager.prototype, 'connectAll');
+    ctx.CONFIG = { yeaftDir: root };
+    ctx.ws = { readyState: 1, send() {} };
+    ctx.serverEncryptionRequired = false;
+    ctx.messageBuffer = [];
+    ctx.outboundSendQueue = [];
+    ctx.outboundSendQueueActive = true;
+    __testSetSession(null);
+    const request = (requestId, requestedWorkDir = '') => {
+      handleYeaftPluginCatalog({ requestId, workDir: requestedWorkDir, _requestClientId: 'catalog-client' });
+      return ctx.outboundSendQueue.at(-1).msg;
+    };
+    try {
+      const cold = request('cold');
+      expect(cold).toMatchObject({
+        type: 'yeaft_plugin_catalog_result', requestId: 'cold', _requestClientId: 'catalog-client', error: null,
+      });
+      expect(cold.catalog.tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'Bash' }), expect.objectContaining({ id: 'Skill' }),
+      ]));
+      expect(cold.catalog.skills).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'catalog-check', tier: 'user', description: 'User version' }),
+        expect.objectContaining({ tier: 'bundled' }),
+      ]));
+      expect(cold.catalog.mcpServers).toEqual([expect.objectContaining({ id: 'catalog-mcp', ready: null })]);
+      expect(existsSync(join(root, 'sessions'))).toBe(false);
+      expect(connect).not.toHaveBeenCalled();
+
+      // Even a partially loaded/stale runtime must not dictate inventory.
+      __testSetSession({ yeaftDir: root, config: {}, toolRegistry: new ToolRegistry(),
+        skillManager: { list: () => [{ name: 'other-project-only' }] } });
+      const project = request('project', workDir);
+      expect(project.catalog.tools).toEqual(cold.catalog.tools);
+      expect(project.catalog.skills.find(item => item.id === 'catalog-check')).toMatchObject({ tier: 'project', description: 'Project version' });
+      expect(project.catalog.skills.some(item => item.id === 'other-project-only')).toBe(false);
+      unlinkSync(join(workDir, '.yeaft', 'skills', 'catalog-check.md'));
+      expect(request('refresh', workDir).catalog.skills.find(item => item.id === 'catalog-check')).toMatchObject({ tier: 'user' });
+      expect(request('agent-only').catalog.skills.find(item => item.id === 'catalog-check')).toMatchObject({ tier: 'user' });
+      expect(connect).not.toHaveBeenCalled();
+    } finally {
+      connect.mockRestore();
+      Object.assign(ctx, savedContext);
+    }
   });
 });
 

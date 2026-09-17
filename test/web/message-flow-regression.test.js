@@ -904,6 +904,42 @@ describe('message flow regressions', () => {
     globalThis.Pinia.useChatStore = priorStore;
   });
 
+  it('does not report all-enabled or zero counts while Plugin inventory is loading, failed, or empty', async () => {
+    const record = Vue.reactive({ loading: true, catalog: { tools: [], skills: [], mcpServers: [] } });
+    const pluginStore = Vue.reactive({
+      agents: [{ id: 'agent-cold', online: true, capabilities: ['yeaft_plugins'] }],
+      currentAgent: 'agent-cold', pluginCenterAgentId: 'agent-cold',
+      pluginConfigByAgent: { 'agent-cold': { loaded: true, plugins: {} } },
+      pluginCatalogByKey: { 'agent-cold:': record },
+      pluginCatalogKey: (agentId, workDir = '') => `${agentId}:${workDir}`,
+      loadPluginConfig: vi.fn(), loadPluginCatalog: vi.fn(() => Promise.resolve()),
+    });
+    const priorStore = globalThis.Pinia.useChatStore;
+    globalThis.Pinia.useChatStore = () => pluginStore;
+    const page = mount(PluginCenterPage, { global: { mocks: { $t: translatePluginCenterMessage } } });
+    try {
+      await Vue.nextTick();
+      expect(page.get('.plugin-center-overview-copy').text()).toContain(enMessages['yeaft.plugins.loading']);
+      expect(page.find('.plugin-center-overview-stats').exists()).toBe(false);
+      record.loading = false;
+      record.error = 'timeout';
+      await Vue.nextTick();
+      expect(page.get('.plugin-center-overview-copy').text()).toContain('timeout');
+      expect(page.text()).not.toContain(enMessages['yeaft.plugins.allAvailable']);
+      record.error = null;
+      await Vue.nextTick();
+      expect(page.get('.plugin-center-overview-copy').text()).toContain(enMessages['yeaft.plugins.empty']);
+      expect(page.find('.plugin-center-overview-stats').exists()).toBe(false);
+      record.catalog.tools = [{ id: 'Bash', label: 'Bash' }];
+      await Vue.nextTick();
+      expect(page.get('.plugin-center-overview-copy').text()).toContain(enMessages['yeaft.plugins.allAvailable']);
+      expect(page.get('.plugin-center-enabled-count').text()).toBe('1 / 1');
+    } finally {
+      page.unmount();
+      globalThis.Pinia.useChatStore = priorStore;
+    }
+  });
+
   it('keeps the active Agent selection intact when another Agent save resolves late', async () => {
     const configRequests = [];
     const saveRequests = [];
