@@ -9,6 +9,7 @@ export default {
   emits: ['navigate', 'edit-path', 'confirm', 'close'],
   computed: {
     breadcrumbs() { return directoryBreadcrumbs(this.state.path); },
+    separator() { return this.breadcrumbs[0]?.label.slice(-1) || '/'; },
     parentPath() { return parentDirectory(this.state.path); },
   },
   mounted() {
@@ -85,16 +86,12 @@ export default {
               </button>
             </div>
             <div class="folder-picker-navigation">
-              <button class="btn btn-ghost folder-picker-root" type="button" @click="navigate('')">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 4-3 10v5a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1v-5L19 4Z"/><path d="M2 14h20M6 17h.01M10 17h.01"/></svg>
-                {{ $t('modal.folderPicker.root') }}
-              </button>
               <button class="btn btn-ghost folder-picker-icon" type="button" @click="navigate(parentPath)" :disabled="!state.path || state.path === parentPath" :aria-label="$t('modal.folderPicker.parentDir')" :title="$t('modal.folderPicker.parentDir')">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
               </button>
               <nav class="folder-picker-breadcrumbs" :aria-label="$t('modal.folderPicker.ancestors')">
                 <template v-for="(crumb, index) in breadcrumbs" :key="crumb.path">
-                  <span v-if="index" aria-hidden="true">/</span>
+                  <span v-if="index > 1" aria-hidden="true">{{ separator }}</span>
                   <button class="btn btn-ghost" type="button" @click="navigate(crumb.path)" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" :title="crumb.path">{{ crumb.label }}</button>
                 </template>
               </nav>

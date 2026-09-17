@@ -1,0 +1,176 @@
+/* Inline disclosure: follows the form's scroll flow, including narrow dialogs. */
+.schedule-date-picker {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-primary);
+}
+
+.schedule-date-picker .schedule-date-picker__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--work-center-space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: var(--work-center-space-2) var(--work-center-space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--agent-setup-control-radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.schedule-date-picker__trigger > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.schedule-date-picker__icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.schedule-date-picker__chevron {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  color: var(--text-secondary);
+}
+
+.schedule-date-picker__chevron.is-open { transform: rotate(180deg); }
+
+.schedule-date-picker__panel {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: var(--work-center-space-2);
+  padding: var(--work-center-space-1);
+  border-radius: var(--agent-setup-control-radius);
+  background: var(--bg-subtle);
+}
+
+.schedule-date-picker__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--work-center-space-1);
+  margin-bottom: var(--work-center-space-1);
+}
+
+.schedule-date-picker__month {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.schedule-date-picker .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  border-radius: var(--agent-setup-control-radius);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.schedule-date-picker .schedule-date-picker__nav {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: var(--work-center-space-1);
+}
+
+.schedule-date-picker__nav svg { width: 16px; height: 16px; }
+
+.schedule-date-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 0;
+}
+
+.schedule-date-picker__weekday {
+  padding: var(--work-center-space-1) 0;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.schedule-date-picker .schedule-date-picker__day {
+  width: 100%;
+  height: 30px;
+  padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.schedule-date-picker__footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--work-center-space-1);
+}
+
+.schedule-date-picker .schedule-date-picker__today {
+  min-height: 30px;
+  padding: var(--work-center-space-1) var(--work-center-space-2);
+  color: var(--accent-blue);
+}
+
+.schedule-date-picker button:hover:not(:disabled) { background: var(--sidebar-hover); }
+
+.schedule-date-picker .schedule-date-picker__day[aria-current="date"] {
+  box-shadow: inset 0 0 0 1px var(--border-color);
+  font-weight: 600;
+}
+
+.schedule-date-picker .schedule-date-picker__day[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+.schedule-date-picker .schedule-date-picker__day[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.schedule-date-picker button:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.schedule-date-picker button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.schedule-date-picker__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

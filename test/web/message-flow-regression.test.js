@@ -3611,6 +3611,7 @@ describe('message flow regressions', () => {
       workCenterCreateDraft: null,
       listWorkItems: vi.fn(() => Promise.resolve([])),
       loadWorkCenterSettings: vi.fn(() => Promise.resolve(null)),
+      loadWorkCenterDeliveryInstructions: vi.fn(() => Promise.resolve([])),
       loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(null)),
       enterWorkCenter: vi.fn(),
       toggleSessionSidebar: vi.fn(),
@@ -3628,6 +3629,12 @@ describe('message flow regressions', () => {
       },
     });
     expect(workCenterPage.get('.work-center-heading').text()).toBe('server');
+    expect(workCenterPage.find('.work-center-header-refresh').exists()).toBe(true);
+    expect(workCenterPage.find('.work-center-header-create').exists()).toBe(true);
+    await workCenterPage.get('.work-center-header-menu > button').trigger('click');
+    expect(workCenterPage.find('.work-center-header-popover').text()).toContain('Work Center settings');
+    expect(workCenterPage.find('.work-center-header-popover').text()).not.toContain('Refresh');
+    expect(workCenterPage.find('.work-center-header-popover').text()).not.toContain('New work item');
     workCenterStore.refreshWorkCenterRuntime = vi.fn(() => Promise.resolve());
     await WorkCenterPage.methods.refreshWorkCenterRuntime.call(workCenterPage.vm, 'agent-b');
     expect(workCenterStore.refreshWorkCenterRuntime).not.toHaveBeenCalled();

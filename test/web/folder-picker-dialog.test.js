@@ -24,14 +24,38 @@ afterEach(() => {
 describe('shared directory picker presentation', () => {
   it('offers root, ancestor, parent and single-click folder navigation without requiring double-click', async () => {
     const wrapper = mountDialog();
-    const buttons = wrapper.findAll('.folder-picker-navigation button');
-    await buttons[0].trigger('click');
-    await buttons[1].trigger('click');
-    await wrapper.findAll('.folder-picker-breadcrumbs button')[1].trigger('click');
+    expect(wrapper.find('.folder-picker-root').exists()).toBe(false);
+    await wrapper.get('.folder-picker-navigation > button').trigger('click');
+    const crumbs = wrapper.findAll('.folder-picker-breadcrumbs button');
+    await crumbs[0].trigger('click');
+    await crumbs[1].trigger('click');
     await wrapper.get('.folder-picker-item').trigger('click');
-    expect(wrapper.emitted('navigate')).toEqual([[''], ['/home/user'], ['/home'], ['/home/user/project/child']]);
+    expect(wrapper.emitted('navigate')).toEqual([['/home/user'], ['/'], ['/home'], ['/home/user/project/child']]);
     expect(wrapper.get('.folder-picker-item').attributes('type')).toBe('button');
     expect(wrapper.find('[role="dialog"]').attributes('aria-modal')).toBe('true');
+  });
+
+  it('renders a continuous path with native separators, including roots, UNC and literal POSIX backslashes', async () => {
+    const wrapper = mountDialog();
+    for (const path of ['/', '/home/user/project', '/home/back\\slash/project', 'C:\\', 'C:\\Users\\Test User\\project', 'd:/projects/yeaft', '\\\\server\\share\\folder\\child']) {
+      await wrapper.setProps({ state: { ...wrapper.props('state'), path } });
+      const nav = wrapper.get('.folder-picker-breadcrumbs');
+      expect([...nav.element.children].map(node => node.textContent).join('')).toBe(path);
+      const current = nav.get('[aria-current="location"]');
+      expect(current.attributes('title')).toBe(path);
+    }
+  });
+
+  it('keeps the Windows drive chooser reachable through the drive breadcrumb and parent button', async () => {
+    const wrapper = mountDialog({ path: 'C:\\Users\\project' });
+    await wrapper.findAll('.folder-picker-breadcrumbs button')[0].trigger('click');
+    expect(wrapper.emitted('navigate')).toEqual([['C:\\']]);
+    await wrapper.setProps({ state: { ...wrapper.props('state'), path: 'C:\\' } });
+    await wrapper.get('.folder-picker-navigation > button').trigger('click');
+    expect(wrapper.emitted('navigate').at(-1)).toEqual(['']);
+    await wrapper.setProps({ state: { ...wrapper.props('state'), path: '', canConfirm: false } });
+    expect(wrapper.get('.folder-picker-navigation > button').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.btn-primary').attributes('disabled')).toBeDefined();
   });
 
   it('uses editable input and Enter/Go without submitting the outer create form', async () => {

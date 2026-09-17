@@ -56,8 +56,10 @@ export default {
     },
     canManage() {
       return !this.unavailable && !this.stale && this.item.status !== 'done'
+        && !(this.item.schedule?.recurrence && (this.item.status === 'cancelled' || this.item.schedule.status === 'completed'))
         && Number.isSafeInteger(this.control.revision) && this.control.revision > 0;
     },
+    resumableExecution() { return !this.item.schedule?.recurrence && (!!this.control.stopReason || this.item.status === 'cancelled'); },
     additions() { return budgetAdditions(this.values, this.control.limits); },
     hasInput() { return Object.values(this.values).some(value => String(value).trim()); },
     stopLabel() {
@@ -121,7 +123,7 @@ export default {
     },
     async changeBudget(op) {
       if (!this.canManage || (op === 'extend' && (!this.formOpen || !this.additions))) return;
-      if (op === 'resume' && !this.control.stopReason && this.item.status !== 'cancelled') return;
+      if (op === 'resume' && !this.resumableExecution) return;
       const { id, revision } = this.item;
       const agentId = this.agentId;
       const executionControlRevision = this.control.revision;
@@ -194,7 +196,7 @@ export default {
       <div class="work-center-resource-buttons">
         <button v-if="stale" class="btn-secondary" type="button" :disabled="unavailable" @click="refreshLatest">{{ $t('workCenter.resource.refresh') }}</button>
         <button v-if="!formOpen && item.status !== 'done'" class="btn-ghost" type="button" :disabled="!canManage" @click="openForm">{{ $t('workCenter.resource.extend') }}</button>
-        <button v-if="control.stopReason || item.status === 'cancelled'" class="btn-secondary" type="button" :disabled="!canManage || formOpen" @click="changeBudget('resume')">{{ $t('workCenter.resumeWorkItem') }}</button>
+        <button v-if="resumableExecution" class="btn-secondary" type="button" :disabled="!canManage || formOpen" @click="changeBudget('resume')">{{ $t('workCenter.resumeWorkItem') }}</button>
         <span v-if="pending" class="work-center-muted" role="status">{{ $t('workCenter.resource.pending') }}</span>
       </div>
       <form v-if="formOpen" class="work-center-resource-form" @submit.prevent="changeBudget('extend')" novalidate>

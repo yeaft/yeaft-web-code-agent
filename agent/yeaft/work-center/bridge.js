@@ -21,15 +21,15 @@ let serviceFactory = null;
 let featureEnabled = false;
 
 const BROWSER_DETAIL_OPS = new Set([
-  'get', 'create', 'update', 'start', 'cancel', 'resume', 'extend_budget', 'post_work_item_message', 'action_input', 'retry_action', 'guide', 'retry',
+  'get', 'create', 'update', 'update_schedule', 'start', 'cancel', 'resume', 'extend_budget', 'post_work_item_message', 'action_input', 'retry_action', 'guide', 'retry',
 ]);
 const BROWSER_ACTION_DEBUG_OPS = new Set(['get_action_messages', 'get_action_requests', 'get_action_request']);
 // `files` is an internal server-to-Agent field. The browser relay rejects any
 // client-supplied value and only emits files resolved from owned upload ids.
 const BROWSER_FILE_FIELDS = Object.freeze({
   create: [
-    'title', 'goal', 'acceptanceCriteria', 'workItemType', 'workDir', 'deliveryTarget',
-    'reuseMemory', 'files', 'start',
+    'title', 'titleSource', 'goal', 'acceptanceCriteria', 'workItemType', 'workDir', 'deliveryTarget', 'deliveryInstructions',
+    'reuseMemory', 'files', 'start', 'scheduledFor', 'scheduleEnabled', 'recurrence',
   ],
   post_work_item_message: [
     'id', 'clientMessageId', 'text', 'target', 'revision', 'planRevision', 'ledgerRevision',
@@ -96,6 +96,7 @@ async function getSettingsRuntime() {
     defaultWorkDir: ctx.CONFIG?.workDir || process.cwd(),
     workItemAttachments: Array.isArray(ctx.agentCapabilities)
       && ctx.agentCapabilities.includes('work_item_attachments'),
+    recurringSchedules: true,
     defaultStageInstructions: defaultWorkCenterStageInstructions(),
   };
 }

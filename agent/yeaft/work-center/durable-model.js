@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { withTransaction } from './transaction.js';
 
-export const WORK_CENTER_SCHEMA_VERSION = 40;
+export const WORK_CENTER_SCHEMA_VERSION = 42;
 
 const MIGRATIONS = [
   ['23-conversation-stream', migrateConversationStream],
@@ -21,6 +22,8 @@ const MIGRATIONS = [
   ['38-action-closure-and-outputs', migrateActionClosureAndOutputs],
   ['39-action-creation-source', migrateActionCreationSource],
   ['40-work-item-schedules', migrateWorkItemSchedules],
+  ['41-delivery-instructions', migrateDeliveryInstructions],
+  ['42-recurring-schedules', migrateRecurringSchedules],
 ];
 
 const MIGRATION_ALIASES = new Map([
@@ -82,15 +85,7 @@ function runMigration(db, now, name, migration) {
     db.prepare(`INSERT INTO schema_migrations(name, checksum, applied_at)
       VALUES (?, ?, ?)`).run(name, checksum, now);
   };
-  if (db.isTransaction) return apply();
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    apply();
-    db.exec('COMMIT');
-  } catch (error) {
-    try { db.exec('ROLLBACK'); } catch {}
-    throw error;
-  }
+  return withTransaction(db, apply);
 }
 
 export function migrateDurableWorkCenterModel(db, now = Date.now(), sourceSchemaVersion = 22) {
@@ -567,6 +562,20 @@ function migrateActionClosureAndOutputs(db) {
   `);
 }
 
+function migrateRecurringSchedules(db) {
+  for (const [column, definition] of [
+    ['schedule_recurrence', 'TEXT'],
+    ['schedule_run_count', 'INTEGER NOT NULL DEFAULT 0'],
+    ['schedule_last_work_item_id', 'TEXT'],
+    ['source_schedule_id', 'TEXT'],
+    ['scheduled_occurrence_at', 'INTEGER'],
+  ]) {
+    if (!hasColumn(db, 'work_items', column)) db.exec(`ALTER TABLE work_items ADD COLUMN ${column} ${definition}`);
+  }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_schedule_occurrence
+    ON work_items(source_schedule_id, scheduled_occurrence_at) WHERE source_schedule_id IS NOT NULL`);
+}
+
 function migrateWorkItemSchedules(db) {
   for (const [column, definition] of [
     ['schedule_status', 'TEXT'],
@@ -580,6 +589,12 @@ function migrateWorkItemSchedules(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_work_items_schedule_due
     ON work_items(schedule_status, scheduled_for)
     WHERE schedule_status = 'scheduled'`);
+}
+
+function migrateDeliveryInstructions(db) {
+  if (!hasColumn(db, 'work_items', 'delivery_instructions')) {
+    db.exec('ALTER TABLE work_items ADD COLUMN delivery_instructions TEXT');
+  }
 }
 
 function migrateActionCreationSource(db) {

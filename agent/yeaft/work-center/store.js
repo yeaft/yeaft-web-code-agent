@@ -1,4 +1,6 @@
+import { normalizeRecurrence, validateScheduleTimestamp, initialOccurrence, nextOccurrence, latestOccurrence } from './recurrence.js';
 import { DatabaseSync } from 'node:sqlite';
+import { withTransaction } from './transaction.js';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -112,11 +114,17 @@ function mapWorkItem(row) {
     coordinationMode: row.coordination_mode || 'legacy',
     finalResult: parseJson(row.final_result, null),
     deliveryTarget: row.delivery_target || null,
+    deliveryInstructions: row.delivery_instructions || '',
     schedule: row.schedule_status ? {
-      status: row.schedule_status,
+      status: row.status === 'cancelled' ? 'cancelled' : row.schedule_status,
       scheduledFor: Number(row.scheduled_for) || null,
       triggeredAt: Number(row.schedule_triggered_at) || null,
+      recurrence: parseJson(row.schedule_recurrence, null),
+      runCount: Number(row.schedule_run_count) || 0,
+      lastWorkItemId: row.schedule_last_work_item_id || null,
     } : null,
+    sourceScheduleId: row.source_schedule_id || null,
+    scheduledOccurrenceAt: row.scheduled_occurrence_at ?? null,
     title: row.title,
     titleSource: row.title_source || 'explicit',
     requirement: row.requirement ?? row.goal,
@@ -338,18 +346,6 @@ function mapEvent(row) {
     data: parseJson(row.data, {}),
     createdAt: row.created_at,
   };
-}
-
-function withTransaction(db, fn) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    try { db.exec('ROLLBACK'); } catch {}
-    throw err;
-  }
 }
 
 function hasColumn(db, table, column) {
@@ -840,7 +836,8 @@ export class WorkItemStore {
   extendExecutionBudget(id, revision, additions) { return this.resourceControl.extend(id, revision, additions); }
   stopExecution(id, code, details) { return this.resourceControl.stop(id, code, details); }
   canAutomaticallyCoordinate(id, { userMessage = false } = {}) {
-    const row = this.db.prepare('SELECT status FROM work_items WHERE id = ?').get(id);
+    const row = this.db.prepare('SELECT status, schedule_recurrence FROM work_items WHERE id = ?').get(id);
+    if (row?.schedule_recurrence && parseJson(row.schedule_recurrence, null)) return false;
     if (!row || ['done', 'cancelled'].includes(row.status) || this.isExecutionStopped(id)) return false;
     const control = this.getExecutionControl(id);
     // A failed Action may be closed without retrying it. Enforce lifetime
@@ -863,6 +860,7 @@ export class WorkItemStore {
         coordination_mode TEXT NOT NULL DEFAULT 'legacy',
         final_result TEXT,
         delivery_target TEXT,
+        delivery_instructions TEXT,
         schedule_status TEXT,
         scheduled_for INTEGER,
         schedule_triggered_at INTEGER,
@@ -1161,6 +1159,9 @@ export class WorkItemStore {
     if (!hasColumn(this.db, 'work_items', 'delivery_target')) {
       this.db.exec('ALTER TABLE work_items ADD COLUMN delivery_target TEXT');
     }
+    if (!hasColumn(this.db, 'work_items', 'delivery_instructions')) {
+      this.db.exec('ALTER TABLE work_items ADD COLUMN delivery_instructions TEXT');
+    }
     if (!hasColumn(this.db, 'work_items', 'title_source')) {
       // Old titles were explicit under the previous creation contract.
       this.db.exec("ALTER TABLE work_items ADD COLUMN title_source TEXT NOT NULL DEFAULT 'explicit'");
@@ -1359,7 +1360,7 @@ export class WorkItemStore {
       );
       return this.db.prepare('SELECT * FROM action_entries WHERE id = ?').get(id);
     };
-    return this.db.isTransaction ? append() : withTransaction(this.db, append);
+    return withTransaction(this.db, append);
   }
 
   appendActionControl(workItemId, actionId, command, options = {}) {
@@ -1398,7 +1399,7 @@ export class WorkItemStore {
       );
       return this.db.prepare('SELECT * FROM coordinator_mailbox_entries WHERE id = ?').get(id);
     };
-    return this.db.isTransaction ? enqueue() : withTransaction(this.db, enqueue);
+    return withTransaction(this.db, enqueue);
   }
 
   claimCoordinatorTurn(workItemId, turnId, owner, leaseMs = 60_000) {
@@ -2423,16 +2424,20 @@ export class WorkItemStore {
       const now = this.now();
       const id = input.id || randomUUID();
       const workspaceKey = canonicalWorkspaceKey(input.workDir);
+      const recurrence = normalizeRecurrence(input.schedule?.recurrence);
+      if (recurrence && firstAction) throw new Error('A recurring schedule must remain a draft plan');
+      if (input.schedule) validateScheduleTimestamp(input.schedule.scheduledFor);
       this.db.prepare(`INSERT INTO work_items
-        (id, revision, execution_schema_version, ledger_revision, coordination_mode, final_result, delivery_target,
+        (id, revision, execution_schema_version, ledger_revision, coordination_mode, final_result, delivery_target, delivery_instructions,
          schedule_status, scheduled_for, schedule_triggered_at, title, title_source, requirement, goal, acceptance_criteria, workflow_template, workflow_snapshot, status,
          current_action_id, current_run_id, work_dir, workspace_key, reuse_memory, origin, linked_session_ids,
          session_context, attachments, created_at, updated_at)
-        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id,
         Number.isInteger(input.executionSchemaVersion) ? input.executionSchemaVersion : 2,
         input.coordinationMode || 'legacy',
         input.deliveryTarget || null,
+        input.deliveryInstructions || null,
         input.schedule?.status || null,
         input.schedule?.scheduledFor || null,
         input.title,
@@ -2453,6 +2458,12 @@ export class WorkItemStore {
         now,
         now,
       );
+      if (recurrence) {
+        const due = initialOccurrence(recurrence, input.schedule.scheduledFor);
+        const completed = due == null || (recurrence.endsAt != null && (recurrence.endsAt < now || due > recurrence.endsAt));
+        this.db.prepare(`UPDATE work_items SET schedule_recurrence = ?, scheduled_for = ?, schedule_status = ? WHERE id = ?`)
+          .run(stringify(recurrence), due, completed ? 'completed' : input.schedule.status, id);
+      }
       let action = null;
       if (firstAction) {
         action = this.#insertAction(id, { ...firstAction, contractRevision: 1 }, 1, now);
@@ -2461,6 +2472,16 @@ export class WorkItemStore {
       this.appendEvent(id, 'work_item.created', { status: firstAction ? 'ready' : 'draft' }, { actionId: action?.id });
       return this.getWorkItem(id);
     });
+  }
+
+  listRecentDeliveryInstructions(limit = 12) {
+    const boundedLimit = Math.min(Math.max(Number(limit) || 12, 1), 24);
+    return this.db.prepare(`SELECT delivery_instructions AS value, MAX(created_at) AS last_used_at
+      FROM work_items
+      WHERE delivery_instructions IS NOT NULL AND trim(delivery_instructions) != ''
+      GROUP BY delivery_instructions
+      ORDER BY last_used_at DESC, value ASC
+      LIMIT ?`).all(boundedLimit).map(row => row.value);
   }
 
   #insertAction(workItemId, input, sequence, now = this.now(), options = {}) {
@@ -3074,6 +3095,7 @@ export class WorkItemStore {
 
   getWorkItem(id) {
     const workItem = mapWorkItem(this.db.prepare('SELECT * FROM work_items WHERE id = ?').get(id));
+    if (workItem?.schedule) workItem.schedule.lastError = this.getScheduleLastError(id);
     if (!usesLegacyGraph(workItem) && !isDynamicWorkItem(workItem)) return workItem;
     const actions = this.db.prepare('SELECT * FROM actions WHERE work_item_id = ? ORDER BY sequence')
       .all(id).map(mapAction);
@@ -3119,10 +3141,94 @@ export class WorkItemStore {
       }));
   }
 
+  // Event IDs, not timestamps, order failures and clearing transitions (which may
+  // share a clock tick). Unrelated plan edits must not hide a dispatch failure.
+  getScheduleLastError(id) {
+    const event = this.db.prepare(`SELECT type, created_at FROM events WHERE work_item_id = ?
+      AND type IN ('work_item.schedule_failed', 'work_item.schedule_triggered',
+        'work_item.schedule_advanced', 'work_item.schedule_updated', 'work_item.started')
+      ORDER BY id DESC LIMIT 1`).get(id);
+    return event?.type === 'work_item.schedule_failed' ? {
+      code: 'schedule_dispatch_failed',
+      message: 'Scheduled execution could not start. The plan will retry automatically; check its configuration and attachments.',
+      at: Number(event.created_at),
+    } : null;
+  }
+
+  recordScheduleFailure(id) {
+    return withTransaction(this.db, () => {
+      const workItem = this.getWorkItem(id);
+      if (workItem?.status !== 'draft' || workItem.schedule?.status !== 'scheduled'
+          || workItem.schedule.lastError) return null;
+      // One durable notification per uninterrupted failure episode, even across
+      // restarts. Never persist exception text: it may contain paths or secrets.
+      this.appendEvent(id, 'work_item.schedule_failed', { code: 'schedule_dispatch_failed' });
+      this.db.prepare('UPDATE work_items SET revision = revision + 1, updated_at = ? WHERE id = ?')
+        .run(this.now(), id);
+      return this.getWorkItemDetail(id);
+    });
+  }
+
   listDueScheduledWorkItemIds(now = this.now()) {
     return this.db.prepare(`SELECT id FROM work_items
       WHERE schedule_status = 'scheduled' AND scheduled_for <= ? AND status = 'draft'
       ORDER BY scheduled_for, id`).all(now).map(row => row.id);
+  }
+
+  dispatchScheduledWorkItem(id, scheduledAt, makeInitialAction, cloneAttachments = null) {
+    validateScheduleTimestamp(scheduledAt);
+    return withTransaction(this.db, () => {
+      const source = this.getWorkItem(id);
+      if (!source || source.status !== 'draft' || source.schedule?.status !== 'scheduled'
+          || source.schedule.scheduledFor > scheduledAt) return null;
+      const schedule = source.schedule;
+      if (!schedule.recurrence) return this.startWorkItemAtomic(id, makeInitialAction, { scheduledAt });
+      const recurrence = normalizeRecurrence(schedule.recurrence);
+      const expired = recurrence.endsAt != null && scheduledAt > recurrence.endsAt;
+      const exhausted = recurrence.maxRuns != null && schedule.runCount >= recurrence.maxRuns;
+      const due = latestOccurrence(recurrence, scheduledAt);
+      const next = nextOccurrence(recurrence, scheduledAt);
+      // failed Actions / Runs do not mean a terminal WorkItem: needs_attention,
+      // waiting and running remain live and may be retried by their owner.
+      const overlapping = this.db.prepare(`SELECT id FROM work_items WHERE source_schedule_id = ?
+        AND status NOT IN ('done', 'cancelled', 'failed', 'error') LIMIT 1`).get(id);
+      let occurrence = null;
+      if (!expired && !exhausted && !overlapping && due != null && due >= schedule.scheduledFor) {
+        const occurrenceId = randomUUID();
+        const attachments = source.attachments.length
+          ? cloneAttachments?.(source, occurrenceId) : [];
+        if (!attachments) throw new Error('Recurring attachments require an owner-safe clone');
+        this.createWorkItem({
+          id: occurrenceId, title: source.title, titleSource: source.titleSource, goal: source.goal,
+          acceptanceCriteria: source.acceptanceCriteria, workflowTemplate: source.workflowTemplate,
+          workflowSnapshot: source.workflowSnapshot, executionSchemaVersion: source.executionSchemaVersion,
+          coordinationMode: source.coordinationMode, workDir: source.workDir, reuseMemory: source.reuseMemory,
+          origin: source.origin, linkedSessionIds: source.linkedSessionIds, sessionContext: source.sessionContext,
+          deliveryTarget: source.deliveryTarget, deliveryInstructions: source.deliveryInstructions, attachments,
+        });
+        this.db.prepare(`UPDATE work_items SET source_schedule_id = ?, scheduled_occurrence_at = ?, requirement = ? WHERE id = ?`)
+          .run(id, due, source.requirement, occurrenceId);
+        // Copy the plan's approved limits, not usage, stops, reservations or claims.
+        this.db.prepare(`INSERT INTO work_item_execution_controls (work_item_id, limits_json, action_attempts_extension)
+          SELECT ?, limits_json, action_attempts_extension FROM work_item_execution_controls WHERE work_item_id = ?
+          ON CONFLICT(work_item_id) DO UPDATE SET limits_json = excluded.limits_json,
+            action_attempts_extension = excluded.action_attempts_extension`).run(occurrenceId, id);
+        occurrence = this.startWorkItemAtomic(occurrenceId, makeInitialAction);
+      }
+      const runCount = schedule.runCount + (occurrence ? 1 : 0);
+      const completed = expired || exhausted || next == null
+        || (recurrence.endsAt != null && next > recurrence.endsAt)
+        || (recurrence.maxRuns != null && runCount >= recurrence.maxRuns);
+      this.db.prepare(`UPDATE work_items SET schedule_status = ?, scheduled_for = ?, schedule_run_count = ?,
+        schedule_last_work_item_id = ?, schedule_triggered_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
+        .run(completed ? 'completed' : 'scheduled', next, runCount, occurrence?.id || schedule.lastWorkItemId,
+          occurrence ? scheduledAt : schedule.triggeredAt, this.now(), id);
+      this.appendEvent(id, occurrence ? 'work_item.schedule_triggered' : 'work_item.schedule_advanced', {
+        occurrenceId: occurrence?.id || null, scheduledOccurrenceAt: occurrence?.scheduledOccurrenceAt || null,
+        nextScheduledFor: next, status: completed ? 'completed' : 'scheduled', skippedOverlap: !!overlapping,
+      });
+      return occurrence;
+    });
   }
 
   updateWorkItemSchedule(id, input = {}) {
@@ -3132,15 +3238,30 @@ export class WorkItemStore {
       if (row.status !== 'draft' || !['scheduled', 'paused'].includes(row.schedule_status)) {
         throw new Error('Only pending scheduled WorkItems can be changed');
       }
-      const scheduledFor = input.scheduledFor == null ? Number(row.scheduled_for) : Number(input.scheduledFor);
-      if (!Number.isSafeInteger(scheduledFor) || scheduledFor <= this.now()) {
-        throw new Error('scheduledFor must be in the future');
+      if (typeof input.enabled !== 'boolean') throw new Error('enabled must be a boolean');
+      if (input.revision !== undefined && input.revision !== row.revision) {
+        throw new Error('Schedule changed; refresh and try again');
       }
-      const status = input.enabled === false ? 'paused' : 'scheduled';
+      const oldRecurrence = parseJson(row.schedule_recurrence, null);
+      const recurrence = Object.hasOwn(input, 'recurrence') ? normalizeRecurrence(input.recurrence) : oldRecurrence;
+      if (oldRecurrence && !recurrence) throw new Error('A recurring plan cannot be converted to a one-shot WorkItem');
       const now = this.now();
-      this.db.prepare(`UPDATE work_items SET schedule_status = ?, scheduled_for = ?,
-        revision = revision + 1, updated_at = ? WHERE id = ?`).run(status, scheduledFor, now, id);
-      this.appendEvent(id, 'work_item.schedule_updated', { status, scheduledFor });
+      let scheduledFor = Object.hasOwn(input, 'scheduledFor')
+        ? validateScheduleTimestamp(input.scheduledFor) : Number(row.scheduled_for);
+      if (Object.hasOwn(input, 'scheduledFor') && scheduledFor <= now) throw new Error('scheduledFor must be in the future');
+      if (recurrence) {
+        scheduledFor = initialOccurrence(recurrence, scheduledFor);
+        if (input.enabled && scheduledFor != null && scheduledFor <= now) scheduledFor = nextOccurrence(recurrence, now);
+      } else if (input.enabled && scheduledFor <= now) {
+        throw new Error('Overdue one-shot schedule requires a future scheduledFor to resume');
+      }
+      const completed = recurrence && (scheduledFor == null
+        || (recurrence.endsAt != null && (recurrence.endsAt < now || scheduledFor > recurrence.endsAt))
+        || (recurrence.maxRuns != null && row.schedule_run_count >= recurrence.maxRuns));
+      const status = completed ? 'completed' : input.enabled ? 'scheduled' : 'paused';
+      this.db.prepare(`UPDATE work_items SET schedule_status = ?, scheduled_for = ?, schedule_recurrence = ?,
+        revision = revision + 1, updated_at = ? WHERE id = ?`).run(status, scheduledFor, stringify(recurrence), now, id);
+      this.appendEvent(id, 'work_item.schedule_updated', { status, scheduledFor, recurrence });
       return this.getWorkItemDetail(id);
     });
   }
@@ -3245,6 +3366,7 @@ export class WorkItemStore {
       runsByWorkItem.get(row.work_item_id).push(mapRun(row));
     }
     return workItems.map(workItem => {
+      if (workItem.schedule) workItem.schedule.lastError = this.getScheduleLastError(workItem.id);
       const actions = actionsByWorkItem.get(workItem.id) || [];
       return graphExecutionState({ ...workItem, executionControl: this.getExecutionControl(workItem.id), actions, runs: runsByWorkItem.get(workItem.id) || [] }, actions);
     });
@@ -3438,6 +3560,7 @@ export class WorkItemStore {
       }
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
+      if (workItem.schedule?.recurrence) throw new Error('Recurring schedule plans cannot accept Coordinator messages; edit the plan instead');
       if (this.isExecutionStopped(id)) throw new WorkCenterResourceStopError(this.getExecutionControl(id).stopReason);
       if (['done', 'cancelled'].includes(workItem.status)) {
         throw new Error(`WorkItem in ${workItem.status} cannot accept Coordinator messages`);
@@ -4359,8 +4482,11 @@ export class WorkItemStore {
         now,
         id,
       );
+      if (current.schedule?.recurrence && next.goal !== current.goal) {
+        this.db.prepare('UPDATE work_items SET requirement = ? WHERE id = ?').run(next.goal, id);
+      }
       let action = null;
-      if (contractChanged) {
+      if (contractChanged && !current.schedule?.recurrence) {
         const updated = this.getWorkItem(id);
         if (isDynamicWorkItem(updated)) {
           this.db.prepare(`UPDATE work_items SET status = 'running', current_action_id = NULL,
@@ -4400,6 +4526,7 @@ export class WorkItemStore {
         now,
       );
       this.db.prepare(`UPDATE work_items SET status = 'cancelled', current_action_id = NULL,
+        schedule_status = CASE WHEN schedule_status IN ('scheduled', 'paused') THEN 'paused' ELSE schedule_status END,
         current_run_id = NULL, updated_at = ? WHERE id = ?`).run(now, id);
       this.appendEvent(id, 'work_item.cancelled');
       return this.getWorkItem(id);
@@ -4410,6 +4537,7 @@ export class WorkItemStore {
     return withTransaction(this.db, () => {
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
+      if (workItem.schedule?.recurrence) throw new Error('Cannot resume execution of a recurring schedule plan');
       if (!Number.isInteger(expectedRevision) || workItem.revision !== expectedRevision) {
         throw new Error('WorkItem changed before it was resumed; refresh and try again');
       }
@@ -4542,6 +4670,7 @@ export class WorkItemStore {
     return withTransaction(this.db, () => {
       const workItem = this.getWorkItem(id);
       if (!workItem) return null;
+      if (workItem.schedule?.recurrence) throw new Error('Cannot manually start a recurring schedule plan');
       const scheduledAt = Number(options.scheduledAt);
       const scheduledStart = Number.isSafeInteger(scheduledAt);
       if (scheduledStart && (workItem.status !== 'draft' || workItem.schedule?.status !== 'scheduled'

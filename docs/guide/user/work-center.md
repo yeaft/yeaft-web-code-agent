@@ -48,6 +48,20 @@ The title is a short display label, separate from the original requirement or go
 
 When created from a Session, the runtime stamps the source Session; model input cannot replace that identity.
 
+## Scheduled and recurring execution
+
+Choose **Start now, Save draft, or Schedule** under **When to run**. Scheduling uses a theme-aware inline calendar and a 24-hour time field instead of the operating system's date popup. Select a time zone to preview the first run in that zone.
+
+- **Once** starts this work item when it is due.
+- **Every day / Weekdays / Every week / Every month** saves a separate schedule. Each occurrence creates a new work item with its own conversation, Actions, results, and usage. Weekdays means Monday–Friday, not a holiday calendar. Weekly schedules support multiple days; monthly schedules support days 1–31, using the last day in shorter months.
+- **End conditions**: repeat indefinitely, through a selected date (end of day in the chosen zone), or for 1–1,000 generated work items. The count measures items created, not successful completions.
+
+Schedule details show status, the next run and its time zone, and the generated count, with a link to the latest execution. Each execution links back to its source plan. Pausing stops future occurrences, not work already in progress. Resuming a repeating schedule skips paused times. Cancelling a plan does not cancel existing executions; finished or cancelled plans must be recreated.
+
+Scheduling runs on the Agent, independently of the browser. After Agent downtime, missed times are coalesced into at most the latest due occurrence, never a backlog of all missed runs. If a previous execution is still unfinished, that occurrence is skipped to prevent overlap. Nonexistent daylight-saving times are skipped; repeated wall times run only once. Each execution consumes resources, so confirm the goal and frequency before enabling repetition.
+
+Older Agents that do not advertise recurring schedules keep one-time scheduling with repetition disabled. An overdue paused one-time schedule needs a new future time to resume; in the current UI, recreate that one-time schedule.
+
 ## Planning and execution
 
 New WorkItems use dynamic coordination. If no separate acceptance criteria are supplied, the user goal itself becomes the minimum acceptance condition. The Coordinator inspects current facts and creates only the next necessary Actions; automatic advancement cannot change the goal or criteria. Contract changes require explicit user refinement. There is no mandatory triage → implement → test → review → deliver sequence. A small research task may need one Action; code changes may need separate implementation, verification, or integration when the evidence and risks justify them.

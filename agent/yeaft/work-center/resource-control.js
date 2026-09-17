@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { withTransaction } from './transaction.js';
 import { LLMAdapter } from '../llm/adapter.js';
 import { normalizeTokenUsage } from '../llm/usage-accounting.js';
 
@@ -88,10 +89,7 @@ export class WorkCenterResourceControl {
   }
 
   atomic(fn) {
-    if (this.db.isTransaction) return fn();
-    this.db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); this.db.exec('COMMIT'); return result; }
-    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    return withTransaction(this.db, fn);
   }
 
   ensure(id) {
