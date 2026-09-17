@@ -3862,9 +3862,24 @@ async function openScheduleForm(page, mockAgent, recurring = true) {
   await openWorkCenter(page, mockAgent, []);
   mockAgent.__recurringSchedules = recurring;
   // Hydrate capability through the real settings action/response rather than patching Pinia.
-  await page.evaluate(agentId => { void window.Pinia.useChatStore().loadWorkCenterSettings(agentId); }, mockAgent.agentId);
-  await respondToWorkCenterOp(mockAgent, 'get_settings', { ...WORK_CENTER_SETTINGS,
-    runtime: { ...WORK_CENTER_SETTINGS.runtime, ...(recurring ? { recurringSchedules: true } : {}) } }, []);
+  await page.evaluate(agentId => {
+    const store = window.Pinia.useChatStore();
+    store.__scheduleSettingsLoaded = false;
+    void store.loadWorkCenterSettings(agentId).then(() => { store.__scheduleSettingsLoaded = true; });
+  }, mockAgent.agentId);
+  // Mount may already have queued a settings read. Resolve both reads with the
+  // advertised response; do not mistake the first response for the latest CAS generation.
+  for (let index = 0; index < 8; index++) {
+    const request = await mockAgent.__workCenterTransport.takeNow();
+    if (!request) break;
+    const runtime = { ...WORK_CENTER_SETTINGS.runtime, ...(recurring ? { recurringSchedules: true } : {}) };
+    const data = request.op === 'get_settings' ? { ...WORK_CENTER_SETTINGS, runtime }
+      : request.op === 'get_runtime' ? runtime
+      : request.op === 'list' ? { items: [], watcher: { enabled: true } } : null;
+    if (data == null) throw new Error(`Unexpected schedule setup op ${request.op}`);
+    await mockAgent.__workCenterTransport.resolve(request, data);
+  }
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().__scheduleSettingsLoaded)).toBe(true);
   await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore().workCenterSettingsLoadingByAgent[agentId], mockAgent.agentId)).toBe(false);
   await page.locator('.work-center-header-create').click();
   const dialog = page.locator('.work-center-modal');
