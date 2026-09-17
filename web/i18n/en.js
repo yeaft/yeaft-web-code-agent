@@ -1868,6 +1868,7 @@ export default {
   'workCenter.lastMonth': 'Last 30 days',
   'workCenter.assignment.planned': 'Planned assignment',
   'workCenter.created': 'Created',
+  'workCenter.executionDuration': 'Runtime',
   'workCenter.files': 'files',
   'workCenter.loadMore': 'Load more',
   'workCenter.activeItems': 'Active work',

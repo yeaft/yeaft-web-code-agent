@@ -756,7 +756,10 @@ test.describe('Work Center responsive UI', () => {
       const crumbBox = await breadcrumb.boundingBox();
       expect(crumbBox.y).toBeGreaterThanOrEqual(headerBox.y);
       expect(crumbBox.y + crumbBox.height).toBeLessThanOrEqual(headerBox.y + headerBox.height);
-      await expect(header.locator('.work-center-actions-button')).toBeVisible();
+      const actionsButton = header.locator('.work-center-actions-button');
+      await expect(actionsButton).toBeVisible();
+      await expect(actionsButton).toHaveAccessibleName('View Actions');
+      await expect(actionsButton).toHaveText('');
       await expect(chatPage.locator('.work-center-detail header')).toHaveCount(0);
       await chatPage.locator('.work-center-item-message-input textarea').fill('Preserve this draft');
       await ensureActionsOpen(chatPage);
@@ -792,6 +795,59 @@ test.describe('Work Center responsive UI', () => {
       await expect(chatPage.getByRole('button', { name: 'More actions', exact: true })).toBeFocused();
       await expect.poll(() => chatPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
+  });
+
+  test('shows creation time and execution runtime on Action rows without a header badge', async ({ chatPage, mockAgent }, testInfo) => {
+    const now = Date.now();
+    const detail = detailWithActions(3);
+    detail.actions = detail.actions.map((action, index) => ({
+      ...action, status: index === 2 ? 'running' : index === 1 ? 'ready' : 'completed',
+      createdAt: now - (3 - index) * 60_000,
+      executionDurationMs: index === 1 ? null : 65_000,
+      executionStartedAt: index === 2 ? now : null,
+    }));
+    await chatPage.clock.setFixedTime(now);
+    await openWorkCenter(chatPage, mockAgent);
+    await chatPage.setViewportSize({ width: 1600, height: 900 });
+    const select = chatPage.locator('.work-center-card').click();
+    await respondToWorkCenterOp(mockAgent, 'get', detail);
+    await select;
+    await ensureActionsOpen(chatPage);
+    const headerButton = chatPage.locator('.work-center-actions-button');
+    await expect(headerButton).toHaveText('');
+    await expect(headerButton).toHaveAccessibleName('View Actions');
+    await expect(chatPage.locator('.work-center-content-title')).toContainText('3');
+    const timing = status => chatPage.locator(`.work-center-action-card[data-status="${status}"] .work-center-action-timing`);
+    const created = await chatPage.evaluate(value => new Date(value).toLocaleString(), detail.actions[0].createdAt);
+    await expect(timing('completed')).toContainText(`Created ${created}`);
+    await expect(timing('completed')).toContainText('Runtime 1m5s');
+    await expect(timing('ready')).toContainText('Runtime —');
+    await expect(timing('running')).toContainText('Runtime 1m5s');
+    await chatPage.clock.setFixedTime(now + 5000);
+    await expect(timing('running')).toContainText('Runtime 1m10s');
+    await expect(timing('completed')).toContainText('Runtime 1m5s');
+    for (const theme of ['light', 'dark']) {
+      await chatPage.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+      for (const width of [1600, 320]) {
+        await chatPage.setViewportSize({ width, height: 900 });
+        await ensureActionsOpen(chatPage);
+        await expect(timing('running')).toBeVisible();
+        expect(await timing('running').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        await expect.poll(() => chatPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await chatPage.screenshot({ path: testInfo.outputPath(`action-timing-${theme}-${width}.png`) });
+      }
+    }
+    mockAgent.send({ type: 'work_center_event', event: {
+      type: 'run.progress', workItem: {
+        ...OPEN_ITEM, revision: 1, currentActionId: 'action-3',
+        actionStats: [{ id: 'action-3', generation: 1, status: 'completed', progressRevision: 5,
+          executionDurationMs: 70_000, executionStartedAt: null }],
+      },
+    } });
+    const last = chatPage.locator('.work-center-action-card').filter({ hasText: 'Runtime 1m10s' });
+    await expect(last).toHaveAttribute('data-status', 'completed');
+    await chatPage.clock.setFixedTime(now + 65_000);
+    await expect(last).toContainText('Runtime 1m10s');
   });
 
   test('forwards canonical Work Item messages through the real browser-server-Agent wire', async ({ chatPage, mockAgent }) => {
@@ -1083,7 +1139,7 @@ test.describe('Work Center responsive UI', () => {
     const detail = chatPage.locator('.work-center-detail');
     const conversation = detail.locator('.work-center-conversation');
     const content = detail.locator('.work-center-content-pane');
-    const actionsButton = chatPage.getByRole('button', { name: /^\d+ Actions$/ });
+    const actionsButton = chatPage.getByRole('button', { name: 'View Actions', exact: true });
     await expect(chatPage.locator('.work-center-list')).toBeHidden();
     await expect(detail).toBeVisible();
     await expect(conversation).toBeVisible();
@@ -3243,9 +3299,10 @@ test.describe('Work Center responsive UI', () => {
       });
 
       if (width > 1024) {
-        expect(metrics.lineCount).toBe(3);
+        expect(metrics.lineCount).toBe(4);
         expect(metrics.distinctLineTops).toBeGreaterThanOrEqual(1);
-        expect(metrics.cardHeight).toBeLessThanOrEqual(75);
+        // The fourth compact row contains creation time and runtime.
+        expect(metrics.cardHeight).toBeLessThanOrEqual(91);
       } else {
         expect(metrics.lineCount).toBe(0);
         expect(metrics.cardHeight).toBe(0);

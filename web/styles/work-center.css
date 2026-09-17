@@ -931,21 +931,9 @@
   color: var(--error);
 }
 
-.work-center-main .work-center-actions-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-
 .work-center-main .work-center-actions-button.active {
   background: var(--session-active);
   color: var(--text-primary);
-}
-
-.work-center-actions-button > span {
-  color: var(--text-muted);
-  font-size: 11px;
 }
 
 .work-center-detail-layout {
@@ -1642,6 +1630,16 @@
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.work-center-action-timing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
 
 .work-center-action-description {

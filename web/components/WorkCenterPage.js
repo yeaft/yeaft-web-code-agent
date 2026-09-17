@@ -1,4 +1,5 @@
 import NavigationIcon from './NavigationIcon.js';
+import { formatElapsed } from '../stores/helpers/turn-timing.js';
 import { confirmDialog } from '../utils/dialog.js';
 import WorkCenterActionReference from './WorkCenterActionReference.js';
 import WorkCenterActionDetail from './WorkCenterActionDetail.js';
@@ -88,6 +89,7 @@ export default {
       deletingWorkItemIds: {},
       deleteWorkItemError: '',
       boardQueryTimer: null,
+      actionNowMs: Date.now(),
       workDirTouched: false,
       startTouched: false,
       createAttachments: [],
@@ -549,11 +551,13 @@ export default {
     invalidateWorkCenterUrlRestore(this);
     this.unavailableAgentStateGeneration += 1;
     if (this.boardQueryTimer) clearTimeout(this.boardQueryTimer);
+    clearInterval(this.actionClockTimer);
     window.removeEventListener('popstate', this.restoreWorkCenterUrl);
     document.removeEventListener('click', this.closeHeaderPopovers);
     this.navigationMedia?.removeEventListener('change', this.onNavigationResize);
   },
   mounted() {
+    this.actionClockTimer = setInterval(() => { this.actionNowMs = Date.now(); }, 1000);
     this.returnFocusElement = document.activeElement;
     this.navigationMedia = window.matchMedia('(max-width: 1100px)');
     this.navigationMedia.addEventListener('change', this.onNavigationResize);
@@ -738,6 +742,14 @@ export default {
       const total = Math.max(0, Number(item?.actionCount) || 0);
       const completed = Math.min(total, Math.max(0, Number(item?.completedActionCount) || 0));
       return this.$t('workCenter.actionProgress', { completed, total });
+    },
+    actionDuration(action) {
+      const duration = action?.executionDurationMs;
+      if (!Number.isFinite(duration) || duration < 0) return '—';
+      const start = action.executionStartedAt;
+      const activeMs = action.status === 'running' && Number.isFinite(start) && start > 0
+        ? Math.max(0, this.actionNowMs - start) : 0;
+      return formatElapsed(duration + activeMs) || '—';
     },
     time(value) {
       if (!value) return '';
@@ -1611,10 +1623,9 @@ export default {
                     aria-controls="work-center-content-panel"
                     @click="contentPanelOpen ? closeContentPanel() : openContentPanel()"
                     :title="tr('workCenter.viewActions', 'View Actions')"
-                    :aria-label="$t('workCenter.actionCount', { count: selected.actionCount || selected.actions?.length || 0 })"
+                    :aria-label="tr('workCenter.viewActions', 'View Actions')"
                     >
                     <NavigationIcon name="activity" :size="16" />
-                    <span>{{ selected.actionCount || selected.actions?.length || 0 }}</span>
                   </button>
                 </template>
               </div>
@@ -2029,6 +2040,10 @@ export default {
                                   {{ action.canonicalResult?.summary || action.brief?.approach || actionContentSummary(action) || tr('workCenter.noActionSummary', 'No summary yet') }}
                                 </span>
                                 <small class="work-center-action-vp">{{ actionExecutor(action) }}</small>
+                                <small class="work-center-action-timing">
+                                  <span>{{ tr('workCenter.created', 'Created') }} {{ time(action.createdAt) || '—' }}</span>
+                                  <span>{{ tr('workCenter.executionDuration', 'Runtime') }} {{ actionDuration(action) }}</span>
+                                </small>
                               </span>
                               <span class="work-center-action-chevron" aria-hidden="true"></span>
                             </button>
