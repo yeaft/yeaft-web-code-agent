@@ -793,13 +793,33 @@ function enforceWorkItemBrowserDtoBudget(value, options = {}) {
   if (jsonByteLength(dto) <= MAX_WORK_ITEM_BROWSER_DTO_BYTES) return dto;
 
   const originalCount = actions.length;
-  const retained = keep ? [stripActionBody(keep, true)] : [];
+  // Detail evidence and attempt links need the Action identity AND its readable
+  // name. Drop bulky context/dependencies before dropping their navigation
+  // targets. If even these stubs cannot fit, the minimal fallback below omits
+  // evidence with the Actions instead of leaving known sources unresolvable.
+  const retained = Array.isArray(workItem.runReferences) && Array.isArray(workItem.actions)
+    ? actions.map(action => ({
+        id: action.id,
+        sequence: action.sequence,
+        generation: action.generation,
+        type: action.type,
+        stageId: action.stageId,
+        status: action.status,
+        progressRevision: action.progressRevision,
+        messageCount: action.messageCount,
+        createdAt: action.createdAt,
+        updatedAt: action.updatedAt,
+        executionDurationMs: action.executionDurationMs,
+        executionStartedAt: action.executionStartedAt,
+        brief: { objective: truncateUtf8(action.brief?.objective || action.contentSummary || '', 512) },
+      }))
+    : keep ? [stripActionBody(keep, true)] : [];
   if (Array.isArray(workItem.actions)) workItem.actions = retained;
   else workItem.actionStats = retained;
   workItem.omittedActionCount = originalCount - retained.length;
   if (jsonByteLength(dto) <= MAX_WORK_ITEM_BROWSER_DTO_BYTES) return dto;
 
-  if (retained[0]) {
+  if (retained[0] && !Array.isArray(workItem.runReferences)) {
     delete retained[0].brief;
     delete retained[0].failure;
   }
