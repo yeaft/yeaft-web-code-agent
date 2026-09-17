@@ -12,7 +12,7 @@ export default {
     actionId: { type: String, default: null },
     expanded: { type: Boolean, default: true },
   },
-  emits: ['back', 'collapse', 'select-agent', 'select-item'],
+  emits: ['back', 'collapse', 'create', 'select-agent', 'select-item'],
   data() { return { activityExpanded: true, collapsedItems: {} }; },
   computed: {
     store() { return Pinia.useChatStore(); },
@@ -84,6 +84,11 @@ export default {
           <NavigationIcon :name="expanded ? 'collapse' : 'menu'" :size="18" />
         </button>
       </div>
+      <button class="btn-secondary work-center-sidebar-create" type="button" :disabled="!agentId || !agents.some(agent => agent.online)"
+              :title="$t('workCenter.newWorkItem')" :aria-label="$t('workCenter.newWorkItem')" @click="$emit('create')">
+        <NavigationIcon name="add" :size="18" />
+        <span v-if="expanded">{{ $t('workCenter.newWorkItem') }}</span>
+      </button>
       <div v-if="expanded" class="work-center-sidebar-scroll">
         <nav class="work-center-agent-list" :aria-label="$t('workCenter.selectAgent')">
           <h2>{{ $t('workCenter.agents') }}</h2>

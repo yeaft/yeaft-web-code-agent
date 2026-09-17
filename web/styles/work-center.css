@@ -230,7 +230,6 @@
   opacity: 0.4;
 }
 
-.work-center-header-create,
 .work-center-empty-create {
   display: inline-flex;
   align-items: center;
@@ -268,10 +267,6 @@
   cursor: not-allowed;
 }
 
-.work-center-header-create {
-  color: var(--accent-blue);
-}
-
 .work-center-toolbar {
   display: flex;
   min-width: 0;
@@ -280,8 +275,7 @@
   margin-left: auto;
 }
 
-.work-center-filter-menu,
-.work-center-header-menu {
+.work-center-filter-menu {
   position: relative;
 }
 
@@ -3437,6 +3431,19 @@
 }
 .work-center-sidebar-header > strong { flex: 1; font-size: 13px; font-weight: 600; }
 .work-center-sidebar.collapsed .work-center-sidebar-header { flex-direction: column; padding: 10px 6px; }
+.work-center-sidebar-create {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 36px;
+  margin: 4px 12px 8px;
+  padding: 8px;
+  font-size: 12px;
+}
+.work-center-sidebar-create svg { flex-shrink: 0; }
+.work-center-sidebar.collapsed .work-center-sidebar-create { margin: 4px 6px 8px; padding: 8px 0; justify-content: center; }
 .work-center-sidebar-scroll { min-height: 0; overflow: auto; padding: 8px 12px 20px; }
 .work-center-sidebar h2 { margin: 0; font-size: 11px; font-weight: 500; color: var(--text-muted); }
 .work-center-agent-list > h2 { padding: 0 8px 8px; }

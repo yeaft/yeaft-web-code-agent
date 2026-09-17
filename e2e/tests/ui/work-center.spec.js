@@ -480,6 +480,12 @@ async function openWorkCenter(chatPage, mockAgent, items = [OPEN_ITEM]) {
   await expect(chatPage.locator('.work-center-card')).toHaveCount(items.length);
 }
 
+async function openCreateFromSidebar(page) {
+  const button = page.locator('.work-center-sidebar-create');
+  if (!await button.isVisible()) await page.locator('.work-center-navigation-toggle:visible').click();
+  await button.click();
+}
+
 async function ensureActionsOpen(page) {
   const button = page.locator('.work-center-actions-button');
   if (await button.getAttribute('aria-expanded') === 'false') await button.click();
@@ -789,12 +795,14 @@ test.describe('Work Center responsive UI', () => {
       expect(popover.x).toBeGreaterThanOrEqual(0);
       expect(popover.x + popover.width).toBeLessThanOrEqual(320);
       await chatPage.locator('.work-center-mobile-search input').press('Escape');
-      await expect(chatPage.getByRole('button', { name: 'New work item', exact: true })).toBeVisible();
       await expect(chatPage.getByRole('button', { name: 'Refresh', exact: true }).last()).toBeVisible();
-      await chatPage.getByRole('button', { name: 'More actions', exact: true }).click();
-      await expect(chatPage.getByRole('button', { name: 'Work Center settings', exact: true })).toBeVisible();
-      await chatPage.getByRole('button', { name: 'Work Center settings', exact: true }).press('Escape');
-      await expect(chatPage.getByRole('button', { name: 'More actions', exact: true })).toBeFocused();
+      await expect(chatPage.locator('.work-center-header-settings')).toBeVisible();
+      await expect(chatPage.getByRole('button', { name: 'More actions', exact: true })).toHaveCount(0);
+      const history = respondToWorkCenterOp(mockAgent, 'list_delivery_instructions', { values: [] });
+      await openCreateFromSidebar(chatPage);
+      await history;
+      await expect(chatPage.locator('.work-center-modal')).toBeVisible();
+      await chatPage.locator('.work-center-modal .modal-close').click();
       await expect.poll(() => chatPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
   });
@@ -2611,7 +2619,7 @@ test.describe('Work Center responsive UI', () => {
     expect(entered).toBe(true);
     const pendingSettings = await settingsRequest;
     await expect(chatPage.locator('.work-center-main')).toBeVisible();
-    await chatPage.locator('.work-center-header-create').click();
+    await openCreateFromSidebar(chatPage);
     const createModal = chatPage.locator('.work-center-modal');
     const workDir = createModal.getByRole('textbox', { name: /Working directory/ });
     await expect(workDir).toHaveValue('');
@@ -2640,7 +2648,7 @@ test.describe('Work Center responsive UI', () => {
 
   test('uses the shared workdir picker for Work Center directory selection', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
-    await chatPage.locator('.work-center-header-create').click();
+    await openCreateFromSidebar(chatPage);
     const createModal = chatPage.locator('.work-center-modal');
     const respondDirectory = (request, path, entries) => mockAgent.send({
       type: 'directory_listing', conversationId: request.conversationId,
@@ -2680,7 +2688,8 @@ test.describe('Work Center responsive UI', () => {
     await expect(chatPage.locator('.session-sidebar-shell')).toBeHidden();
     await expect(chatPage.locator('.work-center-return, .work-center-navigation-toggle').filter({ visible: true }).first()).toBeVisible();
 
-    const create = chatPage.locator('.work-center-header-create');
+    await chatPage.locator('.work-center-navigation-toggle:visible').click();
+    const create = chatPage.locator('.work-center-sidebar-create');
     await expect(create).toBeVisible();
     await expect(create).toHaveAttribute('aria-label', 'New work item');
     await create.click();
@@ -2697,7 +2706,6 @@ test.describe('Work Center responsive UI', () => {
       list: { items: [OPEN_ITEM], watcher: { enabled: true } },
       get_settings: WORK_CENTER_SETTINGS,
     });
-    await chatPage.getByRole('button', { name: 'More actions', exact: true }).click();
     await chatPage.getByRole('button', { name: 'Work Center settings', exact: true }).click();
     await settingsRequest;
     // Opening the modal starts its own load after the page-level settings load.
@@ -2791,7 +2799,6 @@ test.describe('Work Center responsive UI', () => {
       get_settings: legacySettings,
     });
 
-    await chatPage.getByRole('button', { name: 'More actions', exact: true }).click();
     await chatPage.getByRole('button', { name: 'Work Center settings', exact: true }).click();
     await settingsRequest;
 
@@ -2820,7 +2827,6 @@ test.describe('Work Center responsive UI', () => {
       list: { items: [OPEN_ITEM], watcher: { enabled: true } },
       get_settings: WORK_CENTER_SETTINGS,
     });
-    await chatPage.getByRole('button', { name: 'More actions', exact: true }).click();
     await chatPage.getByRole('button', { name: 'Work Center settings', exact: true }).click();
     await settingsRequest;
 
@@ -2875,7 +2881,7 @@ test.describe('Work Center responsive UI', () => {
 
   test('creates from a goal contract and leaves planning to the Coordinator', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
-    await chatPage.locator('.work-center-header-create').click();
+    await openCreateFromSidebar(chatPage);
     await expect(chatPage.locator('.work-center-plan-preview')).toContainText('Coordinator-driven execution');
     await expect(chatPage.locator('.work-center-plan-preview')).toContainText('The Coordinator chooses the next Actions and executors from the current evidence');
     await expect(chatPage.locator('.work-center-plan-stages')).toHaveCount(0);
@@ -2890,19 +2896,17 @@ test.describe('Work Center responsive UI', () => {
     expect(request.payload).not.toHaveProperty('stageOverrides');
   });
 
-  test('shows dedicated create and refresh actions and reuses delivery goals', async ({ chatPage, mockAgent }) => {
+  test('shows sidebar create and direct header settings and reuses delivery goals', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await expect(chatPage.locator('.work-center-header-refresh')).toBeVisible();
-    await expect(chatPage.locator('.work-center-header-create')).toBeVisible();
-    await chatPage.getByRole('button', { name: 'More actions', exact: true }).click();
-    const menu = chatPage.locator('.work-center-header-popover');
-    await expect(menu).not.toContainText('Refresh');
-    await expect(menu).not.toContainText('New work item');
+    await expect(chatPage.locator('.work-center-sidebar-create')).toBeVisible();
+    await expect(chatPage.locator('.work-center-header-create, .work-center-header-menu')).toHaveCount(0);
+    await expect(chatPage.locator('.work-center-header-settings')).toBeVisible();
 
     const historyRequest = respondToWorkCenterOp(mockAgent, 'list_delivery_instructions', {
       values: ['Publish a release and summarize the changes'],
     });
-    await chatPage.locator('.work-center-header-create').click();
+    await openCreateFromSidebar(chatPage);
     await historyRequest;
     const modal = chatPage.locator('.work-center-modal');
     const goal = modal.getByRole('combobox', { name: /Delivery goal/ });
@@ -2918,9 +2922,76 @@ test.describe('Work Center responsive UI', () => {
       .toBe('Send the signed package to the release channel');
   });
 
+  test('sidebar creation defaults to the selected Agent and switches its execution context', async ({ chatPage, mockAgent }, testInfo) => {
+    await openWorkCenter(chatPage, mockAgent);
+    await chatPage.evaluate(({ agentId, settings, runtime }) => {
+      const store = window.Pinia.useChatStore();
+      const agent = store.agents.find(agent => agent.id === agentId);
+      store.agents.push({ ...agent, id: 'create-agent-b', name: 'Second Agent' },
+        { ...agent, id: 'create-agent-offline', name: 'Offline Agent', online: false });
+      store.workCenterSettingsByAgent['create-agent-b'] = { ...settings, defaultWorkDir: '/second/project', startImmediately: false };
+      store.workCenterRuntimeByAgent['create-agent-b'] = runtime;
+    }, { agentId: mockAgent.agentId, ...WORK_CENTER_SETTINGS });
+    const transport = mockAgent.__workCenterTransport;
+    await openCreateFromSidebar(chatPage);
+    const modal = chatPage.locator('.work-center-modal');
+    const agents = modal.locator('.work-center-create-agent');
+    const requirement = modal.getByRole('textbox', { name: /Requirement/ });
+    const workDir = modal.getByRole('textbox', { name: /Working directory/ });
+    await expect(agents).toHaveValue(mockAgent.agentId);
+    await expect(agents.locator('option[value="create-agent-offline"]')).toHaveAttribute('disabled', '');
+    await expect(requirement).toBeFocused();
+    await requirement.fill('Keep this requirement when selecting another Agent');
+    await workDir.fill('/first/private');
+    await agents.selectOption('create-agent-b');
+    await expect(modal).toBeVisible();
+    await expect(requirement).toHaveValue('Keep this requirement when selecting another Agent');
+    await expect(workDir).toHaveValue('/second/project');
+    await expect(modal.getByRole('button', { name: 'Save draft', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(chatPage.locator('.work-center-agent-row.active')).toContainText('Second Agent');
+    // Drain real store requests in arrival order, including old Agent responses.
+    const histories = [];
+    for (let i = 0; i < 12; i++) {
+      const request = await transport.takeNow();
+      if (!request) break;
+      if (request.op === 'list_delivery_instructions') { histories.push(request); continue; }
+      const settings = { ...WORK_CENTER_SETTINGS.settings, ...(request.agentId === 'create-agent-b'
+        ? { defaultWorkDir: '/second/project', startImmediately: false } : {}) };
+      await transport.resolve(request, request.op === 'list' ? { items: [] } : { settings, runtime: WORK_CENTER_SETTINGS.runtime });
+    }
+    expect(histories.map(request => request.agentId)).toEqual([mockAgent.agentId, 'create-agent-b']);
+    await transport.resolve(histories[1], { values: ['Second Agent goal'] });
+    await transport.resolve(histories[0], { values: ['Old Agent goal'] });
+    await expect(modal.locator('datalist option')).toHaveCount(1);
+    await expect(modal.locator('datalist option')).toHaveAttribute('value', 'Second Agent goal');
+    for (const [width, theme, locale] of [[1280, 'light', 'en'], [320, 'dark', 'zh-CN']]) {
+      await chatPage.setViewportSize({ width, height: 720 });
+      await chatPage.evaluate(({ theme, locale }) => {
+        document.documentElement.setAttribute('data-theme', theme);
+        window.Pinia.useChatStore().changeLocale(locale);
+      }, { theme, locale });
+      await expect(agents).toHaveAccessibleName(locale === 'en' ? 'Select Agent' : '选择 Agent');
+      await expect.poll(() => modal.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await chatPage.screenshot({ path: testInfo.outputPath(`create-agent-${width}-${theme}.png`) });
+    }
+    await modal.locator('.work-center-modal-footer .btn-primary').click();
+    const request = await transport.next();
+    expect(request.op).toBe('create');
+    expect(request.agentId).toBe('create-agent-b');
+    expect(request.payload).toMatchObject({ workDir: '/second/project', start: false, origin: null, linkedSessionIds: [] });
+    await expect(agents).toBeDisabled();
+    await transport.reject(request, 'Create failed');
+    await expect(modal.getByRole('alert')).toHaveText('Create failed');
+    await expect(agents).toBeEnabled();
+    await modal.locator('.modal-close').click();
+    await openCreateFromSidebar(chatPage);
+    await expect(agents).toHaveValue('create-agent-b');
+    await expect(chatPage.locator('.work-center-sidebar-scrim')).toHaveCount(0);
+  });
+
   test('creates a response delivery without requesting code artifacts', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
-    await chatPage.locator('.work-center-header-create').click();
+    await openCreateFromSidebar(chatPage);
     const modal = chatPage.locator('.work-center-modal');
     await modal.getByRole('textbox', { name: /Requirement/ }).fill('Explain the failure with supporting evidence');
     await modal.getByRole('combobox', { name: /Delivery target/ }).selectOption('response');
@@ -3120,7 +3191,7 @@ test.describe('Work Center responsive UI', () => {
 
   test('uploads files and binds their references to the Work Item create request', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
-    await chatPage.locator('.work-center-header-create').click();
+    await openCreateFromSidebar(chatPage);
     const requirement = chatPage.locator('.work-center-modal').getByRole('textbox', { name: /Requirement/ });
     await requirement.fill('Inspect the uploaded screenshot in every Action');
 
@@ -3911,7 +3982,7 @@ async function openScheduleForm(page, mockAgent, recurring = true) {
   }
   await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().__scheduleSettingsLoaded)).toBe(true);
   await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore().workCenterSettingsLoadingByAgent[agentId], mockAgent.agentId)).toBe(false);
-  await page.locator('.work-center-header-create').click();
+  await openCreateFromSidebar(page);
   const dialog = page.locator('.work-center-modal');
   await dialog.locator('textarea').fill('Check project health and report changes since the previous run.');
   await dialog.getByRole('button', { name: 'Schedule', exact: true }).click();
@@ -3991,7 +4062,7 @@ test.describe('Work Center scheduling', () => {
     await openWorkCenter(chatPage, mockAgent, []);
     const later = Date.now() + 3 * 3600000;
     await chatPage.clock.setFixedTime(later);
-    await chatPage.locator('.work-center-header-create').click();
+    await openCreateFromSidebar(chatPage);
     const dialog = chatPage.locator('.work-center-modal');
     await dialog.getByRole('button', { name: 'Schedule', exact: true }).click();
     await expect(dialog.locator('.work-center-schedule-preview')).toBeVisible();
