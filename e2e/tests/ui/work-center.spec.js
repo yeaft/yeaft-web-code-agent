@@ -377,6 +377,7 @@ async function respondToWorkCenterOp(mockAgent, op, data, listItems = [OPEN_ITEM
       const fallbackData = request.op === 'list' ? { items: listItems, watcher: { enabled: true } }
         : request.op === 'get_settings' ? WORK_CENTER_SETTINGS
         : request.op === 'get_runtime' ? WORK_CENTER_SETTINGS.runtime
+        : request.op === 'list_delivery_instructions' ? { values: [] }
         : request.op === 'get' ? data : null;
       if (!fallbackData) throw new Error(`Expected Work Center ${op}, received ${request.op}`);
       await mockAgent.__workCenterTransport.resolve(request, fallbackData);
@@ -3599,7 +3600,8 @@ test.describe('Work Center responsive UI', () => {
       expect(metrics.mainBackground).toBe('rgba(0, 0, 0, 0)');
       expect(metrics.layoutDisplay).toBe('flex');
       expect(metrics.breadcrumbTop).toBeGreaterThanOrEqual(4);
-      expect(metrics.actionsRight).toBe(8);
+      // Narrow headers use the existing 10px gutter; desktop keeps 8px.
+      expect(metrics.actionsRight).toBe(width <= 768 ? 10 : 8);
       if (width === 1400) {
         expect(metrics.workflowWidth).toBeGreaterThanOrEqual(380);
         expect(metrics.workflowWidth).toBeLessThanOrEqual(420);
