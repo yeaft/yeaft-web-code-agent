@@ -251,11 +251,14 @@ export class WorkflowController {
       throw new Error('actionId, revision, and generation are required for Action input');
     }
     const graphMode = workItem.workflowSnapshot?.executionMode === 'graph';
+    const concurrentMode = graphMode || workItem.coordinationMode === 'dynamic';
     const targetMatches = targetAction?.workItemId === id
       && targetAction.generation === expectedGeneration
-      && (graphMode || workItem.currentActionId === input.actionId);
+      && (concurrentMode || workItem.currentActionId === input.actionId);
     if (!targetMatches || workItem.revision !== input.revision) {
-      throw new Error('Action changed before input was applied; refresh and try again');
+      const error = new Error('Action changed before input was applied; refresh and try again');
+      error.code = 'WORK_CENTER_INPUT_STALE';
+      throw error;
     }
     if (['ready', 'running'].includes(targetAction.status)) {
       if (targetAction.status === 'running' && addedAttachmentCount > 0) {

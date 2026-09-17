@@ -416,6 +416,130 @@ describe('Work Center dynamic coordination contract', () => {
       .toThrow(/WorkItem final result is immutable/);
   });
 
+  it('targets dynamic Action input and retries in place without disturbing siblings or contract identity', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'yeaft-dynamic-action-input-'));
+    let now = 1_000;
+    store = new WorkItemStore(join(tempDir, 'work-center.db'), { now: () => now++ });
+    const controller = new WorkflowController(store);
+    const created = controller.create({
+      ...workItem(), workDir: tempDir, workflowTemplate: 'coordinator-driven', start: true,
+    });
+    const mailbox = store.enqueueCoordinatorMailbox(created.id, 'work_item_created', {}, 'dynamic:input:test');
+    const coordinatorClaim = store.claimCoordinatorMailbox(created.id, 'coordinator-owner');
+    const turn = store.beginDynamicCoordinatorTurn(mailbox.id, {
+      ownerBootId: 'coordinator-owner', claimEpoch: coordinatorClaim.claim_epoch,
+    });
+    const actionSpec = suffix => ({
+      type: 'research', objective: `Research dynamic input path ${suffix}.`,
+      approach: `Exercise the durable Action ${suffix} with focused tests.`,
+      expectedOutcome: `Dynamic Action ${suffix} preserves its identity.`,
+      candidateVpIds: ['linus'], assignmentReason: 'Linus owns implementation.',
+      sourceActionIds: [], workspaceMode: 'read',
+    });
+    const mutation = prepareDynamicActionMutation({
+      workItem: turn.detail, actions: [], availableVpIds: ['linus'],
+      decision: { workItemType: 'software-change', actions: [actionSpec('one'), actionSpec('two')] },
+    });
+    const planned = store.completeCoordinatorTurn(turn.turnId, {
+      reply: 'Starting two independent Actions.',
+      decision: { kind: 'create_actions', reason: 'Both Actions are independently runnable.', actions: [] }, mutation,
+    }, turn.fence);
+    const [target, sibling] = planned.actions;
+    const readyInput = controller.input(created.id, {
+      text: 'Preserve this ready input.', actionId: sibling.id, generation: sibling.generation,
+      revision: planned.revision, clientMessageId: 'dynamic-ready-input',
+    });
+    const readySibling = readyInput.actions.find(action => action.id === sibling.id);
+    expect(readySibling).toMatchObject({ status: 'ready', generation: sibling.generation + 1 });
+
+    const claimed = store.claimReadyAction('runner-owner', 5_000);
+    expect(claimed.action.id).toBe(target.id);
+    const runningInput = controller.input(created.id, {
+      text: 'Preserve this running input.', actionId: target.id, generation: target.generation,
+      revision: readyInput.revision, clientMessageId: 'dynamic-running-input',
+    });
+    expect(runningInput.actions.find(action => action.id === sibling.id)).toMatchObject({
+      status: 'ready', generation: readySibling.generation,
+    });
+    expect(store.listPendingActionInputs(target.id, claimed.run.id, 'runner-owner', claimed.run.leaseEpoch))
+      .toHaveLength(1);
+    store.db.prepare(`UPDATE pending_action_inputs SET consumed_at = ?
+      WHERE action_id = ? AND run_id = ?`).run(now++, target.id, claimed.run.id);
+
+    const claimedSibling = store.claimReadyAction('sibling-owner', 5_000);
+    expect(claimedSibling.action.id).toBe(sibling.id);
+
+    const waiting = controller.submit(claimed.run.id, 'runner-owner', claimed.run.leaseEpoch, {
+      outcome: 'waiting', summary: 'Need a decision', evidence: [], waitingReason: 'Choose a target.',
+    });
+    const waitingAction = waiting.actions.find(action => action.id === target.id);
+    const terminalRun = store.getRun(claimed.run.id);
+    const retried = controller.input(created.id, {
+      text: 'Use the supported target.', actionId: target.id, generation: waitingAction.generation,
+      revision: waiting.revision, clientMessageId: 'dynamic-waiting-retry',
+    });
+    const replacement = retried.actions.find(action => action.id === target.id);
+    expect(retried.revision).toBe(waiting.revision);
+    expect(replacement).toMatchObject({ id: target.id, status: 'ready', generation: waitingAction.generation + 1,
+      contractRevision: waitingAction.contractRevision });
+    expect(replacement.specHash).not.toBe(waitingAction.specHash);
+    expect(replacement.identityHistory).toEqual(expect.arrayContaining([
+      { generation: waitingAction.generation, specHash: waitingAction.specHash },
+      { generation: replacement.generation, specHash: replacement.specHash },
+    ]));
+    expect(replacement.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'input', inputId: 'dynamic-waiting-retry' }),
+    ]));
+    expect(store.getRun(claimed.run.id)).toEqual(terminalRun);
+    expect(retried.actions.find(action => action.id === sibling.id)).toMatchObject({
+      status: 'running', generation: readySibling.generation, currentRunId: claimedSibling.run.id,
+    });
+    expect(controller.input(created.id, {
+      text: 'Duplicate.', actionId: target.id, generation: waitingAction.generation,
+      revision: waiting.revision, clientMessageId: 'dynamic-waiting-retry',
+    }).actions.find(action => action.id === target.id)).toMatchObject({ generation: replacement.generation });
+    expect(() => controller.input(created.id, {
+      text: 'Stale generation.', actionId: target.id, generation: waitingAction.generation,
+      revision: retried.revision, clientMessageId: 'dynamic-stale-generation',
+    })).toThrow(expect.objectContaining({ code: 'WORK_CENTER_INPUT_STALE' }));
+    expect(() => controller.input(created.id, {
+      text: 'Stale revision.', actionId: target.id, generation: replacement.generation,
+      revision: retried.revision + 1, clientMessageId: 'dynamic-stale-revision',
+    })).toThrow(expect.objectContaining({ code: 'WORK_CENTER_INPUT_STALE' }));
+
+    const failedClaim = store.claimReadyAction('failed-owner', 5_000);
+    expect(failedClaim.action.id).toBe(target.id);
+    const failed = controller.submit(failedClaim.run.id, 'failed-owner', failedClaim.run.leaseEpoch, {
+      outcome: 'failed', error: 'Focused failure', summary: 'Retry is required.', evidence: [],
+    });
+    const failedAction = failed.actions.find(action => action.id === target.id);
+    const failedRetry = controller.input(created.id, {
+      text: 'Retry the failed Action.', actionId: target.id, generation: failedAction.generation,
+      revision: failed.revision, clientMessageId: 'dynamic-failed-retry',
+    });
+    const failedReplacement = failedRetry.actions.find(action => action.id === target.id);
+    expect(failedReplacement).toMatchObject({
+      id: target.id, status: 'ready', generation: replacement.generation + 1,
+    });
+    expect(failedRetry.actions.find(action => action.id === sibling.id)).toMatchObject({
+      status: 'running', generation: readySibling.generation, currentRunId: claimedSibling.run.id,
+    });
+
+    const other = controller.create({
+      ...workItem({ id: 'work-item-2', title: 'Other dynamic item' }), workDir: tempDir,
+      workflowTemplate: 'coordinator-driven', start: true,
+    });
+    expect(() => controller.input(other.id, {
+      text: 'Cross item.', actionId: target.id, generation: replacement.generation + 1,
+      revision: other.revision, clientMessageId: 'dynamic-cross-item',
+    })).toThrow(expect.objectContaining({ code: 'WORK_CENTER_INPUT_STALE' }));
+    controller.cancel(created.id);
+    expect(() => controller.input(created.id, {
+      text: 'Cancelled.', actionId: target.id, generation: failedReplacement.generation,
+      revision: failedRetry.revision, clientMessageId: 'dynamic-cancelled',
+    })).toThrow(/cancelled cannot accept input/);
+  });
+
   it('recovers dynamic Runs and resumes cancelled WorkItems through the Coordinator', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'yeaft-dynamic-recovery-'));
     let now = 1_000;
