@@ -3,7 +3,57 @@ import { test } from '../../fixtures/test-server.js';
 
 // Seed only the surrounding inventory/forms. Directory requests and responses
 // always traverse the browser -> Server -> mock Agent requestId relay.
-test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true' } });
+test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.WORKDIR_PICKER_PRODUCTION || 'false' } });
+
+// A visible dialog is not enough: Teleport removes parent-specific styles.
+// Assert actual controls against the theme, not just the outer modal geometry.
+async function expectThemedControls(picker) {
+  // Theme changes transition control colors; wait for settled computed values.
+  await picker.page().mouse.move(0, 0);
+  await expect(async () => {
+    const styles = await picker.evaluate(element => {
+      const themeColor = token => {
+        const probe = document.createElement('span');
+        probe.style.color = `var(${token})`;
+        element.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      };
+      const control = selector => {
+        const node = element.querySelector(selector);
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return {
+          background: style.backgroundColor, color: style.color,
+          radius: parseFloat(style.borderRadius), fontSize: parseFloat(style.fontSize),
+          width: rect.width, height: rect.height,
+        };
+      };
+      return {
+        input: control('input'), primary: control('.btn-primary'), cancel: control('.folder-picker-footer .btn-secondary'),
+        close: control('.folder-picker-header button'), crumb: control('.folder-picker-breadcrumbs button'),
+        list: control('.folder-picker-list'),
+        inputBackground: themeColor('--bg-input'), foreground: themeColor('--text-primary'),
+        accent: themeColor('--accent'), accentForeground: themeColor('--accent-fg'),
+      };
+    });
+    expect(styles.input.background).toBe(styles.inputBackground);
+    expect(styles.input.color).toBe(styles.foreground);
+    expect(styles.input.radius).toBeGreaterThanOrEqual(8);
+    expect(styles.primary.background).toBe(styles.accent);
+    expect(styles.primary.color).toBe(styles.accentForeground);
+    for (const button of [styles.primary, styles.cancel, styles.close, styles.crumb]) {
+      expect(button.radius).toBeGreaterThanOrEqual(6);
+      expect(button.height).toBeGreaterThanOrEqual(36);
+    }
+    expect(styles.primary.fontSize).toBe(14);
+    expect(styles.close.width).toBe(styles.close.height);
+    for (const control of [styles.close, styles.crumb, styles.list]) {
+      expect(control.background).toBe('rgba(0, 0, 0, 0)');
+    }
+  }).toPass();
+}
 
 async function openEntry(page, mockAgent, entry) {
   if (entry === 'work-center') {
@@ -149,6 +199,7 @@ for (const entry of ['session-create', 'session-settings', 'work-center']) {
 
     for (const view of [
       { width: 1280, theme: 'light' },
+      { width: 1280, theme: 'dark' },
       { width: 320, theme: 'light' },
       { width: 320, theme: 'dark' },
     ]) {
@@ -156,6 +207,9 @@ for (const entry of ['session-create', 'session-settings', 'work-center']) {
       await page.evaluate(theme => document.documentElement.setAttribute('data-theme', theme), view.theme);
       await path.focus();
       await expect(path).toBeFocused();
+      await expectThemedControls(picker);
+      const focusStyle = await path.evaluate(element => getComputedStyle(element).boxShadow);
+      expect(focusStyle).not.toBe('none');
       const geometry = await picker.evaluate(element => {
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
@@ -189,6 +243,43 @@ for (const entry of ['session-create', 'session-settings', 'work-center']) {
     await expect(browse).toBeFocused();
   });
 }
+
+test('unified workdir picker: Chinese controls and short mobile viewport retain the Session theme', async ({ chatPage: page, mockAgent }, testInfo) => {
+  // Load the public persisted preference instead of touching Vue's private DOM fields.
+  await page.evaluate(() => localStorage.setItem('locale', 'zh-CN'));
+  await page.reload();
+  await page.waitForFunction(agentId => window.Pinia?.useChatStore?.().agents
+    .some(agent => agent.id === agentId && agent.online && agent.status === 'ready'), mockAgent.agentId);
+  const { browse } = await openEntry(page, mockAgent, 'session-create');
+  const initial = await requestDirectory(mockAgent, () => browse.click());
+  replyDirectory(mockAgent, initial, {
+    path: '/home/azureuser/.yeaft/instances/server',
+    entries: ['asset-outbox', 'bin', 'chat', 'conversation-index', 'managed-browser', 'managed-browser-profiles']
+      .map(name => ({ name, type: 'directory' })),
+  });
+  const picker = page.getByRole('dialog', { name: '选择工作目录', exact: true });
+  await expect(picker).toBeVisible();
+  const confirm = picker.locator('.btn-primary');
+  await expect(confirm).toBeEnabled();
+  for (const view of [
+    { width: 1280, height: 800, theme: 'dark' },
+    { width: 1280, height: 800, theme: 'light' },
+    { width: 320, height: 568, theme: 'dark' },
+    { width: 320, height: 568, theme: 'light' },
+    { width: 667, height: 375, theme: 'dark' },
+  ]) {
+    await page.setViewportSize(view);
+    await page.evaluate(theme => document.documentElement.setAttribute('data-theme', theme), view.theme);
+    await expectThemedControls(picker);
+    await expect(confirm).toBeInViewport();
+    expect(await picker.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    const lastFolder = picker.locator('.folder-picker-item').last();
+    await lastFolder.scrollIntoViewIfNeeded();
+    await expect(lastFolder).toBeInViewport();
+    await expect(confirm).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`chinese-${view.width}-${view.theme}.png`) });
+  }
+});
 
 test('unified workdir picker: Windows drive chooser and current-directory confirmation', async ({ chatPage: page, mockAgent }) => {
   const { field, browse } = await openEntry(page, mockAgent, 'session-settings');

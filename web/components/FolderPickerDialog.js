@@ -70,34 +70,42 @@ export default {
         <div class="folder-picker-dialog" ref="dialog" role="dialog" aria-modal="true" :aria-label="$t('modal.folderPicker.title')">
           <header class="folder-picker-header">
             <h3>{{ $t('modal.folderPicker.title') }}</h3>
-            <button class="btn-ghost" type="button" @click="$emit('close')" :aria-label="$t('common.close')">×</button>
+            <button class="btn btn-ghost folder-picker-icon" type="button" @click="$emit('close')" :aria-label="$t('common.close')" :title="$t('common.close')">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+            </button>
           </header>
           <div class="folder-picker-path">
-            <div class="folder-picker-navigation">
-              <button class="btn-secondary" type="button" @click="navigate('')">{{ $t('modal.folderPicker.root') }}</button>
-              <button class="btn-ghost" type="button" @click="navigate(parentPath)" :disabled="!state.path || state.path === parentPath">{{ $t('modal.folderPicker.parentDir') }}</button>
-            </div>
             <div class="folder-picker-address">
-              <input ref="pathInput" class="folder-picker-input" type="text" :value="state.draft"
+              <input ref="pathInput" class="resume-input folder-picker-input" type="text" :value="state.draft"
                 :aria-label="$t('modal.folderPicker.path')" :placeholder="$t('modal.folderPicker.path')"
                 autocomplete="off" autocapitalize="off" spellcheck="false"
                 @input="$emit('edit-path', $event.target.value)" @keydown.enter.prevent.stop="go" />
-              <button class="btn-secondary" type="button" @click="go" :disabled="!state.draft.trim()">{{ $t('modal.folderPicker.go') }}</button>
+              <button class="btn btn-secondary folder-picker-icon" type="button" @click="go" :disabled="!state.draft.trim()" :aria-label="$t('modal.folderPicker.go')" :title="$t('modal.folderPicker.go')">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+              </button>
             </div>
-            <nav class="folder-picker-breadcrumbs" :aria-label="$t('modal.folderPicker.ancestors')">
-              <template v-for="(crumb, index) in breadcrumbs" :key="crumb.path">
-                <span v-if="index" aria-hidden="true">›</span>
-                <button class="btn-ghost" type="button" @click="navigate(crumb.path)" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" :title="crumb.path">{{ crumb.label }}</button>
-              </template>
-              <span v-if="!breadcrumbs.length">{{ state.path || $t('modal.folderPicker.root') }}</span>
-            </nav>
+            <div class="folder-picker-navigation">
+              <button class="btn btn-ghost folder-picker-root" type="button" @click="navigate('')">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 4-3 10v5a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1v-5L19 4Z"/><path d="M2 14h20M6 17h.01M10 17h.01"/></svg>
+                {{ $t('modal.folderPicker.root') }}
+              </button>
+              <button class="btn btn-ghost folder-picker-icon" type="button" @click="navigate(parentPath)" :disabled="!state.path || state.path === parentPath" :aria-label="$t('modal.folderPicker.parentDir')" :title="$t('modal.folderPicker.parentDir')">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
+              </button>
+              <nav class="folder-picker-breadcrumbs" :aria-label="$t('modal.folderPicker.ancestors')">
+                <template v-for="(crumb, index) in breadcrumbs" :key="crumb.path">
+                  <span v-if="index" aria-hidden="true">/</span>
+                  <button class="btn btn-ghost" type="button" @click="navigate(crumb.path)" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" :title="crumb.path">{{ crumb.label }}</button>
+                </template>
+              </nav>
+            </div>
           </div>
           <div class="folder-picker-list" ref="list" tabindex="0" :aria-label="$t('modal.folderPicker.directories')" :aria-busy="state.loading" @keydown="onListKeydown">
             <div class="folder-picker-state" v-if="state.loading" role="status"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
             <div class="folder-picker-state folder-picker-error" v-else-if="state.error" role="alert">
               <span>{{ $t('modal.folderPicker.' + state.error) }}</span>
               <span v-if="state.errorDetail" class="folder-picker-error-detail">{{ state.errorDetail }}</span>
-              <button class="btn-secondary" type="button" @click="navigate(state.path)">{{ $t('common.retry') }}</button>
+              <button class="btn btn-secondary" type="button" @click="navigate(state.path)">{{ $t('common.retry') }}</button>
             </div>
             <template v-else>
               <button v-for="entry in state.entries" :key="entry.name" class="folder-picker-item" type="button" @click="enter(entry)">
@@ -110,8 +118,8 @@ export default {
           <footer class="folder-picker-footer">
             <p>{{ $t('modal.folderPicker.navigationHint') }}</p>
             <div>
-              <button class="btn-secondary" type="button" @click="$emit('close')">{{ $t('common.cancel') }}</button>
-              <button class="btn-primary" type="button" @click="$emit('confirm')" :disabled="!state.canConfirm">{{ $t('modal.folderPicker.selectCurrent') }}</button>
+              <button class="btn btn-secondary" type="button" @click="$emit('close')">{{ $t('common.cancel') }}</button>
+              <button class="btn btn-primary" type="button" @click="$emit('confirm')" :disabled="!state.canConfirm">{{ $t('modal.folderPicker.selectCurrent') }}</button>
             </div>
           </footer>
         </div>
