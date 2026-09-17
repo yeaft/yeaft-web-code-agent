@@ -2201,6 +2201,8 @@ export default {
   'workCenter.scheduling.status.triggered': "Triggered",
   'workCenter.scheduling.status.completed': "Schedule finished",
   'workCenter.scheduling.status.cancelled': "Cancelled",
+  'workCenter.scheduling.retrying': 'Retrying',
+  'workCenter.scheduling.dispatchFailed': 'Scheduled execution could not start. It will retry automatically; check the plan’s configuration and attachments.',
   'workCenter.scheduling.pause': "Pause schedule",
   'workCenter.scheduling.resume': "Resume schedule",
   'workCenter.scheduling.executions': "{count} work items created",

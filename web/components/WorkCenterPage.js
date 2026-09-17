@@ -1306,6 +1306,7 @@ export default {
     scheduleSummary(schedule) {
       if (!schedule) return '';
       const parts = [this.scheduleStatusLabel(schedule)];
+      if (schedule.lastError && schedule.status === 'scheduled') parts.push(this.$t('workCenter.scheduling.retrying'));
       if (schedule.recurrence) parts.push(this.$t('workCenter.scheduling.' + schedule.recurrence.frequency));
       if (schedule.scheduledFor && !['completed', 'cancelled'].includes(schedule.status)) {
         const timeZone = schedule.recurrence?.timeZone;
@@ -2031,6 +2032,7 @@ export default {
                           <p v-if="selected.schedule?.recurrence" class="work-center-field-help">{{ $t('workCenter.scheduling.executions', { count: selected.schedule.runCount || 0 }) }}</p>
                           <button v-if="selected.schedule?.lastWorkItemId" class="btn-ghost" type="button" @click="openWorkItem(selected.schedule.lastWorkItemId)">{{ $t('workCenter.scheduling.lastExecution') }}</button>
                           <button v-if="selected.sourceScheduleId" class="btn-ghost" type="button" @click="openWorkItem(selected.sourceScheduleId)">{{ $t('workCenter.scheduling.sourcePlan') }}</button>
+                          <p v-if="selected.schedule?.lastError && selected.schedule.status === 'scheduled'" class="work-center-error" role="status">{{ $t('workCenter.scheduling.dispatchFailed') }}</p>
                           <p v-if="scheduleError" class="work-center-error" role="alert">{{ scheduleError }}</p>
                           <div v-if="selected.schedule && selected.status === 'draft' && ['scheduled', 'paused'].includes(selected.schedule.status)" class="work-center-usage-summary work-center-detail-usage">
                             <button v-if="selected.schedule.status === 'scheduled'" class="btn-secondary" type="button" :disabled="scheduleSaving || !agentId" @click="setSelectedScheduleEnabled(false)">{{ $t('workCenter.scheduling.pause') }}</button>

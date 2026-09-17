@@ -2198,6 +2198,8 @@ export default {
   'workCenter.scheduling.status.triggered': "已触发",
   'workCenter.scheduling.status.completed': "计划已结束",
   'workCenter.scheduling.status.cancelled': "已取消",
+  'workCenter.scheduling.retrying': '正在重试',
+  'workCenter.scheduling.dispatchFailed': '定时执行未能启动，将自动重试。请检查计划配置和附件。',
   'workCenter.scheduling.pause': "暂停计划",
   'workCenter.scheduling.resume': "恢复计划",
   'workCenter.scheduling.executions': "已生成 {count} 个工作项",

@@ -3974,12 +3974,15 @@ test.describe('Work Center scheduling', () => {
 
   test('recurring plan is read-only and pause/resume retain its revision', async ({ chatPage, mockAgent }) => {
     let detail = { ...OPEN_ITEM_DETAIL, id: 'recurring-plan', title: 'Weekly check', status: 'draft', actions: [], currentAction: null, currentActionId: null,
-      schedule: { status: 'scheduled', scheduledFor: Date.now() + 3600000, recurrence: { frequency: 'weekly', timeZone: 'Asia/Shanghai', time: '09:00', weekdays: [1] }, runCount: 2, lastWorkItemId: 'latest-run' } };
+      schedule: { status: 'scheduled', scheduledFor: Date.now() + 3600000, recurrence: { frequency: 'weekly', timeZone: 'Asia/Shanghai', time: '09:00', weekdays: [1] }, runCount: 2, lastWorkItemId: 'latest-run',
+        lastError: { code: 'schedule_dispatch_failed', message: 'Do not render raw server diagnostics', at: Date.now() } } };
     await openWorkCenter(chatPage, mockAgent, [detail]);
     const select = chatPage.locator('.work-center-card-open').click();
     await respondToWorkCenterOp(mockAgent, 'get', detail, [detail]);
     await select;
     await expect(chatPage.locator('.work-center-conversation-readonly')).toContainText('This is a schedule');
+    await expect(chatPage.locator('.work-center-error[role="status"]')).toContainText('It will retry automatically');
+    await expect(chatPage.locator('.work-center-main')).not.toContainText('Do not render raw server diagnostics');
     await expect(chatPage.locator('.work-center-item-message-input')).toHaveCount(0);
     await expect(chatPage.locator('.work-center-header-actions').getByRole('button', { name: 'Start', exact: true })).toHaveCount(0);
     for (const enabled of [false, true]) {
@@ -3987,7 +3990,7 @@ test.describe('Work Center scheduling', () => {
       const request = await mockAgent.__workCenterTransport.next();
       expect(request.op).toBe('update_schedule');
       expect(request.payload).toEqual({ id: detail.id, schedule: { enabled, revision: detail.revision } });
-      detail = { ...detail, revision: detail.revision + 1, schedule: { ...detail.schedule, status: enabled ? 'scheduled' : 'paused' } };
+      detail = { ...detail, revision: detail.revision + 1, schedule: { ...detail.schedule, status: enabled ? 'scheduled' : 'paused', lastError: null } };
       await mockAgent.__workCenterTransport.resolve(request, detail);
       await respondToWorkCenterOp(mockAgent, 'list', { items: [detail], watcher: { enabled: true } });
       await expect(chatPage.getByRole('button', { name: enabled ? 'Pause schedule' : 'Resume schedule', exact: true })).toBeEnabled();
