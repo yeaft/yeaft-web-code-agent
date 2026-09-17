@@ -3,7 +3,11 @@ import { test } from '../../fixtures/test-server.js';
 
 // Seed only the surrounding inventory/forms. Directory requests and responses
 // always traverse the browser -> Server -> mock Agent requestId relay.
-test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.WORKDIR_PICKER_PRODUCTION || 'false' } });
+test.use({
+  serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.WORKDIR_PICKER_PRODUCTION || 'false' },
+  // Headless Chromium normally hides native scrollbars, masking theme regressions in screenshots.
+  launchOptions: { ignoreDefaultArgs: ['--hide-scrollbars'] },
+});
 
 // A visible dialog is not enough: Teleport removes parent-specific styles.
 // Assert actual controls against the theme, not just the outer modal geometry.
