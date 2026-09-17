@@ -2636,44 +2636,36 @@ test.describe('Work Center responsive UI', () => {
     expect(request.payload.goal).toBe('Use the directory shown in the form');
   });
 
-  test('uses the Work Center design system for directory selection', async ({ chatPage, mockAgent }) => {
+  test('uses the shared workdir picker for Work Center directory selection', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.locator('.work-center-header-create').click();
     const createModal = chatPage.locator('.work-center-modal');
-
-    const directoryRequestPromise = mockAgent.waitForMessage('list_directory');
+    const respondDirectory = (request, path, entries) => mockAgent.send({
+      type: 'directory_listing', conversationId: request.conversationId,
+      requestId: request.requestId, _workbenchRequestId: request._workbenchRequestId,
+      dirPath: path, entries,
+    });
+    const initial = mockAgent.waitForMessage('list_directory');
     await createModal.getByRole('button', { name: 'Choose folder' }).click();
-    const directoryRequest = await directoryRequestPromise;
-    mockAgent.send({
-      type: 'directory_listing',
-      conversationId: directoryRequest.conversationId,
-      requestId: directoryRequest.requestId,
-      _workbenchRequestId: directoryRequest._workbenchRequestId,
-      dirPath: '/tmp/test',
-      entries: [
-        { name: 'project-alpha', type: 'directory' },
-        { name: 'project-beta', type: 'directory' },
-      ],
-    });
+    respondDirectory(await initial, '/tmp/test', [
+      { name: 'project-alpha', type: 'directory' },
+      { name: 'project-beta', type: 'directory' },
+    ]);
 
-    const picker = chatPage.locator('.work-center-directory-dialog');
+    const picker = chatPage.getByRole('dialog', { name: 'Select Work Directory', exact: true });
     await expect(picker).toBeVisible();
-    await expect(picker.getByText('Choose the project folder this Work Item can read and modify.')).toBeVisible();
-    await expect(picker.locator('.work-center-directory-current')).toHaveText('/tmp/test');
-    await expect(picker.getByRole('option')).toHaveCount(2);
+    await expect(picker.getByRole('textbox', { name: 'Directory path' })).toHaveValue('/tmp/test');
+    await expect(picker.locator('.folder-picker-item')).toHaveCount(2);
     await expect(picker.locator('.tree-item')).toHaveCount(0);
-
-    const firstFolder = picker.getByRole('option', { name: 'project-alpha' });
-    await firstFolder.click();
-    await expect(firstFolder).toHaveAttribute('aria-selected', 'true');
-    const colors = await firstFolder.evaluate(element => {
-      const style = getComputedStyle(element);
-      return { background: style.backgroundColor, color: style.color };
-    });
-    expect(colors.background).not.toBe('rgba(0, 0, 0, 0)');
-    expect(colors.background).not.toBe('rgb(255, 255, 255)');
-
-    await picker.getByRole('button', { name: 'OK' }).click();
+    const navigation = mockAgent.waitForMessage('list_directory');
+    await picker.getByRole('button', { name: 'project-alpha' }).click();
+    const request = await navigation;
+    expect(request.dirPath).toBe('/tmp/test/project-alpha');
+    const confirm = picker.getByRole('button', { name: 'Select this directory' });
+    await expect(confirm).toBeDisabled();
+    respondDirectory(request, request.dirPath, []);
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
     await expect(createModal.getByRole('textbox', { name: /Working directory/ }))
       .toHaveValue('/tmp/test/project-alpha');
   });

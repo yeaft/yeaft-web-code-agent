@@ -6053,11 +6053,12 @@ describe('message flow regressions', () => {
     expect(sessionCreateCss).toMatch(/\.yeaft-session-create-fields \.resume-control-row\s*\{[^}]*align-items:\s*center;[^}]*flex-direction:\s*row;[^}]*gap:\s*12px;/s);
     expect(sessionCreateCss).toMatch(/\.yeaft-session-create-modal \.resume-control-label\s*\{[^}]*width:\s*96px;[^}]*flex:\s*0 0 96px;/s);
     expect(sessionCreateCss).toMatch(/\.yeaft-session-create-modal \.modern-select-trigger\s*\{[^}]*border-radius:\s*10px;/s);
-    expect(sessionCreateCss).toMatch(/\.yeaft-folder-picker-dialog\s*\{[^}]*height:\s*min\(560px, calc\(100vh - 96px\)\);[^}]*overflow:\s*hidden;/s);
-    expect(sessionCreateCss).toMatch(/\.yeaft-folder-picker-dialog \.folder-picker-list\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*max-height:\s*none;[^}]*overflow-y:\s*auto;/s);
-    expect(sessionCreateCss).toMatch(/\.yeaft-folder-picker-dialog \.folder-picker-item\s*\{[^}]*font-family:\s*inherit;[^}]*font-size:\s*14px;/s);
-    expect(sessionCreateCss).not.toMatch(/\.yeaft-folder-picker-dialog[^}]*#[0-9a-f]{3,6}/i);
-    expect(sessionCreateCss).not.toMatch(/\.yeaft-folder-picker-dialog[^}]*rgba?\(/i);
+    const pickerCss = readFileSync(resolve(import.meta.dirname, '../../web/styles/files.css'), 'utf8');
+    expect(pickerCss).toMatch(/\.workdir-picker \.folder-picker-dialog\s*\{[^}]*height:\s*min\(560px, calc\(100dvh - 48px\)\);[^}]*overflow:\s*hidden;/s);
+    expect(pickerCss).toMatch(/\.workdir-picker \.folder-picker-list\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*max-height:\s*none;[^}]*overflow-y:\s*auto;/s);
+    expect(pickerCss).toMatch(/\.workdir-picker \.folder-picker-item\s*\{[^}]*font-family:\s*inherit;[^}]*font-size:\s*14px;/s);
+    expect(pickerCss).not.toMatch(/\.workdir-picker[^}]*#[0-9a-f]{3,6}/i);
+    expect(pickerCss).not.toMatch(/\.workdir-picker[^}]*rgba?\(/i);
     expect(sessionCreateCss).toMatch(/@media \(max-width:\s*640px\)[\s\S]*?\.yeaft-session-create-fields \.resume-control-row\s*\{[^}]*align-items:\s*center;[^}]*flex-direction:\s*row;[^}]*gap:\s*8px;/s);
     expect(sessionCreateCss).toMatch(/@media \(max-width:\s*640px\)[\s\S]*?\.yeaft-session-create-modal \.resume-control-label\s*\{[^}]*width:\s*76px;[^}]*flex:\s*0 0 76px;/s);
     expect(sessionCreateCss).toMatch(/@media \(max-width:\s*640px\)[\s\S]*?\.resume-control-row-vp\s*\{[^}]*align-items:\s*flex-start;[^}]*flex-direction:\s*row;/s);
