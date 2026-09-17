@@ -14,6 +14,9 @@ import {
 import { join, relative } from 'node:path';
 import { writeAtomic } from '../storage/atomic.js';
 
+// v3 indexes the visible transcript, including rows replaced only in model context.
+export const HISTORY_INDEX_SCHEMA_VERSION = 3;
+
 const STATE_VERSION = 1;
 const INDEX_DIR = 'conversation-index';
 const STATE_FILE = 'mutation-state.json';

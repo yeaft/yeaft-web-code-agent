@@ -74,6 +74,9 @@ const DELTA_TOOL_PAIR_EXTENSION_CAP = 500;
 
 const SEGMENT_INDEX_FILE = 'index.json';
 const SEGMENT_LINEAGE_FILE = 'lineage.json';
+// Browser cursors also identify the visible projection. Version 1 (unversioned)
+// omitted folded rows; its cached head cannot be repaired by an append delta.
+const VISIBLE_HISTORY_PROJECTION_VERSION = 2;
 const SEGMENT_DIR = 'segments';
 const SEGMENT_TARGET_BYTES = 1024 * 1024;
 const SEGMENT_FIRST_NAME = '000001.jsonl';
@@ -490,7 +493,7 @@ export function projectVisibleSessionMessages(messages) {
     const { providerState, thinkingBlocks, ...row } = sourceRow;
     if (!isVisibleConversationRow(row)) continue;
     if (row.role !== 'assistant' || !Array.isArray(row.toolCalls) || row.toolCalls.length === 0) {
-      if (row.role === 'assistant' && !row.content && !row.attachments && !row.images
+      if (row.role === 'assistant' && !row.content && !row.attachments && !row.images && !row.imageAssetIds?.length
           && !row.todos && !row.askUserResults) continue;
       const responseKind = row.role === 'assistant' ? projectedResponseKind(row) : null;
       visible.push(responseKind && row.responseKind !== responseKind
@@ -520,7 +523,7 @@ export function projectVisibleSessionMessages(messages) {
       ...(visibleToolCalls.length > 0 ? { toolCalls: visibleToolCalls } : {}),
       ...(askUserResults.length > 0 ? { askUserResults } : {}),
     };
-    if (!projected.content && !projected.attachments && !projected.images
+    if (!projected.content && !projected.attachments && !projected.images && !projected.imageAssetIds?.length
         && !projected.todos && !projected.toolCalls && !projected.askUserResults) continue;
     visible.push(projected);
   }
@@ -1031,7 +1034,12 @@ class SegmentStore {
     return rows;
   }
 
-  readAll({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false } = {}) {
+  /**
+   * Context applies fold replacements; transcript preserves durable source rows.
+   * Transcript is NOT a public projection: callers must still filter control
+   * rows and sensitive fields before exposing it to users.
+   */
+  readAll({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, projection = 'context' } = {}) {
     if (!this.hasData()) return [];
     const idx = this.loadIndex();
     const segments = (idx.segments || [])
@@ -1041,7 +1049,7 @@ class SegmentStore {
     const out = [];
     for (const seg of segments) {
       const rows = this.#readSegment(seg.file, { beforeSeq, afterSeq, desc, includeCold });
-      out.push(...applyFoldedMessageTombstones(rows, idx.foldedMessageIds));
+      out.push(...(projection === 'transcript' ? rows : applyFoldedMessageTombstones(rows, idx.foldedMessageIds)));
     }
     return desc
       ? out.sort((a, b) => parseSeqFromId(b.id) - parseSeqFromId(a.id))
@@ -1062,7 +1070,7 @@ class SegmentStore {
       .sort(compareMessagesBySeq);
   }
 
-  *scan({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, scanStats = null } = {}) {
+  *scan({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, scanStats = null, projection = 'context' } = {}) {
     if (!this.hasData()) return;
     const idx = this.loadIndex();
     const segments = (idx.segments || [])
@@ -1074,7 +1082,7 @@ class SegmentStore {
       addScanMetric(scanStats, 'segments');
       addScanMetric(scanStats, 'bytes', Number(seg.bytes) || 0);
       addScanMetric(scanStats, 'rows', rows.length);
-      yield* applyFoldedMessageTombstones(rows, idx.foldedMessageIds);
+      yield* projection === 'transcript' ? rows : applyFoldedMessageTombstones(rows, idx.foldedMessageIds);
     }
   }
 
@@ -1650,8 +1658,9 @@ export class ConversationStore {
    * Atomically publish a logical range replacement for tool folding.
    *
    * The original rows stay append-only on disk. A single reflection row owns
-   * their ids as tombstones, so readers either observe the complete old arc or
-   * the complete reflection — never a half-rewritten tool pair.
+   * their ids as context-only tombstones, so model readers observe the complete
+   * old arc or its reflection — never a half-rewritten tool pair. User-visible
+   * history always projects the original transcript, not these replacements.
    *
    * @param {object[]} messages — persisted rows being folded
    * @param {object} reflection — synthetic `_reflection` user row
@@ -1792,15 +1801,20 @@ export class ConversationStore {
   // ─── Read API ───────────────────────────────────────────
 
   /**
-   * Return the durable identity of one Session transcript. `streamId`
-   * changes on clear/recreate; `revision` changes on append/update/fold.
-   * Browser caches use both values to detect non-append mutations before
-   * trusting an `afterSeq` delta cursor.
+   * Return the cache identity of one Session's user-visible history. `streamId`
+   * includes the projection version and changes on clear/recreate; `revision`
+   * changes on append/update/fold. Browser caches must match both before
+   * trusting an `afterSeq` delta cursor, including across projection upgrades.
+   * The durable stream identity and model context are not modified.
    */
   getSessionHistoryMetadata(sessionId) {
     if (!sessionId) return null;
     const store = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sessionId));
-    return store.metadata();
+    const metadata = store.metadata();
+    return {
+      ...metadata,
+      streamId: `${metadata.streamId}:visible-v${VISIBLE_HISTORY_PROJECTION_VERSION}`,
+    };
   }
 
   /**
@@ -2119,7 +2133,7 @@ export class ConversationStore {
   loadOlderBySession(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return { messages: [], oldestSeq: null, hasMore: false };
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const prefix = this.#readSessionRows(sessionId, { beforeSeq: cutoff })
+    const prefix = this.#readSessionRows(sessionId, { beforeSeq: cutoff, projection: 'transcript' })
       .filter(m => m && m.sessionId === sessionId && isVisibleConversationRow(m));
     if (prefix.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
     const sliced = pairSanitize(sliceLastNTurns(prefix, turnsLimit));
@@ -2215,7 +2229,7 @@ export class ConversationStore {
     const completedBeforeCursor = new Set();
     const boundaryAssistants = [];
     let boundaryLookbackRows = 0;
-    for (const previous of this.#iterateSessionRows(sessionId, { beforeSeq: cutoff + 1, desc: true })) {
+    for (const previous of this.#iterateSessionRows(sessionId, { beforeSeq: cutoff + 1, desc: true, projection: 'transcript' })) {
       if (!previous || previous.sessionId !== sessionId) continue;
       boundaryLookbackRows += 1;
       if (boundaryLookbackRows > DELTA_TOOL_PAIR_EXTENSION_CAP) break;
@@ -2250,7 +2264,7 @@ export class ConversationStore {
     let visibleBytes = after.reduce((sum, message) => sum + Buffer.byteLength(JSON.stringify(message)), 0);
     let stoppedAtBudget = false;
     let extensionRows = 0;
-    const deltaRows = this.#iterateSessionRows(sessionId, { afterSeq: cutoff, desc: false });
+    const deltaRows = this.#iterateSessionRows(sessionId, { afterSeq: cutoff, desc: false, projection: 'transcript' });
     while (true) {
       const step = deltaRows.next();
       if (step.done) break;
@@ -2465,7 +2479,7 @@ export class ConversationStore {
     const seen = new Set(messages.map(message => message?.id).filter(Boolean));
     let followingUserTurns = 0;
 
-    for (const message of this.#iterateSessionRows(sessionId, { afterSeq: anchorSeq, desc: false })) {
+    for (const message of this.#iterateSessionRows(sessionId, { afterSeq: anchorSeq, desc: false, projection: 'transcript' })) {
       if (!message || message.sessionId !== sessionId || !isVisibleConversationRow(message)) continue;
       if (message.role === 'user') {
         followingUserTurns += 1;
@@ -2480,6 +2494,7 @@ export class ConversationStore {
     const entryStartSeq = Number.isFinite(opts.entryStartSeq) ? opts.entryStartSeq : anchorSeq;
     const entryEndSeq = Number.isFinite(opts.entryEndSeq) ? opts.entryEndSeq : anchorSeq;
     for (const message of this.#iterateSessionRows(sessionId, {
+      projection: 'transcript',
       afterSeq: entryStartSeq - 1,
       beforeSeq: entryEndSeq + 1,
       desc: false,
@@ -2674,7 +2689,7 @@ export class ConversationStore {
     for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
       const store = this.#segmentStoreForConversationDir(dir);
       if (!store.hasData()) continue;
-      const rows = store.readAll({ includeCold: true });
+      const rows = store.readAll({ includeCold: true, projection: 'transcript' });
       let keepRows = [];
       let dirty = false;
       for (const msg of rows) {
@@ -2744,7 +2759,7 @@ export class ConversationStore {
     for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
       const store = this.#segmentStoreForConversationDir(dir);
       if (!store.hasData()) continue;
-      const rows = store.readAll();
+      const rows = store.readAll({ includeCold: true, projection: 'transcript' });
       let dirty = false;
       for (const msg of rows) {
         if (!msg || msg.threadId !== sourceId) continue;
@@ -3159,7 +3174,9 @@ export class ConversationStore {
     // and stop after the requested turn window is complete. Hidden/internal and
     // non-turn rows are not allowed to force an unbounded scan; a hard parse cap
     // conservatively marks the page truncated.
-    for (const m of this.#iterateSessionRows(sessionId, { beforeSeq, afterSeq, desc: true })) {
+    for (const m of this.#iterateSessionRows(sessionId, {
+      beforeSeq, afterSeq, desc: true, projection: visibleOnly ? 'transcript' : 'context',
+    })) {
       if (parsed >= scanCap) {
         truncated = true;
         scanCapped = true;
@@ -3232,6 +3249,7 @@ export class ConversationStore {
       beforeSeq,
       desc: true,
       scanStats: opts.scanStats,
+      projection: 'transcript',
     });
     yield* iterateCanonicalVisibleEntriesNewestFirst(rows, sessionId);
   }
@@ -3271,15 +3289,35 @@ export class ConversationStore {
   *#iterateSessionRows(sessionId, opts = {}) {
     const primaryDir = this.#sessionConversationDir(sessionId);
     const segmentStore = this.#segmentStoreForConversationDir(primaryDir);
-    yield* segmentStore.scan({ includeCold: true, ...opts });
-    for (const entry of this.#sessionFileEntries('all', sessionId, opts)) {
+    const legacyEntries = this.#sessionFileEntries('all', sessionId, opts);
+    // Interrupted migrations may leave a markdown copy of a folded JSONL row.
+    // Apply the index's context-only tombstones to that copy too, including
+    // when its reflection lies outside this page's sequence bounds. Legacy
+    // markdown itself predates foldedMessageIds and has no fold metadata.
+    const foldedIds = new Set(opts.projection === 'transcript'
+      ? [] : segmentStore.loadIndex().foldedMessageIds || []);
+    const segments = segmentStore.scan({ includeCold: true, ...opts });
+    let segment = segments.next();
+    let legacyIndex = 0;
+    // Merge by sequence rather than concatenating formats. A delta cursor must
+    // not pass a legacy-only row, and the canonical JSONL copy wins duplicates.
+    while (!segment.done || legacyIndex < legacyEntries.length) {
+      const entry = legacyEntries[legacyIndex];
+      const segmentSeq = segment.done ? null : parseSeqFromId(segment.value.id);
+      if (!segment.done && (!entry || (opts.desc ? segmentSeq >= entry.seq : segmentSeq <= entry.seq))) {
+        while (legacyEntries[legacyIndex]?.seq === segmentSeq) legacyIndex += 1;
+        if (!foldedIds.has(segment.value.id)) yield segment.value;
+        segment = segments.next();
+        continue;
+      }
+      legacyIndex += 1;
       try {
         const msg = this.readMessageFile(entry.path);
         addScanMetric(opts.scanStats, 'legacyFiles');
         try { addScanMetric(opts.scanStats, 'bytes', statSync(entry.path).size); } catch {}
         if (msg) {
           addScanMetric(opts.scanStats, 'rows');
-          yield msg;
+          if (!foldedIds.has(msg.id)) yield msg;
         }
       } catch (err) {
         if (isPermissionError(err)) continue;

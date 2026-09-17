@@ -26,6 +26,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/file-reference-resolver.test.js',
   'test/agent/windows-upgrade-handoff.test.js',
   'test/agent/yeaft/conversation/persist.test.js',
+  'test/agent/yeaft/conversation/fold-transcript.test.js',
   'test/agent/yeaft/config-api-debug.test.js',
   'test/agent/yeaft/quick-send-config.test.js',
   'test/agent/yeaft/quick-send.test.js',

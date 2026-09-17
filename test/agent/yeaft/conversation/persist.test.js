@@ -280,9 +280,8 @@ Hello`;
       expect.objectContaining({ id: user.id }),
       expect.objectContaining({ id: reflection.id, _reflection: true }),
     ]);
-    expect(restarted.loadOlderBySession('session_fold', reflection.seq, 10).messages).toEqual([
-      expect.objectContaining({ id: user.id }),
-    ]);
+    expect(restarted.loadOlderBySession('session_fold', reflection.seq, 10).messages.map(row => row.id))
+      .toEqual([user.id, assistant.id, tool.id]);
 
     const indexPath = join(TEST_DIR, 'sessions', 'session_fold', 'conversation', 'index.json');
     const staleIndex = JSON.parse(readFileSync(indexPath, 'utf8'));
@@ -326,7 +325,7 @@ Hello`;
     const segments = readdirSync(segmentDir).filter(file => file.endsWith('.jsonl')).sort();
     expect(segments).toHaveLength(3);
     expect(store.loadOlderBySession(sessionId, currentUser.seq, 10).messages.map(row => row.id))
-      .not.toContain(foldedOld.id);
+      .toContain(foldedOld.id);
 
     // Keep the already-loaded index and matching file sizes, then make the
     // oldest segment unreadable. A bounded newest-to-oldest scan must finish the
@@ -786,7 +785,7 @@ describe('ConversationStore', () => {
       const rebuilt = new ConversationStore(TEST_DIR).getSessionHistoryMetadata(sessionId);
       expect(rebuilt).toEqual(firstUpgrade);
       expect(JSON.parse(readFileSync(lineagePath, 'utf8'))).toMatchObject({
-        streamId: firstUpgrade.streamId,
+        streamId: firstUpgrade.streamId.replace(/:visible-v2$/, ''),
         revision: firstUpgrade.revision,
       });
     });
@@ -1556,7 +1555,8 @@ legacy session`, { encoding: 'utf8' });
         anchorMessageId: updated.results[0].messageId,
         anchorSeq: updated.results[0].seq,
       })).toMatchObject({ ok: false, code: 'stale_result' });
-      expect((await searchConversationIndex(TEST_DIR, sessionId, 'updated-token')).results).toEqual([]);
+      expect((await searchConversationIndex(TEST_DIR, sessionId, 'updated-token')).results)
+        .toEqual([expect.objectContaining({ messageId: assistant.id })]);
 
       store.deleteByGroup(sessionId);
       await validateConversationIndexAnchor(TEST_DIR, sessionId, {

@@ -1294,6 +1294,48 @@ describe('Yeaft load-history first paint', () => {
     }
   });
 
+  it('resets stale cache cursors consistently before warm and cold history replay', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-history-cache-fence-'));
+    try {
+      ctx.CONFIG = { yeaftDir: dir };
+      const store = new ConversationStore(dir);
+      store.append({ role: 'user', content: 'recover the complete turn', sessionId: 'session-fast' });
+      const anchor = store.append({ role: 'assistant', content: 'cached tail', sessionId: 'session-fast' });
+      const metadata = store.getSessionHistoryMetadata('session-fast');
+      const runtime = {
+        conversationStore: store,
+        config: { model: 'test-model', availableModels: [] },
+        status: { skills: 0, mcpServers: [], tools: 0 },
+        taskManager: { listActiveTasks: () => [] },
+      };
+      for (const cold of [false, true]) {
+        for (const cursor of [
+          { streamId: metadata.streamId, revision: metadata.revision - 1, afterMessageId: anchor.id },
+          { streamId: 'replaced-stream', revision: metadata.revision, afterMessageId: anchor.id },
+          { afterMessageId: 'missing-message' },
+          { streamId: metadata.streamId, revision: metadata.revision - 1, afterSeq: Number(anchor.id.slice(1)), afterMessageId: anchor.id },
+        ]) {
+          __testSetSession(cold ? null : runtime);
+          sent.length = 0;
+          resolveLoadSession = null;
+          await handleYeaftLoadHistory({ sessionId: 'session-fast', ...cursor });
+          const chunks = sent.filter(m => m.type === 'yeaft_history_chunk');
+          expect(chunks, JSON.stringify({ cold, cursor })).toHaveLength(1);
+          expect(chunks[0]).toMatchObject({ mode: 'recent', streamId: metadata.streamId, revision: metadata.revision });
+          expect(chunks[0].messages.map(row => row.content)).toEqual(['recover the complete turn', 'cached tail']);
+          if (cold) {
+            await flushMicrotasks();
+            resolveLoadSession(runtime);
+            await flushMicrotasks();
+          }
+        }
+      }
+    } finally {
+      __testSetSession(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('cold-start delta replay preserves timestamps, attachments, and tool summaries', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-delta-cold-'));
     try {

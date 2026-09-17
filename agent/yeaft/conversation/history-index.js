@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { writeAtomic } from '../storage/atomic.js';
 import { extractRecallTerms, scoreRecallTurn, normalizeRecallLimit } from './recall-relevance.js';
 import {
+  HISTORY_INDEX_SCHEMA_VERSION,
   conversationIndexDatabasePath,
   conversationIndexManifestPath,
   flushConversationIndexMutations,
@@ -47,7 +48,9 @@ function readManifest(ownerRoot, sessionId) {
   if (!existsSync(path)) return null;
   try {
     const value = JSON.parse(readFileSync(path, 'utf8'));
-    if (Number(value?.indexSchemaVersion) !== 2) return null;
+    // Retain the previous generation across projection/schema upgrades, but
+    // never activate its database until it has been rebuilt.
+    if (!Number.isInteger(value?.indexSchemaVersion)) return null;
     const generation = Number(value?.generation);
     if (!Number.isInteger(generation) || generation < 1) return null;
     const databasePath = conversationIndexDatabasePath(ownerRoot, sessionId, generation);
@@ -232,7 +235,7 @@ class SessionHistoryIndex {
     const manifest = readManifest(this.ownerRoot, this.sessionId);
     if (!manifest?.databasePath || !existsSync(manifest.databasePath)) return { needs: true, manifest };
     const revision = readConversationMutationRevision(this.ownerRoot, 'session', this.sessionId);
-    if (Number(manifest.sourceRevision) !== revision) return { needs: true, manifest };
+    if (manifest.indexSchemaVersion !== HISTORY_INDEX_SCHEMA_VERSION || Number(manifest.sourceRevision) !== revision) return { needs: true, manifest };
     if (this.active?.databasePath === manifest.databasePath) return { needs: false, manifest };
     const source = await spawnOneShot('fingerprint', {
       ownerRoot: this.ownerRoot,
@@ -297,7 +300,7 @@ class SessionHistoryIndex {
 
     const manifest = readManifest(this.ownerRoot, this.sessionId);
     if (manifest?.databasePath && existsSync(manifest.databasePath)) {
-      if (allowStale) {
+      if (allowStale && manifest.indexSchemaVersion === HISTORY_INDEX_SCHEMA_VERSION) {
         await this.#activate(manifest);
         return this.active;
       }
@@ -350,7 +353,7 @@ class SessionHistoryIndex {
         }
         const manifest = {
           version: 1,
-          indexSchemaVersion: 2,
+          indexSchemaVersion: HISTORY_INDEX_SCHEMA_VERSION,
           sessionId: this.sessionId,
           generation,
           databasePath,
