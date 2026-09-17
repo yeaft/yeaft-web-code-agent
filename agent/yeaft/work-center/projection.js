@@ -1137,7 +1137,10 @@ export function projectWorkItemDetail(detail, options = {}) {
     ...projected.outputs.map(output => output.runId),
   ].filter(Boolean));
   const actionIds = new Set(projected.actions.map(action => action.id));
-  projected.runReferences = [...evidenceRunIds].slice(0, 256).flatMap(id => {
+  // The evidence collections above already have bounded browser projections.
+  // Keep every retained reference resolvable; an independent count cap would
+  // starve later criteria and delivery evidence. The whole DTO budget still applies.
+  projected.runReferences = [...evidenceRunIds].flatMap(id => {
     const run = runById.get(id);
     if (!run || !actionIds.has(run.actionId)
         || (run.workItemId && run.workItemId !== detail.id)) return [];

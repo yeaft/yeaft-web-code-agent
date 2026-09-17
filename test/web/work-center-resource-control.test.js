@@ -1,17 +1,24 @@
 // @vitest-environment happy-dom
 import { mount, flushPromises } from '@vue/test-utils';
-import { reactive } from 'vue';
+import * as Vue from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ResourceControl, { budgetAdditions } from '../../web/components/WorkCenterResourceControl.js';
 import { applyWorkItemSummary, isWorkItemDetailStale, mergeWorkItemDetail, mergeWorkItemSummary } from '../../web/stores/helpers/work-center.js';
 import en from '../../web/i18n/en.js';
 import zh from '../../web/i18n/zh-CN.js';
+import Reference, { resolveActionReference } from '../../web/components/WorkCenterActionReference.js';
+
+const { reactive } = Vue;
 
 // Capture the real store actions without booting a socket or browser owner.
 const stores = {};
 globalThis.Pinia = { defineStore: (id, options) => { stores[id] = options; return () => ({}); } };
 await import('../../web/stores/chat.js');
 const actions = stores.chat.actions;
+globalThis.Vue = Vue;
+const { default: ActionDetail } = await import('../../web/components/WorkCenterActionDetail.js');
+const { default: Page } = await import('../../web/components/WorkCenterPage.js');
+const { default: UserTurnBlock } = await import('../../web/components/UserTurnBlock.js');
 
 const limits = { maxRequests: 200, maxTokens: 2000000, maxRunRequests: 40, maxActionAttempts: 3, maxCoordinatorFailures: 3 };
 const usage = { llmRequestCount: 200, totalTokens: 500, chargedTokens: 1500, reservedTokens: 1000, unknownRequests: 1, inFlightRequests: 1 };
@@ -375,12 +382,6 @@ describe('Work Center resource store wire and scope', () => {
   });
 });
 
-import * as Vue from 'vue';
-import Reference, { resolveActionReference } from '../../web/components/WorkCenterActionReference.js';
-globalThis.Vue = Vue;
-const { default: ActionDetail } = await import('../../web/components/WorkCenterActionDetail.js');
-const { default: Page } = await import('../../web/components/WorkCenterPage.js');
-const { default: UserTurnBlock } = await import('../../web/components/UserTurnBlock.js');
 
 const translate = locale => (key, params = {}) => Object.entries(params).reduce(
   (text, [name, value]) => text.replaceAll(`{${name}}`, value), locale[key] || key,

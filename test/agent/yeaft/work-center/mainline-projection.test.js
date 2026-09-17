@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_WORK_ITEM_BROWSER_DTO_BYTES, projectWorkItemDetail, projectWorkItemSummary } from '../../../../agent/yeaft/work-center/projection.js';
 import {
   MAINLINE_CONTEXT_HARD_LIMIT_BYTES,
   buildMainlineContextSnapshot,
@@ -457,9 +458,8 @@ describe('Mainline projection', () => {
 
 });
 
-import { projectWorkItemDetail, projectWorkItemSummary } from '../../../../agent/yeaft/work-center/projection.js';
 
-function fixture(count = 2) {
+function evidenceReferenceFixture(count = 2) {
   const ids = Array.from({ length: count }, (_, index) => `run-${index}`);
   return {
     id: 'item', title: 'Item', status: 'done',
@@ -472,7 +472,7 @@ function fixture(count = 2) {
 
 describe('Work Center evidence reference projection', () => {
   it('projects only referenced Run identities and retains old-generation evidence navigation', () => {
-    const detail = fixture();
+    const detail = evidenceReferenceFixture();
     detail.runs.push({ id: 'unreferenced', actionId: 'action', rawRequest: 'SECRET' });
     expect(projectWorkItemDetail(detail).runReferences).toEqual([
       { id: 'run-0', actionId: 'action' }, { id: 'run-1', actionId: 'action' },
@@ -482,17 +482,41 @@ describe('Work Center evidence reference projection', () => {
   });
 
   it('does not link missing Actions or Runs belonging to other WorkItems', () => {
-    const detail = fixture(3);
+    const detail = evidenceReferenceFixture(3);
     detail.runs[0].actionId = 'missing';
     detail.runs[1].workItemId = 'another-item';
     expect(projectWorkItemDetail(detail).runReferences).toEqual([{ id: 'run-2', actionId: 'action' }]);
   });
 
-  it('bounds identity metadata without serializing Run payloads', () => {
-    const detail = fixture(400);
+  it('maps every retained evidence after 256 references, including delivery, responses and outputs, within the DTO budget', () => {
+    const detail = evidenceReferenceFixture(320);
+    detail.goalProgress.criteria = Array.from({ length: 5 }, (_, index) => ({
+      criterion: `Verified ${index}`, status: 'passed',
+      evidenceRunIds: detail.runs.slice(index * 64, (index + 1) * 64).map(run => run.id),
+    }));
+    for (const id of ['delivery-proof', 'response-proof', 'output-proof']) {
+      detail.runs.push({ id, workItemId: 'item', actionId: 'action', status: 'completed' });
+    }
+    detail.goalProgress.delivery.evidenceRunIds = ['delivery-proof'];
+    detail.finalResult.responses[0].runId = 'response-proof';
+    detail.actions[0].resultRunId = 'output-proof';
+    detail.runs.at(-1).outputs = [{ kind: 'file', label: 'Result', ref: 'docs/result.md' }];
     const projected = projectWorkItemDetail(detail);
-    expect(projected.runReferences.length).toBeLessThanOrEqual(256);
-    expect(projected.runReferences.length).toBeGreaterThan(0);
-    expect(projected.runReferences.every(ref => Object.keys(ref).length === 2)).toBe(true);
+    const visibleIds = [
+      ...projected.goalProgress.criteria.flatMap(check => check.evidenceRunIds),
+      ...projected.goalProgress.delivery.evidenceRunIds,
+      ...projected.finalResult.responses.map(response => response.runId),
+      ...projected.outputs.map(output => output.runId),
+    ];
+    expect(visibleIds).toHaveLength(323);
+    expect(visibleIds).toContain('run-256');
+    expect(visibleIds).toEqual(expect.arrayContaining(['delivery-proof', 'response-proof', 'output-proof']));
+    expect(new Set(projected.runReferences.map(ref => ref.id))).toEqual(new Set(visibleIds));
+    expect(projected.runReferences.every(ref => Object.keys(ref).length === 2 && ref.actionId === 'action')).toBe(true);
+    expect(JSON.stringify(projected.runReferences)).not.toContain('SECRET');
+    expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThanOrEqual(MAX_WORK_ITEM_BROWSER_DTO_BYTES);
+    const oversized = projectWorkItemDetail({ ...detail, title: 'x'.repeat(600 * 1024) });
+    expect(oversized.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThanOrEqual(MAX_WORK_ITEM_BROWSER_DTO_BYTES);
   });
 });
