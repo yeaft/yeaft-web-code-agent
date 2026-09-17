@@ -272,7 +272,9 @@ export class WorkflowController {
       }, input.attachments, input.addedAttachments, input.clientMessageId, quote);
     }
     if (!['waiting', 'failed'].includes(targetAction.status)) {
-      throw new Error(`Action in ${targetAction.status} cannot accept input`);
+      const error = new Error(`Action in ${targetAction.status} cannot accept input`);
+      error.code = 'WORK_CENTER_INPUT_STALE';
+      throw error;
     }
     return this.retry(id, {
       answer: text,

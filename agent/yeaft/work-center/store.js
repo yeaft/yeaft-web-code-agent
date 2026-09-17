@@ -1944,7 +1944,9 @@ export class WorkItemStore {
         ? ['ready', 'running', 'waiting', 'needs_attention']
         : ['ready', 'running'];
       if (!inputStatuses.includes(workItem.status)) {
-        throw new Error(`WorkItem in ${workItem.status} cannot accept Action input`);
+        const error = new Error(`WorkItem in ${workItem.status} cannot accept Action input`);
+        error.code = 'WORK_CENTER_INPUT_STALE';
+        throw error;
       }
       const action = this.getAction(expected.actionId);
       const actionMatches = action?.workItemId === id
@@ -4547,7 +4549,9 @@ export class WorkItemStore {
         ? ['ready', 'running', 'waiting', 'needs_attention']
         : ['waiting', 'needs_attention'];
       if (!retryableWorkItemStatuses.includes(workItem.status)) {
-        throw new Error(`WorkItem in ${workItem.status} does not need retry`);
+        const error = new Error(`WorkItem in ${workItem.status} does not need retry`);
+        error.code = 'WORK_CENTER_INPUT_STALE';
+        throw error;
       }
       let previous = workItem.currentActionId ? this.getAction(workItem.currentActionId) : null;
       if (options.expected) {

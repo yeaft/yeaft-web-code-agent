@@ -533,11 +533,32 @@ describe('Work Center dynamic coordination contract', () => {
       text: 'Cross item.', actionId: target.id, generation: replacement.generation + 1,
       revision: other.revision, clientMessageId: 'dynamic-cross-item',
     })).toThrow(expect.objectContaining({ code: 'WORK_CENTER_INPUT_STALE' }));
+    // Terminal eligibility can change without changing the Action identity.
+    const eventsBefore = store.getWorkItemDetail(created.id).events.length;
+    for (const status of ['completed', 'cancelled', 'superseded']) {
+      store.db.prepare('UPDATE actions SET status = ? WHERE id = ?').run(status, target.id);
+      expect(() => controller.input(created.id, {
+        text: 'Late answer.', actionId: target.id, generation: failedReplacement.generation,
+        revision: failedRetry.revision, clientMessageId: `terminal-${status}`,
+      })).toThrow(expect.objectContaining({ code: 'WORK_CENTER_INPUT_STALE' }));
+    }
+    store.db.prepare("UPDATE actions SET status = 'waiting' WHERE id = ?").run(target.id);
+    const openStatus = store.getWorkItem(created.id).status;
+    for (const status of ['done', 'cancelled']) {
+      store.db.prepare('UPDATE work_items SET status = ? WHERE id = ?').run(status, created.id);
+      const expected = { actionId: target.id, generation: failedReplacement.generation, revision: failedRetry.revision };
+      expect(() => controller.input(created.id, { ...expected, text: 'Too late.' }))
+        .toThrow(expect.objectContaining({ code: 'WORK_CENTER_INPUT_STALE' }));
+      expect(() => store.addActionInput(created.id, 'Too late.', expected))
+        .toThrow(expect.objectContaining({ code: 'WORK_CENTER_INPUT_STALE' }));
+    }
+    store.db.prepare('UPDATE work_items SET status = ? WHERE id = ?').run(openStatus, created.id);
+    expect(store.getWorkItemDetail(created.id).events.length).toBe(eventsBefore);
     controller.cancel(created.id);
     expect(() => controller.input(created.id, {
       text: 'Cancelled.', actionId: target.id, generation: failedReplacement.generation,
       revision: failedRetry.revision, clientMessageId: 'dynamic-cancelled',
-    })).toThrow(/cancelled cannot accept input/);
+    })).toThrow(expect.objectContaining({ code: 'WORK_CENTER_INPUT_STALE' }));
   });
 
   it('recovers dynamic Runs and resumes cancelled WorkItems through the Coordinator', () => {
