@@ -145,6 +145,61 @@ describe('parent-owned live child controls', () => {
     await expect(child.execute('Bash', {})).rejects.toThrow(/finalization/);
   });
 
+  it.each(['active', 'idle', 'truncated'])('finalizes %s children once with incomplete evidence and no new tools', async mode => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-finalize-'));
+    const agent = record();
+    agent.persona = 'explorer';
+    const calls = [];
+    const requests = [];
+    const completions = [];
+    const registry = new ToolRegistry().register(tool('FileRead', async () => {
+      calls.push('read');
+      await update({ request_finalize: true });
+      return 'observed evidence';
+    }));
+    const adapter = {
+      async *stream(params) {
+        requests.push(params);
+        if (requests.length === 1) {
+          yield { type: 'text_delta', text: 'progress only;' };
+          if (mode !== 'idle') yield { type: 'tool_call', id: 'read', name: 'FileRead', input: {} };
+          yield { type: 'stop', stopReason: mode === 'idle' ? 'end_turn' : 'tool_use' };
+        } else {
+          expect(params.tools || []).toEqual([]);
+          yield { type: 'text_delta', text: 'APPROVE; unchecked scope remains' };
+          yield { type: 'tool_call', id: 'forbidden', name: 'FileRead', input: {} };
+          yield { type: 'stop', stopReason: mode === 'truncated' ? 'max_tokens' : 'end_turn' };
+        }
+      },
+    };
+    if (mode !== 'idle') agent.taskId = 'task-finalize';
+    try {
+      startSubAgent(agent, { adapter, parentToolRegistry: registry, parentSessionId: 's', parentVpId: 'vp', parentThreadId: 'main', config: { model: 'test', projectDocMaxBytes: 0 },
+        trace: new NullTrace(), subAgentLogDir: dir, yeaftDir: dir,
+        taskManager: { completeTask(...args) { completions.push(args); }, refreshTaskLog() {}, renderActiveTasksForPrompt() { return ''; } } });
+      if (mode === 'idle') {
+        await vi.waitFor(() => expect(agent.status).toBe('idle'));
+        expect((await update({ request_finalize: true })).success).toBe(true);
+      }
+      await vi.waitFor(() => expect(agent.__driverStarted).toBe(false));
+      expect(requests).toHaveLength(2);
+      expect(calls).toHaveLength(mode === 'idle' ? 0 : 1);
+      expect(agent.result).toBe('APPROVE; unchecked scope remains');
+      expect(agent.finalReport).toMatchObject({ received: true, truncated: mode === 'truncated' });
+      const waitAgent = (await import('../../../agent/yeaft/tools/wait-agent.js')).default;
+      const closeAgent = (await import('../../../agent/yeaft/tools/close-agent.js')).default;
+      for (const tool of [waitAgent, closeAgent]) {
+        const result = JSON.parse(await tool.execute({ agent_id: agent.id, timeout_ms: 0, result: 'replacement' }, ctx));
+        expect(result.outcome).toMatchObject({ status: 'incomplete', complete: false, reason: 'parent_requested_finalization' });
+        expect(result.result).toBe('APPROVE; unchecked scope remains');
+      }
+      if (mode !== 'idle') expect(completions[0][2]).toMatchObject({ status: 'failed', error: 'parent_requested_finalization' });
+    } finally {
+      agent.abortController.abort('cleanup');
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reserves real provider dispatches and permits only one separate report', () => {
     const agent = record({ max_llm_calls: 2 });
     const child = new SubAgentToolRegistry({ agent });

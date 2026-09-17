@@ -201,6 +201,116 @@ describe('TaskManager', () => {
     expect(manager.getTask('session_cancel', task.id).status).toBe('running');
   });
 
+  it('waits by task id, returns terminal state, and handles completion races', async () => {
+    const manager = new TaskManager({ yeaftDir: dir });
+    const task = manager.startTask({
+      sessionId: 'session_wait',
+      ownerVpId: 'vp_owner',
+      kind: 'shell',
+      title: 'Wait target',
+    });
+
+    const waiting = manager.waitForTask('session_wait', task.id, {
+      timeoutMs: 1000,
+      ownerVpId: 'vp_owner',
+    });
+    manager.completeTask('session_wait', task.id, { status: 'failed', exitCode: 7 });
+    await expect(waiting).resolves.toMatchObject({
+      ok: true,
+      timedOut: false,
+      task: { id: task.id, status: 'failed', result: { exitCode: 7 } },
+    });
+
+    await expect(manager.waitForTask('session_wait', task.id, { timeoutMs: 0, ownerVpId: 'vp_owner' }))
+      .resolves.toMatchObject({ ok: true, timedOut: false, task: { status: 'failed' } });
+  });
+
+  it('times out without changing task state and cleans abort listeners', async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new TaskManager({ yeaftDir: dir });
+      const task = manager.startTask({ sessionId: 'session_timeout', ownerVpId: 'vp_owner', kind: 'shell' });
+      const timedOut = manager.waitForTask('session_timeout', task.id, { timeoutMs: 25, ownerVpId: 'vp_owner' });
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(timedOut).resolves.toMatchObject({ ok: true, timedOut: true, task: { status: 'running' } });
+      expect(manager.getTask('session_timeout', task.id).status).toBe('running');
+      expect(manager.waiters.size).toBe(0);
+
+      const controller = new AbortController();
+      const remove = vi.spyOn(controller.signal, 'removeEventListener');
+      const aborted = manager.waitForTask('session_timeout', task.id, {
+        timeoutMs: 1000,
+        signal: controller.signal,
+        ownerVpId: 'vp_owner',
+      });
+      controller.abort();
+      await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
+      expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+      expect(manager.waiters.size).toBe(0);
+
+      manager.completeTask('session_timeout', task.id, { status: 'succeeded', exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles completion-vs-timeout and cancellation-vs-completion races once', async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new TaskManager({ yeaftDir: dir });
+      const completionTask = manager.startTask({ sessionId: 'session_race', ownerVpId: 'vp_owner', kind: 'shell' });
+      const completed = manager.waitForTask('session_race', completionTask.id, {
+        timeoutMs: 50,
+        ownerVpId: 'vp_owner',
+      });
+      manager.completeTask('session_race', completionTask.id, { status: 'succeeded', exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(completed).resolves.toMatchObject({
+        timedOut: false,
+        task: { status: 'succeeded', result: { exitCode: 0 } },
+      });
+
+      const cancellationTask = manager.startTask({ sessionId: 'session_race', ownerVpId: 'vp_owner', kind: 'shell' });
+      const cancelled = manager.waitForTask('session_race', cancellationTask.id, {
+        timeoutMs: 50,
+        ownerVpId: 'vp_owner',
+      });
+      manager.completeTask('session_race', cancellationTask.id, { status: 'cancelled', signal: 'SIGTERM' });
+      manager.completeTask('session_race', cancellationTask.id, { status: 'succeeded', exitCode: 0 });
+      await expect(cancelled).resolves.toMatchObject({
+        timedOut: false,
+        task: { status: 'cancelled', result: { signal: 'SIGTERM' } },
+      });
+      expect(manager.getTask('session_race', cancellationTask.id).status).toBe('cancelled');
+      expect(manager.waiters.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('applies the same owner fence to status, waits, logs, and cancellation', async () => {
+    const manager = new TaskManager({ yeaftDir: dir });
+    const task = manager.startTask({ sessionId: 'session_owner', ownerVpId: 'vp_owner', kind: 'shell' });
+    const ownerless = manager.startTask({ sessionId: 'session_owner', kind: 'shell' });
+    expect(manager.listActiveTasks('session_owner', 'vp_other')).toEqual([]);
+    expect(manager.getTask('session_owner', ownerless.id, 'vp_other')).toBeNull();
+    expect(manager.getTask('session_owner', task.id, 'vp_other')).toBeNull();
+    expect(manager.getTask('session_other', task.id, 'vp_owner')).toBeNull();
+    expect(manager.readTaskLog('session_owner', task.id, {}, 'vp_other')).toBeNull();
+    expect(manager.readTaskLog('session_owner', ownerless.id, {}, 'vp_other')).toBeNull();
+    expect(manager.cancelTask('session_owner', task.id, 'vp_other')).toMatchObject({ ok: false });
+    expect(manager.cancelTask('session_owner', ownerless.id, 'vp_other')).toMatchObject({ ok: false });
+    await expect(manager.waitForTask('session_owner', task.id, { ownerVpId: 'vp_other' }))
+      .resolves.toMatchObject({ ok: false, error: `Unknown task: ${task.id}` });
+    await expect(manager.waitForTask('session_owner', ownerless.id, { ownerVpId: 'vp_other' }))
+      .resolves.toMatchObject({ ok: false, error: `Unknown task: ${ownerless.id}` });
+    await expect(manager.waitForTask('session_other', task.id, { ownerVpId: 'vp_owner' }))
+      .resolves.toMatchObject({ ok: false, error: `Unknown task: ${task.id}` });
+    manager.completeTask('session_owner', task.id, { status: 'succeeded', exitCode: 0 });
+    manager.completeTask('session_owner', ownerless.id, { status: 'succeeded', exitCode: 0 });
+  });
+
   it('reads log tails without requiring a whole-file read', () => {
     const manager = new TaskManager({ yeaftDir: dir });
     const task = manager.startTask({

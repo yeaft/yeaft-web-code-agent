@@ -192,6 +192,7 @@ describe('active tool exposure and scoped prompts', () => {
       'ListAgents',
       'ListTasks',
       'ReadTaskLog',
+      'WaitTask',
       'CancelTask',
       'RouteForward',
       'CreateWorkItem',
@@ -765,7 +766,7 @@ describe('active tool exposure and scoped prompts', () => {
         return 'Started background task task_live.';
       },
     });
-    for (const name of ['ListTasks', 'ReadTaskLog', 'CancelTask']) {
+    for (const name of ['ListTasks', 'ReadTaskLog', 'WaitTask', 'CancelTask']) {
       registry.register({
         name,
         description: `${name} description`,
@@ -798,6 +799,7 @@ describe('active tool exposure and scoped prompts', () => {
     expect(mockAdapter.callLog[1].tools.map(tool => tool.name)).toEqual(expect.arrayContaining([
       'ListTasks',
       'ReadTaskLog',
+      'WaitTask',
       'CancelTask',
     ]));
     expect(mockAdapter.callLog[1].system).not.toContain('task_live is running');
@@ -4087,7 +4089,11 @@ describe('Engine', () => {
           // consume
         }
         await Promise.resolve();
-        const firstTurn = conversationStore.loadRecentBySession('session-t2-fold', Infinity);
+        const firstTurn = [
+          { role: 'user', content: 'Unrelated historical prompt must survive' },
+          { role: 'assistant', content: 'Unrelated historical answer must survive' },
+          ...conversationStore.loadRecentBySession('session-t2-fold', Infinity),
+        ];
         const secondEvents = [];
         for await (const event of engine.query({
           prompt: 'continue after t2',
@@ -5591,8 +5597,21 @@ describe('Engine', () => {
         cwd: process.cwd(),
         requestToolBatchBarrier: reason => barrierRequests.push(reason),
       });
-      expect(confirmedTimeoutOutput).toContain('Exit code: 124');
-      expect(ordinaryFailureOutput).toContain('Exit code: 2');
+      expect(JSON.parse(confirmedTimeoutOutput)).toMatchObject({
+        code: 'bash_timeout_confirmed',
+        failureType: 'timeout_confirmed',
+        exitCode: 124,
+        timedOut: true,
+        terminationConfirmed: true,
+        replaySafe: false,
+      });
+      expect(JSON.parse(ordinaryFailureOutput)).toMatchObject({
+        code: 'bash_exit_nonzero',
+        failureType: 'exit_nonzero',
+        exitCode: 2,
+        timedOut: false,
+        replaySafe: false,
+      });
       expect(barrierRequests).toEqual([
         expect.objectContaining({ kind: 'owned_timeout' }),
       ]);
@@ -5675,7 +5694,14 @@ describe('Engine', () => {
       expect(recoveryAdapter.callLog).toHaveLength(3);
       const timeoutToolMessage = recoveryAdapter.callLog[1].messages
         .find(message => message.toolCallId === 'call_unconfirmed_timeout');
-      expect(timeoutToolMessage).toMatchObject({ isError: false });
+      expect(timeoutToolMessage).toMatchObject({ isError: true });
+      expect(JSON.parse(timeoutToolMessage.content)).toMatchObject({
+        code: 'bash_timeout_unconfirmed',
+        failureType: 'timeout_unconfirmed',
+        timedOut: true,
+        terminationConfirmed: false,
+        replaySafe: false,
+      });
       expect(timeoutToolMessage.content).toContain('Exit code: 124');
       expect(timeoutToolMessage.content).toContain('Process tree did not exit within 5ms after SIGKILL: powershell.exe');
       expect(timeoutToolMessage.content).toContain('The command may still be running.');
@@ -5757,7 +5783,7 @@ describe('Engine', () => {
         const barrierProviderMessages = batchBarrierAdapter.callLog[1].messages;
         expect(barrierProviderMessages
           .find(message => message.toolCallId === 'call_batch_timeout')).toMatchObject({
-            isError: false,
+            isError: true,
             content: expect.stringContaining('The command may still be running.'),
           });
         expect(barrierProviderMessages
@@ -5779,7 +5805,7 @@ describe('Engine', () => {
         expect(batchBarrierEvents.filter(event => event.type === 'tool_start').map(event => event.name))
           .toEqual(['Bash']);
         expect(batchBarrierEvents.filter(event => event.type === 'tool_end')).toEqual([
-          expect.objectContaining({ id: 'call_batch_timeout', name: 'Bash', isError: false }),
+          expect.objectContaining({ id: 'call_batch_timeout', name: 'Bash', isError: true }),
           expect.objectContaining({
             id: 'call_write_after_timeout',
             name: 'FileWrite',
@@ -5897,13 +5923,13 @@ describe('Engine', () => {
               expect(bashAdapter.callLog).toHaveLength(2);
               expect(bashAdapter.callLog[1].messages.find(message => message.role === 'tool')).toMatchObject({
                 toolCallId: 'call_bash_timeout',
-                isError: false,
+                isError: true,
               });
               expect(bashAdapter.callLog[1].messages.find(message => message.role === 'tool').content)
                 .toContain('Exit code: 124');
               expect(bashEvents.find(event => event.type === 'tool_end')).toMatchObject({
                 id: 'call_bash_timeout',
-                isError: false,
+                isError: true,
               });
               expect(bashEvents.find(event => event.type === 'error')).toBeUndefined();
               expect(bashEvents.filter(event => event.type === 'turn_end').at(-1)).toMatchObject({

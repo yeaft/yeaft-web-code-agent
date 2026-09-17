@@ -12,6 +12,7 @@ import { agentBelongsToCaller, getAgentRegistry } from './agent.js';
 import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
 import { consumeNotificationForAgent, enqueueTerminalNotification } from '../sub-agent/notifications.js';
 import { snapshotLiveness } from '../sub-agent/liveness.js';
+import { describeAgentLifecycle, describeAgentOutcome } from '../sub-agent/outcome.js';
 
 export default defineTool({
   name: 'CloseAgent',
@@ -73,7 +74,7 @@ Do NOT end your turn silently right after CloseAgent.`,
       return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: `Agent not found: ${agent_id}` });
     }
 
-    if (result) {
+    if (result && !isTerminalAgentStatus(agent.status)) {
       agent.result = result;
     }
 
@@ -86,7 +87,7 @@ Do NOT end your turn silently right after CloseAgent.`,
 
     const finalResult = (typeof agent.result === 'string' && agent.result)
       ? agent.result
-      : (agent.lastResult || '');
+      : (agent.result?.partial_output || agent.lastResult || '');
 
     // If the agent had already gone terminal (e.g. failed) before we got
     // here, preserve that status; otherwise mark closed. Either way drain
@@ -139,6 +140,10 @@ Do NOT end your turn silently right after CloseAgent.`,
       agentId: agent_id,
       name: agent.name,
       status: agent.status,
+      lifecycle: describeAgentLifecycle(agent),
+      outcome: describeAgentOutcome(agent),
+      incomplete: !describeAgentOutcome(agent).complete,
+      final_report: agent.result?.final_report || agent.finalReport || null,
       result: finalResult,
       outputFile: agent.outputFile || null,
       liveness: snapshotLiveness(agent.liveness),

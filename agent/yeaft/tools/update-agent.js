@@ -46,7 +46,7 @@ export default defineTool({
     const fail = error => JSON.stringify({ error, next_steps: 'Inspect the current agent state and correct the request; do not respawn or repeat blindly.' });
     const agent = getAgentRegistry().get(input.agent_id);
     if (!agent || !agentBelongsToCaller(agent, ctx)) return fail(`Agent not found: ${input.agent_id}`);
-    if (isTerminalAgentStatus(agent.status) || agent.budgetReportStarted || agent.budgetStopReason
+    if (isTerminalAgentStatus(agent.status) || agent.budgetReportStarted || agent.finalizationRequested || agent.budgetStopReason
         || agent.abortController?.signal.aborted) return fail('Agent is terminal, stopping or already reporting; it cannot be extended');
     if (typeof input.reason !== 'string' || !input.reason.trim() || input.reason.length > 2000) return fail('reason must contain 1..2000 characters of evidence and remaining work');
     if (input.budget === undefined && input.allow_tools === undefined && input.request_finalize !== true) return fail('budget, allow_tools, or request_finalize=true is required');

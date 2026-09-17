@@ -66,6 +66,7 @@ export class TaskManager {
     this.active = new Map();
     this.processes = new Map();
     this.cancelEscalationTimers = new Map();
+    this.waiters = new Map();
     this.pendingStartupEvents = [];
     this.#loadPersistedRunningTasks();
   }
@@ -86,6 +87,20 @@ export class TaskManager {
 
   #deliverEvent(event, sink = this.onEvent) {
     try { sink?.(event); } catch { /* event sinks must not break tasks */ }
+  }
+
+  #taskForOwner(sessionId, taskId, ownerVpId = null) {
+    const task = this.active.get(this.#key(sessionId, taskId)) || this.store.readTask(sessionId, taskId);
+    if (!task) return null;
+    if (ownerVpId && task.ownerVpId !== ownerVpId) return null;
+    return task;
+  }
+
+  #settleWaiters(key, task) {
+    const waiters = this.waiters.get(key);
+    if (!waiters) return;
+    this.waiters.delete(key);
+    for (const settle of [...waiters]) settle(task);
   }
 
   #emit(event, task, extra = {}, { deferUntilSink = false } = {}) {
@@ -246,12 +261,13 @@ export class TaskManager {
     this.active.delete(key);
     this.processes.delete(key);
     this.#emit('completed', task);
+    this.#settleWaiters(key, task);
     return publicSnapshot(task);
   }
 
-  cancelTask(sessionId, taskId) {
+  cancelTask(sessionId, taskId, ownerVpId = null) {
     const key = this.#key(sessionId, taskId);
-    const task = this.active.get(key) || this.store.readTask(sessionId, taskId);
+    const task = this.#taskForOwner(sessionId, taskId, ownerVpId);
     if (!task) return { ok: false, error: `Unknown task: ${taskId}` };
     if (isTerminalTaskStatus(task.status)) return { ok: true, task: publicSnapshot(task) };
     const runner = this.processes.get(key);
@@ -312,19 +328,75 @@ export class TaskManager {
     return { ok: true, task: publicSnapshot(task), pending: true };
   }
 
-  listActiveTasks(sessionId = null) {
-    const tasks = Array.from(this.active.values()).filter(task => !sessionId || task.sessionId === sessionId);
+  listActiveTasks(sessionId = null, ownerVpId = null) {
+    const tasks = Array.from(this.active.values()).filter(task => (
+      (!sessionId || task.sessionId === sessionId)
+      && (!ownerVpId || task.ownerVpId === ownerVpId)
+    ));
     return tasks.map(publicSnapshot);
   }
 
-  getTask(sessionId, taskId) {
-    return publicSnapshot(this.active.get(this.#key(sessionId, taskId)) || this.store.readTask(sessionId, taskId));
+  getTask(sessionId, taskId, ownerVpId = null) {
+    return publicSnapshot(this.#taskForOwner(sessionId, taskId, ownerVpId));
   }
 
-  readTaskLog(sessionId, taskId, opts = {}) {
-    const task = this.active.get(this.#key(sessionId, taskId)) || this.store.readTask(sessionId, taskId);
+  readTaskLog(sessionId, taskId, opts = {}, ownerVpId = null) {
+    const task = this.#taskForOwner(sessionId, taskId, ownerVpId);
+    if (!task) return null;
     if (task?.log?.path) return this.store.readLogFile(task.log.path, opts);
     return this.store.readLog(sessionId, taskId, opts);
+  }
+
+  /** Wait for exactly one task without reading its log into memory. */
+  waitForTask(sessionId, taskId, { timeoutMs = 120_000, signal = null, ownerVpId = null } = {}) {
+    const key = this.#key(sessionId, taskId);
+    const initial = this.#taskForOwner(sessionId, taskId, ownerVpId);
+    if (!initial) return Promise.resolve({ ok: false, error: `Unknown task: ${taskId}` });
+    if (isTerminalTaskStatus(initial.status)) {
+      return Promise.resolve({ ok: true, timedOut: false, task: publicSnapshot(initial) });
+    }
+
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      let settled = false;
+      const waiters = this.waiters.get(key) || new Set();
+      this.waiters.set(key, waiters);
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        signal?.removeEventListener?.('abort', onAbort);
+        waiters.delete(onComplete);
+        if (waiters.size === 0 && this.waiters.get(key) === waiters) this.waiters.delete(key);
+      };
+      const finish = (value, error = null) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const onComplete = task => finish({ ok: true, timedOut: false, task: publicSnapshot(task) });
+      const onAbort = () => {
+        const error = new Error('Task wait aborted');
+        error.name = 'AbortError';
+        finish(null, error);
+      };
+      waiters.add(onComplete);
+
+      // Register before the second read so completion cannot be missed.
+      const current = this.#taskForOwner(sessionId, taskId, ownerVpId);
+      if (!current) finish({ ok: false, error: `Unknown task: ${taskId}` });
+      else if (isTerminalTaskStatus(current.status)) onComplete(current);
+      else if (signal?.aborted) onAbort();
+      else {
+        signal?.addEventListener?.('abort', onAbort, { once: true });
+        timer = setTimeout(() => {
+          const latest = this.#taskForOwner(sessionId, taskId, ownerVpId);
+          if (!latest) finish({ ok: false, error: `Unknown task: ${taskId}` });
+          else finish({ ok: true, timedOut: !isTerminalTaskStatus(latest.status), task: publicSnapshot(latest) });
+        }, Math.max(0, Number.isFinite(timeoutMs) ? Math.floor(timeoutMs) : 120_000));
+        if (typeof timer.unref === 'function') timer.unref();
+      }
+    });
   }
 
   setTaskLogPath(sessionId, taskId, logPath) {

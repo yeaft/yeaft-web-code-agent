@@ -26,6 +26,7 @@ export const ALWAYS_VISIBLE_TOOL_NAMES = Object.freeze([
 export const BACKGROUND_TASK_TOOL_NAMES = Object.freeze([
   'ListTasks',
   'ReadTaskLog',
+  'WaitTask',
   'CancelTask',
 ]);
 
@@ -44,6 +45,7 @@ export const CONDITIONAL_BUILTIN_TOOL_NAMES = new Set([
   'ApplyPatch',
   'ListTasks',
   'ReadTaskLog',
+  'WaitTask',
   'CancelTask',
   'SpawnAgent',
   'UpdateAgent',

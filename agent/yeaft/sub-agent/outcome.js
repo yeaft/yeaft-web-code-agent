@@ -13,6 +13,10 @@ export function describeAgentOutcome(agent) {
       truncated: Boolean(budgetResult.truncated || budgetResult.final_report?.truncated),
     };
   }
+  if (agent?.finalizationRequested) {
+    return { status: 'incomplete', complete: false, reason: 'parent_requested_finalization',
+      truncated: Boolean(agent.finalReport?.truncated) };
+  }
   switch (agent?.status) {
     case STATUS.COMPLETED:
       return { status: 'succeeded', complete: true, reason: null, truncated: false };

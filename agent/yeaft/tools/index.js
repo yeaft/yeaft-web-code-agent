@@ -43,6 +43,7 @@ import diskUsage from './disk-usage.js';
 import applyPatch from './apply-patch.js';
 import listTasks from './list-tasks.js';
 import readTaskLog from './read-task-log.js';
+import waitTask from './wait-task.js';
 import cancelTask from './cancel-task.js';
 
 // --- P1 Agent tools ---
@@ -109,6 +110,7 @@ export const allTools = [
   applyPatch,
   listTasks,
   readTaskLog,
+  waitTask,
   cancelTask,
 
   // P1 Agent

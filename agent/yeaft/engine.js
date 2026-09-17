@@ -17,7 +17,7 @@
  * Reference: yeaft-yeaft-implementation-plan.md §3.1, §4 (Phase 2)
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
@@ -50,6 +50,13 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // Default thread marker for legacy / non-group flows. Group VP runtime may
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
+
+function foldingMessageKey(message) {
+  return message?._persistedMessageId || message?.id || createHash('sha256').update(JSON.stringify([
+    message?.role, message?.toolCallId, message?.toolCalls, message?.content,
+  ])).digest('hex');
+}
+
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
 import { bindProviderState } from './llm/provider-state.js';
 import {
@@ -4115,6 +4122,12 @@ export class Engine {
             const info = {
               promise,
               loopRange: [arcStart, arcEnd],
+              // Absolute indexes do not survive history-window reconstruction.
+              arcKeys: conversationMessages.slice(arcStart, arcEnd + 1).map(foldingMessageKey),
+              arcRows: conversationMessages.slice(arcStart, arcEnd + 1).map(message => ({
+                role: message.role, id: message.id, _persistedMessageId: message._persistedMessageId,
+                toolCallId: message.toolCallId, toolCalls: message.toolCalls?.map(call => ({ id: call.id })),
+              })),
               count: pairs.length,
               originalUserMsg: prompt,
               originatingTurnId: queryTurnId,
@@ -5186,12 +5199,13 @@ export class Engine {
     this.#pendingT2.clear();
 
     for (const [turnNumber, info] of drained) {
-      const range = info.loopRange;
-      if (!Array.isArray(range) || range.length !== 2) continue;
-      const [startIdx, endIdx] = range;
-      if (startIdx < 0 || endIdx < startIdx || endIdx >= conversationMessages.length) {
-        continue;
-      }
+      const keys = info.arcKeys;
+      if (!Array.isArray(keys) || keys.length === 0) continue;
+      const currentKeys = conversationMessages.map(foldingMessageKey);
+      const startIdx = currentKeys.findIndex((key, index) => key === keys[0]
+        && keys.every((expected, offset) => currentKeys[index + offset] === expected));
+      const endIdx = startIdx + keys.length - 1;
+      const rangePresent = startIdx >= 0;
 
       // PR-L follow-up: deterministic readiness check. The info record
       // carries `ready / result / error` flags that are flipped from the
@@ -5220,7 +5234,9 @@ export class Engine {
       }
 
       // Rewrite history and publish the same logical replacement to disk.
-      const { messages: next, reflection: reflectionMessage, foldedMessages } = collapseRangeToReflection(conversationMessages, startIdx, endIdx, content);
+      const { messages: next, reflection: reflectionMessage, foldedMessages } = rangePresent
+        ? collapseRangeToReflection(conversationMessages, startIdx, endIdx, content)
+        : collapseRangeToReflection(info.arcRows, 0, info.arcRows.length - 1, content);
       const durableRowsInRange = foldedMessages
         .some(message => message?._persistedMessageId || message?.id);
       const persistedReflection = this.#persistFoldedRange(
@@ -5237,16 +5253,18 @@ export class Engine {
       // T2 replaces this arc in durable and in-memory history just like T1.
       // Forget its raw result handles before a late async task can append to a
       // tombstoned tool row at the next provider boundary.
-      const foldedToolCallIds = conversationMessages
-        .slice(startIdx, endIdx + 1)
+      const foldedToolCallIds = foldedMessages
         .filter(message => message?.role === 'tool' && message.toolCallId)
         .map(message => message.toolCallId);
       for (const toolCallId of foldedToolCallIds) {
         this.#persistedToolMessages.delete(toolCallId);
       }
-      // Mutate in place so caller's reference stays valid.
-      conversationMessages.length = 0;
-      for (const m of next) conversationMessages.push(m);
+      // History may have evicted the old arc. Publish only its original
+      // durable row IDs; never replace unrelated rows at stale indexes.
+      if (rangePresent) {
+        conversationMessages.length = 0;
+        for (const m of next) conversationMessages.push(m);
+      }
 
       yield {
         type: 'reflection',

@@ -65,6 +65,7 @@ export class SubAgentToolRegistry extends ToolRegistry {
     const llmLimit = agent.budget?.max_llm_calls;
     const llmCalls = agent.usage?.llmCalls || 0;
     if (agent.finalizationRequested) {
+      agent.finalizationStarted = true;
       return {
         finalize: true,
         maxOutputTokens: 4096,

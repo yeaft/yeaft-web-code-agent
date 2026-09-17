@@ -56,6 +56,9 @@ function nextStepsFor(status, opts = {}) {
       'as an ordinary successful completion.'
     );
   }
+  if (opts.incomplete) {
+    return 'Sub-agent lifecycle ended with incomplete evidence. Inspect outcome and final_report; do not present partial verdict text as a completed review.';
+  }
   if (opts.timedOut && opts.stale) {
     return (
       'No observable event arrived within the diagnostic threshold. This does ' +
@@ -158,6 +161,7 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     next_steps: nextStepsFor(status, {
       timedOut,
       budgetExceeded: !!budgetResult,
+      incomplete: isTerminalAgentStatus(status) && !describeAgentOutcome(agent).complete,
       stale: liveness.stale,
       mustCollectReply: mustCollectReply && !liveness.stale,
     }),
@@ -192,6 +196,12 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     env.truncated = Boolean(budgetResult.truncated || budgetResult.final_report?.truncated);
     env.final_report = budgetResult.final_report || null;
     env.budget_usage = budgetResult.usage || null;
+  }
+  if (agent.finalizationRequested) {
+    env.incomplete = true;
+    env.final_report = agent.finalReport || null;
+    env.truncated = Boolean(agent.finalReport?.truncated);
+    env.partial_output = resultText;
   }
   env.result = resultText;
   return env;
