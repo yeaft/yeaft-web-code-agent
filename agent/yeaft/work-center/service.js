@@ -37,6 +37,11 @@ function requiredString(value, name) {
   return value.trim();
 }
 
+function optionalString(value, limit) {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, limit);
+}
+
 function requiredWorkDir(value) {
   const workDir = requiredString(value, 'workDir');
   let canonical;
@@ -167,6 +172,8 @@ export class WorkCenterService {
           watcher: this.watcher.status(),
         };
       }
+      case 'list_delivery_instructions':
+        return { values: this.store.listRecentDeliveryInstructions(payload.limit) };
       case 'get':
         return this.#requiredItem(payload.id);
       case 'get_action_messages': {
@@ -287,6 +294,8 @@ export class WorkCenterService {
             deliveryTarget: requestContext.userOriginated === true
               && ['response', 'workspace_files', 'pull_request', 'merge'].includes(payload.deliveryTarget)
               ? payload.deliveryTarget : null,
+            deliveryInstructions: requestContext.userOriginated === true
+              ? optionalString(payload.deliveryInstructions, 500) : '',
             reuseMemory: payload.reuseMemory !== false,
             origin: payload.origin && typeof payload.origin === 'object'
               ? {

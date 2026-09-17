@@ -258,7 +258,28 @@ describe('Work Center dynamic coordination contract', () => {
     expect(fallback.decision.title).toBe(pending.goal);
     expect(normalizeCoordinatorResponse({ ...fallback, decision: {
       ...fallback.decision, title: 'x'.repeat(300),
-    } }, pending, { automatic: true, availableVpIds: ['linus'] }).decision.title).toHaveLength(200);
+    } }, pending, { automatic: true, availableVpIds: ['linus'] }).decision.title).toHaveLength(80);
+
+    const longGoal = { ...pending, goal: 'Implement a detailed Work Center experience that keeps the original requirement while presenting a concise generated display title for users everywhere' };
+    expect(normalizeCoordinatorResponse({
+      reply: 'The request is ready for coordination.',
+      decision: {
+        kind: 'request_human',
+        reason: 'The delivery boundary still needs confirmation.',
+        question: 'Which delivery target should be used?',
+      },
+    }, longGoal, { automatic: true, availableVpIds: ['linus'] }).decision.title)
+      .toBe('Implement a detailed Work Center experience that keeps the original requirement…');
+    expect(normalizeCoordinatorResponse({
+      reply: 'The request is ready for coordination.',
+      decision: {
+        kind: 'request_human',
+        reason: 'The delivery boundary still needs confirmation.',
+        title: 'Fix Node.js build for v1.2 release',
+        question: 'Which delivery target should be used?',
+      },
+    }, pending, { automatic: true, availableVpIds: ['linus'] }).decision.title)
+      .toBe('Fix Node.js build for v1.2 release');
   });
 
   it('persists a generated title without rejecting an otherwise valid decision', () => {

@@ -105,6 +105,8 @@ export default {
       createAttachmentUploadCount: 0,
       attachmentsUploading: false,
       createAttachmentError: '',
+      deliveryInstructionOptions: [],
+      deliveryInstructionsGeneration: 0,
       previewingAttachmentId: null,
       attachmentPreviewError: '',
       attachmentPreviewGeneration: 0,
@@ -112,6 +114,7 @@ export default {
         requirement: '',
         workDir: '',
         deliveryTarget: '',
+        deliveryInstructions: '',
         reuseMemory: true,
         start: true,
         scheduled: false,
@@ -517,6 +520,8 @@ export default {
         this.createGeneration = (Number(this.createGeneration) || 0) + 1;
         this.createAttachmentUploadCount = 0;
         this.attachmentsUploading = false;
+        this.deliveryInstructionOptions = [];
+        this.deliveryInstructionsGeneration += 1;
         this.saving = false;
         this.selectedId = null;
         this.selectedActionId = null;
@@ -544,6 +549,7 @@ export default {
             : this.store.listWorkItems(id);
           listRequest.catch(() => {});
           this.store.loadWorkCenterSettings(id).catch(() => {});
+          if (this.createOpen) this.loadDeliveryInstructionOptions();
         }
       },
     },
@@ -607,6 +613,7 @@ export default {
     this.createGeneration = (Number(this.createGeneration) || 0) + 1;
     this.workItemComposerGeneration += 1;
     this.unavailableAgentStateGeneration += 1;
+    this.deliveryInstructionsGeneration += 1;
     if (this.boardQueryTimer) clearTimeout(this.boardQueryTimer);
     clearInterval(this.actionClockTimer);
     window.removeEventListener('popstate', this.restoreWorkCenterUrl);
@@ -628,6 +635,7 @@ export default {
       requirement: draft.requirement || draft.goal || draft.title || '',
       workDir: draft.workDir || '',
       deliveryTarget: draft.deliveryTarget || '',
+      deliveryInstructions: draft.deliveryInstructions || '',
       reuseMemory: true,
       start: this.settings?.startImmediately !== false,
     };
@@ -1261,6 +1269,7 @@ export default {
           requirement: draft.requirement || draft.goal || draft.title || '',
           workDir: '',
           deliveryTarget: draft.deliveryTarget || '',
+          deliveryInstructions: draft.deliveryInstructions || '',
           origin: null,
           linkedSessionIds: [],
         };
@@ -1531,6 +1540,21 @@ export default {
       if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
       return `${(size / 1024 / 1024).toFixed(1)} MB`;
     },
+    async loadDeliveryInstructionOptions() {
+      const agentId = this.agentId;
+      const generation = ++this.deliveryInstructionsGeneration;
+      if (!agentId) return;
+      try {
+        const values = await this.store.loadWorkCenterDeliveryInstructions(agentId);
+        if (this.agentId === agentId && this.deliveryInstructionsGeneration === generation) {
+          this.deliveryInstructionOptions = values;
+        }
+      } catch {
+        if (this.agentId === agentId && this.deliveryInstructionsGeneration === generation) {
+          this.deliveryInstructionOptions = [];
+        }
+      }
+    },
     openCreate() {
       this.createGeneration = (Number(this.createGeneration) || 0) + 1;
       this.createAttachmentUploadCount = 0;
@@ -1540,6 +1564,7 @@ export default {
       this.startTouched = false;
       this.createAttachmentError = '';
       this.applyCreateDefaults();
+      this.loadDeliveryInstructionOptions();
     },
     closeCreate() {
       if (this.saving) return;
@@ -1576,6 +1601,7 @@ export default {
           workItemType: 'auto',
           workDir: this.form.workDir.trim(),
           deliveryTarget: this.form.deliveryTarget || null,
+          deliveryInstructions: this.form.deliveryInstructions.trim() || null,
           origin: draftOwnedByAgent ? (draft.origin || null) : null,
           linkedSessionIds: draftOwnedByAgent ? (draft.linkedSessionIds || []) : [],
           attachments: this.workItemAttachmentsSupported
@@ -1597,6 +1623,7 @@ export default {
           requirement: '',
           workDir: '',
           deliveryTarget: '',
+          deliveryInstructions: '',
           reuseMemory: true,
           start: this.settings?.startImmediately !== false,
           scheduled: false,
@@ -1818,6 +1845,14 @@ export default {
                   :aria-label="$t('workbench.title')" @click="toggleWorkbench">
                   <NavigationIcon name="workbench" :size="16" />
                 </button>
+                <button v-if="agentId" class="work-center-icon-button work-center-header-refresh" type="button" @click="refresh" :disabled="loading"
+                  :title="tr('workCenter.refresh', 'Refresh')" :aria-label="tr('workCenter.refresh', 'Refresh')">
+                  <NavigationIcon name="refresh" :size="16" />
+                </button>
+                <button v-if="agentId" class="work-center-icon-button work-center-header-create" type="button" @click="openCreate"
+                  :title="tr('workCenter.newWorkItem', 'New work item')" :aria-label="tr('workCenter.newWorkItem', 'New work item')">
+                  <NavigationIcon name="add" :size="16" />
+                </button>
                 <div v-if="agentId" class="work-center-header-menu" @keydown.esc.stop="headerMenuOpen = false; $refs.headerMenuButton.focus()">
                   <button ref="headerMenuButton" class="work-center-icon-button" type="button" :aria-expanded="headerMenuOpen" aria-controls="work-center-header-options" @click="headerMenuOpen = !headerMenuOpen"
                     :title="tr('workCenter.moreActions', 'More actions')" :aria-label="tr('workCenter.moreActions', 'More actions')">
@@ -1825,14 +1860,8 @@ export default {
                   </button>
                   <div v-if="headerMenuOpen" id="work-center-header-options" class="work-center-header-popover">
                     <button type="button" @click="headerMenuOpen = false; settingsOpen = true">{{ tr('workCenter.settings.title', 'Work Center settings') }}</button>
-                    <button type="button" @click="headerMenuOpen = false; refresh()" :disabled="loading">{{ tr('workCenter.refresh', 'Refresh') }}</button>
-                    <button class="work-center-menu-create" type="button" @click="headerMenuOpen = false; openCreate()">{{ tr('workCenter.newWorkItem', 'New work item') }}</button>
                   </div>
                 </div>
-                <button v-if="agentId" class="work-center-icon-button work-center-header-create" type="button" @click="openCreate"
-                  :title="tr('workCenter.newWorkItem', 'New work item')" :aria-label="tr('workCenter.newWorkItem', 'New work item')">
-                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
-                </button>
                 <template v-if="narrowPane !== 'items' && selected">
                   <button
                     ref="actionsButton"
@@ -2116,6 +2145,7 @@ export default {
                             <div v-if="goalProgress.delivery" class="work-center-goal-delivery">
                               <h3>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</h3>
                               <p>{{ deliveryTargetLabel(goalProgress.delivery.target) }} · <span class="work-center-goal-status" :data-status="goalProgress.delivery.status">{{ goalStatusLabel(goalProgress.delivery.status) }}</span></p>
+                              <p v-if="selected.deliveryInstructions" class="work-center-muted">{{ selected.deliveryInstructions }}</p>
                               <details v-if="goalProgress.delivery.evidenceRunIds?.length" class="work-center-goal-evidence">
                                 <summary>{{ tr('workCenter.evidenceRuns', 'Evidence Runs') }}</summary>
                                 <ul><li v-for="runId in goalProgress.delivery.evidenceRunIds" :key="runId"><WorkCenterActionReference :actions="selected.actions || []" :run-id="runId" :run-references="selected.runReferences || []" @select-action="selectAction" /></li></ul>
@@ -2401,6 +2431,7 @@ export default {
               </label>
               <div class="work-center-create-options">
                 <label><span>{{ tr('workCenter.deliveryTarget', 'Delivery target') }}</span><select v-model="form.deliveryTarget"><option value="">{{ tr('workCenter.deliveryTargetAsk', 'Ask me before delivery') }}</option><option value="response">{{ tr('workCenter.deliveryTargetResponse', 'Response') }}</option><option value="workspace_files">{{ tr('workCenter.deliveryTargetFiles', 'Workspace files') }}</option><option value="pull_request">{{ tr('workCenter.deliveryTargetPr', 'Open a pull request') }}</option><option value="merge">{{ tr('workCenter.deliveryTargetMerge', 'Merge an approved pull request') }}</option></select><small class="work-center-field-help">{{ tr('workCenter.deliveryTargetHelp', 'This is the completion boundary, not permission to bypass review or merge policy.') }}</small></label>
+                <label><span>{{ tr('workCenter.deliveryInstructions', 'Delivery goal') }}</span><input v-model="form.deliveryInstructions" type="text" maxlength="500" list="work-center-delivery-instructions" :placeholder="tr('workCenter.deliveryInstructionsHint', 'For example: publish a release and summarize the changes')"><datalist id="work-center-delivery-instructions"><option v-for="value in deliveryInstructionOptions" :key="value" :value="value"></option></datalist><small class="work-center-field-help">{{ tr('workCenter.deliveryInstructionsHelp', 'Choose a previous goal or enter a new one. This does not grant extra delivery permissions.') }}</small></label>
                 <label class="work-center-checkbox"><input v-model="form.reuseMemory" type="checkbox"><span><strong>{{ tr('workCenter.reuseMemory', 'Use relevant Agent memory and completed work from this project') }}</strong><small>{{ tr('workCenter.reuseMemoryHelp', 'Uses scope-bounded Agent memory and structured results from completed WorkItems in the same project.') }}</small></span></label>
               </div>
             </section>

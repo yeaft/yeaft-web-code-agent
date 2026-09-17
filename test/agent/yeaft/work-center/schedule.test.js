@@ -298,7 +298,7 @@ describe('recurring schedules', () => {
   it('preserves trusted provenance, authority, settings and securely re-owns attachment bytes', async () => {
     const { service, controller, store, setNow } = fixture();
     const plan = await createPlan(service, daily, {
-      deliveryTarget: 'merge', reuseMemory: false,
+      deliveryTarget: 'merge', deliveryInstructions: 'Publish the approved report', reuseMemory: false,
       origin: { sessionId: 'trusted-session', messageId: 'message', createdBy: 'vp' },
       linkedSessionIds: ['trusted-session'], acceptanceCriteria: ['Report includes evidence'],
       files: [{ name: 'input.txt', mimeType: 'text/plain', data: Buffer.from('trusted bytes').toString('base64') }],
@@ -306,14 +306,14 @@ describe('recurring schedules', () => {
     setNow('2026-03-06T14:00:00Z');
     const item = controller.startScheduled(plan.id, epoch('2026-03-06T14:00:00Z'),
       (source, id) => cloneWorkItemAttachments(source, id, { root: service.attachmentRoot }));
-    expect(item).toMatchObject({ origin: plan.origin, deliveryTarget: 'merge', reuseMemory: false,
+    expect(item).toMatchObject({ origin: plan.origin, deliveryTarget: 'merge', deliveryInstructions: 'Publish the approved report', reuseMemory: false,
       acceptanceCriteria: plan.acceptanceCriteria, workflowSnapshot: plan.workflowSnapshot, linkedSessionIds: plan.linkedSessionIds });
     expect(item.attachments[0].id).not.toBe(plan.attachments[0].id);
     expect(readWorkItemAttachment(item, item.attachments[0].id, { root: service.attachmentRoot }).data).toBe(Buffer.from('trusted bytes').toString('base64'));
     expect(() => readWorkItemAttachment(item, plan.attachments[0].id, { root: service.attachmentRoot })).toThrow(/not found/);
     expect(projectWorkItemSummary(item)).toMatchObject({ sourceScheduleId: plan.id, scheduledOccurrenceAt: item.scheduledOccurrenceAt });
     expect(projectWorkItemDetail(item)).toMatchObject({ sourceScheduleId: plan.id, scheduledOccurrenceAt: item.scheduledOccurrenceAt });
-    const untrusted = await createPlan(service, daily, { scheduledFor: epoch('2026-03-07T14:00:00Z'), deliveryTarget: 'merge', origin: { sessionId: 'spoofed' } });
+    const untrusted = await createPlan(service, daily, { scheduledFor: epoch('2026-03-07T14:00:00Z'), deliveryTarget: 'merge', deliveryInstructions: 'Publish the approved report', origin: { sessionId: 'spoofed' } });
     const child = controller.startScheduled(untrusted.id, epoch('2026-03-07T14:00:00Z'));
     expect(child.deliveryTarget).toBeNull();
     expect(child.origin.trustedSession).toBe(false);
@@ -359,7 +359,7 @@ describe('recurring schedules', () => {
     const { service, store, dir } = fixture();
     const plan = await createPlan(service, null);
     store.db.exec(`DROP INDEX idx_work_items_schedule_occurrence;
-      DELETE FROM schema_migrations WHERE name = '41-recurring-schedules';
+      DELETE FROM schema_migrations WHERE name = '42-recurring-schedules';
       UPDATE schema_meta SET value = '40' WHERE key = 'schema_version';`);
     for (const column of ['schedule_recurrence', 'schedule_run_count', 'schedule_last_work_item_id', 'source_schedule_id', 'scheduled_occurrence_at']) {
       store.db.exec(`ALTER TABLE work_items DROP COLUMN ${column}`);

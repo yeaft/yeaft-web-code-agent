@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { withTransaction } from './transaction.js';
 
-export const WORK_CENTER_SCHEMA_VERSION = 41;
+export const WORK_CENTER_SCHEMA_VERSION = 42;
 
 const MIGRATIONS = [
   ['23-conversation-stream', migrateConversationStream],
@@ -22,7 +22,8 @@ const MIGRATIONS = [
   ['38-action-closure-and-outputs', migrateActionClosureAndOutputs],
   ['39-action-creation-source', migrateActionCreationSource],
   ['40-work-item-schedules', migrateWorkItemSchedules],
-  ['41-recurring-schedules', migrateRecurringSchedules],
+  ['41-delivery-instructions', migrateDeliveryInstructions],
+  ['42-recurring-schedules', migrateRecurringSchedules],
 ];
 
 const MIGRATION_ALIASES = new Map([
@@ -588,6 +589,12 @@ function migrateWorkItemSchedules(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_work_items_schedule_due
     ON work_items(schedule_status, scheduled_for)
     WHERE schedule_status = 'scheduled'`);
+}
+
+function migrateDeliveryInstructions(db) {
+  if (!hasColumn(db, 'work_items', 'delivery_instructions')) {
+    db.exec('ALTER TABLE work_items ADD COLUMN delivery_instructions TEXT');
+  }
 }
 
 function migrateActionCreationSource(db) {

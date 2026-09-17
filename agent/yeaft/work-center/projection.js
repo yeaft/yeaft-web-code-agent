@@ -1117,6 +1117,7 @@ export function projectWorkItemDetail(detail, options = {}) {
     scheduledOccurrenceAt: detail.scheduledOccurrenceAt ?? null,
     deliveryTarget: ['response', 'workspace_files', 'pull_request', 'merge'].includes(detail.deliveryTarget)
       ? detail.deliveryTarget : null,
+    deliveryInstructions: truncateUtf8(detail.deliveryInstructions || '', 2 * 1024),
     waitingReason: sanitizeDiagnosticText(waitingReason(detail), MAX_ACTION_DIAGNOSTIC_CHARS),
     failureReason: workItemFailureReason(detail),
 
