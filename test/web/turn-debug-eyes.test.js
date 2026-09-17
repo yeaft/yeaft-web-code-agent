@@ -64,6 +64,21 @@ beforeEach(() => {
 });
 
 describe('VpTurnBlock debug action', () => {
+  it('lets read-only Work Center turns hide debug and quote while preserving export and copy', async () => {
+    const wrapper = mount(VpTurnBlock, {
+      props: { turn: makeTurn(), sessionActions: false, debugActionEnabled: false },
+      global: { mocks: { $t: key => key }, provide: { t: key => key } },
+    });
+    expect(wrapper.find('.debug-turn-action-btn').exists()).toBe(false);
+    expect(wrapper.find('[aria-label="message.quote"]').exists()).toBe(false);
+    expect(wrapper.find('.export-md-btn').exists()).toBe(true);
+    expect(wrapper.find('.copy-full-btn').exists()).toBe(true);
+    await wrapper.setProps({ sessionActions: true });
+    expect(wrapper.find('[aria-label="message.quote"]').exists()).toBe(true);
+    expect(wrapper.find('.debug-turn-action-btn').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('renders the debug-specific action first in the existing hover footer', () => {
     const wrapper = mount(VpTurnBlock, {
       props: { turn: makeTurn() },

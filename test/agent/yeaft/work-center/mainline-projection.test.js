@@ -456,3 +456,43 @@ describe('Mainline projection', () => {
 
 
 });
+
+import { projectWorkItemDetail, projectWorkItemSummary } from '../../../../agent/yeaft/work-center/projection.js';
+
+function fixture(count = 2) {
+  const ids = Array.from({ length: count }, (_, index) => `run-${index}`);
+  return {
+    id: 'item', title: 'Item', status: 'done',
+    actions: [{ id: 'action', sequence: 1, type: 'review', status: 'completed', generation: 2 }],
+    runs: ids.map(id => ({ id, workItemId: 'item', actionId: 'action', actionGeneration: 1, status: 'completed', rawRequest: 'SECRET', contextSnapshot: 'SECRET' })),
+    goalProgress: { criteria: [{ criterion: 'Verified', status: 'passed', evidenceRunIds: ids }], delivery: { target: 'merge', status: 'passed', evidenceRunIds: ids } },
+    finalResult: { responses: [{ runId: ids[0], summary: 'Delivered' }] },
+  };
+}
+
+describe('Work Center evidence reference projection', () => {
+  it('projects only referenced Run identities and retains old-generation evidence navigation', () => {
+    const detail = fixture();
+    detail.runs.push({ id: 'unreferenced', actionId: 'action', rawRequest: 'SECRET' });
+    expect(projectWorkItemDetail(detail).runReferences).toEqual([
+      { id: 'run-0', actionId: 'action' }, { id: 'run-1', actionId: 'action' },
+    ]);
+    expect(JSON.stringify(projectWorkItemDetail(detail).runReferences)).not.toContain('SECRET');
+    expect(projectWorkItemSummary(detail)).not.toHaveProperty('runReferences');
+  });
+
+  it('does not link missing Actions or Runs belonging to other WorkItems', () => {
+    const detail = fixture(3);
+    detail.runs[0].actionId = 'missing';
+    detail.runs[1].workItemId = 'another-item';
+    expect(projectWorkItemDetail(detail).runReferences).toEqual([{ id: 'run-2', actionId: 'action' }]);
+  });
+
+  it('bounds identity metadata without serializing Run payloads', () => {
+    const detail = fixture(400);
+    const projected = projectWorkItemDetail(detail);
+    expect(projected.runReferences.length).toBeLessThanOrEqual(256);
+    expect(projected.runReferences.length).toBeGreaterThan(0);
+    expect(projected.runReferences.every(ref => Object.keys(ref).length === 2)).toBe(true);
+  });
+});

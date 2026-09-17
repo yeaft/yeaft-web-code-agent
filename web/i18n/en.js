@@ -1939,6 +1939,7 @@ export default {
   'workCenter.breadcrumbs': 'Work Center navigation',
   'workCenter.actionNumber': 'Action {number}',
   'workCenter.actionBreadcrumb': 'Action {number}: {description}',
+  'workCenter.sourceUnavailable': 'Source Action unavailable',
   'workCenter.untitledAction': 'Untitled Action',
   'workCenter.workItems': 'Work items',
   'workCenter.description': 'Description',

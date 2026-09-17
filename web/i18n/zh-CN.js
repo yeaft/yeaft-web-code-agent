@@ -1936,6 +1936,7 @@ export default {
   'workCenter.breadcrumbs': 'Work Center 导航',
   'workCenter.actionNumber': 'Action {number}',
   'workCenter.actionBreadcrumb': 'Action {number}：{description}',
+  'workCenter.sourceUnavailable': '来源 Action 不可用',
   'workCenter.untitledAction': '未命名 Action',
   'workCenter.workItems': '工作项',
   'workCenter.description': '需求描述',

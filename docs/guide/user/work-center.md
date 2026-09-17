@@ -54,11 +54,13 @@ Each Run uses the existing Yeaft engine and submits a structured outcome. The Co
 
 ### Goal progress, not activity counts
 
-With an Agent that provides `goalProgress`, the WorkItem detail shows **verified acceptance criteria / total criteria**, the remaining count, each criterion's verified/failed/not-yet-verified state, blockers, and a separate delivery state. Unverified and failed rows are the remaining work. Expand **Evidence Runs** to inspect the source Run identities. The browser displays the Agent's evidence projection; it does not infer completion from completed Actions, elapsed time, or model estimates.
+With an Agent that provides `goalProgress`, the WorkItem detail shows **verified acceptance criteria / total criteria**, the remaining count, each criterion's verified/failed/not-yet-verified state, blockers, and a separate delivery state. Unverified and failed rows are the remaining work. Once all criteria are verified, the rows collapse by default while the progress summary remains visible. Expand **Evidence Runs** to see the source Action number and objective; select it to open the Action in the right pane (a detail panel on narrow screens). Attempt records in the resource budget, blockers, and source Action references use the same navigation. If an older Agent or a missing record cannot establish a reliable association, the UI shows **Source Action unavailable** rather than guessing; the original identity remains in the hover hint. The browser displays the Agent's evidence projection; it does not infer completion from completed Actions, elapsed time, or model estimates.
 
 All criteria being verified is not by itself delivery. Current canonical Run evidence must support both the criteria and the selected delivery target. Stale or contradictory evidence can leave a criterion unverified or failed. Older Agents without this projection keep the plain acceptance list rather than showing an invented percentage.
 
-The goal, evidence progress, delivered result, and Coordinator conversation stay in one scroll stream. **Actions** opens execution details alongside the Item on wide screens and can be closed; its execution count is not a measure of goal progress.
+The goal, evidence progress, delivered result, and Coordinator conversation stay in one scroll stream. Outputs use compact title/reference rows that wrap on narrow screens. Resource details and the original requirement expand on demand; resource stop reasons retain priority. **Actions** opens execution details alongside the Item on wide screens and can be closed; its execution count is not a measure of goal progress.
+
+Work Center messages hide the unconnected per-message debug button. Completed or cancelled items also hide unavailable quote and edit-as-new controls, while copy and export remain available. Ordinary Session debug and quote controls are unchanged.
 
 ### Choose the completion boundary
 

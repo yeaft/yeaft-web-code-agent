@@ -34,6 +34,7 @@ export default {
   components: { MessageItem },
   props: {
     message: { type: Object, required: true },
+    sessionActions: { type: Boolean, default: true },
     externalAttachmentOpen: { type: Boolean, default: false },
   },
   emits: ['quote', 'edit-as-new', 'open-attachment'],
@@ -42,7 +43,7 @@ export default {
       <div class="user-turn-block-main">
         <MessageItem
           :message="message"
-          :session-actions="true"
+          :session-actions="sessionActions"
           :external-attachment-open="externalAttachmentOpen"
           @quote="$emit('quote', $event)"
           @edit-as-new="$emit('edit-as-new', $event)"

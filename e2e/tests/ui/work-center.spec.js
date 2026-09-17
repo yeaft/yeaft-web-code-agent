@@ -2234,6 +2234,9 @@ test.describe('Work Center responsive UI', () => {
       await expect(conversation.locator('.work-center-conversation-readonly')).toBeVisible();
       await expect(conversation.locator('.work-center-item-message-input')).toHaveCount(0);
       await expect(conversation.locator('textarea')).toHaveCount(0);
+      await expect(conversation.locator('.debug-turn-action-btn, [aria-label="Quote"], [aria-label="Edit as new message"]')).toHaveCount(0);
+      await expect(conversation.locator('.copy-full-btn')).not.toHaveCount(0);
+      await expect(conversation.locator('.export-md-btn')).not.toHaveCount(0);
 
       await ensureActionsOpen(chatPage);
       await chatPage.locator('.work-center-action-summary').click();
@@ -2244,6 +2247,9 @@ test.describe('Work Center responsive UI', () => {
       await expect(actionDetail.locator('.work-center-action-message .vp-turn-block-name')).toHaveText('Action 1');
       await expect(actionDetail.locator('.work-center-action-composer')).toHaveCount(0);
       await expect(actionDetail.locator('textarea')).toHaveCount(0);
+      await expect(actionDetail.locator('.debug-turn-action-btn, [aria-label="Quote"], [aria-label="Edit as new message"]')).toHaveCount(0);
+      await expect(actionDetail.locator('.copy-full-btn')).not.toHaveCount(0);
+      await expect(actionDetail.locator('.export-md-btn')).not.toHaveCount(0);
       await expect(actionDetail).not.toContainText('Choose this Action in the Work Item composer');
 
       await chatPage.getByRole('button', { name: 'Back to Actions' }).click();
@@ -2757,6 +2763,70 @@ test.describe('Work Center responsive UI', () => {
     expect((await createRequest).payload.deliveryTarget).toBe('response');
   });
 
+  test('compact item references open named Actions from attempts, evidence and dependencies', async ({ chatPage, mockAgent }, testInfo) => {
+    const source = { ...OPEN_ITEM_DETAIL.actions[0], status: 'completed', messages: [], brief: { objective: 'Review model tags and defaults' } };
+    const delivery = { ...source, id: 'action-delivery', sequence: 4, stageId: 'deliver', sourceActionIds: [source.id], brief: { objective: 'Merge approved model policy' } };
+    const detail = {
+      ...resourceStoppedDetail(), status: 'done', currentActionId: delivery.id, actions: [source, delivery],
+      outputs: Array.from({ length: 8 }, (_, index) => ({ kind: 'file', label: `Model policy output ${index + 1}`, ref: `agent/yeaft/work-center/model-policy-${index + 1}.js` })),
+      goalProgress: { completedCriteriaCount: 1, totalCriteriaCount: 1, criteria: [{ criterion: 'Verify model tags '.repeat(40), status: 'passed', evidenceRunIds: ['delivery-proof'] }],
+        blockers: [], delivery: { target: 'merge', status: 'passed', evidenceRunIds: ['delivery-proof'] } },
+      runReferences: [{ id: 'delivery-proof', actionId: delivery.id }],
+    };
+    detail.executionControl.stopReason = null;
+    detail.executionControl.actionAttempts = [
+      { actionId: source.id, attempts: 1, effectiveMaxAttempts: 3 },
+      { actionId: delivery.id, attempts: 1, effectiveMaxAttempts: 2 },
+      { actionId: 'missing-action', attempts: 1, effectiveMaxAttempts: 1 },
+    ];
+    await openWorkCenter(chatPage, mockAgent);
+    const select = chatPage.locator('.work-center-card-open').click();
+    await respondToWorkCenterOp(mockAgent, 'get', detail);
+    await select;
+    const overview = chatPage.locator('.work-center-work-item-overview');
+    await expect(overview.locator('.work-center-criteria-details')).not.toHaveAttribute('open', '');
+    await expect(overview.locator('.work-center-requirement-details')).not.toHaveAttribute('open', '');
+    await overview.locator('.work-center-resource-details > summary').click();
+    const attempts = overview.locator('.work-center-resource-attempts');
+    await expect(attempts).toContainText('Action 4 · Merge approved model policy');
+    await expect(attempts).not.toContainText('action-delivery');
+    await expect(attempts.locator('.work-center-reference-unavailable')).toHaveText('Source Action unavailable');
+    const reference = attempts.getByRole('button', { name: /Action 4/ });
+    await reference.focus();
+    await chatPage.keyboard.press('Enter');
+    const actionPane = chatPage.locator('.work-center-action-detail-pane');
+    await expect(actionPane.locator('h2')).toHaveText(delivery.brief.objective);
+    await expect(chatPage).toHaveURL(/workContent=action-list%2Faction%3Aaction-delivery/);
+    await expect(chatPage.getByRole('button', { name: 'Back to Actions' })).toBeFocused();
+    await actionPane.getByRole('button', { name: /Action 1 · Review model tags/ }).click();
+    await expect(actionPane.locator('h2')).toHaveText(source.brief.objective);
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
+    await overview.locator('.work-center-goal-delivery > details > summary').click();
+    await overview.locator('.work-center-goal-delivery').getByRole('button', { name: /Action 4/ }).click();
+    await expect(actionPane.locator('h2')).toHaveText(delivery.brief.objective);
+    await chatPage.getByRole('button', { name: 'Close Actions' }).click();
+    await overview.locator('.work-center-resource-details > summary').click();
+    for (const [theme, locale] of [['light', 'en'], ['dark', 'zh-CN']]) {
+      await chatPage.evaluate(({ theme, locale }) => {
+        document.documentElement.setAttribute('data-theme', theme);
+        window.Pinia.useChatStore().changeLocale(locale);
+      }, { theme, locale });
+      for (const width of [1440, 320]) {
+        await chatPage.setViewportSize({ width, height: 900 });
+        await expectNoHorizontalOverflow(overview, { outputs: '.work-center-output-list', overview: ':scope' });
+        await expect(overview.locator('.work-center-output-list > li')).toHaveCount(8);
+        const outputHeight = await overview.locator('.work-center-output-list').evaluate(el => el.getBoundingClientRect().height);
+        if (width === 1440) expect(outputHeight).toBeLessThan(330);
+        await overview.scrollIntoViewIfNeeded();
+        await chatPage.screenshot({ path: testInfo.outputPath(`item-${theme}-${width}.png`) });
+      }
+    }
+    // The reference also opens the narrow-screen content overlay and remains usable after closing it.
+    await overview.locator('.work-center-goal-delivery').getByRole('button').click();
+    await expect(actionPane.locator('h2')).toHaveText(delivery.brief.objective);
+    await expect(actionPane).toBeVisible();
+  });
+
   test('shows evidence-based goal progress, blockers and delivery instead of Action completion', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     const select = chatPage.locator('.work-center-card').click();
@@ -2783,7 +2853,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(progress).toContainText('2 remaining');
     await expect(progress.locator('[data-status="failed"]')).toContainText('Verify the fix');
     await expect(progress.locator('[data-status="unmet"]').first()).toContainText('Document the result');
-    await expect(progress.locator('[data-status="passed"]')).toContainText('run-proof');
+    await expect(progress.locator('[data-status="passed"]')).toContainText('Source Action unavailable');
     await expect(progress).toContainText('Need the reproduction logs');
     await expect(progress).toContainText('Response');
     await expect(progress).toContainText('Not yet verified');
@@ -2836,7 +2906,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(chatPage.locator('.work-center-header h1')).toHaveText(OPEN_ITEM_DETAIL.title);
     await expect(result).toContainText('The answer is supported by logs.');
     await expect(result).toContainText('Reproduction confirmed');
-    await expect(result).toContainText(runId);
+    await expect(result).toContainText('Source Action unavailable');
     await expect(progress).toContainText('All criteria verified');
     await expect(requirement).not.toHaveAttribute('open', '');
     await expect(taskInformation).not.toHaveAttribute('open', '');
@@ -2861,6 +2931,7 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.keyboard.press('Enter');
     await expectVisibleFocus(result.locator('summary'));
     await expect(result.locator('details')).toHaveAttribute('open', '');
+    await chatPage.locator('.work-center-criteria-details > summary').click();
     await chatPage.locator('.work-center-goal-criteria summary').click();
     await chatPage.locator('.work-center-goal-delivery summary').click();
     for (const [theme, locale] of [['light', 'en'], ['light', 'zh-CN'], ['dark', 'en'], ['dark', 'zh-CN']]) {

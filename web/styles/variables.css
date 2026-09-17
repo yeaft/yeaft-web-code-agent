@@ -58,6 +58,11 @@ select option:checked {
 
 /* Light Theme (default) - warm, eye-friendly tones */
 :root {
+  --work-center-space-1: 4px;
+  --work-center-space-2: 8px;
+  --work-center-space-3: 12px;
+  --work-center-space-4: 16px;
+
   /* Agent 接入页：与现有 Composer / 设置控件保持同一间距和圆角节奏。 */
   --agent-setup-space-xs: 4px;
   --agent-setup-space-sm: 8px;
@@ -322,6 +327,11 @@ select option:checked {
 
 /* Dark Theme - warm, eye-friendly tones */
 [data-theme="dark"] {
+  --work-center-space-1: 4px;
+  --work-center-space-2: 8px;
+  --work-center-space-3: 12px;
+  --work-center-space-4: 16px;
+
   /* Agent 接入页：与现有 Composer / 设置控件保持同一间距和圆角节奏。 */
   --agent-setup-space-xs: 4px;
   --agent-setup-space-sm: 8px;

@@ -1097,6 +1097,22 @@ export function projectWorkItemDetail(detail, options = {}) {
         }))
       : [],
   };
+  // Only identities needed by visible evidence links, never Run bodies or traces.
+  // Historical evidence may belong to an older generation of the same Action.
+  const evidenceRunIds = new Set([
+    ...(projected.goalProgress?.evidenceRunIds || []),
+    ...(projected.goalProgress?.criteria || []).flatMap(check => check.evidenceRunIds || []),
+    ...(projected.goalProgress?.delivery?.evidenceRunIds || []),
+    ...(projected.finalResult?.responses || []).map(response => response.runId),
+    ...projected.outputs.map(output => output.runId),
+  ].filter(Boolean));
+  const actionIds = new Set(projected.actions.map(action => action.id));
+  projected.runReferences = [...evidenceRunIds].slice(0, 256).flatMap(id => {
+    const run = runById.get(id);
+    if (!run || !actionIds.has(run.actionId)
+        || (run.workItemId && run.workItemId !== detail.id)) return [];
+    return [{ id: truncateUtf8(id, 256), actionId: truncateUtf8(run.actionId, 256) }];
+  });
   return enforceWorkItemBrowserDtoBudget(projected, { keepActionId: liveActionId });
 }
 

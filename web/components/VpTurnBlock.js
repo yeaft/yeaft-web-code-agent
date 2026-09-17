@@ -43,6 +43,8 @@ export default {
     responseCollapsed: { type: Boolean, default: false },
     responseToggleLabel: { type: String, default: '' },
     displayNameOverride: { type: String, default: '' },
+    sessionActions: { type: Boolean, default: true },
+    debugActionEnabled: { type: Boolean, default: true },
     canStop: { type: Boolean, default: true },
     interactiveSpeaker: { type: Boolean, default: true },
     originMessageId: { type: String, default: '' },
@@ -114,10 +116,10 @@ export default {
           :response-collapsible="responseCollapsible"
           :response-collapsed="responseCollapsed"
           :response-toggle-label="responseToggleLabel"
-          :session-actions="true"
+          :session-actions="sessionActions"
           :quote-author="displayName"
           :origin-message-id="originMessageId"
-          :show-debug-action="hasDebugEntry"
+          :show-debug-action="debugActionEnabled && hasDebugEntry"
           :debug-action-title="debugActionTitle"
           @quote="$emit('quote', $event)"
           @open-debug="$emit('open-debug')"
