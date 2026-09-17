@@ -819,22 +819,35 @@ test.describe('Work Center responsive UI', () => {
     await expect(chatPage.locator('.work-center-content-title')).toContainText('3');
     const timing = status => chatPage.locator(`.work-center-action-card[data-status="${status}"] .work-center-action-timing`);
     const created = await chatPage.evaluate(value => new Date(value).toLocaleString(), detail.actions[0].createdAt);
-    await expect(timing('completed')).toContainText(`Created ${created}`);
-    await expect(timing('completed')).toContainText('Runtime 1m5s');
-    await expect(timing('ready')).toContainText('Runtime —');
-    await expect(timing('running')).toContainText('Runtime 1m5s');
+    await expect(timing('completed').locator('span')).toHaveText([created, '1m5s']);
+    await expect(timing('ready').locator('span').last()).toHaveText('—');
+    await expect(timing('running').locator('span').last()).toHaveText('1m5s');
     await chatPage.clock.setFixedTime(now + 5000);
-    await expect(timing('running')).toContainText('Runtime 1m10s');
-    await expect(timing('completed')).toContainText('Runtime 1m5s');
-    for (const theme of ['light', 'dark']) {
-      await chatPage.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
-      for (const width of [1600, 320]) {
-        await chatPage.setViewportSize({ width, height: 900 });
-        await ensureActionsOpen(chatPage);
-        await expect(timing('running')).toBeVisible();
-        expect(await timing('running').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-        await expect.poll(() => chatPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-        await chatPage.screenshot({ path: testInfo.outputPath(`action-timing-${theme}-${width}.png`) });
+    await expect(timing('running').locator('span').last()).toHaveText('1m10s');
+    await expect(timing('completed').locator('span').last()).toHaveText('1m5s');
+    for (const locale of ['en', 'zh-CN']) {
+      await chatPage.evaluate(value => window.Pinia.useChatStore().changeLocale(value), locale);
+      for (const theme of ['light', 'dark']) {
+        await chatPage.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+        for (const width of [1600, 320]) {
+          await chatPage.setViewportSize({ width, height: 900 });
+          await ensureActionsOpen(chatPage);
+          for (const status of ['completed', 'ready', 'running']) {
+            const row = timing(status);
+            await expect(row).toBeVisible();
+            await expect(row).not.toContainText(/Created|Runtime|创建|用时/);
+            const bounds = await row.boundingBox();
+            const left = await row.locator('span').first().boundingBox();
+            const right = await row.locator('span').last().boundingBox();
+            expect(Math.abs(left.x - bounds.x)).toBeLessThanOrEqual(1);
+            expect(Math.abs(right.x + right.width - bounds.x - bounds.width)).toBeLessThanOrEqual(1);
+            expect(Math.abs(left.y - right.y)).toBeLessThanOrEqual(1);
+            expect(left.x + left.width).toBeLessThanOrEqual(right.x);
+            expect(await row.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+          }
+          await expect.poll(() => chatPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await chatPage.screenshot({ path: testInfo.outputPath(`action-timing-${locale}-${theme}-${width}.png`) });
+        }
       }
     }
     mockAgent.send({ type: 'work_center_event', event: {
@@ -844,10 +857,10 @@ test.describe('Work Center responsive UI', () => {
           executionDurationMs: 70_000, executionStartedAt: null }],
       },
     } });
-    const last = chatPage.locator('.work-center-action-card').filter({ hasText: 'Runtime 1m10s' });
+    const last = chatPage.locator('.work-center-action-card').filter({ hasText: '1m10s' });
     await expect(last).toHaveAttribute('data-status', 'completed');
     await chatPage.clock.setFixedTime(now + 65_000);
-    await expect(last).toContainText('Runtime 1m10s');
+    await expect(last.locator('.work-center-action-timing span').last()).toHaveText('1m10s');
   });
 
   test('forwards canonical Work Item messages through the real browser-server-Agent wire', async ({ chatPage, mockAgent }) => {

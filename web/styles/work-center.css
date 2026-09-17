@@ -1584,6 +1584,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+.work-center-action-timing > :last-child {
+  margin-left: auto;
+  text-align: right;
+}
+
 .work-center-action-description {
   color: var(--text-secondary);
   font-size: 11px;
