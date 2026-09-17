@@ -44,7 +44,7 @@ For a new WorkItem, provide:
 5. the delivery target (or ask before delivery);
 6. whether execution should start immediately.
 
-The title is a short display label, separate from the original requirement or goal. An explicitly supplied title is preserved. When it is omitted, the existing initial Coordinator decision generates one without another model call; retries keep the original goal unchanged, and older WorkItems keep their stored titles.
+The title is a short display label, separate from the original requirement or goal. An explicitly supplied title is preserved. When it is omitted, the existing initial Coordinator decision generates one without another model call; retries keep the original goal unchanged, and older WorkItems keep their stored titles. New items retain the creation-time requirement independently of later user-approved goal refinements. Older items use the goal retained at upgrade as their requirement; earlier versions did not save a separate original. Until coordination runs, a compact fallback label is displayed. An omitted generated title uses a deterministic fallback instead of failing the task.
 
 When created from a Session, the runtime stamps the source Session; model input cannot replace that identity.
 

@@ -1810,7 +1810,7 @@ export default {
   'workCenter.infoTab.outputs': 'Outputs',
   'workCenter.infoTab.goals': 'Goals',
   'workCenter.infoTab.usage': 'Usage',
-  'workCenter.infoProgressEmpty': 'No Action is currently selected for execution.',
+  'workCenter.infoProgressEmpty': 'No Actions yet.',
   'workCenter.infoOutputsEmpty': 'No outputs yet.',
   'workCenter.infoConversationEmpty': 'No messages yet.',
   'workCenter.workbenchUnavailable': 'Open a Work Item with a workspace on an updated Agent and Server to use Workbench.',

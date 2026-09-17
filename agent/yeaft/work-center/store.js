@@ -114,6 +114,7 @@ function mapWorkItem(row) {
     deliveryTarget: row.delivery_target || null,
     title: row.title,
     titleSource: row.title_source || 'explicit',
+    requirement: row.requirement ?? row.goal,
     goal: row.goal,
     acceptanceCriteria: parseJson(row.acceptance_criteria, []),
     workflowTemplate: row.workflow_template,
@@ -859,6 +860,7 @@ export class WorkItemStore {
         delivery_target TEXT,
         title TEXT NOT NULL,
         title_source TEXT NOT NULL DEFAULT 'explicit',
+        requirement TEXT,
         goal TEXT NOT NULL,
         acceptance_criteria TEXT NOT NULL,
         workflow_template TEXT NOT NULL,
@@ -1144,6 +1146,11 @@ export class WorkItemStore {
     if (!hasColumn(this.db, 'work_items', 'title_source')) {
       // Old titles were explicit under the previous creation contract.
       this.db.exec("ALTER TABLE work_items ADD COLUMN title_source TEXT NOT NULL DEFAULT 'explicit'");
+    }
+    if (!hasColumn(this.db, 'work_items', 'requirement')) {
+      // Old items cannot reconstruct an earlier goal; retain their current contract.
+      this.db.exec('ALTER TABLE work_items ADD COLUMN requirement TEXT');
+      this.db.exec('UPDATE work_items SET requirement = goal');
     }
     if (!hasColumn(this.db, 'actions', 'source_action_ids')) {
       this.db.exec("ALTER TABLE actions ADD COLUMN source_action_ids TEXT NOT NULL DEFAULT '[]'");
@@ -2393,16 +2400,17 @@ export class WorkItemStore {
       const workspaceKey = canonicalWorkspaceKey(input.workDir);
       this.db.prepare(`INSERT INTO work_items
         (id, revision, execution_schema_version, ledger_revision, coordination_mode, final_result, delivery_target,
-         title, title_source, goal, acceptance_criteria, workflow_template, workflow_snapshot, status,
+         title, title_source, requirement, goal, acceptance_criteria, workflow_template, workflow_snapshot, status,
          current_action_id, current_run_id, work_dir, workspace_key, reuse_memory, origin, linked_session_ids,
          session_context, attachments, created_at, updated_at)
-        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        VALUES (?, 1, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id,
         Number.isInteger(input.executionSchemaVersion) ? input.executionSchemaVersion : 2,
         input.coordinationMode || 'legacy',
         input.deliveryTarget || null,
         input.title,
         input.titleSource === 'coordinator_pending' ? 'coordinator_pending' : 'explicit',
+        input.goal,
         input.goal,
         stringify(input.acceptanceCriteria || []),
         input.workflowTemplate || 'software-change',

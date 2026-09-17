@@ -305,7 +305,7 @@ describe('Work Center dynamic coordination contract', () => {
         coordinatorRevision: current.coordinatorRevision,
       },
     ), 'coordinator-owner');
-    const contractPatch = { title: originalGoal };
+    const contractPatch = { title: originalGoal, goal: 'A user-refined goal' };
     const refined = store.completeCoordinatorTurn(refinement.turnId, {
       reply: 'The explicit title is saved.',
       decision: {
@@ -315,8 +315,10 @@ describe('Work Center dynamic coordination contract', () => {
       mutation: { contractPatch },
     }, refinement.fence);
     expect(refined).toMatchObject({
-      title: originalGoal, titleSource: 'explicit', goal: originalGoal,
+      title: originalGoal, titleSource: 'explicit', goal: 'A user-refined goal',
+      requirement: originalGoal,
     });
+    expect(projectWorkItemDetail(refined)).toMatchObject({ requirement: originalGoal, goal: 'A user-refined goal' });
   });
 
   it('persists dynamic Actions and automatically reconciles only after the runnable batch settles', () => {
@@ -514,6 +516,7 @@ describe('Work Center dynamic coordination contract', () => {
     try {
       const originalGoal = 'Preserve the existing Work Center UX without replacing this requirement';
       const created = await service.handle('create', {
+        title: 'Legacy display fallback', titleSource: 'coordinator_pending',
         goal: originalGoal,
         acceptanceCriteria: ['The detail DTO stays compatible'],
         workDir: tempDir,

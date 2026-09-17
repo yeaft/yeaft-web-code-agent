@@ -1398,7 +1398,9 @@ export default {
         const draftOwnedByAgent = draft?.sourceAgentId === requestAgentId;
         const detail = await this.store.createWorkItem({
           requirement,
-          title: requirement,
+          // Keep a display fallback for older Agents that still require title.
+          title: requirement.replace(/\s+/g, ' ').slice(0, 80),
+          titleSource: 'coordinator_pending',
           goal: requirement,
           acceptanceCriteria: [],
           workItemType: 'auto',

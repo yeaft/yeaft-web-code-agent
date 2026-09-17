@@ -1807,7 +1807,7 @@ export default {
   'workCenter.infoTab.outputs': '产出',
   'workCenter.infoTab.goals': '目标',
   'workCenter.infoTab.usage': '用量',
-  'workCenter.infoProgressEmpty': '暂无当前执行的 Action。',
+  'workCenter.infoProgressEmpty': '暂无 Action。',
   'workCenter.infoOutputsEmpty': '暂无产出。',
   'workCenter.infoConversationEmpty': '暂无对话消息。',
   'workCenter.workbenchUnavailable': '请在新版 Agent 和 Server 上打开有工作目录的工作项以使用工作台。',

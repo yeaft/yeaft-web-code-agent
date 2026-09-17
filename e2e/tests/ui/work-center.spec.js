@@ -676,7 +676,7 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.getByRole('button', { name: 'Close Actions', exact: true }).click();
     const aligned = await chatPage.evaluate(() => {
       const breadcrumb = document.querySelector('.work-center-detail-breadcrumb').getBoundingClientRect();
-      const overview = document.querySelector('.work-center-work-item-overview').getBoundingClientRect();
+      const overview = document.querySelector('.work-center-info-tabs').getBoundingClientRect();
       return { breadcrumb: breadcrumb.x, overview: overview.x };
     });
     expect(aligned.breadcrumb).toBeCloseTo(aligned.overview, 0);
@@ -1065,7 +1065,7 @@ test.describe('Work Center responsive UI', () => {
     expect(dividerStyle.lineWidth).toBe(1);
     expect(dividerStyle.lineColor).toBe('rgba(0, 0, 0, 0)');
     const breadcrumb = await chatPage.locator('.work-center-detail-breadcrumb').boundingBox();
-    const overview = await chatPage.locator('.work-center-work-item-overview').boundingBox();
+    const overview = await chatPage.locator('.work-center-info-tabs').boundingBox();
     expect(breadcrumb.x).toBeCloseTo(overview.x, 0);
     await tabTo(chatPage, '.pane-resize-handle');
     expect(await divider.evaluate(element => getComputedStyle(element, '::after').backgroundColor))
@@ -1454,7 +1454,7 @@ test.describe('Work Center responsive UI', () => {
     expect(workItemComposerMetrics.overflowY).toBe('hidden');
     const workItemInputWidth = await conversation.locator('.work-center-item-message-input')
       .evaluate(element => element.getBoundingClientRect().width);
-    const overviewWidth = await conversation.locator('.work-center-work-item-overview')
+    const overviewWidth = await chatPage.locator('.work-center-info-tabs')
       .evaluate(element => element.getBoundingClientRect().width);
     expect(workItemInputWidth).toBe(overviewWidth);
     expect(workItemInputWidth).toBeGreaterThan(700);
@@ -2546,6 +2546,8 @@ test.describe('Work Center responsive UI', () => {
     await respondToWorkCenterOp(mockAgent, 'list', { items: [OPEN_ITEM], watcher: { enabled: true } });
     expect(request.payload.workDir).toBe('/tmp/test');
     expect(request.payload.workItemType).toBe('auto');
+    expect(request.payload.titleSource).toBe('coordinator_pending');
+    expect(request.payload.goal).toBe('Fix dynamic planning with the smallest safe flow');
   });
 
   test('uses the Work Center design system for directory selection', async ({ chatPage, mockAgent }) => {
@@ -3107,11 +3109,15 @@ test.describe('Work Center responsive UI', () => {
     await chatPage.locator('#work-item-info-tab-goals').click();
     await chatPage.evaluate(agentId => {
       const store = window.Pinia.useChatStore();
-      store.workCenterDetailByAgent[agentId] = { ...store.workCenterDetailByAgent[agentId], updatedAt: Date.now() };
+      store.workCenterDetailByAgent[agentId] = {
+        ...store.workCenterDetailByAgent[agentId], title: 'Concise generated title', updatedAt: Date.now(),
+      };
     }, mockAgent.agentId);
     await expect(chatPage.locator('#work-item-info-tab-goals')).toHaveAttribute('aria-selected', 'true');
     await expect(composer.locator('textarea')).toHaveValue('Keep this conversation draft');
-
+    await expect(chatPage.locator('.work-center-header h1')).toHaveText('Concise generated title');
+    await chatPage.locator('#work-item-info-tab-requirement').click();
+    await expect(panel).toContainText(longDetail.requirement);
   });
 
   test('keeps long Work Item messages fully visible without horizontal clipping', async ({ chatPage, mockAgent }) => {

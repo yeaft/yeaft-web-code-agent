@@ -398,7 +398,7 @@ describe('Work Center store migration', () => {
     expect(store.db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get())
       .toEqual({ value: '40' });
     expect(store.db.prepare('PRAGMA table_info(work_items)').all().map(row => row.name))
-      .toEqual(expect.arrayContaining(['coordination_mode', 'final_result', 'delivery_target', 'title_source']));
+      .toEqual(expect.arrayContaining(['coordination_mode', 'final_result', 'delivery_target', 'title_source', 'requirement']));
     expect(store.db.prepare('PRAGMA table_info(actions)').all().map(row => row.name))
       .toEqual(expect.arrayContaining(['source_action_ids', 'creation_source', 'close_reason', 'closed_at']));
     expect(store.db.prepare('PRAGMA table_info(runs)').all().map(row => row.name))
@@ -420,6 +420,8 @@ describe('Work Center store migration', () => {
       });
     store.db.prepare("UPDATE schema_meta SET value = '38' WHERE key = 'schema_version'").run();
     store.db.exec('ALTER TABLE actions DROP COLUMN creation_source');
+    store.db.exec('ALTER TABLE work_items DROP COLUMN requirement');
+    store.db.exec('ALTER TABLE work_items DROP COLUMN title_source');
     expect(store.db.prepare('PRAGMA table_info(actions)').all().map(row => row.name))
       .not.toContain('creation_source');
 
@@ -432,6 +434,9 @@ describe('Work Center store migration', () => {
       .toContain('creation_source');
     expect(store.db.prepare('SELECT creation_source FROM actions WHERE work_item_id = ?').all(legacy.id))
       .toEqual([]);
+    expect(store.getWorkItem(legacy.id)).toMatchObject({
+      title: 'Legacy item', titleSource: 'explicit', requirement: 'Keep the existing execution path',
+    });
     expect(store.createNextAction(legacy.id, {
       type: 'custom', stageId: 'legacy-action', instruction: 'Legacy action',
     }).creationSource).toBe('legacy');

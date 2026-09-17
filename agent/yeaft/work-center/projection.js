@@ -825,6 +825,7 @@ function enforceWorkItemBrowserDtoBudget(value, options = {}) {
   }
   workItem.title = truncateUtf8(workItem.title, 4 * 1024);
   workItem.goal = truncateUtf8(workItem.goal, 4 * 1024);
+  if (workItem.requirement !== undefined) workItem.requirement = truncateUtf8(workItem.requirement, 4 * 1024);
   workItem.waitingReason = truncateUtf8(workItem.waitingReason, 4 * 1024);
   workItem.actionSummary = truncateUtf8(workItem.actionSummary, 4 * 1024);
   if (Array.isArray(workItem.acceptanceCriteria)) workItem.acceptanceCriteria = [];
@@ -837,6 +838,7 @@ function enforceWorkItemBrowserDtoBudget(value, options = {}) {
     revision: count(workItem.revision),
     title: truncateUtf8(workItem.title, 4 * 1024),
     goal: truncateUtf8(workItem.goal, 4 * 1024),
+    ...(workItem.requirement !== undefined ? { requirement: truncateUtf8(workItem.requirement, 4 * 1024) } : {}),
     status: truncateUtf8(workItem.status, 256),
     currentActionId: truncateUtf8(workItem.currentActionId, 4 * 1024) || null,
     executionStats: workItem.executionStats,
@@ -1074,6 +1076,7 @@ export function projectWorkItemDetail(detail, options = {}) {
           .map(risk => truncateUtf8(risk, MAX_ACTION_MESSAGE_CHARS)).slice(0, 24) : [],
     } : null,
     title: detail.title,
+    requirement: detail.requirement ?? detail.goal,
     goal: detail.goal,
     acceptanceCriteria: Array.isArray(detail.acceptanceCriteria) ? detail.acceptanceCriteria : [],
     goalProgress: projectGoalProgress(detail.goalProgress),

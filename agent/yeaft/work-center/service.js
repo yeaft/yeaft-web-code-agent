@@ -248,14 +248,15 @@ export class WorkCenterService {
           });
           const shouldStart = payload.start === undefined ? settings.startImmediately : payload.start !== false;
           const goal = requiredString(payload.goal, 'goal');
-          const explicitTitle = typeof payload.title === 'string' ? payload.title.trim() : '';
+          const explicitTitle = payload.titleSource !== 'coordinator_pending' && typeof payload.title === 'string'
+            ? payload.title.trim() : '';
           const requestedCriteria = Array.isArray(payload.acceptanceCriteria)
             ? payload.acceptanceCriteria.map(value => String(value).trim()).filter(Boolean) : [];
           this.controller.create({
             id: workItemId,
             // Goal remains the original requirement. Until coordination succeeds,
             // title is only a backwards-compatible display fallback.
-            title: explicitTitle || goal,
+            title: explicitTitle || goal.replace(/\s+/g, ' ').slice(0, 80),
             titleSource: explicitTitle ? 'explicit' : 'coordinator_pending',
             goal,
             // With no separate criteria, the user's goal itself is the minimum
