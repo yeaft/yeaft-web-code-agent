@@ -1018,9 +1018,133 @@
 }
 
 .work-center-work-item-overview {
-  padding: var(--work-center-space-2) 0 var(--work-center-space-4);
+  display: flex;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 46%;
+  padding: var(--work-center-space-2) 0;
+  border-bottom: 1px solid var(--border-light);
 }
 
+.work-center-info-column {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: var(--work-center-conversation-column-width);
+  margin: 0 auto;
+  padding: 0 var(--work-center-conversation-gutter);
+  box-sizing: border-box;
+}
+
+.work-center-info-tabs {
+  padding: 0;
+  overflow-x: auto;
+}
+
+.work-center-info-tabs .session-tab {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: var(--work-center-space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  white-space: nowrap;
+}
+
+.work-center-info-tabs .session-tab.active {
+  border-bottom-color: var(--accent-blue);
+}
+
+.work-center-info-tabs .session-tab:focus-visible,
+.work-center-info-panel:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+}
+
+.work-center-info-panel {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  padding: var(--work-center-space-3) 0;
+  font-size: 13px;
+}
+
+.work-center-info-panel > .work-center-section:first-child,
+.work-center-info-panel > .work-center-resources:first-child {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.work-center-info-actions {
+  display: grid;
+  gap: var(--work-center-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.work-center-info-actions > li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--work-center-space-2);
+  min-width: 0;
+}
+
+.work-center-info-actions .work-center-status {
+  flex: 0 0 auto;
+}
+
+.work-center-info-progress-count {
+  margin-top: var(--work-center-space-3);
+}
+
+.work-center-info-panel .work-center-detail-meta {
+  margin-top: var(--work-center-space-3);
+}
+
+.work-center-info-panel .work-center-description p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.work-center-info-panel .work-center-description h3 {
+  margin: 0 0 var(--work-center-space-2);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.work-center-info-resource-alert {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  color: var(--warn-text);
+}
+
+.work-center-info-column > .work-center-failure,
+.work-center-info-column > .work-center-resume {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 72px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  margin: 0 0 var(--work-center-space-2);
+}
+
+.work-center-section .work-center-conversation-heading {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: var(--work-center-conversation-column-width);
+  margin: 0 auto;
+  padding: var(--work-center-space-2) var(--work-center-conversation-gutter) 0;
+  box-sizing: border-box;
+}
+
+.work-center-conversation-empty {
+  font-size: 13px;
+}
 
 
 .work-center-work-item-kicker {
@@ -1155,7 +1279,7 @@
   font-size: 14px;
 }
 
-/* Resource controls stay in the goal stream; detail and editing are progressive. */
+/* Resource controls live in Usage; edits keep their state while switching tabs. */
 .work-center-resources {
   min-width: 0;
   margin-top: 16px;
@@ -1885,7 +2009,7 @@
   width: 100%;
   min-width: 0;
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-direction: column;
   margin-top: 0;
   overflow: hidden;

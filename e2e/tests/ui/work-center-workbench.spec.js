@@ -66,6 +66,7 @@ for (const { width, theme } of [
     if (width === 320) await page.locator('.work-center-board-lane-tabs [role="tab"]').last().click();
     await expect(card).toBeVisible();
     await card.click();
+    await page.locator('#work-item-info-tab-outputs').click();
     const toggle = page.locator('.work-center-workbench-toggle:visible');
     await expect(toggle).toBeEnabled();
     await page.evaluate(() => { window.Pinia.useChatStore().workCenterWorkbenchProtocolSupported = false; });

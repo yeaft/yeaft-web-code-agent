@@ -2840,8 +2840,8 @@ test.describe('Work Center responsive UI', () => {
     await respondToWorkCenterOp(mockAgent, 'get', detail);
     await select;
     const overview = chatPage.locator('.work-center-work-item-overview');
-    await expect(overview.locator('.work-center-criteria-details')).not.toHaveAttribute('open', '');
-    await expect(overview.locator('.work-center-requirement-details')).not.toHaveAttribute('open', '');
+    await expect(chatPage.locator('#work-item-info-tab-requirement')).toHaveAttribute('aria-selected', 'true');
+    await chatPage.locator('#work-item-info-tab-usage').click();
     await overview.locator('.work-center-resource-details > summary').click();
     const attempts = overview.locator('.work-center-resource-attempts');
     await expect(attempts).toContainText('Action 4 · Merge approved model policy');
@@ -2857,11 +2857,12 @@ test.describe('Work Center responsive UI', () => {
     await actionPane.getByRole('button', { name: /Action 1 · Review model tags/ }).click();
     await expect(actionPane.locator('h2')).toHaveText(source.brief.objective);
     await chatPage.getByRole('button', { name: 'Close Actions' }).click();
+    await chatPage.locator('#work-item-info-tab-goals').click();
     await overview.locator('.work-center-goal-delivery > details > summary').click();
     await overview.locator('.work-center-goal-delivery').getByRole('button', { name: /Action 4/ }).click();
     await expect(actionPane.locator('h2')).toHaveText(delivery.brief.objective);
     await chatPage.getByRole('button', { name: 'Close Actions' }).click();
-    await overview.locator('.work-center-resource-details > summary').click();
+    await chatPage.locator('#work-item-info-tab-outputs').click();
     for (const [theme, locale] of [['light', 'en'], ['dark', 'zh-CN']]) {
       await chatPage.evaluate(({ theme, locale }) => {
         document.documentElement.setAttribute('data-theme', theme);
@@ -2878,6 +2879,7 @@ test.describe('Work Center responsive UI', () => {
       }
     }
     // The reference also opens the narrow-screen content overlay and remains usable after closing it.
+    await chatPage.locator('#work-item-info-tab-goals').click();
     await overview.locator('.work-center-goal-delivery').getByRole('button').click();
     await expect(actionPane.locator('h2')).toHaveText(delivery.brief.objective);
     await expect(actionPane).toBeVisible();
@@ -2904,13 +2906,16 @@ test.describe('Work Center responsive UI', () => {
       },
     });
     await select;
+    await chatPage.locator('#work-item-info-tab-goals').click();
     const progress = chatPage.locator('.work-center-goal-progress');
     await expect(progress).toContainText('1 / 3 criteria verified');
     await expect(progress).toContainText('2 remaining');
     await expect(progress.locator('[data-status="failed"]')).toContainText('Verify the fix');
     await expect(progress.locator('[data-status="unmet"]').first()).toContainText('Document the result');
     await expect(progress.locator('[data-status="passed"]')).toContainText('Source Action unavailable');
-    await expect(progress).toContainText('Need the reproduction logs');
+    await chatPage.locator('#work-item-info-tab-progress').click();
+    await expect(chatPage.locator('.work-center-goal-blockers')).toContainText('Need the reproduction logs');
+    await chatPage.locator('#work-item-info-tab-goals').click();
     await expect(progress).toContainText('Response');
     await expect(progress).toContainText('Not yet verified');
     await expect(chatPage.locator('.work-center-content-panel')).not.toBeVisible();
@@ -2957,37 +2962,20 @@ test.describe('Work Center responsive UI', () => {
     const overview = chatPage.locator('.work-center-work-item-overview');
     const result = overview.locator('.work-center-responses');
     const progress = overview.locator('.work-center-goal-progress');
-    const requirement = overview.locator('.work-center-requirement-details');
-    const taskInformation = overview.locator('.work-center-task-information');
     await expect(chatPage.locator('.work-center-header h1')).toHaveText(OPEN_ITEM_DETAIL.title);
+    await expect(chatPage.locator('#work-item-info-tab-requirement')).toHaveAttribute('aria-selected', 'true');
+    await expect(result).not.toBeVisible();
+    await chatPage.locator('#work-item-info-tab-outputs').click();
     await expect(result).toContainText('The answer is supported by logs.');
     await expect(result).toContainText('Reproduction confirmed');
     await expect(result).toContainText('Source Action unavailable');
-    await expect(progress).toContainText('All criteria verified');
-    await expect(requirement).not.toHaveAttribute('open', '');
-    await expect(taskInformation).not.toHaveAttribute('open', '');
-    const hierarchy = await overview.evaluate(element => {
-      const top = selector => element.querySelector(selector)?.getBoundingClientRect().top;
-      return {
-        title: document.querySelector('.work-center-header h1').getBoundingClientRect().top,
-        result: top('.work-center-primary-result'),
-        progress: top('.work-center-goal-progress'),
-        requirement: top('.work-center-requirement-details'),
-        taskInformation: top('.work-center-task-information'),
-        width: element.getBoundingClientRect().width,
-      };
-    });
-    expect(hierarchy.title).toBeLessThan(hierarchy.result);
-    expect(hierarchy.result).toBeLessThan(hierarchy.progress);
-    expect(hierarchy.progress).toBeLessThan(hierarchy.requirement);
-    expect(hierarchy.requirement).toBeLessThan(hierarchy.taskInformation);
-    expect(hierarchy.width).toBeLessThanOrEqual(920);
     expect(await chatPage.evaluate(() => window.untrustedResponse)).toBeUndefined();
     await result.locator('summary').focus();
     await chatPage.keyboard.press('Enter');
     await expectVisibleFocus(result.locator('summary'));
     await expect(result.locator('details')).toHaveAttribute('open', '');
-    await chatPage.locator('.work-center-criteria-details > summary').click();
+    await chatPage.locator('#work-item-info-tab-goals').click();
+    await expect(progress).toContainText('All criteria verified');
     await chatPage.locator('.work-center-goal-criteria summary').click();
     await chatPage.locator('.work-center-goal-delivery summary').click();
     for (const [theme, locale] of [['light', 'en'], ['light', 'zh-CN'], ['dark', 'en'], ['dark', 'zh-CN']]) {
@@ -2996,17 +2984,20 @@ test.describe('Work Center responsive UI', () => {
         window.Pinia.useChatStore().changeLocale(locale);
       }, { theme, locale });
       await expect(result.locator('h3')).toHaveText(locale === 'zh-CN' ? '交付回复' : 'Delivered response');
-      await expect(requirement.locator(':scope > summary')).toHaveText(locale === 'zh-CN' ? '需求与验收' : 'Requirement and acceptance');
-      await expect(taskInformation.locator(':scope > summary')).toHaveText(locale === 'zh-CN' ? '任务信息与用量' : 'Task information and usage');
+      await expect(chatPage.locator('#work-item-info-tab-requirement')).toHaveText(locale === 'zh-CN' ? '需求' : 'Requirement');
+      await expect(chatPage.locator('#work-item-info-tab-usage')).toHaveText(locale === 'zh-CN' ? '用量' : 'Usage');
       await expect(chatPage.locator('.work-center-goal-count')).toContainText(locale === 'zh-CN' ? '1 / 1 项验收条件已验证' : '1 / 1 criteria verified');
       await expect(chatPage.locator('.work-center-goal-delivery')).toContainText(locale === 'zh-CN' ? '回复' : 'Response');
       for (const width of [1280, 320]) {
         await chatPage.setViewportSize({ width, height: 720 });
-        await expectNoHorizontalOverflow(chatPage.locator('.work-center-work-item-overview'), {
-          overview: ':scope', progress: '.work-center-goal-progress', criteria: '.work-center-goal-criteria',
-          delivery: '.work-center-goal-delivery', responses: '.work-center-responses', response: '.work-center-response-summary',
-          requirement: '.work-center-requirement-details', taskInformation: '.work-center-task-information',
-        });
+        if (width === 320 && await chatPage.getByRole('button', { name: /Close Actions|关闭 Action/ }).isVisible()) {
+          await chatPage.getByRole('button', { name: /Close Actions|关闭 Action/ }).click();
+        }
+        for (const tab of ['requirement', 'progress', 'outputs', 'goals', 'usage']) {
+          await chatPage.locator(`#work-item-info-tab-${tab}`).click();
+          await expectNoHorizontalOverflow(overview, { overview: ':scope', panel: `#work-item-info-panel-${tab}` });
+          await expect(chatPage.locator('.work-center-conversation-composer')).toBeInViewport();
+        }
         const colors = await result.evaluate(element => ({
           text: getComputedStyle(element).color,
           background: getComputedStyle(document.querySelector('.work-center-main')).backgroundColor,
@@ -3041,13 +3032,14 @@ test.describe('Work Center responsive UI', () => {
     })]);
   });
 
-  test('keeps metadata and Conversation in one scroll stream while the composer stays reachable', async ({ chatPage, mockAgent }) => {
+  test('keeps Info above an independent Conversation and preserves drafts across tabs', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.setViewportSize({ width: 1600, height: 720 });
     const select = chatPage.locator('.work-center-card').click();
     const longDetail = {
       ...OPEN_ITEM_DETAIL,
-      goal: `Long goal ${'g'.repeat(7900)}`,
+      requirement: `Original request ${'r'.repeat(7900)}`,
+      goal: `Refined goal ${'g'.repeat(7900)}`,
       acceptanceCriteria: Array.from(
         { length: 30 },
         (_, index) => `Criterion ${index + 1}: ${'c'.repeat(1900)}`,
@@ -3062,43 +3054,64 @@ test.describe('Work Center responsive UI', () => {
 
     const detail = chatPage.locator('.work-center-detail');
     const stream = detail.locator('.work-center-conversation-scroll');
-    const column = detail.locator('.work-center-conversation-column');
     const overview = detail.locator('.work-center-work-item-overview');
     const messageList = detail.locator('.work-center-item-message-list');
     const composer = detail.locator('.work-center-conversation-composer');
     await expect(overview).toBeVisible();
     await expect(stream).toBeVisible();
-    await expect(composer).toBeVisible();
-    await expect(composer.locator('textarea')).toBeInViewport();
-    await expect(detail.locator('.work-center-triage-summary')).toHaveCount(0);
-    const metrics = await detail.evaluate(element => {
-      const stream = element.querySelector('.work-center-conversation-scroll');
-      const column = element.querySelector('.work-center-conversation-column');
-      const overview = element.querySelector('.work-center-work-item-overview');
-      const messages = element.querySelector('.work-center-item-message-list');
-      const composer = element.querySelector('.work-center-conversation-composer');
-      const scrollable = [...element.querySelectorAll('*')].filter(candidate => {
-        const style = getComputedStyle(candidate);
-        return /(auto|scroll)/.test(style.overflowY) && candidate.scrollHeight > candidate.clientHeight + 1;
-      });
-      return {
-        streamScrollable: stream.scrollHeight > stream.clientHeight,
-        streamOverflowY: getComputedStyle(stream).overflowY,
-        overviewParentIsColumn: overview.parentElement === column,
-        messagesParentIsColumn: messages.parentElement === column,
-        composerVisible: composer.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom + 1,
-        verticalScrollClasses: scrollable.map(candidate => candidate.className).filter(value => typeof value === 'string'),
-      };
-    });
-    expect(metrics.streamScrollable).toBe(true);
-    expect(metrics.streamOverflowY).toBe('auto');
-    expect(metrics.overviewParentIsColumn).toBe(true);
-    expect(metrics.messagesParentIsColumn).toBe(true);
-    expect(metrics.composerVisible).toBe(true);
-    expect(metrics.verticalScrollClasses).toEqual(['work-center-conversation-scroll']);
-    await stream.evaluate(element => { element.scrollTop = element.scrollHeight; });
     await expect(messageList).toBeInViewport();
     await expect(composer.locator('textarea')).toBeInViewport();
+    await expect(chatPage.locator('#work-item-info-panel-requirement')).toContainText('Original request');
+    await composer.locator('textarea').fill('Keep this conversation draft');
+    await chatPage.locator('#work-item-info-tab-requirement').focus();
+    await chatPage.keyboard.press('ArrowRight');
+    await expect(chatPage.locator('#work-item-info-tab-progress')).toBeFocused();
+    await expect(chatPage.locator('#work-item-info-tab-progress')).toHaveAttribute('aria-selected', 'true');
+    await chatPage.keyboard.press('End');
+    await expect(chatPage.locator('#work-item-info-tab-usage')).toBeFocused();
+    await chatPage.keyboard.press('Home');
+    await expect(chatPage.locator('#work-item-info-tab-requirement')).toBeFocused();
+    for (const width of [1600, 320]) {
+      await chatPage.setViewportSize({ width, height: 720 });
+      if (width === 320 && await chatPage.getByRole('button', { name: 'Close Actions' }).isVisible()) {
+        await chatPage.getByRole('button', { name: 'Close Actions' }).click();
+      }
+      for (const tab of ['requirement', 'progress', 'outputs', 'goals', 'usage']) {
+        await chatPage.locator(`#work-item-info-tab-${tab}`).click();
+        await expect(chatPage.getByRole('tabpanel')).toHaveCount(1);
+        await expect(composer.locator('textarea')).toHaveValue('Keep this conversation draft');
+        await expect(composer.locator('textarea')).toBeInViewport();
+        const metrics = await detail.evaluate(element => {
+          const overview = element.querySelector('.work-center-work-item-overview');
+          const conversation = element.querySelector('.work-center-conversation');
+          const stream = element.querySelector('.work-center-conversation-scroll');
+          return {
+            separate: !stream.contains(overview),
+            infoBottom: overview.getBoundingClientRect().bottom,
+            conversationTop: conversation.getBoundingClientRect().top,
+            infoHeight: overview.getBoundingClientRect().height,
+            height: element.getBoundingClientRect().height,
+          };
+        });
+        expect(metrics.separate).toBe(true);
+        expect(metrics.infoBottom).toBeLessThanOrEqual(metrics.conversationTop + 1);
+        expect(metrics.infoHeight).toBeLessThan(metrics.height * 0.5);
+      }
+    }
+    await chatPage.locator('#work-item-info-tab-requirement').click();
+    const panel = chatPage.locator('#work-item-info-panel-requirement');
+    expect(await panel.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    await panel.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await expect(messageList).toBeInViewport();
+    // A refreshed detail must not reset the selected tab or conversation draft.
+    await chatPage.locator('#work-item-info-tab-goals').click();
+    await chatPage.evaluate(agentId => {
+      const store = window.Pinia.useChatStore();
+      store.workCenterDetailByAgent[agentId] = { ...store.workCenterDetailByAgent[agentId], updatedAt: Date.now() };
+    }, mockAgent.agentId);
+    await expect(chatPage.locator('#work-item-info-tab-goals')).toHaveAttribute('aria-selected', 'true');
+    await expect(composer.locator('textarea')).toHaveValue('Keep this conversation draft');
+
   });
 
   test('keeps long Work Item messages fully visible without horizontal clipping', async ({ chatPage, mockAgent }) => {
@@ -3598,6 +3611,8 @@ async function openResourceDetail(chatPage, mockAgent) {
   const select = chatPage.locator('.work-center-card-open').click();
   await respondToWorkCenterOp(mockAgent, 'get', detail, [detail]);
   await select;
+  await expect(chatPage.locator('.work-center-info-resource-alert')).toBeVisible();
+  await chatPage.locator('.work-center-info-resource-alert').click();
   await expect(chatPage.locator('.work-center-resources')).toBeVisible();
   return detail;
 }
