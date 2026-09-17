@@ -97,6 +97,7 @@ export class WorkCenterService {
   constructor(options) {
     const yeaftDir = requiredString(options?.yeaftDir, 'yeaftDir');
     this.yeaftDir = yeaftDir;
+    this.now = typeof options.now === 'function' ? options.now : () => Date.now();
     this.settingsReader = options.settingsReader || readWorkCenterSettings;
     this.settingsWriter = options.settingsWriter || writeWorkCenterSettings;
     this.runtimeInfoProvider = typeof options.runtimeInfoProvider === 'function'
@@ -246,7 +247,13 @@ export class WorkCenterService {
             root: this.attachmentRoot,
             workItemId,
           });
-          const shouldStart = payload.start === undefined ? settings.startImmediately : payload.start !== false;
+          const scheduledFor = payload.scheduledFor == null || payload.scheduledFor === ''
+            ? null : Number(payload.scheduledFor);
+          if (scheduledFor != null && (!Number.isSafeInteger(scheduledFor) || scheduledFor <= this.now())) {
+            throw new Error('scheduledFor must be in the future');
+          }
+          const shouldStart = scheduledFor == null
+            && (payload.start === undefined ? settings.startImmediately : payload.start !== false);
           const goal = requiredString(payload.goal, 'goal');
           const explicitTitle = payload.titleSource !== 'coordinator_pending' && typeof payload.title === 'string'
             ? payload.title.trim() : '';
@@ -289,6 +296,10 @@ export class WorkCenterService {
               ? normalizeSessionContextSnapshot(payload.sessionContext)
               : [],
             attachments,
+            schedule: scheduledFor == null ? null : {
+              status: payload.scheduleEnabled === false ? 'paused' : 'scheduled',
+              scheduledFor,
+            },
             start: false,
           });
           let detail = this.#requiredItem(workItemId);
@@ -311,6 +322,13 @@ export class WorkCenterService {
           this.#queueDynamicCoordinatorWake(id);
         }
         this.#emit({ type: 'work_item.updated', workItem: detail });
+        return detail;
+      }
+      case 'update_schedule': {
+        const id = requiredString(payload.id, 'id');
+        const detail = this.store.updateWorkItemSchedule(id, payload.schedule || payload);
+        if (!detail) throw new Error(`WorkItem not found: ${id}`);
+        this.#emit({ type: 'work_item.schedule_updated', workItem: detail });
         return detail;
       }
       case 'start': {
@@ -715,7 +733,16 @@ export class WorkCenterService {
     }
   }
 
+  #scanSchedules() {
+    const now = this.now();
+    for (const id of this.store.listDueScheduledWorkItemIds(now)) {
+      const detail = this.controller.startScheduled(id, now);
+      if (detail) this.#emit({ type: 'work_item.schedule_triggered', workItem: detail });
+    }
+  }
+
   #scanRecoveries() {
+    this.#scanSchedules();
     this.#scanCoordinatorProviderRecoveries();
     this.#scanDynamicCoordinatorWakes();
     this.#scanFailureRecoveries();
