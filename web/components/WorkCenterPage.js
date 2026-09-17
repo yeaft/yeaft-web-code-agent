@@ -90,7 +90,7 @@ export default {
       unavailableAgentStateError: '',
       search: '',
       filtersOpen: false,
-      headerMenuOpen: false,
+      createAgentSelection: null,
       boardVpId: '',
       boardWorkItemType: '',
       boardUpdatedRange: 'week',
@@ -531,14 +531,14 @@ export default {
         this.composerTargetValue = 'coordinator';
         this.narrowPane = 'items';
         this.filtersOpen = false;
-        this.headerMenuOpen = false;
         this.previewingAttachmentId = null;
         this.attachmentPreviewError = '';
         this.attachmentPreviewGeneration = (Number(this.attachmentPreviewGeneration) || 0) + 1;
         if (previousId && id !== previousId) {
           this.closeFolderPicker();
-          this.resetCreateExecutionContext(id);
+          this.resetCreateExecutionContext(id, { keepOpen: !!id && this.createAgentSelection === id });
         }
+        this.createAgentSelection = null;
         if (this.store.workCenterAgentId !== id) {
           this.store.enterWorkCenter(id);
           return;
@@ -700,7 +700,6 @@ export default {
     },
     closeHeaderPopovers(event) {
       if (!event?.target?.closest?.('.work-center-filter-menu, .work-center-search')) this.filtersOpen = false;
-      if (!event?.target?.closest?.('.work-center-header-menu')) this.headerMenuOpen = false;
     },
     backToChat() {
       this.store.leaveWorkCenter();
@@ -1260,7 +1259,7 @@ export default {
       if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
       return String(tokens);
     },
-    resetCreateExecutionContext(agentId) {
+    resetCreateExecutionContext(agentId, { keepOpen = false } = {}) {
       const hadUserExecutionInput = this.workDirTouched || this.startTouched;
       const draft = this.store.workCenterCreateDraft;
       if (draft) {
@@ -1274,6 +1273,8 @@ export default {
           linkedSessionIds: [],
         };
       }
+      this.createAttachments = [];
+      this.createAttachmentError = '';
       this.form.workDir = '';
       this.form.start = true;
       this.form.scheduled = false;
@@ -1282,7 +1283,7 @@ export default {
       this.createError = '';
       this.workDirTouched = false;
       this.startTouched = false;
-      if (hadUserExecutionInput) this.createOpen = false;
+      if (hadUserExecutionInput && !keepOpen) this.createOpen = false;
       this.applyCreateDefaults();
     },
     applyCreateDefaults() {
@@ -1555,7 +1556,17 @@ export default {
         }
       }
     },
+    selectCreateAgent(nextAgentId) {
+      if (this.saving || nextAgentId === this.agentId
+        || !this.onlineAgents.some(agent => agent.id === nextAgentId)) return;
+      // Use the same selection as the sidebar, but keep this explicit draft open.
+      // The Agent watcher fences uploads/history and resets Agent-owned defaults.
+      this.createAgentSelection = nextAgentId;
+      this.selectWorkCenterAgent(nextAgentId);
+    },
     openCreate() {
+      if (!this.agentId) return;
+      if (this.mobileNavigation) this.sidebarExpanded = false;
       this.createGeneration = (Number(this.createGeneration) || 0) + 1;
       this.createAttachmentUploadCount = 0;
       this.attachmentsUploading = false;
@@ -1565,6 +1576,7 @@ export default {
       this.createAttachmentError = '';
       this.applyCreateDefaults();
       this.loadDeliveryInstructionOptions();
+      this.$nextTick(() => this.$refs.createRequirement?.focus());
     },
     closeCreate() {
       if (this.saving) return;
@@ -1580,7 +1592,7 @@ export default {
     },
     async submitCreate() {
       const requirement = String(this.form.requirement || this.form.goal || this.form.title || '').trim();
-      if (!requirement || !this.form.workDir.trim()) return;
+      if (this.saving || this.attachmentsUploading || !this.agentId || !requirement || !this.form.workDir.trim()) return;
       const schedule = this.form.scheduled ? scheduleFormResult(this.form.scheduleDraft) : {};
       if (schedule.error || (schedule.recurrence && !this.recurringSchedulesSupported)) return;
       this.createError = '';
@@ -1768,7 +1780,7 @@ export default {
     <main class="work-center-main" :class="{ 'navigation-open': sidebarExpanded && mobileNavigation }" :aria-label="tr('workCenter.title', 'Work Center')">
         <WorkCenterSidebar ref="navigation" :agents="sidebarAgents" :agent-id="agentId" :item-id="selectedId"
                            :action-id="selectedActionId" :expanded="sidebarExpanded"
-                           @back="backToChat" @collapse="toggleNavigation" @select-agent="selectWorkCenterAgent" @select-item="selectActivity" />
+                           @back="backToChat" @collapse="toggleNavigation" @create="openCreate" @select-agent="selectWorkCenterAgent" @select-item="selectActivity" />
         <button v-if="mobileNavigation && sidebarExpanded" class="work-center-sidebar-scrim" type="button" tabindex="-1"
                 :aria-label="$t('workCenter.hideNavigation')" @click="toggleNavigation"></button>
         <div ref="shell" class="work-center-shell" :inert="mobileNavigation && sidebarExpanded" :class="{ 'showing-detail': narrowPane !== 'items' }"
@@ -1849,19 +1861,10 @@ export default {
                   :title="tr('workCenter.refresh', 'Refresh')" :aria-label="tr('workCenter.refresh', 'Refresh')">
                   <NavigationIcon name="refresh" :size="16" />
                 </button>
-                <button v-if="agentId" class="work-center-icon-button work-center-header-create" type="button" @click="openCreate"
-                  :title="tr('workCenter.newWorkItem', 'New work item')" :aria-label="tr('workCenter.newWorkItem', 'New work item')">
-                  <NavigationIcon name="add" :size="16" />
+                <button v-if="agentId" class="work-center-icon-button work-center-header-settings" type="button" @click="settingsOpen = true"
+                  :title="tr('workCenter.settings.title', 'Work Center settings')" :aria-label="tr('workCenter.settings.title', 'Work Center settings')">
+                  <NavigationIcon name="settings" :size="16" />
                 </button>
-                <div v-if="agentId" class="work-center-header-menu" @keydown.esc.stop="headerMenuOpen = false; $refs.headerMenuButton.focus()">
-                  <button ref="headerMenuButton" class="work-center-icon-button" type="button" :aria-expanded="headerMenuOpen" aria-controls="work-center-header-options" @click="headerMenuOpen = !headerMenuOpen"
-                    :title="tr('workCenter.moreActions', 'More actions')" :aria-label="tr('workCenter.moreActions', 'More actions')">
-                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></g></svg>
-                  </button>
-                  <div v-if="headerMenuOpen" id="work-center-header-options" class="work-center-header-popover">
-                    <button type="button" @click="headerMenuOpen = false; settingsOpen = true">{{ tr('workCenter.settings.title', 'Work Center settings') }}</button>
-                  </div>
-                </div>
                 <template v-if="narrowPane !== 'items' && selected">
                   <button
                     ref="actionsButton"
@@ -2390,8 +2393,13 @@ export default {
           </header>
           <div class="work-center-modal-body">
             <section class="work-center-form-section work-center-requirement-section">
+              <label>{{ $t('workCenter.selectAgent') }}
+                <select class="work-center-create-agent" :value="agentId" :disabled="saving" @change="selectCreateAgent($event.target.value)">
+                  <option v-for="agent in sidebarAgents" :key="agent.id" :value="agent.id" :disabled="!agent.online">{{ agent.name || agent.id }}{{ agent.online ? '' : ' · ' + $t('workCenter.offline') }}</option>
+                </select>
+              </label>
               <label>{{ tr('workCenter.requirement', 'Requirement') }}
-                <textarea v-model="form.requirement" rows="8" required autofocus @paste="onCreateRequirementPaste" :placeholder="tr('workCenter.requirementHint', 'Describe the problem, desired outcome, and any constraints in your own words')"></textarea>
+                <textarea ref="createRequirement" v-model="form.requirement" rows="8" required autofocus @paste="onCreateRequirementPaste" :placeholder="tr('workCenter.requirementHint', 'Describe the problem, desired outcome, and any constraints in your own words')"></textarea>
                 <small class="work-center-field-help">{{ tr('workCenter.requirementHelp', 'The Coordinator will refine the goal and acceptance criteria, then create Actions dynamically as evidence arrives.') }}</small>
               </label>
             </section>
@@ -2453,7 +2461,7 @@ export default {
           <p v-if="createError" class="work-center-error work-center-create-error" role="alert">{{ createError }}</p>
           <footer class="work-center-modal-footer">
             <button class="btn-secondary" type="button" @click="closeCreate">{{ tr('common.cancel', 'Cancel') }}</button>
-            <button class="btn-primary" type="submit" :disabled="saving || attachmentsUploading || !form.requirement.trim() || !form.workDir.trim() || !!createScheduleResult.error || (form.scheduled && form.scheduleDraft.frequency !== 'once' && !recurringSchedulesSupported)">
+            <button class="btn-primary" type="submit" :disabled="saving || attachmentsUploading || !agentId || !form.requirement.trim() || !form.workDir.trim() || !!createScheduleResult.error || (form.scheduled && form.scheduleDraft.frequency !== 'once' && !recurringSchedulesSupported)">
               {{ saving ? tr('workCenter.creating', 'Creating…') : form.scheduled ? $t('workCenter.scheduling.create') : tr('workCenter.create', 'Create') }}
             </button>
           </footer>

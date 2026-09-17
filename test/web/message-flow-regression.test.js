@@ -3561,7 +3561,7 @@ describe('message flow regressions', () => {
     expect(workCenter).toContain('<WorkCenterSidebar');
     expect(workCenter).toContain('@select-agent="selectWorkCenterAgent"');
     expect(workCenter).not.toContain('<label class="work-center-agent-picker">');
-    expect(workCenter).not.toContain('<select :value="agentId"');
+    expect(workCenter).toContain('class="work-center-create-agent" :value="agentId"');
     expect(workCenter).toContain("this.store.enterWorkCenter(nextAgentId)");
     expect(workCenterCss).toMatch(/\.work-center-sidebar\s*\{[^}]*background:\s*var\(--bg-sidebar\)/s);
     const pluginCenterCss = readFileSync(resolve(import.meta.dirname, '../../web/styles/plugin-center.css'), 'utf8');
@@ -3630,11 +3630,12 @@ describe('message flow regressions', () => {
     });
     expect(workCenterPage.get('.work-center-heading').text()).toBe('server');
     expect(workCenterPage.find('.work-center-header-refresh').exists()).toBe(true);
-    expect(workCenterPage.find('.work-center-header-create').exists()).toBe(true);
-    await workCenterPage.get('.work-center-header-menu > button').trigger('click');
-    expect(workCenterPage.find('.work-center-header-popover').text()).toContain('Work Center settings');
-    expect(workCenterPage.find('.work-center-header-popover').text()).not.toContain('Refresh');
-    expect(workCenterPage.find('.work-center-header-popover').text()).not.toContain('New work item');
+    expect(workCenterPage.find('.work-center-header-create').exists()).toBe(false);
+    expect(workCenterPage.find('.work-center-sidebar-create').exists()).toBe(true);
+    expect(workCenterPage.find('.work-center-header-menu').exists()).toBe(false);
+    await workCenterPage.get('.work-center-header-settings').trigger('click');
+    expect(workCenterPage.vm.settingsOpen).toBe(true);
+    expect(workCenterPage.findComponent({ name: 'WorkCenterSettingsModal' }).exists()).toBe(true);
     workCenterStore.refreshWorkCenterRuntime = vi.fn(() => Promise.resolve());
     await WorkCenterPage.methods.refreshWorkCenterRuntime.call(workCenterPage.vm, 'agent-b');
     expect(workCenterStore.refreshWorkCenterRuntime).not.toHaveBeenCalled();

@@ -114,4 +114,72 @@ describe('Work Center explicit user input', () => {
     expect(store.getWorkItem).toHaveBeenCalledTimes(code ? 1 : 0);
     expect(wrapper.vm.workItemMessageError).toBe(code ? en['workCenter.inputStale'] : 'Request failed');
   });
+
+  it('switches the create Agent only through an explicit available selection', () => {
+    const vm = { saving: false, agentId: 'a', onlineAgents: [{ id: 'a' }, { id: 'b' }],
+      selectWorkCenterAgent: vi.fn(), createAgentSelection: null };
+    for (const id of ['a', 'offline', 'unknown']) Page.methods.selectCreateAgent.call(vm, id);
+    expect(vm.selectWorkCenterAgent).not.toHaveBeenCalled();
+    Page.methods.selectCreateAgent.call(vm, 'b');
+    expect(vm.createAgentSelection).toBe('b');
+    expect(vm.selectWorkCenterAgent).toHaveBeenCalledExactlyOnceWith('b');
+    vm.saving = true;
+    Page.methods.selectCreateAgent.call(vm, 'b');
+    expect(vm.selectWorkCenterAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an explicit create draft open but clears Agent-owned context and late upload/history results', async () => {
+    let finishUpload, finishHistory;
+    const vm = {
+      ...Page.data(), agentId: 'a', createOpen: true, workDirTouched: true, startTouched: true,
+      workItemAttachmentsSupported: true,
+      createAttachments: [{ fileId: 'old-file' }],
+      form: { requirement: 'Keep my request', workDir: '/agent-a/private', deliveryTarget: 'response',
+        deliveryInstructions: 'Summarize results', start: false, scheduled: true, scheduleDraft: {} },
+      store: {
+        workCenterAgentId: 'a', workCenterCreateDraft: { sourceAgentId: 'a', requirement: 'Keep my request',
+          origin: { sessionId: 'private-session' }, linkedSessionIds: ['private-session'] },
+        listWorkItems: vi.fn().mockResolvedValue([]), loadWorkCenterSettings: vi.fn().mockResolvedValue(null),
+        loadWorkCenterDeliveryInstructions: vi.fn(() => new Promise(resolve => { finishHistory = resolve; })),
+      },
+      closeFolderPicker: vi.fn(), createDefaultWorkDir: '/agent-b/project', createDefaultStart: true,
+      resetCreateExecutionContext: Page.methods.resetCreateExecutionContext,
+      applyCreateDefaults: Page.methods.applyCreateDefaults, loadDeliveryInstructionOptions: vi.fn(),
+      uploadPendingAttachments: () => new Promise(resolve => { finishUpload = resolve; }),
+    };
+    const upload = Page.methods.addCreateAttachments.call(vm, [{ name: 'late.png' }]);
+    const history = Page.methods.loadDeliveryInstructionOptions.call(vm);
+    vm.agentId = 'b';
+    vm.store.workCenterAgentId = 'b';
+    vm.createAgentSelection = 'b';
+    Page.watch.agentId.handler.call(vm, 'b', 'a');
+    expect(vm.createOpen).toBe(true);
+    expect(vm.form).toMatchObject({ requirement: 'Keep my request', workDir: '/agent-b/project',
+      deliveryInstructions: 'Summarize results', deliveryTarget: 'response', start: true, scheduled: false });
+    expect(vm.createAttachments).toEqual([]);
+    expect(vm.store.workCenterCreateDraft).toMatchObject({ sourceAgentId: 'b', origin: null, linkedSessionIds: [] });
+    expect(vm.store.loadWorkCenterSettings).toHaveBeenCalledWith('b');
+    expect(vm.loadDeliveryInstructionOptions).toHaveBeenCalledOnce();
+    finishUpload([{ fileId: 'late-file' }]);
+    finishHistory(['Private Agent A goal']);
+    await Promise.all([upload, history]);
+    expect(vm.createAttachments).toEqual([]);
+    expect(vm.deliveryInstructionOptions).toEqual([]);
+    expect(vm.attachmentsUploading).toBe(false);
+    // An implicit offline/fallback Agent change retains the existing close behavior.
+    vm.workDirTouched = true;
+    vm.agentId = null;
+    vm.store.workCenterAgentId = null;
+    Page.watch.agentId.handler.call(vm, null, 'b');
+    expect(vm.createOpen).toBe(false);
+  });
+
+  it('does not submit a create while uploading, saving or without an Agent', async () => {
+    const store = { createWorkItem: vi.fn() };
+    for (const state of [{ attachmentsUploading: true, agentId: 'a' }, { saving: true, agentId: 'a' }, { agentId: null }]) {
+      await Page.methods.submitCreate.call({ ...state, store, form: { requirement: 'Request', workDir: '/tmp/test' } });
+    }
+    expect(store.createWorkItem).not.toHaveBeenCalled();
+  });
+
 });
