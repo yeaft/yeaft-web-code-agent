@@ -149,8 +149,16 @@ function compareExecutionControl(candidate, current) {
   return revision != null && currentRevision != null ? Math.sign(revision - currentRevision) : 0;
 }
 
+function workItemIsTerminal(item) {
+  return ['done', 'cancelled'].includes(item?.status) || ['done', 'cancelled'].includes(item?.lifecycle);
+}
+
 function isWorkItemStateStale(summary, current) {
   if (!summary || !current || summary.id !== current.id) return false;
+  // Equal-version delayed state cannot reopen a terminal Item. A real resume
+  // has a newer lifecycle version; independent resource settlement is preserved.
+  if (isSameWorkItemVersion(current, summary)
+      && workItemIsTerminal(current) && !workItemIsTerminal(summary)) return true;
   const legacyResourceOrder = positiveIntegerOrNull(summary.executionControl?.dataRevision) == null
     && positiveIntegerOrNull(current.executionControl?.dataRevision) == null
     ? compareExecutionControl(summary.executionControl, current.executionControl) : 0;
@@ -391,4 +399,51 @@ export function applyWorkItemSummary(items, summary) {
   if (existing) nextSummary = withLatestExecutionControl(existing, summary, nextSummary);
   return [nextSummary, ...current.filter(item => item.id !== nextSummary.id)]
     .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+}
+
+/** Activity is a live navigation projection, not the Action execution journal. */
+export function workCenterActivityActions(item) {
+  if (!item || ['done', 'cancelled'].includes(item.status) || ['done', 'cancelled'].includes(item.lifecycle)) return [];
+  const actions = Array.isArray(item.actionStats) ? item.actionStats
+    : item.currentAction?.id ? [item.currentAction] : [];
+  return orderWorkCenterActions(actions.filter(action => ['ready', 'running', 'waiting'].includes(action?.status)));
+}
+
+export function workCenterItemTime(item) {
+  return validWorkCenterTime(item?.updatedAt) || validWorkCenterTime(item?.createdAt);
+}
+
+export function workCenterActionTime(action) {
+  return validWorkCenterTime(action?.createdAt) || validWorkCenterTime(action?.updatedAt);
+}
+
+function validWorkCenterTime(value) {
+  const time = Number(value);
+  return time > 0 && Number.isFinite(new Date(time).getTime()) ? time : 0;
+}
+
+/** Newest creation first; older Agents can supply sequence without timestamps. */
+export function orderWorkCenterActions(actions) {
+  return [...actions].sort((left, right) => {
+    const leftTime = workCenterActionTime(left);
+    const rightTime = workCenterActionTime(right);
+    if (leftTime !== rightTime) return rightTime - leftTime;
+    return (Number(right?.sequence) || 0) - (Number(left?.sequence) || 0);
+  });
+}
+
+/** Only summary fields may cross from a full detail into the activity cache. */
+export function workCenterActivitySnapshot(detail) {
+  if (!detail?.id) return null;
+  const summary = { id: detail.id };
+  for (const field of DETAIL_SUMMARY_FIELDS) {
+    if (Object.hasOwn(detail, field)) summary[field] = detail[field];
+  }
+  if (Array.isArray(detail.actions)) {
+    summary.actionStats = detail.actions.map(action => Object.fromEntries([
+      'id', 'generation', 'attempt', 'status', 'sequence', 'createdAt', 'updatedAt',
+      'assignedVp', 'contentSummary', 'progressRevision',
+    ].filter(field => Object.hasOwn(action, field)).map(field => [field, action[field]])));
+  } else if (Array.isArray(detail.actionStats)) summary.actionStats = detail.actionStats;
+  return summary;
 }

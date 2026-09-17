@@ -1,4 +1,6 @@
+import NavigationIcon from './NavigationIcon.js';
 export default {
+  components: { NavigationIcon },
   name: 'YeaftSessionActions',
   emits: ['toggle-search', 'reload-messages', 'toggle-session-status', 'toggle-workbench', 'reload-page', 'fork-session'],
   props: {
@@ -51,7 +53,7 @@ export default {
         :aria-expanded="searchOpen ? 'true' : 'false'"
         aria-controls="yeaft-conversation-outline"
       >
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <NavigationIcon name="search" :size="16" />
       </button>
       <!-- Message refresh — replays current Yeaft session history without a full page reload. -->
       <button
@@ -63,9 +65,7 @@ export default {
         :title="$t('yeaft.reloadMessages')"
         :aria-label="$t('yeaft.reloadMessages')"
       >
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-        </svg>
+        <NavigationIcon name="refresh" :size="16" />
       </button>
       <button
         class="yeaft-topbar-vp-toggle"
@@ -75,11 +75,7 @@ export default {
         :aria-label="sessionStatusVisible ? $t('yeaft.sessionStatus.hide') : $t('yeaft.sessionStatus.show')"
         :aria-expanded="sessionStatusVisible ? 'true' : 'false'"
       >
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="4" width="18" height="16" rx="3"/>
-          <path d="M8 9h8"/>
-          <path d="M8 14h5"/>
-        </svg>
+        <NavigationIcon name="activity" :size="16" />
       </button>
       <button
         v-if="canUseWorkbench"
@@ -90,7 +86,7 @@ export default {
         :aria-label="$t('chat.sidebar.workbench')"
         :aria-expanded="workbenchVisible ? 'true' : 'false'"
       >
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
+        <NavigationIcon name="workbench" :size="16" />
       </button>
       <!-- Page refresh is a mobile-only escape hatch; desktop keeps the header focused on session actions. -->
       <button

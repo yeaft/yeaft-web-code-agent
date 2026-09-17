@@ -24,8 +24,8 @@ const indexOf = (haystack, needle) => haystack.indexOf(needle);
 describe('Yeaft conversation outline UI', () => {
   it('uses an explicit search button with a lazy 50-row outline while preserving server search', () => {
     expect(actions).toContain('aria-controls="yeaft-conversation-outline"');
-    expect(actions).toContain('<circle cx="11" cy="11" r="7"/>');
-    expect(actions).toContain('<path d="m20 20-3.5-3.5"/>');
+    expect(actions).toContain('<NavigationIcon name="search" :size="16" />');
+    expect(read('components/NavigationIcon.js')).toContain('<circle cx="11" cy="11" r="7"/>');
     expect(actions).toContain(":title=\"$t('yeaft.historySearch.button')\"");
     expect(actions).toContain(":aria-label=\"$t('yeaft.historySearch.button')\"");
     expect(actions).not.toContain('<path d="M4 6h2"/>');

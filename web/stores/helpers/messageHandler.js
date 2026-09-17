@@ -234,6 +234,12 @@ function hydrateDebugLoopRequests(loops = []) {
 
 export function handleMessage(store, msg) {
   const authStore = useAuthStore();
+  // The socket identity gate excludes replaced sockets. Also reject a still-open
+  // old-owner socket during the logout/re-authentication transition.
+  if (['work_center_response', 'work_center_event'].includes(msg?.type)
+      && Object.hasOwn(msg, '_wsAuthGeneration')
+      && (msg._wsAuthGeneration !== authStore.authGeneration
+        || msg._wsAuthToken !== (authStore.getActiveToken?.() || authStore.token || null))) return;
   if (msg?.type === 'yeaft_debug_history_chunk') {
     const assembled = acceptDebugHistoryChunk(store, msg);
     if (!assembled) return;

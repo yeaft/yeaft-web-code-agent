@@ -1,3 +1,4 @@
+import NavigationIcon from './NavigationIcon.js';
 import ChatInput from './ChatInput.js';
 import { alertDialog } from '../utils/dialog.js';
 import AgentInstaller from './AgentInstaller.js';
@@ -100,7 +101,7 @@ export function visibleSessionStatusTasks(taskMap) {
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
+  components: { NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
   template: `
     <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
@@ -141,7 +142,7 @@ export default {
             :title="$t('chat.sidebar.expand')"
             :aria-label="$t('chat.sidebar.expand')"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+            <NavigationIcon name="menu" :size="18" />
           </button>
 
         <!-- task-339-F1: SessionSelector removed from topbar — groups now surface via sidebar section. -->

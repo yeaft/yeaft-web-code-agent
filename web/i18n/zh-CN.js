@@ -1807,6 +1807,8 @@ export default {
   'workCenter.showNavigation': '展开工作中心导航',
   'workCenter.hideNavigation': '收起工作中心导航',
   'workCenter.agents': 'Agents',
+  'workCenter.expandItemActivity': '展开 {title} 的执行状态',
+  'workCenter.collapseItemActivity': '收起 {title} 的执行状态',
   'workCenter.activity': '正在推进',
   'workCenter.noActivity': '暂无正在推进的工作项',
   'workCenter.activityOffline': '连接已断开 · 状态可能不是最新',
