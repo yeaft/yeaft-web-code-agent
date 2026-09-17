@@ -1,3 +1,4 @@
+import NavigationIcon from './NavigationIcon.js';
 import { alertDialog, confirmDialog } from '../utils/dialog.js';
 
 /**
@@ -31,7 +32,7 @@ import { buildYeaftSidebarSessionList } from '../stores/helpers/yeaft-sidebar-se
 
 export default {
   name: 'YeaftSidebar',
-  components: { SessionCreateModal, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SessionSidebarShell, UnifiedSessionList },
+  components: { NavigationIcon, SessionCreateModal, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SessionSidebarShell, UnifiedSessionList },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-agent-settings', 'open-group-settings'],
   template: `
     <SessionSidebarShell class="yeaft-sidebar" :collapsed="collapsed">
@@ -40,10 +41,10 @@ export default {
            sidebar can be re-expanded after collapse instead of disappearing. -->
       <div class="sidebar-collapsed-bar" v-if="collapsed">
         <button class="collapsed-icon-btn" @click="$emit('toggle-sidebar')" :title="tr('chat.sidebar.expand', 'Expand')">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+          <NavigationIcon name="menu" :size="18" />
         </button>
         <button class="collapsed-icon-btn" @click="$emit('back')" :title="tr('yeaft.back', 'Back')">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          <NavigationIcon name="back" :size="18" />
         </button>
         <SidebarWorkCenter
           v-if="chatStore && chatStore.workCenterUiEnabled"
@@ -86,7 +87,7 @@ export default {
               @open="onOpenWorkCenter"
             />
             <button class="sidebar-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
+              <NavigationIcon name="collapse" :size="18" />
             </button>
           </div>
         </div>

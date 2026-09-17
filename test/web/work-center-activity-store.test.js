@@ -2,16 +2,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { reactive, nextTick } from 'vue';
+import { workCenterActivityActions, orderWorkCenterActions, workCenterActionTime, workCenterItemTime } from '../../web/stores/helpers/work-center.js';
+import { projectWorkItemSummary } from '../../agent/yeaft/work-center/projection.js';
 import WorkCenterSidebar from '../../web/components/WorkCenterSidebar.js';
+import { bindWorkCenterBrowserOwner, clearWorkCenterBrowserOwner } from '../../web/stores/helpers/work-center-browser-state.js';
 
 const stores = {};
+const authState = {};
 globalThis.Pinia = {
   defineStore: (id, options) => {
     stores[id] = options;
-    return () => ({});
+    return () => id === 'auth' ? authState : {};
   },
 };
 await import('../../web/stores/chat.js');
+const { handleMessage } = await import('../../web/stores/helpers/messageHandler.js');
 const definition = stores.chat;
 
 function createStore(overrides = {}) {
@@ -38,7 +43,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => { localStorage.clear(); clearWorkCenterBrowserOwner(); });
 
 describe('Work Center activity store', () => {
   it('loads exact active statuses independently from board filters and detail state', async () => {
@@ -165,10 +170,10 @@ describe('Work Center activity store', () => {
     store.applyWorkCenterEvent('agent-a', { type: 'run.finished', workItem: older });
     expect(store.workCenterItemsByAgent['agent-a']).toEqual([canonical]);
     expect(store.workCenterActivityByAgent['agent-a']).toEqual([canonical]);
-    // A genuinely newer activity snapshot still fences an older board/event.
+    // Activity lifecycle fences stay independent of canonical board fields.
     store.workCenterActivityByAgent['agent-a'] = [item('one', 'running', 4, 8)];
     store.applyWorkCenterEvent('agent-a', { type: 'run.progress', workItem: item('one', 'running', 3, 6) });
-    expect(store.workCenterItemsByAgent['agent-a'][0].revision).toBe(4);
+    expect(store.workCenterItemsByAgent['agent-a'][0].revision).toBe(3);
     expect(store.workCenterActivityByAgent['agent-a'][0].actionStats[0].progressRevision).toBe(8);
   });
 
@@ -214,6 +219,195 @@ describe('Work Center activity store', () => {
       store.workCenterActivityConnectionGeneration = 3;
       await flushPromises();
       expect(store.workCenterRequest).toHaveBeenCalledTimes(4);
+    } finally { wrapper.unmount(); }
+  });
+
+  it('reconciles a completed detail and fences stale activity snapshots/events without leaking bodies', async () => {
+    const old = { ...item('one', 'running', 1), boardLane: 'active',
+      actionCounts: { running: 1 }, activeAction: { id: 'one-action' },
+      attentionAction: null, executors: [{ id: 'vp-a' }] };
+    const store = createStore({ workCenterAgentId: 'agent-a' });
+    store.applyWorkCenterEvent('agent-a', { type: 'run.progress', workItem: old });
+    store.workCenterRequest = vi.fn(async () => ({
+      ...item('one', 'done', 5), messages: [{ text: 'private body' }],
+      actions: [{ id: 'one-action', status: 'closed', generation: 1, progressRevision: 5, response: 'private response' }],
+    }));
+    await store.getWorkItem('one', 'agent-a');
+    expect(store.workCenterActivityByAgent['agent-a']).toEqual([]);
+    const cached = store._workCenterActivityEventsByAgent['agent-a'].one.summary;
+    expect(cached).not.toHaveProperty('messages');
+    expect(cached.actionStats[0]).not.toHaveProperty('response');
+    store.workCenterRequest = vi.fn(async () => ({ items: [old] }));
+    await store.loadWorkCenterActivity('agent-a');
+    store.applyWorkCenterEvent('agent-a', { type: 'run.finished', workItem: old });
+    expect(store.workCenterActivityByAgent['agent-a']).toEqual([]);
+    expect(store.workCenterItemsByAgent['agent-a']).toEqual([old]);
+    expect(store.workCenterDetailByAgent['agent-a'].status).toBe('done');
+    store.applyWorkCenterEvent('agent-a', { type: 'work_item.updated', workItem: item('one', 'running', 6) });
+    expect(store.workCenterActivityByAgent['agent-a'][0].status).toBe('running');
+  });
+
+  it('a board refresh repairs missed terminal events without clearing unrelated activity', async () => {
+    const store = createStore({ workCenterAgentId: 'agent-a' });
+    for (const id of ['one', 'other']) store.applyWorkCenterEvent('agent-a', { type: 'run.progress', workItem: item(id, 'running') });
+    store.workCenterRequest = vi.fn(async () => ({ items: [item('one', 'done', 3)] }));
+    await store.listWorkItems('agent-a', { lane: 'closed' });
+    expect(store.workCenterActivityByAgent['agent-a'].map(row => row.id)).toEqual(['other']);
+    store.applyWorkCenterEvent('agent-a', { type: 'run.progress', workItem: item('one', 'running', 2) });
+    expect(store.workCenterActivityByAgent['agent-a'].map(row => row.id)).toEqual(['other']);
+  });
+
+  it('accepts a new Coordinator lifecycle with no overlapping Actions and loads its reply', async () => {
+    const store = createStore({ workCenterAgentId: 'agent-a' });
+    const terminal = { ...item('one', 'done', 5), lifecycle: 'done', coordinatorRevision: 2,
+      actions: [{ id: 'old-action', status: 'closed' }], messages: [] };
+    store.workCenterDetailByAgent['agent-a'] = terminal;
+    const next = { ...item('one', 'running', 6), lifecycle: 'open', coordinatorRevision: 3,
+      currentActionId: null, currentAction: null, actionStats: [] };
+    const detail = { ...next, actions: [], messages: [{ text: 'New plan' }] };
+    store.workCenterRequest = vi.fn(async () => detail);
+    store.applyWorkCenterEvent('agent-a', { type: 'coordinator.turn_completed', workItem: next });
+    expect(store.workCenterDetailByAgent['agent-a']).toMatchObject({ status: 'running', lifecycle: 'open' });
+    await flushPromises();
+    expect(store.workCenterDetailByAgent['agent-a'].messages).toEqual([{ text: 'New plan' }]);
+  });
+
+  it.each(['done', 'cancelled'])('does not resurrect %s from equal-version list/events/details', async status => {
+    const store = createStore({ workCenterAgentId: 'agent-a' });
+    const terminal = { ...item('one', status, 5), lifecycle: status, coordinatorRevision: 3 };
+    const running = { ...terminal, status: 'running', lifecycle: 'open' };
+    store.workCenterRequest = vi.fn(async () => terminal);
+    await store.getWorkItem('one', 'agent-a');
+    store.workCenterRequest = vi.fn(async () => ({ items: [running] }));
+    await store.loadWorkCenterActivity('agent-a');
+    await store.listWorkItems('agent-a');
+    store.applyWorkCenterEvent('agent-a', { type: 'work_item.updated', workItem: running });
+    store.workCenterRequest = vi.fn(async () => running);
+    await store.getWorkItem('one', 'agent-a');
+    expect(store.workCenterActivityByAgent['agent-a']).toEqual([]);
+    expect(store.workCenterDetailByAgent['agent-a'].status).toBe(status);
+    store.applyWorkCenterEvent('agent-a', {
+      type: 'work_item.updated', workItem: { ...running, revision: 6, updatedAt: 6 },
+    });
+    expect(store.workCenterActivityByAgent['agent-a'][0].status).toBe('running');
+  });
+
+  it.each(['reset', 'owner', 'connection', 'agent'])('fences late board and detail activity writes across %s changes', async change => {
+    bindWorkCenterBrowserOwner('owner-a');
+    const store = createStore({ workCenterAgentId: 'agent-a' });
+    const list = deferred();
+    const detail = deferred();
+    store.workCenterRequest = vi.fn(op => op === 'list' ? list.promise : detail.promise);
+    const pendingList = store.listWorkItems('agent-a');
+    const pendingDetail = store.getWorkItem('one', 'agent-a');
+    if (change === 'reset') store.clearWorkCenterActivityState();
+    if (change === 'owner') bindWorkCenterBrowserOwner('owner-b');
+    if (change === 'connection') store.chatHistoryConnectionGeneration += 1;
+    if (change === 'agent') store.workCenterAgentId = 'agent-b';
+    list.resolve({ items: [item('board', 'running')] });
+    detail.resolve(item('one', 'running'));
+    await Promise.all([pendingList, pendingDetail]);
+    // Agent-scoped detail cache may finish for Agent A; it must not leak to B.
+    if (change === 'agent') {
+      expect(store.workCenterActivityByAgent['agent-a'].map(row => row.id)).toEqual(['one']);
+      expect(store.workCenterActivityByAgent['agent-b']).toBeUndefined();
+    } else {
+      expect(store.workCenterActivityByAgent).toEqual({});
+      expect(store.workCenterDetailByAgent).toEqual({});
+    }
+    expect(store.workCenterItemsByAgent).toEqual({});
+  });
+
+  it('rejects activity from a replaced browser owner without relying on a reset listener', async () => {
+    bindWorkCenterBrowserOwner('owner-a');
+    const store = createStore();
+    const request = deferred();
+    store.workCenterRequest = vi.fn(() => request.promise);
+    const pending = store.loadWorkCenterActivity('agent-a');
+    bindWorkCenterBrowserOwner('owner-b');
+    request.resolve({ items: [item('old-owner', 'running')], nextCursor: 'more' });
+    await pending;
+    expect(store.workCenterActivityByAgent).toEqual({});
+    expect(store.workCenterRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores pagination from a previous browser owner', async () => {
+    bindWorkCenterBrowserOwner('owner-a');
+    const store = createStore({ workCenterAgentId: 'agent-a' });
+    store.workCenterRequest = vi.fn(async () => ({ items: [], nextCursor: 'page-2' }));
+    await store.listWorkItems('agent-a');
+    const page = deferred();
+    store.workCenterRequest = vi.fn(() => page.promise);
+    const pending = store.loadMoreWorkItems('agent-a');
+    bindWorkCenterBrowserOwner('owner-b');
+    page.resolve({ items: [item('old-owner', 'running')] });
+    await pending;
+    expect(store.workCenterActivityByAgent).toEqual({});
+    expect(store.workCenterItemsByAgent['agent-a']).toEqual([]);
+  });
+
+  it('rejects events and responses from an old authenticated socket', () => {
+    Object.assign(authState, { token: 'new-token', authGeneration: 2 });
+    const store = createStore();
+    const resolve = vi.fn();
+    const timer = setTimeout(() => {}, 10000);
+    store.workCenterPending.request = { timer, resolve };
+    const event = { type: 'work_center_event', agentId: 'agent-a',
+      event: { type: 'run.progress', workItem: item('one', 'running') },
+      _wsAuthToken: 'old-token', _wsAuthGeneration: 1 };
+    handleMessage(store, event);
+    handleMessage(store, { ...event, type: 'work_center_response', requestId: 'request', ok: true });
+    expect(store.workCenterActivityByAgent).toEqual({});
+    expect(resolve).not.toHaveBeenCalled();
+    handleMessage(store, { ...event, _wsAuthToken: 'new-token', _wsAuthGeneration: 2 });
+    expect(store.workCenterActivityByAgent['agent-a'][0].id).toBe('one');
+    clearTimeout(timer);
+  });
+
+  it('only lists live actions by creation time, retaining the complete journal separately', () => {
+    const actions = ['failed', 'closed', 'superseded', 'cancelled', 'completed', 'running', 'waiting', 'ready']
+      .map((status, index) => ({ id: status, status, sequence: index + 1, createdAt: 100 + index, updatedAt: 900 - index }));
+    const summary = { status: 'waiting', actionStats: actions };
+    expect(workCenterActivityActions(summary).map(action => action.id)).toEqual(['ready', 'waiting', 'running']);
+    expect(workCenterActivityActions({ ...summary, status: 'done' })).toEqual([]);
+    expect(workCenterActivityActions({ ...summary, lifecycle: 'done' })).toEqual([]);
+    expect(orderWorkCenterActions(actions).map(action => action.id)).toEqual([...actions].reverse().map(action => action.id));
+    expect(actions[0].id).toBe('failed');
+    expect(workCenterActivityActions({ status: 'running', currentAction: { id: 'legacy', status: 'running' } })).toHaveLength(1);
+    expect(workCenterActivityActions({ ...summary, actionStats: [], currentAction: { id: 'stale', status: 'running' } })).toEqual([]);
+    expect(orderWorkCenterActions([{ sequence: 1 }, { sequence: 3 }, { sequence: 2 }]).map(a => a.sequence)).toEqual([3, 2, 1]);
+    expect(workCenterActionTime({ createdAt: 1e100, updatedAt: -1 })).toBe(0);
+    expect(workCenterItemTime({ createdAt: 10, updatedAt: 50 })).toBe(50);
+  });
+
+  it('projects Action sequence and timestamps without exposing execution inputs', () => {
+    const summary = projectWorkItemSummary({
+      ...item('one', 'running'), actions: [{ id: 'action', status: 'running', sequence: 7, createdAt: 100, updatedAt: 200, prompt: 'private' }],
+      runs: [], events: [],
+    });
+    expect(summary.actionStats[0]).toMatchObject({ sequence: 7, createdAt: 100, updatedAt: 200 });
+    expect(summary.actionStats[0]).not.toHaveProperty('prompt');
+  });
+
+  it('discloses activity and each Item independently, with Agent-scoped expansion and time labels', async () => {
+    const summary = { ...item('one', 'running'), title: 'One', createdAt: 1000, updatedAt: 2000, actionStats: [{ id: 'a', status: 'running', createdAt: 1000, contentSummary: 'Working' }] };
+    const store = reactive(createStore({ workCenterActivityByAgent: { 'agent-a': [summary], 'agent-b': [summary] } }));
+    Pinia.useChatStore = () => store;
+    const wrapper = mount(WorkCenterSidebar, { attachTo: document.body, props: { agentId: 'agent-a' }, global: { mocks: { $t: key => key } } });
+    try {
+      expect(wrapper.get('.work-center-activity-item time').attributes('datetime')).toBe('1970-01-01T00:00:02.000Z');
+      const toggle = wrapper.get('.work-center-item-disclosure');
+      expect(toggle.attributes('aria-expanded')).toBe('true');
+      expect(wrapper.get('.work-center-activity-actions time').attributes('datetime')).toBe('1970-01-01T00:00:01.000Z');
+      await toggle.trigger('click');
+      expect(wrapper.get('.work-center-activity-actions').isVisible()).toBe(false);
+      expect(wrapper.emitted('select-item')).toBeUndefined();
+      await wrapper.setProps({ agentId: 'agent-b' });
+      expect(toggle.attributes('aria-expanded')).toBe('true');
+      await wrapper.setProps({ agentId: 'agent-a' });
+      expect(toggle.attributes('aria-expanded')).toBe('false');
+      await wrapper.get('.work-center-activity-disclosure').trigger('click');
+      expect(wrapper.get('.work-center-activity-items').isVisible()).toBe(false);
     } finally { wrapper.unmount(); }
   });
 

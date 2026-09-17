@@ -1,3 +1,4 @@
+import NavigationIcon from './NavigationIcon.js';
 import { confirmDialog } from '../utils/dialog.js';
 import WorkCenterActionDetail from './WorkCenterActionDetail.js';
 import WorkCenterResourceControl from './WorkCenterResourceControl.js';
@@ -16,6 +17,7 @@ import { normalizeSessionMessageQuote } from '../utils/session-message-quote.js'
 import { openImagePreview } from '../utils/imagePreview.js';
 import {
   mergeActionMessages,
+  orderWorkCenterActions,
   workCenterActionMessageKey,
 } from '../stores/helpers/work-center.js';
 
@@ -35,7 +37,7 @@ function invalidateWorkCenterUrlRestore(target) {
 
 export default {
   name: 'WorkCenterPage',
-  components: {
+  components: { NavigationIcon,
     MessageComposer, UserTurnBlock, VpTurnBlock, WorkCenterActionDetail,
     WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle, WorkCenterSidebar,
   },
@@ -410,18 +412,7 @@ export default {
     },
     orderedActions() {
       const actions = Array.isArray(this.selected?.actions) ? this.selected.actions : [];
-      const priority = { running: 0, waiting: 1, failed: 2, ready: 3, completed: 4, done: 4, closed: 5, superseded: 6, cancelled: 7 };
-      return actions.map((action, index) => ({ action, index })).sort((left, right) => {
-        const leftPriority = priority[left.action?.status] ?? 7;
-        const rightPriority = priority[right.action?.status] ?? 7;
-        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-        const leftSequence = Number(left.action?.sequence);
-        const rightSequence = Number(right.action?.sequence);
-        if (Number.isFinite(leftSequence) && Number.isFinite(rightSequence) && leftSequence !== rightSequence) {
-          return leftSequence - rightSequence;
-        }
-        return left.index - right.index;
-      }).map(entry => entry.action);
+      return orderWorkCenterActions(actions);
     },
     boardLanes() {
       return [
@@ -1525,7 +1516,7 @@ export default {
               <div class="work-center-header-main-inner">
                 <button class="work-center-icon-button work-center-navigation-toggle" type="button" @click="toggleNavigation"
                         :aria-label="$t('workCenter.showNavigation')" :aria-expanded="sidebarExpanded" aria-controls="work-center-sidebar">
-                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M3 4h18v16H3zM9 4v16"/></svg>
+                  <NavigationIcon name="menu" :size="16" />
                 </button>
                 <div v-if="narrowPane === 'items' || !selected" class="work-center-heading">
                   <span>{{ agents.find(agent => agent.id === agentId)?.name || tr('workCenter.backToWorkItems', 'Work items') }}</span>
@@ -1542,14 +1533,14 @@ export default {
               </nav>
               <div v-if="narrowPane === 'items' && agentId" class="work-center-toolbar">
                 <label class="work-center-search work-center-desktop-search">
-                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9.5 3a6.5 6.5 0 1 0 4.02 11.61L19.91 21 21 19.91l-6.39-6.39A6.5 6.5 0 0 0 9.5 3Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Z"/></svg>
+                  <NavigationIcon name="search" :size="16" />
                   <input v-model="search" type="search" :aria-label="tr('workCenter.search', 'Search work items')" :placeholder="tr('workCenter.search', 'Search work items')">
                 </label>
                 <div class="work-center-filter-menu" @keydown.esc.stop="filtersOpen = false; $refs.filterButton.focus()">
                   <button ref="filterButton" class="work-center-icon-button" :class="{ active: filtersOpen || search || boardVpId || boardWorkItemType || boardUpdatedRange !== 'week' }" type="button"
                     :aria-expanded="filtersOpen" aria-controls="work-center-filters" @click="filtersOpen = !filtersOpen"
                     :title="tr('workCenter.searchAndFilters', 'Search and filters')" :aria-label="tr('workCenter.searchAndFilters', 'Search and filters')">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M4 7h16M7 12h10M10 17h4"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 7h16M7 12h10M10 17h4"/></svg>
                   </button>
                   <div v-if="filtersOpen" id="work-center-filters" class="work-center-header-popover">
                     <label class="work-center-mobile-search"><span>{{ tr('workCenter.search', 'Search work items') }}</span><input v-model="search" type="search" :aria-label="tr('workCenter.search', 'Search work items')" :placeholder="tr('workCenter.search', 'Search work items')"></label>
@@ -1575,11 +1566,11 @@ export default {
                 <template v-if="narrowPane !== 'items' && selected">
                   <button v-if="selected.status === 'draft'" class="work-center-icon-button" type="button" @click="startSelected"
                     :title="tr('workCenter.start', 'Start')" :aria-label="tr('workCenter.start', 'Start')">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="m8 5 11 7-11 7V5Z"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m8 5 11 7-11 7V5Z"/></svg>
                   </button>
                   <button v-else-if="selected.status === 'cancelled' && !selected.executionControl" class="work-center-icon-button work-center-resume-action" type="button" @click="resumeSelected"
                     :title="tr('workCenter.resumeWorkItem', 'Resume work item')" :aria-label="tr('workCenter.resumeWorkItem', 'Resume work item')">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6a6 6 0 0 1-9.81 4.62l-1.42 1.42A8 8 0 1 0 12 5Z"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6a6 6 0 0 1-9.81 4.62l-1.42 1.42A8 8 0 1 0 12 5Z"/></svg>
                   </button>
                   <button v-else-if="!['done', 'cancelled'].includes(selected.status)" class="work-center-icon-button work-center-stop-action" type="button" @click="cancelSelected"
                     :title="tr('workCenter.stopWorkItem', 'Stop work item')" :aria-label="tr('workCenter.stopWorkItem', 'Stop work item')">
@@ -1590,12 +1581,12 @@ export default {
                   :disabled="!workbenchContext.available" :class="{ active: workbenchExpanded }" :aria-pressed="workbenchExpanded"
                   :title="workbenchContext.available ? $t('workbench.title') : $t('workCenter.workbenchUnavailable')"
                   :aria-label="$t('workbench.title')" @click="toggleWorkbench">
-                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M3 4h18v16H3zM14 4v16M3 9h11"/></svg>
+                  <NavigationIcon name="workbench" :size="16" />
                 </button>
                 <div v-if="agentId" class="work-center-header-menu" @keydown.esc.stop="headerMenuOpen = false; $refs.headerMenuButton.focus()">
                   <button ref="headerMenuButton" class="work-center-icon-button" type="button" :aria-expanded="headerMenuOpen" aria-controls="work-center-header-options" @click="headerMenuOpen = !headerMenuOpen"
                     :title="tr('workCenter.moreActions', 'More actions')" :aria-label="tr('workCenter.moreActions', 'More actions')">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></g></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></g></svg>
                   </button>
                   <div v-if="headerMenuOpen" id="work-center-header-options" class="work-center-header-popover">
                     <button type="button" @click="headerMenuOpen = false; settingsOpen = true">{{ tr('workCenter.settings.title', 'Work Center settings') }}</button>
@@ -1605,7 +1596,7 @@ export default {
                 </div>
                 <button v-if="agentId" class="work-center-icon-button work-center-header-create" type="button" @click="openCreate"
                   :title="tr('workCenter.newWorkItem', 'New work item')" :aria-label="tr('workCenter.newWorkItem', 'New work item')">
-                  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
                 </button>
                 <template v-if="narrowPane !== 'items' && selected">
                   <button
@@ -1619,7 +1610,7 @@ export default {
                     :title="tr('workCenter.viewActions', 'View Actions')"
                     :aria-label="$t('workCenter.actionCount', { count: selected.actionCount || selected.actions?.length || 0 })"
                     >
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M5 5h2v2H5V5Zm4 0h10v2H9V5ZM5 11h2v2H5v-2Zm4 0h10v2H9v-2Zm-4 6h2v2H5v-2Zm4 0h10v2H9v-2Z"/></svg>
+                    <NavigationIcon name="activity" :size="16" />
                     <span>{{ selected.actionCount || selected.actions?.length || 0 }}</span>
                   </button>
                 </template>
@@ -1629,7 +1620,7 @@ export default {
             <div v-if="narrowPane !== 'items' && selected && contentPanelOpen" class="work-center-header-content">
               <button class="work-center-icon-button work-center-navigation-toggle" type="button" @click="toggleNavigation"
                       :aria-label="$t('workCenter.showNavigation')" :aria-expanded="sidebarExpanded" aria-controls="work-center-sidebar">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M3 4h18v16H3zM9 4v16"/></svg>
+                <NavigationIcon name="menu" :size="16" />
               </button>
               <nav class="work-center-content-title" :aria-label="tr('workCenter.actionsPanel', 'Actions')">
                 <template v-if="!contentIsActionList">
@@ -1647,11 +1638,11 @@ export default {
                 :disabled="!workbenchContext.available" :class="{ active: workbenchExpanded }" :aria-pressed="workbenchExpanded"
                 :title="workbenchContext.available ? $t('workbench.title') : $t('workCenter.workbenchUnavailable')"
                 :aria-label="$t('workbench.title')" @click="toggleWorkbench">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M3 4h18v16H3zM14 4v16M3 9h11"/></svg>
+                <NavigationIcon name="workbench" :size="16" />
               </button>
               <button ref="contentClose" class="work-center-icon-button work-center-content-close" type="button" @click="closeContentPanel"
                 :title="tr('workCenter.closeActions', 'Close Actions')" :aria-label="tr('workCenter.closeActions', 'Close Actions')">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg>
+                <NavigationIcon name="close" :size="16" />
               </button>
             </div>
           </header>
@@ -2149,7 +2140,7 @@ export default {
               </header>
               <div class="work-center-directory-path">
                 <button class="btn-ghost work-center-directory-up" type="button" @click="folderPickerNavigateUp" :disabled="!folderPickerPath" :aria-label="tr('modal.folderPicker.parentDir', 'Parent directory')">
-                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z"/></svg>
+                  <NavigationIcon name="back" :size="16" />
                 </button>
                 <span class="work-center-directory-current" :title="folderPickerPath">{{ folderPickerPath || tr('common.rootDir', 'Root') }}</span>
               </div>

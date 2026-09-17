@@ -288,7 +288,7 @@ describe('Work Center resource store wire and scope', () => {
   function context() {
     const state = { currentAgent: 'agent-b', workCenterAgentId: 'agent-b', _workCenterListFiltersByAgent: {},
       _workCenterDetailRequestGenerationByAgent: {}, workCenterDetailByAgent: {},
-      workCenterRequest: vi.fn(async () => itemFixture()), listWorkItems: vi.fn(async () => {}), workItemDeleted: () => false,
+      syncWorkCenterActivity: vi.fn(), workCenterRequest: vi.fn(async () => itemFixture()), listWorkItems: vi.fn(async () => {}), workItemDeleted: () => false,
     };
     for (const key of ['beginWorkCenterDetailWrite', 'commitWorkCenterDetail', 'resumeWorkItem', 'extendWorkItemBudget']) state[key] = actions[key].bind(state);
     return state;
@@ -332,7 +332,7 @@ describe('Work Center resource store wire and scope', () => {
 
   it.each(['current rows', 'cached event outside current query'])('fences old list pages against %s, including events preceding the request', async source => {
     const store = { ...stores.chat.state(), currentAgent: 'agent-a', workCenterAgentId: 'agent-a',
-      workItemDeleted: () => false, workCenterRequest: vi.fn(),
+      workItemDeleted: () => false, workCenterRequest: vi.fn(), syncWorkCenterActivity: vi.fn(),
     };
     for (const key of ['listWorkItems', 'loadMoreWorkItems', 'workItemMatchesBoardQuery', 'applyWorkItemBoardSummary']) {
       store[key] = actions[key].bind(store);

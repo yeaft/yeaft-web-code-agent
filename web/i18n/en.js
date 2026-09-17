@@ -1810,6 +1810,8 @@ export default {
   'workCenter.showNavigation': 'Show Work Center navigation',
   'workCenter.hideNavigation': 'Hide Work Center navigation',
   'workCenter.agents': 'Agents',
+  'workCenter.expandItemActivity': 'Expand activity for {title}',
+  'workCenter.collapseItemActivity': 'Collapse activity for {title}',
   'workCenter.activity': 'In progress',
   'workCenter.noActivity': 'No work in progress',
   'workCenter.activityOffline': 'Disconnected · status may be out of date',

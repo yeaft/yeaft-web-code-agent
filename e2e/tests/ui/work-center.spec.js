@@ -592,6 +592,56 @@ async function expectNoHorizontalOverflow(root, selectors) {
 }
 
 test.describe('Work Center responsive UI', () => {
+  test('activity is collapsible, chronological and excludes retired actions in both themes and narrow screens', async ({ chatPage, mockAgent }, testInfo) => {
+    await chatPage.setViewportSize({ width: 1600, height: 900 });
+    const statuses = ['running', 'waiting', 'ready', 'failed', 'closed', 'completed', 'superseded', 'cancelled'];
+    const actionStats = statuses.map((status, index) => ({
+      id: `activity-${status}`, status, sequence: index + 1,
+      contentSummary: `${status} · A deliberately long Action description for wrapping checks`,
+      assignedVp: { id: 'omni', name: 'Software Engineer' },
+      createdAt: Date.UTC(2026, 8, 16, 9, index), updatedAt: Date.UTC(2026, 8, 16, 10, 59 - index),
+    }));
+    await openWorkCenter(chatPage, mockAgent, [{ ...OPEN_ITEM, actionStats }, DONE_ITEM]);
+    const sidebar = chatPage.locator('.work-center-sidebar');
+    const children = sidebar.locator('.work-center-activity-actions');
+    await expect(children.locator('button')).toHaveCount(3);
+    expect(await children.locator('.work-center-status').evaluateAll(rows => rows.map(row => row.dataset.status)))
+      .toEqual(['ready', 'waiting', 'running']);
+    await expect(children.locator('time')).toHaveCount(3);
+    await expect(children.locator('time').first()).toHaveAttribute('datetime', '2026-09-16T09:02:00.000Z');
+    const itemToggle = sidebar.locator('.work-center-item-disclosure');
+    await itemToggle.press('Enter');
+    await expect(itemToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(children).toBeHidden();
+    await itemToggle.press('Space');
+    await expect(children).toBeVisible();
+    const allToggle = sidebar.getByRole('button', { name: 'In progress', exact: true });
+    await allToggle.click();
+    await expect(children).toBeHidden();
+    await allToggle.click();
+    for (const theme of ['light', 'dark']) {
+      await chatPage.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+      await chatPage.screenshot({ path: testInfo.outputPath(`activity-${theme}.png`) });
+      const metrics = await children.locator('button').evaluateAll(rows => rows.map(row => [row.scrollWidth, row.clientWidth]));
+      for (const [scroll, width] of metrics) expect(scroll).toBeLessThanOrEqual(width + 1);
+    }
+    await chatPage.setViewportSize({ width: 320, height: 720 });
+    await chatPage.locator('.work-center-navigation-toggle:visible').click();
+    await expect(children).toBeVisible();
+    await expect.poll(() => chatPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await itemToggle.click();
+    await expect(children).toBeHidden();
+    await itemToggle.click();
+    await chatPage.screenshot({ path: testInfo.outputPath('activity-mobile.png') });
+    // A terminal item update clears the entire live subtree, not just its badge.
+    await chatPage.evaluate(({ agentId, actionStats, item }) => {
+      window.Pinia.useChatStore().applyWorkCenterEvent(agentId, {
+        type: 'work_item.updated', workItem: { ...item, actionStats, status: 'done', revision: 10 },
+      });
+    }, { agentId: mockAgent.agentId, actionStats, item: OPEN_ITEM });
+    await expect(sidebar.locator('.work-center-activity-item')).toHaveCount(0);
+  });
+
   test('sidebar owns Agent navigation and live activity without taking over Item detail', async ({ chatPage, mockAgent }, testInfo) => {
     await chatPage.setViewportSize({ width: 1600, height: 900 });
     const activityItem = { ...OPEN_ITEM, actionStats: OPEN_ITEM_DETAIL.actions };
@@ -601,7 +651,7 @@ test.describe('Work Center responsive UI', () => {
     await expect(sidebar.locator('.work-center-activity-item')).toHaveCount(1);
     await expect(sidebar.locator('.work-center-activity-actions')).toContainText('Linus');
     const agent = await sidebar.locator('.work-center-agent-row').boundingBox();
-    const item = await sidebar.locator('.work-center-activity-item').boundingBox();
+    const item = await sidebar.locator('.work-center-activity-item-row').boundingBox();
     expect(agent.x).toBe(item.x);
     expect(agent.width).toBe(item.width);
     for (const theme of ['light', 'dark']) {
@@ -610,7 +660,7 @@ test.describe('Work Center responsive UI', () => {
     }
 
     const select = sidebar.locator('.work-center-activity-actions button').click();
-    await respondToWorkCenterOp(mockAgent, 'get', OPEN_ITEM_DETAIL);
+    await respondToWorkCenterOp(mockAgent, 'get', OPEN_ITEM_DETAIL, [activityItem, DONE_ITEM]);
     await select;
     await expect(chatPage.locator('.work-center-action-detail-pane')).toBeVisible();
     await expect(sidebar.locator('.work-center-activity-actions button')).toHaveAttribute('aria-current', 'page');

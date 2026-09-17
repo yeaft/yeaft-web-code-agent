@@ -139,7 +139,7 @@ export default {
           <section class="work-center-action-overview">
             <div class="work-center-action-overview-meta">
               <span class="work-center-status" :data-status="action.status"><span aria-hidden="true"></span>{{ statusLabel(action.status) }}</span>
-              <span class="work-center-action-executor"><span class="work-center-action-vp-presence" :data-status="action.status" aria-hidden="true"></span>{{ executorName }}</span>
+              <span v-if="action.assignedVp || action.requiredRole || ['ready', 'running', 'waiting'].includes(action.status)" class="work-center-action-executor"><span class="work-center-action-vp-presence" :data-status="action.status" aria-hidden="true"></span>{{ executorName }}</span>
             </div>
             <h2>{{ action.brief?.objective || tr('workCenter.actionDetails', 'Action details') }}</h2>
             <p v-if="action.brief?.approach">{{ action.brief.approach }}</p>

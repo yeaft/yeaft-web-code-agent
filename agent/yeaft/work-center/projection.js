@@ -57,6 +57,9 @@ function projectCurrentActionSummary(action, projectedAction = action) {
     generation: actionGeneration(projectedAction.generation),
     assignmentMode: projectedAction.assignmentPolicy?.mode || (projectedAction.requiredRole ? 'fixed' : null),
     status: projectedAction.status,
+    sequence: projectedAction.sequence,
+    createdAt: projectedAction.createdAt,
+    updatedAt: projectedAction.updatedAt,
     objective: truncateUtf8(action?.brief?.objective, 1_000) || null,
     ...(projectedAction.assignedVp ? { assignedVp: projectedAction.assignedVp } : {}),
   };
@@ -617,6 +620,8 @@ function projectAction(action, runs, events, includeBody = true) {
   return {
     id: action.id,
     sequence: action.sequence,
+    createdAt: count(action.createdAt),
+    updatedAt: count(action.updatedAt),
     type: action.type,
     stageId: action.stageId || action.type,
     assignmentPolicy: alreadyProjected
@@ -699,6 +704,9 @@ function projectActionStats(detail, liveActionId = bodyActionId(detail)) {
       id: projected.id,
       generation: actionGeneration(projected.generation),
       status: projected.status,
+      sequence: projected.sequence,
+      createdAt: projected.createdAt,
+      updatedAt: projected.updatedAt,
       assignedVp: projected.assignedVp,
       contentSummary: projected.contentSummary,
       executionStats: projected.executionStats,
