@@ -2191,6 +2191,7 @@ export default {
   'workCenter.scheduling.futureTime': "首次执行时间必须晚于现在。",
   'workCenter.scheduling.tooFar': "请选择未来五年内的首次执行时间。",
   'workCenter.scheduling.invalidEndDate': "结束日期不能早于首次执行。",
+  'workCenter.scheduling.supportedRange': '请选择支持范围内的日期（UTC 1970–2099 年）。',
   'workCenter.scheduling.invalidRunCount': "请输入 1 至 1,000 之间的整数。",
   'workCenter.scheduling.status.scheduled': "已安排",
   'workCenter.scheduling.status.paused': "已暂停",

@@ -111,6 +111,7 @@ export class WorkCenterService {
         ...(await this.runtimeInfoProvider()),
         defaultStageInstructions: defaultWorkCenterStageInstructions(),
         workItemTypes: listWorkItemTypeTemplates(settings),
+        recurringSchedules: true,
       };
     };
     this.ownerBootId = options.ownerBootId || randomUUID();

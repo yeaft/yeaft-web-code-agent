@@ -3861,9 +3861,11 @@ test.describe('Work Center resource budget', () => {
 async function openScheduleForm(page, mockAgent, recurring = true) {
   await openWorkCenter(page, mockAgent, []);
   mockAgent.__recurringSchedules = recurring;
-  await page.evaluate(({ agentId, recurring }) => {
-    window.Pinia.useChatStore().workCenterRuntimeByAgent[agentId].recurringSchedules = recurring;
-  }, { agentId: mockAgent.agentId, recurring });
+  // Hydrate capability through the real settings action/response rather than patching Pinia.
+  await page.evaluate(agentId => { void window.Pinia.useChatStore().loadWorkCenterSettings(agentId); }, mockAgent.agentId);
+  await respondToWorkCenterOp(mockAgent, 'get_settings', { ...WORK_CENTER_SETTINGS,
+    runtime: { ...WORK_CENTER_SETTINGS.runtime, ...(recurring ? { recurringSchedules: true } : {}) } }, []);
+  await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore().workCenterSettingsLoadingByAgent[agentId], mockAgent.agentId)).toBe(false);
   await page.locator('.work-center-header-create').click();
   const dialog = page.locator('.work-center-modal');
   await dialog.locator('textarea').fill('Check project health and report changes since the previous run.');

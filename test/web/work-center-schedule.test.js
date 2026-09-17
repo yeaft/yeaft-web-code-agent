@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { scheduleFormResult, wallTimeToEpoch, validDate, normalizeScheduleTime } from '../../web/utils/work-center-schedule.js';
+import { scheduleFormResult, wallTimeToEpoch, validDate, normalizeScheduleTime, scheduleDateBounds } from '../../web/utils/work-center-schedule.js';
 
 const now = Date.parse('2026-09-17T00:00:00Z');
 const draft = overrides => ({ date: '2026-09-18', time: '09:30', timeZone: 'Asia/Shanghai', frequency: 'once', weekdays: [1, 3], dayOfMonth: 31, end: 'never', maxRuns: 10, ...overrides });
@@ -34,6 +34,15 @@ describe('Work Center schedule form projection', () => {
     expect(scheduleFormResult(draft({ frequency: 'daily', end: 'date', endDate: '2026-09-17' }), now).error).toBe('invalidEndDate');
     expect(scheduleFormResult(draft({ frequency: 'daily', end: 'count', maxRuns: 0 }), now).error).toBe('invalidRunCount');
     expect(scheduleFormResult(draft({ frequency: 'daily', end: 'count', maxRuns: 4 }), now).recurrence.maxRuns).toBe(4);
+  });
+  it('matches API epoch limits including end-of-day in negative offset zones', () => {
+    expect(scheduleFormResult(draft({ frequency: 'daily', end: 'date', endDate: '2100-01-01', timeZone: 'UTC' }), now).error).toBe('supportedRange');
+    expect(scheduleFormResult(draft({ frequency: 'daily', end: 'date', endDate: '2099-12-31', timeZone: 'America/Los_Angeles' }), now).error).toBe('supportedRange');
+    expect(scheduleFormResult(draft({ frequency: 'daily', end: 'date', endDate: '2099-12-31', timeZone: 'UTC' }), now).recurrence.endsAt).toBe(Date.UTC(2100, 0, 1) - 1);
+    expect(scheduleDateBounds('America/Los_Angeles', now).maxEndDate).toBe('2099-12-30');
+    expect(scheduleDateBounds('Asia/Shanghai', now).maxEndDate).toBe('2099-12-31');
+    expect(scheduleDateBounds('UTC', now).maxStartDate).toBe(new Date(now + 5 * 366 * 86400000).toISOString().slice(0, 10));
+    expect(scheduleFormResult(draft({ date: '2100-01-01', timeZone: 'UTC' }), Date.UTC(2099, 0, 1)).error).toBe('supportedRange');
   });
   it('rejects DST gaps for one-shot and resolves folds once to the earlier instant', () => {
     expect(wallTimeToEpoch('2026-03-08', '02:30', 'America/New_York')).toBeNull();

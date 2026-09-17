@@ -1,4 +1,7 @@
 // Browser form projection only. The Agent owns persisted recurrence and dispatch.
+// Wire date range matches agent/yeaft/work-center/recurrence.js.
+export const MAX_SCHEDULE_TIMESTAMP = Date.UTC(2100, 0, 1) - 1;
+const FIRST_RUN_HORIZON = 5 * 366 * 86400000;
 export function scheduleTimeZone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
@@ -47,6 +50,16 @@ export function wallTimeToEpoch(date, time, timeZone) {
   } catch { return null; }
 }
 
+export function scheduleDateBounds(timeZone, now = Date.now()) {
+  const maxStartDate = dateInZone(Math.min(MAX_SCHEDULE_TIMESTAMP, now + FIRST_RUN_HORIZON), timeZone).date;
+  let maxEndDate = dateInZone(MAX_SCHEDULE_TIMESTAMP, timeZone).date;
+  const end = wallTimeToEpoch(maxEndDate, '23:59', timeZone);
+  if (end == null || end + 59999 > MAX_SCHEDULE_TIMESTAMP) {
+    maxEndDate = new Date(Date.parse(`${maxEndDate}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  }
+  return { maxStartDate, maxEndDate };
+}
+
 export function scheduleFormResult(draft, now = Date.now()) {
   if (!draft || !validDate(draft.date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time || '')) return { error: 'invalidDateTime' };
   const supported = ['once', 'daily', 'weekdays', 'weekly', 'monthly'];
@@ -68,8 +81,9 @@ export function scheduleFormResult(draft, now = Date.now()) {
     if (scheduledFor != null) break;
   }
   if (scheduledFor == null) return { error: 'nonexistentTime' };
+  if (scheduledFor < 0 || scheduledFor > MAX_SCHEDULE_TIMESTAMP) return { error: 'supportedRange' };
   if (scheduledFor <= now) return { error: 'futureTime' };
-  if (scheduledFor > now + 5 * 366 * 86400000) return { error: 'tooFar' };
+  if (scheduledFor > now + FIRST_RUN_HORIZON) return { error: 'tooFar' };
   if (draft.frequency === 'once') return { scheduledFor, recurrence: null };
   let endsAt = null;
   let maxRuns = null;
@@ -77,6 +91,7 @@ export function scheduleFormResult(draft, now = Date.now()) {
     endsAt = wallTimeToEpoch(draft.endDate, '23:59', draft.timeZone);
     if (endsAt == null || endsAt < scheduledFor) return { error: 'invalidEndDate' };
     endsAt += 59999;
+    if (endsAt < 0 || endsAt > MAX_SCHEDULE_TIMESTAMP) return { error: 'supportedRange' };
   } else if (draft.end === 'count') {
     maxRuns = Number(draft.maxRuns);
     if (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > 1000) return { error: 'invalidRunCount' };

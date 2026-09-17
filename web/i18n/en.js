@@ -2194,6 +2194,7 @@ export default {
   'workCenter.scheduling.futureTime': "The first run must be in the future.",
   'workCenter.scheduling.tooFar': "Choose a first run within the next five years.",
   'workCenter.scheduling.invalidEndDate': "The end date must include at least the first run.",
+  'workCenter.scheduling.supportedRange': 'Choose dates within the supported 1970–2099 UTC range.',
   'workCenter.scheduling.invalidRunCount': "Enter a whole number from 1 to 1,000.",
   'workCenter.scheduling.status.scheduled': "Scheduled",
   'workCenter.scheduling.status.paused': "Paused",

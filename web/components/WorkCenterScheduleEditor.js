@@ -1,6 +1,6 @@
 import ModernSelect from './ModernSelect.js';
 import ScheduleDatePicker from './ScheduleDatePicker.js';
-import { dateInZone, scheduleFormResult, normalizeScheduleTime } from '../utils/work-center-schedule.js';
+import { dateInZone, scheduleFormResult, normalizeScheduleTime, scheduleDateBounds } from '../utils/work-center-schedule.js';
 
 export default {
   name: 'WorkCenterScheduleEditor',
@@ -18,6 +18,7 @@ export default {
     locale() { return this.$locale?.value || this.$locale || document.documentElement.lang || 'en'; },
     result() { return scheduleFormResult(this.modelValue, this.now); },
     today() { try { return dateInZone(this.now, this.modelValue.timeZone).date; } catch { return ''; } },
+    bounds() { try { return scheduleDateBounds(this.modelValue.timeZone, this.now); } catch { return {}; } },
     frequencies() {
       return ['once', 'daily', 'weekdays', 'weekly', 'monthly'].map(value => ({
         value, label: this.$t(`workCenter.scheduling.${value}`), disabled: value !== 'once' && !this.recurringSupported,
@@ -61,7 +62,7 @@ export default {
         </div>
         <div class="work-center-schedule-field">
           <span>{{ $t(modelValue.frequency === 'once' ? 'workCenter.scheduling.date' : 'workCenter.scheduling.fromDate') }}</span>
-          <ScheduleDatePicker :model-value="modelValue.date" :min="today" :today="today" :disabled="disabled" :aria-label="$t('workCenter.scheduling.date')" @update:model-value="patch('date', $event)" />
+          <ScheduleDatePicker :model-value="modelValue.date" :min="today" :max="bounds.maxStartDate" :today="today" :disabled="disabled" :aria-label="$t('workCenter.scheduling.date')" @update:model-value="patch('date', $event)" />
         </div>
         <label class="work-center-schedule-field">
           <span>{{ $t('workCenter.scheduling.time') }}</span>
@@ -85,7 +86,7 @@ export default {
         </div>
         <div v-if="modelValue.end === 'date'" class="work-center-schedule-field">
           <span>{{ $t('workCenter.scheduling.endDate') }}</span>
-          <ScheduleDatePicker :model-value="modelValue.endDate" :min="modelValue.date" :today="today" :disabled="disabled" :aria-label="$t('workCenter.scheduling.endDate')" @update:model-value="patch('endDate', $event)" />
+          <ScheduleDatePicker :model-value="modelValue.endDate" :min="modelValue.date" :max="bounds.maxEndDate" :today="today" :disabled="disabled" :aria-label="$t('workCenter.scheduling.endDate')" @update:model-value="patch('endDate', $event)" />
         </div>
         <label v-if="modelValue.end === 'count'" class="work-center-schedule-field">
           <span>{{ $t('workCenter.scheduling.runCount') }}</span>

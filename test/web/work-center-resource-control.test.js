@@ -108,6 +108,23 @@ describe('Work Center resource control', () => {
     expect(store.resumeWorkItem).toHaveBeenCalledWith('item', 4, 'agent-a', 7);
   });
 
+  it('never resumes a recurring source plan, including its cancelled resource panel', async () => {
+    const { item, store } = setup();
+    item.schedule = { status: 'scheduled', recurrence: { frequency: 'daily' } };
+    item.status = 'draft';
+    await flushPromises();
+    expect(button('Resume work item')).toBeUndefined();
+    expect(button('Extend budget').attributes('disabled')).toBeUndefined();
+    await wrapper.vm.changeBudget('resume');
+    item.status = 'cancelled';
+    item.schedule.status = 'cancelled';
+    await flushPromises();
+    expect(button('Resume work item')).toBeUndefined();
+    expect(button('Extend budget').attributes('disabled')).toBeDefined();
+    await wrapper.vm.changeBudget('resume');
+    expect(store.resumeWorkItem).not.toHaveBeenCalled();
+  });
+
   it('extends all fields explicitly without resuming; resume uses latest contract and resource CAS', async () => {
     const { item, store } = setup();
     await button('Extend budget').trigger('click');

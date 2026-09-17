@@ -114,7 +114,7 @@ function mapWorkItem(row) {
     finalResult: parseJson(row.final_result, null),
     deliveryTarget: row.delivery_target || null,
     schedule: row.schedule_status ? {
-      status: row.schedule_status,
+      status: row.status === 'cancelled' ? 'cancelled' : row.schedule_status,
       scheduledFor: Number(row.scheduled_for) || null,
       triggeredAt: Number(row.schedule_triggered_at) || null,
       recurrence: parseJson(row.schedule_recurrence, null),
