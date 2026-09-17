@@ -136,6 +136,48 @@ describe('Work Center core', () => {
   });
 
 
+  it('projects Action runtime from matching Run intervals without queue or retry gaps', () => {
+    const action = {
+      id: 'timed-action', generation: 2, specHash: 'current-spec', type: 'implement',
+      sequence: 1, createdAt: 500, updatedAt: 99_000, status: 'running',
+    };
+    const run = { actionId: action.id, actionGeneration: 2, actionSpecHash: action.specHash };
+    const detail = {
+      id: 'timed-item', status: 'running', currentActionId: action.id, actions: [action],
+      runs: [
+        { ...run, id: 'first', status: 'failed', startedAt: 1_000, endedAt: 4_000 },
+        { ...run, id: 'active', status: 'running', startedAt: 9_000 },
+        { ...run, id: 'stale-generation', actionGeneration: 1, status: 'completed', startedAt: 1, endedAt: 99_000 },
+        { ...run, id: 'stale-spec', actionSpecHash: 'old', status: 'completed', startedAt: 1, endedAt: 99_000 },
+        { ...run, id: 'invalid', status: 'completed', startedAt: 8_000, endedAt: 7_000 },
+        { ...run, id: 'missing-end', status: 'failed', startedAt: 500 },
+      ],
+    };
+    const expected = { createdAt: 500, executionDurationMs: 3_000, executionStartedAt: 9_000 };
+    expect(projectWorkItemDetail(detail).actions[0]).toMatchObject(expected);
+    expect(projectWorkItemSummary(detail).actionStats[0]).toMatchObject(expected);
+    expect(projectWorkCenterEvent({ type: 'run.progress', workItem: detail }).workItem.actionStats[0])
+      .toMatchObject(expected);
+    expect(projectWorkItemDetail(projectWorkItemDetail(detail)).actions[0]).toMatchObject(expected);
+
+    detail.runs[1] = { ...detail.runs[1], status: 'completed', endedAt: 12_000 };
+    action.status = 'completed';
+    expect(projectWorkItemDetail(detail).actions[0])
+      .toMatchObject({ executionDurationMs: 6_000, executionStartedAt: null });
+    detail.runs[1] = { ...detail.runs[1], endedAt: null, terminalAt: 12_000, terminalStatus: 'completed' };
+    expect(projectWorkItemDetail(detail).actions[0].executionDurationMs).toBe(6_000);
+    detail.runs = [];
+    expect(projectWorkItemDetail(detail).actions[0])
+      .toMatchObject({ executionDurationMs: null, executionStartedAt: null });
+    delete detail.runs;
+    expect(projectWorkItemDetail(detail).actions[0])
+      .toMatchObject({ executionDurationMs: null, executionStartedAt: null });
+    action.executionDurationMs = Infinity;
+    action.executionStartedAt = -1;
+    expect(projectWorkItemDetail(detail).actions[0])
+      .toMatchObject({ executionDurationMs: null, executionStartedAt: null });
+  });
+
   it('retries Actions after an interrupted Bash without bypassing other unknown side effects', () => {
     const bashItem = controller.create(createInput({ id: 'bash-retry', workDir: dir }));
     const bashClaim = store.claimReadyAction('bash-owner', 5_000);

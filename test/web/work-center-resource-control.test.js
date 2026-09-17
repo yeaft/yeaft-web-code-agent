@@ -374,3 +374,19 @@ describe('Work Center resource store wire and scope', () => {
     expect(store.workCenterDetailByAgent['agent-a'].id).toBe('other');
   });
 });
+
+
+it('keeps Action timing through progress updates and rejects older timing snapshots', () => {
+  const current = { id: 'timed', revision: 1, actions: [{
+    id: 'action', generation: 1, status: 'running', progressRevision: 3,
+    createdAt: 100, executionDurationMs: 3000, executionStartedAt: 9000,
+  }] };
+  const finished = { id: 'timed', revision: 1, actionStats: [{
+    id: 'action', generation: 1, status: 'completed', progressRevision: 4,
+    createdAt: 100, executionDurationMs: 6000, executionStartedAt: null,
+  }] };
+  const merged = mergeWorkItemSummary(current, finished);
+  expect(merged.actions[0]).toMatchObject(finished.actionStats[0]);
+  expect(mergeWorkItemSummary(merged, { id: 'timed', revision: 1, actionStats: current.actions }).actions)
+    .toEqual(merged.actions);
+});
