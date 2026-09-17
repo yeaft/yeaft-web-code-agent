@@ -63,6 +63,7 @@ export default {
       workItemMessage: '',
       workItemMessageQuote: null,
       workItemMessageAttachments: [],
+      workItemMessageAttachmentUploadCount: 0,
       workItemMessageAttachmentsUploading: false,
       workItemMessageSending: false,
       workItemMessageError: '',
@@ -94,7 +95,9 @@ export default {
       workDirTouched: false,
       startTouched: false,
       createAttachments: [],
+      createAttachmentUploadCount: 0,
       attachmentsUploading: false,
+      createAttachmentError: '',
       previewingAttachmentId: null,
       attachmentPreviewError: '',
       attachmentPreviewGeneration: 0,
@@ -165,7 +168,13 @@ export default {
     settings() { return this.store.workCenterSettingsByAgent[this.agentId] || null; },
     runtime() { return this.store.workCenterRuntimeByAgent[this.agentId] || null; },
     workItemTypes() { return Array.isArray(this.runtime?.workItemTypes) ? this.runtime.workItemTypes : []; },
-    workItemAttachmentsSupported() { return this.runtime?.workItemAttachments === true; },
+    workItemAttachmentsSupported() {
+      const agent = this.agents.find(candidate => candidate?.id === this.agentId);
+      if (agent?.capabilityMetadataProvided === true) {
+        return agent.capabilities?.includes('work_item_attachments') === true;
+      }
+      return this.runtime?.workItemAttachments === true;
+    },
     canonicalMessageWireSupported() {
       return this.agents.find(agent => agent?.id === this.agentId)?.capabilities
         ?.includes('work_center_message_v2') === true;
@@ -472,6 +481,8 @@ export default {
       handler(id, previousId) {
         invalidateWorkCenterUrlRestore(this);
         this.createGeneration = (Number(this.createGeneration) || 0) + 1;
+        this.createAttachmentUploadCount = 0;
+        this.attachmentsUploading = false;
         this.saving = false;
         this.selectedId = null;
         this.selectedActionId = null;
@@ -559,6 +570,8 @@ export default {
   },
   beforeUnmount() {
     invalidateWorkCenterUrlRestore(this);
+    this.createGeneration = (Number(this.createGeneration) || 0) + 1;
+    this.workItemComposerGeneration += 1;
     this.unavailableAgentStateGeneration += 1;
     if (this.boardQueryTimer) clearTimeout(this.boardQueryTimer);
     clearInterval(this.actionClockTimer);
@@ -1008,6 +1021,7 @@ export default {
       this.workItemMessage = '';
       this.workItemMessageQuote = null;
       this.workItemMessageAttachments = [];
+      this.workItemMessageAttachmentUploadCount = 0;
       this.workItemMessageAttachmentsUploading = false;
       this.workItemMessageError = '';
       this.workItemMessageSending = false;
@@ -1049,6 +1063,7 @@ export default {
       this.workItemMessageError = draft?.error || '';
       this.staleComposerTarget = null;
       this.workItemMessageSending = false;
+      this.workItemMessageAttachmentUploadCount = 0;
       this.workItemMessageAttachmentsUploading = false;
       this.workItemComposerGeneration += 1;
     },
@@ -1226,34 +1241,82 @@ export default {
     onCreateStartInput() {
       this.startTouched = true;
     },
-    async onCreateAttachmentInput(event) {
+    clipboardFiles(event) {
+      return Array.from(event?.clipboardData?.items || [])
+        .filter(item => item?.kind === 'file')
+        .map(item => item.getAsFile?.())
+        .filter(Boolean);
+    },
+    clipboardIncludesText(event) {
+      return Array.from(event?.clipboardData?.types || []).some(type => (
+        String(type).toLowerCase().startsWith('text/')
+      ));
+    },
+    attachmentUploadName(file, index) {
+      const name = String(file?.name || '').trim();
+      if (name) return name;
+      const extensions = {
+        'image/png': '.png',
+        'image/jpeg': '.jpg',
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+        'application/pdf': '.pdf',
+        'application/json': '.json',
+        'text/plain': '.txt',
+      };
+      const prefix = String(file?.type || '').startsWith('image/') ? 'pasted-image' : 'pasted-file';
+      return `${prefix}-${Date.now()}-${index + 1}${extensions[file?.type] || ''}`;
+    },
+    async uploadPendingAttachments(files) {
+      const formData = new FormData();
+      files.forEach((file, index) => {
+        formData.append('files', file, this.attachmentUploadName(file, index));
+      });
+      const authStore = Pinia.useAuthStore();
+      const token = authStore.getActiveToken?.() || authStore.token || null;
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const response = await fetch('/api/upload', { method: 'POST', headers, body: formData });
+      if (!response.ok) throw new Error(this.tr('workCenter.attachmentsUploadFailed', 'Attachment upload failed'));
+      const result = await response.json();
+      return Array.isArray(result.files) ? result.files : [];
+    },
+    async addCreateAttachments(files) {
       if (!this.workItemAttachmentsSupported) {
-        event.target.value = '';
-        throw new Error(this.tr('workCenter.attachmentsUnsupported', 'The selected Agent does not support Work Item attachments.'));
+        this.createAttachmentError = this.tr('workCenter.attachmentsUnsupported', 'The selected Agent does not support Work Item attachments.');
+        return;
       }
+      const remaining = Math.max(0, 10 - this.createAttachments.length);
+      const selected = Array.from(files || []).slice(0, remaining);
+      if (selected.length === 0) return;
+      const generation = this.createGeneration;
+      this.createAttachmentUploadCount += 1;
+      this.attachmentsUploading = true;
+      this.createAttachmentError = '';
+      try {
+        const uploaded = await this.uploadPendingAttachments(selected);
+        if (!this.createOpen || this.createGeneration !== generation) return;
+        this.createAttachments = [...this.createAttachments, ...uploaded].slice(0, 10);
+      } catch (error) {
+        if (this.createOpen && this.createGeneration === generation) {
+          this.createAttachmentError = error?.message || String(error);
+        }
+      } finally {
+        if (this.createGeneration === generation) {
+          this.createAttachmentUploadCount = Math.max(0, this.createAttachmentUploadCount - 1);
+          this.attachmentsUploading = this.createAttachmentUploadCount > 0;
+        }
+      }
+    },
+    async onCreateAttachmentInput(event) {
       const files = Array.from(event.target.files || []);
       event.target.value = '';
+      await this.addCreateAttachments(files);
+    },
+    async onCreateRequirementPaste(event) {
+      const files = this.clipboardFiles(event);
       if (files.length === 0) return;
-      const remaining = Math.max(0, 10 - this.createAttachments.length);
-      const selected = files.slice(0, remaining);
-      if (selected.length === 0) return;
-      this.attachmentsUploading = true;
-      try {
-        const formData = new FormData();
-        for (const file of selected) formData.append('files', file, file.name || 'attachment');
-        const authStore = Pinia.useAuthStore();
-        const token = authStore.getActiveToken?.() || authStore.token || null;
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const response = await fetch('/api/upload', { method: 'POST', headers, body: formData });
-        if (!response.ok) throw new Error(this.tr('workCenter.attachmentsUploadFailed', 'Attachment upload failed'));
-        const result = await response.json();
-        this.createAttachments = [
-          ...this.createAttachments,
-          ...(Array.isArray(result.files) ? result.files : []),
-        ].slice(0, 10);
-      } finally {
-        this.attachmentsUploading = false;
-      }
+      if (!this.clipboardIncludesText(event)) event.preventDefault();
+      await this.addCreateAttachments(files);
     },
     removeCreateAttachment(index) {
       this.createAttachments = this.createAttachments.filter((_attachment, itemIndex) => itemIndex !== index);
@@ -1262,37 +1325,28 @@ export default {
       if (!this.clearPendingMessageEnvelope()) return;
       this.saveComposerDraft();
     },
-    async onWorkItemMessageAttachmentInput(event) {
+    async addWorkItemMessageAttachments(files) {
       if (!this.workItemAttachmentsSupported) {
-        event.target.value = '';
         this.workItemMessageError = this.tr('workCenter.attachmentsUnsupported', 'The selected Agent does not support Work Item attachments.');
         return;
       }
-      const files = Array.from(event.target.files || []);
-      event.target.value = '';
-      if (files.length === 0) return;
+      if (!files.length) return;
       const scope = this.workItemComposerScope;
       if (!scope) return;
       const replacingPending = this.pendingEnvelopeAttachmentRecovery;
       const existingCount = Array.isArray(this.selected?.attachments) ? this.selected.attachments.length : 0;
       const remaining = Math.max(0, 10 - existingCount
         - (replacingPending ? 0 : this.workItemMessageAttachments.length));
-      const selected = files.slice(0, remaining);
+      const selected = Array.from(files).slice(0, remaining);
       if (selected.length === 0) return;
+      const generation = this.workItemComposerGeneration;
+      this.workItemMessageAttachmentUploadCount += 1;
       this.workItemMessageAttachmentsUploading = true;
       this.workItemMessageError = '';
       try {
-        const formData = new FormData();
-        for (const file of selected) formData.append('files', file, file.name || 'attachment');
-        const authStore = Pinia.useAuthStore();
-        const token = authStore.getActiveToken?.() || authStore.token || null;
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const response = await fetch('/api/upload', { method: 'POST', headers, body: formData });
-        if (!response.ok) throw new Error(this.tr('workCenter.attachmentsUploadFailed', 'Attachment upload failed'));
-        const result = await response.json();
-        if (this.workItemComposerScope !== scope) return;
-        const uploaded = (Array.isArray(result.files) ? result.files : [])
+        const uploaded = (await this.uploadPendingAttachments(selected))
           .slice(0, Math.max(0, 10 - existingCount));
+        if (this.workItemComposerScope !== scope || this.workItemComposerGeneration !== generation) return;
         if (replacingPending) {
           const replaced = this.store.replaceWorkCenterMessageEnvelopeAttachments(
             this.agentId, this.selectedId, uploaded,
@@ -1311,10 +1365,26 @@ export default {
           this.saveComposerDraft();
         }
       } catch (error) {
-        if (this.workItemComposerScope === scope) this.workItemMessageError = error?.message || String(error);
+        if (this.workItemComposerScope === scope && this.workItemComposerGeneration === generation) {
+          this.workItemMessageError = error?.message || String(error);
+        }
       } finally {
-        if (this.workItemComposerScope === scope) this.workItemMessageAttachmentsUploading = false;
+        if (this.workItemComposerScope === scope && this.workItemComposerGeneration === generation) {
+          this.workItemMessageAttachmentUploadCount = Math.max(0, this.workItemMessageAttachmentUploadCount - 1);
+          this.workItemMessageAttachmentsUploading = this.workItemMessageAttachmentUploadCount > 0;
+        }
       }
+    },
+    async onWorkItemMessageAttachmentInput(event) {
+      const files = Array.from(event.target.files || []);
+      event.target.value = '';
+      await this.addWorkItemMessageAttachments(files);
+    },
+    async onWorkItemMessagePaste(event) {
+      const files = this.clipboardFiles(event);
+      if (files.length === 0) return;
+      if (!this.clipboardIncludesText(event)) event.preventDefault();
+      await this.addWorkItemMessageAttachments(files);
     },
     removeWorkItemMessageAttachment(index) {
       this.workItemMessageAttachments = this.workItemMessageAttachments
@@ -1375,15 +1445,24 @@ export default {
       return `${(size / 1024 / 1024).toFixed(1)} MB`;
     },
     openCreate() {
+      this.createGeneration = (Number(this.createGeneration) || 0) + 1;
+      this.createAttachmentUploadCount = 0;
+      this.attachmentsUploading = false;
       this.createOpen = true;
       this.workDirTouched = false;
       this.startTouched = false;
+      this.createAttachmentError = '';
       this.applyCreateDefaults();
     },
     closeCreate() {
       if (this.saving) return;
+      this.createGeneration = (Number(this.createGeneration) || 0) + 1;
+      this.createAttachmentUploadCount = 0;
+      this.attachmentsUploading = false;
       this.closeFolderPicker();
       this.createOpen = false;
+      this.createAttachments = [];
+      this.createAttachmentError = '';
       this.store.workCenterCreateDraft = null;
     },
     async submitCreate() {
@@ -2038,6 +2117,7 @@ export default {
                               :send-label="$t('workCenter.sendToTarget', { target: composerTargetLabel })"
                               @input="onWorkItemMessageInput"
                               @keydown="onWorkItemMessageKeydown"
+                              @paste="onWorkItemMessagePaste"
                               @send="sendSelectedWorkItemMessage"
                             >
                               <template #start-actions>
@@ -2152,7 +2232,7 @@ export default {
           <div class="work-center-modal-body">
             <section class="work-center-form-section work-center-requirement-section">
               <label>{{ tr('workCenter.requirement', 'Requirement') }}
-                <textarea v-model="form.requirement" rows="8" required autofocus :placeholder="tr('workCenter.requirementHint', 'Describe the problem, desired outcome, and any constraints in your own words')"></textarea>
+                <textarea v-model="form.requirement" rows="8" required autofocus @paste="onCreateRequirementPaste" :placeholder="tr('workCenter.requirementHint', 'Describe the problem, desired outcome, and any constraints in your own words')"></textarea>
                 <small class="work-center-field-help">{{ tr('workCenter.requirementHelp', 'The Coordinator will refine the goal and acceptance criteria, then create Actions dynamically as evidence arrives.') }}</small>
               </label>
             </section>
@@ -2166,6 +2246,7 @@ export default {
                 {{ attachmentsUploading ? tr('workCenter.attachmentsUploading', 'Uploading…') : tr('workCenter.addAttachments', 'Add files') }}
               </label>
               <p v-else class="work-center-muted">{{ tr('workCenter.attachmentsUnsupported', 'The selected Agent does not support Work Item attachments.') }}</p>
+              <p v-if="createAttachmentError" class="work-center-error" role="alert">{{ createAttachmentError }}</p>
               <div v-if="workItemAttachmentsSupported && createAttachments.length" class="work-center-attachment-list">
                 <span v-for="(attachment, index) in createAttachments" :key="attachment.fileId" class="work-center-attachment-chip">
                   <span>{{ attachment.name }}</span>

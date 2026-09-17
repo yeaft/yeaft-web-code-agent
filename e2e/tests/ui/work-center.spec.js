@@ -3038,8 +3038,8 @@ test.describe('Work Center responsive UI', () => {
   test('uploads files and binds their references to the Work Item create request', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await chatPage.locator('.work-center-header-create').click();
-    await chatPage.locator('.work-center-modal').getByRole('textbox', { name: /Requirement/ })
-      .fill('Inspect the uploaded screenshot in every Action');
+    const requirement = chatPage.locator('.work-center-modal').getByRole('textbox', { name: /Requirement/ });
+    await requirement.fill('Inspect the uploaded screenshot in every Action');
 
     const upload = chatPage.waitForResponse(response => response.url().includes('/api/upload') && response.request().method() === 'POST');
     await chatPage.locator('.work-center-attachment-picker input').setInputFiles({
@@ -3048,15 +3048,45 @@ test.describe('Work Center responsive UI', () => {
     await upload;
     await expect(chatPage.locator('.work-center-attachment-chip')).toContainText('screen.png');
 
+    const pastedUpload = chatPage.waitForResponse(response => response.url().includes('/api/upload') && response.request().method() === 'POST');
+    const pasteResult = await requirement.evaluate(element => {
+      const image = new File(['pasted-image'], '', { type: 'image/png' });
+      const data = new DataTransfer();
+      data.items.add(image);
+      const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data });
+      element.dispatchEvent(event);
+      return { prevented: event.defaultPrevented };
+    });
+    expect(pasteResult.prevented).toBe(true);
+    await pastedUpload;
+    await expect(chatPage.locator('.work-center-attachment-chip')).toHaveCount(2);
+    await expect(chatPage.locator('.work-center-attachment-chip').nth(1)).toContainText(/pasted-image-\d+-1\.png/);
+
+    const mixedUpload = chatPage.waitForResponse(response => response.url().includes('/api/upload') && response.request().method() === 'POST');
+    const mixedPasteResult = await requirement.evaluate(element => {
+      const image = new File(['mixed-image'], 'mixed.png', { type: 'image/png' });
+      const data = new DataTransfer();
+      data.setData('text/plain', ' keep this text');
+      data.items.add(image);
+      const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data });
+      element.dispatchEvent(event);
+      return { prevented: event.defaultPrevented, text: data.getData('text/plain') };
+    });
+    expect(mixedPasteResult).toEqual({ prevented: false, text: ' keep this text' });
+    await mixedUpload;
+    await expect(chatPage.locator('.work-center-attachment-chip')).toHaveCount(3);
+
     const createRequest = respondToWorkCenterOp(mockAgent, 'create', {
       ...OPEN_ITEM_DETAIL,
       attachments: [{ id: 'attachment-1', name: 'screen.png', mimeType: 'image/png', size: 10, isImage: true }],
     });
     await chatPage.getByRole('button', { name: 'Create', exact: true }).click();
     const request = await createRequest;
-    expect(request.payload.attachments).toEqual([expect.objectContaining({
-      fileId: expect.any(String), name: 'screen.png', mimeType: 'image/png', size: 10,
-    })]);
+    expect(request.payload.attachments).toEqual([
+      expect.objectContaining({ fileId: expect.any(String), name: 'screen.png', mimeType: 'image/png', size: 10 }),
+      expect.objectContaining({ fileId: expect.any(String), name: expect.stringMatching(/^pasted-image-\d+-1\.png$/), mimeType: 'image/png' }),
+      expect.objectContaining({ fileId: expect.any(String), name: 'mixed.png', mimeType: 'image/png' }),
+    ]);
   });
 
   test('keeps Info above an independent Conversation and preserves drafts across tabs', async ({ chatPage, mockAgent }) => {
@@ -3195,6 +3225,23 @@ test.describe('Work Center responsive UI', () => {
     await expect(conversation.locator('.work-center-message-draft-attachments')).toContainText('work-item-screen.png');
     await expect(conversation.locator('textarea')).toHaveValue('');
 
+    const pastedUpload = chatPage.waitForResponse(response => (
+      response.url().includes('/api/upload') && response.request().method() === 'POST'
+    ));
+    const pasteResult = await conversation.locator('textarea').evaluate(element => {
+      const image = new File(['pasted-message-image'], '', { type: 'image/png' });
+      const data = new DataTransfer();
+      data.setData('text/plain', ' keep this message text');
+      data.items.add(image);
+      const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data });
+      element.dispatchEvent(event);
+      return { prevented: event.defaultPrevented };
+    });
+    expect(pasteResult.prevented).toBe(false);
+    await pastedUpload;
+    await expect(conversation.locator('.work-center-message-draft-attachments .work-center-attachment-chip')).toHaveCount(2);
+    await expect(conversation.locator('.work-center-message-draft-attachments')).toContainText(/pasted-image-\d+-1\.png/);
+
     const messageResponse = respondToWorkCenterOp(mockAgent, 'post_work_item_message', {
       accepted: true,
       turnId: 'attachment-only-turn',
@@ -3209,12 +3256,19 @@ test.describe('Work Center responsive UI', () => {
       planRevision: 2,
       ledgerRevision: 4,
       coordinatorRevision: 0,
-      attachments: [expect.objectContaining({
-        fileId: expect.any(String),
-        name: 'work-item-screen.png',
-        mimeType: 'image/png',
-        size: 15,
-      })],
+      attachments: [
+        expect.objectContaining({
+          fileId: expect.any(String),
+          name: 'work-item-screen.png',
+          mimeType: 'image/png',
+          size: 15,
+        }),
+        expect.objectContaining({
+          fileId: expect.any(String),
+          name: expect.stringMatching(/^pasted-image-\d+-1\.png$/),
+          mimeType: 'image/png',
+        }),
+      ],
     });
     await expect(conversation.locator('.work-center-message-draft-attachments')).toHaveCount(0);
 

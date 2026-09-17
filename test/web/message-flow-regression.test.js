@@ -3599,6 +3599,99 @@ describe('message flow regressions', () => {
     expect(workCenterStore.refreshWorkCenterRuntime).toHaveBeenCalledOnce();
     expect(workCenterStore.refreshWorkCenterRuntime).toHaveBeenCalledWith('agent-a');
 
+    const attachmentSupport = WorkCenterPage.computed.workItemAttachmentsSupported;
+    expect(attachmentSupport.call({
+      agentId: 'agent-a', runtime: { workItemAttachments: false },
+      agents: [{
+        id: 'agent-a', capabilities: ['work_center', 'work_item_attachments'],
+        capabilityMetadataProvided: true,
+      }],
+    })).toBe(true);
+    expect(attachmentSupport.call({
+      agentId: 'agent-a', runtime: { workItemAttachments: true },
+      agents: [{
+        id: 'agent-a', capabilities: ['work_center'], capabilityMetadataProvided: true,
+      }],
+    })).toBe(false);
+    expect(attachmentSupport.call({
+      agentId: 'agent-a', runtime: { workItemAttachments: true },
+      agents: [{ id: 'agent-a', capabilities: ['work_center'] }],
+    })).toBe(true);
+
+    const uploadResolvers = [];
+    const attachmentContext = {
+      workItemAttachmentsSupported: true,
+      createAttachments: [],
+      createAttachmentUploadCount: 0,
+      attachmentsUploading: false,
+      createAttachmentError: '',
+      createGeneration: 7,
+      createOpen: true,
+      tr: (_key, fallback) => fallback,
+      uploadPendingAttachments: vi.fn(() => new Promise(resolve => uploadResolvers.push(resolve))),
+    };
+    const firstUpload = WorkCenterPage.methods.addCreateAttachments.call(attachmentContext, [{ name: 'first.png' }]);
+    const secondUpload = WorkCenterPage.methods.addCreateAttachments.call(attachmentContext, [{ name: 'second.png' }]);
+    expect(attachmentContext.createAttachmentUploadCount).toBe(2);
+    expect(attachmentContext.attachmentsUploading).toBe(true);
+    uploadResolvers[0]([{ fileId: 'first', name: 'first.png' }]);
+    await firstUpload;
+    expect(attachmentContext.attachmentsUploading).toBe(true);
+    uploadResolvers[1]([{ fileId: 'second', name: 'second.png' }]);
+    await secondUpload;
+    expect(attachmentContext.attachmentsUploading).toBe(false);
+    expect(attachmentContext.createAttachments.map(attachment => attachment.fileId)).toEqual(['first', 'second']);
+
+    const abandonedUpload = WorkCenterPage.methods.addCreateAttachments.call(attachmentContext, [{ name: 'late.png' }]);
+    attachmentContext.createOpen = false;
+    attachmentContext.createGeneration += 1;
+    uploadResolvers[2]([{ fileId: 'late', name: 'late.png' }]);
+    await abandonedUpload;
+    expect(attachmentContext.createAttachments.map(attachment => attachment.fileId)).toEqual(['first', 'second']);
+
+    const messageUploadResolvers = [];
+    const messageAttachmentContext = {
+      workItemAttachmentsSupported: true,
+      workItemComposerScope: 'agent-a:item-a',
+      pendingEnvelopeAttachmentRecovery: false,
+      selected: { attachments: [] },
+      selectedId: 'item-a',
+      agentId: 'agent-a',
+      workItemMessage: 'ready',
+      workItemMessageQuote: null,
+      workItemMessageAttachments: [],
+      workItemMessageAttachmentUploadCount: 0,
+      workItemMessageAttachmentsUploading: false,
+      workItemMessageSending: false,
+      workItemMessageError: '',
+      workItemComposerGeneration: 3,
+      composerTargetUnavailable: false,
+      staleComposerTarget: null,
+      uploadPendingAttachments: vi.fn(() => new Promise(resolve => messageUploadResolvers.push(resolve))),
+      saveComposerDraft: vi.fn(),
+      tr: (_key, fallback) => fallback,
+    };
+    const firstMessageUpload = WorkCenterPage.methods.addWorkItemMessageAttachments.call(
+      messageAttachmentContext, [{ name: 'first-message.png' }],
+    );
+    const secondMessageUpload = WorkCenterPage.methods.addWorkItemMessageAttachments.call(
+      messageAttachmentContext, [{ name: 'second-message.png' }],
+    );
+    expect(messageAttachmentContext.workItemMessageAttachmentUploadCount).toBe(2);
+    expect(WorkCenterPage.computed.composerCanSend.call(messageAttachmentContext)).toBe(false);
+    messageUploadResolvers[0]([{ fileId: 'first-message', name: 'first-message.png' }]);
+    await firstMessageUpload;
+    expect(messageAttachmentContext.workItemMessageAttachmentsUploading).toBe(true);
+    expect(WorkCenterPage.computed.composerCanSend.call(messageAttachmentContext)).toBe(false);
+    expect(messageAttachmentContext.saveComposerDraft).toHaveBeenCalledOnce();
+
+    WorkCenterPage.methods.resetWorkItemComposer.call(messageAttachmentContext);
+    messageUploadResolvers[1]([{ fileId: 'late-message', name: 'second-message.png' }]);
+    await secondMessageUpload;
+    expect(messageAttachmentContext.workItemMessageAttachments).toEqual([]);
+    expect(messageAttachmentContext.saveComposerDraft).toHaveBeenCalledOnce();
+    expect(messageAttachmentContext.workItemMessageAttachmentsUploading).toBe(false);
+
     const emptyWorkCenterStore = Vue.reactive({
       ...workCenterStore,
       workCenterAgentId: null,
