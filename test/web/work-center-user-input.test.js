@@ -174,6 +174,48 @@ describe('Work Center explicit user input', () => {
     expect(vm.createOpen).toBe(false);
   });
 
+  it('unifies built-in, custom and historical delivery without hidden goals or extra permissions', () => {
+    const vm = { ...Page.data(), $t: key => en[key], deliveryInstructionOptions: ['Ship the report'],
+      deliveryTargetLabel: value => value || 'Ask' };
+    const options = Page.computed.deliveryTargetOptions.call(vm);
+    expect(options.map(option => option.value)).toContain('custom');
+    expect(options.at(-1)).toEqual({ value: 'history:Ship the report', label: 'Ship the report' });
+    const choose = value => Page.computed.deliveryTargetChoice.set.call(vm, value);
+    choose('history:Ship the report');
+    expect(vm.form).toMatchObject({ deliveryTarget: '', deliveryInstructions: 'Ship the report' });
+    expect(vm.customDeliveryTarget).toBe(true);
+    choose('pull_request');
+    expect(vm.form).toMatchObject({ deliveryTarget: 'pull_request', deliveryInstructions: '' });
+    expect(vm.customDeliveryTarget).toBe(false);
+    choose('custom');
+    expect(vm.form.deliveryTarget).toBe('');
+    expect(Page.computed.deliveryTargetChoice.get.call(vm)).toBe('custom');
+  });
+
+  it('uses themed Agent options with offline choices disabled', () => {
+    const options = Page.computed.createAgentOptions.call({ sidebarAgents: [
+      { id: 'a', name: 'C1', online: true }, { id: 'b', online: false },
+    ], $t: key => en[key] });
+    expect(options).toEqual([
+      { value: 'a', label: 'C1', badge: '', disabled: false },
+      { value: 'b', label: 'b', badge: 'Offline', disabled: true },
+    ]);
+  });
+
+  it('rejects an empty custom goal and always enables scoped memory on creation', async () => {
+    const store = { createWorkItem: vi.fn().mockResolvedValue({ id: 'new-item' }) };
+    const vm = { ...Page.data(), store, agentId: 'a', customDeliveryTarget: true,
+      form: { requirement: 'Request', workDir: '/tmp/test', deliveryTarget: 'merge', deliveryInstructions: '  ', reuseMemory: false },
+      openWorkItem: vi.fn() };
+    await Page.methods.submitCreate.call(vm);
+    expect(store.createWorkItem).not.toHaveBeenCalled();
+    vm.form.deliveryInstructions = 'Report the result';
+    await Page.methods.submitCreate.call(vm);
+    expect(store.createWorkItem).toHaveBeenCalledWith(expect.objectContaining({ deliveryTarget: null,
+      deliveryInstructions: 'Report the result', reuseMemory: true }), 'a');
+    expect(vm.customDeliveryTarget).toBe(false);
+  });
+
   it('does not submit a create while uploading, saving or without an Agent', async () => {
     const store = { createWorkItem: vi.fn() };
     for (const state of [{ attachmentsUploading: true, agentId: 'a' }, { saving: true, agentId: 'a' }, { agentId: null }]) {

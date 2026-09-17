@@ -8,6 +8,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -21,6 +22,7 @@ import {
   MAX_WORK_ITEM_ATTACHMENT_BYTES,
   MAX_WORK_ITEM_INLINE_BYTES,
 } from './attachment-policy.js';
+import { assertWorkItemAttachmentPlatform } from './attachment-platform.js';
 
 function isInsideOrEqual(parent, child) {
   const rel = relative(parent, child);
@@ -57,15 +59,77 @@ function digest(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
+function samePath(left, right) {
+  return relative(resolve(left), resolve(right)) === '';
+}
+
 function assertStableDirectory(directory, label, expectedIdentity = null) {
   const expected = resolve(directory);
   const stat = lstatSync(expected);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${label} must be a real directory`);
   const actual = realpathSync(expected);
-  if (actual !== expected || (expectedIdentity && actual !== expectedIdentity)) {
+  // realpath also rejects symlink/junction ancestors. path.relative preserves
+  // Windows' case-insensitive path semantics without weakening POSIX checks.
+  if (!samePath(actual, expected)
+    || (expectedIdentity && !samePath(actual, expectedIdentity))) {
     throw new Error(`${label} identity changed`);
   }
   return actual;
+}
+
+function directoryIdentity(directory, label) {
+  const path = assertStableDirectory(directory, label);
+  const stat = lstatSync(directory);
+  return { path, dev: stat.dev, ino: stat.ino };
+}
+
+function sameFileIdentity(stat, identity) {
+  return stat.dev === identity.dev && stat.ino === identity.ino;
+}
+
+function assertDirectoryIdentity(directory, label, identity, options = {}) {
+  const path = assertStableDirectory(directory, label, options.allowRename ? null : identity.path);
+  const stat = lstatSync(directory);
+  if (!sameFileIdentity(stat, identity)) throw new Error(`${label} identity changed`);
+  return path;
+}
+
+function assertRegularFileIdentity(descriptor, filePath, label, expectedIdentity = null) {
+  const descriptorStat = fstatSync(descriptor);
+  const pathStat = lstatSync(filePath);
+  if (!descriptorStat.isFile() || !pathStat.isFile() || pathStat.isSymbolicLink()
+    || !sameFileIdentity(pathStat, descriptorStat)
+    || (expectedIdentity && !sameFileIdentity(descriptorStat, expectedIdentity))) {
+    throw new Error(`${label} identity changed`);
+  }
+  return descriptorStat;
+}
+
+function isLinuxDescriptorState(state) {
+  return state?.rootDescriptor !== undefined && state?.itemDescriptor !== undefined;
+}
+
+function assertPortableDirectoryState(state) {
+  const root = assertDirectoryIdentity(
+    state.attachmentRoot,
+    'WorkItem attachment root',
+    state.rootIdentity,
+  );
+  const item = assertDirectoryIdentity(
+    state.itemDirectory,
+    'WorkItem attachment owner directory',
+    state.itemIdentity,
+  );
+  if (!isInsideOrEqual(root, item)) throw new Error('WorkItem attachment owner identity changed');
+}
+
+function assertDirectoryState(state) {
+  if (isLinuxDescriptorState(state)) {
+    assertDescriptorMatchesPath(state.rootDescriptor, state.attachmentRoot, 'WorkItem attachment root');
+    assertDescriptorMatchesPath(state.itemDescriptor, state.itemDirectory, 'WorkItem attachment owner directory');
+    return;
+  }
+  assertPortableDirectoryState(state);
 }
 
 function assertDescriptorMatchesPath(descriptor, directory, label) {
@@ -96,14 +160,42 @@ function openDirectory(directory, label) {
 }
 
 function prepareAttachmentDirectory(root, workItemId) {
-  if (process.platform !== 'linux') {
-    throw new Error('Secure WorkItem attachment persistence requires Linux');
-  }
+  assertWorkItemAttachmentPlatform();
   const attachmentRoot = resolve(root);
   const parent = resolve(attachmentRoot, '..');
   const rootName = basename(attachmentRoot);
   if (!rootName || rootName === '.' || rootName === '..') throw new Error('Invalid WorkItem attachment root');
-  assertStableDirectory(parent, 'WorkItem attachment parent');
+  const parentIdentity = directoryIdentity(parent, 'WorkItem attachment parent');
+  if (process.platform !== 'linux') {
+    try {
+      mkdirSync(attachmentRoot, { mode: 0o700 });
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+    assertDirectoryIdentity(parent, 'WorkItem attachment parent', parentIdentity);
+    const rootIdentity = directoryIdentity(attachmentRoot, 'WorkItem attachment root');
+    if (!isInsideOrEqual(parentIdentity.path, rootIdentity.path)) throw new Error('WorkItem attachment root identity changed');
+    const ownerName = safeWorkItemId(workItemId);
+    const itemDirectory = join(attachmentRoot, ownerName);
+    try {
+      mkdirSync(itemDirectory, { mode: 0o700 });
+    } catch (error) {
+      if (error?.code === 'EEXIST') throw new Error('WorkItem attachment owner directory already exists');
+      throw error;
+    }
+    let itemIdentity;
+    try {
+      assertDirectoryIdentity(attachmentRoot, 'WorkItem attachment root', rootIdentity);
+      itemIdentity = directoryIdentity(itemDirectory, 'WorkItem attachment owner directory');
+      if (!isInsideOrEqual(rootIdentity.path, itemIdentity.path)) throw new Error('WorkItem attachment owner identity changed');
+      return { attachmentRoot, itemDirectory, ownerName, rootIdentity, itemIdentity };
+    } catch (error) {
+      if (itemIdentity) {
+        removeCreatedDirectory({ attachmentRoot, itemDirectory, ownerName, rootIdentity, itemIdentity });
+      }
+      throw error;
+    }
+  }
   const parentDescriptor = openDirectory(parent, 'WorkItem attachment parent');
   let rootDescriptor;
   try {
@@ -148,6 +240,30 @@ function attachmentDirectory(root, workItemId) {
 }
 
 function writeAttachmentFile(directoryState, storageName, buffer) {
+  if (!isLinuxDescriptorState(directoryState)) {
+    assertPortableDirectoryState(directoryState);
+    const filePath = join(directoryState.itemDirectory, storageName);
+    const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
+      | (constants.O_NOFOLLOW || 0);
+    // Windows maps missing write bits to a read-only attribute, which can block
+    // single-file rollback. Integrity is checked by size and SHA-256 on reads;
+    // POSIX platforms keep the existing read-only file mode.
+    const fileMode = process.platform === 'win32' ? 0o600 : 0o400;
+    const descriptor = openSync(filePath, flags, fileMode);
+    try {
+      assertRegularFileIdentity(descriptor, filePath, 'WorkItem attachment file');
+      const actualPath = realpathSync(filePath);
+      if (!isInsideOrEqual(directoryState.itemIdentity.path, actualPath)) {
+        throw new Error('WorkItem attachment path escapes its owner');
+      }
+      writeFileSync(descriptor, buffer);
+      fchmodSync(descriptor, fileMode);
+      assertPortableDirectoryState(directoryState);
+    } finally {
+      closeSync(descriptor);
+    }
+    return;
+  }
   assertDescriptorMatchesPath(directoryState.rootDescriptor, directoryState.attachmentRoot, 'WorkItem attachment root');
   assertDescriptorMatchesPath(directoryState.itemDescriptor, directoryState.itemDirectory, 'WorkItem attachment owner directory');
   const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
@@ -167,6 +283,19 @@ function closeDirectoryState(state) {
 }
 
 function removeCreatedDirectory(state) {
+  if (!isLinuxDescriptorState(state)) {
+    try {
+      assertPortableDirectoryState(state);
+      const quarantine = join(state.attachmentRoot, `.remove-${randomUUID()}`);
+      renameSync(state.itemDirectory, quarantine);
+      assertDirectoryIdentity(quarantine, 'WorkItem attachment cleanup directory', state.itemIdentity, { allowRename: true });
+      assertDirectoryIdentity(state.attachmentRoot, 'WorkItem attachment root', state.rootIdentity);
+      rmSync(quarantine, { recursive: true, force: true });
+    } catch {
+      // Never follow or remove a replacement path while handling another failure.
+    }
+    return;
+  }
   try {
     assertDescriptorMatchesPath(state.rootDescriptor, state.attachmentRoot, 'WorkItem attachment root');
     assertDescriptorMatchesPath(state.itemDescriptor, state.itemDirectory, 'WorkItem attachment owner directory');
@@ -177,10 +306,18 @@ function removeCreatedDirectory(state) {
 }
 
 function openAttachmentDirectory(root, workItemId) {
-  if (process.platform !== 'linux') {
-    throw new Error('Secure WorkItem attachment access requires Linux');
-  }
+  assertWorkItemAttachmentPlatform();
   const { attachmentRoot, itemDirectory } = attachmentDirectory(root, workItemId);
+  if (process.platform !== 'linux') {
+    const rootIdentity = directoryIdentity(attachmentRoot, 'WorkItem attachment root');
+    const itemIdentity = directoryIdentity(itemDirectory, 'WorkItem attachment owner directory');
+    if (!isInsideOrEqual(rootIdentity.path, itemIdentity.path)) {
+      throw new Error('WorkItem attachment owner identity changed');
+    }
+    return {
+      attachmentRoot, itemDirectory, ownerName: safeWorkItemId(workItemId), rootIdentity, itemIdentity,
+    };
+  }
   const rootDescriptor = openDirectory(attachmentRoot, 'WorkItem attachment root');
   try {
     const ownerName = safeWorkItemId(workItemId);
@@ -204,6 +341,19 @@ function openAttachmentDirectory(root, workItemId) {
 
 function removeAttachmentFile(directoryState, storageName) {
   if (!/^[A-Za-z0-9_-]+(?:\.[a-z0-9]{1,10})?$/.test(storageName)) return;
+  if (!isLinuxDescriptorState(directoryState)) {
+    assertPortableDirectoryState(directoryState);
+    const filePath = join(directoryState.itemDirectory, storageName);
+    try {
+      const stat = lstatSync(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('WorkItem attachment is not a regular file');
+      unlinkSync(filePath);
+      assertPortableDirectoryState(directoryState);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    return;
+  }
   assertDescriptorMatchesPath(directoryState.rootDescriptor, directoryState.attachmentRoot, 'WorkItem attachment root');
   assertDescriptorMatchesPath(directoryState.itemDescriptor, directoryState.itemDirectory, 'WorkItem attachment owner directory');
   try {
@@ -237,13 +387,11 @@ export function persistWorkItemAttachments(files, options = {}) {
       if (totalBytes > MAX_WORK_ITEM_ATTACHMENT_BYTES) {
         throw new Error(`WorkItem attachments exceed ${MAX_WORK_ITEM_ATTACHMENT_BYTES} bytes`);
       }
-      assertDescriptorMatchesPath(directoryState.rootDescriptor, directoryState.attachmentRoot, 'WorkItem attachment root');
-      assertDescriptorMatchesPath(directoryState.itemDescriptor, directoryState.itemDirectory, 'WorkItem attachment owner directory');
+      assertDirectoryState(directoryState);
       const id = randomUUID();
       const storageName = `${id}${safeExtension(name)}`;
       writeAttachmentFile(directoryState, storageName, buffer);
-      assertDescriptorMatchesPath(directoryState.rootDescriptor, directoryState.attachmentRoot, 'WorkItem attachment root');
-      assertDescriptorMatchesPath(directoryState.itemDescriptor, directoryState.itemDirectory, 'WorkItem attachment owner directory');
+      assertDirectoryState(directoryState);
       attachments.push({
         id,
         name,
@@ -334,8 +482,22 @@ export function removeWorkItemAttachmentFiles(root, workItemId, attachments) {
 
 export function removeWorkItemAttachments(root, workItemId, options = {}) {
   if (!root || !workItemId) return;
+  assertWorkItemAttachmentPlatform();
   if (process.platform !== 'linux') {
-    throw new Error('Secure WorkItem attachment removal requires Linux');
+    try {
+      const state = openAttachmentDirectory(root, workItemId);
+      options.beforeRemove?.();
+      assertPortableDirectoryState(state);
+      const quarantine = join(state.attachmentRoot, `.remove-${randomUUID()}`);
+      renameSync(state.itemDirectory, quarantine);
+      assertDirectoryIdentity(quarantine, 'WorkItem attachment removal directory', state.itemIdentity, { allowRename: true });
+      assertDirectoryIdentity(state.attachmentRoot, 'WorkItem attachment root', state.rootIdentity);
+      rmSync(quarantine, { recursive: true, force: true });
+    } catch (error) {
+      if (error?.code === 'ENOENT') return;
+      throw error;
+    }
+    return;
   }
 
   const { attachmentRoot, itemDirectory } = attachmentDirectory(root, workItemId);
@@ -375,21 +537,51 @@ export function removeWorkItemAttachments(root, workItemId, options = {}) {
   }
 }
 
-function resolveAttachmentPath(root, workItemId, attachment) {
-  const { attachmentRoot, itemDirectory } = attachmentDirectory(root, workItemId);
-  assertStableDirectory(attachmentRoot, 'WorkItem attachment root');
-  const itemRoot = assertStableDirectory(itemDirectory, 'WorkItem attachment owner directory');
+function safeStorageName(attachment) {
   const storageName = typeof attachment?.storageName === 'string' ? attachment.storageName : '';
   if (!/^[A-Za-z0-9_-]+(?:\.[a-z0-9]{1,10})?$/.test(storageName)) {
     throw new Error('WorkItem attachment metadata is invalid');
   }
-  const filePath = resolve(itemDirectory, storageName);
-  if (!isInsideOrEqual(itemRoot, filePath)) throw new Error('WorkItem attachment path escapes its owner');
-  const stat = lstatSync(filePath);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('WorkItem attachment is not a regular file');
-  const actualPath = realpathSync(filePath);
-  if (!isInsideOrEqual(itemRoot, actualPath)) throw new Error('WorkItem attachment path escapes its owner');
-  return { filePath: actualPath, size: stat.size, itemDirectory: itemRoot };
+  return storageName;
+}
+
+function readAttachmentBuffer(state, attachment) {
+  const storageName = safeStorageName(attachment);
+  assertDirectoryState(state);
+  const filePath = join(state.itemDirectory, storageName);
+  const openPath = isLinuxDescriptorState(state)
+    ? `/proc/self/fd/${state.itemDescriptor}/${storageName}`
+    : filePath;
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0);
+  const descriptor = openSync(openPath, flags);
+  try {
+    const descriptorStat = isLinuxDescriptorState(state)
+      ? fstatSync(descriptor)
+      : assertRegularFileIdentity(descriptor, filePath, 'WorkItem attachment file');
+    if (!descriptorStat.isFile()) throw new Error('WorkItem attachment is not a regular file');
+    assertWorkItemAttachmentSize(descriptorStat.size);
+    if (!isLinuxDescriptorState(state)) {
+      const actualPath = realpathSync(filePath);
+      if (!isInsideOrEqual(state.itemIdentity.path, actualPath)) {
+        throw new Error('WorkItem attachment path escapes its owner');
+      }
+    }
+    const buffer = readFileSync(descriptor);
+    const finalStat = isLinuxDescriptorState(state)
+      ? fstatSync(descriptor)
+      : assertRegularFileIdentity(descriptor, filePath, 'WorkItem attachment file', descriptorStat);
+    if (finalStat.size !== descriptorStat.size || !sameFileIdentity(finalStat, descriptorStat)) {
+      throw new Error('WorkItem attachment changed while reading');
+    }
+    assertDirectoryState(state);
+    assertRegularFileIdentity(descriptor, filePath, 'WorkItem attachment file', descriptorStat);
+    const actualPath = realpathSync(filePath);
+    const itemRoot = state.itemIdentity?.path || realpathSync(state.itemDirectory);
+    if (!isInsideOrEqual(itemRoot, actualPath)) throw new Error('WorkItem attachment path escapes its owner');
+    return { buffer, size: finalStat.size, path: actualPath };
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 /** Copy verified bytes into a new owner directory; never share source paths. */
@@ -398,23 +590,12 @@ export function cloneWorkItemAttachments(workItem, workItemId, options = {}) {
   const state = openAttachmentDirectory(options.root, workItem.id);
   try {
     const files = workItem.attachments.map(attachment => {
-      const storageName = attachment.storageName;
-      if (typeof storageName !== 'string' || !/^[A-Za-z0-9_-]+(?:\.[a-z0-9]{1,10})?$/.test(storageName)) {
-        throw new Error('WorkItem attachment metadata is invalid');
+      const { buffer, size } = readAttachmentBuffer(state, attachment);
+      if (buffer.length !== Number(attachment.size) || size !== Number(attachment.size)
+        || digest(buffer) !== attachment.sha256) {
+        throw new Error('WorkItem attachment changed after creation');
       }
-      assertDescriptorMatchesPath(state.rootDescriptor, state.attachmentRoot, 'WorkItem attachment root');
-      assertDescriptorMatchesPath(state.itemDescriptor, state.itemDirectory, 'WorkItem attachment owner directory');
-      const fd = openSync(`/proc/self/fd/${state.itemDescriptor}/${storageName}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-      try {
-        const stat = fstatSync(fd);
-        if (!stat.isFile()) throw new Error('WorkItem attachment is not a regular file');
-        assertWorkItemAttachmentSize(stat.size);
-        const buffer = readFileSync(fd);
-        if (buffer.length !== Number(attachment.size) || digest(buffer) !== attachment.sha256) {
-          throw new Error('WorkItem attachment changed after creation');
-        }
-        return { name: attachment.name, mimeType: attachment.mimeType, data: buffer.toString('base64') };
-      } finally { closeSync(fd); }
+      return { name: attachment.name, mimeType: attachment.mimeType, data: buffer.toString('base64') };
     });
     return persistWorkItemAttachments(files, { root: options.root, workItemId });
   } finally { closeDirectoryState(state); }
@@ -425,19 +606,24 @@ export function readWorkItemAttachment(workItem, attachmentId, options = {}) {
     ? workItem.attachments.find(item => item?.id === attachmentId)
     : null;
   if (!attachment) throw new Error('WorkItem attachment not found');
-  const resolved = resolveAttachmentPath(options.root, workItem.id, attachment);
-  const buffer = readFileSync(resolved.filePath);
-  if (resolved.size !== Number(attachment.size) || digest(buffer) !== attachment.sha256) {
-    throw new Error(`WorkItem attachment changed after creation: ${attachment.name || attachment.id}`);
+  const state = openAttachmentDirectory(options.root, workItem.id);
+  try {
+    const { buffer, size } = readAttachmentBuffer(state, attachment);
+    if (buffer.length !== Number(attachment.size) || size !== Number(attachment.size)
+      || digest(buffer) !== attachment.sha256) {
+      throw new Error(`WorkItem attachment changed after creation: ${attachment.name || attachment.id}`);
+    }
+    return {
+      id: attachment.id,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size,
+      isImage: attachment.isImage === true,
+      data: buffer.toString('base64'),
+    };
+  } finally {
+    closeDirectoryState(state);
   }
-  return {
-    id: attachment.id,
-    name: attachment.name,
-    mimeType: attachment.mimeType,
-    size: resolved.size,
-    isImage: attachment.isImage === true,
-    data: buffer.toString('base64'),
-  };
 }
 
 function escapePromptText(value) {
@@ -519,33 +705,36 @@ export function buildWorkItemAttachmentContext(workItem, options = {}) {
   const promptParts = [];
   const files = [];
   const promptByteBudget = Math.max(0, Number(options.inlineTextBytes) || 0);
-  let itemDirectory = null;
-  for (const attachment of attachments) {
-    const resolved = resolveAttachmentPath(options.root, workItem.id, attachment);
-    itemDirectory ||= resolved.itemDirectory;
-    const buffer = readFileSync(resolved.filePath);
-    if (resolved.size !== Number(attachment.size) || digest(buffer) !== attachment.sha256) {
-      throw new Error(`WorkItem attachment changed after creation: ${attachment.name || attachment.id}`);
+  const state = openAttachmentDirectory(options.root, workItem.id);
+  try {
+    for (const attachment of attachments) {
+      const resolved = readAttachmentBuffer(state, attachment);
+      if (resolved.buffer.length !== Number(attachment.size) || resolved.size !== Number(attachment.size)
+        || digest(resolved.buffer) !== attachment.sha256) {
+        throw new Error(`WorkItem attachment changed after creation: ${attachment.name || attachment.id}`);
+      }
+      const kind = attachment.kind || assertSupportedWorkItemAttachment(attachment.name, attachment.mimeType);
+      const ref = `work-item-attachment://${encodeURIComponent(attachment.id)}/${encodeURIComponent(attachment.name)}`;
+      lines.push(`- ${escapePromptText(attachment.name)}: ${escapePromptText(ref)} (${escapePromptText(attachment.mimeType)}, ${resolved.size} bytes)`);
+      files.push({ ref, path: resolved.path, root: state.itemIdentity?.path || state.itemDirectory, id: attachment.id });
+      if (kind === 'text' && promptByteBudget > 0) {
+        textAttachments.push({ attachment, content: resolved.buffer.toString('utf8') });
+      }
+      if (kind === 'image' && resolved.size <= MAX_WORK_ITEM_INLINE_BYTES) {
+        promptParts.push({
+          type: 'image',
+          source: { type: 'base64', media_type: attachment.mimeType, data: resolved.buffer.toString('base64') },
+        });
+      } else if (kind === 'pdf' && resolved.size <= MAX_WORK_ITEM_INLINE_BYTES) {
+        promptParts.push({
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: resolved.buffer.toString('base64') },
+          title: attachment.name,
+        });
+      }
     }
-    const kind = attachment.kind || assertSupportedWorkItemAttachment(attachment.name, attachment.mimeType);
-    const ref = `work-item-attachment://${encodeURIComponent(attachment.id)}/${encodeURIComponent(attachment.name)}`;
-    lines.push(`- ${escapePromptText(attachment.name)}: ${escapePromptText(ref)} (${escapePromptText(attachment.mimeType)}, ${resolved.size} bytes)`);
-    files.push({ ref, path: resolved.filePath, root: resolved.itemDirectory, id: attachment.id });
-    if (kind === 'text' && promptByteBudget > 0) {
-      textAttachments.push({ attachment, content: buffer.toString('utf8') });
-    }
-    if (kind === 'image' && resolved.size <= MAX_WORK_ITEM_INLINE_BYTES) {
-      promptParts.push({
-        type: 'image',
-        source: { type: 'base64', media_type: attachment.mimeType, data: buffer.toString('base64') },
-      });
-    } else if (kind === 'pdf' && resolved.size <= MAX_WORK_ITEM_INLINE_BYTES) {
-      promptParts.push({
-        type: 'document',
-        source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') },
-        title: attachment.name,
-      });
-    }
+  } finally {
+    closeDirectoryState(state);
   }
 
   let promptBlock = buildAttachmentMetadataBlock(lines, promptByteBudget);
@@ -557,6 +746,6 @@ export function buildWorkItemAttachmentContext(workItem, options = {}) {
     promptBlock,
     promptParts,
     files,
-    readRoots: itemDirectory ? [itemDirectory] : [],
+    readRoots: files.length > 0 ? [files[0].root] : [],
   };
 }

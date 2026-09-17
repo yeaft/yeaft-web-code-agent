@@ -40,9 +40,10 @@ For a new WorkItem, provide:
 1. the requirement or goal;
 2. the working directory;
 3. optional files (supported image, PDF, or text-based attachments);
-4. whether to reuse eligible prior memory;
-5. the delivery target (or ask before delivery);
-6. whether execution should start immediately.
+4. the delivery target (or ask before delivery);
+5. whether execution should start immediately.
+
+The create entry uses the same borderless style as **New chat**, and the Agent picker uses a rounded, theme-aware menu. **Delivery target** occupies one row: choose a built-in target, or choose **Custom** and type beside it. Previously used custom goals are available in the same menu, scoped to the selected Agent. Custom text does not grant merge or release permission. Eligible Agent memory and completed work are enabled by default without a checkbox; scope, workspace, and ownership boundaries remain unchanged.
 
 The title is a short display label, separate from the original requirement or goal. An explicitly supplied title is preserved. When it is omitted, the existing initial Coordinator decision generates one without another model call; retries keep the original goal unchanged, and older WorkItems keep their stored titles. New items retain the creation-time requirement independently of later user-approved goal refinements. Older items use the goal retained at upgrade as their requirement; earlier versions did not save a separate original. Until coordination runs, a compact fallback label is displayed. An omitted generated title uses a deterministic fallback instead of failing the task.
 
