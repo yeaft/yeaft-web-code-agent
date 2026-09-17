@@ -789,9 +789,11 @@ test.describe('Work Center responsive UI', () => {
       expect(popover.x).toBeGreaterThanOrEqual(0);
       expect(popover.x + popover.width).toBeLessThanOrEqual(320);
       await chatPage.locator('.work-center-mobile-search input').press('Escape');
-      await chatPage.getByRole('button', { name: 'More actions', exact: true }).click();
       await expect(chatPage.getByRole('button', { name: 'New work item', exact: true })).toBeVisible();
-      await chatPage.getByRole('button', { name: 'New work item', exact: true }).press('Escape');
+      await expect(chatPage.getByRole('button', { name: 'Refresh', exact: true }).last()).toBeVisible();
+      await chatPage.getByRole('button', { name: 'More actions', exact: true }).click();
+      await expect(chatPage.getByRole('button', { name: 'Work Center settings', exact: true })).toBeVisible();
+      await chatPage.getByRole('button', { name: 'Work Center settings', exact: true }).press('Escape');
       await expect(chatPage.getByRole('button', { name: 'More actions', exact: true })).toBeFocused();
       await expect.poll(() => chatPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
@@ -2886,6 +2888,34 @@ test.describe('Work Center responsive UI', () => {
     expect(request.payload.workItemType).toBe('auto');
     expect(request.payload).not.toHaveProperty('workflowTemplate');
     expect(request.payload).not.toHaveProperty('stageOverrides');
+  });
+
+  test('shows dedicated create and refresh actions and reuses delivery goals', async ({ chatPage, mockAgent }) => {
+    await openWorkCenter(chatPage, mockAgent);
+    await expect(chatPage.locator('.work-center-header-refresh')).toBeVisible();
+    await expect(chatPage.locator('.work-center-header-create')).toBeVisible();
+    await chatPage.getByRole('button', { name: 'More actions', exact: true }).click();
+    const menu = chatPage.locator('.work-center-header-popover');
+    await expect(menu).not.toContainText('Refresh');
+    await expect(menu).not.toContainText('New work item');
+
+    const historyRequest = respondToWorkCenterOp(mockAgent, 'list_delivery_instructions', {
+      values: ['Publish a release and summarize the changes'],
+    });
+    await chatPage.locator('.work-center-header-create').click();
+    await historyRequest;
+    const modal = chatPage.locator('.work-center-modal');
+    const goal = modal.getByRole('combobox', { name: /Delivery goal/ });
+    await expect(goal).toHaveAttribute('list', 'work-center-delivery-instructions');
+    await expect(modal.locator('#work-center-delivery-instructions option')).toHaveAttribute(
+      'value', 'Publish a release and summarize the changes',
+    );
+    await goal.fill('Send the signed package to the release channel');
+    await modal.getByRole('textbox', { name: /Requirement/ }).fill('Prepare the release package');
+    const createRequest = respondToWorkCenterOp(mockAgent, 'create', OPEN_ITEM_DETAIL);
+    await modal.getByRole('button', { name: 'Create', exact: true }).click();
+    expect((await createRequest).payload.deliveryInstructions)
+      .toBe('Send the signed package to the release channel');
   });
 
   test('creates a response delivery without requesting code artifacts', async ({ chatPage, mockAgent }) => {

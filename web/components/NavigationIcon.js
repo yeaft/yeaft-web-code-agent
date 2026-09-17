@@ -15,6 +15,7 @@ export default {
         <template v-if="name === 'activity'"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 14h5"/></template>
         <template v-else-if="name === 'search'"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></template>
         <template v-else-if="name === 'refresh'"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></template>
+        <path v-else-if="name === 'add'" d="M12 5v14M5 12h14"/>
         <path v-else-if="name === 'close'" d="m6 6 12 12M18 6 6 18"/>
         <path v-else-if="name === 'chevron'" d="m9 5 7 7-7 7"/>
       </g>

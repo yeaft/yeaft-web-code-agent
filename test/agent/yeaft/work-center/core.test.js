@@ -341,15 +341,29 @@ describe('Work Center core', () => {
           reuseMemory: false,
           start: false,
           deliveryTarget,
+          deliveryInstructions: `Deliver ${deliveryTarget} with a concise summary`,
         },
       });
       await new Promise(resolve => setImmediate(resolve));
       expect(bridgeFrames.find(frame => frame.requestId === requestId)).toMatchObject({
         type: 'work_center_response',
         ok: true,
-        data: { deliveryTarget },
+        data: {
+          deliveryTarget,
+          deliveryInstructions: `Deliver ${deliveryTarget} with a concise summary`,
+        },
       });
     }
+    expect(store.listRecentDeliveryInstructions(3)).toEqual([
+      'Deliver merge with a concise summary',
+      'Deliver pull_request with a concise summary',
+      'Deliver response with a concise summary',
+    ]);
+    expect(await bridgeService.handle('list_delivery_instructions', { limit: 2 }))
+      .toEqual({ values: [
+        'Deliver merge with a concise summary',
+        'Deliver pull_request with a concise summary',
+      ] });
 
     const producerItem = await createWorkItemFromProducer({
       title: 'Producer cannot choose delivery',
@@ -360,8 +374,10 @@ describe('Work Center core', () => {
       reuseMemory: false,
       start: false,
       deliveryTarget: 'merge',
+      deliveryInstructions: 'Producer-chosen delivery goal',
     });
     expect(producerItem.deliveryTarget).toBeNull();
+    expect(producerItem.deliveryInstructions).toBe('');
     await handleWorkCenterRequest({ requestId: 'goal-only', op: 'create', payload: {
       title: 'Goal-only report', goal: 'Explain this failure', acceptanceCriteria: [],
       deliveryTarget: 'response', workDir: dir, start: false,
