@@ -39,6 +39,11 @@ export default {
       } catch (_) { return fallback || key; }
     },
   },
+  computed: {
+    availableUpdateCount() {
+      return this.onlineAgents.filter(agent => agent?.upgradeAvailable).length;
+    },
+  },
   template: `
     <div class="agent-header-controls">
       <button
@@ -51,6 +56,16 @@ export default {
       >
         <span class="status-dot" :class="{ online: onlineAgentCount > 0 }"></span>
         <span class="brand-label">{{ tr('chat.agent.count', onlineAgentCount + ' agents', { count: onlineAgentCount }) }}</span>
+        <span
+          v-if="availableUpdateCount > 0"
+          class="agent-update-notification"
+          :title="tr('chat.agent.updatesAvailable', availableUpdateCount + ' updates available', { count: availableUpdateCount })"
+          :aria-label="tr('chat.agent.updatesAvailable', availableUpdateCount + ' updates available', { count: availableUpdateCount })"
+          role="status"
+        >
+          <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l2.3-2.3 1.4 1.42-4 4a1 1 0 0 1-1.4 0l-4-4 1.4-1.42 2.3 2.3V4a1 1 0 0 1 1-1ZM5 19h14v2H5v-2Z"/></svg>
+          <span class="agent-update-notification-count">{{ availableUpdateCount }}</span>
+        </span>
         <svg class="dropdown-chevron" :class="{ open }" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
       </button>
       <div class="agent-dropdown" v-if="open" role="menu" @click.stop>
@@ -61,16 +76,18 @@ export default {
             <span class="agent-dropdown-meta">
               <span class="agent-dropdown-status" v-if="restartingAgents[agent.id]">{{ tr('chat.agent.restarting', 'Restarting…') }}</span>
               <span class="agent-dropdown-status" v-else-if="upgradingAgents[agent.id]">{{ tr('chat.agent.upgrading', 'Upgrading…') }}</span>
+              <span class="agent-dropdown-version agent-dropdown-update-version" v-else-if="agent.upgradeAvailable">v{{ agent.upgradeAvailable }}</span>
               <span class="agent-dropdown-version" v-else-if="agent.version">v{{ agent.version }}</span>
             </span>
             <span v-if="showAgentActions" class="agent-dropdown-actions">
               <button
                 type="button"
                 class="agent-dropdown-action-btn agent-dropdown-upgrade-btn"
+                :class="{ 'update-available': agent.upgradeAvailable }"
                 @click.stop="$emit('upgrade-agent', agent.id)"
                 :disabled="!agent.online || restartingAgents[agent.id] || upgradingAgents[agent.id]"
-                :title="tr('chat.agent.upgrade', 'Upgrade')"
-                :aria-label="tr('chat.agent.upgrade', 'Upgrade')"
+                :title="agent.upgradeAvailable ? tr('chat.agent.updateAvailable', 'Update available: v' + agent.upgradeAvailable, { version: agent.upgradeAvailable }) : tr('chat.agent.upgrade', 'Upgrade')"
+                :aria-label="agent.upgradeAvailable ? tr('chat.agent.updateAvailable', 'Update available: v' + agent.upgradeAvailable, { version: agent.upgradeAvailable }) : tr('chat.agent.upgrade', 'Upgrade')"
               >
                 <span v-if="upgradingAgents[agent.id]" class="spinner-mini"></span>
                 <svg v-else viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>

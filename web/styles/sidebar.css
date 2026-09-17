@@ -158,6 +158,26 @@
   border-radius: 2px;
 }
 
+.agent-update-notification {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent-blue);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.agent-update-notification-count {
+  font-variant-numeric: tabular-nums;
+}
+
 .dropdown-chevron {
   color: var(--text-secondary);
   transition: transform 0.2s;
@@ -236,6 +256,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+.agent-dropdown-update-version {
+  color: var(--accent-blue);
+  font-weight: 700;
+}
+
 .agent-dropdown-status {
   font-size: 10px;
   color: var(--accent-blue);
@@ -279,6 +304,11 @@
 .agent-dropdown-action-btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+.agent-dropdown-upgrade-btn.update-available:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--accent-blue);
 }
 
 .agent-dropdown-empty {
