@@ -1,17 +1,24 @@
 // @vitest-environment happy-dom
 import { mount, flushPromises } from '@vue/test-utils';
-import { reactive } from 'vue';
+import * as Vue from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ResourceControl, { budgetAdditions } from '../../web/components/WorkCenterResourceControl.js';
 import { applyWorkItemSummary, isWorkItemDetailStale, mergeWorkItemDetail, mergeWorkItemSummary } from '../../web/stores/helpers/work-center.js';
 import en from '../../web/i18n/en.js';
 import zh from '../../web/i18n/zh-CN.js';
+import Reference, { resolveActionReference } from '../../web/components/WorkCenterActionReference.js';
+
+const { reactive } = Vue;
 
 // Capture the real store actions without booting a socket or browser owner.
 const stores = {};
 globalThis.Pinia = { defineStore: (id, options) => { stores[id] = options; return () => ({}); } };
 await import('../../web/stores/chat.js');
 const actions = stores.chat.actions;
+globalThis.Vue = Vue;
+const { default: ActionDetail } = await import('../../web/components/WorkCenterActionDetail.js');
+const { default: Page } = await import('../../web/components/WorkCenterPage.js');
+const { default: UserTurnBlock } = await import('../../web/components/UserTurnBlock.js');
 
 const limits = { maxRequests: 200, maxTokens: 2000000, maxRunRequests: 40, maxActionAttempts: 3, maxCoordinatorFailures: 3 };
 const usage = { llmRequestCount: 200, totalTokens: 500, chargedTokens: 1500, reservedTokens: 1000, unknownRequests: 1, inFlightRequests: 1 };
@@ -375,6 +382,84 @@ describe('Work Center resource store wire and scope', () => {
   });
 });
 
+
+const translate = locale => (key, params = {}) => Object.entries(params).reduce(
+  (text, [name, value]) => text.replaceAll(`{${name}}`, value), locale[key] || key,
+);
+const referenceActions = [
+  { id: 'source', stageId: 'review', sequence: 2, type: 'review', brief: { objective: 'Review the model policy' } },
+  { id: 'delivery', stageId: 'deliver', sequence: 4, type: 'deliver', sourceActionIds: ['source'] },
+];
+
+describe('Work Center readable references', () => {
+  it.each([en, zh])('navigates using readable names in both locales, never guessing missing identities', async locale => {
+    const wrapper = mount(Reference, { props: { actions: referenceActions, actionId: 'source' }, global: { mocks: { $t: translate(locale) } } });
+    expect(wrapper.text()).toContain('Review the model policy');
+    expect(wrapper.text()).toContain('2');
+    await wrapper.get('button').trigger('click');
+    expect(wrapper.emitted('select-action')[0]).toEqual([referenceActions[0]]);
+    await wrapper.setProps({ actionId: 'deleted-action' });
+    expect(wrapper.find('button').exists()).toBe(false);
+    expect(wrapper.text()).toBe(locale['workCenter.sourceUnavailable']);
+    expect(wrapper.get('span').attributes('title')).toBe('deleted-action');
+    wrapper.unmount();
+  });
+
+  it('resolves evidence and unique legacy stages within the selected item only', () => {
+    const runs = [{ id: 'proof', actionId: 'source' }];
+    expect(resolveActionReference(referenceActions, { runId: 'proof' }, runs)).toBe(referenceActions[0]);
+    expect(resolveActionReference(referenceActions, { stageId: 'review' })).toBe(referenceActions[0]);
+    expect(resolveActionReference([...referenceActions, { id: 'other', stageId: 'review' }], { stageId: 'review' })).toBeNull();
+    expect(resolveActionReference([], { runId: 'proof' }, runs)).toBeNull();
+    expect(resolveActionReference(referenceActions, { runId: 'unknown' }, runs)).toBeNull();
+  });
+
+  it('source Action links forward navigation; read-only messages cannot forward quote/edit', async () => {
+    const wrapper = mount(ActionDetail, {
+      props: { action: referenceActions[1], actions: referenceActions, canMessage: false, messages: [
+        { id: 'human', role: 'user', text: 'Ship it' },
+        { id: 'assistant', role: 'assistant', text: 'Shipped', status: 'completed' },
+      ] },
+      global: { mocks: { $t: translate(en) }, stubs: { UserTurnBlock: true, VpTurnBlock: true } },
+    });
+    await wrapper.get('.work-center-action-reference').trigger('click');
+    expect(wrapper.emitted('select-action')[0]).toEqual([referenceActions[0]]);
+    const user = wrapper.getComponent({ name: 'UserTurnBlock' });
+    const vp = wrapper.getComponent({ name: 'VpTurnBlock' });
+    expect(user.props('sessionActions')).toBe(false);
+    expect(vp.props('sessionActions')).toBe(false);
+    expect(vp.props('debugActionEnabled')).toBe(false);
+    user.vm.$emit('quote', { content: 'Quote' });
+    user.vm.$emit('edit-as-new', 'Edit');
+    vp.vm.$emit('quote', { content: 'Quote' });
+    expect(wrapper.emitted('quote')).toBeUndefined();
+    expect(wrapper.emitted('edit-as-new')).toBeUndefined();
+    await wrapper.setProps({ canMessage: true });
+    user.vm.$emit('edit-as-new', 'Edit');
+    expect(wrapper.emitted('edit-as-new')[0]).toEqual(['Edit']);
+    wrapper.unmount();
+  });
+
+  it('preserves Session defaults and makes UserTurnBlock controls opt-out', async () => {
+    const wrapper = mount(UserTurnBlock, {
+      props: { message: { id: 'human', type: 'user', content: 'hello' } },
+      global: { stubs: { MessageItem: true } },
+    });
+    expect(wrapper.getComponent({ name: 'MessageItem' }).props('sessionActions')).toBe(true);
+    await wrapper.setProps({ sessionActions: false });
+    expect(wrapper.getComponent({ name: 'MessageItem' }).props('sessionActions')).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('rejects late quote/edit events after the item closes without changing the draft', () => {
+    const vm = { coordinatorReadOnly: true, workItemMessage: 'Draft', workItemMessageQuote: null, saveComposerDraft: vi.fn() };
+    Page.methods.quoteWorkItemMessage.call(vm, { role: 'assistant', author: 'VP', content: 'Quote' });
+    Page.methods.editWorkItemMessageAsNew.call(vm, 'Edit');
+    expect(vm.workItemMessage).toBe('Draft');
+    expect(vm.workItemMessageQuote).toBeNull();
+    expect(vm.saveComposerDraft).not.toHaveBeenCalled();
+  });
+});
 
 it('keeps Action timing through progress updates and rejects older timing snapshots', () => {
   const current = { id: 'timed', revision: 1, actions: [{

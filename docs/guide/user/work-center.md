@@ -44,6 +44,8 @@ For a new WorkItem, provide:
 5. the delivery target (or ask before delivery);
 6. whether execution should start immediately.
 
+The title is a short display label, separate from the original requirement or goal. An explicitly supplied title is preserved. When it is omitted, the existing initial Coordinator decision generates one without another model call; retries keep the original goal unchanged, and older WorkItems keep their stored titles. New items retain the creation-time requirement independently of later user-approved goal refinements. Older items use the goal retained at upgrade as their requirement; earlier versions did not save a separate original. Until coordination runs, a compact fallback label is displayed. An omitted generated title uses a deterministic fallback instead of failing the task.
+
 When created from a Session, the runtime stamps the source Session; model input cannot replace that identity.
 
 ## Planning and execution
@@ -54,11 +56,13 @@ Each Run uses the existing Yeaft engine and submits a structured outcome. The Co
 
 ### Goal progress, not activity counts
 
-With an Agent that provides `goalProgress`, the WorkItem detail shows **verified acceptance criteria / total criteria**, the remaining count, each criterion's verified/failed/not-yet-verified state, blockers, and a separate delivery state. Unverified and failed rows are the remaining work. Expand **Evidence Runs** to inspect the source Run identities. The browser displays the Agent's evidence projection; it does not infer completion from completed Actions, elapsed time, or model estimates.
+With an Agent that provides `goalProgress`, the WorkItem detail shows **verified acceptance criteria / total criteria**, the remaining count, each criterion's verified/failed/not-yet-verified state, blockers, and a separate delivery state. Unverified and failed rows are the remaining work. The **Goals** tab shows the criteria and delivery evidence; **Progress** summarizes verified criteria, current Actions, and blockers. Expand **Evidence Runs** to see the source Action number and objective; select it to open the Action in the right pane (a detail panel on narrow screens). Attempt records in the resource budget, blockers, and source Action references use the same navigation. If an older Agent or a missing record cannot establish a reliable association, the UI shows **Source Action unavailable** rather than guessing; the original identity remains in the hover hint. The browser displays the Agent's evidence projection; it does not infer completion from completed Actions, elapsed time, or model estimates.
 
 All criteria being verified is not by itself delivery. Current canonical Run evidence must support both the criteria and the selected delivery target. Stale or contradictory evidence can leave a criterion unverified or failed. Older Agents without this projection keep the plain acceptance list rather than showing an invented percentage.
 
-The goal, evidence progress, delivered result, and Coordinator conversation stay in one scroll stream. **Actions** opens execution details alongside the Item on wide screens and can be closed; its execution count is not a measure of goal progress.
+Item details have two independent areas: **Info above, Conversation below**. Info opens on **Requirement** (the original request, attachments, and basic metadata), with parallel **Progress / Outputs / Goals / Usage** tabs. Outputs use compact title/reference rows; Usage contains resource budgets and controls. Long Info content scrolls within its panel without pushing the conversation composer out of view. Switching tabs preserves conversation and budget-edit drafts; opening another Item returns to Requirement. Tabs support arrow keys, Home, and End. Failure/waiting notices and a link to resource stop details remain outside the tabs. **Actions** opens execution details alongside the Item on wide screens and can be closed; its execution count is not a measure of goal progress.
+
+Work Center messages hide the unconnected per-message debug button. Completed or cancelled items also hide unavailable quote and edit-as-new controls, while copy and export remain available. Ordinary Session debug and quote controls are unchanged.
 
 ### Choose the completion boundary
 
@@ -78,7 +82,7 @@ Older WorkItems can still use workflow snapshots and dependency/final-gate rules
 
 ## Resource budget and explicit recovery
 
-WorkItems with resource control show **Resource budget** in the goal detail: lifetime requests and budgeted tokens consumed / limit, a localized stop reason, and expandable **Usage breakdown and limits** for Coordinator and Actions separately. Reported tokens are known usage. Reservations include in-flight and unknown usage, are already included in budgeted tokens, and must not be added again. Unknown usage is not free.
+WorkItems with resource control show **Resource budget** in the **Usage** tab: lifetime requests and budgeted tokens consumed / limit, a localized stop reason, and expandable **Usage breakdown and limits** for Coordinator and Actions separately. Reported tokens are known usage. Reservations include in-flight and unknown usage, are already included in budgeted tokens, and must not be added again. Unknown usage is not free.
 
 Default limits are **200 lifetime requests**, **2,000,000 lifetime tokens**, **40 requests per Run**, **3 lifetime attempts per Action**, and **3 cumulative Coordinator failures**. Action attempts also respect the Action’s original limit plus explicit extensions; the detail lists used / effective limits. Requests include retries and auxiliary calls. Cancel, restart, a successful turn, or a new generation does not reset cumulative consumption.
 

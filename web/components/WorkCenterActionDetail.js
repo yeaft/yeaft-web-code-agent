@@ -1,3 +1,4 @@
+import WorkCenterActionReference from './WorkCenterActionReference.js';
 import UserTurnBlock from './UserTurnBlock.js';
 import VpTurnBlock from './VpTurnBlock.js';
 
@@ -5,8 +6,9 @@ import { renderMermaidIn } from '../utils/markdown.js';
 
 export default {
   name: 'WorkCenterActionDetail',
-  components: { UserTurnBlock, VpTurnBlock },
+  components: { UserTurnBlock, VpTurnBlock, WorkCenterActionReference },
   props: {
+    actions: { type: Array, default: () => [] },
     action: { type: Object, default: null },
     canMessage: { type: Boolean, default: false },
     messages: { type: Array, default: () => [] },
@@ -16,7 +18,7 @@ export default {
     previewingAttachmentId: { type: String, default: null },
     attachmentError: { type: String, default: '' },
   },
-  emits: ['load-earlier-messages', 'open-attachment', 'quote', 'edit-as-new'],
+  emits: ['select-action', 'load-earlier-messages', 'open-attachment', 'quote', 'edit-as-new'],
   computed: {
     executorName() {
       return this.action?.assignedVp?.name || this.action?.assignedVp?.id
@@ -128,6 +130,12 @@ export default {
       if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
       return `${(size / 1024 / 1024).toFixed(1)} MB`;
     },
+    quoteMessage(payload) {
+      if (this.canMessage) this.$emit('quote', payload);
+    },
+    editMessage(text) {
+      if (this.canMessage) this.$emit('edit-as-new', text);
+    },
     openAttachment(payload) {
       this.$emit('open-attachment', payload?.attachment || payload, payload?.trigger || null);
     },
@@ -145,7 +153,11 @@ export default {
             <p v-if="action.brief?.approach">{{ action.brief.approach }}</p>
             <dl class="work-center-action-context-list">
               <div v-if="action.brief?.expectedOutcome"><dt>{{ tr('workCenter.actionExpectedOutcome', 'Expected result') }}</dt><dd>{{ action.brief.expectedOutcome }}</dd></div>
-              <div v-if="(action.sourceActionIds?.length || action.dependsOnStageIds?.length)"><dt>{{ tr('workCenter.dependencies', 'Source Actions') }}</dt><dd>{{ (action.sourceActionIds?.length ? action.sourceActionIds : action.dependsOnStageIds).join(', ') }}</dd></div>
+              <div v-if="(action.sourceActionIds?.length || action.dependsOnStageIds?.length)"><dt>{{ tr('workCenter.dependencies', 'Source Actions') }}</dt><dd class="work-center-action-sources">
+                <WorkCenterActionReference v-for="sourceId in (action.sourceActionIds?.length ? action.sourceActionIds : action.dependsOnStageIds)" :key="sourceId"
+                  :actions="actions" :action-id="action.sourceActionIds?.length ? sourceId : ''" :stage-id="action.sourceActionIds?.length ? '' : sourceId"
+                  @select-action="$emit('select-action', $event)" />
+              </dd></div>
               <div v-if="action.canonicalResult?.summary"><dt>{{ tr('workCenter.actionResult', 'Latest result') }}</dt><dd>{{ action.canonicalResult.summary }}</dd></div>
             </dl>
           </section>
@@ -177,9 +189,10 @@ export default {
                 v-if="block.kind === 'user'"
                 class="work-center-action-message role-user"
                 :message="block.message"
+                :session-actions="canMessage"
                 :external-attachment-open="true"
-                @quote="$emit('quote', $event)"
-                @edit-as-new="$emit('edit-as-new', $event)"
+                @quote="quoteMessage"
+                @edit-as-new="editMessage"
                 @open-attachment="openAttachment"
               />
               <VpTurnBlock
@@ -188,8 +201,10 @@ export default {
                 :turn="block.turn"
                 :display-name-override="block.speakerName"
                 :can-stop="false"
+                :session-actions="canMessage"
+                :debug-action-enabled="false"
                 :interactive-speaker="false"
-                @quote="$emit('quote', $event)"
+                @quote="quoteMessage"
               >
                 <div v-if="block.turn.attachments?.length" class="work-center-attachment-list">
                   <button v-for="attachment in block.turn.attachments" :key="attachment.id" type="button"

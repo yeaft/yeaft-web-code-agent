@@ -793,18 +793,39 @@ function enforceWorkItemBrowserDtoBudget(value, options = {}) {
   if (jsonByteLength(dto) <= MAX_WORK_ITEM_BROWSER_DTO_BYTES) return dto;
 
   const originalCount = actions.length;
-  const retained = keep ? [stripActionBody(keep, true)] : [];
+  // Detail evidence and attempt links need the Action identity AND its readable
+  // name. Drop bulky context/dependencies before dropping their navigation
+  // targets. If even these stubs cannot fit, the minimal fallback below omits
+  // evidence with the Actions instead of leaving known sources unresolvable.
+  const retained = Array.isArray(workItem.runReferences) && Array.isArray(workItem.actions)
+    ? actions.map(action => ({
+        id: action.id,
+        sequence: action.sequence,
+        generation: action.generation,
+        type: action.type,
+        stageId: action.stageId,
+        status: action.status,
+        progressRevision: action.progressRevision,
+        messageCount: action.messageCount,
+        createdAt: action.createdAt,
+        updatedAt: action.updatedAt,
+        executionDurationMs: action.executionDurationMs,
+        executionStartedAt: action.executionStartedAt,
+        brief: { objective: truncateUtf8(action.brief?.objective || action.contentSummary || '', 512) },
+      }))
+    : keep ? [stripActionBody(keep, true)] : [];
   if (Array.isArray(workItem.actions)) workItem.actions = retained;
   else workItem.actionStats = retained;
   workItem.omittedActionCount = originalCount - retained.length;
   if (jsonByteLength(dto) <= MAX_WORK_ITEM_BROWSER_DTO_BYTES) return dto;
 
-  if (retained[0]) {
+  if (retained[0] && !Array.isArray(workItem.runReferences)) {
     delete retained[0].brief;
     delete retained[0].failure;
   }
   workItem.title = truncateUtf8(workItem.title, 4 * 1024);
   workItem.goal = truncateUtf8(workItem.goal, 4 * 1024);
+  if (workItem.requirement !== undefined) workItem.requirement = truncateUtf8(workItem.requirement, 4 * 1024);
   workItem.waitingReason = truncateUtf8(workItem.waitingReason, 4 * 1024);
   workItem.actionSummary = truncateUtf8(workItem.actionSummary, 4 * 1024);
   if (Array.isArray(workItem.acceptanceCriteria)) workItem.acceptanceCriteria = [];
@@ -817,6 +838,7 @@ function enforceWorkItemBrowserDtoBudget(value, options = {}) {
     revision: count(workItem.revision),
     title: truncateUtf8(workItem.title, 4 * 1024),
     goal: truncateUtf8(workItem.goal, 4 * 1024),
+    ...(workItem.requirement !== undefined ? { requirement: truncateUtf8(workItem.requirement, 4 * 1024) } : {}),
     status: truncateUtf8(workItem.status, 256),
     currentActionId: truncateUtf8(workItem.currentActionId, 4 * 1024) || null,
     executionStats: workItem.executionStats,
@@ -1054,6 +1076,7 @@ export function projectWorkItemDetail(detail, options = {}) {
           .map(risk => truncateUtf8(risk, MAX_ACTION_MESSAGE_CHARS)).slice(0, 24) : [],
     } : null,
     title: detail.title,
+    requirement: detail.requirement ?? detail.goal,
     goal: detail.goal,
     acceptanceCriteria: Array.isArray(detail.acceptanceCriteria) ? detail.acceptanceCriteria : [],
     goalProgress: projectGoalProgress(detail.goalProgress),
@@ -1127,6 +1150,25 @@ export function projectWorkItemDetail(detail, options = {}) {
         }))
       : [],
   };
+  // Only identities needed by visible evidence links, never Run bodies or traces.
+  // Historical evidence may belong to an older generation of the same Action.
+  const evidenceRunIds = new Set([
+    ...(projected.goalProgress?.evidenceRunIds || []),
+    ...(projected.goalProgress?.criteria || []).flatMap(check => check.evidenceRunIds || []),
+    ...(projected.goalProgress?.delivery?.evidenceRunIds || []),
+    ...(projected.finalResult?.responses || []).map(response => response.runId),
+    ...projected.outputs.map(output => output.runId),
+  ].filter(Boolean));
+  const actionIds = new Set(projected.actions.map(action => action.id));
+  // The evidence collections above already have bounded browser projections.
+  // Keep every retained reference resolvable; an independent count cap would
+  // starve later criteria and delivery evidence. The whole DTO budget still applies.
+  projected.runReferences = [...evidenceRunIds].flatMap(id => {
+    const run = runById.get(id);
+    if (!run || !actionIds.has(run.actionId)
+        || (run.workItemId && run.workItemId !== detail.id)) return [];
+    return [{ id: truncateUtf8(id, 256), actionId: truncateUtf8(run.actionId, 256) }];
+  });
   return enforceWorkItemBrowserDtoBudget(projected, { keepActionId: liveActionId });
 }
 

@@ -1,3 +1,5 @@
+import WorkCenterActionReference from './WorkCenterActionReference.js';
+
 const LIMIT_FIELDS = Object.freeze([
   'maxRequests', 'maxTokens', 'maxRunRequests', 'maxActionAttempts', 'maxCoordinatorFailures',
 ]);
@@ -18,6 +20,8 @@ export function budgetAdditions(values, limits = {}) {
 
 export default {
   name: 'WorkCenterResourceControl',
+  components: { WorkCenterActionReference },
+  emits: ['select-action'],
   props: {
     item: { type: Object, required: true },
     agentId: { type: String, required: true },
@@ -177,7 +181,10 @@ export default {
         </dl>
         <p class="work-center-muted">{{ $t('workCenter.resource.attemptLimit') }}</p>
         <ul v-if="control.actionAttempts?.length" class="work-center-resource-attempts">
-          <li v-for="action in control.actionAttempts" :key="action.actionId"><code>{{ action.actionId }}</code> · {{ count(action.attempts) }} / {{ count(action.effectiveMaxAttempts) }}</li>
+          <li v-for="action in control.actionAttempts" :key="action.actionId">
+            <WorkCenterActionReference :actions="item.actions || []" :action-id="action.actionId" @select-action="$emit('select-action', $event)" />
+            <span class="work-center-attempt-count">{{ count(action.attempts) }} / {{ count(action.effectiveMaxAttempts) }}</span>
+          </li>
         </ul>
       </details>
       <p v-if="!online" class="work-center-muted" role="status">{{ $t('workCenter.resource.offline') }}</p>

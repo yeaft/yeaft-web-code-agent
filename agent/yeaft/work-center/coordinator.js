@@ -230,6 +230,7 @@ Return exactly one JSON object and no surrounding prose:
   "decision": {
     "kind": "answer|create_actions|guide_actions|request_human|complete",
     "reason": "short audit reason",
+    "title": null,
     "question": null,
     "workItemType": null,
     "contractPatch": null,
@@ -242,8 +243,9 @@ Return exactly one JSON object and no surrounding prose:
 }
 
 Rules:
+- When workItem.titleSource is coordinator_pending, include a concise title (prefer 6–12 words or a short Chinese phrase; at most 200 characters) in decision.title. This display label summarizes the original goal; it is not a contractPatch and must not rewrite or shorten the goal. Otherwise leave decision.title null. A missing or oversized display title is normalized by the runtime and must not change the substantive decision.
 - answer: explain state only. Never use it for an automatic advance trigger.
-- Never mutate title, goal, acceptanceCriteria, or deliveryTarget during automatic advance/recovery. contractPatch is allowed only for explicit user-originated refinement, never to make existing evidence pass. For an older WorkItem with no acceptance criteria, request_human to establish its completion condition before commissioning new work.
+- Never mutate goal, acceptanceCriteria, or deliveryTarget during automatic advance/recovery. decision.title is the only automatic title-generation path and is allowed only while titleSource is coordinator_pending; contractPatch (including a user-specified title) is allowed only for explicit user-originated refinement, never to make existing evidence pass. For an older WorkItem with no acceptance criteria, request_human to establish its completion condition before commissioning new work.
 - create_actions: create 1..8 currently runnable Actions. Every Action needs type, objective, approach, expectedOutcome, capability, candidateVpIds, assignmentReason, sourceActionIds, workspaceMode, and optional maxAttempts/separateFromActionTypes. sourceActionIds are context/audit references, never scheduling dependencies. Do not include dependsOnActionIds, dependsOnStageIds, stages, or a graph.
 - A missing skill/capability label is not a missing execution capability. Prefer an existing VP with a task-specific brief. Missing tools, credentials, or authorization require request_human; never expand roles as a workaround. create_vp is only appropriate when creating a persistent role is itself an explicit user deliverable.
 - closeActions may accompany create_actions. Each entry is {"actionId":"failed or waiting durable Action id","reason":"why it is no longer required"}. Close only work made obsolete by replacement evidence or a clarified contract. Closed Actions remain audit history, are never acceptance evidence, and do not block completion.
@@ -288,6 +290,13 @@ function cleanText(value, limit, name) {
   const text = typeof value === 'string' ? value.trim().slice(0, limit) : '';
   if (!text) throw new Error(`Work Center Coordinator ${name} is required`);
   return text;
+}
+
+function coordinatorDisplayTitle(value, detail) {
+  if (detail.titleSource !== 'coordinator_pending') return null;
+  const proposed = typeof value === 'string' ? value.trim() : '';
+  const fallback = String(detail.goal || detail.title || 'Work Item').trim().replace(/\s+/g, ' ');
+  return (proposed || fallback || 'Work Item').slice(0, 200);
 }
 
 function requiresDeliveryBoundaryDecision(detail, actions) {
@@ -460,8 +469,9 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
   const kind = allowedKinds.includes(source.kind) ? source.kind : '';
   if (!kind) throw new Error('Work Center Coordinator decision kind is invalid');
   const reason = cleanText(source.reason, 2_000, 'decision reason');
+  const generatedTitle = coordinatorDisplayTitle(source.title, detail);
   if (kind === 'answer') {
-    return { reply, decision: { kind, reason, contractPatch: null, guidance: [], actions: [] } };
+    return { reply, decision: { kind, reason, title: generatedTitle, contractPatch: null, guidance: [], actions: [] } };
   }
   if (kind === 'guide_actions') {
     const guidance = normalizeGuidance(source.guidance, detail);
@@ -478,6 +488,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
       decision: {
         kind,
         reason,
+        title: generatedTitle,
         contractPatch: null,
         guidance,
         actions: [],
@@ -491,6 +502,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
       decision: {
         kind,
         reason,
+        title: generatedTitle,
         question: cleanText(source.question, COORDINATOR_MAX_REPLY_CHARS, 'human question'),
         contractPatch: dynamic && options.automatic !== true ? contractPatch : null,
         guidance: [],
@@ -504,6 +516,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
       decision: {
         kind,
         reason,
+        title: generatedTitle,
         closeActions: normalizeDynamicActionClosures(source.closeActions, detail.actions || []),
         completion: source.completion,
         contractPatch: null,
@@ -520,6 +533,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
     const decision = {
       kind,
       reason,
+      title: generatedTitle,
       workItemType: source.workItemType,
       contractPatch,
       closeActions: source.closeActions,
@@ -551,6 +565,7 @@ export function normalizeCoordinatorResponse(value, detail, options = {}) {
     decision: {
       kind,
       reason,
+      title: generatedTitle,
       contractPatch,
       guidance: [],
       actions: normalizeCoordinatorActionReferences(source.actions, detail),
@@ -616,6 +631,7 @@ export function coordinatorSnapshot(detail) {
     ledgerRevision: detail.ledgerRevision,
     status: truncateUtf8(detail.status, 64),
     title: truncateUtf8(detail.title, 1 * 1024),
+    titleSource: detail.titleSource || 'explicit',
     goal: truncateUtf8(detail.goal, 4 * 1024),
     deliveryTarget: detail.deliveryTarget || null,
     acceptanceCriteria,

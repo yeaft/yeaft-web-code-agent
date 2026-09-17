@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_WORK_ITEM_BROWSER_DTO_BYTES, projectWorkItemDetail, projectWorkItemSummary } from '../../../../agent/yeaft/work-center/projection.js';
 import {
   MAINLINE_CONTEXT_HARD_LIMIT_BYTES,
   buildMainlineContextSnapshot,
@@ -455,4 +456,98 @@ describe('Mainline projection', () => {
 
 
 
+});
+
+
+function evidenceReferenceFixture(count = 2) {
+  const ids = Array.from({ length: count }, (_, index) => `run-${index}`);
+  return {
+    id: 'item', title: 'Item', status: 'done',
+    actions: [{ id: 'action', sequence: 1, type: 'review', status: 'completed', generation: 2 }],
+    runs: ids.map(id => ({ id, workItemId: 'item', actionId: 'action', actionGeneration: 1, status: 'completed', rawRequest: 'SECRET', contextSnapshot: 'SECRET' })),
+    goalProgress: { criteria: [{ criterion: 'Verified', status: 'passed', evidenceRunIds: ids }], delivery: { target: 'merge', status: 'passed', evidenceRunIds: ids } },
+    finalResult: { responses: [{ runId: ids[0], summary: 'Delivered' }] },
+  };
+}
+
+describe('Work Center evidence reference projection', () => {
+  it('projects only referenced Run identities and retains old-generation evidence navigation', () => {
+    const detail = evidenceReferenceFixture();
+    detail.runs.push({ id: 'unreferenced', actionId: 'action', rawRequest: 'SECRET' });
+    expect(projectWorkItemDetail(detail).runReferences).toEqual([
+      { id: 'run-0', actionId: 'action' }, { id: 'run-1', actionId: 'action' },
+    ]);
+    expect(JSON.stringify(projectWorkItemDetail(detail).runReferences)).not.toContain('SECRET');
+    expect(projectWorkItemSummary(detail)).not.toHaveProperty('runReferences');
+  });
+
+  it('does not link missing Actions or Runs belonging to other WorkItems', () => {
+    const detail = evidenceReferenceFixture(3);
+    detail.runs[0].actionId = 'missing';
+    detail.runs[1].workItemId = 'another-item';
+    expect(projectWorkItemDetail(detail).runReferences).toEqual([{ id: 'run-2', actionId: 'action' }]);
+  });
+
+  it('maps every retained evidence after 256 references, including delivery, responses and outputs, within the DTO budget', () => {
+    const detail = evidenceReferenceFixture(320);
+    detail.goalProgress.criteria = Array.from({ length: 5 }, (_, index) => ({
+      criterion: `Verified ${index}`, status: 'passed',
+      evidenceRunIds: detail.runs.slice(index * 64, (index + 1) * 64).map(run => run.id),
+    }));
+    for (const id of ['delivery-proof', 'response-proof', 'output-proof']) {
+      detail.runs.push({ id, workItemId: 'item', actionId: 'action', status: 'completed' });
+    }
+    detail.goalProgress.delivery.evidenceRunIds = ['delivery-proof'];
+    detail.finalResult.responses[0].runId = 'response-proof';
+    detail.actions[0].resultRunId = 'output-proof';
+    detail.runs.at(-1).outputs = [{ kind: 'file', label: 'Result', ref: 'docs/result.md' }];
+    const projected = projectWorkItemDetail(detail);
+    const visibleIds = [
+      ...projected.goalProgress.criteria.flatMap(check => check.evidenceRunIds),
+      ...projected.goalProgress.delivery.evidenceRunIds,
+      ...projected.finalResult.responses.map(response => response.runId),
+      ...projected.outputs.map(output => output.runId),
+    ];
+    expect(visibleIds).toHaveLength(323);
+    expect(visibleIds).toContain('run-256');
+    expect(visibleIds).toEqual(expect.arrayContaining(['delivery-proof', 'response-proof', 'output-proof']));
+    expect(new Set(projected.runReferences.map(ref => ref.id))).toEqual(new Set(visibleIds));
+    expect(projected.runReferences.every(ref => Object.keys(ref).length === 2 && ref.actionId === 'action')).toBe(true);
+    expect(JSON.stringify(projected.runReferences)).not.toContain('SECRET');
+    expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThanOrEqual(MAX_WORK_ITEM_BROWSER_DTO_BYTES);
+    const oversized = projectWorkItemDetail({ ...detail, title: 'x'.repeat(600 * 1024) });
+    expect(oversized.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThanOrEqual(MAX_WORK_ITEM_BROWSER_DTO_BYTES);
+  });
+
+  it('retains readable Action navigation targets when oversized detail loses bulky contexts', () => {
+    const detail = evidenceReferenceFixture(64);
+    const actionIds = detail.runs.map((_, index) => `action-${index}-${'x'.repeat(200)}`);
+    detail.actions = actionIds.map((id, index) => ({
+      id, sequence: index + 1, generation: 2, type: 'review', status: 'completed',
+      brief: { objective: `Review result ${index + 1}`, approach: 'Inspect code and tests', expectedOutcome: 'Report verified findings' },
+      sourceActionIds: actionIds.slice(0, index), dependsOnStageIds: actionIds.slice(0, index),
+    }));
+    detail.runs.forEach((run, index) => { run.actionId = actionIds[index]; });
+    const projected = projectWorkItemDetail(detail);
+    expect(projected.truncated).toBe(true);
+    expect(projected.actions).toHaveLength(64);
+    expect(projected.omittedActionCount).toBe(0);
+    const retainedActions = new Map(projected.actions.map(action => [action.id, action]));
+    const runTargets = new Map(projected.runReferences.map(ref => [ref.id, ref.actionId]));
+    const visibleIds = [
+      ...projected.goalProgress.criteria.flatMap(check => check.evidenceRunIds),
+      ...projected.goalProgress.delivery.evidenceRunIds,
+      ...projected.finalResult.responses.map(response => response.runId),
+    ];
+    expect(new Set(visibleIds).size).toBe(64);
+    for (const id of visibleIds) {
+      const action = retainedActions.get(runTargets.get(id));
+      expect(action).toBeDefined();
+      expect(action.brief.objective).toMatch(/^Review result /);
+      expect(action.generation).toBe(2);
+      expect(action).not.toHaveProperty('messages');
+    }
+    expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThanOrEqual(MAX_WORK_ITEM_BROWSER_DTO_BYTES);
+  });
 });

@@ -21,7 +21,7 @@ Use this when work must continue beyond the current turn, needs role handoffs, r
     properties: {
       title: {
         type: 'string',
-        description: { en: 'Short work item title', zh: '简短的工作项标题' },
+        description: { en: 'Optional explicit title; otherwise the Coordinator generates one', zh: '可选的显式标题；省略时由 Coordinator 生成' },
       },
       goal: {
         type: 'string',
@@ -45,7 +45,7 @@ Use this when work must continue beyond the current turn, needs role handoffs, r
         description: { en: 'Start Coordinator execution immediately (default true)', zh: '是否立即启动 Coordinator 执行（默认 true）' },
       },
     },
-    required: ['title', 'goal'],
+    required: ['goal'],
   },
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
@@ -57,14 +57,14 @@ Use this when work must continue beyond the current turn, needs role handoffs, r
     if (!sessionId) throw new Error('CreateWorkItem requires an active Session');
     const title = typeof input?.title === 'string' ? input.title.trim() : '';
     const goal = typeof input?.goal === 'string' ? input.goal.trim() : '';
-    if (!title || !goal) throw new Error('title and goal are required');
+    if (!goal) throw new Error('goal is required');
 
     // Dynamic import avoids tools/index -> create-work-item -> bridge -> runner
     // -> tools/index becoming a static initialization cycle.
     const { createWorkItemFromProducer, snapshotCurrentSessionContext } = await import('../work-center/bridge.js');
     const sessionContext = await snapshotCurrentSessionContext(sessionId);
     const detail = await createWorkItemFromProducer({
-      title,
+      ...(title ? { title } : {}),
       goal,
       acceptanceCriteria: cleanCriteria(input.acceptanceCriteria),
       workItemType: typeof input.workItemType === 'string' ? input.workItemType.trim() : 'auto',
