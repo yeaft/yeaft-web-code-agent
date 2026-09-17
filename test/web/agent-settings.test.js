@@ -81,6 +81,37 @@ describe('Agent settings surface', () => {
     wrapper.unmount();
   });
 
+  it('shows a compact update notification only when the Server reports a newer Agent version', async () => {
+    const wrapper = mount(SidebarAgentHeader, {
+      props: {
+        onlineAgents: [
+          { id: 'agent-a', name: 'Agent A', online: true, version: '1.0.437', upgradeAvailable: '1.0.560' },
+          { id: 'agent-b', name: 'Agent B', online: true, version: '1.0.560' },
+        ],
+        onlineAgentCount: 2,
+        showAgentActions: true,
+      },
+      global: { mocks: { $t: (key, params) => params?.version ? `${key}:${params.version}` : key } },
+    });
+
+    const notification = wrapper.get('.agent-update-notification');
+    expect(notification.text()).toBe('1');
+    expect(notification.attributes('role')).toBe('status');
+    await wrapper.get('.agent-dropdown-trigger').trigger('click');
+    const rows = wrapper.findAll('.agent-dropdown-item');
+    expect(rows[0].get('.agent-dropdown-update-version').text()).toBe('v1.0.560');
+    expect(rows[0].get('.agent-dropdown-upgrade-btn').classes()).toContain('update-available');
+    expect(rows[0].get('.agent-dropdown-upgrade-btn').attributes('aria-label')).toBe('chat.agent.updateAvailable:1.0.560');
+    expect(rows[1].find('.agent-dropdown-update-version').exists()).toBe(false);
+
+    await wrapper.setProps({
+      onlineAgents: [{ id: 'agent-b', name: 'Agent B', online: true, version: '1.0.560' }],
+      onlineAgentCount: 1,
+    });
+    expect(wrapper.find('.agent-update-notification').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('places a guarded bulk-upgrade action after Agent settings', async () => {
     const wrapper = mount(SidebarAgentHeader, {
       props: {

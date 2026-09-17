@@ -125,6 +125,8 @@ export default {
   'chat.agent.select': 'Select Agent',
   'chat.agent.manage': 'Manage Agents',
   'chat.agent.count': '{count} agents',
+  'chat.agent.updatesAvailable': '{count} Agent update(s) available',
+  'chat.agent.updateAvailable': 'Update available: v{version}',
   'chat.agent.none': 'No Agents',
   'chat.agent.restarting': 'Restarting',
   'agentSettings.open': 'Agent settings',
