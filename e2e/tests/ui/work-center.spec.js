@@ -818,15 +818,17 @@ test.describe('Work Center responsive UI', () => {
     await expect(headerButton).toHaveAccessibleName('View Actions');
     await expect(chatPage.locator('.work-center-content-title')).toContainText('3');
     const timing = status => chatPage.locator(`.work-center-action-card[data-status="${status}"] .work-center-action-timing`);
+    const timingValues = status => timing(status).locator(':scope > span > span:last-child');
     const created = await chatPage.evaluate(value => new Date(value).toLocaleString(), detail.actions[0].createdAt);
-    await expect(timing('completed').locator('span')).toHaveText([created, '1m5s']);
-    await expect(timing('ready').locator('span').last()).toHaveText('—');
-    await expect(timing('running').locator('span').last()).toHaveText('1m5s');
+    await expect(timingValues('completed')).toHaveText([created, '1m5s']);
+    await expect(timingValues('ready').last()).toHaveText('—');
+    await expect(timingValues('running').last()).toHaveText('1m5s');
     await chatPage.clock.setFixedTime(now + 5000);
-    await expect(timing('running').locator('span').last()).toHaveText('1m10s');
-    await expect(timing('completed').locator('span').last()).toHaveText('1m5s');
+    await expect(timingValues('running').last()).toHaveText('1m10s');
+    await expect(timingValues('completed').last()).toHaveText('1m5s');
     for (const locale of ['en', 'zh-CN']) {
       await chatPage.evaluate(value => window.Pinia.useChatStore().changeLocale(value), locale);
+      const labels = locale === 'en' ? ['Created', 'Runtime'] : ['创建于', '执行用时'];
       for (const theme of ['light', 'dark']) {
         await chatPage.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
         for (const width of [1600, 320]) {
@@ -835,10 +837,20 @@ test.describe('Work Center responsive UI', () => {
           for (const status of ['completed', 'ready', 'running']) {
             const row = timing(status);
             await expect(row).toBeVisible();
-            await expect(row).not.toContainText(/Created|Runtime|创建|用时/);
+            const values = await timingValues(status).allTextContents();
+            expect(values.join(' ')).not.toMatch(/Created|Runtime|创建|用时/);
+            const accessibleTiming = `${labels[0]} ${values[0]} ${labels[1]} ${values[1]}`;
+            const summary = chatPage.locator(`.work-center-action-card[data-status="${status}"] .work-center-action-summary`);
+            await expect(summary).toHaveAccessibleName(new RegExp(accessibleTiming.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+            for (const label of await row.locator('.work-center-action-timing-label').all()) {
+              await expect(label).toHaveCSS('position', 'absolute');
+              await expect(label).toHaveCSS('clip-path', 'inset(50%)');
+              await expect(label).toHaveCSS('width', '1px');
+              await expect(label).toHaveCSS('height', '1px');
+            }
             const bounds = await row.boundingBox();
-            const left = await row.locator('span').first().boundingBox();
-            const right = await row.locator('span').last().boundingBox();
+            const left = await row.locator(':scope > span').first().boundingBox();
+            const right = await row.locator(':scope > span').last().boundingBox();
             expect(Math.abs(left.x - bounds.x)).toBeLessThanOrEqual(1);
             expect(Math.abs(right.x + right.width - bounds.x - bounds.width)).toBeLessThanOrEqual(1);
             expect(Math.abs(left.y - right.y)).toBeLessThanOrEqual(1);
