@@ -28,14 +28,25 @@ async function expectThemedControls(picker) {
           background: style.backgroundColor, color: style.color,
           radius: parseFloat(style.borderRadius), fontSize: parseFloat(style.fontSize),
           width: rect.width, height: rect.height,
+          scrollbar: style.scrollbarColor, scrollbarWidth: style.scrollbarWidth, colorScheme: style.colorScheme,
         };
       };
+      const nav = element.querySelector('.folder-picker-breadcrumbs');
+      const parts = [...nav.children];
       return {
         input: control('input'), primary: control('.btn-primary'), cancel: control('.folder-picker-footer .btn-secondary'),
         close: control('.folder-picker-header button'), crumb: control('.folder-picker-breadcrumbs button'),
-        list: control('.folder-picker-list'),
+        list: control('.folder-picker-list'), breadcrumbs: control('.folder-picker-breadcrumbs'),
+        path: parts.map(part => part.textContent).join(''), draft: element.querySelector('input').value,
+        gaps: parts.slice(1).map((part, index) => part.getBoundingClientRect().left - parts[index].getBoundingClientRect().right),
+        crumbPadding: parts.filter(part => part.tagName === 'BUTTON').map(part => {
+          const style = getComputedStyle(part);
+          return parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth);
+        }),
         inputBackground: themeColor('--bg-input'), foreground: themeColor('--text-primary'),
         accent: themeColor('--accent'), accentForeground: themeColor('--accent-fg'),
+        scrollbar: themeColor('--border-color') + ' rgba(0, 0, 0, 0)',
+        theme: document.documentElement.dataset.theme || 'light',
       };
     });
     expect(styles.input.background).toBe(styles.inputBackground);
@@ -47,6 +58,14 @@ async function expectThemedControls(picker) {
       expect(button.radius).toBeGreaterThanOrEqual(6);
       expect(button.height).toBeGreaterThanOrEqual(36);
     }
+    for (const scrollable of [styles.list, styles.breadcrumbs]) {
+      expect(scrollable.scrollbar).toBe(styles.scrollbar);
+      expect(scrollable.scrollbarWidth).toBe('thin');
+      expect(scrollable.colorScheme).toBe(styles.theme);
+    }
+    expect(styles.path).toBe(styles.draft);
+    expect(styles.gaps.every(gap => Math.abs(gap) <= 0.5)).toBe(true);
+    expect(styles.crumbPadding.every(padding => padding === 0)).toBe(true);
     expect(styles.primary.fontSize).toBe(14);
     expect(styles.close.width).toBe(styles.close.height);
     for (const control of [styles.close, styles.crumb, styles.list]) {
@@ -164,10 +183,12 @@ for (const entry of ['session-create', 'session-settings', 'work-center']) {
     await expect(field).toHaveValue(originalDirectory);
 
     // Root is one direct request, not repeated parent navigation.
-    const root = picker.getByRole('button', { name: 'Root / drives', exact: true });
+    await expect(picker.getByRole('button', { name: 'Root / drives', exact: true })).toHaveCount(0);
+    const root = picker.getByRole('navigation', { name: 'Directory ancestors' }).getByRole('button', { name: '/', exact: true });
     await root.focus();
+    await expect(root).toBeFocused();
     const rootRequest = await requestDirectory(mockAgent, () => page.keyboard.press('Enter'));
-    expect(rootRequest.dirPath).toBe('');
+    expect(rootRequest.dirPath).toBe('/');
     replyDirectory(mockAgent, rootRequest, { path: '/', entries: [] });
     await expect(path).toHaveValue('/');
     await expect(confirm).toBeEnabled();
@@ -290,7 +311,13 @@ test('unified workdir picker: Windows drive chooser and current-directory confir
   const confirm = picker.getByRole('button', { name: 'Select this directory', exact: true });
   await expect(confirm).toBeEnabled();
 
-  const root = await requestDirectory(mockAgent, () => picker.getByRole('button', { name: 'Root / drives', exact: true }).click());
+  await expect(picker.getByRole('button', { name: 'Root / drives', exact: true })).toHaveCount(0);
+  const driveRoot = await requestDirectory(mockAgent, () => picker.getByRole('navigation', { name: 'Directory ancestors' })
+    .getByRole('button', { name: 'C:\\', exact: true }).click());
+  expect(driveRoot.dirPath).toBe('C:\\');
+  replyDirectory(mockAgent, driveRoot);
+  await expect(path).toHaveValue('C:\\');
+  const root = await requestDirectory(mockAgent, () => picker.getByRole('button', { name: 'Parent Directory', exact: true }).click());
   expect(root.dirPath).toBe('');
   replyDirectory(mockAgent, root, { path: '', entries: [{ name: 'C:', type: 'directory' }, { name: 'D:', type: 'directory' }] });
   await expect(path).toHaveValue('');
