@@ -3040,8 +3040,11 @@ test.describe('Work Center responsive UI', () => {
           }));
           expect(candidateMetrics.wrapping).toBe('normal');
           expect(candidateMetrics.scrollWidth).toBeLessThanOrEqual(candidateMetrics.width);
+          // Measure after the shared menu's scale-in transition reaches its
+          // final geometry; visibility alone does not wait for that animation.
+          await expect.poll(async () => (await deliveryMenu.boundingBox())?.width || 0)
+            .toBeGreaterThanOrEqual(Math.min(360, width - 16));
           const menuBox = await deliveryMenu.boundingBox();
-          expect(menuBox.width).toBeGreaterThanOrEqual(Math.min(360, width - 16));
           expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(width);
           await target.press('Escape');
           await expect(deliveryMenu).toHaveCount(0);
