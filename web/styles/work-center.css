@@ -1010,9 +1010,7 @@
 
 .work-center-work-item-overview {
   display: flex;
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 46%;
+  flex: 0 0 auto;
   padding: var(--work-center-space-2) 0;
   border-bottom: 1px solid var(--border-light);
 }
@@ -1055,9 +1053,6 @@
 }
 
 .work-center-info-panel {
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
   overflow-wrap: anywhere;
   padding: var(--work-center-space-3) 0;
   font-size: 13px;
@@ -1116,10 +1111,7 @@
 
 .work-center-info-column > .work-center-failure,
 .work-center-info-column > .work-center-resume {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 72px;
-  overflow: auto;
+  flex: 0 0 auto;
   overflow-wrap: anywhere;
   margin: 0 0 var(--work-center-space-2);
 }
@@ -2038,12 +2030,20 @@
 }
 
 .work-center-conversation-scroll {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px 0 16px;
   overscroll-behavior: contain;
+}
+
+.work-center-item-messages {
+  flex: 1 0 auto;
+  min-width: 0;
+  margin-top: 0;
+  padding-bottom: var(--work-center-space-4);
 }
 
 .work-center-conversation-column,
@@ -2057,12 +2057,16 @@
 }
 
 .work-center-conversation-column {
+  padding-top: var(--work-center-space-3);
   display: flex;
   min-width: 0;
   flex-direction: column;
 }
 
 .work-center-conversation-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   flex: 0 0 auto;
   padding: 8px 0 calc(14px + env(safe-area-inset-bottom, 0px));
   background: var(--bg-main);
