@@ -235,7 +235,6 @@ export default {
           :aria-label="$t('yeaft.session.forkFromTurn')"
         >
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="5" r="2.5"/><circle cx="17" cy="5" r="2.5"/><circle cx="7" cy="19" r="2.5"/><path d="M7 7.5v9M17 7.5v1a4 4 0 0 1-4 4H7"/></svg>
-          <span>{{ $t('yeaft.session.forkFromTurn') }}</span>
         </button>
         <button
           v-if="showDebugAction"

@@ -78,7 +78,9 @@ describe('VpTurnBlock debug action', () => {
     expect(wrapper.find('[aria-label="message.quote"]').exists()).toBe(true);
     expect(wrapper.find('.debug-turn-action-btn').exists()).toBe(false);
     const fork = wrapper.get('.fork-turn-action-btn');
-    expect(fork.text()).toBe('yeaft.session.forkFromTurn');
+    expect(fork.text()).toBe('');
+    expect(fork.get('svg').attributes('aria-hidden')).toBe('true');
+    expect(fork.attributes('title')).toBe('yeaft.session.forkFromTurnHint');
     expect(fork.attributes('aria-label')).toBe('yeaft.session.forkFromTurn');
     await fork.trigger('click');
     expect(wrapper.emitted('fork-from-turn')).toHaveLength(1);
