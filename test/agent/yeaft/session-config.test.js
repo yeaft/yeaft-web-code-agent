@@ -789,6 +789,39 @@ describe('Yeaft session-scoped model config', () => {
     expect(loadSessionConfig(root, 'fork-roster').modelEffort).toBe('max');
   });
 
+  it('forwards a turn boundary through the bridge and removes invalid partial forks', () => {
+    const root = makeDir();
+    createSession(sessionsRoot(root), {
+      id: 'fork-boundary-source', name: 'Boundary source', roster: [], defaultVpId: null,
+    }).close();
+    const conversation = new ConversationStore(root);
+    conversation.append({ role: 'user', content: 'Question', sessionId: 'fork-boundary-source' });
+    conversation.append({
+      role: 'assistant', content: 'Answer', sessionId: 'fork-boundary-source', turnId: 'turn-answer',
+    });
+    conversation.append({ role: 'user', content: 'Later', sessionId: 'fork-boundary-source' });
+    ctx.CONFIG = { ...(originalConfig || {}), yeaftDir: root };
+
+    const start = ctx.messageBuffer.length;
+    handleYeaftCopySession({
+      requestId: 'fork-boundary-request', sessionId: 'fork-boundary-source', throughTurnId: 'turn-answer',
+    });
+    const success = ctx.messageBuffer.slice(start).map(frame => frame.event)
+      .find(event => event?.requestId === 'fork-boundary-request');
+    expect(success).toMatchObject({ op: 'copy', ok: true, session: { copiedMessageCount: 2 } });
+    expect(conversation.loadAllBySession(success.session.id).map(row => row.content)).toEqual(['Question', 'Answer']);
+
+    handleYeaftCopySession({
+      requestId: 'fork-boundary-invalid', sessionId: 'fork-boundary-source', throughTurnId: '',
+    });
+    const failure = ctx.messageBuffer.map(frame => frame.event)
+      .find(event => event?.requestId === 'fork-boundary-invalid');
+    expect(failure).toMatchObject({ op: 'copy', ok: false, error: { code: 'invalid_fork_boundary' } });
+    expect(snapshotSessions(root).map(row => row.id)).toEqual([
+      'fork-boundary-source', success.session.id,
+    ]);
+  });
+
   it('removes the partial Session when transcript copying fails', () => {
     const root = makeDir();
     createSession(sessionsRoot(root), {

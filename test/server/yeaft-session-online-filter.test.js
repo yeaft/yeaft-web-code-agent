@@ -518,6 +518,47 @@ describe('Yeaft Session online Agent filtering', () => {
     })).toThrow(/Unknown Chat runtime provider/);
   };
 
+  it('guards turn forks by access and Agent capability without weakening whole copy', async () => {
+    const client = { userId: 'user-1', currentAgent: 'fork-agent', sent: [] };
+    agents.set('fork-agent', {
+      ws: { readyState: 1 }, ownerId: 'user-1', conversations: new Map(), capabilities: [],
+    });
+
+    const denied = vi.fn(async () => false);
+    await handleClientConversation('fork-client', client, {
+      type: 'yeaft_copy_session', agentId: 'fork-agent', sessionId: 'source',
+      requestId: 'denied', throughTurnId: 'turn-1',
+    }, denied);
+    expect(denied).toHaveBeenCalledWith('fork-agent');
+    expect(forwardToAgent).not.toHaveBeenCalled();
+
+    await handleClientConversation('fork-client', client, {
+      type: 'yeaft_copy_session', agentId: 'fork-agent', sessionId: 'source',
+      requestId: 'unsupported', throughTurnId: 'turn-1',
+    }, allow);
+    expect(client.sent.at(-1)).toMatchObject({
+      type: 'session_crud_result', op: 'copy', ok: false,
+      error: { code: 'session_fork_from_turn_unsupported' },
+    });
+    expect(forwardToAgent).not.toHaveBeenCalled();
+
+    await handleClientConversation('fork-client', client, {
+      type: 'yeaft_copy_session', agentId: 'fork-agent', sessionId: 'source', requestId: 'whole-copy',
+    }, allow);
+    expect(forwardToAgent).toHaveBeenLastCalledWith('fork-agent', expect.objectContaining({
+      type: 'yeaft_copy_session', requestId: 'whole-copy',
+    }));
+
+    agents.get('fork-agent').capabilities.push('session_fork_from_turn');
+    await handleClientConversation('fork-client', client, {
+      type: 'yeaft_copy_session', agentId: 'fork-agent', sessionId: 'source',
+      requestId: 'supported', throughTurnId: 'turn-1',
+    }, allow);
+    expect(forwardToAgent).toHaveBeenLastCalledWith('fork-agent', expect.objectContaining({
+      type: 'yeaft_copy_session', throughTurnId: 'turn-1', requestId: 'supported',
+    }));
+  });
+
   it('projects canonical availability and handles catalog lifecycle updates', async () => {
     verifyCatalogProjection();
     CONFIG.skipAuth = false;

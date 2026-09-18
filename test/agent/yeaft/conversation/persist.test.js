@@ -522,6 +522,73 @@ describe('ConversationStore', () => {
         .not.toContain(idMap.get(reflection.id));
     });
 
+    it('copies the chronological durable prefix through the selected assistant turn', () => {
+      const sourceSessionId = 'session_fork_turn_source';
+      const targetSessionId = 'session_fork_turn_target';
+      const firstUser = store.append({ role: 'user', content: 'first', sessionId: sourceSessionId });
+      const call = store.append({
+        role: 'assistant', content: '', sessionId: sourceSessionId, turnId: 'turn-selected',
+        speakerVpId: 'vp-a', causalRootId: firstUser.id,
+        toolCalls: [{ id: 'call-stable', name: 'Read', input: {} }],
+      });
+      store.append({
+        role: 'tool', content: 'tool output', sessionId: sourceSessionId, turnId: 'turn-selected',
+        speakerVpId: 'vp-a', toolCallId: 'call-stable',
+      });
+      const answer = store.append({
+        role: 'assistant', content: 'selected answer', sessionId: sourceSessionId,
+        turnId: 'turn-selected', speakerVpId: 'vp-a', causalRootId: firstUser.id,
+      });
+      store.moveToCold(firstUser.id);
+      const legacyDir = join(TEST_DIR, 'sessions', sourceSessionId, 'conversation', 'messages');
+      mkdirSync(legacyDir, { recursive: true });
+      writeFileSync(join(legacyDir, 'm0000.md'), `---\nid: m0000\nrole: system\nsessionId: ${sourceSessionId}\ninternal: true\n---\nlegacy internal`);
+      store.append({ role: 'user', content: 'later prompt', sessionId: sourceSessionId });
+      store.append({ role: 'assistant', content: 'later answer', sessionId: sourceSessionId, turnId: 'turn-later' });
+
+      const { copiedCount, idMap } = store.copySession(sourceSessionId, targetSessionId, {
+        throughTurnId: 'turn-selected',
+      });
+      const targetSegment = join(TEST_DIR, 'sessions', targetSessionId, 'conversation', 'segments', '000001.jsonl');
+      const rows = readFileSync(targetSegment, 'utf8').trim().split('\n').map(JSON.parse);
+
+      expect(copiedCount).toBe(5);
+      expect(rows.map(row => row.content)).toEqual([
+        'legacy internal', 'first', '', 'tool output', 'selected answer',
+      ]);
+      expect(rows[1]).toMatchObject({ cold: true, id: idMap.get(firstUser.id) });
+      expect(rows[2]).toMatchObject({ id: idMap.get(call.id), toolCalls: [{ id: 'call-stable' }] });
+      expect(rows[4].id).toBe(idMap.get(answer.id));
+      expect(store.loadAllBySession(sourceSessionId).some(row => row.content === 'later answer')).toBe(true);
+    });
+
+    it('fails closed for invalid, unknown, ambiguous, and incomplete fork boundaries', () => {
+      const sourceSessionId = 'session_fork_invalid_source';
+      store.append({ role: 'user', content: 'prompt', sessionId: sourceSessionId });
+      store.append({ role: 'assistant', content: 'a', sessionId: sourceSessionId, turnId: 'shared', speakerVpId: 'vp-a' });
+      store.append({ role: 'assistant', content: 'b', sessionId: sourceSessionId, turnId: 'shared', speakerVpId: 'vp-b' });
+      store.append({
+        role: 'assistant', content: 'calling', sessionId: sourceSessionId, turnId: 'incomplete',
+        speakerVpId: 'vp-a', toolCalls: [{ id: 'missing-result', name: 'Read', input: {} }],
+      });
+
+      const expectCode = (target, throughTurnId, code) => {
+        try {
+          store.copySession(sourceSessionId, target, { throughTurnId });
+          throw new Error('expected copy to fail');
+        } catch (error) {
+          expect(error).toMatchObject({ code });
+        }
+      };
+      expectCode('target-empty', ' ', 'invalid_fork_boundary');
+      expectCode('target-missing', 'missing', 'fork_boundary_not_found');
+      expectCode('target-ambiguous', 'shared', 'ambiguous_fork_boundary');
+      expectCode('target-incomplete', 'incomplete', 'incomplete_fork_boundary');
+      for (const target of ['target-empty', 'target-missing', 'target-ambiguous', 'target-incomplete']) {
+        expect(existsSync(join(TEST_DIR, 'sessions', target, 'conversation'))).toBe(false);
+      }
+    });
+
     it('keeps global message ids unique across live append and Session copy stores', () => {
       const liveStore = new ConversationStore(TEST_DIR);
       const copyStore = new ConversationStore(TEST_DIR);
