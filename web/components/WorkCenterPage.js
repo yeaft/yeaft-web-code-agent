@@ -458,6 +458,13 @@ export default {
           return { key: message.id, kind: 'system', message };
         });
     },
+    conversationScrollState() {
+      return {
+        agentId: this.agentId,
+        workItemId: this.detail?.id === this.selectedId ? this.selectedId : null,
+        blocks: this.conversationBlocks,
+      };
+    },
     coordinatorThinking() {
       return (this.selected?.messages || []).some(message => (
         message?.role === 'assistant' && message.status === 'thinking'
@@ -594,10 +601,19 @@ export default {
     boardVpId() { this.scheduleBoardQuery(); },
     boardWorkItemType() { this.scheduleBoardQuery(); },
     boardUpdatedRange() { this.scheduleBoardQuery(); },
-    'detail.coordinatorRevision'() {
+    conversationScrollState(next, previous) {
+      const stream = this.$refs.detailScroll;
+      // Follow rendered messages, not revisions: event summaries precede the full detail.
+      // A newly loaded Work Item always opens at its overview.
+      if (!stream || !next.workItemId || next.workItemId !== previous?.workItemId
+          || next.agentId !== previous.agentId || stream.dataset.workItemId !== next.workItemId) return;
+      const position = stream.scrollTop;
+      if (stream.scrollHeight - stream.clientHeight - position > 64) return;
       this.$nextTick(() => {
-        const stream = this.$el?.querySelector?.('.work-center-conversation-scroll');
-        if (stream) stream.scrollTop = stream.scrollHeight;
+        if (this.$refs.detailScroll === stream && stream.scrollTop === position
+            && this.agentId === next.agentId && this.selectedId === next.workItemId) {
+          stream.scrollTop = stream.scrollHeight;
+        }
       });
     },
     pendingMessageEnvelope(next, previous) {
@@ -675,10 +691,6 @@ export default {
   methods: {
     selectInfoTab(id) {
       this.infoTab = id;
-      this.$nextTick(() => {
-        const panel = this.$refs.shell?.querySelector(`#work-item-info-panel-${id}`);
-        if (panel) panel.scrollTop = 0;
-      });
     },
     onInfoTabKeydown(event, id) {
       const ids = this.infoTabs.map(tab => tab.id);
@@ -2042,7 +2054,8 @@ export default {
               <template v-if="selected">
                 <div class="work-center-detail-layout" :class="{ 'content-open': contentPanelOpen }">
                   <div class="work-center-detail-main work-center-conversation-pane">
-
+                    <div class="work-center-conversation">
+                      <div ref="detailScroll" :key="agentId + ':' + selectedId" :data-work-item-id="detail?.id === selectedId ? selectedId : null" class="work-center-conversation-scroll">
                     <section class="work-center-work-item-overview" :aria-label="$t('workCenter.itemInfo')">
                       <div class="work-center-info-column">
                         <div class="work-center-work-item-kicker">
@@ -2211,9 +2224,8 @@ export default {
                       </div>
                     </section>
 
-                    <section class="work-center-section work-center-item-messages work-center-conversation" :aria-label="tr('workCenter.conversation', 'Conversation')">
+                    <section class="work-center-section work-center-item-messages" :aria-label="tr('workCenter.conversation', 'Conversation')">
                       <h3 class="work-center-conversation-heading">{{ tr('workCenter.conversation', 'Conversation') }}</h3>
-                      <div class="work-center-conversation-scroll">
                         <div class="work-center-conversation-column">
                           <div v-if="detailLoading" class="work-center-detail-notice" aria-live="polite">{{ tr('workCenter.detailLoading', 'Loading full details…') }}</div>
                           <div v-else-if="detailError" class="work-center-detail-notice work-center-detail-error" role="alert">
@@ -2265,7 +2277,7 @@ export default {
                           <p v-if="!conversationBlocks.length && !coordinatorThinking" class="work-center-muted work-center-conversation-empty">{{ $t('workCenter.infoConversationEmpty') }}</p>
                           <p v-if="workItemMessageError" class="work-center-error" role="alert">{{ workItemMessageError }}</p>
                         </div>
-                      </div>
+                    </section>
 
                       <div class="work-center-conversation-composer">
                         <div class="work-center-composer-column">
@@ -2340,7 +2352,8 @@ export default {
                           </template>
                         </div>
                       </div>
-                    </section>
+                      </div>
+                    </div>
                   </div>
 
                   <PaneResizeHandle v-if="contentPanelOpen" v-model="actionsPaneWidth"

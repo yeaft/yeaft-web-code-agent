@@ -15,6 +15,50 @@ afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); });
 const waiting = { id: 'a2', generation: 2, status: 'waiting', canonicalResult: { waitingReason: 'Which branch?' } };
 
 describe('Work Center explicit user input', () => {
+  it('follows actual message updates only at the bottom of the same Agent and Work Item', () => {
+    const stream = { dataset: { workItemId: 'item' }, scrollTop: 800, scrollHeight: 1000, clientHeight: 200 };
+    const tick = vi.fn();
+    const vm = { agentId: 'agent', selectedId: 'item', $refs: { detailScroll: stream }, $nextTick: tick };
+    const state = { agentId: 'agent', workItemId: 'item', blocks: [] };
+    const update = previous => Page.watch.conversationScrollState.call(vm, state, previous);
+    update(undefined); // Initial load stays at the overview.
+    update({ ...state, workItemId: null }); // Delayed first detail is not a live message.
+    update({ ...state, workItemId: 'another-item' }); // New keyed DOM cannot inherit scroll intent.
+    update({ ...state, agentId: 'another-agent' });
+    expect(tick).not.toHaveBeenCalled();
+    stream.scrollTop = 0;
+    update(state); // Reading requirements must not be interrupted.
+    expect(tick).not.toHaveBeenCalled();
+    stream.scrollTop = 800;
+    update(state);
+    stream.scrollHeight = 1200;
+    tick.mock.calls[0][0]();
+    expect(stream.scrollTop).toBe(1200);
+  });
+
+  it('does not apply a queued scroll after the reader moves or the Work Item changes', () => {
+    const stream = { dataset: { workItemId: 'item' }, scrollTop: 800, scrollHeight: 1000, clientHeight: 200 };
+    const tick = vi.fn();
+    const vm = { agentId: 'agent', selectedId: 'item', $refs: { detailScroll: stream }, $nextTick: tick };
+    const state = { agentId: 'agent', workItemId: 'item', blocks: [] };
+    Page.watch.conversationScrollState.call(vm, state, state);
+    stream.scrollTop = 100;
+    tick.mock.calls[0][0]();
+    expect(stream.scrollTop).toBe(100);
+    stream.scrollTop = 800;
+    vm.selectedId = 'another-item';
+    tick.mock.calls[0][0]();
+    expect(stream.scrollTop).toBe(800);
+    vm.selectedId = 'item';
+    vm.agentId = 'another-agent';
+    tick.mock.calls[0][0]();
+    expect(stream.scrollTop).toBe(800);
+    vm.agentId = 'agent';
+    vm.$refs.detailScroll = {};
+    tick.mock.calls[0][0]();
+    expect(stream.scrollTop).toBe(800);
+  });
+
   it('routes a Coordinator question to the Coordinator, not an arbitrary current Action', () => {
     const selected = { status: 'waiting', currentActionId: 'a2', actions: [waiting], messages: [
       { role: 'assistant', decision: { kind: 'request_human', question: 'May we use a worktree?' } },
