@@ -150,6 +150,20 @@ describe('YeaftPage setup', () => {
     chatStore.sessionForkUnavailableReason = vi.fn(() => 'fork_pending');
     await page.forkCurrentSession();
     expect(chatStore.copyCatalogSession).toHaveBeenCalledTimes(1);
+    chatStore.sessionForkUnavailableReason = vi.fn(() => null);
+    expect(page.forkFromTurnEnabled.value).toBe(false);
+    await page.forkFromTurn({ turnId: 'first-runtime-turn', forkBoundaryTurnId: 'selected-turn' });
+    expect(chatStore.copyCatalogSession).toHaveBeenCalledTimes(1);
+    chatStore.agents = [{ id: 'agent-1', online: true, capabilities: ['session_fork_from_turn'] }];
+    expect(page.forkFromTurnEnabled.value).toBe(true);
+    await page.forkFromTurn({ turnId: 'first-runtime-turn', forkBoundaryTurnId: 'selected-turn', isStreaming: true });
+    await page.forkFromTurn({ turnId: 'first-runtime-turn', forkBoundaryTurnId: 'selected-turn', isActive: true });
+    await page.forkFromTurn({});
+    await page.forkFromTurn({ turnId: 'first-runtime-turn' });
+    expect(chatStore.copyCatalogSession).toHaveBeenCalledTimes(1);
+    await page.forkFromTurn({ turnId: 'first-runtime-turn', forkBoundaryTurnId: 'selected-turn' });
+    expect(chatStore.copyCatalogSession).toHaveBeenLastCalledWith(page.forkSessionRow.value, { throughTurnId: 'selected-turn' });
+    chatStore.agents = [{ id: 'agent-1', online: true }];
     const actions = mount(YeaftSessionActions, {
       props: { showFork: true }, global: { mocks: { $t: key => key } },
     });

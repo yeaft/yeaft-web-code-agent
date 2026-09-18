@@ -48,8 +48,11 @@ export default {
     canStop: { type: Boolean, default: true },
     interactiveSpeaker: { type: Boolean, default: true },
     originMessageId: { type: String, default: '' },
+    showForkAction: { type: Boolean, default: false },
+    forkActionDisabled: { type: Boolean, default: false },
+    forkActionTitle: { type: String, default: '' },
   },
-  emits: ['toggle-response-collapse', 'quote', 'open-debug'],
+  emits: ['toggle-response-collapse', 'quote', 'open-debug', 'fork-from-turn'],
   template: `
     <div class="vp-turn-block"
          :class="{ 'vp-turn-block-streaming': turn.isStreaming }"
@@ -121,6 +124,10 @@ export default {
           :origin-message-id="originMessageId"
           :show-debug-action="debugActionEnabled && hasDebugEntry"
           :debug-action-title="debugActionTitle"
+          :show-fork-action="showForkAction"
+          :fork-action-disabled="forkActionDisabled"
+          :fork-action-title="forkActionTitle"
+          @fork-from-turn="$emit('fork-from-turn')"
           @quote="$emit('quote', $event)"
           @open-debug="$emit('open-debug')"
           @toggle-response-collapse="$emit('toggle-response-collapse')"

@@ -1710,6 +1710,19 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           }
           return true;
         }
+        if (relayType === 'yeaft_copy_session'
+            && Object.prototype.hasOwnProperty.call(msg, 'throughTurnId')
+            && !agents.get(relayAgentId)?.capabilities?.includes('session_fork_from_turn')) {
+          await sendToWebClient(client, {
+            type: 'session_crud_result', op: 'copy', requestId: msg.requestId,
+            agentId: relayAgentId, ok: false,
+            error: {
+              code: 'session_fork_from_turn_unsupported',
+              message: 'The selected Agent does not support forking a Session from a turn.',
+            },
+          });
+          return true;
+        }
         if (relayType === 'yeaft_plugin_catalog'
             && !agentSupportsYeaftPlugins(agents.get(relayAgentId))) {
           await sendToWebClient(client, {

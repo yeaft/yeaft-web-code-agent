@@ -1558,10 +1558,10 @@
   opacity: 1;
 }
 
-/* Touch devices have no hover affordance. Keep the same action row visible
-   so a turn-scoped debug trace remains reachable by tap. */
+/* Touch devices have no hover affordance. Keep turn actions reachable by tap. */
 @media (pointer: coarse) {
-  .assistant-turn.has-turn-debug-action .turn-footer {
+  .assistant-turn.has-turn-debug-action .turn-footer,
+  .assistant-turn.has-turn-fork-action .turn-footer {
     opacity: 1;
   }
 }
@@ -1642,6 +1642,29 @@
   cursor: pointer;
   font-size: 12px;
   transition: background 0.15s, color 0.15s;
+}
+
+.assistant-turn.has-turn-fork-action .turn-footer {
+  flex-wrap: wrap;
+}
+
+.turn-footer .fork-turn-action-btn {
+  width: auto;
+  gap: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.turn-footer .fork-turn-action-btn:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.turn-footer .fork-turn-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--text-muted);
 }
 
 .turn-footer .message-action-btn:hover,

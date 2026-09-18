@@ -3663,6 +3663,9 @@ export function handleYeaftCopySession(msg) {
     const session = copySession(yeaftDir, sessionId, {
       ...configuredVpPaths(),
       name: msg && msg.name,
+      ...(msg && Object.prototype.hasOwnProperty.call(msg, 'throughTurnId')
+        ? { throughTurnId: msg.throughTurnId }
+        : {}),
     });
     recordAgentSessionCreated();
     session.config = loadSessionConfig(yeaftDir, session.id);

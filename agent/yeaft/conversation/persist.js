@@ -1962,9 +1962,12 @@ export class ConversationStore {
    * copied persisted message are remapped; external/client/tool identities are
    * intentionally preserved.
    *
+   * @param {string} sourceSessionId
+   * @param {string} targetSessionId
+   * @param {{throughTurnId?: string}} [options]
    * @returns {{ copiedCount: number, idMap: Map<string, string> }}
    */
-  copySession(sourceSessionId, targetSessionId) {
+  copySession(sourceSessionId, targetSessionId, options = {}) {
     if (!sourceSessionId || !targetSessionId || sourceSessionId === targetSessionId) {
       return { copiedCount: 0, idMap: new Map() };
     }
@@ -1986,7 +1989,44 @@ export class ConversationStore {
       if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id) continue;
       rowsById.set(row.id, row);
     }
-    const rows = [...rowsById.values()].sort(compareMessagesBySeq);
+    let rows = [...rowsById.values()].sort(compareMessagesBySeq);
+    if (Object.prototype.hasOwnProperty.call(options, 'throughTurnId')) {
+      const throughTurnId = typeof options.throughTurnId === 'string'
+        ? options.throughTurnId.trim()
+        : '';
+      if (!throughTurnId) {
+        const error = new Error('throughTurnId must be a nonempty string');
+        error.code = 'invalid_fork_boundary';
+        throw error;
+      }
+
+      const matchingAssistantRows = rows.filter(row => row?.role === 'assistant' && row.turnId === throughTurnId);
+      if (matchingAssistantRows.length === 0) {
+        const error = new Error(`Assistant turn not found: ${throughTurnId}`);
+        error.code = 'fork_boundary_not_found';
+        throw error;
+      }
+      const speakers = new Set(matchingAssistantRows.map(row => row.speakerVpId || row.vpId || '').filter(Boolean));
+      if (speakers.size > 1) {
+        const error = new Error(`Assistant turn boundary is ambiguous: ${throughTurnId}`);
+        error.code = 'ambiguous_fork_boundary';
+        throw error;
+      }
+      const endpoint = rows.reduce((last, row, index) => row?.turnId === throughTurnId ? index : last, -1);
+      const prefix = rows.slice(0, endpoint + 1);
+      const sanitized = pairSanitize(prefix);
+      const pairShape = row => ({
+        id: row?.id,
+        toolCalls: Array.isArray(row?.toolCalls) ? row.toolCalls.map(call => call?.id) : undefined,
+      });
+      if (sanitized.length !== prefix.length
+          || sanitized.some((row, index) => JSON.stringify(pairShape(row)) !== JSON.stringify(pairShape(prefix[index])))) {
+        const error = new Error(`Assistant turn boundary would split provider tool history: ${throughTurnId}`);
+        error.code = 'incomplete_fork_boundary';
+        throw error;
+      }
+      rows = prefix;
+    }
     if (rows.length === 0) return { copiedCount: 0, idMap: new Map() };
 
     const firstSeq = this.#reserveSeqRange(rows.length);

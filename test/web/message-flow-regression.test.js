@@ -6496,6 +6496,21 @@ describe('message flow regressions', () => {
       routeRef: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'copied-session' },
     });
 
+    // Unknown/old Agents must never silently turn a prefix fork into a full copy.
+    await expect(store.copyCatalogSession(row, { throughTurnId: 'turn-selected' }))
+      .resolves.toMatchObject({ error: { code: 'session_fork_from_turn_unsupported' } });
+    store.agents = [{ id: 'agent-a', online: true, capabilities: ['session_fork_from_turn'] }];
+    for (const throughTurnId of ['', '  ', null, 12]) {
+      await expect(store.copyCatalogSession(row, { throughTurnId }))
+        .resolves.toMatchObject({ error: { code: 'invalid_fork_boundary' } });
+    }
+    expect(store.sessionCrudRequest).toHaveBeenCalledTimes(1);
+    await expect(store.copyCatalogSession(row, { throughTurnId: 'turn-selected' }))
+      .resolves.toMatchObject({ ok: true, op: 'copy' });
+    expect(store.sessionCrudRequest).toHaveBeenLastCalledWith(
+      'copy', { sessionId: 'source-session', throughTurnId: 'turn-selected' }, { agentId: 'agent-a' },
+    );
+
     const sessions = useSessionsStore();
     sessions.applyCrudResult({
       ok: true,

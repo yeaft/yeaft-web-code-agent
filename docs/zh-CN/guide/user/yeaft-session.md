@@ -44,11 +44,13 @@ Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是
 
 ## Fork 当前 Session
 
-在当前 Session 的侧栏菜单选择 **Fork 当前会话**，或点击 conversation 右上角的 **Fork**。无需填写创建弹窗，完成后自动打开同一 Agent 上的新 Session。
+在当前 Session 的侧栏菜单选择 **复制会话**，或点击 conversation 右上角的复制图标。无需填写创建弹窗，完成后自动打开同一 Agent 上的新 Session。
 
 Fork 保留完整持久对话、公告、VP roster/default VP、工作目录和 Session model/effort 配置。原 Session 属于 Project 时，Server 会将新 Session 放入同一 Project，继续使用统一 instruction。原 Session 不变，之后两边的对话和 Session 配置修改彼此独立。
 
 正在生成回复时需等待结束；断线或 Fork 进行中时入口禁用。Fork 不复制后台进程、运行任务、debug trace 或 Session memory 文件；附件引用保持原所有权。Project 继承要求 Server 和 Agent 均支持此能力。
+
+在已完成 AI 回复下方选择 **从此轮分叉**，只复制持久历史开头到这轮回复结束（包含该轮），不包含后续消息。新会话仍继承相同配置和 Project，原会话不会截断或改变。需要新版 Agent 支持；旧记录缺少可靠轮次标识时不显示入口，边界不明确或会拆开工具调用/结果时会报错，不会退化为复制全部历史。多 VP 并行时以持久消息顺序为准，边界之前其他 VP 的消息也会保留。
 
 ## 路由一个 turn
 

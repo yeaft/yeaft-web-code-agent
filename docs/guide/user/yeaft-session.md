@@ -32,11 +32,13 @@ The assistant helps with questions, research, writing, translation, learning, pl
 
 ## Fork the current Session
 
-Choose **Fork current session** from the active Session’s sidebar menu, or **Fork** at the top right of the conversation. No setup dialog is needed: the new Session opens automatically on the same Agent.
+Choose **Copy session** from the active Session’s sidebar menu, or the copy icon at the top right of the conversation. No setup dialog is needed: the new Session opens automatically on the same Agent.
 
 The fork copies the complete persisted conversation, announcement, VP roster/default VP, working directory, and Session model/effort overrides. If the source belongs to a Project, the Server puts the fork in the same Project, so the shared instruction continues to apply. The source remains unchanged; later conversation and Session setting changes are independent.
 
 Wait for a running response to finish before forking. Forking is unavailable while disconnected or another fork is pending. Background processes, running tasks, debug traces, and Session memory files are not cloned. Attachment references retain their original ownership. Both Server and Agent must support Project inheritance for this behavior.
+
+Choose **Fork from this turn** below a completed AI response to copy the chronological history prefix through that turn, inclusive, without later messages. The new Session inherits the same configuration and Project; the source is never truncated or changed. This requires a supporting Agent. Older responses without a reliable turn ID have no action; ambiguous boundaries or boundaries that split a tool call/result are rejected rather than falling back to a full copy. With parallel VPs, persisted message order is authoritative, so other VP messages before the boundary are included.
 
 ## Route a turn
 

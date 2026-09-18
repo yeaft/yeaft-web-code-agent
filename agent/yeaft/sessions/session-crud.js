@@ -641,11 +641,17 @@ export function copySession(yeaftDir, sourceSessionId, options = {}) {
     }
 
     const transcript = new ConversationStore(sourceYeaftDir);
-    const { copiedCount } = transcript.copySession(sourceSessionId, copied.id);
+    const transcriptOptions = Object.prototype.hasOwnProperty.call(options, 'throughTurnId')
+      ? { throughTurnId: options.throughTurnId }
+      : {};
+    const { copiedCount } = transcript.copySession(sourceSessionId, copied.id, transcriptOptions);
     return { ...requireSessionMeta(sourceYeaftDir, copied.id), copiedMessageCount: copiedCount };
   } catch (error) {
     // A partial clone must never appear as a successful copy.
     deleteSession(sourceYeaftDir, copied.id, options);
+    if (['invalid_fork_boundary', 'fork_boundary_not_found', 'ambiguous_fork_boundary', 'incomplete_fork_boundary'].includes(error?.code)) {
+      throw new SessionCrudError(error.code, sourceSessionId, error.message);
+    }
     throw error;
   }
 }

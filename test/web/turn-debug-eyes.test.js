@@ -73,9 +73,22 @@ describe('VpTurnBlock debug action', () => {
     expect(wrapper.find('[aria-label="message.quote"]').exists()).toBe(false);
     expect(wrapper.find('.export-md-btn').exists()).toBe(true);
     expect(wrapper.find('.copy-full-btn').exists()).toBe(true);
-    await wrapper.setProps({ sessionActions: true });
+    expect(wrapper.find('.fork-turn-action-btn').exists()).toBe(false);
+    await wrapper.setProps({ sessionActions: true, showForkAction: true });
     expect(wrapper.find('[aria-label="message.quote"]').exists()).toBe(true);
     expect(wrapper.find('.debug-turn-action-btn').exists()).toBe(false);
+    const fork = wrapper.get('.fork-turn-action-btn');
+    expect(fork.text()).toBe('yeaft.session.forkFromTurn');
+    expect(fork.attributes('aria-label')).toBe('yeaft.session.forkFromTurn');
+    await fork.trigger('click');
+    expect(wrapper.emitted('fork-from-turn')).toHaveLength(1);
+    await wrapper.setProps({ forkActionDisabled: true, forkActionTitle: 'Wait for completion' });
+    expect(fork.attributes('title')).toBe('Wait for completion');
+    expect(fork.attributes('disabled')).toBeDefined();
+    await fork.trigger('click');
+    expect(wrapper.emitted('fork-from-turn')).toHaveLength(1);
+    await wrapper.setProps({ turn: makeTurn({ isStreaming: true }) });
+    expect(wrapper.find('.fork-turn-action-btn').exists()).toBe(false);
     wrapper.unmount();
   });
 

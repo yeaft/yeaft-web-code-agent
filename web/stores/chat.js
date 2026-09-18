@@ -7679,16 +7679,27 @@ export const useChatStore = defineStore('chat', {
       if (this.isYeaftSessionProcessing(route.sessionId, route.agentId)) return 'session_running';
       return null;
     },
-    async copyCatalogSession(row) {
+    async copyCatalogSession(row, options = {}) {
       const unavailable = this.sessionForkUnavailableReason(row);
       if (unavailable) return { ok: false, op: 'copy', error: { code: unavailable } };
       const route = { ...row.routeRef };
+      const fromTurn = Object.prototype.hasOwnProperty.call(options, 'throughTurnId');
+      if (fromTurn) {
+        if (typeof options.throughTurnId !== 'string' || !options.throughTurnId.trim()) {
+          return { ok: false, op: 'copy', error: { code: 'invalid_fork_boundary' } };
+        }
+        if (!this.agents.find(agent => agent.id === route.agentId)?.capabilities?.includes('session_fork_from_turn')) {
+          return { ok: false, op: 'copy', error: { code: 'session_fork_from_turn_unsupported' } };
+        }
+      }
       this.sessionForkPendingKey = yeaftCatalogKey(route.agentId, route.sessionId);
       this.sessionForkState = 'copying';
       try {
-        // Keep the existing copy wire contract for compatible Agent versions.
+        // Whole copies retain the old wire contract. Turn copies require an
+        // explicit capability: an old Agent must never silently copy later rows.
         const result = await this.sessionCrudRequest('copy', {
           sessionId: route.sessionId,
+          ...(fromTurn ? { throughTurnId: options.throughTurnId } : {}),
         }, { agentId: route.agentId });
         if (!result?.ok || !result.session?.id) return result;
         this.sessionForkState = 'success';

@@ -67,14 +67,17 @@ export default {
     // VpTurnBlock opts into the turn-scoped debug action. Keeping this
     // opt-in preserves the legacy Chat footer unchanged.
     showDebugAction: { type: Boolean, default: false },
-    debugActionTitle: { type: String, default: '' }
+    debugActionTitle: { type: String, default: '' },
+    showForkAction: { type: Boolean, default: false },
+    forkActionDisabled: { type: Boolean, default: false },
+    forkActionTitle: { type: String, default: '' },
   },
-  emits: ['update-actions-expanded', 'update-tool-expanded', 'toggle-response-collapse', 'quote', 'open-debug'],
+  emits: ['update-actions-expanded', 'update-tool-expanded', 'toggle-response-collapse', 'quote', 'open-debug', 'fork-from-turn'],
   template: `
     <div
       class="assistant-turn"
       ref="turnRef"
-      :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId, 'has-turn-debug-action': showDebugAction }"
+      :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId, 'has-turn-debug-action': showDebugAction, 'has-turn-fork-action': showForkAction }"
       :data-response-origin-id="originMessageId || null"
     >
       <!-- 0. task-334-ui-b: VP speaker header — only when a speakerVpId is
@@ -206,7 +209,7 @@ export default {
       <!-- 6. Response footer actions (visible on hover) -->
       <div
         class="turn-footer"
-        v-if="(turn.textContent || responseCollapsible || showDebugAction || (sessionActions && (turn.todoMsg || turn.toolMsgs?.length))) && !turn.isStreaming"
+        v-if="(turn.textContent || responseCollapsible || showDebugAction || showForkAction || (sessionActions && (turn.todoMsg || turn.toolMsgs?.length))) && !turn.isStreaming"
       >
         <div
           v-if="(turnTime && !turn.speakerVpId) || responseModelMeta || turn.llmCallCount > 0 || responseTokenMeta"
@@ -222,6 +225,18 @@ export default {
           <span v-if="turn.llmCallCount > 0" class="turn-time">{{ $t(turn.llmCallCount === 1 ? 'yeaft.message.llmCall' : 'yeaft.message.llmCalls', { count: turn.llmCallCount }) }}</span>
           <span v-if="responseTokenMeta" class="turn-time turn-token-meta" :title="responseTokenMeta">{{ responseTokenMeta }}</span>
         </div>
+        <button
+          v-if="showForkAction"
+          type="button"
+          class="message-action-btn fork-turn-action-btn"
+          :disabled="forkActionDisabled"
+          @click="$emit('fork-from-turn')"
+          :title="forkActionTitle || $t('yeaft.session.forkFromTurnHint')"
+          :aria-label="$t('yeaft.session.forkFromTurn')"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="5" r="2.5"/><circle cx="17" cy="5" r="2.5"/><circle cx="7" cy="19" r="2.5"/><path d="M7 7.5v9M17 7.5v1a4 4 0 0 1-4 4H7"/></svg>
+          <span>{{ $t('yeaft.session.forkFromTurn') }}</span>
+        </button>
         <button
           v-if="showDebugAction"
           type="button"
