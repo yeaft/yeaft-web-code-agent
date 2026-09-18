@@ -284,6 +284,10 @@ export default {
         <MessageList
           ref="messageListRef"
           v-if="!showSettings && !showOnboardingGuide && (conversationInventoryReady || store.yeaftVisibleMessages.length > 0) && (!isActiveGroupEmpty || store.yeaftVisibleMessages.length > 0 || store.yeaftInitialHistoryLoading)"
+          :fork-from-turn-enabled="forkFromTurnEnabled"
+          :fork-from-turn-disabled="!!forkUnavailableReason"
+          :fork-from-turn-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.forkFromTurnHint')"
+          @fork-from-turn="forkFromTurn"
           @quote-message="setMessageQuote"
           @edit-message-as-new="editMessageAsNew"
         />
@@ -1070,9 +1074,11 @@ export default {
     ));
     const isActiveSessionCopying = Vue.computed(() => activeSessionForkState.value === 'copying');
     const forkUnavailableReason = Vue.computed(() => store.sessionForkUnavailableReason(forkSessionRow.value));
-    const forkCurrentSession = async () => {
-      if (!forkSessionRow.value || forkUnavailableReason.value) return;
-      const result = await store.copyCatalogSession(forkSessionRow.value);
+    const forkFromTurnEnabled = Vue.computed(() => (
+      !!forkSessionRow.value && store.agents.some(agent => agent.id === store.currentAgent
+        && agent.capabilities?.includes('session_fork_from_turn'))
+    ));
+    const showForkError = async (result) => {
       if (!result?.ok) {
         const code = result?.error?.code || 'unknown';
         const key = `yeaft.session.error.${code}`;
@@ -1080,6 +1086,18 @@ export default {
         const message = translated === key ? (result?.error?.message || code) : translated;
         await alertDialog($t('yeaft.session.copyFailed', { message }));
       }
+    };
+
+    const forkCurrentSession = async () => {
+      if (!forkSessionRow.value || forkUnavailableReason.value) return;
+      await showForkError(await store.copyCatalogSession(forkSessionRow.value));
+    };
+    const forkFromTurn = async (turn) => {
+      if (!forkFromTurnEnabled.value || forkUnavailableReason.value
+          || !turn?.forkBoundaryTurnId || turn.isStreaming || turn.isActive) return;
+      await showForkError(await store.copyCatalogSession(forkSessionRow.value, {
+        throughTurnId: turn.forkBoundaryTurnId,
+      }));
     };
 
     const activeSessionIdForSettings = () => resolveActiveSessionIdForSettings({
@@ -1569,6 +1587,8 @@ export default {
       isActiveSessionCopying,
       forkUnavailableReason,
       forkCurrentSession,
+      forkFromTurnEnabled,
+      forkFromTurn,
       topbarSessionTitle,
       topbarFolderPath,
       topbarModel,

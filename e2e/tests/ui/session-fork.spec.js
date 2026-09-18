@@ -1,5 +1,11 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
+import { copySession, sessionsRoot } from '../../../agent/yeaft/sessions/session-crud.js';
 
 // Use the real durable owner/catalog path, not ownerless development snapshots.
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true' } });
@@ -184,5 +190,120 @@ for (const scenario of [
     }
     await page.reload();
     await expect.poll(inspectCopy).toEqual(expected);
+  });
+}
+
+for (const scenario of [
+  { width: 1280, theme: 'light', vp: false },
+  { width: 320, theme: 'dark', vp: true },
+]) {
+  test(`Fork from this turn: durable prefix, ${scenario.width}px ${scenario.theme}, VP=${scenario.vp}`, async ({ chatPage: page, mockAgent }, testInfo) => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-e2e-fork-turn-'));
+    try {
+      const source = { id: 'turn-fork-source', name: 'Choose an earlier response', roster: [], defaultVpId: null, workDir: '/tmp/test' };
+      createSession(sessionsRoot(root), source).close();
+      const transcript = new ConversationStore(root);
+      const append = row => transcript.append({ sessionId: source.id, ...row });
+      append({ role: 'user', content: 'Original question' });
+      append({ role: 'assistant', content: 'Keep this first answer', turnId: 'runtime-a', ...(scenario.vp ? { speakerVpId: 'omni' } : {}) });
+      append({ role: 'assistant', content: 'Keep the continuation too', turnId: 'runtime-b', ...(scenario.vp ? { speakerVpId: 'omni' } : {}) });
+      append({ role: 'assistant', content: 'Keep the complete result', turnId: 'runtime-c', ...(scenario.vp ? { speakerVpId: 'omni' } : {}) });
+      append({ role: 'user', content: 'Later question excluded from fork' });
+      append({ role: 'assistant', content: 'Later answer excluded from fork', turnId: 'turn-later', ...(scenario.vp ? { speakerVpId: 'omni' } : {}) });
+      const originalRows = transcript.loadAllBySession(source.id);
+      // The websocket transport is mocked; copying and loading the transcript
+      // use the actual durable implementation in a disposable data root.
+      const replyHistory = request => {
+        const rows = transcript.loadAllBySession(request.sessionId);
+        const metadata = { sessionId: request.sessionId, requestId: request.requestId,
+          oldestSeq: rows[0]?.seq, latestSeq: rows.at(-1)?.seq, hasMore: false, mode: 'recent' };
+        mockAgent.send({ type: 'yeaft_history_chunk', ...metadata, messages: rows });
+        mockAgent.send({ type: 'yeaft_output', event: { type: 'history_loaded', ...metadata, count: rows.length } });
+      };
+      mockAgent._messageHandlers.push(request => {
+        if (request.type === 'yeaft_load_history' && request.sessionId) replyHistory(request);
+      });
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [source] } });
+      await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().sessionCatalog
+        .some(row => row.routeRef.sessionId === id), source.id)).toBe(true);
+      await page.setViewportSize({ width: scenario.width, height: 800 });
+      await page.evaluate(({ agentId, sessionId, theme }) => {
+        document.documentElement.setAttribute('data-theme', theme);
+        const store = window.Pinia.useChatStore();
+        store.openCatalogSession(store.sessionCatalog.find(row => row.routeRef.agentId === agentId && row.routeRef.sessionId === sessionId));
+        store.sessionSidebarOpen = false;
+      }, { agentId: mockAgent.agentId, sessionId: source.id, theme: scenario.theme });
+      const actions = page.locator('.fork-turn-action-btn');
+      await expect(actions).toHaveCount(2);
+      // Three persisted runtime deliveries form one visible historical reply.
+      const sourceReply = page.locator('.assistant-turn').first();
+      await expect(sourceReply).toContainText('Keep the continuation too');
+      await expect(sourceReply).toContainText('Keep the complete result');
+      const first = actions.first();
+      await expect(first).toHaveAccessibleName('Fork from this turn');
+      await first.focus();
+      await expect(first).toBeFocused();
+      const geometry = await first.evaluate(button => {
+        const rect = button.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, opacity: getComputedStyle(button.parentElement).opacity };
+      });
+      expect(geometry.left).toBeGreaterThanOrEqual(0);
+      expect(geometry.right).toBeLessThanOrEqual(scenario.width);
+      await expect.poll(() => first.evaluate(button => getComputedStyle(button.parentElement).opacity)).toBe('1');
+      await page.screenshot({ path: testInfo.outputPath('fork-from-turn.png') });
+
+      await page.evaluate(({ agentId, sessionId }) => {
+        window.Pinia.useChatStore().yeaftProcessingSessions = { [`${agentId}\u001f${sessionId}`]: true };
+      }, { agentId: mockAgent.agentId, sessionId: source.id });
+      await expect(first).toBeDisabled();
+      await page.evaluate(() => {
+        const store = window.Pinia.useChatStore();
+        store.yeaftProcessingSessions = {};
+        store.connectionState = 'reconnecting';
+      });
+      await expect(first).toBeDisabled();
+      await page.evaluate(() => {
+        const store = window.Pinia.useChatStore();
+        store.connectionState = 'connected';
+        store.agents = store.agents.map(agent => ({ ...agent, capabilities: agent.capabilities.filter(value => value !== 'session_fork_from_turn') }));
+      });
+      await expect(actions).toHaveCount(0);
+      expect(mockAgent._messageHistory.filter(request => request.type === 'yeaft_copy_session')).toHaveLength(0);
+      await page.evaluate(() => {
+        const store = window.Pinia.useChatStore();
+        store.agents = store.agents.map(agent => ({ ...agent, capabilities: [...agent.capabilities, 'session_fork_from_turn'] }));
+      });
+      await expect(first).toBeEnabled();
+      // A merged reply ending in a legacy row without a durable turn identity
+      // cannot fall back to runtime-a or runtime-b and silently truncate itself.
+      await page.evaluate(() => {
+        const row = window.Pinia.useChatStore().messages.find(message => message.turnId === 'runtime-c');
+        row.turnId = null;
+      });
+      await expect(actions).toHaveCount(1);
+      await expect(sourceReply.locator('.fork-turn-action-btn')).toHaveCount(0);
+      await page.evaluate(() => {
+        const row = window.Pinia.useChatStore().messages.find(message => message.content === 'Keep the complete result');
+        row.turnId = 'runtime-c';
+      });
+      await expect(actions).toHaveCount(2);
+      const pending = mockAgent.waitForMessage('yeaft_copy_session');
+      await first.focus();
+      await first.press('Enter');
+      const request = await pending;
+      expect(request).toMatchObject({ sessionId: source.id, throughTurnId: 'runtime-c' });
+      await expect(first).toBeDisabled();
+      const copied = copySession(root, request.sessionId, { throughTurnId: request.throughTurnId });
+      expect(transcript.loadAllBySession(copied.id).map(row => row.content)).toEqual(['Original question', 'Keep this first answer', 'Keep the continuation too', 'Keep the complete result']);
+      expect(transcript.loadAllBySession(source.id)).toEqual(originalRows);
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'session_crud_result', op: 'copy', ok: true,
+        requestId: request.requestId, sourceSessionId: source.id, session: copied } });
+      await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.sessionId)).toBe(copied.id);
+      await expect(page.locator('.assistant-turn', { hasText: 'Keep this first answer' })).toBeVisible();
+      await expect(page.locator('.assistant-turn', { hasText: 'Later answer excluded from fork' })).toHaveCount(0);
+      await expect(actions).toHaveCount(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 }

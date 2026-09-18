@@ -191,6 +191,10 @@ export default {
                 <VpTurnBlock
                   v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
                   :turn="item"
+                  :show-fork-action="forkFromTurnEnabled && !!item.forkBoundaryTurnId && !item.isStreaming && !item.isActive"
+                  :fork-action-disabled="forkFromTurnDisabled"
+                  :fork-action-title="forkFromTurnTitle"
+                  @fork-from-turn="$emit('fork-from-turn', item)"
                   :now-ms="nowMs"
                   :response-collapsible="responseToggleBelongsToItem(block, item)"
                   :response-collapsed="block.responseCollapsed"
@@ -203,6 +207,10 @@ export default {
                 <AssistantTurn
                   v-else-if="item.type === 'assistant-turn'"
                   :turn="item"
+                  :show-fork-action="forkFromTurnEnabled && !!item.forkBoundaryTurnId && !item.isStreaming && !item.isActive"
+                  :fork-action-disabled="forkFromTurnDisabled"
+                  :fork-action-title="forkFromTurnTitle"
+                  @fork-from-turn="$emit('fork-from-turn', item)"
                   :actions-expanded="assistantTurnActionsExpandedFor(item)"
                   :tool-expand-states="toolExpandStates"
                   :tool-state-prefix="turnUiKey(item)"
@@ -290,6 +298,10 @@ export default {
               <VpTurnBlock
                 v-else-if="block.type === 'assistant-turn' && block.speakerVpId"
                 :turn="block"
+                :show-fork-action="forkFromTurnEnabled && !!block.forkBoundaryTurnId && !block.isStreaming && !block.isActive"
+                :fork-action-disabled="forkFromTurnDisabled"
+                :fork-action-title="forkFromTurnTitle"
+                @fork-from-turn="$emit('fork-from-turn', block)"
                 :now-ms="nowMs"
                 @quote="$emit('quote-message', $event)"
                 @open-debug="onOpenTurnDebug(block)"
@@ -297,6 +309,10 @@ export default {
               <AssistantTurn
                 v-else-if="block.type === 'assistant-turn'"
                 :turn="block"
+                :show-fork-action="forkFromTurnEnabled && !!block.forkBoundaryTurnId && !block.isStreaming && !block.isActive"
+                :fork-action-disabled="forkFromTurnDisabled"
+                :fork-action-title="forkFromTurnTitle"
+                @fork-from-turn="$emit('fork-from-turn', block)"
                 :actions-expanded="assistantTurnActionsExpandedFor(block)"
                 :tool-expand-states="toolExpandStates"
                 :tool-state-prefix="turnUiKey(block)"
@@ -652,7 +668,12 @@ export default {
       </nav>
     </main>
   `,
-  emits: ['new-conversation', 'resume-conversation', 'open-settings', 'quote-message', 'edit-message-as-new'],
+  props: {
+    forkFromTurnEnabled: { type: Boolean, default: false },
+    forkFromTurnDisabled: { type: Boolean, default: false },
+    forkFromTurnTitle: { type: String, default: '' },
+  },
+  emits: ['new-conversation', 'resume-conversation', 'open-settings', 'quote-message', 'edit-message-as-new', 'fork-from-turn'],
   setup(_props, { expose }) {
     const store = Pinia.useChatStore();
     const authStore = useAuthStore();
@@ -928,6 +949,9 @@ export default {
         ? orderYeaftVpTurnMessagesByExecution(inlineMessages)
         : inlineMessages;
       const result = [];
+      // Rendering can bucket parallel VP executions. Fork endpoints must still
+      // follow transcript order, not the reordered visual row positions.
+      const transcriptOrder = new Map(inlineMessages.map((message, index) => [message, index]));
       let currentTurn = null;
 
       // task-708: every VP-attributed turn carries its own avatar header.
@@ -947,6 +971,18 @@ export default {
               && (!store.currentAgent || !row?.agentId || row.agentId === store.currentAgent)
             )) || null
             : null;
+          // A replayed reply can merge multiple runtime turn IDs. Keep the
+          // first ID for debug/grouping, but fork through its latest durable
+          // assistant row (tool-use rows also project persisted assistants).
+          // A legacy endpoint without identity must not fall back to an earlier
+          // row, which would silently cut off part of the selected response.
+          const forkEndpoint = currentTurn.messages.reduce((latest, message) => (
+            (message.type === 'assistant' || message.type === 'tool-use')
+              && (!latest || transcriptOrder.get(message) > transcriptOrder.get(latest))
+              ? message : latest
+          ), null);
+          currentTurn.forkBoundaryTurnId = typeof forkEndpoint?.turnId === 'string'
+            ? forkEndpoint.turnId.trim() : '';
           currentTurn.isActive = !!activeTurnMeta;
           if (Number.isFinite(activeTurnMeta?.startedAt)) currentTurn.startedAt = activeTurnMeta.startedAt;
           finalizeTurnResponseSegments(currentTurn);
@@ -1069,9 +1105,8 @@ export default {
           imageMsgs: [],
           askMsg: null,
           messages: [],
-          // task-314: persisted message id (`m{NNNN}`) for the last
-          // assistant chunk in this turn — used as the fork cursor when
-          // the user clicks "Fork from here".
+          // Last persisted assistant message ID for message navigation.
+          // Fork uses forkBoundaryTurnId instead of this display anchor.
           atMessageId: null,
           // task-334-ui-b: speaker attribution. `speakerVpId` latches from
           // the first VP-attributed message in the turn (assistant /
@@ -1141,10 +1176,7 @@ export default {
           if (msg.isHistory) {
             currentTurn.isHistory = true;
           }
-          // task-314: remember the persisted message id for this turn so a
-          // "Fork from here" click can tell the agent which message to cut
-          // at. We latch the LAST assistant message id — forking from the
-          // turn cuts after the full assistant reply has been received.
+          // Keep the last persisted assistant message as the display anchor.
           if (msg.id && /^m\d+$/.test(msg.id)) {
             currentTurn.atMessageId = msg.id;
           }
