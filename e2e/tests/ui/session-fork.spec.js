@@ -224,8 +224,9 @@ for (const scenario of [
         if (request.type === 'yeaft_load_history' && request.sessionId) replyHistory(request);
       });
       mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [source] } });
-      await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().sessionCatalog
-        .some(row => row.routeRef.sessionId === id), source.id)).toBe(true);
+      await expect.poll(() => page.evaluate(({ agentId, sessionId }) => window.Pinia.useChatStore().sessionCatalog
+        .some(row => row.routeRef.agentId === agentId && row.routeRef.sessionId === sessionId),
+      { agentId: mockAgent.agentId, sessionId: source.id })).toBe(true);
       await page.setViewportSize({ width: scenario.width, height: 800 });
       await page.evaluate(({ agentId, sessionId, theme }) => {
         document.documentElement.setAttribute('data-theme', theme);
@@ -241,14 +242,25 @@ for (const scenario of [
       await expect(sourceReply).toContainText('Keep the complete result');
       const first = actions.first();
       await expect(first).toHaveAccessibleName('Fork from this turn');
+      await expect(first).toHaveText('');
+      await expect(first).toHaveAttribute('title', 'Copy history through this response into a new Session; later messages are excluded.');
       await first.focus();
       await expect(first).toBeFocused();
+      await expect(first.locator('svg')).toBeVisible();
       const geometry = await first.evaluate(button => {
         const rect = button.getBoundingClientRect();
-        return { left: rect.left, right: rect.right, opacity: getComputedStyle(button.parentElement).opacity };
+        const copyRect = button.parentElement.querySelector('.copy-full-btn').getBoundingClientRect();
+        const styles = getComputedStyle(button);
+        return { left: rect.left, right: rect.right, width: rect.width, height: rect.height,
+          copyWidth: copyRect.width, copyHeight: copyRect.height,
+          outlineStyle: styles.outlineStyle, outlineWidth: styles.outlineWidth };
       });
       expect(geometry.left).toBeGreaterThanOrEqual(0);
       expect(geometry.right).toBeLessThanOrEqual(scenario.width);
+      expect(geometry.width).toBe(geometry.copyWidth);
+      expect(geometry.height).toBe(geometry.copyHeight);
+      expect(geometry.outlineStyle).toBe('solid');
+      expect(parseFloat(geometry.outlineWidth)).toBeGreaterThan(0);
       await expect.poll(() => first.evaluate(button => getComputedStyle(button.parentElement).opacity)).toBe('1');
       await page.screenshot({ path: testInfo.outputPath('fork-from-turn.png') });
 

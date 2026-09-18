@@ -1648,13 +1648,6 @@
   flex-wrap: wrap;
 }
 
-.turn-footer .fork-turn-action-btn {
-  width: auto;
-  gap: 4px;
-  padding: 0 4px;
-  white-space: nowrap;
-}
-
 .turn-footer .fork-turn-action-btn:focus-visible {
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
