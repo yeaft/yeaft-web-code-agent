@@ -451,7 +451,7 @@ describe('resolveAgentAccessError', () => {
     expect(agent.dreamEnabled).toBe(false);
   });
 
-  it('routes correlated Agent maintenance and Dream replies only to the originating browser', async () => {
+  it('rejects retired Dream settings locally and still correlates Agent maintenance replies', async () => {
     CONFIG.skipAuth = true;
     const forwarded = [];
     const originMessages = [];
@@ -481,10 +481,9 @@ describe('resolveAgentAccessError', () => {
     });
 
     expect(forwarded).toEqual([
-      { type: 'set_dream_enabled', enabled: false, requestId: 'dream-1', clientId: 'browser-origin' },
       { type: 'restart_agent', requestId: 'restart-1', clientId: 'browser-origin' },
     ]);
-    expect(originMessages).toContainEqual({ type: 'dream_enabled_changed', agentId: agent.id, requestId: 'dream-1', enabled: false });
+    expect(originMessages).toContainEqual({ type: 'dream_enabled_changed', agentId: agent.id, requestId: 'dream-1', enabled: false, error: 'Dream is disabled.' });
     expect(originMessages).toContainEqual({ type: 'restart_agent_ack', agentId: agent.id, requestId: 'restart-1' });
     expect(siblingMessages.some(message => message.type === 'dream_enabled_changed' || message.type === 'restart_agent_ack')).toBe(false);
   });

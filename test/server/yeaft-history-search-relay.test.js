@@ -64,6 +64,14 @@ async function runConsolidatedHistoryScenarios() {
 describe('Yeaft Session history search relay', () => {
 
 
+  it('rejects manual Dream commands from older clients without forwarding to an Agent', async () => {
+    for (const type of ['yeaft_dream_trigger', 'unify_dream_trigger']) {
+      await handleClientConversation('client-1', client, { type, agentId: 'agent-1', sessionId: 'sess-1' }, allow);
+      expect(client.sent.at(-1)).toMatchObject({ type: 'yeaft_dream_result', sessionId: 'sess-1', skippedReason: 'disabled' });
+    }
+    expect(forwardToAgent).not.toHaveBeenCalled();
+  });
+
   it('requires explicit compound identity and targets the requesting client', async () => {
     webClients.set('client-1', client);
     await runConsolidatedHistoryScenarios();
@@ -147,7 +155,7 @@ describe('Yeaft Session history search relay', () => {
       requestKind: 'detail',
       detailTurnId: 'turn-1',
       limit: 1,
-      dreamLimit: 5,
+      dreamLimit: 0,
       _requestClientId: 'client-1',
     }));
     forwardToAgent.mockClear();

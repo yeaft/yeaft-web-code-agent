@@ -21,7 +21,6 @@ import { createFullRegistry } from './tools/index.js';
 import { existsSync, lstatSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { buildDreamOutputSnapshot } from './dream/output-snapshot.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
 import { loadAgentMCPConfig, loadConfig, loadMCPConfig } from './config.js';
@@ -220,19 +219,6 @@ function applyLiveLanguage(language) {
   try { session?.engine?.setLanguage?.(language); } catch { /* best-effort */ }
 }
 
-/**
- * Apply an Agent-level Dream toggle to an already loaded runtime.
- * This must never bootstrap a Session: config.json is the authoritative commit,
- * while the live scheduler update is only a best-effort cache refresh.
- */
-export function setLiveDreamEnabled(enabled) {
-  const next = enabled !== false;
-  if (session?.config && typeof session.config === 'object') {
-    session.config.dream = { ...(session.config.dream || {}), enabled: next };
-  }
-  session?.dreamScheduler?.setEnabled?.(next);
-}
-
 function modelRefIdentity(value) {
   const text = String(value || '');
   const slash = text.indexOf('/');
@@ -355,30 +341,6 @@ export function __testSetThreadClassifier(fn) {
   threadClassifier = typeof fn === 'function' ? fn : defaultClassifyThread;
 }
 
-/**
- * Tracks scoped-dream triggers that are currently inflight, keyed by
- * sessionId. Used by `handleYeaftDreamTrigger` to reject any overlapping
- * scoped trigger rather than racing the sink-wrapping logic against
- * itself.
- *
- * Cross-group overlap is rejected (not just same-group): under the
- * existing dream scheduler a second concurrent trigger silently shares
- * the first's inflight promise and dropped its own scope filter. So
- * "B during A's run" doesn't actually produce a separate scoped pass
- * for B — letting B install a second sink wrapper would only mis-stamp
- * A's events with B's sessionId. Reporting B as an explicit skipped
- * result is the honest answer; the user can re-click after A settles.
- * @type {Set<string>}
- */
-const inflightScopedDreamGroups = new Set();
-
-async function sendDreamSnapshotForSession(sessionId, extra = {}) {
-  const snapshot = await buildDreamOutputSnapshot(session, sessionId);
-  if (!snapshot) return null;
-  sendSessionEvent({ type: 'yeaft_dream_snapshot', ...extra, snapshot }, { sessionId });
-  return snapshot;
-}
-
 function scheduleYeaftLoadHistoryMetadataReplay(sessionId) {
   const replaySession = session;
   const replayConversationId = yeaftConversationId;
@@ -423,9 +385,6 @@ function scheduleYeaftLoadHistoryMetadataReplay(sessionId) {
       }, { sessionId });
       if (sessionId) replayPendingUserPrompts(sessionId);
       sendSessionSnapshotBroadcast();
-      if (sessionId && session === replaySession) {
-        sendDreamSnapshotForSession(sessionId, { trigger: 'load_history' }).catch(() => null);
-      }
       try {
         getVpStatusBroker().broadcastSnapshot();
       } catch (err) {
@@ -3978,7 +3937,7 @@ function buildVpPersona(vpId) {
 }
 
 /**
- * Install the dream pipeline progress sink and runtime settings bridge.
+ * Install task delivery and the runtime settings compatibility bridge.
  * Thread scheduling is owned by the group VP runtime below, not by mutable
  * threadStore settings. The old threadStore setters are kept only as ignored
  * compatibility shims for older clients.
@@ -3997,59 +3956,6 @@ export function installYeaftRuntimeBridge(s) {
       } catch { /* never let task event delivery throw */ }
     });
   }
-
-  // Forward dream pipeline progress events to the web debug panel.
-  //
-  // Group-id stamping is NO LONGER done here. It used to be: this sink
-  // read a module-level `activeScopedDreamGroupId` that
-  // `handleYeaftDreamTrigger({sessionId})` parked before awaiting the
-  // scope-filtered pass. That created a race when two scoped triggers
-  // overlapped (auto-tick during a manual click; or two manual clicks
-  // for different groups): the second handler's `finally` could clear
-  // the module slot while the first run was still emitting events,
-  // dropping the stamp from the tail of the first pass. The new design:
-  // `handleYeaftDreamTrigger` wraps THIS sink for the lifetime of the
-  // trigger to inject `sessionId` per-call (see that function below). The
-  // base sink is intentionally a pure passthrough.
-  //
-  // Bug 2: also forward turn_open / turn_close / loop events emitted by
-  // the dream pipeline so the debug panel shows dream LLM API calls.
-  s._dreamProgressSink = (evt) => {
-    try {
-      if (evt.type === 'turn_open' || evt.type === 'turn_close' || evt.type === 'loop') {
-        const tag = evt && evt.sessionId ? { sessionId: evt.sessionId } : {};
-        sendSessionEvent(evt, tag);
-      } else {
-        const out = { type: 'dream_progress', ...evt };
-        const tag = evt && evt.sessionId ? { sessionId: evt.sessionId } : {};
-        sendSessionEvent(out, tag);
-      }
-    } catch { /* never let event delivery throw */ }
-  };
-
-  // Auto dream runs are triggered by the scheduler / nudges, not by the
-  // manual `handleYeaftDreamTrigger` path. Without this terminal sink the UI
-  // only saw progress debug events and could not restore the final dream
-  // output after switching sessions. Manual runs keep using their explicit
-  // handler below to avoid duplicate terminal events.
-  s._dreamResultSink = async (result = {}) => {
-    if (result?.trigger !== 'auto') return;
-    const normalized = normalizeDreamResult(result);
-    const processed = Array.isArray(result.sessions)
-      ? result.sessions.filter(row => row && row.status === 'triaged' && row.sessionId)
-      : [];
-    for (const sessionRow of processed) {
-      const sessionId = sessionRow.sessionId;
-      const snapshot = await buildDreamOutputSnapshot(session, sessionId).catch(() => null);
-      sendToServer({
-        type: 'yeaft_dream_result',
-        sessionId,
-        ...result,
-        ...normalized,
-        snapshot,
-      });
-    }
-  };
 
   ctx.yeaftRuntimeSettings = {
     // No multi-thread settings to surface anymore. Stub for back-compat
@@ -4559,17 +4465,6 @@ function handleEngineEvent(event, hctx) {
         turnId: event.turnId,
         loaded: event.loaded || [],
         meta: event.meta || null,
-      }, envelope);
-      break;
-
-    case 'dream_memory_loaded':
-      sendSessionEvent({
-        type: 'dream_memory_loaded',
-        turnId: event.turnId,
-        vpId: event.vpId || null,
-        sessionId: event.sessionId || null,
-        loadedInto: event.loadedInto || 'system_prompt.memory',
-        resident: Array.isArray(event.resident) ? event.resident : [],
       }, envelope);
       break;
 
@@ -5368,7 +5263,6 @@ function startSessionLoadInBackground({ sessionId = null, sessionMeta = null, pe
         const hydrateStart = perfNowMs();
         setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
         if (typeof traceDuration === 'function') traceDuration('history.hydrate_group_history', hydrateStart, { detail: { background: true } });
-        sendDreamSnapshotForSession(sessionId, { trigger: 'load_history' }).catch(() => null);
       }
       return loaded;
     })
@@ -5613,10 +5507,6 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
   };
 
   try {
-    if (session?.dreamScheduler) {
-      session.dreamScheduler.noteUserMessage();
-    }
-
     let queryTimer = null;
     const queryTimeoutMs = queryTimeoutMsForSession(sessionId);
     const pauseQueryTimer = () => {
@@ -6526,195 +6416,17 @@ export function __testAppendTurnToSessionHistory(...args) {
   return appendTurnToSessionHistory(...args);
 }
 
-/**
- * Manual dream trigger.
- *
- * Two call shapes, both routed through this single handler:
- *
- *   { type: 'yeaft_dream_trigger', vpId }     — per-VP trigger (legacy
- *     VP-detail page button). Fires an unscoped dream pass; the result
- *     event is tagged with `vpId` so the per-VP store row updates.
- *
- *   { type: 'yeaft_dream_trigger', sessionId }  — per-GROUP trigger (new
- *     in v0.1.754 — added so users can manually kick dream for a group
- *     after seeing the Resident layer stuck on the bootstrap seed).
- *     Fires a scope-filtered pass via `triggerDreamForScopes(['sessions/X'])`
- *     so unrelated groups don't get processed; the result event is
- *     tagged with `sessionId` for the per-session UI row.
- *
- * Backwards-compat: when neither field is set, defaults to `vpId='default'`
- * which matches the pre-v0.1.754 behavior.
- */
-function resolveDreamTriggerSessionId(msg = {}) {
-  return typeof msg.sessionId === 'string' && msg.sessionId
-    ? msg.sessionId
-    : (typeof msg.groupId === 'string' && msg.groupId ? msg.groupId : null);
-}
-
-export function normalizeDreamResult(result) {
-  const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
-  const targets = Array.isArray(result?.targets) ? result.targets : [];
-  const sessionsProcessed = sessions.filter(g => g && g.status === 'triaged').length;
-  const skippedSessions = sessions.filter(g => g && g.status === 'skipped');
-  const sessionsSkipped = skippedSessions.length;
-  const targetsApplied = targets.filter(t => t && t.status === 'done').length;
-  const targetErrors = targets
-    .filter(t => t && t.status === 'error')
-    .map(t => ({ target: t.target || null, error: t.error || 'unknown' }));
-  const hardError = result?.error || null;
-  const explicitSkipped = result?.skipped === true;
-  const skipped = !hardError && (explicitSkipped || (sessionsProcessed === 0 && targetsApplied === 0));
-  const skippedReason = skipped
-    ? (result?.skippedReason || skippedSessions[0]?.reason || 'no-targets-applied')
-    : null;
-  const trigger = result?.trigger || null;
-  const success = !hardError && targetErrors.length === 0 && !skipped && targetsApplied > 0;
-
-  return {
-    success,
-    durationMs: Number.isFinite(Number(result?.durationMs)) ? Number(result.durationMs) : 0,
-    llmCallCount: Number.isFinite(Number(result?.llmCallCount)) ? Number(result.llmCallCount) : 0,
-    inputTokens: Number.isFinite(Number(result?.inputTokens)) ? Number(result.inputTokens) : 0,
-    outputTokens: Number.isFinite(Number(result?.outputTokens)) ? Number(result.outputTokens) : 0,
-    totalTokens: Number.isFinite(Number(result?.totalTokens)) ? Number(result.totalTokens) : 0,
-    metrics: result?.metrics || null,
-    passBreakdown: result?.passBreakdown || result?.metrics?.passBreakdown || null,
-    skipped,
-    skippedReason,
-    sessionsProcessed,
-    sessionsSkipped,
-    targetsApplied,
-    targetErrors,
-    entriesCreated: targetsApplied,
-    lastDreamAt: result?.startedAt || new Date().toISOString(),
-    trigger,
-    error: hardError || (targetErrors[0]?.error || null),
-  };
-}
-
+/** Reject old clients explicitly without loading a Session or touching Dream data. */
 export async function handleYeaftDreamTrigger(msg = {}) {
-  // Resolve tag up-front so EVERY outbound envelope (including the
-  // scheduler-uninitialised early-return below) carries `sessionId` /
-  // `vpId`. Without this the frontend's `applyDreamResult` couldn't
-  // route the error event back to the right row and the per-group
-  // "Run dream now" button would stay stuck on "Running…" forever
-  // (review feedback from PR #757).
-  const sessionId = resolveDreamTriggerSessionId(msg);
-  const vpId = !sessionId ? (msg.vpId || 'default') : null;
-  const tag = sessionId ? { sessionId } : { vpId };
-
-  if (!session?.dreamScheduler) {
-    const error = 'Dream scheduler not initialized — session not loaded.';
-    sendToServer({
-      type: 'yeaft_dream_result',
-      ...tag,
-      ...normalizeDreamResult({ error }),
-    });
-    return;
-  }
-
-  // Concurrent-trigger guard for scoped runs. Two scoped clicks (same
-  // group or different) overlapping the same inflight pass used to set
-  // the module-level sessionId slot, race the sink wrapping, and let the
-  // second `finally` restore the original sink while the first run was
-  // still emitting events. We now refuse scoped triggers while ANY dream
-  // pass is already running: a scoped manual click during an unscoped
-  // auto run must not install `_dreamActiveGroupId` or wrap the sink,
-  // otherwise auto-run events can be persisted under the clicked group.
-  // The scheduler also short-circuits the underlying run for same-group,
-  // and a different group's filter would have been silently dropped
-  // anyway (see dream/schedule.js inflight reuse), so the user-facing
-  // semantics are unchanged ("you already asked").
-  if (sessionId && (inflightScopedDreamGroups.size > 0 || session.dreamScheduler.isRunning)) {
-    const skippedResult = {
-      skipped: true,
-      skippedReason: 'already-running',
-      trigger: msg.manual === false ? 'auto' : 'manual',
-    };
-    sendToServer({
-      type: 'yeaft_dream_result',
-      ...tag,
-      ...skippedResult,
-      ...normalizeDreamResult(skippedResult),
-    });
-    return;
-  }
-
-  // Per-call sink wrapper. For scoped runs we install a closure that
-  // injects this trigger's sessionId onto top-level events the runner
-  // emits without one (start/merge/done), then delegates to the
-  // original passthrough sink. The wrapper lives only for the lifetime
-  // of this trigger and is restored in `finally`; concurrent calls for
-  // OTHER sessionIds chain (last-installed wins) but each restoration
-  // unwinds back to its predecessor.
-  const originalSink = session?._dreamProgressSink;
-  if (sessionId) session._dreamActiveGroupId = sessionId;
-  if (sessionId && typeof originalSink === 'function') {
-    inflightScopedDreamGroups.add(sessionId);
-    session._dreamProgressSink = (evt) => {
-      try {
-        const stamped = evt && evt.sessionId
-          ? evt
-          : { ...evt, sessionId };
-        originalSink(stamped);
-      } catch { /* never let event delivery throw */ }
-    };
-  }
-
-  try {
-    sendToServer({
-      type: 'yeaft_dream_status',
-      ...tag,
-      status: 'running',
-    });
-
-    const result = sessionId
-      ? await session.dreamScheduler.triggerDreamForScopes([`sessions/${sessionId}`])
-      : await session.dreamScheduler.triggerDreamNow();
-
-    const normalized = normalizeDreamResult(result);
-    const snapshot = sessionId
-      ? await buildDreamOutputSnapshot(session, sessionId).catch(() => null)
-      : null;
-
-    // Spread `result` FIRST so normalized fields (success, skipped,
-    // skippedReason, sessionsProcessed, sessionsSkipped, targetsApplied,
-    // targetErrors, entriesCreated, lastDreamAt) authoritatively shadow
-    // anything the runner might grow
-    // with the same name. Today there is no collision (runner.js returns
-    // { groups, targets, startedAt, error?, skipped? }) but the failure
-    // mode of the alternative ordering is silent — review feedback from
-    // PR #743.
-    //
-    // This `yeaft_dream_result` envelope is the SOLE terminal signal for
-    // a dream pass. The chat-store projects it into BOTH `yeaftDreamLatest`
-    // (final tally row) AND `yeaftDreamEvents` (ring-buffer terminal
-    // marker), so we no longer mirror a synthetic `phase:'result'`
-    // dream_progress event — that mirror used to race the
-    // `yeaftDreamLatest` writer and flip the success row back to
-    // 'running' (Critical reviewer finding pre-merge).
-    sendToServer({
-      type: 'yeaft_dream_result',
-      ...tag,
-      ...result,
-      ...normalized,
-      ...(snapshot ? { snapshot } : {}),
-    });
-  } catch (err) {
-    const error = err?.message || String(err);
-    sendToServer({
-      type: 'yeaft_dream_result',
-      ...tag,
-      ...normalizeDreamResult({ error }),
-    });
-  } finally {
-    // Restore the original sink and release the per-group inflight lock.
-    if (sessionId && session?._dreamActiveGroupId === sessionId) session._dreamActiveGroupId = null;
-    if (sessionId && typeof originalSink === 'function') {
-      session._dreamProgressSink = originalSink;
-      inflightScopedDreamGroups.delete(sessionId);
-    }
-  }
+  const sessionId = msg.sessionId || msg.groupId || null;
+  sendToServer({
+    type: 'yeaft_dream_result',
+    ...(sessionId ? { sessionId } : { vpId: msg.vpId || 'default' }),
+    success: false,
+    skipped: true,
+    skippedReason: 'disabled',
+    error: 'Dream is disabled.',
+  });
 }
 
 /**
@@ -6793,7 +6505,7 @@ export async function handleYeaftFetchToolStats(_msg = {}) {
  */
 export async function handleYeaftFetchDebugHistory(msg = {}) {
   const limit = Number.isFinite(msg?.limit) ? Number(msg.limit) : 10;
-  const dreamLimit = Number.isFinite(msg?.dreamLimit) ? Number(msg.dreamLimit) : 5;
+  const dreamLimit = 0; // Older callers cannot request retired Dream history.
   const sessionId = typeof msg?.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const threadId = typeof msg?.threadId === 'string' && msg.threadId ? msg.threadId : null;
   const search = typeof msg?.search === 'string' ? msg.search.trim() : '';
@@ -6804,7 +6516,6 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
   const detailTurnId = typeof msg?.detailTurnId === 'string' && msg.detailTurnId ? msg.detailTurnId : null;
   let loops = [];
   let turns = [];
-  let dreamEvents = [];
   let projection = null;
   let hasMore = false;
   try {
@@ -6812,14 +6523,12 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
       const out = await session.trace.fetchTurnDebug({ sessionId, turnId: detailTurnId, dreamLimit });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
-      dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
       projection = out?.projection && typeof out.projection === 'object' ? out.projection : null;
       hasMore = false;
     } else if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
       const out = await session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId, indexOnly, detailTurnId, search });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
-      dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
       projection = out?.projection && typeof out.projection === 'object' ? out.projection : null;
       hasMore = !!out?.hasMore;
     }
@@ -6846,7 +6555,7 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
     type: 'yeaft_debug_history',
     loops,
     turns,
-    dreamEvents,
+    dreamEvents: [],
     ...(projection ? { projection } : {}),
     requestId,
     requestKind,
@@ -7368,8 +7077,8 @@ export async function handleYeaftLoadHistory(msg) {
     }
     historyAlreadyReplayed = true;
 
-    // Full runtime boot can be expensive (memory FTS sync, skills, MCP, dream
-    // boot checks). It is not needed to render persisted history, so keep this
+    // Full runtime boot can be expensive (skills and MCP discovery).
+    // It is not needed to render persisted history, so keep this
     // request short and let message-send await the same single-flight boot when
     // the user actually submits a turn.
     startSessionLoadInBackground({ sessionId, sessionMeta: sessionMetaForRuntime, perfTraceId, traceDuration, tracePerf });
@@ -7394,7 +7103,7 @@ export async function handleYeaftLoadHistory(msg) {
   // Always replay session_ready so refresh / reconnect rebuilds UI state, but
   // never make the history response wait for bulky metadata snapshots. The
   // first visible chunk has already been sent above; defer metadata to the next
-  // tick so the browser can paint messages before VP/session/dream snapshots.
+  // tick so the browser can paint messages before VP/session snapshots.
   if (session) scheduleYeaftLoadHistoryMetadataReplay(sessionId);
 
   if (historyAlreadyReplayed) {
@@ -8293,7 +8002,6 @@ export const __testHooks = {
     return getVpStatusBroker().transition(status);
   },
   decorateSessionsWithRuntimeState,
-  resolveDreamTriggerSessionId,
   async loadProjectRuntime(workDir) {
     return loadProjectRuntime(workDir);
   },

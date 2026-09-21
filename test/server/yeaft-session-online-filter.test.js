@@ -1369,6 +1369,13 @@ describe('Yeaft Session online Agent filtering', () => {
       detailTurnId: 'turn-owner-only',
     }, allow);
     expect(pendingYeaftDebugRequests.size).toBe(1);
+    for (const type of ['yeaft_dream_snapshot', 'yeaft_dream_result', 'yeaft_dream_status', 'dream_progress', 'dream_memory_loaded']) {
+      await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', sessionId: 'same-id', event: { type, body: 'old memory' } });
+    }
+    for (const type of ['yeaft_dream_snapshot', 'yeaft_dream_result', 'yeaft_dream_status']) {
+      await handleAgentOutput('agent-a', agent, { type, sessionId: 'same-id', body: 'old memory' });
+    }
+    expect(ownerClient.sent).toEqual([]);
     // Simulate the rolling topology: an old Agent echoes requestId/sessionId
     // but drops the newly introduced private browser client field.
     await handleAgentOutput('agent-a', agent, {
@@ -1379,7 +1386,7 @@ describe('Yeaft Session online Agent filtering', () => {
       sessionId: 'same-id',
       turns: [{ turnId: 'turn-owner-only' }],
       loops: [{ turnId: 'turn-owner-only', loopNumber: 1 }],
-      dreamEvents: [],
+      dreamEvents: [{ type: 'dream_progress', body: 'old memory' }],
       projection: { truncated: true, reason: 'debug_detail_wire_budget' },
     });
     expect(ownerClient.sent.at(-1)).toMatchObject({
@@ -1389,6 +1396,8 @@ describe('Yeaft Session online Agent filtering', () => {
       detailTurnId: 'turn-owner-only',
       projection: { truncated: true, reason: 'debug_detail_wire_budget' },
     });
+    expect(ownerClient.sent.at(-1).dreamEvents).toEqual([]);
+    expect(JSON.stringify(ownerClient.sent)).not.toContain('old memory');
     expect(otherTab.sent).toEqual([]);
     expect(pendingYeaftDebugRequests.size).toBe(0);
 

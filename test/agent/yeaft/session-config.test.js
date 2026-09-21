@@ -1998,7 +1998,7 @@ describe('Yeaft session-scoped model config', () => {
     }
   });
 
-  it('persists Dream disable without bootstrapping a Session runtime', async () => {
+  it('rejects legacy Dream toggles without modifying persisted configuration', async () => {
     const root = makeDir();
     const configPath = join(root, 'config.json');
     writeFileSync(configPath, JSON.stringify({ dream: { enabled: true } }, null, 2));
@@ -2020,19 +2020,20 @@ describe('Yeaft session-scoped model config', () => {
     try {
       await handleMessage({
         type: 'set_dream_enabled',
-        enabled: false,
+        enabled: true,
         requestId: 'dream-disable',
         clientId: 'browser-a',
       });
       await new Promise(resolve => setImmediate(resolve));
 
       expect(JSON.parse(readFileSync(configPath, 'utf8'))).toMatchObject({
-        dream: { enabled: false },
+        dream: { enabled: true },
       });
       expect(loadConfig({ dir: root }).dream.enabled).toBe(false);
       expect(sent).toContainEqual(expect.objectContaining({
         type: 'dream_enabled_changed',
         enabled: false,
+        error: 'Dream is disabled.',
         requestId: 'dream-disable',
         clientId: 'browser-a',
       }));
@@ -2045,7 +2046,7 @@ describe('Yeaft session-scoped model config', () => {
     }
   });
 
-  it('reports persisted Dream disable even when the live scheduler refresh fails', async () => {
+  it('does not call a scheduler even if an old live runtime still exposes it', async () => {
     const root = makeDir();
     const configPath = join(root, 'config.json');
     writeFileSync(configPath, JSON.stringify({ dream: { enabled: true } }, null, 2));
@@ -2075,9 +2076,11 @@ describe('Yeaft session-scoped model config', () => {
       expect(sent).toContainEqual(expect.objectContaining({
         type: 'dream_enabled_changed',
         enabled: false,
+        error: 'Dream is disabled.',
         requestId: 'dream-live-failure',
       }));
-      expect(sent.find(frame => frame.type === 'dream_enabled_changed')).not.toHaveProperty('error');
+      expect(sent.find(frame => frame.type === 'dream_enabled_changed').error).toBe('Dream is disabled.');
+      expect(JSON.parse(readFileSync(configPath, 'utf8')).dream.enabled).toBe(true);
     } finally {
       ctx.ws = previousTransport.ws;
       ctx.serverEncryptionRequired = previousTransport.serverEncryptionRequired;
