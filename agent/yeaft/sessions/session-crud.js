@@ -383,7 +383,9 @@ export function restoreSessionToRegistry(defaultYeaftDir, sessionId, workDir) {
   } finally {
     handle.close();
   }
-  copySessionExtras(projectYeaftDir, defaultYeaftDir, sessionId);
+  // Restore only the explicitly selected Session and its transcript. Archived
+  // Dream scopes are owned by their existing data root and are not Session
+  // storage extras.
   invalidateSessionConversationIndex(
     [defaultYeaftDir],
     sessionId,
