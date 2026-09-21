@@ -86,7 +86,6 @@ const SUBDIRS = [
   'chat/cold',
   'chat/blobs',
   'sessions',
-  'memory/entries',
   'tasks',
   'skills',
 ];
@@ -113,19 +112,6 @@ const DEFAULT_CONFIG_JSON = `{
   "maxContextTokens": 200000,
   "messageTokenBudget": 32768
 }
-`;
-
-/** Default MEMORY.md content. */
-const DEFAULT_MEMORY = `# Yeaft Memory
-
-This file stores persistent memory entries. The agent will read and update this file.
-
-## Facts
-
-## Preferences
-
-## Project Context
-
 `;
 
 /** Default mcp.json example — generated as reference for MCP server configuration. */
@@ -210,12 +196,6 @@ export function initYeaftDir(dir, { migrateMemory = false } = {}) {
       if (isPermissionError(err)) warnings.push(`Cannot write ${configJsonPath}: ${err.code}`);
       else throw err;
     }
-  }
-
-  const memoryPath = join(root, 'memory', 'MEMORY.md');
-  if (!existsSync(memoryPath)) {
-    safeWriteFile(memoryPath, DEFAULT_MEMORY, warnings);
-    created.push(memoryPath);
   }
 
   const chatIndexPath = join(root, 'chat', 'index.md');

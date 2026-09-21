@@ -913,7 +913,7 @@ describe('Yeaft session-scoped model config', () => {
         defaultVpId: vpId,
       }),
     ]);
-    expect(existsSync(join(root, 'memory', 'sessions', response.session.id, 'summary.md'))).toBe(true);
+    expect(existsSync(join(root, 'memory', 'sessions', response.session.id, 'summary.md'))).toBe(false);
   });
 
   async function assertMcpBootstrapRemoveDoesNotRestoreServer({ workDir = '' } = {}) {
@@ -2862,6 +2862,9 @@ describe('Yeaft session-scoped model config', () => {
         expect(statSync(file).mtimeMs).toBe(snapshot.mtimeMs);
       }
       expect(existsSync(join(memoryDir, '.legacy'))).toBe(false);
+      expect(existsSync(join(memoryDir, 'MEMORY.md'))).toBe(false);
+      expect(existsSync(join(memoryDir, 'entries'))).toBe(false);
+      expect(existsSync(join(memoryDir, 'sessions'))).toBe(false);
     } finally {
       await session?.shutdown?.();
     }

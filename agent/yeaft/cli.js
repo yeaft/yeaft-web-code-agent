@@ -480,7 +480,7 @@ async function runREPL(config, args) {
         }
 
         case 'memory': {
-          console.log('Memory commands have been retired. Memory is now managed by Dream V2; use the in-app FTS recall.');
+          console.log('Dream memory is disabled. Historical memory files are retained but are not loaded automatically.');
           break;
         }
 

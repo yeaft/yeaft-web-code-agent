@@ -14,19 +14,9 @@
 
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { openSession, createSession, loadSessionMeta } from './session-store.js';
-import { seedSummaryIfMissingSync } from '../memory/store.js';
 
 export const DEFAULT_SESSION_ID = 'session_default';
-
-/**
- * Default memory root used when callers don't pass `options.memoryRoot`.
- * See `sessions/session-crud.js` and `vp/vp-crud.js` for the same default;
- * production code threads `<yeaftDir>/memory` through to keep test/prod
- * isolation honest.
- */
-const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
 /**
  * Build the default-session seed summary body. Pulled into a helper so
@@ -54,7 +44,6 @@ export function buildDefaultSessionSeedSummary(spec) {
  * @returns {{ group: import('./session-store.js').GroupHandle, created: boolean }}
  */
 export function seedDefaultSession(yeaftDir, spec = {}) {
-  const memoryRoot = spec.memoryRoot || DEFAULT_MEMORY_ROOT;
   const sessionsRoot = join(yeaftDir, 'sessions');
   if (!existsSync(sessionsRoot)) mkdirSync(sessionsRoot, { recursive: true });
 
@@ -75,21 +64,6 @@ export function seedDefaultSession(yeaftDir, spec = {}) {
     roster,
     defaultVpId,
   });
-
-  // Seed Layer-A resident summary so the very first session — even on a
-  // brand-new install where only `session_default` exists — renders a non-
-  // empty memory section in the system prompt. No-op once Dream-v2 (or
-  // createSessionFromSpec) has already written one. Best-effort: a memory-
-  // root permission failure must NOT break the bootstrap flow.
-  try {
-    seedSummaryIfMissingSync(
-      { kind: 'session', id: DEFAULT_SESSION_ID },
-      buildDefaultSessionSeedSummary({ name, roster, defaultVpId }),
-      { root: memoryRoot },
-    );
-  } catch (err) {
-    console.warn(`[seed-default] failed to seed summary.md for ${DEFAULT_SESSION_ID}:`, err?.message || err);
-  }
 
   return { group, created: true };
 }

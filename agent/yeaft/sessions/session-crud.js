@@ -56,7 +56,7 @@ import { addVp as rosterAdd, removeVp as rosterRemove, setDefaultVp } from './ro
 import { seedDefaultSession, DEFAULT_SESSION_ID } from './seed-default.js';
 import { nextSessionId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
-import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store.js';
+import { removeScopeDirSync } from '../memory/store.js';
 import {
   markConversationDirty,
   removeConversationIndexScope,
@@ -470,7 +470,6 @@ function scanSortedVpIds(libDir) {
  */
 export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
-  const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
   repairSessionStoreAndManifest(yeaftDir, {
     defaultRoster: scanSortedVpIds(libDir),
   });
@@ -489,7 +488,6 @@ export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
     name: options.name || 'Default',
     roster: vps,
     defaultVpId,
-    memoryRoot,
   });
   const meta = group.getMeta();
   if (meta) addOrUpdateManifestSession(yeaftDir, meta, join(sessionsRoot(yeaftDir), meta.id));
@@ -517,7 +515,6 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   const workspaceKey = canonicalWorkspaceKey(normalizedWorkDir);
   ensureSessionManifestReady(yeaftDir);
   const groupYeaftDir = yeaftDir;
-  const memoryRoot = options.memoryRoot || (groupYeaftDir ? join(groupYeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
   const name = String(input.name || '').trim();
   if (!name) throw new SessionCrudError('invalid_name', null, 'group name required');
@@ -574,19 +571,6 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
     }
   } catch (err) {
     console.warn(`[session-crud] failed to seed config.json for ${id}:`, err?.message || err);
-  }
-
-  // Seed Layer-A resident summary so the first session has memory content
-  // even before Dream-v2 has run. No-op if a summary.md already exists.
-  // Best-effort: a memory-root permission failure must NOT break group create.
-  try {
-    seedSummaryIfMissingSync(
-      { kind: 'session', id },
-      buildSessionSeedSummary({ name, roster, defaultVpId }),
-      { root: memoryRoot },
-    );
-  } catch (err) {
-    console.warn(`[session-crud] failed to seed summary.md for ${id}:`, err?.message || err);
   }
 
   return meta;
