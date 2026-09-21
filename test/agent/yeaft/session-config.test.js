@@ -2873,11 +2873,14 @@ describe('Yeaft session-scoped model config', () => {
     mkdirSync(legacyDir, { recursive: true });
     writeFileSync(join(legacyDir, 'memory.md'), '---\nscope: group/legacy-session\n---\narchived');
 
-    initYeaftDir(root, { migrateMemory: false });
+    // Agent and service entry points use the no-options initializer before
+    // loadSession; neither first boot nor a repeat boot may migrate Dream.
+    initYeaftDir(root);
+    initYeaftDir(root);
     expect(existsSync(legacyDir)).toBe(true);
     expect(JSON.parse(readFileSync(join(root, '.yeaft-migration.done'), 'utf8')).memoryMigrated).toBe(false);
 
-    initYeaftDir(root);
+    initYeaftDir(root, { migrateMemory: true });
     const migratedDir = join(root, 'memory', 'session', 'legacy-session');
     expect(existsSync(legacyDir)).toBe(false);
     expect(existsSync(migratedDir)).toBe(true);

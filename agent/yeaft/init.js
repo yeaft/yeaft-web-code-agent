@@ -160,9 +160,10 @@ This file tracks one Yeaft message-history mode.
  * Initialize the Yeaft data directory structure.
  *
  * @param {string} [dir] — Root directory path. Defaults to ~/.yeaft/
+ * @param {{ migrateMemory?: boolean }} [options] — Archived Dream migration is explicit opt-in, never part of Agent/service/Session startup.
  * @returns {{ dir: string, created: string[], writable: boolean, warnings: string[], seededSkills?: number }} — The root dir, list of created paths, writability status, any warnings, and how many bundled skills were seeded
  */
-export function initYeaftDir(dir, { migrateMemory = true } = {}) {
+export function initYeaftDir(dir, { migrateMemory = false } = {}) {
   const root = dir || DEFAULT_YEAFT_DIR;
   const created = [];
   const warnings = [];
