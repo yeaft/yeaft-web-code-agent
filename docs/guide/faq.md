@@ -81,9 +81,7 @@ Edit the selected Agent instance's resolved `config.json` and add at least one p
 
 ### VP doesn't seem to remember what I said last session
 
-Yeaft uses H2-AMS persistent memory, but new memory segments don't show up until the consolidation pass runs at the end of a turn. If you said something five seconds ago, it might not be in the recall index yet. Wait for the turn to fully finish (the typing indicator goes away) and try again.
-
-For the architecture of why this works the way it does, see [Yeaft Memory (H2-AMS)](./tech/yeaft-memory.md).
+Dream/H2-AMS persistent recall is retired. A native turn receives a bounded window from the current Session transcript, not legacy memory segments or sibling Session summaries. Existing memory files remain on the Agent but are not read or injected. See [Retired H2-AMS implementation](./tech/yeaft-memory.md).
 
 ### `@mention` doesn't fan out to multiple VPs
 

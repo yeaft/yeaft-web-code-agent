@@ -1,4 +1,8 @@
-# H2-AMS Memory
+# H2-AMS Memory (Retired)
+
+> **Retired runtime implementation:** Dream/H2-AMS is disabled. Startup does not migrate or synchronize this store, and interactive turns, history loading, and Work Center do not read or inject it. Legacy files, indexes, modules, and command entry points remain for data compatibility and technical reference; enable/manual commands report `disabled`. Historical messages and ordinary debug data are retained. Post-turn compact is a separate active history-window feature.
+
+The remainder of this page documents the retained implementation and historical data format, not current runtime behavior.
 
 H2-AMS is the native Yeaft engine's scoped persistent-memory system. It uses readable Markdown as the source of truth, SQLite FTS5 as a rebuildable search index, and a budgeted in-memory Active Memory Set (AMS) for the current Session.
 
@@ -24,7 +28,7 @@ For each scope, the memory root can contain:
 <scope>/summary.zh.md         optional Chinese summary
 ```
 
-`segment-store.js` parses and atomically rewrites the multi-segment `memory.md`. `store.js` is the scope/path/ACL boundary used by current runtime readers and writers. `summary-store.js` manages the bounded Layer-A summary.
+`segment-store.js` parses and atomically rewrites the multi-segment `memory.md`. `store.js` was the scope/path/ACL boundary for runtime readers and writers. `summary-store.js` manages the bounded Layer-A summary.
 
 `index-db.js` maintains a derived SQLite database:
 
@@ -37,7 +41,7 @@ The Markdown files are the source of truth. `segment-sync.js` can rebuild/synchr
 
 ## Scope model
 
-Scope is the isolation dimension. Current storage readers handle active and compatibility layouts, including:
+Scope is the isolation dimension. The retained storage implementation recognizes historical and compatibility layouts, including:
 
 | Scope family | Purpose |
 | --- | --- |
@@ -95,7 +99,7 @@ Dream is a background maintenance operation with a restricted prompt/tool contra
 
 Source message normalization matters: persisted segment metadata stores IDs, while Markdown source text is a debug/history fallback. This prevents raw message objects from leaking into memory provenance fields.
 
-## Work Center memory reuse
+## Historical Work Center memory reuse
 
 Work Center does not share one memory owner with Sessions. With `reuseMemory=true`, a WorkItem may compute three bounded candidates:
 

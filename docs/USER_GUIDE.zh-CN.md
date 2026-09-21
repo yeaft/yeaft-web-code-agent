@@ -40,7 +40,7 @@
 - [架构](./guide/tech/architecture.md)
 - [CLI provider 系统](./guide/tech/providers.md)
 - [原生 Yeaft engine](./guide/tech/yeaft-engine.md)
-- [H2-AMS memory](./guide/tech/yeaft-memory.md)
+- [已退役的 H2-AMS 实现](./guide/tech/yeaft-memory.md)
 - [原生 LLM 层](./guide/tech/yeaft-llm.md)
 - [WebSocket 协议](./guide/tech/wire-protocol.md)
 - [配置参考](./guide/reference/config-reference.md)

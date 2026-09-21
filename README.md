@@ -19,7 +19,7 @@ Yeaft is a web control plane for code agents running on your own machines. One b
 - **Keep execution near the code.** Shell commands, files, Git operations, providers, credentials, Session data, and Work Center state stay on the connected Agent machine. The server authenticates users and relays browser-to-Agent traffic.
 - **Use the right runtime for each task.** Claude Code CLI, GitHub Copilot CLI over ACP, and the native Yeaft engine share one Web UI without pretending they have identical behavior.
 - **Scale a Session from one VP to many.** A native Yeaft Session is the only collaboration unit: use one VP for focused work, or address several VPs for parallel implementation, review, research, or design.
-- **Carry context deliberately.** H2-AMS recalls scoped user, VP, Session, and related Project-Session memory instead of copying one global transcript everywhere.
+- **Carry context deliberately.** Native Sessions use a bounded window of their own persisted turns; Project instructions remain separate and sibling transcripts are not injected automatically.
 - **Move long work out of a chat turn.** Work Center persists a goal as a WorkItem, lets an AI planner create a validated Action graph, assigns Actions to VPs, records Runs and tool evidence, and can continue after a browser disconnect or Agent restart.
 
 ## Product model
@@ -27,9 +27,9 @@ Yeaft is a web control plane for code agents running on your own machines. One b
 | Concept | What it means |
 | --- | --- |
 | **Agent** | A Node.js worker on a laptop, VM, server, or container. It owns execution, local configuration, and native Yeaft runtime data. |
-| **Session** | A durable native Yeaft conversation with 1..N VPs, one message timeline, a working directory, model override, announcement, and memory scopes. |
+| **Session** | A durable native Yeaft conversation with 1..N VPs, one message timeline, a working directory, model override, and announcement. |
 | **VP (Virtual Person)** | A reusable persona with localized metadata, traits, prompt, and a primary/fast model hint. A VP is a role, not a separate machine. |
-| **Project** | A browser-visible grouping of native Sessions. It carries a shared Project instruction and lets sibling Sessions on the same Agent recall read-only scoped summaries while preserving source identity. |
+| **Project** | A browser-visible grouping of native Sessions. It carries a shared Project instruction without merging or automatically injecting sibling Session transcripts. |
 | **Work Center** | An Agent-level durable task system. A WorkItem has a contract and conversation; planned Actions are executed as fenced Runs with status, evidence, retries, human input, and review outcomes. |
 
 Some internal wire types and storage paths retain historical names such as `group`, `unify_*`, or `claude_output` for compatibility. They are not current product terminology.
@@ -40,7 +40,7 @@ Some internal wire types and storage paths retain historical names such as `grou
 | --- | --- | --- |
 | **Claude Code** | One Claude Code CLI process per conversation; Claude Code tools, skills, MCP, compact/clear, sub-agent events, and resume behavior | Requires a locally installed and authenticated Claude Code CLI |
 | **GitHub Copilot** | One `copilot --acp` process per conversation; Copilot model catalog and explicit tool-permission prompts | Requires the Copilot CLI and an eligible GitHub Copilot account |
-| **Yeaft Code Agent** | Native engine inside `yeaft-agent`; 1..N VPs, 33 built-in tools, provider routing, H2-AMS memory, Projects, sub-agents, and Work Center handoff | Does not emulate every Claude Code or Copilot CLI command |
+| **Yeaft Code Agent** | Native engine inside `yeaft-agent`; 1..N VPs, 33 built-in tools, provider routing, bounded Session history, Projects, sub-agents, and Work Center handoff | Does not emulate every Claude Code or Copilot CLI command |
 
 The Web UI also includes a terminal, Git status/diff, file browser/editor, port proxy, split-screen CLI conversations, an Expert Panel for Claude Code conversations, usage administration, light/dark themes, and English/Chinese localization.
 
@@ -54,16 +54,16 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 
 - Create a Session with an Agent, working directory, roster, and default VP. After creation, choose model/effort in the composer and edit the announcement in Session settings.
 - Address one or more VPs with `@mentions`; selected VPs execute the same turn independently and can hand work to a peer with `RouteForward`.
-- Search and page durable Session history, inspect per-VP turns, running background tasks, model choice, memory recall, tool calls, token usage, and stop reasons.
+- Search and page durable Session history, and inspect per-VP turns, running background tasks, model choice, tool calls, token usage, and stop reasons.
 - Organize native Sessions into Projects, drag them between Project and Recents sections, and attach a Project instruction to all member Sessions.
 - Start a persistent WorkItem from the current Session; origin identity is stamped by the runtime.
 
-### Providers, tools, and memory
+### Providers, tools, and context
 
 - Native adapters support Anthropic Messages and OpenAI Responses protocols.
 - A configured provider can use a static API key or a dynamic GitHub Copilot credential provider. Per-model protocol, context window, output limit, and reasoning-effort metadata are supported.
 - The current native registry exposes **33 built-in tools** for files/patches, shell and background jobs, Git worktrees, search, Web access, images, notebooks, planning, persistent work creation, and sub-agent/VP orchestration. Skills and MCP can extend that registry.
-- H2-AMS combines resident summaries, recent context, and on-demand full-text recall. Dream maintenance extracts durable segments in the background; memory remains scope- and owner-aware.
+- Provider context uses a bounded, disposable window of the current Session’s persisted turns. Post-turn compact remains a separate history-window optimization; it does not reactivate Dream or H2-AMS memory.
 
 ### Work Center
 
@@ -202,7 +202,7 @@ Agent (Node.js on the code machine)
         │   ├── Session + VP orchestration
         │   ├── Anthropic / OpenAI Responses adapters
         │   ├── 33 built-in tools + Skills + MCP
-        │   ├── H2-AMS memory + Dream maintenance
+        │   ├── bounded Session history + post-turn compact
         │   └── Work Center (WorkItem → Action → Run)
         └── Workbench (terminal, Git, files, port proxy)
 ```

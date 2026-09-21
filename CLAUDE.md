@@ -17,7 +17,7 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。用户在�
 | Agent instance | 拥有本机执行环境、配置和数据的运行实例；不是一个模型角色。 |
 | VP（Virtual Person） | 可复用的角色，拥有独立 soul、角色元数据和模型偏好。角色差异是产品能力，不只是显示名称。 |
 | Session | 原生引擎唯一的持久对话编排单元，包含 1..N 个 VP。单人对话与多人协作是同一种 Session，不另设 chat/group mode。 |
-| Project | 用户级 Session 归属与共享 instruction；同一 Agent 上的成员 Session 可共享有来源标记的只读记忆摘要。 |
+| Project | 用户级 Session 归属与共享 instruction；成员 Session 的 transcript 不会自动互相注入。 |
 | Work Center | 跨越单次对话 turn 的持久任务系统。WorkItem 表示目标与验收条件，Action 表示工作单元，Run 表示一次执行尝试；它不是另一种 Session。 |
 
 ### 兼容术语
@@ -63,7 +63,7 @@ Agent instance（Workbench + CLI providers + Yeaft engine）
 
 跨 Agent 的 Session 身份是 **`(agentId, sessionId)`**。前端入口为 `sessionById(sessionId, agentId)`；同名 Session 不能互相覆盖。消息中继携带 owner / Agent access、Session identity 和 request correlation；乱序历史、snapshot 与 reconnect 由 conversation generation 等 fence 隔离。
 
-Project 的权威归属在 Server SQLite 的 `yeaft_projects` / `yeaft_project_sessions`，成员包含 `agentId + sessionId`。Agent-local `projects.json` 是 legacy/fallback cache，不反向覆盖 Server 归属。Project 共享召回仅覆盖同一 Agent 上的 sibling Sessions，保留来源，不共享可写 transcript。
+Project 的权威归属在 Server SQLite 的 `yeaft_projects` / `yeaft_project_sessions`，成员包含 `agentId + sessionId`。Agent-local `projects.json` 是 legacy/fallback cache，不反向覆盖 Server 归属。Project instruction 可用于成员 Session，但 sibling Session transcript 或旧 memory summary 不会自动召回或注入。
 
 ### 数据根与持久化所有权
 
@@ -73,7 +73,7 @@ Project 的权威归属在 Server SQLite 的 `yeaft_projects` / `yeaft_project_s
 - `YEAFT_DIR` 或 service config 可覆盖数据根；命名实例的配置、manifest 与数据始终属于该实例。
 - `<yeaftDir>/sessions-manifest.json` 是实例的 Session 发现索引。
 - `<yeaftDir>/sessions/<sessionId>/` 包含 `session.json`、`config.json`、`conversation/index.json` 和 `conversation/segments/*.jsonl`。
-- `<yeaftDir>/memory/<scope>/` 中的 `memory.md` 与 `summary.md` 是记忆真源；SQLite FTS 是可重建索引。
+- `<yeaftDir>/memory/<scope>/` 中可能保留历史 Dream/H2-AMS 文件和派生索引；当前 runtime 不读取、迁移、同步或注入它们。
 - `<yeaftDir>/work-center/` 包含 `work-center.db`、`settings.json` 和 `attachments/`；其 conversation / Action transcript 不写入普通 Session。
 
 `<workDir>/.yeaft/sessions`、`group-workdirs.json`、旧 `groups/` 和旧消息格式属于 bootstrap / migration 兼容路径，不是新数据的稳态归属。
@@ -96,7 +96,7 @@ Project 的权威归属在 Server SQLite 的 `yeaft_projects` / `yeaft_project_s
 
 `session.js#loadSession()` 组装运行环境；`engine.js` 管理单个 VP / Action 的 query lifecycle；`web-bridge.js` 将 Session 执行投影为 `yeaft_output`。`sessions/` 管理 Session 生命周期和上下文，`conversation/` 管理持久历史、搜索与可见投影。本地 CLI 入口为 `cli.js`、`cli-session-runner.js` 和 `stdio-protocol.js`；自动化的 `stream-json` stdout 是严格 JSONL。
 
-引擎上下文包含 VP soul、Project instruction、工作目录中的 `CLAUDE.md` / `AGENTS.md`、运行环境、记忆、skills 和历史。Project instruction 来自 Server metadata，项目文档来自 `workDir`，历史内容不取代这两层。
+引擎上下文包含 VP soul、Project instruction、工作目录中的 `CLAUDE.md` / `AGENTS.md`、运行环境、skills 和有界 Session 历史。Project instruction 来自 Server metadata，项目文档来自 `workDir`，历史内容不取代这两层。
 
 Query 的重要契约：
 
@@ -115,9 +115,9 @@ Query 的重要契约：
 - 模型能力来自显式配置、`models.dev` cache 和 `models.js`；模型级 `maxOutput` 与 runtime 顶层 `maxOutputTokens` 是不同字段，窗口大小不在 UI / prompt 中另行硬编码。
 - Session 的 `model` / `modelEffort` override 写入自己的 `config.json`，不改变 Agent 默认模型。
 
-### 记忆、Skills 与工具
+### 历史上下文、Skills 与工具
 
-Dream 异步更新 scope 的 `memory.md` / `summary.md` 并同步 FTS；它与临时 history window 分工不同。Session scope 使用 `sessions/<sessionId>` 及其 `/user`、`/vp/<vpId>`、`/topic/...` 子域，另有 `user` scope。1:1 Yeaft / CLI chat 的 `chat/<chatId>` 与 `/vp/<vpId>` 仍是有效 scope；单数 `session/...`、`group/...`、顶层 `feature/...` 是旧格式兼容。
+Dream/H2-AMS runtime 已停用：启动不迁移或同步旧 memory，交互 turn、历史加载与 Work Center 不读取或注入它，debug UI 也不再提供 Dream tab/settings。旧 memory 文件、索引、模块和 legacy 命令入口暂时保留用于数据兼容和技术追溯；启用或手动 Dream 命令只返回 disabled。历史真实消息和常规 debug 数据不因此删除。Post-turn compact 是独立的 history-window 能力并继续保留。
 
 Skills 有 bundled、user、project tiers；`skills.js` 定义 precedence。MCP 合并 global、external user 和 project 配置。`sessions/project-doc.js` 按任务和路径选择项目文档章节，`projectDocMaxBytes: 0` 可禁用项目文档。
 
@@ -135,7 +135,7 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 
 - 相同 workspace 的冲突写入串行，`isolated-write` 使用 Git worktree 并经集成汇总。`read` 分类不是工具 sandbox，也不等于运行时禁止写入。
 - Action 的完成有结构化 outcome、evidence 和 acceptance checks；terminal Run 的结果证据有数据库 immutability fence。
-- WorkItem 可保存有界来源 Session context。记忆复用受 owner、scope 与 canonical workspace 限制，属于不可信参考而非当前指令；不同 execution schema 的实际注入行为由 Runner 决定。
+- WorkItem 可保存有界来源 Session context，并复用同一 canonical workspace 下已完成 WorkItem 的结构化 summary/evidence；旧 Dream memory recall/prompt injection 已停用。
 
 ## Web、Server 与 UI 风格
 

@@ -19,7 +19,7 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 - **让执行靠近代码。** Shell、文件、Git、provider、凭据、Session 数据和 Work Center 状态都留在已连接的 Agent 机器。Server 负责用户认证和 Browser ↔ Agent 中继。
 - **每个任务选合适的 runtime。** Claude Code CLI、基于 ACP 的 GitHub Copilot CLI 与 Yeaft 原生引擎共用一套 Web UI，但文档不会假装它们行为完全相同。
 - **一个 Session 从 1 个 VP 扩到多个 VP。** 原生 Yeaft 只有 Session 这一种协作单元：1 个 VP 做专注任务，多个 VP 可并行承担实现、审查、调研或设计。
-- **有意识地携带上下文。** H2-AMS 按 user、VP、Session 和相关 Project Session scope 召回记忆，不把一份全局 transcript 无差别塞给所有角色。
+- **有意识地携带上下文。** 原生 Session 使用自身持久 turn 的有界窗口；Project instruction 独立注入，不自动注入兄弟 Session transcript。
 - **把长任务移出单次 chat turn。** Work Center 将目标持久化为 WorkItem，由 AI 规划经过校验的 Action graph，分配 VP、记录 Run 和工具证据，并能在浏览器断开或 Agent 重启后继续恢复。
 
 ## 产品模型
@@ -27,9 +27,9 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 | 概念 | 准确定义 |
 | --- | --- |
 | **Agent** | 运行在笔记本、VM、服务器或容器上的 Node.js worker。它拥有执行环境、本机配置和原生 Yeaft 运行数据。 |
-| **Session** | 原生 Yeaft 的持久对话单元，包含 1..N 个 VP、一个消息时间线、工作目录、模型 override、公告和记忆 scope。 |
+| **Session** | 原生 Yeaft 的持久对话单元，包含 1..N 个 VP、一个消息时间线、工作目录、模型 override 和公告。 |
 | **VP（Virtual Person）** | 可复用角色，包含双语元数据、traits、persona prompt，以及 primary/fast model hint。VP 是角色，不是另一台机器。 |
-| **Project** | 浏览器中对原生 Session 的分组。Project instruction 作用于成员 Session；同一 Agent 上的兄弟 Session 可召回只读的 scoped summary，并保留来源身份。 |
+| **Project** | 浏览器中对原生 Session 的分组。Project instruction 作用于成员 Session，但不会合并或自动注入兄弟 Session transcript。 |
 | **Work Center** | Agent 级持久任务系统。WorkItem 包含合同和对话；规划出的 Action 通过有 fence 的 Run 执行，记录状态、证据、重试、人工输入和 review 结论。 |
 
 内部 wire type 和存储路径仍有 `group`、`unify_*`、`claude_output` 等历史名字用于兼容；它们不是当前产品术语。
@@ -40,7 +40,7 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 | --- | --- | --- |
 | **Claude Code** | 每个 conversation 一个 Claude Code CLI 进程；支持 Claude Code 工具、skills、MCP、compact/clear、sub-agent event 和 resume | 本机必须安装并登录 Claude Code CLI |
 | **GitHub Copilot** | 每个 conversation 一个 `copilot --acp` 进程；使用 Copilot model catalog 和明确的工具权限确认 | 本机必须安装 Copilot CLI，并拥有可用的 GitHub Copilot 账号 |
-| **Yeaft Code Agent** | `yeaft-agent` 内的原生引擎；1..N 个 VP、33 个内置工具、多 provider 路由、H2-AMS 记忆、Project、sub-agent 和 Work Center 交接 | 不模拟 Claude Code 或 Copilot CLI 的所有命令和行为 |
+| **Yeaft Code Agent** | `yeaft-agent` 内的原生引擎；1..N 个 VP、33 个内置工具、多 provider 路由、有界 Session history、Project、sub-agent 和 Work Center 交接 | 不模拟 Claude Code 或 Copilot CLI 的所有命令和行为 |
 
 Web UI 还提供终端、Git 状态与 diff、文件浏览/编辑、端口代理、CLI conversation 分屏、Claude Code conversation 的 Expert Panel、用量管理、light/dark theme，以及中英文切换。
 
@@ -54,16 +54,16 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 
 - 创建 Session 时选择 Agent、工作目录、roster 和 default VP；创建后在 composer 选择 model/effort，在 Session settings 编辑公告。
 - 用 `@mention` 指定一个或多个 VP；选中的 VP 独立执行同一个 turn，也能通过 `RouteForward` 明确交接给同 Session 的其他 VP。
-- 搜索和分页加载持久 Session history，检查每个 VP turn、运行中的后台任务、模型选择、记忆召回、工具调用、token 用量和 stop reason。
+- 搜索和分页加载持久 Session history，检查每个 VP turn、运行中的后台任务、模型选择、工具调用、token 用量和 stop reason。
 - 将原生 Session 放入 Project，在 Project 与 Recents 之间拖动，并为所有成员 Session 设置共享 Project instruction。
 - 从当前 Session 创建持久 WorkItem；来源 Session 身份由 runtime 强制写入。
 
-### Provider、工具与记忆
+### Provider、工具与上下文
 
 - 原生 adapter 支持 Anthropic Messages 和 OpenAI Responses 两种协议。
 - Provider 可以使用静态 API key，也可以使用 GitHub Copilot 动态凭据。支持 per-model protocol、context window、output limit 和 reasoning effort 元数据。
 - 当前原生 registry 提供 **33 个内置工具**，覆盖文件/patch、shell 与后台任务、Git worktree、搜索、Web、图片、notebook、计划、持久 WorkItem 创建，以及 sub-agent/VP 编排；Skills 和 MCP 可以继续扩展工具表。
-- H2-AMS 组合 resident summary、recent context 与按需全文召回。Dream 在后台提取持久 segment；记忆始终遵守 scope 和 owner 边界。
+- Provider context 使用当前 Session 持久 turn 的有界临时窗口。Turn 后 compact 是独立的 history-window 优化，不会重新启用 Dream 或 H2-AMS memory。
 
 ### Work Center
 
@@ -202,7 +202,7 @@ Agent（运行在代码所在机器的 Node.js）
         │   ├── Session + VP 编排
         │   ├── Anthropic / OpenAI Responses adapter
         │   ├── 33 个内置工具 + Skills + MCP
-        │   ├── H2-AMS memory + Dream maintenance
+        │   ├── bounded Session history + post-turn compact
         │   └── Work Center（WorkItem → Action → Run）
         └── Workbench（terminal、Git、files、port proxy）
 ```

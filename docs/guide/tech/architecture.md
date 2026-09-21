@@ -16,8 +16,8 @@ Agent (Node.js on the code machine)
         │   ├── Session + 1..N VP orchestration
         │   ├── Anthropic / OpenAI Responses adapters
         │   ├── 33 built-in tools + Skills + MCP
-        │   ├── H2-AMS memory + Dream maintenance
-        │   ├── Projects and scoped sibling-Session recall
+        │   ├── bounded Session history; legacy memory retained but disabled
+        │   ├── Projects and shared instructions
         │   └── Work Center (WorkItem → Action → Run)
         └── Workbench launcher (Terminal, Git, Files, Browser availability)
 ```
@@ -99,7 +99,7 @@ For each VP turn the engine:
 3. streams from the selected Anthropic Messages or OpenAI Responses adapter;
 4. executes allowed tools and folds long tool arcs;
 5. persists raw events, messages, usage, and traces;
-6. adjusts H2-AMS, triggers Dream when required, and reports stop/result events.
+6. finalizes the bounded history window and reports stop/result events; post-turn compact remains independent of retired Dream memory.
 
 Context errors are surfaced after deterministic history-window shaping; configured fallback models handle eligible provider failures. Background jobs and child agents use persistent Session-scoped task records.
 
@@ -115,7 +115,7 @@ agent/
     sessions/               Session roster, store, coordinator, pre-flow
     projects/               Agent-side Project context store
     llm/                    Anthropic/OpenAI Responses adapters and routing
-    memory/                 H2-AMS, FTS index, summaries, segments
+    memory/                 retained, disabled H2-AMS implementation/data readers
     tools/                  33 built-in tools
     work-center/            WorkItem/Action/Run store, planner, watcher, runner
     sub-agent/              Child-agent execution and notifications
@@ -130,7 +130,7 @@ docs/                       Bilingual VitePress documentation
 
 ## Project and memory flow
 
-The Server catalog gives the browser one Agent-aware view of native and CLI conversations. Project membership is synchronized to Agents. Before a native turn, the current Agent can resolve same-Agent sibling Sessions in the Project and include their source-labelled, read-only scopes in H2-AMS recall.
+The Server catalog gives the browser one Agent-aware view of native and CLI conversations. Project membership is synchronized to Agents. Project instructions can be supplied to member Sessions. Sibling Session transcripts and legacy memory summaries are not automatically recalled or injected.
 
 This is not transcript merging. User, VP, Session, Project-related Session, WorkItem, and legacy compatibility scopes keep explicit ownership and ACL rules.
 
@@ -156,7 +156,7 @@ This is not transcript merging. User, VP, Session, Project-related Session, Work
 
 - [CLI provider system](./providers.md)
 - [Native Yeaft engine](./yeaft-engine.md)
-- [H2-AMS memory](./yeaft-memory.md)
+- [Retired H2-AMS implementation](./yeaft-memory.md)
 - [Native LLM layer](./yeaft-llm.md)
 - [WebSocket protocol](./wire-protocol.md)
 - [WebRTC Browser Runtime design](../../notes/2026-08-07-webrtc-browser-runtime-design.md)

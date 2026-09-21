@@ -16,8 +16,8 @@ Agent（运行在代码机器的 Node.js）
         │   ├── Session + 1..N VP 编排
         │   ├── Anthropic / OpenAI Responses adapter
         │   ├── 33 个内置工具 + Skills + MCP
-        │   ├── H2-AMS memory + Dream maintenance
-        │   ├── Project 与 scoped sibling-Session recall
+        │   ├── 有界 Session history；旧 memory 保留但禁用
+        │   ├── Project 与共享 instruction
         │   └── Work Center（WorkItem → Action → Run）
         └── Workbench 能力选择页（Terminal、Git、Files、Browser 可用性）
 ```
@@ -99,7 +99,7 @@ Work Center 属于 Agent。Source Session 是 origin/link，不是 storage owner
 3. 从所选 Anthropic Messages 或 OpenAI Responses adapter stream；
 4. 执行允许的工具，并 fold 较长 tool arc；
 5. 持久化 raw event、message、usage 和 trace；
-6. 调整 H2-AMS，按需触发 Dream/compact，并报告 stop/result event。
+6. 完成有界 history window 并报告 stop/result event；turn 后 compact 与已退役的 Dream memory 相互独立。
 
 Context error 可以触发强制 compact/retry；配置的 fallback model 处理符合条件的 provider failure。Background job 与 child agent 使用持久 Session-scoped task record。
 
@@ -115,7 +115,7 @@ agent/
     sessions/               Session roster、store、coordinator、pre-flow
     projects/               Agent-side Project context store
     llm/                    Anthropic/OpenAI Responses adapter 与 routing
-    memory/                 H2-AMS、FTS index、summary、segment
+    memory/                 保留但禁用的 H2-AMS 实现/数据 reader
     tools/                  33 个内置工具
     work-center/            WorkItem/Action/Run store、planner、watcher、runner
     sub-agent/              Child-agent execution 与 notification
@@ -129,7 +129,7 @@ docs/                       中英文 VitePress 文档
 
 ## Project 与 memory flow
 
-Server catalog 给 Browser 一个 Agent-aware 的原生/CLI conversation 视图。Project membership 会同步给 Agent。原生 turn 开始前，当前 Agent 可以解析 Project 中同一 Agent 的 sibling Session，并将保留来源标签的只读 scope 加入 H2-AMS recall。
+Server catalog 给 Browser 一个 Agent-aware 的原生/CLI conversation 视图。Project membership 会同步给 Agent。Project instruction 可提供给成员 Session；兄弟 Session transcript 和旧 memory summary 不会自动召回或注入。
 
 这不是 transcript merging。User、VP、Session、Project-related Session、WorkItem 与 legacy compatibility scope 都保留明确所有权和 ACL rule。
 
@@ -155,7 +155,7 @@ Server catalog 给 Browser 一个 Agent-aware 的原生/CLI conversation 视图�
 
 - [CLI provider 系统](./providers.md)
 - [原生 Yeaft engine](./yeaft-engine.md)
-- [H2-AMS memory](./yeaft-memory.md)
+- [已退役的 H2-AMS 实现](./yeaft-memory.md)
 - [原生 LLM 层](./yeaft-llm.md)
 - [WebSocket 协议](./wire-protocol.md)
 - [WebRTC Browser Runtime 设计](../../../notes/2026-08-07-webrtc-browser-runtime-design.md)

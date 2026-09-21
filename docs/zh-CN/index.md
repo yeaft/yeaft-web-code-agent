@@ -30,7 +30,7 @@ features:
     details: 原生请求通过 Anthropic Messages 或 OpenAI Responses provider 路由，也支持已实现的 GitHub Copilot 动态凭据和 compatible gateway。
     link: /zh-CN/guide/yeaft-config
   - title: Scoped persistent memory
-    details: H2-AMS 在明确的 user、VP、Session 与相关 Project-Session scope 中组合 resident summary、recent context 和全文召回。
+    details: 原生 turn 使用当前 Session 持久历史的有界窗口。旧 Dream/H2-AMS 数据保留，但 runtime 不再读取或注入。
     link: /zh-CN/guide/tech/yeaft-memory
   - title: Claude Code 与 Copilot CLI
     details: 需要 vendor CLI 行为时继续使用对应 runtime；Browser 只共享导航和可兼容的 event rendering，不掩盖行为差异。

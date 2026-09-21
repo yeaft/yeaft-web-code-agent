@@ -16,7 +16,7 @@ agent/yeaft/
   projects/             Agent-side Project context store
   vp/                   VP library, persona loader, defaults, registry
   llm/                  adapter router, Anthropic, OpenAI Responses, credentials
-  memory/               H2-AMS, FTS index, scopes, summaries, segments
+  memory/               retained, disabled H2-AMS implementation
   conversation/         durable message persistence and search
   tools/                33 built-in tool definitions and registry
   sub-agent/            child-agent runner, logs, liveness, notifications
@@ -24,21 +24,21 @@ agent/yeaft/
   work-center/          WorkItem/Action/Run planner, store, watcher, runner
   tool-folding/         turn reflection and long tool-arc folding
   history-window.js     deterministic provider history window
-  dream/                background memory maintenance
+  dream/                retained, disabled maintenance implementation
   archive/              large/raw tool-result archive helpers
-  templates/            bilingual base, unified, dream, plan, persona prompts
+  templates/            bilingual base, unified, retained dream, plan, persona prompts
 ```
 
 ## One native turn
 
 A normal VP turn follows this shape. `history-window.js` is deterministic and never produces a persisted summary:
 
-1. **Pre-query** — resolve Agent/Session/VP/Project identity, project instructions, runtime platform, pending child-agent notifications, project docs, and H2-AMS recall.
+1. **Pre-query** — resolve Agent/Session/VP/Project identity, project instructions, runtime platform, pending child-agent notifications, project docs, and bounded current-Session history.
 2. **Build context** — combine the system prompt, VP persona, deterministic budgeted history window, current user content, and supported attachments. The Web Session source is a bounded disposable runtime cache; the complete transcript stays in ConversationStore, and no LLM conversation summary is loaded from disk.
 3. **Stream LLM** — select the configured provider/model and call either the Anthropic Messages or OpenAI Responses adapter.
 4. **Execute tools** — run allowed calls through `ToolRegistry`, append result blocks, and continue streaming.
 5. **Fold long arcs** — periodically reflect tool batches and summarize long turns while retaining raw output in persistence/debug paths.
-6. **Finish** — persist messages, usage, traces, task state, and terminal result; acknowledge injected notifications; Dream remains responsible for background semantic-memory maintenance.
+6. **Finish** — persist messages, usage, traces, task state, and terminal result; acknowledge injected notifications; optionally produce the separate post-turn compact for a future history window.
 7. **Recover** — auto-continue `max_tokens` responses within the configured limit; surface context errors without a hidden summary call; use an eligible fallback model for classified retryable failures.
 
 An abort signal is threaded through the adapter and tools. The engine distinguishes user aborts, auth errors, rate limits, server failures, idle timeouts, and context failures instead of treating every stop as a generic error.
@@ -69,14 +69,13 @@ The Web path uses `web-bridge.js`. The direct `yeaft` CLI uses the transport-neu
 
 - `templates/base.md`, `identity-yeaft.md`, and `common-rules.md`;
 - the single interactive `mode-unified.md` contract;
-- Dream or plan instructions when those operations run;
+- plan instructions, plus retained Dream templates that are no longer dispatched;
 - the selected persona and VP metadata;
 - runtime platform metadata;
 - project docs and Project instruction;
-- the rendered H2-AMS memory block;
 - optional harness-level instructions.
 
-Historical interactive modes have been folded into the unified contract. Dream remains a specialized memory-maintenance operation, not a user-facing Session mode.
+Historical interactive modes have been folded into the unified contract. Dream is disabled; legacy dispatch commands return `disabled`.
 
 ## LLM adapters
 
@@ -106,21 +105,15 @@ See [Native LLM layer](./yeaft-llm.md).
 - sub-agent spawn/prompt/wait/list/close and explicit VP routing;
 - Skills.
 
-MCP tools are added at runtime. Registry policy can deny tools for the current execution context. Dream maintenance is not given the same broad side-effect contract as an interactive Session turn.
+MCP tools are added at runtime. Registry policy can deny tools for the current execution context.
 
 Tool events and raw results are persisted for audit/debug. The context-facing representation is separately budgeted and can be folded or replaced by archive stubs; UI truncation does not mean the raw record was discarded.
 
-## H2-AMS memory
+## Retired H2-AMS memory
 
-Before each turn, pre-flow maps authorized scopes to the current Agent's memory store, extracts query keywords, and retrieves FTS hits. The Active Memory Set combines:
+Dream/H2-AMS modules and legacy data remain for compatibility and technical reference, but the current runtime does not migrate, synchronize, read, recall, or inject them. Interactive turns and Work Center use their own current sources instead. Legacy enable/manual commands return `disabled`; the Web debug surface has no Dream tab or settings. Historical messages and ordinary debug records remain intact. Post-turn compact is a separate active history-window feature.
 
-- resident scope summaries;
-- recent items;
-- on-demand full-text segments.
-
-Dream maintenance extracts durable segments and regenerates summaries. Scope ownership is explicit: user, VP, nested VP, Session, related Project-Session, and compatibility scopes do not become one shared transcript.
-
-See [H2-AMS memory](./yeaft-memory.md).
+See [Retired H2-AMS implementation](./yeaft-memory.md).
 
 ## Background tasks and sub-agents
 

@@ -14,7 +14,7 @@ This chapter is the **field-by-field** reference for an Agent instance's Yeaft `
 | --- | --- | --- | --- |
 | `providers` | `Provider[]` | — (required) | LLM provider list |
 | `primaryModel` | `string` | — (required) | Primary model `<provider>/<model-id>` |
-| `fastModel` | `string` | `primaryModel` | Lightweight model for internal tasks such as recall and classification; Dream uses the Session's primary model |
+| `fastModel` | `string` | `primaryModel` | Lightweight model for active internal tasks such as classification |
 | `fallbackModel` | `string` | `null` | Model used when the primary fails with a retryable error |
 | `language` | `'en' \| 'zh'` | `'en'` | System prompt language |
 | `debug` | `boolean` | `false` | Verbose-log raw LLM req/resp + engine events to stdout |
@@ -93,8 +93,7 @@ Anything else on a model entry is silently ignored. UI affordances like display 
   "autoArchiveIdleDays":  30,
   "recentTurnsLimit":     10,
   "relatedTurnsLimit":    5,
-  "multiVp": { "enabled": true },
-  "dream":   { "DREAM_INTERVAL_HOURS": 1, "MIN_NEW_PER_GROUP": 20, "MAX_DREAM_PROMPT_CHARS": 96000 }
+  "multiVp": { "enabled": true }
 }
 ```
 
@@ -105,7 +104,7 @@ Anything else on a model entry is silently ignored. UI affordances like display 
 | `recentTurnsLimit` | `number` | `10` | `1–500` | Compatible cold-start replay setting. Provider history targets the latest 10 turns and shrinks from the oldest end under budget pressure. It protects a three-turn floor when possible; if three complete turns still do not fit, related recall is omitted, those three turns are compressed in the disposable provider copy, and tool replay narrows to the newest turn |
 | `relatedTurnsLimit` | `number` | `5` | `0–5` | Same-Session automatic related-turn cap; only clearly relevant full turns are included (0–5 actual turns). Set 0 to disable; older 8/10 values read as 5 |
 | `multiVp.enabled` | `boolean` | `false` | — | Legacy feature flag retained for compatibility; the current Session UI does not use it as a mode gate |
-| `dream.*` | object | see [dream/limits.js](https://github.com/yeaft/yeaft-web-code-agent/blob/main/agent/yeaft/dream/limits.js) | — | Overrides any UPPER_CASE constant in `DEFAULT_LIMITS` |
+
 
 Out-of-range numeric values are **clamped** to the valid range rather than silently reset (so a hand-edit of `maxConcurrentThreads: 100` loads as `50`, not the default `6`).
 

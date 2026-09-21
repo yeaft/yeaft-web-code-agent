@@ -106,7 +106,7 @@ Each reply renders as a **Turn** card:
 
 | Capability | Claude Code | Copilot | Yeaft Code Agent |
 | --- | :---: | :---: | :---: |
-| `/compact` auto-compress | ✓ | — | ✓ (H2-AMS) |
+| `/compact` / history-window compact | ✓ | — | ✓ |
 | `/clear` reset | ✓ | ✓ | ✓ |
 | Model picker | ✓ | ✓ | ✓ (per VP) |
 | MCP tools | ✓ | ✓ | ✓ |

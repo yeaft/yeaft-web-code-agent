@@ -11,7 +11,7 @@ Yeaft Web Code Agent 是运行在已连接机器上的代码 Agent 的浏览器�
 | **Agent** | 运行在代码所在机器。执行工具、启动可选 CLI provider、调用原生 LLM provider，并保存 Agent-local Yeaft 数据。 |
 | **Session** | 原生引擎的持久对话单元。包含 1..N 个 VP、一个 timeline、工作目录、模型设置、公告和 scoped memory。 |
 | **VP** | 可复用 Virtual Person，包含 persona、双语角色元数据、traits 和 primary/fast model hint。 |
-| **Project** | 对原生 Session 分组并提供共享 instruction。同一 Agent 上的相关 Session 可以召回 scoped summary，但不会合并 transcript。 |
+| **Project** | 对原生 Session 分组并提供共享 instruction；不会合并或自动注入兄弟 Session transcript。 |
 | **WorkItem** | Work Center 的持久目标，由 Action 规划并通过有 fence 的 Run 执行。它属于 Agent，可以长于来源 Session 的一次 turn。 |
 
 1 个 VP 的 Session 就是普通专注代码 Agent。增加 VP 不会切换到另一种 mode，只是让同一个 Session 可以并行点名更多角色。
@@ -35,10 +35,10 @@ Yeaft Session 可以：
 - 使用 `RouteForward` 在当前 Session 成员之间明确交接；
 - 运行有持久状态记录的后台 shell job 和 sub-agent；
 - 搜索与分页加载已持久化 history；
-- 检查模型路由、记忆召回、token 用量、工具调用和 stop reason；
+- 检查模型路由、token 用量、工具调用和 stop reason；
 - 在工作需要跨越当前交互 turn 时创建持久 WorkItem。
 
-Project 提供组织和受控的上下文共享。Project instruction 会注入每个成员 Session。相关 Session summary 只作为只读 context，保留来源身份，并且仅限同一 Agent 上的兄弟 Session。
+Project 提供组织和受控的上下文共享。Project instruction 会注入每个成员 Session，但不会自动召回或注入兄弟 Session transcript 与旧 summary。
 
 ## 用 Work Center 承载持久工作
 
@@ -64,7 +64,7 @@ WorkItem 会关联来源 Session，但生命周期和 SQLite 数据属于 Agent 
 
 原生 registry 当前包含 33 个内置工具，覆盖文件、patch、shell/background task、Git worktree、搜索、Web、图片、notebook、计划、WorkItem 创建，以及 agent/VP 编排。Skills 和 MCP server 还可以添加工具，因此最终工具表取决于 Agent 与 Session policy。
 
-H2-AMS 是原生记忆系统。每个 turn 之前，它把相关全文 segment 召回到有预算的 Active Memory Set；工作完成后，Dream maintenance 提取持久 scoped segment 和 summary。User、VP、Session 和相关 Project-Session scope 始终保持分离。
+Dream/H2-AMS 已从当前 runtime 退役。原生 turn 使用当前 Session 持久历史的有界窗口，不召回或注入旧 memory 或兄弟 Session summary。Agent 上已有 memory 文件会保留；turn 后 compact 是独立的 history-window 能力。
 
 ## 浏览器工作区
 
