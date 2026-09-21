@@ -17,7 +17,7 @@ import folderPickerMixin from './mixins/folder-picker-mixin.js';
  * inline per section.
  *
  * Mount contract: parent passes `group-id` and `initial-section`
- * ('session' | 'members' | 'memory', with legacy announcement/rename/danger
+ * ('session' | 'members', with legacy announcement/rename/danger
  * aliases mapped to 'session'); listens for
  * `close`. Parent owns visibility and re-mounts when the active group
  * changes (the modal re-derives state from the store on each render).
@@ -35,7 +35,7 @@ const SESSION_SETTINGS_SECTION = 'session';
 const LEGACY_SESSION_SETTINGS_SECTIONS = new Set(['announcement', 'rename', 'danger']);
 
 function normalizeSettingsSection(section) {
-  if (section === 'members' || section === 'memory' || section === SESSION_SETTINGS_SECTION) return section;
+  if (section === 'members' || section === SESSION_SETTINGS_SECTION) return section;
   if (LEGACY_SESSION_SETTINGS_SECTIONS.has(section)) return SESSION_SETTINGS_SECTION;
   return SESSION_SETTINGS_SECTION;
 }
@@ -51,7 +51,7 @@ export default {
     initialSection: {
       type: String,
       default: SESSION_SETTINGS_SECTION,
-      validator: v => [SESSION_SETTINGS_SECTION, 'announcement', 'members', 'rename', 'memory', 'danger'].includes(v),
+      validator: v => [SESSION_SETTINGS_SECTION, 'announcement', 'members', 'rename', 'danger'].includes(v),
     },
     initialEditVpId: { type: String, default: '' },
   },
@@ -137,22 +137,7 @@ export default {
       return [
         { id: SESSION_SETTINGS_SECTION, label: this.$t('yeaft.session.settings.nav.session') },
         { id: 'members', label: this.$t('yeaft.session.settings.nav.members') },
-        { id: 'memory', label: this.$t('yeaft.session.settings.nav.memory') },
       ];
-    },
-    /**
-     * v0.1.754 — reactive dream status for THIS group. Reads from
-     * vpStore.groupDreamStatus so the "Run dream now" button flips
-     * between idle / running / success / error states without manual
-     * polling. Returns the same shape as `dreamStatusFor`.
-     */
-    groupDreamStatus() {
-      const vs = this.vpStore;
-      if (!vs) return { status: 'idle', lastRunAt: null, lastResult: null, lastError: null };
-      return vs.groupDreamStatusFor(this.groupId);
-    },
-    dreamRunning() {
-      return this.groupDreamStatus.status === 'running';
     },
   },
   watch: {
@@ -371,19 +356,6 @@ export default {
       } finally {
         this.membersBusy = false;
       }
-    },
-    // ── Memory (manual dream trigger) ───────────────────────
-    // v0.1.754: lets the user kick the dream scheduler for this group
-    // after observing that the Resident layer is stuck on the bootstrap
-    // seed. Status flows back as a `groupId`-tagged yeaft_dream_result
-    // and lands in `vpStore.groupDreamStatus`.
-    runDream() {
-      if (!this.vpStore || this.dreamRunning) return;
-      this.vpStore.triggerGroupDream(this.groupId, { agentId: this.targetAgentId });
-    },
-    formatDreamTimestamp(ms) {
-      if (!ms) return '';
-      try { return new Date(ms).toLocaleString(); } catch (_) { return ''; }
     },
     // ── Delete session ──────────────────────────────────────
     async confirmDelete() {
@@ -610,34 +582,6 @@ export default {
                 </section>
               </div>
               <p v-if="membersError" class="group-settings-error" role="alert">{{ membersError }}</p>
-            </div>
-
-            <!-- Memory (manual dream trigger) -->
-            <div v-else-if="section === 'memory'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.memory.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('yeaft.session.settings.memory.help') }}</p>
-              <div class="group-settings-actions">
-                <button
-                  type="button"
-                  class="group-settings-primary"
-                  :disabled="dreamRunning"
-                  @click="runDream"
-                >{{ dreamRunning
-                    ? $t('yeaft.session.settings.memory.running')
-                    : $t('yeaft.session.settings.memory.runNow') }}</button>
-              </div>
-              <p
-                v-if="groupDreamStatus.status === 'success' && groupDreamStatus.lastRunAt"
-                class="group-settings-help group-settings-memory-status group-settings-memory-status-success"
-              >{{ $t('yeaft.session.settings.memory.lastSuccess', {
-                  time: formatDreamTimestamp(groupDreamStatus.lastRunAt),
-                  count: groupDreamStatus.lastResult?.entriesCreated ?? 0,
-              }) }}</p>
-              <p
-                v-else-if="groupDreamStatus.status === 'error'"
-                class="group-settings-error group-settings-memory-status"
-                role="alert"
-              >{{ $t('yeaft.session.settings.memory.lastError', { error: groupDreamStatus.lastError || 'unknown' }) }}</p>
             </div>
 
           </section>

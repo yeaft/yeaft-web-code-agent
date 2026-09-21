@@ -33,8 +33,8 @@ function freshStore() {
   stores.clear();
   const store = useChatStore();
   store.agents = [
-    { id: 'agent-a', online: true, version: '1.0.0', dreamEnabled: true },
-    { id: 'agent-b', online: true, version: '1.0.0', dreamEnabled: false },
+    { id: 'agent-a', online: true, version: '1.0.0' },
+    { id: 'agent-b', online: true, version: '1.0.0' },
   ];
   store.currentAgent = 'agent-a';
   store.sendWsMessage = vi.fn();
@@ -61,6 +61,32 @@ describe('Agent-scoped settings lifecycle', () => {
     pendingAgentConnections.clear();
     pendingAgentSettingsRequests.clear();
     webClients.clear();
+  });
+
+  it('ignores legacy Dream events without retaining live state', () => {
+    const store = freshStore();
+
+    handleMessage(store, {
+      type: 'dream_enabled_changed',
+      agentId: 'agent-a',
+      requestId: 'legacy-request',
+      enabled: true,
+    });
+    for (const event of [
+      { type: 'dream_memory_loaded', turnId: 'legacy-turn', resident: [{ scope: 'sessions/legacy', summary: 'private' }] },
+      { type: 'dream_progress', sessionId: 'legacy', phase: 'apply', summary: 'private' },
+      { type: 'yeaft_dream_snapshot', snapshot: { scope: 'sessions/legacy', summaryText: 'private' } },
+      { type: 'yeaft_dream_status', sessionId: 'legacy', status: 'running' },
+      { type: 'yeaft_dream_result', sessionId: 'legacy', success: true },
+    ]) store.handleYeaftOutput({ event });
+
+    expect(store.agentDreamState).toBeUndefined();
+    expect(store.setDreamEnabled).toBeUndefined();
+    expect(store.yeaftDreamLatest).toBeUndefined();
+    expect(store.yeaftDreamEvents).toBeUndefined();
+    expect(store.yeaftDreamSnapshots).toBeUndefined();
+    expect(store.yeaftDreamPromptLoads).toBeUndefined();
+    expect(store.agents[0]).not.toHaveProperty('dreamEnabled');
   });
 
   it('correlates telemetry calls, times them out, and ignores stale replies', async () => {
@@ -278,116 +304,6 @@ describe('Agent-scoped settings lifecycle', () => {
     expect(store.agentUpgradeBatch.results['agent-a']).toMatchObject({ status: 'failed', error: 'timeout' });
     expect(completed).toHaveBeenCalledTimes(1);
     window.removeEventListener('agent-upgrade-batch-complete', completed);
-  });
-
-  it('settles a synthesized Dream rejection through the web handler', async () => {
-    CONFIG.skipAuth = true;
-    const store = freshStore();
-    expect(store.setDreamEnabled('agent-a', false)).toBe(true);
-    const requestId = store.agentDreamState['agent-a'].requestId;
-    const client = {
-      authenticated: true,
-      userId: 'user-1',
-      role: 'user',
-      ws: { readyState: WS_OPEN, send: payload => handleMessage(store, JSON.parse(payload)) },
-    };
-    webClients.set('browser-origin', client);
-    agents.set('agent-a', {
-      id: 'agent-a', ownerId: 'user-1',
-      ws: { readyState: WS_OPEN, send() { throw new Error('must not dispatch duplicate'); } },
-    });
-    expect(registerAgentSettingsRequest({
-      agentId: 'agent-a', operation: 'dream', requestId, clientId: 'browser-origin',
-    })).toBe(true);
-
-    await handleClientMisc('browser-origin', client, {
-      type: 'set_dream_enabled', agentId: 'agent-a', enabled: false, requestId,
-    }, async () => true);
-
-    expect(store.agentDreamState['agent-a']).toMatchObject({
-      pending: false,
-      authoritative: true,
-      error: 'Request rejected: too many pending requests or duplicate requestId.',
-    });
-    expect(store.agents[0].dreamEnabled).toBe(true);
-  });
-
-  it('settles a synthesized Dream disconnect reply through the web handler', async () => {
-    vi.useRealTimers();
-    CONFIG.skipAuth = true;
-    const store = freshStore();
-    store.agents[0].dreamEnabled = false;
-    expect(store.setDreamEnabled('agent-a', true)).toBe(true);
-    const requestId = store.agentDreamState['agent-a'].requestId;
-    const client = {
-      authenticated: true,
-      userId: 'user-1',
-      role: 'user',
-      ws: { readyState: WS_OPEN, send: payload => handleMessage(store, JSON.parse(payload)) },
-    };
-    webClients.set('browser-origin', client);
-    const socket = new MockWebSocket(WS_OPEN);
-    const url = new URL('ws://localhost/?type=agent&id=agent-a&name=agent-a&instanceId=agent-a&capabilities=plaintext-ok');
-    handleAgentConnection(socket, url);
-    const challenge = socket.getLastMessage();
-    socket.simulateMessage({
-      type: 'auth', tempId: challenge.tempId, secret: '', capabilities: ['plaintext-ok'], version: '1.0.0',
-    });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(registerAgentSettingsRequest({
-      agentId: 'agent-a', operation: 'dream', requestId, clientId: 'browser-origin',
-    })).toBe(true);
-
-    socket.close(1000, 'test disconnect');
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    expect(store.agentDreamState['agent-a']).toMatchObject({
-      pending: false,
-      authoritative: false,
-      error: 'Agent disconnected before completing the request.',
-    });
-  });
-
-  it('treats a missing Dream state as disabled while a toggle is pending', () => {
-    const store = freshStore();
-    delete store.agents[0].dreamEnabled;
-
-    expect(store.setDreamEnabled('agent-a', true)).toBe(true);
-    expect(store.agentDreamState['agent-a']).toMatchObject({
-      pending: true,
-      requested: true,
-      authoritative: false,
-    });
-  });
-
-  it('uses authoritative Dream state on failure and rejects rapid toggles', async () => {
-    const store = freshStore();
-    expect(store.setDreamEnabled('agent-a', false)).toBe(true);
-    expect(store.setDreamEnabled('agent-a', true)).toBe(false);
-    expect(store.agentDreamState['agent-a']).toMatchObject({ pending: true, requested: false });
-    expect(store.agents[0].dreamEnabled).toBe(true);
-    const failedRequestId = store.agentDreamState['agent-a'].requestId;
-
-    handleMessage(store, { type: 'dream_enabled_changed', agentId: 'agent-a', requestId: 'stale-dream', enabled: false });
-    expect(store.agentDreamState['agent-a']).toMatchObject({ pending: true, error: null });
-    handleMessage(store, { type: 'dream_enabled_changed', agentId: 'agent-a', requestId: failedRequestId, enabled: true, error: 'write failed' });
-    expect(store.agentDreamState['agent-a']).toMatchObject({ pending: false, error: 'write failed' });
-    expect(store.agents[0].dreamEnabled).toBe(true);
-
-    expect(store.setDreamEnabled('agent-a', false)).toBe(true);
-    const successRequestId = store.agentDreamState['agent-a'].requestId;
-    handleMessage(store, { type: 'dream_enabled_changed', agentId: 'agent-a', requestId: 'stale-dream-2', enabled: false });
-    expect(store.agentDreamState['agent-a']).toMatchObject({ pending: true, requested: false });
-    expect(store.agents[0].dreamEnabled).toBe(true);
-    handleMessage(store, { type: 'dream_enabled_changed', agentId: 'agent-a', requestId: successRequestId, enabled: false });
-    expect(store.agentDreamState['agent-a']).toMatchObject({ pending: false, error: null });
-    expect(store.agents[0].dreamEnabled).toBe(false);
-
-    expect(store.setDreamEnabled('agent-a', true)).toBe(true);
-    await vi.advanceTimersByTimeAsync(15001);
-    expect(store.agentDreamState['agent-a']).toMatchObject({ pending: false, error: 'timeout' });
-    handleMessage(store, { type: 'dream_enabled_changed', agentId: 'agent-a', enabled: true });
-    expect(store.agents[0].dreamEnabled).toBe(false);
   });
 
   it('returns a correlated unsupported response immediately for an old Agent', async () => {

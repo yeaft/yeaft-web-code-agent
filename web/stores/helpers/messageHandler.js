@@ -590,7 +590,6 @@ export function handleMessage(store, msg) {
       const turnIds = new Set(turns.map(turn => turn?.turnId).filter(Boolean));
       const rawLoops = hydrateDebugLoopRequests(Array.isArray(msg?.loops) ? msg.loops : []);
       const loops = isDetailFetch ? rawLoops : rawLoops.filter(loop => !loop?.turnId || turnIds.has(loop.turnId));
-      const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
       store.yeaftDebugHistoryHasMore = !!msg?.hasMore || (!isDetailFetch && rawTurns.length > turns.length);
       // A single-request detail fetch may return `limit = loopCount`; do not
       // let that shrink the global debug retention window after the index
@@ -687,18 +686,6 @@ export function handleMessage(store, msg) {
         for (const turn of turns) appendTurnId(turn?.turnId);
       }
       store.yeaftDebugTurnOrder = isDetailFetch ? mergedOrder : mergedOrder.slice(-listLimit);
-      for (const evt of dreamEvents) {
-        if (!evt) continue;
-        let scope = null;
-        const evtSessionId = evt.sessionId || evt.groupId;
-        if (typeof evt.target === 'string' && evt.target.includes('/')) scope = evt.target;
-        else if (typeof evtSessionId === 'string' && evtSessionId) scope = `group/${evtSessionId}`;
-        else scope = '*';
-        if (typeof store._appendDreamEvent === 'function') store._appendDreamEvent(scope, evt);
-        if (evt.type === 'dream_progress' && typeof store.handleYeaftOutput === 'function') {
-          store.handleYeaftOutput({ event: evt });
-        }
-      }
       store.yeaftDebugHistoryLoading = false;
       store.yeaftDebugHistoryError = typeof msg?.error === 'string' ? msg.error : null;
       store.yeaftDebugHistoryProjection = msg?.projection && typeof msg.projection === 'object'
@@ -1065,17 +1052,9 @@ export function handleMessage(store, msg) {
       }
       break;
 
-    case 'dream_enabled_changed': {
-      const previous = store.agentDreamState?.[msg.agentId] || {};
-      const matches = !!msg.requestId && previous.requestId === msg.requestId;
-      if (!previous.pending || !matches) break;
-      clearTimeout(previous.timer);
-      const authoritative = typeof msg.enabled === 'boolean' ? msg.enabled : previous.authoritative !== false;
-      const agent = Array.isArray(store.agents) ? store.agents.find(item => item.id === msg.agentId) : null;
-      if (agent) agent.dreamEnabled = authoritative;
-      store.agentDreamState = { ...store.agentDreamState, [msg.agentId]: { ...previous, pending: false, timer: null, authoritative, error: msg.error || null } };
+    case 'dream_enabled_changed':
+      // Compatibility with older servers. No Dream state is retained in Web.
       break;
-    }
 
     case 'restart_agent_ack': {
       const current = store.agentOperations?.[msg.agentId]?.restart;

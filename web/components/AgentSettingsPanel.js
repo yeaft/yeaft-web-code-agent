@@ -101,17 +101,6 @@ export default {
                     <dd><strong :title="selectedAgent.workDir || ''">{{ selectedAgent.workDir || '—' }}</strong></dd>
                   </div>
                 </dl>
-                <div class="agent-settings-row">
-                  <div>
-                    <strong>{{ $t('chat.agent.dream') }}</strong>
-                    <p>{{ $t('chat.agent.dreamHint') }}</p>
-                  </div>
-                  <label class="agent-settings-switch">
-                    <input type="checkbox" :checked="selectedAgent.dreamEnabled === true" :disabled="!selectedAgent.online || dreamState.pending" @change="setDreamEnabled($event.target.checked)">
-                    <span aria-hidden="true"></span>
-                  </label>
-                </div>
-                <p v-if="dreamState.error" class="error">{{ dreamState.error }}</p>
                 <div class="agent-settings-row agent-settings-work-center-row">
                   <div>
                     <strong ref="workCenterHeading" tabindex="-1">{{ $t('agentSettings.workCenter.title') }}</strong>
@@ -240,7 +229,6 @@ export default {
     operations() { return this.store.agentOperations?.[this.selectedAgentId] || {}; },
     restarting() { return this.operations.restart?.pending === true; },
     upgrading() { return this.operations.upgrade?.pending === true; },
-    dreamState() { return this.store.agentDreamState?.[this.selectedAgentId] || {}; },
     workCenterSettings() { return this.store.workCenterFeatureSettingsByAgent?.[this.selectedAgentId] || null; },
     workCenterEnabled() { return this.workCenterSettings?.enabled === true; },
     selectedWorkCenterAgentSignature() {
@@ -474,9 +462,6 @@ export default {
         event.preventDefault();
         first.focus();
       }
-    },
-    setDreamEnabled(enabled) {
-      if (this.selectedAgentId) this.store.setDreamEnabled(this.selectedAgentId, enabled);
     },
     async restartAgent() {
       const agent = this.selectedAgent;

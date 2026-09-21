@@ -20,11 +20,6 @@
 
 const { defineStore } = Pinia;
 
-function projectDreamDebugEvent(chat, event) {
-  if (!chat || typeof chat.handleYeaftOutput !== 'function' || !event) return;
-  chat.handleYeaftOutput({ event });
-}
-
 // 12 modern default avatar motifs. The mapping is deterministic:
 // vpId -> fixed known-VP entry when present, otherwise 32-bit hash -> one of
 // these 12 entries. The concrete colors live in CSS variables so light and dark
@@ -171,29 +166,6 @@ export const useVpStore = defineStore('vp', {
      * recomputing the full list. null before any live event.
      */
     lastChange: null,
-    /**
-     * R6 G3 — per-VP dream activity state. Populated from
-     * yeaft_dream_status (status='running') and yeaft_dream_result
-     * (status='success' | 'error') events. Shape:
-     *   {
-     *     status: 'idle'|'running'|'success'|'error',
-     *     lastRunAt: number|null,    // set on success/error
-     *     lastResult: object|null,   // raw payload for success
-     *     lastError: string|null,    // error message
-     *   }
-     * Inline status surfaces read this for dream activity without polling.
-     * @type {Record<string, object>}
-     */
-    dreamStatus: {},
-    /**
-     * v0.1.754 — per-GROUP dream activity state. Same shape as
-     * `dreamStatus` but keyed by groupId instead of vpId. Populated
-     * from yeaft_dream_status / yeaft_dream_result events that carry a
-     * `groupId` field (i.e. triggered via `triggerGroupDream(groupId)`
-     * rather than the legacy per-VP path).
-     * @type {Record<string, object>}
-     */
-    groupDreamStatus: {},
   }),
 
   getters: {
@@ -238,24 +210,6 @@ export const useVpStore = defineStore('vp', {
     },
     vpTextColor: () => (id) => fallbackTextColor(id),
     vpAvatarMotif: () => (id) => fallbackAvatarMotif(id),
-    /** R6 G3 — dream status row for a vpId (always returns an object). */
-    dreamStatusFor: (state) => (id) => {
-      return state.dreamStatus[id] || {
-        status: 'idle',
-        lastRunAt: null,
-        lastResult: null,
-        lastError: null,
-      };
-    },
-    /** v0.1.754 — dream status row for a groupId (always returns an object). */
-    groupDreamStatusFor: (state) => (groupId) => {
-      return state.groupDreamStatus[groupId] || {
-        status: 'idle',
-        lastRunAt: null,
-        lastResult: null,
-        lastError: null,
-      };
-    },
   },
 
   actions: {
@@ -360,190 +314,5 @@ export const useVpStore = defineStore('vp', {
       if (this.emptyLibrary) this.emptyLibrary = false;
     },
 
-    // ── R6 G3: Dream trigger + status ────────────────────────────
-    /**
-     * Send yeaft_dream_trigger over WS. Optimistically marks the VP as
-     * 'running'; the agent will subsequently emit yeaft_dream_status
-     * (running) and yeaft_dream_result (success|error).
-     *
-     * @param {string} vpId
-     */
-    triggerDream(vpId) {
-      if (!vpId) return;
-      this.dreamStatus = {
-        ...this.dreamStatus,
-        [vpId]: {
-          ...(this.dreamStatus[vpId] || {}),
-          status: 'running',
-          lastError: null,
-        },
-      };
-      const chat = (window.Pinia && window.Pinia.useChatStore)
-        ? window.Pinia.useChatStore()
-        : null;
-      if (chat && typeof chat.sendWsMessage === 'function') {
-        chat.sendWsMessage({ type: 'yeaft_dream_trigger', vpId });
-      }
-    },
-
-    /**
-     * Per-group manual dream trigger (added v0.1.754 to give users a
-     * way to kick the dream scheduler after seeing the Resident layer
-     * stuck on a session bootstrap seed). Sends
-     * `{ type: 'yeaft_dream_trigger', sessionId }` over WS; the agent's
-     * `handleYeaftDreamTrigger` routes to `triggerDreamForScopes(['sessions/X'])`
-     * so unrelated sessions are not processed. Status flows back via
-     * yeaft_dream_status / yeaft_dream_result events tagged with
-     * `sessionId` instead of `vpId`.
-     *
-     * @param {string} groupId legacy in-store argument name for sessionId
-     */
-    triggerGroupDream(groupId, meta = {}) {
-      if (!groupId) return;
-      this.groupDreamStatus = {
-        ...this.groupDreamStatus,
-        [groupId]: {
-          ...(this.groupDreamStatus[groupId] || {}),
-          status: 'running',
-          lastError: null,
-        },
-      };
-      const chat = (window.Pinia && window.Pinia.useChatStore)
-        ? window.Pinia.useChatStore()
-        : null;
-      const now = Date.now();
-      projectDreamDebugEvent(chat, {
-        type: 'dream_progress',
-        phase: 'start',
-        groupId,
-        manual: true,
-        trigger: 'manual',
-        source: 'header-button',
-        ts: now,
-      });
-      if (!chat || typeof chat.sendWsMessage !== 'function') {
-        projectDreamDebugEvent(chat, {
-          type: 'yeaft_dream_result',
-          groupId,
-          success: false,
-          skipped: true,
-          skippedReason: 'chat-store-unavailable',
-          trigger: 'manual',
-          error: null,
-        });
-        return;
-      }
-      const frame = { type: 'yeaft_dream_trigger', sessionId: groupId };
-      // Route by the session's owning agent (dream is session-scoped). Falls
-      // back to currentAgent; server also defaults to client.currentAgent.
-      const dreamAgentId = meta && meta.agentId
-        ? meta.agentId
-        : (typeof chat.agentIdForSession === 'function'
-          ? chat.agentIdForSession(groupId)
-          : chat.currentAgent);
-      if (dreamAgentId) frame.agentId = dreamAgentId;
-      const sent = chat.sendWsMessage(frame);
-      if (sent === false) {
-        projectDreamDebugEvent(chat, {
-          type: 'yeaft_dream_result',
-          groupId,
-          success: false,
-          skipped: true,
-          skippedReason: 'websocket-not-open',
-          trigger: 'manual',
-          error: null,
-        });
-      }
-    },
-
-    /**
-     * Apply yeaft_dream_status event (status='running' from agent).
-     * Routes by which id field the event carries (vpId vs sessionId).
-     * Legacy `groupId` is still accepted for older agent builds.
-     */
-    applyDreamStatus(event) {
-      if (!event) return;
-      const sessionId = event.sessionId;
-      if (sessionId) {
-        this.groupDreamStatus = {
-          ...this.groupDreamStatus,
-          [sessionId]: {
-            ...(this.groupDreamStatus[sessionId] || {}),
-            status: event.status === 'running' ? 'running' : (event.status || 'idle'),
-          },
-        };
-        return;
-      }
-      if (!event.vpId) return;
-      const vpId = event.vpId;
-      this.dreamStatus = {
-        ...this.dreamStatus,
-        [vpId]: {
-          ...(this.dreamStatus[vpId] || {}),
-          status: event.status === 'running' ? 'running' : (event.status || 'idle'),
-        },
-      };
-    },
-
-    /**
-     * Apply yeaft_dream_result event (success or error). Routes by
-     * which id field the event carries.
-     */
-    applyDreamResult(event) {
-      if (!event) return;
-      const ok = !!event.success;
-      const skipped = !!event.skipped;
-      const result = {
-        mergedCount: event.mergedCount ?? null,
-        extractedCount: event.extractedCount ?? null,
-        // fix/dream-cadence-and-ui-trigger: bridge derives a single
-        // scalar `entriesCreated` (count of done targets) so the
-        // topbar bubble has a stable field to read; falls back to
-        // mergedCount/extractedCount if an older agent build is
-        // attached.
-        entriesCreated: typeof event.entriesCreated === 'number'
-          ? event.entriesCreated
-          : (event.mergedCount ?? event.extractedCount ?? 0),
-        skipped,
-        skippedReason: event.skippedReason || null,
-        sessionsProcessed: typeof event.sessionsProcessed === 'number' ? event.sessionsProcessed : null,
-        sessionsSkipped: typeof event.sessionsSkipped === 'number' ? event.sessionsSkipped : null,
-        targetsApplied: typeof event.targetsApplied === 'number' ? event.targetsApplied : null,
-        durationMs: typeof event.durationMs === 'number' ? event.durationMs : null,
-        llmCallCount: typeof event.llmCallCount === 'number' ? event.llmCallCount : 0,
-        inputTokens: typeof event.inputTokens === 'number' ? event.inputTokens : 0,
-        outputTokens: typeof event.outputTokens === 'number' ? event.outputTokens : 0,
-        totalTokens: typeof event.totalTokens === 'number' ? event.totalTokens : 0,
-        metrics: event.metrics || null,
-        passBreakdown: event.passBreakdown || event.metrics?.passBreakdown || null,
-        targetErrors: Array.isArray(event.targetErrors) ? event.targetErrors : [],
-      };
-      const lastError = ok || skipped ? null : (event.error || null);
-      const status = skipped ? 'skipped' : (ok ? 'success' : 'error');
-      const sessionId = event.sessionId;
-      if (sessionId) {
-        this.groupDreamStatus = {
-          ...this.groupDreamStatus,
-          [sessionId]: {
-            status,
-            lastRunAt: Date.now(),
-            lastResult: result,
-            lastError,
-          },
-        };
-        return;
-      }
-      if (!event.vpId) return;
-      const vpId = event.vpId;
-      this.dreamStatus = {
-        ...this.dreamStatus,
-        [vpId]: {
-          status,
-          lastRunAt: Date.now(),
-          lastResult: result,
-          lastError,
-        },
-      };
-    },
   },
 });
