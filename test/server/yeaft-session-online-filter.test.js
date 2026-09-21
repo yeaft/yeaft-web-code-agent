@@ -1375,7 +1375,25 @@ describe('Yeaft Session online Agent filtering', () => {
     for (const type of ['yeaft_dream_snapshot', 'yeaft_dream_result', 'yeaft_dream_status']) {
       await handleAgentOutput('agent-a', agent, { type, sessionId: 'same-id', body: 'old memory' });
     }
+    for (const envelope of ['yeaft_output', 'yeaft_session_output', 'session_output']) {
+      for (const type of ['turn_open', 'loop', 'turn_close']) {
+        await handleAgentOutput('agent-a', agent, {
+          type: envelope, sessionId: 'same-id',
+          event: { type, turnId: 'dream-1-123456', response: 'old memory' },
+        });
+      }
+    }
     expect(ownerClient.sent).toEqual([]);
+    expect(otherTab.sent).toEqual([]);
+    for (const type of ['turn_open', 'loop', 'turn_close']) {
+      await handleAgentOutput('agent-a', agent, {
+        type: 'yeaft_output', sessionId: 'same-id',
+        event: { type, turnId: 'ordinary-turn', response: 'normal debug' },
+      });
+      expect(ownerClient.sent.at(-1).event).toMatchObject({ type, turnId: 'ordinary-turn' });
+    }
+    ownerClient.sent.length = 0;
+    otherTab.sent.length = 0;
     // Simulate the rolling topology: an old Agent echoes requestId/sessionId
     // but drops the newly introduced private browser client field.
     await handleAgentOutput('agent-a', agent, {

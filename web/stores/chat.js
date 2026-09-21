@@ -4819,6 +4819,10 @@ export const useChatStore = defineStore('chat', {
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
+      // Rolling upgrades may still deliver old Dream LLM debug events through
+      // an older Server. Never retain their prompt/response as ordinary turns.
+      if (['turn_open', 'loop', 'turn_close'].includes(msg.event?.type)
+          && typeof msg.event.turnId === 'string' && msg.event.turnId.startsWith('dream-')) return;
       const envelopeAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent || null;
       const envelopeConversationId = msg.conversationId || msg.event?.conversationId || null;
       const retiredEnvelopeConversation = isRetiredYeaftConversation(

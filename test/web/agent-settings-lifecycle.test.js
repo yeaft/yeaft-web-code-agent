@@ -78,8 +78,16 @@ describe('Agent-scoped settings lifecycle', () => {
       { type: 'yeaft_dream_snapshot', snapshot: { scope: 'sessions/legacy', summaryText: 'private' } },
       { type: 'yeaft_dream_status', sessionId: 'legacy', status: 'running' },
       { type: 'yeaft_dream_result', sessionId: 'legacy', success: true },
+      { type: 'turn_open', turnId: 'dream-1-123456', userPrompt: 'private Dream' },
+      { type: 'loop', turnId: 'dream-1-123456', loopNumber: 1, response: 'private Dream' },
+      { type: 'turn_close', turnId: 'dream-1-123456' },
     ]) store.handleYeaftOutput({ event });
 
+    expect(store.yeaftDebugTurnOrder).toEqual([]);
+    expect(store.yeaftDebugTurnsById).toEqual({});
+    expect(store.yeaftDebugLoops).toEqual([]);
+    store.handleYeaftOutput({ event: { type: 'turn_open', turnId: 'ordinary-turn', userPrompt: 'normal request' } });
+    expect(store.yeaftDebugTurnsById['ordinary-turn'].userPrompt).toBe('normal request');
     expect(store.agentDreamState).toBeUndefined();
     expect(store.setDreamEnabled).toBeUndefined();
     expect(store.yeaftDreamLatest).toBeUndefined();

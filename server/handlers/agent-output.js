@@ -8,6 +8,14 @@ import { yeaftAssetStore } from '../yeaft-asset-store.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
 
 
+// Older Dream bridges reused the ordinary debug lifecycle with a reserved
+// dream- turn id. Drop these before projection/relay, not only named Dream events.
+function isRetiredDreamEvent(event) {
+  return ['yeaft_dream_snapshot', 'yeaft_dream_status', 'yeaft_dream_result', 'dream_progress', 'dream_memory_loaded'].includes(event?.type)
+    || (['turn_open', 'loop', 'turn_close'].includes(event?.type)
+      && typeof event.turnId === 'string' && event.turnId.startsWith('dream-'));
+}
+
 export function decorateYeaftSessionsWithPinned(agentId, sessions) {
   const rawRows = Array.isArray(sessions) ? sessions : [];
   const rowsById = new Map();
@@ -602,7 +610,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
     case 'yeaft_output':
     case 'yeaft_session_output':
     case 'session_output': {
-      if (['yeaft_dream_snapshot', 'yeaft_dream_status', 'yeaft_dream_result', 'dream_progress', 'dream_memory_loaded'].includes(msg.event?.type)) break;
+      if (isRetiredDreamEvent(msg.event)) break;
       const data = hydrateInlinePreviewData(msg.data);
       let event = syncYeaftSessionMetadata(agentId, agent, msg.event);
       if ((event?.type === 'session_list_updated' || event?.type === 'session_crud_result') && agent.ownerId) {
