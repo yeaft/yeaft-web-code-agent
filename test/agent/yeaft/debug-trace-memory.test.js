@@ -20,6 +20,8 @@ afterEach(async () => {
 describe('DebugTrace active payload release', () => {
   it('keeps flushed active loops lossless on disk while continuing from the latest snapshot', async () => {
     const root = await traceRoot();
+    const archived = JSON.stringify([{ eventType: 'dream_progress', eventData: { body: 'archived Dream' } }]);
+    await fs.writeFile(join(root, 'events.json'), archived);
     const trace = new DebugTrace(root);
     const sessionId = 'memory-session';
     const traceId = 'memory-turn';
@@ -40,6 +42,10 @@ describe('DebugTrace active payload release', () => {
       await trace.flush();
     }
 
+    trace.event('dream_progress', { sessionId, phase: 'done', body: 'retired Dream output' });
+    const history = await trace.fetchRecentDebugHistory({ sessionId, dreamLimit: 50 });
+    expect(history.dreamEvents).toEqual([]);
+    expect((await trace.fetchTurnDebug({ sessionId, turnId: traceId, dreamLimit: 50 })).dreamEvents).toEqual([]);
     const detail = await trace.fetchTurnDebug({ sessionId, turnId: traceId });
     expect(detail.loops).toHaveLength(40);
     expect(detail.loops.map(loop => loop.response)).toEqual(
@@ -50,6 +56,15 @@ describe('DebugTrace active payload release', () => {
     expect(await trace.stats()).toMatchObject({ turnCount: 40, requestCount: 1 });
     expect(await trace.search('response-17')).toHaveLength(40);
     await trace.close();
+    expect(await readFile(join(root, 'events.json'), 'utf8')).toBe(archived);
+    const readSpy = vi.spyOn(fs, 'readFile');
+    const reopened = new DebugTrace(root);
+    try {
+      await reopened.stats();
+      await reopened.fetchRecentDebugHistory({ dreamLimit: 50 });
+      await reopened.close();
+      expect(readSpy.mock.calls.some(([path]) => String(path) === join(root, 'events.json'))).toBe(false);
+    } finally { readSpy.mockRestore(); }
   });
 
   it('retains unpersisted diagnostic payload when opening the event log fails', async () => {

@@ -28,10 +28,9 @@ import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getPluginConfig, updatePluginConfig, getTelemetrySettings, updateTelemetrySettings, getWorkCenterFeatureSettings, updateWorkCenterFeatureSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { loadConfig } from '../yeaft/config.js';
-import { mutateAgentConfig } from '../yeaft/config-store.js';
 import { discoverLlmModels } from '../llm-model-discovery.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
-import { handleYeaftSessionSend, handleYeaftAskUserAnswer, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, refreshLiveSessionConfig, setLiveDreamEnabled, handleYeaftLoadHistory, handleYeaftLoadHistoryOutline, handleYeaftSearchHistory, handleYeaftLoadHistoryWindow, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftProjectContextSync, handleYeaftProjectMutation, handleYeaftCreateSession, handleYeaftCopySession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, handleYeaftPluginCatalog, handleYeaftManagedSkill, ensureSessionLoaded, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager, broadcastYeaftVpSnapshotEager, preloadYeaftSkillSlashCommands } from '../yeaft/web-bridge.js';
+import { handleYeaftSessionSend, handleYeaftAskUserAnswer, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, refreshLiveSessionConfig, handleYeaftLoadHistory, handleYeaftLoadHistoryOutline, handleYeaftSearchHistory, handleYeaftLoadHistoryWindow, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftProjectContextSync, handleYeaftProjectMutation, handleYeaftCreateSession, handleYeaftCopySession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, handleYeaftPluginCatalog, handleYeaftManagedSkill, ensureSessionLoaded, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager, broadcastYeaftVpSnapshotEager, preloadYeaftSkillSlashCommands } from '../yeaft/web-bridge.js';
 import { startYeaftStatusRefresh, forceRefreshYeaftStatus } from '../yeaft/status-cache.js';
 import { handleWorkCenterRequest } from '../yeaft/work-center/bridge.js';
 import { handleBrowserRuntimeMessage } from '../browser-runtime/messages.js';
@@ -220,8 +219,7 @@ export async function handleMessage(msg) {
       await ctx.assetOutbox?.drain();
 
       // ★ Phase 1: 通知 server 同步完成
-      const runtimeConfig = loadConfig({ dir: ctx.CONFIG?.yeaftDir });
-      sendToServer({ type: 'agent_sync_complete', dreamEnabled: runtimeConfig.dream?.enabled === true });
+      sendToServer({ type: 'agent_sync_complete', dreamEnabled: false });
 
       // ★ 发送 MCP servers 列表给 server（供前端 Settings > Tools tab 使用）
       if (ctx.mcpServers.length > 0) {
@@ -437,24 +435,12 @@ export async function handleMessage(msg) {
       await handleRestartAgent({ requestId: msg.requestId, clientId: msg.clientId });
       break;
 
+    // Compatibility response for old Web clients; never persist or re-enable Dream.
     case 'set_dream_enabled': {
-      const enabled = msg.enabled !== false;
-      try {
-        mutateAgentConfig(ctx.CONFIG?.yeaftDir, (config) => {
-          if (!config.dream || typeof config.dream !== 'object' || Array.isArray(config.dream)) config.dream = {};
-          config.dream.enabled = enabled;
-        });
-        const persisted = loadConfig({ dir: ctx.CONFIG?.yeaftDir }).dream?.enabled === true;
-        if (persisted !== enabled) throw new Error('Dream setting was not persisted');
-        try {
-          setLiveDreamEnabled(persisted);
-        } catch (error) {
-          console.warn('[Dream] persisted setting but live runtime update failed:', error?.message || error);
-        }
-        sendToServer({ type: 'dream_enabled_changed', enabled: persisted, requestId: msg.requestId, clientId: msg.clientId });
-      } catch (error) {
-        sendToServer({ type: 'dream_enabled_changed', enabled: !enabled, error: error?.message || String(error), requestId: msg.requestId, clientId: msg.clientId });
-      }
+      sendToServer({
+        type: 'dream_enabled_changed', enabled: false, error: 'Dream is disabled.',
+        requestId: msg.requestId, clientId: msg.clientId,
+      });
       break;
     }
 
@@ -867,7 +853,7 @@ export async function handleMessage(msg) {
       handleYeaftTaskCancel(msg);
       break;
 
-    // wave-6b: manual dream trigger from VP detail page
+    // Retired Dream commands receive an explicit disabled response.
     case 'yeaft_dream_trigger':
     case 'unify_dream_trigger':
       await handleYeaftDreamTrigger(msg);

@@ -75,7 +75,7 @@
 | --- | --- | :---: | --- | --- |
 | `providers` | `Provider[]` | ✓ | — | LLM provider 列表 |
 | `primaryModel` | `string` | ✓ | — | 主 model，格式 `<provider>/<model-id>` |
-| `fastModel` | `string` | — | `primaryModel` | 用于 recall、分类等内部任务的轻量 model；Dream 使用 Session 的 primary model |
+| `fastModel` | `string` | — | `primaryModel` | 用于当前仍启用的分类等内部任务的轻量 model |
 | `language` | `'en' \| 'zh'` | — | `'en'` | System prompt 语言 |
 | `debug` | `boolean` | — | `false` | 把每次 LLM raw request/response 打到 console |
 | `maxContextTokens` | `number` | — | `200000` | Provider context window 的请求保护参考值 |

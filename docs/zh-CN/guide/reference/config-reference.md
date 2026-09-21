@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | `providers` | `Provider[]` | — (required) | LLM provider 列表 |
 | `primaryModel` | `string` | — (required) | 主 model 引用 `<provider>/<model-id>` |
-| `fastModel` | `string` | `primaryModel` | compact、召回和分类等内部任务使用的轻量 model；Dream 使用 Session 的 primary model |
+| `fastModel` | `string` | `primaryModel` | 用于当前仍启用的 compact、分类等内部任务的轻量 model |
 | `fallbackModel` | `string` | `null` | 主 model 出现可重试错误时换用的 model |
 | `language` | `'en' \| 'zh'` | `'en'` | System prompt 语言 |
 | `debug` | `boolean` | `false` | 把 LLM raw req/resp + 引擎事件 verbose-log 到 stdout |
@@ -95,8 +95,7 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
   "autoArchiveIdleDays":  30,
   "recentTurnsLimit":     10,
   "relatedTurnsLimit":    5,
-  "multiVp": { "enabled": true },
-  "dream":   { "DREAM_INTERVAL_HOURS": 1, "MIN_NEW_PER_GROUP": 20, "MAX_DREAM_PROMPT_CHARS": 96000 }
+  "multiVp": { "enabled": true }
 }
 ```
 
@@ -107,7 +106,7 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 | `recentTurnsLimit` | `number` | `10` | `1–500` | 保留冷启回放配置兼容；provider 默认争取最近 10 turn，预算不足时从最旧端缩减并尽量保护 3 turn。连 3 个完整 turn 也装不下时，取消相关召回，只压缩这 3 个 turn 的临时 provider 副本，并将工具回放收窄到最新 1 turn |
 | `relatedTurnsLimit` | `number` | `5` | `0–5` | 当前 Session 自动相关召回上限；只选明显相关的完整问答，实际可为 0–5 个 turn。0 关闭召回；旧值 8/10 读取时收敛到 5 |
 | `multiVp.enabled` | `boolean` | `false` | — | 为兼容保留的 legacy feature flag；当前 Session UI 不把它作为 mode gate |
-| `dream.*` | object | 见 [dream/limits.js](https://github.com/yeaft/yeaft-web-code-agent/blob/main/agent/yeaft/dream/limits.js) | — | 任何 `DEFAULT_LIMITS` 里的 UPPER_CASE 常量都可覆盖 |
+
 
 数值超范围会被**钳制**到合法范围（而不是悄悄回落默认），所以手写一个 `maxConcurrentThreads: 100` 会被读成 `50`，不是默认的 `6`。
 

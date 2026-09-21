@@ -32,7 +32,7 @@ Choose the native engine when you need product-level orchestration rather than e
 
 - A Session has 1..N reusable VPs and one durable timeline.
 - `@mentions` can fan one turn out to several VPs; `RouteForward` records explicit peer handoffs.
-- H2-AMS recalls scoped user, VP, Session, and related Project-Session memory.
+- Native turns use a bounded window of their own Session history; legacy Dream/H2-AMS memory and sibling Session summaries are not injected.
 - Native providers route through Anthropic Messages or OpenAI Responses adapters, including supported GitHub Copilot dynamic credentials and compatible gateways.
 - The current built-in registry has 33 tools; Skills and MCP may add more.
 - A Session can create an Agent-level WorkItem for durable, planned, recoverable work.

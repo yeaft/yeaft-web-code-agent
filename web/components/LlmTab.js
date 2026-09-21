@@ -729,7 +729,7 @@ export default {
       // The Yeaft config UI hides fast/secondary model — Yeaft users only
       // pick a primary, and the engine quietly falls back to primary when
       // fastModel is unset (see engine.js: `config.fastModelId || config.model`).
-      // That fallback means recall/consolidation/dream still work, but they
+      // That fallback means recall and consolidation still work, but they
       // run on the expensive primary model. Hiding the field is a UX choice,
       // not a claim that the engine has no fast-model concept.
       //

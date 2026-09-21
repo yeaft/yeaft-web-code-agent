@@ -64,19 +64,21 @@ const SENTINEL_VERSION = 3;
  * @param {string} yeaftDir
  * @returns {{ migrated: boolean, moved: number, frontmatterRewrites: number, warnings: string[] }}
  */
-export function migrateSessions(yeaftDir) {
+export function migrateSessions(yeaftDir, { migrateMemory = true } = {}) {
   const warnings = [];
   if (!yeaftDir || !existsSync(yeaftDir)) {
     return { migrated: false, moved: 0, frontmatterRewrites: 0, warnings: ['yeaftDir missing'] };
   }
   const sentinel = join(yeaftDir, SENTINEL);
   if (existsSync(sentinel)) {
-    // Version-aware: ignore a sentinel from an older schema. Future v3
-    // migrations can run on v2-completed trees because they read what
-    // we wrote and decide for themselves whether to re-execute.
-    let v = 0;
-    try { v = JSON.parse(readFileSync(sentinel, 'utf8'))?.version ?? 0; } catch { /* corrupt sentinel — treat as 0 */ }
-    if (v >= SENTINEL_VERSION) {
+    // Version-aware: ignore a sentinel from an older schema. A runtime-only
+    // migration deliberately leaves memoryMigrated=false so an explicitly
+    // invoked full migration can still process the archived Dream data later.
+    let state = null;
+    try { state = JSON.parse(readFileSync(sentinel, 'utf8')); } catch { /* corrupt sentinel — treat as incomplete */ }
+    const versionComplete = (state?.version ?? 0) >= SENTINEL_VERSION;
+    const memoryComplete = state?.memoryMigrated !== false;
+    if (versionComplete && (!migrateMemory || memoryComplete)) {
       return { migrated: false, moved: 0, frontmatterRewrites: 0, warnings: [] };
     }
   }
@@ -96,8 +98,8 @@ export function migrateSessions(yeaftDir) {
   const memSessionsAmsRoot = join(memoryRoot, 'sessions');
 
   if (!existsSync(sessionsRoot)) mkdirSync(sessionsRoot, { recursive: true });
-  if (!existsSync(memSessionRoot)) mkdirSync(memSessionRoot, { recursive: true });
-  if (!existsSync(memSessionsAmsRoot)) mkdirSync(memSessionsAmsRoot, { recursive: true });
+  if (migrateMemory && !existsSync(memSessionRoot)) mkdirSync(memSessionRoot, { recursive: true });
+  if (migrateMemory && !existsSync(memSessionsAmsRoot)) mkdirSync(memSessionsAmsRoot, { recursive: true });
 
   // ID collision check
   const groupIds = listDirs(groupsRoot);
@@ -165,52 +167,52 @@ export function migrateSessions(yeaftDir) {
     moved++;
   }
 
-  // 3+4. memory/{group,chat}/<id>/ → memory/session/<id>/
-  for (const family of ['group', 'chat']) {
-    const root = join(memoryRoot, family);
-    if (!existsSync(root)) continue;
-    for (const id of listDirs(root)) {
-      const src = join(root, id);
-      const dst = join(memSessionRoot, id);
-      if (existsSync(dst)) {
-        warnings.push(`memory/session/${id} already exists; skipping memory/${family}/${id}`);
-        continue;
+  if (migrateMemory) {
+    // 3+4. memory/{group,chat}/<id>/ → memory/session/<id>/
+    for (const family of ['group', 'chat']) {
+      const root = join(memoryRoot, family);
+      if (!existsSync(root)) continue;
+      for (const id of listDirs(root)) {
+        const src = join(root, id);
+        const dst = join(memSessionRoot, id);
+        if (existsSync(dst)) {
+          warnings.push(`memory/session/${id} already exists; skipping memory/${family}/${id}`);
+          continue;
+        }
+        renameSync(src, dst);
+        rewriteSegmentScopes(dst, family, id, warnings);
       }
-      renameSync(src, dst);
-      rewriteSegmentScopes(dst, family, id, warnings);
     }
-  }
 
-  // 5. memory/groups/<g>/ams.json → memory/sessions/<g>/ams.json
-  const amsGroupRoot = join(memoryRoot, 'groups');
-  if (existsSync(amsGroupRoot)) {
-    for (const id of listDirs(amsGroupRoot)) {
-      const srcDir = join(amsGroupRoot, id);
-      const dstDir = join(memSessionsAmsRoot, id);
-      if (existsSync(dstDir)) {
-        warnings.push(`memory/sessions/${id} already exists; skipping memory/groups/${id}`);
-        continue;
+    // 5. memory/groups/<g>/ams.json → memory/sessions/<g>/ams.json
+    const amsGroupRoot = join(memoryRoot, 'groups');
+    if (existsSync(amsGroupRoot)) {
+      for (const id of listDirs(amsGroupRoot)) {
+        const srcDir = join(amsGroupRoot, id);
+        const dstDir = join(memSessionsAmsRoot, id);
+        if (existsSync(dstDir)) {
+          warnings.push(`memory/sessions/${id} already exists; skipping memory/groups/${id}`);
+          continue;
+        }
+        renameSync(srcDir, dstDir);
       }
-      renameSync(srcDir, dstDir);
     }
-  }
-  const amsChatRoot = join(memoryRoot, 'chats');
-  if (existsSync(amsChatRoot)) {
-    for (const id of listDirs(amsChatRoot)) {
-      const srcDir = join(amsChatRoot, id);
-      const dstDir = join(memSessionsAmsRoot, id);
-      if (existsSync(dstDir)) {
-        warnings.push(`memory/sessions/${id} already exists; skipping memory/chats/${id}`);
-        continue;
+    const amsChatRoot = join(memoryRoot, 'chats');
+    if (existsSync(amsChatRoot)) {
+      for (const id of listDirs(amsChatRoot)) {
+        const srcDir = join(amsChatRoot, id);
+        const dstDir = join(memSessionsAmsRoot, id);
+        if (existsSync(dstDir)) {
+          warnings.push(`memory/sessions/${id} already exists; skipping memory/chats/${id}`);
+          continue;
+        }
+        renameSync(srcDir, dstDir);
       }
-      renameSync(srcDir, dstDir);
     }
-  }
 
-  // 6. Rewrite SQLite FTS index scope strings via the shared index-db module
-  //    (which already handles ABI loading). Idempotent: WHERE clause skips
-  //    already-rewritten rows. Synchronous: better-sqlite3 has no async API.
-  rewriteFtsScopes(memoryRoot, warnings);
+    // 6. Rewrite SQLite FTS index scope strings via the shared index-db module.
+    rewriteFtsScopes(memoryRoot, warnings);
+  }
 
   // 7. Per-message frontmatter rewrite. Walks both the legacy flat
   //    conversation directory and every per-session conversation directory
@@ -224,8 +226,11 @@ export function migrateSessions(yeaftDir) {
   moved += cleanup.moved;
 
   // 9. Sentinel — version 3 = consolidated migration plus legacy cleanup.
+  // Record whether the optional archived-memory steps ran; runtime startup
+  // skips them, while explicit migration callers retain the ability to run them.
   writeFileSync(sentinel, JSON.stringify({
     version: SENTINEL_VERSION,
+    memoryMigrated: migrateMemory,
     migratedAt: new Date().toISOString(),
     moved,
     frontmatterRewrites,

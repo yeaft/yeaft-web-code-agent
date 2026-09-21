@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +29,7 @@ import {
   batchSourcesForApply,
 } from '../../../agent/yeaft/dream/segment.js';
 import { buildPluginCatalog, createPluginSkillManager } from '../../../agent/yeaft/plugins.js';
+import { initYeaftDir } from '../../../agent/yeaft/init.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
 import { MCPManager } from '../../../agent/yeaft/mcp.js';
 import { __testGetOrCreateVpEngine, __testHooks, __testLoadPluginCatalogMcpConfig, __testResetVpState, __testResolveVpEffectiveConfig, __testSetSession, handleYeaftCopySession, handleYeaftCreateSession, handleYeaftLoadHistoryOutline, handleYeaftPluginCatalog, handleYeaftManagedSkill, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftUpdateSessionConfig, handleYeaftVpSubscribe, refreshLiveSessionConfig } from '../../../agent/yeaft/web-bridge.js';
@@ -912,7 +913,7 @@ describe('Yeaft session-scoped model config', () => {
         defaultVpId: vpId,
       }),
     ]);
-    expect(existsSync(join(root, 'memory', 'sessions', response.session.id, 'summary.md'))).toBe(true);
+    expect(existsSync(join(root, 'memory', 'sessions', response.session.id, 'summary.md'))).toBe(false);
   });
 
   async function assertMcpBootstrapRemoveDoesNotRestoreServer({ workDir = '' } = {}) {
@@ -1998,7 +1999,7 @@ describe('Yeaft session-scoped model config', () => {
     }
   });
 
-  it('persists Dream disable without bootstrapping a Session runtime', async () => {
+  it('rejects legacy Dream toggles without modifying persisted configuration', async () => {
     const root = makeDir();
     const configPath = join(root, 'config.json');
     writeFileSync(configPath, JSON.stringify({ dream: { enabled: true } }, null, 2));
@@ -2020,19 +2021,20 @@ describe('Yeaft session-scoped model config', () => {
     try {
       await handleMessage({
         type: 'set_dream_enabled',
-        enabled: false,
+        enabled: true,
         requestId: 'dream-disable',
         clientId: 'browser-a',
       });
       await new Promise(resolve => setImmediate(resolve));
 
       expect(JSON.parse(readFileSync(configPath, 'utf8'))).toMatchObject({
-        dream: { enabled: false },
+        dream: { enabled: true },
       });
       expect(loadConfig({ dir: root }).dream.enabled).toBe(false);
       expect(sent).toContainEqual(expect.objectContaining({
         type: 'dream_enabled_changed',
         enabled: false,
+        error: 'Dream is disabled.',
         requestId: 'dream-disable',
         clientId: 'browser-a',
       }));
@@ -2045,7 +2047,7 @@ describe('Yeaft session-scoped model config', () => {
     }
   });
 
-  it('reports persisted Dream disable even when the live scheduler refresh fails', async () => {
+  it('does not call a scheduler even if an old live runtime still exposes it', async () => {
     const root = makeDir();
     const configPath = join(root, 'config.json');
     writeFileSync(configPath, JSON.stringify({ dream: { enabled: true } }, null, 2));
@@ -2075,9 +2077,11 @@ describe('Yeaft session-scoped model config', () => {
       expect(sent).toContainEqual(expect.objectContaining({
         type: 'dream_enabled_changed',
         enabled: false,
+        error: 'Dream is disabled.',
         requestId: 'dream-live-failure',
       }));
-      expect(sent.find(frame => frame.type === 'dream_enabled_changed')).not.toHaveProperty('error');
+      expect(sent.find(frame => frame.type === 'dream_enabled_changed').error).toBe('Dream is disabled.');
+      expect(JSON.parse(readFileSync(configPath, 'utf8')).dream.enabled).toBe(true);
     } finally {
       ctx.ws = previousTransport.ws;
       ctx.serverEncryptionRequired = previousTransport.serverEncryptionRequired;
@@ -2826,15 +2830,64 @@ describe('Yeaft session-scoped model config', () => {
   });
 
 
-  it('does not initialize the Dream scheduler while the runtime path is disabled', async () => {
+  it('does not initialize or touch archived Dream state while the runtime path is disabled', async () => {
     const root = makeDir();
+    const memoryDir = join(root, 'memory');
+    const legacyDir = join(memoryDir, 'group', 'legacy-session');
+    mkdirSync(legacyDir, { recursive: true });
+    const memoryPath = join(legacyDir, 'memory.md');
+    const contentPath = join(legacyDir, 'content.md');
+    const indexPath = join(memoryDir, 'index.db');
+    writeFileSync(memoryPath, 'ARCHIVED_EVIDENCE');
+    writeFileSync(contentPath, 'ARCHIVED_CANONICAL');
+    writeFileSync(indexPath, 'NOT_A_SQLITE_DATABASE');
+    const before = new Map([memoryPath, contentPath, indexPath].map(file => [file, {
+      contents: readFileSync(file, 'utf8'),
+      mtimeMs: statSync(file).mtimeMs,
+    }]));
     let session = null;
     try {
-      session = await loadSession({ dir: root, skipMCP: true, skipSkills: true });
+      session = await loadSession({
+        dir: root,
+        skipMCP: true,
+        skipSkills: true,
+        dreamEnabled: true,
+      });
+      expect(session.config.dream.enabled).toBe(false);
       expect(session.dreamScheduler).toBeNull();
+      expect(session.memoryIndex).toBeNull();
+      expect(session.amsRegistry).toBeNull();
+      for (const [file, snapshot] of before) {
+        expect(readFileSync(file, 'utf8')).toBe(snapshot.contents);
+        expect(statSync(file).mtimeMs).toBe(snapshot.mtimeMs);
+      }
+      expect(existsSync(join(memoryDir, '.legacy'))).toBe(false);
+      expect(existsSync(join(memoryDir, 'MEMORY.md'))).toBe(false);
+      expect(existsSync(join(memoryDir, 'entries'))).toBe(false);
+      expect(existsSync(join(memoryDir, 'sessions'))).toBe(false);
     } finally {
       await session?.shutdown?.();
     }
+  });
+
+  it('leaves archived memory eligible for an explicit migration after runtime startup', () => {
+    const root = makeDir();
+    const legacyDir = join(root, 'memory', 'group', 'legacy-session');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'memory.md'), '---\nscope: group/legacy-session\n---\narchived');
+
+    // Agent and service entry points use the no-options initializer before
+    // loadSession; neither first boot nor a repeat boot may migrate Dream.
+    initYeaftDir(root);
+    initYeaftDir(root);
+    expect(existsSync(legacyDir)).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, '.yeaft-migration.done'), 'utf8')).memoryMigrated).toBe(false);
+
+    initYeaftDir(root, { migrateMemory: true });
+    const migratedDir = join(root, 'memory', 'session', 'legacy-session');
+    expect(existsSync(legacyDir)).toBe(false);
+    expect(existsSync(migratedDir)).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, '.yeaft-migration.done'), 'utf8')).memoryMigrated).toBe(true);
   });
 
   it('omits the Work Center producer tool by default and restores it when explicitly enabled', async () => {

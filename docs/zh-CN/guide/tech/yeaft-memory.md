@@ -1,4 +1,8 @@
-# H2-AMS Memory
+# H2-AMS Memory（已退役）
+
+> **已退役的 runtime 实现：** Dream/H2-AMS 已禁用。启动不会迁移或同步该存储，交互 turn、历史加载和 Work Center 也不会读取或注入它。旧文件、index、模块和命令入口为数据兼容与技术追溯暂时保留；enable/manual 命令返回 `disabled`。历史真实消息与常规 debug 数据保留。Turn 后 compact 是独立且仍启用的 history-window 能力。
+
+下文记录保留的实现和历史数据格式，不代表当前 runtime 行为。
 
 H2-AMS 是 Yeaft 原生 engine 的 scoped persistent-memory system。它以可读 Markdown 为 source of truth，以 SQLite FTS5 作为可重建搜索 index，并为当前 Session 维护有预算的 in-memory Active Memory Set（AMS）。
 
@@ -95,7 +99,7 @@ Dream 是 restricted prompt/tool contract 下的后台 maintenance operation。�
 
 Source message normalization 很重要：持久 segment metadata 只保存 ID，Markdown source text 只是 debug/history fallback，避免 raw message object 泄漏到 memory provenance 字段。
 
-## Work Center memory reuse
+## 历史 Work Center memory reuse
 
 Work Center 与 Session 不共享一个 memory owner。`reuseMemory=true` 时，WorkItem 可以计算三类有边界的候选来源：
 

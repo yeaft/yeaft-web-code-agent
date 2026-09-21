@@ -16,7 +16,7 @@ agent/yeaft/
   projects/             Agent-side Project context store
   vp/                   VP library、persona loader、default、registry
   llm/                  adapter router、Anthropic、OpenAI Responses、credential
-  memory/               H2-AMS、FTS index、scope、summary、segment
+  memory/               保留但禁用的 H2-AMS 实现
   conversation/         持久 message 与搜索
   tools/                33 个内置工具定义和 registry
   sub-agent/            child-agent runner、log、liveness、notification
@@ -24,21 +24,21 @@ agent/yeaft/
   work-center/          WorkItem/Action/Run planner、store、watcher、runner
   tool-folding/         turn reflection 与长 tool arc folding
   compact/              context compaction
-  dream/                后台 memory maintenance
+  dream/                保留但禁用的 maintenance 实现
   archive/              大型/raw turn 与 tool-result archive helper
-  templates/            双语 base、unified、dream、plan、persona prompt
+  templates/            双语 base、unified、保留的 dream、plan、persona prompt
 ```
 
 ## 一个原生 turn
 
 普通 VP turn 按以下步骤运行：
 
-1. **Pre-query** — 解析 Agent/Session/VP/Project identity、project instruction、runtime platform、pending child-agent notification、project docs 与 H2-AMS recall。
+1. **Pre-query** — 解析 Agent/Session/VP/Project identity、project instruction、runtime platform、pending child-agent notification、project docs 与当前 Session 的有界 history。
 2. **构造 context** — 组合 system prompt、VP persona、确定性的有预算 history window、当前 user content 和支持的 attachment。Web Session 只保留有界的临时 runtime cache，完整 transcript 仍由 ConversationStore 持有；不再从磁盘加载 LLM 对话摘要。
 3. **Stream LLM** — 选择配置的 provider/model，调用 Anthropic Messages 或 OpenAI Responses adapter。
 4. **执行工具** — 通过 `ToolRegistry` 运行允许的 call，append result block 并继续 stream。
 5. **Fold 长 arc** — 周期性 reflect tool batch，并 summary 长 turn，同时在 persistence/debug 路径保留 raw output。
-6. **结束** — 持久化 message、usage、trace、task state 和 terminal result；确认已注入 notification；Dream 负责后台语义 Memory 维护。
+6. **结束** — 持久化 message、usage、trace、task state 和 terminal result；确认已注入 notification；可为后续 history window 生成独立的 turn 后 compact。
 7. **恢复** — 在配置上限内 auto-continue `max_tokens`；context error 直接暴露，不触发隐藏摘要调用；分类为 retryable 的 failure 可以切换 eligible fallback model。
 
 Abort signal 会传入 adapter 和 tools。Engine 区分 user abort、auth error、rate limit、server failure、idle timeout 与 context failure，不把所有 stop 当成 generic error。
@@ -69,14 +69,13 @@ Web path 使用 `web-bridge.js`。直接运行的 `yeaft` CLI 使用 transport-n
 
 - `templates/base.md`、`identity-yeaft.md` 和 `common-rules.md`；
 - 唯一的 interactive `mode-unified.md` contract；
-- Dream 或 plan operation 的专用 instruction；
+- plan operation 的专用 instruction，以及不再 dispatch 的保留 Dream template；
 - selected persona 与 VP metadata；
 - runtime platform metadata；
 - project docs 与 Project instruction；
-- 渲染后的 H2-AMS memory block；
 - 可选 harness-level instruction。
 
-历史 interactive mode 已收敛进 unified contract。Dream 仍是专用 memory-maintenance operation，不是面向用户的 Session mode。
+历史 interactive mode 已收敛进 unified contract。Dream 已禁用；旧 dispatch 命令返回 `disabled`。
 
 ## LLM adapter
 
@@ -106,21 +105,15 @@ Web path 使用 `web-bridge.js`。直接运行的 `yeaft` CLI 使用 transport-n
 - sub-agent spawn/prompt/wait/list/close 与显式 VP routing；
 - Skills。
 
-MCP tool 在 runtime 添加。Registry policy 可以针对当前 execution context deny tool。Dream maintenance 不拥有与 interactive Session turn 相同的广泛 side-effect contract。
+MCP tool 在 runtime 添加。Registry policy 可以针对当前 execution context deny tool。
 
 Tool event 与 raw result 会持久化用于 audit/debug。进入 context 的表示另有预算，并可能 fold 或变成 archive stub；UI truncation 不表示 raw record 已丢失。
 
-## H2-AMS memory
+## 已退役的 H2-AMS memory
 
-每个 turn 前，pre-flow 将授权 scope 映射到当前 Agent memory store，提取 query keyword 并获取 FTS hit。Active Memory Set 组合：
+Dream/H2-AMS 模块和旧数据为兼容与技术追溯保留，但当前 runtime 不迁移、同步、读取、召回或注入它们。交互 turn 与 Work Center 使用各自当前的数据来源。旧 enable/manual 命令返回 `disabled`；Web debug surface 不再有 Dream tab 或设置。历史真实消息与常规 debug 记录保持不变。Turn 后 compact 是独立且仍启用的 history-window 能力。
 
-- resident scope summary；
-- recent item；
-- on-demand full-text segment。
-
-Dream maintenance 提取持久 segment 并重建 summary。Scope ownership 是显式的：user、VP、nested VP、Session、related Project-Session 和 compatibility scope 不会变成一份共享 transcript。
-
-参见 [H2-AMS memory](./yeaft-memory.md)。
+参见 [已退役的 H2-AMS 实现](./yeaft-memory.md)。
 
 ## Background task 与 sub-agent
 

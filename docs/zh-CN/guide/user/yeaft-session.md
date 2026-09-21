@@ -97,7 +97,7 @@ Yeaft 页面提供：
 - per-VP turn block 和 quote/edit-as-new message action；
 - 包含公告、roster 和 active background task 的 Session status；
 - composer 内的 model/effort selector；
-- 可选 debug panel，用于检查 provider request、memory recall、tools、tokens 和 stop reason。
+- 可选 debug panel，用于检查 provider request、tools、tokens 和 stop reason；不再显示 Dream event 或设置。
 
 Debug output 可能包含 project 文本与 tool result，只应由当前 owner 使用，不要随意导出或共享。
 
@@ -131,10 +131,10 @@ Project 不会合并 Session transcript 或 storage。对于运行在某个 Agen
 - user scope 保存持久用户偏好；
 - VP scope 与 Session-nested VP scope 保存角色知识；
 - Session scope 保存当前协作的共享事实；
-- 相关 Project-Session scope 提供有边界的兄弟召回；
+- Project instruction 可用于成员 Session，但不会自动召回兄弟 Session；
 - 当前 storage reader 支持的 topic 与 legacy compatibility scope。
 
-H2-AMS 从 resident summary、recent context 和 on-demand full-text hit 渲染唯一的 budgeted memory block。Dream maintenance 在后台更新 segment 和 summary。召回 memory 是 context，不是更高优先级 instruction。
+Dream/H2-AMS 已从当前 runtime 退役。原生 turn 只使用当前 Session transcript 的有界 history window；旧 memory 文件和 index 留在磁盘，但不会读取、迁移、同步、召回或注入。历史真实消息与常规 debug 记录保留，turn 后 compact 作为独立 history-window 能力继续存在。旧 enable/manual Dream 命令只返回 disabled，UI 不再提供 Dream debug tab 或设置控件。
 
 ## 将持久工作移到 Work Center
 
@@ -155,4 +155,4 @@ H2-AMS 从 resident summary、recent context 和 on-demand full-text hit 渲染�
 - [选择代码 Agent 路径](./choose-backend.md)
 - [Provider 与 model 配置](../yeaft-config.md)
 - [Yeaft engine 内部实现](../tech/yeaft-engine.md)
-- [H2-AMS memory](../tech/yeaft-memory.md)
+- [已退役的 H2-AMS 实现](../tech/yeaft-memory.md)

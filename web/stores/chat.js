@@ -538,17 +538,6 @@ function resolveActiveYeaftSessionId(state, { fallbackDefault = false } = {}) {
   return null;
 }
 
-function resolveActiveDreamDebugSessionId(state) {
-  const debugFilter = state.yeaftDebugSessionFilter;
-  if (debugFilter === '__all__') return null;
-  if (debugFilter) return debugFilter;
-  const resolved = resolveActiveYeaftSessionId(state);
-  if (resolved) return resolved;
-  const gs = getSessionsStore();
-  if (gs?.sessions?.grp_default) return 'grp_default';
-  return null;
-}
-
 function yeaftWatchdogOwner(event, fallback = 'session') {
   return [
     event?.vpId || event?.ownerVpId || 'vp',
@@ -598,14 +587,6 @@ function isVisibleYeaftOutput(state, sessionId, agentId) {
 const MAX_YEAFT_DEBUG_LOOPS = 1000;
 const DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT = 1;
 const SEARCH_YEAFT_DEBUG_HISTORY_LIMIT = 5;
-
-// PR feat-dream-debug-panel-full: per-scope ring buffer cap for dream
-// events. Bounds the yeaftDreamEvents map so long-running sessions
-// (auto-dream every hour) don't grow unbounded. 200 is generous:
-// a typical dream pass emits ~6-10 events (start, load-diff per
-// group, triage per group, merge, apply per target, done, result),
-// so this holds ~20-30 recent passes.
-const MAX_YEAFT_DREAM_EVENTS_PER_SCOPE = 200;
 
 // Reads belong to both the authenticated browser owner and its socket. A
 // generation alone can be reused after logout, so never use it as an owner fence.
@@ -920,7 +901,6 @@ export const useChatStore = defineStore('chat', {
     workCenterFeatureRequestByAgent: {},
     agentOperations: {},
     agentUpgradeBatch: null,
-    agentDreamState: {},
     // Last live Tavily /usage probe.
     //   { plan, used, limit, paygoUsed, paygoLimit } | { error }
     tavilyUsage: null,
@@ -1112,32 +1092,6 @@ export const useChatStore = defineStore('chat', {
     // means the request log is global across Sessions.
     yeaftDebugSearch: '',
     yeaftDebugSessionFilter: null,
-    // v0.1.755: latest dream pass status per scope, keyed by scope string
-    // (e.g. 'group/abc', 'vp/alice'). Auto-triggered and manual passes both
-    // feed the same map via `dream_progress` events. Schema per entry:
-    //   { scope, status: 'running'|'success'|'error', startedAt, finishedAt?,
-    //     stage?, mergedCount?, error?, manual?, durationMs? }
-    // YeaftDebugPanel reads `yeaftDreamLatestForActiveSession` (getter) to
-    // render a single row showing the most recent pass for the active
-    // group's scope.
-    yeaftDreamLatest: {},
-    // Loadable dream output snapshots keyed by scope. Unlike
-    // `yeaftDreamLatest` (run status) this holds the current contents of
-    // the dream-produced memory files so switching sessions can restore
-    // what the session has learned.
-    yeaftDreamSnapshots: {},
-    // Last per-turn Dream resident summaries that were actually injected into
-    // the system prompt Memory section, keyed by scope (e.g. sessions/<id>).
-    yeaftDreamPromptLoads: {},
-    // PR feat-dream-debug-panel-full: per-scope ring buffer of dream
-    // events. Each entry is the raw event payload augmented with `at`
-    // (receive timestamp). Buffer is capped at YEAFT_DREAM_EVENT_LIMIT
-    // per scope so the array stays bounded across long sessions. Both
-    // auto-triggered and manually-triggered passes append here. The
-    // debug panel renders this under the Dream row when expanded.
-    // Shape: { [scope: string]: Array<{phase, status?, target?, groupId?,
-    //   error?, segments?, actions?, manual?, ts, at, ...}> }
-    yeaftDreamEvents: {},
     // PR-L: V7 tool-history reflection cards. Keyed by `${conversationId}:${trigger}:${loopRange[0]}-${loopRange[1]}`.
     // Each entry: { trigger, status, loopRange, toolCount, content, durationMs, error,
     // anchorMsgId, anchorOrder }. Rendered inline by MessageList — anchored
@@ -1380,55 +1334,6 @@ export const useChatStore = defineStore('chat', {
         if (!inner) return false;
         return (inner[vpId] || 0) > 0;
       };
-    },
-    // v0.1.755: latest dream pass for the currently-focused session (or null).
-    // Reads from `yeaftDreamLatest` keyed by scope. The active session's
-    // scope is `sessions/<id>` — we resolve that from `yeaftActiveSessionFilter`
-    // (or fall back to the debug-side filter). Returns null when nothing
-    // has been recorded yet for this scope.
-    yeaftDreamLatestForActiveSession(state) {
-      const targetSessionId = resolveActiveDreamDebugSessionId(state);
-      if (!targetSessionId) return null;
-      const scope = `sessions/${targetSessionId}`;
-      return state.yeaftDreamLatest?.[scope] || null;
-    },
-    yeaftDreamSnapshotForActiveSession(state) {
-      const targetSessionId = resolveActiveDreamDebugSessionId(state);
-      if (!targetSessionId) return null;
-            const scope = `sessions/${targetSessionId}`;
-      return state.yeaftDreamSnapshots?.[scope] || null;
-    },
-    yeaftDreamPromptLoadForActiveSession(state) {
-      const targetSessionId = resolveActiveDreamDebugSessionId(state);
-      if (!targetSessionId) return null;
-      // Prompt-load records describe what the LLM sees in system prompt
-      // memory, so they use product terminology (`sessions/<id>`), even
-      // when the underlying disk store still has historical group paths.
-      const scope = `sessions/${targetSessionId}`;
-      return state.yeaftDreamPromptLoads?.[scope] || null;
-    },
-    // PR feat-dream-debug-panel-full: per-group event log for the
-    // expanded debug-panel view. Same filter precedence as
-    // `yeaftDreamLatestForActiveSession`. Returns the full ring-buffer
-    // array for the active group's scope (oldest first), or an empty
-    // array. Includes `'*'`-scoped events broadcast to all groups
-    // (start/done) merged in chronological order so the user sees a
-    // single coherent timeline regardless of whether a given event
-    // landed in the scoped bucket or the broadcast bucket.
-    yeaftDreamEventsForActiveSession(state) {
-      const targetSessionId = resolveActiveDreamDebugSessionId(state);
-      if (!targetSessionId) return [];
-      const scope = `sessions/${targetSessionId}`;
-      const scoped = Array.isArray(state.yeaftDreamEvents?.[scope])
-        ? state.yeaftDreamEvents[scope] : [];
-      const broadcast = Array.isArray(state.yeaftDreamEvents?.['*'])
-        ? state.yeaftDreamEvents['*'] : [];
-      if (broadcast.length === 0) return scoped;
-      if (scoped.length === 0) return broadcast;
-      // Merge by `at` timestamp (already monotonic per source since both
-      // are append-only ring buffers). A simple concat+sort is fine at
-      // this scale (≤400 entries).
-      return [...scoped, ...broadcast].sort((a, b) => (a.at || 0) - (b.at || 0));
     },
     // feat-6af5f9f1 PR B: Turn-grouped debug records for the redesigned
     // panel. Returns `[{ turnId, userPrompt, vpId, groupId, openedAt,
@@ -3491,7 +3396,7 @@ export const useChatStore = defineStore('chat', {
      * web (`yeaft_debug_history` case in messageHandler merges into
      * `yeaftDebugLoops` / `yeaftDebugTurnsById` / `yeaftDebugTurnOrder`).
      */
-    loadYeaftDebugHistory({ groupId, limit, dreamLimit, indexOnly = false, detailTurnId = null, search = undefined } = {}) {
+    loadYeaftDebugHistory({ groupId, limit, indexOnly = false, detailTurnId = null, search = undefined } = {}) {
       const targetAgentId = resolveAgentIdForSession(this, groupId);
       if (!targetAgentId) return;
       const searchPattern = typeof search === 'string' ? search.trim() : (this.yeaftDebugSearch || '').trim();
@@ -3505,7 +3410,6 @@ export const useChatStore = defineStore('chat', {
         agentId: targetAgentId,
         groupId: groupId || null,
         limit: requestedLimit,
-        dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
         indexOnly: !!indexOnly,
         detailTurnId: detailTurnId || null,
         search: isDetailRequest ? '' : searchPattern,
@@ -3524,7 +3428,6 @@ export const useChatStore = defineStore('chat', {
         requestId,
         requestKind,
         limit: requestedLimit,
-        dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
       if (indexOnly) payload.indexOnly = true;
       if (typeof detailTurnId === 'string' && detailTurnId) payload.detailTurnId = detailTurnId;
@@ -3624,7 +3527,6 @@ export const useChatStore = defineStore('chat', {
       this.loadYeaftDebugHistory({
         groupId: sessionId || undefined,
         limit: 1,
-        dreamLimit: 5,
         detailTurnId: turnId,
       });
     },
@@ -4917,6 +4819,10 @@ export const useChatStore = defineStore('chat', {
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
+      // Rolling upgrades may still deliver old Dream LLM debug events through
+      // an older Server. Never retain their prompt/response as ordinary turns.
+      if (['turn_open', 'loop', 'turn_close'].includes(msg.event?.type)
+          && typeof msg.event.turnId === 'string' && msg.event.turnId.startsWith('dream-')) return;
       const envelopeAgentId = msg.agentId || this.yeaftAgentId || this.currentAgent || null;
       const envelopeConversationId = msg.conversationId || msg.event?.conversationId || null;
       const retiredEnvelopeConversation = isRetiredYeaftConversation(
@@ -5466,47 +5372,10 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
-        case 'dream_memory_loaded': {
-          const resident = Array.isArray(event.resident) ? event.resident : [];
-          if (event.turnId) {
-            const prev = this.yeaftDebugTurnsById[event.turnId];
-            if (prev) {
-              this.yeaftDebugTurnsById = {
-                ...this.yeaftDebugTurnsById,
-                [event.turnId]: {
-                  ...prev,
-                  dreamMemoryLoaded: resident,
-                  dreamMemoryLoadedInto: event.loadedInto || 'system_prompt.memory',
-                },
-              };
-            }
-          }
-          const updates = {};
-          for (const item of resident) {
-            const rawScope = item && typeof item.scope === 'string' ? item.scope : null;
-            const sessionScope = rawScope && /^sessions\/[^/]+$/.test(rawScope)
-              ? rawScope
-              : (rawScope && /^group\/[^/]+$/.test(rawScope)
-                ? `sessions/${rawScope.slice('group/'.length)}`
-                : null);
-            if (!sessionScope) continue;
-            updates[sessionScope] = {
-              scope: sessionScope,
-              sourceScope: rawScope,
-              sessionId: sessionScope.slice('sessions/'.length),
-              turnId: event.turnId || null,
-              vpId: event.vpId || null,
-              loadedInto: event.loadedInto || 'system_prompt.memory',
-              summary: item.summary || '',
-              truncated: !!item.truncated,
-              receivedAt: Date.now(),
-            };
-          }
-          if (Object.keys(updates).length > 0) {
-            this.yeaftDreamPromptLoads = { ...this.yeaftDreamPromptLoads, ...updates };
-          }
+        case 'dream_memory_loaded':
+          // Compatibility: older Agents may still emit Dream events. The Web UI
+          // intentionally ignores them and does not retain their payloads.
           break;
-        }
 
         case 'memory_adjust': {
           if (!event.turnId) break;
@@ -6446,260 +6315,20 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
-        case 'yeaft_dream_snapshot': {
-          const snapshot = event && event.snapshot;
-          const scope = snapshot && typeof snapshot.scope === 'string' ? snapshot.scope : null;
-          if (scope) {
-            this.yeaftDreamSnapshots = {
-              ...this.yeaftDreamSnapshots,
-              [scope]: { ...snapshot, receivedAt: Date.now() },
-            };
-          }
+        case 'yeaft_dream_snapshot':
+        case 'yeaft_dream_status':
+        case 'yeaft_dream_result':
+        case 'dream_progress':
+          // Compatibility with older Agents: Dream is no longer a Web feature.
+          // Drop these frames without rendering or accumulating their contents.
           break;
-        }
-
-        // ★ R6 G3: dream activity events. Forwarded from
-        // agent/yeaft/web-bridge.js handleYeaftDreamTrigger.
-        // yeaft_dream_status carries { vpId, status: 'running' } during the
-        // run; yeaft_dream_result carries { vpId, success, mergedCount, ... }
-        // when finished. Both flow into vpStore.dreamStatus[vpId] so inline
-        // status surfaces can update without polling.
-        case 'yeaft_dream_status': {
-          const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
-          if (vp) vp.applyDreamStatus(event);
-          break;
-        }
-        case 'yeaft_dream_result': {
-          const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
-          if (vp) vp.applyDreamResult(event);
-          if (event?.snapshot?.scope) {
-            this.yeaftDreamSnapshots = {
-              ...this.yeaftDreamSnapshots,
-              [event.snapshot.scope]: { ...event.snapshot, receivedAt: Date.now() },
-            };
-          }
-          // PR feat-dream-debug-panel-full: `yeaft_dream_result` is the
-          // SOLE terminal projection for a scoped dream pass. We write the
-          // most-recent-pass row and append a terminal record into the
-          // timeline ring buffer so the debug panel doesn't end on the last
-          // `phase:'apply'` event with no outcome.
-          //
-          // The bridge used to mirror an extra `phase:'result'`
-          // dream_progress event for #2, but that mirror raced through
-          // the `dream_progress` projection (which doesn't recognise
-          // `phase:'result'` as terminal) and clobbered the
-          // `yeaftDreamLatest` success row back to 'running'. The fix
-          // is to consolidate both writes here.
-          {
-            const scope = typeof event?.snapshot?.scope === 'string' && event.snapshot.scope
-              ? event.snapshot.scope
-              : (typeof event?.sessionId === 'string' && event.sessionId ? `sessions/${event.sessionId}` : null);
-            if (!scope) break;
-            const prev = this.yeaftDreamLatest[scope] || null;
-            // Defaults when no prior running entry exists (network
-            // reorder, fresh-tab reconnect): leave nullable fields
-            // null rather than synthesising `Date.now()` /
-            // `manual: true`. UI consumers already handle missing
-            // startedAt; misattributing an auto run as manual is worse
-            // than rendering 'unknown'.
-            this.yeaftDreamLatest = {
-              ...this.yeaftDreamLatest,
-              [scope]: {
-                scope,
-                phase: 'result',
-                status: event.skipped ? 'skipped' : (event.success ? 'success' : 'error'),
-                startedAt: prev?.startedAt ?? null,
-                finishedAt: Date.now(),
-                mergedCount: typeof event.entriesCreated === 'number'
-                  ? event.entriesCreated
-                  : (prev?.mergedCount ?? null),
-                error: event.skipped || event.success ? null : (event.error || 'unknown'),
-                manual: typeof event?.manual === 'boolean'
-                  ? event.manual
-                  : (prev?.manual ?? null),
-                durationMs: typeof event.durationMs === 'number' ? event.durationMs : (prev?.durationMs ?? null),
-                llmCallCount: typeof event.llmCallCount === 'number' ? event.llmCallCount : (prev?.llmCallCount ?? 0),
-                inputTokens: typeof event.inputTokens === 'number' ? event.inputTokens : (prev?.inputTokens ?? 0),
-                outputTokens: typeof event.outputTokens === 'number' ? event.outputTokens : (prev?.outputTokens ?? 0),
-                totalTokens: typeof event.totalTokens === 'number' ? event.totalTokens : (prev?.totalTokens ?? 0),
-                metrics: event.metrics || prev?.metrics || null,
-                passBreakdown: event.passBreakdown || event.metrics?.passBreakdown || prev?.passBreakdown || null,
-                isRunning: false,
-              },
-            };
-            // Append a synthetic terminal record into the ring buffer
-            // so the timeline shows the final outcome. We invent a
-            // `phase:'result'` marker on the record only (NOT on the
-            // wire — the bridge does not mirror it anymore). The
-            // record uses the same shape as a dream_progress event so
-            // the panel's renderer can treat it uniformly.
-            this._appendDreamEvent(scope, {
-              type: 'dream_progress',
-              phase: 'result',
-              sessionId: event.sessionId,
-              status: event.skipped ? 'skipped' : (event.success ? 'success' : 'error'),
-              success: !!event.success,
-              entriesCreated: typeof event.entriesCreated === 'number'
-                ? event.entriesCreated
-                : null,
-              trigger: event.trigger || null,
-              error: event.skipped || event.success ? null : (event.error || null),
-              skipped: !!event.skipped,
-              skippedReason: event.skippedReason || null,
-              durationMs: typeof event.durationMs === 'number' ? event.durationMs : null,
-              llmCallCount: typeof event.llmCallCount === 'number' ? event.llmCallCount : 0,
-              inputTokens: typeof event.inputTokens === 'number' ? event.inputTokens : 0,
-              outputTokens: typeof event.outputTokens === 'number' ? event.outputTokens : 0,
-              totalTokens: typeof event.totalTokens === 'number' ? event.totalTokens : 0,
-              metrics: event.metrics || null,
-              passBreakdown: event.passBreakdown || event.metrics?.passBreakdown || null,
-              ts: Date.now(),
-            });
-          }
-          break;
-        }
         // 2026-05-16: `yeaft_tool_stats` is NOT a `yeaft_output` event —
         // the agent emits it as a bare top-level message via
         // `sendToServer({type:'yeaft_tool_stats', ...})`. Routing lives
         // in `helpers/messageHandler.js`. The previous case here was
         // unreachable and is intentionally removed to prevent future
         // confusion about which switch owns this protocol.
-        // v0.1.755: dream_progress events emitted by both manual + auto
-        // dream runs (see agent/yeaft/web-bridge.js _dreamProgressSink).
-        // Per-group events carry `groupId`; per-target merge/apply events
-        // carry `target` (already a scope string like 'group/...' / 'vp/...').
-        // Top-level start/done/merge events carry neither — those we attach
-        // to a magic '*' bucket so they show up for every focused group.
-        // Schema per entry (the projection — NOT identical to the raw
-        // event):
-        //   { scope, status: 'running'|'success'|'error', startedAt,
-        //     finishedAt?, phase, mergedCount?, error?, manual?,
-        //     durationMs? }.
-        // YeaftDebugPanel reads `yeaftDreamLatestForActiveSession` (getter)
-        // to render a single row showing the most recent pass for the
-        // active group's scope ("dream只需要看最新的一次就行").
-        case 'dream_progress': {
-          const phase = event?.phase || 'unknown';
-          // Resolve the scope this event belongs to.
-          let scope = null;
-          if (typeof event?.target === 'string' && event.target.includes('/')) {
-            scope = event.target;
-          } else if (typeof event?.sessionId === 'string' && event.sessionId) {
-            scope = `sessions/${event.sessionId}`;
-          } else {
-            // Top-level event (start/merge/done/error without group context).
-            // Apply to all known scopes — easiest to spread across whatever
-            // scopes are already tracked, OR fall back to a singleton '*'
-            // bucket so the active-group getter can find it on first run.
-            scope = '*';
-          }
-          const isDone = phase === 'done';
-          const isError = phase === 'error' || (event?.status === 'error');
-          const isRunning = !isDone && !isError;
-          const updateScope = (key) => {
-            const prev = this.yeaftDreamLatest[key] || null;
-            return {
-              scope: key,
-              phase,
-              status: isError ? 'error' : (isDone ? 'success' : 'running'),
-              startedAt: prev?.startedAt && isRunning
-                ? prev.startedAt
-                : (event?.ts || prev?.startedAt || Date.now()),
-              finishedAt: (isDone || isError) ? (event?.ts || Date.now()) : null,
-              mergedCount: typeof event?.mergedCount === 'number'
-                ? event.mergedCount
-                : (typeof event?.targets === 'number'
-                  ? event.targets
-                  : (prev?.mergedCount ?? null)),
-              error: isError ? (event?.error || 'unknown') : null,
-              manual: typeof event?.manual === 'boolean'
-                ? event.manual
-                : (prev?.manual ?? false),
-              durationMs: typeof event?.duration === 'number'
-                ? event.duration
-                : (typeof event?.durationMs === 'number'
-                  ? event.durationMs
-                  : (prev?.durationMs ?? null)),
-              llmCallCount: typeof event?.llmCallCount === 'number' ? event.llmCallCount : (prev?.llmCallCount ?? 0),
-              inputTokens: typeof event?.inputTokens === 'number' ? event.inputTokens : (prev?.inputTokens ?? 0),
-              outputTokens: typeof event?.outputTokens === 'number' ? event.outputTokens : (prev?.outputTokens ?? 0),
-              totalTokens: typeof event?.totalTokens === 'number' ? event.totalTokens : (prev?.totalTokens ?? 0),
-              metrics: event?.metrics || prev?.metrics || null,
-              passBreakdown: event?.passBreakdown || event?.metrics?.passBreakdown || prev?.passBreakdown || null,
-              isRunning,
-            };
-          };
-          if (scope === '*') {
-            // Broadcast: if we already track any scopes, refresh them all
-            // so the active-group panel always reflects the newest pass.
-            // Also keep the '*' bucket so a first-ever start event from a
-            // group with no prior entry still surfaces something.
-            //
-            // NOTE on invariant: a top-level `phase='done'` will mark every
-            // tracked scope as success — this is intentional (the dream
-            // worker emits a single global "done" after a sweep), but it
-            // means a scope's last finishedAt no longer corresponds to a
-            // scope-specific pass. UI consumers should treat the dream row
-            // as "most recent activity touching this group", not "this
-            // group's own pass".
-            const next = { ...this.yeaftDreamLatest, '*': updateScope('*') };
-            for (const k of Object.keys(this.yeaftDreamLatest)) {
-              if (k === '*') continue;
-              next[k] = updateScope(k);
-            }
-            this.yeaftDreamLatest = next;
-          } else {
-            this.yeaftDreamLatest = {
-              ...this.yeaftDreamLatest,
-              [scope]: updateScope(scope),
-            };
-          }
-          // PR feat-dream-debug-panel-full: also append to the per-scope
-          // ring buffer so the debug panel can render a timeline (not just
-          // the latest summary line). We append to the SAME scope that the
-          // latest-projection resolved — for '*' events that means the
-          // broadcast bucket, which the getter merges with the active
-          // group's bucket. Cap at MAX_YEAFT_DREAM_EVENTS_PER_SCOPE so the
-          // buffer stays bounded.
-          this._appendDreamEvent(scope, event);
-          break;
-        }
       }
-    },
-    // PR feat-dream-debug-panel-full: append a dream event to the per-scope
-    // ring buffer. Caps the buffer at MAX_YEAFT_DREAM_EVENTS_PER_SCOPE so a
-    // long-running session can't grow the array unboundedly. Caller
-    // resolves the scope ('sessions/<id>' for scoped events; '*' for top-level
-    // broadcast events that don't carry a sessionId).
-    //
-    // The augmented record adds an `at` timestamp (receive time, used by
-    // the active-group getter to merge scoped+broadcast buckets in order)
-    // and preserves the raw event fields so the UI can render whatever it
-    // wants (phase, status, target, error, etc.).
-    _appendDreamEvent(scope, event) {
-      if (!scope || !event) return;
-      const at = Date.now();
-      const record = { ...event, at };
-      const prev = Array.isArray(this.yeaftDreamEvents?.[scope])
-        ? this.yeaftDreamEvents[scope]
-        : [];
-      const keyOf = (e) => [
-        e?.type || '',
-        e?.phase || '',
-        (e?.sessionId ?? e?.groupId) || '',
-        e?.target || '',
-        e?.ts || e?.at || '',
-      ].join('|');
-      const recordKey = keyOf(record);
-      if (prev.some(e => keyOf(e) === recordKey)) return;
-      const next = [...prev, record];
-      if (next.length > MAX_YEAFT_DREAM_EVENTS_PER_SCOPE) {
-        next.splice(0, next.length - MAX_YEAFT_DREAM_EVENTS_PER_SCOPE);
-      }
-      this.yeaftDreamEvents = {
-        ...this.yeaftDreamEvents,
-        [scope]: next,
-      };
     },
 
     fetchExpertRoleDefinitions() {
@@ -7019,7 +6648,6 @@ export const useChatStore = defineStore('chat', {
         this.yeaftDebugTurnOrder = [];
         this.loadYeaftDebugHistory({
           limit: this.yeaftDebugSearch.trim() ? SEARCH_YEAFT_DEBUG_HISTORY_LIMIT : DEFAULT_YEAFT_DEBUG_HISTORY_LIMIT,
-          dreamLimit: 5,
           indexOnly: true,
           search: this.yeaftDebugSearch,
         });
@@ -7416,10 +7044,6 @@ export const useChatStore = defineStore('chat', {
       this.yeaftReflectionCards = {};
       this.yeaftSubAgentCards = {};
       // VP-block redesign (2026-05-08): per-turn detail drawer retired.
-      // v0.1.755: reset dream-pass projection so a previous session's
-      // "latest pass" doesn't bleed into the fresh session.
-      this.yeaftDreamLatest = {};
-      this.yeaftDreamEvents = {};
       // vp-status: drop the cached per-VP status table on session reset.
       // The agent will re-broadcast a fresh snapshot after re-init.
       this.vpStatuses = {};
@@ -8353,23 +7977,6 @@ export const useChatStore = defineStore('chat', {
     answerUserQuestion(requestId, answers, conversationId) { convHelpers.answerUserQuestion(this, requestId, answers, conversationId); },
     refreshAgents() { convHelpers.refreshAgents(this); },
     refreshConversation() { convHelpers.refreshConversation(this); },
-    setDreamEnabled(agentId, enabled) {
-      if (!agentId || this.agentDreamState?.[agentId]?.pending) return false;
-      const agent = this.agents.find(item => item.id === agentId);
-      const requested = enabled !== false;
-      const requestId = `dream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const timer = setTimeout(() => {
-        const current = this.agentDreamState?.[agentId];
-        if (!current?.pending || current.requestId !== requestId) return;
-        this.agentDreamState = {
-          ...this.agentDreamState,
-          [agentId]: { ...current, pending: false, timer: null, error: 'timeout' },
-        };
-      }, 15000);
-      this.agentDreamState = { ...this.agentDreamState, [agentId]: { pending: true, requestId, requested, authoritative: agent?.dreamEnabled === true, timer, error: null } };
-      convHelpers.setDreamEnabled(this, agentId, requested, requestId);
-      return true;
-    },
 
     // ★ Phase 6.1: 分页加载（基于 turn，统一走 DB）
     loadMoreMessages() {

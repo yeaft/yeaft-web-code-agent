@@ -25,7 +25,6 @@ import {
   createSubmitWorkItemReplanTool,
   createWorkItemToolRegistry,
   parseStructuredResult,
-  recallWorkItemMemory,
   renderPendingActionInput,
   workItemToolPolicySnapshot,
   resolveWorkItemWorkDir,
@@ -50,38 +49,7 @@ describe('Work Center tool policy', () => {
 
 
 
-  it('protects canonical WorkItem memory and attachment-mode tool policy', async () => {
-    const yeaftDir = join(workDir, '.yeaft-runtime');
-    const scope = 'sessions/session-memory';
-    mkdirSync(join(yeaftDir, 'memory', scope), { recursive: true });
-    writeFileSync(join(yeaftDir, 'memory', scope, 'content.md'), 'CANONICAL_MEMORY_FACT\n');
-    writeFileSync(join(yeaftDir, 'memory', scope, 'memory.md'), 'RAW_EVIDENCE_SECRET\n');
-    const requiredTags = [];
-    const memoryIndex = {
-      search({ requiredTag }) {
-        requiredTags.push(requiredTag);
-        return [{
-          id: 'canonical-selector', scope, kind: 'context', tags: ['canonical-content'],
-          sourceMessages: [], body: 'RAW_EVIDENCE_SECRET', rank: -1,
-          createdAt: '2026-08-04T00:00:00.000Z', updatedAt: '2026-08-04T00:00:00.000Z',
-        }];
-      },
-    };
-    const block = recallWorkItemMemory(
-      { memoryIndex, yeaftDir },
-      {
-        goal: 'Use canonical memory fact',
-        origin: { sessionId: 'session-memory', trustedSession: true },
-        linkedSessionIds: ['session-memory'],
-        reuseMemory: true,
-      },
-      { instruction: 'Use canonical memory fact', expectedOutcome: 'Fact retained', type: 'implement' },
-      { id: 'omni' },
-    );
-    expect(requiredTags).toEqual(['canonical-content']);
-    expect(block).toContain('CANONICAL_MEMORY_FACT');
-    expect(block).not.toContain('RAW_EVIDENCE_SECRET');
-
+  it('protects attachment-mode tool policy', async () => {
     const attachmentDir = join(outsideDir, 'attachments');
     mkdirSync(attachmentDir);
     const attachmentPath = join(attachmentDir, 'evidence.txt');
@@ -1227,6 +1195,83 @@ describe('Work Center tool policy', () => {
     expect(capturedRequests).toHaveLength(1);
     expect(capturedRequests[0].tools.map(tool => tool.name)).toContain('SubmitWorkItemPlan');
     expect(result).toMatchObject({ outcome: 'completed', summary: 'Plan submitted' });
+  });
+
+  it.each([
+    ['legacy', {}],
+    ['dynamic', { coordinationMode: 'dynamic' }],
+  ])('does not inject archived Dream memory into %s Actions', async (_mode, modeFields) => {
+    const yeaftDir = join(workDir, '.yeaft-runtime');
+    const memoryDir = join(yeaftDir, 'memory', 'sessions', 'origin-session');
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, 'content.md'), 'ARCHIVED_DREAM_SECRET');
+    const search = vi.fn(() => [{ scope: 'sessions/origin-session', body: 'ARCHIVED_DREAM_SECRET' }]);
+    const capturedRequests = [];
+    const runner = new WorkItemRunner({
+      yeaftDir,
+      runtimeProvider: async () => ({
+        yeaftDir,
+        defaultWorkDir: workDir,
+        memoryIndex: { search },
+        config: { model: 'provider/model', maxOutputTokens: 1_024, projectDocMaxBytes: 0 },
+        adapter: {
+          async *stream(request) {
+            capturedRequests.push(request);
+            yield { type: 'text_delta', text: JSON.stringify({
+              outcome: 'completed', summary: 'Action complete', evidence: ['runtime evidence'],
+              acceptanceChecks: [],
+            }) };
+            yield { type: 'stop', stopReason: 'end_turn' };
+          },
+        },
+      }),
+      store: {
+        listCompletedRuns: () => [],
+        listActionSources: () => [],
+        listActionDependencies: () => [],
+        isActiveRun: () => true,
+        setRunExecutionSnapshots: () => true,
+        isExecutionStopped: () => false,
+        reserveWorkItemRequest: () => ({ allowed: true, id: 'memory-disabled-request' }),
+        settleWorkItemRequest: () => true,
+        prepareEngineTurn: () => ({ id: 'memory-disabled-turn' }),
+        claimEngineTurn: () => true,
+        consumeEngineTurn: () => true,
+        failEngineTurn: () => ({ allowRetry: true }),
+        closeRunInput: () => true,
+        listPendingActionInputs: () => [],
+      },
+      registry: {
+        listVps: () => [{ id: 'omni', name: 'Omni', role: 'developer', persona: '' }],
+        getVp: () => ({ id: 'omni', name: 'Omni', role: 'developer', persona: '' }),
+      },
+    });
+    const result = await runner.run({
+      workItem: {
+        id: `memory-disabled-${_mode}`,
+        title: 'Run without Dream',
+        goal: 'Do not inject archived memory',
+        acceptanceCriteria: [],
+        reuseMemory: true,
+        origin: { sessionId: 'origin-session', trustedSession: true },
+        linkedSessionIds: ['origin-session'],
+        ...modeFields,
+      },
+      action: {
+        id: `action-${_mode}`, type: 'implement', requiredRole: 'omni',
+        instruction: 'Complete this Action without hidden context.',
+        assignmentPolicy: { mode: 'fixed', fixedVpId: 'omni' },
+        modelPolicy: { mode: 'inherit' }, sourceActionIds: [], dependsOnStageIds: [],
+      },
+      run: { id: `run-${_mode}`, leaseEpoch: 1 },
+      signal: new AbortController().signal,
+      ownerBootId: `boot-${_mode}`,
+    });
+
+    expect(result).toMatchObject({ outcome: 'completed' });
+    expect(search).not.toHaveBeenCalled();
+    expect(JSON.stringify(capturedRequests)).not.toContain('ARCHIVED_DREAM_SECRET');
+    expect(JSON.stringify(capturedRequests)).not.toContain('<work-center-memory>');
   });
 
   it('fences execution after the Run loses its lease', async () => {

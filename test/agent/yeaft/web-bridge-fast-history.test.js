@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const sent = [];
+const buildDreamOutputSnapshot = vi.fn();
+vi.mock('../../../agent/yeaft/dream/output-snapshot.js', () => ({ buildDreamOutputSnapshot }));
 let resolveLoadSession;
 const loadSession = vi.fn(() => new Promise((resolve) => { resolveLoadSession = resolve; }));
 
@@ -31,6 +33,9 @@ const { pairSanitize } = await import('../../../agent/yeaft/pair-sanitize.js');
 const { filterSnapshotForVp } = await import('../../../agent/yeaft/snapshot-filter.js');
 const {
   handleYeaftLoadHistory,
+  handleYeaftDreamTrigger,
+  handleYeaftFetchDebugHistory,
+  installYeaftRuntimeBridge,
   handleYeaftLoadHistoryOutline,
   handleYeaftLoadMoreHistory,
   handleYeaftSearchHistory,
@@ -69,6 +74,7 @@ describe('Yeaft load-history first paint', () => {
     __testSetSession(null);
     sent.length = 0;
     loadSession.mockClear();
+    buildDreamOutputSnapshot.mockClear();
     resolveLoadSession = null;
     ctx.CONFIG = null;
   });
@@ -77,8 +83,43 @@ describe('Yeaft load-history first paint', () => {
     __testSetSession(null);
     sent.length = 0;
     loadSession.mockClear();
+    buildDreamOutputSnapshot.mockClear();
     resolveLoadSession = null;
     ctx.CONFIG = null;
+  });
+
+  it('rejects old Dream triggers and omits retired output from normal debug', async () => {
+    const triggerDreamNow = vi.fn();
+    const triggerDreamForScopes = vi.fn();
+    const setEventSink = vi.fn();
+    const oldEvent = { type: 'dream_progress', phase: 'completed', body: 'old memory' };
+    const trace = {
+      fetchTurnDebug: vi.fn(async () => ({ loops: [{ turnId: 'turn-1' }], turns: [], dreamEvents: [oldEvent] })),
+      fetchRecentDebugHistory: vi.fn(async () => ({ loops: [], turns: [{ turnId: 'turn-1' }], dreamEvents: [oldEvent] })),
+    };
+    const runtime = { taskManager: { setEventSink }, dreamScheduler: { triggerDreamNow, triggerDreamForScopes }, trace };
+    installYeaftRuntimeBridge(runtime);
+    expect(setEventSink).toHaveBeenCalledWith(expect.any(Function));
+    expect(runtime).not.toHaveProperty('_dreamProgressSink');
+    expect(runtime).not.toHaveProperty('_dreamResultSink');
+    __testSetSession(runtime);
+    for (const tag of [{ sessionId: 's1' }, { groupId: 'legacy' }, { vpId: 'vp1' }]) {
+      await handleYeaftDreamTrigger(tag);
+      expect(sent.at(-1)).toMatchObject({ type: 'yeaft_dream_result', skippedReason: 'disabled', success: false });
+    }
+    expect(triggerDreamNow).not.toHaveBeenCalled();
+    expect(triggerDreamForScopes).not.toHaveBeenCalled();
+    expect(buildDreamOutputSnapshot).not.toHaveBeenCalled();
+    for (const detailTurnId of [null, 'turn-1']) {
+      await handleYeaftFetchDebugHistory({ sessionId: 's1', detailTurnId, dreamLimit: 50 });
+      expect(sent.at(-1)).toMatchObject({ type: 'yeaft_debug_history', dreamEvents: [] });
+      expect(JSON.stringify(sent.at(-1))).not.toContain('old memory');
+    }
+    expect(trace.fetchTurnDebug).toHaveBeenCalledWith(expect.objectContaining({ dreamLimit: 0 }));
+    expect(trace.fetchRecentDebugHistory).toHaveBeenCalledWith(expect.objectContaining({ dreamLimit: 0 }));
+    __testSetSession(null);
+    await handleYeaftDreamTrigger({ sessionId: 's1' });
+    expect(loadSession).not.toHaveBeenCalled();
   });
 
   it('replays human-paced AskUser requests and bounded terminal results without crossing identities', async () => {
@@ -877,6 +918,9 @@ describe('Yeaft load-history first paint', () => {
         event: { type: 'session_ready' },
       });
 
+      expect(buildDreamOutputSnapshot).not.toHaveBeenCalled();
+      expect(sent.some(m => m.event?.type === 'yeaft_dream_snapshot')).toBe(false);
+
       const hiddenSessionId = 'session-hidden-continuation';
       store.appendBatch([
         { role: 'user', content: 'reachable old question', sessionId: hiddenSessionId },
@@ -1508,6 +1552,8 @@ describe('Yeaft load-history first paint', () => {
         sessionId: 'session-fast',
         event: { type: 'session_ready' },
       });
+      expect(buildDreamOutputSnapshot).not.toHaveBeenCalled();
+      expect(sent.some(m => m.event?.type === 'yeaft_dream_snapshot')).toBe(false);
       expect(sent[firstHistoryIndex].messages.map(m => m.content)).toEqual([
         'ready recent user',
         'ready recent assistant',

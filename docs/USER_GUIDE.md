@@ -40,7 +40,7 @@ This stable URL is a compact index of the current product documentation.
 - [Architecture](./guide/tech/architecture.md)
 - [CLI provider system](./guide/tech/providers.md)
 - [Native Yeaft engine](./guide/tech/yeaft-engine.md)
-- [H2-AMS memory](./guide/tech/yeaft-memory.md)
+- [Retired H2-AMS implementation](./guide/tech/yeaft-memory.md)
 - [Native LLM layer](./guide/tech/yeaft-llm.md)
 - [WebSocket protocol](./guide/tech/wire-protocol.md)
 - [Configuration reference](./guide/reference/config-reference.md)

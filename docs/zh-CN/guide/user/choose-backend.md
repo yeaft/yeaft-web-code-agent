@@ -32,7 +32,7 @@ Yeaft 在同一个浏览器中提供三条执行路径。一台已连接 Agent �
 
 - Session 包含 1..N 个可复用 VP 和一条持久 timeline。
 - `@mention` 可以把一个 turn fan-out 给多个 VP；`RouteForward` 记录明确 peer handoff。
-- H2-AMS 召回 scoped user、VP、Session 和相关 Project-Session memory。
+- 原生 turn 使用自身 Session history 的有界窗口；旧 Dream/H2-AMS memory 和兄弟 Session summary 不会注入。
 - 原生 provider 通过 Anthropic Messages 或 OpenAI Responses adapter 路由，也支持已实现的 GitHub Copilot dynamic credential 与 compatible gateway。
 - 当前 built-in registry 有 33 个工具；Skills 与 MCP 可以继续增加。
 - Session 可以创建 Agent-level WorkItem，用于持久、可规划、可恢复的工作。

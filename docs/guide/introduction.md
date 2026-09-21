@@ -35,10 +35,10 @@ A Yeaft Session can:
 - use explicit `RouteForward` handoffs between current Session members;
 - run background shell jobs and sub-agents with durable status records;
 - search and page persisted history;
-- inspect model routing, memory recall, token usage, tool calls, and stop reasons;
+- inspect model routing, token usage, tool calls, and stop reasons;
 - create a persistent WorkItem when work should continue beyond the interactive turn.
 
-Projects add organization and controlled context sharing. A Project instruction is injected into each member Session. Related Session summaries are read-only context, preserve source identity, and are limited to siblings on the same Agent.
+Projects add organization and controlled context sharing. A Project instruction is injected into each member Session, but sibling Session transcripts and legacy summaries are not automatically recalled or injected.
 
 ## Durable work with Work Center
 
@@ -64,7 +64,7 @@ The native LLM layer supports Anthropic Messages and OpenAI Responses protocols.
 
 The built-in native registry currently contains 33 tools covering files, patches, shell/background tasks, Git worktrees, search, Web access, images, notebooks, planning, WorkItem creation, and agent/VP orchestration. Skills and MCP servers may add more tools, so the effective list depends on the Agent and Session policy.
 
-H2-AMS is the native memory system. Before a turn it recalls relevant full-text segments into a budgeted Active Memory Set; after work completes, Dream maintenance extracts durable scoped segments and summaries. User, VP, Session, and related Project-Session scopes remain distinct.
+Dream/H2-AMS is retired from the active runtime. Native turns use a bounded window of the current Session’s persisted history; they do not recall or inject legacy memory or sibling Session summaries. Existing memory files are retained on the Agent, and post-turn compact remains a separate history-window feature.
 
 ## Browser workspace
 

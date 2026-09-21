@@ -70,7 +70,6 @@ describe('YeaftDebugPanel store actions', () => {
     expect(store.loadYeaftDebugHistory).toHaveBeenCalledWith({
       groupId: 'session-1',
       limit: 1,
-      dreamLimit: 5,
       detailTurnId: 'turn-abc',
     });
   });
@@ -274,7 +273,6 @@ describe('YeaftDebugPanel store actions', () => {
     expect(store.loadYeaftDebugHistory).toHaveBeenCalledWith({
       groupId: 'session-1',
       limit: 1,
-      dreamLimit: 5,
       detailTurnId: 'turn-abc',
     });
   });

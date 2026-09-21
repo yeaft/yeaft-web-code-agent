@@ -133,11 +133,10 @@ export function startSubAgent(agent, deps = {}) {
   let subEngine = null;
   let outputLog = null;
   try {
-    // Build sub-engine wired to the parent's adapter/stores/config but with
-    // a restricted toolset. We DO NOT pass a conversationStore: sub-agent
-    // turns must not pollute the user-facing conversation history. The
-    // memory stores are shared so memory recall still works for the
-    // sub-agent (matches parent VP persona memory).
+    // Build sub-engine wired to the parent's adapter/config but with a
+    // restricted toolset. We DO NOT pass a conversationStore: sub-agent
+    // turns must not pollute the user-facing conversation history. Dream
+    // runtime recall remains disabled for sub-agents as it is for Sessions.
     agent.budget = resolveSubAgentBudget(agent.budget);
     agent.execution = agent.execution || createExecutionStats();
     const childRegistry = buildChildToolRegistry(deps.parentToolRegistry, { agent });
@@ -149,9 +148,9 @@ export function startSubAgent(agent, deps = {}) {
         _gitReadAlwaysVisible: (agent.personaData || getPersona(agent.persona))?.id === 'reviewer',
       },
       conversationStore: null,
-      memoryIndex: deps.memoryIndex || null,
-      memoryStore: deps.memoryStore || null,
-      memoryShardStore: deps.memoryShardStore || null,
+      memoryIndex: null,
+      memoryStore: null,
+      memoryShardStore: null,
       toolRegistry: childRegistry,
       skillManager: deps.skillManager || null,
       mcpManager: deps.mcpManager || null,

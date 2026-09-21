@@ -30,7 +30,7 @@ features:
     details: Route native requests through Anthropic Messages or OpenAI Responses providers, including supported dynamic GitHub Copilot credentials and compatible gateways.
     link: /guide/yeaft-config
   - title: Scoped persistent memory
-    details: H2-AMS combines resident summaries, recent context, and full-text recall across explicit user, VP, Session, and related Project-Session scopes.
+    details: Native turns use a bounded window of the current Session’s durable history. Legacy Dream/H2-AMS data is retained but no longer read or injected at runtime.
     link: /guide/tech/yeaft-memory
   - title: Claude Code and Copilot CLI
     details: Keep vendor CLI behavior when you need it. Each runtime is explicit, while the browser shares navigation and compatible event rendering.

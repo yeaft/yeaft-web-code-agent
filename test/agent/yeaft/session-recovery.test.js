@@ -4,7 +4,15 @@ import { tmpdir } from 'os';
 import { describe, expect, it, afterEach } from 'vitest';
 import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { repairSessionStore } from '../../../agent/yeaft/sessions/recovery.js';
-import { createSessionFromSpec, scanWorkdirSessions, snapshotSessions, updateSessionWorkDir } from '../../../agent/yeaft/sessions/session-crud.js';
+import {
+  createSessionFromSpec,
+  migrateRegisteredWorkDirSessions,
+  registerSessionWorkDir,
+  restoreSessionToRegistry,
+  scanWorkdirSessions,
+  snapshotSessions,
+  updateSessionWorkDir,
+} from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
 
@@ -70,6 +78,55 @@ describe('Session disk recovery', () => {
 
     const cleared = updateSessionWorkDir(root, created.id, '');
     expect(cleared).toMatchObject({ workDir: '', workspaceKey: '' });
+  });
+
+  it('bootstraps registered Session transcripts without copying archived Dream scopes', () => {
+    const root = tempRoot();
+    const workDir = join(root, 'workspace');
+    const sessionId = 'session_legacy_bootstrap';
+    const sourceSession = join(workDir, '.yeaft', 'sessions', sessionId);
+    const sourceMemory = join(workDir, '.yeaft', 'memory', 'group', sessionId);
+    mkdirSync(join(sourceSession, 'conversation', 'segments'), { recursive: true });
+    mkdirSync(sourceMemory, { recursive: true });
+    writeFileSync(join(sourceSession, 'session.json'), `${JSON.stringify({ id: sessionId, name: 'Legacy', workDir, roster: [] })}\n`);
+    writeFileSync(join(sourceSession, 'conversation', 'segments', '000001.jsonl'), '{"role":"user","text":"preserve me"}\n');
+    writeFileSync(join(sourceMemory, 'memory.md'), 'ARCHIVED_DREAM');
+    registerSessionWorkDir(root, sessionId, workDir);
+
+    const result = migrateRegisteredWorkDirSessions(root);
+
+    expect(result.migrated).toEqual([sessionId]);
+    expect(readFileSync(join(root, 'sessions', sessionId, 'conversation', 'segments', '000001.jsonl'), 'utf8'))
+      .toContain('preserve me');
+    expect(readFileSync(join(sourceMemory, 'memory.md'), 'utf8')).toBe('ARCHIVED_DREAM');
+    expect(existsSync(join(root, 'memory', 'group', sessionId))).toBe(false);
+    const manifest = JSON.parse(readFileSync(join(root, 'sessions-manifest.json'), 'utf8'));
+    expect(manifest.sessions.find(row => row.id === sessionId)?.path)
+      .toBe(join(root, 'sessions', sessionId));
+  });
+
+  it('explicitly restores Session ownership without importing archived Dream scopes', () => {
+    const root = tempRoot();
+    const workDir = join(root, 'workspace');
+    const sessionId = 'session_explicit_restore';
+    const sourceSession = join(workDir, '.yeaft', 'sessions', sessionId);
+    const sourceMemory = join(workDir, '.yeaft', 'memory', 'sessions', sessionId);
+    mkdirSync(join(sourceSession, 'conversation', 'segments'), { recursive: true });
+    mkdirSync(sourceMemory, { recursive: true });
+    writeFileSync(join(sourceSession, 'session.json'), `${JSON.stringify({ id: sessionId, name: 'Restore', workDir, roster: [] })}\n`);
+    writeFileSync(join(sourceSession, 'conversation', 'segments', '000001.jsonl'), '{"role":"user","text":"owned transcript"}\n');
+    writeFileSync(join(sourceMemory, 'content.md'), 'ARCHIVED_CANONICAL');
+
+    const restored = restoreSessionToRegistry(root, sessionId, workDir);
+
+    expect(restored).toMatchObject({ id: sessionId, workDir });
+    expect(readFileSync(join(root, 'sessions', sessionId, 'conversation', 'segments', '000001.jsonl'), 'utf8'))
+      .toContain('owned transcript');
+    expect(readFileSync(join(sourceMemory, 'content.md'), 'utf8')).toBe('ARCHIVED_CANONICAL');
+    expect(existsSync(join(root, 'memory', 'sessions', sessionId))).toBe(false);
+    const manifest = JSON.parse(readFileSync(join(root, 'sessions-manifest.json'), 'utf8'));
+    expect(manifest.sessions.find(row => row.id === sessionId)?.path)
+      .toBe(join(root, 'sessions', sessionId));
   });
 
   it('rebuilds missing metadata from markdown-only session dirs without creating audit transcripts', () => {

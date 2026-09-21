@@ -8,6 +8,14 @@ import { yeaftAssetStore } from '../yeaft-asset-store.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
 
 
+// Older Dream bridges reused the ordinary debug lifecycle with a reserved
+// dream- turn id. Drop these before projection/relay, not only named Dream events.
+function isRetiredDreamEvent(event) {
+  return ['yeaft_dream_snapshot', 'yeaft_dream_status', 'yeaft_dream_result', 'dream_progress', 'dream_memory_loaded'].includes(event?.type)
+    || (['turn_open', 'loop', 'turn_close'].includes(event?.type)
+      && typeof event.turnId === 'string' && event.turnId.startsWith('dream-'));
+}
+
 export function decorateYeaftSessionsWithPinned(agentId, sessions) {
   const rawRows = Array.isArray(sessions) ? sessions : [];
   const rowsById = new Map();
@@ -602,6 +610,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
     case 'yeaft_output':
     case 'yeaft_session_output':
     case 'session_output': {
+      if (isRetiredDreamEvent(msg.event)) break;
       const data = hydrateInlinePreviewData(msg.data);
       let event = syncYeaftSessionMetadata(agentId, agent, msg.event);
       if ((event?.type === 'session_list_updated' || event?.type === 'session_crud_result') && agent.ownerId) {
@@ -880,39 +889,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
 
     case 'yeaft_dream_status':
     case 'yeaft_dream_result':
-      // Forward Dream lifecycle envelopes to the web client.
-      //
-      // The bug this fixes: `handleYeaftDreamTrigger` in
-      // `agent/yeaft/web-bridge.js` emits these as BARE top-level
-      // messages when the user clicks "Run dream now" (in the topbar or
-      // group settings). Without a case here, the switch hit
-      // `default: return false` and silently dropped the message,
-      // leaving the UI stuck on "Running…" even after the dream pass
-      // completed.
-      //
-      // Whitelist spread matches the pattern used by sibling cases
-      // (`yeaft_output`, `yeaft_history_chunk`) so a future agent-side
-      // bug that tags an internal field onto a dream envelope can't
-      // leak it to the web client. Keep in sync with the agent emit at
-      // `handleYeaftDreamTrigger`.
-      for (const [, c] of webClients) {
-        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
-          await sendToWebClient(c, {
-            type: msg.type,
-            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
-            ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
-            ...(msg.status != null ? { status: msg.status } : {}),
-            ...(typeof msg.success === 'boolean' ? { success: msg.success } : {}),
-            ...(typeof msg.entriesCreated === 'number' ? { entriesCreated: msg.entriesCreated } : {}),
-            ...(msg.lastDreamAt != null ? { lastDreamAt: msg.lastDreamAt } : {}),
-            ...(msg.skipped ? { skipped: true } : {}),
-            ...(msg.error != null ? { error: msg.error } : {}),
-            ...(Array.isArray(msg.groups) ? { groups: msg.groups } : {}),
-            ...(Array.isArray(msg.targets) ? { targets: msg.targets } : {}),
-            ...(msg.startedAt != null ? { startedAt: msg.startedAt } : {}),
-          });
-        }
-      }
+    case 'yeaft_dream_snapshot':
+      // Retired UI: older Agents may still send these. Do not relay memory data.
       break;
 
     case 'yeaft_plugin_catalog_result': {
@@ -1117,7 +1095,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           agentId,
           loops: Array.isArray(msg.loops) ? msg.loops : [],
           turns: Array.isArray(msg.turns) ? msg.turns : [],
-          dreamEvents: Array.isArray(msg.dreamEvents) ? msg.dreamEvents : [],
+          dreamEvents: [],
           ...(msg.projection && typeof msg.projection === 'object' ? { projection: msg.projection } : {}),
           ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
           ...(msg.threadId != null ? { threadId: msg.threadId } : {}),

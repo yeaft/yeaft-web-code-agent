@@ -51,7 +51,7 @@ Agent 启动时会做后端能力检测。某个后端不出现，说明对应 C
 
 - **Claude Code** —— 1:1 聊天，全套 Claude 工具
 - **Copilot** —— 1:1 聊天，想对比 Claude vs GPT 模型 / 已有 Copilot 订阅
-- **Yeaft Code Agent** —— 多 VP 并行协作 + 跨 session 持久记忆
+- **Yeaft Code Agent** —— 多 VP 并行协作 + 当前 Session 的持久历史
 
 ## Copilot 模式
 
@@ -81,17 +81,15 @@ CLI 用的 OAuth token 和 IDE 插件不是同一个。在 agent 机器上跑 `c
 
 ### VP 好像不记得上次说过的话
 
-Yeaft 用 H2-AMS 持久化记忆，但新写入的记忆段要等本 turn 末尾 consolidation pass 跑完才会进召回索引。如果你五秒前刚说的话，可能还没入索引。等本轮 typing indicator 消失再问一次。
-
-为什么这么设计，详见 [Yeaft 记忆系统（H2-AMS）](./tech/yeaft-memory.md)。
+Dream/H2-AMS 持久召回已退役。原生 turn 使用当前 Session transcript 的有界窗口，不读取旧 memory segment 或兄弟 Session summary。已有 memory 文件仍保留在 Agent 上，但不会读取或注入。参见[已退役的 H2-AMS 实现](./tech/yeaft-memory.md)。
 
 ### `@mention` 没有 fan-out 到多个 VP
 
 要逐个显式 mention：`@designer @dev 帮我看下这个布局`。Mentions 在 fan-out 前解析 —— 没被 @ 到的 VP 不会回。完全不 @ 任何人，由 group 的默认路由规则决定谁回答。
 
-### 怎么看 VP 的记忆里有什么？
+### 旧 VP memory 文件还在吗？
 
-记忆位于 Agent 机器的 `<resolvedYeaftDir>/memory/<scope>/memory.md`（每个 scope 一个 `memory.md`，包含多个 segment）。Default instance 对应 `~/.yeaft/memory/...`；named `<name>` 对应 `~/.yeaft/instances/<name>/memory/...`；显式 `YEAFT_DIR` / `--yeaft-dir` 则使用该 custom root。文件是普通 markdown，可以直接查看。
+记忆位于 Agent 机器的 `<resolvedYeaftDir>/memory/<scope>/memory.md`（每个 scope 一个 `memory.md`，包含多个 segment）。Default instance 对应 `~/.yeaft/memory/...`；named `<name>` 对应 `~/.yeaft/instances/<name>/memory/...`；显式 `YEAFT_DIR` / `--yeaft-dir` 则使用该 custom root。文件是普通 markdown，可用于数据追溯；当前 runtime 不读取或注入这些文件。
 
 ## Yeaft 引擎配置
 

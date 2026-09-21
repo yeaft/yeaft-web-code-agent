@@ -18,12 +18,10 @@ import { createInterface } from 'readline';
 const TRACE_VERSION = 3;
 const REQUEST_RETENTION = 10;
 const MAX_HISTORY_LIMIT = 5;
-const MAX_DREAM_EVENTS = 100;
 // Debug records are diagnostic source data. They deliberately do not inherit
 // model-context or ordinary history budgets, and explicit detail transport is
 // chunked instead of truncating persisted values.
 const TRACE_APPEND_BATCH_MS = 100;
-const EVENT_FLUSH_INTERVAL_MS = 30_000;
 const MAX_SEARCH_PATTERN_CHARS = 300;
 
 function isPlainObject(value) {
@@ -925,23 +923,6 @@ export class DebugTrace {
   /** @type {number} */
   #sequence = 0;
   /**
-   * In-memory dream/event ring (authoritative copy; persisted async).
-   * @type {Array<object>}
-   */
-  #events = [];
-  /** @type {boolean} */
-  #eventsDirty = false;
-  /**
-   * Whether the on-disk events.json has been folded into #events yet. The
-   * events ring must merge prior-run history exactly once before any flush
-   * overwrites the file, or a live append landing before first hydrate would
-   * silently destroy cross-restart dream history.
-   * @type {boolean}
-   */
-  #eventsHydrated = false;
-  /** @type {NodeJS.Timeout|null} */
-  #eventFlushTimer = null;
-  /**
    * One-time metadata hydrate guard. Reads/maintenance keep only bounded
    * request headers resident. Full loop/tool payloads are loaded for one
    * selected request at a time and are never installed in #requestCache.
@@ -1102,32 +1083,10 @@ export class DebugTrace {
     return id;
   }
 
-  logEvent({ traceId, eventType, eventData = null } = {}) {
-    const id = randomUUID();
-    if (!this.#acceptingWrites) return id;
-    // In-memory authoritative ring; persisted async (fire-and-forget). The
-    // dream/event sink runs on the engine hot path, so it must not block on a
-    // synchronous read-modify-write of events.json.
-    this.#events.push({
-      id,
-      traceId: traceId || String(eventType || 'event'),
-      eventType: eventType || 'event',
-      eventData: cloneJsonValue(eventData),
-      createdAt: Date.now(),
-    });
-    if (this.#events.length > MAX_DREAM_EVENTS) {
-      this.#events = this.#events.slice(-MAX_DREAM_EVENTS);
-    }
-    this.#scheduleEventFlush();
-    return id;
-  }
-
-  event(eventType, eventData = null) {
-    const traceId = (eventData && typeof eventData === 'object' && (eventData.turnId || eventData.runId))
-      ? String(eventData.turnId || eventData.runId)
-      : String(eventType || 'event');
-    return this.logEvent({ traceId, eventType, eventData });
-  }
+  // The global events.json ring belonged to Dream. Keep these call shapes for
+  // compatibility, but never read, append, or rewrite its archived contents.
+  logEvent() { return 'null'; }
+  event() { return 'null'; }
 
   async queryByMessage(messageId) {
     await this.#drainWrites();
@@ -1163,7 +1122,7 @@ export class DebugTrace {
     }
   }
 
-  async fetchTurnDebug({ sessionId, turnId, dreamLimit = 0 } = {}) {
+  async fetchTurnDebug({ sessionId, turnId } = {}) {
     const requestedSessionId = typeof sessionId === 'string' && sessionId ? sessionId : null;
     const requestedTurnId = typeof turnId === 'string' && turnId ? turnId : null;
     if (!requestedSessionId || !requestedTurnId) {
@@ -1193,16 +1152,16 @@ export class DebugTrace {
         }
       }
     }
-    const dreamEvents = this.#readDreamEvents({ sessionId: requestedSessionId, dreamLimit });
+    const dreamEvents = []; // Compatibility shape; retired Dream events are not replayed.
     if (!trace) return { loops: [], turns: [], dreamEvents, detailTurnId: requestedTurnId };
     const expanded = expandTrace(trace);
     return { ...expanded, dreamEvents, detailTurnId: requestedTurnId };
   }
 
-  async fetchRecentDebugHistory({ limit = MAX_HISTORY_LIMIT, dreamLimit = 5, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null, search = '' } = {}) {
+  async fetchRecentDebugHistory({ limit = MAX_HISTORY_LIMIT, sessionId = null, threadId = null, indexOnly = false, detailTurnId = null, search = '' } = {}) {
     const requestedDetailTurnId = typeof detailTurnId === 'string' && detailTurnId ? detailTurnId : null;
     if (requestedDetailTurnId && sessionId) {
-      const detail = await this.fetchTurnDebug({ sessionId, turnId: requestedDetailTurnId, dreamLimit });
+      const detail = await this.fetchTurnDebug({ sessionId, turnId: requestedDetailTurnId });
       return { ...detail, hasMore: false, limit: detail.loops.length, indexOnly: false };
     }
     await this.#drainWrites();
@@ -1212,7 +1171,7 @@ export class DebugTrace {
       .map(({ trace }) => trace)
       .filter(trace => !threadId || trace.threadId === threadId)
       .filter(trace => requestedDetailTurnId || traceMatchesRegex(trace, searchRegex));
-    const dreamEvents = this.#readDreamEvents({ sessionId, dreamLimit });
+    const dreamEvents = [];
     if (requestedDetailTurnId) {
       const trace = traces.find(t => t.requestId === requestedDetailTurnId || t.traceId === requestedDetailTurnId);
       if (!trace) return { loops: [], turns: [], dreamEvents, hasMore: false, limit: 0, indexOnly: false, detailTurnId: requestedDetailTurnId };
@@ -1308,7 +1267,7 @@ export class DebugTrace {
       turnCount += counts.loopCount;
       toolCount += counts.toolCount;
     }
-    const eventCount = this.#events.length;
+    const eventCount = 0;
     const { bytes } = await countDirFiles(this.#rootDir);
     return { turnCount, toolCount, eventCount, dbSizeBytes: bytes, fileSizeBytes: bytes, requestCount: traces.length };
   }
@@ -1343,10 +1302,8 @@ export class DebugTrace {
     this.#initializedRequestKeys.clear();
     this.#reconciledRetentionSessions.clear();
     this.#retentionIndex.clear();
-    this.#events = [];
     this.#hydrated = false;
     this.#hydratePromise = null;
-    this.#eventsHydrated = false;
     this.#acceptingWrites = true;
   }
 
@@ -1497,37 +1454,17 @@ export class DebugTrace {
     if (this.#hydrated) return;
     if (this.#hydratePromise) return this.#hydratePromise;
     this.#hydratePromise = (async () => {
-      const [headers, storedEvents] = await Promise.all([
-        readTraceHeaders(this.#rootDir, null),
-        readJson(join(this.#rootDir, 'events.json')),
-      ]);
+      const headers = await readTraceHeaders(this.#rootDir, null);
       for (const { trace } of headers) {
         if (!trace?.requestKey || this.#requestCache.has(trace.requestKey)) continue;
         this.#diskHeaders.set(trace.requestKey, trace.active
           ? { ...trace, active: false, interrupted: true }
           : trace);
       }
-      if (Array.isArray(storedEvents)) this.#mergeStoredEvents(storedEvents);
       this.#hydrated = true;
       this.#hydratePromise = null;
     })();
     return this.#hydratePromise;
-  }
-
-  /**
-   * Fold on-disk events into the in-memory ring by id, preserving live order
-   * and bounding to MAX_DREAM_EVENTS. Unseen disk records are prepended (they
-   * are older); a live append therefore never erases prior-run history. Sets
-   * #eventsHydrated so this runs at most once.
-   */
-  #mergeStoredEvents(stored) {
-    if (this.#eventsHydrated) return;
-    this.#eventsHydrated = true;
-    if (!Array.isArray(stored) || stored.length === 0) return;
-    const seen = new Set(this.#events.map(e => e?.id).filter(Boolean));
-    const older = stored.filter(e => e && (!e.id || !seen.has(e.id)));
-    if (older.length === 0) return;
-    this.#events = [...older, ...this.#events].slice(-MAX_DREAM_EVENTS);
   }
 
   #traceFile(trace) {
@@ -1580,16 +1517,6 @@ export class DebugTrace {
     if (typeof this.#appendTimer.unref === 'function') this.#appendTimer.unref();
   }
 
-  #scheduleEventFlush() {
-    this.#eventsDirty = true;
-    if (this.#eventFlushTimer) return;
-    this.#eventFlushTimer = setTimeout(() => {
-      this.#eventFlushTimer = null;
-      this.#flushEvents();
-    }, EVENT_FLUSH_INTERVAL_MS);
-    if (typeof this.#eventFlushTimer.unref === 'function') this.#eventFlushTimer.unref();
-  }
-
   /** Queue append-only loop/tool records onto the single-writer chain. */
   #flushPending() {
     if (this.#appendTimer) {
@@ -1597,10 +1524,7 @@ export class DebugTrace {
       this.#appendTimer = null;
     }
     const entries = this.#pendingWrites.splice(0);
-    if (entries.length === 0) {
-      this.#flushEvents();
-      return;
-    }
+    if (entries.length === 0) return;
     this.#chain(async () => {
       const batches = new Map();
       for (const entry of entries) {
@@ -1697,7 +1621,6 @@ export class DebugTrace {
       try { await this.#pruneAll(REQUEST_RETENTION); }
       catch (err) { console.warn('[Yeaft] debug trace prune failed:', err?.message || err); }
     });
-    this.#flushEvents();
   }
 
   /**
@@ -1715,26 +1638,6 @@ export class DebugTrace {
       await task();
     })();
     return this.#flushChain;
-  }
-
-  #flushEvents() {
-    if (!this.#eventsDirty) return;
-    this.#eventsDirty = false;
-    if (this.#eventFlushTimer) {
-      clearTimeout(this.#eventFlushTimer);
-      this.#eventFlushTimer = null;
-    }
-    const file = join(this.#rootDir, 'events.json');
-    this.#chain(async () => {
-      // Fold in any prior-run events we haven't loaded yet BEFORE overwriting,
-      // so a write that beats #ensureHydrated can't drop cross-restart history.
-      if (!this.#eventsHydrated) {
-        this.#mergeStoredEvents(await readJson(file));
-      }
-      const text = JSON.stringify(this.#events.slice(-MAX_DREAM_EVENTS));
-      try { await atomicWriteText(file, text); }
-      catch (err) { console.warn('[Yeaft] debug trace event write failed:', err?.message || err); }
-    });
   }
 
   /** Await every scheduled write (and prune) to settle. Used by close()/queries. */
@@ -1755,32 +1658,6 @@ export class DebugTrace {
       snapshot = applyRequestDelta(snapshot || trace.baseRequest || null, loop.requestDelta || {});
     }
     return snapshot;
-  }
-
-  #readDreamEvents({ sessionId = null, dreamLimit = 5 } = {}) {
-    const limit = Number.isFinite(Number(dreamLimit)) ? Math.max(0, Math.min(50, Number(dreamLimit))) : 5;
-    if (limit <= 0) return [];
-    // In-memory ring (hydrated once); no disk read on the query path.
-    const events = this.#events;
-    const out = [];
-    for (const event of events.slice().reverse()) {
-      const data = isPlainObject(event.eventData) ? event.eventData : {};
-      if (sessionId) {
-        const evtSessionId = typeof data.sessionId === 'string' && data.sessionId ? data.sessionId : null;
-        const target = typeof data.target === 'string' ? data.target : '';
-        const isBroadcast = !evtSessionId && !target;
-        const isThisSession = evtSessionId === sessionId || target === `sessions/${sessionId}` || target === `group/${sessionId}`;
-        if (!isBroadcast && !isThisSession) continue;
-      }
-      out.push({
-        type: data.type || event.eventType || 'event',
-        ...data,
-        at: event.createdAt,
-        ts: data.ts || data.at || event.createdAt,
-      });
-      if (out.length >= limit) break;
-    }
-    return out.reverse();
   }
 
   async #pruneAll(keep) {

@@ -1395,7 +1395,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           requestId: debugRequestId,
           requestKind: msg.requestKind === 'detail' ? 'detail' : 'list',
           limit: typeof msg.limit === 'number' ? msg.limit : 10,
-          dreamLimit: typeof msg.dreamLimit === 'number' ? msg.dreamLimit : 5,
+          dreamLimit: 0,
           indexOnly: msg.indexOnly === true,
           detailTurnId: typeof msg.detailTurnId === 'string' ? msg.detailTurnId : null,
           search: typeof msg.search === 'string' ? msg.search.slice(0, 500) : '',
@@ -1661,7 +1661,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
     default: {
       // task-fix: generic relay for all `yeaft_*` messages so any new
       // agent-router case (yeaft_vp_*, yeaft_user_memory_*, yeaft_*_group,
-      // yeaft_dream_*, etc.) works without a dedicated server case.
+      // etc.) works without a dedicated server case.
       // Without this, messages like `yeaft_vp_subscribe` arrive at the
       // server, fall through to default, return false, and are silently
       // dropped — which is why the GroupCreateWizard's "VP 加载中..."
@@ -1708,6 +1708,11 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           } else if (relayType === 'yeaft_vp_subscribe') {
             await sendVpSnapshotError(client, msg, 'The selected Agent is not available.');
           }
+          return true;
+        }
+        // Do not let an older Web client restart Dream on an older Agent.
+        if (relayType === 'yeaft_dream_trigger') {
+          await sendToWebClient(client, skippedYeaftDreamResult(msg, 'disabled'));
           return true;
         }
         if (relayType === 'yeaft_copy_session'

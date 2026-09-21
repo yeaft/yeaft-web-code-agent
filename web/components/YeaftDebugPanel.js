@@ -25,7 +25,6 @@
  *   - raw [copy req] / [copy res]     → JSON-stringified payload
  *   - turn   [copy turn]              → markdown summary
  */
-import { buildDreamDebugItems, filterDreamDebugItems, previewText } from './dream-debug-model.js';
 import { splitTokenBreakdown, apportionToBuckets, apportionRequestInput, formatClockTime, reconstructDebugRawRequest } from './yeaft-debug-helpers.js';
 
 const INITIAL_REQUEST_HISTORY_LIMIT = 1;
@@ -50,17 +49,7 @@ export default {
       // moment they start a search, restored when they clear it. Without
       // this, search would clobber their carefully curated open turns.
       _expandSnapshot: null,
-      // PR feat-dream-debug-panel-full: expand state for the Dream row's
-      // event timeline. False = collapsed summary line only; true = show
-      // full per-event ring buffer below.
-      dreamExpanded: false,
-      // feat-dream-debug-detail: per-dream-event expand state, keyed by
-      // `${at}#${idx}` matching the v-for key used in the template.
-      expandedDreamEvents: {},
-      expandedDreamSegments: {},
-      activeDreamItemKey: null,
-      dreamItemSearch: '',
-      activeTab: 'requests', // 'toolStats' | 'dream' | 'requests'
+      activeTab: 'requests', // 'toolStats' | 'requests'
     };
   },
   watch: {
@@ -237,114 +226,10 @@ export default {
       if (!t) return '';
       try { return new Date(t).toLocaleTimeString(); } catch { return ''; }
     },
-    // v0.1.755: latest dream pass for the active session (auto + manual share
-    // this surface; user only cares about the most recent run).
-    dreamLatest() {
-      return (this.store && this.store.yeaftDreamLatestForActiveSession) || null;
-    },
-    dreamLatestLabel() {
-      const d = this.dreamLatest;
-      if (!d) return '';
-      if (d.status === 'running') {
-        return `running · ${d.phase || '...'}`;
-      }
-      if (d.status === 'error') {
-        return `error · ${d.error || 'unknown'}`;
-      }
-      if (d.status === 'skipped') {
-        return 'skipped';
-      }
-      const parts = ['done'];
-      if (typeof d.mergedCount === 'number') parts.push(`merged ${d.mergedCount}`);
-      const metrics = this.formatDreamMetrics(d);
-      if (metrics) parts.push(metrics);
-      return parts.join(' · ');
-    },
-    dreamLatestKindLabel() {
-      const d = this.dreamLatest;
-      if (!d) return '';
-      return d.manual ? 'manual' : 'auto';
-    },
-    dreamSnapshot() {
-      return (this.store && this.store.yeaftDreamSnapshotForActiveSession) || null;
-    },
-    dreamPromptLoad() {
-      return (this.store && this.store.yeaftDreamPromptLoadForActiveSession) || null;
-    },
-    dreamPromptLoadSummary() {
-      const d = this.dreamPromptLoad;
-      const text = d && typeof d.summary === 'string' ? d.summary.trim() : '';
-      return text && d.truncated ? `${text}\n... truncated` : text;
-    },
-    dreamSnapshotSummary() {
-      const s = this.dreamSnapshot;
-      const text = s && typeof s.summaryText === 'string' ? s.summaryText.trim() : '';
-      return text && s.summaryTruncated ? `${text}\n... truncated` : text;
-    },
-    dreamSnapshotMemory() {
-      const s = this.dreamSnapshot;
-      const text = s && typeof s.memoryText === 'string' ? s.memoryText.trim() : '';
-      return text && s.memoryTruncated ? `${text}\n... truncated` : text;
-    },
-    // PR feat-dream-debug-panel-full: full per-event timeline for the
-    // active session. Empty array when no events have been recorded yet.
-    // Sorted oldest-first (matches the store getter's merge order).
-    dreamEvents() {
-      const list = (this.store && this.store.yeaftDreamEventsForActiveSession) || [];
-      return Array.isArray(list) ? list : [];
-    },
-    dreamEventCount() {
-      return this.dreamEvents.length;
-    },
-    dreamSessionTitles() {
-      const titles = {};
-      const add = (id, value) => {
-        const title = String(value || '').trim();
-        if (id && title) titles[id] = title;
-      };
-      const sessions = this.sessionsStore?.sessions || {};
-      for (const session of Object.values(sessions)) {
-        if (!session || !session.id) continue;
-        add(session.id, session.name || session.title);
-        add(`sessions/${session.id}`, session.name || session.title);
-      }
-      const activeFilter = this.store?.yeaftActiveSessionFilter;
-      if (activeFilter) add(activeFilter, this.store?.yeaftActiveSessionName || this.store?.currentSessionTitle);
-      return titles;
-    },
-    allDreamItems() {
-      const store = this.store || {};
-      const eventsByScope = store.yeaftDreamEvents || {};
-      const events = Object.values(eventsByScope).flatMap((list) => Array.isArray(list) ? list : []);
-      return buildDreamDebugItems({
-        latest: store.yeaftDreamLatest || {},
-        snapshots: store.yeaftDreamSnapshots || {},
-        promptLoads: store.yeaftDreamPromptLoads || {},
-        events,
-        sessionTitles: this.dreamSessionTitles,
-      });
-    },
-    dreamItems() {
-      return filterDreamDebugItems(this.allDreamItems, this.dreamItemSearch);
-    },
-    activeDreamItem() {
-      if (!this.activeDreamItemKey) return null;
-      return this.dreamItems.find((item) => item.key === this.activeDreamItemKey) || null;
-    },
-    activeDreamRequestEvents() {
-      const item = this.activeDreamItem;
-      if (!item) return [];
-      return item.events.filter((evt) => evt && (
-        evt.request || evt.response || evt.rawRequest || evt.rawResponse || evt.systemPrompt || this.dreamLoopUserContent(evt)
-      ));
-    },
   },
   methods: {
     debugSessionId(turn) {
       return this.formatDebugSessionId((turn && (turn.sessionId || turn.groupId)) || '');
-    },
-    debugDreamSessionId(evt) {
-      return this.formatDebugSessionId((evt && (evt.sessionId || evt.groupId)) || '');
     },
     formatDebugSessionId(id) {
       const raw = String(id || '');
@@ -390,241 +275,9 @@ export default {
       if (!this.debugTurnNeedsDetailLoad(turn)) return;
       this.store.loadYeaftDebugHistory({
         limit: INITIAL_REQUEST_HISTORY_LIMIT,
-        dreamLimit: 0,
         detailTurnId: turnId,
         groupId: turn.sessionId || null,
       });
-    },
-    // PR feat-dream-debug-panel-full: toggle the expanded event timeline
-    // under the Dream row.
-    toggleDream() {
-      this.dreamExpanded = !this.dreamExpanded;
-    },
-    // PR feat-dream-debug-panel-full: human-readable one-line detail for
-    // a single dream event in the timeline. Falls back to phase + status
-    // when no richer detail is available so every event shows something.
-    dreamEventDetail(evt) {
-      if (!evt) return '';
-      const phase = evt.phase || 'unknown';
-      const parts = [];
-      // Per-phase rich detail: prefer the most informative field per phase.
-      let matched = true;
-      if (phase === 'start') {
-        parts.push(evt.manual ? 'manual trigger' : 'auto trigger');
-      } else if (phase === 'load-diff') {
-        if (this.debugDreamSessionId(evt)) parts.push(`session ${this.debugDreamSessionId(evt)}`);
-      } else if (phase === 'triage') {
-        if (typeof evt.segments === 'number') parts.push(`${evt.segments} segs`);
-        if (typeof evt.actions === 'number') parts.push(`${evt.actions} actions`);
-        if (evt.status) parts.push(evt.status);
-      } else if (phase === 'merge') {
-        if (typeof evt.targets === 'number') parts.push(`${evt.targets} targets`);
-      } else if (phase === 'apply') {
-        if (evt.target) parts.push(evt.target);
-        if (evt.status) parts.push(evt.status);
-        if (typeof evt.mergedCount === 'number') parts.push(`merged ${evt.mergedCount}`);
-      } else if (phase === 'done') {
-        const sessions = typeof evt.sessions === 'number' ? evt.sessions : evt.groups;
-        if (typeof sessions === 'number') parts.push(`${sessions} sessions`);
-        if (typeof evt.targets === 'number') parts.push(`${evt.targets} targets`);
-        if (typeof evt.duration === 'number') parts.push(this.formatMs(evt.duration));
-      } else if (phase === 'result') {
-        parts.push(evt.success ? 'success' : 'error');
-        if (typeof evt.entriesCreated === 'number') parts.push(`entries ${evt.entriesCreated}`);
-        if (this.formatDreamMetrics(evt)) parts.push(this.formatDreamMetrics(evt));
-        if (!evt.success && evt.error) parts.push(evt.error);
-        if (evt.skipped) parts.push(`skipped: ${evt.skippedReason || 'unknown'}`);
-      } else {
-        matched = false;
-      }
-      // Generic fallback: if the phase wasn't one we know, OR a known
-      // phase produced no parts (runner grew a new field shape), show
-      // every scalar field so the panel never silently goes blank. This
-      // makes new runner phases visible as soon as they ship instead of
-      // requiring a UI update lockstep.
-      if (!matched || parts.length === 0) {
-        const skip = new Set(['type', 'phase', 'sessionId', 'groupId', 'target', 'ts', 'at']);
-        for (const [k, v] of Object.entries(evt)) {
-          if (skip.has(k)) continue;
-          if (v === null || v === undefined) continue;
-          if (typeof v === 'object') continue;
-          parts.push(`${k}=${v}`);
-        }
-      }
-      if (evt.error && !parts.includes(evt.error)) parts.unshift(`error: ${evt.error}`);
-      return parts.join(' · ');
-    },
-    // PR feat-dream-debug-panel-full: status label used to colorize a
-    // timeline row (matches the same class names as the Dream summary).
-    dreamEventStatus(evt) {
-      if (!evt) return 'running';
-      if (evt.status === 'skipped' || evt.skipped) return 'skipped';
-      if (evt.status === 'error' || evt.phase === 'error') return 'error';
-      if (evt.status === 'done' || evt.status === 'success' || evt.phase === 'done') return 'success';
-      if (evt.phase === 'result') return evt.success ? 'success' : 'error';
-      return 'running';
-    },
-    dreamEventTrigger(evt) {
-      if (!evt) return '-';
-      if (evt.trigger) return evt.trigger;
-      if (evt.source) return evt.source;
-      if (evt.manual === true) return 'manual';
-      if (evt.manual === false) return 'auto';
-      return '-';
-    },
-    dreamEventCall(evt) {
-      if (!evt) return '-';
-      const phase = evt.phase || 'unknown';
-      const status = evt.status || '';
-      if (phase === 'start') return 'scheduler -> runDream';
-      if (phase === 'load-diff') return 'runDream -> loadSessionDiff';
-      if (phase === 'triage') return status ? `triageSessionSegments · ${status}` : 'triageSessionSegments';
-      if (phase === 'merge') return 'mergeByTarget';
-      if (phase === 'apply') return status ? `applyMergedTarget · ${status}` : 'applyMergedTarget';
-      if (phase === 'done') return 'runDream completed';
-      if (phase === 'result') return 'web-bridge -> yeaft_dream_result';
-      return phase;
-    },
-    dreamEventLocation(evt) {
-      if (!evt) return '-';
-      if (evt.target) return evt.target;
-      if (evt.scope) return evt.scope;
-      if (this.debugDreamSessionId(evt)) return `session/${this.debugDreamSessionId(evt)}`;
-      if (evt.vpId) return `vp/${evt.vpId}`;
-      return '-';
-    },
-    dreamEventResult(evt) {
-      if (!evt) return '-';
-      const parts = [];
-      if (evt.skipped) parts.push(`skipped: ${evt.skippedReason || 'unknown'}`);
-      if (evt.reason) parts.push(`reason: ${evt.reason}`);
-      if (typeof evt.entriesCreated === 'number') parts.push(`entries ${evt.entriesCreated}`);
-      if (typeof evt.targetsApplied === 'number') parts.push(`applied ${evt.targetsApplied}`);
-      if (typeof evt.sessionsProcessed === 'number') parts.push(`sessions ${evt.sessionsProcessed}`);
-      if (typeof evt.sessionsSkipped === 'number') parts.push(`skipped sessions ${evt.sessionsSkipped}`);
-      if (typeof evt.segments === 'number') parts.push(`segments ${evt.segments}`);
-      if (typeof evt.actions === 'number') parts.push(`actions ${evt.actions}`);
-      if (typeof evt.targets === 'number') parts.push(`targets ${evt.targets}`);
-      if (typeof evt.duration === 'number') parts.push(this.formatMs(evt.duration));
-      if (this.formatDreamMetrics(evt)) parts.push(this.formatDreamMetrics(evt));
-      if (Array.isArray(evt.targetErrors) && evt.targetErrors.length > 0) {
-        parts.push(`errors ${evt.targetErrors.length}: ${this.truncate(evt.targetErrors.map(e => e.target ? `${e.target}: ${e.error}` : e.error).join('; '), 160)}`);
-      }
-      if (evt.error) parts.push(`error: ${evt.error}`);
-      return parts.length > 0 ? parts.join(' · ') : this.dreamEventDetail(evt);
-    },
-    // feat-dream-debug-detail: classify a dream event so the template
-    // can render the right body. `loop` = an LLM call (has prompt +
-    // response), `turn_close` = pass-level metrics, `dream_run` =
-    // overall status, `progress` = phase event.
-    dreamEventKind(evt) {
-      if (!evt) return 'progress';
-      const t = evt.type;
-      if (t === 'loop') return 'loop';
-      if (t === 'turn_close' || t === 'dream_turn_close') return 'turn_close';
-      if (t === 'dream_run' && evt.phase === 'result') return 'result';
-      return 'progress';
-    },
-    isDreamEventExpandable(evt) {
-      const kind = this.dreamEventKind(evt);
-      if (kind === 'loop') return !!(evt && (evt.systemPrompt || evt.response || (Array.isArray(evt.messages) && evt.messages.length > 0)));
-      if (kind === 'turn_close' || kind === 'result') return !!(evt && (evt.metrics || evt.passBreakdown || evt.resultSummary));
-      if (kind === 'progress') {
-        return !!(evt && (evt.memoryMdPreview || evt.summaryMdPreview));
-      }
-      return false;
-    },
-    // Review fix (Fowler+Torvalds Minor): use a stable id so a ring-shift
-    // can't land an open-state on the wrong row. `at` (epoch ms) +
-    // turnId + (phase|type) is unique-enough for the panel's scale.
-    dreamEventKey(evt) {
-      if (!evt) return '';
-      return `${evt.at || 0}:${evt.turnId || ''}:${evt.phase || evt.type || ''}`;
-    },
-    toggleDreamEvent(evt) {
-      const key = this.dreamEventKey(evt);
-      if (!key) return;
-      // Review fix (Torvalds Important): prune stale keys so a long
-      // session that scrolls thousands of dream events through the
-      // bounded ring doesn't leak forever in expandedDreamEvents.
-      const live = new Set(this.dreamEvents.map((e) => this.dreamEventKey(e)));
-      const next = {};
-      for (const [k, v] of Object.entries(this.expandedDreamEvents)) {
-        if (live.has(k)) next[k] = v;
-      }
-      next[key] = !next[key];
-      this.expandedDreamEvents = next;
-    },
-    isDreamEventExpanded(evt) {
-      return !!this.expandedDreamEvents[this.dreamEventKey(evt)];
-    },
-    // Best-effort: render the user message a loop sent to the LLM. Loop
-    // events emitted by session-wiring have `messages: [{role:'user',content:str}]`.
-    dreamLoopUserContent(evt) {
-      const messages = Array.isArray(evt?.messages) ? evt.messages : [];
-      for (const m of messages) {
-        if (m && m.role === 'user') {
-          if (typeof m.content === 'string') return m.content;
-          if (m.content != null) return JSON.stringify(m.content, null, 2);
-        }
-      }
-      return '';
-    },
-    formatPassBreakdown(pb) {
-      if (!pb || typeof pb !== 'object') return '';
-      const out = [];
-      for (const [pass, rec] of Object.entries(pb)) {
-        if (!rec) continue;
-        const parts = [pass + ':'];
-        if (rec.llmCallCount) parts.push(`${rec.llmCallCount} call`);
-        if (rec.totalTokens) parts.push(`${this.formatTokens(rec.totalTokens)} tok`);
-        if (rec.durationMs) parts.push(this.formatMs(rec.durationMs));
-        out.push(parts.join(' '));
-      }
-      return out.join(' · ');
-    },
-    copyDreamEventAsMarkdown(evt) {
-      if (!evt) return;
-      const kind = this.dreamEventKind(evt);
-      const lines = [`# Dream event · ${kind} · ${evt.phase || evt.type || '?'}`];
-      lines.push(`- at: ${this.formatTimestamp(evt.at)}`);
-      if (evt.turnId) lines.push(`- turnId: ${evt.turnId}`);
-      if (this.debugDreamSessionId(evt)) lines.push(`- sessionId: ${this.debugDreamSessionId(evt)}`);
-      if (evt.target) lines.push(`- target: ${evt.target}`);
-      if (kind === 'loop') {
-        lines.push(`- pass: ${evt.pass || '-'}`);
-        lines.push(`- model: ${evt.model || '-'}`);
-        lines.push(`- latency: ${this.formatMs(evt.latencyMs)}`);
-        const u = evt.usage || {};
-        lines.push(`- tokens: ${this.formatUsageBreakdown(u)}`);
-        lines.push('', '## System prompt', '```', evt.systemPrompt || '', '```');
-        lines.push('', '## User message', '```', this.dreamLoopUserContent(evt), '```');
-        lines.push('', '## Response', '```', evt.response || '', '```');
-      } else if (kind === 'turn_close') {
-        lines.push(`- loopCount: ${evt.loopCount ?? evt.metrics?.llmCallCount ?? 0}`);
-        lines.push(`- totalTokens: ${evt.totalTokens ?? evt.metrics?.totalTokens ?? 0}`);
-        lines.push(`- totalMs: ${evt.totalMs ?? evt.metrics?.durationMs ?? 0}`);
-        const pb = evt.passBreakdown || evt.metrics?.passBreakdown;
-        if (pb) {
-          lines.push('', '## Pass breakdown', '```json', JSON.stringify(pb, null, 2), '```');
-        }
-      } else if (kind === 'result') {
-        lines.push(`- status: ${evt.status || '-'}`);
-        if (evt.error) lines.push(`- error: ${evt.error}`);
-        if (evt.resultSummary) {
-          lines.push('', '## Result summary', '```json', JSON.stringify(evt.resultSummary, null, 2), '```');
-        }
-        if (evt.metrics) {
-          lines.push('', '## Metrics', '```json', JSON.stringify(evt.metrics, null, 2), '```');
-        }
-      } else {
-        if (evt.memoryMdPreview) lines.push('', '## memory.md (preview)', '```', evt.memoryMdPreview, '```');
-        if (evt.summaryMdPreview) lines.push('', '## summary.md (preview)', '```', evt.summaryMdPreview, '```');
-        if (!evt.memoryMdPreview && !evt.summaryMdPreview) {
-          lines.push('', '## Raw', '```json', JSON.stringify(evt, null, 2), '```');
-        }
-      }
-      this.copyText(lines.join('\n'), 'dream event');
     },
     toggleLoop(turnId, loopNumber) {
       const key = `${turnId}#${loopNumber}`;
@@ -678,20 +331,6 @@ export default {
       }
       return text;
     },
-    formatDreamMetrics(d) {
-      if (!d) return '';
-      const parts = [];
-      if (typeof d.durationMs === 'number') parts.push(this.formatMs(d.durationMs));
-      if (typeof d.llmCallCount === 'number') parts.push(`${d.llmCallCount} LLM calls`);
-      if (typeof d.totalTokens === 'number') parts.push(`${this.formatTokens(d.totalTokens)} tok`);
-      return parts.join(' · ');
-    },
-    formatTimestamp(ms) {
-      if (!ms) return '';
-      try { return new Date(ms).toLocaleTimeString(); } catch { return ''; }
-    },
-    // feat-debug-timestamp: HH:MM:SS form for per-request rows. Wraps
-    // the pure helper so the template only needs `formatClock(loop.at)`.
     formatClock(value) {
       return formatClockTime(value);
     },
@@ -975,28 +614,8 @@ export default {
       this.expandedLoops = { ...this.expandedLoops, [loopKey]: true };
       this.expandedSections = { ...this.expandedSections, [sectionKey]: true };
     },
-    setActiveDreamItem(key) {
-      this.activeDreamItemKey = this.activeDreamItemKey === key ? null : (key || null);
-    },
-    isDreamSegmentExpanded(segment) {
-      return !!this.expandedDreamSegments[segment?.id];
-    },
-    toggleDreamSegment(segment) {
-      if (!segment?.id) return;
-      this.expandedDreamSegments = {
-        ...this.expandedDreamSegments,
-        [segment.id]: !this.expandedDreamSegments[segment.id],
-      };
-    },
-    dreamPreview(value, limit = 180) {
-      return previewText(value, limit);
-    },
-    formatDebugValue(value) {
-      if (value == null) return '';
-      return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-    },
     setActiveTab(tab) {
-      this.activeTab = tab === 'toolStats' || tab === 'dream' ? tab : 'requests';
+      this.activeTab = tab === 'toolStats' ? tab : 'requests';
       if (this.activeTab === 'toolStats' && !this.toolStats && !this.toolStatsLoading) {
         this.refreshToolStats();
       }
@@ -1009,7 +628,6 @@ export default {
       const search = String(this.searchQuery || '').trim();
       this.store.loadYeaftDebugHistory({
         limit: search ? SEARCH_REQUEST_HISTORY_LIMIT : INITIAL_REQUEST_HISTORY_LIMIT,
-        dreamLimit: 5,
         indexOnly: true,
         search,
       });
@@ -1250,17 +868,6 @@ export default {
         <button
           type="button"
           class="yeaft-debug-tab"
-          :class="{ active: activeTab === 'dream' }"
-          role="tab"
-          :aria-selected="activeTab === 'dream'"
-          @click="setActiveTab('dream')"
-        >
-          {{ $t('yeaft.debugTabDream') }}
-          <span class="yeaft-debug-tab-count" v-if="dreamEventCount > 0">{{ dreamEventCount }}</span>
-        </button>
-        <button
-          type="button"
-          class="yeaft-debug-tab"
           :class="{ active: activeTab === 'requests' }"
           role="tab"
           :aria-selected="activeTab === 'requests'"
@@ -1328,148 +935,6 @@ export default {
             <span v-for="name in unusedToolRows" :key="name" class="yeaft-debug-unused-tool">{{ name }}</span>
           </div>
         </template>
-      </div>
-
-      <div v-else-if="activeTab === 'dream'" class="yeaft-debug-dream-panel" role="tabpanel">
-        <div class="yeaft-debug-dream-toolbar">
-          <input
-            v-model="dreamItemSearch"
-            type="search"
-            class="yeaft-debug-dream-search"
-            :placeholder="$t('yeaft.dreamDebug.searchPlaceholder')"
-          />
-          <span class="yeaft-debug-dream-count">{{ dreamItems.length }} / {{ allDreamItems.length }}</span>
-        </div>
-        <div class="yeaft-debug-dream-list" v-if="dreamItems.length > 0" :aria-label="$t('yeaft.dreamDebug.itemList')">
-          <article
-            v-for="item in dreamItems"
-            :key="item.key"
-            class="yeaft-debug-dream-accordion-item"
-            :class="{ expanded: activeDreamItem && activeDreamItem.key === item.key }"
-          >
-            <button
-              type="button"
-              class="yeaft-debug-dream-item"
-              :aria-expanded="activeDreamItem && activeDreamItem.key === item.key ? 'true' : 'false'"
-              @click="setActiveDreamItem(item.key)"
-            >
-              <span class="yeaft-debug-dream-item-main">
-                <span class="yeaft-debug-dream-item-title" :title="item.scope">{{ item.title }}</span>
-                <span class="yeaft-debug-dream-item-summary">{{ item.subtitle || $t('yeaft.dreamDebug.noSummary') }}</span>
-              </span>
-              <span class="yeaft-debug-dream-item-meta">
-                <span class="yeaft-debug-dream-item-status" :class="'status-' + item.status">{{ item.status }}</span>
-                <span class="yeaft-debug-dream-item-segments">{{ item.segmentCount }} {{ $t('yeaft.dreamDebug.segments') }}</span>
-                <span class="yeaft-debug-dream-item-time">{{ formatTimestamp(item.lastAt) || '-' }}</span>
-              </span>
-              <span class="yeaft-debug-dream-item-toggle" aria-hidden="true">{{ activeDreamItem && activeDreamItem.key === item.key ? '−' : '+' }}</span>
-            </button>
-              <section class="yeaft-debug-dream-detail" v-if="activeDreamItem && activeDreamItem.key === item.key">
-              <div class="yeaft-debug-dream-detail-header">
-                <div>
-                  <div class="yeaft-debug-dream-detail-title">{{ activeDreamItem.title }}</div>
-                  <div class="yeaft-debug-dream-detail-subtitle">
-                    {{ activeDreamItem.status }} · {{ formatTimestamp(activeDreamItem.lastAt) || '-' }}
-                  </div>
-                </div>
-              </div>
-
-              <div class="yeaft-debug-dream-detail-body">
-                <section class="yeaft-debug-dream-card">
-                  <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.overview') }}</div>
-                  <div class="yeaft-debug-dream-summary-grid">
-                    <span>{{ $t('yeaft.dreamDebug.scope') }}</span>
-                    <strong>{{ activeDreamItem.scope }}</strong>
-                    <span>{{ $t('yeaft.dreamDebug.sessionId') }}</span>
-                    <strong>{{ activeDreamItem.sessionId }}</strong>
-                    <span>{{ $t('yeaft.dreamDebug.lastDream') }}</span>
-                    <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.lastDreamAt) || formatTimestamp(activeDreamItem.lastAt) || '-' }}</strong>
-                    <span>{{ $t('yeaft.dreamDebug.messagesCovered') }}</span>
-                    <strong>{{ (activeDreamItem.snapshot && activeDreamItem.snapshot.messageCount) || 0 }} / {{ (activeDreamItem.snapshot && activeDreamItem.snapshot.totalMessageCount) || 0 }}</strong>
-                    <span>{{ $t('yeaft.dreamDebug.segments') }}</span>
-                    <strong>{{ activeDreamItem.segmentCount }}</strong>
-                    <template v-if="activeDreamItem.lastError">
-                      <span>{{ $t('yeaft.dreamDebug.lastError') }}</span>
-                      <strong>{{ activeDreamItem.lastError.message || activeDreamItem.lastError.error || activeDreamItem.lastError.phase || 'unknown' }}</strong>
-                    </template>
-                    <span>{{ $t('yeaft.dreamDebug.loadedAt') }}</span>
-                    <strong>{{ formatTimestamp(activeDreamItem.snapshot && activeDreamItem.snapshot.loadedAt) || '-' }}</strong>
-                  </div>
-                </section>
-
-                <section class="yeaft-debug-dream-card">
-                  <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.layers') }}</div>
-                  <details class="yeaft-debug-dream-layer" open>
-                    <summary>{{ $t('yeaft.dreamDebug.summaryLayer') }}</summary>
-                    <pre v-if="activeDreamItem.snapshot && activeDreamItem.snapshot.summaryText" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.snapshot.summaryText }}</pre>
-                    <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noSummary') }}</div>
-                  </details>
-                  <details class="yeaft-debug-dream-layer">
-                    <summary>memory.md</summary>
-                    <pre v-if="activeDreamItem.snapshot && activeDreamItem.snapshot.memoryText" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.snapshot.memoryText }}</pre>
-                    <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noOutput') }}</div>
-                  </details>
-                  <details class="yeaft-debug-dream-layer">
-                    <summary>{{ $t('yeaft.dreamDebug.promptLoadTitle') }}</summary>
-                    <pre v-if="activeDreamItem.promptLoad && activeDreamItem.promptLoad.summary" class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ activeDreamItem.promptLoad.summary }}</pre>
-                    <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noPromptLoad') }}</div>
-                  </details>
-                </section>
-
-                <section class="yeaft-debug-dream-card">
-                  <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.segmentTitle') }}</div>
-                  <div v-if="activeDreamItem.segments.length > 0" class="yeaft-debug-dream-segments">
-                    <article v-for="segment in activeDreamItem.segments" :key="segment.id" class="yeaft-debug-dream-segment">
-                      <button type="button" class="yeaft-debug-dream-segment-head" @click="toggleDreamSegment(segment)">
-                        <span class="yeaft-debug-dream-segment-toggle" aria-hidden="true">{{ isDreamSegmentExpanded(segment) ? '−' : '+' }}</span>
-                        <span class="yeaft-debug-dream-segment-identity">
-                          <strong class="yeaft-debug-dream-segment-id">{{ segment.id }}</strong>
-                          <em class="yeaft-debug-dream-segment-kind">{{ segment.kind }}</em>
-                        </span>
-                        <span class="yeaft-debug-dream-segment-tags">{{ segment.tags.join(', ') || '-' }}</span>
-                      </button>
-                      <div class="yeaft-debug-dream-segment-meta">
-                        <span>{{ $t('yeaft.dreamDebug.sourceMessages') }}: {{ segment.sourceMessages.join(', ') || '-' }}</span>
-                        <span>{{ $t('yeaft.dreamDebug.createdAt') }}: {{ formatTimestamp(segment.createdAt) || '-' }}</span>
-                        <span>{{ $t('yeaft.dreamDebug.updatedAt') }}: {{ formatTimestamp(segment.updatedAt) || '-' }}</span>
-                      </div>
-                      <p v-if="!isDreamSegmentExpanded(segment)" class="yeaft-debug-dream-segment-preview">{{ dreamPreview(segment.content) }}</p>
-                      <div v-else class="yeaft-debug-dream-segment-content">{{ segment.content }}</div>
-                    </article>
-                  </div>
-                  <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noSegments') }}</div>
-                </section>
-
-                <section class="yeaft-debug-dream-card">
-                  <div class="yeaft-debug-dream-card-title">{{ $t('yeaft.dreamDebug.requestResponse') }}</div>
-                  <div v-if="activeDreamRequestEvents.length > 0" class="yeaft-debug-dream-events">
-                    <details v-for="evt in activeDreamRequestEvents" :key="dreamEventKey(evt)" class="yeaft-debug-dream-layer">
-                      <summary>{{ dreamEventPhaseLabel(evt) }} · {{ formatTimestamp(evt.at || evt.ts) || '-' }}</summary>
-                      <div class="yeaft-debug-section" v-if="evt.systemPrompt">
-                        <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">System prompt</span></div>
-                        <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ evt.systemPrompt }}</pre>
-                      </div>
-                      <div class="yeaft-debug-section" v-if="dreamLoopUserContent(evt)">
-                        <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Request</span></div>
-                        <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ dreamLoopUserContent(evt) }}</pre>
-                      </div>
-                      <div class="yeaft-debug-section" v-if="evt.response || evt.rawResponse">
-                        <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Response</span></div>
-                        <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ formatDebugValue(evt.response || evt.rawResponse) }}</pre>
-                      </div>
-                      <div class="yeaft-debug-section">
-                        <div class="yeaft-debug-section-row"><span class="yeaft-debug-section-title">Raw event</span></div>
-                        <pre class="yeaft-debug-pre yeaft-debug-scroll-pre">{{ formatDebugValue(evt) }}</pre>
-                      </div>
-                    </details>
-                  </div>
-                  <div v-else class="yeaft-debug-dream-event-empty">{{ $t('yeaft.dreamDebug.noRequestResponse') }}</div>
-                </section>
-              </div>
-            </section>
-          </article>
-        </div>
-        <div v-else class="yeaft-debug-empty">{{ allDreamItems.length ? $t('yeaft.dreamDebug.noSearchResults') : $t('yeaft.dreamDebug.empty') }}</div>
       </div>
 
       <div v-else-if="activeTab === 'requests' && turns.length > 0" class="yeaft-debug-turns">

@@ -33,29 +33,13 @@ import { TaskManager } from './tasks/manager.js';
 // session still exposes a single default Engine; PR #797 adds group VP thread
 // engines in web-bridge runtime state, keyed below the session layer.
 //
-// GC.1 (final): the session opens a SegmentIndex (SQLite FTS5 over
-// memory.md) and passes it to the Engine. Engine.#recallMemory routes
-// pre-turn recall through sessions/pre-flow.js → memory/preflow.js (the
-// previous per-scope file reader recall-v2.js has been deleted).
-// The `config.memoryV2` opt-out flag was retired in task-710; wiring is
-// unconditional.
-//
-// When memoryIndex is wired we also open an AmsRegistry. It caches the
-// per-Session ActiveMemorySet object and keeps the version-1 ams.json shape for
-// disk compatibility. Engine rebuilds prompt-facing Resident entries from
-// query-selected canonical content on every turn; persisted segment ids are
-// never rehydrated into the prompt.
+// Dream memory remains archived on disk, but normal Session startup must not
+// open, migrate, reconcile, or inject it. Explicit memory tools own any direct
+// access requested by a user.
 import { ensureDefaultSessionIfEmpty, migrateRegisteredWorkDirSessions } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
-import { archiveLegacyScopes } from './memory/seed-backfill.js';
-// Dream scheduler wiring is intentionally not imported while the runtime path is disabled.
-// import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream/session-wiring.js';
 import { isWorkCenterEnabled } from './work-center/feature.js';
-import { openSegmentIndex } from './memory/index-db.js';
-import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
-import { backfillCanonicalContent } from './memory/content-backfill.js';
-import { openAmsRegistry } from './memory/ams-registry.js';
 import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, mkdirSync as mkdirSyncSafe } from 'fs';
 
@@ -139,7 +123,6 @@ export async function loadSession(options = {}) {
     extraTools = [],
     configOverrides = {},
     serverMode = false,
-    dreamEnabled,
     managedCliReady = null,
     workCenterEnabled,
   } = options;
@@ -159,7 +142,7 @@ export async function loadSession(options = {}) {
   const sessionWorkDir = typeof workDir === 'string' && workDir.trim() ? workDir.trim() : '';
   const configDir = overrides.dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
   const yeaftDir = configDir;
-  const configInitResult = initYeaftDir(configDir);
+  const configInitResult = initYeaftDir(configDir, { migrateMemory: false });
   const storeInitResult = configInitResult;
   overrides.dir = configDir;
 
@@ -174,11 +157,10 @@ export async function loadSession(options = {}) {
   // ─── 2. Load config ───────────────────────────────────
   const config = loadConfig(overrides);
   const effectiveWorkCenterEnabled = workCenterEnabled ?? isWorkCenterEnabled(process.env, config);
-  // fix/dream-cadence-and-ui-trigger: tag config so the dream scheduler
-  // can decide whether to keep its interval timer alive (server) or
-  // unref it (CLI / tests). Non-persisted — set per-session by caller.
   if (serverMode) config.serverMode = true;
-  if (typeof dreamEnabled === 'boolean') config.dream.enabled = dreamEnabled;
+  // Dream is disabled at the runtime boundary. Ignore legacy caller/config
+  // toggles so an old client cannot re-enable scheduling or loading.
+  config.dream = { ...(config.dream || {}), enabled: false };
 
   // Propagate the (clamped) cold-start replay window to the conversation
   // store. The default is 10 turns; a user wanting more recall after a
@@ -260,60 +242,11 @@ export async function loadSession(options = {}) {
   // ─── 5. Create stores ──────────────────────────────────
   const conversationStore = new ConversationStore(yeaftDir);
 
-  // ─── 5-fts. (GC.1) Open SegmentIndex for FTS pre-flow ────
-  //     Build a SQLite FTS5 index over per-scope evidence memory.md and
-  //     canonical content.md, then pass it to Engine for scope selection.
-  //     Engine.#recallMemory uses it via sessions/pre-flow.js →
-  //     memory/preflow.js. Disk is the source of
-  //     truth; on boot we reconcile disk → index via syncAll. Failure
-  //     to open the index is non-fatal: #recallMemory returns an empty
-  //     result and the turn proceeds without pre-injected memory.
-  let memoryIndex = null;
-  if (!config._readOnly) {
-    try {
-      const indexPath = join(yeaftDir, 'memory', 'index.db');
-      memoryIndex = openSegmentIndex(indexPath);
-      const memoryRoot = join(yeaftDir, 'memory');
-      // One-shot migration to the group-isolated memory layout: move any
-      // remaining top-level vp/ feature/ topic/ dirs into .legacy/ before
-      // we open the FTS index and re-sync from disk.
-      try {
-        archiveLegacyScopes(memoryRoot);
-      } catch (archiveErr) {
-        if (config.debug) {
-          console.warn(`[Yeaft] legacy scope archive warning: ${archiveErr?.message || archiveErr}`);
-        }
-      }
-      try {
-        backfillCanonicalContent(memoryRoot);
-        syncSegmentIndex(memoryRoot, memoryIndex);
-      } catch (syncErr) {
-        // Sync is best-effort; an empty / partial index just produces
-        // empty recall results, never an error.
-        if (config.debug) {
-          console.warn(`[Yeaft] FTS index sync warning: ${syncErr?.message || syncErr}`);
-        }
-      }
-    } catch (err) {
-      console.warn(`[Yeaft] Failed to open FTS segment index (preflow disabled): ${err?.message || err}`);
-      memoryIndex = null;
-    }
-  }
-
-  // ─── 5-ams. Session-keyed AMS registry ─────────────────
-  //     The registry caches one ActiveMemorySet per sessionId and
-  //     retains version-1 metadata for disk compatibility. Prompt state is
-  //     rebuilt from selected canonical content each turn; old segment ids are
-  //     not rehydrated. Without memoryIndex the registry remains disabled.
-  let amsRegistry = null;
-  if (memoryIndex && !config._readOnly) {
-    try {
-      amsRegistry = openAmsRegistry({ yeaftDir, memoryIndex, config });
-    } catch (err) {
-      console.warn(`[Yeaft] Failed to open AMS registry (adjust disabled): ${err?.message || err}`);
-      amsRegistry = null;
-    }
-  }
+  // Dream runtime loading is disabled. Keep these compatibility properties
+  // null for callers that still pass them through to Engine/sub-agent setup,
+  // without touching the archived memory tree or its SQLite index on boot.
+  const memoryIndex = null;
+  const amsRegistry = null;
 
   // ─── 5a. (removed 2026-05-13) Feature store init — Feature system retired.
 
@@ -475,19 +408,8 @@ export async function loadSession(options = {}) {
   });
 
 
-  // ─── 9a. Dream runtime temporarily disabled ────────────
-  // Message history now supplies turn context. Keep the Dream implementation
-  // and persisted data intact, but do not create a scheduler or run boot-time
-  // initialization/catch-up while the replacement is evaluated.
-  //
-  // const partialSession = { yeaftDir, adapter, config, engine, trace };
-  // const dreamScheduler = createV2DreamScheduler(partialSession);
-  // if (memoryIndex && !config._readOnly) {
-  //   bootInitEmptyGroups({ yeaftDir, memoryIndex, dreamScheduler, config }).catch(() => {});
-  // }
-  // if (!config._readOnly) {
-  //   bootCatchUpStaleDream({ yeaftDir, dreamScheduler, config }).catch(() => {});
-  // }
+  // Dream implementation and persisted data remain available for explicit
+  // tooling, but Session runtime has no scheduler or boot-time Dream hooks.
   const dreamScheduler = null;
 
   // H2.f.5 retired the old session-level thread engine registry, input queue,
@@ -507,13 +429,8 @@ export async function loadSession(options = {}) {
     tools: toolRegistry.size,
   };
 
-  /** Graceful shutdown: disconnect MCP, close trace DB, stop dream scheduler. */
+  /** Graceful shutdown: disconnect MCP and close runtime-owned resources. */
   async function shutdown() {
-    try {
-      dreamScheduler.shutdown();
-    } catch {
-      // Best-effort cleanup
-    }
     try {
       await mcpManager.disconnectAll();
     } catch {
@@ -528,16 +445,6 @@ export async function loadSession(options = {}) {
       flushAgentPerfTrace(config);
     } catch {
       // Performance telemetry is best-effort and must not block shutdown.
-    }
-    try {
-      if (memoryIndex) memoryIndex.close();
-    } catch {
-      // Best-effort cleanup
-    }
-    try {
-      if (amsRegistry) amsRegistry.persistAll();
-    } catch {
-      // Best-effort cleanup
     }
     try {
       if (toolStats && typeof toolStats.flush === 'function') {

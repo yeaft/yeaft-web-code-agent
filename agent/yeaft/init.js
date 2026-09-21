@@ -86,7 +86,6 @@ const SUBDIRS = [
   'chat/cold',
   'chat/blobs',
   'sessions',
-  'memory/entries',
   'tasks',
   'skills',
 ];
@@ -113,19 +112,6 @@ const DEFAULT_CONFIG_JSON = `{
   "maxContextTokens": 200000,
   "messageTokenBudget": 32768
 }
-`;
-
-/** Default MEMORY.md content. */
-const DEFAULT_MEMORY = `# Yeaft Memory
-
-This file stores persistent memory entries. The agent will read and update this file.
-
-## Facts
-
-## Preferences
-
-## Project Context
-
 `;
 
 /** Default mcp.json example — generated as reference for MCP server configuration. */
@@ -160,9 +146,10 @@ This file tracks one Yeaft message-history mode.
  * Initialize the Yeaft data directory structure.
  *
  * @param {string} [dir] — Root directory path. Defaults to ~/.yeaft/
+ * @param {{ migrateMemory?: boolean }} [options] — Archived Dream migration is explicit opt-in, never part of Agent/service/Session startup.
  * @returns {{ dir: string, created: string[], writable: boolean, warnings: string[], seededSkills?: number }} — The root dir, list of created paths, writability status, any warnings, and how many bundled skills were seeded
  */
-export function initYeaftDir(dir) {
+export function initYeaftDir(dir, { migrateMemory = false } = {}) {
   const root = dir || DEFAULT_YEAFT_DIR;
   const created = [];
   const warnings = [];
@@ -211,12 +198,6 @@ export function initYeaftDir(dir) {
     }
   }
 
-  const memoryPath = join(root, 'memory', 'MEMORY.md');
-  if (!existsSync(memoryPath)) {
-    safeWriteFile(memoryPath, DEFAULT_MEMORY, warnings);
-    created.push(memoryPath);
-  }
-
   const chatIndexPath = join(root, 'chat', 'index.md');
   if (!existsSync(chatIndexPath)) {
     safeWriteFile(chatIndexPath, DEFAULT_CONVERSATION_INDEX, warnings);
@@ -252,7 +233,7 @@ export function initYeaftDir(dir) {
   // Idempotent (sentinel file) so re-running on a fully-migrated dir is a
   // no-op; on a partial-crash dir, each step is independently resumable.
   try {
-    const res = migrateSessions(root);
+    const res = migrateSessions(root, { migrateMemory });
     if (res && res.migrated) {
       console.log(`[yeaft] session migration complete (${res.moved} dirs moved, ${res.frontmatterRewrites} messages rewritten${res.warnings?.length ? `, ${res.warnings.length} warnings` : ''})`);
       if (res.warnings?.length) for (const w of res.warnings) console.warn(`[yeaft] migration: ${w}`);

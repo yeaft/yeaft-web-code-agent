@@ -105,12 +105,10 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       const agentId = msg.agentId;
       if (!agentId) break;
       if (!await checkAgentAccess(agentId)) break;
-      if (msg.requestId) {
-        await forwardRegisteredAgentRequest({ client, clientId, agentId, operation: 'dream', requestId: msg.requestId,
-          message: { type: 'set_dream_enabled', enabled: msg.enabled !== false, requestId: msg.requestId, clientId }, responseType: 'dream_enabled_changed' });
-      } else {
-        await forwardToAgent(agentId, { type: 'set_dream_enabled', enabled: msg.enabled !== false });
-      }
+      await sendToWebClient(client, {
+        type: 'dream_enabled_changed', agentId, requestId: msg.requestId,
+        enabled: false, error: 'Dream is disabled.',
+      });
       break;
     }
 

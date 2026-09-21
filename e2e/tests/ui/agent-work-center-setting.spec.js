@@ -59,6 +59,8 @@ for (const scenario of [
 
     const dialog = page.getByRole('dialog', { name: /Agent settings|Agent 设置/ });
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Dream', { exact: true })).toHaveCount(0);
+    await expect(dialog.getByText('Run dream now', { exact: true })).toHaveCount(0);
     await expect(dialog.locator('.agent-settings-work-center-row strong')).toBeFocused();
     await dialog.locator('.settings-close').focus();
     await dialog.locator('.settings-close').press('Shift+Tab');

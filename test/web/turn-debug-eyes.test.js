@@ -330,7 +330,6 @@ describe('handleMessage turn-level panel status', () => {
         turnId: 'turn-abc',
         error: null,
       },
-      _appendDreamEvent: () => {},
       handleYeaftOutput: () => {},
       ...overrides,
     });
@@ -398,7 +397,6 @@ describe('handleMessage turn-level panel status', () => {
         },
         latencyMs: 50,
       }],
-      dreamEvents: [],
       projection: {
         truncated: true,
         reason: 'debug_detail_wire_budget',
@@ -414,6 +412,16 @@ describe('handleMessage turn-level panel status', () => {
 
     expect(store.yeaftDebugPanel.status).toBe('ready');
     expect(store.yeaftDebugHistoryProjection).toMatchObject({ truncated: true });
+    expect(wrapper.findAll('.yeaft-debug-tab')).toHaveLength(2);
+    expect(wrapper.findAll('.yeaft-debug-tab').map(tab => tab.text())).toEqual([
+      'yeaft.debugTabToolStats',
+      expect.stringContaining('yeaft.debugTabRequestLog'),
+    ]);
+    expect(wrapper.text()).not.toContain('yeaft.debugTabDream');
+    await wrapper.findAll('.yeaft-debug-tab')[0].trigger('click');
+    expect(wrapper.get('.yeaft-debug-tool-stats').isVisible()).toBe(true);
+    await wrapper.findAll('.yeaft-debug-tab')[1].trigger('click');
+    expect(wrapper.get('.yeaft-debug-turns').isVisible()).toBe(true);
     expect(store.yeaftDebugTurnsById['turn-abc'].loops).toBeUndefined();
     expect(store.yeaftDebugTurnsById['turn-abc'].memoryLoaded).toEqual([
       expect.objectContaining({ body: 'Persisted memory from the exact request.' }),
@@ -590,7 +598,6 @@ describe('handleMessage turn-level panel status', () => {
       detailTurnId: 'turn-abc',
       turns: [],
       loops: [],
-      dreamEvents: [],
       error: 'trace disabled',
     });
     expect(store.yeaftDebugPanel.status).toBe('error');
@@ -606,7 +613,6 @@ describe('handleMessage turn-level panel status', () => {
       detailTurnId: 'turn-abc',
       turns: [],
       loops: [],
-      dreamEvents: [],
     });
     // Guard drops the stale response before any state mutation.
     expect(store.yeaftDebugPanel.status).toBe('loading');

@@ -11,6 +11,8 @@ import SidebarAgentHeader from '../../web/components/SidebarAgentHeader.js';
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const panel = readFileSync(join(root, 'web/components/AgentSettingsPanel.js'), 'utf8');
 const llmTab = readFileSync(join(root, 'web/components/LlmTab.js'), 'utf8');
+const sessionSettings = readFileSync(join(root, 'web/components/SessionSettingsModal.js'), 'utf8');
+const vpStore = readFileSync(join(root, 'web/stores/vp.js'), 'utf8');
 const header = readFileSync(join(root, 'web/components/SidebarAgentHeader.js'), 'utf8');
 const chatPage = readFileSync(join(root, 'web/components/ChatPage.js'), 'utf8');
 const yeaftPage = readFileSync(join(root, 'web/components/YeaftPage.js'), 'utf8');
@@ -222,6 +224,16 @@ describe('Agent settings surface', () => {
     expect(zh).toContain("'agentSettings.categories.llm': 'LLM 配置'");
   });
 
+  it('does not expose or retain Dream controls in Web settings', () => {
+    expect(panel).not.toMatch(/dream/i);
+    expect(llmTab).not.toMatch(/dream/i);
+    expect(sessionSettings).not.toMatch(/dream/i);
+    expect(vpStore).not.toMatch(/dream/i);
+    expect(chatStore).not.toMatch(/setDreamEnabled|agentDreamState|yeaftDream/);
+    expect(en).not.toMatch(/dream/i);
+    expect(zh).not.toMatch(/dream/i);
+  });
+
   it('reuses LlmTab with an explicit selected-Agent target', () => {
     expect(panel).toContain("import LlmTab from './LlmTab.js'");
     expect(panel).toContain('<LlmTab context="yeaft" :agent-id="selectedAgentId"');
@@ -242,7 +254,6 @@ describe('Agent settings surface', () => {
       agents: [{ id: 'agent-a', name: 'Agent A', online: true }],
       currentAgent: 'agent-a',
       agentOperations: {},
-      agentDreamState: {},
       loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
     });
     globalThis.Pinia = { useChatStore: () => store };
@@ -268,7 +279,6 @@ describe('Agent settings surface', () => {
       }],
       currentAgent: 'agent-a',
       agentOperations: {},
-      agentDreamState: {},
       workCenterFeatureSettingsByAgent: { 'agent-a': settings },
       loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
       loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(settings)),
@@ -305,7 +315,7 @@ describe('Agent settings surface', () => {
     });
     const store = Vue.reactive({
       agents: [{ id: 'agent-a', name: 'Agent A', online: true, capabilities: ['work_center_feature_settings'] }],
-      currentAgent: 'agent-a', agentOperations: {}, agentDreamState: {},
+      currentAgent: 'agent-a', agentOperations: {},
       workCenterFeatureSettingsByAgent: { 'agent-a': settings },
       loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
       loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(settings)),
@@ -330,7 +340,7 @@ describe('Agent settings surface', () => {
   it('loads Work Center settings when the selected Agent gains capability after reconnect', async () => {
     const store = Vue.reactive({
       agents: [{ id: 'agent-a', name: 'Agent A', online: true, capabilities: [] }],
-      currentAgent: 'agent-a', agentOperations: {}, agentDreamState: {},
+      currentAgent: 'agent-a', agentOperations: {},
       workCenterFeatureSettingsByAgent: {},
       loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
       loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve({ enabled: false, loaded: true })),
@@ -354,7 +364,6 @@ describe('Agent settings surface', () => {
       agents: [{ id: 'agent-old', name: 'Old', online: true, capabilities: [] }],
       currentAgent: 'agent-old',
       agentOperations: {},
-      agentDreamState: {},
       workCenterFeatureSettingsByAgent: {},
       loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
       loadWorkCenterFeatureSettings: vi.fn(),
@@ -383,7 +392,6 @@ describe('Agent settings surface', () => {
       }],
       currentAgent: 'agent-env',
       agentOperations: {},
-      agentDreamState: {},
       workCenterFeatureSettingsByAgent: { 'agent-env': settings },
       loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
       loadWorkCenterFeatureSettings: vi.fn(() => Promise.resolve(settings)),
@@ -416,7 +424,6 @@ describe('Agent settings surface', () => {
       }],
       currentAgent: 'agent-error',
       agentOperations: {},
-      agentDreamState: {},
       workCenterFeatureSettingsByAgent: {},
       loadTelemetrySettings: vi.fn(() => Promise.resolve({})),
       loadWorkCenterFeatureSettings: vi.fn()

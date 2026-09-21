@@ -43,7 +43,7 @@ For a new WorkItem, provide:
 4. the delivery target (or ask before delivery);
 5. whether execution should start immediately.
 
-The create entry uses the same borderless style as **New chat**, and the Agent picker uses a rounded, theme-aware menu. **Delivery target** occupies one row: choose a built-in target, or choose **Custom** and type beside it. Previously used custom goals are available in the same menu, scoped to the selected Agent. Custom text does not grant merge or release permission. Eligible Agent memory and completed work are enabled by default without a checkbox; scope, workspace, and ownership boundaries remain unchanged.
+The create entry uses the same borderless style as **New chat**, and the Agent picker uses a rounded, theme-aware menu. **Delivery target** occupies one row: choose a built-in target, or choose **Custom** and type beside it. Previously used custom goals are available in the same menu, scoped to the selected Agent. Custom text does not grant merge or release permission. Eligible completed-work summaries are enabled by default without a checkbox; workspace and ownership boundaries remain unchanged. Legacy Dream/H2-AMS memory is not recalled.
 
 The title is a short display label, separate from the original requirement or goal. An explicitly supplied title is preserved. When it is omitted, the existing initial Coordinator decision generates one without another model call; retries keep the original goal unchanged, and older WorkItems keep their stored titles. New items retain the creation-time requirement independently of later user-approved goal refinements. Older items use the goal retained at upgrade as their requirement; earlier versions did not save a separate original. Until coordination runs, a compact fallback label is displayed. An omitted generated title uses a deterministic fallback instead of failing the task.
 
@@ -164,15 +164,11 @@ Stopping or cancelling closes active execution fences; late tool/model output ca
 
 ## Memory reuse
 
-With `reuseMemory=true`, Work Center can compute three bounded candidate sources:
+With `reuseMemory=true`, Work Center can reuse structured summary/evidence from completed WorkItems with the same canonical workspace key. A WorkItem may also carry explicitly captured, bounded source Session context.
 
-- scope-bounded full-text recall from the current Agent's memory index;
-- structured summary/evidence from completed WorkItems with the same canonical workspace key;
-- user-visible transcript excerpts from ordinary Sessions whose persisted workspace resolves to the same canonical path.
+Legacy Dream/H2-AMS indexes and workspace transcript recall are not read or injected.
 
-Browser-created and legacy items read the Agent user scope. A trusted Session producer may additionally authorize source Session and current VP scopes. Workspace transcript recall is owner-local, verifies the canonical path, excludes the current source Session, and never reads raw tool output.
-
-These are candidates, not a promise that every source enters every prompt. Execution schema v1 appends the runner-computed memory and workspace-Session blocks when non-empty. Schema v2 renders the immutable Mainline context plus a fixed suffix and currently does not append those two precomputed blocks. All recalled content is token-bounded reference context and cannot override the WorkItem contract, Action instruction, tool policy, or completion protocol. `reuseMemory=false` disables the three candidate paths.
+Reused completed-work context is token-bounded reference material and cannot override the WorkItem contract, Action instruction, tool policy, or completion protocol. `reuseMemory=false` disables this reuse.
 
 ## Attachments and evidence
 
@@ -186,8 +182,8 @@ Execution evidence can include summaries, acceptance checks, file/test reference
 - `read` workspace policy is not a kernel-level sandbox.
 - A completed Action is not enough to mark a WorkItem done; the goal criteria and delivery boundary must be supported by current evidence (legacy workflows also retain their final gate).
 - A `turn_end` event is not an Action completion. The executor must submit the structured outcome contract.
-- Work Center memory never grants authority over the current contract or safety rules.
-- Sessions and WorkItems do not share one transcript or one memory owner.
+- Reused completed-work context never grants authority over the current contract or safety rules.
+- Sessions and WorkItems do not share one transcript.
 
 ## Related pages
 

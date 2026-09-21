@@ -85,7 +85,7 @@ The Yeaft page provides:
 - per-VP turn blocks and message quote/edit-as-new actions;
 - Session status with announcement, roster, and active background tasks;
 - model/effort selection in the composer;
-- an optional debug panel for provider requests, memory recall, tools, tokens, and stop reasons.
+- an optional debug panel for provider requests, tools, tokens, and stop reasons. Dream events and settings are not exposed.
 
 Debug output can contain project text and tool results. It is for the current owner and should not be exported or shared casually.
 
@@ -110,19 +110,18 @@ Projects are user-visible groups in the unified sidebar. You can:
 - reorder Sessions without losing cross-Agent identity;
 - attach one Project instruction to the Project.
 
-A Project does not merge Session transcripts or storage. For a Session running on an Agent, Yeaft can add same-Agent sibling Session IDs to its scoped recall set and inject read-only summaries with their source Session identity. Sessions on another Agent are still visible in the browser catalog but are not treated as local memory scopes by the current runtime.
+A Project does not merge Session transcripts or storage. It supplies Project instructions to members, but the current runtime does not recall or inject sibling Session summaries.
 
 ## Memory boundaries
 
-Native memory is scoped rather than globally shared:
+Dream/H2-AMS memory is retired from the active runtime:
 
-- user scope for durable user preferences;
-- VP scope and Session-nested VP scope for role-specific knowledge;
-- Session scope for shared facts in the current collaboration;
-- related Project-Session scopes for bounded sibling recall;
-- topic and legacy compatibility scopes where current storage readers support them.
+- native turns use only the bounded history window selected from the current Session transcript;
+- legacy memory files and indexes remain on disk but are not read, migrated, synchronized, recalled, or injected;
+- historical messages and ordinary debug records are retained;
+- post-turn compact remains a separate history-window feature.
 
-H2-AMS renders one budgeted memory block from resident summaries, recent context, and on-demand full-text hits. Dream maintenance updates segments and summaries in the background. Retrieved memory is context, not a higher-priority instruction.
+Legacy enable/manual Dream commands report that the feature is disabled. There is no Dream debug tab or settings control.
 
 ## Move durable work to Work Center
 
@@ -143,4 +142,4 @@ See [Work Center](./work-center.md).
 - [Choose a code agent path](./choose-backend.md)
 - [Provider and model configuration](../yeaft-config.md)
 - [Yeaft engine internals](../tech/yeaft-engine.md)
-- [H2-AMS memory](../tech/yeaft-memory.md)
+- [Retired H2-AMS implementation](../tech/yeaft-memory.md)

@@ -380,6 +380,14 @@ test('debug panel keeps one latest request and full loop tools across themes and
   page.on('pageerror', error => pageErrors.push(error.message));
   await page.goto(`${baseUrl}/__debug-panel`);
   await expect.poll(() => page.evaluate(() => window.__ready === true).then(ready => ready ? 'ready' : pageErrors.join('\n'))).toBe('ready');
+  const tabs = page.locator('.yeaft-debug-tab');
+  await expect(tabs).toHaveCount(2);
+  await expect(tabs).toContainText(['Tool Stats', 'Request Log']);
+  await expect(page.getByRole('tab', { name: /Dream/i })).toHaveCount(0);
+  await tabs.first().click();
+  await expect(page.locator('.yeaft-debug-tool-stats')).toBeVisible();
+  await tabs.last().click();
+  await expect(page.locator('.yeaft-debug-turns')).toBeVisible();
   await page.locator('.yeaft-debug-turn-header').click();
   const request = page.locator('.yeaft-debug-latest-request');
   const system = page.locator('.yeaft-debug-latest-system-prompt');

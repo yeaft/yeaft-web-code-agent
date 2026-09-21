@@ -43,7 +43,7 @@ Item 的「工作项 / 标题」面包屑与快捷图标放在唯一顶栏，起
 4. 交付目标（或选择交付前询问）；
 5. 是否立即开始执行。
 
-新建入口采用与「新建聊天」一致的无边框按钮，Agent 选择使用随主题变化的圆角菜单。「交付目标」只占一行：选择内置目标，或选择「自定义」后在同一行输入；以前用过的自定义目标也在菜单中，按当前 Agent 隔离。自定义文字不自动授予合并或发布权限。符合 scope 和项目目录约束的 Agent memory 与已完成工作默认启用，不再需要勾选；不会扩大记忆的所有权边界。
+新建入口采用与「新建聊天」一致的无边框按钮，Agent 选择使用随主题变化的圆角菜单。「交付目标」只占一行：选择内置目标，或选择「自定义」后在同一行输入；以前用过的自定义目标也在菜单中，按当前 Agent 隔离。自定义文字不自动授予合并或发布权限。符合项目目录约束的已完成工作 summary 默认启用，不再需要勾选；不会扩大 ownership 边界。旧 Dream/H2-AMS memory 不会召回。
 
 标题是简短的展示标签，与用户原始 requirement 或 goal 分开保存。显式提供的标题会原样保留；省略标题时，由已有的首次 Coordinator 决策一并生成，不增加独立 model 调用。重试不会改写原始 goal，旧 WorkItem 也继续保留已有标题。 新 Item 独立保留创建时的需求，用户后续确认的目标调整不会覆盖它。旧 Item 以升级时保留的目标作为需求，早期版本没有单独保存原文。Coordinator 执行前显示紧凑的临时标题；模型未返回标题时使用确定性回退，不因此让任务失败。
 
@@ -164,15 +164,11 @@ Stop/cancel 会关闭 active execution fence；迟到 tool/model output 不能�
 
 ## Memory reuse
 
-`reuseMemory=true` 时，Work Center 可以计算三类有边界的候选来源：
+`reuseMemory=true` 时，Work Center 可以复用相同 canonical workspace key 下 completed WorkItem 的 structured summary/evidence。WorkItem 也可以携带明确保存的有界 source Session context。
 
-- 当前 Agent memory index 的 scope-bounded full-text recall；
-- 相同 canonical workspace key 下 completed WorkItem 的 structured summary/evidence；
-- persisted workspace 解析到同一 canonical path 的普通 Session user-visible transcript excerpt。
+旧 Dream/H2-AMS index 和 workspace transcript recall 不会读取或注入。
 
-Browser-created 和 legacy item 读取 Agent user scope。Trusted Session producer 还可以授权 source Session 与 current VP scope。Workspace transcript recall 只在 owner 本地运行，会验证 canonical path、排除当前 source Session，并且不读取 raw tool output。
-
-这些只是候选来源，不代表每类都会进入每个 prompt。Execution schema v1 会在非空时附加 Runner 计算的 memory 与 workspace-Session block；schema v2 渲染 immutable Mainline context 与 fixed suffix，当前不会附加这两个预计算 block。所有 recall 都有 token budget，只是 reference context，不能覆盖 WorkItem contract、Action instruction、tool policy 或 completion protocol。`reuseMemory=false` 会关闭三条候选路径。
+复用的已完成工作 context 有 token budget，只是 reference material，不能覆盖 WorkItem contract、Action instruction、tool policy 或 completion protocol。`reuseMemory=false` 会关闭该复用。
 
 ## Attachment 与 evidence
 
@@ -186,8 +182,8 @@ Execution evidence 可以包含 summary、acceptance check、file/test reference
 - `read` workspace policy 不是 kernel-level sandbox。
 - 一个 Action completed 不足以让 WorkItem done；当前证据必须支持目标验收条件和交付边界，旧 workflow 还保留 final gate。
 - `turn_end` 不是 Action completion；executor 必须提交 structured outcome contract。
-- Work Center memory 永远不能获得高于当前合同与 safety rule 的权限。
-- Session 与 WorkItem 不共享一份 transcript，也不是同一个 memory owner。
+- 复用的已完成工作 context 永远不能获得高于当前合同与 safety rule 的权限。
+- Session 与 WorkItem 不共享一份 transcript。
 
 ## 相关页面
 
