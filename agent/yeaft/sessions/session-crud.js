@@ -218,7 +218,8 @@ function ensureSessionManifestReady(yeaftDir) {
     registry: readWorkDirRegistry(yeaftDir),
     yeaftDirForWorkDir,
     sessionsRootForYeaftDir: sessionsRoot,
-    copySessionExtras: (projectYeaftDir, sessionId) => copySessionExtras(projectYeaftDir, yeaftDir, sessionId),
+    // Archived Dream scopes stay at their original data root. Session bootstrap
+    // migrates Session metadata/transcripts only and must not read or copy memory.
     unregisterSessionWorkDir: (sessionId) => unregisterSessionWorkDir(yeaftDir, sessionId),
   });
   for (const row of listManifestSessions(yeaftDir)) {
@@ -235,16 +236,6 @@ function ensureSessionManifestReady(yeaftDir) {
     }
   }
   return result;
-}
-
-function copySessionExtras(sourceYeaftDir, destYeaftDir, sessionId) {
-  for (const family of ['session', 'sessions', 'group']) {
-    const src = join(sourceYeaftDir, 'memory', family, sessionId);
-    const dst = join(destYeaftDir, 'memory', family, sessionId);
-    if (!existsSync(src) || existsSync(dst)) continue;
-    mkdirSync(join(dst, '..'), { recursive: true });
-    cpSync(src, dst, { recursive: true, errorOnExist: false });
-  }
 }
 
 function repairSessionStoreAndManifest(yeaftDir, options = {}) {

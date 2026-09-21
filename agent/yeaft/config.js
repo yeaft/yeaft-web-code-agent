@@ -545,7 +545,9 @@ export function loadConfig(overrides = {}) {
     yeaft: normaliseYeaftSection(jsonConfig.yeaft),
     telemetry: normaliseTelemetrySection(jsonConfig.telemetry),
     workCenter: { enabled: jsonConfig.workCenter?.enabled === true },
-    dream: { enabled: jsonConfig.dream?.enabled === true },
+    // Dream runtime is disabled. Keep the stable shape but never honor a
+    // persisted toggle from an older client.
+    dream: { enabled: false },
     browserRuntime: normaliseBrowserRuntimeSection(jsonConfig.browserRuntime),
 
     // Agent-level tools / skills / MCP server allowlists. Missing fields mean

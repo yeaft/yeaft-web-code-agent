@@ -162,7 +162,7 @@ This file tracks one Yeaft message-history mode.
  * @param {string} [dir] — Root directory path. Defaults to ~/.yeaft/
  * @returns {{ dir: string, created: string[], writable: boolean, warnings: string[], seededSkills?: number }} — The root dir, list of created paths, writability status, any warnings, and how many bundled skills were seeded
  */
-export function initYeaftDir(dir) {
+export function initYeaftDir(dir, { migrateMemory = true } = {}) {
   const root = dir || DEFAULT_YEAFT_DIR;
   const created = [];
   const warnings = [];
@@ -252,7 +252,7 @@ export function initYeaftDir(dir) {
   // Idempotent (sentinel file) so re-running on a fully-migrated dir is a
   // no-op; on a partial-crash dir, each step is independently resumable.
   try {
-    const res = migrateSessions(root);
+    const res = migrateSessions(root, { migrateMemory });
     if (res && res.migrated) {
       console.log(`[yeaft] session migration complete (${res.moved} dirs moved, ${res.frontmatterRewrites} messages rewritten${res.warnings?.length ? `, ${res.warnings.length} warnings` : ''})`);
       if (res.warnings?.length) for (const w of res.warnings) console.warn(`[yeaft] migration: ${w}`);

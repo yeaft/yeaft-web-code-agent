@@ -28,10 +28,10 @@ function makeSession(enabled) {
 }
 
 describe('Agent Dream toggle', () => {
-  it('defaults Dream off and preserves explicit persisted toggles', () => {
+  it('keeps Dream off even when an old client persisted an enabled toggle', () => {
     expect(makeConfig({}).dream.enabled).toBe(false);
     expect(makeConfig({ dream: { enabled: false } }).dream.enabled).toBe(false);
-    expect(makeConfig({ dream: { enabled: true } }).dream.enabled).toBe(true);
+    expect(makeConfig({ dream: { enabled: true } }).dream.enabled).toBe(false);
   });
 
   it('stops automatic scheduling without disabling manual Dream triggers', async () => {

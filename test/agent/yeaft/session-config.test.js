@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +29,7 @@ import {
   batchSourcesForApply,
 } from '../../../agent/yeaft/dream/segment.js';
 import { buildPluginCatalog, createPluginSkillManager } from '../../../agent/yeaft/plugins.js';
+import { initYeaftDir } from '../../../agent/yeaft/init.js';
 import { loadSession } from '../../../agent/yeaft/session.js';
 import { MCPManager } from '../../../agent/yeaft/mcp.js';
 import { __testGetOrCreateVpEngine, __testHooks, __testLoadPluginCatalogMcpConfig, __testResetVpState, __testResolveVpEffectiveConfig, __testSetSession, handleYeaftCopySession, handleYeaftCreateSession, handleYeaftLoadHistoryOutline, handleYeaftPluginCatalog, handleYeaftManagedSkill, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftUpdateSessionConfig, handleYeaftVpSubscribe, refreshLiveSessionConfig } from '../../../agent/yeaft/web-bridge.js';
@@ -2829,15 +2830,58 @@ describe('Yeaft session-scoped model config', () => {
   });
 
 
-  it('does not initialize the Dream scheduler while the runtime path is disabled', async () => {
+  it('does not initialize or touch archived Dream state while the runtime path is disabled', async () => {
     const root = makeDir();
+    const memoryDir = join(root, 'memory');
+    const legacyDir = join(memoryDir, 'group', 'legacy-session');
+    mkdirSync(legacyDir, { recursive: true });
+    const memoryPath = join(legacyDir, 'memory.md');
+    const contentPath = join(legacyDir, 'content.md');
+    const indexPath = join(memoryDir, 'index.db');
+    writeFileSync(memoryPath, 'ARCHIVED_EVIDENCE');
+    writeFileSync(contentPath, 'ARCHIVED_CANONICAL');
+    writeFileSync(indexPath, 'NOT_A_SQLITE_DATABASE');
+    const before = new Map([memoryPath, contentPath, indexPath].map(file => [file, {
+      contents: readFileSync(file, 'utf8'),
+      mtimeMs: statSync(file).mtimeMs,
+    }]));
     let session = null;
     try {
-      session = await loadSession({ dir: root, skipMCP: true, skipSkills: true });
+      session = await loadSession({
+        dir: root,
+        skipMCP: true,
+        skipSkills: true,
+        dreamEnabled: true,
+      });
+      expect(session.config.dream.enabled).toBe(false);
       expect(session.dreamScheduler).toBeNull();
+      expect(session.memoryIndex).toBeNull();
+      expect(session.amsRegistry).toBeNull();
+      for (const [file, snapshot] of before) {
+        expect(readFileSync(file, 'utf8')).toBe(snapshot.contents);
+        expect(statSync(file).mtimeMs).toBe(snapshot.mtimeMs);
+      }
+      expect(existsSync(join(memoryDir, '.legacy'))).toBe(false);
     } finally {
       await session?.shutdown?.();
     }
+  });
+
+  it('leaves archived memory eligible for an explicit migration after runtime startup', () => {
+    const root = makeDir();
+    const legacyDir = join(root, 'memory', 'group', 'legacy-session');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'memory.md'), '---\nscope: group/legacy-session\n---\narchived');
+
+    initYeaftDir(root, { migrateMemory: false });
+    expect(existsSync(legacyDir)).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, '.yeaft-migration.done'), 'utf8')).memoryMigrated).toBe(false);
+
+    initYeaftDir(root);
+    const migratedDir = join(root, 'memory', 'session', 'legacy-session');
+    expect(existsSync(legacyDir)).toBe(false);
+    expect(existsSync(migratedDir)).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, '.yeaft-migration.done'), 'utf8')).memoryMigrated).toBe(true);
   });
 
   it('omits the Work Center producer tool by default and restores it when explicitly enabled', async () => {
