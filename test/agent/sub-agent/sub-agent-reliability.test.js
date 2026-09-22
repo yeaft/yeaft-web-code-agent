@@ -654,6 +654,129 @@ describe('wait-agent envelope shape', () => {
 // 9. Engine prepend — consumePendingNotifications hooks into the user prompt
 // -------------------------------------------------------------------------
 
+describe('task-backed child provider activity', () => {
+  beforeEach(() => {
+    _resetAgentRegistry();
+    _resetNotifications();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['single', 'burst', 'mixed'])('consumes %s activity after liveness without log/task/UI projection through Engine.query', async mode => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-child-activity-'));
+    const sessionId = 'session-activity';
+    const onEvent = vi.fn();
+    const taskEvents = vi.fn();
+    const taskManager = new TaskManager({ yeaftDir: dir, onEvent: taskEvents });
+    const task = taskManager.startTask({ sessionId, ownerVpId: 'vp-test', kind: 'sub_agent' });
+    const refresh = vi.spyOn(taskManager, 'refreshTaskLog');
+    const writeTask = vi.spyOn(taskManager.store, 'writeTask');
+    const agent = {
+      id: `agent-activity-${mode}`, name: 'activity', mission: 'Return the result.',
+      status: STATUS.CREATED, taskId: task.id, cwd: dir,
+      usage: { tokens: 0, turns: 0, startedAt: Date.now() },
+      createdAt: Date.now(), abortController: new AbortController(),
+    };
+    getAgentRegistry().set(agent.id, agent);
+    const checkpoints = [];
+    let streamCalls = 0;
+    const snapshot = () => ({
+      liveness: structuredClone(agent.liveness),
+      log: fs.readFileSync(agent.outputFile, 'utf8'),
+      refreshes: refresh.mock.calls.length, taskWrites: writeTask.mock.calls.length,
+      events: onEvent.mock.calls.length, taskEvents: taskEvents.mock.calls.length,
+      task: structuredClone(taskManager.getTask(sessionId, task.id)),
+      result: agent.result, lastResult: agent.lastResult, partial: agent.partial_output,
+      usage: structuredClone(agent.usage), execution: structuredClone(agent.execution),
+    });
+    async function* hidden(count) {
+      const before = snapshot();
+      // Separate timestamps without mocking Engine.query or the runner's clock.
+      await new Promise(resolve => setTimeout(resolve, 2));
+      const startedAt = Date.now();
+      for (let i = 0; i < count; i++) yield { type: 'provider_activity' };
+      checkpoints.push({ count, startedAt, before, after: snapshot() });
+    }
+    const adapter = {
+      async *stream() {
+        streamCalls++;
+        if (mode === 'mixed' && streamCalls === 1) {
+          yield* hidden(2);
+          yield { type: 'text_delta', text: 'checking; ' };
+          yield { type: 'thinking_delta', text: 'visible thinking' };
+          yield* hidden(3);
+          yield { type: 'tool_call', id: 'activity-echo', name: 'echo', input: {} };
+          yield { type: 'usage', inputTokens: 3, outputTokens: 2 };
+          yield { type: 'stop', stopReason: 'tool_use' };
+          return;
+        }
+        yield* hidden(mode === 'burst' ? 256 : 1);
+        yield { type: 'text_delta', text: 'done' };
+        yield { type: 'usage', inputTokens: 7, outputTokens: 4 };
+        yield { type: 'stop', stopReason: 'end_turn' };
+      },
+      async call() { return { text: 'ok', usage: {} }; },
+    };
+    try {
+      startSubAgent(agent, mkDeps(adapter, {
+        taskManager, parentSessionId: sessionId, onEvent,
+        subAgentLogDir: dir, yeaftDir: dir,
+      }));
+      await vi.waitFor(() => expect(agent.__driverStarted).toBe(false), { timeout: 5000 });
+      expect(agent.status).toBe(STATUS.COMPLETED);
+      expect(agent.error).toBeFalsy();
+      expect(streamCalls).toBe(mode === 'mixed' ? 2 : 1);
+      expect(checkpoints.map(c => c.count)).toEqual(mode === 'mixed' ? [2, 3, 1] : [mode === 'burst' ? 256 : 1]);
+      for (const { count, startedAt, before, after } of checkpoints) {
+        const { liveness: beforeLiveness, ...beforeProjection } = before;
+        const { liveness: afterLiveness, ...afterProjection } = after;
+        expect(afterLiveness).toEqual({
+          ...beforeLiveness, eventCount: beforeLiveness.eventCount + count,
+          lastEventAt: expect.any(Number), lastEventType: 'provider_activity',
+        });
+        expect(afterLiveness.lastEventAt).toBeGreaterThan(beforeLiveness.lastEventAt);
+        expect(afterLiveness.lastEventAt).toBeGreaterThanOrEqual(startedAt);
+        // No durable bytes, TaskStore writes, refreshTaskLog or either UI sink.
+        expect(afterProjection).toEqual(beforeProjection);
+      }
+      const text = mode === 'mixed' ? 'checking; done' : 'done';
+      const tokens = mode === 'mixed' ? 16 : 11;
+      expect(agent.result).toBe(text);
+      expect(agent.lastResult).toBe(text);
+      expect(agent.usage).toMatchObject({ tokens, turns: 1 });
+      expect(agent.liveness).toMatchObject({ outputChars: text.length, usageTokens: tokens,
+        toolUseCount: mode === 'mixed' ? 1 : 0 });
+      const log = fs.readFileSync(agent.outputFile, 'utf8');
+      const records = log.trim().split('\n').map(line => JSON.parse(line));
+      expect(records.filter(e => e.type === 'text_delta').map(e => e.text).join('')).toBe(text);
+      // The durable log uses an allowlisted projection; full fields stay on events.
+      expect(records).toContainEqual(expect.objectContaining({ type: 'usage' }));
+      expect(records).toContainEqual(expect.objectContaining({ type: 'turn_end', stopReason: 'end_turn' }));
+      const events = onEvent.mock.calls.map(([, event]) => event);
+      expect(events).toContainEqual(expect.objectContaining({ type: 'usage', inputTokens: 7, outputTokens: 4 }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'turn_end', terminal: true }));
+      expect(events.some(e => e.type === 'text_delta')).toBe(false); // Existing inline-card policy.
+      expect(events).toContainEqual(expect.objectContaining({ type: 'sub_agent_status', status: STATUS.COMPLETED }));
+      if (mode === 'mixed') {
+        for (const type of ['thinking_delta', 'tool_start', 'tool_end']) {
+          expect(records).toContainEqual(expect.objectContaining({ type }));
+          expect(events).toContainEqual(expect.objectContaining({ type }));
+        }
+      }
+      expect(taskManager.getTask(sessionId, task.id)).toMatchObject({ status: 'succeeded', result: { summary: text } });
+      expect(taskEvents.mock.calls.map(([event]) => event.event)).toContain('updated');
+      expect(taskEvents.mock.calls.map(([event]) => event.event)).toContain('completed');
+      expect(log).not.toContain('provider_activity');
+      expect(JSON.stringify(events)).not.toContain('provider_activity');
+      expect(JSON.stringify(taskEvents.mock.calls)).not.toContain('provider_activity');
+      expect(JSON.stringify(agent.engineMessages)).not.toContain('provider_activity');
+    } finally {
+      agent.abortController.abort();
+      await vi.waitFor(() => expect(agent.__driverStarted).toBe(false), { timeout: 5000 });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('engine prepends sub-agent notifications to the next user turn', () => {
   beforeEach(() => _resetNotifications());
 

@@ -490,6 +490,8 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           // Liveness — update first so even listener throws don't lose
           // the bump.
           bumpLivenessFromEvent(agent.liveness, evt);
+          // Hidden provider progress is liveness only, never a log/task/UI event.
+          if (evt?.type === 'provider_activity') continue;
 
           // Mirror every raw event to the durable log. We still keep
           // `sub_agent_event` text_delta suppressed so the inline transcript
