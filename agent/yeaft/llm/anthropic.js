@@ -395,6 +395,8 @@ export class AnthropicAdapter extends LLMAdapter {
           }
 
           const type = event.type;
+          if (signal?.aborted) throw new LLMAbortError();
+          if (sawStop) continue;
 
           if (type === 'content_block_start') {
             const block = event.content_block;
@@ -435,11 +437,15 @@ export class AnthropicAdapter extends LLMAdapter {
             const st = blockByIndex.get(idx);
             if (delta?.type === 'text_delta') {
               if (st?.kind === 'text') st.text += delta.text || '';
-              yield { type: 'text_delta', text: delta.text };
+              if (typeof delta.text === 'string' && delta.text.length > 0) {
+                yield { type: 'text_delta', text: delta.text };
+              }
             } else if (delta?.type === 'thinking_delta') {
               // Forward delta for live UI; ALSO accumulate for round-trip.
               if (st && st.kind === 'thinking') st.thinking += delta.thinking || '';
-              yield { type: 'thinking_delta', text: delta.thinking };
+              if (typeof delta.thinking === 'string' && delta.thinking.length > 0) {
+                yield { type: 'thinking_delta', text: delta.thinking };
+              }
             } else if (delta?.type === 'signature_delta') {
               // Anthropic typically sends signature in one delta near the
               // end of the (redacted_)thinking block. Accumulate defensively.
@@ -447,7 +453,11 @@ export class AnthropicAdapter extends LLMAdapter {
                 st.signature += delta.signature || '';
               }
             } else if (delta?.type === 'input_json_delta') {
-              if (st && st.kind === 'tool_use') st.input += delta.partial_json;
+              if (st?.kind === 'tool_use' && typeof delta.partial_json === 'string' && delta.partial_json.length > 0) {
+                st.input += delta.partial_json;
+                // No content and no throttling: the last delta defines idle time.
+                yield { type: 'provider_activity' };
+              }
             }
           } else if (type === 'content_block_stop') {
             const idx = event.index;

@@ -1157,7 +1157,7 @@ export function broadcastLanguageChange(language) {
   applyLiveLanguage(language);
 }
 
-/** Query timeout in ms — abort if LLM doesn't respond within this window */
+/** Provider inactivity windows (not a total-duration limit on an LLM call). */
 const QUERY_TIMEOUT_MS = 120_000;
 const HIGH_REASONING_QUERY_TIMEOUT_MS = 300_000;
 /** AskUser is human-paced but must never pin a VP turn forever. */
@@ -1166,6 +1166,41 @@ const ASK_USER_TIMEOUT_MS = 10 * 60_000;
 function isHighReasoningEffort(effort) {
   const value = typeof effort === 'string' ? effort.trim().toLowerCase() : '';
   return value === 'high' || value === 'xhigh' || value === 'max' || value === 'ultra';
+}
+
+/**
+ * Per-query provider inactivity window, not a total LLM call deadline.
+ * Hidden deltas only refresh an armed timer; tool/retry waits stay paused.
+ * stop() is irreversible, including on abort, so late events cannot revive it.
+ * @param {{ signal: AbortSignal, timeoutMs: number, onTimeout: Function }} options
+ */
+function createQueryWatchdog({ signal, timeoutMs, onTimeout }) {
+  let timer = null;
+  let stopped = signal.aborted;
+  const pause = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+  const stop = () => {
+    stopped = true;
+    pause();
+    signal.removeEventListener('abort', stop);
+  };
+  const reset = () => {
+    if (stopped || signal.aborted) return;
+    if (timer) {
+      timer.refresh();
+      return;
+    }
+    timer = setTimeout(() => {
+      stop();
+      onTimeout();
+    }, timeoutMs);
+  };
+  // No throttling or trailing heartbeat: the actual last delta owns idle time.
+  const touch = () => { if (timer) reset(); };
+  if (!stopped) signal.addEventListener('abort', stop, { once: true });
+  return { reset, pause, touch, stop };
 }
 
 function queryTimeoutMsForSessionConfig(config = null) {
@@ -4087,15 +4122,25 @@ function queueStreamTextDelta(hctx, text, envelope) {
  * todos, debug cards, and persistence all share the same boundary.
  *
  * @param {object} event — engine event (text_delta / tool_call / …)
- * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, thinkingBlocksAccum?:Array, resetQueryTimer:Function, pauseQueryTimer?:Function, markEngineTerminal?:Function, sessionId?:string, vpId?:string, turnId?:string}} hctx
+ * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, thinkingBlocksAccum?:Array, resetQueryTimer:Function, pauseQueryTimer?:Function, touchQueryTimer?:Function, stopQueryTimer?:Function, markEngineTerminal?:Function, sessionId?:string, vpId?:string, turnId?:string}} hctx
  */
 export function __testHandleEngineEvent(event, hctx) {
   return handleEngineEvent(event, hctx);
 }
 
 function handleEngineEvent(event, hctx) {
+  // Hidden progress has no wire/history/status projection and must not flush
+  // pending visible text or resume a paused/terminal provider watchdog.
+  if (event.type === 'provider_activity') {
+    hctx.touchQueryTimer?.();
+    return;
+  }
+  if ((event.type === 'text_delta' || event.type === 'thinking_delta')
+      && (typeof event.text !== 'string' || event.text.length === 0)) return;
   const terminalTurnEnd = event.type === 'turn_end' && event.terminal === true;
   const managesQueryTimer = terminalTurnEnd
+    || event.type === 'aborted'
+    || event.type === 'usage'
     || event.type === 'tool_start'
     || event.type === 'tool_end'
     || event.type === 'async_task_wait_start'
@@ -4300,6 +4345,7 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'aborted':
+      (hctx.stopQueryTimer || hctx.pauseQueryTimer)?.();
       if (typeof hctx.markEngineTerminal === 'function') {
         hctx.markEngineTerminal('aborted', { reason: event.reason || 'external' });
       }
@@ -4309,8 +4355,8 @@ function handleEngineEvent(event, hctx) {
       // Most engine turn_end events are internal loop boundaries. Only the
       // explicit terminal event precedes post-turn persistence/maintenance;
       // stop the user-query silence watchdog before that best-effort work.
-      if (event.terminal && typeof hctx.pauseQueryTimer === 'function') {
-        hctx.pauseQueryTimer();
+      if (event.terminal) {
+        (hctx.stopQueryTimer || hctx.pauseQueryTimer)?.();
       }
       // A normal tool_use stop means "run tools, then call the adapter again",
       // so it must NOT end the VP's visible turn. An aborted turn is terminal
@@ -5282,7 +5328,7 @@ function startSessionLoadInBackground({ sessionId = null, sessionMeta = null, pe
 /**
  * Wrap {@link runVpTurn} with a second-stage abort escalation.
  *
- * The in-turn watchdog is activity based: every engine event resets its
+ * The in-turn watchdog is activity based: content progress resets its
  * silence timer, and only a genuinely silent turn calls `vpAbort.abort()`.
  * This wrapper must therefore start its grace period from that abort signal,
  * not from turn enqueue. A fixed enqueue deadline incorrectly terminates
@@ -5507,21 +5553,16 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
   };
 
   try {
-    let queryTimer = null;
     const queryTimeoutMs = queryTimeoutMsForSession(sessionId);
-    const pauseQueryTimer = () => {
-      if (queryTimer) clearTimeout(queryTimer);
-      queryTimer = null;
-    };
-    const resetQueryTimer = () => {
-      pauseQueryTimer();
-      queryTimer = setTimeout(() => {
-        if (!vpAbort.signal.aborted) {
-          console.error(`[Yeaft] query timeout after ${queryTimeoutMs / 1000}s of silence — aborting VP ${vpId}`);
-          try { vpAbort.abort(); } catch { /* best-effort */ }
-        }
-      }, queryTimeoutMs);
-    };
+    const watchdog = createQueryWatchdog({
+      signal: vpAbort.signal,
+      timeoutMs: queryTimeoutMs,
+      onTimeout: () => {
+        console.error(`[Yeaft] query timeout after ${queryTimeoutMs / 1000}s of silence — aborting VP ${vpId}`);
+        try { vpAbort.abort(); } catch { /* best-effort */ }
+      },
+    });
+    const { reset: resetQueryTimer, pause: pauseQueryTimer } = watchdog;
     resetQueryTimer();
 
     // Emit turn_start so frontend can create the message block.
@@ -5605,6 +5646,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         thinkingBlocksAccum,
         resetQueryTimer,
         pauseQueryTimer,
+        touchQueryTimer: watchdog.touch,
+        stopQueryTimer: watchdog.stop,
         sessionId,
         vpId,
         turnId,
@@ -5656,10 +5699,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           // Human think time is not engine silence. Pause the query watchdog,
           // but keep a separate bounded AskUser lifetime so an abandoned card
           // cannot pin the VP forever.
-          if (queryTimer) {
-            clearTimeout(queryTimer);
-            queryTimer = null;
-          }
+          pauseQueryTimer();
           const pending = {
             resolve,
             reject,
@@ -5706,7 +5746,6 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
             messageType: event?.type || null,
           });
         }
-        resetQueryTimer();
         handleEngineEvent(event, handlerCtx);
       }
       if (perfTraceId) {
@@ -5781,7 +5820,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         emitVpTurnEnd('end_turn');
       }
     } finally {
-      if (queryTimer) clearTimeout(queryTimer);
+      watchdog.stop();
     }
   } catch (err) {
     if (escalationState?.escalated) return;
@@ -8068,6 +8107,7 @@ export const __testHooks = {
   projectRuntimeCount() {
     return projectRuntimes.size;
   },
+  createQueryWatchdog,
   queryTimeoutMsForSessionConfig,
   queryTimeoutMsForSession,
   seedQueuedVpTurn({ sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test' } = {}) {

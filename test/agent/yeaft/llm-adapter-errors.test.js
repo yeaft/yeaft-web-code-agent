@@ -432,3 +432,97 @@ describe('OpenAIResponsesAdapter error classification', () => {
     expect(events[0].error.code).toBe('invalid_request_error');
   });
 });
+
+describe('provider stream activity', () => {
+  afterEach(() => { global.fetch = originalFetch; });
+
+  const request = { model: 'test', system: '', messages: [{ role: 'user', content: 'hi' }] };
+  const sse = events => ({
+    ok: true, status: 200, headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')));
+      controller.close();
+    } }),
+  });
+  const anthropicDelta = (type, field, value) => ({
+    type: 'content_block_delta', index: 0, delta: { type, [field]: value },
+  });
+
+  it('reports every non-empty hidden delta without content, ignores empty/metadata and preserves completed tool input', async () => {
+    const chunks = ['{"secret":"', ...Array(200).fill('x'), '"}'];
+    for (const protocol of ['anthropic', 'responses']) {
+      const anthropic = protocol === 'anthropic';
+      const metadata = anthropic ? [
+        { type: 'ping' },
+        anthropicDelta('signature_delta', 'signature', 'signature-only'),
+        anthropicDelta('text_delta', 'text', ''),
+        anthropicDelta('thinking_delta', 'thinking', ''),
+      ] : [
+        { type: 'response.created' },
+        { type: 'response.reasoning_summary_part.added', part: { text: 'metadata' } },
+        { type: 'response.output_text.delta', delta: '' },
+      ];
+      const delta = value => anthropic
+        ? anthropicDelta('input_json_delta', 'partial_json', value)
+        : { type: 'response.function_call_arguments.delta', output_index: 0, delta: value };
+      const events = anthropic ? [
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'call', name: 'Tool', input: {} } },
+      ] : [
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call', name: 'Tool' } },
+      ];
+      events.push(...metadata, ...['', null, undefined, 42].map(delta), ...chunks.map(delta));
+      // Both Responses reasoning variants stay hidden. Anthropic keeps its
+      // existing visible thinking_delta projection, but never emits empties.
+      if (anthropic) {
+        events.push(anthropicDelta('thinking_delta', 'thinking', 'visible thinking'));
+        events.push({ type: 'content_block_stop', index: 0 }, { type: 'message_stop' });
+      } else {
+        for (const type of ['response.reasoning_text.delta', 'response.reasoning_summary_text.delta']) {
+          events.push(...['', null, undefined, 42].map(value => ({ type, delta: value })));
+          events.push({ type, delta: 'hidden reasoning' });
+        }
+        events.push({ type: 'response.function_call_arguments.done', output_index: 0 });
+        events.push({ type: 'response.completed', response: { status: 'completed', output: [], usage: {} } });
+      }
+      // Buffered post-terminal deltas are not activity.
+      events.push(delta('late'), { type: 'response.reasoning_text.delta', delta: 'late' });
+      global.fetch = async () => sse(events);
+      const Adapter = anthropic ? AnthropicAdapter : OpenAIResponsesAdapter;
+      const output = [];
+      for await (const event of new Adapter({ baseUrl: 'https://x', apiKey: 'k' }).stream(request)) output.push(event);
+      const activity = output.filter(event => event.type === 'provider_activity');
+      expect(activity).toEqual(Array.from({ length: chunks.length + (anthropic ? 0 : 2) }, () => ({ type: 'provider_activity' })));
+      expect(output.filter(event => event.type === 'tool_call')).toEqual([
+        { type: 'tool_call', id: 'call', name: 'Tool', input: { secret: 'x'.repeat(200) } },
+      ]);
+      expect(output.filter(event => event.type === 'thinking_delta')).toEqual(anthropic
+        ? [{ type: 'thinking_delta', text: 'visible thinking' }] : []);
+      expect(output.filter(event => event.type === 'text_delta')).toEqual([]);
+    }
+  });
+
+  it('drops buffered hidden deltas after abort and starts the next stream independently', async () => {
+    for (const Adapter of [AnthropicAdapter, OpenAIResponsesAdapter]) {
+      const events = Adapter === AnthropicAdapter ? [
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'call', name: 'Tool' } },
+        anthropicDelta('input_json_delta', 'partial_json', '{'),
+        anthropicDelta('input_json_delta', 'partial_json', '}'),
+        { type: 'content_block_stop', index: 0 }, { type: 'message_stop' },
+      ] : [
+        { type: 'response.reasoning_text.delta', delta: 'first' },
+        { type: 'response.reasoning_text.delta', delta: 'late' },
+        { type: 'response.completed', response: { status: 'completed' } },
+      ];
+      global.fetch = async () => sse(events);
+      const adapter = new Adapter({ baseUrl: 'https://x', apiKey: 'k' });
+      const ctrl = new AbortController();
+      const stream = adapter.stream({ ...request, signal: ctrl.signal });
+      expect((await stream.next()).value).toEqual({ type: 'provider_activity' });
+      ctrl.abort();
+      await expect(stream.next()).rejects.toMatchObject({ name: 'LLMAbortError' });
+      const next = [];
+      for await (const event of adapter.stream(request)) next.push(event);
+      expect(next.filter(event => event.type === 'provider_activity')).toHaveLength(2);
+    }
+  });
+});

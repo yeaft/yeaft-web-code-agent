@@ -1740,3 +1740,155 @@ describe('Yeaft load-history first paint', () => {
     }
   });
 });
+
+describe('provider inactivity watchdog', () => {
+  const makeHandler = (timeoutMs) => {
+    const ctrl = new AbortController();
+    const onTimeout = vi.fn(() => ctrl.abort());
+    const watchdog = __testHooks.createQueryWatchdog({ signal: ctrl.signal, timeoutMs, onTimeout });
+    const hctx = {
+      assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [], thinkingBlocksAccum: [],
+      resetQueryTimer: watchdog.reset, pauseQueryTimer: watchdog.pause,
+      touchQueryTimer: watchdog.touch, stopQueryTimer: watchdog.stop,
+    };
+    watchdog.reset();
+    return { ctrl, onTimeout, watchdog, hctx };
+  };
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); sent.length = 0; });
+
+  it('keeps hidden provider streams alive beyond 120s/300s and times out exactly one idle window after the last non-empty delta', async () => {
+    vi.useFakeTimers();
+    const { OpenAIResponsesAdapter } = await import('../../../agent/yeaft/llm/openai-responses.js');
+    for (const [effort, windowMs] of [['medium', 120_000], ['high', 300_000]]) {
+      expect(__testHooks.queryTimeoutMsForSessionConfig({ modelEffort: effort })).toBe(windowMs);
+      for (const Adapter of [AnthropicAdapter, OpenAIResponsesAdapter]) {
+        const { ctrl, onTimeout, watchdog, hctx } = makeHandler(windowMs);
+        let source;
+        const body = new ReadableStream({ start(controller) { source = controller; } });
+        const push = event => source.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+        vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, headers: new Headers(), body })));
+        const output = [];
+        const adapter = new Adapter({ baseUrl: 'https://x', apiKey: 'k' });
+        const pump = (async () => {
+          try {
+            for await (const event of adapter.stream({ model: 'test', system: '', messages: [], signal: ctrl.signal })) {
+              output.push(event);
+              __testHandleEngineEvent(event, hctx);
+            }
+          } catch (error) { return error; }
+        })();
+        const anthropic = Adapter === AnthropicAdapter;
+        push(anthropic
+          ? { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'call', name: 'Tool' } }
+          : { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call', name: 'Tool' } });
+        const delta = (value, n = 0) => anthropic
+          ? { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: value } }
+          : { type: n % 2 ? 'response.reasoning_summary_text.delta' : 'response.function_call_arguments.delta', output_index: 0, delta: value };
+        sent.length = 0;
+        for (let n = 0; n < 12; n++) {
+          await vi.advanceTimersByTimeAsync(windowMs / 4);
+          push(delta('hidden-content', n));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(ctrl.signal.aborted).toBe(false);
+        }
+        // A dense burst must not turn a throttle into a debounce or lose its tail.
+        for (let n = 0; n < 100; n++) push(delta('x', n));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(output).toEqual(Array.from({ length: 112 }, () => ({ type: 'provider_activity' })));
+        expect(sent).toEqual([]);
+        expect(hctx.assistantTextParts).toEqual([]);
+        expect(hctx.toolCallsAccum).toEqual([]);
+        expect(hctx.thinkingBlocksAccum).toEqual([]);
+        // Transport traffic and empty deltas are not model progress.
+        for (let n = 0; n < 3; n++) {
+          await vi.advanceTimersByTimeAsync(windowMs / 4);
+          push(delta(''));
+          push(anthropic ? { type: 'ping' } : { type: 'response.in_progress' });
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        await vi.advanceTimersByTimeAsync(windowMs / 4 - 1);
+        expect(ctrl.signal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(onTimeout).toHaveBeenCalledTimes(1);
+        expect(ctrl.signal.aborted).toBe(true);
+        push(delta('late'));
+        expect(await pump).toMatchObject({ name: 'LLMAbortError' });
+        source.close();
+        watchdog.touch(); watchdog.reset();
+        expect(vi.getTimerCount()).toBe(0);
+      }
+    }
+  });
+
+  it('does not flush text, project hidden content or let empty/usage metadata renew silence', async () => {
+    vi.useFakeTimers();
+    const { hctx, watchdog, onTimeout } = makeHandler(120_000);
+    sent.length = 0;
+    __testHandleEngineEvent({ type: 'text_delta', text: 'first' }, hctx);
+    __testHandleEngineEvent({ type: 'text_delta', text: 'batched' }, hctx);
+    const before = JSON.stringify(sent);
+    const timer = hctx.streamTextBatch.timer;
+    for (let n = 0; n < 100; n++) {
+      __testHandleEngineEvent({ type: 'provider_activity', text: 'secret', input: { password: 'secret' } }, hctx);
+    }
+    expect(JSON.stringify(sent)).toBe(before);
+    expect(hctx.streamTextBatch.parts).toEqual(['batched']);
+    expect(hctx.streamTextBatch.timer).toBe(timer);
+    expect(hctx.streamTextBatch.immediateNext).toBe(false);
+    expect(hctx.assistantTextParts).toEqual(['first', 'batched']);
+    await vi.advanceTimersByTimeAsync(199);
+    expect(JSON.stringify(sent)).toBe(before);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sent.at(-1).data.message.content).toEqual([{ type: 'text', text: 'batched' }]);
+    expect(JSON.stringify(sent)).not.toContain('secret');
+    for (let n = 0; n < 3; n++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      for (const type of ['text_delta', 'thinking_delta']) __testHandleEngineEvent({ type, text: '' }, hctx);
+      __testHandleEngineEvent({ type: 'usage', inputTokens: 0, outputTokens: 0 }, hctx);
+    }
+    await vi.advanceTimersByTimeAsync(29_799);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    watchdog.stop();
+  });
+
+  it('cannot resume paused work or resurrect aborted/terminal timers, including across queries', async () => {
+    vi.useFakeTimers();
+    for (const ending of ['abort', 'aborted', 'terminal']) {
+      const first = makeHandler(120_000);
+      for (const event of [
+        { type: 'tool_start', id: 'call', name: 'Bash' },
+        { type: 'llm_retry', delayMs: 180_000 },
+        { type: 'async_task_wait_start', pendingTaskIds: ['task'] },
+      ]) {
+        __testHandleEngineEvent(event, first.hctx);
+        __testHandleEngineEvent({ type: 'provider_activity' }, first.hctx);
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(first.onTimeout).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        __testHandleEngineEvent({ type: 'turn_start' }, first.hctx);
+        expect(vi.getTimerCount()).toBe(1);
+      }
+      if (ending === 'abort') first.ctrl.abort();
+      else __testHandleEngineEvent(ending === 'terminal'
+        ? { type: 'turn_end', terminal: true, stopReason: 'end_turn' }
+        : { type: 'aborted' }, first.hctx);
+      expect(vi.getTimerCount()).toBe(0);
+      const next = makeHandler(120_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      __testHandleEngineEvent({ type: 'provider_activity' }, first.hctx);
+      first.watchdog.reset(); // Also fence late AskUser resume callbacks.
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(first.onTimeout).not.toHaveBeenCalled();
+      expect(next.onTimeout).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      first.watchdog.stop(); next.watchdog.stop();
+    }
+    const ctrl = new AbortController(); ctrl.abort();
+    const stale = __testHooks.createQueryWatchdog({ signal: ctrl.signal, timeoutMs: 120_000, onTimeout: vi.fn() });
+    stale.reset(); stale.touch();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

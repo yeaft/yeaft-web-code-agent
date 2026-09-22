@@ -3169,7 +3169,12 @@ export class Engine {
             });
           }
           switch (event.type) {
+            case 'provider_activity':
+              // Internal liveness only: no text, tools, usage or durable state.
+              if (!sawProviderStop) yield { type: 'provider_activity' };
+              break;
             case 'text_delta':
+              if (typeof event.text !== 'string' || event.text.length === 0) break;
               if (ttfbMs === null) {
                 ttfbMs = Date.now() - startTime;
                 traceRequest('llm.first_text', {
@@ -3184,6 +3189,7 @@ export class Engine {
               providerState = event.providerState;
               break;
             case 'thinking_delta':
+              if (typeof event.text !== 'string' || event.text.length === 0) break;
               yield event;
               break;
             case 'thinking_block_end':
