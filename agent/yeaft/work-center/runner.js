@@ -1394,6 +1394,9 @@ export class WorkItemRunner {
           stoppedByEngineEvent = true;
           break;
         }
+        // Provider activity is liveness-only; keep control handling above, but
+        // never turn it into durable Run progress or a UI broadcast.
+        if (event?.type === 'provider_activity') continue;
         if (event?.type === 'loop') {
           loopCount += 1;
           this.store.appendRunLoop?.(run.id, ownerBootId, run.leaseEpoch, {

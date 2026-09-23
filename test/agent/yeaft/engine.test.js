@@ -11924,3 +11924,42 @@ describe('managed CLI setup and fast tool integration', () => {
     await verifyRipgrepParity();
   }, 120_000);
 });
+
+describe('provider activity through Engine', () => {
+  it('forwards content-free liveness only before stop/abort and does not contaminate a later query', async () => {
+    const adapter = new MockAdapter();
+    const engine = new Engine({ adapter, trace, config: { model: 'test' } });
+    adapter.pushResponse([
+      { type: 'provider_activity', text: 'hidden-secret', input: { secret: true } },
+      { type: 'text_delta', text: '' }, { type: 'thinking_delta', text: '' },
+      { type: 'text_delta', text: 'visible' },
+      { type: 'stop', stopReason: 'end_turn' },
+      { type: 'provider_activity', text: 'late-secret' },
+    ]);
+    const events = [];
+    for await (const event of engine.query({ prompt: 'first' })) events.push(event);
+    expect(events.filter(event => event.type === 'provider_activity')).toEqual([{ type: 'provider_activity' }]);
+    expect(events.filter(event => event.type === 'text_delta')).toEqual([{ type: 'text_delta', text: 'visible' }]);
+    expect(events.filter(event => event.type === 'thinking_delta')).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain('hidden-secret');
+    expect(JSON.stringify(events)).not.toContain('late-secret');
+
+    adapter.pushResponse([{ type: 'provider_activity' }, { type: 'provider_activity' }]);
+    const ctrl = new AbortController();
+    const aborted = [];
+    for await (const event of engine.query({ prompt: 'abort', signal: ctrl.signal })) {
+      aborted.push(event);
+      if (event.type === 'provider_activity') ctrl.abort();
+    }
+    expect(aborted.filter(event => event.type === 'provider_activity')).toHaveLength(1);
+    expect(aborted).toContainEqual(expect.objectContaining({ type: 'turn_end', terminal: true, stopReason: 'aborted' }));
+
+    adapter.pushResponse([{ type: 'provider_activity' }, { type: 'text_delta', text: 'next' }, { type: 'stop', stopReason: 'end_turn' }]);
+    const next = [];
+    for await (const event of engine.query({ prompt: 'next' })) next.push(event);
+    expect(next.filter(event => event.type === 'provider_activity')).toEqual([{ type: 'provider_activity' }]);
+    expect(JSON.stringify(adapter.callLog.at(-1))).not.toContain('provider_activity');
+    expect(JSON.stringify(adapter.callLog.at(-1))).not.toContain('hidden-secret');
+    expect(next).toContainEqual(expect.objectContaining({ type: 'turn_end', terminal: true, stopReason: 'end_turn' }));
+  });
+});

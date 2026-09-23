@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkItemWatcher } from '../../../../agent/yeaft/work-center/watcher.js';
+import { WorkItemRunner } from '../../../../agent/yeaft/work-center/runner.js';
+import { NullTrace } from '../../../../agent/yeaft/debug-trace.js';
 import { WorkItemStore } from '../../../../agent/yeaft/work-center/store.js';
 import { WorkflowController } from '../../../../agent/yeaft/work-center/controller.js';
 import { isWorkCenterEnabled } from '../../../../agent/yeaft/work-center/feature.js';
@@ -23,6 +25,129 @@ describe('Work Center feature gate', () => {
 });
 
 describe('WorkItemWatcher', () => {
+  it.each([
+    { name: 'single', activityCount: 1, mixed: false },
+    { name: 'burst', activityCount: 3, mixed: false },
+    { name: 'mixed', activityCount: 2, mixed: true },
+  ])('keeps $name provider activity out of durable progress through the real Engine', async ({ activityCount, mixed }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-work-center-activity-'));
+    const store = new WorkItemStore(join(dir, 'work-center.db'));
+    const controller = new WorkflowController(store, { listAvailableVpIds: () => ['omni'] });
+    const criterion = 'Provider activity never publishes progress';
+    controller.create({
+      title: 'Keep activity internal', goal: criterion, acceptanceCriteria: [criterion],
+      workflowTemplate: 'software-change', workDir: dir, start: true,
+    });
+    writeFileSync(join(dir, 'evidence.txt'), 'Normal tool output');
+    const events = [];
+    const engineEvents = [];
+    const observations = [];
+    const visibleObservations = [];
+    const updateProgress = vi.spyOn(store, 'updateRunProgress');
+    let onProgress;
+    let runId;
+    let requests = 0;
+    const projection = () => ({
+      callbacks: onProgress.mock.calls.length,
+      writes: updateProgress.mock.calls.length,
+      broadcasts: events.filter(event => event.type === 'run.progress').length,
+      revision: store.getRun(runId).progressRevision,
+    });
+    const runner = new WorkItemRunner({
+      store,
+      trace: new NullTrace(),
+      runtimeProvider: async () => ({
+        defaultWorkDir: dir,
+        config: { model: 'provider/model', maxOutputTokens: 1_024, projectDocMaxBytes: 0 },
+        adapter: {
+          async *stream() {
+            requests += 1;
+            const count = requests === 1 ? activityCount : 1;
+            for (let index = 0; index < count; index += 1) {
+              // Cross the real default 200ms progress throttle, including each
+              // event of the burst, without overriding the production interval.
+              await new Promise(resolve => setTimeout(resolve, 250));
+              const before = projection();
+              yield { type: 'provider_activity' };
+              observations.push({ before, after: projection() });
+            }
+            const beforeText = projection();
+            yield { type: 'text_delta', text: requests === 1 ? 'Inspecting evidence.\n' : 'Finished inspection.\n' };
+            visibleObservations.push({ before: beforeText, after: projection() });
+            if (mixed && requests === 1) {
+              yield { type: 'tool_call', id: 'read-evidence', name: 'FileRead', input: {
+                file_path: join(dir, 'evidence.txt'), offset: 0, limit: 10,
+              } };
+            } else {
+              yield { type: 'text_delta', text: JSON.stringify({
+                outcome: 'completed', summary: 'Inspection complete', evidence: ['evidence.txt'],
+                acceptanceChecks: [{ criterion, status: 'passed', evidence: 'Checked progress isolation' }],
+              }) };
+            }
+            yield { type: 'usage', inputTokens: 10, outputTokens: 3 };
+            yield { type: 'stop', stopReason: mixed && requests === 1 ? 'tool_use' : 'end_turn' };
+          },
+        },
+      }),
+      registry: {
+        listVps: () => [{ id: 'omni', name: 'Omni', role: 'developer', traits: [] }],
+        getVp: () => ({ id: 'omni', name: 'Omni', role: 'developer', traits: [] }),
+      },
+    });
+    const run = runner.run.bind(runner);
+    const runSpy = vi.spyOn(runner, 'run').mockImplementation(options => {
+      runId = options.run.id;
+      onProgress = vi.fn(options.onProgress);
+      return run({ ...options, onProgress, onEngineEvent: event => { engineEvents.push(event); } });
+    });
+    const watcher = new WorkItemWatcher({
+      store, controller, runner, ownerBootId: 'activity-owner',
+      pollIntervalMs: 60_000, leaseMs: 60_000,
+      onEvent: event => {
+        events.push(event);
+        // This fixture executes one Action, not the rest of the workflow.
+        if (event.type === 'run.finished') watcher.lifecycle = 'idle';
+      },
+    });
+    try {
+      expect(runner.progressIntervalMs).toBe(200);
+      await watcher.tick();
+      await Promise.all([...watcher.activeRuns.values()].map(entry => entry.promise));
+      expect(runSpy).toHaveBeenCalledTimes(1);
+      const result = await runSpy.mock.results[0].value;
+      expect(observations).toHaveLength(activityCount + (mixed ? 1 : 0));
+      for (const { before, after } of observations) expect(after).toEqual(before);
+      for (const { before, after } of visibleObservations) {
+        expect(after.callbacks).toBeGreaterThan(before.callbacks);
+        expect(after.writes).toBeGreaterThan(before.writes);
+        expect(after.broadcasts).toBeGreaterThan(before.broadcasts);
+        expect(after.revision).toBeGreaterThan(before.revision);
+      }
+      expect(engineEvents.filter(event => event.type === 'provider_activity')).toHaveLength(observations.length);
+      expect(engineEvents).toContainEqual(expect.objectContaining({ type: 'turn_end', terminal: true }));
+      expect(result).toMatchObject({
+        outcome: 'completed', llmRequestCount: mixed ? 2 : 1,
+        toolCount: mixed ? 1 : 0, inputTokens: mixed ? 20 : 10,
+        outputTokens: mixed ? 6 : 3, totalTokens: mixed ? 26 : 13,
+        response: mixed ? 'Inspecting evidence.\nFinished inspection.' : 'Inspecting evidence.',
+      });
+      if (mixed) {
+        expect(engineEvents).toContainEqual(expect.objectContaining({ type: 'tool_start', name: 'FileRead' }));
+        expect(engineEvents).toContainEqual(expect.objectContaining({ type: 'tool_end', isError: false }));
+        expect(onProgress.mock.calls.map(([progress]) => progress.toolCount)).toContain(1);
+      }
+      expect(onProgress.mock.calls.at(-1)[0]).toMatchObject({ totalTokens: result.totalTokens });
+      expect(store.getRun(runId)).toMatchObject({ status: 'completed', totalTokens: result.totalTokens });
+      expect(events).toContainEqual(expect.objectContaining({ type: 'run.finished', runId }));
+    } finally {
+      await watcher.stop();
+      runSpy.mockRestore();
+      updateProgress.mockRestore();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('interrupts a claimed Run when stop races with preparation', async () => {
     const prepareGate = deferred();
     const claim = { workItem: { id: 'w1' }, action: { id: 'a1' }, run: { id: 'r1', leaseEpoch: 4 } };

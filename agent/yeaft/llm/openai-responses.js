@@ -429,6 +429,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
           const type = event.type;
 
+          if (signal?.aborted) throw new LLMAbortError();
           if (sawTerminalEvent) continue;
           if (type === 'response.output_item.done') {
             if (Number.isInteger(event.output_index) && event.item) completedItems.set(event.output_index, event.item);
@@ -450,8 +451,14 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           } else if (type === 'response.function_call_arguments.delta') {
             const idx = event.output_index;
             const accum = toolCallAccum.get(idx);
-            if (accum) {
-              accum.arguments += event.delta || '';
+            if (accum && typeof event.delta === 'string' && event.delta.length > 0) {
+              accum.arguments += event.delta;
+              yield { type: 'provider_activity' };
+            }
+          } else if (type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') {
+            // Reasoning remains hidden; only report actual incremental content.
+            if (typeof event.delta === 'string' && event.delta.length > 0) {
+              yield { type: 'provider_activity' };
             }
           } else if (type === 'response.function_call_arguments.done') {
             const idx = event.output_index;
