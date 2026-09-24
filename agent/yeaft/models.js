@@ -496,8 +496,9 @@ function inferThinkingCapability(model) {
     return { supportsThinking: true, thinkingProtocol: 'openai-reasoning', defaultEffort: null, maxBudgetTokens: null };
   }
 
-  // Claude Opus 4.7/4.8 expose the full adaptive effort set, including xhigh.
-  if (/^claude-opus-4[-.]?(7|8)($|-|\.)/.test(id)) {
+  // Claude Opus 4.7/4.8 and every Claude 5+ generation (e.g. claude-opus-5.5,
+  // claude-sonnet-5) use adaptive thinking with output_config.effort.
+  if (/^claude-opus-4[-.]?(7|8)($|-|\.)/.test(id) || /^claude-(opus|sonnet|haiku)-([5-9]|[1-9]\d)($|-|\.)/.test(id)) {
     return {
       supportsThinking: true,
       thinkingProtocol: 'anthropic-adaptive',
