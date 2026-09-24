@@ -327,6 +327,11 @@ export class AnthropicAdapter extends LLMAdapter {
     // when streaming was requested. Seal exactly the same native blocks.
     if ((response.headers?.get('content-type') || '').includes('application/json')) {
       const result = await response.json();
+      // Account for consumed tokens even when the completed response cannot
+      // safely publish tools. Budget consumers may abort on this usage event.
+      yield { type: 'usage', inputTokens: result.usage?.input_tokens || 0, outputTokens: result.usage?.output_tokens || 0,
+        cacheReadTokens: result.usage?.cache_read_input_tokens || 0, cacheWriteTokens: result.usage?.cache_creation_input_tokens || 0,
+        ...reasoningUsage(result.usage, 'anthropic') };
       if (signal?.aborted) throw new LLMAbortError();
       for (const block of result.content || []) {
         if (block.type !== 'tool_use') continue;
@@ -343,9 +348,6 @@ export class AnthropicAdapter extends LLMAdapter {
         if (block.type === 'redacted_thinking') yield { type: 'thinking_block_end', redacted: true, data: block.data };
       }
       if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
-      yield { type: 'usage', inputTokens: result.usage?.input_tokens || 0, outputTokens: result.usage?.output_tokens || 0,
-        cacheReadTokens: result.usage?.cache_read_input_tokens || 0, cacheWriteTokens: result.usage?.cache_creation_input_tokens || 0,
-        ...reasoningUsage(result.usage, 'anthropic') };
       yield { type: 'stop', stopReason: this.#mapStopReason(result.stop_reason) };
       if (onRawExchange) {
         try { onRawExchange({ rawRequest, rawResponse: { status: response.status, headers: safeHeaders(response), body: result } }); } catch { /* diagnostic only */ }
@@ -385,7 +387,8 @@ export class AnthropicAdapter extends LLMAdapter {
     let sawStop = false;
     let sawMessageStart = false;
     let cumulativeOutputTokens = 0;
-    const hasToolBlocks = () => [...blockByIndex.values()].some(block => block.kind === 'tool_use')
+    let toolInputError = null;
+    const hasToolBlocks = () => toolInputError !== null || [...blockByIndex.values()].some(block => block.kind === 'tool_use')
       || [...completedBlocks.values()].some(block => block.type === 'tool_use');
     const requireClosedBlocks = () => {
       if (blockByIndex.size > 0) {
@@ -501,16 +504,14 @@ export class AnthropicAdapter extends LLMAdapter {
               // Unknown / unhandled block kind (e.g. text — we don't track
               // text state because text_delta is forwarded immediately).
             } else if (st.kind === 'tool_use') {
-              let parsedInput;
               try {
-                parsedInput = st.input ? JSON.parse(st.input) : st.native.input;
+                const parsedInput = requireToolInputObject(st.input ? JSON.parse(st.input) : st.native.input);
+                completedBlocks.set(idx, { ...st.native, input: parsedInput });
               } catch {
-                // Fine-grained streams can end mid-JSON. Never repair input or
-                // turn a failed parse into execute({}); discard the whole batch.
-                throw new LLMServerError('Anthropic returned invalid or incomplete tool input', 0);
+                // Reject the entire batch, but drain to the message boundary so
+                // the provider's final usage is not lost on truncated JSON.
+                toolInputError = new LLMServerError('Anthropic returned invalid or incomplete tool input', 0);
               }
-              requireToolInputObject(parsedInput);
-              completedBlocks.set(idx, { ...st.native, input: parsedInput });
               // Publish tools only after message_stop validates the entire
               // response, including parallel siblings and max_tokens truncation.
             } else if (st.kind === 'thinking' || st.kind === 'redacted_thinking') {
@@ -538,18 +539,8 @@ export class AnthropicAdapter extends LLMAdapter {
             if (st?.kind === 'redacted_thinking') completedBlocks.set(idx, { type: 'redacted_thinking', data: st.data });
             blockByIndex.delete(idx);
           } else if (type === 'message_delta') {
-            const stopReason = event.delta?.stop_reason;
-            if (stopReason) {
-              if (stopReason === 'max_tokens' && hasToolBlocks()) {
-                throw new LLMServerError('Anthropic tool response was truncated at max_tokens', 0);
-              }
-              // Only message_stop seals native state. EOF after message_delta
-              // must not silently complete a signed tool turn without its state.
-              yield {
-                type: 'stop',
-                stopReason: this.#mapStopReason(stopReason),
-              };
-            }
+            // Account before validating stop_reason: failed requests still cost
+            // tokens, and usage can trigger a budget abort before any retry.
             // Anthropic message_delta usage is cumulative across the response.
             // Expose only the newly consumed output tokens so shared accounting
             // can safely add events from message_start and multiple deltas.
@@ -570,7 +561,18 @@ export class AnthropicAdapter extends LLMAdapter {
                 outputTokens,
               };
             }
+            if (signal?.aborted) throw new LLMAbortError();
+            const stopReason = event.delta?.stop_reason;
+            if (stopReason === 'max_tokens' && hasToolBlocks()) {
+              toolInputError = new LLMServerError('Anthropic tool response was truncated at max_tokens', 0);
+            }
+            if (stopReason && !toolInputError) {
+              // Only message_stop seals native state. EOF after message_delta
+              // must not silently complete a signed tool turn without its state.
+              yield { type: 'stop', stopReason: this.#mapStopReason(stopReason) };
+            }
           } else if (type === 'message_stop') {
+            if (toolInputError) throw toolInputError;
             requireClosedBlocks();
             sawStop = true;
             if (!stateFailed) {
@@ -613,6 +615,7 @@ export class AnthropicAdapter extends LLMAdapter {
         }
       }
       if (signal?.aborted) throw new LLMAbortError();
+      if (toolInputError) throw toolInputError;
       if (!sawStop && (sawMessageStart || hasToolBlocks())) {
         throw new LLMServerError('Anthropic stream ended before stop event', 0);
       }

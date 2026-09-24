@@ -581,12 +581,34 @@ describe('Anthropic tool input completion boundary', () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects invalid/truncated JSON fallback before exposing any tools', async () => {
+  it('accounts for cumulative usage before rejecting truncated or malformed SSE tool batches', async () => {
+    for (const compact of [false, true]) {
+      for (const [input, stop_reason] of [['{}', 'max_tokens'], ['{"value":', 'max_tokens'], ['null', 'tool_use']]) {
+        const events = [
+          { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 } } },
+          start(0), delta(0, input), stop(0),
+          { type: 'message_delta', usage: { output_tokens: 7 } },
+          { type: 'message_delta', delta: { stop_reason }, usage: { output_tokens: 65536 } },
+          messageStop,
+        ];
+        vi.stubGlobal('fetch', vi.fn(async () => response(events, compact)));
+        const seen = [];
+        await expect((async () => { for await (const e of adapter().stream(request)) seen.push(e); })()).rejects.toBeInstanceOf(LLMServerError);
+        const usage = seen.filter(e => e.type === 'usage');
+        expect(usage.map(e => e.outputTokens)).toEqual([1, 6, 65529]);
+        expect(usage[0]).toMatchObject({ inputTokens: 10, cacheReadTokens: 7, cacheWriteTokens: 3 });
+        expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
+      }
+    }
+  });
+
+  it('accounts for invalid/truncated JSON fallback without exposing any tools', async () => {
     for (const [input, stop_reason] of [[null, 'tool_use'], [[], 'tool_use'], [{}, 'max_tokens']]) {
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ content: [start(0).content_block, start(1, input).content_block], stop_reason })));
+      const usage = { input_tokens: 10, output_tokens: 65536, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 };
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ content: [start(0).content_block, start(1, input).content_block], stop_reason, usage })));
       const seen = [];
       await expect((async () => { for await (const e of adapter().stream(request)) seen.push(e); })()).rejects.toBeInstanceOf(LLMServerError);
-      expect(seen).toEqual([]);
+      expect(seen).toEqual([{ type: 'usage', inputTokens: 10, outputTokens: 65536, cacheReadTokens: 7, cacheWriteTokens: 3 }]);
     }
   });
 });

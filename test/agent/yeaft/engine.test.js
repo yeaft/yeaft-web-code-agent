@@ -7641,6 +7641,64 @@ describe('Engine', () => {
       }
     });
 
+    it('accounts for every rejected Anthropic tool response across retries without executing or persisting tools', async () => {
+      const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-anthropic-retry-usage-'));
+      const originalFetch = global.fetch;
+      const conversationStore = new ConversationStore(yeaftDir);
+      const execute = vi.fn(async () => 'must not execute');
+      const registry = new ToolRegistry().register(defineTool({ name: 'echo', description: 'echo', parameters: { type: 'object' }, execute }));
+      const usage = { input_tokens: 10, output_tokens: 65536, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 };
+      try {
+        for (const format of ['sse', 'json']) {
+          for (const invalid of [false, true]) {
+            const block = { type: 'tool_use', id: 'call', name: 'echo', input: invalid ? null : {} };
+            const stop_reason = invalid ? 'tool_use' : 'max_tokens';
+            global.fetch = vi.fn(async () => format === 'json'
+              ? new Response(JSON.stringify({ content: [block], stop_reason, usage }), { headers: { 'content-type': 'application/json' } })
+              : new Response([
+                { type: 'message_start', message: { usage: { ...usage, output_tokens: 1 } } },
+                { type: 'content_block_start', index: 0, content_block: { ...block, input: {} } },
+                { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: invalid ? '{"value":' : '{}' } },
+                { type: 'content_block_stop', index: 0 },
+                { type: 'message_delta', delta: { stop_reason }, usage: { output_tokens: usage.output_tokens } },
+                { type: 'message_stop' },
+              ].map(event => `data:${JSON.stringify(event)}\n\n`).join('')));
+            const accounting = vi.fn();
+            const onRequest = vi.fn();
+            const onProviderRequestStart = vi.fn();
+            const adapter = withUsageAccounting(new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', streamIdleTimeoutMs: 90_000, highEffortStreamIdleTimeoutMs: 270_000 }), accounting, onRequest);
+            const engine = new Engine({ adapter, trace, toolRegistry: registry, conversationStore, yeaftDir,
+              config: { model: 'claude-opus-5.5', modelEffort: 'xhigh', projectDocMaxBytes: 0, maxOutputTokens: 65536,
+                llmRetry: { maxRetries: 3, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+            const sessionId = `retry-usage-${format}-${invalid}`;
+            const events = [];
+            for await (const event of engine.query({ prompt: 'echo', sessionId, onProviderRequestStart })) events.push(event);
+            expect(global.fetch).toHaveBeenCalledTimes(4);
+            expect(onRequest).toHaveBeenCalledTimes(4);
+            expect(onProviderRequestStart.mock.calls.map(([policy]) => policy)).toEqual(Array(4).fill({ effort: 'xhigh', streamIdleTimeoutMs: 270_000 }));
+            expect(accounting.mock.calls.map(([tokens]) => tokens)).toEqual(Array(4).fill({
+              inputTokens: 10, outputTokens: 65536, cacheReadTokens: 7, cacheWriteTokens: 3, totalTokens: 65556,
+            }));
+            expect(events.filter(e => e.type === 'usage').reduce((sum, e) => sum + e.outputTokens, 0)).toBe(262144);
+            expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(3);
+            expect(events.filter(e => e.type === 'error')).toHaveLength(1);
+            expect(events).toContainEqual(expect.objectContaining({ type: 'turn_end', terminal: true, stopReason: 'error' }));
+            expect(events).toContainEqual(expect.objectContaining({ type: 'turn_close', outputTokens: 262144, totalTokens: 262224 }));
+            expect(execute).not.toHaveBeenCalled();
+            expect(events.filter(e => e.type === 'tool_call' || e.type === 'tool_start')).toEqual([]);
+            const persisted = conversationStore.loadRecentBySession(sessionId, 50);
+            expect(persisted.flatMap(row => row.toolCalls || [])).toEqual([]);
+            expect(persisted.filter(row => row.role === 'tool')).toEqual([]);
+          }
+        }
+      } finally {
+        global.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
     it('falls back after stream idle timeout retries are exhausted', async () => {
       const { LLMStreamIdleTimeoutError } = await import('../../../agent/yeaft/llm/adapter.js');
       const models = [];

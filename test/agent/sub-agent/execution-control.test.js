@@ -202,6 +202,55 @@ describe('sub-agent execution control', () => {
     }
   });
 
+  it.each(['sse', 'json'])('enforces the token budget on rejected Anthropic tool output before retry (%s)', async format => {
+    const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
+    const { withUsageAccounting } = await import('../../../agent/yeaft/llm/usage-accounting.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-execution-truncated-usage-'));
+    const originalFetch = global.fetch;
+    const agent = record({ max_tokens: 65536 });
+    const block = { type: 'tool_use', id: 'read', name: 'FileRead', input: {} };
+    const usage = { input_tokens: 10, output_tokens: 65536 };
+    let requests = 0;
+    let toolCalls = 0;
+    const accounting = [];
+    global.fetch = async () => {
+      requests++;
+      return format === 'json'
+        ? new Response(JSON.stringify({ content: [block], stop_reason: 'max_tokens', usage }), { headers: { 'content-type': 'application/json' } })
+        : new Response([
+          { type: 'message_start', message: { usage: { ...usage, output_tokens: 1 } } },
+          { type: 'content_block_start', index: 0, content_block: block },
+          { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"file_path":' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: usage.output_tokens } },
+          { type: 'message_stop' },
+        ].map(event => `data:${JSON.stringify(event)}\n\n`).join(''));
+    };
+    getAgentRegistry().set(agent.id, agent);
+    try {
+      startSubAgent(agent, {
+        adapter: withUsageAccounting(new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid' }), tokens => accounting.push(tokens)),
+        config: { model: 'claude-opus-5.5', maxOutputTokens: 65536, projectDocMaxBytes: 0, _readOnly: true,
+          llmRetry: { maxRetries: 3, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } },
+        trace: new NullTrace(), parentToolRegistry: new ToolRegistry().register(readTool(async () => { toolCalls++; return 'must not execute'; })),
+        subAgentLogDir: dir, yeaftDir: dir,
+      });
+      await waitForCleanup(agent);
+      expect(requests).toBe(1);
+      expect(toolCalls).toBe(0);
+      expect(agent.result).toMatchObject({ status: 'budget_exceeded', usage: { tokens: 65546 } });
+      expect(agent.result.reason).toContain('max_tokens');
+      expect(agent.liveness.usageTokens).toBe(65546);
+      expect(accounting).toEqual([{ inputTokens: 10, outputTokens: 65536, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 65546 }]);
+    } finally {
+      agent.abortController.abort('cleanup');
+      await waitForCleanup(agent);
+      global.fetch = originalFetch;
+      getAgentRegistry().delete(agent.id);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('abandons idle work only when the embedding caller explicitly opts into an idle timeout', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yeaft-execution-explicit-idle-'));
     const agent = record();

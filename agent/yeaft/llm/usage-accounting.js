@@ -71,9 +71,9 @@ export class UsageAccountingAdapter extends LLMAdapter {
     const upstream = params?.onRequestStart;
     return {
       ...params,
-      onRequestStart: () => {
+      onRequestStart: (...args) => {
         try {
-          upstream?.();
+          upstream?.(...args);
         } finally {
           try {
             this.#onRequest();
