@@ -355,6 +355,65 @@ test.describe('Yeaft composer menus', () => {
     await expect(panel).not.toHaveClass(/expanded/);
   });
 
+  for (const { theme, width } of [{ theme: 'light', width: 1280 }, { theme: 'dark', width: 320 }]) {
+    test(`LLM settings preserve hidden request policies: ${theme}, ${width}px`, async ({ page, serverUrl }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await openYeaftComposer(page, serverUrl);
+      await page.evaluate(theme => {
+        document.documentElement.setAttribute('data-theme', theme);
+        const store = window.Pinia.useChatStore();
+        const agentId = store.currentAgent;
+        store.llmConfig[agentId] = { loaded: true, agentConfig: {
+          providers: [
+            { name: 'proxy', baseUrl: 'https://proxy.invalid', apiKey: 'synthetic', protocol: 'anthropic',
+              streamIdleTimeoutMs: 400000, capabilities: { eagerInputStreaming: true }, models: ['claude-opus-5.5'] },
+            { name: 'github-copilot', managed: 'github-copilot', credentialProvider: 'github-copilot',
+              apiKey: 'PRIVATE-API-KEY', githubToken: 'PRIVATE-GITHUB-TOKEN',
+              streamIdleTimeoutMs: 0, capabilities: { eagerInputStreaming: false }, models: ['claude-opus-4.8'] },
+          ], primaryModel: 'proxy/claude-opus-5.5', debug: false,
+        } };
+        window.__llmSavedWire = [];
+        store.sendWsMessage = message => {
+          if (message.type === 'get_llm_config') {
+            setTimeout(() => { store.llmConfig[agentId] = JSON.parse(JSON.stringify(store.llmConfig[agentId])); }, 0);
+            return;
+          }
+          if (message.type !== 'update_llm_config') return;
+          window.__llmSavedWire.push(structuredClone(message));
+          setTimeout(() => {
+            store.llmConfig[agentId] = { loaded: true, requestId: message.requestId, agentConfig: structuredClone(message.config) };
+          }, 0);
+        };
+      }, theme);
+      await page.locator('.yeaft-composer-model').click();
+      await page.locator('.yeaft-model-config-option').click();
+      const dialog = page.getByRole('dialog', { name: 'Agent settings', exact: true });
+      const tab = dialog.locator('.llm-tab');
+      await expect(tab.locator('.llm-provider-card')).toHaveCount(2);
+      const save = tab.locator('.llm-save-row button');
+      await expect(save).toBeDisabled();
+      await tab.locator('.llm-model-section .sp-custom-select-trigger').click();
+      await tab.locator('.llm-model-menu .sp-custom-select-option').filter({ hasText: 'github-copilot/claude-opus-4.8' }).click();
+      await tab.locator('.llm-toggle-row input').check();
+      await expect(save).toBeEnabled();
+      await save.focus();
+      await save.press('Enter');
+      await expect.poll(() => page.evaluate(() => window.__llmSavedWire.length)).toBe(1);
+      const message = await page.evaluate(() => window.__llmSavedWire[0]);
+      expect(message.config).toMatchObject({ primaryModel: 'github-copilot/claude-opus-4.8', debug: true,
+        providers: [
+          { name: 'proxy', streamIdleTimeoutMs: 400000, capabilities: { eagerInputStreaming: true } },
+          { name: 'github-copilot', streamIdleTimeoutMs: 0, capabilities: { eagerInputStreaming: false } },
+        ] });
+      expect(JSON.stringify(message)).not.toContain('PRIVATE');
+      await expect.poll(() => page.evaluate(() => {
+        const store = window.Pinia.useChatStore();
+        return store.llmConfig[store.currentAgent]?.agentConfig.primaryModel;
+      })).toBe('github-copilot/claude-opus-4.8');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    });
+  }
+
   test('opens LLM configuration from the model menu', async ({ page, serverUrl }) => {
     await openYeaftComposer(page, serverUrl);
     await page.evaluate(() => {
