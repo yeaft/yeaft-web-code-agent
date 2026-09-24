@@ -415,7 +415,7 @@ Concept 是有类型的认知对象，不只是关键词。集合中的每个对
 2. **产生信号**：视角调用或调查 Agent 显式输出观察、假设、设想、反例、简要理由和 proposal。记录调用开始、终态与已取得的输出；失败/取消也有记录，不编造未返回内容。
 3. **综合**：Person 的 `integrator` 在当前 Soul 和状态下比较提案。输出逐项 disposition、当前评价、未决问题和有类型 patch。它可以选择“不变”或“尚不决定”，不是为了更新而更新。
 4. **自判**：确定性规则先检查引用与矛盾；语义 critic 检查跑题、推断跨越和忽略反证。需要时回到综合，默认最多两轮；超限保存未决点并等待新证据。
-5. **短事务提交**：验证 read-set 与删除/授权 fence，CAS 推进 `stateVersion`，原子写入 Concept revision、当前索引、decision、trace 终态、event 消费/预算结算与 outbox。
+5. **短事务提交**：验证 read-set，并条件写入与控制/来源更新共享的 `person_guards`，形成真正的写冲突 fence；CAS 推进 `stateVersion`，原子写入 Concept revision、当前索引、decision、trace 终态、event 消费/预算结算与 outbox。仅在快照事务中读取策略，不能防住并发撤权；具体协议见 11.6。
 6. **后续**：dispatcher 再次验权执行；新回执是新事件，可以引发下一次认知修订。
 
 模型请求、工具执行都在事务外。并行 proposals 本身不推进全局状态。首版一个提交 lane；read-set 包含实际读取对象及影响判断的查询结果版本（如 focus/conflict/来源集合水位），防止漏掉新出现的反证。若当前 `stateVersion` 已变，先重新验证/重新综合，不在冲突中直接重试旧 patch；未来才优化可证明无依赖变化的 rebase。
@@ -430,7 +430,7 @@ async function attend(trigger, runtime) {
   const proposals = await runtime.runPerspectives(snapshot)
   const draft = await runtime.integrate(snapshot, proposals)
   const checked = await runtime.selfCheck(snapshot, draft)
-  // commit 在数据库中原子校验 epoch/state/read-set/policy/control 水位。
+  // commit 条件写共享 guard，再原子校验 read-set 并 CAS 根；仅读取策略不足以 fence。
   // stale 不会在这里盲重试；交给新的综合 episode。
   return runtime.commitCognition({ snapshot, proposals, checked })
 }
@@ -509,6 +509,7 @@ npm 安装不静默安装或开启 `mongod`。连接向导先验证版本、TLS/
 | --- | --- | --- |
 | `persons` / `soul_revisions` | 身份、home、epoch、稳定内核与版本 | owner/Person 唯一；Soul 不能修改权限 |
 | `spaces` | ACL、用途、出站/共享策略 | domain 不能代替 ACL |
+| `person_guards` | epoch、lease、控制水位、输入水位、恢复代次与写入序号 | 每 Person 一个；控制、来源更新及全部内容入口共享的事务写 fence，见 11.6 |
 | `events` | 用户/环境/内生事件及来源 revision | scope + source + dedupeKey 唯一 |
 | `cognitive_states` | 当前根、stateVersion、少量活跃引用 | 每 Person 一个当前根，CAS；根的敏感引用也按 scope 投影 |
 | `state_commits` / `concept_revisions` | 提交清单与历史对象版本 | `(ownerId, personId, stateVersion)`、`(scope, conceptId, revision)` 唯一；普通写不能覆盖历史，合规删除仍可清除内容 |
@@ -586,13 +587,38 @@ npm 安装不静默安装或开启 `mongod`。连接向导先验证版本、TLS/
 
 ### 11.6 事务、lease 与提交
 
-在当前 home 上，数据库时间驱动 lease。获取权威时原子递增 `authorityEpoch`。每次状态提交验证当前根的 epoch/stateVersion、read-set、策略与控制水位。更新 Concept 当前投影、增加不可覆盖 revision 和推进当前根属于同一事务；全局 commitId 幂等。并行调用仅追加 signal/proposal，不能直接更新当前根。
+MongoDB 快照隔离不是可串行化隔离。**仅“读取策略并校验，再写 Concept/根”不足以防止并发撤权或漏掉新反证。** 首版采用每 Person 一个 `person_guards` 文档作为保守写 fence；先保证正确性，不提前拆分为难以证明覆盖范围的细粒度锁。
 
-一次提交的 MongoDB 事务范围：Concept/关系修订与当前根、state commit、decision 与采纳状态、相关 memory/concern、episode 结果、已消费事件、预算记账、trace 提交事件和 outbox 意图。大规模 Dream/扫描拆成有界批次，不用跨百万对象长事务；每批独立原子且可恢复。模型请求与外部工具调用不在数据库事务里。
+Guard 至少包含 `authorityEpoch / leaseOwner / leaseUntil / appliedControlSeq / inputWatermark / recoveryGeneration / mode / writeSerial`。语义水位与物理写入序号分开：普通 Trace 追加只增加 `writeSerial`，不把所有正在计算的提案标为过期。数据库时间驱动 lease；获取/接管权威、续租及失效均写同一个 guard，获取新权威时原子递增 epoch，当前根的权威标记一并更新。
 
-可靠路径使用适当的 majority 确认；单节点 majority 不意味着能抗磁盘丢失。Lease 过期后旧进程即使仍运行，也不得提交或新发行动。执行接收方还要校验命令代次/授权，而不只依赖发送方自觉。
+| 写入口 | 同事务操作与冲突条件 |
+| --- | --- |
+| 控制：撤权、删除、暂停、来源失效 | 写 tombstone/策略投影/失效标记，并更新 guard 的控制水位或模式；认知队列不是控制前置 |
+| 来源：Connector 新增、编辑、反证、查询集合变化 | 持久事件及 source revision 与 `inputWatermark` 增长同事务，不能先推进 cursor 再补 fence |
+| 认知提交 | 条件匹配当前 epoch、有效 lease、运行模式、恢复代次及快照控制/输入水位，**实际 `$inc writeSerial`**，再校验 read-set 并 CAS 根；所有修订同事务 |
+| 内容追加：调用输出、proposal、Trace 分块、委派回报 | 按 11.7 验证最新可用性与来源限制，同事务写 guard 和内容；可以记录 stale 候选，不能绕过删除 |
 
-MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端持久幂等 + 结果对账处理；本地/远端执行器都需要新增可验证契约。该路径不使用 `CreateWorkItem`、WorkItem 状态或 Work Center SQLite。提交 ACK 丢失时先按 commitId 查证是否已经提交，不重新生成副作用。
+Guard 的条件写失败或事务写冲突时，整个事务 abort。若控制/输入已改变，认知提交返回 stale/blocked，交给新快照重新校验或综合；驱动自动重试也不能只刷新 expected revision 后重放旧 patch。若只是无关 Trace 竞争，可在有界重试中重新执行全部校验。多来源查询首版保守依赖 Person 输入水位，包括新插入对象，防止 read-set 只覆盖已有文档而漏掉 phantom。只凭 Change stream 异步补水位不能作为正确性保证。
+
+Person 使用的有效策略须有经过该 guard 发布的版本。共享 Space/owner 策略收紧时，先逐个阻断受影响 Person guard，再应用新投影；所有受影响主体都已阻断/更新才确认整体生效，故障时保持 pending 和已建立的阻断，不能让未完成扇出假装全局撤权成功。控制账本与 MongoDB 的跨恢复域衔接仍遵循 21.4，不宣称跨库原子事务。
+
+一次认知提交的 MongoDB 事务范围：guard、Concept/关系修订与当前根、state commit、decision 与采纳状态、相关 memory/concern、episode 结果、已消费事件、预算记账、trace 提交事件和 outbox 意图。全局 commitId 幂等；更新当前投影、增加不可覆盖 revision 和推进根不可拆开。大规模 Dream/扫描拆成有界批次，不用跨百万对象长事务。模型请求与外部工具调用都在事务外。
+
+可靠路径使用 snapshot read concern 与 majority write concern，并测试实际支持的部署配置；单节点 majority 不意味着能抗磁盘丢失。Lease 到期后旧主不能获得新提交/派发 admission；与接管并发的短事务由 guard 写冲突排序。已经开始的外部动作不会因 epoch 改变自动停止，按 14.4 对账/隔离，执行接收方仍复核代次和授权。
+
+MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端持久幂等 + 结果对账处理；本地/远端执行器都需要新增可验证契约。该路径不使用 `CreateWorkItem`、WorkItem 状态或 Work Center SQLite。提交 ACK 丢失时先按 commitId 查证，不重新生成副作用。
+
+### 11.7 所有内容入口的删除与撤权 fence
+
+调用结果不是等到最终认知提交时才受控。`cognitive_calls` 输出、signal/proposal、委派回报、Trace 分块、格式错误的安全投影、附件及 UI provisional 内容，统一经过 Repository 内容 admission：
+
+1. runtime 从实际输入快照及工具读取记录生成 `inputDependencyManifest`，包含传递来源、revision、Space、用途和控制水位。默认输出继承所有输入限制；模型的 `basisRefs` 只提供解释，不能缩小真实依赖。中途取得新资料时先扩展清单再允许输出，无法确定依赖时 fail closed。
+2. 每次持久分块/输出在短事务中读取最新 guard、tombstone 与策略，检查依赖仍可被保留及投影，并条件写 guard 后写内容。纯正文写入、诊断日志、大对象暂存都不能有旁路；有界内存缓冲不写临时正文文件。
+3. 删除事务先在同一 guard 下发布 tombstone/水位。若输出先提交，删除清理能按依赖清单定位它；若删除先提交，晚到输出事务冲突或被拒绝。拒绝后只保存不含正文的 `cancelled/redacted` 终态、opaque ID 和必要费用信息，不在错误日志复述内容，也不保存供“以后重评”的旧正文。
+4. 内容先通过 admission 持久化，再供 UI 订阅；`provisional` 仅表示尚未形成最终调用结果/认知决定，不表示允许绕过持久化与权限。投影发送前重验控制版本；删除会失效排队投影并清除受管缓存。已发送给 provider 或已经显示给人的内容无法倒退召回，离线副本的清理进度单独报告。
+5. 删除完成要求已阻断旧依赖的新写入、完成当前可控副本和派生清理，并有可核验进度；不必等待不可取消的 provider 返回。晚到结果仍只能留下脱敏终态。独立控制权威与备份的防复活要求见 21.4。
+
+这使“记录每次应用层思想”与删除要求一致：每次调用都有状态证据，但无权保留的思想正文不会以 Debug 完整性为理由重新落库。
 
 ## 12. 记忆、知识与学习生命周期
 
@@ -633,7 +659,7 @@ MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端�
 - “不要再提醒”：关闭提醒条件，不等于删除事实。
 - “忘记这件事”：默认需要解释删除范围，并提供来源屏蔽选项防止再次导入。
 
-删除流程先建立最小 tombstone 并禁止召回，再清理 MongoDB、索引、缓存、附件、投递草稿和派生记录。Tombstone 不保留被删正文；已确认删除必须进入第 21.4 节的防回退控制账本，不能仅存在于待恢复的同一份 MongoDB 快照中。恢复备份只有在追平独立权威的最新控制水位后，才可解除读取隔离。第三方源与已有 Session transcript 不由认知删除隐式销毁，UI 必须说明各自范围并提供相应入口。
+删除流程先按 11.6–11.7 在共享 guard 下建立最小 tombstone，禁止召回和所有旧依赖内容追加，再清理 MongoDB、索引、缓存、附件、投递草稿和派生记录。Tombstone 不保留被删正文；已确认删除必须进入第 21.4 节的防回退控制账本，不能仅存在于待恢复的同一份 MongoDB 快照中。恢复备份只有在追平独立权威的最新控制水位后，才可解除读取隔离。第三方源与已有 Session transcript 不由认知删除隐式销毁，UI 必须说明各自范围并提供相应入口。
 
 建议初始保留策略：工作缓存 7 天、无价值探索产物 30 天后评估清理、原始 Connector 正文默认只按需短缓存、长期记忆和重要 Concept 修订保留至失效或用户删除；承诺不按天数自动清除。具体期限在启用时可配置，企业策略可能更严格。
 
@@ -763,12 +789,14 @@ runtime 绑定 owner/Space/执行 Agent/epoch/取消 token，并核对真实 cap
 ### 14.4 无旧任务系统的可靠执行
 
 - 提交决定时原子写 outbox；dispatcher 获取当前策略、authority epoch、决定/依赖有效性，再将具体命令发给执行端。
-- 接收端持久化 `commandId → executionRef` 并去重。同进程也不省略接收记录；避免崩溃后无法判断是否做过。
-- 执行状态含 `queued / running / succeeded / failed / rejected / cancelled / unknown`。超时不证明没发生，先查证；不支持幂等或状态查询的高风险动作不自动重试。
+- 接收端持久化 `commandId → executionRef` 并去重。同进程也不省略接收记录。若恢复安全依赖该账本，它必须独立于认知快照回退域，保留期覆盖所有有效备份与重投递寿命；否则只能作为当前运行辅助证据，不能证明旧备份命令未执行。
+- 执行状态含 `queued / running / succeeded / failed / rejected / cancelled / unknown`，另有独立的 `admission: held | allowed` 和 `recoveryGeneration`。备份恢复出来的所有未终态命令、委派与 outbox（包括 queued/pending）都先 held，不能仅检查 unknown；按 21.3 对账后重新 admission。
+- 超时不证明没发生，先查证；不支持幂等或状态查询的高风险动作不自动重试。稳定 commandId 不因恢复或重试而改变；已有副作用不能通过换 ID 假装首次执行。
 - Person 自己验收回执与成果，更新 commitment，不靠子 Agent 文本说“完成”。外部服务是副作用证据来源，MongoDB 保存最近确认和未知状态。
 - 同 workspace 冲突写入必须有执行端共享锁/资源 lease，与仍运行的旧 Work Center 使用同一冲突原语，或在未打通前拒绝共享 workspace 并发。只使用 Person 内部锁不能保护旧任务。
-- 隔离写采用显式 worktree，成果仍需数字人决定如何集成；`read` 标签不是工具限制。
-- 取消阻止后续下发；正在发生的副作用是否可撤销以工具为准。停机恢复先对账，再决定继续，不重新执行整段计划。
+- **资源 lease 到期不等于 writer 已停止。** Shell/普通文件系统不能在每次写入时校验 fencing token，因此 lease 失效只将资源置为 `unknown/quarantined`，禁止交给新 writer。执行器记录主机 boot ID、不可仅靠可复用 PID 的进程身份、进程组/作业对象及监督句柄；取消或监督进程崩溃后，须证明旧进程树已退出、写能力已撤销或写入环境已隔离，才可释放资源。平台应使用经验证的进程树监督（如 cgroup / Job Object 等）；无法约束逃逸子进程时保持隔离并要求人工处理，不能猜测“超时大概结束”。
+- 隔离写采用显式 worktree，成果仍需数字人决定如何集成。Worktree 不是 sandbox：共享 Git 元数据、同路径外文件及公共服务仍需权限/锁；孤儿 writer 的 worktree 不复用、不集成、不自动删除，直到对账确认安全。资源若原生支持 fencing token，需验证它确实在每次副作用入口拒绝旧 token。
+- 取消阻止后续下发；正在发生的副作用是否可撤销以工具为准。停机恢复先核对 writer 与资源状态，再决定继续，不重新执行整段计划；epoch 只 fence 新操作，不虚构能撤回已开始的任意写入。
 
 现有执行原语可以抽离复用，但不得为此隐式启动 Work Center 服务。验收必须包含 Work Center 未启动时数字人独立完成调查、委派、执行、恢复和验收。
 
@@ -965,7 +993,7 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 
 ### 20.2 撤权时序
 
-撤权先更新策略 revision、失效 token/lease 与 pending approval，然后取消相关排队工作。正在运行的请求尽力终止；无法召回已发给外部服务的数据或已发生动作，要明确说明并审计。旧模型结果提交时再次检查策略与删除账本，避免“已撤权但稍后写回”。
+撤权先通过 11.6 的共享 guard 阻断 admission，更新策略 revision、失效 token/lease 与 pending approval，然后取消相关排队工作。正在运行的请求尽力终止；无法召回已发给外部服务的数据或已发生动作，要明确说明并审计。所有旧结果的正文追加（不仅最终认知提交）遵循 11.7；删除/禁止保留冲突只能写脱敏终态，避免“状态没更新，但 Trace 重新保存了正文”。
 
 停止按钮通过控制面处理，不排在普通认知事件后等待模型决定。权限策略不可由 Soul、模型输出、Skill 或历史自修改。
 
@@ -1003,14 +1031,17 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 
 - 启用前显示备份责任。单节点数据库默认不提供灾难恢复保证。
 - 备份同时覆盖 MongoDB、一致的附件 manifest、加密/签名元数据和控制账本的水位引用；快照中的账本副本不是恢复权威，外部执行状态通过源系统恢复/对账。
-- 恢复后先进入 `recovery-quarantined`，禁止正文读取、交互召回、导出、模型出站和新行动；追平第 21.4 节控制水位后才转为 paused，再检查过期审批、Connector cursor 与 unknown 任务，最后由用户确认恢复自主活动。
+- 恢复后先进入 `recovery-quarantined`，禁止正文读取、交互召回、导出、模型出站和新行动；从独立控制权威取得新的单调 `recoveryGeneration`（不能用旧快照计数 +1），废弃旧 admission。必须隔离/撤销旧 dispatcher 与执行路由，不能让两个恢复副本同时接管。
+- 追平第 21.4 节控制水位后才转为 paused。**所有恢复前产生的非终态命令、委派及 outbox，包括 queued、pending、running、unknown，都 held**；dispatcher 和接收端默认拒绝 generation 不符或未重新 admission 的记录，不依赖批量逐条标记完成后才开始阻断。
+- 按稳定 commandId/delegationId/attemptId 向源服务或未回退的执行账本对账：已完成则补回执不重发；仍在执行则重新绑定观察而不再启动；只有可信的“未执行”证据，或经验证仍在有效期内的幂等保证，才可在复核当前意向、依赖、策略、审批与资源状态后重新 admission。普通 `not found`、已过期去重窗口或与认知库一起回退的账本都不构成未执行证明；不确定的非幂等动作保持隔离，不自动发送。
+- 复核过期审批、Connector cursor、活动进程与资源隔离后，由用户确认恢复自主活动。该确认只恢复已经满足条件的活动，不会批量放行 held 命令；未知影响须专项对账，必要时人工决策并明确重复风险。覆盖测试：T0 备份时 queued → T1 已执行成功 → T2 恢复 T0，不能再次执行。
 - Schema migration 可中断续跑、带版本 fence；先备份再执行，禁止旧 runtime 在未知 schema 上写入。
 - 回滚程序不等于回滚事实；不能靠旧备份重新发送消息、复活已删除记忆或恢复撤销的权限。
 - 运维日志默认不记录正文、秘密、音频或完整 prompt；它与私有 MongoDB 认知 Trace 分开。后者按第 22 节记录应用层明确输出，并受 scope、保留与删除控制；完整 prompt 等诊断采集需单独授权。
 
 ### 21.4 删除与撤权的防回退恢复权威
 
-认知内容的真源仍是 MongoDB；但删除、权限收紧、设备撤销和权威失效等安全控制，需要**独立于认知快照恢复域**的最小追加账本与可验证单调水位。这是恢复安全元数据，不是第二套记忆库；只记录受影响的 opaque ID、范围、控制动作、序号和校验信息，不保存被删正文或秘密。
+认知内容的真源仍是 MongoDB；但删除、权限收紧、设备撤销、权威失效及恢复代次等安全控制，需要**独立于认知快照恢复域**的最小追加账本与可验证单调水位。这是恢复安全元数据，不是第二套记忆库；只记录受影响的 opaque ID、范围、控制动作、序号和校验信息，不保存被删正文或秘密。
 
 - 具体介质由 P0 确定，可使用用户控制的独立持久控制服务或独立故障域的防覆盖日志；同一磁盘上的另一文件、同一旧备份中的集合、仅有哈希链但没有新鲜水位来源，都不满足灾难恢复要求。不可默认把这些元数据上传 Server 或第三方。
 - 收到控制请求后立即在当前 runtime fail closed。对用户确认“持久删除/撤权已生效”之前，必须将控制记录可靠提交到防回退权威，再将其幂等应用到 MongoDB。两者不宣称原子事务；中间失败保留阻断状态并重试对账，不继续按旧权限运行。
@@ -1037,7 +1068,7 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 - `state.committed / commit.rejected / dependency.invalidated / dream.checkpoint`。
 - `delegation.started / delegation.result / command.dispatched / command.result / message.delivered`。
 
-MongoDB 保存每次调用**明确生成的应用层输出**：想法、假设、想象、批评、结论、简要依据、行动建议和格式错误输出的安全投影。大小超限使用有上限分块或数据库管理的大对象引用；标明 retained/truncated/redacted/expired/gap，不能将未保留部分伪装成不存在。未被采纳的想法也保留来源和拒绝原因，不进入当前信念。
+MongoDB 经 11.7 内容 admission 保存每次调用**获准保留的应用层输出**：想法、假设、想象、批评、结论、简要依据、行动建议和格式错误输出的安全投影。大小超限使用有上限分块或数据库管理的大对象引用；标明 retained/truncated/redacted/expired/gap，不能将未保留部分伪装成不存在。未被采纳的想法也保留来源和拒绝原因，不进入当前信念。
 
 不要求 provider 返回隐藏逐字推理，不把编造的独白作为真实内部过程。调用失败没有输出时记录“未取得输出”；网络流中已收到但未持久化的部分可能在崩溃中丢失，应标记缺口，不宣称能读取模型的每个内部信号。完整 system prompt、原始敏感工具结果和诊断采样不是默认可公开内容；输入通常保存可解析的版本引用及授权投影。
 
@@ -1057,7 +1088,7 @@ MongoDB 保存每次调用**明确生成的应用层输出**：想法、假设�
 
 状态回放依据 checkpoint + 已提交 revision，可重建保留范围内的旧状态；删除/过期位置显示缺口。诊断“再次用模型评估”是新的 sandbox episode，拥有新 call ID、预算和输出，默认禁用副作用；不能重发历史通知/命令，也不能声称生成过程必然可确定复现。
 
-Trace 写入与状态提交使用同一 commit 标识，当前态必须能追踪到完整的提交说明。每次调用前持久化 started，输出/失败在结束时持久化；记录失败则停止后续认知提交/新动作并显示观测降级，恢复后对账，不能悄悄绕过审计。流式 thought block 可显示 provisional，ACK/commit 后才视为持久化。
+每次认知提交的 Trace 与状态使用同一 commit 标识；调用/候选追加有独立 trace ID，尚未提交时不伪造 commitId。每次调用前持久化 started，输出分块和终态均按 11.7 写入；删除后晚到结果只留脱敏终态。记录失败则停止后续认知提交/新动作并显示观测降级，恢复后对账，不能绕过审计。流式 thought block 经内容 admission 持久化后才可投影为 provisional；持久化 ACK 不代表认知采纳，只有 state commit 才推进当前态。
 
 运维指标只保留最小无正文统计：队列、耗时、费用、stale proposal、commit 冲突、自判更正、Dream no-change、unknown 副作用、依赖失效滞后与删除进度。它们不替代认知 Trace，也不以“活动量越多越好”优化人物。
 
@@ -1100,12 +1131,12 @@ Trace 写入与状态提交使用同一 commit 标识，当前态必须能追踪
 | 层次 | 必测内容 |
 | --- | --- |
 | 单元 | 关注排序、到期/时区、预算、Schema、事实/假设转换、ACL 与保留策略 |
-| MongoDB 集成 | replica set 事务、CAS、TTL 延迟、索引、lease、重复事件、游标提交 |
-| 恢复/故障注入 | 提交前后崩溃、outbox 发送后断连、旧 epoch 写入、DB/provider 断网 |
-| 执行集成 | 无 WorkItem 路径的命令/委派幂等、父主体验收、共享 workspace 锁、撤权、unknown 对账 |
-| 多视角状态 | 相同快照冲突、迟到结果、新反证查询水位、CAS 冲突重综合、依赖失效、混合评价与未决决定 |
+| MongoDB 集成 | replica set 事务、共享 guard 条件写/CAS、TTL 延迟、索引、lease、重复事件、游标提交；禁止只读策略形成 write skew |
+| 恢复/故障注入 | 提交前后崩溃、outbox 发送后断连、旧 epoch 写入、DB/provider 断网；T0 queued 备份→T1 成功→恢复 T0 时 held；账本同回退/幂等期限过期不得放行 |
+| 执行集成 | 无 WorkItem 路径的命令/委派幂等、父主体验收、共享 workspace 锁、撤权、unknown 对账；监督进程死亡但子进程继续写，lease 到期后资源仍 quarantined，新 writer 必须被拒绝 |
+| 多视角状态 | 相同快照冲突、迟到结果、依赖失效、混合评价与未决决定；认知事务读完校验对象后并发提交撤权/反证插入，旧事务必须 abort，不得自动重放旧 patch |
 | 新 Dream | 分批水位、前台抢占、删除/撤权竞态、无证据不增信、暂停恢复、no-change 与自激循环限制 |
-| 认知 Trace | 输出与状态关联、provisional→持久态、写入失败、截断/缺口、按版本回放、诊断重评不执行副作用 |
+| 认知 Trace | 输出与状态关联、持久候选→provisional 投影→采纳、写入失败、截断/缺口、按版本回放、诊断重评不执行副作用；删除完成后晚到调用/委派/分块结果不得在任何内容入口重新落库或推送 |
 | 思考与行动分离 | 内部可以不同意/重访被否定观点；禁止动作/已删除数据/停机控制均不能被绕过 |
 | 环境扫描 | 授权全范围分页、覆盖率、路径逃逸、文件变化、敏感分类、撤权取消、限额与断点恢复 |
 | Connector | 乱序/重复/删除/过期订阅、限流、gap、OAuth 撤销与恶意内容 |
@@ -1113,7 +1144,7 @@ Trace 写入与状态提交使用同一 commit 标识，当前态必须能追踪
 | 安全 | 跨空间检索、工具参数提权、SSRF、注入、皮肤/富 UI 代码执行、秘密泄漏 |
 | 多设备 | 双主/分区、锁屏提示、旧通知/语音回放、撤销配对、迁移恢复 |
 | Native | 各 OS 窗口/点击区域/DPI/多屏/睡眠/键盘/音频/签名与安装更新 |
-| 隐私 | 删除覆盖 Concept revision、候选输出、Trace diff/prompt、Dream checkpoint 与派生链；T0 备份→T1 删除/撤权→T2 当前库丢失→恢复 T0 时不复活；独立控制权威不可达/水位缺口时保持读取隔离；控制提交前后崩溃与重放；保留到期、日志与导出最小化 |
+| 隐私 | 实际输入清单保守继承依赖，模型省略 basisRefs 不能绕过删除；删除覆盖 Concept revision、候选输出、Trace diff/prompt、Dream checkpoint 与派生链；T0 备份→T1 删除/撤权→T2 当前库丢失→恢复 T0 时不复活；独立控制权威不可达/水位缺口时保持读取隔离；控制提交前后崩溃与重放；保留到期、日志与导出最小化 |
 | 回归 | 未启用 Person 时 Session、CLI providers、Work Center、Web 行为不变 |
 
 首次实现需要在仓库 focused tests、`npm test`、syntax/release guard、Web build/E2E 之外增加专门的 MongoDB replica-set 和 Rust 平台测试。本文是文档改动，只要求文档构建、链接/一致性审查与 diff 检查；发布 tag 的既有 CI 仍独立执行项目门禁，不能把设计审查当实现测试通过。
@@ -1165,7 +1196,7 @@ Session 仍是现有对话载体。数字人可通过 Session 接收真实对话
 
 | 阶段 | 范围 | 退出证据 |
 | --- | --- | --- |
-| P0 可行性与契约 | MongoDB 部署/许可、Rust 窗口平台 spike、身份/权限与 Engine adapter、成本模型 | 至少一个目标 OS 完成透明/输入/降级验证；事务/恢复实验；未决依赖有结论 |
+| P0 可行性与契约 | MongoDB 部署/许可、Rust 窗口平台 spike、身份/权限与 Engine adapter、成本模型 | 至少一个目标 OS 完成透明/输入/降级验证；共享 guard/晚到删除/旧 queued 恢复/孤儿 writer 故障实验；未决依赖有结论 |
 | P1 单设备认知闭环 | Concept/state/revision、文字输入、Soul、事件/关注、单视角→综合→提交、Trace | 可看每次调用与状态 diff；记录→纠正→恢复，不依赖 Work Center |
 | P2 自主多视角与 Dream | 并行提案、自判、回顾/幻想/巩固、分类依赖图、预算、沟通 gate | 冲突/迟到/删除竞态通过；有新版 Dream，无文件认知写入、无无界反刍 |
 | P3 自主协调与行动 | 全范围可控扫描、一个 Connector、VP 模板调查/执行委派、直接工具、幂等/锁/unknown | 关闭 Work Center 的端到端履约；禁止动作与思考分歧分离；故障/撤权测试通过 |
@@ -1287,7 +1318,7 @@ Prompt 职责示意：
 }
 ```
 
-runtime 分配 `signalId / proposalId / callId`，绑定输入版本、owner、Person、Space、模型/费用与 evidence lineage。`localId` 只用于一次响应内部关联，不能用于冒充已有数据库对象。全部显式输出进入受控 Trace，未采纳内容不写入当前信念。
+runtime 分配 `signalId / proposalId / callId`，绑定输入版本、owner、Person、Space、模型/费用与 evidence lineage。`localId` 只用于一次响应内部关联，不能用于冒充已有数据库对象。全部显式输出经 11.7 的依赖继承与内容 admission 后进入受控 Trace；删除/禁止保留时只留脱敏终态，未采纳内容不写入当前信念。
 
 ### B.2 数字人综合 Prompt 与输出
 
