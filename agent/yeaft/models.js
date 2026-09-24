@@ -696,6 +696,9 @@ export function normalizeProviderModels(provider) {
     if (entry && typeof entry === 'object' && typeof entry.id === 'string' && entry.id.trim()) {
       const norm = { id: entry.id.trim() };
       if (entry.capabilities && typeof entry.capabilities === 'object') norm.capabilities = { ...entry.capabilities };
+      if (Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
+        norm.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
+      }
       const ctx = coercePositiveInt(entry.contextWindow);
       const max = coercePositiveInt(entry.maxOutput);
       if (ctx !== undefined) norm.contextWindow = ctx;
@@ -734,9 +737,12 @@ export function serializeModelForPersistence(entry) {
     ? entry.protocol.trim()
     : undefined;
   const capabilities = entry.capabilities && typeof entry.capabilities === 'object' ? { ...entry.capabilities } : undefined;
-  if (ctx === undefined && max === undefined && proto === undefined && capabilities === undefined) return entry.id;
+  const streamIdleTimeoutMs = Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0
+    ? Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs)) : undefined;
+  if (ctx === undefined && max === undefined && proto === undefined && capabilities === undefined && streamIdleTimeoutMs === undefined) return entry.id;
   const obj = { id: entry.id };
   if (capabilities !== undefined) obj.capabilities = capabilities;
+  if (streamIdleTimeoutMs !== undefined) obj.streamIdleTimeoutMs = streamIdleTimeoutMs;
   if (ctx !== undefined) obj.contextWindow = ctx;
   if (max !== undefined) obj.maxOutput = max;
   if (proto !== undefined) obj.protocol = proto;

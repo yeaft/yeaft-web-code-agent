@@ -18,7 +18,10 @@ import {
   LLMContextError,
   LLMStreamIdleTimeoutError,
   createBoundedTextAccumulator,
+  resolveStreamIdleTimeoutMs,
 } from '../../../agent/yeaft/llm/adapter.js';
+import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
+import { normalizeLlmRetry } from '../../../agent/yeaft/config.js';
 import { boundRawExchange, truncateUtf8Text } from '../../../agent/yeaft/perf-trace.js';
 
 const originalFetch = global.fetch;
@@ -430,6 +433,183 @@ describe('OpenAIResponsesAdapter error classification', () => {
     expect(events[0]).toMatchObject({ type: 'error', retryable: false });
     expect(events[0].error.message).toBe('bad request body');
     expect(events[0].error.code).toBe('invalid_request_error');
+  });
+});
+
+describe('request-scoped stream idle policy', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it('keeps defaults bounded and preserves explicit legacy/zero budgets', () => {
+    const defaults = normalizeLlmRetry();
+    expect(defaults).toMatchObject({ streamIdleTimeoutMs: 90_000, highEffortStreamIdleTimeoutMs: 270_000 });
+    for (const effort of ['high', 'xhigh', 'max', 'ultra']) expect(resolveStreamIdleTimeoutMs(defaults, effort)).toBe(270_000);
+    for (const effort of ['low', 'medium', null]) expect(resolveStreamIdleTimeoutMs(defaults, effort)).toBe(90_000);
+    for (const timeout of [0, 1234]) {
+      const legacy = normalizeLlmRetry({ streamIdleTimeoutMs: timeout });
+      expect(resolveStreamIdleTimeoutMs(legacy, 'max')).toBe(timeout);
+    }
+    expect(resolveStreamIdleTimeoutMs(normalizeLlmRetry({ streamIdleTimeoutMs: 0, highEffortStreamIdleTimeoutMs: 5000 }), 'high')).toBe(0);
+    expect(resolveStreamIdleTimeoutMs(normalizeLlmRetry({ streamIdleTimeoutMs: 100, highEffortStreamIdleTimeoutMs: 500 }), 'high')).toBe(500);
+    expect(resolveStreamIdleTimeoutMs(normalizeLlmRetry(defaults, { streamIdleTimeoutMs: 200 }), 'high')).toBe(200);
+    expect(resolveStreamIdleTimeoutMs(defaults, 'high', 0)).toBe(0);
+    expect(resolveStreamIdleTimeoutMs(defaults, 'high', 999_999)).toBe(600_000);
+    expect(resolveStreamIdleTimeoutMs(defaults, 'high', NaN)).toBe(270_000);
+  });
+
+  it('uses final effort and absolute overrides independently for cached models and both protocols', async () => {
+    for (const protocol of ['anthropic', 'openai-responses']) {
+      const model = protocol === 'anthropic' ? 'claude-opus-4.8' : 'gpt-5';
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(protocol === 'anthropic'
+        ? { content: [], stop_reason: 'end_turn' } : { output: [], status: 'completed' })));
+      const router = new AdapterRouter({ llmRetry: normalizeLlmRetry(), providers: [{ name: 'fixture', apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', protocol,
+        models: [model, { id: `${model}-zero`, streamIdleTimeoutMs: 0 }, { id: `${model}-slow`, streamIdleTimeoutMs: 400_000 }] }] });
+      const run = async (id, effort, extraBody, effortConstraint) => {
+        const onRequestStart = vi.fn();
+        await consume(router.stream({ model: `fixture/${id}`, system: '', messages: [], effort, effortSource: 'user', extraBody, effortConstraint, onRequestStart }));
+        return onRequestStart.mock.calls[0][0];
+      };
+      expect(await run(model, 'high')).toEqual({ effort: 'high', streamIdleTimeoutMs: 270_000 });
+      expect(await run(model, 'low')).toEqual({ effort: 'low', streamIdleTimeoutMs: 90_000 });
+      expect((await run(`${model}-zero`, 'high')).streamIdleTimeoutMs).toBe(0);
+      expect((await run(`${model}-slow`, 'high')).streamIdleTimeoutMs).toBe(400_000);
+      const lowWire = protocol === 'anthropic' ? { thinking: { type: 'adaptive' }, output_config: { effort: 'low' } } : { reasoning: { effort: 'low' } };
+      expect(await run(model, 'high', lowWire)).toEqual({ effort: 'low', streamIdleTimeoutMs: 90_000 });
+      const capped = await run(model, 'high', undefined, { parentDecision: { effective: 'medium' } });
+      expect(capped).toEqual({ effort: 'medium', streamIdleTimeoutMs: 90_000 });
+      expect(await run(model, 'high')).toEqual({ effort: 'high', streamIdleTimeoutMs: 270_000 });
+
+      const providerOverride = new AdapterRouter({ llmRetry: normalizeLlmRetry(), providers: [{ name: 'fixture', apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', protocol,
+        streamIdleTimeoutMs: 200_000, models: [model, { id: `${model}-zero`, streamIdleTimeoutMs: 0 }] }] });
+      for (const [id, budget] of [[model, 200_000], [`${model}-zero`, 0]]) {
+        const onRequestStart = vi.fn();
+        await consume(providerOverride.stream({ model: `fixture/${id}`, messages: [], effort: 'high', effortSource: 'user', onRequestStart }));
+        expect(onRequestStart.mock.calls[0][0].streamIdleTimeoutMs).toBe(budget);
+      }
+    }
+  });
+
+  it('waits past 90s for high effort partial FileWrite input but still cancels at its exact bounded deadline', async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    const partial = [
+      { type: 'message_start', message: { usage: {} } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'write', name: 'FileWrite', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"file_path":"design.md",' } },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(partial.map(e => `data: ${JSON.stringify(e)}\n\n`).join('')));
+    }, cancel }))));
+    const adapter = new AnthropicAdapter({ baseUrl: 'https://proxy.invalid', apiKey: 'synthetic', ...normalizeLlmRetry() });
+    const events = [];
+    let finished = false;
+    const pump = (async () => {
+      try { for await (const event of adapter.stream({ model: 'claude-opus-4.8', messages: [], effort: 'xhigh', effortSource: 'user' })) events.push(event); }
+      catch (error) { return error; }
+      finally { finished = true; }
+    })();
+    await vi.advanceTimersByTimeAsync(269_999);
+    expect(finished).toBe(false);
+    expect(cancel).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pump).toMatchObject({ name: 'LLMStreamIdleTimeoutError', idleMs: 270_000 });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(events.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('Anthropic tool input completion boundary', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+  const start = (index, input = {}) => ({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: `call-${index}`, name: 'Tool', input } });
+  const delta = (index, partial_json) => ({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json } });
+  const stop = index => ({ type: 'content_block_stop', index });
+  const messageStop = { type: 'message_stop' };
+  const wire = (events, compact) => events.map(e => `data:${compact && (e.type === 'content_block_delta' || e.type === 'message_delta') ? '' : ' '}${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join('');
+  const response = (events, compact = false) => new Response(wire(events, compact));
+  const adapter = () => new AnthropicAdapter({ baseUrl: 'https://proxy.invalid', apiKey: 'synthetic' });
+  const request = { model: 'claude-opus-4.8', messages: [] };
+
+  it('rejects malformed/non-object input and incomplete sibling batches before publishing any tool', async () => {
+    const validFirst = [start(0), delta(0, '{"value":1}'), stop(0)];
+    const failures = [
+      ...['{"secret":"PRIVATE', 'null', '[]', '"PRIVATE"', '42'].map(input => [start(1), delta(1, input), stop(1), messageStop]),
+      ...[null, [], 'PRIVATE'].map(input => [start(1, input), stop(1), messageStop]),
+      [start(1), delta(1, '{"value":'), messageStop],
+      [start(1), 'malformed-SSE-PRIVATE', stop(1), messageStop],
+      [start(1), delta(1, '{"value":'), '[DONE]'],
+      [start(1), delta(1, '{"value":')],
+      [{ type: 'message_delta', delta: { stop_reason: 'tool_use' } }],
+      ['[DONE]'],
+      [{ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }, messageStop],
+    ];
+    for (const compact of [false, true]) {
+      for (const tail of failures) {
+        const seen = [];
+        vi.stubGlobal('fetch', vi.fn(async () => response([...validFirst, ...tail], compact)));
+        let caught;
+        try { for await (const e of adapter().stream(request)) seen.push(e); } catch (error) { caught = error; }
+        expect(caught).toBeInstanceOf(LLMServerError);
+        expect(caught.message).not.toContain('PRIVATE');
+        expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
+      }
+    }
+  });
+
+  it('accepts interleaved complete objects, empty tools, initial inputs and split UTF-8 exactly once', async () => {
+    const events = [start(0), start(1), delta(1, '{"content":"你'), delta(0, '{"value":1}'),
+      delta(1, '好\\nworld"}'), stop(1), stop(0), start(2), stop(2), start(3, { ready: true }), stop(3), messageStop];
+    for (const compact of [false, true]) {
+      const bytes = new TextEncoder().encode(wire(events, compact));
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(controller) {
+        for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+        controller.close();
+      } }))));
+      const seen = [];
+      for await (const e of adapter().stream(request)) seen.push(e);
+      expect(seen.filter(e => e.type === 'tool_call').map(e => [e.id, e.input])).toEqual([
+        ['call-0', { value: 1 }], ['call-1', { content: '你好\nworld' }], ['call-2', {}], ['call-3', { ready: true }],
+      ]);
+    }
+  });
+
+  it('finishes at message_stop without waiting for transport EOF', async () => {
+    const cancel = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode([start(0), stop(0), messageStop].map(e => `data: ${JSON.stringify(e)}\n\n`).join('')));
+    }, cancel }))));
+    await consume(adapter().stream(request));
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('accounts for cumulative usage before rejecting truncated or malformed SSE tool batches', async () => {
+    for (const compact of [false, true]) {
+      for (const [input, stop_reason] of [['{}', 'max_tokens'], ['{"value":', 'max_tokens'], ['null', 'tool_use']]) {
+        const events = [
+          { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 } } },
+          start(0), delta(0, input), stop(0),
+          { type: 'message_delta', usage: { output_tokens: 7 } },
+          { type: 'message_delta', delta: { stop_reason }, usage: { output_tokens: 65536 } },
+          messageStop,
+        ];
+        vi.stubGlobal('fetch', vi.fn(async () => response(events, compact)));
+        const seen = [];
+        await expect((async () => { for await (const e of adapter().stream(request)) seen.push(e); })()).rejects.toBeInstanceOf(LLMServerError);
+        const usage = seen.filter(e => e.type === 'usage');
+        expect(usage.map(e => e.outputTokens)).toEqual([1, 6, 65529]);
+        expect(usage[0]).toMatchObject({ inputTokens: 10, cacheReadTokens: 7, cacheWriteTokens: 3 });
+        expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
+      }
+    }
+  });
+
+  it('accounts for invalid/truncated JSON fallback without exposing any tools', async () => {
+    for (const [input, stop_reason] of [[null, 'tool_use'], [[], 'tool_use'], [{}, 'max_tokens']]) {
+      const usage = { input_tokens: 10, output_tokens: 65536, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 };
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ content: [start(0).content_block, start(1, input).content_block], stop_reason, usage })));
+      const seen = [];
+      await expect((async () => { for await (const e of adapter().stream(request)) seen.push(e); })()).rejects.toBeInstanceOf(LLMServerError);
+      expect(seen).toEqual([{ type: 'usage', inputTokens: 10, outputTokens: 65536, cacheReadTokens: 7, cacheWriteTokens: 3 }]);
+    }
   });
 });
 

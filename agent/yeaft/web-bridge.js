@@ -1194,17 +1194,33 @@ function createQueryWatchdog({ signal, timeoutMs, onTimeout }) {
     }
     timer = setTimeout(() => {
       stop();
-      onTimeout();
+      onTimeout(timeoutMs);
     }, timeoutMs);
+  };
+  const setTimeoutMs = (next) => {
+    if (stopped || signal.aborted || !Number.isFinite(next) || next <= 0) return;
+    const armed = !!timer;
+    pause();
+    timeoutMs = next;
+    if (armed) reset();
   };
   // No throttling or trailing heartbeat: the actual last delta owns idle time.
   const touch = () => { if (timer) reset(); };
   if (!stopped) signal.addEventListener('abort', stop, { once: true });
-  return { reset, pause, touch, stop };
+  return { reset, pause, touch, stop, setTimeoutMs };
 }
 
 function queryTimeoutMsForSessionConfig(config = null) {
   return isHighReasoningEffort(config?.modelEffort) ? HIGH_REASONING_QUERY_TIMEOUT_MS : QUERY_TIMEOUT_MS;
+}
+
+// Request effort can differ from Session settings (prefix, auto, child ceiling,
+// fallback). Leave transport retries 30s of headroom even for explicit budgets.
+// Disabling the transport guard does not disable this independent watchdog.
+function queryTimeoutMsForProviderRequest({ effort, streamIdleTimeoutMs } = {}) {
+  const fallback = queryTimeoutMsForSessionConfig({ modelEffort: effort });
+  return Number.isFinite(streamIdleTimeoutMs) && streamIdleTimeoutMs > 0
+    ? Math.max(fallback, Math.min(600_000, streamIdleTimeoutMs) + 30_000) : fallback;
 }
 
 function queryTimeoutMsForSession(sessionId = null) {
@@ -5557,8 +5573,8 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     const watchdog = createQueryWatchdog({
       signal: vpAbort.signal,
       timeoutMs: queryTimeoutMs,
-      onTimeout: () => {
-        console.error(`[Yeaft] query timeout after ${queryTimeoutMs / 1000}s of silence — aborting VP ${vpId}`);
+      onTimeout: timeoutMs => {
+        console.error(`[Yeaft] query timeout after ${timeoutMs / 1000}s of silence — aborting VP ${vpId}`);
         try { vpAbort.abort(); } catch { /* best-effort */ }
       },
     });
@@ -5728,6 +5744,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
           return thread.pendingQueries.splice(0).map(item => ({ ...item, persisted: true }));
         },
         ...queryOpts,
+        onProviderRequestStart: policy => {
+          if (policy) watchdog.setTimeoutMs(queryTimeoutMsForProviderRequest(policy));
+        },
       })) {
         // An escalated turn is detached from the per-VP driver. Its stale
         // promise may still resume if a provider/tool ignored AbortSignal;
@@ -8109,6 +8128,7 @@ export const __testHooks = {
   },
   createQueryWatchdog,
   queryTimeoutMsForSessionConfig,
+  queryTimeoutMsForProviderRequest,
   queryTimeoutMsForSession,
   seedQueuedVpTurn({ sessionId = 'session-test', vpId = 'vp-test', threadId = 'main', turnId = 'turn-test' } = {}) {
     const key = threadKey(sessionId, vpId, threadId);

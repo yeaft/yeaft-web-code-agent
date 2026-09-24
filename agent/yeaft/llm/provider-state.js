@@ -75,6 +75,7 @@ export function createProviderContext({ protocol, baseUrl, providerId, credentia
       nativeReasoningState: enabled('nativeReasoningState'),
       promptCaching: enabled('promptCaching'),
       parallelToolCalls: enabled('parallelToolCalls'),
+      eagerInputStreaming: protocol === 'anthropic' && enabled('eagerInputStreaming'),
     },
     diagnostics: { capabilitySource: capabilities.translation ? 'translation-disabled' : native ? 'native-endpoint' : 'custom-endpoint-unverified' },
   };

@@ -72,8 +72,24 @@ export function modelEntryForGitHubCopilot(id) {
   return protocol ? { id: value, protocol } : { id: value };
 }
 
+// Managed catalogs still own model protocols and credentials. Preserve only
+// supported, non-secret request-policy overrides across normalization and save.
+function requestPolicyOverrides(entry) {
+  const out = {};
+  if (entry?.capabilities && typeof entry.capabilities === 'object' && !Array.isArray(entry.capabilities)) {
+    out.capabilities = { ...entry.capabilities };
+  }
+  if (Number.isFinite(entry?.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
+    out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
+  }
+  return out;
+}
+
 export function githubCopilotModelEntries(ids = FALLBACK_GITHUB_COPILOT_MODELS) {
-  return dedupe(ids).map(item => modelEntryForGitHubCopilot(modelId(item))).filter(Boolean);
+  return dedupe(ids).map(item => ({
+    ...modelEntryForGitHubCopilot(modelId(item)),
+    ...requestPolicyOverrides(item),
+  }));
 }
 
 export function normalizeKnownProviderForRuntime(provider) {
@@ -100,6 +116,7 @@ export function serializeKnownProviderForPersistence(provider) {
     name: provider.name || GITHUB_COPILOT_PROVIDER_NAME,
     credentialProvider: GITHUB_COPILOT_CREDENTIAL_PROVIDER,
     managed: provider.managed || GITHUB_COPILOT_CREDENTIAL_PROVIDER,
+    ...requestPolicyOverrides(provider),
     ...(models.length ? { models } : {}),
   };
 }

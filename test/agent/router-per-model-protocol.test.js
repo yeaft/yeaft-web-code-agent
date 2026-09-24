@@ -7,6 +7,13 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getLlmConfig, updateLlmConfig } from '../../agent/yeaft/config-api.js';
+import { normalizeLlmRetry } from '../../agent/yeaft/config.js';
+import { normalizeKnownProviderForRuntime } from '../../agent/yeaft/llm/known-providers.js';
+import LlmTab from '../../web/components/LlmTab.js';
 
 vi.mock('../../agent/yeaft/llm/credentials/index.js', () => ({
   CREDENTIAL_PROVIDER_NAMES: { GITHUB_COPILOT: 'github-copilot' },
@@ -65,6 +72,139 @@ describe('inferProtocolFromModelId', () => {
 });
 
 describe('AdapterRouter resolution', () => {
+  it.each([
+    ['proxy', 'https://proxy.invalid'],
+    ['official', 'https://api.anthropic.com'],
+    ['github-copilot', 'https://api.githubcopilot.com'],
+  ])('preserves hidden provider policies through Web save, reload and dispatch (%s)', async (name, baseUrl) => {
+    const dir = mkdtempSync(join(tmpdir(), 'web-request-policy-'));
+    const originalFetch = globalThis.fetch;
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ content: [], stop_reason: 'end_turn' }), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    globalThis.fetch = fetch;
+    let vm;
+    try {
+      for (const [timeout, eager] of [[0, true], [0, false], [400_000, true], [400_000, false], [undefined, undefined]]) {
+        const policy = timeout === undefined ? {} : { streamIdleTimeoutMs: timeout, capabilities: { eagerInputStreaming: eager } };
+        const managed = name === 'github-copilot';
+        const saved = updateLlmConfig({ providers: [{ name, baseUrl, protocol: 'anthropic',
+          apiKey: 'static-test-key', ...(managed ? { credentialProvider: 'github-copilot' } : {}),
+          ...policy, models: ['claude-opus-4.8', 'claude-sonnet-4.6'] }], primaryModel: `${name}/claude-opus-4.8`, debug: false }, dir);
+        expect(saved.error).toBeUndefined();
+        const config = getLlmConfig(dir);
+        // A managed runtime may expose transient credentials; Web must never
+        // round-trip those into either its save payload or the on-disk config.
+        if (managed) Object.assign(config.agentConfig.providers[0], { apiKey: 'PRIVATE-API-KEY', githubToken: 'PRIVATE-GITHUB-TOKEN' });
+        const sendWsMessage = vi.fn();
+        vm = { ...LlmTab.data(), effectiveAgentId: 'policy-agent', context: 'yeaft',
+          chatStore: { sendWsMessage }, $watch: () => () => {}, $emit: vi.fn(), $t: key => key };
+        for (const [key, method] of Object.entries(LlmTab.methods)) vm[key] = method.bind(vm);
+        Object.defineProperty(vm, 'editableProviders', { get: () => vm.localProviders });
+        vm.loadFromConfig(config);
+        if (timeout !== undefined) {
+          expect(vm.localProviders[0].capabilities).toEqual(policy.capabilities);
+          expect(vm.localProviders[0].capabilities).not.toBe(config.agentConfig.providers[0].capabilities);
+        }
+        // Refreshing a managed catalog must not reset provider policies or the
+        // policies of retained model ids, and must not restore removed models.
+        if (managed) {
+          vm.localProviders[0].models = [
+            { id: 'claude-opus-4.8', protocol: 'anthropic', streamIdleTimeoutMs: 123_000, capabilities: { eagerInputStreaming: true } },
+            'removed-model',
+          ];
+          vm.applyDiscoveredProvider({ provider: { name }, providerModels: [
+            { id: 'claude-opus-4.8', protocol: 'anthropic' }, { id: 'claude-sonnet-4.6', protocol: 'anthropic' },
+          ] });
+          expect(vm.localProviders[0].models).toEqual([
+            { id: 'claude-opus-4.8', protocol: 'anthropic', streamIdleTimeoutMs: 123_000, capabilities: { eagerInputStreaming: true } },
+            { id: 'claude-sonnet-4.6', protocol: 'anthropic' },
+          ]);
+        }
+        // Only unrelated, visible settings are changed.
+        vm.localPrimaryModel = `${name}/claude-sonnet-4.6`;
+        vm.localDebug = true;
+        vm.markDirty();
+        vm.saveConfig();
+        vm.cancelPendingSave();
+        const message = sendWsMessage.mock.calls[0][0];
+        expect(message).toMatchObject({ type: 'update_llm_config', agentId: 'policy-agent',
+          config: { primaryModel: `${name}/claude-sonnet-4.6`, debug: true } });
+        expect(message.config.providers[0].streamIdleTimeoutMs).toBe(timeout);
+        expect(message.config.providers[0].capabilities).toEqual(policy.capabilities);
+        if (managed) expect(JSON.stringify(message)).not.toContain('PRIVATE');
+        expect(updateLlmConfig(message.config, dir).error).toBeUndefined();
+        const reloaded = getLlmConfig(dir);
+        expect(reloaded.providers[0].streamIdleTimeoutMs).toBe(timeout);
+        expect(reloaded.providers[0].capabilities).toEqual(policy.capabilities);
+        if (managed) expect(readFileSync(join(dir, 'config.json'), 'utf8')).not.toContain('PRIVATE');
+        const router = new AdapterRouter({ providers: reloaded.providers, llmRetry: normalizeLlmRetry() });
+        const onRequestStart = vi.fn();
+        for await (const _ of router.stream({ model: reloaded.primaryModel, messages: [], effort: 'high', effortSource: 'user',
+          tools: [{ name: 'FileWrite', description: 'Write', parameters: { type: 'object' } }], onRequestStart })) {}
+        expect(onRequestStart).toHaveBeenCalledWith({ effort: 'high', streamIdleTimeoutMs: timeout ?? 270_000 });
+        const [url, init] = fetch.mock.calls.at(-1);
+        expect(url).toBe(`${baseUrl}/v1/messages`);
+        const expectedEager = eager ?? name === 'official';
+        expect(JSON.parse(init.body).tools[0].eager_input_streaming).toBe(expectedEager ? true : undefined);
+      }
+    } finally {
+      vm?.cancelPendingSave();
+      globalThis.fetch = originalFetch;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps managed request policies across save, reload and per-model dispatch without persisting credentials', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'managed-request-policy-'));
+    const originalFetch = globalThis.fetch;
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ content: [], stop_reason: 'end_turn' }), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    globalThis.fetch = fetch;
+    try {
+      const capabilities = { eagerInputStreaming: true };
+      const modelCapabilities = { eagerInputStreaming: false };
+      const models = [
+        { id: 'claude-opus-4.8', protocol: 'anthropic', streamIdleTimeoutMs: 0, capabilities: modelCapabilities },
+        { id: 'claude-sonnet-4.6', protocol: 'anthropic' },
+        { id: 'claude-opus-4.7', protocol: 'anthropic', streamIdleTimeoutMs: 400_000 },
+      ];
+      const saved = updateLlmConfig({ providers: [{ name: 'github-copilot', apiKey: 'PRIVATE-API-KEY',
+        githubToken: 'PRIVATE-GITHUB-TOKEN', baseUrl: 'https://unused.invalid',
+        streamIdleTimeoutMs: 200_000, capabilities, models }] }, dir);
+      expect(saved.error).toBeUndefined();
+      const expected = { name: 'github-copilot', managed: 'github-copilot', credentialProvider: 'github-copilot',
+        streamIdleTimeoutMs: 200_000, capabilities, models };
+      expect(saved.providers).toEqual([expected]);
+      expect(readFileSync(join(dir, 'config.json'), 'utf8')).not.toContain('PRIVATE');
+      const reloaded = getLlmConfig(dir);
+      expect(reloaded.providers).toEqual([expected]);
+      expect(normalizeKnownProviderForRuntime(reloaded.providers[0])).toEqual({ ...expected, baseUrl: 'https://api.githubcopilot.com' });
+      const router = new AdapterRouter({ providers: reloaded.providers, llmRetry: normalizeLlmRetry() });
+      // All three share an adapter; no model's absolute override may leak to siblings.
+      for (const [id, budget, eager] of [['claude-opus-4.8', 0, false], ['claude-sonnet-4.6', 200_000, true],
+        ['claude-opus-4.7', 400_000, true], ['claude-sonnet-4.6', 200_000, true]]) {
+        const onRequestStart = vi.fn();
+        for await (const _ of router.stream({ model: `github-copilot/${id}`, messages: [], effort: 'high', effortSource: 'user',
+          tools: [{ name: 'FileWrite', description: 'Write', parameters: { type: 'object' } }], onRequestStart })) {}
+        expect(onRequestStart).toHaveBeenCalledWith({ effort: 'high', streamIdleTimeoutMs: budget });
+        const [url, init] = fetch.mock.calls.at(-1);
+        expect(url).toBe('https://api.githubcopilot.com/v1/messages');
+        expect(JSON.parse(init.body).tools[0].eager_input_streaming).toBe(eager ? true : undefined);
+      }
+      const zeroSaved = updateLlmConfig({ providers: [{ ...reloaded.providers[0], streamIdleTimeoutMs: 0 }] }, dir);
+      expect(zeroSaved.providers[0].streamIdleTimeoutMs).toBe(0);
+      const zeroRouter = new AdapterRouter({ providers: getLlmConfig(dir).providers, llmRetry: normalizeLlmRetry() });
+      const onRequestStart = vi.fn();
+      for await (const _ of zeroRouter.stream({ model: 'github-copilot/claude-sonnet-4.6', messages: [], effort: 'high', effortSource: 'user', onRequestStart })) {}
+      expect(onRequestStart).toHaveBeenCalledWith({ effort: 'high', streamIdleTimeoutMs: 0 });
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves captured catalogs and routes managed protocol refs", async () => {
     {
     const oldFetch = globalThis.fetch;

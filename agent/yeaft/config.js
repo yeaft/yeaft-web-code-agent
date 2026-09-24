@@ -84,16 +84,18 @@ const DEFAULTS = {
   //   • baseDelayMs / maxDelayMs: exponential backoff bounds used when
   //     the server didn't send a Retry-After header.
   //   • jitterRatio: ± random fraction applied to backoff; 0 disables.
-  //   • streamIdleTimeoutMs: per-SSE-chunk silence budget. 0 disables the
-  //     stalled-stream guard; every received chunk refreshes the budget.
-  //     Keep the default below the normal 120s Session silence watchdog so
-  //     the engine can cancel the stale response and issue a fresh request.
+  //   • streamIdleTimeoutMs / highEffortStreamIdleTimeoutMs: per-chunk silence
+  //     budgets, selected from the final wire effort (high/xhigh/max/ultra).
+  //     Defaults leave 30s before the Session's 120s/300s silence watchdog.
+  //     streamIdleTimeoutMs: 0 disables both; an explicit legacy timeout sets
+  //     both budgets unless highEffortStreamIdleTimeoutMs is also supplied.
   llmRetry: {
     maxRetries: 3,
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     jitterRatio: 0.25,
     streamIdleTimeoutMs: 90_000,
+    highEffortStreamIdleTimeoutMs: 270_000,
     forbiddenRetryDelaysMs: [30_000, 120_000],
   },
 };
@@ -110,7 +112,7 @@ const DEFAULTS = {
  *
  * @param {object | null | undefined} fileConfig
  * @param {object | null | undefined} overrides
- * @returns {{ maxRetries: number, baseDelayMs: number, maxDelayMs: number, jitterRatio: number, streamIdleTimeoutMs: number }}
+ * @returns {{ maxRetries: number, baseDelayMs: number, maxDelayMs: number, jitterRatio: number, streamIdleTimeoutMs: number, highEffortStreamIdleTimeoutMs: number }}
  */
 export function normalizeLlmRetry(fileConfig, overrides) {
   const base = DEFAULTS.llmRetry;
@@ -131,6 +133,11 @@ export function normalizeLlmRetry(fileConfig, overrides) {
     }
     if (Number.isFinite(src.streamIdleTimeoutMs) && src.streamIdleTimeoutMs >= 0) {
       out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(src.streamIdleTimeoutMs));
+      // Preserve explicit legacy budgets (especially 0) at every effort.
+      out.highEffortStreamIdleTimeoutMs = out.streamIdleTimeoutMs;
+    }
+    if (Number.isFinite(src.highEffortStreamIdleTimeoutMs) && src.highEffortStreamIdleTimeoutMs >= 0) {
+      out.highEffortStreamIdleTimeoutMs = Math.min(600_000, Math.floor(src.highEffortStreamIdleTimeoutMs));
     }
     if (Array.isArray(src.forbiddenRetryDelaysMs)) {
       out.forbiddenRetryDelaysMs = src.forbiddenRetryDelaysMs

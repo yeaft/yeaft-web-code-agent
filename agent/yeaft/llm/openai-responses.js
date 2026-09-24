@@ -38,6 +38,7 @@ import {
   classifyFetchError,
   retryAfterFromResponse,
   readStreamChunkWithIdleTimeout,
+  resolveStreamIdleTimeoutMs,
   redactRawRequest,
   safeHeaders,
   SseLineBuffer,
@@ -76,16 +77,16 @@ function effortForResponses(effort) {
 export class OpenAIResponsesAdapter extends LLMAdapter {
   #apiKey;
   #baseUrl;
-  #streamIdleTimeoutMs;
+  #streamIdlePolicy;
 
   /**
-   * @param {{ apiKey: string, baseUrl?: string, streamIdleTimeoutMs?: number }} config
+   * @param {{ apiKey: string, baseUrl?: string, streamIdleTimeoutMs?: number, highEffortStreamIdleTimeoutMs?: number }} config
    */
-  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL, streamIdleTimeoutMs = 0 }) {
-    super({ apiKey, baseUrl, streamIdleTimeoutMs });
+  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL, streamIdleTimeoutMs = 0, highEffortStreamIdleTimeoutMs }) {
+    super({ apiKey, baseUrl, streamIdleTimeoutMs, highEffortStreamIdleTimeoutMs });
     this.#apiKey = apiKey;
     this.#baseUrl = (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
-    this.#streamIdleTimeoutMs = Number.isFinite(streamIdleTimeoutMs) ? Math.max(0, Math.floor(streamIdleTimeoutMs)) : 0;
+    this.#streamIdlePolicy = { streamIdleTimeoutMs, highEffortStreamIdleTimeoutMs };
   }
 
   /** Expose baseUrl for testing. */
@@ -268,7 +269,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * `api-key` headers are auto-redacted (see `redactRawRequest` in
    * `adapter.js`); request-body fields are caller-controlled.
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, model });
@@ -305,6 +306,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       : captureEffortDecision({ body, model, protocol: 'openai-responses', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
     const wireBody = toWellFormedJson(body);
+    const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
 
     const url = `${this.#baseUrl}/responses`;
     const headers = {
@@ -318,7 +320,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     let response;
     try {
-      onRequestStart?.();
+      onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs });
       response = await fetch(url, {
         method: 'POST',
         headers,
@@ -402,7 +404,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       while (true) {
         const { done, value } = await readStreamChunkWithIdleTimeout(reader, {
           signal,
-          idleMs: this.#streamIdleTimeoutMs,
+          idleMs,
           providerLabel: 'OpenAI',
         });
         if (done) break;

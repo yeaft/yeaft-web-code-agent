@@ -66,7 +66,7 @@ describe('provider continuation ownership and projection', () => {
     for (const field of Object.keys(identity)) expect(createPromptCacheKey({ ...identity, [field]: 'different' }, context('openai-responses'))).not.toBe(key);
     expect(createPromptCacheKey({}, context('openai-responses'))).toBeNull();
     const custom = createProviderContext({ protocol: 'anthropic', baseUrl: 'https://proxy.invalid', model: 'claude-sonnet-4' });
-    expect(custom.capabilities).toEqual({ nativeReasoningState: false, promptCaching: false, parallelToolCalls: false });
+    expect(custom.capabilities).toEqual({ nativeReasoningState: false, promptCaching: false, parallelToolCalls: false, eagerInputStreaming: false });
     expect(createProviderContext({ protocol: 'anthropic', capabilities: { translation: true, nativeReasoningState: true, promptCaching: true } }).capabilities.nativeReasoningState).toBe(false);
   });
 
@@ -244,15 +244,47 @@ describe('native provider wire contracts', () => {
     await expect(collect(new AnthropicAdapter({ apiKey: 'synthetic' }).stream({ model: 'claude-sonnet-4', messages: [], requestIdentity: identity, providerContext: context('anthropic') }))).rejects.toThrow(/before stop event/);
   });
 
+  it('sends eager tool streaming only to verified Anthropic routes, with model overrides', async () => {
+    const cases = [
+      [undefined, undefined, undefined, true],
+      [undefined, { eagerInputStreaming: false }, undefined, false],
+      ['https://proxy.invalid', undefined, undefined, false],
+      ['https://proxy.invalid', { eagerInputStreaming: true }, undefined, true],
+      ['https://proxy.invalid', { eagerInputStreaming: true }, { eagerInputStreaming: false }, false],
+      ['https://proxy.invalid', { eagerInputStreaming: true, translation: true }, undefined, false],
+    ];
+    for (const [baseUrl, capabilities, modelCapabilities, enabled] of cases) {
+      const fetch = vi.fn(async () => json({ content: [], stop_reason: 'end_turn' }));
+      vi.stubGlobal('fetch', fetch);
+      const router = new AdapterRouter({ providers: [{ name: 'fixture', apiKey: 'synthetic', baseUrl, protocol: 'anthropic', capabilities,
+        models: [{ id: 'claude-opus-4.8', capabilities: modelCapabilities }] }] });
+      const params = { model: 'fixture/claude-opus-4.8', messages: [], tools: [{ name: 'FileWrite', description: 'Write', parameters: { type: 'object' } }] };
+      await collect(router.stream(params));
+      const body = JSON.parse(fetch.mock.calls[0][1].body);
+      expect(body.tools[0].eager_input_streaming).toBe(enabled ? true : undefined);
+      expect(fetch.mock.calls[0][1].headers['anthropic-beta']).toBeUndefined();
+      await collect(router.stream({ ...params, tools: undefined }));
+      expect(JSON.parse(fetch.mock.calls[1][1].body).tools).toBeUndefined();
+    }
+    const fetch = vi.fn(async () => json({ output: [], status: 'completed' }));
+    vi.stubGlobal('fetch', fetch);
+    const router = new AdapterRouter({ providers: [{ name: 'fixture', apiKey: 'synthetic', protocol: 'openai-responses',
+      capabilities: { eagerInputStreaming: true }, models: ['gpt-5'] }] });
+    await collect(router.stream({ model: 'fixture/gpt-5', messages: [], tools: [{ name: 'Tool', parameters: { type: 'object' } }] }));
+    expect(fetch.mock.calls[0][1].body).not.toContain('eager_input_streaming');
+  });
+
   it('preserves model capability overrides through config API persistence and normalization', () => {
     const dir = mkdtempSync(join(tmpdir(), 'provider-capabilities-'));
     try {
-      const capabilities = { nativeReasoningState: true, promptCaching: false, translation: false };
+      const capabilities = { nativeReasoningState: true, promptCaching: false, translation: false, eagerInputStreaming: true };
       const saved = updateLlmConfig({ providers: [{ name: 'fixture', baseUrl: 'https://proxy.invalid', apiKey: 'synthetic',
-        credentialScopeId: 'fixture-account', capabilities: { promptCaching: true }, models: [{ id: 'gpt-5', capabilities }] }] }, dir);
+        credentialScopeId: 'fixture-account', streamIdleTimeoutMs: 200_000, capabilities: { promptCaching: true },
+        models: [{ id: 'gpt-5', capabilities, streamIdleTimeoutMs: 0 }] }] }, dir);
       expect(saved.error).toBeUndefined();
-      expect(saved.providers[0].models[0]).toEqual({ id: 'gpt-5', capabilities });
-      expect(normalizeProviderModels(saved.providers[0])[0].capabilities).toEqual(capabilities);
+      expect(saved.providers[0].models[0]).toEqual({ id: 'gpt-5', capabilities, streamIdleTimeoutMs: 0 });
+      expect(normalizeProviderModels(saved.providers[0])[0]).toMatchObject({ capabilities, streamIdleTimeoutMs: 0 });
+      expect(saved.providers[0].streamIdleTimeoutMs).toBe(200_000);
       expect(saved.providers[0].credentialScopeId).toBe('fixture-account');
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

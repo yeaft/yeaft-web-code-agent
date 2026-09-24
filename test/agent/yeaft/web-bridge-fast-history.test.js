@@ -1813,11 +1813,51 @@ describe('provider inactivity watchdog', () => {
         expect(ctrl.signal.aborted).toBe(true);
         push(delta('late'));
         expect(await pump).toMatchObject({ name: 'LLMAbortError' });
-        source.close();
+        if (!anthropic) source.close(); // Anthropic now cancels the reader on abort.
         watchdog.touch(); watchdog.reset();
         expect(vi.getTimerCount()).toBe(0);
       }
     }
+  });
+
+  it('coordinates real Router transport budgets with final request policy rather than stale Session effort', async () => {
+    vi.useFakeTimers();
+    const { AdapterRouter } = await import('../../../agent/yeaft/llm/router.js');
+    const { normalizeLlmRetry } = await import('../../../agent/yeaft/config.js');
+    const router = new AdapterRouter({ llmRetry: normalizeLlmRetry(), providers: [{ name: 'fixture', apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', protocol: 'anthropic', models: [
+      'claude-opus-4.8', { id: 'claude-sonnet-4.8', streamIdleTimeoutMs: 400_000 },
+    ] }] });
+    for (const [model, effort, initialWindow, idleMs, watchdogMs] of [
+      ['claude-opus-4.8', 'high', 120_000, 270_000, 300_000],
+      ['claude-opus-4.8', 'low', 300_000, 90_000, 120_000],
+      ['claude-sonnet-4.8', 'low', 120_000, 400_000, 430_000],
+    ]) {
+      const { ctrl, onTimeout, watchdog, hctx } = makeHandler(initialWindow);
+      let source;
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(controller) { source = controller; } }))));
+      const policy = vi.fn(request => watchdog.setTimeoutMs(__testHooks.queryTimeoutMsForProviderRequest(request)));
+      const pump = (async () => {
+        try { for await (const event of router.stream({ model: `fixture/${model}`, messages: [], effort, effortSource: 'user', signal: ctrl.signal, onRequestStart: policy })) __testHandleEngineEvent(event, hctx); }
+        catch (error) { return error; }
+      })();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(policy).toHaveBeenCalledWith({ effort, streamIdleTimeoutMs: idleMs });
+      expect(__testHooks.queryTimeoutMsForProviderRequest(policy.mock.calls[0][0])).toBe(watchdogMs);
+      source.enqueue(new TextEncoder().encode('data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call","name":"FileWrite","input":{}}}\n\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"file_path\\":\\"design.md\\","}}\n\n'));
+      await vi.advanceTimersByTimeAsync(idleMs - 1);
+      expect(ctrl.signal.aborted).toBe(false);
+      expect(onTimeout).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pump).toMatchObject({ name: 'LLMStreamIdleTimeoutError' });
+      expect(onTimeout).not.toHaveBeenCalled();
+      __testHandleEngineEvent({ type: 'llm_retry', delayMs: 1000 }, hctx);
+      await vi.advanceTimersByTimeAsync(watchdogMs);
+      expect(onTimeout).not.toHaveBeenCalled();
+      expect(hctx.toolCallsAccum).toEqual([]);
+      watchdog.stop();
+    }
+    expect(__testHooks.queryTimeoutMsForProviderRequest({ effort: 'high', streamIdleTimeoutMs: 0 })).toBe(300_000);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('does not flush text, project hidden content or let empty/usage metadata renew silence', async () => {

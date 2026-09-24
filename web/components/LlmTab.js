@@ -1,6 +1,20 @@
 import { PROTOCOL_PRESET_MODELS } from '../utils/protocolPresets.js';
 import ProviderPresetPicker from './ProviderPresetPicker.js';
 
+// Preserve non-secret request policies that have no controls in this form.
+// Managed providers must still use an explicit whitelist rather than copying
+// the whole runtime provider (which may contain resolved credentials).
+function cloneRequestPolicy(provider) {
+  const policy = {};
+  if (Number.isFinite(provider.streamIdleTimeoutMs) && provider.streamIdleTimeoutMs >= 0) {
+    policy.streamIdleTimeoutMs = provider.streamIdleTimeoutMs;
+  }
+  if (provider.capabilities && typeof provider.capabilities === 'object' && !Array.isArray(provider.capabilities)) {
+    policy.capabilities = { ...provider.capabilities };
+  }
+  return policy;
+}
+
 export default {
   name: 'LlmTab',
   components: { ProviderPresetPicker },
@@ -436,8 +450,16 @@ export default {
       };
       const providers = [...this.localProviders];
       const index = providers.findIndex(p => p?.name === provider.name);
-      if (index >= 0) providers[index] = provider;
-      else providers.push(provider);
+      if (index >= 0) {
+        const previous = providers[index];
+        Object.assign(provider, cloneRequestPolicy(previous));
+        const previousModels = new Map((previous.models || []).map(model => [this._modelId(model), model]));
+        provider.models = provider.models.map(model => {
+          const policy = cloneRequestPolicy(previousModels.get(this._modelId(model)) || {});
+          return Object.keys(policy).length ? { ...(typeof model === 'string' ? { id: model } : model), ...policy } : model;
+        });
+        providers[index] = provider;
+      } else providers.push(provider);
       this.localProviders = providers;
       this.refreshProviderModelsText();
       const modelRefs = new Set(this.parseModelsFromProvider(provider)
@@ -516,6 +538,7 @@ export default {
         githubToken: p.githubToken || '',
         protocol: p.protocol || 'openai-responses',
         credentialProvider: p.credentialProvider || null,
+        ...cloneRequestPolicy(p),
         models: Array.isArray(p.models)
           ? p.models.map(m => (m && typeof m === 'object') ? { ...m } : m)
           : []
@@ -696,6 +719,7 @@ export default {
               name: p.name.trim() || 'github-copilot',
               credentialProvider: 'github-copilot',
               managed: p.managed || 'github-copilot',
+              ...cloneRequestPolicy(p),
               // Keep the catalog returned by GitHub Copilot. The Session model
               // menu is rebuilt from persisted providers after this save.
               models: (p.models || []).filter(m => this._modelId(m)),
@@ -707,6 +731,7 @@ export default {
             baseUrl: p.baseUrl.trim(),
             apiKey: p.apiKey || '',
             githubToken: p.githubToken || '',
+            ...cloneRequestPolicy(p),
             // Preserve mixed string/object entries — agent-side normalize
             // collapses to plain string when no metadata is attached.
             models: (p.models || []).filter(m => this._modelId(m))
