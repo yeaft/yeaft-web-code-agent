@@ -311,6 +311,28 @@ export class SseLineBuffer {
 }
 
 /**
+ * Resolve one request's transport silence budget after final effort enforcement.
+ * Provider/model overrides are absolute (including 0); the shared adapter is
+ * never mutated. Explicit legacy timeouts apply to every effort unless a high
+ * budget was also configured. All enabled budgets remain bounded at 10 minutes.
+ *
+ * @param {{ streamIdleTimeoutMs?: number, highEffortStreamIdleTimeoutMs?: number }} policy
+ * @param {string|null} effort — effective wire effort, not the requested value
+ * @param {number|undefined} overrideMs — model > provider override
+ * @returns {number}
+ */
+export function resolveStreamIdleTimeoutMs(policy = {}, effort = null, overrideMs) {
+  const valid = value => Number.isFinite(value) && value >= 0;
+  const clamp = value => Math.min(600_000, Math.floor(value));
+  if (valid(overrideMs)) return clamp(overrideMs);
+  const normal = valid(policy.streamIdleTimeoutMs) ? clamp(policy.streamIdleTimeoutMs) : 0;
+  if (normal === 0) return 0;
+  const high = ['high', 'xhigh', 'max', 'ultra'].includes(effort);
+  return high && valid(policy.highEffortStreamIdleTimeoutMs)
+    ? clamp(policy.highEffortStreamIdleTimeoutMs) : normal;
+}
+
+/**
  * Read one chunk from a Fetch stream with a silence timeout. This is not a
  * total request deadline: every received chunk gets a fresh budget. A caller
  * abort still wins and is classified as LLMAbortError; only an idle stream is
@@ -692,6 +714,7 @@ export async function createLLMAdapter(config) {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl || undefined, // AnthropicAdapter has its own default
       streamIdleTimeoutMs: config.llmRetry?.streamIdleTimeoutMs,
+      highEffortStreamIdleTimeoutMs: config.llmRetry?.highEffortStreamIdleTimeoutMs,
     });
   }
 

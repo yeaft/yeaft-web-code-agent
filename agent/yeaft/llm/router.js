@@ -48,6 +48,9 @@ export function normalizeModelEntry(entry) {
   if (entry && typeof entry === 'object' && typeof entry.id === 'string' && entry.id) {
     const out = { id: entry.id };
     if (entry.capabilities && typeof entry.capabilities === 'object') out.capabilities = { ...entry.capabilities };
+    if (Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
+      out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
+    }
     if (typeof entry.protocol === 'string' && entry.protocol) {
       out.protocol = entry.protocol;
     }
@@ -246,18 +249,19 @@ export class AdapterRouter extends LLMAdapter {
   /** @type {Set<string>} managed providers backed by an explicit model catalog */
   #authoritativeManagedProviders;
 
-  /** @type {number} per-SSE-chunk silence budget; <= 0 disables the guard */
-  #streamIdleTimeoutMs;
+  /** @type {{ streamIdleTimeoutMs?: number, highEffortStreamIdleTimeoutMs?: number }} */
+  #streamIdlePolicy;
 
   /**
-   * @param {{ providers: object[], llmRetry?: { streamIdleTimeoutMs?: number } }} params
+   * @param {{ providers: object[], llmRetry?: { streamIdleTimeoutMs?: number, highEffortStreamIdleTimeoutMs?: number } }} params
    * @param {object[]} params.providers — Array of { name, baseUrl, apiKey, protocol?, models[] }
    */
   constructor({ providers, llmRetry = {} }) {
     super();
-    this.#streamIdleTimeoutMs = Number.isFinite(llmRetry.streamIdleTimeoutMs)
-      ? Math.max(0, Math.floor(llmRetry.streamIdleTimeoutMs))
-      : 0;
+    this.#streamIdlePolicy = {
+      streamIdleTimeoutMs: llmRetry.streamIdleTimeoutMs,
+      highEffortStreamIdleTimeoutMs: llmRetry.highEffortStreamIdleTimeoutMs,
+    };
     this.#providers = [];
     this.#modelToProvider = new Map();
     this.#adapterCache = new Map();
@@ -509,7 +513,7 @@ export class AdapterRouter extends LLMAdapter {
         apiKey,
         baseUrl: provider.baseUrl,
         authHeaderMode: anthropicAuthHeaderMode,
-        streamIdleTimeoutMs: this.#streamIdleTimeoutMs,
+        ...this.#streamIdlePolicy,
       });
     } else if (protocol === 'openai-responses') {
       // OpenAI Responses API (/v1/responses) — canonical OpenAI-compatible path.
@@ -517,7 +521,7 @@ export class AdapterRouter extends LLMAdapter {
       adapter = new OpenAIResponsesAdapter({
         apiKey,
         baseUrl: provider.baseUrl,
-        streamIdleTimeoutMs: this.#streamIdleTimeoutMs,
+        ...this.#streamIdlePolicy,
       });
     } else {
       throw new Error(
@@ -659,8 +663,13 @@ export class AdapterRouter extends LLMAdapter {
       };
       const filtered = filterEffortForModel({ ...params, model: resolved.modelId }, resolved);
       const sanitized = sanitizeMessagesForWire(filtered);
+      // Resolve the absolute model > provider override per request, never on
+      // the shared adapter: two models may use the same cached instance.
+      const configuredTimeout = [resolved.entry?.streamIdleTimeoutMs, provider?.streamIdleTimeoutMs]
+        .find(value => Number.isFinite(value) && value >= 0);
       try {
-        yield* resolved.adapter.stream({ ...sanitized, model: resolved.modelId, effortContext, providerContext, rawExchangeMaxBytes: params.rawExchangeMaxBytes });
+        yield* resolved.adapter.stream({ ...sanitized, model: resolved.modelId, effortContext, providerContext,
+          streamIdleTimeoutMs: configuredTimeout, rawExchangeMaxBytes: params.rawExchangeMaxBytes });
         return;
       } catch (err) {
         this.#annotateAuthError(err, provider, params.model);

@@ -38,7 +38,8 @@
 | `protocol` | `'anthropic' \| 'openai-responses'` | — | provider 级 wire 协议；per-model 覆盖优先 |
 | `models` | `(string \| ModelEntry)[]` | ✓ | 该 provider 服务的 model |
 | `credentialScopeId` | `string` | — | 原生 reasoning 回传与缓存的稳定、非敏感账号归属；动态凭据/自定义 endpoint 必填，官方静态 key 路径默认使用 key 指纹。换账号时更换；仅轮换 token 时保持 |
-| `capabilities` | `object` | — | `nativeReasoningState`、`promptCaching`、`parallelToolCalls` 布尔开关；`translation: true` 强制关闭这三项。模型级覆盖优先 |
+| `capabilities` | `object` | — | `nativeReasoningState`、`promptCaching`、`parallelToolCalls`、`eagerInputStreaming` 布尔开关；`translation: true` 强制关闭这些能力。模型级覆盖优先 |
+| `streamIdleTimeoutMs` | `number` | — | 自定义 provider 的流读取静默预算（0–600000ms）；绝对覆盖全局策略，模型级覆盖优先 |
 
 > chat-completions 协议已在 Phase 7（v0.1.590）移除。当前合法值只有 `anthropic` 和 `openai-responses`。
 
@@ -53,6 +54,22 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 | `contextWindow` | `number` | — | 覆盖该 model 的注册表默认 |
 | `maxOutput` | `number` | — | 覆盖该 model 的注册表输出默认 |
 | `capabilities` | `object` | — | 逐字段覆盖 provider 的协议能力开关 |
+| `streamIdleTimeoutMs` | `number` | — | 当前请求的流读取静默预算（0–600000ms）；绝对覆盖 provider 和全局策略，包括显式 `0` |
+
+#### 流静默与长工具参数
+
+全局 `llmRetry` 策略同时用于 Anthropic Messages 和 OpenAI Responses：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `llmRetry.streamIdleTimeoutMs` | `90000` | 普通请求每个 chunk 之间的静默预算；`0` 在所有 effort 下关闭全局传输层 guard |
+| `llmRetry.highEffortStreamIdleTimeoutMs` | `270000` | 最终 wire effort 为 `high`、`xhigh`、`max` 或 `ultra` 时的预算，不依据最初请求的 effort |
+
+启用的预算最多 600000ms。每次收到 chunk 都重新计时，不是整次请求的总时限。旧配置显式指定 `streamIdleTimeoutMs` 时，该值用于所有 effort，除非同时提供高 effort 预算。模型/provider 的绝对覆盖优先于全局配置（包括全局 `0`），且不会改变其他模型共用的缓存 adapter。独立的 Session watchdog 按最终请求 effort 调整，并比启用的传输层预算至少多留 30 秒处理超时。关闭传输层 guard 不会关闭 Session watchdog 或用户取消能力；原有有限重试次数仍有效。
+
+官方 Anthropic 请求会对自定义工具发送 `eager_input_streaming: true`，启用[细粒度工具流](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming)，无需 beta header。未知代理默认**不发送**该字段；确认代理支持后，才可在 provider/model 设置 `capabilities.eagerInputStreaming: true`。设为 `false` 可退出；`translation: true` 始终关闭该能力。此选项不影响 OpenAI Responses。
+
+工具参数只累积，不会在完整 Anthropic message 结束前执行。无效 JSON、非对象输入、未关闭的 block、提前 EOF 或 `max_tokens` 工具响应会使整批失败；已完成的同批其他工具也不会执行或按完整调用持久化。合法的无参数工具仍可使用 `{}`。取消、有限重试和 fallback 保持有效，不会把截断参数修补成可执行输入。
 
 #### Reasoning 连续性与缓存
 

@@ -7562,6 +7562,84 @@ describe('Engine', () => {
       }));
     });
 
+    it('never executes or persists partial Anthropic tool batches and safely retries a complete batch once', async () => {
+      const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-anthropic-tool-boundary-'));
+      const originalFetch = global.fetch;
+      const conversationStore = new ConversationStore(yeaftDir);
+      const execute = vi.fn(async input => JSON.stringify(input));
+      const registry = new ToolRegistry();
+      registry.register(defineTool({ name: 'echo', description: 'echo', parameters: { type: 'object' }, execute }));
+      const start = index => ({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: `call-${index}`, name: 'echo', input: {} } });
+      const delta = (index, partial_json) => ({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json } });
+      const blockStop = index => ({ type: 'content_block_stop', index });
+      const messageStop = { type: 'message_stop' };
+      const stop = stop_reason => ({ type: 'message_delta', delta: { stop_reason } });
+      const firstTool = [start(0), delta(0, '{"value":1}'), blockStop(0)];
+      const complete = [...firstTool, start(1), delta(1, '{"value":2}'), blockStop(1), stop('tool_use'), messageStop];
+      const partial = [...firstTool, start(1), delta(1, '{"value":')];
+      const encode = events => new TextEncoder().encode(events.map(e => `data: ${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join(''));
+      const sse = events => new Response(encode(events));
+      try {
+        for (const [name, events] of [
+          ['invalid-json', [...partial, blockStop(1), stop('tool_use'), messageStop]],
+          ['open-sibling', [...partial, stop('tool_use'), messageStop]],
+          ['done', [...partial, '[DONE]']],
+          ['eof', partial],
+          ['max-tokens', [...firstTool, stop('max_tokens'), messageStop]],
+          ['idle', partial],
+          ['abort', partial],
+          ['recover', [...partial, blockStop(1), stop('tool_use'), messageStop]],
+        ]) {
+          execute.mockClear();
+          const sessionId = `session-stream-${name}`;
+          const ctrl = new AbortController();
+          let requests = 0;
+          const cancel = vi.fn();
+          global.fetch = vi.fn(async () => {
+            requests += 1;
+            if (name === 'recover' && requests > 1) return sse(requests === 2 ? complete : [stop('end_turn'), messageStop]);
+            if (name === 'idle' || name === 'abort') return new Response(new ReadableStream({ start(controller) {
+              controller.enqueue(encode(events));
+            }, cancel }));
+            return sse(events);
+          });
+          const policies = [];
+          const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', streamIdleTimeoutMs: 10 }), trace,
+            toolRegistry: registry, conversationStore, yeaftDir,
+            config: { model: 'claude-opus-4.8', modelEffort: 'high', projectDocMaxBytes: 0, maxOutputTokens: 1024,
+              llmRetry: { maxRetries: name === 'recover' ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+          const output = [];
+          for await (const event of engine.query({ prompt: 'echo values', sessionId, signal: ctrl.signal, onProviderRequestStart: policy => policies.push(policy) })) {
+            output.push(event);
+            if (name === 'abort' && event.type === 'provider_activity') ctrl.abort();
+          }
+          expect(policies[0]).toEqual({ effort: 'high', streamIdleTimeoutMs: 10 });
+          const persisted = conversationStore.loadRecentBySession(sessionId, 50);
+          if (name === 'recover') {
+            expect(requests).toBe(3);
+            expect(execute.mock.calls.map(([input]) => input)).toEqual([{ value: 1 }, { value: 2 }]);
+            expect(output.filter(e => e.type === 'llm_retry')).toHaveLength(1);
+            expect(output.filter(e => e.type === 'tool_call')).toHaveLength(2);
+            expect(persisted.flatMap(row => row.toolCalls || [])).toHaveLength(2);
+            expect(persisted.filter(row => row.role === 'tool')).toHaveLength(2);
+          } else {
+            expect(requests).toBe(1);
+            expect(execute).not.toHaveBeenCalled();
+            expect(output.filter(e => e.type === 'tool_call' || e.type === 'tool_start')).toEqual([]);
+            expect(persisted.flatMap(row => row.toolCalls || [])).toEqual([]);
+            expect(persisted.filter(row => row.role === 'tool')).toEqual([]);
+            expect(output.some(e => e.type === (name === 'abort' ? 'aborted' : 'error'))).toBe(true);
+          }
+          if (name === 'idle' || name === 'abort') expect(cancel).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        global.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
     it('falls back after stream idle timeout retries are exhausted', async () => {
       const { LLMStreamIdleTimeoutError } = await import('../../../agent/yeaft/llm/adapter.js');
       const models = [];
