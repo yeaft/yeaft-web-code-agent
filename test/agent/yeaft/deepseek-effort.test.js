@@ -385,3 +385,41 @@ describe('DeepSeek model effort levels', () => {
     }
   });
 });
+
+const CLAUDE5_ADAPTIVE = ['low', 'medium', 'high', 'xhigh', 'max'];
+describe('Claude 5+ adaptive effort', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('advertises adaptive effort for Claude 5+ families', () => {
+    for (const id of ['claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-5-1', 'anthropic/claude-opus-5.5']) {
+      expect(getThinkingCapability(id, { protocol: 'anthropic' }).thinkingProtocol).toBe('anthropic-adaptive');
+      expect(getModelEffortOptions(id, { protocol: 'anthropic' })).toEqual(CLAUDE5_ADAPTIVE);
+    }
+  });
+
+  it('keeps older Claude families unchanged', () => {
+    expect(getModelEffortOptions('claude-opus-4.6')).toEqual(['low', 'medium', 'high', 'max']);
+    expect(getThinkingCapability('claude-sonnet-4-20250514').thinkingProtocol).toBe('anthropic');
+    expect(getModelEffortOptions('claude-3-5-haiku')).toEqual([]);
+  });
+
+  it('keeps user effort through the router filter', () => {
+    const out = filterEffortForModel({ model: 'claude-opus-5.5', effort: 'xhigh', effortSource: 'user' }, { protocol: 'anthropic' });
+    expect(out.effort).toBe('xhigh');
+  });
+
+  it('sends output_config.effort on the Anthropic wire', async () => {
+    let body;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      body = JSON.parse(init.body);
+      throw new Error('stop');
+    });
+    const adapter = new AnthropicAdapter({ apiKey: 'k', baseUrl: 'https://example.invalid' });
+    await expect(adapter.call({
+      model: 'claude-opus-5.5', system: 's', messages: [{ role: 'user', content: 'hi' }],
+      effort: 'high', effortSource: 'user',
+    })).rejects.toThrow();
+    expect(body.output_config).toEqual({ effort: 'high' });
+    expect(body.thinking?.type).toBe('adaptive');
+  });
+});
