@@ -39,7 +39,7 @@ This chapter is the **field-by-field** reference for an Agent instance's Yeaft `
 | `models` | `(string \| ModelEntry)[]` | ✓ | Models served by this provider |
 | `credentialScopeId` | `string` | — | Stable, non-secret account scope for native reasoning replay and caching. Required for dynamic credentials/custom endpoints; official static-key routes default to a key fingerprint. Change when switching accounts; preserve when rotating tokens |
 | `capabilities` | `object` | — | Boolean `nativeReasoningState`, `promptCaching`, `parallelToolCalls`, `eagerInputStreaming`; `translation: true` disables these capabilities. Model overrides take precedence |
-| `streamIdleTimeoutMs` | `number` | — | Custom-provider stream read silence budget (0–600000ms); absolute override of global policy, with model overrides taking precedence |
+| `streamIdleTimeoutMs` | `number` | — | Provider stream read silence budget (0–600000ms); absolute override of global policy, with model overrides taking precedence. Managed Copilot also preserves timeout and capability overrides when saving |
 
 > The chat-completions protocol was removed in Phase 7 (v0.1.590). Only `anthropic` and `openai-responses` are valid.
 

@@ -7578,7 +7578,8 @@ describe('Engine', () => {
       const firstTool = [start(0), delta(0, '{"value":1}'), blockStop(0)];
       const complete = [...firstTool, start(1), delta(1, '{"value":2}'), blockStop(1), stop('tool_use'), messageStop];
       const partial = [...firstTool, start(1), delta(1, '{"value":')];
-      const encode = events => new TextEncoder().encode(events.map(e => `data: ${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join(''));
+      // Mix both legal SSE field forms, including no-space input/stop deltas.
+      const encode = events => new TextEncoder().encode(events.map(e => `data:${e.type === 'content_block_delta' || e.type === 'message_delta' ? '' : ' '}${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join(''));
       const sse = events => new Response(encode(events));
       try {
         for (const [name, events] of [

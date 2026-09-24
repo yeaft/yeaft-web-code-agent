@@ -7,6 +7,12 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getLlmConfig, updateLlmConfig } from '../../agent/yeaft/config-api.js';
+import { normalizeLlmRetry } from '../../agent/yeaft/config.js';
+import { normalizeKnownProviderForRuntime } from '../../agent/yeaft/llm/known-providers.js';
 
 vi.mock('../../agent/yeaft/llm/credentials/index.js', () => ({
   CREDENTIAL_PROVIDER_NAMES: { GITHUB_COPILOT: 'github-copilot' },
@@ -65,6 +71,56 @@ describe('inferProtocolFromModelId', () => {
 });
 
 describe('AdapterRouter resolution', () => {
+  it('keeps managed request policies across save, reload and per-model dispatch without persisting credentials', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'managed-request-policy-'));
+    const originalFetch = globalThis.fetch;
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ content: [], stop_reason: 'end_turn' }), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    globalThis.fetch = fetch;
+    try {
+      const capabilities = { eagerInputStreaming: true };
+      const modelCapabilities = { eagerInputStreaming: false };
+      const models = [
+        { id: 'claude-opus-4.8', protocol: 'anthropic', streamIdleTimeoutMs: 0, capabilities: modelCapabilities },
+        { id: 'claude-sonnet-4.6', protocol: 'anthropic' },
+        { id: 'claude-opus-4.7', protocol: 'anthropic', streamIdleTimeoutMs: 400_000 },
+      ];
+      const saved = updateLlmConfig({ providers: [{ name: 'github-copilot', apiKey: 'PRIVATE-API-KEY',
+        githubToken: 'PRIVATE-GITHUB-TOKEN', baseUrl: 'https://unused.invalid',
+        streamIdleTimeoutMs: 200_000, capabilities, models }] }, dir);
+      expect(saved.error).toBeUndefined();
+      const expected = { name: 'github-copilot', managed: 'github-copilot', credentialProvider: 'github-copilot',
+        streamIdleTimeoutMs: 200_000, capabilities, models };
+      expect(saved.providers).toEqual([expected]);
+      expect(readFileSync(join(dir, 'config.json'), 'utf8')).not.toContain('PRIVATE');
+      const reloaded = getLlmConfig(dir);
+      expect(reloaded.providers).toEqual([expected]);
+      expect(normalizeKnownProviderForRuntime(reloaded.providers[0])).toEqual({ ...expected, baseUrl: 'https://api.githubcopilot.com' });
+      const router = new AdapterRouter({ providers: reloaded.providers, llmRetry: normalizeLlmRetry() });
+      // All three share an adapter; no model's absolute override may leak to siblings.
+      for (const [id, budget, eager] of [['claude-opus-4.8', 0, false], ['claude-sonnet-4.6', 200_000, true],
+        ['claude-opus-4.7', 400_000, true], ['claude-sonnet-4.6', 200_000, true]]) {
+        const onRequestStart = vi.fn();
+        for await (const _ of router.stream({ model: `github-copilot/${id}`, messages: [], effort: 'high', effortSource: 'user',
+          tools: [{ name: 'FileWrite', description: 'Write', parameters: { type: 'object' } }], onRequestStart })) {}
+        expect(onRequestStart).toHaveBeenCalledWith({ effort: 'high', streamIdleTimeoutMs: budget });
+        const [url, init] = fetch.mock.calls.at(-1);
+        expect(url).toBe('https://api.githubcopilot.com/v1/messages');
+        expect(JSON.parse(init.body).tools[0].eager_input_streaming).toBe(eager ? true : undefined);
+      }
+      const zeroSaved = updateLlmConfig({ providers: [{ ...reloaded.providers[0], streamIdleTimeoutMs: 0 }] }, dir);
+      expect(zeroSaved.providers[0].streamIdleTimeoutMs).toBe(0);
+      const zeroRouter = new AdapterRouter({ providers: getLlmConfig(dir).providers, llmRetry: normalizeLlmRetry() });
+      const onRequestStart = vi.fn();
+      for await (const _ of zeroRouter.stream({ model: 'github-copilot/claude-sonnet-4.6', messages: [], effort: 'high', effortSource: 'user', onRequestStart })) {}
+      expect(onRequestStart).toHaveBeenCalledWith({ effort: 'high', streamIdleTimeoutMs: 0 });
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves captured catalogs and routes managed protocol refs", async () => {
     {
     const oldFetch = globalThis.fetch;

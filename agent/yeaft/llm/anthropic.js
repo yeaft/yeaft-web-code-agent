@@ -407,8 +407,10 @@ export class AnthropicAdapter extends LLMAdapter {
         const lines = sseLines.push(chunkText);
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
+          // SSE permits `data:{...}` as well as `data: {...}`. Skipping the
+          // compact form can lose input deltas or the max_tokens stop reason.
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
           if (signal?.aborted) throw new LLMAbortError();
           if (sawStop) continue;
           if (data === '[DONE]') {

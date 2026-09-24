@@ -39,7 +39,7 @@
 | `models` | `(string \| ModelEntry)[]` | ✓ | 该 provider 服务的 model |
 | `credentialScopeId` | `string` | — | 原生 reasoning 回传与缓存的稳定、非敏感账号归属；动态凭据/自定义 endpoint 必填，官方静态 key 路径默认使用 key 指纹。换账号时更换；仅轮换 token 时保持 |
 | `capabilities` | `object` | — | `nativeReasoningState`、`promptCaching`、`parallelToolCalls`、`eagerInputStreaming` 布尔开关；`translation: true` 强制关闭这些能力。模型级覆盖优先 |
-| `streamIdleTimeoutMs` | `number` | — | 自定义 provider 的流读取静默预算（0–600000ms）；绝对覆盖全局策略，模型级覆盖优先 |
+| `streamIdleTimeoutMs` | `number` | — | provider 的流读取静默预算（0–600000ms）；绝对覆盖全局策略，模型级覆盖优先。Managed Copilot 保存时也保留 timeout 和 capability 覆盖 |
 
 > chat-completions 协议已在 Phase 7（v0.1.590）移除。当前合法值只有 `anthropic` 和 `openai-responses`。
 

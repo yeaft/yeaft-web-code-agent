@@ -524,7 +524,8 @@ describe('Anthropic tool input completion boundary', () => {
   const delta = (index, partial_json) => ({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json } });
   const stop = index => ({ type: 'content_block_stop', index });
   const messageStop = { type: 'message_stop' };
-  const response = events => new Response(events.map(e => `data: ${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join(''));
+  const wire = (events, compact) => events.map(e => `data:${compact && (e.type === 'content_block_delta' || e.type === 'message_delta') ? '' : ' '}${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join('');
+  const response = (events, compact = false) => new Response(wire(events, compact));
   const adapter = () => new AnthropicAdapter({ baseUrl: 'https://proxy.invalid', apiKey: 'synthetic' });
   const request = { model: 'claude-opus-4.8', messages: [] };
 
@@ -541,30 +542,34 @@ describe('Anthropic tool input completion boundary', () => {
       ['[DONE]'],
       [{ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }, messageStop],
     ];
-    for (const tail of failures) {
-      const seen = [];
-      vi.stubGlobal('fetch', vi.fn(async () => response([...validFirst, ...tail])));
-      let caught;
-      try { for await (const e of adapter().stream(request)) seen.push(e); } catch (error) { caught = error; }
-      expect(caught).toBeInstanceOf(LLMServerError);
-      expect(caught.message).not.toContain('PRIVATE');
-      expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
+    for (const compact of [false, true]) {
+      for (const tail of failures) {
+        const seen = [];
+        vi.stubGlobal('fetch', vi.fn(async () => response([...validFirst, ...tail], compact)));
+        let caught;
+        try { for await (const e of adapter().stream(request)) seen.push(e); } catch (error) { caught = error; }
+        expect(caught).toBeInstanceOf(LLMServerError);
+        expect(caught.message).not.toContain('PRIVATE');
+        expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
+      }
     }
   });
 
   it('accepts interleaved complete objects, empty tools, initial inputs and split UTF-8 exactly once', async () => {
     const events = [start(0), start(1), delta(1, '{"content":"你'), delta(0, '{"value":1}'),
       delta(1, '好\\nworld"}'), stop(1), stop(0), start(2), stop(2), start(3, { ready: true }), stop(3), messageStop];
-    const bytes = new TextEncoder().encode(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''));
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(controller) {
-      for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
-      controller.close();
-    } }))));
-    const seen = [];
-    for await (const e of adapter().stream(request)) seen.push(e);
-    expect(seen.filter(e => e.type === 'tool_call').map(e => [e.id, e.input])).toEqual([
-      ['call-0', { value: 1 }], ['call-1', { content: '你好\nworld' }], ['call-2', {}], ['call-3', { ready: true }],
-    ]);
+    for (const compact of [false, true]) {
+      const bytes = new TextEncoder().encode(wire(events, compact));
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(controller) {
+        for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+        controller.close();
+      } }))));
+      const seen = [];
+      for await (const e of adapter().stream(request)) seen.push(e);
+      expect(seen.filter(e => e.type === 'tool_call').map(e => [e.id, e.input])).toEqual([
+        ['call-0', { value: 1 }], ['call-1', { content: '你好\nworld' }], ['call-2', {}], ['call-3', { ready: true }],
+      ]);
+    }
   });
 
   it('finishes at message_stop without waiting for transport EOF', async () => {
