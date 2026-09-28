@@ -183,6 +183,79 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.messageCursor).toBeNull();
   });
 
+  it.each(['offline', 'requestFailed', 'busy'])('retains an unknown command after a rejected %s retry', async code => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    let rejection = 'outcome_unknown';
+    f.auto(r => {
+      if (r.op !== 'send') return;
+      f.response(r, null, { ok: false, errorCode: rejection, error: 'safe failure' });
+      return false;
+    });
+    expect(await f.controller.command('send', 'accepted maybe')).toBe(false);
+    const original = f.state.retryCommand.payload.clientMessageId;
+    rejection = code;
+    expect(await f.controller.command('send', '', true)).toBe(false);
+    expect(f.state.retryCommand.payload.clientMessageId).toBe(original);
+    expect(await f.controller.command('send', 'new ID forbidden')).toBe(false);
+    f.auto();
+    expect(await f.controller.command('send', '', true)).toBe(true);
+    expect(f.requests.filter(r => r.op === 'send').map(r => r.payload.clientMessageId)).toEqual([original, original, original]);
+    expect(f.state.retryCommand).toBeNull();
+  });
+
+  it('does not let a delayed latest page erase the final polled reply', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    let records = Array.from({ length: 50 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
+    let busy = true, delayed = null, hold = false;
+    f.auto(r => {
+      if (r.op === 'snapshot') return { person: { id: 'p' }, messages: records.slice(-20), nextMessagesCursor: '31', busy, episodeId: busy ? 'e1' : null };
+      if (r.op === 'messages') {
+        if (hold) { delayed = r; return false; }
+        return { items: records, nextCursor: null };
+      }
+    });
+    await f.controller.open('a');
+    hold = true;
+    const refresh = f.controller.refresh();
+    await Promise.resolve(); await Promise.resolve();
+    expect(delayed).toBeTruthy();
+    const oldRows = records;
+    records = [...records, { id: 'm51', seq: 51 }]; busy = false;
+    await vi.advanceTimersByTimeAsync(51);
+    expect(f.state.messages.at(-1).seq).toBe(51);
+    expect(f.state.busy).toBe(false);
+    f.response(delayed, { items: oldRows, nextCursor: null }); await refresh;
+    expect(f.state.messages.at(-1).seq).toBe(51);
+    expect(f.state.messages).toHaveLength(51);
+    expect(f.state.messageCursor).toBeNull();
+  });
+
+  it('fences an older page when a newer snapshot resets a gap window', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    let records = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
+    let hold = false, delayed;
+    f.auto(r => {
+      if (r.op === 'snapshot') return { person: { id: 'p' }, messages: records.slice(-20), nextMessagesCursor: String(records.at(-20).seq), busy: true };
+      if (r.op === 'messages') {
+        if (hold) { delayed = r; return false; }
+        const end = r.payload.cursor ? Number(r.payload.cursor) - 1 : records.length;
+        const items = records.slice(Math.max(0, end - 50), end);
+        return { items, nextCursor: end > 50 ? String(items[0].seq) : null };
+      }
+    });
+    await f.controller.open('a'); hold = true;
+    const older = f.controller.page('messages', true);
+    records = Array.from({ length: 160 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
+    await vi.advanceTimersByTimeAsync(51);
+    expect(f.state.messageCursor).toBe('141');
+    f.response(delayed, { items: records.slice(0, 30), nextCursor: null }); await older;
+    expect(f.state.messages).toHaveLength(20);
+    expect(f.state.messageCursor).toBe('141');
+    hold = false;
+    while (f.state.messageCursor) await f.controller.page('messages', true);
+    expect(f.state.messages.map(m => m.seq)).toEqual(records.map(m => m.seq));
+  });
+
   it('sorts same-time and clock-rollback records by authoritative sequence', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     const records = [{ id: 'z-first', seq: 1, createdAt: 100 }, { id: 'a-second', seq: 2, createdAt: 99 }];

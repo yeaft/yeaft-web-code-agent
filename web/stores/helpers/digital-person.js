@@ -134,7 +134,14 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       messageWindowVersion += 1;
       state.messages = mergeRows([], incoming);
       state.messageCursor = data.nextMessagesCursor ?? null;
-    } else state.messages = mergeRows(state.messages, incoming);
+    } else {
+      // Any newly observed tail invalidates an older page read, even without a
+      // gap. Otherwise a delayed latest page could erase a completed reply after
+      // polling has stopped. An invalidated older page can be requested again.
+      const existing = new Set(state.messages.map(row => row.id));
+      if (incoming.some(row => !existing.has(row.id))) messageWindowVersion += 1;
+      state.messages = mergeRows(state.messages, incoming);
+    }
     state.busy = data.busy === true;
     state.episodeId = data.episodeId || null;
   }
@@ -250,7 +257,9 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       return true;
     } catch (error) {
       if (current(g)) {
-        if (!['timeout', 'outcome_unknown', 'disconnected', 'stale'].includes(error.code)) {
+        // A rejected retry says nothing about the original unknown admission.
+        // Only an acknowledgement (or explicit discard) resolves that envelope.
+        if (!retry && !['timeout', 'outcome_unknown', 'disconnected', 'stale'].includes(error.code)) {
           outbox().delete(agentId);
           state.retryCommand = null;
         }
