@@ -72,7 +72,7 @@ export class MongoPersonRepository {
         if (!p) {
           p = this.doc(scope, {
             name, soul: 'A continuous, curious and honest digital person. Preserve uncertainty, reconsider your judgments, distinguish imagination from experience, and respect permissions. You may disagree without acting without authority.',
-            soulRevision: 1, createdAt: new Date(), settings: { autonomy: false, dreamEnabled: false },
+            soulRevision: 1, createdAt: new Date(), settings: { autonomyEnabled: false },
             epoch: 0, writeSerial: 0, inputWatermark: 0, controlVersion: 0, stateVersion: 0,
             traceSeq: 0, messageSeq: 0, activeEpisodeId: null, leaseOwner: null, leaseUntil: new Date(0),
           });
@@ -124,7 +124,8 @@ export class MongoPersonRepository {
       let p = await this.collections.persons.findOne(scope, { session });
       if (!p) fail('NOT_OPEN');
       if (p.activeEpisodeId) fail('BUSY');
-      if (kind === 'dream' && !p.settings.dreamEnabled) fail('DREAM_DISABLED');
+      // Every admission is explicit. A manual Dream request authorizes this episode
+      // only; it neither requires nor enables unsolicited background cognition.
       const id = randomUUID();
       p = await this.collections.persons.findOneAndUpdate({ ...scope, activeEpisodeId: null, epoch: p.epoch }, [{ $set: {
         activeEpisodeId: id, leaseOwner: workerId, leaseUntil: { $add: ['$$NOW', this.leaseMs] },

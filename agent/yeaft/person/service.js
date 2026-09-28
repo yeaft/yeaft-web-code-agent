@@ -74,10 +74,10 @@ export function createPersonService(options = {}) {
         return result;
       }
       case 'settings': {
-        object(payload, ['autonomy', 'dreamEnabled'], []);
+        object(payload, ['autonomyEnabled'], []);
         if (Object.values(payload).some(v => typeof v !== 'boolean')) fail('INVALID_REQUEST');
         // Timer-driven autonomy is deliberately not claimed or silently enabled.
-        if (payload.autonomy === true) fail('UNSUPPORTED');
+        if (payload.autonomyEnabled === true) fail('UNSUPPORTED');
         return repository.settings(ownerId, payload);
       }
       default: fail('INVALID_REQUEST');

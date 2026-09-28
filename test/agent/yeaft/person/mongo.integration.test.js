@@ -62,9 +62,10 @@ suite('Person real MongoDB replica-set integration', () => {
       seen.push({ context, model: params.model, effort: params.effort });
       const p = finalProposal(context.state.version);
       const n = seen.length;
-      if (n === 1) p.next = { model: 'test/second', effort: 'high', reason: 'Recall prior experience before reconsidering.', capability: { id: 'catalog.view', args: { id: 'Recall' } } };
-      if (n === 2) p.next = { model: 'test/first', effort: 'low', reason: 'Read a small relevant history page.', capability: { id: 'Recall', args: { kind: 'messages', query: 'garden', limit: 2 } } };
-      if (n === 3) {
+      if (n === 1) p.next = { model: 'test/second', effort: 'high', reason: 'Discover a way to recall prior experience.', capability: { id: 'catalog.search', args: { query: 'memory', limit: 1 } } };
+      if (n === 2) p.next = { model: 'test/first', effort: 'low', reason: 'Inspect the selected Recall manifest.', capability: { id: 'catalog.view', args: { id: context.capabilityResult.items[0].id } } };
+      if (n === 3) p.next = { model: 'test/first', effort: 'low', reason: 'Read a small relevant history page.', capability: { id: 'Recall', args: { kind: 'messages', query: 'garden', limit: 2 } } };
+      if (n === 4) {
         p.activity.kind = 'associate';
         p.activity.sourceRefs = context.sourceRefs.filter(r => r.startsWith('message:'));
         p.concepts[0].sourceRefs = p.activity.sourceRefs;
@@ -76,7 +77,7 @@ suite('Person real MongoDB replica-set integration', () => {
     const service = create('roundtrip', adapter);
     const opened = await call(service, 'open');
     expect((await call(service, 'open')).person.id).toBe(opened.person.id);
-    expect((await call(service, 'snapshot')).person.settings).toEqual({ autonomy: false, dreamEnabled: false });
+    expect((await call(service, 'snapshot')).person.settings).toEqual({ autonomyEnabled: false });
     const accepted = await call(service, 'send', { text: 'I am learning to garden.', clientMessageId: 'message-1' });
     expect(accepted.episodeId).toBeTruthy();
     const duplicate = await call(service, 'send', { text: 'I am learning to garden.', clientMessageId: 'message-1' });
@@ -84,10 +85,13 @@ suite('Person real MongoDB replica-set integration', () => {
     const snapshot = await waitIdle(service);
     expect(snapshot.state.version).toBe(1); expect(snapshot.concepts).toHaveLength(2);
     expect(snapshot.messages.map(m => m.role)).toEqual(['user', 'assistant']);
-    expect(seen.map(s => [s.model, s.effort])).toEqual([['test/first', undefined], ['test/second', 'high'], ['test/first', 'low']]);
-    expect(seen[2].context.capabilityResult.items[0].text).toBe('I am learning to garden.');
+    expect(seen.map(s => [s.model, s.effort])).toEqual([['test/first', undefined], ['test/second', 'high'], ['test/first', 'low'], ['test/first', 'low']]);
+    expect(seen.map(s => s.context.budget.remainingCalls)).toEqual([4, 3, 2, 1]);
+    expect(seen[3].context.capabilityResult.items[0].text).toBe('I am learning to garden.');
     const traces = (await call(service, 'traces', { limit: 50 })).items;
-    expect(traces.filter(t => t.kind === 'activity')).toHaveLength(3);
+    expect(traces.filter(t => t.kind === 'activity')).toHaveLength(4);
+    expect(traces.filter(t => t.kind === 'capability_result').reverse().map(t => t.capability.id)).toEqual(['catalog.search', 'catalog.view', 'Recall']);
+    expect(traces[0].kind).toBe('committed');
     expect(traces.find(t => t.kind === 'call_started').request.tools).toEqual([]);
     expect(traces.find(t => t.kind === 'call_output').output).toMatchObject({ complete: true, usage: { inputTokens: 40 } });
     await expect(call(service, 'send', { text: 'different', clientMessageId: 'message-1' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
@@ -125,16 +129,22 @@ suite('Person real MongoDB replica-set integration', () => {
       return p;
     }));
     await call(service, 'open');
-    await expect(call(service, 'dream', { clientMessageId: 'dream' })).rejects.toMatchObject({ code: 'DREAM_DISABLED' });
-    await expect(call(service, 'settings', { autonomy: true })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+    expect((await call(service, 'status')).configured).toBe(true);
+    expect(await call(service, 'settings', { autonomyEnabled: false })).toEqual({ settings: { autonomyEnabled: false } });
+    await expect(call(service, 'settings', { autonomyEnabled: true })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+    await expect(call(service, 'settings', { autonomyEnabled: 'false' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(count).toBe(0);
     await call(service, 'think', { text: 'Reconsider what you know.', clientMessageId: 'think' });
     expect((await waitIdle(service)).state.version).toBe(1);
     expect((await call(service, 'messages')).items).toHaveLength(0);
-    await call(service, 'settings', { dreamEnabled: true });
     expect(count).toBe(1);
     await call(service, 'dream', { clientMessageId: 'dream' });
     const snapshot = await waitIdle(service);
     expect(snapshot.state.version).toBe(2); expect(snapshot.concepts[0].epistemicState).toBe('imagined');
+    expect(snapshot.person.settings).toEqual({ autonomyEnabled: false });
+    expect(snapshot.messages).toEqual([]);
+    await new Promise(resolve => setTimeout(resolve, 50));
     expect(count).toBe(2);
     expect(await inspector.db(dbName).collection('person_concept_revisions').countDocuments({ namespace: 'intrinsic' })).toBe(2);
   });
