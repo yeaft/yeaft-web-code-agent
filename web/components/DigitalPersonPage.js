@@ -1,10 +1,16 @@
 import UserTurnBlock from './UserTurnBlock.js';
+import MessageComposer from './MessageComposer.js';
+import NavigationIcon from './NavigationIcon.js';
+import ThemeToggle from './ThemeToggle.js';
+import PersonThoughtJournal from './PersonThoughtJournal.js';
+import PersonDebugLog from './PersonDebugLog.js';
 import { useAuthStore } from '../stores/auth.js';
+import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
 import { createPersonController, digitalPersonGate, personState } from '../stores/helpers/digital-person.js';
 
 export default {
   name: 'DigitalPersonPage',
-  components: { UserTurnBlock },
+  components: { UserTurnBlock, MessageComposer, NavigationIcon, ThemeToggle, PersonThoughtJournal, PersonDebugLog },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -13,13 +19,15 @@ export default {
       || chat.agents.find(a => a.online && a.capabilities?.includes('digital_person'))?.id
       || chat.agents[0]?.id || '');
     const draft = Vue.ref('');
-    const traceOpen = Vue.ref(false);
+    const view = Vue.ref('conversation');
+    const previousView = Vue.ref('conversation');
     const messagePane = Vue.ref(null);
     const returnButton = Vue.ref(null);
+    const viewNavigation = Vue.ref(null);
     const gate = Vue.computed(() => digitalPersonGate(chat, agentId.value));
     const scope = () => JSON.stringify([auth.userId, auth.authGeneration]);
     const controller = createPersonController({ chat, state, scope });
-    Vue.watch(() => JSON.stringify([scope(), agentId.value]), () => { draft.value = ''; });
+    Vue.watch(() => JSON.stringify([scope(), agentId.value]), () => { draft.value = ''; view.value = 'conversation'; });
     Vue.watch(() => JSON.stringify([scope(), agentId.value, gate.value, chat.chatHistoryConnectionGeneration]), () => {
       controller.open(agentId.value);
     // Batch auth_result mutations: authenticated is set before the new socket's
@@ -38,6 +46,18 @@ export default {
       if (await controller.command(op, before, retry)) {
         if (draft.value === before && op !== 'dream') draft.value = '';
       }
+    }
+    function onKeydown(event) {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+        event.preventDefault();
+        if (canCompose.value && draft.value.trim()) command('send');
+      }
+    }
+    async function selectView(next) {
+      if (next === 'debug') previousView.value = view.value;
+      view.value = next;
+      await Vue.nextTick();
+      viewNavigation.value?.querySelector('[aria-current="page"]')?.focus();
     }
     Vue.watch(() => state.messages.at(-1)?.id, async () => {
       const pane = messagePane.value;
@@ -58,37 +78,55 @@ export default {
       if (destination === 'plugins') { chat.enterYeaft(); chat.openPluginCenter(agentId.value); }
     }
     const asUserMessage = message => ({ ...message, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
-    const format = value => JSON.stringify(value, null, 2);
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, traceOpen, messagePane, returnButton, gate, ready, canCompose, controller, command, leave, asUserMessage, format, time };
+    return { chat, state, agentId, draft, view, previousView, messagePane, returnButton, viewNavigation, gate, ready, canCompose, controller, command, onKeydown, selectView, leave, asUserMessage, time, renderSafeMessageMarkdown };
   },
   template: `
     <div class="person-page">
-      <nav class="person-navigation" :aria-label="$t('person.navigation')">
-        <button ref="returnButton" type="button" class="btn-ghost" @click="leave('sessions')">{{ $t('yeaft.session.title') }}</button>
-        <button v-if="chat.workCenterUiEnabled" type="button" class="btn-ghost" @click="leave('work')">{{ $t('workCenter.title') }}</button>
-        <button type="button" class="btn-ghost" aria-current="page">{{ $t('person.title') }}</button>
-        <button type="button" class="btn-ghost" @click="leave('plugins')" :disabled="!agentId || !!gate">{{ $t('person.plugins') }}</button>
-        <button type="button" class="btn-ghost" @click="chat.toggleTheme()">{{ $t(chat.theme === 'dark' ? 'chat.sidebar.lightMode' : 'chat.sidebar.darkMode') }}</button>
-      </nav>
       <header class="person-header">
-        <h1>{{ state.person?.name || $t('person.title') }}</h1>
-        <label class="person-agent-label" for="person-agent">{{ $t('person.agent') }}</label>
-        <select id="person-agent" v-model="agentId">
-          <option v-if="!chat.agents.length" value="">{{ $t('person.noAgent') }}</option>
-          <option v-for="agent in chat.agents" :key="agent.id" :value="agent.id">{{ agent.name || agent.id }}{{ agent.online ? '' : ' · ' + $t('person.offlineShort') }}</option>
-        </select>
-        <button type="button" class="btn-secondary" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending">{{ $t('common.refresh') }}</button>
-        <button type="button" class="btn-secondary" :aria-expanded="traceOpen" aria-controls="person-trace" @click="traceOpen = !traceOpen">{{ $t('person.trace') }}</button>
+        <nav class="person-navigation" :aria-label="$t('person.navigation')">
+          <button ref="returnButton" type="button" class="btn-ghost person-icon-button" @click="leave('sessions')" :aria-label="$t('yeaft.session.title')" :title="$t('yeaft.session.title')"><NavigationIcon name="back" /></button>
+        </nav>
+        <div class="person-identity">
+          <h1>{{ state.person?.name || $t('person.title') }}</h1>
+          <span class="person-muted">{{ $t('person.title') }}</span>
+        </div>
+        <div class="person-header-actions">
+          <label class="person-sr-only" for="person-agent">{{ $t('person.agent') }}</label>
+          <select id="person-agent" v-model="agentId">
+            <option v-if="!chat.agents.length" value="">{{ $t('person.noAgent') }}</option>
+            <option v-for="agent in chat.agents" :key="agent.id" :value="agent.id">{{ agent.name || agent.id }}{{ agent.online ? '' : ' · ' + $t('person.offlineShort') }}</option>
+          </select>
+          <button type="button" class="btn-ghost person-icon-button" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>
+          <details class="person-menu">
+            <summary class="btn-ghost">{{ $t('person.more') }}</summary>
+            <nav :aria-label="$t('person.navigation')">
+              <button v-if="chat.workCenterUiEnabled" type="button" class="btn-ghost" @click="leave('work')">{{ $t('workCenter.title') }}</button>
+              <button type="button" class="btn-ghost" @click="leave('plugins')" :disabled="!agentId || !!gate">{{ $t('person.plugins') }}</button>
+              <ThemeToggle />
+            </nav>
+          </details>
+        </div>
       </header>
+      <nav ref="viewNavigation" class="session-tab-bar person-views" :aria-label="$t('person.views')">
+        <template v-if="view !== 'debug'">
+          <button type="button" class="session-tab" :class="{ active: view === 'conversation' }" :aria-current="view === 'conversation' ? 'page' : null" aria-controls="person-conversation" @click="selectView('conversation')">{{ $t('person.chat') }}</button>
+          <button type="button" class="session-tab" :class="{ active: view === 'thoughts' }" :aria-current="view === 'thoughts' ? 'page' : null" aria-controls="person-thoughts" @click="selectView('thoughts')">{{ $t('person.thoughts') }}</button>
+          <button type="button" class="btn-ghost person-debug-link" aria-controls="person-debug" @click="selectView('debug')">{{ $t('person.debug') }}</button>
+        </template>
+        <template v-else>
+          <button type="button" class="btn-ghost" @click="selectView(previousView)"><NavigationIcon name="back" />{{ $t('person.back') }}</button>
+          <button type="button" class="session-tab active" aria-current="page" aria-controls="person-debug">{{ $t('person.debug') }}</button>
+        </template>
+      </nav>
       <div class="person-status" role="status" aria-live="polite">
+        <span class="person-status-dot" :class="{ ready, busy: state.busy || state.commandPending }" aria-hidden="true"></span>
         <span v-if="gate">{{ $t('person.' + gate) }}</span>
         <span v-else-if="state.loading">{{ $t('person.loading') }}</span>
         <span v-else-if="state.busy || state.commandPending">{{ $t('person.busy') }}</span>
         <span v-else-if="ready">{{ $t('person.ready') }}</span>
-        <span v-if="state.state?.version != null"> · {{ $t('person.version', { version: state.state.version }) }}</span>
         <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
-        <button v-if="state.busy" type="button" class="btn-secondary" @click="controller.cancel()" :disabled="!!gate || state.cancelPending">{{ $t(state.cancelPending ? 'person.cancelling' : 'common.cancel') }}</button>
+        <button v-if="state.busy" type="button" class="btn-ghost" @click="controller.cancel()" :disabled="!!gate || state.cancelPending">{{ $t(state.cancelPending ? 'person.cancelling' : 'common.cancel') }}</button>
       </div>
       <section v-if="(state.configured === false || state.storageReady === false || state.modelReady === false) && !gate" class="person-configuration" role="status">
         <h2>{{ $t('person.configureTitle') }}</h2>
@@ -98,7 +136,7 @@ export default {
         <p v-if="state.reason" class="person-muted">{{ state.reason }}</p>
       </section>
       <div v-if="state.latestEpisode && ['failed', 'interrupted', 'budget_exhausted'].includes(state.latestEpisode.status)" class="person-error" role="alert">
-        {{ $t('person.episodeFailed') }} <code>{{ state.latestEpisode.terminalCode || state.latestEpisode.status }}</code>
+        {{ $t('person.episodeFailed') }}
       </div>
       <div v-if="state.error" class="person-error" role="alert">
         <p>{{ $t('person.requestFailed') }} {{ state.error.message }}</p>
@@ -109,49 +147,32 @@ export default {
         <button type="button" class="btn-secondary" :disabled="!ready" @click="command(state.retryCommand.op, true)">{{ $t('person.retrySame') }}</button>
         <button type="button" class="btn-ghost" @click="controller.discardRetry()">{{ $t('person.discardRetry') }}</button>
       </div>
-      <div class="person-content" :class="{ 'trace-open': traceOpen }">
-        <main class="person-conversation" :aria-label="$t('person.conversation')">
-          <div ref="messagePane" class="person-messages" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading">
-            <button v-if="state.messageCursor != null" type="button" class="btn-ghost" @click="controller.page('messages', true)" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
-            <p v-if="!state.messages.length && ready" class="person-empty">{{ $t('person.empty') }}</p>
+      <main v-show="view === 'conversation'" id="person-conversation" class="person-conversation" :aria-label="$t('person.conversation')">
+        <div ref="messagePane" class="person-messages" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading">
+          <div class="person-reading-column">
+            <button v-if="state.messageCursor != null" type="button" class="btn-ghost person-load-more" @click="controller.page('messages', true)" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
+            <div v-if="!state.messages.length && ready" class="person-welcome"><NavigationIcon name="activity" :size="28" /><h2>{{ $t('person.welcome') }}</h2><p>{{ $t('person.empty') }}</p></div>
             <template v-for="message in state.messages" :key="message.id">
               <UserTurnBlock v-if="message.role === 'user'" :message="asUserMessage(message)" :session-actions="false" />
               <article v-else class="person-message" :data-message-id="message.id">
-                <header><strong>{{ message.role === 'assistant' ? (state.person?.name || $t('person.title')) : $t('person.system') }}</strong><time>{{ time(message.createdAt) }}</time></header>
-                <div class="person-message-text">{{ message.text }}</div>
+                <header class="person-message-meta"><strong>{{ message.role === 'assistant' ? (state.person?.name || $t('person.title')) : $t('person.system') }}</strong><time>{{ time(message.createdAt) }}</time></header>
+                <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
               </article>
             </template>
           </div>
-          <form class="person-composer" @submit.prevent="command('send')">
-            <label for="person-input">{{ $t('person.input') }}</label>
-            <textarea id="person-input" v-model="draft" rows="3" :disabled="!canCompose" :placeholder="$t('person.placeholder')" aria-describedby="person-think-hint" @keydown.ctrl.enter.prevent="!$event.isComposing && canCompose && command('send')" @keydown.meta.enter.prevent="!$event.isComposing && canCompose && command('send')"></textarea>
-            <p id="person-think-hint" class="person-muted">{{ $t('person.thinkHint') }}</p>
-            <div class="person-composer-actions">
-              <button type="button" class="btn-secondary" :disabled="!canCompose" @click="command('dream')">{{ $t('person.dream') }}</button>
-              <button type="button" class="btn-secondary" :disabled="!canCompose" @click="command('think')">{{ $t('person.think') }}</button>
-              <button type="submit" class="btn-primary" :disabled="!canCompose || !draft.trim()">{{ $t('person.send') }}</button>
-            </div>
-          </form>
-        </main>
-        <aside v-if="traceOpen" id="person-trace" class="person-trace" :aria-label="$t('person.trace')">
-          <div class="person-trace-heading"><h2>{{ $t('person.trace') }}</h2><button type="button" class="btn-ghost" @click="traceOpen = false">{{ $t('common.close') }}</button></div>
-          <p class="person-muted">{{ $t('person.traceHint') }}</p>
-          <button type="button" class="btn-ghost" @click="controller.page('traces')" :disabled="!ready || state.tracesLoading">{{ $t('person.refreshTrace') }}</button>
-          <p v-if="state.tracesStale" role="status">{{ $t('person.traceStale') }}</p>
-          <div class="person-trace-scroll" tabindex="0" :aria-label="$t('person.traceEvents')" :aria-busy="state.tracesLoading">
-            <p v-if="!state.traces.length">{{ $t(state.tracesLoading ? 'person.loading' : 'person.noTrace') }}</p>
-            <details v-if="state.state" class="person-trace-row"><summary>{{ $t('person.state') }}</summary><pre>{{ format(state.state) }}</pre></details>
-            <details v-for="trace in state.traces" :key="trace.id" class="person-trace-row">
-              <summary><strong>{{ trace.kind }}</strong> <time>{{ time(trace.createdAt) }}</time><small>{{ trace.episodeId }}</small></summary>
-              <dl><dt>{{ $t('person.traceId') }}</dt><dd>{{ trace.id }}</dd></dl>
-              <div v-if="trace.input !== undefined"><h3>{{ $t('person.traceInput') }}</h3><pre>{{ format(trace.input) }}</pre></div>
-              <div v-if="trace.output !== undefined"><h3>{{ $t('person.traceOutput') }}</h3><pre>{{ format(trace.output) }}</pre></div>
-              <h3>{{ $t('person.traceRecord') }}</h3><pre>{{ format(trace) }}</pre>
-            </details>
-            <button v-if="state.traceCursor != null" type="button" class="btn-secondary" @click="controller.page('traces', true)" :disabled="!!gate || state.tracesLoading">{{ $t('person.moreTrace') }}</button>
-          </div>
-        </aside>
-      </div>
+        </div>
+        <div class="input-area person-composer">
+          <label class="person-sr-only" for="person-input">{{ $t('person.input') }}</label>
+          <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canCompose && !!draft.trim()" :sending="state.commandPending" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')" @send="command('send')" @keydown="onKeydown">
+            <template #start-actions>
+              <button type="button" class="btn-ghost" :disabled="!canCompose" @click="command('think')" :title="$t('person.thinkHint')">{{ $t('person.think') }}</button>
+              <button type="button" class="btn-ghost" :disabled="!canCompose" @click="command('dream')">{{ $t('person.dream') }}</button>
+            </template>
+          </MessageComposer>
+        </div>
+      </main>
+      <PersonThoughtJournal v-if="view === 'thoughts'" :traces="state.traces" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
+      <PersonDebugLog v-if="view === 'debug'" :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
     </div>
   `,
 };
