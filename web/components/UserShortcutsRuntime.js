@@ -17,7 +17,7 @@ export default {
     const { preferences, ownerId } = useUserShortcuts();
     const sessionCreateOpen = Vue.ref(false);
     const sessionCreateAgentId = Vue.ref(null);
-    Vue.watch([ownerId, () => store.currentAgent, () => store.currentView], () => {
+    Vue.watch([ownerId, () => store.currentAgent, () => store.currentView, () => store.digitalPersonOpen], () => {
       sessionCreateOpen.value = false;
     }, { flush: 'sync' });
     const execute = action => {

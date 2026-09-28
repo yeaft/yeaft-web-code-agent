@@ -3,6 +3,7 @@
  * Delegates to sub-handlers for complex message types.
  */
 
+import { acceptPersonResponse } from './digital-person.js';
 import { useAuthStore } from '../auth.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
@@ -236,7 +237,7 @@ export function handleMessage(store, msg) {
   const authStore = useAuthStore();
   // The socket identity gate excludes replaced sockets. Also reject a still-open
   // old-owner socket during the logout/re-authentication transition.
-  if (['work_center_response', 'work_center_event'].includes(msg?.type)
+  if (['work_center_response', 'work_center_event', 'person_response'].includes(msg?.type)
       && Object.hasOwn(msg, '_wsAuthGeneration')
       && (msg._wsAuthGeneration !== authStore.authGeneration
         || msg._wsAuthToken !== (authStore.getActiveToken?.() || authStore.token || null))) return;
@@ -250,6 +251,10 @@ export function handleMessage(store, msg) {
   store._lastPongAt = Date.now();
 
   switch (msg.type) {
+    case 'person_response':
+      acceptPersonResponse(store, msg);
+      break;
+
     case 'work_center_response': {
       const pending = msg.requestId ? store.workCenterPending[msg.requestId] : null;
       if (!pending) break;

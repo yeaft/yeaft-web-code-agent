@@ -1,0 +1,121 @@
+import { expect } from '@playwright/test';
+import { test } from '../../fixtures/test-server.js';
+
+// Real browser entry + WebSocket framing with an explicit mock Person runtime.
+// This is not a model, MongoDB or Server authorization integration test.
+test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
+
+async function mockPersonSocket(page) {
+  const requests = [];
+  const messages = [];
+  let socket;
+  let configured = true;
+  let busy = false;
+  const agents = [
+    { id: 'person-a', name: 'Owner Agent A', online: true, capabilities: ['digital_person'] },
+    { id: 'person-b', name: 'Owner Agent B', online: true, capabilities: ['digital_person'] },
+    { id: 'old-agent', name: 'Old Agent', online: true, capabilities: [] },
+  ];
+  const agentList = () => socket.send(JSON.stringify({ type: 'agent_list', agents }));
+  await page.routeWebSocket(/.*/, route => {
+    socket = route;
+    const server = route.connectToServer();
+    server.onMessage(message => {
+      const data = JSON.parse(String(message));
+      if (data.type === 'agent_list') route.send(JSON.stringify({ ...data, agents }));
+      else route.send(message);
+    });
+    route.onMessage(message => {
+      const request = JSON.parse(String(message));
+      if (request.type !== 'person_request') { server.send(message); return; }
+      requests.push(request);
+      const reply = (data, extra = {}) => route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data, ...extra }));
+      if (request.op === 'status') reply({ configured, reason: configured ? '' : 'MongoDB is not configured' });
+      else if (request.op === 'open') reply({ person: { id: 'person-1' } });
+      else if (request.op === 'snapshot') {
+        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea' }, state: { version: 4, currentEpisodeId: 'episode-1' }, messages: request.agentId === 'person-a' ? messages : [], busy, episodeId: busy ? 'episode-1' : null });
+      } else if (request.op === 'messages') {
+        reply({ items: request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor ? null : 'older-page' });
+      } else if (request.op === 'traces') {
+        reply({ items: [{ id: request.payload.cursor ? 'trace-older' : 'trace-latest', episodeId: 'episode-1', kind: request.payload.cursor ? 'recall' : 'model_choice', createdAt: 2, input: { query: '<script>not HTML</script>', text: 'topic '.repeat(100) }, output: { result: 'recorded application output' }, stateBeforeRef: 'v3', stateAfterRef: 'v4', model: 'mock/model', toolChoice: 'recall' }], nextCursor: request.payload.cursor ? null : 'trace-page-2' });
+      } else if (['send', 'think', 'dream'].includes(request.op)) {
+        if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
+        busy = true; reply({ episodeId: 'episode-1' });
+      } else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
+    });
+  });
+  return { requests, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+}
+
+for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
+  test(`Digital Person route / Trace / gating ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
+    const mock = await mockPersonSocket(page);
+    await page.setViewportSize({ width: scenario.width, height: 800 });
+    await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
+    await page.goto(serverUrl);
+    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+    const zh = scenario.locale === 'zh-CN';
+    if (scenario.width === 320) await page.locator('.header-sidebar-toggle').click();
+    const entry = page.locator('.sidebar-person-trigger:visible');
+    await entry.focus(); await entry.press('Enter');
+    await expect(page.locator('.person-page')).toBeVisible();
+    await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
+    await expect(page.locator('.person-header h1')).toHaveText('Ada');
+    const input = page.getByLabel(zh ? '消息或思考主题' : 'Message or thought topic', { exact: true });
+    await expect(input).toBeEnabled();
+    await input.focus(); await expect(input).toBeFocused();
+    await input.fill('Hello Person');
+    await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
+    await expect(input).toBeDisabled();
+    await expect(page.locator('.person-messages')).toContainText('Recorded mock response.');
+    await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+    await expect(input).toBeEnabled();
+    await page.getByRole('button', { name: zh ? '加载更早消息' : 'Load older messages' }).click();
+    await expect(page.locator('.person-messages')).toContainText('Older persisted message');
+    await page.getByRole('button', { name: 'Trace', exact: true }).click();
+    await page.locator('.person-trace-row').filter({ hasText: 'model_choice' }).locator('summary').click();
+    await expect(page.locator('#person-trace')).toContainText('stateBeforeRef');
+    await expect(page.locator('#person-trace')).toContainText('<script>not HTML</script>');
+    await expect(page.locator('#person-trace script')).toHaveCount(0);
+    await page.getByRole('button', { name: zh ? '加载更多 Trace' : 'Load more Trace' }).click();
+    await expect(page.locator('.person-trace-row')).toHaveCount(3);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`person-trace-${scenario.width}.png`) });
+    await page.locator('.person-trace-heading button').click();
+    await page.getByRole('button', { name: zh ? '思考' : 'Think', exact: true }).click();
+    await expect.poll(() => mock.requests.filter(r => r.op === 'think').length).toBe(1);
+    expect(mock.requests.find(r => r.op === 'think').payload.text).toBe('');
+    await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+    await expect(input).toBeEnabled();
+    await page.getByRole('button', { name: zh ? '梦境' : 'Dream', exact: true }).click();
+    await expect.poll(() => mock.requests.filter(r => r.op === 'dream').length).toBe(1);
+    await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+    await page.locator('#person-agent').selectOption('person-b');
+    await expect(page.locator('.person-header h1')).toHaveText('Bea');
+    await expect(page.locator('.person-messages')).not.toContainText('Hello Person');
+    await page.locator('#person-agent').selectOption('old-agent');
+    await expect(page.locator('.person-status')).toContainText('digital_person');
+    await expect(input).toBeDisabled();
+    mock.configure(false);
+    await page.locator('#person-agent').selectOption('person-a');
+    await expect(page.locator('.person-configuration')).toContainText('MongoDB');
+    await expect(page.locator('.person-configuration')).toContainText(zh ? '不要将凭据' : 'Do not paste credentials');
+    mock.configure(true);
+    await page.locator('.person-header').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();
+    await expect(input).toBeEnabled();
+    const opens = mock.requests.filter(r => r.op === 'open').length;
+    mock.online(false); await expect(input).toBeDisabled();
+    mock.online(true); await expect(input).toBeEnabled();
+    expect(mock.requests.filter(r => r.op === 'open').length).toBeGreaterThan(opens);
+    const connectionOpens = mock.requests.filter(r => r.op === 'open').length;
+    mock.disconnect();
+    await expect.poll(() => mock.requests.filter(r => r.op === 'open').length).toBeGreaterThan(connectionOpens);
+    await expect(input).toBeEnabled();
+    expect(mock.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    expect(mock.requests.every(r => r.requestId && r.agentId && !r.sessionId && !r.ownerId)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`person-conversation-${scenario.width}.png`) });
+    await page.locator('.person-navigation button').first().click();
+    await expect(page.locator('.chat-page')).toBeVisible();
+  });
+}
