@@ -4,6 +4,7 @@ import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { acceptPersonResponse } from '../../web/stores/helpers/digital-person.js';
 import DigitalPersonPage from '../../web/components/DigitalPersonPage.js';
+import PersonThoughtJournal from '../../web/components/PersonThoughtJournal.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
@@ -67,6 +68,22 @@ describe('Digital Person surface', () => {
     await wrapper.findAll('button').find(b => b.text() === 'Back').trigger('click');
     expect(wrapper.find('#person-thoughts').exists()).toBe(true);
     expect(wrapper.find('#person-debug').exists()).toBe(false);
+  });
+
+  it('labels continuation input as earlier candidate and hides truncated technical output', () => {
+    const traces = personRecords();
+    const request = traces.find(t => t.kind === 'call_started');
+    const context = JSON.parse(request.request.messages[0].content);
+    context.previousProposal = { state: { summary: 'An earlier possible explanation.' }, next: { capability: { id: 'Recall' } } };
+    context.capabilityResult = { kind: 'messages', items: [{ role: 'user', text: 'A recalled report at this page boundary.' }] };
+    request.request.messages[0].content = JSON.stringify(context);
+    traces.push({ id: 'partial', episodeId: 'e', seq: 9, kind: 'call_failed', output: { text: '{"sourceRefs":["private-ref"],"next":{"model":"private-model"', complete: false } });
+    wrapper = mount(PersonThoughtJournal, { props: { traces }, global: { config: { globalProperties: { $t: t } } } });
+    expect(wrapper.text()).toContain('Earlier candidate — not adopted · Current understanding');
+    expect(wrapper.text()).toContain('Recalled for this thought');
+    expect(wrapper.text()).toContain('A recalled report at this page boundary.');
+    expect(wrapper.text()).toContain(en['person.thought.structured_unavailable']);
+    expect(wrapper.text()).not.toMatch(/sourceRefs|private-ref|private-model/);
   });
 
   it('preserves the draft between views and sends only on the explicit keyboard shortcut', async () => {

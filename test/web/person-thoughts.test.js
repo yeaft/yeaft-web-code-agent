@@ -115,7 +115,7 @@ describe('Person thought journal projection', () => {
       .toEqual([{ label: kind, text: 'A starting question.' }]);
   });
 
-  it('preserves partial public text when cancellation is followed by a draining call failure', () => {
+  it('keeps truncated structured output in debug when cancellation is followed by a draining call failure', () => {
     const text = '{"activity":{"summary":"Only the beginning';
     const entries = projectPersonThoughts([
       trace('call_failed', 3, { callId: 'call-a', code: 'CANCELLED', output: { text, complete: false, accepted: false,
@@ -123,8 +123,45 @@ describe('Person thought journal projection', () => {
       trace('cancelled', 2, { code: 'CANCELLED' }),
     ]);
     expect(entries.map(e => [e.kind, e.status])).toEqual([['cancelled', 'recorded'], ['thought', 'incomplete']]);
-    expect(entries[1].sections).toEqual([{ label: 'incomplete', text }]);
+    expect(entries[1].sections).toEqual([{ label: 'structured_unavailable' }]);
     expect(JSON.stringify(entries)).not.toMatch(/provider-secret|raw-secret|reasoningTokens/);
+  });
+
+  it('does not expose technical fields in truncated, fenced or prefaced JSON output', () => {
+    const proposal = finalProposal();
+    proposal.activity.sourceRefs = ['message:private-id:1'];
+    proposal.next = { model: 'private/provider-model', reason: 'Look again.', effort: 'high' };
+    const prefix = JSON.stringify(proposal).slice(0, -1);
+    for (const text of [prefix, `\`\`\`json\n${prefix}`, `Here is my proposal:\n${prefix}`]) {
+      const entries = projectPersonThoughts([trace('call_failed', 1, { callId: 'a', output: { text, complete: false } })]);
+      expect(entries[0]).toMatchObject({ status: 'incomplete', sections: [{ label: 'structured_unavailable' }] });
+      expect(JSON.stringify(entries)).not.toMatch(/sourceRefs|private-id|provider-model|baseStateVersion/);
+    }
+  });
+
+  it.each(['messages', 'concepts'])('includes %s Recall and earlier candidate input at a continuation page boundary', kind => {
+    const snap = snapshot();
+    const previous = finalProposal();
+    previous.state.summary = 'Previous candidate state, not adopted.';
+    previous.next = { model: provider.defaultSelection.model, effort: null, reason: 'Recall earlier evidence.', capability: { id: 'Recall', args: { kind } } };
+    const capabilityResult = { kind, items: snap[kind] };
+    const context = assembleContext({ snapshot: snap, episode: { id: 'episode-a', kind: 'think', text: '' },
+      provider, selection: provider.defaultSelection, previous, capabilityResult, remainingCalls: 1 });
+    // The assembler intentionally removes recalled records from top-level arrays.
+    expect(JSON.parse(context.messages[0].content)[kind]).toEqual([]);
+    const entries = projectPersonThoughts([trace('call_started', 2, { callId: 'second', request: { system: context.system, messages: context.messages } })]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].status).toBe('recorded'); // Recorded input, not accepted state.
+    expect(entries[0].sections).toContainEqual({ scope: 'previous_candidate', label: 'state_summary', text: previous.state.summary });
+    expect(entries[0].sections.filter(s => s.scope === 'previous_candidate').length).toBeGreaterThan(4);
+    expect(entries[0].sections).toContainEqual(kind === 'messages'
+      ? { scope: 'recalled', label: 'user_message', text: snap.messages[0].text }
+      : { scope: 'recalled', label: 'concept_hypothesis', text: snap.concepts[0].statement });
+    expect(JSON.stringify(entries)).not.toMatch(/system-secret|message-secret|concept-secret|test\/first|sourceRefs/);
+    const registryInput = JSON.parse(context.messages[0].content);
+    registryInput.previousProposal.next.capability.id = 'catalog.view';
+    const registryEntries = projectPersonThoughts([trace('call_started', 3, { request: { messages: [{ role: 'user', content: JSON.stringify(registryInput) }] } })]);
+    expect(registryEntries[0].sections.some(s => s.scope === 'recalled')).toBe(false);
   });
 
   it('does not promote a complete but uncommitted proposal on cancellation or budget exhaustion', () => {
@@ -215,7 +252,7 @@ describe('Person thought journal projection', () => {
       provider, selection: provider.defaultSelection, remainingCalls: 1 });
     const value = JSON.parse(context.messages[0].content);
     Object.assign(value, { models: secret, capabilities: secret, person: secret, budget: secret, sourceRefs: secret,
-      previousProposal: { reply: secret }, capabilityResult: { text: secret }, contextNotice: secret, reasoning: secret });
+      previousProposal: { reasoning: secret, sourceRefs: [secret] }, capabilityResult: { text: secret }, contextNotice: secret, reasoning: secret });
     value.messages.push({ role: 'developer', text: secret }, { role: 'system', text: secret });
     const proposal = finalProposal();
     proposal.reasoning = secret; proposal.activity.hiddenReasoning = secret;

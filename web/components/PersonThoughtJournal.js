@@ -28,7 +28,7 @@ export default {
               <time>{{ time(entry.createdAt) }}</time>
             </header>
             <section v-for="(section, index) in entry.sections" :key="index" class="person-thought-section">
-              <h3>{{ $t('person.thought.' + section.label) }}</h3>
+              <h3><span v-if="section.scope">{{ $t('person.thought.' + section.scope) }} · </span>{{ $t('person.thought.' + section.label) }}</h3>
               <p v-if="section.text" class="person-prose">{{ section.text }}</p>
               <ul v-if="section.items?.length"><li v-for="(item, i) in section.items" :key="i" class="person-prose">{{ item }}</li></ul>
             </section>

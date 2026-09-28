@@ -72,6 +72,15 @@ function proposalSections(value) {
   return sections;
 }
 
+function recallSections(result) {
+  const sections = [];
+  if (isRecord(result)) {
+    if (result.kind === 'messages') addMessages(sections, result.items);
+    if (result.kind === 'concepts') addConcepts(sections, result.items);
+  }
+  return sections;
+}
+
 function contextSections(trace) {
   const message = list(trace.request?.messages)[0];
   if (!isRecord(message) || message.role !== 'user') return [];
@@ -82,6 +91,12 @@ function contextSections(trace) {
   addState(sections, value.state);
   addMessages(sections, value.messages);
   addConcepts(sections, value.concepts);
+  // Continuation inputs must be self-contained even when the preceding call is
+  // on an unloaded page. A previous proposal is explicitly NOT adopted state.
+  sections.push(...proposalSections(value.previousProposal).map(section => ({ ...section, scope: 'previous_candidate' })));
+  if (value.previousProposal?.next?.capability?.id === 'Recall') {
+    sections.push(...recallSections(value.capabilityResult).map(section => ({ ...section, scope: 'recalled' })));
+  }
   return sections;
 }
 
@@ -105,10 +120,13 @@ function outputProjection(trace) {
     || (sections.length > 0 && !completeShape(value));
   const incomplete = partial || !sections.length;
   if (incomplete) {
-    // JSON objects are always allowlisted, including rejected/partial proposals.
-    // Only unstructured *public text* may be shown verbatim; never stringify a trace.
-    const label = !hasText(output.text) ? 'unavailable' : partial ? 'incomplete' : 'unstructured';
-    sections.unshift(!parsed && hasText(output.text) ? { label, text: output.text } : { label });
+    // A cancelled call often retains a JSON prefix. Parse failure must not bypass
+    // the field allowlist and expose sourceRefs/model/other technical metadata.
+    // Conservatively keep bracketed/quoted/fenced output in the debug page; only
+    // clearly unstructured public prose can fall back to verbatim text here.
+    const structured = !parsed && typeof output.text === 'string' && /[{}[\]]|```|^\s*"/.test(output.text);
+    const label = !hasText(output.text) ? 'unavailable' : structured ? 'structured_unavailable' : partial ? 'incomplete' : 'unstructured';
+    sections.unshift(!parsed && !structured && hasText(output.text) ? { label, text: output.text } : { label });
   }
   return { sections, incomplete };
 }
@@ -135,7 +153,7 @@ const timestamp = value => {
  * @param {unknown} traces A possibly partial, unordered array of repository trace records.
  * @returns {Array<{id: string, episodeId: string, callId?: string, createdAt: string|null,
  *   kind: string, status: 'candidate'|'committed'|'rejected'|'incomplete'|'recorded',
- *   sections: Array<{label: string, text?: string, items?: string[]}>}>}
+ *   sections: Array<{label: string, scope?: string, text?: string, items?: string[]}>}>}
  */
 export function projectPersonThoughts(traces) {
   const seen = new Set();
@@ -201,9 +219,7 @@ export function projectPersonThoughts(traces) {
       if (sections.length) add(trace, 'activity', statusFor(trace), sections);
     } else if (trace.kind === 'capability_result') {
       if (trace.capability?.id !== 'Recall' || !isRecord(trace.result)) continue;
-      const sections = [];
-      if (trace.result.kind === 'messages') addMessages(sections, trace.result.items);
-      if (trace.result.kind === 'concepts') addConcepts(sections, trace.result.items);
+      const sections = recallSections(trace.result);
       if (sections.length) add(trace, 'memory', 'recorded', sections);
     } else if (trace.kind === 'proposal_rejected') {
       // With the output on another page, rejection must still be visible.
