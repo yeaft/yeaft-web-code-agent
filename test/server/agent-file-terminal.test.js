@@ -60,6 +60,7 @@ vi.mock('../../server/ws-utils.js', () => ({
   sendToAgent,
   forwardToClients,
   forwardToAgent,
+  resolveAgentAccessError: vi.fn(() => null),
   verifyConversationOwnership: vi.fn(() => true),
   getCachedDir: vi.fn(() => null),
   setCachedDir: vi.fn(),

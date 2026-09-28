@@ -65,6 +65,14 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 - The current native registry exposes **33 built-in tools** for files/patches, shell and background jobs, Git worktrees, search, Web access, images, notebooks, planning, persistent work creation, and sub-agent/VP orchestration. Skills and MCP can extend that registry.
 - Provider context uses a bounded, disposable window of the current Session’s persisted turns. Post-turn compact remains a separate history-window optimization; it does not reactivate Dream or H2-AMS memory.
 
+### Digital Person (experimental)
+
+The sidebar **Digital Person** entry opens an independent message/input page with **Think**, explicit **Dream**, cancellation, and paginated application-level **Trace**. It has no Session list and creates neither a hidden Session nor a WorkItem. Think recalls stored messages/concepts, reorganizes experiences, proposes associations, and records self-checks and versioned conclusions in MongoDB. Trace shows explicit inputs, outputs and revisions, not a provider's hidden reasoning.
+
+To evaluate on a **new, isolated Agent instance**, supply `YEAFT_PERSON_MONGODB_URI` in the Agent process environment and optionally `YEAFT_PERSON_MONGODB_DB` (default `yeaft_person`). Use a dedicated MongoDB replica set or transaction-capable sharded deployment, with authentication/TLS outside loopback, database-scoped credentials, and backups. Standalone MongoDB is not supported; the app neither installs MongoDB nor falls back to files. Configure a native API model in that instance's `<yeaftDir>/config.json` using `yeaft-agent llm setup --config <path>`. Keep credentials out of the browser and chat. Environment changes on an existing service require an explicitly authorized restart; this feature does not restart it automatically.
+
+This first slice is **explicitly triggered only**: no idle timer, event Connector, VP delegation, external write tools or Rust desktop body yet. Its read-only capability directory currently has four methods, not the full Skills registry. Each activity allows at most four model calls / 120 seconds; the Person may choose subsequent models from up to eight configured native models. Dynamic effort is available only with `YEAFT_THINKING_V1=1` and supported model metadata. Messages, state and explicit Trace persist; model context is a bounded short-term copy. See the [design and implementation boundary](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版) for remaining work.
+
 ### Work Center
 
 ![Work Center showing a persistent WorkItem, its conversation, and Action graph](docs/images/work-center.png)

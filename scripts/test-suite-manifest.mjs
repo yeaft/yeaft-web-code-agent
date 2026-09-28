@@ -39,6 +39,9 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/provider-continuity.test.js',
   'test/agent/yeaft/harness-integration.test.js',
   'test/agent/yeaft/dream-toggle.test.js',
+  'test/agent/yeaft/person-bridge.test.js',
+  'test/agent/yeaft/person/contracts.test.js',
+  'test/server/person-relay.test.js',
   'test/agent/yeaft/engine.test.js',
   'test/agent/yeaft/debug-trace-memory.test.js',
   'test/agent/yeaft/engine-post-compact.test.js',
@@ -150,6 +153,8 @@ export const SANDBOX_TEST_FILES = Object.freeze([
 export const REVIEWED_TEST_FILES = Object.freeze([
   ...CORE_TEST_FILES,
   ...SANDBOX_TEST_FILES,
+  // Explicit isolated MongoDB replica set; focused invocation required (no live DB fallback).
+  'test/agent/yeaft/person/mongo.integration.test.js',
 ]);
 
 export function normalizeTestPath(filePath) {

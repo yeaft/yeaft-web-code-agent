@@ -28,6 +28,9 @@ vi.mock('../../server/ws-utils.js', () => ({
   clearAgentDirCache,
 }));
 
+vi.mock('../../server/handlers/client-person.js', () => ({
+  handleAgentPerson: vi.fn(async () => false),
+}));
 vi.mock('../../server/handlers/agent-conversation.js', () => ({
   handleAgentConversation: vi.fn(async () => false),
 }));

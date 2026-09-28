@@ -34,7 +34,7 @@ export function acceptPersonResponse(chat, message) {
 
 export function personState() {
   return {
-    loading: false, configured: null, reason: '', person: null, state: null,
+    loading: false, configured: null, storageReady: null, modelReady: null, reason: '', person: null, state: null, latestEpisode: null,
     messages: [], traces: [], busy: false, episodeId: null, error: null,
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
     commandPending: false, cancelPending: false, retryCommand: null, tracesStale: false,
@@ -122,6 +122,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     if (!current(g) || requestNumber !== snapshotRequest) return;
     state.person = data.person;
     state.state = data.state;
+    state.latestEpisode = data.latestEpisode || null;
     state.messages = mergeRows(state.messages, data.messages);
     state.busy = data.busy === true;
     state.episodeId = data.episodeId || null;
@@ -178,8 +179,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       const status = await request('status');
       if (!current(g)) return;
       state.configured = status.configured === true;
+      state.storageReady = status.storageReady !== false;
+      state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';
-      if (!state.configured) return;
+      if (!state.configured || !state.storageReady) return;
       await request('open');
       if (!current(g)) return;
       await snapshot();
@@ -194,7 +197,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   async function refresh() {
-    if (!state.person) return open(agentId);
+    if (!state.person || state.modelReady === false || state.storageReady === false) return open(agentId);
     const g = generation;
     if (state.loading) return;
     state.loading = true;
@@ -210,7 +213,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   async function command(op, text = '', retry = false) {
-    if (state.commandPending || state.loading || !state.person || !state.configured || digitalPersonGate(chat, agentId)) return false;
+    if (state.commandPending || state.loading || !state.person || !state.configured || state.modelReady === false || digitalPersonGate(chat, agentId)) return false;
     if (state.retryCommand && !retry) return false;
     if (!retry && (state.busy || (op === 'send' && !text.trim()))) return false;
     const envelope = retry ? state.retryCommand : {

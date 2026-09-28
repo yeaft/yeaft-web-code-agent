@@ -48,6 +48,7 @@ export class MongoPersonRepository {
     await Promise.all([
       unique('persons', {}), unique('states', {}), unique('episodes', { clientMessageId: 1 }), unique('episodes', { id: 1 }),
       unique('messages', { seq: 1 }), unique('traces', { seq: 1 }), unique('concepts', { id: 1 }),
+      this.collections.episodes.createIndex({ ...scope, inputWatermark: -1 }),
       unique('concept_revisions', { id: 1, revision: 1 }), unique('state_commits', { version: 1 }),
       this.collections.concepts.createIndex({ ...scope, updatedAt: -1, id: 1 }),
     ]);
@@ -271,7 +272,9 @@ export class MongoPersonRepository {
       const state = await this.collections.states.findOne(scope, { session });
       const messages = await this.collections.messages.find(scope, { session }).sort({ seq: -1 }).limit(21).toArray();
       const concepts = await this.collections.concepts.find({ ...scope, id: { $in: state.focusConceptIds } }, { session }).limit(12).toArray();
-      return { person: this.personView(p), state: publicDoc(state), concepts: concepts.map(publicDoc), messages: messages.slice(0, 20).reverse().map(publicDoc),
+      const episode = await this.collections.episodes.findOne(scope, { session, sort: { inputWatermark: -1 },
+        projection: { _id: 0, id: 1, status: 1, terminalCode: 1, endedAt: 1 } });
+      return { latestEpisode: episode, person: this.personView(p), state: publicDoc(state), concepts: concepts.map(publicDoc), messages: messages.slice(0, 20).reverse().map(publicDoc),
         nextMessagesCursor: messages.length > 20 ? String(messages[19].seq) : null, busy: Boolean(p.activeEpisodeId), episodeId: p.activeEpisodeId };
     });
   }

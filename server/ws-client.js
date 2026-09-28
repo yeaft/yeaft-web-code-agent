@@ -33,6 +33,7 @@ import { handleClientWorkbench } from './handlers/client-workbench.js';
 import { CLIENT_BROWSER_TYPES, handleClientBrowser } from './handlers/client-browser.js';
 import { handleClientMisc } from './handlers/client-misc.js';
 import { clearWorkCenterRequestsForClient, handleClientWorkCenter } from './handlers/client-work-center.js';
+import { clearPersonRequestsForClient, handleClientPerson } from './handlers/client-person.js';
 import { recordPerfTraceEvent } from './perf-trace.js';
 
 export function cleanupWorkbenchForDisconnectedClient(clientId) {
@@ -201,6 +202,7 @@ export function handleWebConnection(ws, url, req = {}) {
       }
     }
     clearWorkCenterRequestsForClient(client);
+    clearPersonRequestsForClient(client);
     clearAgentSettingsRequestsForClient(clientId);
     clearYeaftDebugRequestsForClient(clientId);
     const browserPeers = clearBrowserRuntimeForClient(client);
@@ -295,5 +297,6 @@ async function handleWebMessage(clientId, msg) {
   if (await handleClientBrowser(client, msg, checkAgentAccess)) return;
   if (await handleClientWorkbench(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientWorkCenter(client, msg, checkAgentAccess)) return;
+  if (await handleClientPerson(client, msg)) return;
   if (await handleClientMisc(clientId, client, msg, checkAgentAccess)) return;
 }

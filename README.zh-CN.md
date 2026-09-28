@@ -65,6 +65,14 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 - 当前原生 registry 提供 **33 个内置工具**，覆盖文件/patch、shell 与后台任务、Git worktree、搜索、Web、图片、notebook、计划、持久 WorkItem 创建，以及 sub-agent/VP 编排；Skills 和 MCP 可以继续扩展工具表。
 - Provider context 使用当前 Session 持久 turn 的有界临时窗口。Turn 后 compact 是独立的 history-window 优化，不会重新启用 Dream 或 H2-AMS memory。
 
+### 数字人（实验性）
+
+侧栏的**数字人**入口打开独立的 Message／输入页面，提供**想**、显式**遐想**、取消和可分页查看的应用层 **Trace**。没有 Session 列表，不创建隐藏 Session 或 WorkItem。“想”可召回已存消息／概念、整理经历、提出关联，并把自判和版本化结论记录到 MongoDB。Trace 展示显式输入、输出和修订，不是 provider 的隐藏推理。
+
+建议在**新建隔离 Agent 实例**中体验：在 Agent 进程环境中提供 `YEAFT_PERSON_MONGODB_URI`，可选 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`）。使用专用 MongoDB replica set 或支持事务的分片部署；非 loopback 部署需要认证／TLS、数据库范围凭据与备份。不支持 standalone MongoDB；应用不会自动安装 MongoDB，也不会回退到文件。使用 `yeaft-agent llm setup --config <path>` 配置该实例 `<yeaftDir>/config.json` 中的原生 API 模型。凭据不要放进浏览器或聊天。已有服务的环境变更需要明确授权后重启，数字人功能不会自动重启它。
+
+首版**仅显式触发**：尚无空闲定时器、事件 Connector、VP 委派、外部写工具和 Rust 桌面身体。只读能力目录目前有四个方法，并非完整 Skills registry。每次活动最多四次模型调用／120 秒；数字人可从最多八个已配置原生模型中选择后续模型。动态 effort 需 `YEAFT_THINKING_V1=1` 及模型支持的元数据。消息、状态和显式 Trace 持久保存，模型 context 是有界短期副本。剩余工作见[设计及实现边界](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版)。
+
 ### Work Center
 
 ![Work Center 中的持久 WorkItem、主对话与 Action graph](docs/images/zh-CN/work-center.png)

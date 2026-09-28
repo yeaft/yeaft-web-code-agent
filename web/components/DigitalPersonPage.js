@@ -31,7 +31,7 @@ export default {
     });
     Vue.onMounted(() => returnButton.value?.focus());
     Vue.onBeforeUnmount(() => controller.dispose());
-    const ready = Vue.computed(() => !gate.value && state.configured && !!state.person && !state.loading);
+    const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
     const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.retryCommand);
     async function command(op, retry = false) {
       const before = draft.value;
@@ -90,13 +90,16 @@ export default {
         <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
         <button v-if="state.busy" type="button" class="btn-secondary" @click="controller.cancel()" :disabled="!!gate || state.cancelPending">{{ $t(state.cancelPending ? 'person.cancelling' : 'common.cancel') }}</button>
       </div>
-      <section v-if="state.configured === false && !gate" class="person-configuration" role="status">
+      <section v-if="(state.configured === false || state.storageReady === false || state.modelReady === false) && !gate" class="person-configuration" role="status">
         <h2>{{ $t('person.configureTitle') }}</h2>
         <p>{{ $t('person.configureAgent') }}</p>
         <p>{{ $t('person.configureSecrets') }}</p>
         <p>{{ $t('person.configureRefresh') }}</p>
         <p v-if="state.reason" class="person-muted">{{ state.reason }}</p>
       </section>
+      <div v-if="state.latestEpisode && ['failed', 'interrupted', 'budget_exhausted'].includes(state.latestEpisode.status)" class="person-error" role="alert">
+        {{ $t('person.episodeFailed') }} <code>{{ state.latestEpisode.terminalCode || state.latestEpisode.status }}</code>
+      </div>
       <div v-if="state.error" class="person-error" role="alert">
         <p>{{ $t('person.requestFailed') }} {{ state.error.message }}</p>
         <p v-if="state.error.code === 'timeout'">{{ $t('person.timeout') }}</p>
