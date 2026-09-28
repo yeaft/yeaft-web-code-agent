@@ -41,6 +41,40 @@ describe('digital Person strict contracts', () => {
     p.concepts[0].kind = 'scenario'; p.concepts[0].epistemicState = 'imagined';
     expect(validateProposal(p, { ...validation, dream: true })).toBe(p);
   });
+  it('requires typed independent reports for every reported revision, including Dream', async () => {
+    const provider = await createPersonProvider({ config, adapter: {} });
+    const reportRef = 'message:user:1';
+    const snapshot = { person: { id: 'p', name: 'Person', soul: 'Honesty.', soulRevision: 1 }, state: { version: 0 },
+      messages: [{ id: 'user', revision: 1, role: 'user', text: 'I saw a blue bird.' }, { id: 'self', revision: 1, role: 'assistant', text: 'I imagined a red bird.' }],
+      concepts: [
+        { id: 'curiosity', revision: 1, epistemicState: 'imagined' },
+        { id: 'guess', revision: 1, epistemicState: 'hypothesis', reportedSourceRefs: [reportRef] },
+        { id: 'report', revision: 1, epistemicState: 'reported', reportedSourceRefs: [reportRef] },
+        { id: 'legacy', revision: 1, epistemicState: 'reported', sourceRefs: [reportRef] },
+      ] };
+    for (const kind of ['send', 'think', 'dream']) {
+      const context = assembleContext({ snapshot, episode: { id: 'e', kind, text: kind === 'dream' ? '' : 'I saw a blue bird.' },
+        provider, selection: provider.defaultSelection, remainingCalls: 1 });
+      const rules = { ...validation, sourceRefs: context.sourceRefs, concepts: context.concepts, sources: context.sources, dream: kind === 'dream' };
+      const p = finalProposal(); p.concepts[0].expectedRevision = 1; p.concepts[0].epistemicState = 'reported';
+      for (const ref of ['message:self:1', 'concept:curiosity:1', 'concept:guess:1', 'concept:legacy:1']) {
+        p.concepts[0].sourceRefs = [ref]; expect(() => validateProposal(p, rules)).toThrow();
+      }
+      for (const ref of [reportRef, 'concept:report:1']) {
+        p.concepts[0].sourceRefs = [ref]; expect(validateProposal(p, rules)).toBe(p);
+      }
+      p.concepts[0].sourceRefs = ['trigger:e'];
+      if (kind === 'dream') expect(() => validateProposal(p, rules)).toThrow();
+      else expect(validateProposal(p, rules)).toBe(p);
+      p.concepts[0].id = 'new-report'; p.concepts[0].expectedRevision = 0;
+      p.state.focusConceptIds = ['new-report']; p.concepts[0].sourceRefs = [reportRef];
+      if (kind === 'dream') expect(() => validateProposal(p, rules)).toThrow();
+      else expect(validateProposal(p, rules)).toBe(p);
+    }
+    const emptyThink = assembleContext({ snapshot, episode: { id: 'e', kind: 'think', text: ' ' }, provider,
+      selection: provider.defaultSelection, remainingCalls: 1 });
+    expect(emptyThink.sources.get('trigger:e').reportedSourceRefs).toEqual([]);
+  });
   it('progressively discovers, inspects and applies only safe built-in methods', async () => {
     const capabilities = new PersonCapabilities({}, 'owner');
     await expect(capabilities.execute({ id: 'Recall', args: { kind: 'messages' } })).rejects.toMatchObject({ code: 'UNSUPPORTED' });

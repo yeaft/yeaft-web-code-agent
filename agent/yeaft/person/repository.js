@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { digest, fail, safeError } from './contracts.js';
+import { bytes, digest, fail, LIMITS, PersonError, safeError } from './contracts.js';
 
 const COLLECTIONS = ['persons', 'messages', 'episodes', 'states', 'concepts', 'concept_revisions', 'state_commits', 'traces'];
 const txOptions = { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, readPreference: 'primary', maxCommitTimeMS: 5000, timeoutMS: 10000 };
@@ -12,6 +12,22 @@ const iso = date => date instanceof Date ? date.toISOString() : date;
 const scopeFor = (ownerId, namespace) => ({ ownerId, namespace, personId: `person-${digest([namespace, ownerId]).slice(0, 32)}` });
 const fresh = () => ({ $expr: { $gt: ['$leaseUntil', '$$NOW'] } });
 const expired = () => ({ $expr: { $lte: ['$leaseUntil', '$$NOW'] } });
+const unavailableOutput = () => ({ text: '', retainedBytes: 0, observedBytes: null, complete: false, accepted: false, availability: 'unavailable', reason: 'worker-unavailable' });
+// This terminal-only path accepts a bounded public-output shape, never arbitrary trace/state data.
+const publicOutput = (output, failed) => {
+  if (!output) return unavailableOutput();
+  if (typeof output.text !== 'string' || bytes(output.text) > LIMITS.outputBytes) fail('OUTPUT_LIMIT');
+  const retainedBytes = bytes(output.text);
+  const observedBytes = output.observedBytes ?? output.bytes ?? retainedBytes;
+  if (!Number.isSafeInteger(observedBytes) || observedBytes < retainedBytes) fail('INVALID_REQUEST');
+  const usage = output.usage ? {} : null;
+  if (usage) for (const key of ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens']) {
+    if (Number.isFinite(output.usage[key]) && output.usage[key] >= 0) usage[key] = output.usage[key];
+  }
+  const stopReason = typeof output.stopReason === 'string' && bytes(output.stopReason) <= 128 ? output.stopReason : null;
+  return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
+    : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
+};
 
 /** MongoDB is the sole authority. No Session, local transcript or memory-file fallback. */
 export class MongoPersonRepository {
@@ -104,13 +120,22 @@ export class MongoPersonRepository {
   }
   async recover(ownerId) {
     return this.transaction(async session => {
-      const p = await this.collections.persons.findOneAndUpdate({ ...this.scope(ownerId), activeEpisodeId: { $ne: null }, ...expired() }, {
+      const scope = this.scope(ownerId);
+      const p = await this.collections.persons.findOneAndUpdate({ ...scope, activeEpisodeId: { $ne: null }, ...expired() }, {
         $inc: { epoch: 1, writeSerial: 1 }, $set: { activeEpisodeId: null, leaseOwner: null, leaseUntil: new Date(0) },
       }, { session, returnDocument: 'before' });
-      if (!p) return false;
-      await this.collections.episodes.updateOne({ ...this.scope(ownerId), id: p.activeEpisodeId, status: 'running' }, { $set: { status: 'interrupted', terminalCode: 'INTERRUPTED', endedAt: new Date() } }, { session });
-      await this.trace(session, p, p.activeEpisodeId, 'interrupted', { code: 'INTERRUPTED', reason: 'lease-expired', baseStateVersion: p.stateVersion });
-      return true;
+      if (p) {
+        const episode = await this.collections.episodes.findOneAndUpdate({ ...scope, id: p.activeEpisodeId, status: 'running' },
+          { $set: { status: 'interrupted', terminalCode: 'INTERRUPTED', endedAt: new Date() } }, { session, returnDocument: 'before' });
+        await this.abandonCall(session, p, episode, 'INTERRUPTED');
+        await this.trace(session, p, p.activeEpisodeId, 'interrupted', { code: 'INTERRUPTED', reason: 'lease-expired', baseStateVersion: p.stateVersion });
+      }
+      // Cancellation leaves a bounded drain window for the original worker's consumed prefix.
+      // If that worker crashed, the next access closes the call with explicit unavailable output.
+      const abandoned = await this.collections.episodes.find({ ...scope, status: 'cancelled', 'openCall.callId': { $exists: true },
+        $expr: { $lte: ['$callFinalizeUntil', '$$NOW'] } }, { session }).toArray();
+      for (const episode of abandoned) await this.abandonCall(session, { ownerId }, episode, 'CANCELLED');
+      return Boolean(p);
     });
   }
   async admit(ownerId, { kind, text, clientMessageId, workerId, budget }) {
@@ -164,6 +189,48 @@ export class MongoPersonRepository {
       return this.trace(session, p, episode.id, kind, data);
     });
   }
+  async startCall(episode, data) {
+    return this.transaction(async session => {
+      const p = await this.collections.persons.findOneAndUpdate(this.fence(episode), { $inc: { writeSerial: 1 } }, { session, returnDocument: 'after' });
+      if (!p) fail('STALE');
+      const updated = await this.collections.episodes.updateOne({ ...this.scope(episode.ownerId), id: episode.id, status: 'running', openCall: { $exists: false } },
+        { $set: { openCall: { callId: data.callId, requested: data.requested, effective: data.effective, ...(data.manifest ? { manifest: data.manifest } : {}) } } }, { session });
+      if (!updated.modifiedCount) fail('STALE');
+      return this.trace(session, p, episode.id, 'call_started', data);
+    });
+  }
+  /** Close exactly the original worker's started call, even after cancel; never regain state ownership. */
+  async finalizeCall(episode, { callId, effective, output, code = null }) {
+    return this.transaction(async session => {
+      const scope = this.scope(episode.ownerId);
+      const record = await this.collections.episodes.findOne({ ...scope, id: episode.id, workerId: episode.workerId,
+        epoch: episode.epoch, 'openCall.callId': callId }, { session });
+      if (!record) return false;
+      const live = record.status === 'running' && await this.collections.persons.findOne(this.fence(episode), { session });
+      const draining = record.status === 'cancelled' && await this.collections.episodes.findOne({ ...scope, id: episode.id,
+        $expr: { $gt: ['$callFinalizeUntil', '$$NOW'] } }, { session });
+      if (!live && !draining) return false;
+      const failed = Boolean(code || !live || !output);
+      const terminalCode = !live ? 'CANCELLED' : code || 'INTERRUPTED';
+      const safeEffective = { model: record.openCall.requested.model, effort: typeof effective?.effort === 'string' && effective.effort.length <= 128 ? effective.effort : null,
+        effortObserved: effective?.effortObserved === true };
+      if (typeof effective?.wireMode === 'string' && effective.wireMode.length <= 128) safeEffective.wireMode = effective.wireMode;
+      // The episode update serializes finalizers, cancellation/recovery and duplicate workers.
+      await this.collections.episodes.updateOne({ ...scope, id: episode.id, 'openCall.callId': callId }, { $unset: { openCall: '', callFinalizeUntil: '' } }, { session });
+      await this.trace(session, { ownerId: episode.ownerId }, episode.id, failed ? 'call_failed' : 'call_output', {
+        callId, requested: record.openCall.requested, effective: safeEffective, output: publicOutput(output, failed),
+        ...(!failed && record.openCall.manifest ? { manifest: record.openCall.manifest } : {}),
+        ...(failed ? { code: new PersonError(terminalCode).code } : {}),
+      });
+      return Boolean(live);
+    });
+  }
+  async abandonCall(session, p, episode, code) {
+    if (!episode?.openCall) return;
+    await this.collections.episodes.updateOne({ ...this.scope(p.ownerId), id: episode.id, 'openCall.callId': episode.openCall.callId },
+      { $unset: { openCall: '', callFinalizeUntil: '' } }, { session });
+    await this.trace(session, p, episode.id, 'call_failed', { ...episode.openCall, code, output: unavailableOutput() });
+  }
   async context(episode) {
     await this.init();
     const scope = this.scope(episode.ownerId);
@@ -186,7 +253,7 @@ export class MongoPersonRepository {
     const docs = await this.collections.concepts.find(filter).sort({ id: 1 }).limit(limit + 1).maxTimeMS(2000).toArray();
     return { items: docs.slice(0, limit).map(publicDoc), nextCursor: docs.length > limit ? docs[limit - 1].id : null };
   }
-  async commit(episode, proposal, selection, callId) {
+  async commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     return this.transaction(async session => {
       const scope = this.scope(episode.ownerId);
       const p = await this.collections.persons.findOneAndUpdate(this.fence(episode), { $inc: { stateVersion: 1, writeSerial: 1, messageSeq: proposal.reply ? 1 : 0 },
@@ -195,7 +262,9 @@ export class MongoPersonRepository {
       const revisions = [];
       for (const patch of proposal.concepts) {
         const { expectedRevision, ...fields } = patch;
-        const record = this.doc(scope, { ...fields, revision: expectedRevision + 1, episodeId: episode.id, callId, stateVersion: p.stateVersion, updatedAt: new Date() });
+        const reportedSourceRefs = reportedSources.get(patch.id) ?? [];
+        if (patch.epistemicState === 'reported' && !reportedSourceRefs.length) fail('INVALID_PROPOSAL');
+        const record = this.doc(scope, { ...fields, reportedSourceRefs, revision: expectedRevision + 1, episodeId: episode.id, callId, stateVersion: p.stateVersion, updatedAt: new Date() });
         if (expectedRevision === 0) {
           if (await this.collections.concepts.findOne({ ...scope, id: patch.id }, { session })) fail('STALE');
           await this.collections.concepts.insertOne(record, { session });
@@ -226,7 +295,8 @@ export class MongoPersonRepository {
       const p = await this.collections.persons.findOneAndUpdate(this.fence(episode, false), { $inc: { writeSerial: 1, epoch: 1 },
         $set: { activeEpisodeId: null, leaseOwner: null, leaseUntil: new Date(0) } }, { session, returnDocument: 'before' });
       if (!p) return false; // A cancel, takeover or earlier terminal transaction already won.
-      await this.collections.episodes.updateOne({ ...this.scope(episode.ownerId), id: episode.id, status: 'running' }, { $set: { status, terminalCode: code, endedAt: new Date() } }, { session });
+      const ended = await this.collections.episodes.findOneAndUpdate({ ...this.scope(episode.ownerId), id: episode.id, status: 'running' }, { $set: { status, terminalCode: code, endedAt: new Date() } }, { session, returnDocument: 'before' });
+      await this.abandonCall(session, p, ended, code);
       await this.trace(session, p, episode.id, status, { code, baseStateVersion: episode.baseStateVersion });
       return true;
     });
@@ -241,7 +311,7 @@ export class MongoPersonRepository {
         $inc: { epoch: 1, controlVersion: 1, writeSerial: 1 }, $set: { activeEpisodeId: null, leaseOwner: null, leaseUntil: new Date(0) },
       }, { session, returnDocument: 'before' });
       if (!p) fail('STALE');
-      await this.collections.episodes.updateOne({ ...scope, id: p.activeEpisodeId, status: 'running' }, { $set: { status: 'cancelled', terminalCode: 'CANCELLED', endedAt: new Date() } }, { session });
+      await this.collections.episodes.updateOne({ ...scope, id: p.activeEpisodeId, status: 'running' }, { $set: { status: 'cancelled', terminalCode: 'CANCELLED', endedAt: new Date(), callFinalizeUntil: p.leaseUntil } }, { session });
       await this.trace(session, p, p.activeEpisodeId, 'cancelled', { code: 'CANCELLED' });
       return { cancelled: true, episodeId: p.activeEpisodeId };
     });

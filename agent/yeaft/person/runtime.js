@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { CAPABILITY_MAP, PersonCapabilities, catalogRevision as capabilityCatalogRevision } from './capabilities.js';
 import { abortable, collectOutput } from './provider.js';
-import { bytes, fail, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, safeError, validateProposal, validateSelection } from './contracts.js';
+import { bytes, fail, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
 
 const messageRef = m => `message:${m.id}:${m.revision}`;
 const conceptRef = c => `concept:${c.id}:${c.revision}`;
@@ -26,10 +26,18 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   const sourceRefs = new Set([triggerRef, ...dependencyRefs]);
   const renderedRefs = new Set([triggerRef]);
   const conceptMap = new Map();
+  const sources = new Map([[triggerRef, { kind: 'trigger', reportedSourceRefs:
+    ['send', 'think'].includes(episode.kind) && episode.text?.trim() ? [triggerRef] : [] }]]);
+  const seenMessage = m => sources.set(messageRef(m), { kind: 'message', role: m.role, reportedSourceRefs: m.role === 'user' ? [messageRef(m)] : [] });
+  const seenConcept = c => {
+    conceptMap.set(c.id, c);
+    sources.set(conceptRef(c), { kind: 'concept', epistemicState: c.epistemicState,
+      reportedSourceRefs: c.epistemicState === 'reported' ? c.reportedSourceRefs ?? [] : [] });
+  };
   const omitted = [];
   // A selected recall result is a full bounded page. Never silently shorten it after recording tool success.
-  if (capabilityResult?.kind === 'messages') for (const m of capabilityResult.items) { sourceRefs.add(messageRef(m)); renderedRefs.add(messageRef(m)); }
-  if (capabilityResult?.kind === 'concepts') for (const c of capabilityResult.items) { sourceRefs.add(conceptRef(c)); renderedRefs.add(conceptRef(c)); conceptMap.set(c.id, c); }
+  if (capabilityResult?.kind === 'messages') for (const m of capabilityResult.items) { sourceRefs.add(messageRef(m)); renderedRefs.add(messageRef(m)); seenMessage(m); }
+  if (capabilityResult?.kind === 'concepts') for (const c of capabilityResult.items) { sourceRefs.add(conceptRef(c)); renderedRefs.add(conceptRef(c)); seenConcept(c); }
   context.sourceRefs = [...sourceRefs];
   const fits = () => bytes(system) + bytes(context) <= contextCap;
   if (!fits()) fail('CONTEXT_LIMIT');
@@ -38,13 +46,13 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     const inherited = sourceRefs.has(ref);
     context[field].push(item); if (!inherited) context.sourceRefs.push(ref);
     if (!fits()) { context[field].pop(); if (!inherited) context.sourceRefs.pop(); omitted.push({ ref, reason: 'context-budget' }); }
-    else { sourceRefs.add(ref); renderedRefs.add(ref); if (field === 'concepts') conceptMap.set(item.id, item); }
+    else { sourceRefs.add(ref); renderedRefs.add(ref); if (field === 'concepts') seenConcept(item); else seenMessage(item); }
   };
   for (const m of [...snapshot.messages].reverse()) add('messages', m, messageRef(m));
   context.messages.reverse();
   for (const c of snapshot.concepts) add('concepts', c, conceptRef(c));
   return {
-    system, messages: [{ role: 'user', content: JSON.stringify(context) }], sourceRefs, concepts: conceptMap,
+    system, messages: [{ role: 'user', content: JSON.stringify(context) }], sourceRefs, concepts: conceptMap, sources,
     manifest: { stateVersion: snapshot.state.version, sourceRefs: [...sourceRefs], renderedSourceRefs: [...renderedRefs], inputDependencyRefs: [...sourceRefs], omitted,
       boundedRecentWindow: { messages: 12, recentConcepts: 12, focusedConcepts: 12 },
       contextBytes: bytes(system) + bytes(context), contextBudgetBytes: contextCap, outputTokensReserved: model.maxOutput,
@@ -89,39 +97,44 @@ export class PersonRuntime {
       }
       const capabilities = new PersonCapabilities(this.repository, episode.ownerId);
       let previous = null, capabilityResult = null, dependencyRefs = [];
+      // Validation retains actual reads across calls, independently of the bounded rendered request.
+      // Candidate proposals never enter this read-set or establish new provenance.
+      const readConcepts = new Map(), readSources = new Map();
       for (let index = 0; index < episode.budget.calls; index++) {
         signal.throwIfAborted();
         const callId = randomUUID();
         const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, dependencyRefs, remainingCalls: episode.budget.calls - index });
         dependencyRefs = context.manifest.inputDependencyRefs;
+        for (const [id, concept] of context.concepts) readConcepts.set(id, concept);
+        for (const [ref, source] of context.sources) readSources.set(ref, source);
         await this.repository.heartbeat(episode); // Revalidate distributed ownership before each dispatch.
         const requested = { model: selection.model, effort: selection.effort };
         const effective = { model: selection.model, effort: null, effortObserved: false };
-        await this.repository.append(episode, 'call_started', {
+        await this.repository.startCall(episode, {
           callId, callIndex: index, requested, effective, selectionOrigin: selection.origin, reason: selection.reason,
           manifest: context.manifest, request: { system: context.system, messages: context.messages, maxTokens: context.maxTokens, tools: [] },
           capability: previous?.next?.capability ?? null,
         });
-        signal.throwIfAborted();
         let output;
         try {
+          signal.throwIfAborted();
           output = await collectOutput(provider.adapter, {
             model: selection.model, effort: selection.effort ?? undefined, effortSource: 'auto',
             system: context.system, messages: context.messages, maxTokens: context.maxTokens, signal,
           }, decision => { effective.effort = decision.effective; effective.effortObserved = true; effective.wireMode = decision.wireMode; });
         } catch (error) {
           const safe = safeError(error, 'PROVIDER_FAILED');
-          await this.repository.append(episode, 'call_failed', { callId, requested, effective, code: safe.code,
-            ...(error.partialOutput ? { output: error.partialOutput } : {}) }).catch(() => {});
+          await this.repository.finalizeCall(episode, { callId, effective, code: safe.code, output: error.partialOutput }).catch(() => {});
           throw safe;
         }
+        // A narrow once-only finalizer can retain consumed output after cancellation, never state.
+        // Complete public output remains durable even if proposal validation subsequently rejects it.
+        if (!await this.repository.finalizeCall(episode, { callId, effective, output })) fail('STALE');
         signal.throwIfAborted();
-        // Full public output is durable even if schema/selection validation subsequently rejects it.
-        await this.repository.append(episode, 'call_output', { callId, requested, effective, output: { ...output, complete: true }, manifest: context.manifest });
         let proposal;
         try {
           try { proposal = JSON.parse(output.text); } catch { fail('INVALID_PROPOSAL'); }
-          validateProposal(proposal, { stateVersion: episode.baseStateVersion, sourceRefs: context.sourceRefs, concepts: context.concepts, catalog: provider.catalog, dream: episode.kind === 'dream' });
+          validateProposal(proposal, { stateVersion: episode.baseStateVersion, sourceRefs: context.sourceRefs, concepts: readConcepts, sources: readSources, catalog: provider.catalog, dream: episode.kind === 'dream' });
         } catch (error) {
           const safe = safeError(error, 'INVALID_PROPOSAL');
           await this.repository.append(episode, 'proposal_rejected', { callId, code: safe.code });
@@ -130,7 +143,7 @@ export class PersonRuntime {
         await this.repository.append(episode, 'activity', { callId, activity: proposal.activity, decision: proposal.decision, disposition: proposal.next ? 'candidate' : 'proposed-commit' });
         if (!proposal.next) {
           signal.throwIfAborted();
-          await this.repository.commit(episode, proposal, selection, callId);
+          await this.repository.commit(episode, proposal, selection, callId, new Map(proposal.concepts.map(c => [c.id, c.epistemicState === 'reported' ? reportedLineage(c, readSources) : []])));
           return;
         }
         if (index + 1 >= episode.budget.calls) {

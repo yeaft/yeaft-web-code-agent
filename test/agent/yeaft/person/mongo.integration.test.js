@@ -103,6 +103,85 @@ suite('Person real MongoDB replica-set integration', () => {
     expect(await collection.countDocuments({ namespace: 'roundtrip' })).toBe(2);
   });
 
+  it('retains previously read concept revisions and reported provenance across Recall pages without pretending to render them again', async () => {
+    const seen = [];
+    const service = create('concept-read-set', adapterFor(context => {
+      seen.push(context);
+      const p = finalProposal(context.state.version);
+      const n = seen.length;
+      if (n === 1) p.next = { model: 'test/first', effort: null, reason: 'Inspect Recall.', capability: { id: 'catalog.view', args: { id: 'Recall' } } };
+      if (n === 2) p.next = { model: 'test/first', effort: null, reason: 'Read the oldest concepts.', capability: { id: 'Recall', args: { kind: 'concepts', limit: 2 } } };
+      if (n >= 3) {
+        p.concepts = [{ ...p.concepts[0], id: 'c00', expectedRevision: 1, epistemicState: 'reported', sourceRefs: ['concept:c00:1'], statement: 'Revised after reading more.' }];
+        p.state.focusConceptIds = ['c00'];
+      }
+      if (n === 3) p.next = { model: 'test/first', effort: null, reason: 'Read the next page.', capability: { id: 'Recall', args: { kind: 'concepts', limit: 2, cursor: context.capabilityResult.nextCursor } } };
+      return p;
+    }));
+    const r = repo('concept-read-set'); await r.open('alice');
+    await inspector.db(dbName).collection('person_messages').insertOne(r.doc(r.scope('alice'), {
+      id: 'original-report', revision: 1, seq: 1, role: 'user', text: 'An earlier user report.',
+    }));
+    // Neither the focused nor recent bootstrap window includes c00 (more than 24 concepts).
+    await inspector.db(dbName).collection('person_concepts').insertMany(Array.from({ length: 30 }, (_, i) => r.doc(r.scope('alice'), {
+      id: `c${String(i).padStart(2, '0')}`, revision: 1, kind: 'claim', epistemicState: i === 0 ? 'reported' : 'uncertain', statement: `Old concept ${i}`,
+      reportedSourceRefs: i === 0 ? ['message:original-report:1'] : [],
+      sourceRefs: [], associations: [], updatedAt: new Date(1000 + i),
+    })));
+    await inspector.db(dbName).collection('person_persons').updateOne(r.scope('alice'), { $set: { messageSeq: 1 } });
+    await call(service, 'think', { text: '', clientMessageId: 'pages' });
+    const snapshot = await waitIdle(service);
+    expect(snapshot.state.version).toBe(1);
+    expect(snapshot.concepts[0]).toMatchObject({ id: 'c00', revision: 2, reportedSourceRefs: ['message:original-report:1'] });
+    expect(seen).toHaveLength(4);
+    expect(seen[3].concepts.some(c => c.id === 'c00')).toBe(false);
+    expect(seen[3].capabilityResult.items.map(c => c.id)).toEqual(['c02', 'c03']);
+    expect(seen[3].previousProposal.concepts[0].id).toBe('c00');
+    const finalCall = (await call(service, 'traces', { limit: 50 })).items.find(t => t.kind === 'call_started');
+    expect(finalCall.manifest.inputDependencyRefs).toContain('concept:c00:1');
+    expect(finalCall.manifest.renderedSourceRefs).not.toContain('concept:c00:1');
+  });
+
+  it('does not promote self-generated imagination or assistant text into reports and preserves real report lineage', async () => {
+    let mode = 'imagine';
+    const service = create('reported-lineage', adapterFor(context => {
+      const p = finalProposal(context.state.version);
+      const old = context.concepts.find(c => c.id === 'curiosity');
+      p.concepts[0].expectedRevision = old?.revision ?? 0;
+      p.concepts[0].epistemicState = mode === 'imagine' ? 'imagined' : 'reported';
+      if (mode === 'self' || mode === 'revise') p.concepts[0].sourceRefs = [`concept:curiosity:${old.revision}`];
+      if (mode === 'assistant') p.concepts[0].sourceRefs = context.messages.filter(m => m.role === 'assistant').map(m => `message:${m.id}:${m.revision}`);
+      if (mode === 'trigger') p.concepts[0].sourceRefs = [context.trigger.ref];
+      if (mode === 'user') p.concepts[0].sourceRefs = context.messages.filter(m => m.role === 'user').map(m => `message:${m.id}:${m.revision}`);
+      return p;
+    }));
+    await call(service, 'open');
+    await call(service, 'think', { text: '', clientMessageId: 'imagine' });
+    expect((await waitIdle(service)).state.version).toBe(1);
+    for (const attempt of ['self', 'assistant', 'trigger']) {
+      mode = attempt;
+      await call(service, 'dream', { clientMessageId: `dream-${attempt}` });
+      const snapshot = await waitIdle(service);
+      expect(snapshot.state.version).toBe(1); expect(snapshot.latestEpisode.terminalCode).toBe('INVALID_PROPOSAL');
+    }
+    mode = 'trigger';
+    await call(service, 'think', { text: 'I observed a blue bird.', clientMessageId: 'real-report' });
+    const reported = await waitIdle(service);
+    expect(reported.state.version).toBe(2);
+    const roots = reported.concepts[0].reportedSourceRefs;
+    expect(roots).toEqual([`trigger:${reported.latestEpisode.id}`]);
+    mode = 'revise';
+    await call(service, 'dream', { clientMessageId: 'preserve-report' });
+    const revised = await waitIdle(service);
+    expect(revised.state.version).toBe(3);
+    expect(revised.concepts[0]).toMatchObject({ revision: 3, epistemicState: 'reported', sourceRefs: ['concept:curiosity:2'], reportedSourceRefs: roots });
+    mode = 'user';
+    await call(service, 'send', { text: 'I observed the bird again.', clientMessageId: 'user-report' });
+    const userReport = await waitIdle(service);
+    expect(userReport.state.version).toBe(4);
+    expect(userReport.concepts[0].reportedSourceRefs).toEqual([`message:${userReport.messages.find(m => m.role === 'user').id}:1`]);
+  });
+
   it('isolates owners/namespaces and paginates every trace without gaps', async () => {
     const service = create('pagination', adapterFor(() => finalProposal()));
     await call(service, 'open');
@@ -171,21 +250,83 @@ suite('Person real MongoDB replica-set integration', () => {
     expect(serialized).toContain('PROVIDER_FAILED');
   });
 
-  it('cancels across service instances and rejects late provider completion', async () => {
-    let release;
+  it.each(['local', 'remote'])('retains consumed output exactly once on %s cancellation without a late state commit', async mode => {
+    let release, consumed, aborted;
     const waiting = new Promise(resolve => { release = resolve; });
-    let started; const providerStarted = new Promise(resolve => { started = resolve; });
-    const a = create('cancel', adapterFor(async () => { started(); await waiting; return finalProposal(); }), { leaseMs: 600 });
-    const b = create('cancel', adapterFor(() => finalProposal()));
+    const providerConsumed = new Promise(resolve => { consumed = resolve; });
+    const providerAborted = new Promise(resolve => { aborted = resolve; });
+    const adapter = { async *stream(params) {
+      params.signal.addEventListener('abort', aborted, { once: true });
+      yield { type: 'text_delta', text: '{"partial":"已读取"' };
+      consumed(); await waiting; // Deliberately ignore abort; late provider output must not win.
+      yield { type: 'text_delta', text: JSON.stringify(finalProposal()) };
+      yield { type: 'stop', stopReason: 'end_turn' };
+    } };
+    const a = create(`cancel-${mode}`, adapter, { leaseMs: 1200 });
+    const b = create(`cancel-${mode}`, adapterFor(() => finalProposal()));
     await call(a, 'open');
     const admitted = await call(a, 'send', { text: 'cancel me', clientMessageId: 'cancel' });
-    await providerStarted;
+    await providerConsumed;
     await expect(call(b, 'think', { text: '', clientMessageId: 'other' })).rejects.toMatchObject({ code: 'BUSY' });
-    expect(await call(b, 'cancel', { episodeId: admitted.episodeId })).toMatchObject({ cancelled: true });
-    release(); await a.close();
-    expect((await call(b, 'snapshot')).state.version).toBe(0);
+    expect(await call(mode === 'local' ? a : b, 'cancel', { episodeId: admitted.episodeId })).toMatchObject({ cancelled: true });
+    await providerAborted; // Remote cancellation must be observed by the running worker heartbeat.
+    await a.close();
+    release(); await new Promise(resolve => setImmediate(resolve));
+    const snapshot = await call(b, 'snapshot');
+    expect(snapshot.state.version).toBe(0);
+    expect(snapshot.latestEpisode).toMatchObject({ status: 'cancelled', terminalCode: 'CANCELLED' });
     expect((await call(b, 'messages')).items).toHaveLength(1);
-    expect((await call(b, 'traces')).items[0].kind).toBe('cancelled');
+    const traces = (await call(b, 'traces')).items;
+    expect(traces.filter(t => t.kind === 'call_started')).toHaveLength(1);
+    const terminal = traces.filter(t => ['call_failed', 'call_output'].includes(t.kind));
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]).toMatchObject({ kind: 'call_failed', code: 'CANCELLED', output: {
+      text: '{"partial":"已读取"', retainedBytes: Buffer.byteLength('{"partial":"已读取"'), complete: false, accepted: false, availability: 'captured',
+    } });
+    expect(traces.some(t => ['committed', 'activity'].includes(t.kind))).toBe(false);
+  });
+
+  it('bounds the cancelled-call drain right and makes crash/takeover output explicitly unavailable', async () => {
+    const r = repo('terminal-right'); await r.open('alice');
+    const admit = id => r.admit('alice', { kind: 'think', text: '', clientMessageId: id, workerId: 'original', budget: { calls: 1, timeoutMs: 1000 } });
+    const start = (episode, callId) => r.startCall(episode, { callId, requested: { model: 'test/first', effort: null }, effective: { model: 'test/first', effort: null } });
+    const one = await admit('one'); await start(one.episode, 'one-call'); await r.cancel('alice');
+    const terminal = { callId: 'one-call', output: { text: 'consumed prefix', observedBytes: 15 }, code: 'CANCELLED' };
+    expect(await r.finalizeCall({ ...one.episode, workerId: 'imposter' }, terminal)).toBe(false);
+    await expect(r.finalizeCall(one.episode, { ...terminal, output: { text: 'x'.repeat(65537) } })).rejects.toMatchObject({ code: 'OUTPUT_LIMIT' });
+    const two = await admit('two'); // A new state owner does not erase the old call's bounded trace-only right.
+    await Promise.all([r.finalizeCall(one.episode, terminal), r.finalizeCall(one.episode, terminal)]);
+    await expect(r.append(one.episode, 'activity', {})).rejects.toMatchObject({ code: 'STALE' });
+    await expect(r.commit(one.episode, finalProposal(), { model: 'test/first', effort: null }, 'one-call')).rejects.toMatchObject({ code: 'STALE' });
+    await start(two.episode, 'two-call');
+    await new Promise(resolve => setTimeout(resolve, 450));
+    await r.recover('alice'); // Crashed worker had a started call; no output can be reconstructed.
+    expect(await r.finalizeCall(two.episode, { ...terminal, callId: 'two-call' })).toBe(false);
+    const three = await admit('three'); await start(three.episode, 'three-call'); await r.cancel('alice');
+    await new Promise(resolve => setTimeout(resolve, 450));
+    await r.recover('alice'); // A cancelled worker can crash before its drain finalizer too.
+    expect(await r.finalizeCall(three.episode, { ...terminal, callId: 'three-call' })).toBe(false);
+    const traces = (await r.list('alice', 'traces', { limit: 50 })).items;
+    const terminals = traces.filter(t => t.kind === 'call_failed');
+    expect(terminals).toHaveLength(3);
+    expect(terminals.find(t => t.callId === 'one-call').output).toMatchObject({ text: 'consumed prefix', availability: 'captured' });
+    for (const callId of ['two-call', 'three-call']) expect(terminals.find(t => t.callId === callId).output).toMatchObject({ availability: 'unavailable', observedBytes: null, complete: false });
+    expect((await r.snapshot('alice')).state.version).toBe(0);
+  });
+
+  it('records a completed-but-cancelled output as rejected without committing it', async () => {
+    const r = repo('cancel-completed'); await r.open('alice');
+    const admitted = await r.admit('alice', { kind: 'think', text: '', clientMessageId: 'one', workerId: 'worker', budget: { calls: 1, timeoutMs: 1000 } });
+    await r.startCall(admitted.episode, { callId: 'call', requested: { model: 'test/first', effort: null }, effective: { model: 'test/first', effort: null } });
+    // Provider completion raced with distributed cancel before its output transaction.
+    const text = JSON.stringify(finalProposal());
+    await r.cancel('alice');
+    expect(await r.finalizeCall(admitted.episode, { callId: 'call', output: { text, bytes: Buffer.byteLength(text), stopReason: 'end_turn' } })).toBe(false);
+    expect(await r.finalizeCall(admitted.episode, { callId: 'call', output: { text: 'late rewrite' } })).toBe(false);
+    const terminal = (await r.list('alice', 'traces', { limit: 50 })).items.filter(t => t.kind === 'call_failed');
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]).toMatchObject({ code: 'CANCELLED', output: { text, complete: false, accepted: false, availability: 'captured', stopReason: 'end_turn' } });
+    expect((await r.snapshot('alice')).state.version).toBe(0);
   });
 
   it('uses database-time leases, epoch takeover fences and transaction rollback of every state write', async () => {
