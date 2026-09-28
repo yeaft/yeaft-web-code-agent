@@ -4,7 +4,7 @@
 - 状态：**设计提案，尚未实现**；本文合并不代表功能上线，也不授权读取用户资料或修改运行数据。
 - 目标：定义一个以持续身份为主体、能自主关注和思考、具有记忆与行动边界的数字人，而不是给 Session 或任务系统加一个桌面角色。
 - 技术方向：JavaScript 认知运行时 + MongoDB 数字人存储 + Rust 原生桌面身体 + npm 分发入口。
-- 本轮修订：2026-09-24；将设计中心从“人格 + 任务系统”改为“数字人自我协调 + 持久认知状态 + 多视角更新”，重设计 MongoDB Dream。
+- 本轮修订：2026-09-28；将设计中心从“人格 + 任务系统”改为“数字人自我协调 + 持久认知状态 + 多视角更新”，重设计 MongoDB Dream。
 - 源码考察基线：`171bf953`。现状与拟议架构明确分开；后续实现应重新核对。
 - 决策级别：文中“必须”是拟议的验收契约；“建议默认值”需要原型验证；“待决定”不是已确定产品行为。
 
@@ -576,7 +576,7 @@ npm 安装不静默安装或开启 `mongod`。连接向导先验证版本、TLS/
 
 ### 11.5 索引与查询
 
-- 主键/去重：`(ownerId, personId, logicalId)`；事件增加 `(sourceId, dedupeKey)` 唯一键。
+- 主键/去重：`(ownerId, personId, logicalId)`；事件唯一键为 `(ownerId, personId, spaceId, sourceId, dedupeKey)`，去重仅在完整 scope 内进行，不跨 Person 或 Space 合并来源事件。
 - 待办：`(ownerId, personId, status, nextEligibleAt)`；Connector 的源 object / revision 有索引。
 - 记忆：`(ownerId, personId, spaceId, lifecycle, updatedAt)`，另按实体、domain、时间和来源做有界查询。
 - 短暂 presence、可删除缓存可用 `expireAt` TTL；TTL 异步执行，权限与到期判断必须在查询时执行，不能等物理删除。
@@ -1196,7 +1196,7 @@ Session 仍是现有对话载体。数字人可通过 Session 接收真实对话
 
 | 阶段 | 范围 | 退出证据 |
 | --- | --- | --- |
-| P0 可行性与契约 | MongoDB 部署/许可、Rust 窗口平台 spike、身份/权限与 Engine adapter、成本模型 | 至少一个目标 OS 完成透明/输入/降级验证；共享 guard/晚到删除/旧 queued 恢复/孤儿 writer 故障实验；未决依赖有结论 |
+| P0 可行性与契约 | MongoDB 部署/许可、Rust 窗口平台 spike、身份/权限与 Engine adapter、成本模型 | 至少一个目标 OS 完成透明/输入/降级验证；共享 guard/晚到删除/旧 queued 恢复/孤儿 writer 故障实验；持续扫描、Connector 输入与 Trace 分块竞争下测量提交进展、stale 重评成本和控制延迟，验证合并/限速/批次策略，未经证明不拆细 fence；未决依赖有结论 |
 | P1 单设备认知闭环 | Concept/state/revision、文字输入、Soul、事件/关注、单视角→综合→提交、Trace | 可看每次调用与状态 diff；记录→纠正→恢复，不依赖 Work Center |
 | P2 自主多视角与 Dream | 并行提案、自判、回顾/幻想/巩固、分类依赖图、预算、沟通 gate | 冲突/迟到/删除竞态通过；有新版 Dream，无文件认知写入、无无界反刍 |
 | P3 自主协调与行动 | 全范围可控扫描、一个 Connector、VP 模板调查/执行委派、直接工具、幂等/锁/unknown | 关闭 Work Center 的端到端履约；禁止动作与思考分歧分离；故障/撤权测试通过 |
