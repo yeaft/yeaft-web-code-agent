@@ -176,7 +176,7 @@ describe('global action availability and focus ownership', () => {
     expect(isGlobalShortcutAvailable('quickSend1', store, globals.auth)).toBe(false);
     const variants = [
       { connectionState: 'reconnecting' }, { authenticated: false }, { currentView: 'settings' },
-      { workCenterOpen: true }, { pluginCenterOpen: true }, { currentAgent: 'other' },
+      { workCenterOpen: true }, { pluginCenterOpen: true }, { digitalPersonOpen: true }, { currentAgent: 'other' },
       { agents: [{ id: 'agent-a', online: false }] },
       { activeSessionRoute: { ...store.activeSessionRoute, agentId: 'other' } },
       { currentAgentInfo: { id: 'other' } }, { workbenchRouteProtocolSupported: false },

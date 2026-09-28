@@ -631,6 +631,7 @@ export const useChatStore = defineStore('chat', {
     // 连接状态
     sessionForkPendingKey: null, // one explicit copy operation at a time across both UI entry points
     sessionForkState: 'idle', // idle | copying | success | error
+    digitalPersonOpen: false,
     connectionState: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
@@ -1680,6 +1681,11 @@ export const useChatStore = defineStore('chat', {
     // =====================
     // Work Center
     // =====================
+    enterDigitalPerson() {
+      this.digitalPersonOpen = true;
+      this.closeSessionSidebar();
+    },
+    leaveDigitalPerson() { this.digitalPersonOpen = false; },
     enterWorkCenter(agentId = null) {
       if (!this.hydrateWorkCenterBrowserState()) return false;
       const compatibleAgents = this.agents.filter(agent => agent?.online

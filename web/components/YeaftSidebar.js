@@ -25,6 +25,7 @@ import SessionCreateModal from './SessionCreateModal.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
 import SidebarWorkCenter from './SidebarWorkCenter.js';
+import SidebarDigitalPerson from './SidebarDigitalPerson.js';
 import SessionSidebarShell from './SessionSidebarShell.js';
 import UnifiedSessionList from './UnifiedSessionList.js';
 import { shortenPath } from '../utils/path-display.js';
@@ -32,7 +33,7 @@ import { buildYeaftSidebarSessionList } from '../stores/helpers/yeaft-sidebar-se
 
 export default {
   name: 'YeaftSidebar',
-  components: { NavigationIcon, SessionCreateModal, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SessionSidebarShell, UnifiedSessionList },
+  components: { NavigationIcon, SessionCreateModal, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-agent-settings', 'open-group-settings'],
   template: `
     <SessionSidebarShell class="yeaft-sidebar" :collapsed="collapsed">
@@ -46,6 +47,7 @@ export default {
         <button class="collapsed-icon-btn" @click="$emit('back')" :title="tr('yeaft.back', 'Back')">
           <NavigationIcon name="back" :size="18" />
         </button>
+        <SidebarDigitalPerson :collapsed="true" />
         <SidebarWorkCenter
           v-if="chatStore && chatStore.workCenterUiEnabled"
           :agents="chatStore.agents"
@@ -80,6 +82,7 @@ export default {
           />
           <div class="sidebar-header-actions">
             <SidebarModeToggle v-if="!chatStore || !chatStore.sessionCatalogLoaded" view="yeaft" @flip="onModeFlip" />
+            <SidebarDigitalPerson />
             <SidebarWorkCenter
               v-if="chatStore && chatStore.workCenterUiEnabled"
               :agents="chatStore.agents"

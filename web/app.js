@@ -9,6 +9,7 @@ import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
 import LoginPage from './components/LoginPage.js';
 import ChatPage from './components/ChatPage.js';
+import DigitalPersonPage from './components/DigitalPersonPage.js';
 import YeaftPage from './components/YeaftPage.js';
 import SplitPane from './components/SplitPane.js';
 import ToolLine from './components/ToolLine.js';
@@ -27,14 +28,15 @@ window.Pinia = {
 };
 
 const App = {
-  components: { LoginPage, ChatPage, YeaftPage, AppDialog, UserShortcutsRuntime },
+  components: { DigitalPersonPage, LoginPage, ChatPage, YeaftPage, AppDialog, UserShortcutsRuntime },
   template: `
     <AppDialog />
     <div v-if="!authStore.initialized" class="auth-bootstrap" aria-busy="true"><span class="session-loading-spinner"></span></div>
     <LoginPage v-else-if="!authStore.isAuthenticated" />
     <template v-else>
       <UserShortcutsRuntime />
-      <YeaftPage v-if="chatStore.currentView === 'yeaft'" />
+      <DigitalPersonPage v-if="chatStore.digitalPersonOpen" />
+      <YeaftPage v-else-if="chatStore.currentView === 'yeaft'" />
       <ChatPage v-else />
     </template>
   `,

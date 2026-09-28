@@ -15,6 +15,7 @@ import ModernSelect from './ModernSelect.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
 import SidebarWorkCenter from './SidebarWorkCenter.js';
+import SidebarDigitalPerson from './SidebarDigitalPerson.js';
 import SessionSidebarShell from './SessionSidebarShell.js';
 import UnifiedSessionList from './UnifiedSessionList.js';
 import SessionCreateModal from './SessionCreateModal.js';
@@ -27,7 +28,7 @@ import { collapseSidebar } from '../utils/sidebar-collapse.js';
 
 export default {
   name: 'ChatPage',
-  components: { FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
+  components: { FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
@@ -50,6 +51,7 @@ export default {
           <button class="collapsed-icon-btn" @click="onUnifiedCreate" :disabled="onlineAgentCount === 0" :title="$t('chat.sidebar.newConv')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
           </button>
+          <SidebarDigitalPerson :collapsed="true" />
           <SidebarWorkCenter
             v-if="store.workCenterUiEnabled"
             :agents="store.agents"
@@ -88,6 +90,7 @@ export default {
                 :disabled="onlineAgentCount === 0"
                 @flip="onModeFlip"
               />
+              <SidebarDigitalPerson />
               <SidebarWorkCenter
                 v-if="store && store.workCenterUiEnabled"
                 :agents="store.agents"

@@ -7,7 +7,7 @@ export const GLOBAL_SHORTCUT_ACTIONS = Object.freeze(['terminal', 'files', 'git'
 export function isGlobalShortcutAvailable(action, store, auth) {
   if (!GLOBAL_SHORTCUT_ACTIONS.includes(action) || !auth?.isAuthenticated
     || !['yeaft', 'chat'].includes(store.currentView)
-    || store.workCenterOpen || store.pluginCenterOpen) return false;
+    || store.workCenterOpen || store.pluginCenterOpen || store.digitalPersonOpen) return false;
   if (action === 'closeWorkbench') return store.workbenchExpanded === true;
   if (store.connectionState !== 'connected' || !store.authenticated) return false;
   const agent = store.agents?.find(item => item.id === store.currentAgent);
