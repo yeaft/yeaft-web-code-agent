@@ -150,11 +150,15 @@ export const SANDBOX_TEST_FILES = Object.freeze([
   'test/web/agent-settings.test.js',
 ]);
 
+// Explicit isolated MongoDB replica set; focused invocation required (no live DB fallback).
+export const PERSON_MONGO_TEST_FILES = Object.freeze([
+  'test/agent/yeaft/person/mongo.integration.test.js',
+]);
+
 export const REVIEWED_TEST_FILES = Object.freeze([
   ...CORE_TEST_FILES,
   ...SANDBOX_TEST_FILES,
-  // Explicit isolated MongoDB replica set; focused invocation required (no live DB fallback).
-  'test/agent/yeaft/person/mongo.integration.test.js',
+  ...PERSON_MONGO_TEST_FILES,
 ]);
 
 export function normalizeTestPath(filePath) {
