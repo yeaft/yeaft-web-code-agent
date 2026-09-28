@@ -4,6 +4,7 @@ vi.mock('../../server/config.js', () => ({ CONFIG: { skipAuth: false } }));
 vi.mock('../../server/context.js', () => ({ agents: new Map() }));
 vi.mock('../../server/ws-utils.js', () => ({ forwardToAgent: vi.fn(), sendToWebClient: vi.fn(), resolveAgentAccessError: vi.fn() }));
 import { createPersonRelay } from '../../server/handlers/client-person.js';
+import { acceptPersonResponse, createPersonController, personState } from '../../web/stores/helpers/digital-person.js';
 
 let relay, send, forward, accessError, client, agentMap;
 beforeEach(() => {
@@ -30,6 +31,12 @@ describe('digital person authenticated relay', () => {
     expect(send).toHaveBeenCalledExactlyOnceWith(client, { type: 'person_response', requestId: 'browser-1', agentId: 'agent-a', op: 'send', ok: true, data: { busy: false } });
     await relay.response('agent-a', { type: 'person_response', requestId: outbound.requestId, ok: true });
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the exact cancellation episode and ignores a forged owner', async () => {
+    await relay.request(client, message({ op: 'cancel', payload: { episodeId: 'old-episode', ownerId: 'victim' } }));
+    expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op: 'cancel', payload: { episodeId: 'old-episode' } });
+    expect(forward.mock.lastCall[1].payload).not.toHaveProperty('ownerId');
   });
 
   it('does not let wrong Agent consume a pending request', async () => {
@@ -90,6 +97,43 @@ describe('digital person authenticated relay', () => {
     relay.clearClient(client);
     await vi.advanceTimersByTimeAsync(30_001);
     expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['timeout', 'outcome_unknown'])('preserves the command ID across a relay %s before the browser timer', async code => {
+    relay.close();
+    const state = personState();
+    const chat = { authenticated: true, connectionState: 'connected', agents: [{ id: 'agent-a', online: true, capabilities: ['digital_person'] }],
+      sendWsMessage(msg) { void relay.request(client, msg); return true; } };
+    let retry = false;
+    const ids = [];
+    relay = createPersonRelay({ agentMap, accessError, timeoutMs: 10,
+      send: async (_client, msg) => acceptPersonResponse(chat, msg),
+      forward: async (agentId, msg) => {
+        if (msg.op === 'send') {
+          ids.push(msg.payload.clientMessageId);
+          if (!retry) {
+            if (code === 'outcome_unknown') throw new Error('connection lost after sending');
+            return true; // Admission may have succeeded but the acknowledgement is lost.
+          }
+        }
+        const data = { status: { configured: true }, open: {}, snapshot: { person: { id: 'p' }, messages: [], busy: false }, messages: { items: [] }, traces: { items: [] }, send: { episodeId: 'original-episode', duplicate: true } }[msg.op];
+        await relay.response(agentId, { type: 'person_response', requestId: msg.requestId, ok: true, data });
+        return true;
+      },
+    });
+    const controller = createPersonController({ chat, state, scope: () => 'owner-a', timeoutMs: 1000 });
+    try {
+      await controller.open('agent-a');
+      const command = controller.command('send', 'accepted once');
+      await vi.advanceTimersByTimeAsync(11);
+      expect(await command).toBe(false);
+      expect(state.error.code).toBe(code);
+      expect(state.retryCommand.payload.clientMessageId).toBe(ids[0]);
+      retry = true;
+      expect(await controller.command('send', '', true)).toBe(true);
+      expect(ids).toEqual([ids[0], ids[0]]);
+      expect(state.retryCommand).toBeNull();
+    } finally { controller.dispose(); }
   });
 
   it('bounds pending work per browser and ignores unrelated messages', async () => {

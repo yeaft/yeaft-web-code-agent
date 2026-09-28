@@ -6,7 +6,7 @@ import { forwardToAgent, resolveAgentAccessError, sendToWebClient } from '../ws-
 const FIELDS = Object.freeze({
   status: [], open: [], snapshot: [],
   send: ['text', 'clientMessageId'], think: ['text', 'clientMessageId'],
-  dream: ['clientMessageId'], cancel: [],
+  dream: ['clientMessageId'], cancel: ['episodeId'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'],
   settings: ['autonomyEnabled'],
 });
@@ -70,7 +70,7 @@ export function createPersonRelay({
       const row = { client, agent, ownerId, agentId, envelope };
       row.timer = setTimeout(() => {
         if (!forget(relayId)) return;
-        void reply(client, envelope, { ok: false, error: 'Digital person request timed out; refresh before retrying' }).catch(() => {});
+        void reply(client, envelope, { ok: false, errorCode: 'timeout', error: 'Digital person request timed out; refresh before retrying' }).catch(() => {});
       }, timeoutMs);
       row.timer.unref?.();
       pending.set(relayId, row);
@@ -80,9 +80,10 @@ export function createPersonRelay({
           // Only server-authenticated identity crosses the relay boundary.
           ownerId,
         });
-        if (sent === false) throw new Error('offline');
+        if (sent === false && forget(relayId)) await reply(client, envelope, { ok: false, errorCode: 'offline', error: 'Agent is offline; refresh before retrying' });
       } catch {
-        if (forget(relayId)) await reply(client, envelope, { ok: false, error: 'Agent is offline; refresh before retrying' });
+        // A thrown transport error does not prove the request was never delivered.
+        if (forget(relayId)) await reply(client, envelope, { ok: false, errorCode: 'outcome_unknown', error: 'Agent delivery could not be confirmed; refresh before retrying' });
       }
       return true;
     },
@@ -96,7 +97,9 @@ export function createPersonRelay({
       // Whitelist the response. Echoed owner/agent/op/correlation fields are not trusted.
       await reply(row.client, row.envelope, msg.ok === true
         ? { ok: true, data: msg.data }
-        : { ok: false, error: typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'Digital person request failed' });
+        : { ok: false,
+          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
+          error: typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'Digital person request failed' });
       return true;
     },
     clearClient(client) {

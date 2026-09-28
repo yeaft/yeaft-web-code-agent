@@ -19,8 +19,8 @@ export default {
     const gate = Vue.computed(() => digitalPersonGate(chat, agentId.value));
     const scope = () => JSON.stringify([auth.userId, auth.authGeneration]);
     const controller = createPersonController({ chat, state, scope });
+    Vue.watch(() => JSON.stringify([scope(), agentId.value]), () => { draft.value = ''; });
     Vue.watch(() => JSON.stringify([scope(), agentId.value, gate.value, chat.chatHistoryConnectionGeneration]), () => {
-      draft.value = '';
       controller.open(agentId.value);
     // Batch auth_result mutations: authenticated is set before the new socket's
     // encryption key / plaintext negotiation. Opening synchronously sends with
@@ -55,7 +55,7 @@ export default {
           .find(button => button.getClientRects().length)?.focus());
       }
       if (destination === 'work') chat.enterWorkCenter(agentId.value);
-      if (destination === 'plugins') { chat.currentView = 'yeaft'; chat.openPluginCenter(agentId.value); }
+      if (destination === 'plugins') { chat.enterYeaft(); chat.openPluginCenter(agentId.value); }
     }
     const asUserMessage = message => ({ ...message, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const format = value => JSON.stringify(value, null, 2);

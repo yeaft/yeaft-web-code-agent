@@ -152,15 +152,44 @@ describe('Digital Person owner / Agent request boundary', () => {
     const f = fixture(); let busy = true;
     const message = { id: 'new', role: 'assistant', text: 'answer', createdAt: 2 };
     f.auto(r => {
-      if (r.op === 'snapshot') return { person: { id: 'p' }, state: {}, messages: [message], busy };
+      if (r.op === 'snapshot') return { person: { id: 'p' }, state: {}, messages: [message], busy, episodeId: busy ? 'displayed-episode' : null };
       if (r.op === 'messages') return { items: r.payload.cursor ? [{ id: 'old', role: 'user', text: 'hi', createdAt: 1 }, message] : [message], nextCursor: r.payload.cursor ? null : 'cursor' };
       if (r.op === 'cancel') busy = false;
     });
     await f.controller.open('a'); await f.controller.page('messages', true);
     expect(f.state.messages.map(m => m.id)).toEqual(['old', 'new']);
     await f.controller.cancel();
-    expect(f.requests.find(r => r.op === 'cancel').agentId).toBe('a');
+    expect(f.requests.find(r => r.op === 'cancel')).toMatchObject({ agentId: 'a', payload: { episodeId: 'displayed-episode' } });
     expect(f.state.busy).toBe(false);
+  });
+
+  it('rebuilds a complete message pagination chain after remote activity exceeds the snapshot window', async () => {
+    const f = fixture(); let records = [];
+    f.auto(r => {
+      if (r.op === 'snapshot') return { person: { id: 'p' }, state: {}, busy: false, messages: records.slice(-20), nextMessagesCursor: records.length > 20 ? String(records.at(-20).seq) : null };
+      if (r.op === 'messages') {
+        const end = r.payload.cursor ? Number(r.payload.cursor) - 1 : records.length;
+        const items = records.slice(Math.max(0, end - 50), end);
+        return { items, nextCursor: end > 50 ? String(items[0].seq) : null };
+      }
+    });
+    await f.controller.open('a');
+    records = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1, createdAt: 1, text: 'remote' }));
+    await f.controller.refresh();
+    expect(f.state.messages).toHaveLength(50);
+    expect(f.state.messageCursor).toBe('31');
+    await f.controller.page('messages', true);
+    expect(f.state.messages.map(m => m.seq)).toEqual(Array.from({ length: 80 }, (_, i) => i + 1));
+    expect(f.state.messageCursor).toBeNull();
+  });
+
+  it('sorts same-time and clock-rollback records by authoritative sequence', async () => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    const records = [{ id: 'z-first', seq: 1, createdAt: 100 }, { id: 'a-second', seq: 2, createdAt: 99 }];
+    f.auto(r => r.op === 'messages' || r.op === 'traces' ? { items: [...records].reverse(), nextCursor: null } : undefined);
+    await f.controller.refresh();
+    expect(f.state.messages.map(m => m.seq)).toEqual([1, 2]);
+    expect(f.state.traces.map(m => m.seq)).toEqual([1, 2]);
   });
 
   it('fails a dropped transport promptly instead of waiting for timeout', async () => {

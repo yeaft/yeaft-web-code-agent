@@ -20,12 +20,13 @@ beforeEach(() => {
     currentAgent: 'a', connectionState: 'connected', authenticated: true, theme: 'light',
     agents: [{ id: 'a', online: true, capabilities: ['digital_person'] }],
     leaveDigitalPerson: vi.fn(), leaveWorkCenter: vi.fn(), closePluginCenter: vi.fn(), toggleTheme: vi.fn(),
+    enterYeaft: vi.fn(() => { chat.currentView = 'yeaft'; chat.currentAgent = 'previous-session-agent'; }), openPluginCenter: vi.fn(),
     sendWsMessage(request) {
       requests.push(request);
       const data = {
         status: { configured, reason: 'MongoDB not configured' }, open: {},
         snapshot: { person: { id: 'p', name: 'Ada' }, state: { version: 4 }, messages: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], busy: false },
-        messages: { items: [], nextCursor: null }, traces: { items: [{ id: 't', kind: 'recall', episodeId: 'e', createdAt: 1, input: 'hi', output: 'recorded', model: 'test/model', stateAfterRef: 'v4' }], nextCursor: 'older' },
+        messages: { items: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], nextCursor: null }, traces: { items: [{ id: 't', kind: 'recall', episodeId: 'e', createdAt: 1, input: 'hi', output: 'recorded', model: 'test/model', stateAfterRef: 'v4' }], nextCursor: 'older' },
         think: { episodeId: 'e' },
       };
       queueMicrotask(() => acceptPersonResponse(chat, { ...request, type: 'person_response', ok: true, data: data[request.op] }));
@@ -80,6 +81,30 @@ describe('Digital Person surface', () => {
     await flushPromises();
     expect(requests.slice(before).map(r => r.op)).toEqual(['status', 'open', 'snapshot', 'messages', 'traces']);
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
+  });
+
+  it('preserves unsent drafts across reconnect/offline but clears them when changing Agent', async () => {
+    await render();
+    await wrapper.get('#person-input').setValue('unfinished long thought');
+    chat.connectionState = 'reconnecting'; await Vue.nextTick();
+    expect(wrapper.get('#person-input').element.value).toBe('unfinished long thought');
+    chat.connectionState = 'connected'; await flushPromises();
+    chat.agents[0].online = false; await Vue.nextTick();
+    expect(wrapper.get('#person-input').element.value).toBe('unfinished long thought');
+    chat.agents.push({ id: 'b', online: true, capabilities: ['digital_person'] });
+    await Vue.nextTick();
+    await wrapper.get('#person-agent').setValue('b'); await flushPromises();
+    expect(wrapper.get('#person-input').element.value).toBe('');
+  });
+
+  it('uses the established Chat-to-Yeaft transition before opening Plugins for the selected Agent', async () => {
+    chat.currentView = 'chat';
+    await render();
+    await wrapper.findAll('button').find(b => b.text() === t('person.plugins')).trigger('click');
+    expect(chat.enterYeaft).toHaveBeenCalledExactlyOnceWith();
+    expect(chat.openPluginCenter).toHaveBeenCalledExactlyOnceWith('a');
+    expect(chat.currentAgent).toBe('previous-session-agent');
+    expect(chat.enterYeaft.mock.invocationCallOrder[0]).toBeLessThan(chat.openPluginCenter.mock.invocationCallOrder[0]);
   });
 
   it('explains missing MongoDB without a credential form or fallback Session', async () => {

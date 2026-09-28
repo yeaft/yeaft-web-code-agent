@@ -26,7 +26,7 @@ export function acceptPersonResponse(chat, message) {
   else {
     const detail = typeof message.error === 'string' ? message.error : message.error?.message;
     pending.reject(Object.assign(new Error(detail || 'requestFailed'), {
-      code: message.error?.code || 'requestFailed',
+      code: message.errorCode || message.error?.code || 'requestFailed',
     }));
   }
   return true;
@@ -45,6 +45,7 @@ function mergeRows(previous, next) {
   const rows = new Map(previous.map(row => [row.id, row]));
   for (const row of next || []) if (row?.id) rows.set(row.id, row);
   return [...rows.values()].sort((a, b) => {
+    if (Number.isSafeInteger(a.seq) && Number.isSafeInteger(b.seq)) return a.seq - b.seq;
     const delta = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
     return Number.isFinite(delta) && delta !== 0 ? delta : String(a.id).localeCompare(String(b.id));
   });
@@ -61,6 +62,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let poll = null;
   let polling = false;
   let snapshotRequest = 0;
+  let messageWindowVersion = 0;
   let tracePaged = false;
   let disposed = false;
   const owned = new Set();
@@ -123,7 +125,16 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.person = data.person;
     state.state = data.state;
     state.latestEpisode = data.latestEpisode || null;
-    state.messages = mergeRows(state.messages, data.messages);
+    const incoming = data.messages || [];
+    const lastSeq = state.messages.at(-1)?.seq;
+    const firstSeq = incoming[0]?.seq;
+    // A remote tab may have produced more than the snapshot window. Restart a
+    // contiguous pagination chain rather than leaving an unreachable middle gap.
+    if (!state.messages.length || (Number.isSafeInteger(firstSeq) && Number.isSafeInteger(lastSeq) && firstSeq > lastSeq + 1)) {
+      messageWindowVersion += 1;
+      state.messages = mergeRows([], incoming);
+      state.messageCursor = data.nextMessagesCursor ?? null;
+    } else state.messages = mergeRows(state.messages, incoming);
     state.busy = data.busy === true;
     state.episodeId = data.episodeId || null;
   }
@@ -134,10 +145,11 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     const cursorKey = kind === 'messages' ? 'messageCursor' : 'traceCursor';
     if (state[loadingKey] || (more && state[cursorKey] == null)) return;
     state[loadingKey] = true;
+    const windowVersion = kind === 'messages' && !more ? ++messageWindowVersion : messageWindowVersion;
     try {
       const data = await request(kind, { cursor: more ? state[cursorKey] : null, limit: PAGE_SIZE });
-      if (!current(g)) return;
-      state[kind] = mergeRows(more || kind === 'messages' ? state[kind] : [], data.items);
+      if (!current(g) || (kind === 'messages' && windowVersion !== messageWindowVersion)) return;
+      state[kind] = mergeRows(more ? state[kind] : [], data.items);
       state[cursorKey] = data.nextCursor ?? null;
       if (kind === 'traces') {
         tracePaged = more;
@@ -204,7 +216,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.error = null;
     try {
       await snapshot();
-      if (current(g)) await page('traces');
+      if (current(g)) await Promise.all([page('messages'), page('traces')]);
     } catch (error) {
       if (current(g)) showError(error);
     } finally {
@@ -238,7 +250,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       return true;
     } catch (error) {
       if (current(g)) {
-        if (!['timeout', 'disconnected', 'stale'].includes(error.code)) {
+        if (!['timeout', 'outcome_unknown', 'disconnected', 'stale'].includes(error.code)) {
           outbox().delete(agentId);
           state.retryCommand = null;
         }
@@ -251,11 +263,12 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   async function cancel() {
-    if (state.cancelPending || !state.busy) return;
+    if (state.cancelPending || !state.busy || !state.episodeId) return;
+    const episodeId = state.episodeId;
     const g = generation;
     state.cancelPending = true;
     try {
-      await request('cancel');
+      await request('cancel', { episodeId });
       if (current(g)) await refresh();
     } catch (error) {
       if (current(g)) showError(error);

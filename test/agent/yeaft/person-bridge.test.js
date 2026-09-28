@@ -38,7 +38,7 @@ describe('Person bridge is independent of Session and Work Center', () => {
     const f = fixture();
     f.createService.mockRejectedValueOnce(new Error('mongodb://admin:password@example credentials'));
     await f.bridge.request(request());
-    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: false, requestId: 'r1' });
+    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: false, requestId: 'r1', errorCode: 'outcome_unknown' });
     expect(JSON.stringify(f.send.mock.lastCall)).not.toContain('password');
     await f.bridge.request(request());
     expect(f.send.mock.lastCall[0].ok).toBe(true);

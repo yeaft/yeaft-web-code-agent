@@ -29,7 +29,7 @@ export function createPersonBridge({
     try {
       if (closed) throw new Error('closed');
       if (!response.requestId || typeof msg.ownerId !== 'string' || !msg.ownerId || msg.ownerId.length > 128) {
-        await send({ ...response, ok: false, error: 'Digital person request requires authenticated ownership' });
+        await send({ ...response, ok: false, errorCode: 'invalid_request', error: 'Digital person request requires authenticated ownership' });
         return true;
       }
       const uri = env.YEAFT_PERSON_MONGODB_URI;
@@ -37,7 +37,7 @@ export function createPersonBridge({
         if (response.op === 'status') {
           await send({ ...response, ok: true, data: { configured: false, reason: 'mongodb_not_configured' } });
         } else {
-          await send({ ...response, ok: false, error: 'Configure YEAFT_PERSON_MONGODB_URI on the Agent to enable the digital person' });
+          await send({ ...response, ok: false, errorCode: 'not_configured', error: 'Configure YEAFT_PERSON_MONGODB_URI on the Agent to enable the digital person' });
         }
         return true;
       }
@@ -76,7 +76,11 @@ export function createPersonBridge({
         IDEMPOTENCY_CONFLICT: 'This message identifier already belongs to a different request',
         UNSUPPORTED: 'This capability is not available in this digital person version',
       };
-      await send({ ...response, ok: false, error: safeErrors[error?.code] || 'Digital person unavailable; check Agent database and model configuration' });
+      const known = Object.hasOwn(safeErrors, error?.code);
+      // A lost Mongo commit acknowledgement or response-send failure is not a
+      // definitive rejection. Preserve the command ID so an explicit retry deduplicates.
+      await send({ ...response, ok: false, errorCode: known ? error.code.toLowerCase() : 'outcome_unknown',
+        error: known ? safeErrors[error.code] : 'Digital person outcome is unknown; refresh and check Agent database/model configuration' });
     }
     return true;
   }
