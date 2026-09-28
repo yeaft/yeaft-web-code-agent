@@ -44,16 +44,17 @@ test('Person conversation and Think persist through the actual relay and a servi
     await page.getByRole('button', { name: 'Think', exact: true }).click();
     await expect.poll(() => calls).toBe(2);
     await expect(page.locator('#person-input')).toBeEnabled();
-    await page.getByRole('button', { name: 'Trace', exact: true }).click();
-    await expect(page.locator('#person-trace')).toContainText('committed');
-    await expect(page.locator('#person-trace')).toContainText('call_output');
+    await page.getByRole('button', { name: 'Thought journal', exact: true }).click();
+    await expect(page.locator('#person-thoughts')).toContainText('Reconsider the available experience.');
+    await expect(page.locator('#person-thoughts')).toContainText('A hypothesis is not a fact.');
+    await expect(page.locator('#person-thoughts pre')).toHaveCount(0);
     expect(mockAgent.conversations.size).toBe(0);
     await bridge.close(); bridge = makeBridge();
     await page.reload();
     await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('.person-messages')).toContainText('Remembered in MongoDB.');
-    await expect(page.locator('.person-status')).toContainText('2');
+    await expect(page.locator('.person-status')).toContainText('Ready');
     expect(calls).toBe(2);
     await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
   } finally {

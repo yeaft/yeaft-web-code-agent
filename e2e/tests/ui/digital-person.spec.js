@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/test-server.js';
+import { personRecords } from '../../../test/fixtures/person-records.js';
 
 // Real browser entry + WebSocket framing with an explicit mock Person runtime.
 // This is not a model, MongoDB or Server authorization integration test.
@@ -37,7 +38,7 @@ async function mockPersonSocket(page) {
       } else if (request.op === 'messages') {
         reply({ items: request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor ? null : 'older-page' });
       } else if (request.op === 'traces') {
-        reply({ items: [{ id: request.payload.cursor ? 'trace-older' : 'trace-latest', episodeId: 'episode-1', kind: request.payload.cursor ? 'recall' : 'model_choice', createdAt: 2, input: { query: '<script>not HTML</script>', text: 'topic '.repeat(100) }, output: { result: 'recorded application output' }, stateBeforeRef: 'v3', stateAfterRef: 'v4', model: 'mock/model', toolChoice: 'recall' }], nextCursor: request.payload.cursor ? null : 'trace-page-2' });
+        reply({ items: request.payload.cursor ? [{ id: 'trace-older', seq: 0, episodeId: 'older', kind: 'accepted', trigger: { kind: 'think', text: 'Earlier question' }, createdAt: 1 }] : personRecords(), nextCursor: request.payload.cursor ? null : 'trace-page-2' });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
         if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
         busy = true; reply({ episodeId: 'episode-1' });
@@ -47,8 +48,8 @@ async function mockPersonSocket(page) {
   return { requests, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
 }
 
-for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
-  test(`Digital Person route / Trace / gating ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
+for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 1280, theme: 'dark', locale: 'zh-CN' }, { width: 320, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
+  test(`Digital Person conversation / thoughts / debug / gating ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
     const mock = await mockPersonSocket(page);
     await page.setViewportSize({ width: scenario.width, height: 800 });
     await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
@@ -73,22 +74,32 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(input).toBeEnabled();
     await page.getByRole('button', { name: zh ? '加载更早消息' : 'Load older messages' }).click();
     await expect(page.locator('.person-messages')).toContainText('Older persisted message');
-    await page.getByRole('button', { name: 'Trace', exact: true }).click();
-    await page.locator('.person-trace-row').filter({ hasText: 'model_choice' }).locator('summary').click();
-    await expect(page.locator('#person-trace')).toContainText('stateBeforeRef');
-    await expect(page.locator('#person-trace')).toContainText('<script>not HTML</script>');
-    await expect(page.locator('#person-trace script')).toHaveCount(0);
-    await page.getByRole('button', { name: zh ? '加载更多 Trace' : 'Load more Trace' }).click();
-    await expect(page.locator('.person-trace-row')).toHaveCount(3);
+    await page.screenshot({ path: testInfo.outputPath(`person-messages-${scenario.width}.png`) });
+    await page.getByRole('button', { name: zh ? '思考记录' : 'Thought journal', exact: true }).click();
+    const thoughts = page.locator('#person-thoughts');
+    await expect(thoughts).toContainText('Maybe the delay came from the final verification step.');
+    await expect(thoughts).toContainText('A repeated guess is not new evidence.');
+    await expect(thoughts).toContainText('<script>not HTML</script>');
+    await expect(thoughts.locator('script, pre')).toHaveCount(0);
+    for (const text of ['PRIVATE SYSTEM PROMPT', 'contextBytes', 'test/model', 'HIDDEN REASONING']) await expect(thoughts).not.toContainText(text);
+    await page.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' }).click();
+    await expect(thoughts).toContainText('Earlier question');
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`person-trace-${scenario.width}.png`) });
-    await page.locator('.person-trace-heading button').click();
+    await page.screenshot({ path: testInfo.outputPath(`person-thoughts-${scenario.width}.png`) });
+    await page.getByRole('button', { name: zh ? '调试日志' : 'Debug logs', exact: true }).click();
+    await expect(thoughts).toHaveCount(0);
+    await page.locator('.person-debug-row').filter({ hasText: 'call_started' }).locator('summary').click();
+    await expect(page.locator('#person-debug')).toContainText('contextBytes');
+    await page.getByRole('button', { name: zh ? '返回' : 'Back', exact: true }).click();
+    await expect(page.locator('#person-debug')).toHaveCount(0);
+    await expect(thoughts).toBeVisible();
+    await page.getByRole('button', { name: zh ? '对话' : 'Conversation', exact: true }).click();
     await page.getByRole('button', { name: zh ? '思考' : 'Think', exact: true }).click();
     await expect.poll(() => mock.requests.filter(r => r.op === 'think').length).toBe(1);
     expect(mock.requests.find(r => r.op === 'think').payload.text).toBe('');
     await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
     await expect(input).toBeEnabled();
-    await page.getByRole('button', { name: zh ? '梦境' : 'Dream', exact: true }).click();
+    await page.getByRole('button', { name: zh ? '遐想' : 'Dream', exact: true }).click();
     await expect.poll(() => mock.requests.filter(r => r.op === 'dream').length).toBe(1);
     await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
     await page.locator('#person-agent').selectOption('person-b');
