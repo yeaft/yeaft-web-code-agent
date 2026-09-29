@@ -10,6 +10,8 @@ permissions:
   packages: write
 
 env:
+  # Person Recall uses CPU inference; do not download optional CUDA runtimes.
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   # Legacy image name for deployments that still pull the pre-rename package.

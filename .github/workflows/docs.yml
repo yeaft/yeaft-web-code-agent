@@ -18,6 +18,10 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  # Person Recall uses CPU inference; do not download optional CUDA runtimes.
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 jobs:
   build:
     runs-on: ubuntu-latest
