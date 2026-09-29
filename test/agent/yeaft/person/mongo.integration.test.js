@@ -437,7 +437,9 @@ suite('Person real MongoDB replica-set integration', () => {
       expect(snapshot.state.version).toBe(1);
       expect(requests).toHaveLength(1); expect(requests[0].path).toBe('/v1/messages');
       expect(requests[0].body.model).toBe('person-test-model');
-      expect((await readdir(yeaftDir)).sort()).toEqual(['config.json']);
+      expect((await readdir(yeaftDir)).sort()).toEqual(['config.json', 'person']);
+      // Only the backend binding marker is local; Mongo mode creates no SQLite authority or index.
+      expect(await readdir(join(yeaftDir, 'person'))).toEqual([expect.stringMatching(/^storage-[a-f0-9]+\.json$/)]);
       const traces = await call(service, 'traces');
       expect(JSON.stringify(traces)).not.toContain('local-test-secret');
       expect(traces.items.find(t => t.kind === 'call_output').effective.effortObserved).toBe(true);

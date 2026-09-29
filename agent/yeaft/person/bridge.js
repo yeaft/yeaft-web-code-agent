@@ -3,7 +3,7 @@ import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
 
 /** Lazy Person transport. Only deployment-local environment supplies database credentials.
- * MongoDB is never contacted at ordinary Agent startup, nor configured by browser messages.
+ * Storage is lazy and instance-local by default; browser messages cannot choose a backend.
  */
 export function createPersonBridge({
   context = ctx, send = sendToServer, env = process.env,
@@ -33,14 +33,6 @@ export function createPersonBridge({
         return true;
       }
       const uri = env.YEAFT_PERSON_MONGODB_URI;
-      if (!uri) {
-        if (response.op === 'status') {
-          await send({ ...response, ok: true, data: { configured: false, reason: 'mongodb_not_configured' } });
-        } else {
-          await send({ ...response, ok: false, errorCode: 'not_configured', error: 'Configure YEAFT_PERSON_MONGODB_URI on the Agent to enable the digital person' });
-        }
-        return true;
-      }
       const agentId = context.agentId || context.AGENT_ID;
       if (!agentId || !context.CONFIG?.yeaftDir) throw new Error('identity');
       // Server+Agent is a storage boundary; a re-registration must not reuse the old runtime.
@@ -54,6 +46,8 @@ export function createPersonBridge({
       if (!servicePromise) {
         servicePromise = Promise.resolve().then(() => createService({
           uri,
+          storage: env.YEAFT_PERSON_STORAGE,
+          embedding: { enabled: env.YEAFT_PERSON_EMBEDDING !== 'off', allowDownload: env.YEAFT_PERSON_EMBEDDING_DOWNLOAD !== '0' },
           dbName: env.YEAFT_PERSON_MONGODB_DB || 'yeaft_person',
           namespace,
           yeaftDir: context.CONFIG.yeaftDir,
@@ -74,10 +68,11 @@ export function createPersonBridge({
         NOT_OPEN: 'Open the digital person first',
         STALE: 'Digital person state changed; refresh and try again',
         IDEMPOTENCY_CONFLICT: 'This message identifier already belongs to a different request',
+        STORAGE_MISMATCH: 'The configured storage differs from the existing Person authority; do not switch without a verified migration',
         UNSUPPORTED: 'This capability is not available in this digital person version',
       };
       const known = Object.hasOwn(safeErrors, error?.code);
-      // A lost Mongo commit acknowledgement or response-send failure is not a
+      // A lost database commit acknowledgement or response-send failure is not a
       // definitive rejection. Preserve the command ID so an explicit retry deduplicates.
       await send({ ...response, ok: false, errorCode: known ? error.code.toLowerCase() : 'outcome_unknown',
         error: known ? safeErrors[error.code] : 'Digital person outcome is unknown; refresh and check Agent database/model configuration' });

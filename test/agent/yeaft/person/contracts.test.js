@@ -46,7 +46,7 @@ describe('digital Person strict contracts', () => {
     vi.restoreAllMocks(); vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
-  it('is inert and safe without configured MongoDB', async () => {
+  it('is inert without an instance directory or configured MongoDB', async () => {
     const service = createPersonService();
     expect(await service.request({ ownerId: 'owner', op: 'status' })).toMatchObject({ configured: false, storageReady: false });
     await expect(service.request({ ownerId: 'owner', op: 'open' })).rejects.toMatchObject({ code: 'NOT_CONFIGURED' });

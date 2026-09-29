@@ -152,6 +152,31 @@ describe('local Person recall (real SQLite, deterministic injected vectors)', ()
     await expect(memory.recall('alice', { query: 'car' })).rejects.toMatchObject({ code: 'MEMORY_CLOSED' });
   });
 
+  it('cancels active and queued episode recalls without fallback or later inference', async () => {
+    const { memory, repository } = await setup({ embedding: { delayMs: 10000 }, shutdownTimeoutMs: 1000 });
+    repository.put('alice', 'a', 'car');
+    let fallbacks = 0;
+    memory.literalRecall = async () => { fallbacks++; return { items: [], nextCursor: null }; };
+    const activeController = new AbortController(), queuedController = new AbortController();
+    const active = memory.recall('alice', { query: 'car' }, { signal: activeController.signal });
+    const worker = memory.worker;
+    const exited = new Promise(resolve => worker.once('exit', resolve));
+    const queued = memory.recall('alice', { query: 'car' }, { signal: queuedController.signal });
+    const settled = Promise.allSettled([active, queued]);
+    queuedController.abort();
+    expect(memory.queue).toHaveLength(0);
+    activeController.abort();
+    expect((await settled).map(result => result.reason.code)).toEqual(['RECALL_CANCELLED', 'RECALL_CANCELLED']);
+    await exited;
+    expect(fallbacks).toBe(0);
+    expect(memory.status()).toMatchObject({ workerStarted: false, queued: 0 });
+    const alreadyAborted = new AbortController(); alreadyAborted.abort();
+    await expect(memory.recall('alice', { query: 'car' }, { signal: alreadyAborted.signal })).rejects.toMatchObject({ code: 'RECALL_CANCELLED' });
+    expect(memory.worker).toBeNull();
+    memory.options.embedding.delayMs = 0;
+    expect((await memory.recall('alice', { query: 'car' })).items[0].id).toBe('a');
+  });
+
   it('rejects active and queued work on bounded shutdown without orphaning a worker', async () => {
     const { memory, repository } = await setup({ embedding: { delayMs: 10000 }, shutdownTimeoutMs: 50 });
     repository.put('alice', 'a', 'car');

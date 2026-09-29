@@ -4,8 +4,7 @@ import { digest, fail, identifier, PersonError, text } from './contracts.js';
 
 const storageError = code => {
   const error = new PersonError(code);
-  // contracts.js still describes Mongo's topology; SQLite must not expose that
-  // misleading implementation detail (nor native SQL errors/paths).
+  // Keep transport errors independent of backend topology, SQL and local paths.
   if (error.code === 'STORAGE_UNAVAILABLE') error.message = 'Digital person storage is unavailable.';
   return error;
 };

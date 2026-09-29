@@ -1,28 +1,46 @@
 import { MongoPersonRepository } from './repository.js';
+import { SqlitePersonRepository } from './sqlite-repository.js';
+import { LocalPersonMemory } from './local-memory.js';
+import { selectPersonStorage, bindPersonStorage } from './storage.js';
 import { PersonRuntime } from './runtime.js';
 import { createPersonProvider } from './provider.js';
 import { fail, identifier, LIMITS, object, page, safeError, text } from './contracts.js';
 
 /**
- * One Mongo-backed Person per (namespace, authenticated ownerId). The transport MUST
+ * One durable Person per (namespace, authenticated ownerId). The transport MUST
  * supply authenticated ownerId, never accept it from a browser payload. URI/provider
  * secrets stay inside this Agent. Constructor and status never initiate model calls.
  * Native provider configuration is read from yeaftDir only (no Session initialization).
- * Inject MongoClient/config/adapter for isolated integration tests; no persistence fallback.
+ * SQLite is the local default; an existing Mongo URI retains Mongo. No authority fallback.
  */
 export function createPersonService(options = {}) {
   const { uri, dbName = 'yeaft_person', namespace = 'default', yeaftDir, MongoClient, config, adapter, allowedModels } = options;
   identifier(namespace);
   if (typeof dbName !== 'string' || !/^[a-zA-Z0-9_-]{1,63}$/.test(dbName)) fail('INVALID_REQUEST');
   if (uri != null && typeof uri !== 'string') fail('INVALID_REQUEST');
-  const configured = Boolean(uri?.trim());
+  const { storage, configured } = selectPersonStorage({ ...options, yeaftDir });
   const calls = options.maxCalls ?? LIMITS.calls;
   const timeoutMs = options.timeoutMs ?? LIMITS.timeoutMs;
   const leaseMs = options.leaseMs ?? LIMITS.leaseMs;
   if (!Number.isInteger(calls) || calls < 1 || calls > 8 || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300000 ||
       !Number.isInteger(leaseMs) || leaseMs < 300 || leaseMs > 60000) fail('INVALID_REQUEST');
   if (allowedModels != null && (!Array.isArray(allowedModels) || !allowedModels.length || allowedModels.length > 8 || allowedModels.some(m => typeof m !== 'string'))) fail('INVALID_REQUEST');
-  const repository = new MongoPersonRepository({ uri, dbName, namespace, MongoClient, leaseMs });
+  const repository = !configured ? null : storage === 'mongodb'
+    ? new MongoPersonRepository({ uri, dbName, namespace, MongoClient, leaseMs })
+    : new SqlitePersonRepository({ yeaftDir, namespace, leaseMs });
+  const initialize = repository?.init.bind(repository);
+  let binding;
+  if (repository) repository.init = async () => {
+    if (!binding) binding = bindPersonStorage(yeaftDir, namespace, storage).catch(error => { binding = null; throw error; });
+    await binding;
+    return initialize();
+  };
+  const literalRecall = repository?.recall.bind(repository);
+  const memory = repository && storage === 'sqlite' ? new LocalPersonMemory({
+    repository, literalRecall, yeaftDir, namespace, embedding: options.embedding,
+  }) : null;
+  if (memory) repository.recall = (ownerId, args = {}, { signal } = {}) => args.query?.trim()
+    ? memory.recall(ownerId, args, { signal }) : literalRecall(ownerId, args);
   // Config/adapter are loaded per explicit episode, not a permanent stale cache.
   const getProvider = () => createPersonProvider({ yeaftDir, config, adapter, allowedModels, effortEnabled: options.effortEnabled });
   const runtime = new PersonRuntime({ repository, getProvider, budget: { calls, timeoutMs } });
@@ -34,13 +52,13 @@ export function createPersonService(options = {}) {
     if (typeof op !== 'string') fail('INVALID_REQUEST');
     if (op === 'status') {
       object(payload, []);
-      if (!configured) return { configured: false, reason: 'MongoDB is not configured for digital person.', storageReady: false, modelReady: false };
+      if (!configured) return { configured: false, storage, reason: 'Digital person storage configuration is missing.', storageReady: false, modelReady: false };
       try { await repository.init(); }
-      catch { return { configured: true, reason: 'Digital person storage is unavailable; a transaction-capable MongoDB replica set is required.', storageReady: false, modelReady: false }; }
+      catch (error) { return { configured: true, storage, reason: safeError(error).message, storageReady: false, modelReady: false }; }
       try {
         const provider = await getProvider();
-        return { configured: true, reason: null, storageReady: true, modelReady: true, models: provider.catalog, autonomySupported: false };
-      } catch { return { configured: true, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false }; }
+        return { configured: true, storage, reason: null, storageReady: true, modelReady: true, models: provider.catalog, autonomySupported: false };
+      } catch { return { configured: true, storage, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false }; }
     }
     if (!configured) fail('NOT_CONFIGURED');
     switch (op) {
@@ -93,7 +111,8 @@ export function createPersonService(options = {}) {
       closed = true;
       await Promise.allSettled([...requests]);
       await runtime.close();
-      await repository.close().catch(() => {});
+      await memory?.close();
+      await repository?.close().catch(() => {});
     },
   };
 }

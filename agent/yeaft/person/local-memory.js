@@ -53,26 +53,28 @@ export class LocalPersonMemory {
     return { enabled: this.options.embedding.enabled !== false, workerStarted: Boolean(this.worker), queued: this.queue.length, closed: this.closed };
   }
 
-  async recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 } = {}) {
+  async recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 } = {}, { signal } = {}) {
     if (typeof ownerId !== 'string' || !ownerId.trim()) throw new TypeError('ownerId is required');
     if (!['messages', 'concepts'].includes(kind) || typeof query !== 'string' || query.length > 4000) throw fault('INVALID_RECALL');
     if (this.closed) throw fault('MEMORY_CLOSED');
+    if (signal?.aborted) throw fault('RECALL_CANCELLED');
     limit = integer(limit, 5, 1, 50);
     if (!query.trim()) return this.literalRecall(ownerId, { kind, query, cursor, limit });
     const request = { ownerId, kind, query, cursor, limit };
     return this._schedule(token => this._recall(request, token), error => {
-      if (['INVALID_CURSOR', 'MEMORY_CLOSED', 'RECALL_BUSY'].includes(error.code)) throw error;
+      if (signal?.aborted) throw fault('RECALL_CANCELLED');
+      if (['INVALID_CURSOR', 'MEMORY_CLOSED', 'RECALL_BUSY', 'RECALL_CANCELLED'].includes(error.code)) throw error;
       // A failed continuation must never silently restart ranking or expose a foreign cursor.
       if (cursor) throw fault('RECALL_RETRY');
       return this._literal(request, error.code || 'INDEX_FAILURE');
-    });
+    }, signal);
   }
 
   _alive(token) {
     if (this.closed) throw fault('MEMORY_CLOSED');
-    if (token.cancelled) throw fault('RECALL_TIMEOUT');
+    if (token.cancelled) throw fault(token.reason || 'RECALL_TIMEOUT');
   }
-  _schedule(fn, onError) {
+  _schedule(fn, onError, signal) {
     if (this.queue.length + Number(Boolean(this.active)) >= this.maxQueue) return Promise.reject(fault('RECALL_BUSY'));
     return new Promise((resolve, reject) => {
       const token = { cancelled: false };
@@ -80,16 +82,25 @@ export class LocalPersonMemory {
       job.abort = new Promise((_, fail) => { job.fail = fail; });
       // Queued time counts too. Attach a handler before the job becomes active.
       job.abort.catch(() => {});
-      job.timer = setTimeout(() => {
+      const abort = code => {
+        if (token.cancelled) return;
         token.cancelled = true;
-        const error = fault('RECALL_TIMEOUT');
+        token.reason = code;
+        const error = fault(code);
         job.fail(error);
         if (this.active !== job) {
           this.queue = this.queue.filter(item => item !== job);
+          clearTimeout(job.timer);
+          job.cleanup();
           reject(error);
         }
-      }, this.timeoutMs);
+      };
+      const onAbort = () => abort('RECALL_CANCELLED');
+      job.cleanup = () => signal?.removeEventListener('abort', onAbort);
+      job.timer = setTimeout(() => abort('RECALL_TIMEOUT'), this.timeoutMs);
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.queue.push(job);
+      if (signal?.aborted) onAbort();
       void this._pump();
     });
   }
@@ -109,6 +120,7 @@ export class LocalPersonMemory {
     }
     finally {
       clearTimeout(job.timer);
+      job.cleanup();
       if (job.token.cancelled) await this._stopWorker(false);
       this.active = null;
       void this._pump();
@@ -120,7 +132,9 @@ export class LocalPersonMemory {
     // onnxruntime-node cannot reliably reload its native addon in a replacement
     // worker_thread. A managed process also makes blocked native inference killable.
     const worker = fork(new URL('./local-memory-host.js', import.meta.url), [], {
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', execArgv: [],
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced',
+      // Older supported Node 22 requires this flag; do not inherit --input-type or test loaders.
+      execArgv: process.execArgv.filter(arg => arg === '--experimental-sqlite'),
     });
     this.worker = worker;
     worker.send({ init: this.options });
@@ -262,6 +276,7 @@ export class LocalPersonMemory {
     this.snapshots.clear();
     for (const job of [...this.queue, ...(this.active ? [this.active] : [])]) {
       clearTimeout(job.timer);
+      job.cleanup();
       job.token.cancelled = true;
       job.fail(fault('MEMORY_CLOSED'));
       job.reject(fault('MEMORY_CLOSED'));
