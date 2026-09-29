@@ -52,9 +52,23 @@ export class SqlitePersonStore {
     try {
       // Numeric option is validated again here before interpolating a PRAGMA literal.
       if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 5000) fail('INVALID_REQUEST');
-      this.db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA foreign_keys = ON;`);
-      if (this.db.prepare('PRAGMA journal_mode = WAL').get().journal_mode !== 'wal') fail('STORAGE_UNAVAILABLE');
-      this.db.exec('PRAGMA synchronous = FULL;');
+      this.db.exec('PRAGMA foreign_keys = ON;');
+      // Concurrent first opens can fail WAL's lock upgrade immediately, even with
+      // busy_timeout. Retry ONLY this idempotent setup step within the same bound;
+      // never retry a logical operation whose commit outcome may be unknown.
+      const deadline = Date.now() + busyTimeoutMs;
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      while (true) {
+        try {
+          if (this.db.prepare('PRAGMA journal_mode = WAL').get().journal_mode !== 'wal') fail('STORAGE_UNAVAILABLE');
+          break;
+        } catch (error) {
+          const remaining = deadline - Date.now();
+          if ((error.errcode & 0xff) !== 5 || remaining <= 0) throw error;
+          Atomics.wait(wait, 0, 0, Math.min(10, remaining));
+        }
+      }
+      this.db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA synchronous = FULL;`);
       const version = this.db.prepare('PRAGMA user_version').get().user_version;
       if (version > 1) fail('STORAGE_UNAVAILABLE');
       this.db.exec('BEGIN IMMEDIATE');

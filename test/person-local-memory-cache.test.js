@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { prepareModelCache } from '../agent/yeaft/person/local-memory-cache.js';
 import { LocalPersonMemory } from '../agent/yeaft/person/local-memory.js';
 
@@ -19,6 +20,9 @@ const artifacts = { [name]: { size: bytes.length, sha256: createHash('sha256').u
 const directories = [];
 const memories = [];
 const children = [];
+const probe = new DatabaseSync(':memory:');
+let hasFts = false;
+try { probe.exec('CREATE VIRTUAL TABLE f USING fts5(t)'); hasFts = true; } catch {} finally { probe.close(); }
 async function setup() {
   const yeaftDir = await mkdtemp(path.join(tmpdir(), 'person-cache-'));
   directories.push(yeaftDir);
@@ -129,7 +133,9 @@ describe('atomic instance-local model cache', () => {
     expect(await readdir(path.dirname(file))).toEqual(['model_quantized.onnx']);
   });
 
-  it('SIGKILL during a real write leaves no published model; restarted explicit Recall repairs and then works offline', async () => {
+  // The eight cache-only cases above run even on Node builds without FTS5.
+  // This end-to-end Recall case requires the hybrid index before embedding starts.
+  it.skipIf(!hasFts)('SIGKILL during a real write leaves no published model; restarted explicit Recall repairs and then works offline', async () => {
     const { options, file } = await setup();
     const fixture = path.join(options.yeaftDir, 'cache-embedding.mjs');
     await writeFile(fixture, `

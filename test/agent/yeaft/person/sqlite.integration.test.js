@@ -67,6 +67,38 @@ describe('Person real SQLite authority in managed workers', () => {
     expect(await reopened.admit('alice', input())).toMatchObject({ duplicate: true, episodeId: episode.id, status: 'completed' });
   });
 
+  it('waits within the startup budget for WAL lock upgrades without retrying logical writes', async () => {
+    const r = repo('startup', { busyTimeoutMs: 1500 });
+    await (await import('node:fs/promises')).mkdir(join(yeaftDir, 'person'));
+    const lock = new DatabaseSync(r.dbPath);
+    lock.exec('CREATE TABLE seed (id INTEGER); BEGIN; SELECT * FROM seed;');
+    let settled = false;
+    const opening = r.open('alice').finally(() => { settled = true; });
+    // Attach failure handling before the wait, including on the regressed version.
+    const checked = expect(opening).resolves.toMatchObject({ person: { name: 'Digital Person' } });
+    try { await sleep(250); expect(settled).toBe(false); }
+    finally { lock.exec('ROLLBACK'); lock.close(); }
+    await checked;
+    expect(inspect(r, db => db.prepare('PRAGMA journal_mode').get().journal_mode)).toBe('wal');
+  });
+
+  it('bounds a startup WAL lock wait and permits a later explicit fresh repository', async () => {
+    const r = repo('startup-timeout', { busyTimeoutMs: 150 });
+    await (await import('node:fs/promises')).mkdir(join(yeaftDir, 'person'));
+    const lock = new DatabaseSync(r.dbPath);
+    lock.exec('CREATE TABLE seed (id INTEGER); BEGIN; SELECT * FROM seed;');
+    const started = Date.now();
+    try {
+      await expect(r.open('alice')).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(140);
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally { lock.exec('ROLLBACK'); lock.close(); }
+    await expect(r.open('alice')).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+    const fresh = repo('startup-timeout');
+    await fresh.open('alice');
+    expect((await fresh.snapshot('alice')).state.version).toBe(0);
+  });
+
   it('serializes independent workers for opens, admission, idempotency and busy exclusion', async () => {
     const a = repo(), b = repo();
     const opened = await Promise.all([a.open('alice'), b.open('alice')]);
