@@ -89,7 +89,7 @@ export default {
         </nav>
         <div class="person-identity">
           <h1>{{ state.person?.name || $t('person.title') }}</h1>
-          <span class="person-muted">{{ $t('person.title') }}</span>
+          <span class="person-muted">{{ $t('person.manualMode') }}</span>
         </div>
         <div class="person-header-actions">
           <label class="person-sr-only" for="person-agent">{{ $t('person.agent') }}</label>
@@ -169,6 +169,7 @@ export default {
               <button type="button" class="btn-ghost" :disabled="!canCompose" @click="command('dream')">{{ $t('person.dream') }}</button>
             </template>
           </MessageComposer>
+          <p class="person-manual-hint person-muted">{{ $t('person.manualHint') }}</p>
         </div>
       </main>
       <PersonThoughtJournal v-if="view === 'thoughts'" :traces="state.traces" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />

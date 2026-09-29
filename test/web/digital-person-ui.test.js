@@ -49,6 +49,9 @@ describe('Digital Person surface', () => {
     await render();
     expect(wrapper.find('.session-sidebar-shell').exists()).toBe(false);
     expect(wrapper.find('[data-message-composer]').exists()).toBe(true);
+    expect(wrapper.get('.person-identity').text()).toContain(en['person.manualMode']);
+    expect(wrapper.get('.person-manual-hint').text()).toBe(en['person.manualHint']);
+    expect(wrapper.get('.person-status').text()).toContain(en['person.ready']);
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
     expect(wrapper.find('.person-message img').exists()).toBe(false);
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();

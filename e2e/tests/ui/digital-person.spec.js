@@ -62,6 +62,10 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(page.locator('.person-page')).toBeVisible();
     await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
     await expect(page.locator('.person-header h1')).toHaveText('Ada');
+    await expect(page.locator('.person-identity')).toContainText(zh ? '手动模式' : 'Manual mode');
+    await expect(page.locator('.person-manual-hint')).toContainText(zh ? '不会自动思考' : 'No automatic thinking');
+    await expect(page.locator('.person-status')).toContainText(zh ? '等待你发起' : 'Waiting for you');
+    expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
     const input = page.getByLabel(zh ? '消息或思考主题' : 'Message or thought topic', { exact: true });
     await expect(input).toBeEnabled();
     await input.focus(); await expect(input).toBeFocused();
@@ -123,7 +127,7 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     mock.disconnect();
     await expect.poll(() => mock.requests.filter(r => r.op === 'open').length).toBeGreaterThan(connectionOpens);
     await expect(input).toBeEnabled();
-    expect(mock.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    for (const op of ['send', 'think', 'dream']) expect(mock.requests.filter(r => r.op === op)).toHaveLength(1);
     expect(mock.requests.every(r => r.requestId && r.agentId && !r.sessionId && !r.ownerId)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`person-conversation-${scenario.width}.png`) });
     await page.locator('.person-navigation button').first().click();
