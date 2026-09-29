@@ -6,7 +6,7 @@ import { bytes, fail, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineag
 const messageRef = m => `message:${m.id}:${m.revision}`;
 const conceptRef = c => `concept:${c.id}:${c.revision}`;
 
-/** Assemble bounded request copies. Omitting a record never deletes or truncates its MongoDB original. */
+/** Assemble bounded request copies. Omitting a record never deletes or truncates its durable original. */
 export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, dependencyRefs = [] }) {
   const model = validateSelection(selection, provider.catalog);
   // UTF-8 bytes is a conservative text-token bound; reserve explicit envelope/output overhead.
@@ -21,7 +21,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     budget: { remainingCalls, maxOutputBytes: LIMITS.outputBytes },
     previousProposal: previous ?? null, capabilityResult: capabilityResult ?? null,
     messages: [], concepts: [], sourceRefs: [triggerRef], inheritedSourceRefs: dependencyRefs,
-    contextNotice: 'This is bounded short-term context, not all memory. Omitted records remain in MongoDB. Recall pages are scoped to this Person. A previous proposal is not committed state. Inherited source refs were read by an earlier call of this episode, not necessarily rendered here; recall again to check their content.',
+    contextNotice: 'This is bounded short-term context, not all memory. Omitted records remain in long-term storage. Recall pages are scoped to this Person. A previous proposal is not committed state. Inherited source refs were read by an earlier call of this episode, not necessarily rendered here; recall again to check their content.',
   };
   const sourceRefs = new Set([triggerRef, ...dependencyRefs]);
   const renderedRefs = new Set([triggerRef]);
@@ -158,7 +158,7 @@ export class PersonRuntime {
           await this.repository.append(episode, 'capability_started', { callId, capability: invocation, access: 'read-only' });
           try {
             signal.throwIfAborted();
-            capabilityResult = await abortable(capabilities.execute(invocation), signal);
+            capabilityResult = await abortable(capabilities.execute(invocation, { signal }), signal);
             await this.repository.append(episode, 'capability_result', { callId, capability: invocation, result: capabilityResult });
           } catch (error) {
             const safe = safeError(error, 'UNSUPPORTED');
@@ -170,7 +170,7 @@ export class PersonRuntime {
     } catch (error) {
       const safe = safeError(signal.aborted ? signal.reason : error, 'PROVIDER_FAILED');
       const status = safe.code === 'CANCELLED' ? 'cancelled' : safe.code === 'INTERRUPTED' || safe.code === 'STALE' ? 'interrupted' : 'failed';
-      // On database outage no local fallback is possible. Expired leases become durable interrupted records on next access.
+      // On authority failure no alternate memory store is used. Expired leases become durable interrupted records on next access.
       await this.repository.finish(episode, status, safe.code).catch(() => {});
     } finally {
       clearTimeout(timeout); clearInterval(heartbeat);

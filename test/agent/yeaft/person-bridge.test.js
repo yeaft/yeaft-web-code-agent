@@ -11,14 +11,24 @@ function fixture(env = { YEAFT_PERSON_MONGODB_URI: 'mongodb://localhost:27017/?r
 }
 
 describe('Person bridge is independent of Session and Work Center', () => {
-  it('does not initialize database/provider for unconfigured status', async () => {
+  it('lazily selects instance-local storage without Mongo configuration', async () => {
     const f = fixture({});
+    expect(f.createService).not.toHaveBeenCalled();
     await f.bridge.request(request());
-    expect(f.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true, data: { configured: false, reason: 'mongodb_not_configured' } }));
-    expect(f.createService).not.toHaveBeenCalled();
-    await f.bridge.request(request({ op: 'send' }));
-    expect(f.send.mock.lastCall[0].ok).toBe(false);
-    expect(f.createService).not.toHaveBeenCalled();
+    expect(f.createService).toHaveBeenCalledWith(expect.objectContaining({
+      uri: undefined, storage: undefined, yeaftDir: '/isolated/person',
+      embedding: { enabled: true, allowDownload: true },
+    }));
+    expect(f.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true, data: { configured: true } }));
+    await f.bridge.close();
+    expect(f.service.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes only deployment embedding and backend controls', async () => {
+    const f = fixture({ YEAFT_PERSON_STORAGE: 'sqlite', YEAFT_PERSON_EMBEDDING: 'off', YEAFT_PERSON_EMBEDDING_DOWNLOAD: '0' });
+    await f.bridge.request(request({ payload: { storage: 'mongodb', embedding: { allowDownload: true } } }));
+    expect(f.createService).toHaveBeenCalledWith(expect.objectContaining({ storage: 'sqlite', embedding: { enabled: false, allowDownload: false } }));
+    await f.bridge.close();
   });
 
   it('binds local database configuration and authenticated owner without accepting browser config', async () => {

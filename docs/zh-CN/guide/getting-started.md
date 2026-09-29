@@ -9,12 +9,14 @@ Yeaft 包含 browser/server control plane 和一台或多台 Agent。Agent 运�
 - Yeaft Session 至少配置一个原生 LLM provider，或者为对应 conversation path 安装并登录 vendor CLI
 - 生产 Server 推荐使用 Docker
 
+以下安装命令适用于 POSIX shell，显式跳过 ONNX Runtime 的额外 CUDA 下载，仍保留 CPU 原生依赖与安装脚本。直接 npm 安装不会自动继承一键安装器策略；Windows 请用[安装指南中的 PowerShell 临时环境块](./deploy-agent.md#手动-npm-安装)，安装结束恢复原设置。完整数字人混合召回推荐 Node 24。
+
 ## 最快路径：Local mode
 
 Local mode 在 `127.0.0.1` 启动内置 Web UI、Server 和 Agent：
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 yeaft-agent local --name local
 ```
 
@@ -58,7 +60,7 @@ yeaft-agent llm use github-copilot --config "$YEAFT_CONFIG" \
 ## 连接已有 Server
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 yeaft-agent --server wss://your-server.example --name my-worker --secret your-agent-secret
 ```
 
@@ -76,7 +78,7 @@ yeaft-agent status --name my-worker
 ```bash
 git clone https://github.com/yeaft/yeaft-web-code-agent.git
 cd yeaft-web-code-agent
-npm install
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
 npm run dev
 ```
 

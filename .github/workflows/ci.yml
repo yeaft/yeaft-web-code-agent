@@ -6,6 +6,10 @@ on:
   # Actions tab when we want a full CI pass.
   workflow_dispatch:
 
+env:
+  # Person Recall uses CPU inference; do not download optional CUDA runtimes.
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 jobs:
   test:
     runs-on: ubuntu-latest

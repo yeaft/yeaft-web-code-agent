@@ -26,7 +26,7 @@ beforeEach(() => {
     sendWsMessage(request) {
       requests.push(request);
       const data = {
-        status: { configured, reason: 'MongoDB not configured' }, open: {},
+        status: { configured, reason: 'Model unavailable' }, open: {},
         snapshot: { person: { id: 'p', name: 'Ada' }, state: { version: 4 }, messages: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], busy: false },
         messages: { items: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], nextCursor: null }, traces: { items: personRecords(), nextCursor: 'older' },
         think: { episodeId: 'e' }, send: { episodeId: 'e' },
@@ -155,7 +155,7 @@ describe('Digital Person surface', () => {
     expect(chat.enterYeaft.mock.invocationCallOrder[0]).toBeLessThan(chat.openPluginCenter.mock.invocationCallOrder[0]);
   });
 
-  it('explains missing MongoDB without a credential form or fallback Session', async () => {
+  it('explains unavailable storage or model configuration without a credential form or fallback Session', async () => {
     configured = false; await render();
     expect(wrapper.get('.person-configuration').text()).toContain('Do not paste credentials');
     expect(wrapper.get('#person-input').attributes('disabled')).toBeDefined();

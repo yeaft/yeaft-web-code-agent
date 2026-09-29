@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory = $true)][string]$Server,
   [Parameter(Mandatory = $true)][string]$Secret,
   [Parameter(Mandatory = $true)][string]$NodePath,
-  [string]$Mode = 'existing'
+  [string]$Mode = 'existing',
+  [string]$Cuda = ''
 )
 $ErrorActionPreference = 'Stop'
 $env:HOME = Join-Path $Sandbox 'home'
@@ -17,6 +18,8 @@ $env:YEAFT_DIR = 'inherited-yeaft-dir'
 $env:SERVER_URL = 'inherited-server'
 $env:AGENT_SECRET = 'inherited-secret'
 $env:PM2_HOME = 'existing-pm2-home'
+if ($Cuda) { $env:ONNXRUNTIME_NODE_INSTALL_CUDA = $Cuda }
+else { Remove-Item -LiteralPath 'Env:ONNXRUNTIME_NODE_INSTALL_CUDA' -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $env:HOME, $env:APPDATA | Out-Null
 $script:AclCalled = $false
 $script:DownloadCalled = $false
@@ -30,6 +33,7 @@ fs.writeFileSync(startup, '@echo off\r\npm2 resurrect\r\nstart "" powershell -Fi
 fs.writeFileSync(path.join(process.env.APPDATA, 'cli-capture.json'), JSON.stringify({
   args, secret:process.env.AGENT_SECRET, server:process.env.SERVER_URL,
   workDir:process.env.WORK_DIR, yeaftDir:process.env.YEAFT_DIR, runtimePath:process.env.PATH,
+  cuda:process.env.ONNXRUNTIME_NODE_INSTALL_CUDA ?? null,
 }));
 '@
 function Install-FixtureRuntime([string]$Directory, [bool]$WithNpm) {
@@ -42,6 +46,8 @@ function Install-FixtureRuntime([string]$Directory, [bool]$WithNpm) {
   Set-Content -LiteralPath $NpmFile -Encoding UTF8 -Value @'
 const fs=require('fs'),path=require('path'),args=process.argv.slice(2);
 if(args.includes('--version')) { console.log('11.0.0'); process.exit(0); }
+fs.writeFileSync(path.join(process.env.APPDATA,'npm-capture.json'), JSON.stringify({args, cuda:process.env.ONNXRUNTIME_NODE_INSTALL_CUDA}));
+if(process.env.FIXTURE_NPM_FAIL === '1') process.exit(2);
 const prefix=args[args.indexOf('--prefix')+1];
 if(!prefix || !args.includes('--global=false')) process.exit(3);
 const cli=path.join(prefix,'node_modules/@yeaft/webchat-agent/cli.js'),pm2=path.join(prefix,'node_modules/pm2/bin/pm2');
@@ -50,13 +56,13 @@ fs.copyFileSync(process.env.FIXTURE_CLI_TEMPLATE,cli);fs.writeFileSync(pm2,'// m
 '@
 }
 $script:FixtureNodeDir = Join-Path $Sandbox 'existing-node'
-if ($Mode -eq 'existing' -or $Mode -eq 'mismatched-npm') {
-  Install-FixtureRuntime $script:FixtureNodeDir ($Mode -eq 'existing')
+if ($Mode -in @('existing', 'mismatched-npm', 'npm-fail')) {
+  Install-FixtureRuntime $script:FixtureNodeDir ($Mode -ne 'mismatched-npm')
 }
 function Get-Command {
   param([string]$Name, [Parameter(ValueFromRemainingArguments = $true)]$Rest)
   if ($Name -eq 'node.exe' -or $Name -eq 'node') {
-    if ($Mode -ne 'existing' -and $Mode -ne 'mismatched-npm') { return $null }
+    if ($Mode -notin @('existing', 'mismatched-npm', 'npm-fail')) { return $null }
     return [pscustomobject]@{ Source = (Join-Path $script:FixtureNodeDir 'node.exe') }
   }
   if ($Name -eq 'npm.cmd' -or $Name -eq 'npm') { throw 'A foreign npm shim must never be discovered or invoked' }
@@ -76,12 +82,22 @@ function Expand-Archive {
   param($LiteralPath, $DestinationPath)
   Install-FixtureRuntime (Join-Path $DestinationPath 'node-v24.9.0-win-x64') $true
 }
-. $Installer -Server $Server -Secret $Secret
+if ($Mode -eq 'npm-fail') { $env:FIXTURE_NPM_FAIL = '1' }
+try {
+  . $Installer -Server $Server -Secret $Secret
+} finally {
+  @{ cuda = $env:ONNXRUNTIME_NODE_INSTALL_CUDA } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $Sandbox 'environment-after.json')
+}
+$NpmCapture = Get-Content -LiteralPath (Join-Path $env:APPDATA 'npm-capture.json') -Raw | ConvertFrom-Json
 $Capture = Get-Content -LiteralPath (Join-Path $env:APPDATA 'cli-capture.json') -Raw | ConvertFrom-Json
 $Installation = Get-ChildItem -LiteralPath (Join-Path $env:HOME '.yeaft/installations') -Directory | Select-Object -First 1
 $Startup = Get-ChildItem -LiteralPath $env:APPDATA -Recurse -File | Where-Object Name -like 'yeaft-agent-*.bat' | Select-Object -First 1
 $StartupText = Get-Content -LiteralPath $Startup.FullName -Raw
 [pscustomobject]@{
+  npmCuda = $NpmCapture.cuda
+  npmScriptsEnabled = -not (@($NpmCapture.args) -contains '--ignore-scripts')
+  serviceCuda = $Capture.cuda
+  cudaRestored = if ($Cuda) { $env:ONNXRUNTIME_NODE_INSTALL_CUDA -ceq $Cuda } else { -not (Test-Path 'Env:ONNXRUNTIME_NODE_INSTALL_CUDA') }
   aclCalled = $script:AclCalled
   downloaded = $script:DownloadCalled
   complete = Test-Path -LiteralPath (Join-Path $Installation.FullName '.complete')

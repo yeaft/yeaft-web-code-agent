@@ -67,11 +67,15 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 
 ### Digital Person (experimental)
 
-The sidebar **Digital Person** entry opens an independent message/input page with **Think**, explicit **Dream**, cancellation, and paginated application-level **Trace**. It has no Session list and creates neither a hidden Session nor a WorkItem. Think recalls stored messages/concepts, reorganizes experiences, proposes associations, and records self-checks and versioned conclusions in MongoDB. Trace shows explicit inputs, outputs and revisions, not a provider's hidden reasoning.
+The sidebar **Digital Person** entry opens an independent message/input page with **Think**, explicit **Dream**, cancellation, and paginated application-level **Trace**. It has no Session list and creates neither a hidden Session nor a WorkItem. Think recalls messages/concepts, reorganizes experiences, proposes associations, and records self-checks and versioned conclusions. Trace shows explicit inputs, outputs and revisions, not a provider's hidden reasoning.
 
-To evaluate on a **new, isolated Agent instance**, supply `YEAFT_PERSON_MONGODB_URI` in the Agent process environment and optionally `YEAFT_PERSON_MONGODB_DB` (default `yeaft_person`). Use a dedicated MongoDB replica set or transaction-capable sharded deployment, with authentication/TLS outside loopback, database-scoped credentials, and backups. Standalone MongoDB is not supported; the app neither installs MongoDB nor falls back to files. Configure a native API model in that instance's `<yeaftDir>/config.json` using `yeaft-agent llm setup --config <path>`. Keep credentials out of the browser and chat. Environment changes on an existing service require an explicitly authorized restart; this feature does not restart it automatically.
+Try it on a **new, isolated Agent instance**: no MongoDB setup is needed by default. SQLite at `<yeaftDir>/person/person.db` owns messages, concepts, episodes, state and Trace; `<yeaftDir>/person/recall.db` is a separate, rebuildable search index, not another memory authority. Agent-managed workers share the Agent lifecycle; exiting stops computation, not persistent memory. Scenes are views/scopes within that authority, not separate databases. Configure a native API model in the instance's `<yeaftDir>/config.json` with `yeaft-agent llm setup --config <path>`; keep credentials out of the browser and chat.
 
-This first slice is **explicitly triggered only**: no idle timer, event Connector, VP delegation, external write tools or Rust desktop body yet. Its read-only capability directory currently has four methods, not the full Skills registry. Each activity allows at most four model calls / 120 seconds; the Person may choose subsequent models from up to eight configured native models. Dynamic effort is available only with `YEAFT_THINKING_V1=1` and supported model metadata. Messages, state and explicit Trace persist; model context is a bounded short-term copy. See the [design and implementation boundary](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版) for remaining work.
+On the default SQLite backend, Recall combines Chinese/English keyword FTS5 with local vector cosine ranking and RRF. The default embedding model is **multilingual-e5-small**, pinned q8 ONNX via `@huggingface/transformers` on CPU, cached in `<yeaftDir>/person/models`. Only the first explicit, nonempty Recall may download model files; opening the page, ordinary startup and empty Recall do not. Use `YEAFT_PERSON_EMBEDDING=off` to disable embeddings, or `YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` to prohibit downloads (an already cached model can still run). Embedding inference and search stay local; model-file downloads contact Hugging Face, and the cognitive LLM still uses the configured provider, which may be remote. Missing model/index support reports fallback metadata, not fake semantic results. Vector search is bounded exact scanning, not ANN or a million-record performance promise; Trace is not vector-indexed. Node 24 is recommended for full FTS5/hybrid recall. Early supported Node 22 builds without FTS5 keep SQLite authority and literal recall, report `FTS_UNAVAILABLE`, and do not start embeddings. Model artifacts are size/SHA-256 verified and atomically published; interrupted downloads are retried on a later explicit Recall. Ignored `.partial` files may remain after a forced process exit.
+
+**Existing MongoDB configuration is retained.** `YEAFT_PERSON_MONGODB_URI` selects MongoDB, with optional `YEAFT_PERSON_MONGODB_DB` (default `yeaft_person`). Optional `YEAFT_PERSON_STORAGE=sqlite|mongodb` makes the choice explicit; `sqlite` with a configured MongoDB URI is rejected to prevent a second, divergent authority. There is no automatic migration or backend fallback. MongoDB still requires a transaction-capable replica set or sharded deployment, dedicated credentials, authentication/TLS outside loopback, and backups; standalone is unsupported. Back up the authority for either backend. Environment changes on an existing service require an explicitly authorized restart; this feature does not restart it automatically.
+
+The feature remains **manual only**: no idle timer, event Connector, VP delegation, external write tools or Rust desktop body yet. Its read-only capability directory has four methods, not the full Skills registry. Each activity allows at most four model calls / 120 seconds; the Person may choose subsequent models from up to eight configured native models. Dynamic effort requires `YEAFT_THINKING_V1=1` and supported model metadata. Persistent memory and bounded model context remain distinct. See the [design and implementation boundary](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版) for transaction, retrieval and remaining-work details.
 
 ### Work Center
 
@@ -92,11 +96,25 @@ Work Center does **not** mean arbitrary unattended deployment. Side effects stil
 
 ### Local, single-machine evaluation
 
-Install the published Agent package, then start its bundled local Web UI, Server, and Agent on loopback:
+Install the published Agent package, then start its bundled local Web UI, Server, and Agent on loopback. On Linux / macOS (POSIX shell):
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 ```
+
+On Windows PowerShell, use a temporary environment variable and restore it after installation:
+
+```powershell
+$previousCuda = $env:ONNXRUNTIME_NODE_INSTALL_CUDA
+try {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = 'skip'
+  npm install -g @yeaft/webchat-agent
+} finally {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = $previousCuda
+}
+```
+
+The recommended install defaults to CPU: `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` skips ONNX Runtime's extra CUDA binary download, not npm lifecycle scripts. Installation still downloads the optional `@huggingface/transformers` npm package and native dependencies such as ONNX Runtime; Recall model files may download only on the first explicit, nonempty Recall. Do not substitute `--ignore-scripts`, which can break native dependencies. If optional dependencies fail to install or are omitted, Recall reports a fallback. `YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` controls model downloads, not npm installation.
 
 `yeaft-agent local` uses a named Agent instance. Without `--name`, the name is the sanitized computer hostname; this example makes it explicit:
 
@@ -127,12 +145,12 @@ Claude Code and Copilot CLI conversations require their corresponding CLI to be 
 
 ### Connect an Agent to an existing server
 
-Recommended: open **Settings → Security**, choose **Linux / macOS** or **Windows PowerShell**, and copy the one-line installer command. It checks Node.js/npm, installs the Agent in an isolated user directory, and starts a new instance named `<hostname>-<four random digits>` with your server address and Secret. Existing Node installations and running Agents are not replaced. See [Agent Setup](docs/guide/deploy-agent.md) for platform requirements, security notes and management commands.
+Recommended: open **Settings → Security**, choose **Linux / macOS** or **Windows PowerShell**, and copy the one-line installer command. It checks Node.js/npm, installs the Agent in an isolated user directory, and starts a new instance named `<hostname>-<four random digits>` with your server address and Secret. Existing Node installations and running Agents are not replaced. Only the npm install step defaults `ONNXRUNTIME_NODE_INSTALL_CUDA` to `skip`; an explicit nonempty caller value is preserved (it may download GPU binaries but does not change Recall CPU inference). See [Agent Setup](docs/guide/deploy-agent.md) for platform requirements, security notes and management commands.
 
-Manual alternative:
+Manual alternative (Linux / macOS; for PowerShell, use the temporary environment variable above):
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 yeaft-agent --server wss://your-server.example --name my-worker --secret your-agent-secret
 ```
 
@@ -150,7 +168,7 @@ The Workbench Browser viewer currently supports Linux x64 Agents. Browser routes
 1. Select the Agent in Yeaft and open **Workbench → Browser**. If Browser is not ready, the card says **Enable required** and the panel shows the pinned Chrome for Testing download size.
 2. Click **Enable Browser** once. Yeaft displays the real download percentage, verifies and installs the browser in that Agent instance's data directory, persists enablement, runs the media probe, refreshes capabilities, and opens the viewer automatically. No Agent restart or second enable action is required.
 
-Nothing downloads merely because Yeaft or the Agent was installed. Administrators can disable the entire Browser surface with `BROWSER_RUNTIME_ENABLED=false`. The Agent media probe validates Chrome, tab capture, VP8, and local WebRTC; it cannot prove that a remote Web viewer has a reachable ICE path to the Agent. `BROWSER_STUN_URLS` is optional for direct ICE. For production across NATs or restrictive networks, deploy TURN and configure `BROWSER_TURN_URLS` plus `BROWSER_TURN_SECRET`; set `BROWSER_ICE_TRANSPORT_POLICY=relay` when direct candidates are forbidden. A hardened self-hosted template is available in [`deploy/browser-turn/`](deploy/browser-turn/README.md).
+No browser binaries download merely because Yeaft or the Agent was installed. Administrators can disable the entire Browser surface with `BROWSER_RUNTIME_ENABLED=false`. The Agent media probe validates Chrome, tab capture, VP8, and local WebRTC; it cannot prove that a remote Web viewer has a reachable ICE path to the Agent. `BROWSER_STUN_URLS` is optional for direct ICE. For production across NATs or restrictive networks, deploy TURN and configure `BROWSER_TURN_URLS` plus `BROWSER_TURN_SECRET`; set `BROWSER_ICE_TRANSPORT_POLICY=relay` when direct candidates are forbidden. A hardened self-hosted template is available in [`deploy/browser-turn/`](deploy/browser-turn/README.md).
 
 For unattended setup, use the same named instance throughout:
 
@@ -169,7 +187,7 @@ yeaft-agent browser status --name my-worker
 ```bash
 git clone https://github.com/yeaft/yeaft-web-code-agent.git
 cd yeaft-web-code-agent
-npm install
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
 npm run dev
 ```
 
@@ -239,7 +257,7 @@ Detailed guides:
 ## Development and verification
 
 ```bash
-npm install
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
 npm test                 # core Vitest suite
 npm run test:e2e         # Playwright browser suite
 npm run release:guard    # server/Agent import guard + startup smoke

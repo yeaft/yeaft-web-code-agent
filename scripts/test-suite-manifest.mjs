@@ -41,6 +41,11 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/dream-toggle.test.js',
   'test/agent/yeaft/person-bridge.test.js',
   'test/agent/yeaft/person/contracts.test.js',
+  'test/agent/yeaft/person/storage.test.js',
+  'test/agent/yeaft/person/sqlite.integration.test.js',
+  'test/agent/yeaft/person/sqlite-service.test.js',
+  'test/person-local-memory.test.js',
+  'test/person-local-memory-cache.test.js',
   'test/server/person-relay.test.js',
   'test/agent/yeaft/engine.test.js',
   'test/agent/yeaft/debug-trace-memory.test.js',
@@ -157,10 +162,14 @@ export const PERSON_MONGO_TEST_FILES = Object.freeze([
   'test/agent/yeaft/person/mongo.integration.test.js',
 ]);
 
+// Explicit real CPU/download smoke; never part of an offline default test run.
+export const PERSON_CPU_TEST_FILES = Object.freeze(['test/person-local-memory-cpu.test.js']);
+
 export const REVIEWED_TEST_FILES = Object.freeze([
   ...CORE_TEST_FILES,
   ...SANDBOX_TEST_FILES,
   ...PERSON_MONGO_TEST_FILES,
+  ...PERSON_CPU_TEST_FILES,
 ]);
 
 export function normalizeTestPath(filePath) {

@@ -3,7 +3,7 @@ import { bytes, digest, fail, identifier, object, page, text } from './contracts
 // Versioned read-only methods, not the Agent's full registry. No shell/filesystem/VP side effects.
 const entries = [
   { id: 'Think', version: 1, domain: 'cognition', description: 'Intrinsic deliberate reflection, reorganization, association and reconsideration.', instructions: 'Revisit supplied experiences and current judgments; separate report from hypothesis, propose new concepts or associations, test a counterexample, and record the explicit finding with uncertainty. It is fine to rest. This is a method, not another model call or external action.', args: {} },
-  { id: 'Recall', version: 1, domain: 'memory', description: 'Read a bounded page of your own MongoDB messages or concepts.', instructions: 'args: {kind:"messages"|"concepts",query?:string,cursor?:string|null,limit?:1..5}. Literal text search, not a semantic or exhaustive search. Preserve nextCursor to reach older/lower-ranked records.', args: { kind: 'messages|concepts', query: 'optional literal search text', cursor: 'optional opaque cursor', limit: '1..5' } },
+  { id: 'Recall', version: 1, domain: 'memory', description: 'Recall a bounded page of your own long-term messages or concepts.', instructions: 'args: {kind:"messages"|"concepts",query?:string,cursor?:string|null,limit?:1..5}. SQLite uses local hybrid keyword/semantic recall when available; inspect retrieval mode, coverage and degradation. Legacy storage may use literal matching. Results are not exhaustive or authorization. Preserve nextCursor for the same query; local ranking cursors expire after 5 minutes or restart.', args: { kind: 'messages|concepts', query: 'optional memory search text', cursor: 'optional opaque cursor', limit: '1..5' } },
   { id: 'Skill.reconsider', version: 1, domain: 'method', description: 'Read-only method for revising a previous judgment.', instructions: 'Identify one prior claim, list a concrete counterexample or missing evidence, and decide whether to retain, qualify or revise it. Mark what remains unresolved. Do not present the counterexample as an observed event without evidence.', args: {} },
   { id: 'Skill.associate', version: 1, domain: 'method', description: 'Read-only method for new conceptual associations.', instructions: 'Compare two recalled concepts or experiences. Propose a typed relation and a new question or hypothetical scenario. Co-occurrence is not causation; imagination is not an experience. Keep useful disagreement instead of forcing agreement.', args: {} },
 ];
@@ -16,7 +16,8 @@ export const CAPABILITY_MAP = Object.freeze({
 export const catalogRevision = digest(entries);
 export class PersonCapabilities {
   constructor(repository, ownerId) { this.repository = repository; this.ownerId = ownerId; this.loaded = new Set(['Think']); }
-  async execute({ id, args }) {
+  async execute({ id, args }, { signal } = {}) {
+    signal?.throwIfAborted();
     if (id === 'catalog.search') {
       object(args, ['query', 'cursor', 'limit'], []);
       const query = text(args.query ?? '', 200, true).toLowerCase();
@@ -44,9 +45,10 @@ export class PersonCapabilities {
       text(args.query ?? '', 200, true);
       const limit = args.limit ?? 3;
       if (!Number.isInteger(limit) || limit < 1 || limit > 5) fail('INVALID_REQUEST');
-      const cursor = args.kind === 'messages' ? page({ cursor: args.cursor, limit }).cursor : args.cursor;
-      if (args.kind === 'concepts' && cursor != null) identifier(cursor);
-      const result = await this.repository.recall(this.ownerId, { ...args, cursor, limit });
+      const localCursor = typeof args.cursor === 'string' && /^lm:[a-f0-9]{32}:\d{1,6}$/.test(args.cursor);
+      const cursor = args.kind === 'messages' && !localCursor ? page({ cursor: args.cursor, limit }).cursor : args.cursor;
+      if (cursor != null && (localCursor || args.kind === 'concepts')) identifier(cursor);
+      const result = await this.repository.recall(this.ownerId, { ...args, cursor, limit }, { signal });
       // Pages contain complete accepted records; context assembly may omit whole records later.
       if (bytes(result) > 60000) fail('CONTEXT_LIMIT');
       return { ...result, kind: args.kind, version: entry.version };

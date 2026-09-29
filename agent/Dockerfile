@@ -22,7 +22,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY agent/package.json ./agent/
-RUN npm_config_cache=/tmp/yeaft-npm-cache npm ci --workspace=agent --omit=dev \
+RUN ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm_config_cache=/tmp/yeaft-npm-cache npm ci --workspace=agent --omit=dev \
   && rm -rf /tmp/yeaft-npm-cache \
   && install -d -m 0700 -o yeaft -g yeaft /home/yeaft/.npm
 COPY --chown=yeaft:yeaft agent ./agent
