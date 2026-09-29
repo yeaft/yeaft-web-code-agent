@@ -147,6 +147,127 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.requests).toHaveLength(count);
   });
 
+  it('synchronizes terminal traces behind late reads without silently losing paged history', async () => {
+    vi.useFakeTimers();
+    for (const more of [false, true]) for (const kind of ['committed', 'cancelled', 'failed']) {
+      const f = fixture();
+      const latest = { id: 'latest', seq: 2, kind: 'call_started' };
+      const older = { id: 'older', seq: 1, kind: 'committed' };
+      const terminal = { id: 'terminal', seq: 3, kind };
+      f.auto(r => r.op === 'traces' ? { items: [latest], nextCursor: 'older' } : undefined);
+      await f.controller.open('a'); await f.controller.command('think');
+      f.auto(r => r.op === 'traces' ? false : undefined);
+      const reading = f.controller.page('traces', more);
+      const delayed = f.requests.at(-1);
+      // Both polling and the cancel acknowledgement refresh terminal state
+      // while a pre-terminal trace read is still in flight.
+      if (kind === 'cancelled') await f.controller.cancel();
+      else await vi.advanceTimersByTimeAsync(51);
+      expect(f.state.busy).toBe(false);
+      expect(f.state.tracesStale).toBe(true);
+      f.response(delayed, { items: more ? [older] : [latest], nextCursor: more ? null : 'older' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.state.tracesStale).toBe(true);
+      if (more) {
+        await reading;
+        expect(f.state.traces.map(t => t.id)).toEqual(['older', 'latest']);
+        expect(f.state.traceCursor).toBeNull();
+        expect(f.requests.filter(r => r.op === 'traces')).toHaveLength(2);
+        // Only an explicit latest refresh may replace the paged window.
+        f.auto(r => r.op === 'traces' ? { items: [latest, terminal], nextCursor: 'older' } : undefined);
+        await f.controller.page('traces');
+      } else {
+        const followup = f.requests.at(-1);
+        expect(followup).toMatchObject({ op: 'traces', payload: { cursor: null, limit: 50 } });
+        expect(followup.requestId).not.toBe(delayed.requestId);
+        f.response(followup, { items: [latest, terminal], nextCursor: 'older' });
+        await reading;
+      }
+      expect(f.state.traces.at(-1)).toEqual(terminal);
+      expect(f.state.tracesStale).toBe(false);
+      const count = f.requests.length;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.requests).toHaveLength(count);
+      expect(f.requests.filter(r => !['status', 'open', 'snapshot', 'messages', 'traces'].includes(r.op)).map(r => r.op)).toEqual(kind === 'cancelled' ? ['think', 'cancel'] : ['think']);
+      f.controller.dispose();
+    }
+  });
+
+  it('keeps failed or timed-out terminal reads stale without unbounded retries', async () => {
+    vi.useFakeTimers();
+    for (const code of ['requestFailed', 'timeout']) for (const more of [false, true]) {
+      const f = fixture();
+      const latest = { id: 'latest', seq: 2 };
+      f.auto(r => r.op === 'traces' ? { items: [latest], nextCursor: 'older' } : undefined);
+      await f.controller.open('a'); await f.controller.command('think');
+      f.auto(r => r.op === 'traces' ? false : undefined);
+      const reading = f.controller.page('traces', more);
+      const delayed = f.requests.at(-1);
+      await vi.advanceTimersByTimeAsync(51);
+      if (code === 'timeout') await vi.advanceTimersByTimeAsync(50);
+      else {
+        f.response(delayed, null, { ok: false, errorCode: code });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const followup = f.requests.at(-1);
+      expect(followup.op).toBe('traces');
+      expect(followup.requestId).not.toBe(delayed.requestId);
+      if (code === 'timeout') await vi.advanceTimersByTimeAsync(101);
+      else f.response(followup, null, { ok: false, errorCode: code });
+      await reading;
+      expect(f.state.error.code).toBe(code);
+      expect(f.state.tracesStale).toBe(true);
+      expect(f.state.tracesLoading).toBe(false);
+      expect(f.state.traces).toEqual([latest]);
+      expect(f.state.traceCursor).toBe('older');
+      expect(f.response(delayed, { items: [{ id: 'too-late' }] })).toBe(false);
+      expect(f.response(followup, { items: [{ id: 'also-too-late' }] })).toBe(false);
+      const count = f.requests.length;
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(f.requests).toHaveLength(count);
+      f.auto(r => r.op === 'traces' ? { items: [{ id: 'terminal', kind: 'failed' }], nextCursor: null } : undefined);
+      await f.controller.refresh();
+      expect(f.state.traces.map(t => t.id)).toEqual(['terminal']);
+      expect(f.state.tracesStale).toBe(false);
+      expect(f.state.error).toBeNull();
+      expect(f.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op)).map(r => r.op)).toEqual(['think']);
+      f.controller.dispose();
+    }
+  });
+
+  it('fences queued and in-flight terminal trace reads across Agent and owner changes', async () => {
+    vi.useFakeTimers();
+    for (const boundary of ['agent', 'owner']) for (const followupStarted of [false, true]) {
+      const f = fixture(); f.auto(); await f.controller.open('a');
+      await f.controller.command('think');
+      f.auto(r => r.op === 'traces' ? false : undefined);
+      const reading = f.controller.page('traces');
+      const delayed = f.requests.at(-1);
+      await vi.advanceTimersByTimeAsync(51);
+      expect(f.state.tracesStale).toBe(true);
+      if (followupStarted) {
+        f.response(delayed, { items: [{ id: 'old' }], nextCursor: null });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const pending = f.requests.at(-1);
+      if (boundary === 'owner') {
+        f.owner('owner-b');
+        expect(f.response(pending, { items: [{ id: 'leak' }] })).toBe(false);
+      }
+      const count = f.requests.length;
+      f.auto(); await f.controller.open(boundary === 'agent' ? 'b' : 'a'); await reading;
+      expect(f.response(pending, { items: [{ id: 'leak' }] })).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.requests.slice(count).map(r => r.op)).toEqual(['status', 'open', 'snapshot', 'messages', 'traces']);
+      expect(f.state.person.id).toBe(boundary === 'agent' ? 'person-b' : 'person-a');
+      expect(f.state.traces).toEqual([]);
+      expect(f.state.tracesStale).toBe(false);
+      expect(f.state.tracesLoading).toBe(false);
+      expect(f.state.error).toBeNull();
+      f.controller.dispose();
+    }
+  });
+
   it('does not let an older idle snapshot undo an acknowledged command', async () => {
     vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
     let delayedSnapshot;

@@ -13,10 +13,39 @@
 - **已有代码**：`agent/yeaft/person/` 是独立认知运行时，不依赖 Session、WorkItem 或旧 Dream。MongoDB 保存身份/Soul、原生消息、认知活动、当前状态、版本化 Concept、提交与 Trace；显式 Send／Think／Dream 可产生召回、整理、联想、自判和一次原子认知提交。Think 是主体自身能力，不是外部 VP 的代称。
 - **界面**：左侧数字人入口；复用 Web 聊天输入组件，独立输入／消息，无 Session 列表；选择 Agent、取消、失败提示与重连刷新。**思考记录**是独立的消息式时间线，展示触发输入、上下文中的记忆、明确生成的想法、判断、自判及输出，并区分候选、已采纳、未采纳与不完整记录；原始请求、事件 JSON 与状态版本另放在**调试日志**页面。两种视图复用同一授权与分页数据源，保留 MongoDB/wire 的 `traces` 名称，不迁移历史数据。当前按认证 owner + Server/Agent 命名空间拥有一个 Person，不代表跨设备漫游已完成。
 - **当前触发策略：仅手动**。只有用户发送消息、点击“思考”或“遐想”才开始一轮；Think 可指定主题或留空，Dream 不要求主题。打开页面、刷新、重连、Agent 重启、空闲计时及上一轮结束都不启动下一轮。一次操作内仍可按预算进行多次模型调用、召回与自判，无需逐步点击；完成、取消或失败后等待下一次显式操作。刷新只同步已有活动与记录，不派发模型计算；未知结果仅由用户以原命令 ID 显式重试，取消不回滚已经提交的认识。UI 常显“手动模式”和启动说明，当前不提供自动模式开关，后端拒绝 `autonomyEnabled: true`。这是当前产品策略，不是由旧 Dream 限制产生的临时缺陷；以后完善后再单独交付自主触发，不因升级静默开启。自动化免去逐轮点击，不取消停止入口或行为/数据授权边界。
-- **能力与模型边界**：四个内置只读认知方法，目录 search/view 后加载，没有真实文件 Skill／VP executor／外部写操作。每次 episode 最多四次调用、120 秒；后续模型可自主选自最多八个已配置原生模型，effort 仅在 `YEAFT_THINKING_V1=1` 且模型元数据支持时启用。不是万级能力装配的最终实现。
+- **能力与模型边界**：四个内置只读认知方法，目录 search/view 后加载，没有真实文件 Skill／VP executor／外部写操作。每次 episode 最多四次调用、120 秒；后续模型可自主选自最多八个已配置原生模型，effort 仅在 `YEAFT_THINKING_V1=1`、模型元数据支持且实际请求不突破本轮输出预留时可选。当前输出预留为模型上限与 4096 token 中较小者；Anthropic manual thinking 会扩大 `max_tokens` 的组合不进入可选目录，adaptive / Responses 在预算内仍可选。不是万级能力装配的最终实现。
 - **未实现**：自主空闲唤醒、事件 Connector、并行多视角、外部 VP 委派、场景快捷方式学习、语义检索、数据删除/撤权控制台、Rust 身体和跨设备迁移。手动 Dream 是新认知契约中的遐想活动入口，不等于完整自主 Dream 已完成。不要用本实验处理依赖未实现撤权/删除治理的敏感数据。
 - **配置**：只从 Agent 进程环境读取 `YEAFT_PERSON_MONGODB_URI` 与可选 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`）；原生模型来自当前实例 `config.json`。需要支持事务的 MongoDB replica set / sharded deployment；不自动安装、不开机连接、不做文件 fallback、不自动重启已有服务。建议使用隔离实例、专用库、最小权限凭据、认证/TLS 与备份。
 - **验证边界**：测试覆盖真实 MongoDB 事务、进程竞争、取消、重启恢复和浏览器→Server→Agent→数据库链路；推理使用脚本化 adapter，不代表真实模型认知质量已验证。所有 accepted 记录完整保存，超预算输出明确标记不完整/拒绝；不保存或伪造 provider 隐藏思维链。
+
+## 当前代码工作流：一张图看懂
+
+以下描述的是**已实现的手动认知路径**，不是后文的完整目标架构。阅读图中的 1–9 即可理解一轮如何运行；[打开大图](/images/digital-person-manual-flow.svg)。
+
+![数字人手动认知工作流：人工触发，经鉴权、MongoDB 准入、上下文组装、模型调用与提案校验，可继续思考或原子提交；页面只读同步消息、思考记录与独立调试日志。](/images/digital-person-manual-flow.svg)
+
+### 每一步实际做什么
+
+| 步骤 | 当前实现 | 关键边界 |
+| --- | --- | --- |
+| 1. 人决定开始 | 发送消息、点击 Think 或 Dream，生成稳定命令 ID | Think 可有主题或留空；Dream 不带主题。打开、空闲、重连都不会开始计算 |
+| 2. 鉴权与中继 | Browser → Server → 指定 Agent；Server 提供认证 owner，校验 Agent 访问权及请求关联 | Server 不执行推理；不创建隐藏 Session、WorkItem 或 Coordinator |
+| 3. 准入与持久化 | MongoDB 去重、忙检查，创建 episode（一轮活动）、租约与版本保护；仅 Send 写用户消息 | 同一命令重试不重复启动；未知结果只能人工以原 ID 重试。过期活动标记中断，不自动续跑 |
+| 4. 激活短期记忆 | Soul、当前状态、触发、模型/能力目录摘要，以及有界历史消息和 Concept 进入 context | 初始候选窗口为最近 12 条消息、最多 12 个关注 Concept + 12 个近期 Concept，再按预算省略整条记录；不是把数据库全部塞进去 |
+| 5. 认知调用 | 第一次采用有效的上次已接受选择，否则采用配置默认模型；后续调用采用数字人指定的模型/effort | 调用前校验可用性和预算、记录输入与选择；默认最多 4 次调用、120 秒，支持的模型最多 8 个 |
+| 6. 保存与校验 | 保存公开输出，解析结构化 proposal，检查格式、实际读取过的来源、Concept 修订、想象标记及后续模型选择 | 代码只能验证来源关系，不能证明语义真实；无效提案失败结束，当前没有自动修复重试回路 |
+| 7. 继续想 | `next` 指定下一模型、effort、原因和可选能力；能力结果与上一提案进入下一次 context | 中间提案只是候选，不覆盖当前认识；能力发现、查看、使用各占后续推进机会，受同一调用预算约束 |
+| 8. 接受当前认识 | `next: null` 后，在一个 MongoDB 事务中提交 Concept/revision、state、commit、可选回复与完成事件 | 必须仍拥有当前租约及正确状态/控制版本；取消、失联 worker 或旧版本不能提交。取消不回滚已完成的提交 |
+| 9. 展示与等待 | 页面运行中轮询 snapshot/记录，终态同步后停止；消息、思考记录、调试日志分别投影 | 思考记录展示应用层实际产物，不是 provider 隐藏推理。已分页历史保留并提示需刷新；终态前发出的旧读取不能冒充最新同步 |
+
+### “想”、能力和记忆如何连接
+
+- **想不等于一次检索。** 模型可对 context 中已有经历进行整理、联想、反例检查并提出新的 Concept；不足时选择 Recall，把长期记忆的一页带入下一次短期 context。每次调用的公开想法、自判与结果都可追溯。
+- **当前能力是最小只读实现。** `Think` 是内在方法，无需工具调用；`catalog.search` → `catalog.view` → 使用，可找到 `Recall`、`Skill.reconsider`、`Skill.associate`。Recall 是本 Person 的消息/Concept 字面搜索；另外两项返回方法说明，不调用外部执行者。
+- **还不是完整动态 tool set。** 当前 provider 请求不携带原生工具 schema，而是模型在结构化 `next.capability` 中提出能力调用，由 runtime 执行。通用 Skills 装配、外部 VP executor 与并行视角仍未接入，不能把上图理解成它们已经可用。
+- **数据库区分“想到过”与“现在接受”。** 消息、活动与调用记录构成长期经历；经过提交的 state/Concept 才是当前接受的认识。失败、超时、预算耗尽不提交候选。数据库故障时没有文件兜底，未成功归档的内容不能保证重建；下一次访问恢复过期活动为 interrupted。
+
+源码入口：`web/stores/helpers/digital-person.js` → `server/handlers/client-person.js` → `agent/yeaft/person/bridge.js` → `agent/yeaft/person/service.js`；认知循环、存储、能力与模型适配分别见该目录的 `runtime.js`、`repository.js`、`capabilities.js`、`provider.js`。消息式思考记录的白名单投影见 `web/stores/helpers/person-thoughts.js`。
 
 ## 阅读地图
 

@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadConfig } from '../../../../agent/yeaft/config.js';
+import { AdapterRouter } from '../../../../agent/yeaft/llm/router.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { LIMITS, validateProposal } from '../../../../agent/yeaft/person/contracts.js';
 import { abortable, collectOutput, createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
@@ -8,7 +13,39 @@ import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
 import { config, finalProposal } from './fixtures.js';
 const validation = { stateVersion: 0, sourceRefs: new Set(['message:m:1']), concepts: new Map(), catalog: [{ id: 'test/first', efforts: ['low'] }] };
 
+const tempDirs = [];
+function configuredModels(value) {
+  const dir = mkdtempSync(join(tmpdir(), 'yeaft-person-provider-'));
+  tempDirs.push(dir);
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(value));
+  return loadConfig({ dir });
+}
+function requestContext(provider, selection = provider.defaultSelection) {
+  return assembleContext({ provider, selection, remainingCalls: 1,
+    snapshot: { person: { id: 'p', name: 'Person', soul: 'Honesty.', soulRevision: 1 }, state: { version: 0 }, messages: [], concepts: [] },
+    episode: { id: 'e', kind: 'think', text: '' } });
+}
+function stubProviderFetch() {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async url => new Response(JSON.stringify(
+    url.endsWith('/messages')
+      ? { content: [{ type: 'text', text: '{}' }], stop_reason: 'end_turn', usage: {} }
+      : { output: [{ type: 'message', content: [{ type: 'output_text', text: '{}' }] }], status: 'completed', usage: {} }
+  ), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+}
+async function dispatch(provider, selection = provider.defaultSelection) {
+  const context = requestContext(provider, selection);
+  let decision;
+  await collectOutput(provider.adapter, { model: selection.model, effort: selection.effort ?? undefined, effortSource: 'auto',
+    system: context.system, messages: context.messages, maxTokens: context.maxTokens, signal: new AbortController().signal },
+  value => { decision = value; });
+  return { context, decision };
+}
+
 describe('digital Person strict contracts', () => {
+  afterEach(() => {
+    vi.restoreAllMocks(); vi.unstubAllEnvs();
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
   it('is inert and safe without configured MongoDB', async () => {
     const service = createPersonService();
     expect(await service.request({ ownerId: 'owner', op: 'status' })).toMatchObject({ configured: false, storageReady: false });
@@ -105,6 +142,108 @@ describe('digital Person strict contracts', () => {
     expect(provider.catalog.map(m => m.efforts)).toEqual([[], []]);
     const limited = await createPersonProvider({ config, adapter: {}, allowedModels: ['test/second'], effortEnabled: true });
     expect(limited.catalog).toHaveLength(1); expect(limited.catalog[0].efforts).toContain('high');
+  });
+  it.each([
+    ['test/second', 'test/second'], ['second', 'test/second'],
+    ['global:retired/second', 'test/second'],
+  ])('resolves configured default %s through normalized config', async (primaryModel, expected) => {
+    const normalized = configuredModels({ providers: config.providers, primaryModel });
+    const before = normalized.availableModels.map(m => m.ref);
+    const provider = await createPersonProvider({ config: normalized, adapter: {} });
+    expect(provider.defaultSelection).toEqual({ model: expected, effort: null });
+    expect(provider.catalog[0].id).toBe(expected);
+    expect(normalized.availableModels.map(m => m.ref)).toEqual(before);
+  });
+  it('uses config.model when primaryModel is absent', async () => {
+    const provider = await createPersonProvider({ config: { ...config, primaryModel: null, model: 'second' }, adapter: {} });
+    expect(provider.defaultSelection).toEqual({ model: 'test/second', effort: null });
+  });
+  it.each([
+    ['shared', 'one/shared'], ['two/shared', 'two/shared'],
+  ])('preserves router ownership for duplicate IDs and provider rows: %s', async (primaryModel, expected) => {
+    const normalized = configuredModels({ primaryModel, providers: [
+      { name: 'one', models: ['first', 'shared', 'shared'] },
+      { name: 'two', models: ['shared'] }, { name: 'one', models: ['shared', 'last'] },
+    ] });
+    const provider = await createPersonProvider({ config: normalized, adapter: {} });
+    expect(provider.defaultSelection.model).toBe(expected);
+    expect(provider.catalog.map(m => m.id).sort()).toEqual(['one/first', 'one/last', 'one/shared', 'two/shared']);
+    const limited = await createPersonProvider({ config: normalized, adapter: {}, allowedModels: ['two/shared'] });
+    expect(limited.catalog.map(m => m.id)).toEqual(['two/shared']);
+  });
+  it.each(['model9', 'test/model9'])('prioritizes %s before the eight-model limit', async primaryModel => {
+    const normalized = configuredModels({ primaryModel, providers: [{ name: 'test', models: Array.from({ length: 10 }, (_, i) => `model${i}`) }] });
+    const provider = await createPersonProvider({ config: normalized, adapter: {} });
+    expect(provider.catalog.map(m => m.id)).toEqual(['test/model9', ...Array.from({ length: 7 }, (_, i) => `test/model${i}`)]);
+    expect(provider.defaultSelection).toEqual({ model: 'test/model9', effort: null });
+  });
+  it.each([
+    ['claude-sonnet-4-20250514', 4096], ['claude-sonnet-4-20250514', 2048], ['manual-alias', 4096],
+  ])('rejects %s manual thinking that expands the %i output reserve before dispatch', async (id, maxOutput) => {
+    vi.stubEnv('YEAFT_THINKING_V1', '1');
+    const fetchMock = stubProviderFetch();
+    const normalized = configuredModels({ primaryModel: `test/${id}`, providers: [{
+      name: 'test', apiKey: 'test-only', baseUrl: 'https://person.invalid', protocol: 'anthropic',
+      models: [{ id, contextWindow: 16384, maxOutput, ...(id === 'manual-alias' ? { supportsEffort: true } : {}) }],
+    }] });
+    const provider = await createPersonProvider({ config: normalized });
+    expect(provider.adapter).toBeInstanceOf(AdapterRouter);
+    expect(normalized.availableModels[0].effortOptions).toEqual(['low', 'medium', 'high']);
+    expect(provider.catalog[0]).toMatchObject({ maxOutput, efforts: [] });
+    for (const effort of normalized.availableModels[0].effortOptions) {
+      expect(() => requestContext(provider, { model: provider.defaultSelection.model, effort })).toThrow(/catalog/);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    const { context, decision } = await dispatch(provider);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.max_tokens).toBe(maxOutput);
+    expect(body.thinking).toBeUndefined();
+    expect(context.manifest.outputTokensReserved).toBe(body.max_tokens);
+    expect(context.manifest.contextBudgetBytes + body.max_tokens + 1024).toBe(16384);
+    expect(decision).toEqual({ effective: null, wireMode: 'omitted', thinkingEnabled: false });
+    // The exported preflight must not change ordinary native engine behavior.
+    await provider.adapter.call({ model: provider.defaultSelection.model, system: 's', messages: [{ role: 'user', content: 'hi' }], maxTokens: maxOutput, effort: 'high' });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ max_tokens: 17408, thinking: { type: 'enabled', budget_tokens: 16384 } });
+  });
+  it.each([
+    ['claude-opus-4-7', 'anthropic', undefined, ['low', 'medium', 'high', 'xhigh', 'max']],
+    ['adaptive-alias', 'anthropic', 'anthropic-adaptive', ['low', 'high']],
+    ['claude-sonnet-4-20250514', 'anthropic', 'anthropic-adaptive', ['low', 'high']],
+    ['gpt-5.5', 'openai-responses', undefined, ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']],
+  ])('keeps %s effort, null defaults and disabled flags within the wire reserve', async (id, protocol, thinkingProtocol, efforts) => {
+    const fetchMock = stubProviderFetch();
+    const normalized = configuredModels({ providers: [{ name: 'test', apiKey: 'test-only', baseUrl: 'https://person.invalid', protocol,
+      models: [{ id, contextWindow: 16384, maxOutput: 2048, ...(thinkingProtocol ? { thinkingProtocol, effortOptions: efforts } : {}) }],
+    }] });
+    for (const flag of ['1', '0']) {
+      vi.stubEnv('YEAFT_THINKING_V1', flag);
+      const provider = await createPersonProvider({ config: normalized });
+      expect(provider.catalog[0].efforts).toEqual(flag === '1' ? efforts : []);
+      expect(provider.defaultSelection.effort).toBeNull();
+      if (flag === '0') expect(() => requestContext(provider, { ...provider.defaultSelection, effort: 'high' })).toThrow(/catalog/);
+      for (const effort of [null, ...provider.catalog[0].efforts]) {
+        const { context, decision } = await dispatch(provider, { model: provider.defaultSelection.model, effort });
+        const body = JSON.parse(fetchMock.mock.calls.at(-1)[1].body);
+        const maxTokens = protocol === 'anthropic' ? body.max_tokens : body.max_output_tokens;
+        expect(maxTokens).toBe(2048);
+        expect(context.maxTokens).toBe(maxTokens);
+        expect(context.manifest.outputTokensReserved).toBe(maxTokens);
+        expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
+        expect(context.manifest.contextBudgetBytes + maxTokens + 1024).toBe(16384);
+        if (effort && protocol === 'anthropic') {
+          expect(body.thinking).toEqual({ type: 'adaptive' });
+          expect(body.output_config).toEqual({ effort });
+          expect(decision).toEqual({ effective: effort, wireMode: 'adaptive', thinkingEnabled: true });
+        } else if (effort) {
+          expect(body.reasoning).toEqual({ effort });
+          expect(decision).toEqual({ effective: effort, wireMode: 'reasoning-effort', thinkingEnabled: true });
+        } else {
+          expect(body.thinking).toBeUndefined(); expect(body.reasoning).toBeUndefined(); expect(body.output_config).toBeUndefined();
+          expect(decision).toMatchObject({ wireMode: 'omitted', thinkingEnabled: false });
+          expect(decision.effective).toBe(id === 'claude-opus-4-7' ? 'high' : null);
+        }
+      }
+    }
   });
   it('bounds short-term copies without mutating complete historical records', async () => {
     const provider = await createPersonProvider({ config, adapter: {} });

@@ -1,6 +1,7 @@
 import { loadConfig } from '../config.js';
 import { createLLMAdapter } from '../llm/adapter.js';
-import { resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
+import { applyAnthropicThinking } from '../llm/anthropic.js';
+import { normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 import { bytes, digest, fail, LIMITS, PersonError } from './contracts.js';
 
@@ -8,14 +9,31 @@ import { bytes, digest, fail, LIMITS, PersonError } from './contracts.js';
 export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1' }) {
   const config = suppliedConfig || loadConfig({ dir: yeaftDir });
   if (!config.providers?.length && !suppliedAdapter) fail('MODEL_UNAVAILABLE');
-  const available = (config.availableModels || []).filter(m => !allowedModels || allowedModels.includes(m.ref || m.id));
-  const defaultRef = config.primaryModel || config.model;
-  available.sort((a, b) => Number((b.ref || b.id) === defaultRef) - Number((a.ref || a.id) === defaultRef));
-  const catalog = available.slice(0, 8).map(m => ({
-    id: m.ref || m.id, efforts: effortEnabled ? (m.effortOptions || []).filter(e => ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(e)) : [],
-    contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })),
-    maxOutput: Math.min(4096, Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m }))),
-  })).filter(m => typeof m.id === 'string' && m.id.length <= 256 && m.contextWindow > m.maxOutput + 1024 && m.maxOutput >= 256);
+  const models = config.availableModels || [];
+  const requestedDefault = config.primaryModel || config.model;
+  // Match router ownership: exact qualified ref first; bare IDs use the first
+  // configured provider. Resolve before allowlisting, sorting or truncating.
+  const defaultModel = models.find(m => (m.ref || m.id) === requestedDefault)
+    || models.find(m => m.id === requestedDefault);
+  const defaultRef = defaultModel?.ref || defaultModel?.id;
+  const available = models.filter(m => !allowedModels || allowedModels.includes(m.ref || m.id));
+  const catalog = available.map(m => {
+    const maxOutput = Math.min(4096, Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m })));
+    const effortContext = { ...m, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
+    const efforts = effortEnabled ? (m.effortOptions || []).filter(e => {
+      if (!normalizeEffort(e)) return false;
+      // Manual thinking can silently expand native max_tokens. Use the exact
+      // adapter rules to admit only combinations that fit this fixed reserve;
+      // adaptive and Responses effort do not require a larger output budget.
+      const body = { max_tokens: maxOutput };
+      applyAnthropicThinking(body, m.id, e, effortContext);
+      return body.max_tokens === maxOutput;
+    }) : [];
+    return { id: m.ref || m.id, efforts, maxOutput,
+      contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };
+  }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && m.contextWindow > m.maxOutput + 1024 && m.maxOutput >= 256);
+  catalog.sort((a, b) => Number(b.id === defaultRef) - Number(a.id === defaultRef));
+  catalog.splice(8);
   if (!catalog.length) fail('MODEL_UNAVAILABLE');
   const adapter = suppliedAdapter || await createLLMAdapter(config);
   return { adapter, catalog, catalogRevision: digest(catalog), defaultSelection: { model: catalog[0].id, effort: null }, effortEnabled };

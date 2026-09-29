@@ -64,6 +64,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let snapshotRequest = 0;
   let messageWindowVersion = 0;
   let tracePaged = false;
+  let traceRefreshVersion = 0;
+  let queuedTraceRefresh = null;
   let disposed = false;
   const owned = new Set();
   const current = (g = generation) => !disposed && g === generation && activeScope === scope();
@@ -114,6 +116,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     agentId = nextAgentId;
     activeScope = scope();
     tracePaged = false;
+    traceRefreshVersion = 0;
+    queuedTraceRefresh = null;
     Object.assign(state, personState(), { retryCommand: outbox().get(agentId) || null });
   }
 
@@ -146,12 +150,25 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.episodeId = data.episodeId || null;
   }
 
-  async function page(kind, more = false) {
+  async function page(kind, more = false, { preserveHistory = false } = {}) {
     const g = generation;
+    if (!current(g)) return;
     const loadingKey = kind === 'messages' ? 'messagesLoading' : 'tracesLoading';
     const cursorKey = kind === 'messages' ? 'messageCursor' : 'traceCursor';
+    if (kind === 'traces' && !more) {
+      traceRefreshVersion += 1;
+      state.tracesStale = true;
+      if (state.tracesLoading) {
+        // Coalesce newer demands, but never let an automatic poll override an
+        // explicit refresh. An in-flight pre-terminal read cannot satisfy them.
+        if (!queuedTraceRefresh || !preserveHistory) queuedTraceRefresh = { preserveHistory };
+        return;
+      }
+      if (preserveHistory && tracePaged) return;
+    }
     if (state[loadingKey] || (more && state[cursorKey] == null)) return;
     state[loadingKey] = true;
+    const traceVersion = traceRefreshVersion;
     const windowVersion = kind === 'messages' && !more ? ++messageWindowVersion : messageWindowVersion;
     try {
       const data = await request(kind, { cursor: more ? state[cursorKey] : null, limit: PAGE_SIZE });
@@ -160,12 +177,22 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       state[cursorKey] = data.nextCursor ?? null;
       if (kind === 'traces') {
         tracePaged = more;
-        state.tracesStale = false;
+        // Older pages extend history, not our knowledge of the latest tail.
+        if (!more && traceVersion === traceRefreshVersion) state.tracesStale = false;
       }
     } catch (error) {
       if (current(g)) showError(error);
     } finally {
-      if (current(g)) state[loadingKey] = false;
+      if (current(g)) {
+        state[loadingKey] = false;
+        if (kind === 'traces' && queuedTraceRefresh) {
+          const queued = queuedTraceRefresh;
+          queuedTraceRefresh = null;
+          // Consume once, even on failure. Recheck history after an older page
+          // settles so polling cannot silently replace newly paged records.
+          await page('traces', false, queued);
+        }
+      }
     }
   }
 
@@ -179,8 +206,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       try {
         await snapshot();
         if (!current(g)) return;
-        if (!tracePaged) await page('traces');
-        else state.tracesStale = true;
+        await page('traces', false, { preserveHistory: true });
       } catch (error) {
         if (current(g)) showError(error);
       } finally {
@@ -215,7 +241,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
 
-  async function refresh() {
+  async function refresh({ preserveHistory = false } = {}) {
     if (!state.person || state.modelReady === false || state.storageReady === false) return open(agentId);
     const g = generation;
     if (state.loading) return;
@@ -223,7 +249,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.error = null;
     try {
       await snapshot();
-      if (current(g)) await Promise.all([page('messages'), page('traces')]);
+      if (current(g)) await Promise.all([page('messages'), page('traces', false, { preserveHistory })]);
     } catch (error) {
       if (current(g)) showError(error);
     } finally {
@@ -278,7 +304,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.cancelPending = true;
     try {
       await request('cancel', { episodeId });
-      if (current(g)) await refresh();
+      if (current(g)) await refresh({ preserveHistory: true });
     } catch (error) {
       if (current(g)) showError(error);
     } finally {
