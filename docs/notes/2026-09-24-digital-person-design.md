@@ -45,7 +45,7 @@
 - **还不是完整动态 tool set。** 当前 provider 请求不携带原生工具 schema，而是模型在结构化 `next.capability` 中提出能力调用，由 runtime 执行。通用 Skills 装配、外部 VP executor 与并行视角仍未接入，不能把上图理解成它们已经可用。
 - **数据库区分“想到过”与“现在接受”。** 消息、活动与调用记录构成长期经历；经过提交的 state/Concept 才是当前接受的认识。失败、超时、预算耗尽不提交候选。数据库故障时没有文件兜底，未成功归档的内容不能保证重建；下一次访问恢复过期活动为 interrupted。
 
-源码入口：`web/stores/helpers/digital-person.js` → `server/handlers/client-person.js` → `agent/yeaft/person-bridge.js` → `agent/yeaft/person/service.js`；认知循环、存储、能力与模型适配分别见该目录的 `runtime.js`、`repository.js`、`capabilities.js`、`provider.js`。消息式思考记录的白名单投影见 `web/stores/helpers/person-thoughts.js`。
+源码入口：`web/stores/helpers/digital-person.js` → `server/handlers/client-person.js` → `agent/yeaft/person/bridge.js` → `agent/yeaft/person/service.js`；认知循环、存储、能力与模型适配分别见该目录的 `runtime.js`、`repository.js`、`capabilities.js`、`provider.js`。消息式思考记录的白名单投影见 `web/stores/helpers/person-thoughts.js`。
 
 ## 阅读地图
 
