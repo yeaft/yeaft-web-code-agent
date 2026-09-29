@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -295,6 +295,25 @@ describe('local Person recall (real SQLite, deterministic injected vectors)', ()
     await expect(memory.recall('alice', { query: 'literal' })).rejects.toMatchObject({ code: 'RECALL_BUSY' });
     release({ items: [], nextCursor: null });
     expect((await first).retrieval.mode).toBe('literal');
+  });
+
+  it('releases the queue if the episode is cancelled during a fallback read', async () => {
+    const { memory, dir } = await setup({ maxQueue: 1 });
+    await writeFile(path.join(dir, 'person'), 'not a directory');
+    let entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    memory.literalRecall = () => { entered(); return new Promise(resolve => { release = resolve; }); };
+    const controller = new AbortController();
+    const recall = memory.recall('alice', { query: 'literal' }, { signal: controller.signal });
+    const rejected = expect(recall).rejects.toMatchObject({ code: 'RECALL_CANCELLED' });
+    await started;
+    controller.abort();
+    await rejected;
+    release({ items: [], nextCursor: 'late-cursor' });
+    await vi.waitFor(() => expect(memory.active).toBeNull());
+    expect(memory.snapshots.size).toBe(0);
+    memory.literalRecall = async () => ({ items: [], nextCursor: null });
+    expect((await memory.recall('alice', { query: 'literal' })).retrieval.mode).toBe('literal');
   });
 
   it('uses literal authoritative fallback with pagination if the derived index fails', async () => {

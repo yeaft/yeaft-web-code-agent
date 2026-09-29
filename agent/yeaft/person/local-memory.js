@@ -66,7 +66,7 @@ export class LocalPersonMemory {
       if (['INVALID_CURSOR', 'MEMORY_CLOSED', 'RECALL_BUSY', 'RECALL_CANCELLED'].includes(error.code)) throw error;
       // A failed continuation must never silently restart ranking or expose a foreign cursor.
       if (cursor) throw fault('RECALL_RETRY');
-      return this._literal(request, error.code || 'INDEX_FAILURE');
+      return this._literal(request, error.code || 'INDEX_FAILURE', undefined, signal);
     }, signal);
   }
 
@@ -239,19 +239,26 @@ export class LocalPersonMemory {
     const nextCursor = position < snapshot.refs.length ? (id ? `lm:${id}:${position}` : this._save(snapshot, position)) : null;
     return { items, nextCursor, retrieval: { ...snapshot.retrieval, snapshot: true, expiresInMs: this.snapshotTtlMs } };
   }
-  async _literal(request, reason, token) {
+  async _literal(request, reason, token, signal) {
     if (this.closed) throw fault('MEMORY_CLOSED');
-    let timer;
+    if (signal?.aborted) throw fault('RECALL_CANCELLED');
+    let timer, onAbort;
     try {
       const result = await Promise.race([
         this.literalRecall(request.ownerId, { kind: request.kind, query: request.query, cursor: request.cursor, limit: request.limit }),
         new Promise((_, reject) => { timer = setTimeout(() => reject(fault('RECALL_TIMEOUT')), Math.min(this.timeoutMs, 10000)); }),
+        new Promise((_, reject) => {
+          onAbort = () => reject(fault('RECALL_CANCELLED'));
+          signal?.addEventListener('abort', onAbort, { once: true });
+          if (signal?.aborted) onAbort();
+        }),
       ]);
       if (token) this._alive(token);
+      if (signal?.aborted) throw fault('RECALL_CANCELLED');
       if (this.closed) throw fault('MEMORY_CLOSED');
       const nextCursor = result.nextCursor ? this._save({ ...request, literal: true, rawCursor: result.nextCursor, reason }, 0) : null;
       return { ...result, nextCursor, retrieval: { mode: 'literal', semantic: false, degraded: true, reasons: [reason], bounded: true, snapshot: false } };
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
   }
   async _stopWorker(graceful = true) {
     const worker = this.worker;
