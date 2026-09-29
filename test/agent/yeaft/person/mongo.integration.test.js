@@ -33,8 +33,10 @@ suite('Person real MongoDB replica-set integration', () => {
     const service = createPersonService({ uri, dbName, namespace, MongoClient, config, adapter, effortEnabled: true, ...more });
     services.push(service); return service;
   };
-  const repo = namespace => {
-    const repository = new MongoPersonRepository({ uri, dbName, namespace, MongoClient, leaseMs: 400 });
+  const repo = (namespace, leaseMs = 10_000) => {
+    // Only expiry tests use a short lease. Unrelated transaction/cancel tests
+    // must not lose ownership merely because a shared CI host pauses for 400ms.
+    const repository = new MongoPersonRepository({ uri, dbName, namespace, MongoClient, leaseMs });
     repositories.push(repository); return repository;
   };
   const waitIdle = async service => {
@@ -287,7 +289,7 @@ suite('Person real MongoDB replica-set integration', () => {
   });
 
   it('bounds the cancelled-call drain right and makes crash/takeover output explicitly unavailable', async () => {
-    const r = repo('terminal-right'); await r.open('alice');
+    const r = repo('terminal-right', 400); await r.open('alice');
     const admit = id => r.admit('alice', { kind: 'think', text: '', clientMessageId: id, workerId: 'original', budget: { calls: 1, timeoutMs: 1000 } });
     const start = (episode, callId) => r.startCall(episode, { callId, requested: { model: 'test/first', effort: null }, effective: { model: 'test/first', effort: null } });
     const one = await admit('one'); await start(one.episode, 'one-call'); await r.cancel('alice');
@@ -330,7 +332,7 @@ suite('Person real MongoDB replica-set integration', () => {
   });
 
   it('uses database-time leases, epoch takeover fences and transaction rollback of every state write', async () => {
-    const first = repo('fences'), second = repo('fences');
+    const first = repo('fences', 400), second = repo('fences', 400);
     await first.open('alice');
     const one = await first.admit('alice', { kind: 'think', text: '', clientMessageId: 'one', workerId: 'worker-a', budget: { calls: 1, timeoutMs: 1000 } });
     expect(await second.recover('alice')).toBe(false);
