@@ -45,6 +45,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/person/sqlite.integration.test.js',
   'test/agent/yeaft/person/sqlite-service.test.js',
   'test/person-local-memory.test.js',
+  'test/person-local-memory-cache.test.js',
   'test/server/person-relay.test.js',
   'test/agent/yeaft/engine.test.js',
   'test/agent/yeaft/debug-trace-memory.test.js',

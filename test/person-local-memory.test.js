@@ -41,7 +41,21 @@ afterEach(async () => {
   resources.length = 0;
 });
 
-describe('local Person recall (real SQLite, deterministic injected vectors)', () => {
+const probe = new DatabaseSync(':memory:');
+let hasFts = false;
+try { probe.exec('CREATE VIRTUAL TABLE f USING fts5(t)'); hasFts = true; } catch {} finally { probe.close(); }
+
+it.skipIf(hasFts)('explicitly degrades without FTS5 on older supported Node builds, without starting embedding', async () => {
+  const { memory, repository } = await setup();
+  repository.put('alice', 'memory', 'remember this literal text');
+  for (let i = 0; i < 2; i++) {
+    const result = await memory.recall('alice', { query: 'literal text' });
+    expect(result.items[0].id).toBe('memory');
+    expect(result.retrieval).toMatchObject({ mode: 'literal', semantic: false, degraded: true, reasons: ['FTS_UNAVAILABLE'] });
+  }
+});
+
+describe.skipIf(!hasFts)('local Person recall (real SQLite, deterministic injected vectors)', () => {
   it('is lazy, preserves browse, and performs hybrid semantic retrieval without lexical overlap', async () => {
     const { memory, repository, dir } = await setup();
     repository.put('alice', 'travel', 'My automobile needs servicing');

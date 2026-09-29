@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, readdir } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
@@ -7,6 +8,9 @@ import { LocalPersonMemory } from '../../../../agent/yeaft/person/local-memory.j
 import { bindPersonStorage } from '../../../../agent/yeaft/person/storage.js';
 import { config, finalProposal } from './fixtures.js';
 
+const probe = new DatabaseSync(':memory:');
+let hasFts = false;
+try { probe.exec('CREATE VIRTUAL TABLE f USING fts5(t)'); hasFts = true; } catch {} finally { probe.close(); }
 const services = [], directories = [];
 const call = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
 async function directory() { const dir = await mkdtemp(join(tmpdir(), 'person-local-service-')); directories.push(dir); return dir; }
@@ -72,7 +76,7 @@ describe('SQLite is the instance-local Person default', () => {
       const p = final(input);
       const n = seen.length;
       if (n === 1) p.next = { model: 'test/first', effort: null, reason: 'Inspect recall.', capability: { id: 'catalog.view', args: { id: 'Recall' } } };
-      if (n === 2) p.next = { model: 'test/first', effort: null, reason: 'Find prior words.', capability: { id: 'Recall', args: { kind: 'messages', query: '长期 好奇心', limit: 2 } } };
+      if (n === 2) p.next = { model: 'test/first', effort: null, reason: 'Find prior words.', capability: { id: 'Recall', args: { kind: 'messages', query: hasFts ? '长期 好奇心' : '长期', limit: 2 } } };
       return p;
     });
     const service = create(dir, { adapter });
@@ -89,7 +93,7 @@ describe('SQLite is the instance-local Person default', () => {
     expect((await call(service, 'messages', {}, 'bob')).items).toEqual([]);
   });
 
-  it.each(['cancel', 'timeout'])('stops supervised recall when the owning episode ends by %s', async mode => {
+  it.skipIf(!hasFts).each(['cancel', 'timeout'])('stops supervised recall when the owning episode ends by %s', async mode => {
     const dir = await directory();
     let memory, searching = false, modelCalls = 0, signal;
     const originalRecall = LocalPersonMemory.prototype.recall;

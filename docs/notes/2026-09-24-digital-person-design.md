@@ -789,6 +789,9 @@ MongoDB 兼容路径保留 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`）�
 - 关键词路采用适合中英文的文本处理与 FTS5；语义路采用归一化 embedding 的 cosine 排序，再以 reciprocal rank fusion（RRF）融合。词法命中、向量命中与融合排名是检索信号，不证明结论为真。
 - 向量在有界候选集内**精确扫描**，不是 ANN。候选上限意味着可能漏召回，不能写成全库无损检索或百万条级性能承诺。扩大规模前需另测耗时、内存、索引追平与 top-k 质量。
 - 默认模型为固定 revision 的 **multilingual-e5-small q8 ONNX**，使用 `@huggingface/transformers` CPU；不以 `main` 浮动版本替代 pin。缓存位于实例 `<yeaftDir>/person/models`，仅首次显式非空 Recall 才可懒加载／下载。启动、页面刷新、空 Recall、普通认知写入不触发下载。
+- 推荐 Node 24 的完整 FTS5 支持；早期受支持 Node 22 的 SQLite build 若未编入 FTS5，权威仍可用，Recall 明确以 `FTS_UNAVAILABLE` 降为字面查询，不启动 embedding。不能把此模式称作混合检索。
+- 下载按固定 revision 的大小与 SHA-256 校验，唯一临时文件写完并 fsync 后原子发布；完整缓存可离线复用，损坏缓存允许下次显式 Recall 修复。同实例并发发布不互删有效文件；SIGKILL 遗留 `.partial` 文件只忽略、不自动删除，避免误删并发写入。取消/episode 超时沿能力调用传至 Recall 队列，移除排队请求并终止受管模型进程，不转入降级查询。
+- 推荐安装器、CI 及 Agent 镜像使用 `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` 跳过额外 CUDA 包；直接 npm 安装需显式设置该变量，不能以禁用 lifecycle scripts 代替。npm/原生依赖下载与首次 Recall 模型下载是不同阶段。
 - `YEAFT_PERSON_EMBEDDING=off` 禁用 embedding；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止联网下载，已缓存模型仍可运行。首次缺模型、下载失败、native runtime 不可用或索引故障均需明确反馈实际模式和降级原因；可用时退回关键词／权威有界读取，不伪造向量或把“语义不可用”描述为“没有相关记忆”。这是**检索降级**，不是换一个权威后端。
 - Embedding inference 与 search 在本机，不向 embedding API 上传正文；模型文件下载会联系 Hugging Face。认知 LLM 仍使用配置的 provider，召回结果进入其 context 后可能出站，不能因此宣称全部离线或全部数据不离机。
 - 索引和向量也可能泄露内容，须遵守同等文件权限、scope 和保留策略；模型或 chunk 算法版本改变可重建，不改原始记忆。删除/撤权的完整治理仍按 11.7、21.4 的未来契约验收，不能因为索引可重建就称其已实现。

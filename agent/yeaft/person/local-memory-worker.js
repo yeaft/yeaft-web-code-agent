@@ -40,6 +40,15 @@ function open() {
   if (db) return;
   mkdirSync(path.join(yeaftDir, 'person'), { recursive: true, mode: 0o700 });
   db = new DatabaseSync(path.join(yeaftDir, 'person', 'recall.db'));
+  try {
+    // Some supported early Node 22 builds omit FTS5. Keep authority usable and
+    // report an explicit literal-only fallback; never start a model on this path.
+    db.exec('CREATE VIRTUAL TABLE temp.person_fts_probe USING fts5(terms); DROP TABLE temp.person_fts_probe;');
+  } catch (error) {
+    db.close(); db = null;
+    if (/no such module: fts5/i.test(error.message)) error.code = 'FTS_UNAVAILABLE';
+    throw error;
+  }
   db.exec(`PRAGMA busy_timeout=2000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
     CREATE TABLE IF NOT EXISTS spaces(namespace TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS checkpoints(namespace TEXT NOT NULL, owner TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(namespace,owner));
