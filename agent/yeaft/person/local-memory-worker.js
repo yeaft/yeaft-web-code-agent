@@ -1,11 +1,22 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { parentPort, workerData } from 'node:worker_threads';
 import { CHUNK_SIZE, CHUNK_OVERLAP, MODEL_FINGERPRINT, VECTOR_DIMENSION } from './local-memory-embedding.js';
 
-let yeaftDir, namespace, embedding, embeddingModule, maxVectorChunks, maxEmbedChunksPerRecall, candidateLimit, fingerprint;
+const { yeaftDir, namespace, embedding = {}, embeddingModule, maxVectorChunks, maxEmbedChunksPerRecall, candidateLimit } = workerData;
+const fingerprint = embeddingModule ? `${MODEL_FINGERPRINT}:injected:${embeddingModule}:${embedding.fingerprint ?? 'test'}` : MODEL_FINGERPRINT;
 let db;
 let embedder;
+let embeddingId = 0;
+const embeddingRequests = new Map();
+function hostEmbedding(texts, type) {
+  return new Promise((resolve, reject) => {
+    const id = ++embeddingId;
+    embeddingRequests.set(id, { resolve, reject });
+    parentPort.postMessage({ embeddingRequest: { id, texts, type } });
+  });
+}
 const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
 
 function tokens(text) {
@@ -93,11 +104,13 @@ function encode(v) {
   return blob;
 }
 async function embed(texts, type) {
-  if (!embedder) {
-    const module = await import(embeddingModule || './local-memory-embedding.js');
+  // Trusted deterministic fixtures run in this thread. Production inference runs
+  // in its disposable host process to avoid ONNX addon thread reload failures.
+  if (embeddingModule && !embedder) {
+    const module = await import(embeddingModule);
     embedder = module.createEmbedding({ ...embedding, yeaftDir });
   }
-  const results = await embedder.embed(texts, type);
+  const results = embedder ? await embedder.embed(texts, type) : await hostEmbedding(texts, type);
   if (!Array.isArray(results) || results.length !== texts.length) throw new Error('invalid_embedding');
   return results.map(vector);
 }
@@ -189,19 +202,21 @@ async function dispatch({ op, owner, ...args }) {
 }
 // The controller issues one RPC at a time; serialize defensively inside the worker too.
 let chain = Promise.resolve();
-process.on('message', message => {
-  if (message.init) {
-    ({ yeaftDir, namespace, embedding = {}, embeddingModule, maxVectorChunks, maxEmbedChunksPerRecall, candidateLimit } = message.init);
-    fingerprint = embeddingModule ? `${MODEL_FINGERPRINT}:injected:${embeddingModule}:${embedding.fingerprint ?? 'test'}` : MODEL_FINGERPRINT;
+parentPort.on('message', message => {
+  // Results must bypass the serialized RPC chain, whose search is awaiting them.
+  if (message.embeddingResult) {
+    const { id, value, error } = message.embeddingResult;
+    const pending = embeddingRequests.get(id);
+    embeddingRequests.delete(id);
+    if (error) pending?.reject(new Error('embedding_unavailable'));
+    else pending?.resolve(value);
     return;
   }
   chain = chain.then(async () => {
     try {
       const value = await dispatch(message);
-      if (message.op === 'close') { process.disconnect(); return; }
-      process.send?.({ id: message.id, value });
-    } catch (error) { process.send?.({ id: message.id, error: { code: error.code || 'INDEX_FAILURE' } }); }
+      if (message.op === 'close') { parentPort.postMessage({ closed: true }); return; }
+      parentPort.postMessage({ id: message.id, value });
+    } catch (error) { parentPort.postMessage({ id: message.id, error: { code: error.code || 'INDEX_FAILURE' } }); }
   });
 });
-// Do not orphan a model process when the Agent crashes or disconnects IPC.
-process.on('disconnect', () => process.exit(0));

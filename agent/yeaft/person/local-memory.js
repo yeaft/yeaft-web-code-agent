@@ -119,7 +119,7 @@ export class LocalPersonMemory {
     if (this.worker) return this.worker;
     // onnxruntime-node cannot reliably reload its native addon in a replacement
     // worker_thread. A managed process also makes blocked native inference killable.
-    const worker = fork(new URL('./local-memory-worker.js', import.meta.url), [], {
+    const worker = fork(new URL('./local-memory-host.js', import.meta.url), [], {
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', execArgv: [],
     });
     this.worker = worker;

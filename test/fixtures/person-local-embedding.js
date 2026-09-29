@@ -1,9 +1,11 @@
 import { access } from 'node:fs/promises';
+import { isMainThread } from 'node:worker_threads';
 
 // Test-only vectors. Production never substitutes this for the pinned CPU model.
 export function createEmbedding(options) {
   return {
     async embed(texts) {
+      if (isMainThread) throw new Error('test embedding must execute in a worker thread');
       if (options.failFile) {
         const exists = await access(options.failFile).then(() => true, () => false);
         if (exists) throw new Error('test model unavailable');
