@@ -236,6 +236,53 @@ describe('Person real SQLite authority in managed workers', () => {
     await expect(r.searchChanges('alice', { limit: 1001 })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
   });
 
+  it('filters Unicode literal projections before scoped keyset paging and preserves original records on reopen/update', async () => {
+    const r = repo(), other = repo('other');
+    await Promise.all([r.open('alice'), r.open('bob'), other.open('alice')]);
+    const original = "ÉCOLE ЖУК İ 𐐀 中文 [a].* %_\\ ' OR 1=1 --";
+    const query = "école жук i\u0307 𐐨 中文 [a].* %_\\ ' or 1=1 --";
+    const seed = async (repository, owner, n, value, version) => {
+      const { episode } = await repository.admit(owner, input(`unicode-${n}`, { text: value }));
+      const proposal = finalProposal(version);
+      proposal.reply = ''; proposal.concepts[0].id = `concept-${6 - n}`; proposal.concepts[0].statement = value;
+      proposal.state.focusConceptIds = [proposal.concepts[0].id];
+      await repository.commit(episode, proposal, selection, 'unicode');
+    };
+    // Nonmatches between hits must not consume LIMIT or lose matching page tails.
+    for (let i = 0; i < 7; i++) await seed(r, 'alice', i, i % 2 ? 'not a match' : original, i);
+    await seed(r, 'bob', 0, original, 0); await seed(other, 'alice', 0, original, 0);
+    await r.close();
+    const reopened = repo();
+    for (const kind of ['messages', 'concepts']) {
+      const items = []; let cursor = null;
+      do {
+        const page = await reopened.recall('alice', { kind, query, cursor, limit: 2 });
+        expect(page.items).toHaveLength(2);
+        items.push(...page.items); cursor = page.nextCursor;
+      } while (cursor);
+      expect(new Set(items.map(item => item.id)).size).toBe(4);
+      expect(items.map(item => kind === 'messages' ? item.seq : item.id)).toEqual(kind === 'messages' ? [7, 5, 3, 1] : ['concept-0', 'concept-2', 'concept-4', 'concept-6']);
+      for (const item of items) {
+        expect(item[kind === 'messages' ? 'text' : 'statement']).toBe(original);
+        expect(item).not.toHaveProperty('ownerId'); expect(item).not.toHaveProperty('namespace');
+      }
+      for (const literal of ['éCOLE', 'Жук', '[a].*', '%_\\', "' OR 1=1 --"]) {
+        expect((await reopened.recall('alice', { kind, query: literal, limit: 10 })).items).toHaveLength(4);
+      }
+      expect((await reopened.recall('alice', { kind, query: '[a].*NOPE' })).items).toEqual([]);
+      expect((await reopened.recall('alice', { kind, limit: 10 })).items).toHaveLength(7);
+    }
+    expect(inspect(reopened, db => db.prepare('SELECT text, record FROM messages WHERE ownerId = ? AND seq = 1').get('alice'))).toMatchObject({ text: query });
+    const { episode } = await reopened.admit('alice', input('revision', { kind: 'think', text: '' }));
+    const revision = finalProposal(7);
+    Object.assign(revision.concepts[0], { id: 'concept-0', expectedRevision: 1, statement: 'ÉTÉ révisé' });
+    revision.state.focusConceptIds = ['concept-0']; revision.reply = 'RÉPONSE';
+    await reopened.commit(episode, revision, selection, 'revision');
+    expect((await reopened.recall('alice', { kind: 'concepts', query, limit: 10 })).items).toHaveLength(3);
+    expect((await reopened.recall('alice', { kind: 'concepts', query: 'été RÉVISÉ' })).items).toMatchObject([{ id: 'concept-0', revision: 2, statement: 'ÉTÉ révisé' }]);
+    expect((await reopened.recall('alice', { query: 'réponse' })).items).toMatchObject([{ role: 'assistant', text: 'RÉPONSE' }]);
+  });
+
   it('rolls back admission if the same-transaction journal fails', async () => {
     const r = repo(); await r.open('alice');
     inspect(r, db => db.exec("CREATE TRIGGER fail_journal BEFORE INSERT ON memory_changes BEGIN SELECT RAISE(ABORT, 'secret-path-and-input'); END"));
@@ -369,9 +416,10 @@ describe('Person real SQLite authority in managed workers', () => {
       const { createPersonService } = await import('../../../../agent/yeaft/person/service.js');
       const options = { uri: 'unused-test-seam', namespace: 'services', yeaftDir, config, adapter };
       a = createPersonService(options); b = createPersonService(options);
+      expect(await a.request({ ownerId: 'alice', op: 'status' })).toMatchObject({ storageReady: true, modelReady: true });
       await Promise.all([a, b].map(s => s.request({ ownerId: 'alice', op: 'open' })));
       await b.request({ ownerId: 'alice', op: 'snapshot' }); expect(providerCalls).toBe(0);
-      const request = { ownerId: 'alice', op: 'send', payload: { text: 'service input', clientMessageId: 'same' } };
+      const request = { ownerId: 'alice', op: 'send', payload: { text: 'service ÉCOLE input', clientMessageId: 'same' } };
       const results = await Promise.all([a.request(request), b.request(request)]);
       expect(results[0].episodeId).toBe(results[1].episodeId);
       expect(results.filter(r => !r.duplicate)).toHaveLength(1);
@@ -379,7 +427,11 @@ describe('Person real SQLite authority in managed workers', () => {
       await expect(b.request({ ...request, payload: { ...request.payload, clientMessageId: 'other' } })).rejects.toMatchObject({ code: 'BUSY' });
       release();
       await vi.waitFor(async () => expect((await b.request({ ownerId: 'alice', op: 'snapshot' })).state.version).toBe(1), { timeout: 5000 });
-      expect((await repo('services').searchChanges('alice')).items).toHaveLength(3);
+      const authority = repo('services');
+      expect((await authority.searchChanges('alice')).items).toHaveLength(3);
+      const recall = new PersonCapabilities(authority, 'alice');
+      await recall.execute({ id: 'catalog.view', args: { id: 'Recall' } });
+      expect((await recall.execute({ id: 'Recall', args: { kind: 'messages', query: 'école' } })).items).toMatchObject([{ text: 'service ÉCOLE input' }]);
       expect(await a.request(request)).toMatchObject({ duplicate: true, status: 'completed' });
     } finally {
       release(); await Promise.all([a?.close(), b?.close()]);

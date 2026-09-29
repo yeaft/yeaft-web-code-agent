@@ -8,6 +8,8 @@ import { SCHEMA, TABLES } from './sqlite-schema.js';
 
 const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
 const scopeValues = s => [s.namespace, s.ownerId, s.personId];
+// Query-only projections; record retains the original public Unicode text.
+const SEARCH_COLUMNS = Object.freeze({ messages: 'text', concepts: 'statement' });
 const dates = new Set(['createdAt', 'updatedAt', 'endedAt', 'leaseUntil', 'callFinalizeUntil']);
 const decode = row => row ? JSON.parse(row.record, (key, value) => dates.has(key) && typeof value === 'string' ? new Date(value) : value) : null;
 const publicDoc = doc => {
@@ -58,8 +60,6 @@ export class SqlitePersonStore {
       this.db.exec('BEGIN IMMEDIATE');
       try { this.db.exec(SCHEMA); this.db.exec('PRAGMA user_version = 1; COMMIT;'); }
       catch (error) { this.db.exec('ROLLBACK'); throw error; }
-      // Unicode-aware literal matching, not SQL/regex supplied by the caller.
-      this.db.function('person_contains', { deterministic: true }, (value, query) => Number(value.toLowerCase().includes(query.toLowerCase())));
       this.statements = new Map();
     } catch (error) { this.db.close(); throw error; }
   }
@@ -92,7 +92,11 @@ export class SqlitePersonStore {
   put(table, record, insert = false) {
     const spec = this.table(table), keys = ['namespace', 'ownerId', 'personId', ...spec.keys];
     const columns = [...keys, ...spec.columns, 'record'];
-    const values = columns.map(key => key === 'record' ? JSON.stringify(record) : record[key] instanceof Date ? record[key].getTime() : record[key] ?? null);
+    // Node 22.5 has no DatabaseSync.function; SQLite lower() only folds ASCII.
+    // Fold once on write in JS, then use instr() in SQL before ORDER BY / LIMIT.
+    // This keeps Unicode literal recall scoped and avoids materializing a JS scan.
+    const values = columns.map(key => key === 'record' ? JSON.stringify(record) : key === SEARCH_COLUMNS[table] ? record[key].toLowerCase()
+      : record[key] instanceof Date ? record[key].getTime() : record[key] ?? null);
     const update = insert ? '' : ` ON CONFLICT(${keys.join(',')}) DO UPDATE SET ${[...spec.columns, 'record'].map(key => `${key} = excluded.${key}`).join(',')}`;
     this.sql(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})${update}`).run(...values);
   }
@@ -314,7 +318,7 @@ export class SqlitePersonStore {
     if (query && collection !== 'messages') fail('INVALID_REQUEST');
     let clause = '', params = [];
     if (cursor != null) { clause += ' AND seq < ?'; params.push(sequence(cursor)); }
-    if (query) { clause += ' AND person_contains(text, ?)'; params.push(query); }
+    if (query) { clause += ' AND instr(text, ?) > 0'; params.push(query.toLowerCase()); }
     const docs = this.rows(collection, this.scope(ownerId), `${clause} ORDER BY seq DESC LIMIT ?`, [...params, limit + 1]);
     return { items: docs.slice(0, limit).map(publicDoc), nextCursor: docs.length > limit ? String(docs[limit - 1].seq) : null };
   }
@@ -323,7 +327,7 @@ export class SqlitePersonStore {
     if (kind === 'messages') return this.list(ownerId, kind, { cursor, limit }, query ? { text: { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } } : {});
     this.getPerson(ownerId);
     if (cursor != null) text(cursor, 128);
-    const docs = this.rows('concepts', this.scope(ownerId), ' AND (? IS NULL OR id > ?) AND person_contains(statement, ?) ORDER BY id ASC LIMIT ?', [cursor, cursor, query, limit + 1]);
+    const docs = this.rows('concepts', this.scope(ownerId), ' AND (? IS NULL OR id > ?) AND instr(statement, ?) > 0 ORDER BY id ASC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);
     return { items: docs.slice(0, limit).map(publicDoc), nextCursor: docs.length > limit ? docs[limit - 1].id : null };
   }
   snapshot(ownerId) {
