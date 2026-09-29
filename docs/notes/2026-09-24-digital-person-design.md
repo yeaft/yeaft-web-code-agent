@@ -4,8 +4,8 @@
 - 状态：**完整设计 + 显式认知实验首版**；仅下方“本轮实现边界”列出的功能已有代码，其他章节仍是目标契约。合并不授权读取用户资料、部署数据库或修改在线运行数据。
 - 目标：定义一个以持续身份为主体、能自主关注和思考、具有记忆与行动边界的数字人，而不是给 Session 或任务系统加一个桌面角色。
 - 技术方向：JavaScript 认知运行时 + MongoDB 数字人存储 + Rust 原生桌面身体 + npm 分发入口。
-- 本轮修订：2026-09-28；明确人本 Dream、按需能力装配、自主模型/effort 选择、数据库长期记忆与 context 短期记忆，以及 VP 作为外部能力的边界。
-- 源码考察基线：`df7481a9`。现状与拟议架构明确分开；后续实现应重新核对。
+- 本轮修订：2026-09-29；明确 Person Turn、Engine Turn、Loop、模型调用的层级，以及数字人的语义决策、运行时控制与外部 VP 执行边界。
+- 源码考察基线：当前手动认知调用链按 `d0a00d3a` 核对；早期架构考察为 `df7481a9`。现状与拟议架构明确分开；后续实现应重新核对。
 - 决策级别：文中“必须”是拟议的验收契约；“建议默认值”需要原型验证；“待决定”不是已确定产品行为。
 
 ### 本轮实现边界：显式认知首版
@@ -46,6 +46,106 @@
 - **数据库区分“想到过”与“现在接受”。** 消息、活动与调用记录构成长期经历；经过提交的 state/Concept 才是当前接受的认识。失败、超时、预算耗尽不提交候选。数据库故障时没有文件兜底，未成功归档的内容不能保证重建；下一次访问恢复过期活动为 interrupted。
 
 源码入口：`web/stores/helpers/digital-person.js` → `server/handlers/client-person.js` → `agent/yeaft/person/bridge.js` → `agent/yeaft/person/service.js`；认知循环、存储、能力与模型适配分别见该目录的 `runtime.js`、`repository.js`、`capabilities.js`、`provider.js`。消息式思考记录的白名单投影见 `web/stores/helpers/person-thoughts.js`。
+
+## 一轮、Loop 与模型：谁在什么时候决定 {#turn-loop-control}
+
+**先区分两个 Turn：Person Turn 是数字人处理一次触发的认知活动（`episodeId`）；Engine Turn 是一次 `Engine.query()` 执行。当前 Person 路径不调用 `Engine.query()`，所以不能把两者写成同一个东西。** Loop 是各自运行时的一次循环推进，模型调用则是其中的计算步骤。
+
+### 当前代码的准确层级
+
+| 名称 | 边界与归属 | 当前关系 |
+| --- | --- | --- |
+| Person / 数字人 | 持续的身份、Soul、认知状态与经历 | 跨越所有 Turn；不是一个永远运行的 API 请求 |
+| Person Turn / cognitive episode | 一次人工 Send、Think、Dream 被准入，到 completed / cancelled / failed / interrupted / budget_exhausted | 使用已有 `episodeId`，不新增平行 Turn 存储；一个 Turn 可以没有回复，但仍有终态 |
+| Person Loop / 认知循环步 | 组装本次 context → 调用模型 → 保存/校验提案 → 继续或提交 | `PersonRuntime.run()` 的一次 `for` 迭代；若继续，可先执行一个只读能力，再进入下一步 |
+| Model call / 逻辑模型调用 | 给定 context、模型、effort、工具快照的一次 adapter 流请求 | Person 使用 `callId / callIndex`；当前每个成功派发的 Loop 恰有一次逻辑调用，派发前失败可为零次 |
+| Engine Turn / engine call | 调用一次 `Engine.query()` 到终态 `turn_end { terminal: true }` | 现有 Session / VP 执行机制；**不是 Person 当前内部循环**；未来可作为外部能力的执行后端 |
+| Engine Loop / 执行循环步 | `Engine.query()` 内的一次循环推进，通常为模型输出、工具执行及结果回填 | 一个 Engine Turn 可以多 Loop；技术重试/续传、流式 chunk、并行工具都不能按条数当成新 Turn |
+
+**逻辑模型调用不保证等于一次 HTTP 请求。** Adapter/provider 层可能发生重试或协议协商；`callId` 不能冒充逐 HTTP attempt ID。当前 Person 没有应用层 proposal 修复/续跑回路；provider 最终失败会结束本次活动。模型内部 reasoning 的 token、流式 chunk、一次工具调用也都不是新的 Loop。
+
+当前真实调用关系如下（方括号内是负责方）：
+
+```text
+人工操作 → MongoDB 准入 → PersonRuntime.run(episode)           [运行时]
+  └─ Person Loop 0..N-1
+       ├─ assembleContext + startCall(callId, callIndex)        [运行时]
+       ├─ collectOutput → adapter.stream → 结构化 proposal      [模型承载 Person 思考]
+       ├─ finalizeCall + validateProposal                     [运行时]
+       ├─ next 非空：选择下一模型/effort/可选能力                [proposal 中的 Person 决定]
+       │    └─ 验证并执行能力 → 结果带入下一 Loop                [运行时]
+       └─ next 为空：尝试原子 commit → completed               [运行时]
+```
+
+生产入口默认 **最多 4 次逻辑调用、120 秒**；不是无界循环。最后一次若还要求 `next`，runtime 标记 `budget_exhausted`，不额外送一次“收尾调用”，也不提交候选。最终输出应携带需要保留的全部 Concept 修改，而不是假定前几轮已提交；成功活动只有一次认知状态提交。召回和过程记录可以先入库，不等于已采纳认识。
+
+### 数字人不是模型之外的另一位隐形决策者
+
+“数字人介入”表示**调用使用主体的身份、认知状态和决策合同进行判断**，不是 runtime 中还住着一个不需要模型计算的“人”。同一个模型可以承担不同调用角色；换模型也不换人：
+
+| 层次 | 负责什么 | 不负责什么 |
+| --- | --- | --- |
+| 数字人决策（由模型计算） | 要关注什么、怎样理解、继续想还是结束、下一模型/effort/能力、是否采纳结果 | 不能自己授予权限、绕过预算或宣称候选已提交 |
+| 运行时（确定性代码） | 准入、加载、限额、来源/版本校验、能力派发、取消和事务提交 | 不替人物决定观点正确、感受合理或外部结果值得采纳 |
+| 模型/provider | 按本次角色、输入和合同产生显式输出 | 不直接拥有 Person 数据库，不因返回 `end_turn` 就完成认知活动 |
+| 工具/外部 VP | 在委派范围内读取、计算或执行，返回结果与证据 | 不能把自己的 Loop/终态当成人物的最终判断，不能直接覆盖其认知状态 |
+
+**当前每次 Person 模型调用都包含人物判断，不存在“先让普通模型随便跑，最后数字人再醒来”的阶段。** 同一个 proposal 中已经包含 `activity`、`decision.selfCheck`、候选 state/Concept、回复与 `next`。模型说“证据不足，继续召回”就是数字人在决定；runtime 实施召回后，下一次模型调用再作新的判断。步骤 7 是执行步骤 5 已生成的 `next` 分支，不是另一次未计费的“决策模型”调用。
+
+当前自判是同一次模型输出的显式检查，不是独立 critic 的保证。运行时通过 schema/来源/版本校验，也不等于语义审查通过；多视角综合与独立 critic 仍是目标能力。
+
+### 未来委派时：什么时候交出去，什么时候回来
+
+以下是**尚未接入的执行合同**，不是当前流程多出来的一层 Coordinator：
+
+```text
+Person Turn
+  ├─ Person 决策调用：给出有界委派及验收要求
+  ├─ runtime 校验 → 外部 VP / 执行 Skill
+  │    └─ Engine.query() = 一个 Engine Turn
+  │         ├─ Engine Loop：模型 → 工具 → 结果
+  │         ├─ Engine Loop：模型 → 工具 → 结果
+  │         └─ terminal 结果 / 阻塞 / 取消 / 失败
+  └─ Person 决策调用：验收证据、调整判断、继续或提交
+```
+
+交付执行前，Person 必须说明目标、输入与来源、可自主作出的局部选择、允许能力/模型与预算、停止条件、交回条件、产物/验收标准。Runtime 验证实际权限，将合同冻结给执行者；委派本身不是新增授权。
+
+| 边界 | 是否需要 Person 再判断 | 执行方式 |
+| --- | --- | --- |
+| 合同内读下一文件、运行已允许测试、选局部实现步骤 | 不需要逐工具介入 | 执行 VP 可在内部 Loop 自主推进；runtime 每次仍校验能力和权限 |
+| 切换执行模型/effort | 合同已允许的范围内不必逐次交回；越界则必须 | 当前 Engine 已在 Loop/provider 请求边界接纳刷新配置，显式 query override 与 fallback 仍按既有优先规则生效；尚未接入 Person 委派合同驱动的逐调用选择。未来 adapter 需绑定选择来源、允许范围与预算，不能把配置刷新等同于人物自主选择 |
+| 新增目标、扩展数据范围/权限、超预算、改变承诺或接受新的高影响副作用 | 必须交回；需要授权时再由人确认 | 暂停该操作，不以普通执行细节为由越权继续 |
+| 发现推翻原计划的证据、出现歧义、卡住或反复无进展 | 必须交回 | 返回证据、未决点和可选路径；不让执行者自行重定义人物目标 |
+| 执行完成、失败或被取消 | 必须交回结果，但不保证一定还能调用模型 | Runtime 先持久化；仅当前 Person Turn 仍有效且有预算时进入人物验收 |
+| Person 已停止、超时、结束或版本已过期，子任务才返回 | 不能借回报重新唤醒人物 | 按来源/授权保存可保留的结果并标记待复核/迟到；手动模式等待下次人工触发 |
+
+只执行确定性工具时，不必包一层 `Engine.query()`；只有需要 LLM 驱动多步执行时才使用它。无需每调用一个工具就再启动一位“监督数字人”，也不能等无限执行完成才让人物看到风险。Person 自己继续思考走认知 Loop；调用外部 VP 则是有父级来源的委派，不能混成它自己的身份。终态/handoff 不转让 Person 的提交权。
+
+未来 adapter 要把 Person 的停止和总预算传递给子执行，预留验收投入；不能每启动一个 Engine Turn 就把总限额重置。父级汇总实际子调用消耗，区分顶层决策调用与子执行调用，避免漏计或重复相加。取消不证明外部副作用已停止，仍按第 14.4 节隔离与对账。
+
+### 结束、记录与验收契约
+
+四种“结束”不能互换：
+
+1. Provider `stopReason: end_turn`：当前模型流正常结束；Person 还要解析、校验、选分支。
+2. Engine 内部 `turn_end`：未带 `terminal: true` 的事件不是 Engine Turn 结束。
+3. Engine `turn_end { terminal: true }`：本次 query 生命周期结束；不等于委派成功，更不等于 Person 已验收。
+4. Person episode 终态：本轮结束。成功提交才改变已接受状态；失败/预算耗尽不采纳候选，且不会自动开启下一 Person Turn。已经成功提交后再取消，不回滚状态。
+
+思考记录按 **Person Turn → 决策/执行活动 → 显式输入输出 → 采纳结果** 理解；技术调试另看 request/attempt。当前可用 `episodeId + callId + callIndex` 关联 `call_started / call_output / activity / capability_result / committed` 等事件，缺失的输出明确标注，不补造想法。
+
+未来并行视角/VP adapter 需要增加持久化的调用角色与父子关联，例如 `actorRole`（person-decision / person-perspective / delegated-executor）、父 `callId`、`delegationId / engineTurnId / loopIndex`；这些是拟议字段，不是现有 wire。字段由 runtime 绑定，而非任由模型自报。Person Loop 当前可由 `callIndex` 定位，不为了展示另建一个与现有记录竞争的 loop 真源。
+
+验收时至少检查：
+
+- 同一次人工触发，多个 `callId` 始终属于一个 episode；`next` 改变选择只影响下一次调用。
+- Provider 正常结束但 `next` 非空不会提前结束 Person；Engine 内部事件不能释放父级活动/冒充采纳。
+- 最终提案提交才改变 stateVersion；候选、自判、执行成功都不能替代 commit。
+- 已观察到 Cancel/过期/最后调用耗尽后，不再派发隐形额外调用；刷新、重连及未来 VP 迟到回报也不自动启动新 Turn。并发取消可能与在途派发相遇，因此仍需提交 fence；已派发的外部计算不保证立即停止。
+- 未来委派中，合同内局部执行不要求人物逐步确认；合同变化必须交回，且必须通过人物验收才可成为其认知更新。
+
+当前源码依据：`person/service.js#createPersonService()`、`person/runtime.js#PersonRuntime.run()`、`person/provider.js#collectOutput()`、`person/contracts.js#PROPOSAL_INSTRUCTIONS`、`person/repository.js#commit()`；Engine 的 query 终态与执行 loop 另见 `engine.js` 的 `query()` / `#runQuery()`。本文澄清边界，不改现有运行时或新增自动调度。
 
 ## 阅读地图
 
@@ -98,7 +198,7 @@
 | --- | --- |
 | VP 是可复用角色定义，包含 soul 与模型偏好 | 新增长期存在的 `personId`，不能把已有 `vpId` 自动当成一个用户专属生命实例 |
 | Session 是原生持久对话编排单元；跨 Agent 身份包含 `agentId + sessionId` | 数字人可参与多个交流上下文，但不破坏现有身份隔离，不创建伪用户消息唤醒自己 |
-| `Engine.query()` 有明确的 terminal boundary | 一个思考 episode 可使用有限 query；query 结束不代表人物消失，也不代表所有承诺完成 |
+| `Engine.query()` 有明确的 terminal boundary；当前 Person 则直接调用 LLM adapter | Person episode 与 Engine query 是不同生命周期；未来委派可使用有限 query，但 query 结束不代表人物已验收或所有承诺完成，见[调用与控制边界](#turn-loop-control) |
 | Work Center 已有 WorkItem / Action / Run 与 Coordinator | 保留旧产品兼容；数字人路径不创建这些对象、不调用其 Coordinator。可抽取独立执行/冲突管理原语，但不是复用整套工作流 |
 | Dream/H2-AMS runtime 在当前基线已停用 | 淘汰旧文件 Dream，为数字人重设计 MongoDB 原生 Dream；不直接重新开启旧实现 |
 | Post-turn compact 服务于上下文窗口 | compact 不是人物记忆，不作为事实独立来源，也不承担兴趣、承诺或身份 |
@@ -898,7 +998,7 @@ manifest 还需来源/发布者、适用条件、schema 字节/token 估计、�
 
 ### 13.5 按场景的快捷方式与每-call 工具集
 
-**Turn 是需求处理过程，不等于一次 provider call**。一个 episode/query 可以多次递进发现；每次 provider 请求的工具集合固定，发现或加载结果只影响下一 call。示意：
+**Person Turn（episode）与 Engine Turn（query）是两个层次，都不等于一次 provider call**，详见[调用与控制边界](#turn-loop-control)。人物可以在认知 Loop 中递进发现能力；未来外部执行 VP 也可在获准合同内通过 Engine Loop 发现能力，但不接管人物的最终判断。每次 provider 请求的工具集合固定，发现或加载结果只影响下一 call。示意：
 
 | 当前场景 | 有限的常驻候选快捷方式 | 默认不常驻 |
 | --- | --- | --- |

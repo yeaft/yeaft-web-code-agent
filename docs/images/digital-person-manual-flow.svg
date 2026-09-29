@@ -18,7 +18,7 @@
   </defs>
   <rect width="1120" height="1380" rx="16" fill="#f7f9fc"/>
   <text class="title" x="560" y="45" text-anchor="middle">数字人如何完成一轮“想”</text>
-  <text class="detail" x="560" y="77" text-anchor="middle">当前实现 · 人控制开始，一轮内自行思考，结束后等待</text>
+  <text class="detail" x="560" y="77" text-anchor="middle">当前实现 · 一次操作 = Person Turn（episode）；内部多个认知 Loop</text>
 
   <rect class="accent" x="230" y="102" width="590" height="80"/>
   <text class="label" x="525" y="134" text-anchor="middle">1. 用户显式触发</text>
@@ -38,7 +38,7 @@
   <text class="detail" x="525" y="511" text-anchor="middle">Soul + 当前状态 + 触发 + 有界消息 / Concept + 能力结果</text>
   <path class="line" d="M525 538V567"/>
   <rect class="accent" x="230" y="570" width="590" height="90"/>
-  <text class="label" x="525" y="603" text-anchor="middle">5. 调用当前选择的模型与 effort</text>
+  <text class="label" x="525" y="603" text-anchor="middle">5. 模型承载 Person 的判断（一次 call）</text>
   <text class="detail" x="525" y="633" text-anchor="middle">产生结构化想法、判断、自判、状态提案与下一步</text>
   <path class="line" d="M525 660V689"/>
   <rect class="box" x="230" y="692" width="590" height="90"/>
@@ -46,7 +46,7 @@
   <text class="detail" x="525" y="755" text-anchor="middle">格式、读过的来源、事实 / 想象标记、版本、模型选择</text>
   <path class="line" d="M525 782V811"/>
   <rect class="box" x="230" y="814" width="590" height="70"/>
-  <text class="label" x="525" y="856" text-anchor="middle">7. 数字人选择：继续想，还是提交？</text>
+  <text class="label" x="525" y="856" text-anchor="middle">7. Runtime 按提案 next 分支：继续 / 提交</text>
 
   <path class="line" d="M230 848H115V777"/>
   <text class="small" x="145" y="836">继续</text>
@@ -93,5 +93,5 @@
 
   <text class="detail" x="560" y="1280" text-anchor="middle">取消 / 失败 / 超时 / 调用耗尽：终止并记载结果，不提交候选认识</text>
   <text class="small" x="560" y="1312" text-anchor="middle">默认每轮最多 4 次模型调用、120 秒；重连 / 刷新 / 空闲不启动思考</text>
-  <text class="small" x="560" y="1344" text-anchor="middle">未接入：自动唤醒、外部 VP 执行、通用 Skills 工具集、语义检索、Rust 身体</text>
+  <text class="small" x="560" y="1344" text-anchor="middle">Person 当前直接调用 adapter，不经 Engine.query；外部 VP / 自动唤醒尚未接入</text>
 </svg>
