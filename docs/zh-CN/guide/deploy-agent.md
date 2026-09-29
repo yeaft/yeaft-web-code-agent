@@ -38,14 +38,38 @@ Windows PowerShell 5.1+ 示例：
 
 - 合格的现有 Node.js/npm 会被复用；否则从 `nodejs.org` 下载 Node 24，并在解压前校验官方 SHA-256。不会通过 `sudo`、Homebrew 或系统安装器替换已有 Node，不修改系统 PATH 或 npm 全局配置。
 - 安装实际 npm 包 `@yeaft/webchat-agent`，使用独立的用户级目录 `~/.yeaft/installations/<机器名-四位随机数>/`。同一条命令重复运行会新增实例，而不是升级或重启已有 Agent。
+- npm 新装默认使用 `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` 跳过额外 CUDA 包，保留调用者非空覆盖；默认值只作用于 npm，不写入 Agent 服务环境。
 - 自动运行 `yeaft-agent install`，注册并启动当前用户的后台服务。Linux 需要可用的 systemd 用户会话；macOS 使用 launchd；Windows 使用 PM2 并在登录时恢复。Linux 退出登录后继续运行仍可能需要管理员启用 linger，脚本不会自行提权。
 - 命令参数中的 Secret 不会放入脚本下载 URL，也不会作为安装进度输出。**命令本身包含凭据**，可能留在剪贴板、终端历史或进程参数中；不要分享，泄露后请在设置中重置。
 - 安装结束会输出该实例的管理命令。私有安装不向系统 PATH 添加 `yeaft-agent`；升级请使用 Web UI 的实例级安全升级（管理入口会拒绝独立 `upgrade`，避免修改全局包）；请使用输出的绝对路径命令，或在 Web UI 管理已连接 Agent。LLM provider 和 Claude/Copilot CLI 的账号登录仍按需单独配置。
 
 ## 手动 npm 安装
 
-```bash
-npm install -g @yeaft/webchat-agent
+Linux / macOS（POSIX shell）：
+
+```sh
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
+```
+
+Windows PowerShell（无论成功失败都恢复原值）：
+
+```powershell
+$previousCuda = $env:ONNXRUNTIME_NODE_INSTALL_CUDA
+try {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = 'skip'
+  npm install -g @yeaft/webchat-agent
+} finally {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = $previousCuda
+}
+```
+
+直接 npm 安装不会自动继承一键安装器的 CPU 策略。变量只跳过额外 CUDA 下载，不禁用原生依赖安装脚本；不要用 `--ignore-scripts` 代替。安装仍会下载可选 Transformers／ONNX CPU 依赖；可选依赖失败或省略时，Recall 明确降级，不伪造语义结果。
+
+这与模型权重下载不同：首次显式非空 Recall 才下载固定版本 CPU 模型到 `<yeaftDir>/person/models`。`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止模型下载，完整缓存可用；`YEAFT_PERSON_EMBEDDING=off` 禁用 embedding，二者不控制 npm 安装。源码 `npm install`／`npm ci` 同样需要此 POSIX 前缀或上述 PowerShell 环境块。
+
+安装后运行：
+
+```sh
 
 # 前台运行。--name 可省略，默认使用计算机名，其中非法字符替换为 "-"。
 yeaft-agent --server wss://your-server.com --secret your-secret

@@ -9,12 +9,14 @@ Yeaft has a browser/server control plane and one or more Agents. The Agent runs 
 - at least one native LLM provider for Yeaft Sessions, or an installed/authenticated vendor CLI for that conversation path
 - Docker for the recommended production server deployment
 
+The install commands below use a POSIX shell and explicitly skip extra ONNX Runtime CUDA downloads while keeping CPU native dependencies and lifecycle scripts. Direct npm installation does not inherit the one-line installer policy. On Windows, use the [temporary PowerShell environment block](./deploy-agent.md#manual-npm-installation), which restores the previous setting. Node 24 is recommended for full digital-person hybrid recall.
+
 ## Fastest path: local mode
 
 Local mode starts the bundled Web UI, Server, and Agent on `127.0.0.1`:
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 yeaft-agent local --name local
 ```
 
@@ -42,7 +44,7 @@ The native credential provider uses the local device/`gh auth` credential flow a
 ## Connect to an existing server
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 yeaft-agent --server wss://your-server.example --name my-worker --secret your-agent-secret
 ```
 
@@ -60,7 +62,7 @@ Each `--name` is also the Agent instance identity. Separate instances resolve se
 ```bash
 git clone https://github.com/yeaft/yeaft-web-code-agent.git
 cd yeaft-web-code-agent
-npm install
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
 npm run dev
 ```
 
