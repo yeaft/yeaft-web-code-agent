@@ -85,6 +85,24 @@ describe.skipIf(!powerShellAvailable)('Windows bootstrap installer', () => {
     });
   });
 
+  it.each(['', 'v12'])('scopes the CPU install default to npm and restores the CUDA setting (%s)', cuda => {
+    const output = runPowerShell(['-File', fixture, '-Installer', installer, '-Sandbox', sandbox(), '-Server', 'wss://test.example', '-Secret', 'fake-key', '-NodePath', process.execPath, '-Cuda', cuda]);
+    expect(JSON.parse(output.trim().split(/\r?\n/).at(-1))).toMatchObject({
+      npmCuda: cuda || 'skip', npmScriptsEnabled: true, serviceCuda: cuda || null, cudaRestored: true,
+    });
+  });
+
+  it.each(['', 'v12'])('restores the CUDA setting even when npm fails (%s)', cuda => {
+    const root = sandbox();
+    const failed = spawnSync(pwsh, ['-NoLogo', '-NoProfile', '-File', fixture, '-Installer', installer, '-Sandbox', root, '-Server', 'wss://test.example', '-Secret', 'fake-key', '-NodePath', process.execPath, '-Mode', 'npm-fail', '-Cuda', cuda], { encoding: 'utf8' });
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain('npm could not install the Yeaft Agent');
+    expect(JSON.parse(readFileSync(join(root, 'appdata/npm-capture.json'), 'utf8')).cuda).toBe(cuda || 'skip');
+    const after = JSON.parse(readFileSync(join(root, 'environment-after.json'), 'utf8').replace(/^\uFEFF/, ''));
+    expect(after.cuda).toBe(cuda || null);
+    expect(readdirSync(join(root, 'home/.yeaft/installations'))).toEqual([]);
+  });
+
   it('executes the generated download command without interpreting credentials and restores TLS', () => {
     const secret = `p&ss' $(); \\" secret`;
     const command = getAgentInstallerCommand({ platform: 'powershell', agentSecret: secret, locationLike: { origin: 'https://control.example', host: 'control.example', protocol: 'https:' } });

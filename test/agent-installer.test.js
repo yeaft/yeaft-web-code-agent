@@ -16,7 +16,7 @@ function executable(path, source) {
   chmodSync(path, 0o755);
 }
 const cliFixture = `const fs = require('node:fs');
-fs.appendFileSync(process.env.FIXTURE_LOG, JSON.stringify({args:process.argv.slice(2), secret:process.env.AGENT_SECRET, node:process.execPath})+'\\n');
+fs.appendFileSync(process.env.FIXTURE_LOG, JSON.stringify({args:process.argv.slice(2), secret:process.env.AGENT_SECRET, node:process.execPath, cuda:process.env.ONNXRUNTIME_NODE_INSTALL_CUDA ?? null})+'\\n');
 process.exit(Number(process.env.FIXTURE_CLI_EXIT || 0));`;
 function nodeScript(compatible) {
   return `${compatible ? '' : 'if [ "${1:-}" = -e ]; then exit 1; fi\n'}exec ${q(process.execPath)} "$@"`;
@@ -24,6 +24,7 @@ function nodeScript(compatible) {
 function npmScript() {
   return `if [ "\${1:-}" = --version ]; then echo 11.0.0; exit 0; fi
 printf '%s\\n' "$*" > "$FIXTURE_NPM_LOG"
+printf '%s' "\${ONNXRUNTIME_NODE_INSTALL_CUDA:-}" > "$FIXTURE_NPM_LOG.cuda"
 [ "\${FIXTURE_NPM_FAIL:-0}" = 0 ] || exit 2
 [ "$1" = --prefix ] || exit 3
 prefix=$2
@@ -114,6 +115,17 @@ describe('isolated POSIX Agent installer (no live services or downloads)', () =>
     expect(upgrade.status).toBe(1);
     expect(upgrade.stderr).toContain('Web UI');
     expect(r.stdout + r.stderr).not.toContain(secret);
+  });
+  it.each([
+    [undefined, 'skip'], ['', 'skip'], ['v12', 'v12'],
+  ])('scopes the CPU install default to npm and respects an explicit CUDA override (%s)', (cuda, expected) => {
+    const f = fixture();
+    const env = cuda === undefined ? {} : { ONNXRUNTIME_NODE_INSTALL_CUDA: cuda };
+    const r = run(f, undefined, env);
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(`${f.npmLog}.cuda`, 'utf8')).toBe(expected);
+    expect(JSON.parse(readFileSync(f.log, 'utf8')).cuda).toBe(cuda ?? null);
+    expect(readFileSync(f.npmLog, 'utf8')).not.toContain('--ignore-scripts');
   });
   it('passes the installed-package layout and instance roots into the real Linux service installer', () => {
     const f = fixture();

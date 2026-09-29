@@ -124,7 +124,9 @@ fi
 YEAFT_INSTALL_SERVER="$SERVER" "$NODE" -e 'try {const u=new URL(process.env.YEAFT_INSTALL_SERVER);if(!["ws:","wss:"].includes(u.protocol)||!u.hostname||u.username||u.password)process.exit(1)}catch{process.exit(1)}' >/dev/null 2>&1 || fail 'invalid server URL'
 NODE_DIR=$(dirname "$NODE")
 printf 'Installing the Yeaft Agent in %s...\n' "$PREFIX"
-PATH="$NODE_DIR:$PREFIX/bin:$PATH" "$NPM" --prefix "$PREFIX" --global install "$PACKAGE" \
+# Default to CPU native dependencies; scope the policy to npm, not the Agent service.
+ONNXRUNTIME_NODE_INSTALL_CUDA="${ONNXRUNTIME_NODE_INSTALL_CUDA:-skip}" \
+  PATH="$NODE_DIR:$PREFIX/bin:$PATH" "$NPM" --prefix "$PREFIX" --global install "$PACKAGE" \
   --registry="$REGISTRY" --no-audit --no-fund --loglevel=error || fail 'npm could not install the Yeaft Agent'
 CLI_JS=$PREFIX/lib/node_modules/@yeaft/webchat-agent/cli.js
 [ -f "$CLI_JS" ] || fail 'the installed package did not provide yeaft-agent'

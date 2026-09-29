@@ -166,8 +166,19 @@ try {
   $env:PATH = "$NodeDir;$Prefix;$LocalBin;$OriginalPath"
   & $Node $NpmCli --version *> $null
   if ($LASTEXITCODE -ne 0) { Stop-Install 'the selected Node.js does not provide a working npm' }
-  & $Node $NpmCli --prefix $Prefix --global=false install $Package pm2 --registry=$Registry --no-audit --no-fund --loglevel=error
-  if ($LASTEXITCODE -ne 0) { Stop-Install 'npm could not install the Yeaft Agent' }
+  # Default to CPU native dependencies without changing the caller or service environment.
+  $OriginalCuda = Get-Item -LiteralPath 'Env:ONNXRUNTIME_NODE_INSTALL_CUDA' -ErrorAction SilentlyContinue
+  try {
+    if (-not $env:ONNXRUNTIME_NODE_INSTALL_CUDA) { $env:ONNXRUNTIME_NODE_INSTALL_CUDA = 'skip' }
+    & $Node $NpmCli --prefix $Prefix --global=false install $Package pm2 --registry=$Registry --no-audit --no-fund --loglevel=error
+    if ($LASTEXITCODE -ne 0) { Stop-Install 'npm could not install the Yeaft Agent' }
+  } finally {
+    if ($null -ne $OriginalCuda) {
+      Set-Item -LiteralPath 'Env:ONNXRUNTIME_NODE_INSTALL_CUDA' -Value $OriginalCuda.Value
+    } else {
+      Remove-Item -LiteralPath 'Env:ONNXRUNTIME_NODE_INSTALL_CUDA' -ErrorAction SilentlyContinue
+    }
+  }
 
   $Cli = Join-Path $Prefix 'node_modules\@yeaft\webchat-agent\cli.js'
   $Pm2 = Join-Path $Prefix 'node_modules\pm2\bin\pm2'

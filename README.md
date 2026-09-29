@@ -96,11 +96,25 @@ Work Center does **not** mean arbitrary unattended deployment. Side effects stil
 
 ### Local, single-machine evaluation
 
-Install the published Agent package, then start its bundled local Web UI, Server, and Agent on loopback:
+Install the published Agent package, then start its bundled local Web UI, Server, and Agent on loopback. On Linux / macOS (POSIX shell):
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 ```
+
+On Windows PowerShell, use a temporary environment variable and restore it after installation:
+
+```powershell
+$previousCuda = $env:ONNXRUNTIME_NODE_INSTALL_CUDA
+try {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = 'skip'
+  npm install -g @yeaft/webchat-agent
+} finally {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = $previousCuda
+}
+```
+
+The recommended install defaults to CPU: `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` skips ONNX Runtime's extra CUDA binary download, not npm lifecycle scripts. Installation still downloads the optional `@huggingface/transformers` npm package and native dependencies such as ONNX Runtime; Recall model files may download only on the first explicit, nonempty Recall. Do not substitute `--ignore-scripts`, which can break native dependencies. If optional dependencies fail to install or are omitted, Recall reports a fallback. `YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` controls model downloads, not npm installation.
 
 `yeaft-agent local` uses a named Agent instance. Without `--name`, the name is the sanitized computer hostname; this example makes it explicit:
 
@@ -131,12 +145,12 @@ Claude Code and Copilot CLI conversations require their corresponding CLI to be 
 
 ### Connect an Agent to an existing server
 
-Recommended: open **Settings → Security**, choose **Linux / macOS** or **Windows PowerShell**, and copy the one-line installer command. It checks Node.js/npm, installs the Agent in an isolated user directory, and starts a new instance named `<hostname>-<four random digits>` with your server address and Secret. Existing Node installations and running Agents are not replaced. See [Agent Setup](docs/guide/deploy-agent.md) for platform requirements, security notes and management commands.
+Recommended: open **Settings → Security**, choose **Linux / macOS** or **Windows PowerShell**, and copy the one-line installer command. It checks Node.js/npm, installs the Agent in an isolated user directory, and starts a new instance named `<hostname>-<four random digits>` with your server address and Secret. Existing Node installations and running Agents are not replaced. Only the npm install step defaults `ONNXRUNTIME_NODE_INSTALL_CUDA` to `skip`; an explicit nonempty caller value is preserved (it may download GPU binaries but does not change Recall CPU inference). See [Agent Setup](docs/guide/deploy-agent.md) for platform requirements, security notes and management commands.
 
-Manual alternative:
+Manual alternative (Linux / macOS; for PowerShell, use the temporary environment variable above):
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 yeaft-agent --server wss://your-server.example --name my-worker --secret your-agent-secret
 ```
 
@@ -154,7 +168,7 @@ The Workbench Browser viewer currently supports Linux x64 Agents. Browser routes
 1. Select the Agent in Yeaft and open **Workbench → Browser**. If Browser is not ready, the card says **Enable required** and the panel shows the pinned Chrome for Testing download size.
 2. Click **Enable Browser** once. Yeaft displays the real download percentage, verifies and installs the browser in that Agent instance's data directory, persists enablement, runs the media probe, refreshes capabilities, and opens the viewer automatically. No Agent restart or second enable action is required.
 
-Nothing downloads merely because Yeaft or the Agent was installed. Administrators can disable the entire Browser surface with `BROWSER_RUNTIME_ENABLED=false`. The Agent media probe validates Chrome, tab capture, VP8, and local WebRTC; it cannot prove that a remote Web viewer has a reachable ICE path to the Agent. `BROWSER_STUN_URLS` is optional for direct ICE. For production across NATs or restrictive networks, deploy TURN and configure `BROWSER_TURN_URLS` plus `BROWSER_TURN_SECRET`; set `BROWSER_ICE_TRANSPORT_POLICY=relay` when direct candidates are forbidden. A hardened self-hosted template is available in [`deploy/browser-turn/`](deploy/browser-turn/README.md).
+No browser binaries download merely because Yeaft or the Agent was installed. Administrators can disable the entire Browser surface with `BROWSER_RUNTIME_ENABLED=false`. The Agent media probe validates Chrome, tab capture, VP8, and local WebRTC; it cannot prove that a remote Web viewer has a reachable ICE path to the Agent. `BROWSER_STUN_URLS` is optional for direct ICE. For production across NATs or restrictive networks, deploy TURN and configure `BROWSER_TURN_URLS` plus `BROWSER_TURN_SECRET`; set `BROWSER_ICE_TRANSPORT_POLICY=relay` when direct candidates are forbidden. A hardened self-hosted template is available in [`deploy/browser-turn/`](deploy/browser-turn/README.md).
 
 For unattended setup, use the same named instance throughout:
 
@@ -173,7 +187,7 @@ yeaft-agent browser status --name my-worker
 ```bash
 git clone https://github.com/yeaft/yeaft-web-code-agent.git
 cd yeaft-web-code-agent
-npm install
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
 npm run dev
 ```
 
@@ -243,7 +257,7 @@ Detailed guides:
 ## Development and verification
 
 ```bash
-npm install
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
 npm test                 # core Vitest suite
 npm run test:e2e         # Playwright browser suite
 npm run release:guard    # server/Agent import guard + startup smoke

@@ -38,15 +38,38 @@ Installation behavior:
 
 - Reuses compatible Node.js/npm; otherwise downloads Node 24 from `nodejs.org` and checks the official SHA-256 before extraction. It does not replace your Node through `sudo`, Homebrew or a system installer, or change system PATH/global npm configuration.
 - Installs the actual npm package, `@yeaft/webchat-agent`, in a private user directory, `~/.yeaft/installations/<hostname-four-random-digits>/`. Re-running the command creates a new instance, not an upgrade or restart of an existing Agent.
+- Defaults to CPU-only ONNX Runtime installation by setting `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` only for npm installation. A nonempty caller-provided value is respected; deliberately opting into CUDA artifacts does not change Recall CPU inference. The script does not persist this default into your shell or Agent service.
 - Runs `yeaft-agent install` to register and start a current-user background service. Linux requires a working systemd user session; macOS uses launchd; Windows uses PM2 with restoration at login. Linux may still require an administrator to enable linger for running after logout; the script does not elevate privileges.
 - The Secret is a script argument, never part of the download URL or installer progress output. **The command contains credentials** and may remain in your clipboard, shell history or process arguments. Do not share it; reset the key in Settings if exposed.
 - The installer prints instance-specific management commands. Private installation does not add `yeaft-agent` to system PATH; use the Web UI for instance-safe upgrades (the management wrapper rejects standalone `upgrade`); use the printed absolute-path commands or manage the connected Agent in the Web UI. LLM providers and Claude/Copilot CLI account authentication remain separate, optional setup.
 
 ## Manual npm installation
 
-```bash
-npm install -g @yeaft/webchat-agent
+Linux / macOS (POSIX shell):
 
+```sh
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
+```
+
+Windows PowerShell (restore the previous setting even if installation fails):
+
+```powershell
+$previousCuda = $env:ONNXRUNTIME_NODE_INSTALL_CUDA
+try {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = 'skip'
+  npm install -g @yeaft/webchat-agent
+} finally {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = $previousCuda
+}
+```
+
+The environment variable skips ONNX Runtime's extra CUDA artifact download, **not** native installation scripts. Do not use a blanket `--ignore-scripts`: native dependencies may need their lifecycle scripts. Installation still downloads optional npm dependencies (`@huggingface/transformers`, including ONNX Runtime and its CPU native binaries). Optional-dependency failure or omission results in an explicit Recall fallback rather than semantic results.
+
+This is separate from **Recall model downloads**: only the first explicit, nonempty Recall may download the pinned CPU embedding model into `<yeaftDir>/person/models`. Page loading, ordinary startup and empty Recall do not download the model. `YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` prevents model downloads (cached models still work), and `YEAFT_PERSON_EMBEDDING=off` disables embeddings; neither setting suppresses npm dependency installation. Source installs should likewise prefix `npm install` / `npm ci` with `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` in POSIX shells, or use the PowerShell environment block above.
+
+After installation, on either platform:
+
+```sh
 # Run once. --name is optional; computer-name invalid characters become "-".
 yeaft-agent --server wss://your-server.com --secret your-secret
 

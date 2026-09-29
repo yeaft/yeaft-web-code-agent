@@ -96,11 +96,25 @@ Work Center **不等于**任意无人值守部署。外部副作用仍受所选 
 
 ### 本机单机体验
 
-先安装发布的 Agent 包，再在 loopback 上启动内置 Web UI、Server 和 Agent：
+先安装发布的 Agent 包，再在 loopback 上启动内置 Web UI、Server 和 Agent。Linux / macOS（POSIX shell）：
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 ```
+
+Windows PowerShell 使用临时环境变量（安装后恢复原值）：
+
+```powershell
+$previousCuda = $env:ONNXRUNTIME_NODE_INSTALL_CUDA
+try {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = 'skip'
+  npm install -g @yeaft/webchat-agent
+} finally {
+  $env:ONNXRUNTIME_NODE_INSTALL_CUDA = $previousCuda
+}
+```
+
+推荐安装默认只使用 CPU：`ONNXRUNTIME_NODE_INSTALL_CUDA=skip` 跳过 ONNX Runtime 的额外 CUDA 二进制下载，而不是禁用 npm 安装脚本。安装时仍会下载可选的 `@huggingface/transformers` npm 包及 ONNX Runtime 等原生依赖；Recall 的模型文件仅在首次显式、非空 Recall 时才可能下载。不要使用 `--ignore-scripts` 代替该设置，否则可能破坏原生依赖。可选依赖安装失败或被省略时，Recall 会明确降级；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 只控制模型下载，不控制 npm 安装。
 
 `yeaft-agent local` 使用 named Agent instance。不传 `--name` 时，name 是经过清理的计算机 hostname；这里显式指定：
 
@@ -131,12 +145,12 @@ Claude Code 和 Copilot CLI conversation 仍需要分别安装并登录对应 CL
 
 ### 连接已有 Server
 
-推荐：打开 **设置 → 安全**，选择 **Linux / macOS** 或 **Windows PowerShell**，复制一键安装命令。脚本会检查 Node.js/npm、在独立用户目录安装 Agent，并使用当前服务器地址和 Secret 启动 `<机器名>-<四位随机数>` 新实例，不替换已有 Node 或正在运行的 Agent。平台要求、安全注意事项和管理方式见 [Agent 安装](docs/zh-CN/guide/deploy-agent.md)。
+推荐：打开 **设置 → 安全**，选择 **Linux / macOS** 或 **Windows PowerShell**，复制一键安装命令。脚本会检查 Node.js/npm、在独立用户目录安装 Agent，并使用当前服务器地址和 Secret 启动 `<机器名>-<四位随机数>` 新实例，不替换已有 Node 或正在运行的 Agent。仅在 npm 安装期间默认设置 `ONNXRUNTIME_NODE_INSTALL_CUDA=skip`；若调用者已显式设置非空值，脚本保留该覆盖（可能下载 GPU 二进制，但不会改变 Recall 的 CPU 推理设置）。平台要求、安全注意事项和管理方式见 [Agent 安装](docs/zh-CN/guide/deploy-agent.md)。
 
-手动安装方式：
+手动安装方式（Linux / macOS；PowerShell 安装使用上文的临时环境变量方式）：
 
 ```bash
-npm install -g @yeaft/webchat-agent
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install -g @yeaft/webchat-agent
 yeaft-agent --server wss://your-server.example --name my-worker --secret your-agent-secret
 ```
 
@@ -154,7 +168,7 @@ Workbench 浏览器查看器目前支持 Linux x64 Agent。Server 默认开放�
 1. 在 Yeaft 中选择 Agent，打开 **Workbench → 浏览器**。浏览器未就绪时，能力卡显示**需要启用**，面板会显示固定版本 Chrome for Testing 的下载大小。
 2. 点击一次**启用浏览器**。Yeaft 会显示真实下载百分比，在该 Agent instance 的数据目录中完成浏览器校验和安装，持久化启用配置，执行媒体链路探测，刷新 capability，并自动打开 Viewer；不需要重启 Agent，也不需要再点一次启用。
 
-仅安装 Yeaft 或 Agent 不会触发任何下载。管理员可以设置 `BROWSER_RUNTIME_ENABLED=false` 关闭整个浏览器能力。Agent 媒体 probe 只验证 Chrome、tab capture、VP8 和本机 WebRTC，无法证明远程 Web Viewer 到 Agent 具备可达的 ICE 路径。`BROWSER_STUN_URLS` 可选，用于 direct ICE。生产环境如果需要跨 NAT 或受限网络连接，应部署 TURN，并配置 `BROWSER_TURN_URLS` 和 `BROWSER_TURN_SECRET`；禁止 direct candidate 时设置 `BROWSER_ICE_TRANSPORT_POLICY=relay`。仓库在 [`deploy/browser-turn/`](deploy/browser-turn/README.md) 提供了加固的自托管模板。
+仅安装 Yeaft 或 Agent 不会触发浏览器二进制下载。管理员可以设置 `BROWSER_RUNTIME_ENABLED=false` 关闭整个浏览器能力。Agent 媒体 probe 只验证 Chrome、tab capture、VP8 和本机 WebRTC，无法证明远程 Web Viewer 到 Agent 具备可达的 ICE 路径。`BROWSER_STUN_URLS` 可选，用于 direct ICE。生产环境如果需要跨 NAT 或受限网络连接，应部署 TURN，并配置 `BROWSER_TURN_URLS` 和 `BROWSER_TURN_SECRET`；禁止 direct candidate 时设置 `BROWSER_ICE_TRANSPORT_POLICY=relay`。仓库在 [`deploy/browser-turn/`](deploy/browser-turn/README.md) 提供了加固的自托管模板。
 
 无人值守安装必须在所有命令中使用同一个 named instance：
 
@@ -173,7 +187,7 @@ yeaft-agent browser status --name my-worker
 ```bash
 git clone https://github.com/yeaft/yeaft-web-code-agent.git
 cd yeaft-web-code-agent
-npm install
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
 npm run dev
 ```
 
@@ -243,7 +257,7 @@ Server 拥有认证、用户可见的 catalog metadata 和 relay state。Agent �
 ## 开发与验证
 
 ```bash
-npm install
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
 npm test                 # 核心 Vitest suite
 npm run test:e2e         # Playwright browser suite
 npm run release:guard    # Server/Agent import guard + startup smoke
