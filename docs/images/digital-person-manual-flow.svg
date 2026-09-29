@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1380" viewBox="0 0 1120 1380" role="img" aria-labelledby="title desc">
   <title id="title">数字人当前手动认知工作流</title>
-  <desc id="desc">用户发送消息、点击思考或遐想，经 Server 鉴权中继和 Agent 的 MongoDB 准入后，组装短期上下文并调用模型。公开输出保存后校验提案。继续时可选择下一模型和只读能力；结束时原子提交当前认识。页面只读同步消息、思考记录和调试日志。失败、取消或预算耗尽不提交候选认识。没有自动唤醒。</desc>
+  <desc id="desc">用户发送消息、点击思考或遐想，经 Server 鉴权和 Agent 认知库准入后，组装短期上下文并在事务外调用模型。默认 SQLite person.db 是认知权威，已配置 MongoDB URI 则保留原后端，不自动迁移。独立 recall.db 在 worker 中追平 search_changes，FTS5 和本地向量混合召回后回读权威当前版本；Trace 不做向量索引。结束时短事务原子提交认识与检索变更日志。页面只读同步消息、思考记录和调试日志。Agent 退出停止计算但记忆保留，没有自动唤醒。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#526078"/></marker>
     <style>
@@ -18,7 +18,7 @@
   </defs>
   <rect width="1120" height="1380" rx="16" fill="#f7f9fc"/>
   <text class="title" x="560" y="45" text-anchor="middle">数字人如何完成一轮“想”</text>
-  <text class="detail" x="560" y="77" text-anchor="middle">当前实现 · 一次操作 = Person Turn（episode）；内部多个认知 Loop</text>
+  <text class="detail" x="560" y="77" text-anchor="middle">手动模式 · 默认 SQLite 权威 + 本地召回 · 一次操作可含多个认知 Loop</text>
 
   <rect class="accent" x="230" y="102" width="590" height="80"/>
   <text class="label" x="525" y="134" text-anchor="middle">1. 用户显式触发</text>
@@ -29,7 +29,7 @@
   <text class="detail" x="525" y="275" text-anchor="middle">校验用户与 Agent 访问权，关联请求，不做推理</text>
   <path class="line" d="M525 294V323"/>
   <rect class="box" x="230" y="326" width="590" height="90"/>
-  <text class="label" x="525" y="357" text-anchor="middle">3. MongoDB 准入</text>
+  <text class="label" x="525" y="357" text-anchor="middle">3. 认知库准入（默认 SQLite）</text>
   <text class="detail" x="525" y="386" text-anchor="middle">命令去重 · 忙检查 · 创建活动 / 租约 / 版本保护</text>
   <text class="small" x="525" y="407" text-anchor="middle">仅 Send 写用户消息；Think / Dream 保存为活动触发</text>
   <path class="line" d="M525 416V445"/>
@@ -38,7 +38,7 @@
   <text class="detail" x="525" y="511" text-anchor="middle">Soul + 当前状态 + 触发 + 有界消息 / Concept + 能力结果</text>
   <path class="line" d="M525 538V567"/>
   <rect class="accent" x="230" y="570" width="590" height="90"/>
-  <text class="label" x="525" y="603" text-anchor="middle">5. 模型承载 Person 的判断（一次 call）</text>
+  <text class="label" x="525" y="603" text-anchor="middle">5. 模型承载 Person 的判断（事务外）</text>
   <text class="detail" x="525" y="633" text-anchor="middle">产生结构化想法、判断、自判、状态提案与下一步</text>
   <path class="line" d="M525 660V689"/>
   <rect class="box" x="230" y="692" width="590" height="90"/>
@@ -61,20 +61,27 @@
   <text class="small" x="542" y="910">结束：next = null</text>
 
   <rect class="storage" x="850" y="448" width="250" height="105"/>
-  <text class="label" x="975" y="482" text-anchor="middle">MongoDB 长期记忆</text>
+  <text class="label" x="975" y="482" text-anchor="middle">person.db · 认知权威</text>
   <text class="small" x="975" y="513" text-anchor="middle">身份、消息、状态、Concept</text>
-  <text class="small" x="975" y="538" text-anchor="middle">有界读取；省略 ≠ 删除</text>
+  <text class="small" x="975" y="538" text-anchor="middle">状态持久化；省略 ≠ 删除</text>
   <path class="line dashed" d="M850 492H823"/>
+  <rect class="storage" x="850" y="570" width="250" height="105"/>
+  <text class="label" x="975" y="600" text-anchor="middle">recall.db · 派生索引</text>
+  <text class="small" x="975" y="628" text-anchor="middle">FTS5 + 向量 · worker 追平</text>
+  <text class="small" x="975" y="655" text-anchor="middle">Recall 后回读当前 revision</text>
+  <path class="line dashed" d="M975 553V567"/>
+  <path class="line dashed" d="M850 616H835V518H823"/>
   <rect class="storage" x="850" y="692" width="250" height="126"/>
   <text class="label" x="975" y="726" text-anchor="middle">持久认知记录</text>
   <text class="small" x="975" y="756" text-anchor="middle">每次输入、公开输出、能力</text>
   <text class="small" x="975" y="781" text-anchor="middle">候选 / 提交 / 终态与版本</text>
-  <text class="small" x="975" y="805" text-anchor="middle">不保存模型隐藏推理</text>
+  <text class="small" x="975" y="805" text-anchor="middle">无隐藏推理 · 不做向量索引</text>
   <path class="line dashed" d="M820 736H847"/>
 
   <rect class="storage" x="230" y="926" width="590" height="90"/>
-  <text class="label" x="525" y="959" text-anchor="middle">8. MongoDB 原子提交</text>
-  <text class="detail" x="525" y="989" text-anchor="middle">Concept 修订 + 当前状态 + 提交记录 + 可选回复</text>
+  <text class="label" x="525" y="959" text-anchor="middle">8. 权威库短事务原子提交</text>
+  <text class="small" x="525" y="985" text-anchor="middle">Concept / state / episode / 回复 / Trace + search_changes</text>
+  <text class="small" x="525" y="1007" text-anchor="middle">同库提交 · lease / revision fence · 索引异步追平</text>
   <path class="line" d="M525 1016V1045"/>
   <rect class="box" x="230" y="1048" width="590" height="65"/>
   <text class="label" x="525" y="1089" text-anchor="middle">9. 页面只读同步 → 等待下次人工操作</text>
@@ -92,6 +99,6 @@
   <text class="small" x="913" y="1217" text-anchor="middle">技术事件、请求参数、状态版本</text>
 
   <text class="detail" x="560" y="1280" text-anchor="middle">取消 / 失败 / 超时 / 调用耗尽：终止并记载结果，不提交候选认识</text>
-  <text class="small" x="560" y="1312" text-anchor="middle">默认每轮最多 4 次模型调用、120 秒；重连 / 刷新 / 空闲不启动思考</text>
-  <text class="small" x="560" y="1344" text-anchor="middle">Person 当前直接调用 adapter，不经 Engine.query；外部 VP / 自动唤醒尚未接入</text>
+  <text class="small" x="560" y="1312" text-anchor="middle">最多 4 次调用 / 120 秒；Agent 退出停止 worker，已提交记忆保留</text>
+  <text class="small" x="560" y="1344" text-anchor="middle">既有 MongoDB URI 保留原后端，无自动迁移；重连 / 刷新 / 空闲不启动思考</text>
 </svg>

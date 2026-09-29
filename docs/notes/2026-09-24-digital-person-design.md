@@ -1,28 +1,30 @@
 # 数字人设计：Soul、自主认知、记忆与桌面身体
 
 - 日期：2026-09-24
-- 状态：**完整设计 + 显式认知实验首版**；仅下方“本轮实现边界”列出的功能已有代码，其他章节仍是目标契约。合并不授权读取用户资料、部署数据库或修改在线运行数据。
+- 状态：**完整设计 + 显式认知实验首版，SQLite／本地召回切片集成中**；下方“本轮实现边界”区分手动路径、本轮切片与未实现能力，其他章节仍是目标契约。合并不授权读取用户资料、部署数据库或修改在线运行数据。
 - 目标：定义一个以持续身份为主体、能自主关注和思考、具有记忆与行动边界的数字人，而不是给 Session 或任务系统加一个桌面角色。
-- 技术方向：JavaScript 认知运行时 + MongoDB 数字人存储 + Rust 原生桌面身体 + npm 分发入口。
-- 本轮修订：2026-09-29；明确 Person Turn、Engine Turn、Loop、模型调用的层级，以及数字人的语义决策、运行时控制与外部 VP 执行边界。
-- 源码考察基线：当前手动认知调用链按 `d0a00d3a` 核对；早期架构考察为 `df7481a9`。现状与拟议架构明确分开；后续实现应重新核对。
+- 技术方向：JavaScript 认知运行时 + SQLite 默认认知权威（保留 MongoDB 兼容后端） + 本地派生检索 + Rust 原生桌面身体 + npm 分发入口。
+- 本轮修订：2026-09-29；在手动认知路径上改为 SQLite 默认权威与本地混合召回，保留既有 MongoDB 后端；自主触发、完整治理和跨设备能力仍是目标。
+- 源码考察基线：手动认知调用链此前按 `d0a00d3a` 核对；早期架构考察为 `df7481a9`。本轮 SQLite／本地召回正在集成，下述存储与检索合同须随最终源码及测试复核，不把历史 MongoDB 验证当作新后端的通过证据。
 - 决策级别：文中“必须”是拟议的验收契约；“建议默认值”需要原型验证；“待决定”不是已确定产品行为。
 
 ### 本轮实现边界：显式认知首版
 
-- **已有代码**：`agent/yeaft/person/` 是独立认知运行时，不依赖 Session、WorkItem 或旧 Dream。MongoDB 保存身份/Soul、原生消息、认知活动、当前状态、版本化 Concept、提交与 Trace；显式 Send／Think／Dream 可产生召回、整理、联想、自判和一次原子认知提交。Think 是主体自身能力，不是外部 VP 的代称。
-- **界面**：左侧数字人入口；复用 Web 聊天输入组件，独立输入／消息，无 Session 列表；选择 Agent、取消、失败提示与重连刷新。**思考记录**是独立的消息式时间线，展示触发输入、上下文中的记忆、明确生成的想法、判断、自判及输出，并区分候选、已采纳、未采纳与不完整记录；原始请求、事件 JSON 与状态版本另放在**调试日志**页面。两种视图复用同一授权与分页数据源，保留 MongoDB/wire 的 `traces` 名称，不迁移历史数据。当前按认证 owner + Server/Agent 命名空间拥有一个 Person，不代表跨设备漫游已完成。
+- **认知运行时**：`agent/yeaft/person/` 独立于 Session、WorkItem 和旧 Dream。显式 Send／Think／Dream 可产生召回、整理、联想、自判和一次原子认知提交；Think 是主体自身能力，不是外部 VP 的代称。默认由 `<yeaftDir>/person/person.db` 保存身份/Soul、原生消息、认知活动、当前状态、版本化 Concept、提交与 Trace；配置了 MongoDB URI 的实例继续使用原后端。
+- **本轮存储／召回切片**：SQLite 权威采用 WAL、busy timeout 和 `BEGIN IMMEDIATE` 短事务；消息、Concept/revision、episode、Trace、state/commit 与对应 `search_changes` 变更日志原子落库，不把模型调用放进事务。独立 `recall.db` 保存可重建 FTS5／向量索引，在 Agent 管理的 worker 中追平；按 owner + namespace 隔离候选，回读权威的当前 revision 后才进入 context。索引不是第二套真源，也不是把每个场景拆成一个数据库；Agent 退出停止 worker，已提交记忆保留。具体边界见 11.1、11.5–11.6。
+- **界面**：左侧数字人入口；复用 Web 聊天输入组件，独立输入／消息，无 Session 列表；选择 Agent、取消、失败提示与重连刷新。**思考记录**是独立的消息式时间线，展示触发输入、上下文中的记忆、明确生成的想法、判断、自判及输出，并区分候选、已采纳、未采纳与不完整记录；原始请求、事件 JSON 与状态版本另放在**调试日志**页面。两种视图复用同一授权与分页数据源，保留存储/wire 的 `traces` 名称，不迁移历史数据。当前按认证 owner + Server/Agent 命名空间拥有一个 Person，不代表跨设备漫游已完成。
 - **当前触发策略：仅手动**。只有用户发送消息、点击“思考”或“遐想”才开始一轮；Think 可指定主题或留空，Dream 不要求主题。打开页面、刷新、重连、Agent 重启、空闲计时及上一轮结束都不启动下一轮。一次操作内仍可按预算进行多次模型调用、召回与自判，无需逐步点击；完成、取消或失败后等待下一次显式操作。刷新只同步已有活动与记录，不派发模型计算；未知结果仅由用户以原命令 ID 显式重试，取消不回滚已经提交的认识。UI 常显“手动模式”和启动说明，当前不提供自动模式开关，后端拒绝 `autonomyEnabled: true`。这是当前产品策略，不是由旧 Dream 限制产生的临时缺陷；以后完善后再单独交付自主触发，不因升级静默开启。自动化免去逐轮点击，不取消停止入口或行为/数据授权边界。
 - **能力与模型边界**：四个内置只读认知方法，目录 search/view 后加载，没有真实文件 Skill／VP executor／外部写操作。每次 episode 最多四次调用、120 秒；后续模型可自主选自最多八个已配置原生模型，effort 仅在 `YEAFT_THINKING_V1=1`、模型元数据支持且实际请求不突破本轮输出预留时可选。当前输出预留为模型上限与 4096 token 中较小者；Anthropic manual thinking 会扩大 `max_tokens` 的组合不进入可选目录，adaptive / Responses 在预算内仍可选。不是万级能力装配的最终实现。
-- **未实现**：自主空闲唤醒、事件 Connector、并行多视角、外部 VP 委派、场景快捷方式学习、语义检索、数据删除/撤权控制台、Rust 身体和跨设备迁移。手动 Dream 是新认知契约中的遐想活动入口，不等于完整自主 Dream 已完成。不要用本实验处理依赖未实现撤权/删除治理的敏感数据。
-- **配置**：只从 Agent 进程环境读取 `YEAFT_PERSON_MONGODB_URI` 与可选 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`）；原生模型来自当前实例 `config.json`。需要支持事务的 MongoDB replica set / sharded deployment；不自动安装、不开机连接、不做文件 fallback、不自动重启已有服务。建议使用隔离实例、专用库、最小权限凭据、认证/TLS 与备份。
-- **验证边界**：测试覆盖真实 MongoDB 事务、进程竞争、取消、重启恢复和浏览器→Server→Agent→数据库链路；推理使用脚本化 adapter，不代表真实模型认知质量已验证。所有 accepted 记录完整保存，超预算输出明确标记不完整/拒绝；不保存或伪造 provider 隐藏思维链。
+- **本地 embedding**：默认固定版本的 multilingual-e5-small q8 ONNX，经 `@huggingface/transformers` 在 CPU 上推理，缓存于 `<yeaftDir>/person/models`。仅首次显式非空 Recall 才可按需下载；启动、页面打开、空查询和普通写入不下载。`YEAFT_PERSON_EMBEDDING=off` 禁用；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止下载，已有缓存可用。关键词 FTS5 + 余弦向量 + RRF 支持中英文，向量是有界精确扫描而非 ANN／百万条规模承诺；缺模型或索引时返回明确降级元数据，Trace 不做向量索引。推理／检索在本机，模型文件下载会连接 Hugging Face；认知 LLM 仍可能把获准 context 发给远端 provider。
+- **未实现**：自主空闲唤醒、事件 Connector、并行多视角、外部 VP 委派、场景快捷方式学习、数据删除/撤权控制台、Rust 身体、后端数据迁移和跨设备迁移。手动 Dream 不等于完整自主 Dream；本地召回不等于完整知识图谱治理。不要用本实验处理依赖未实现撤权/删除治理的敏感数据。
+- **配置**：无 MongoDB 配置时默认 SQLite；可用 `YEAFT_PERSON_STORAGE=sqlite|mongodb` 显式选择。`YEAFT_PERSON_MONGODB_URI` 保持原 MongoDB 路径，可选 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`）；URI 已配置时显式选 SQLite 会失败，避免静默分叉。无自动迁移／后端 fallback；MongoDB 仍需 replica set / sharded deployment 事务支持，应用不安装 `mongod`。原生认知模型来自实例 `config.json`。建议隔离实例、最小权限与备份；已有服务配置变更须明确授权后重启，不由本功能自动执行。
+- **验证边界**：历史 MongoDB 测试不证明 SQLite、真实本地模型下载或混合检索已验收；本轮须在最终集成源码上检查事务/竞争/恢复、索引追平/重建/隔离、懒下载/离线/降级，以及 Browser→Server→Agent 链路。脚本化 adapter 不代表真实模型认知质量；文档不充当测试通过报告。所有 accepted 记录应完整保存，超预算输出明确标记不完整/拒绝；不保存或伪造 provider 隐藏思维链。
 
 ## 当前代码工作流：一张图看懂
 
-以下描述的是**已实现的手动认知路径**，不是后文的完整目标架构。阅读图中的 1–9 即可理解一轮如何运行；[打开大图](/images/digital-person-manual-flow.svg)。
+以下描述**手动认知路径与本轮 SQLite／本地召回切片**，不是后文的完整目标架构；新后端的最终验收边界见上文。阅读图中的 1–9 即可理解一轮如何运行；[打开大图](/images/digital-person-manual-flow.svg)。
 
-![数字人手动认知工作流：人工触发，经鉴权、MongoDB 准入、上下文组装、模型调用与提案校验，可继续思考或原子提交；页面只读同步消息、思考记录与独立调试日志。](/images/digital-person-manual-flow.svg)
+![数字人手动认知工作流：人工触发，经鉴权、认知库准入、上下文组装、模型调用与提案校验，可继续思考或原子提交；页面只读同步消息、思考记录与独立调试日志。](/images/digital-person-manual-flow.svg)
 
 ### 每一步实际做什么
 
@@ -30,18 +32,18 @@
 | --- | --- | --- |
 | 1. 人决定开始 | 发送消息、点击 Think 或 Dream，生成稳定命令 ID | Think 可有主题或留空；Dream 不带主题。打开、空闲、重连都不会开始计算 |
 | 2. 鉴权与中继 | Browser → Server → 指定 Agent；Server 提供认证 owner，校验 Agent 访问权及请求关联 | Server 不执行推理；不创建隐藏 Session、WorkItem 或 Coordinator |
-| 3. 准入与持久化 | MongoDB 去重、忙检查，创建 episode（一轮活动）、租约与版本保护；仅 Send 写用户消息 | 同一命令重试不重复启动；未知结果只能人工以原 ID 重试。过期活动标记中断，不自动续跑 |
+| 3. 准入与持久化 | 认知库去重、忙检查，创建 episode（一轮活动）、租约与版本保护；仅 Send 写用户消息 | 同一命令重试不重复启动；未知结果只能人工以原 ID 重试。过期活动标记中断，不自动续跑 |
 | 4. 激活短期记忆 | Soul、当前状态、触发、模型/能力目录摘要，以及有界历史消息和 Concept 进入 context | 初始候选窗口为最近 12 条消息、最多 12 个关注 Concept + 12 个近期 Concept，再按预算省略整条记录；不是把数据库全部塞进去 |
 | 5. 认知调用 | 第一次采用有效的上次已接受选择，否则采用配置默认模型；后续调用采用数字人指定的模型/effort | 调用前校验可用性和预算、记录输入与选择；默认最多 4 次调用、120 秒，支持的模型最多 8 个 |
 | 6. 保存与校验 | 保存公开输出，解析结构化 proposal，检查格式、实际读取过的来源、Concept 修订、想象标记及后续模型选择 | 代码只能验证来源关系，不能证明语义真实；无效提案失败结束，当前没有自动修复重试回路 |
 | 7. 继续想 | `next` 指定下一模型、effort、原因和可选能力；能力结果与上一提案进入下一次 context | 中间提案只是候选，不覆盖当前认识；能力发现、查看、使用各占后续推进机会，受同一调用预算约束 |
-| 8. 接受当前认识 | `next: null` 后，在一个 MongoDB 事务中提交 Concept/revision、state、commit、可选回复与完成事件 | 必须仍拥有当前租约及正确状态/控制版本；取消、失联 worker 或旧版本不能提交。取消不回滚已完成的提交 |
+| 8. 接受当前认识 | `next: null` 后，在一个权威库短事务中提交 Concept/revision、state、commit、episode 终态、可选回复与 Trace；SQLite 同事务写对应 `search_changes` | 必须仍拥有当前租约及正确状态/控制版本；取消、失联 worker 或旧版本不能提交。取消不回滚已完成的提交 |
 | 9. 展示与等待 | 页面运行中轮询 snapshot/记录，终态同步后停止；消息、思考记录、调试日志分别投影 | 思考记录展示应用层实际产物，不是 provider 隐藏推理。已分页历史保留并提示需刷新；终态前发出的旧读取不能冒充最新同步 |
 
 ### “想”、能力和记忆如何连接
 
 - **想不等于一次检索。** 模型可对 context 中已有经历进行整理、联想、反例检查并提出新的 Concept；不足时选择 Recall，把长期记忆的一页带入下一次短期 context。每次调用的公开想法、自判与结果都可追溯。
-- **当前能力是最小只读实现。** `Think` 是内在方法，无需工具调用；`catalog.search` → `catalog.view` → 使用，可找到 `Recall`、`Skill.reconsider`、`Skill.associate`。Recall 是本 Person 的消息/Concept 字面搜索；另外两项返回方法说明，不调用外部执行者。
+- **当前能力是最小只读实现。** `Think` 是内在方法，无需工具调用；`catalog.search` → `catalog.view` → 使用，可找到 `Recall`、`Skill.reconsider`、`Skill.associate`。默认 SQLite 路径的 Recall 对本 Person 的消息/Concept 作本地关键词与语义混合召回；索引不可用时按元数据显式降级，不能把字面匹配称为语义命中。命中保留 chunk→父记录来源并回读权威当前 revision；另外两项返回方法说明，不调用外部执行者。
 - **还不是完整动态 tool set。** 当前 provider 请求不携带原生工具 schema，而是模型在结构化 `next.capability` 中提出能力调用，由 runtime 执行。通用 Skills 装配、外部 VP executor 与并行视角仍未接入，不能把上图理解成它们已经可用。
 - **数据库区分“想到过”与“现在接受”。** 消息、活动与调用记录构成长期经历；经过提交的 state/Concept 才是当前接受的认识。失败、超时、预算耗尽不提交候选。数据库故障时没有文件兜底，未成功归档的内容不能保证重建；下一次访问恢复过期活动为 interrupted。
 
@@ -67,7 +69,7 @@
 当前真实调用关系如下（方括号内是负责方）：
 
 ```text
-人工操作 → MongoDB 准入 → PersonRuntime.run(episode)           [运行时]
+人工操作 → 认知库准入 → PersonRuntime.run(episode)           [运行时]
   └─ Person Loop 0..N-1
        ├─ assembleContext + startCall(callId, callIndex)        [运行时]
        ├─ collectOutput → adapter.stream → 结构化 proposal      [模型承载 Person 思考]
@@ -151,21 +153,21 @@ Person Turn
 
 - 产品、身份与逐维实现矩阵：第 1–6 节。
 - Soul、触发、持久认知工作区、多视角综合和自判：第 7–10 节，核心架构在第 9 节。
-- MongoDB、Concept 图谱、新 Dream、全范围扫描和自主协调：第 11–15 节。
+- 认知存储、本地召回、Concept 图谱、新 Dream、全范围扫描和自主协调：第 11–15 节。
 - 多设备、桌面、交互与协议：第 16–19 节。
 - 安全、恢复、认知 Debug/Trace、验证、迁移与路线：第 20–26 节。
 - Soul 草案、多视角提案与最终综合契约：附录 A、B。
 
 ### 只读这一页：五项需求与实现合同
 
-**数字人是 MongoDB 中持续存在的主体；context 是它当下的短期工作记忆；模型调用提供认知计算；广义 Skills 提供能力；VP 是其中一种外部执行能力。** 数据库本身不证明主观意识，模型或 VP 也不单独拥有这个人的身份。
+**数字人是认知权威中持续存在的主体；context 是它当下的短期工作记忆；模型调用提供认知计算；广义 Skills 提供能力；VP 是其中一种外部执行能力。** 数据库本身不证明主观意识，模型或 VP 也不单独拥有这个人的身份。
 
 | 用户需求 | 确定的设计 | 如何证明满足 | 详细章节 |
 | --- | --- | --- | --- |
 | 全新、贴近人的 Dream | 基于挂念、经历、兴趣和当前评价进行回想、走神、联想、幻想、孵化；可以没有任务、没有新消息、没有成果。记忆整理只是其中一种活动 | 没有新事件仍能沿旧兴趣产生明确标注的想象；可暂停/回访/休息；不调用旧 Dream writer | 12.6 |
 | 成千上万能力，逐步感知和加载 | 有界领域地图 → 搜索/浏览能力摘要 → 查看选中 manifest → 依赖解析 → 本 call 装配工具/Skill/VP adapter；按场景保留少量快捷方式 | 10,000 个能力不造成 prompt 全量膨胀；低排名能力可分页找到；切场景卸载无关工具 | 13.1、13.4–13.6 |
 | 模型与 effort 由数字人动态决定 | 人物输出下一次调用需求和选择，runtime 仅验证真实模型支持、数据出站、预算和权限；允许横向换模型、升降 effort | 每次调用能查到 requested/effective model 与 effort、原因及拒绝/降级；无固定三级流水线 | 10 |
-| DB 是长期记忆，context 是短期记忆 | 获准保存的原生 Message、经历、显式想法和结论落 MongoDB；巩固不是首次变成长记忆；有界召回进入 context | 清空进程后仍能恢复身份/经历；context 淘汰不删除 DB；假设被召回仍是假设 | 11.2–11.3、12.2 |
+| DB 是长期记忆，context 是短期记忆 | 获准保存的原生 Message、经历、显式想法和结论落认知权威；巩固不是首次变成长记忆；有界召回进入 context | 清空进程后仍能恢复身份/经历；context 淘汰不删除 DB；假设被召回仍是假设 | 11.2–11.3、12.2 |
 | VP 是外部帮助，能力统一归 Skills | 版本化 capability manifest 将工具、方法、Connector 和 VP 委派统一描述；VP 只收到必要输入并返回证据/建议；Person 最终验收和提交 | VP 换人/失败不改变主体身份；无 Work Center 也可执行；子 VP 不直接覆盖认知库 | 6、13、14.2 |
 
 最小实现闭环：**唤醒 → 从 DB 组装短期 context → 人物选择认知需求/模型/能力 → 按需装配 → 调用或委派 → 结果持久化 → 人物综合、自判并提交 → 继续、表达或休息**。不要求每次走遍所有步骤，简单情况一次调用即可。
@@ -177,17 +179,17 @@ Person Turn
 1. **数字人是最终主体，也是协调者与最终认知决策者。** 它管理自己的关注、目标、承诺和行动，直接做事或委派子 Agent；不需要先创建 WorkItem，也不由 Work Center Coordinator 决定它的生活。
 2. **VP 是可复用的对话角色/Soul 模板，不是数字人。** 数字人可借用模板初始化或委派调查、执行、评审，但身份、自我认识、经历和决定属于 `personId`。
 3. **思考自主与行为授权分开。** 用户可以禁止操作、撤销数据使用、关闭通知或停止运行；一句“不许这样想”不自动成为内部主题禁令。数字人可以质疑、不同意或重新判断用户的观点和计划，但不能以自己的判断授予外部操作权限。
-4. **“最新认知状态”是核心持久产物。** MongoDB 中结构化 Concept 图谱、当前关注、自我模型、评价、意向与决定共同构成当前认知快照；不是最新一条 Message，也不是某个模型最后一句话。
+4. **“最新认知状态”是核心持久产物。** 认知权威中结构化 Concept 图谱、当前关注、自我模型、评价、意向与决定共同构成当前认知快照；不是最新一条 Message，也不是某个模型最后一句话。
 5. **多个 API call 是认知信号/候选更新，而非多个独立主体。** 回顾、想象、质疑、调查可并行；数字人综合它们，经版本校验提交唯一有序的状态修订。分歧可保留，不强求平均或多数表决。
 6. **采用持久认知工作区（blackboard）+ 多视角提案 + 串行提交。** 模型承担语义判断，确定性代码承担 schema、权限、版本、预算与副作用 fence。接受一个判断不等于证明它客观正确。
-7. **全新人本 Dream。** 从挂念、兴趣与经历出发回想、联想、幻想、孵化和自我校准；记忆整理只是活动之一，不受旧 Dream 设计束缚，与在线认知共用 MongoDB 状态及提交协议。
+7. **全新人本 Dream。** 从挂念、兴趣与经历出发回想、联想、幻想、孵化和自我校准；记忆整理只是活动之一，不受旧 Dream 设计束缚，与在线认知共用认知权威状态及提交协议。
 8. **每次应用层思考都有 Trace。** 记录触发、输入版本、调用身份、明确生成的想法/假设/结论、采纳或否决、自判与状态差异、工具和表达；可以按时间与 Concept 回放。不依赖或伪造 provider 隐藏推理。
 9. **保留探索空间，不以任务完成定义全部认知。** 可以回想、幻想、改进已经解决的事情，也可以搁置、休息；不要求每个念头变成任务或通知。
 10. **允许充分认识环境。** 经明确范围和数据使用授权，可以选择覆盖全部可访问文件系统的持续盘点与读取；不把“不能全盘扫描”写成产品禁区，也不因安装程序就自动获得这种授权。
 11. **模型、effort 与能力均按需选择。** Person 决定下一调用的模型/投入；广义 Skills 经有界发现与装配形成场景化 tool set。Luna / Soul / Astra 只是可选偏好 alias，VP 是外部执行能力，不是主体。
-12. **一个人、多身体、一个提交权威。** Rust 负责桌面呈现，Agent 承载 JavaScript 认知与执行，MongoDB 保存新人物状态。多个视角并行不意味着多设备可各自覆盖同一状态。
+12. **一个人、多身体、一个提交权威。** Rust 负责桌面呈现，Agent 承载 JavaScript 认知与执行，认知权威保存新人物状态。多个视角并行不意味着多设备可各自覆盖同一状态。
 13. **新旧系统隔离演进。** 新数字人不依赖 Work Center，旧 Session / Work Center / CLI 路径继续兼容；不自动迁移旧数据或重启在线服务。
-14. **DB 长期记忆，context 短期记忆。** 获准保存的原生消息与显式认知产物在 MongoDB，按需召回进入 context；持久不等于正确，context 淘汰不删除长期记录。
+14. **DB 长期记忆，context 短期记忆。** 获准保存的原生消息与显式认知产物在认知权威中，按需召回进入 context；持久不等于正确，context 淘汰不删除长期记录。
 15. **以连续理解、判断修正和可靠行动验收。** 完整人类认知/意识建模可以作为长期探索方向；工程上验证已定义能力，不以“能写内心独白”宣称已证明主观意识。
 
 ## 2. 背景与现有系统边界
@@ -200,10 +202,10 @@ Person Turn
 | Session 是原生持久对话编排单元；跨 Agent 身份包含 `agentId + sessionId` | 数字人可参与多个交流上下文，但不破坏现有身份隔离，不创建伪用户消息唤醒自己 |
 | `Engine.query()` 有明确的 terminal boundary；当前 Person 则直接调用 LLM adapter | Person episode 与 Engine query 是不同生命周期；未来委派可使用有限 query，但 query 结束不代表人物已验收或所有承诺完成，见[调用与控制边界](#turn-loop-control) |
 | Work Center 已有 WorkItem / Action / Run 与 Coordinator | 保留旧产品兼容；数字人路径不创建这些对象、不调用其 Coordinator。可抽取独立执行/冲突管理原语，但不是复用整套工作流 |
-| Dream/H2-AMS runtime 在当前基线已停用 | 淘汰旧文件 Dream，为数字人重设计 MongoDB 原生 Dream；不直接重新开启旧实现 |
+| Dream/H2-AMS runtime 在当前基线已停用 | 淘汰旧文件 Dream，为数字人重设计数据库原生 Dream；不直接重新开启旧实现 |
 | Post-turn compact 服务于上下文窗口 | compact 不是人物记忆，不作为事实独立来源，也不承担兴趣、承诺或身份 |
 | Server 负责认证、归属与中继，Agent 拥有执行环境和原生运行数据 | 新认知运行时放在 Agent 一侧；Server 不隐式成为认知数据库或推理服务 |
-| 主应用是 JavaScript；本轮新增独立 MongoDB 显式认知切片，尚无 Rust 身体与完整自主调度 | 顶部实现边界是本轮可用范围；其余目标协议、命令与组件仍是设计 |
+| 主应用是 JavaScript；独立显式认知切片本轮改为 SQLite 默认存储，尚无 Rust 身体与完整自主调度 | 顶部实现边界是本轮可用范围；其余目标协议、命令与组件仍是设计 |
 
 现状依据为仓库中的 `CLAUDE.md`、`agent/yeaft/engine.js`、`agent/yeaft/session.js`、`agent/yeaft/tools/index.js` 和 `agent/yeaft/work-center/service.js`。具体参照以下边界：
 
@@ -270,7 +272,7 @@ Person Turn
 | 已解决问题再次被想起 | 新分支探索改进，不改写已经发生的结果 | 状态版本与事实历史分离 |
 | 同时收到三种解释 | 数字人比较证据，采纳其一或保持未决 | 不是最后响应覆盖，也不是三票成真 |
 | 新证据推翻旧判断 | 自判后修订 Concept，关联计划失效或重评 | Trace 能解释变化，已发生动作不会被“回滚”抹去 |
-| 空闲 Dream | 回顾、幻想、巩固、消解矛盾或休息 | 同一 MongoDB 状态，不写 memory.md |
+| 空闲 Dream | 回顾、幻想、巩固、消解矛盾或休息 | 同一认知权威状态，不写 memory.md |
 | 广范围扫描 | 按授权遍历全部可访问范围，保存覆盖率和例外 | 全范围不等于无限上下文，不把未读文件说成已读 |
 | 调查子 Agent 完成 | 结果作为提案回到数字人，由其决定 | 子 Agent 不直接提交最终认知或扩权 |
 | 用户暂停或撤权 | 控制面立即生效，晚到结果重新过 gate | 不等待模型同意，不让 Dream 复活删除内容 |
@@ -361,7 +363,7 @@ Person Turn
   ├─ Dream：同一主体的遐想、孵化、回访与学习
   └─ 执行与沟通策略：调用 Skill / 外部 VP 委派 / 等待 / 表达
                │
- MongoDB：当前认知 + Concept 图谱 + 修订 + Trace
+ 认知权威：当前认知 + Concept 图谱 + 修订 + Trace
                │                        ▲
        command / delegation outbox       │ 结果事件
                ▼                        │
@@ -373,9 +375,9 @@ Person Turn
 ### 6.1 四类明确职责
 
 1. **数字人判断**：模型在同一 Person 的身份与状态下，产生想法、比较意见、决定自己的当前认识和后续意向。Integrator 是这个主体的一种活动，不是外部 Work Center Coordinator。
-2. **认知持久化**：MongoDB 保存结构化当前态及修订、输入和输出；最新状态是可查询实体，不是从最近聊天中猜测。
+2. **认知持久化**：认知权威保存结构化当前态及修订、输入和输出；最新状态是可查询实体，不是从最近聊天中猜测。
 3. **运行内核**：确定性代码负责调度、版本、权限、预算、输入可信边界和持久提交。它能拒绝非法写入，但不把“模型已判断”当作“内容已证实”。
-4. **执行与表达**：直接工具或委派；所有外部行为再过执行端 gate。身体只展示授权投影，不持有 MongoDB 管理凭据。
+4. **执行与表达**：直接工具或委派；所有外部行为再过执行端 gate。身体只展示授权投影，不直接持有数据库访问权或管理凭据。
 
 Server 继续负责认证与路由，不隐式拥有认知数据。新增 Person 模块可独立关闭。可以没有身体而认知，也可仅显示身体而暂停认知。
 
@@ -568,7 +570,7 @@ Concept 是有类型的认知对象，不只是关键词。集合中的每个对
 }
 ```
 
-根只容纳有界活跃引用；长期知识图谱以分页对象存储，不使用 MongoDB 单文档无限数组。`state_commits` 保存每次提交清单、父版本和 revision 引用，`concept_revisions` 保存历史 payload；checkpoint + 后续提交清单可重建一个版本。UI 上的“完整认知”是当前根与该版本可访问的 Concept 集合，不要求每次调用读取全部图谱。
+根只容纳有界活跃引用；长期知识图谱以分页对象存储，不使用无限增长的单记录数组。`state_commits` 保存每次提交清单、父版本和 revision 引用，`concept_revisions` 保存历史 payload；checkpoint + 后续提交清单可重建一个版本。UI 上的“完整认知”是当前根与该版本可访问的 Concept 集合，不要求每次调用读取全部图谱。
 
 ### 9.4 从并行调用到有序提交
 
@@ -657,44 +659,58 @@ Luna / Soul / Astra 可以保留为可选计算偏好 alias（轻量/常规/深�
 
 ### 10.3 context 就是短期工作记忆
 
-上下文分层：有效运行/数据/行为策略 → 当前 Soul revision → 当前认知快照和空间 → **有界能力地图与本次激活集** → 当前输入及其类型 → 从 DB 召回的经历/结论 → 当前视角职责与检查点。不是把 MongoDB 全库、全部 Skills 或最近所有消息塞进一个 prompt。
+上下文分层：有效运行/数据/行为策略 → 当前 Soul revision → 当前认知快照和空间 → **有界能力地图与本次激活集** → 当前输入及其类型 → 从 DB 召回的经历/结论 → 当前视角职责与检查点。不是把认知库全库、全部 Skills 或最近所有消息塞进一个 prompt。
 
 `context_manifest` 按 call 保存 `stateVersion / sourceRevisionRefs / recalledRefs / skillRefs / activationId / tokenAllocation / omittedReasons`；模型实际接触的内容及工具结果均加入 11.7 的依赖清单。检索先按 owner/Space/用途过滤，再按关联、时间、实体、证据和未决关系排序；缺少信息时可逐步召回，不能把“本次没想起”说成“从未发生”。模型 context 容量变化时重新组装，预留 tool schema、结果和输出空间；不得裁掉身份与安全边界。
 
-每个并行视角/受托 VP 有自己的有限 context，**共同读数据库不代表共享一段无限短期意识**。context 淘汰不删 DB；落库的 context checkpoint 是恢复记录，不是仍在活动的短期记忆。重启后按最新版本与权限重新载入。切换模型传递可见结构化状态，不要求模型共享不可见推理；“MongoDB 在本机”不代表 LLM 请求也在本机。
+每个并行视角/受托 VP 有自己的有限 context，**共同读数据库不代表共享一段无限短期意识**。context 淘汰不删 DB；落库的 context checkpoint 是恢复记录，不是仍在活动的短期记忆。重启后按最新版本与权限重新载入。切换模型传递可见结构化状态，不要求模型共享不可见推理；“认知库和 embedding 在本机”不代表 LLM 请求也在本机。
 
-## 11. MongoDB 存储设计
+## 11. 认知权威与派生检索
 
 ### 11.1 权威范围与部署
 
-MongoDB 保存新 Person 的身份、原生 Message、Concept 图谱与修订、当前认知状态、记忆知识、关注、显式思考输出、Dream、自判、context 恢复引用、模型选择/能力经验、内部事件、命令/委派与通知状态。大文件、音频、图片和既有 transcript 保存引用，不把所有内容内嵌到一个 Person document。
+**默认是一个实例本地 SQLite 权威，不再要求用户先部署 MongoDB。** `<yeaftDir>/person/person.db` 保存 Person 身份/Soul、原生 Message、Concept 及修订、episode、当前 state、commit 与 Trace。独立的 `<yeaftDir>/person/recall.db` 仅保存派生 FTS5、chunk 与向量索引；模型缓存位于 `<yeaftDir>/person/models`。它们不属于 `<workDir>/.yeaft`，也不复用 Server 或 Work Center 的 SQLite 文件。认知计算与存储/检索 worker 都由同一 Agent 管理，不需要另起常驻数据库服务；Agent 退出停止计算，已提交状态不会随进程清空。
 
-建议每个可信管理边界使用一个 MongoDB database，按 owner / Person 隔离记录；不是每个兴趣或领域建一个 database。需要强组织隔离时使用独立部署与凭据，而不是只靠应用标签。
+**场景不等于数据库。** 工作、生活、发布等 domain/场景是同一主体里的标签、视图或查询范围；权限边界还需 owner、namespace 及相应策略，不能以场景标签代替。按场景拆分多个权威库，会把一次跨领域 Concept/state/Trace 提交变成跨库协调，破坏原子性。这里分出 `recall.db` 是按“权威与可重建投影”划分：索引可以落后、丢弃、重建，不能接受认知提交。当前按认证 owner + Server/Agent namespace 隔离；强组织隔离需独立实例、操作系统权限或数据库部署/凭据，而不是只靠应用标签。
 
-首版支持用户显式配置的本地或私有 MongoDB **replica set**，因为设计依赖事务。单节点 replica set 可用于本地验证，但没有高可用性；普通 standalone 不作为完整功能部署。Change stream 是可选优化，可靠队列仍支持有索引轮询。
+后端选择只读取 Agent 进程配置，不由浏览器请求指定：
 
-npm 安装不静默安装或开启 `mongod`。连接向导先验证版本、TLS/认证、事务、索引权限、磁盘与备份配置；云托管是可选路径，不默认要求 Atlas。MongoDB 版本、许可、备份与运维分发方案是 P0 决策门，不能因“支持 npm 安装”而略过。
+| `YEAFT_PERSON_STORAGE` | `YEAFT_PERSON_MONGODB_URI` | 行为 |
+| --- | --- | --- |
+| 未设置 | 未设置 | SQLite 默认路径 |
+| 未设置或 `mongodb` | 已设置 | 保留 MongoDB 权威 |
+| `sqlite` | 未设置 | 显式选择 SQLite |
+| `sqlite` | 已设置 | 拒绝冲突配置，不能静默创建另一套权威 |
+| `mongodb` | 未设置 | 配置错误，不回退 SQLite |
+
+未知后端值也须报配置错误。**没有自动导入、迁移或故障后切换。** 尤其不能在旧 MongoDB 实例上只删 URI，便把新的空 SQLite 误当迁移结果；后端迁移工具尚未交付。
+
+MongoDB 兼容路径保留 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`），仍需支持事务的 replica set 或分片部署；普通 standalone 不支持。单节点 replica set 没有高可用保证。使用专用库与最小权限凭据，非 loopback 连接需要认证/TLS，备份由部署者负责。npm 不静默安装或开启 `mongod`，不默认要求 Atlas；连接向导、部署/许可验证和自动运维仍是未来工作。
+
+后续完整模型还将保存关注、Dream 进展、自判、context 恢复引用、能力经验、内部事件、委派与通知状态；不代表本轮已有全部表/API。大文件、音频、图片和既有 transcript 保存受控引用，不把全部内容内嵌到一个记录。
 
 ### 11.2 数据权威表
 
-| 数据 | 权威存储 | MongoDB 中的形式 |
+| 数据 | 权威存储 | 认知库中的形式 |
 | --- | --- | --- |
-| 新 Person 认知记忆 / 知识 | MongoDB | 有版本与来源的记录 |
-| 原生 Person 输入/输出消息及认知产物 | MongoDB | Message revision、显式想法/结论与派生引用；不是只存筛选后的摘要 |
+| 新 Person 认知记忆 / 知识 | 选定的认知权威 | 有版本与来源的记录 |
+| 原生 Person 输入/输出消息及认知产物 | 选定的认知权威 | Message revision、显式想法/结论与派生引用；不是只存筛选后的摘要 |
 | 旧 Session 对话（兼容来源） | 现有 Agent conversation store | 只读来源引用或经确认的有界导入；不双写完整 transcript，不宣称旧消息已属于 DB |
 | 广义 Skill 实现/模板包 | 版本化能力 registry/package store | 固定版本引用、manifest 投影、场景 profile 与调用记录；不承载 Person 的持续身份 |
-| 新数字人目标 / 承诺 / 委派 / 命令 | MongoDB；外部副作用以源服务回执为证据 | 目标 Concept、承诺、幂等命令、委派与结果记录；不生成 WorkItem |
+| 新数字人目标 / 承诺 / 委派 / 命令 | 认知权威；外部副作用以源服务回执为证据 | 目标 Concept、承诺、幂等命令、委派与结果记录；不生成 WorkItem |
 | 既有 Work Center 历史（可选导入） | 原执行 Agent 的旧数据库 | 只读来源引用；不是数字人执行依赖 |
 | 原始文件 / 邮件 / Teams 消息 | 源文件系统或服务 | 连接器引用、revision、允许保留的缓存 |
 | 多媒体成果 | Agent 管理的附件目录或另行授权的对象存储 | ACL、hash、MIME、大小、生命周期与引用 |
 | provider / Connector 凭据 | 实例秘密存储或 OS keychain | 仅 opaque credential reference |
 | 本机窗口位置 / 音量 | Rust 身体本地配置 | 无需写入认知记忆 |
 
-新增实例本地目录拟为 `<yeaftDir>/persons/<personId>/`，仅放配置引用、经管理的附件和运维信息；MongoDB `dbPath` 由数据库运维独立管理，不落到 `<workDir>/.yeaft`。
+当前数据根为实例的 `<yeaftDir>/person/`，不是按 Person 或场景另建数据库。MongoDB 兼容后端的 `dbPath` 仍由数据库运维独立管理。本表包含未来委派／Connector／桌面数据；不能据此认定它们已接入。
 
-### 11.3 集合职责与归一化
+### 11.3 逻辑记录职责与归一化
 
-| 集合 | 主要内容 | 关键约束 |
+下表是完整目标模型；SQLite 表与 MongoDB 集合是物理实现，不要求同名或逐项建表。本轮 SQLite 权威新增 `search_changes` 持久变更日志，记录可索引父记录的来源与 revision；它和业务写入同事务，消费水位属于可重建索引。不能只在提交后发一条易丢失的内存消息代替日志。
+
+| 逻辑记录 | 主要内容 | 关键约束 |
 | --- | --- | --- |
 | `persons` / `soul_revisions` | 身份、home、epoch、稳定内核与版本 | owner/Person 唯一；Soul 不能修改权限 |
 | `spaces` | ACL、用途、出站/共享策略 | domain 不能代替 ACL |
@@ -718,13 +734,13 @@ npm 安装不静默安装或开启 `mongod`。连接向导先验证版本、TLS/
 | `device_bindings` / `presences` | 配对、路由和短期在线状态 | 配对不是远程执行授权 |
 | `audit` / `deletion_jobs` | 最小控制审计、删除与撤权进度 | 不成为被删正文的隐藏副本 |
 
-以上是逻辑集合职责，可合并同生命周期的物理集合，不为每个词建服务。Schema validator、枚举/字节上限和 `schemaVersion` 必须存在。知识断言唯一归属 Concept；经历证据归 memory；快照只引用版本；Trace 只记录活动及引用。由此避免“同一个结论在四个表各改一半”。
+以上是逻辑职责，可合并同生命周期的物理表／集合，不为每个词建服务。Schema validator、枚举/字节上限和 `schemaVersion` 必须存在。知识断言唯一归属 Concept；经历证据归 memory；快照只引用版本；Trace 只记录活动及引用。由此避免“同一个结论在四个表各改一半”。
 
 旧提案、历史 revision、差异 patch 和 Trace 同样属于内容。逻辑 append-only 指普通认知不能改写历史，不意味着用户不能依法删除；删除后回放明确显示缺口，不从其他副本重建正文。
 
 ### 11.4 记忆记录示意
 
-以下是结构示例，不是已存在 API；实际 BSON 使用 Date，示例使用 ISO 字符串。
+以下是结构示例，不是已存在 API；示例使用 ISO 时间字符串，实际 SQLite／MongoDB adapter 按各自 schema 编码。
 
 ```json
 {
@@ -766,18 +782,31 @@ npm 安装不静默安装或开启 `mongod`。连接向导先验证版本、TLS/
 
 ### 11.5 索引与查询
 
-- 主键/去重：`(ownerId, personId, logicalId)`；事件唯一键为 `(ownerId, personId, spaceId, sourceId, dedupeKey)`，去重仅在完整 scope 内进行，不跨 Person 或 Space 合并来源事件。
-- 待办：`(ownerId, personId, status, nextEligibleAt)`；Connector 的源 object / revision 有索引。
-- 记忆：`(ownerId, personId, spaceId, lifecycle, updatedAt)`，另按实体、domain、时间和来源做有界查询。
-- 短暂 presence、可删除缓存可用 `expireAt` TTL；TTL 异步执行，权限与到期判断必须在查询时执行，不能等物理删除。
-- 语义检索是可选可重建索引，首版使用元数据和可用文本检索。不能假定所有 MongoDB 部署都具备同样的向量搜索能力。
-- 向量索引必须先做等效 ACL 过滤；若所选 backend 不能保证候选数据不跨界，则禁用该路径，不采用“先全库搜再给 UI 隐藏”。
-- embedding 也可能泄露内容，保留相同访问与删除策略；模型版本变更可重建，不影响原始记忆。
-- 所有读取有分页、排序、投影与字节预算；不提供无 scope 的任意查询或无限导出。
+**本轮 SQLite Recall 路径：权威记录 → durable `search_changes` → worker 追平 `recall.db` → 过滤／排序 → 回读当前权威 → 有界 context。** 权威写入和索引写入不组成跨库事务；日志必须与权威变化同提交，索引消费可重放，丢索引可重建，不能反向覆盖权威。CPU embedding、索引维护与查询离开 Agent 主事件循环，不让下载／推理占住认知事务。
+
+- 检索对象是 Message 与 Concept；长正文分 chunk，保留父类型、父 ID、revision 和片段来源。同一父对象聚合后仍能解释命中哪段；chunk 不是新的事实来源或独立记忆。Trace 保存认知过程但**不做向量索引**，避免把候选/诊断输出混成已接受知识。
+- owner + namespace 先限制候选，不能先跨用户搜再给 UI 隐藏。命中回到权威层 hydrate，校验当前归属、存在性和 revision；索引中的旧文本/向量不能直接进入 context 或冒充最新 Concept。索引追平也不能代替最终回读校验。
+- 关键词路采用适合中英文的文本处理与 FTS5；语义路采用归一化 embedding 的 cosine 排序，再以 reciprocal rank fusion（RRF）融合。词法命中、向量命中与融合排名是检索信号，不证明结论为真。
+- 向量在有界候选集内**精确扫描**，不是 ANN。候选上限意味着可能漏召回，不能写成全库无损检索或百万条级性能承诺。扩大规模前需另测耗时、内存、索引追平与 top-k 质量。
+- 默认模型为固定 revision 的 **multilingual-e5-small q8 ONNX**，使用 `@huggingface/transformers` CPU；不以 `main` 浮动版本替代 pin。缓存位于实例 `<yeaftDir>/person/models`，仅首次显式非空 Recall 才可懒加载／下载。启动、页面刷新、空 Recall、普通认知写入不触发下载。
+- `YEAFT_PERSON_EMBEDDING=off` 禁用 embedding；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止联网下载，已缓存模型仍可运行。首次缺模型、下载失败、native runtime 不可用或索引故障均需明确反馈实际模式和降级原因；可用时退回关键词／权威有界读取，不伪造向量或把“语义不可用”描述为“没有相关记忆”。这是**检索降级**，不是换一个权威后端。
+- Embedding inference 与 search 在本机，不向 embedding API 上传正文；模型文件下载会联系 Hugging Face。认知 LLM 仍使用配置的 provider，召回结果进入其 context 后可能出站，不能因此宣称全部离线或全部数据不离机。
+- 索引和向量也可能泄露内容，须遵守同等文件权限、scope 和保留策略；模型或 chunk 算法版本改变可重建，不改原始记忆。删除/撤权的完整治理仍按 11.7、21.4 的未来契约验收，不能因为索引可重建就称其已实现。
+
+后续完整模型的通用查询约束仍然保留：
+
+- 主键/去重在完整 owner / namespace / Person / source scope 内进行，不跨主体合并来源事件。
+- 按状态、时间、来源、domain 和 lifecycle 做有界查询；Connector 的 source object / revision 需索引。
+- 短暂 presence、缓存的到期检查在查询时执行；MongoDB TTL 或未来 SQLite 清理任务不能代替权限判断。
+- 所有读取有分页、排序、投影与字节预算；不提供无 scope 的任意查询或无限导出。不假定兼容 MongoDB 部署具有向量搜索能力，也不将 SQLite 检索的能力状态套用到未接入路径。
 
 ### 11.6 事务、lease 与提交
 
-MongoDB 快照隔离不是可串行化隔离。**仅“读取策略并校验，再写 Concept/根”不足以防止并发撤权或漏掉新反证。** 首版采用每 Person 一个 `person_guards` 文档作为保守写 fence；先保证正确性，不提前拆分为难以证明覆盖范围的细粒度锁。
+**本轮 SQLite：WAL + busy timeout + `BEGIN IMMEDIATE` 短事务。** WAL 允许读者与写者较好地共存，但同一库仍只有一个写者；长读会拖延 checkpoint，竞争写入仍可能等待或报 busy。SQLite 不是“天然无锁／永不死锁”，worker 也不会凭空消除文件锁竞争。`BEGIN IMMEDIATE` 在事务开始取得写入资格，避免读后升级写锁的竞争；busy timeout 只提供有界等待，不保证所有请求成功。
+
+事务内只做有界读取、校验和写入；模型调用、模型下载、embedding、索引重建和外部工具都在事务外。提交必须同时校验 owner/namespace、lease、state/control revision 与 episode 状态，旧 worker、取消或过期计算不能仅靠“拿到写锁”提交。Message、Concept/revision、episode 终态、state/commit、可选回复、Trace 提交事件及对应 `search_changes` 同事务；过程 Trace 可在此前独立短事务持久化，不能误称整轮模型计算是一笔事务。崩溃后以已提交权威为准，未提交候选不补采纳；索引从 durable journal 继续追平。
+
+**以下是完整治理的目标 fence，不是本轮已实现全部撤权／控制账本。** 保守方案为每 Person 一个 `person_guards` 逻辑记录；先保证正确性，不提前拆成难以证明覆盖范围的细粒度锁。MongoDB 兼容实现尤其需注意：快照隔离不是可串行化隔离，仅读策略再写根可能产生 write skew；必须实际条件写共享 fence。SQLite 串行写者也不能替代事务外长计算的版本与权限复核。
 
 Guard 至少包含 `authorityEpoch / leaseOwner / leaseUntil / appliedControlSeq / inputWatermark / recoveryGeneration / mode / writeSerial`。语义水位与物理写入序号分开：普通 Trace 追加只增加 `writeSerial`，不把所有正在计算的提案标为过期。数据库时间驱动 lease；获取/接管权威、续租及失效均写同一个 guard，获取新权威时原子递增 epoch，当前根的权威标记一并更新。
 
@@ -785,18 +814,18 @@ Guard 至少包含 `authorityEpoch / leaseOwner / leaseUntil / appliedControlSeq
 | --- | --- |
 | 控制：撤权、删除、暂停、来源失效 | 写 tombstone/策略投影/失效标记，并更新 guard 的控制水位或模式；认知队列不是控制前置 |
 | 来源：原生 Message/Connector 新增、编辑、反证、查询集合变化 | Message 正文或源记录、引用 event、source revision 与 `inputWatermark` 增长同事务；接收 ACK 在提交后，不能先推进 cursor 再补 fence |
-| 认知提交 | 条件匹配当前 epoch、有效 lease、运行模式、恢复代次及快照控制/输入水位，**实际 `$inc writeSerial`**，再校验 read-set 并 CAS 根；所有修订同事务 |
+| 认知提交 | 条件匹配当前 epoch、有效 lease、运行模式、恢复代次及快照控制/输入水位，**实际递增 `writeSerial`**，再校验 read-set 并 CAS 根；所有修订同事务 |
 | 内容追加：调用输出、proposal、Trace 分块、委派回报 | 按 11.7 验证最新可用性与来源限制，同事务写 guard 和内容；可以记录 stale 候选，不能绕过删除 |
 
-Guard 的条件写失败或事务写冲突时，整个事务 abort。若控制/输入已改变，认知提交返回 stale/blocked，交给新快照重新校验或综合；驱动自动重试也不能只刷新 expected revision 后重放旧 patch。若只是无关 Trace 竞争，可在有界重试中重新执行全部校验。多来源查询首版保守依赖 Person 输入水位，包括新插入对象，防止 read-set 只覆盖已有文档而漏掉 phantom。只凭 Change stream 异步补水位不能作为正确性保证。
+Guard 的条件写失败或事务写冲突时，整个事务 abort。若控制/输入已改变，认知提交返回 stale/blocked，交给新快照重新校验或综合；驱动自动重试也不能只刷新 expected revision 后重放旧 patch。若只是无关 Trace 竞争，可在有界重试中重新执行全部校验。多来源查询首版保守依赖 Person 输入水位，包括新插入对象，防止 read-set 只覆盖已有记录而漏掉 phantom。MongoDB Change stream 或 SQLite 异步索引通知都不能代替事务内权威水位。
 
-Person 使用的有效策略须有经过该 guard 发布的版本。共享 Space/owner 策略收紧时，先逐个阻断受影响 Person guard，再应用新投影；所有受影响主体都已阻断/更新才确认整体生效，故障时保持 pending 和已建立的阻断，不能让未完成扇出假装全局撤权成功。控制账本与 MongoDB 的跨恢复域衔接仍遵循 21.4，不宣称跨库原子事务。
+Person 使用的有效策略须有经过该 guard 发布的版本。共享 Space/owner 策略收紧时，先逐个阻断受影响 Person guard，再应用新投影；所有受影响主体都已阻断/更新才确认整体生效，故障时保持 pending 和已建立的阻断，不能让未完成扇出假装全局撤权成功。控制账本与认知权威的跨恢复域衔接仍遵循 21.4，不宣称跨库原子事务。
 
-一次认知提交的 MongoDB 事务范围：guard、Concept/关系修订与当前根、state commit、decision 与采纳状态、相关 memory/concern、episode 结果、已消费事件、预算记账、trace 提交事件和 outbox 意图。全局 commitId 幂等；更新当前投影、增加不可覆盖 revision 和推进根不可拆开。大规模 Dream/扫描拆成有界批次，不用跨百万对象长事务。模型请求与外部工具调用都在事务外。
+完整目标中一次认知提交的权威库事务范围：guard、Concept/关系修订与当前根、state commit、decision 与采纳状态、相关 memory/concern、episode 结果、已消费事件、预算记账、trace 提交事件、对应 `search_changes` 和 outbox 意图（委派/outbox 尚未交付）。全局 commitId 幂等；更新当前投影、增加不可覆盖 revision 和推进根不可拆开。大规模 Dream/扫描拆成有界批次，不用跨百万对象长事务。模型请求与外部工具调用都在事务外。
 
-可靠路径使用 snapshot read concern 与 majority write concern，并测试实际支持的部署配置；单节点 majority 不意味着能抗磁盘丢失。Lease 到期后旧主不能获得新提交/派发 admission；与接管并发的短事务由 guard 写冲突排序。已经开始的外部动作不会因 epoch 改变自动停止，按 14.4 对账/隔离，执行接收方仍复核代次和授权。
+MongoDB 兼容路径使用 snapshot read concern 与 majority write concern，并测试实际支持的部署配置；单节点 majority 不意味着能抗磁盘丢失。Lease 到期后旧主不能获得新提交/派发 admission；与接管并发的短事务由 guard 写冲突排序。已经开始的外部动作不会因 epoch 改变自动停止，按 14.4 对账/隔离，执行接收方仍复核代次和授权。
 
-MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端持久幂等 + 结果对账处理；本地/远端执行器都需要新增可验证契约。该路径不使用 `CreateWorkItem`、WorkItem 状态或 Work Center SQLite。提交 ACK 丢失时先按 commitId 查证，不重新生成副作用。
+无论 SQLite 还是 MongoDB，认知权威与外部工具/服务都没有跨系统事务。通过 outbox + 接收端持久幂等 + 结果对账处理；本地/远端执行器都需要新增可验证契约。该路径不使用 `CreateWorkItem`、WorkItem 状态或 Work Center SQLite。提交 ACK 丢失时先按 commitId 查证，不重新生成副作用。
 
 ### 11.7 所有内容入口的删除与撤权 fence
 
@@ -824,7 +853,7 @@ MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端�
 
 ### 12.2 长期存储、短期激活与巩固
 
-**长期/短期按存储与激活区分，不按“信息够不够重要”区分。** MongoDB 中获准保存的 Message、经历、显式想法、候选假设和已接受结论都是持久记忆；当前调用 context 中激活的部分是短期工作记忆。一条一分钟前入库的消息也已属于长期记忆，一年前的结论被召回后同时在短期 context 中可用。
+**长期/短期按存储与激活区分，不按“信息够不够重要”区分。** 认知权威中获准保存的 Message、经历、显式想法、候选假设和已接受结论都是持久记忆；当前调用 context 中激活的部分是短期工作记忆。一条一分钟前入库的消息也已属于长期记忆，一年前的结论被召回后同时在短期 context 中可用。
 
 长期不等于永不删除，也不等于已经验证为真。必须分别描述 `storage=durable`、认识状态（reported/hypothesis/accepted 等）、有效时间和保留策略。猜想入库后仍是猜想；巩固只改变组织、关联、可信依据和召回权重，不是获得“长期记忆资格”的唯一入口。
 
@@ -873,7 +902,7 @@ MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端�
 - “不要再提醒”：关闭提醒条件，不等于删除事实。
 - “忘记这件事”：默认需要解释删除范围，并提供来源屏蔽选项防止再次导入。
 
-删除流程先按 11.6–11.7 在共享 guard 下建立最小 tombstone，禁止召回和所有旧依赖内容追加，再清理 MongoDB、索引、缓存、附件、投递草稿和派生记录。Tombstone 不保留被删正文；已确认删除必须进入第 21.4 节的防回退控制账本，不能仅存在于待恢复的同一份 MongoDB 快照中。恢复备份只有在追平独立权威的最新控制水位后，才可解除读取隔离。第三方源与已有 Session transcript 不由认知删除隐式销毁，UI 必须说明各自范围并提供相应入口。
+删除流程先按 11.6–11.7 在共享 guard 下建立最小 tombstone，禁止召回和所有旧依赖内容追加，再清理认知权威、索引、缓存、附件、投递草稿和派生记录。Tombstone 不保留被删正文；已确认删除必须进入第 21.4 节的防回退控制账本，不能仅存在于待恢复的同一份认知库快照中。恢复备份只有在追平独立权威的最新控制水位后，才可解除读取隔离。第三方源与已有 Session transcript 不由认知删除隐式销毁，UI 必须说明各自范围并提供相应入口。
 
 建议初始保留策略：可重建的 context/查询缓存 7 天、无价值探索产物 30 天后评估清理、原始 Connector 正文默认只按需短缓存；获准原生 Message、经历与重要 Concept 修订按长期策略保存，失效仅改变默认召回资格，不自动物理删除；承诺不按天数自动清除。具体期限在启用时可配置，企业策略可能更严格。
 
@@ -887,7 +916,7 @@ MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端�
 
 **从数字人的心智游移设计 Dream，不沿用旧 Yeaft Dream 的目标、scope、数据结构、调度或文件 writer。** Dream 是主体在非即时回应状态下，围绕挂念、兴趣、经历和评价，自主回想、联想、幻想、孵化与重新理解的能力。整理记忆只是可能的结果，不是每次活动的目的；没有新消息、没有待办、没有“更好方案”也可以遐想。
 
-它不写 `memory.md / summary.md`，不把 SQLite FTS 当真源。它与在线认知共用 MongoDB 的 Concept、revision、proposal、integrator 和 Trace，但允许不同的注意力节奏和探索 Prompt；这是一个人的两种活动方式，不是第二个拥有决策权的 Agent。
+它不写 `memory.md / summary.md`，不把 SQLite FTS 当真源。它与在线认知共用认知权威的 Concept、revision、proposal、integrator 和 Trace，但允许不同的注意力节奏和探索 Prompt；这是一个人的两种活动方式，不是第二个拥有决策权的 Agent。
 
 | Dream 模式 | 输入 | Prompt/输出职责 | 生效逻辑 |
 | --- | --- | --- | --- |
@@ -935,7 +964,7 @@ MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端�
 
 一个业务领域可有多种能力，读取和发送分开授权。统一的是发现与版本合同，不是强制每个 Skill 都变成函数工具。Connector 的订阅启停是独立行为，不因临时卸载查询工具就停止已确认订阅，也不因浏览目录就自动订阅。
 
-**主体与能力分离**：人物的身份、认识、经历、关注、习惯和能力使用经验在 MongoDB；能力实现属于版本化 Skill 包/registry，DB 保存 manifest 引用、安装状态和使用经验，不把运行代码塞进认知文档。秘密仍在秘密存储，大对象可以使用受控引用；“全部在数据库”指没有依赖某个 VP context 或 `role.md` 才能恢复的人物状态，而不是把二进制和密码都内嵌。
+**主体与能力分离**：人物的身份、认识、经历、关注、习惯和能力使用经验在认知权威中；能力实现属于版本化 Skill 包/registry，DB 保存 manifest 引用、安装状态和使用经验，不把运行代码塞进认知文档。秘密仍在秘密存储，大对象可以使用受控引用；“全部在数据库”指没有依赖某个 VP context 或 `role.md` 才能恢复的人物状态，而不是把二进制和密码都内嵌。
 
 新学到的方法先成为 DB 中的 `method` Concept；要成为可执行/可分发的 Skill，需要显式打包、测试和发布审核，不能让一次幻想静默安装代码。Skill、模板和 manifest 都不能授予自身权限，也不是 sandbox。
 
@@ -947,7 +976,7 @@ MongoDB 与外部工具/服务没有跨系统事务。通过 outbox + 接收端�
 2. 分页盘点元数据与目录关系，再按文件类型和预算分批读取、索引、理解；目标可以覆盖全部获准内容，不仅近期文件。
 3. 对私钥、凭据、浏览器 profile、系统目录、第三方个人数据等采用敏感规则，默认排除或逐类确认；OS/组织禁止的数据不能越权读取。
 4. 对 symlink、挂载点、循环、文件变化、超大/二进制/不支持格式进行专门处理；检查路径真实归属与授权，不靠 prompt 禁区。
-5. MongoDB 保存 `scanId / roots / policyRevision / cursor / inspected / read / skipped / failed / changed` 和每批来源 revision。覆盖率区分“发现过”“读过”“形成理解”，动态文件系统永远注明观察时间。
+5. 认知权威保存 `scanId / roots / policyRevision / cursor / inspected / read / skipped / failed / changed` 和每批来源 revision。覆盖率区分“发现过”“读过”“形成理解”，动态文件系统永远注明观察时间。
 6. 用户可暂停、预览、撤销和删除派生内容。扫描产物进入 memory/Concept 候选，由数字人形成可修正环境理解，不假称完整无遗漏地理解了用户。
 
 “全范围”是空间范围，不是一次无限调用。总预算、资源限速、分批恢复和出站控制仍然有效；达到预算暂停并报告尚未覆盖范围，不静默改成只扫小目录后声称完成。
@@ -1085,7 +1114,7 @@ runtime 绑定 owner/Space/执行 Agent/epoch/取消 token，并核对真实 cap
 - 接收端持久化 `commandId → executionRef` 并去重。同进程也不省略接收记录。若恢复安全依赖该账本，它必须独立于认知快照回退域，保留期覆盖所有有效备份与重投递寿命；否则只能作为当前运行辅助证据，不能证明旧备份命令未执行。
 - 执行状态含 `queued / running / succeeded / failed / rejected / cancelled / unknown`，另有独立的 `admission: held | allowed` 和 `recoveryGeneration`。备份恢复出来的所有未终态命令、委派与 outbox（包括 queued/pending）都先 held，不能仅检查 unknown；按 21.3 对账后重新 admission。
 - 超时不证明没发生，先查证；不支持幂等或状态查询的高风险动作不自动重试。稳定 commandId 不因恢复或重试而改变；已有副作用不能通过换 ID 假装首次执行。
-- Person 自己验收回执与成果，更新 commitment，不靠子 Agent 文本说“完成”。外部服务是副作用证据来源，MongoDB 保存最近确认和未知状态。
+- Person 自己验收回执与成果，更新 commitment，不靠子 Agent 文本说“完成”。外部服务是副作用证据来源，认知权威保存最近确认和未知状态。
 - 同 workspace 冲突写入必须有执行端共享锁/资源 lease，与仍运行的旧 Work Center 使用同一冲突原语，或在未打通前拒绝共享 workspace 并发。只使用 Person 内部锁不能保护旧任务。
 - **资源 lease 到期不等于 writer 已停止。** Shell/普通文件系统不能在每次写入时校验 fencing token，因此 lease 失效只将资源置为 `unknown/quarantined`，禁止交给新 writer。执行器记录主机 boot ID、不可仅靠可复用 PID 的进程身份、进程组/作业对象及监督句柄；取消或监督进程崩溃后，须证明旧进程树已退出、写能力已撤销或写入环境已隔离，才可释放资源。平台应使用经验证的进程树监督（如 cgroup / Job Object 等）；无法约束逃逸子进程时保持隔离并要求人工处理，不能猜测“超时大概结束”。
 - 隔离写采用显式 worktree，成果仍需数字人决定如何集成。Worktree 不是 sandbox：共享 Git 元数据、同路径外文件及公共服务仍需权限/锁；孤儿 writer 的 worktree 不复用、不集成、不自动删除，直到对账确认安全。资源若原生支持 fencing token，需验证它确实在每次副作用入口拒绝旧 token。
@@ -1097,7 +1126,7 @@ runtime 绑定 owner/Space/执行 Agent/epoch/取消 token，并核对真实 cap
 
 ### 15.1 不同性质的信息
 
-- 用户话语：原生 Person 通道的 MongoDB Message；旧 Session 接入保留源身份和引用，不改变旧 transcript 所有权。
+- 用户话语：原生 Person 通道的持久 Message；旧 Session 接入保留源身份和引用，不改变旧 transcript 所有权。
 - 环境事件：来自 Connector 或工具的观察。
 - 认知产物：疑问、假设、阶段性判断与计划，不默认发布。
 - 对外 Message：经过接收人、时机与权限筛选的表达。
@@ -1123,7 +1152,7 @@ LLM 生成 HTML/JS 不直接注入主应用或 Rust 系统桥。交互 UI 必须
 
 ### 16.1 首版：本地单主
 
-Person 由一个 home Agent 管理，MongoDB 是它的认知权威。关闭 Rust 身体不停止后台认知；关闭 home 则认知暂停。没有本地模型时，“本地优先”仍可能需要远端 provider，不能笼统承诺完全离线。
+Person 由一个 home Agent 管理，默认 SQLite 是认知权威，既有 MongoDB 配置保留原权威。存储／检索 worker 与 home Agent 同生命周期，退出后停止计算但不删除已提交的身份、经历和状态；重启不自动开始下一轮思考。Rust 身体尚未实现，未来关闭身体只结束呈现，不必终止仍获准运行的 home。Embedding 本地不代表认知 LLM 也本地；模型首次下载亦需联网，不能笼统承诺完全离线。
 
 ### 16.2 未来：一个人，多个身体
 
@@ -1142,10 +1171,10 @@ Person 由一个 home Agent 管理，MongoDB 是它的认知权威。关闭 Rust
 
 首版漫游不支持离线多主：非 home 离线端可显示标记为过期的缓存、保存本机待同步输入，但不产生共享承诺、不调用远端工具、不冒充已同步的长期记忆。缓存和输入需要加密与期限；这是后续显式实现项，首版本地模式不假装已经提供。
 
-迁移分两种：
+未来迁移分两种（当前无后端迁移工具，不可用改环境变量代替）：
 
-1. 同一 MongoDB 权威内迁移 home：撤销旧 lease，递增 epoch，等旧执行状态对账后切换。
-2. 不同 MongoDB 部署间迁移：暂停旧 home，导出数据/ACL/删除账本与 manifest，校验后导入，重新绑定设备与凭据，确认唯一权威才恢复。不能靠两个独立数据库各自发号实现可靠 fence。
+1. 同一认知权威内迁移 home：撤销旧 lease，递增 epoch，等旧执行状态对账后切换。
+2. 不同权威部署或后端之间迁移：暂停旧 home，导出数据/ACL/删除账本与 manifest，校验后导入，重新绑定设备与凭据，确认唯一权威才恢复。不能靠两个独立数据库各自发号实现可靠 fence。
 
 网络分区时宁可暂停新自主行动，不能双主。灾难恢复无法确认旧 home 已停止时，必须撤销其执行凭据/路由或人工隔离后再接管。未来云 home 是部署选项，不是漫游人物的必然条件。
 
@@ -1183,7 +1212,7 @@ Person 由一个 home Agent 管理，MongoDB 是它的认知权威。关闭 Rust
 - 包内 manifest 记录目标、版本、哈希、协议兼容范围和许可证；签名/供应链证明与哈希一起验证，哈希不能代替发布者身份。
 - 更新先准备候选版本，再在退出旧身体后原子切换；保留兼容版本回退。不通过全局 npm 覆盖正在运行的 Agent。
 - 身体可以独立升级；启动时做协议 capability/version 握手，不兼容则仅展示错误与升级入口。
-- MongoDB、模型和 Agent 服务的安装/升级是不同边界，不能被身体包暗中代办。
+- 可选 MongoDB 服务、embedding 模型和 Agent 的安装/升级是不同边界，不能被身体包暗中代办；默认 SQLite 不需要单独安装数据库服务。
 
 ### 17.4 音频与可访问性
 
@@ -1221,7 +1250,7 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 | cognitive state / Concept graph snapshot | 指定 stateVersion、分页、revision、依赖有效性与 scope 过滤 |
 | trace / events since cursor | 每次应用层活动的事件/输出/差异；ACL、保留缺口、schemaVersion、epoch 与 seq |
 | Concept/decision 修订提案 | 提案不直接改当前态；expected stateVersion/read-set，交由数字人综合 |
-| 关注/记忆检索及纠正 | 带 scope、来源、revision；不暴露通用 Mongo 查询 |
+| 关注/记忆检索及纠正 | 带 scope、来源、revision；不暴露通用数据库查询 |
 | 行动确认 | action digest、执行 Agent、有效期、policyRevision |
 | Connector 配置与授权 | 独立 OAuth/secret 流程，不经过模型文本 |
 | 设备配对/撤销/主交互端 | 一次性配对凭据、短期身份、撤销生效与审计 |
@@ -1282,7 +1311,7 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 | 导出与备份泄漏 | 加密、下载有效期、范围确认、审计、恢复前删除重放 |
 | 情感操纵与过度监控 | 明示数字身份、可关闭拟人表达、不优化依赖、默认不常听 |
 
-应用层 `ownerId` 过滤不是数据库管理员隔离。多租户部署需数据库凭据、网络与管理边界设计；默认不将个人数据暴露在公网 MongoDB。
+应用层 owner + namespace 过滤不是管理员隔离。默认 SQLite 的权威、派生索引、模型 cache 和备份受本机文件权限保护；OS 管理员仍可访问。多租户部署需独立实例／凭据、网络与管理边界设计；兼容 MongoDB 不应把个人数据暴露到公网。
 
 ### 20.2 撤权时序
 
@@ -1302,7 +1331,8 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 
 | 故障 | 行为 |
 | --- | --- |
-| MongoDB 不可用 | 暂停新自主 episode/认知提交/自主外部动作；显示降级，不假装记住 |
+| 认知权威不可用／SQLite 写锁等待超时 | 拒绝本次不可完成的准入／提交并说明错误；不切后端、不假装记住。未来自主动作同样暂停 |
+| `recall.db`／embedding 不可用 | 不丢弃权威；明确索引／模型降级与实际检索方式，允许后续追平／重建，不伪称语义召回成功 |
 | Provider 不可用 | 有界重试，必要时符合数据/能力策略的降级；不无限换模型 |
 | 身体退出 | 只结束呈现；home 若仍运行可继续获准活动 |
 | home 退出 | 保存状态后暂停；不可达时呈现最后确认状态 |
@@ -1312,7 +1342,7 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 | 设备时钟跳变 | lease 使用权威时间；日程显示与业务发生时间单独处理 |
 | 主动消息已发但 ACK 丢失 | 使用稳定通知 ID 查询/去重；不可查询时不反复播报 |
 
-既有普通 Session 在新 MongoDB 故障时可继续按现有路径工作，但必须说明数字人记忆暂不可用，不能悄悄建立另一套文件认知真源。未来离线待同步输入是单独契约，不以临时 JSON 文件暗中取代数据库。
+既有普通 Session 在认知权威故障时可继续按现有路径工作，但必须说明数字人记忆暂不可用，不能悄悄建立另一套文件认知真源。未来离线待同步输入是单独契约，不以临时 JSON 文件暗中取代数据库。
 
 ### 21.2 预算与限流
 
@@ -1323,21 +1353,22 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 ### 21.3 备份、恢复与升级
 
 - 启用前显示备份责任。单节点数据库默认不提供灾难恢复保证。
-- 备份同时覆盖 MongoDB、一致的附件 manifest、加密/签名元数据和控制账本的水位引用；快照中的账本副本不是恢复权威，外部执行状态通过源系统恢复/对账。
+- SQLite 需一致性备份／受控停写快照；WAL 模式下不能只复制活动的 `person.db` 主文件而忽略尚未 checkpoint 的写入。`recall.db` 与模型 cache 可重建，不代替权威备份。MongoDB 兼容路径按其事务部署备份。
+- 以下完整恢复治理仍是目标：备份同时覆盖认知权威、一致的附件 manifest、加密/签名元数据和控制账本的水位引用；快照中的账本副本不是恢复权威，外部执行状态通过源系统恢复/对账。
 - 恢复后先进入 `recovery-quarantined`，禁止正文读取、交互召回、导出、模型出站和新行动；从独立控制权威取得新的单调 `recoveryGeneration`（不能用旧快照计数 +1），废弃旧 admission。必须隔离/撤销旧 dispatcher 与执行路由，不能让两个恢复副本同时接管。
 - 追平第 21.4 节控制水位后才转为 paused。**所有恢复前产生的非终态命令、委派及 outbox，包括 queued、pending、running、unknown，都 held**；dispatcher 和接收端默认拒绝 generation 不符或未重新 admission 的记录，不依赖批量逐条标记完成后才开始阻断。
 - 按稳定 commandId/delegationId/attemptId 向源服务或未回退的执行账本对账：已完成则补回执不重发；仍在执行则重新绑定观察而不再启动；只有可信的“未执行”证据，或经验证仍在有效期内的幂等保证，才可在复核当前意向、依赖、策略、审批与资源状态后重新 admission。普通 `not found`、已过期去重窗口或与认知库一起回退的账本都不构成未执行证明；不确定的非幂等动作保持隔离，不自动发送。
 - 复核过期审批、Connector cursor、活动进程与资源隔离后，由用户确认恢复自主活动。该确认只恢复已经满足条件的活动，不会批量放行 held 命令；未知影响须专项对账，必要时人工决策并明确重复风险。覆盖测试：T0 备份时 queued → T1 已执行成功 → T2 恢复 T0，不能再次执行。
 - Schema migration 可中断续跑、带版本 fence；先备份再执行，禁止旧 runtime 在未知 schema 上写入。
 - 回滚程序不等于回滚事实；不能靠旧备份重新发送消息、复活已删除记忆或恢复撤销的权限。
-- 运维日志默认不记录正文、秘密、音频或完整 prompt；它与私有 MongoDB 认知 Trace 分开。后者按第 22 节记录应用层明确输出，并受 scope、保留与删除控制；完整 prompt 等诊断采集需单独授权。
+- 运维日志默认不记录正文、秘密、音频或完整 prompt；它与私有认知 Trace 分开。后者按第 22 节记录应用层明确输出，并受 scope、保留与删除控制；完整 prompt 等诊断采集需单独授权。
 
 ### 21.4 删除与撤权的防回退恢复权威
 
-认知内容的真源仍是 MongoDB；但删除、权限收紧、设备撤销、权威失效及恢复代次等安全控制，需要**独立于认知快照恢复域**的最小追加账本与可验证单调水位。这是恢复安全元数据，不是第二套记忆库；只记录受影响的 opaque ID、范围、控制动作、序号和校验信息，不保存被删正文或秘密。
+认知内容的真源仍是选定的认知权威；但删除、权限收紧、设备撤销、权威失效及恢复代次等安全控制，需要**独立于认知快照恢复域**的最小追加账本与可验证单调水位。这是恢复安全元数据，不是第二套记忆库；只记录受影响的 opaque ID、范围、控制动作、序号和校验信息，不保存被删正文或秘密。
 
 - 具体介质由 P0 确定，可使用用户控制的独立持久控制服务或独立故障域的防覆盖日志；同一磁盘上的另一文件、同一旧备份中的集合、仅有哈希链但没有新鲜水位来源，都不满足灾难恢复要求。不可默认把这些元数据上传 Server 或第三方。
-- 收到控制请求后立即在当前 runtime fail closed。对用户确认“持久删除/撤权已生效”之前，必须将控制记录可靠提交到防回退权威，再将其幂等应用到 MongoDB。两者不宣称原子事务；中间失败保留阻断状态并重试对账，不继续按旧权限运行。
+- 收到控制请求后立即在当前 runtime fail closed。对用户确认“持久删除/撤权已生效”之前，必须将控制记录可靠提交到防回退权威，再将其幂等应用到认知权威。两者不宣称原子事务；中间失败保留阻断状态并重试对账，不继续按旧权限运行。
 - 控制权威不可用时，不得声称持久控制提交成功。UI 明确 pending 状态；停止本机活动立即生效，不以远端日志不可用为由继续活动。
 - 恢复端必须从已认证的独立权威取得当前水位，验证完整性并重放到该水位；普通旧快照或其签名只能证明真实性，不能证明足够新。解除隔离时再次核对水位并原子记录已应用序号；运行期间保持控制更新联动，不能只在启动时检查一次。
 - 无法取得权威、无法验证新鲜性、账本出现缺口或控制权威与内容同时丢失时，保持 `recovery-quarantined`。允许状态诊断与彻底删除，禁止正文预览、召回、导出、模型请求和新行动；不能靠用户重新授权绕过未知删除历史。
@@ -1364,7 +1395,7 @@ UI 遵循现有 Vue / i18n / design tokens；状态含 loading、error、empty�
 - `state.committed / commit.rejected / dependency.invalidated / dream.checkpoint`。
 - `delegation.started / delegation.result / command.dispatched / command.result / message.delivered`。
 
-MongoDB 经 11.7 内容 admission 保存每次调用**获准保留的应用层输出**：想法、假设、想象、批评、结论、简要依据、行动建议和格式错误输出的安全投影。大小超限使用有上限分块或数据库管理的大对象引用；标明 retained/truncated/redacted/expired/gap，不能将未保留部分伪装成不存在。未被采纳的想法也保留来源和拒绝原因，不进入当前信念。
+认知权威经 11.7 内容 admission 保存每次调用**获准保留的应用层输出**：想法、假设、想象、批评、结论、简要依据、行动建议和格式错误输出的安全投影。大小超限使用有上限分块或数据库管理的大对象引用；标明 retained/truncated/redacted/expired/gap，不能将未保留部分伪装成不存在。未被采纳的想法也保留来源和拒绝原因，不进入当前信念。
 
 不要求 provider 返回隐藏逐字推理，不把编造的独白作为真实内部过程。调用失败没有输出时记录“未取得输出”；网络流中已收到但未持久化的部分可能在崩溃中丢失，应标记缺口，不宣称能读取模型的每个内部信号。完整 system prompt、原始敏感工具结果和诊断采样不是默认可公开内容；输入通常保存可解析的版本引用及授权投影。
 
@@ -1427,7 +1458,10 @@ MongoDB 经 11.7 内容 admission 保存每次调用**获准保留的应用层�
 | 层次 | 必测内容 |
 | --- | --- |
 | 单元 | 关注排序、到期/时区、预算、Schema、事实/假设转换、ACL 与保留策略 |
-| MongoDB 集成 | replica set 事务、共享 guard 条件写/CAS、TTL 延迟、索引、lease、重复事件、游标提交；禁止只读策略形成 write skew |
+| SQLite 集成 | WAL／busy timeout、`BEGIN IMMEDIATE` 竞争、跨 worker lease/取消 fence、回滚、同事务 `search_changes`、重启持久性、owner/namespace 隔离 |
+| 本地召回 | 中英文 FTS5、余弦/RRF、chunk 来源与父去重、当前 revision hydrate、断点追平／重建、候选上限、Trace 不向量化；首次显式非空 Recall 才下载、off／离线缓存／模型失败降级、主事件循环响应性 |
+| 后端选择 | 无配置默认 SQLite、原 URI 保留 MongoDB、显式 SQLite + URI 拒绝、显式 MongoDB 缺 URI／未知值报错；故障不静默切权威 |
+| MongoDB 兼容集成 | replica set 事务、共享 guard 条件写/CAS、TTL 延迟、索引、lease、重复事件、游标提交；禁止只读策略形成 write skew |
 | 恢复/故障注入 | 提交前后崩溃、outbox 发送后断连、旧 epoch 写入、DB/provider 断网；T0 queued 备份→T1 成功→恢复 T0 时 held；账本同回退/幂等期限过期不得放行 |
 | 执行集成 | 无 WorkItem 路径的命令/委派幂等、父主体验收、共享 workspace 锁、撤权、unknown 对账；监督进程死亡但子进程继续写，lease 到期后资源仍 quarantined，新 writer 必须被拒绝 |
 | 多视角状态 | 相同快照冲突、迟到结果、依赖失效、混合评价与未决决定；认知事务读完校验对象后并发提交撤权/反证插入，旧事务必须 abort，不得自动重放旧 patch |
@@ -1447,7 +1481,7 @@ MongoDB 经 11.7 内容 admission 保存每次调用**获准保留的应用层�
 | 隐私 | 实际输入清单保守继承依赖，模型省略 basisRefs 不能绕过删除；删除覆盖 Concept revision、候选输出、Trace diff/prompt、Dream checkpoint 与派生链；T0 备份→T1 删除/撤权→T2 当前库丢失→恢复 T0 时不复活；独立控制权威不可达/水位缺口时保持读取隔离；控制提交前后崩溃与重放；保留到期、日志与导出最小化 |
 | 回归 | 未启用 Person 时 Session、CLI providers、Work Center、Web 行为不变 |
 
-首次实现需要在仓库 focused tests、`npm test`、syntax/release guard、Web build/E2E 之外增加专门的 MongoDB replica-set 和 Rust 平台测试。本文是文档改动，只要求文档构建、链接/一致性审查与 diff 检查；发布 tag 的既有 CI 仍独立执行项目门禁，不能把设计审查当实现测试通过。
+本轮需在最终集成代码上运行 SQLite／本地召回 focused tests、核心回归、syntax/release guard、Web build/E2E，并保留 MongoDB 兼容测试。Rust、完整撤权恢复与自主委派等行是后续门禁，不是本轮通过清单。文档改动本身检查构建、链接/一致性与 diff；不得据此声称真实模型下载、端到端检索或数据库故障测试已通过。发布仍独立执行项目门禁。
 
 ## 24. 与 Yeaft 的集成与数据演进
 
@@ -1460,7 +1494,7 @@ runtime.js / scheduler.js / attention.js       生命周期与关注
 context.js / perspectives.js / integrator.js  短期记忆、多视角与综合
 call-planner.js / capabilities.js             模型/effort 选择与按需能力装配
 concepts.js / self-check.js / dream.js          图谱、自判与人本遐想
-repository.js / commit.js / trace.js           MongoDB 长期状态、提交与观察
+repository.js / commit.js / trace.js           认知权威长期状态、提交与观察
 executor.js / delegations.js / policy.js       Skill 执行、外部 VP 委派与授权
 communication.js / presence.js                表达与身体路由
 ```
@@ -1475,38 +1509,38 @@ communication.js / presence.js                表达与身体路由
 - `tools/registry.js#getToolDefs()` 与 `tools/discover-tools.js` 已区分注册/暴露，有分页发现；`engine.js` 每 provider call 重新计算 schema。**现状只延迟暴露已注册工具，不是完整能力懒加载**：query 起点固定注册名字，发现集累积，执行用 live registry。需新增目录刷新、淘汰和固定版本 activation，避免 schema/实现错配。
 - `skills.js` 支持元数据 list、正文 view 与 layered precedence；`tools/skill.js` 的 load 是 view 别名，不会注册执行器。当前正文匹配注入不等于广义 Skill 物化，不应复制一套平行 Skill 系统；增加 manifest/adapter 边界并兼容旧文档型 Skill。
 - `engine.js` 的 `turnConfig` 和 `llm/router.js#captureRequest()` 可复用 model/effort 验证与请求快照，但 override 是 query 入口选择，非 Person 每 call 自选。现有子 Agent effort 上限规则也不是拟议 Person 选择规则；新 adapter 在边界新增选择入口，不改 Session 默认或偷偷绕过旧接口限制。
-- `sub-agent/runner.js` 默认继承父 persona 再加 preset/mission，`expected_output` 主要靠 Prompt，结果仍是文本。外部 VP Skill 需要固定模板注入、运行时结果验证和 MongoDB sink，不能宣称现有 SpawnAgent 已完整满足。
-- `conversation/persist.js` 的权威 transcript、`history-window.js` 的临时窗口、`post-compact.js` 的派生缓存体现可复用的层次分离；Person 新消息写 MongoDB，不能把旧 Session 文件 store 重命名成数据库接口就算迁移完成。
+- `sub-agent/runner.js` 默认继承父 persona 再加 preset/mission，`expected_output` 主要靠 Prompt，结果仍是文本。外部 VP Skill 需要固定模板注入、运行时结果验证和持久认知 sink，不能宣称现有 SpawnAgent 已完整满足。
+- `conversation/persist.js` 的权威 transcript、`history-window.js` 的临时窗口、`post-compact.js` 的派生缓存体现可复用的层次分离；Person 新消息写认知权威，不能把旧 Session 文件 store 重命名成数据库接口就算迁移完成。
 
 ### 24.2 必须新增的适配契约
 
 1. **身份**：从 Session/VP/thread 归属显式适配为 Person/episode/call/delegation，不能把 personId 填进 sessionId 掩盖边界。
-2. **输入与日志**：自主触发不是伪用户消息；独立上下文、终态、工具证据与 MongoDB Trace sink，实例目录不能硬编码 `~/.yeaft`。
+2. **输入与日志**：自主触发不是伪用户消息；独立上下文、终态、工具证据与认知 Trace sink，实例目录不能硬编码 `~/.yeaft`。
 3. **委派与投递**：持久派发、attempt、结果 ACK、取消、重入与重复结果；旧内存通知桶不能当恢复账本。
 4. **最小能力和预算**：子 Agent 默认不再递归编排，父数字人负责；Bash/write 能力需实际限制，不依赖“调查者”名称。
 5. **执行协调**：共享 workspace 的冲突管理从旧产品抽出为执行原语，或部署隔离；不能让两个产品各持一把互不感知的锁。
-6. **记忆与 Dream**：MongoDB Message/Concept/Trace/checkpoint repository；context 只作短期激活。新 Dream 从兴趣/挂念选题而非只消费摘要水位，不接旧 writer，不让 compact 暗中成为认知更新器。
+6. **记忆与 Dream**：认知权威 Message/Concept/Trace/checkpoint repository；context 只作短期激活。新 Dream 从兴趣/挂念选题而非只消费摘要水位，不接旧 writer，不让 compact 暗中成为认知更新器。
 7. **广义能力**：在现有 Skill/registry 边界增加 manifest 索引、授权发现、依赖解析、按需 adapter 和每-call 激活/释放；提供有界领域地图与场景 profile，不预加载全部 MCP 或把万级目录注入 Prompt。
 8. **自主计算选择**：新 `nextCall` 计划的 admission/持久化，model catalog、effort 支持、bootstrap、fallback、费用与选择循环限制；最终请求同时核对 context 和工具 schema 的总预算。
 9. **外部 VP Skill**：固定版本模板、最小输入、独立 activation、子预算、result schema、持久回报；Person 综合验收，不赋予 VP 认知提交权。相关源码改动必须覆盖旧 Session/Work Center 回归。
 
-Session 仍是现有对话载体和可选输入桥；原生 Person 入口则使用自己的 MongoDB 消息存储，不依赖隐藏 Session、某个 VP context 或旧文件日志恢复主体。旧 Session transcript 不存每次内部想法，认知视图单独提供。
+Session 仍是现有对话载体和可选输入桥；原生 Person 入口则使用自己的认知消息存储，不依赖隐藏 Session、某个 VP context 或旧文件日志恢复主体。旧 Session transcript 不存每次内部想法，认知视图单独提供。
 
 ### 24.3 新旧数据与产品兼容
 
 - 数字人从空状态或用户预览确认的导入开始。VP 只提供可固定版本的模板，模板升级不静默改变人物。
-- 旧文件 Dream 被淘汰；新的 Dream 使用独立 feature flag 与 MongoDB 状态，不重启旧 scheduler/writer。
+- 旧文件 Dream 被淘汰；新的 Dream 使用独立 feature flag 与认知权威状态，不重启旧 scheduler/writer。
 - 旧 memory/summary/SQLite 索引不自动导入。显式导入需 dry-run、来源、权限、去重、备份与撤销；摘要不自动变事实。
 - 现有 Work Center 继续服务旧用户，不在本次设计修订中删除实现或迁移数据库。数字人没有 Work Center 前置，旧执行结果仅可作为经授权的历史来源。
 - 关闭数字人后停止新调度与输入接入，执行中的命令仍按真实状态对账；旧 Session/CLI/Work Center 行为不变。
-- Rust 身体与新 API 独立 capability/version 握手；Server 增加 owner-scoped 路由，不隐式接管 MongoDB。
+- Rust 身体与新 API 独立 capability/version 握手；Server 增加 owner-scoped 路由，不隐式接管认知权威。
 
 ## 25. 实施路线与退出条件
 
 | 阶段 | 范围 | 退出证据 |
 | --- | --- | --- |
-| P0 可行性与契约 | MongoDB 部署/许可、Rust 窗口平台 spike、身份/权限与 Engine adapter、成本模型 | 至少一个目标 OS 完成透明/输入/降级验证；共享 guard/晚到删除/旧 queued 恢复/孤儿 writer 故障实验；持续扫描、Connector 输入与 Trace 分块竞争下测量提交进展、stale 重评成本和控制延迟，验证合并/限速/批次策略，未经证明不拆细 fence；未决依赖有结论 |
-| P1 单设备认知闭环 | MongoDB Message/Concept/state/revision、短期 context 召回、Soul、事件/关注、单视角→综合→提交、Trace | 可看每次调用与状态 diff；清空 context 后从 DB 恢复身份和经历；记录→纠正→恢复，不依赖 Work Center |
+| P0 可行性与契约 | SQLite 故障/备份与 MongoDB 兼容部署、Rust 窗口平台 spike、身份/权限与 Engine adapter、成本模型 | 至少一个目标 OS 完成透明/输入/降级验证；共享 guard/晚到删除/旧 queued 恢复/孤儿 writer 故障实验；持续扫描、Connector 输入与 Trace 分块竞争下测量提交进展、stale 重评成本和控制延迟，验证合并/限速/批次策略，未经证明不拆细 fence；未决依赖有结论 |
+| P1 单设备认知闭环 | 认知权威 Message/Concept/state/revision、短期 context 召回、Soul、事件/关注、单视角→综合→提交、Trace | 可看每次调用与状态 diff；清空 context 后从 DB 恢复身份和经历；记录→纠正→恢复，不依赖 Work Center |
 | P2 自主认知与按需能力 | 并行提案、自判、人本 Dream、model/effort 自选、manifest/有界发现/场景 profile/activation | 无新事件可沿兴趣遐想或休息；10,000 目录不全量注入；升降/换模型可追踪；冲突/迟到/删除、热更新/撤权测试通过 |
 | P3 自主协调与行动 | 全范围可控扫描、一个 Connector、外部 VP delegate Skill、直接能力、幂等/锁/unknown | 关闭 Work Center 端到端履约；VP 只回报不提交当前态，独立 context/结果 schema 经验证；禁止动作与思考分歧分离 |
 | P4 桌面身体 | Rust 2D、npm 分发、托盘、状态、按键语音、详情入口 | 目标 OS 安装/签名/更新/恢复/可访问性实测，未支持项明确 |
@@ -1521,7 +1555,8 @@ Session 仍是现有对话载体和可选输入桥；原生 Person 入口则使�
 
 ### 26.1 已选择与未选择
 
-- 选择 MongoDB 是尊重数字人多维数据与用户方向；代价是本地部署和备份明显重于文件/SQLite，需要接受并验证，而非宣称无成本。
+- 默认选择 SQLite 权威 + 独立可重建检索库，降低单机使用门槛；多维认知不要求 MongoDB，也不要求按场景建库。代价是单写者竞争、备份与索引一致性仍需验证。保留 MongoDB 是数据兼容，不自动迁移或容错切换。
+- 默认选择本地 q8 embedding，避免向 embedding API 发送正文；代价是首次模型下载、CPU／磁盘成本和有界精确扫描的规模限制。检索不可用要明确降级，不用伪语义结果掩盖。
 - 选择单主认知牺牲网络分区时的全设备自治，换取承诺与权限可解释的一致性。
 - 选择 Rust 身体换取原生控制与较轻表现层，代价是跨平台 native 工程；不承诺必然比所有 Web 方案节省固定比例资源。
 - 选择“结构化当前态 + 完整可用的应用层认知输出 + 修订 Trace”，而非将全部思想塞进聊天或要求 provider 暴露隐藏推理；代价是写入、版本和保留治理更复杂。
@@ -1532,7 +1567,7 @@ Session 仍是现有对话载体和可选输入桥；原生 Person 入口则使�
 ### 26.2 实现前需决定
 
 1. 首发 Windows、macOS 或具体 Linux 桌面组合及真实测试硬件。
-2. MongoDB 最低受支持版本、分发/运维方式、备份和加密职责，以及独立防回退控制权威的部署、可靠提交和故障隔离方案。
+2. SQLite 一致备份／加密职责、候选规模与 CPU 预算的实测上限，MongoDB 兼容版本／运维范围，以及未来后端迁移与独立防回退控制权威的部署、可靠提交和故障隔离方案。
 3. 模型目录、bootstrap/fallback、provider effort 支持、数据出站与成本上限；Luna/Soul/Astra 仅可选偏好 alias。
 4. 第一个 Connector 的账户类型、租户策略、API 许可与范围。
 5. 个人/公司 Space 的管理员与归属；首版是否完全排除组织共管。
@@ -1596,7 +1631,7 @@ Session 仍是现有对话载体和可选输入桥；原生 Person 入口则使�
 
 ## 附录 B：视角提案与综合提交契约草案
 
-以下是应用层显式输出，不是隐藏推理记录。输入由 runtime 注入：Soul revision、快照、允许读取的 Concept/来源、当前视角、预算和真实工具能力。返回内容经过 schema/引用/大小/权限校验，模型不能直接写 MongoDB 或自报有效授权。
+以下是应用层显式输出，不是隐藏推理记录。输入由 runtime 注入：Soul revision、快照、允许读取的 Concept/来源、当前视角、预算和真实工具能力。返回内容经过 schema/引用/大小/权限校验，模型不能直接写认知权威或自报有效授权。
 
 ### B.1 视角调用 Prompt 与输出
 

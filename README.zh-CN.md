@@ -67,11 +67,15 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 
 ### 数字人（实验性）
 
-侧栏的**数字人**入口打开独立的 Message／输入页面，提供**想**、显式**遐想**、取消和可分页查看的应用层 **Trace**。没有 Session 列表，不创建隐藏 Session 或 WorkItem。“想”可召回已存消息／概念、整理经历、提出关联，并把自判和版本化结论记录到 MongoDB。Trace 展示显式输入、输出和修订，不是 provider 的隐藏推理。
+侧栏的**数字人**入口打开独立的 Message／输入页面，提供**想**、显式**遐想**、取消和可分页查看的应用层 **Trace**。没有 Session 列表，不创建隐藏 Session 或 WorkItem。“想”可召回消息／概念、整理经历、提出关联，记录自判和版本化结论。Trace 展示显式输入、输出和修订，不是 provider 的隐藏推理。
 
-建议在**新建隔离 Agent 实例**中体验：在 Agent 进程环境中提供 `YEAFT_PERSON_MONGODB_URI`，可选 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`）。使用专用 MongoDB replica set 或支持事务的分片部署；非 loopback 部署需要认证／TLS、数据库范围凭据与备份。不支持 standalone MongoDB；应用不会自动安装 MongoDB，也不会回退到文件。使用 `yeaft-agent llm setup --config <path>` 配置该实例 `<yeaftDir>/config.json` 中的原生 API 模型。凭据不要放进浏览器或聊天。已有服务的环境变更需要明确授权后重启，数字人功能不会自动重启它。
+建议在**新建隔离 Agent 实例**中体验：默认无需配置 MongoDB。`<yeaftDir>/person/person.db` 是 SQLite 认知权威，保存消息、概念、活动、状态和 Trace；独立的 `<yeaftDir>/person/recall.db` 是可重建检索索引，不是第二套记忆真源。Worker 由同一 Agent 管理生命周期，退出停止计算，但持久记忆保留。场景是同一权威内的视图／范围，不是分别建库。使用 `yeaft-agent llm setup --config <path>` 配置实例 `<yeaftDir>/config.json` 中的原生 API 模型；凭据不要放进浏览器或聊天。
 
-首版**仅显式触发**：尚无空闲定时器、事件 Connector、VP 委派、外部写工具和 Rust 桌面身体。只读能力目录目前有四个方法，并非完整 Skills registry。每次活动最多四次模型调用／120 秒；数字人可从最多八个已配置原生模型中选择后续模型。动态 effort 需 `YEAFT_THINKING_V1=1` 及模型支持的元数据。消息、状态和显式 Trace 持久保存，模型 context 是有界短期副本。剩余工作见[设计及实现边界](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版)。
+默认 SQLite 后端的 Recall 结合中英文关键词 FTS5、本地向量余弦排序与 RRF。默认 embedding 模型是 **multilingual-e5-small**，通过 `@huggingface/transformers` 在 CPU 上运行固定版本 q8 ONNX，缓存于 `<yeaftDir>/person/models`。仅首次显式、非空 Recall 才可能下载模型；打开页面、普通启动和空 Recall 均不下载。`YEAFT_PERSON_EMBEDDING=off` 禁用 embedding；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止下载，已有缓存模型仍可运行。Embedding 推理和查询留在本机；模型文件下载会连接 Hugging Face，认知 LLM 仍使用配置的 provider，可能发送到远端。模型／索引不可用时明确返回降级元数据，不伪称语义检索。向量检索是有界精确扫描，不是 ANN，也不承诺百万条规模性能；Trace 不做向量索引。
+
+**保留现有 MongoDB 配置。** `YEAFT_PERSON_MONGODB_URI` 选择 MongoDB，可选 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`）。可用 `YEAFT_PERSON_STORAGE=sqlite|mongodb` 显式选择；已配置 MongoDB URI 时显式选 `sqlite` 会被拒绝，避免分叉出第二套权威。没有自动迁移或后端 fallback。MongoDB 仍需支持事务的 replica set／分片部署、专用凭据、非 loopback 的认证／TLS 与备份，不支持 standalone。两种后端都需备份权威库。已有服务的环境变更需要明确授权后重启，数字人功能不会自动重启它。
+
+功能仍**仅手动触发**：尚无空闲定时器、事件 Connector、VP 委派、外部写工具和 Rust 桌面身体。只读能力目录有四个方法，并非完整 Skills registry。每次活动最多四次模型调用／120 秒；数字人可从最多八个已配置原生模型中选择后续模型。动态 effort 需 `YEAFT_THINKING_V1=1` 及模型支持的元数据。持久记忆与有界模型 context 各有归属。事务、检索及剩余工作见[设计及实现边界](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版)。
 
 ### Work Center
 
