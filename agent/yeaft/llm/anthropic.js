@@ -41,7 +41,8 @@ function thinkingV1Enabled() {
   return process.env.YEAFT_THINKING_V1 === '1';
 }
 
-function applyAnthropicThinking(body, model, effort, effortContext = {}) {
+/** Apply the native payload rules; bounded callers also use this for budget preflight. */
+export function applyAnthropicThinking(body, model, effort, effortContext = {}) {
   const cap = getThinkingCapability(model, effortContext);
   if (!cap.supportsThinking) return;
   if (!getModelEffortOptions(model, effortContext).includes(effort)) return;
