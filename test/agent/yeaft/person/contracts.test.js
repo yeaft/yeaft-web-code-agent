@@ -16,6 +16,18 @@ describe('digital Person strict contracts', () => {
     await service.close();
     await expect(service.request({ ownerId: 'owner', op: 'status' })).rejects.toMatchObject({ code: 'CLOSED' });
   });
+  it('rejects automatic thinking activation even when MongoDB is configured', async () => {
+    // No database connection is needed to reject activation; this is a service
+    // admission contract, not a MongoDB integration test.
+    const service = createPersonService({ uri: 'mongodb://127.0.0.1:1', config });
+    try {
+      await expect(service.request({ ownerId: 'owner', op: 'settings', payload: { autonomyEnabled: true } }))
+        .rejects.toMatchObject({ code: 'UNSUPPORTED' });
+      for (const op of ['idle', 'wake', 'schedule']) {
+        await expect(service.request({ ownerId: 'owner', op })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      }
+    } finally { await service.close(); }
+  });
   it('accepts only typed, sourced and versioned cognitive proposals', () => {
     expect(validateProposal(finalProposal(), validation).activity.kind).toBe('think');
     for (const mutate of [

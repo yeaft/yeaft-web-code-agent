@@ -41,6 +41,28 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.requests.find(r => r.op === 'traces').payload).toEqual({ cursor: null, limit: 50 });
   });
 
+  it('stays manual through idle time, refresh, reconnect and re-entry', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.auto();
+    const commands = () => f.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op));
+    await f.controller.open('a');
+    await vi.advanceTimersByTimeAsync(3600000);
+    await f.controller.refresh();
+    await f.controller.page('traces');
+    await f.controller.page('messages');
+    f.chat.connectionState = 'reconnecting'; await f.controller.open('a');
+    f.chat.connectionState = 'connected'; await f.controller.open('a');
+    await f.controller.open('b'); await f.controller.open('a');
+    expect(commands()).toEqual([]);
+    for (const op of ['think', 'dream']) {
+      expect(await f.controller.command(op)).toBe(true);
+      // The status poll observes completion, but must not start another episode.
+      await vi.advanceTimersByTimeAsync(3600000);
+      expect(f.state.busy).toBe(false);
+      expect(commands().filter(r => r.op === op)).toHaveLength(1);
+    }
+    expect(commands().map(r => r.op)).toEqual(['think', 'dream']);
+  });
+
   it('gates unsupported, offline and disconnected Agents without requests', async () => {
     const f = fixture();
     f.chat.agents[0].capabilities = [];
