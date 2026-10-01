@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PersonCapabilities, foundationCapabilities, CAPABILITY_LIMITS } from '../../../../agent/yeaft/person/capabilities.js';
 import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
 import { bytes } from '../../../../agent/yeaft/person/contracts.js';
+import * as contracts from '../../../../agent/yeaft/person/contracts.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { config } from './fixtures.js';
 
@@ -42,23 +43,39 @@ describe('Person three-layer capabilities without a selector', () => {
     await expect(cap.execute({ id: 'Skill.reconsider', args: {} })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
   });
 
-  it('keeps every catalog entry reachable and labels omitted full contracts', async () => {
+  it('keeps every catalog entry reachable with bounded contracts and full pagination', async () => {
     const cap = new PersonCapabilities({}, 'owner');
     const all = await cap.execute({ id: 'catalog.search', args: { limit: 5 } });
     expect(all.items).toHaveLength(4);
     expect(bytes(all.contracts)).toBeLessThanOrEqual(CAPABILITY_LIMITS.searchContractBytes);
     const ids = new Set([...all.contracts.map(m => m.id), ...all.omittedContracts.map(m => m.id)]);
     expect(ids.size).toBe(4);
-    for (const omitted of all.omittedContracts) {
-      expect(omitted).toMatchObject({ reason: 'contract-budget', inspect: 'catalog.view' });
-      expect(await cap.execute({ id: 'catalog.view', args: { id: omitted.id } })).toMatchObject({ id: omitted.id, instructions: expect.any(String) });
-    }
     const paged = []; let cursor = null;
     do {
       const result = await cap.execute({ id: 'catalog.search', args: { cursor, limit: 1 } });
       paged.push(...result.items.map(m => m.id)); cursor = result.nextCursor;
     } while (cursor);
     expect(paged).toEqual(['Recall', 'Skill.associate', 'Skill.reconsider', 'Think']);
+  });
+
+  it('leaves an over-budget search contract unprepared until explicitly viewed', async () => {
+    const cap = new PersonCapabilities({}, 'owner');
+    const actualBytes = contracts.bytes;
+    // Simulate a growing catalog contract, without adding a production-only test knob.
+    const size = vi.spyOn(contracts, 'bytes').mockImplementation(value =>
+      Array.isArray(value) && value.some(entry => entry?.id === 'Skill.associate')
+        ? CAPABILITY_LIMITS.searchContractBytes + 1 : actualBytes(value));
+    try {
+      const result = await cap.execute({ id: 'catalog.search', args: { query: '联想' } });
+      expect(result.items.map(m => m.id)).toEqual(['Skill.associate']);
+      expect(result.contracts).toEqual([]);
+      expect(result.omittedContracts).toEqual([{ id: 'Skill.associate', reason: 'contract-budget', inspect: 'catalog.view' }]);
+      expect(cap.context().map(m => m.id)).toEqual(['Think', 'Recall']);
+      await expect(cap.execute({ id: 'Skill.associate', args: {} })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+      expect(await cap.execute({ id: 'catalog.view', args: { id: 'Skill.associate' } })).toMatchObject({ id: 'Skill.associate', instructions: expect.any(String) });
+      cap.activate(cap.context());
+      expect(await cap.execute({ id: 'Skill.associate', args: {} })).toMatchObject({ access: 'method-only' });
+    } finally { size.mockRestore(); }
   });
 
   it('restores bounded familiar contracts from current manifests, never cached instructions', async () => {

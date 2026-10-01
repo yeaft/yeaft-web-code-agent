@@ -91,6 +91,40 @@ describe('Person capability lifecycle', () => {
     expect(afterFailure[1].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall']);
   });
 
+  it('allows ignoring a familiar method and resting after a technically successful but unhelpful recall', async () => {
+    const dir = await directory();
+    const train = create(dir, (input, p) => {
+      if (!input.capabilityResult) use(p, 'catalog.search', { query: '联想' });
+      else if (input.capabilityResult.contracts) use(p, 'Skill.associate');
+    });
+    await call(train, 'open');
+    await call(train, 'dream', { clientMessageId: 'learn-method' });
+    expect((await idle(train)).latestEpisode.status).toBe('completed');
+    await train.close();
+
+    const seen = [];
+    const service = create(dir, (input, p) => {
+      seen.push(input);
+      expect(input.capabilities.active.find(m => m.id === 'Skill.associate').availability.layer).toBe('familiar');
+      if (!input.capabilityResult) use(p, 'Recall', { kind: 'concepts', query: 'missing-experience' });
+      else {
+        expect(input.capabilityResult.items).toEqual([]);
+        p.activity.kind = 'rest'; p.reply = null;
+        p.decision.selfCheck = 'Recall executed, but no evidence supports a conclusion; association would not fill this gap.';
+        p.decision.uncertainties = ['No relevant prior concept was found.'];
+      }
+    });
+    await call(service, 'think', { text: 'Check whether there is evidence, not just an association.', clientMessageId: 'ignore-habit' });
+    const snapshot = await idle(service);
+    expect(snapshot.latestEpisode.status).toBe('completed');
+    expect(seen).toHaveLength(2);
+    const traces = (await call(service, 'traces', { limit: 50 })).items.filter(t => t.episodeId === snapshot.latestEpisode.id);
+    expect(traces.filter(t => t.kind === 'capability_started').map(t => t.capability.id)).toEqual(['Recall']);
+    expect(traces.find(t => t.kind === 'capability_result')).toBeDefined();
+    expect(traces.find(t => t.kind === 'activity' && t.activity.kind === 'rest').decision.selfCheck).toContain('no evidence');
+    expect(seen[1].capabilities.active.find(m => m.id === 'Skill.associate').availability.experience).toMatchObject({ observedSuccesses: 1, usefulness: 'not-evaluated' });
+  });
+
   it('records a rejected unprepared invocation without manufacturing experience', async () => {
     const dir = await directory();
     const service = create(dir, (_input, p) => use(p, 'Skill.reconsider'));
