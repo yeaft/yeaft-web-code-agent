@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { isMainThread } from 'node:worker_threads';
 import { bytes, digest, fail, identifier, LIMITS, PersonError, text } from './contracts.js';
 import { SCHEMA, TABLES } from './sqlite-schema.js';
+import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
 
 const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
 const scopeValues = s => [s.namespace, s.ownerId, s.personId];
@@ -219,7 +220,12 @@ export class SqlitePersonStore {
     const p = this.own(episode); p.leaseUntil = new Date(this.now.getTime() + this.leaseMs); p.writeSerial++; this.put('persons', p);
   }
   append(episode, kind, data) {
-    const p = this.own(episode); p.writeSerial++; this.put('persons', p);
+    const p = this.own(episode);
+    const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
+    if (!record || record.status !== 'running') fail('STALE');
+    const experience = recordCapabilityExperience(p.capabilityExperience, record, kind, data, this.now.toISOString());
+    if (experience) p.capabilityExperience = experience;
+    p.writeSerial++; this.put('persons', p);
     return this.trace(episode.ownerId, episode.id, kind, data);
   }
   startCall(episode, data) {
@@ -256,7 +262,8 @@ export class SqlitePersonStore {
     const p = this.own(episode), scope = this.episodeScope(episode), state = this.one('states', scope);
     const focused = this.focused(scope, state.focusConceptIds).slice(0, 12);
     const recent = this.rows('concepts', scope, ' ORDER BY updatedAt DESC, id ASC LIMIT 12');
-    return { person: this.personView(p), state: publicDoc(state), messages: this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12').reverse().map(publicDoc),
+    return { person: this.personView(p), capabilityExperience: capabilityExperienceView(p.capabilityExperience),
+      state: publicDoc(state), messages: this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12').reverse().map(publicDoc),
       concepts: [...new Map([...focused, ...recent].map(c => [c.id, publicDoc(c)])).values()] };
   }
   commit(episode, proposal, selection, callId, reportedSources = new Map()) {
