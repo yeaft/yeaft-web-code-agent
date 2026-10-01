@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { bytes, digest, fail, LIMITS, PersonError, safeError } from './contracts.js';
+import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
 
 const COLLECTIONS = ['persons', 'messages', 'episodes', 'states', 'concepts', 'concept_revisions', 'state_commits', 'traces'];
 const txOptions = { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, readPreference: 'primary', maxCommitTimeMS: 5000, timeoutMS: 10000 };
@@ -172,7 +173,9 @@ export class MongoPersonRepository {
     });
   }
   fence(episode, withLease = true) {
-    return { ...this.scope(episode.ownerId), activeEpisodeId: episode.id, epoch: episode.epoch, leaseOwner: episode.workerId,
+    const scope = this.scope(episode.ownerId);
+    if (episode.namespace !== scope.namespace || episode.personId !== scope.personId) fail('STALE');
+    return { ...scope, activeEpisodeId: episode.id, epoch: episode.epoch, leaseOwner: episode.workerId,
       stateVersion: episode.baseStateVersion, controlVersion: episode.controlVersion, inputWatermark: episode.inputWatermark, ...(withLease ? fresh() : {}) };
   }
   async heartbeat(episode) {
@@ -186,6 +189,11 @@ export class MongoPersonRepository {
     return this.transaction(async session => {
       const p = await this.collections.persons.findOneAndUpdate(this.fence(episode), { $inc: { writeSerial: 1 } }, { session, returnDocument: 'after' });
       if (!p) fail('STALE');
+      const scope = this.scope(episode.ownerId);
+      const record = await this.collections.episodes.findOne({ ...scope, id: episode.id, status: 'running' }, { session });
+      if (!record) fail('STALE');
+      const experience = recordCapabilityExperience(p.capabilityExperience, record, kind, data, new Date().toISOString());
+      if (experience) await this.collections.persons.updateOne(scope, { $set: { capabilityExperience: experience } }, { session });
       return this.trace(session, p, episode.id, kind, data);
     });
   }
@@ -242,7 +250,8 @@ export class MongoPersonRepository {
       this.collections.concepts.find(scope).sort({ updatedAt: -1, id: 1 }).limit(12).toArray(),
     ]);
     const concepts = [...new Map([...focused, ...recent].map(c => [c.id, publicDoc(c)])).values()];
-    return { person: this.personView(p), state: publicDoc(state), messages: messages.reverse().map(publicDoc), concepts };
+    return { person: this.personView(p), capabilityExperience: capabilityExperienceView(p.capabilityExperience),
+      state: publicDoc(state), messages: messages.reverse().map(publicDoc), concepts };
   }
   async recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 }) {
     const scope = this.scope(ownerId);
