@@ -126,7 +126,8 @@ describe('digital Person strict contracts', () => {
   });
   it('progressively discovers, inspects and applies only safe built-in methods', async () => {
     const capabilities = new PersonCapabilities({}, 'owner');
-    await expect(capabilities.execute({ id: 'Recall', args: { kind: 'messages' } })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+    await expect(capabilities.execute({ id: 'Skill.associate', args: {} })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+    expect(capabilities.context().map(c => c.id)).toEqual(['Think', 'Recall']);
     const ids = []; let cursor = null;
     do {
       const result = await capabilities.execute({ id: 'catalog.search', args: { cursor, limit: 1 } });
