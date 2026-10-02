@@ -35,7 +35,7 @@ describe('Person thought journal projection', () => {
     const append = (_episode, kind, data) => { traces.push(trace(kind, traces.length + 1, data)); };
     // The runtime creates the actual trace payloads; only the MongoDB envelope is in-memory.
     const repository = {
-      leaseMs: 15000, heartbeat: async () => {}, context: async () => snapshot(), append,
+      leaseMs: 15000, heartbeat: async () => {}, context: async () => snapshot(), createdCapabilities: async () => [], append,
       startCall: async (e, data) => append(e, 'call_started', data),
       finalizeCall: async (e, data) => { append(e, 'call_output', { ...data, output: { ...data.output, complete: true } }); return true; },
       commit: async (e, p, selection, callId) => append(e, 'committed', { callId, decision: p.decision, stateVersion: 1 }),
@@ -358,6 +358,28 @@ describe('Person thought journal projection', () => {
     expect(entries[2]).toMatchObject({ status: 'incomplete', sections: [{ label: 'unstructured' }] });
     expect(JSON.stringify(entries)).not.toContain(secret);
     expect(JSON.stringify(entries)).not.toMatch(/manifest|system-secret|catalog-secret|reasoning|sourceRefs/);
+  });
+
+  it('projects the atomic publication trace without a result and deduplicates its later result by call, ID and version', () => {
+    const created = trace('capability_created', 1, { callId: 'create-call', capabilityId: 'Script.sum',
+      capabilityManifest: { id: 'Script.sum', version: 1, revision: 'private-revision' },
+      evidence: { testsPassed: 2, engine: 'quickjs', testedAt: 'private-time' }, code: 'PRIVATE_CODE' });
+    const cancelled = trace('cancelled', 2);
+    const alone = projectPersonThoughts([cancelled, created]);
+    expect(alone.map(e => e.kind)).toEqual(['capability_created', 'cancelled']);
+    expect(alone[0].status).toBe('recorded');
+    expect(sections(alone[0])).toContain('Script.sum');
+    const result = trace('capability_result', 3, { callId: 'create-call',
+      capability: { id: 'Capability.create', args: { code: 'PRIVATE_CODE' } },
+      result: { ok: true, published: true, contract: { id: 'Script.sum', version: 1, description: 'Sum numbers.' }, evidence: { testsPassed: 2 } } });
+    const merged = projectPersonThoughts([result, created, cancelled, created]);
+    expect(merged.filter(e => e.kind === 'capability_created')).toHaveLength(1);
+    expect(merged[0].id).toBe(created.id);
+    expect(sections(merged[0])).toContain('Sum numbers.');
+    expect(JSON.stringify(merged)).not.toMatch(/PRIVATE_CODE|private-revision|private-time/);
+    expect(projectPersonThoughts([result]).map(e => e.kind)).toEqual(['capability_created']);
+    const unrelated = { ...result, id: 'unrelated', callId: 'another-call' };
+    expect(projectPersonThoughts([created, unrelated]).filter(e => e.kind === 'capability_created')).toHaveLength(2);
   });
 
   it('returns HTML as unchanged text, never markup or interpreted content', () => {

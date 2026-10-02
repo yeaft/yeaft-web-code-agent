@@ -222,6 +222,15 @@ export function projectPersonThoughts(traces) {
   // A complete page is not required: terminal evidence may arrive before its output.
   const outcomes = new Map();
   const outputs = new Map();
+  // Publication commits before the later result trace. Cancellation or a crash
+  // between them must not erase the visible record; overlapping pages must not
+  // count the same publication twice. A result-only page remains self-contained.
+  const publicationKey = (trace, contract) => hasText(trace.callId) && scriptId(contract?.id) && Number.isSafeInteger(contract.version)
+    ? JSON.stringify([trace.episodeId, trace.callId, contract.id, contract.version]) : null;
+  const publications = new Set(records.filter(t => t.kind === 'capability_created')
+    .map(t => publicationKey(t, t.capabilityManifest)).filter(Boolean));
+  const publicationResults = new Map(records.filter(t => t.kind === 'capability_result' && t.capability?.id === 'Capability.create' && t.result?.published === true)
+    .map(t => [publicationKey(t, t.result?.contract), t.result]));
   for (const trace of records) {
     const key = callKey(trace);
     if (key && ['committed', 'proposal_rejected', 'call_failed'].includes(trace.kind)) {
@@ -268,7 +277,15 @@ export function projectPersonThoughts(traces) {
     } else if (trace.kind === 'activity') {
       const sections = withoutOutput(trace, activitySections(trace));
       if (sections.length) add(trace, 'activity', statusFor(trace), sections);
+    } else if (trace.kind === 'capability_created') {
+      const manifest = trace.capabilityManifest;
+      if (trace.capabilityId !== manifest?.id) continue;
+      const result = publicationResults.get(publicationKey(trace, manifest));
+      const projection = capabilityProjection('Capability.create', { ok: true, published: true,
+        contract: { ...manifest, description: result?.contract?.description }, evidence: trace.evidence });
+      if (projection) add(trace, projection.kind, 'recorded', projection.sections);
     } else if (trace.kind === 'capability_result' || trace.kind === 'capability_failed') {
+      if (trace.capability?.id === 'Capability.create' && publications.has(publicationKey(trace, trace.result?.contract))) continue;
       if (trace.kind === 'capability_result' && trace.capability?.id === 'Recall') {
         const sections = recallSections(trace.result);
         if (sections.length) add(trace, 'memory', 'recorded', sections);

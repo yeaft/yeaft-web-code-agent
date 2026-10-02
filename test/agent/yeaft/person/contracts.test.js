@@ -127,13 +127,13 @@ describe('digital Person strict contracts', () => {
   it('progressively discovers, inspects and applies only safe built-in methods', async () => {
     const capabilities = new PersonCapabilities({}, 'owner');
     await expect(capabilities.execute({ id: 'Skill.associate', args: {} })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
-    expect(capabilities.context().map(c => c.id)).toEqual(['Think', 'Recall']);
+    expect(capabilities.context().map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
     const ids = []; let cursor = null;
     do {
       const result = await capabilities.execute({ id: 'catalog.search', args: { cursor, limit: 1 } });
       ids.push(...result.items.map(i => i.id)); cursor = result.nextCursor;
     } while (cursor);
-    expect(ids).toEqual(['Recall', 'Skill.associate', 'Skill.reconsider', 'Think']);
+    expect(ids).toEqual(['Capability.create', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think']);
     expect(await capabilities.execute({ id: 'catalog.view', args: { id: 'Skill.associate' } })).toMatchObject({ access: 'read-only', version: 1 });
     expect(await capabilities.execute({ id: 'Skill.associate', args: {} })).toMatchObject({ access: 'method-only' });
     await expect(capabilities.execute({ id: 'Bash', args: { command: 'touch /tmp/not-allowed' } })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
