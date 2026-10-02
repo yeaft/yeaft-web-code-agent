@@ -246,6 +246,96 @@ describe('Person thought journal projection', () => {
     expect(JSON.stringify(entries)).not.toContain('private-');
   });
 
+  it.each(['committed', 'cancelled', 'failed', 'budget_exhausted'])('records durable capability publication independently of a later %s thought', terminal => {
+    const publication = trace('capability_result', 1, { callId: 'call-a', capability: { id: 'Capability.create', args: {
+      code: 'PRIVATE_CODE', tests: [{ input: 'PRIVATE_TEST_INPUT' }], input: 'PRIVATE_INPUT',
+    } }, result: { ok: true, published: true, contract: {
+      id: 'Script.sum', description: 'Sum a list of numbers.', version: 1, code: 'PRIVATE_CODE', inputSchema: 'PRIVATE_SCHEMA',
+    }, evidence: { engine: 'quickjs', testsPassed: 2, testedAt: '2026-10-02T00:00:00Z', tests: 'PRIVATE_TESTS' } } });
+    const expected = { kind: 'capability_created', status: 'recorded', sections: [
+      { label: 'capability_published' },
+      { label: 'capability_name', text: 'Script.sum' },
+      { label: 'capability_description', text: 'Sum a list of numbers.' },
+      { label: 'capability_version', text: '1' },
+      { label: 'capability_tests_passed', text: '2' },
+      { label: 'capability_tests_limit' },
+    ] };
+    expect(projectPersonThoughts(freeze([publication]))[0]).toMatchObject(expected);
+    const entries = projectPersonThoughts([trace(terminal, 2, { callId: 'call-a' }), publication, publication]);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject(expected);
+    expect(JSON.stringify(entries)).not.toMatch(/PRIVATE_|quickjs|testedAt|inputSchema/);
+  });
+
+  it('records script invocation status and version, without serializing inputs or even echoed output', () => {
+    const entries = projectPersonThoughts(freeze([
+      trace('capability_result', 1, { callId: 'call-a', capability: { id: 'Script.sum', args: { input: 'PRIVATE_INPUT' } }, result: {
+        ok: true, id: 'Script.sum', version: 3, revision: 'PRIVATE_REVISION', access: 'pure-computation',
+        output: { code: 'PRIVATE_CODE', echoedInput: 'PRIVATE_INPUT', nested: ['PRIVATE_OUTPUT'] }, diagnostics: 'PRIVATE_DIAGNOSTICS',
+      } }), trace('committed', 2, { callId: 'call-a' }),
+    ]));
+    expect(entries[0]).toMatchObject({ kind: 'script_executed', status: 'recorded', sections: [
+      { label: 'script_succeeded' }, { label: 'capability_name', text: 'Script.sum' }, { label: 'capability_version', text: '3' },
+    ] });
+    expect(JSON.stringify(entries)).not.toMatch(/PRIVATE_|output|revision|diagnostics/);
+  });
+
+  it.each([
+    ['Capability.create', 'SCRIPT_TEST_FAILED', 'script_test_failed'],
+    ['Script.sum', 'SCRIPT_EXECUTION', 'script_execution_failed'],
+    ['Script.sum', 'SCRIPT_TIMEOUT', 'script_timeout'],
+    ['Script.sum', 'SCRIPT_OUTPUT', 'script_output_invalid'],
+    ['Script.sum', 'SCRIPT_VERSION', 'script_version_unavailable'],
+    ['Script.sum', 'SCRIPT_BUSY', 'script_busy'],
+    ['Capability.create', 'PRIVATE_PROVIDER_DIAGNOSTICS', 'capability_failure_unknown'],
+  ])('shows an isolated %s failure (%s) using only a translated reason', (capabilityId, code, label) => {
+    const entries = projectPersonThoughts([trace('capability_failed', 3, { capabilityId, code,
+      capability: { id: capabilityId, args: { code: 'PRIVATE_CODE', tests: 'PRIVATE_TESTS' } },
+      result: { ok: false, code, message: 'PRIVATE_MESSAGE', details: 'PRIVATE_DETAILS', output: 'PRIVATE_OUTPUT' },
+      error: 'PRIVATE_PROVIDER_DIAGNOSTICS',
+    })]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: 'capability_failed', status: 'recorded', sections: [
+      { label: 'capability_name', text: capabilityId }, { label },
+    ] });
+    expect(JSON.stringify(entries)).not.toContain('PRIVATE_');
+  });
+
+  it.each([
+    ['Capability.create', { ok: true, published: true, contract: { id: 'Script.sum', description: 'Sum numbers.', version: 1 }, evidence: { testsPassed: 2 } }, 'capability_published'],
+    ['Script.sum', { ok: true, id: 'Script.sum', version: 1, output: 'PRIVATE_OUTPUT', access: 'pure-computation' }, 'script_succeeded'],
+    ['Capability.create', { ok: false, code: 'SCRIPT_TEST_FAILED', message: 'PRIVATE_DIAGNOSTICS' }, 'script_test_failed'],
+    ['Script.sum', { ok: false, code: 'SCRIPT_TIMEOUT', message: 'PRIVATE_DIAGNOSTICS' }, 'script_timeout'],
+  ])('keeps %s outcomes readable when only the continuation page is loaded', (id, capabilityResult, label) => {
+    const previous = finalProposal();
+    previous.next = { reason: 'Continue after the capability.', capability: { id, args: { code: 'PRIVATE_CODE', tests: 'PRIVATE_TESTS', input: 'PRIVATE_INPUT' } } };
+    const value = { previousProposal: previous, capabilityResult };
+    const continuation = trace('call_started', 4, { callId: 'second', request: { messages: [{ role: 'user', content: JSON.stringify(value) }] } });
+    const page = projectPersonThoughts(freeze([continuation]));
+    expect(page[0]).toMatchObject({ kind: 'context', status: 'recorded' });
+    expect(page[0].sections).toContainEqual({ label, scope: 'capability_recorded' });
+    expect(page[0].sections).toContainEqual({ label: 'capability_name', text: id === 'Capability.create' && capabilityResult.ok ? 'Script.sum' : id, scope: 'capability_recorded' });
+    expect(JSON.stringify(page)).not.toContain('PRIVATE_');
+    // A later page with commit evidence cannot promote a recorded capability outcome.
+    const full = projectPersonThoughts([continuation, trace('committed', 5, { callId: 'second' })]);
+    expect(full[0]).toEqual(page[0]);
+  });
+
+  it('bounds public capability text and rejects malformed publication evidence without coercing objects', () => {
+    const result = { ok: true, published: true, contract: { id: 'Script.sum', description: 'x'.repeat(10000), version: 1 }, evidence: { testsPassed: 0 } };
+    const publication = extra => trace('capability_result', 1, { capability: { id: 'Capability.create' }, result: { ...result, ...extra } });
+    const entries = projectPersonThoughts([publication({})]);
+    expect(entries[0].sections.find(s => s.label === 'capability_description').text).toBe(`${'x'.repeat(600)}…`);
+    expect(entries[0].sections).toContainEqual({ label: 'capability_tests_passed', text: '0' });
+    for (const extra of [{ ok: false }, { ok: 'true' }, { published: false }, { published: 'true' }, { contract: null }, { contract: { id: 'catalog.view' } }]) {
+      expect(projectPersonThoughts([publication(extra)]).some(e => e.kind === 'capability_created')).toBe(false);
+    }
+    const malformed = projectPersonThoughts([publication({ contract: { id: 'Script.sum', description: {}, version: { value: 'PRIVATE_VERSION' } }, evidence: { testsPassed: -1 } })]);
+    expect(malformed[0].sections.map(s => s.label)).toEqual(['capability_published', 'capability_name', 'capability_tests_limit']);
+    expect(JSON.stringify(malformed)).not.toContain('PRIVATE_');
+    expect(projectPersonThoughts([trace('capability_failed', 2, { capabilityId: 'catalog.view', code: 'SCRIPT_TIMEOUT' })])).toEqual([]);
+  });
+
   it('allowlists parsed request/output content rather than serializing metadata or hidden reasoning', () => {
     const secret = 'NEVER_RENDER';
     const context = assembleContext({ snapshot: snapshot(), episode: { id: 'episode-a', kind: 'think', text: 'Consider patience.' },
