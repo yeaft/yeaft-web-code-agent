@@ -5,6 +5,7 @@ import { bytes } from '../../../../agent/yeaft/person/contracts.js';
 import * as contracts from '../../../../agent/yeaft/person/contracts.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { config } from './fixtures.js';
+import { createdCapabilityRecord } from '../../../../agent/yeaft/person/created-capability-contract.js';
 
 const now = Date.parse('2026-10-01T12:00:00Z');
 async function experience(id = 'Skill.associate', observations) {
@@ -76,6 +77,30 @@ describe('Person three-layer capabilities without a selector', () => {
       cap.activate(cap.context());
       expect(await cap.execute({ id: 'Skill.associate', args: {} })).toMatchObject({ access: 'method-only' });
     } finally { size.mockRestore(); }
+  });
+
+  it('prepares a complete search page as one budgeted set without evicting earlier returned contracts', async () => {
+    const created = Array.from({ length: 4 }, (_, i) => createdCapabilityRecord({
+      id: `Script.t${i}`, expectedVersion: 0, description: 'd'.repeat(160), useWhen: 'u'.repeat(100), avoidWhen: '',
+      inputDescription: 'JSON', outputDescription: 'JSON', code: 'return input;', tests: [{ input: 1, expected: 1 }],
+    }, { engine: 'quickjs', testsPassed: 1, testedAt: new Date(now).toISOString() }, { episode: { id: 'ep' }, callId: 'call', now: new Date(now) }));
+    const cap = new PersonCapabilities({}, 'owner', { created });
+    await cap.execute({ id: 'catalog.view', args: { id: 'Skill.associate' } });
+    const result = await cap.execute({ id: 'catalog.search', args: { query: 'Script.', limit: 5 } });
+    expect(result.items).toHaveLength(4);
+    expect(result.contracts.length).toBeGreaterThan(0);
+    expect(result.omittedContracts.length).toBeGreaterThan(0);
+    expect(bytes(result.contracts)).toBeLessThanOrEqual(CAPABILITY_LIMITS.searchContractBytes);
+    expect(bytes(cap.context())).toBeLessThanOrEqual(CAPABILITY_LIMITS.activeBytes);
+    expect([...result.contracts, ...result.omittedContracts].map(m => m.id).sort()).toEqual(created.map(m => m.id));
+    cap.activate(cap.context());
+    for (const item of result.contracts) {
+      expect(cap.executionManifest(item.id)).toMatchObject({ id: item.id, version: 1 });
+      expect(await cap.execute({ id: item.id, args: { input: { value: item.id } } })).toMatchObject({ ok: true, output: { value: item.id } });
+    }
+    const omitted = result.omittedContracts[0];
+    await cap.execute({ id: 'catalog.view', args: { id: omitted.id } });
+    expect(await cap.execute({ id: omitted.id, args: { input: 7 } })).toMatchObject({ ok: true, output: 7 });
   });
 
   it('restores bounded familiar contracts from current manifests, never cached instructions', async () => {

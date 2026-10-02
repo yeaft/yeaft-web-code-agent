@@ -91,19 +91,21 @@ export class PersonCapabilities {
     if (!manifest || manifest.revision !== current?.revision) return null;
     return { id: current.id, version: current.version, revision: current.revision };
   }
-  canPrepare(manifest) {
-    if (foundationIds.has(manifest.id)) return true;
-    return bytes([...foundationCapabilities(), available(manifest, 'discovered', 'explicitly-requested')]) <= CAPABILITY_LIMITS.activeBytes;
+  canPrepareAll(requested) {
+    const optional = requested.filter(m => !foundationIds.has(m.id)).map(m => available(m, 'discovered', 'explicitly-requested'));
+    return bytes([...foundationCapabilities(), ...optional]) <= CAPABILITY_LIMITS.activeBytes;
   }
-  prepare(manifest) {
-    // A bounded working set. Explicitly requested contracts precede older optional ones.
-    const item = available(manifest, foundationIds.has(manifest.id) ? 'foundation' : 'discovered', 'explicitly-requested');
-    const next = [item, ...this.prepared.values()].filter((m, i, all) => all.findIndex(n => n.id === m.id) === i);
+  prepare(manifest) { this.prepareAll([manifest]); }
+  prepareAll(requested) {
+    // Prepare a whole result page atomically: later entries must not evict earlier
+    // contracts that the same result promises will be available on the next call.
+    const items = requested.map(m => available(m, foundationIds.has(m.id) ? 'foundation' : 'discovered', 'explicitly-requested'));
+    const next = [...items, ...this.prepared.values()].filter((m, i, all) => all.findIndex(n => n.id === m.id) === i);
     const kept = next.filter(m => foundationIds.has(m.id));
     for (const candidate of next.filter(m => !foundationIds.has(m.id))) {
       if (bytes([...kept, candidate]) <= CAPABILITY_LIMITS.activeBytes) kept.push(candidate);
     }
-    if (!kept.some(m => m.id === manifest.id)) fail('CONTEXT_LIMIT');
+    if (requested.some(m => !kept.some(n => n.id === m.id))) fail('CONTEXT_LIMIT');
     this.prepared = new Map(kept.map(m => [m.id, m]));
     // Runtime replaces this with its rendered manifest before every cognitive dispatch.
     this.activate(kept);
@@ -122,11 +124,12 @@ export class PersonCapabilities {
       if (args.cursor != null && start === 0) fail('INVALID_REQUEST');
       const contracts = [], omittedContracts = [];
       const items = matches.slice(start, start + limit).map(manifest => {
-        if (bytes([...contracts, manifest]) <= CAPABILITY_LIMITS.searchContractBytes && this.canPrepare(manifest)) { contracts.push(copy(manifest)); this.prepare(manifest); }
+        if (bytes([...contracts, manifest]) <= CAPABILITY_LIMITS.searchContractBytes && this.canPrepareAll([...contracts, manifest])) contracts.push(copy(manifest));
         else omittedContracts.push({ id: manifest.id, reason: 'contract-budget', inspect: 'catalog.view' });
         const { instructions, args: schema, dependencies, keywords, ...summary } = manifest;
         return summary;
       });
+      if (contracts.length) this.prepareAll(contracts);
       return { items, contracts, omittedContracts, nextCursor: start + limit < matches.length ? items.at(-1).id : null, catalogRevision: this.catalog().revision };
     }
     if (id === 'catalog.view') {
@@ -149,7 +152,7 @@ export class PersonCapabilities {
       // JSON escaping can multiply metadata size. Reject before durable publication
       // rather than publish a capability that no call can ever activate.
       const preview = createdCapabilityRecord(definition, tested.evidence, { episode: this.episode, callId, now: new Date() });
-      if (!this.canPrepare(scriptManifest(preview))) return { ok: false, code: 'CONTEXT_LIMIT', notice: 'Shorten the capability descriptions so the complete contract fits with foundation abilities. Nothing was published.' };
+      if (!this.canPrepareAll([scriptManifest(preview)])) return { ok: false, code: 'CONTEXT_LIMIT', notice: 'Shorten the capability descriptions so the complete contract fits with foundation abilities. Nothing was published.' };
       const record = await this.repository.saveCreatedCapability(this.episode, { definition, evidence: tested.evidence, callId });
       this.scripts.set(record.id, record);
       const manifest = scriptManifest(record);
