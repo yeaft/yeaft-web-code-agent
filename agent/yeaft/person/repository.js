@@ -10,6 +10,10 @@ const publicDoc = doc => {
   const { _id, ownerId, namespace, personId, ...rest } = doc;
   return rest;
 };
+// Legacy traces are BSON documents. New traces keep arbitrary JSON (including
+// NUL keys) in a string; only fixed metadata/query projections remain in BSON.
+const publicTrace = doc => doc?.recordEncoding === 'json-v1' && typeof doc.record === 'string'
+  ? publicDoc({ ...JSON.parse(doc.record), createdAt: doc.createdAt }) : publicDoc(doc);
 const iso = date => date instanceof Date ? date.toISOString() : date;
 const scopeFor = (ownerId, namespace) => ({ ownerId, namespace, personId: `person-${digest([namespace, ownerId]).slice(0, 32)}` });
 const fresh = () => ({ $expr: { $gt: ['$leaseUntil', '$$NOW'] } });
@@ -128,8 +132,13 @@ export class MongoPersonRepository {
     const scope = this.scope(p.ownerId);
     const updated = await this.collections.persons.findOneAndUpdate(scope, { $inc: { traceSeq: 1, writeSerial: 1 } }, { session, returnDocument: 'after' });
     const record = this.doc(scope, { ...data, id: randomUUID(), episodeId, kind, seq: updated.traceSeq, createdAt: new Date() });
-    await this.collections.traces.insertOne(record, { session });
-    return publicDoc(record);
+    const stored = this.doc(scope, { id: record.id, episodeId, kind, seq: record.seq, createdAt: record.createdAt,
+      recordEncoding: 'json-v1', record: JSON.stringify(record),
+      ...(typeof record.callId === 'string' ? { callId: record.callId } : {}),
+      ...(['call_output', 'call_failed'].includes(kind) ? { output: { complete: record.output?.complete === true } } : {}),
+    });
+    await this.collections.traces.insertOne(stored, { session });
+    return publicTrace(stored);
   }
   async recover(ownerId) {
     return this.transaction(async session => {
@@ -392,7 +401,7 @@ export class MongoPersonRepository {
   async list(ownerId, collection, { cursor = null, limit = 20 }, filter = {}) {
     await this.getPerson(ownerId);
     const docs = await this.collections[collection].find({ ...this.scope(ownerId), ...filter, ...(cursor ? { seq: { $lt: cursor } } : {}) }).sort({ seq: -1 }).limit(limit + 1).maxTimeMS(2000).toArray();
-    return { items: docs.slice(0, limit).map(publicDoc), nextCursor: docs.length > limit ? String(docs[limit - 1].seq) : null };
+    return { items: docs.slice(0, limit).map(collection === 'traces' ? publicTrace : publicDoc), nextCursor: docs.length > limit ? String(docs[limit - 1].seq) : null };
   }
   async snapshot(ownerId) {
     await this.recover(ownerId);

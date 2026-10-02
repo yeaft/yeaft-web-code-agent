@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { MongoPersonRepository } from '../../../../agent/yeaft/person/repository.js';
-import { digest } from '../../../../agent/yeaft/person/contracts.js';
+import { digest, page as pageOptions } from '../../../../agent/yeaft/person/contracts.js';
 import { validateCreatedDefinition } from '../../../../agent/yeaft/person/created-capability-contract.js';
 
 const definition = (more = {}) => ({ id: 'Script.echo', expectedVersion: 0, description: 'Return the input.', useWhen: 'Need an unchanged JSON value.',
@@ -104,6 +104,85 @@ for (const backend of ['sqlite', 'mongo']) {
       const reopened = repo();
       expect(await reopened.createdCapabilities(episode)).toEqual([saved]);
       expect((await records(reopened, 'created_capability_revisions')).map(publicRecord)).toEqual([saved]);
+    });
+
+    it('round trips arbitrary JSON through actual capability, Recall and catalog traces across reopen and paging', async () => {
+      const r = repo(); await r.open('alice');
+      const { episode } = await r.admit('alice', input()), callId = await finalized(r, episode);
+      const value = JSON.parse('{"__proto__":{"safe":true},"constructor":7,"\\u0000":1,"$operator":2,"dot.key":3,"createdAt":"2026-10-01T00:00:00.000Z","updatedAt":"not a date","endedAt":"2026-10-02T12:34:56Z","leaseUntil":"literal","callFinalizeUntil":"2026-10-03","nested":[null,{"createdAt":"keep me","__proto__":[1,false]}]}');
+      const saved = await save(r, episode, callId, { tests: [{ input: value, expected: value }] });
+      const capabilityManifest = { id: saved.id, version: saved.version, revision: saved.revision };
+      const expected = [];
+      const append = async (kind, data) => {
+        const trace = await r.append(episode, kind, data);
+        expect(trace).toStrictEqual({ ...data, id: expect.any(String), episodeId: episode.id, kind,
+          seq: expect.any(Number), createdAt: expect.any(Date), schemaVersion: 1 });
+        expected.push(trace);
+      };
+      for (const [index, input] of [value, [null, value, [true, 42, 'text']], null].entries()) {
+        const invocation = { id: saved.id, args: { input } };
+        const execution = { callId: `script-${index}`, capability: invocation, capabilityManifest };
+        await append('capability_started', { ...execution, access: 'pure-computation' });
+        await append('capability_result', { ...execution, result: { ok: true, value: input } });
+      }
+      // Definitions contain arbitrary test JSON; both discovery and recall can
+      // return that JSON inside a result, not just inside invocation arguments.
+      await append('capability_result', { callId: 'catalog', capability: { id: 'catalog.view', args: { id: saved.id } }, result: { definition: saved } });
+      await append('capability_result', { callId: 'recall', capability: { id: 'Recall', args: { kind: 'concepts' } },
+        result: { items: [{ id: 'memory', metadata: value }], nextCursor: null } });
+      await append('activity', { ...value, callId: value, output: value, recordEncoding: 'json-v1', record: 'ordinary payload, not an envelope' });
+      if (backend === 'mongo') {
+        const collection = inspector.db(dbName).collection('person_traces');
+        const stored = await collection.findOne({ ...r.scope('alice'), id: expected.at(-1).id });
+        expect(Object.keys(stored).sort()).toEqual(['_id', 'ownerId', 'namespace', 'personId', 'schemaVersion', 'id', 'episodeId', 'kind', 'seq', 'createdAt', 'recordEncoding', 'record'].sort());
+        expect(JSON.parse(stored.record)['\u0000']).toBe(1);
+        const proof = await collection.findOne({ ...r.scope('alice'), episodeId: episode.id, kind: 'call_output', callId, 'output.complete': true });
+        expect(proof.output).toStrictEqual({ complete: true });
+        expect(proof).not.toHaveProperty('requested');
+      }
+      await r.close();
+      const reopened = repo(), traces = [];
+      let cursor = null;
+      do {
+        const page = await reopened.list('alice', 'traces', pageOptions({ cursor, limit: 2 }));
+        traces.push(...page.items); cursor = page.nextCursor;
+      } while (cursor);
+      expect(traces.filter(t => expected.some(e => e.id === t.id)).reverse()).toStrictEqual(expected);
+      const result = traces.find(t => t.kind === 'capability_result' && t.callId === 'script-0').result.value;
+      expect(Object.hasOwn(result, '__proto__')).toBe(true);
+      expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+      expect(result.__proto__).toStrictEqual({ safe: true });
+      expect(traces.find(t => t.kind === 'call_output').output).toStrictEqual({ text: '{}', bytes: 2, complete: true, usage: null, stopReason: null });
+      expect(await reopened.createdCapabilities(episode)).toStrictEqual([saved]);
+      // The JSON writer must retain the exact indexed proof used for publication.
+      expect((await save(reopened, episode, callId, { expectedVersion: 1 })).version).toBe(2);
+      expect((await reopened.getPerson('alice')).leaseUntil).toBeInstanceOf(Date);
+      expect((await reopened.context(episode)).state.updatedAt).toBeInstanceOf(Date);
+    });
+
+    it('reads legacy raw traces alongside encoded traces and accepts legacy finalized call proof', async () => {
+      const r = repo(); await r.open('alice');
+      const { episode } = await r.admit('alice', input()), callId = await finalized(r, episode);
+      const old = await r.append(episode, 'activity', { callId: 'legacy', record: '{"not":"an envelope"}',
+        result: { createdAt: '2026-10-01T00:00:00.000Z', updatedAt: 'unchanged', endedAt: '2026-10-02', array: [null] } });
+      const proof = (await r.list('alice', 'traces', { limit: 50 })).items.find(t => t.kind === 'call_output');
+      if (backend === 'mongo') {
+        const collection = inspector.db(dbName).collection('person_traces');
+        for (const trace of [old, proof]) await collection.replaceOne({ ...r.scope('alice'), id: trace.id }, r.doc(r.scope('alice'), trace));
+      } else {
+        sql(r, db => {
+          for (const trace of [old, proof]) db.prepare('UPDATE traces SET record = ? WHERE namespace = ? AND ownerId = ? AND id = ?')
+            .run(JSON.stringify({ ...trace, ...r.scope('alice') }), r.namespace, 'alice', trace.id);
+        });
+      }
+      const current = await r.append(episode, 'activity', { result: [null, { endedAt: 'not a date' }] });
+      await r.close();
+      const reopened = repo();
+      const page = await reopened.list('alice', 'traces', { limit: 2 });
+      expect(page.items).toStrictEqual([current, old]);
+      expect(page.nextCursor).toBe(String(old.seq));
+      expect((await reopened.list('alice', 'traces', pageOptions({ cursor: page.nextCursor, limit: 2 }))).items[0]).toStrictEqual(proof);
+      expect((await save(reopened, episode, callId)).version).toBe(1);
     });
 
     it('isolates identical IDs by authenticated owner and namespace and rejects forged fences', async () => {

@@ -12,8 +12,20 @@ const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
 const scopeValues = s => [s.namespace, s.ownerId, s.personId];
 // Query-only projections; record retains the original public Unicode text.
 const SEARCH_COLUMNS = Object.freeze({ messages: 'text', concepts: 'statement' });
-const dates = new Set(['createdAt', 'updatedAt', 'endedAt', 'leaseUntil', 'callFinalizeUntil']);
-const decode = row => row ? JSON.parse(row.record, (key, value) => dates.has(key) && typeof value === 'string' ? new Date(value) : value) : null;
+const metadataDates = Object.freeze({
+  persons: ['createdAt', 'leaseUntil'], episodes: ['createdAt', 'endedAt', 'callFinalizeUntil'],
+  messages: ['createdAt'], states: ['updatedAt'], concepts: ['updatedAt'], concept_revisions: ['updatedAt'],
+  state_commits: ['createdAt'], traces: ['createdAt'],
+});
+const decode = (row, table) => {
+  if (!row) return null;
+  const record = JSON.parse(row.record);
+  // Only known storage metadata is a Date. Trace payloads and created-definition
+  // JSON may use these names at any depth without changing their string values.
+  for (const key of metadataDates[table] ?? []) if (typeof record[key] === 'string') record[key] = new Date(record[key]);
+  if (table === 'state_commits' && typeof record.state?.updatedAt === 'string') record.state.updatedAt = new Date(record.state.updatedAt);
+  return record;
+};
 const publicDoc = doc => {
   if (!doc) return null;
   const { _id, ownerId, namespace, personId, ...rest } = doc;
@@ -102,10 +114,8 @@ export class SqlitePersonStore {
   // All clauses at call sites below are fixed application strings; values are bound.
   rows(table, scope, clause = '', params = []) {
     this.table(table);
-    const created = ['created_capabilities', 'created_capability_revisions'].includes(table);
-    // Test JSON may itself have date-named keys; never revive those into Dates.
     return this.sql(`SELECT record FROM ${table} WHERE ${SCOPE}${clause}`).all(...scopeValues(scope), ...params)
-      .map(row => created ? JSON.parse(row.record) : decode(row));
+      .map(row => decode(row, table));
   }
   one(table, scope, clause = '', params = []) { return this.rows(table, scope, `${clause} LIMIT 1`, params)[0] ?? null; }
   put(table, record, insert = false) {
@@ -394,7 +404,7 @@ export class SqlitePersonStore {
     this.getPerson(ownerId); after = sequence(after); boundedLimit(limit, 1000);
     const rows = this.sql(`SELECT seq, kind, id, revision, record FROM memory_changes WHERE ${SCOPE} AND seq > ? ORDER BY seq ASC LIMIT ?`)
       .all(...scopeValues(this.scope(ownerId)), after, limit + 1);
-    const items = rows.slice(0, limit).map(row => ({ ...row, record: decode(row) }));
+    const items = rows.slice(0, limit).map(row => ({ ...row, record: decode(row, row.kind) }));
     return { items, lastSeq: items.at(-1)?.seq ?? after, hasMore: rows.length > limit };
   }
   resolveMemories(ownerId, kind, refs) {
