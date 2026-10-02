@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import { join, resolve } from 'node:path';
 import { digest, fail, identifier, PersonError, text } from './contracts.js';
+import { validateCreatedCapability } from './created-capability-contract.js';
 
 const storageError = code => {
   const error = new PersonError(code);
@@ -91,6 +92,8 @@ export class SqlitePersonRepository {
   async append(episode, kind, data) { return this.request('append', [episode, kind, data]); }
   async startCall(episode, data) { return this.request('startCall', [episode, data]); }
   async finalizeCall(episode, data) { return this.request('finalizeCall', [episode, data]); }
+  async createdCapabilities(episode) { return this.request('createdCapabilities', [episode]); }
+  async saveCreatedCapability(episode, input) { return this.request('saveCreatedCapability', [episode, validateCreatedCapability(input)]); }
   async context(episode) { return this.request('context', [episode]); }
   async recall(ownerId, options) { return this.request('recall', [ownerId, options]); }
   async commit(episode, proposal, selection, callId, reportedSources = new Map()) { return this.request('commit', [episode, proposal, selection, callId, reportedSources]); }

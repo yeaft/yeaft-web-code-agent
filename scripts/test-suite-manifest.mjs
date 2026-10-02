@@ -47,6 +47,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/person/created-capability-runtime.test.js',
   'test/agent/yeaft/person/capability-experience.test.js',
   'test/agent/yeaft/person/capability-experience.persistence.test.js',
+  'test/agent/yeaft/person/created-capability.persistence.test.js',
   'test/agent/yeaft/person/storage.test.js',
   'test/agent/yeaft/person/sqlite.integration.test.js',
   'test/agent/yeaft/person/sqlite-service.test.js',

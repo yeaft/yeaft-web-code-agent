@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { bytes, digest, fail, LIMITS, PersonError, safeError } from './contracts.js';
+import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
 
-const COLLECTIONS = ['persons', 'messages', 'episodes', 'states', 'concepts', 'concept_revisions', 'state_commits', 'traces'];
+const COLLECTIONS = ['persons', 'messages', 'episodes', 'states', 'concepts', 'concept_revisions', 'state_commits', 'traces', 'created_capabilities', 'created_capability_revisions'];
 const txOptions = { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, readPreference: 'primary', maxCommitTimeMS: 5000, timeoutMS: 10000 };
 const publicDoc = doc => {
   if (!doc) return null;
@@ -66,17 +67,28 @@ export class MongoPersonRepository {
       unique('persons', {}), unique('states', {}), unique('episodes', { clientMessageId: 1 }), unique('episodes', { id: 1 }),
       unique('messages', { seq: 1 }), unique('traces', { seq: 1 }), unique('concepts', { id: 1 }),
       this.collections.episodes.createIndex({ ...scope, inputWatermark: -1 }),
+      unique('created_capabilities', { id: 1 }), unique('created_capability_revisions', { id: 1, version: 1 }),
+      this.collections.traces.createIndex({ ...scope, episodeId: 1, kind: 1, callId: 1 }),
       unique('concept_revisions', { id: 1, revision: 1 }), unique('state_commits', { version: 1 }),
       this.collections.concepts.createIndex({ ...scope, updatedAt: -1, id: 1 }),
     ]);
   }
   scope(ownerId) { return scopeFor(ownerId, this.namespace); }
-  doc(scope, values) { return { schemaVersion: 1, ...scope, ...values }; }
-  async transaction(fn) {
+  doc(scope, values) { return { ...values, schemaVersion: 1, ...scope }; }
+  async transaction(fn, retry = true) {
     await this.init();
     const session = this.client.startSession();
-    try { return await session.withTransaction(() => fn(session), txOptions); }
-    catch (error) { throw safeError(error); }
+    try {
+      if (retry) return await session.withTransaction(() => fn(session), txOptions);
+      // Publication never replays logical writes after an unknown commit outcome.
+      session.startTransaction(txOptions);
+      const result = await fn(session);
+      await session.commitTransaction();
+      return result;
+    } catch (error) {
+      if (!retry && session.inTransaction()) await session.abortTransaction().catch(() => {});
+      throw safeError(error);
+    }
     finally { await session.endSession(); }
   }
   personView(p) {
@@ -115,7 +127,7 @@ export class MongoPersonRepository {
   async trace(session, p, episodeId, kind, data = {}) {
     const scope = this.scope(p.ownerId);
     const updated = await this.collections.persons.findOneAndUpdate(scope, { $inc: { traceSeq: 1, writeSerial: 1 } }, { session, returnDocument: 'after' });
-    const record = this.doc(scope, { id: randomUUID(), episodeId, kind, seq: updated.traceSeq, createdAt: new Date(), ...data });
+    const record = this.doc(scope, { ...data, id: randomUUID(), episodeId, kind, seq: updated.traceSeq, createdAt: new Date() });
     await this.collections.traces.insertOne(record, { session });
     return publicDoc(record);
   }
@@ -186,6 +198,8 @@ export class MongoPersonRepository {
     if (!p) fail('STALE');
   }
   async append(episode, kind, data) {
+    // Call proof/publication events are emitted only by their transactional methods.
+    if (['call_started', 'call_output', 'call_failed', 'capability_created'].includes(kind)) fail('INVALID_REQUEST');
     return this.transaction(async session => {
       const p = await this.collections.persons.findOneAndUpdate(this.fence(episode), { $inc: { writeSerial: 1 } }, { session, returnDocument: 'after' });
       if (!p) fail('STALE');
@@ -238,6 +252,44 @@ export class MongoPersonRepository {
     await this.collections.episodes.updateOne({ ...this.scope(p.ownerId), id: episode.id, 'openCall.callId': episode.openCall.callId },
       { $unset: { openCall: '', callFinalizeUntil: '' } }, { session });
     await this.trace(session, p, episode.id, 'call_failed', { ...episode.openCall, code, output: unavailableOutput() });
+  }
+  async createdCapabilities(episode) {
+    return this.transaction(async session => {
+      // Fence and current records share one snapshot, like SQLite's read transaction.
+      const p = await this.collections.persons.findOne(this.fence(episode), { session });
+      if (!p) fail('STALE');
+      return (await this.collections.created_capabilities.find(this.scope(episode.ownerId), { session }).sort({ id: 1 }).limit(32).toArray())
+        .map(doc => publicDoc(JSON.parse(doc.record)));
+    }, false);
+  }
+  async saveCreatedCapability(episode, input) {
+    const { definition, evidence, callId } = validateCreatedCapability(input);
+    return this.transaction(async session => {
+      const p = await this.collections.persons.findOneAndUpdate(this.fence(episode), { $inc: { writeSerial: 1 } }, { session, returnDocument: 'after' });
+      if (!p) fail('STALE');
+      const scope = this.scope(episode.ownerId);
+      const active = await this.collections.episodes.findOne({ ...scope, id: episode.id, status: 'running', epoch: episode.epoch, workerId: episode.workerId }, { session });
+      if (!active) fail('STALE');
+      const proof = await this.collections.traces.findOne({ ...scope, episodeId: episode.id, kind: 'call_output', callId, 'output.complete': true }, { session });
+      if (!proof || active.openCall?.callId === callId) fail('INVALID_REQUEST');
+      const current = await this.collections.created_capabilities.findOne({ ...scope, id: definition.id }, { session });
+      if ((current?.version ?? 0) !== definition.expectedVersion) fail('STALE');
+      if (definition.expectedVersion >= CREATED_CAPABILITY_LIMITS.versions || (!current &&
+          await this.collections.created_capabilities.countDocuments(scope, { session }) >= CREATED_CAPABILITY_LIMITS.ids)) fail('CONTEXT_LIMIT');
+      const record = this.doc(scope, createdCapabilityRecord(definition, evidence, { episode, callId, now: new Date() }));
+      // As in SQLite, JSON is authoritative: arbitrary test keys (including NUL
+      // and __proto__) must survive without BSON field restrictions/coercion.
+      const stored = this.doc(scope, { id: record.id, version: record.version, record: JSON.stringify(record) });
+      await this.collections.created_capability_revisions.insertOne({ ...stored, _id: randomUUID() }, { session });
+      if (!current) await this.collections.created_capabilities.insertOne({ ...stored }, { session });
+      else {
+        const update = await this.collections.created_capabilities.replaceOne({ ...scope, id: definition.id, version: definition.expectedVersion }, stored, { session });
+        if (update.matchedCount !== 1) fail('STALE');
+      }
+      await this.trace(session, p, episode.id, 'capability_created', { callId, capabilityId: record.id,
+        capabilityManifest: { id: record.id, version: record.version, revision: record.revision }, evidence: record.evidence });
+      return publicDoc(record);
+    }, false);
   }
   async context(episode) {
     await this.init();
