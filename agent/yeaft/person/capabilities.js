@@ -1,5 +1,5 @@
 import { bytes, digest, fail, identifier, object, page, text } from './contracts.js';
-import { validateCreatedDefinition } from './created-capability-contract.js';
+import { createdCapabilityRecord, validateCreatedDefinition } from './created-capability-contract.js';
 import { runPersonScript, scriptInput, testPersonScript } from './script-executor.js';
 
 // Built-in cognition plus bounded pure-script creation, not the Agent's full registry.
@@ -91,6 +91,10 @@ export class PersonCapabilities {
     if (!manifest || manifest.revision !== current?.revision) return null;
     return { id: current.id, version: current.version, revision: current.revision };
   }
+  canPrepare(manifest) {
+    if (foundationIds.has(manifest.id)) return true;
+    return bytes([...foundationCapabilities(), available(manifest, 'discovered', 'explicitly-requested')]) <= CAPABILITY_LIMITS.activeBytes;
+  }
   prepare(manifest) {
     // A bounded working set. Explicitly requested contracts precede older optional ones.
     const item = available(manifest, foundationIds.has(manifest.id) ? 'foundation' : 'discovered', 'explicitly-requested');
@@ -99,6 +103,7 @@ export class PersonCapabilities {
     for (const candidate of next.filter(m => !foundationIds.has(m.id))) {
       if (bytes([...kept, candidate]) <= CAPABILITY_LIMITS.activeBytes) kept.push(candidate);
     }
+    if (!kept.some(m => m.id === manifest.id)) fail('CONTEXT_LIMIT');
     this.prepared = new Map(kept.map(m => [m.id, m]));
     // Runtime replaces this with its rendered manifest before every cognitive dispatch.
     this.activate(kept);
@@ -117,7 +122,7 @@ export class PersonCapabilities {
       if (args.cursor != null && start === 0) fail('INVALID_REQUEST');
       const contracts = [], omittedContracts = [];
       const items = matches.slice(start, start + limit).map(manifest => {
-        if (bytes([...contracts, manifest]) <= CAPABILITY_LIMITS.searchContractBytes) { contracts.push(copy(manifest)); this.prepare(manifest); }
+        if (bytes([...contracts, manifest]) <= CAPABILITY_LIMITS.searchContractBytes && this.canPrepare(manifest)) { contracts.push(copy(manifest)); this.prepare(manifest); }
         else omittedContracts.push({ id: manifest.id, reason: 'contract-budget', inspect: 'catalog.view' });
         const { instructions, args: schema, dependencies, keywords, ...summary } = manifest;
         return summary;
@@ -141,6 +146,10 @@ export class PersonCapabilities {
       const tested = await testPersonScript(definition, { signal });
       if (!tested.ok) return tested;
       signal?.throwIfAborted();
+      // JSON escaping can multiply metadata size. Reject before durable publication
+      // rather than publish a capability that no call can ever activate.
+      const preview = createdCapabilityRecord(definition, tested.evidence, { episode: this.episode, callId, now: new Date() });
+      if (!this.canPrepare(scriptManifest(preview))) return { ok: false, code: 'CONTEXT_LIMIT', notice: 'Shorten the capability descriptions so the complete contract fits with foundation abilities. Nothing was published.' };
       const record = await this.repository.saveCreatedCapability(this.episode, { definition, evidence: tested.evidence, callId });
       this.scripts.set(record.id, record);
       const manifest = scriptManifest(record);

@@ -116,6 +116,23 @@ describe('Person three-layer capabilities without a selector', () => {
     await expect(a.execute({ id: 'catalog.view', args: { id: 'Skill.associate' } }, { signal: controller.signal })).rejects.toBe(controller.signal.reason);
   });
 
+  it('rejects encoded metadata too large to activate before publishing and lets the model shorten it', async () => {
+    const saveCreatedCapability = vi.fn(async (_episode, { definition, evidence }) => ({ ...definition, version: 1, revision: 'r'.repeat(64), evidence }));
+    const cap = new PersonCapabilities({ saveCreatedCapability }, 'alice', { episode: { id: 'episode' } });
+    const escaped = '\\'.repeat(400);
+    const definition = { id: 'Script.bounded', expectedVersion: 0, description: escaped, useWhen: escaped, avoidWhen: escaped,
+      inputDescription: escaped, outputDescription: escaped, code: 'return input;', tests: [{ input: 1, expected: 1 }] };
+    expect(await cap.execute({ id: 'Capability.create', args: definition }, { callId: 'call' })).toMatchObject({ ok: false, code: 'CONTEXT_LIMIT' });
+    expect(saveCreatedCapability).not.toHaveBeenCalled();
+    expect(cap.executionManifest(definition.id)).toBeNull();
+    const shortened = { ...definition, description: 'Identity transform', useWhen: 'Copy JSON', avoidWhen: '', inputDescription: 'JSON', outputDescription: 'The same JSON' };
+    expect(await cap.execute({ id: 'Capability.create', args: shortened }, { callId: 'call' })).toMatchObject({ ok: true, published: true });
+    expect(cap.executionManifest(definition.id)).toMatchObject({ id: definition.id, version: 1 });
+    expect(await cap.execute({ id: definition.id, args: { input: [2, 3] } })).toMatchObject({ ok: true, output: [2, 3] });
+    const legacy = new PersonCapabilities({}, 'alice', { created: [{ ...definition, version: 1, revision: 'r'.repeat(64) }] });
+    await expect(legacy.execute({ id: 'catalog.view', args: { id: definition.id } })).rejects.toMatchObject({ code: 'CONTEXT_LIMIT' });
+  });
+
   it('renders complete contracts and traces layers; context-omitted contracts cannot execute', async () => {
     const provider = await createPersonProvider({ config, adapter: {} });
     const cap = new PersonCapabilities({}, 'owner', options([await experience()]));

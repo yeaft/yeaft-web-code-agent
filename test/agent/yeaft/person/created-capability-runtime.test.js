@@ -2,14 +2,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { MongoClient } from 'mongodb';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { config, finalProposal } from './fixtures.js';
 
-const services = [], directories = [];
+const services = [], directories = [], databases = [];
+const mongoUri = process.env.PERSON_TEST_MONGO_URI;
 const request = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
 const definition = () => ({ id: 'Script.sum', expectedVersion: 0, description: 'Sum a list of numbers 求和', useWhen: 'Compute a total of supplied finite numbers.', avoidWhen: 'Not for arbitrary-precision financial amounts.', inputDescription: 'Array of finite numbers.', outputDescription: 'Sum, or zero for an empty list.', code: 'return input.reduce((sum, value) => sum + value, 0);', tests: [{ input: [2, 3], expected: 5 }, { input: [], expected: 0 }] });
 async function directory() { const dir = await mkdtemp(join(tmpdir(), 'person-created-')); directories.push(dir); return dir; }
-function create(yeaftDir, fn) {
+function create(yeaftDir, fn, env = {}) {
   const adapter = { async *stream(params) {
     const input = JSON.parse(params.messages[0].content), p = finalProposal(input.state.version);
     p.concepts = []; p.state.focusConceptIds = []; p.activity.sourceRefs = [input.trigger.ref];
@@ -17,7 +20,7 @@ function create(yeaftDir, fn) {
     yield { type: 'text_delta', text: JSON.stringify(p) };
     yield { type: 'stop', stopReason: 'end_turn' };
   } };
-  const service = createPersonService({ yeaftDir, config, adapter, embedding: { enabled: false } });
+  const service = createPersonService({ yeaftDir, env, config, adapter, embedding: { enabled: false } });
   services.push(service); return service;
 }
 const use = (p, id, args = {}) => { p.next = { model: 'test/first', effort: null, reason: 'Build or reuse a tested method.', capability: { id, args } }; };
@@ -32,6 +35,11 @@ async function idle(service, owner = 'alice') {
 afterEach(async () => {
   await Promise.all(services.splice(0).map(service => service.close()));
   await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+  if (databases.length) {
+    const client = new MongoClient(mongoUri);
+    try { await client.connect(); for (const db of databases.splice(0)) await client.db(db).dropDatabase(); }
+    finally { await client.close(); }
+  }
 });
 
 describe('Person creates, tests, persists and reuses abilities', () => {
@@ -118,6 +126,34 @@ describe('Person creates, tests, persists and reuses abilities', () => {
     });
     await request(second, 'think', { text: 'inspect saved work', clientMessageId: 'inspect' });
     expect((await idle(second)).latestEpisode.status).toBe('completed');
+  });
+
+  for (const backend of ['sqlite', 'mongodb']) it.skipIf(backend === 'mongodb' && !mongoUri)(`${backend} preserves arbitrary JSON through creation, invocation, persisted traces and inspection`, async () => {
+    const dir = await directory(), dbName = `person_script_runtime_${randomUUID().replaceAll('-', '')}`;
+    const env = backend === 'mongodb' ? { YEAFT_PERSON_MONGODB_URI: mongoUri, YEAFT_PERSON_MONGODB_DB: dbName } : {};
+    if (backend === 'mongodb') databases.push(dbName);
+    const payload = JSON.parse(String.raw`{"\u0000":"value","createdAt":"not a date","updatedAt":"2026-10-01","__proto__":{"endedAt":"unchanged"},"nested":[null,{"leaseUntil":"tomorrow"}]}`);
+    const echo = { ...definition(), id: 'Script.echo', code: 'return input;', tests: [{ input: payload, expected: payload }] };
+    const first = create(dir, (input, p) => {
+      if (!input.capabilityResult) use(p, 'Capability.create', echo);
+      else if (input.capabilityResult.published) use(p, echo.id, { input: payload });
+      else expect(input.capabilityResult).toMatchObject({ ok: true, output: payload });
+    }, env);
+    await request(first, 'open');
+    await request(first, 'think', { text: 'Save and use an identity transform.', clientMessageId: 'json' });
+    expect((await idle(first)).latestEpisode.status).toBe('completed');
+    await first.close();
+    const second = create(dir, (input, p) => {
+      if (!input.capabilityResult) use(p, 'catalog.view', { id: echo.id });
+      else expect(input.capabilityResult.definition.tests[0]).toEqual({ input: payload, expected: payload });
+    }, env);
+    const traces = (await request(second, 'traces', { limit: 50 })).items;
+    expect(traces.find(t => t.kind === 'capability_started' && t.capability?.id === 'Capability.create').capability.args.tests).toEqual(echo.tests);
+    expect(traces.find(t => t.kind === 'capability_result' && t.capability?.id === echo.id).result.output).toEqual(payload);
+    await request(second, 'think', { text: '', clientMessageId: 'inspect-json' });
+    expect((await idle(second)).latestEpisode.status).toBe('completed');
+    const inspected = (await request(second, 'traces', { limit: 50 })).items.find(t => t.kind === 'capability_result' && t.capability?.id === 'catalog.view');
+    expect(inspected.result.definition.tests).toEqual(echo.tests);
   });
 
   it('cancels script testing without publishing or committing', async () => {
