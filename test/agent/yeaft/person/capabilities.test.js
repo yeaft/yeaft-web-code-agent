@@ -20,7 +20,7 @@ describe('Person three-layer capabilities without a selector', () => {
     const cap = new PersonCapabilities({ recall }, 'alice');
     expect(recall).not.toHaveBeenCalled();
     const active = cap.context();
-    expect(active.map(m => m.id)).toEqual(['Think', 'Recall']);
+    expect(active.map(m => m.id)).toEqual(['Think', 'Recall', 'Capability.create']);
     expect(active.every(m => m.instructions && m.args && m.revision && m.useWhen && m.avoidWhen)).toBe(true);
     expect(active.every(m => m.availability.layer === 'foundation')).toBe(true);
     cap.activate(active);
@@ -46,16 +46,16 @@ describe('Person three-layer capabilities without a selector', () => {
   it('keeps every catalog entry reachable with bounded contracts and full pagination', async () => {
     const cap = new PersonCapabilities({}, 'owner');
     const all = await cap.execute({ id: 'catalog.search', args: { limit: 5 } });
-    expect(all.items).toHaveLength(4);
+    expect(all.items).toHaveLength(5);
     expect(bytes(all.contracts)).toBeLessThanOrEqual(CAPABILITY_LIMITS.searchContractBytes);
     const ids = new Set([...all.contracts.map(m => m.id), ...all.omittedContracts.map(m => m.id)]);
-    expect(ids.size).toBe(4);
+    expect(ids.size).toBe(5);
     const paged = []; let cursor = null;
     do {
       const result = await cap.execute({ id: 'catalog.search', args: { cursor, limit: 1 } });
       paged.push(...result.items.map(m => m.id)); cursor = result.nextCursor;
     } while (cursor);
-    expect(paged).toEqual(['Recall', 'Skill.associate', 'Skill.reconsider', 'Think']);
+    expect(paged).toEqual(['Capability.create', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think']);
   });
 
   it('leaves an over-budget search contract unprepared until explicitly viewed', async () => {
@@ -70,7 +70,7 @@ describe('Person three-layer capabilities without a selector', () => {
       expect(result.items.map(m => m.id)).toEqual(['Skill.associate']);
       expect(result.contracts).toEqual([]);
       expect(result.omittedContracts).toEqual([{ id: 'Skill.associate', reason: 'contract-budget', inspect: 'catalog.view' }]);
-      expect(cap.context().map(m => m.id)).toEqual(['Think', 'Recall']);
+      expect(cap.context().map(m => m.id)).toEqual(['Think', 'Recall', 'Capability.create']);
       await expect(cap.execute({ id: 'Skill.associate', args: {} })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
       expect(await cap.execute({ id: 'catalog.view', args: { id: 'Skill.associate' } })).toMatchObject({ id: 'Skill.associate', instructions: expect.any(String) });
       cap.activate(cap.context());
@@ -98,7 +98,7 @@ describe('Person three-layer capabilities without a selector', () => {
     ];
     for (const record of bad) {
       const cap = new PersonCapabilities({}, 'owner', options([record]));
-      expect(cap.context().map(m => m.id)).toEqual(['Think', 'Recall']);
+      expect(cap.context().map(m => m.id)).toEqual(['Think', 'Recall', 'Capability.create']);
       await cap.execute({ id: 'catalog.view', args: { id: prior.id } });
       expect(await cap.execute({ id: prior.id, args: {} })).toMatchObject({ access: 'method-only' });
     }
@@ -127,7 +127,7 @@ describe('Person three-layer capabilities without a selector', () => {
     const context = assembleContext({ ...input, activeCapabilities: cap.context() });
     expect(context.manifest.omittedCapabilities).toEqual([{ id: 'Skill.associate', reason: 'context-budget', inspect: 'catalog.view' }]);
     expect(context.manifest.activeCapabilities.every(m => m.layer === 'foundation')).toBe(true);
-    expect(JSON.parse(context.messages[0].content).capabilities.active.map(m => m.id)).toEqual(['Think', 'Recall']);
+    expect(JSON.parse(context.messages[0].content).capabilities.active.map(m => m.id)).toEqual(['Think', 'Recall', 'Capability.create']);
     cap.activate(context.activeCapabilities);
     await expect(cap.execute({ id: 'Skill.associate', args: {} })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
   });

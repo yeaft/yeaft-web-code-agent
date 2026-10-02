@@ -84,11 +84,11 @@ describe('Person capability lifecycle', () => {
     await call(third, 'open');
     await call(third, 'dream', { clientMessageId: 'check-demoted' });
     expect((await idle(third)).latestEpisode.status).toBe('completed');
-    expect(afterFailure[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall']);
+    expect(afterFailure[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
     await call(third, 'open', {}, 'bob');
     await call(third, 'dream', { clientMessageId: 'bob' }, 'bob');
     await idle(third, 'bob');
-    expect(afterFailure[1].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall']);
+    expect(afterFailure[1].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
   });
 
   it('allows ignoring a familiar method and resting after a technically successful but unhelpful recall', async () => {
@@ -140,7 +140,7 @@ describe('Person capability lifecycle', () => {
     const next = create(dir, input => seen.push(input));
     await call(next, 'think', { text: '', clientMessageId: 'after-rejection' });
     expect((await idle(next)).latestEpisode.status).toBe('completed');
-    expect(seen[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall']);
+    expect(seen[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
   });
 
   it('does not turn inspection into experience or require any prepared ability to be used', async () => {
@@ -158,7 +158,7 @@ describe('Person capability lifecycle', () => {
     await call(next, 'think', { text: '', clientMessageId: 'simply-rest' });
     expect((await idle(next)).latestEpisode.status).toBe('completed');
     expect(seen).toHaveLength(1);
-    expect(seen[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall']);
+    expect(seen[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
     const traces = (await call(next, 'traces', { limit: 50 })).items;
     const episodeId = (await call(next, 'snapshot')).latestEpisode.id;
     expect(traces.filter(t => t.episodeId === episodeId && t.kind === 'capability_started')).toEqual([]);
