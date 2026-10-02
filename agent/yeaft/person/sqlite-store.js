@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isMainThread } from 'node:worker_threads';
 import { bytes, digest, fail, identifier, LIMITS, PersonError, text } from './contracts.js';
+import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
 import { SCHEMA, TABLES } from './sqlite-schema.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
 
@@ -11,8 +12,20 @@ const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
 const scopeValues = s => [s.namespace, s.ownerId, s.personId];
 // Query-only projections; record retains the original public Unicode text.
 const SEARCH_COLUMNS = Object.freeze({ messages: 'text', concepts: 'statement' });
-const dates = new Set(['createdAt', 'updatedAt', 'endedAt', 'leaseUntil', 'callFinalizeUntil']);
-const decode = row => row ? JSON.parse(row.record, (key, value) => dates.has(key) && typeof value === 'string' ? new Date(value) : value) : null;
+const metadataDates = Object.freeze({
+  persons: ['createdAt', 'leaseUntil'], episodes: ['createdAt', 'endedAt', 'callFinalizeUntil'],
+  messages: ['createdAt'], states: ['updatedAt'], concepts: ['updatedAt'], concept_revisions: ['updatedAt'],
+  state_commits: ['createdAt'], traces: ['createdAt'],
+});
+const decode = (row, table) => {
+  if (!row) return null;
+  const record = JSON.parse(row.record);
+  // Only known storage metadata is a Date. Trace payloads and created-definition
+  // JSON may use these names at any depth without changing their string values.
+  for (const key of metadataDates[table] ?? []) if (typeof record[key] === 'string') record[key] = new Date(record[key]);
+  if (table === 'state_commits' && typeof record.state?.updatedAt === 'string') record.state.updatedAt = new Date(record.state.updatedAt);
+  return record;
+};
 const publicDoc = doc => {
   if (!doc) return null;
   const { _id, ownerId, namespace, personId, ...rest } = doc;
@@ -32,8 +45,8 @@ const publicOutput = (output, failed) => {
   return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
     : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
 };
-const READS = new Set(['getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories']);
-const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'commit', 'finish', 'cancel', 'settings', 'snapshot']);
+const READS = new Set(['getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities']);
+const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'commit', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
 const sequence = value => {
@@ -101,7 +114,8 @@ export class SqlitePersonStore {
   // All clauses at call sites below are fixed application strings; values are bound.
   rows(table, scope, clause = '', params = []) {
     this.table(table);
-    return this.sql(`SELECT record FROM ${table} WHERE ${SCOPE}${clause}`).all(...scopeValues(scope), ...params).map(decode);
+    return this.sql(`SELECT record FROM ${table} WHERE ${SCOPE}${clause}`).all(...scopeValues(scope), ...params)
+      .map(row => decode(row, table));
   }
   one(table, scope, clause = '', params = []) { return this.rows(table, scope, `${clause} LIMIT 1`, params)[0] ?? null; }
   put(table, record, insert = false) {
@@ -220,6 +234,8 @@ export class SqlitePersonStore {
     const p = this.own(episode); p.leaseUntil = new Date(this.now.getTime() + this.leaseMs); p.writeSerial++; this.put('persons', p);
   }
   append(episode, kind, data) {
+    // Call proof/publication events are emitted only by their transactional methods.
+    if (['call_started', 'call_output', 'call_failed', 'capability_created'].includes(kind)) fail('INVALID_REQUEST');
     const p = this.own(episode);
     const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running') fail('STALE');
@@ -254,6 +270,28 @@ export class SqlitePersonStore {
       ...(!failed && call.manifest ? { manifest: call.manifest } : {}), ...(failed ? { code: new PersonError(terminalCode).code } : {}),
     });
     return live;
+  }
+  createdCapabilities(episode) {
+    this.own(episode);
+    return this.rows('created_capabilities', this.episodeScope(episode), ' ORDER BY id ASC LIMIT 32').map(publicDoc);
+  }
+  saveCreatedCapability(episode, input) {
+    const { definition, evidence, callId } = validateCreatedCapability(input);
+    this.own(episode);
+    const scope = this.episodeScope(episode), active = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    if (!active || active.status !== 'running' || active.epoch !== episode.epoch || active.workerId !== episode.workerId) fail('STALE');
+    const proof = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, callId]);
+    if (!proof || active.openCall?.callId === callId) fail('INVALID_REQUEST');
+    const current = this.one('created_capabilities', scope, ' AND id = ?', [definition.id]);
+    if ((current?.version ?? 0) !== definition.expectedVersion) fail('STALE');
+    if (definition.expectedVersion >= CREATED_CAPABILITY_LIMITS.versions || (!current &&
+        this.sql(`SELECT count(*) AS n FROM created_capabilities WHERE ${SCOPE}`).get(...scopeValues(scope)).n >= CREATED_CAPABILITY_LIMITS.ids)) fail('CONTEXT_LIMIT');
+    const record = this.doc(scope, createdCapabilityRecord(definition, evidence, { episode, callId, now: this.now }));
+    this.put('created_capability_revisions', record, true);
+    this.put('created_capabilities', record);
+    this.trace(episode.ownerId, episode.id, 'capability_created', { callId, capabilityId: record.id,
+      capabilityManifest: { id: record.id, version: record.version, revision: record.revision }, evidence: record.evidence });
+    return publicDoc(record);
   }
   focused(scope, ids) {
     return ids.map(id => this.one('concepts', scope, ' AND id = ?', [id])).filter(Boolean);
@@ -366,7 +404,7 @@ export class SqlitePersonStore {
     this.getPerson(ownerId); after = sequence(after); boundedLimit(limit, 1000);
     const rows = this.sql(`SELECT seq, kind, id, revision, record FROM memory_changes WHERE ${SCOPE} AND seq > ? ORDER BY seq ASC LIMIT ?`)
       .all(...scopeValues(this.scope(ownerId)), after, limit + 1);
-    const items = rows.slice(0, limit).map(row => ({ ...row, record: decode(row) }));
+    const items = rows.slice(0, limit).map(row => ({ ...row, record: decode(row, row.kind) }));
     return { items, lastSeq: items.at(-1)?.seq ?? after, hasMore: rows.length > limit };
   }
   resolveMemories(ownerId, kind, refs) {

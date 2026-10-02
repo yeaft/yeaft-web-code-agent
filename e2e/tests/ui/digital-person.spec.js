@@ -38,7 +38,17 @@ async function mockPersonSocket(page) {
       } else if (request.op === 'messages') {
         reply({ items: request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor ? null : 'older-page' });
       } else if (request.op === 'traces') {
-        reply({ items: request.payload.cursor ? [{ id: 'trace-older', seq: 0, episodeId: 'older', kind: 'accepted', trigger: { kind: 'think', text: 'Earlier question' }, createdAt: 1 }] : personRecords(), nextCursor: request.payload.cursor ? null : 'trace-page-2' });
+        const capabilityRecords = [
+          { id: 'script-publication', seq: 19, episodeId: 'script', callId: 'create-call', kind: 'capability_created', capabilityId: 'Script.sum',
+            capabilityManifest: { id: 'Script.sum', version: 1, revision: 'private-revision' }, evidence: { testsPassed: 2 } },
+          { id: 'script-created', seq: 20, episodeId: 'script', callId: 'create-call', kind: 'capability_result', capability: { id: 'Capability.create', args: { code: 'PRIVATE_CODE', tests: 'PRIVATE_TEST_INPUT' } },
+            result: { ok: true, published: true, contract: { id: 'Script.sum', description: 'Sum numbers. <img src=x onerror="alert(1)">', version: 1 }, evidence: { testsPassed: 2 } } },
+          { id: 'script-ran', seq: 21, episodeId: 'script', kind: 'capability_result', capability: { id: 'Script.sum', args: { input: 'PRIVATE_INPUT' } },
+            result: { ok: true, id: 'Script.sum', version: 1, output: 'PRIVATE_OUTPUT', access: 'pure-computation' } },
+          { id: 'script-failed', seq: 22, episodeId: 'script', kind: 'capability_failed', capabilityId: 'Script.sum', code: 'SCRIPT_TIMEOUT', result: { ok: false, message: 'PRIVATE_DIAGNOSTICS' } },
+          { id: 'script-cancelled', seq: 23, episodeId: 'script', kind: 'cancelled' },
+        ];
+        reply({ items: request.payload.cursor ? [{ id: 'trace-older', seq: 0, episodeId: 'older', kind: 'accepted', trigger: { kind: 'think', text: 'Earlier question' }, createdAt: 1 }] : [...personRecords(), ...capabilityRecords], nextCursor: request.payload.cursor ? null : 'trace-page-2' });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
         if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
         busy = true; reply({ episodeId: 'episode-1' });
@@ -84,8 +94,15 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(thoughts).toContainText('Maybe the delay came from the final verification step.');
     await expect(thoughts).toContainText('A repeated guess is not new evidence.');
     await expect(thoughts).toContainText('<script>not HTML</script>');
-    await expect(thoughts.locator('script, pre')).toHaveCount(0);
-    for (const text of ['PRIVATE SYSTEM PROMPT', 'contextBytes', 'test/model', 'HIDDEN REASONING']) await expect(thoughts).not.toContainText(text);
+    const publication = thoughts.locator('[data-thought-kind="capability_created"]');
+    await expect(publication).toContainText('Script.sum');
+    await expect(publication).toContainText(zh ? '能力已保存，不依赖思考结论是否被采纳' : 'Capability saved independently of thought adoption');
+    await expect(publication).toContainText(zh ? '通过这些测试不代表在其他输入下也一定正确' : 'Passing these tests does not prove correctness for other inputs');
+    await expect(publication.locator('.person-thought-status')).toHaveText(zh ? '已记录' : 'Recorded');
+    await expect(thoughts.locator('[data-thought-kind="script_executed"]')).toContainText(zh ? '纯计算已完成' : 'Pure computation completed');
+    await expect(thoughts.locator('[data-thought-kind="capability_failed"]')).toContainText(zh ? '已达脚本时间限制' : 'Script time limit reached');
+    await expect(thoughts.locator('img, script, pre')).toHaveCount(0);
+    for (const text of ['PRIVATE SYSTEM PROMPT', 'contextBytes', 'test/model', 'HIDDEN REASONING', 'PRIVATE_CODE', 'PRIVATE_TEST_INPUT', 'PRIVATE_INPUT', 'PRIVATE_OUTPUT', 'PRIVATE_DIAGNOSTICS']) await expect(thoughts).not.toContainText(text);
     await page.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' }).click();
     await expect(thoughts).toContainText('Earlier question');
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

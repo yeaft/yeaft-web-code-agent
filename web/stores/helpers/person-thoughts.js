@@ -81,6 +81,52 @@ function recallSections(result) {
   return sections;
 }
 
+const scriptId = id => hasText(id) && id.startsWith('Script.') && hasText(id.slice(7));
+const scriptFailures = new Map([
+  ['SCRIPT_TEST_FAILED', 'script_test_failed'],
+  ['SCRIPT_EXECUTION', 'script_execution_failed'],
+  ['SCRIPT_TIMEOUT', 'script_timeout'],
+  ['SCRIPT_OUTPUT', 'script_output_invalid'],
+  ['SCRIPT_VERSION', 'script_version_unavailable'],
+  ['SCRIPT_BUSY', 'script_busy'],
+]);
+
+function addCapabilityText(sections, label, text, limit = 160) {
+  if (hasText(text)) addText(sections, label, text.length > limit ? `${text.slice(0, limit)}…` : text);
+}
+
+function addCapabilityVersion(sections, version) {
+  if (Number.isSafeInteger(version) && version > 0) addText(sections, 'capability_version', String(version));
+}
+
+// An outcome record is not an adopted thought. Only project public contract
+// metadata; never arguments, code, test cases, diagnostics, or echoed output.
+function capabilityProjection(id, result, failed = false, code = result?.code) {
+  if (id !== 'Capability.create' && !scriptId(id)) return null;
+  const sections = [];
+  if (failed || result?.ok === false) {
+    addCapabilityText(sections, 'capability_name', id);
+    sections.push({ label: scriptFailures.get(code) || 'capability_failure_unknown' });
+    return { kind: 'capability_failed', sections };
+  }
+  if (!isRecord(result) || result.ok !== true) return null;
+  if (id === 'Capability.create') {
+    if (result.published !== true || !isRecord(result.contract) || !scriptId(result.contract.id)) return null;
+    sections.push({ label: 'capability_published' });
+    addCapabilityText(sections, 'capability_name', result.contract.id);
+    addCapabilityText(sections, 'capability_description', result.contract.description, 600);
+    addCapabilityVersion(sections, result.contract.version);
+    const passed = result.evidence?.testsPassed;
+    if (Number.isSafeInteger(passed) && passed >= 0) addText(sections, 'capability_tests_passed', String(passed));
+    sections.push({ label: 'capability_tests_limit' });
+    return { kind: 'capability_created', sections };
+  }
+  sections.push({ label: 'script_succeeded' });
+  addCapabilityText(sections, 'capability_name', id);
+  addCapabilityVersion(sections, result.version);
+  return { kind: 'script_executed', sections };
+}
+
 function contextSections(trace) {
   const message = list(trace.request?.messages)[0];
   if (!isRecord(message) || message.role !== 'user') return [];
@@ -94,8 +140,12 @@ function contextSections(trace) {
   // Continuation inputs must be self-contained even when the preceding call is
   // on an unloaded page. A previous proposal is explicitly NOT adopted state.
   sections.push(...proposalSections(value.previousProposal).map(section => ({ ...section, scope: 'previous_candidate' })));
-  if (value.previousProposal?.next?.capability?.id === 'Recall') {
+  const capabilityId = value.previousProposal?.next?.capability?.id;
+  if (capabilityId === 'Recall') {
     sections.push(...recallSections(value.capabilityResult).map(section => ({ ...section, scope: 'recalled' })));
+  } else {
+    const projection = capabilityProjection(capabilityId, value.capabilityResult);
+    if (projection) sections.push(...projection.sections.map(section => ({ ...section, scope: 'capability_recorded' })));
   }
   return sections;
 }
@@ -145,7 +195,8 @@ const timestamp = value => {
  * Pagination is intentionally not inferred: only an exact episode + call commit marks
  * a proposal committed. Earlier calls remain candidates even in a committed episode.
  *
- * Sections contain only public cognition fields, never request/system/catalog/manifest,
+ * Sections contain only public cognition fields and narrow capability outcome metadata,
+ * never request/system/catalog/manifest, code, arguments, tests, raw script output,
  * provider reasoning, usage, provenance IDs or arbitrary serialized objects. Consumers
  * MUST render text/items with text interpolation, not v-html or an HTML/Markdown parser.
  * Kinds, statuses and section labels are suffixes under `person.thought.`.
@@ -171,6 +222,15 @@ export function projectPersonThoughts(traces) {
   // A complete page is not required: terminal evidence may arrive before its output.
   const outcomes = new Map();
   const outputs = new Map();
+  // Publication commits before the later result trace. Cancellation or a crash
+  // between them must not erase the visible record; overlapping pages must not
+  // count the same publication twice. A result-only page remains self-contained.
+  const publicationKey = (trace, contract) => hasText(trace.callId) && scriptId(contract?.id) && Number.isSafeInteger(contract.version)
+    ? JSON.stringify([trace.episodeId, trace.callId, contract.id, contract.version]) : null;
+  const publications = new Set(records.filter(t => t.kind === 'capability_created')
+    .map(t => publicationKey(t, t.capabilityManifest)).filter(Boolean));
+  const publicationResults = new Map(records.filter(t => t.kind === 'capability_result' && t.capability?.id === 'Capability.create' && t.result?.published === true)
+    .map(t => [publicationKey(t, t.result?.contract), t.result]));
   for (const trace of records) {
     const key = callKey(trace);
     if (key && ['committed', 'proposal_rejected', 'call_failed'].includes(trace.kind)) {
@@ -217,10 +277,23 @@ export function projectPersonThoughts(traces) {
     } else if (trace.kind === 'activity') {
       const sections = withoutOutput(trace, activitySections(trace));
       if (sections.length) add(trace, 'activity', statusFor(trace), sections);
-    } else if (trace.kind === 'capability_result') {
-      if (trace.capability?.id !== 'Recall' || !isRecord(trace.result)) continue;
-      const sections = recallSections(trace.result);
-      if (sections.length) add(trace, 'memory', 'recorded', sections);
+    } else if (trace.kind === 'capability_created') {
+      const manifest = trace.capabilityManifest;
+      if (trace.capabilityId !== manifest?.id) continue;
+      const result = publicationResults.get(publicationKey(trace, manifest));
+      const projection = capabilityProjection('Capability.create', { ok: true, published: true,
+        contract: { ...manifest, description: result?.contract?.description }, evidence: trace.evidence });
+      if (projection) add(trace, projection.kind, 'recorded', projection.sections);
+    } else if (trace.kind === 'capability_result' || trace.kind === 'capability_failed') {
+      if (trace.capability?.id === 'Capability.create' && publications.has(publicationKey(trace, trace.result?.contract))) continue;
+      if (trace.kind === 'capability_result' && trace.capability?.id === 'Recall') {
+        const sections = recallSections(trace.result);
+        if (sections.length) add(trace, 'memory', 'recorded', sections);
+      } else {
+        const failed = trace.kind === 'capability_failed';
+        const projection = capabilityProjection(failed ? trace.capabilityId : trace.capability?.id, trace.result, failed, trace.code ?? trace.result?.code);
+        if (projection) add(trace, projection.kind, 'recorded', projection.sections);
+      }
     } else if (trace.kind === 'proposal_rejected') {
       // With the output on another page, rejection must still be visible.
       if (!outputs.has(callKey(trace))) add(trace, 'rejected', 'rejected');

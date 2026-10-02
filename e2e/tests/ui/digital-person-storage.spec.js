@@ -13,6 +13,7 @@ import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures
 // No live Agent, native config or paid provider is used; all storage is isolated.
 const uri = process.env.PERSON_TEST_MONGO_URI;
 for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capability layers persist through relay and restart`, async ({ page, serverUrl, mockAgent }) => {
+  test.setTimeout(60000);
   test.skip(storage === 'mongodb' && !uri, 'Requires an explicitly supplied isolated MongoDB replica set');
   const dbName = `person_e2e_${randomUUID().replaceAll('-', '')}`;
   const yeaftDir = await mkdtemp(join(tmpdir(), 'person-e2e-'));
@@ -30,7 +31,18 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     proposal.concepts[0].sourceRefs = input.sourceRefs;
     proposal.reply = input.trigger.kind === 'send' ? reply : null;
     const use = (id, args = {}) => { proposal.next = { model: 'test/first', effort: null, reason: 'Choose a prepared cognitive ability.', capability: { id, args } }; };
-    if (!input.capabilityResult) {
+    if (input.trigger.text === 'Learn a reusable sum script.') {
+      if (!input.capabilityResult) use('Capability.create', { id: 'Script.sum', expectedVersion: 0,
+        description: 'Sum numeric arrays', useWhen: 'Need a sum', avoidWhen: 'Not arbitrary precision', inputDescription: 'Number array', outputDescription: 'Total',
+        code: 'return input.reduce((a,b)=>a+b,0);', tests: [{ input: [1, 2], expected: 3 }, { input: [], expected: 0 }] });
+      else if (input.capabilityResult.published) use('Script.sum', { input: [5, 7] });
+      else { expect(input.capabilityResult.output).toBe(12); proposal.reply = 'Learned a reusable sum; result 12.'; }
+    } else if (input.trigger.text === 'Reuse the sum script.') {
+      if (!input.capabilityResult) {
+        expect(input.capabilities.active.find(c => c.id === 'Script.sum').availability.layer).toBe('familiar');
+        use('Script.sum', { input: [8, 9] });
+      } else { expect(input.capabilityResult.output).toBe(17); proposal.reply = 'Reused the saved sum; result 17.'; }
+    } else if (!input.capabilityResult) {
       if (input.trigger.kind === 'send') use('Recall', { kind: 'messages' });
       if (input.trigger.kind === 'think') use('catalog.search', { query: '重新审视' });
       if (input.trigger.kind === 'dream') use('Skill.reconsider');
@@ -79,6 +91,24 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(requests[5].capabilities.active.find(c => c.id === 'Skill.reconsider').availability.layer).toBe('familiar');
     await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
+    await page.locator('#person-input').fill('Learn a reusable sum script.');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.locator('.person-messages')).toContainText('Learned a reusable sum; result 12.');
+    await expect(page.locator('#person-input')).toBeEnabled();
+    expect(calls).toBe(10);
+    await page.getByRole('button', { name: 'Thought journal', exact: true }).click();
+    await expect(page.locator('#person-thoughts')).toContainText('Script.sum');
+    await bridge.close(); bridge = makeBridge();
+    await page.reload();
+    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+    await page.locator('.sidebar-person-trigger:visible').click();
+    await expect(page.locator('#person-input')).toBeEnabled();
+    expect(calls).toBe(10);
+    await page.locator('#person-input').fill('Reuse the sum script.');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.locator('.person-messages')).toContainText('Reused the saved sum; result 17.');
+    await expect(page.locator('#person-input')).toBeEnabled();
+    expect(calls).toBe(12);
   } finally {
     mockAgent._messageHandlers = mockAgent._messageHandlers.filter(h => h !== listener);
     await bridge.close();

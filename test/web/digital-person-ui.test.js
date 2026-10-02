@@ -89,6 +89,32 @@ describe('Digital Person surface', () => {
     expect(wrapper.text()).not.toMatch(/sourceRefs|private-ref|private-model/);
   });
 
+  it.each([en, zhCN])('renders translated capability outcomes as text, independently of adopted cognition', messages => {
+    const html = '<img src=x onerror="alert(1)"><script>not executable</script>';
+    const traces = [
+      { id: 'created', episodeId: 'e', seq: 1, callId: 'a', kind: 'capability_result', capability: { id: 'Capability.create', args: { code: 'PRIVATE_CODE', tests: 'PRIVATE_TESTS' } },
+        result: { ok: true, published: true, contract: { id: 'Script.sum', description: html, version: 1 }, evidence: { testsPassed: 2 } } },
+      { id: 'executed', episodeId: 'e', seq: 2, callId: 'a', kind: 'capability_result', capability: { id: 'Script.sum', args: { input: 'PRIVATE_INPUT' } },
+        result: { ok: true, id: 'Script.sum', version: 1, output: 'PRIVATE_OUTPUT', access: 'pure-computation' } },
+      ...['SCRIPT_TEST_FAILED', 'SCRIPT_EXECUTION', 'SCRIPT_TIMEOUT', 'SCRIPT_OUTPUT', 'SCRIPT_VERSION', 'SCRIPT_BUSY', 'PRIVATE_PROVIDER'].map((code, index) => ({
+        id: `failure-${index}`, episodeId: 'e', seq: index + 3, kind: 'capability_failed', capabilityId: 'Script.sum', code,
+        result: { ok: false, message: 'PRIVATE_DIAGNOSTICS' },
+      })),
+      { id: 'commit', episodeId: 'e', seq: 10, callId: 'a', kind: 'committed' },
+    ];
+    wrapper = mount(PersonThoughtJournal, { props: { traces }, global: { config: { globalProperties: { $t: key => messages[key] || key } } } });
+    const publication = wrapper.get('[data-thought-kind="capability_created"]');
+    expect(publication.text()).toContain(messages['person.thought.capability_created']);
+    expect(publication.text()).toContain(messages['person.thought.capability_published']);
+    expect(publication.text()).toContain(messages['person.thought.capability_tests_limit']);
+    expect(publication.text()).toContain(html);
+    expect(publication.get('.person-thought-status').text()).toBe(messages['person.thought.recorded']);
+    expect(wrapper.get('[data-thought-kind="script_executed"]').text()).toContain(messages['person.thought.script_succeeded']);
+    expect(wrapper.findAll('[data-thought-kind="capability_failed"]')).toHaveLength(7);
+    expect(wrapper.text()).not.toMatch(/PRIVATE_|person\.thought\./);
+    expect(wrapper.find('img, script, pre').exists()).toBe(false);
+  });
+
   it('preserves the draft between views and sends only on the explicit keyboard shortcut', async () => {
     await render();
     const input = wrapper.get('#person-input');

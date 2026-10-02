@@ -172,7 +172,8 @@ for (const backend of ['sqlite', 'mongo']) {
       const { episode } = await r.admit('alice', input());
       const before = await r.getPerson('alice'), traces = await r.list('alice', 'traces', { limit: 50 });
       if (backend === 'sqlite') sql(r, db => db.exec("CREATE TRIGGER reject_probe BEFORE INSERT ON traces WHEN json_extract(NEW.record, '$.rollbackProbe') = 1 BEGIN SELECT RAISE(ABORT, 'probe'); END;"));
-      else await inspector.db(dbName).command({ collMod: 'person_traces', validator: { rollbackProbe: { $exists: false } } });
+      // Mongo stores arbitrary payload fields only in JSON; reject by the fixed kind projection.
+      else await inspector.db(dbName).command({ collMod: 'person_traces', validator: { kind: { $ne: 'capability_result' } } });
       await expect(r.append(episode, 'capability_result', { ...result(), rollbackProbe: 1 })).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
       expect(await r.getPerson('alice')).toEqual(before);
       expect(await r.list('alice', 'traces', { limit: 50 })).toEqual(traces);

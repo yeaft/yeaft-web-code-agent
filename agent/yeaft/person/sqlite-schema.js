@@ -8,6 +8,8 @@ export const TABLES = Object.freeze({
   concept_revisions: { keys: ['id', 'revision'], columns: [] },
   state_commits: { keys: ['version'], columns: ['id'] },
   traces: { keys: ['id'], columns: ['seq'] },
+  created_capabilities: { keys: ['id'], columns: ['version'] },
+  created_capability_revisions: { keys: ['id', 'version'], columns: [] },
 });
 
 export const SCHEMA = `
@@ -64,6 +66,21 @@ CREATE TABLE IF NOT EXISTS traces (
   namespace TEXT NOT NULL, ownerId TEXT NOT NULL, personId TEXT NOT NULL,
   id TEXT NOT NULL, seq INTEGER NOT NULL, record TEXT NOT NULL CHECK(json_valid(record)),
   PRIMARY KEY(namespace, ownerId, personId, id), UNIQUE(namespace, ownerId, personId, seq),
+  FOREIGN KEY(namespace, ownerId, personId) REFERENCES persons(namespace, ownerId, personId)
+) STRICT;
+CREATE INDEX IF NOT EXISTS traces_call_output ON traces(namespace, ownerId, personId,
+  json_extract(record, '$.episodeId'), json_extract(record, '$.callId'))
+  WHERE json_extract(record, '$.kind') = 'call_output';
+CREATE TABLE IF NOT EXISTS created_capabilities (
+  namespace TEXT NOT NULL, ownerId TEXT NOT NULL, personId TEXT NOT NULL,
+  id TEXT NOT NULL, version INTEGER NOT NULL CHECK(version BETWEEN 1 AND 32),
+  record TEXT NOT NULL CHECK(json_valid(record)), PRIMARY KEY(namespace, ownerId, personId, id),
+  FOREIGN KEY(namespace, ownerId, personId) REFERENCES persons(namespace, ownerId, personId)
+) STRICT;
+CREATE TABLE IF NOT EXISTS created_capability_revisions (
+  namespace TEXT NOT NULL, ownerId TEXT NOT NULL, personId TEXT NOT NULL,
+  id TEXT NOT NULL, version INTEGER NOT NULL CHECK(version BETWEEN 1 AND 32),
+  record TEXT NOT NULL CHECK(json_valid(record)), PRIMARY KEY(namespace, ownerId, personId, id, version),
   FOREIGN KEY(namespace, ownerId, personId) REFERENCES persons(namespace, ownerId, personId)
 ) STRICT;
 -- This journal is authority data, not a disposable search index. A committed seq is
