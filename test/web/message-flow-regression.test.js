@@ -7057,6 +7057,38 @@ describe('message flow regressions', () => {
       },
     );
 
+    it('retains an earlier unacknowledged send when a later upload is rejected, then drains on both rejections', () => {
+      vi.useFakeTimers();
+      try {
+        const { store, send, optimistic, reject } = setup();
+        const later = send();
+        const watchdog = store._processingWatchdogs['yeaft-a'];
+        reject({ clientMessageId: later.clientMessageId });
+        expect(later.status).toBe('error');
+        expect(optimistic.status).toBeUndefined();
+        expect(store.yeaftProcessingSessions['agent-a\u001fsame']).toBe(true);
+        expect(store.processingConversations['yeaft-a']).toBe(true);
+        expect(store._processingWatchdogs['yeaft-a']).toBe(watchdog);
+        reject();
+        expect(store.yeaftProcessingSessions).toEqual({});
+        expect(store.processingConversations['yeaft-a']).toBeUndefined();
+        expect(store._processingWatchdogs['yeaft-a']).toBeUndefined();
+      } finally { cleanup(); }
+    });
+
+    it('does not treat an earlier persisted user row as an unacknowledged send', () => {
+      vi.useFakeTimers();
+      try {
+        const { store, send, optimistic, reject } = setup();
+        optimistic.messageId = 'm0001';
+        const later = send();
+        reject({ clientMessageId: later.clientMessageId });
+        expect(later.status).toBe('error');
+        expect(store.yeaftProcessingSessions).toEqual({});
+        expect(store.processingConversations['yeaft-a']).toBeUndefined();
+      } finally { cleanup(); }
+    });
+
     it.each(['active turn', 'running status'])('does not clear an existing %s when another send is rejected', source => {
       vi.useFakeTimers();
       try {

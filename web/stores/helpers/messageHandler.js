@@ -114,6 +114,12 @@ function handleYeaftSessionSendError(store, msg) {
   if (optimistic.status === 'error') return;
   optimistic.status = 'error';
   optimistic.error = msg.message;
+  // A rejection can arrive before any Agent status, in either send order.
+  // Other optimistic identities remain in-flight until a durable echo replaces
+  // them or their own rejection arrives; older persisted rows are not pending.
+  const hasOtherPendingSend = rows.some(row => row !== optimistic && row.type === 'user'
+    && row.sessionId === msg.sessionId && row.status !== 'error' && row.clientMessageId
+    && (row.messageId || row.id) === row.clientMessageId);
   const hasNewerSend = rows.slice(optimisticIndex + 1).some(row => row.type === 'user'
     && row.sessionId === msg.sessionId && row.status !== 'error');
   store.addMessageToConversation(conversationId, {
@@ -124,7 +130,7 @@ function handleYeaftSessionSendError(store, msg) {
     turnId: msg.clientMessageId,
   });
 
-  if (hasNewerSend) return;
+  if (hasOtherPendingSend || hasNewerSend) return;
   // Retain a running VP's state if a second send was rejected mid-turn.
   store.clearYeaftSessionProcessingIfIdle(msg.sessionId, { agentId: msg.agentId });
   // One Agent bridge holds multiple Sessions. Only stop its watchdog when all

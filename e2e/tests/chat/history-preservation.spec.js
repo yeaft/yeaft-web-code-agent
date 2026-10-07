@@ -306,13 +306,20 @@ test('relays uploaded images directly and rejects missing uploads without a text
   const relayed = await mockAgent.waitForMessage('yeaft_session_send');
   expect(relayed.files).toEqual([expect.objectContaining({ name: 'direct-image.png', mimeType: 'image/png', data: PNG.split(',')[1], isImage: true })]);
   expect(relayed.attachments).toBeUndefined();
-  // The successful send intentionally has no running mock VP. Clear its local
-  // pending state before checking rejection cleanup for an independent send.
-  await chatPage.evaluate(() => {
+  // Echo the accepted user row through the ordinary durable history contract.
+  // The fixture has no running VP; this send is no longer unacknowledged when
+  // checking rejection cleanup for the following independent send.
+  await chatPage.evaluate(({ agentId, sessionId, conversationId, sent }) => {
     const store = window.Pinia.useChatStore();
+    const request = store.beginYeaftHistoryLoad({ agentId, sessionId, mode: 'delta', preserveLoaded: true });
+    store.handleMessage({
+      type: 'yeaft_history_chunk', agentId, sessionId, conversationId, requestId: request.requestId,
+      mode: 'delta', messages: [{ id: 'm999999', seq: 999999, role: 'user', content: sent.text,
+        clientMessageId: sent.id, sessionId, ts: Date.now() }], latestSeq: 999999, hasMore: false,
+    });
     store.yeaftProcessingSessions = {};
     store.processingConversations = {};
-  });
+  }, { agentId: mockAgent.agentId, sessionId: SESSION_B, conversationId: CONVERSATION, sent: relayed });
   const rejectedId = await send({ ...upload, fileId: 'expired-image' }, 'Reject an expired image');
   await expect.poll(() => chatPage.evaluate(({ id, conv }) =>
     window.Pinia.useChatStore().messagesMap[conv].find(m => m.clientMessageId === id)?.status,
