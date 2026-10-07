@@ -54,6 +54,7 @@ const {
   __testResetVpState,
   __testSeedAbortController,
   __testSetSession,
+  __testGetOrCreateVpEngine,
   __testHooks,
 } = await import('../../../agent/yeaft/web-bridge.js');
 
@@ -87,6 +88,17 @@ describe('Yeaft load-history first paint', () => {
     buildDreamOutputSnapshot.mockClear();
     resolveLoadSession = null;
     ctx.CONFIG = null;
+  });
+
+  it('constructs an uncached Session VP Engine without a history store decorator', () => {
+    const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-bridge-vision-'));
+    try {
+      __testSetSession({ yeaftDir, config: { dir: yeaftDir, model: 'test-model' } });
+      expect(__testGetOrCreateVpEngine('session-vision-construction', 'vp-vision')).toBeTruthy();
+    } finally {
+      __testResetVpState();
+      rmSync(yeaftDir, { recursive: true, force: true });
+    }
   });
 
   it('rejects old Dream triggers and omits retired output from normal debug', async () => {

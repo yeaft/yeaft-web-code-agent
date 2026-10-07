@@ -4298,6 +4298,7 @@ export class Engine {
       // break out of the outer while-loop cleanly once the current
       // tool batch finishes reporting.
       let abortedDuringTools = false;
+      let batchHasUnseenImages = false;
       /** @type {string[]} */
       const pendingDupReminders = [];
       let terminateAfterDuplicateBatch = false;
@@ -4793,6 +4794,7 @@ export class Engine {
           toolName: tc.name,
           language: this.#config?.language,
         });
+        if (modelImages.length > 0) batchHasUnseenImages = true;
         const toolMessage = {
           role: 'tool',
           toolCallId: tc.id,
@@ -4927,7 +4929,9 @@ export class Engine {
       const completedToolLoops = toolLoopTurns + 1;
       const t1BatchDue = completedToolLoops - lastT1AtLoopCount
         >= TOOL_LOOP_REFLECTION_INTERVAL;
-      if (t1BatchDue && !toolBatchBarrier
+      // Text-only reflection cannot consume visual input. Defer folding until
+      // the primary provider has received this image batch at least once.
+      if (t1BatchDue && !batchHasUnseenImages && !toolBatchBarrier
           && !abortedDuringTools && !signal?.aborted) {
         const t1DedupKey = `${queryNumber}:t1-loop:${completedToolLoops}`;
         if (this.#reflectedTurns.has(t1DedupKey)) {

@@ -1943,7 +1943,6 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
     }
     return eng;
   }
-  installSessionAttachmentHistory(session);
   eng = new Engine({
     adapter: session.adapter,
     trace: session.trace,

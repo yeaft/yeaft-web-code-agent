@@ -12107,6 +12107,33 @@ describe('provider activity through Engine', () => {
 
 
 describe('tool image model input', () => {
+  it('delivers images before T1 folding at both interval boundaries', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-fold-vision-'));
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS9sAAAAASUVORK5CYII=';
+    writeFileSync(join(dir, 'screen.png'), Buffer.from(png, 'base64'));
+    try {
+      const adapter = new MockAdapter();
+      adapter.call = vi.fn().mockResolvedValue({ text: 'summary', usage: {} });
+      for (let i = 1; i <= 62; i++) adapter.pushResponse([
+        { type: 'tool_call', id: `call-${i}`, name: [30, 60, 61].includes(i) ? 'ViewImage' : 'probe',
+          input: [30, 60, 61].includes(i) ? { file_path: 'screen.png' } : { i } },
+        { type: 'stop', stopReason: 'tool_use' },
+      ]);
+      adapter.pushResponse([{ type: 'text_delta', text: 'seen' }, { type: 'stop', stopReason: 'end_turn' }]);
+      const engine = new Engine({ adapter, trace, config: { model: 'test', maxOutputTokens: 1024, maxContextTokens: 128000 } });
+      engine.registerTool(viewImageTool);
+      engine.registerTool({ name: 'probe', description: 'probe', parameters: { type: 'object' }, execute: async ({ i }) => `result ${i}` });
+      const events = [];
+      for await (const event of engine.query({ prompt: 'inspect', workDir: dir })) events.push(event);
+      for (const i of [30, 60, 61]) {
+        const result = adapter.callLog[i].messages.find(m => m.role === 'tool' && m.toolCallId === `call-${i}`);
+        expect(result?.content).toContainEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } });
+      }
+      expect(events.filter(e => e.type === 'reflection' && e.trigger === 't1' && e.status === 'ready')).toHaveLength(2);
+      expect(JSON.stringify(adapter.call.mock.calls)).not.toContain(png);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it.each(['anthropic', 'openai-responses'])('delivers actual ViewImage bytes on the next %s request without leaking into tool history', async protocol => {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-tool-vision-'));
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS9sAAAAASUVORK5CYII=';
