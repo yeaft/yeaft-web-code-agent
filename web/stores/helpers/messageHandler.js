@@ -96,6 +96,51 @@ function acceptDebugHistoryChunk(store, msg) {
   }
 }
 
+function handleYeaftSessionSendError(store, msg) {
+  // Session errors must never fall back to the currently visible CLI/Agent.
+  const conversationId = msg.agentId && msg.sessionId
+    ? store.yeaftConversationIdsByAgent?.[msg.agentId]
+    : null;
+  if (!conversationId) return;
+  const rows = store.messagesMap[conversationId] || [];
+  const optimisticIndex = rows.findIndex(row => row.type === 'user'
+    && row.sessionId === msg.sessionId
+    && row.clientMessageId === msg.clientMessageId
+    && (row.messageId || row.id) === msg.clientMessageId);
+  // Ignore unmatched, already persisted or duplicate rejections. They cannot
+  // authorize a lifecycle change for a newer send after navigation/reconnect.
+  if (!msg.clientMessageId || optimisticIndex < 0) return;
+  const optimistic = rows[optimisticIndex];
+  if (optimistic.status === 'error') return;
+  optimistic.status = 'error';
+  optimistic.error = msg.message;
+  const hasNewerSend = rows.slice(optimisticIndex + 1).some(row => row.type === 'user'
+    && row.sessionId === msg.sessionId && row.status !== 'error');
+  store.addMessageToConversation(conversationId, {
+    type: 'error',
+    content: msg.message,
+    agentId: msg.agentId,
+    sessionId: msg.sessionId,
+    turnId: msg.clientMessageId,
+  });
+
+  if (hasNewerSend) return;
+  // Retain a running VP's state if a second send was rejected mid-turn.
+  store.clearYeaftSessionProcessingIfIdle(msg.sessionId, { agentId: msg.agentId });
+  // One Agent bridge holds multiple Sessions. Only stop its watchdog when all
+  // its Session processing flags have drained; unscoped legacy flags are kept.
+  const hasProcessingSession = Object.entries(store.yeaftProcessingSessions || {}).some(([key, processing]) => {
+    const identity = parseYeaftSessionIdentity(key);
+    return processing && (!identity.agentId || identity.agentId === msg.agentId);
+  });
+  if (!hasProcessingSession) {
+    delete store.processingConversations[conversationId];
+    stopProcessingWatchdog(store, conversationId);
+  }
+  // A server-rejected send never started streaming; do not finalize another
+  // Session/VP's stream through the mutable _currentYeaft* context.
+}
+
 function sessionsStore() {
   return window.Pinia?.useSessionsStore?.()
     || (window.__useSessionsStore && window.__useSessionsStore());
@@ -727,6 +772,10 @@ export function handleMessage(store, msg) {
       break;
 
     case 'error': {
+      if (msg.sessionId || (msg.clientMessageId && msg.code)) {
+        handleYeaftSessionSendError(store, msg);
+        break;
+      }
       const errorConvId = msg.conversationId || store.currentConversation;
       // 'No agent available' is part of the chat-rejection whitelist
       // below and follows the same lifecycle (transient bubble + dedup
