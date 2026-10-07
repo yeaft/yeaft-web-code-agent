@@ -31,6 +31,7 @@ import {
   iterateCanonicalVisibleEntriesNewestFirst,
   normalizeLiteralSearch,
 } from './visible-entry.js';
+import { copyPersistedSessionAttachments } from '../attachments.js';
 import { markConversationDirty } from './history-index-state.js';
 
 /**
@@ -2035,7 +2036,8 @@ export class ConversationStore {
       `m${String(firstSeq + index).padStart(4, '0')}`,
     ]));
     const remapId = id => idMap.get(id) || id;
-    const copies = rows.map(row => {
+    const assetRows = copyPersistedSessionAttachments(rows, { yeaftDir: this.#dir, sourceSessionId, targetSessionId });
+    const copies = assetRows.map(row => {
       const copy = {
         ...row,
         id: idMap.get(row.id),

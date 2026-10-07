@@ -19,7 +19,7 @@
  * Inputs (`files`) come from the server-side resolver in
  * `client-conversation.js`: each entry is
  * `{ name, mimeType, data: <base64>, isImage }` — the `pendingFiles`
- * `fileId` was already consumed by the server before `forwardToAgent`.
+ * `fileId` is consumed only after the server successfully forwards the message.
  *
  * Output (single bundle, all named for the role each piece plays in
  * the LLM call):
@@ -313,7 +313,7 @@ export function resolvePersistedAttachmentPath(attachmentPath, opts = {}) {
 }
 
 /** Shared bounded read for model history and browser preview. Never follows symlinks. */
-function readPersistedImage(att, opts, maxBytes) {
+function readPersistedAttachment(att, opts, maxBytes) {
   const absPath = resolvePersistedAttachmentPath(att?.path, opts);
   if (!absPath) throw new Error('file missing or outside this Session / 文件缺失或不属于本会话');
   const fd = openSync(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
@@ -343,7 +343,7 @@ function readPersistedImage(att, opts, maxBytes) {
 export function persistedAttachmentPreviewPayload(att, opts = {}) {
   if (!att?.isImage || !att.path) return null;
   try {
-    const { bytes, ...payload } = readPersistedImage(att, opts, MAX_PREVIEW_BYTES);
+    const { bytes, ...payload } = readPersistedAttachment(att, opts, MAX_PREVIEW_BYTES);
     return payload;
   } catch {
     return null;
@@ -369,7 +369,7 @@ export function hydratePersistedUserAttachmentContent(row, opts = {}) {
   let totalBytes = 0;
   for (const att of images.slice(0, MAX_FILES_PER_TURN)) {
     try {
-      const payload = readPersistedImage(att, opts, MAX_TOTAL_BYTES - totalBytes);
+      const payload = readPersistedAttachment(att, opts, MAX_TOTAL_BYTES - totalBytes);
       totalBytes += payload.bytes;
       content.push({ type: 'image', source: { type: 'base64', media_type: payload.mimeType, data: payload.data } });
     } catch (error) {
@@ -386,5 +386,36 @@ export function hydratePersistedAttachmentHistory(messages, opts = {}) {
     if (row?.role !== 'user' || row.sessionId !== opts.sessionId || !validSessionId(opts.sessionId)
       || !Array.isArray(row.attachments) || !row.attachments.some(att => att?.isImage)) return row;
     return { ...row, content: hydratePersistedUserAttachmentContent(row, opts) };
+  });
+}
+
+/**
+ * Clone selected transcript attachments into the target Session's owned root.
+ * Missing/denied legacy references remain unavailable (never broaden access).
+ * Copy errors for available files fail the fork so CRUD can roll it back.
+ * @param {Array} rows Selected canonical source rows, including cold history.
+ * @param {{yeaftDir:string, sourceSessionId:string, targetSessionId:string}} opts
+ * @returns {Array} New rows; callers remap message and Session identities.
+ */
+export function copyPersistedSessionAttachments(rows, { yeaftDir, sourceSessionId, targetSessionId }) {
+  const sourceOptions = { yeaftDir, sessionId: sourceSessionId };
+  const copiedPaths = new Map();
+  return rows.map(row => {
+    if (row.sessionId !== sourceSessionId || !Array.isArray(row.attachments)) return row;
+    return { ...row, attachments: row.attachments.map(att => {
+      if (!att?.path) return att;
+      if (copiedPaths.has(att.path)) return { ...att, path: copiedPaths.get(att.path) };
+      if (!resolvePersistedAttachmentPath(att.path, sourceOptions)) return att;
+      const payload = readPersistedAttachment(att, sourceOptions, MAX_TOTAL_BYTES);
+      const bundle = persistYeaftAttachments([{ ...att, name: payload.filename, data: payload.data }], {
+        yeaftDir, sessionId: targetSessionId,
+      });
+      if (bundle.failed.length || bundle.promptAttachments.length !== 1) {
+        throw new Error(`Session attachment copy failed: ${bundle.failed[0]?.error || 'missing output'}`);
+      }
+      const path = bundle.promptAttachments[0].path;
+      copiedPaths.set(att.path, path);
+      return { ...att, path };
+    }) };
   });
 }
