@@ -79,6 +79,9 @@ import { listFilesWithFd } from '../../../agent/yeaft/tools/glob.js';
 import { runProcess } from '../../../agent/yeaft/tools/process-runner.js';
 import bashTool, { createBashTool } from '../../../agent/yeaft/tools/bash.js';
 import agentTool, { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
+import viewImageTool from '../../../agent/yeaft/tools/view-image.js';
+import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
+import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import fileReadTool from '../../../agent/yeaft/tools/file-read.js';
 import fileWriteTool from '../../../agent/yeaft/tools/file-write.js';
 import {
@@ -12098,5 +12101,60 @@ describe('provider activity through Engine', () => {
     expect(JSON.stringify(adapter.callLog.at(-1))).not.toContain('provider_activity');
     expect(JSON.stringify(adapter.callLog.at(-1))).not.toContain('hidden-secret');
     expect(next).toContainEqual(expect.objectContaining({ type: 'turn_end', terminal: true, stopReason: 'end_turn' }));
+  });
+});
+
+
+describe('tool image model input', () => {
+  it.each(['anthropic', 'openai-responses'])('delivers actual ViewImage bytes on the next %s request without leaking into tool history', async protocol => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-tool-vision-'));
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS9sAAAAASUVORK5CYII=';
+    writeFileSync(join(dir, 'screen.png'), Buffer.from(png, 'base64'));
+    const bodies = [];
+    const rows = [];
+    const registry = new ToolRegistry();
+    registry.register(viewImageTool);
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      const callId = `view-${bodies.length}`;
+      const call = { id: callId, name: 'ViewImage', input: { file_path: 'screen.png' } };
+      // Repeat the read once: read-only result reuse must also retain vision.
+      const body = protocol === 'anthropic'
+        ? (bodies.length < 3
+          ? { content: [{ type: 'tool_use', ...call }], stop_reason: 'tool_use' }
+          : { content: [{ type: 'text', text: 'seen' }], stop_reason: 'end_turn' })
+        : { status: 'completed', output: bodies.length < 3
+          ? [{ type: 'function_call', id: `fc-${callId}`, call_id: callId, name: call.name, arguments: JSON.stringify(call.input) }]
+          : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'seen' }] }] };
+      return { ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), json: async () => body };
+    }));
+    try {
+      const adapter = protocol === 'anthropic'
+        ? new AnthropicAdapter({ apiKey: 'test' }) : new OpenAIResponsesAdapter({ apiKey: 'test' });
+      const engine = new Engine({ adapter, trace: new NullTrace(), toolRegistry: registry,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+        conversationStore: { append: row => { rows.push(row); return { ...row, id: `row-${rows.length}` }; } },
+      });
+      const events = [];
+      for await (const event of engine.query({ prompt: 'Inspect screen.png', workDir: dir })) events.push(event);
+      expect(bodies).toHaveLength(3);
+      for (let index = 1; index < 3; index++) {
+        const body = bodies[index];
+        const output = protocol === 'anthropic'
+          ? body.messages.flatMap(m => Array.isArray(m.content) ? m.content : []).find(p => p.type === 'tool_result' && p.tool_use_id === `view-${index}`)?.content
+          : body.input.find(p => p.type === 'function_call_output' && p.call_id === `view-${index}`)?.output;
+        expect(output).toEqual(expect.arrayContaining([protocol === 'anthropic'
+          ? { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }
+          : { type: 'input_image', image_url: `data:image/png;base64,${png}` }]));
+      }
+      const imageEvent = events.find(e => e.type === 'tool_end' && e.id === 'view-1');
+      expect(imageEvent.displayImages).toHaveLength(1);
+      expect(imageEvent.output).not.toContain(png);
+      expect(JSON.stringify(rows)).not.toContain(png);
+      expect(rows.filter(row => row.role === 'tool')).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

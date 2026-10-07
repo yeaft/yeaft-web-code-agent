@@ -125,6 +125,16 @@ export function buildDuplicateReminder({ toolName, count, lastResultBrief }) {
     + `Consider whether re-running this tool is necessary or if you should try a different approach.`;
 }
 
+function toolOutputForReflection(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content) && content.every(part => part && ['text', 'image', 'document'].includes(part.type))) {
+    // Reflection consumes text, not a base64 dump of visual context. The image
+    // has already been delivered to the primary model in the paired result.
+    return content.map(part => part.type === 'text' ? part.text : `[${part.type} content omitted from reflection]`).join('\n');
+  }
+  return JSON.stringify(content);
+}
+
 /**
  * Convert assistant.toolCalls + matching tool results into the
  * { name, input, output, isError } pairs the reflector prompt expects.
@@ -159,14 +169,14 @@ export function extractToolPairsFromRange(messages, startIdx, endIdx) {
     } else if (m.role === 'tool') {
       const ent = m.toolCallId ? byId.get(m.toolCallId) : null;
       if (ent) {
-        ent.output = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        ent.output = toolOutputForReflection(m.content);
         ent.isError = !!m.isError;
       } else {
         // Orphan tool result — still include for completeness.
         pairs.push({
           name: '(orphan)',
           input: {},
-          output: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+          output: toolOutputForReflection(m.content),
           isError: !!m.isError,
         });
       }

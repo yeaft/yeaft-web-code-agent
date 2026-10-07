@@ -4439,6 +4439,7 @@ export class Engine {
 
         let output;
         let displayImages = [];
+        let modelImages = [];
         let isError = false;
         let reusedReadOnlyResult = false;
         let reusedReadOnlyCallId = null;
@@ -4575,6 +4576,7 @@ export class Engine {
           const cachedReadOnly = readOnlyToolResults.get(duplicateKey);
           if (!readOnlyToolReuseDisabled && cachedReadOnly && cacheableTool) {
             output = cachedReadOnly.output;
+            modelImages = cachedReadOnly.modelImages || [];
             isError = Boolean(cachedReadOnly.isError);
             reusedReadOnlyResult = true;
             reusedReadOnlyCallId = cachedReadOnly.callId || null;
@@ -4619,6 +4621,13 @@ export class Engine {
             }
             displayImages = extractDisplayImages(tc.name, output);
             if (displayImages.length > 0) {
+              // UI asset delivery and model vision are independent consumers.
+              // Capture provider parts before yielding to the UI bridge; never
+              // persist base64 in transcript/exec-log or textual tool output.
+              modelImages = displayImages.map(image => ({
+                type: 'image',
+                source: { type: 'base64', media_type: image.mimeType, data: image.previewData.data },
+              }));
               output = stripDisplayImageData(output, displayImages);
             }
             isError = toolErrorOutput === 'json-error-envelope' && isToolErrorOutput(output);
@@ -4752,6 +4761,7 @@ export class Engine {
             && !readOnlyToolReuseDisabled && cacheableTool) {
           readOnlyToolResults.set(duplicateKey, {
             output,
+            modelImages,
             isError,
             callId: tc.id,
           });
@@ -4767,7 +4777,9 @@ export class Engine {
         const toolMessage = {
           role: 'tool',
           toolCallId: tc.id,
-          content: contextOutput,
+          content: modelImages.length > 0
+            ? [{ type: 'text', text: contextOutput }, ...modelImages]
+            : contextOutput,
           isError,
         };
         conversationMessages.push(toolMessage);
