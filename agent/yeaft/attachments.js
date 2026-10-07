@@ -9,9 +9,10 @@
  *     user message into that query's `inputStream`.
  *   - Yeaft mode has many VPs taking turns inside a group, no per-VP
  *     workDir, and the Engine accepts the user message via `query()`
- *     args. So we (a) save attachments to a shared per-group folder
- *     under the agent's CWD (so file-tools using `ctx.cwd` can read
- *     them with relative paths) and (b) hand back the persisted-form
+ *     args. Session uploads belong to the instance's
+ *     `sessions/<sessionId>/attachments` directory, independent of workDir.
+ *     Non-Session callers retain the legacy CWD-relative folder.
+ *     We hand back the persisted-form
  *     metadata AND a `promptParts` content array (image blocks +
  *     synthesized [Uploaded files] suffix) for the LLM call.
  *
@@ -40,8 +41,8 @@
  *     than swallowing it in a console.warn.
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
-import { basename, extname, join, resolve, relative, isAbsolute } from 'node:path';
+import { mkdirSync, writeFileSync, lstatSync, openSync, closeSync, fstatSync, readSync, constants } from 'node:fs';
+import { basename, extname, join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 // Same dir name Chat mode uses, so ".gitignore" rules and tool-side
@@ -89,6 +90,8 @@ function sanitizeBaseName(base) {
  * @param {Array<{name:string, mimeType:string, data:string, isImage?:boolean}>} files
  *        Resolved files from server (pendingFiles → base64).
  * @param {Object} [opts]
+ * @param {string} [opts.yeaftDir] Instance data root for Session uploads.
+ * @param {string} [opts.sessionId] Session owner (required with yeaftDir).
  * @param {string} [opts.subdir]   Sub-folder under TEMP_UPLOAD_DIR
  *        (e.g. sessionId). Lets multiple groups co-exist without clobbering.
  * @param {string} [opts.cwd]      Override base dir; defaults to process.cwd()
@@ -107,9 +110,11 @@ export function persistYeaftAttachments(files, opts = {}) {
   // from sessionId. Keep the existing strict policy here; this is NOT
   // user-visible.
   const subdir = opts.subdir ? String(opts.subdir).replace(/[^a-zA-Z0-9._-]/g, '_') : '';
-  const uploadDir = subdir
-    ? join(cwd, TEMP_UPLOAD_DIR, subdir)
-    : join(cwd, TEMP_UPLOAD_DIR);
+  const sessionUpload = opts.yeaftDir != null || opts.sessionId != null;
+  const uploadDir = sessionUpload
+    ? sessionAttachmentRoot(opts)
+    : (subdir && subdir !== '.' && subdir !== '..'
+      ? resolve(cwd, TEMP_UPLOAD_DIR, subdir) : resolve(cwd, TEMP_UPLOAD_DIR));
 
   if (!Array.isArray(files) || files.length === 0) {
     return { promptAttachments: [], promptSuffix: '', promptParts: [], failed: [] };
@@ -120,8 +125,17 @@ export function persistYeaftAttachments(files, opts = {}) {
   const accepted = files.slice(0, MAX_FILES_PER_TURN);
   const rejectedByCount = files.slice(MAX_FILES_PER_TURN);
 
-  if (!existsSync(uploadDir)) {
+  try {
+    if (!uploadDir) throw new Error('invalid Session attachment owner');
+    const root = sessionUpload ? resolve(opts.yeaftDir) : resolve(cwd);
+    assertNoSymlinks(root, uploadDir, true);
     mkdirSync(uploadDir, { recursive: true });
+    assertNoSymlinks(root, uploadDir);
+  } catch (error) {
+    return {
+      promptAttachments: [], promptSuffix: '', promptParts: [],
+      failed: files.map(file => ({ name: file?.name || '<unknown>', error: error.message })),
+    };
   }
 
   const promptAttachments = [];
@@ -141,17 +155,18 @@ export function persistYeaftAttachments(files, opts = {}) {
       continue;
     }
     try {
-      const ext = extname(file.name);
-      const base = basename(file.name, ext);
+      const rawExt = extname(file.name);
+      const ext = rawExt.replace(/[\\\/\0-\x1f\x7f]/g, '_');
+      const base = basename(file.name, rawExt);
       const safeBase = sanitizeBaseName(base);
       // Identity comes from random bytes — a clock is not an identity.
       // 4 bytes (2^32) is plenty for a 16-file cap.
       const suffix = randomBytes(4).toString('hex');
       const uniqueName = `${safeBase}_${suffix}${ext || ''}`;
       const absPath = join(uploadDir, uniqueName);
-      const relPath = subdir
-        ? join(TEMP_UPLOAD_DIR, subdir, uniqueName)
-        : join(TEMP_UPLOAD_DIR, uniqueName);
+      // Absolute Session references keep file tools independent of workDir;
+      // readers still require this instance and Session's exact asset root.
+      const persistedPath = sessionUpload ? absPath : relative(resolve(cwd), absPath);
 
       const buffer = Buffer.from(file.data, 'base64');
 
@@ -166,12 +181,12 @@ export function persistYeaftAttachments(files, opts = {}) {
       }
       totalBytes += buffer.length;
 
-      writeFileSync(absPath, buffer);
+      writeFileSync(absPath, buffer, { flag: 'wx', mode: 0o600 });
 
       const isImage = !!file.isImage || (file.mimeType || '').startsWith('image/');
       promptAttachments.push({
         name: file.name,
-        path: relPath,
+        path: persistedPath,
         mimeType: file.mimeType || 'application/octet-stream',
         isImage,
       });
@@ -230,48 +245,133 @@ export function attachmentsForPersistence(promptAttachments) {
   }));
 }
 
-/**
- * Resolve a persisted Yeaft attachment path to an on-disk file. The persisted
- * path is intentionally relative (for tool use), so preview hydration must
- * keep it inside the upload root instead of serving arbitrary files.
- *
- * @param {string} attachmentPath
- * @param {{ cwd?: string }} [opts]
- * @returns {string|null}
- */
-export function resolvePersistedAttachmentPath(attachmentPath, opts = {}) {
-  if (!attachmentPath || typeof attachmentPath !== 'string') return null;
-  if (isAbsolute(attachmentPath)) return null;
-  const cwd = resolve(opts.cwd || process.cwd());
-  const uploadRoot = resolve(cwd, TEMP_UPLOAD_DIR);
-  const absPath = resolve(cwd, attachmentPath);
-  const rel = relative(uploadRoot, absPath);
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null;
-  return absPath;
+/** Session IDs are identities, never sanitized into another Session's directory. */
+function validSessionId(value) {
+  return typeof value === 'string' && /^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$/.test(value);
+}
+
+function sessionAttachmentRoot({ yeaftDir, sessionId }) {
+  return typeof yeaftDir === 'string' && yeaftDir && validSessionId(sessionId)
+    ? resolve(yeaftDir, 'sessions', sessionId, 'attachments') : null;
+}
+
+function isWithin(root, path) {
+  const rel = relative(root, path);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+// Check the trusted base itself and every descendant, including intermediate
+// directories. O_NOFOLLOW below also guards replacement of the final file.
+// This is not a sandbox against concurrently replaced ancestor directories.
+function assertNoSymlinks(root, path, allowMissing = false) {
+  if (path !== root && !isWithin(root, path)) throw new Error('attachment path outside owner root');
+  let current = root;
+  for (const part of ['', ...relative(root, path).split(sep).filter(Boolean)]) {
+    if (part) current = join(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) throw new Error('attachment symlink is not allowed');
+    } catch (error) {
+      if (allowMissing && error.code === 'ENOENT') continue;
+      throw error;
+    }
+  }
 }
 
 /**
- * Read a persisted image attachment into a short-lived preview payload for the
- * web server. Returns null for non-images, bad paths, missing files, or files
- * too large to cache as previews.
- *
- * @param {{name?:string, path?:string, mimeType?:string, isImage?:boolean}} att
- * @param {{ cwd?: string }} [opts]
- * @returns {{data:string,mimeType:string,filename:string}|null}
+ * Resolve only this Session's assets, or its CWD-relative legacy uploads.
+ * Absolute paths are allowed ONLY in <yeaftDir>/sessions/<sessionId>/attachments.
+ * No workDir search/fallback: legacy Web uploads were written under Agent CWD.
+ * Non-Session callers retain their original CWD-relative upload root.
+ * @param {string} attachmentPath
+ * @param {{cwd?:string, yeaftDir?:string, sessionId?:string}} [opts]
+ * @returns {string|null}
  */
-export function persistedAttachmentPreviewPayload(att, opts = {}) {
-  if (!att || !att.isImage || !att.path) return null;
-  const absPath = resolvePersistedAttachmentPath(att.path, opts);
-  if (!absPath) return null;
+export function resolvePersistedAttachmentPath(attachmentPath, opts = {}) {
+  if (!attachmentPath || typeof attachmentPath !== 'string' || attachmentPath.includes('\0')) return null;
+  const cwd = resolve(opts.cwd || process.cwd());
+  const scoped = opts.sessionId != null || opts.yeaftDir != null;
+  const sessionRoot = sessionAttachmentRoot(opts);
+  if (scoped && !sessionRoot) return null;
+  const absPath = resolve(cwd, attachmentPath);
+  let root;
+  if (isAbsolute(attachmentPath)) {
+    if (!sessionRoot || !isWithin(sessionRoot, absPath)) return null;
+    root = resolve(opts.yeaftDir);
+  } else {
+    const legacyRoot = scoped
+      ? resolve(cwd, TEMP_UPLOAD_DIR, opts.sessionId) : resolve(cwd, TEMP_UPLOAD_DIR);
+    if (!isWithin(legacyRoot, absPath)) return null;
+    root = cwd;
+  }
   try {
-    const st = statSync(absPath);
-    if (!st.isFile() || st.size > MAX_PREVIEW_BYTES) return null;
-    return {
-      data: readFileSync(absPath).toString('base64'),
-      mimeType: att.mimeType || 'application/octet-stream',
-      filename: att.name || basename(absPath),
-    };
+    assertNoSymlinks(root, absPath);
+    return absPath;
   } catch {
     return null;
   }
+}
+
+/** Shared bounded read for model history and browser preview. Never follows symlinks. */
+function readPersistedImage(att, opts, maxBytes) {
+  const absPath = resolvePersistedAttachmentPath(att?.path, opts);
+  if (!absPath) throw new Error('file missing or outside this Session / 文件缺失或不属于本会话');
+  const fd = openSync(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error('not a regular file');
+    if (stat.size > maxBytes) throw new Error('image exceeds attachment size limit');
+    const buffer = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const read = readSync(fd, buffer, offset, buffer.length - offset, null);
+      if (!read) throw new Error('image changed while reading');
+      offset += read;
+    }
+    return {
+      data: buffer.toString('base64'),
+      mimeType: att.mimeType || 'image/png',
+      filename: att.name || basename(absPath),
+      bytes: buffer.length,
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Short-lived web preview; missing/denied/oversized images have no preview. */
+export function persistedAttachmentPreviewPayload(att, opts = {}) {
+  if (!att?.isImage || !att.path) return null;
+  try {
+    const { bytes, ...payload } = readPersistedImage(att, opts, MAX_PREVIEW_BYTES);
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Provider-only projection. Canonical rows keep text + lightweight references;
+ * neither hydrated base64 nor unavailable-image notices are persisted.
+ * Ownership comes from the requested Session, not an attachment's metadata.
+ */
+export function hydratePersistedAttachmentHistory(messages, opts = {}) {
+  return messages.map(row => {
+    if (row?.role !== 'user' || row.sessionId !== opts.sessionId || !validSessionId(opts.sessionId)) return row;
+    const images = Array.isArray(row.attachments) ? row.attachments.filter(att => att?.isImage) : [];
+    if (!images.length) return row;
+    const content = Array.isArray(row.content) ? [...row.content]
+      : (row.content ? [{ type: 'text', text: String(row.content) }] : []);
+    let totalBytes = 0;
+    for (const att of images.slice(0, MAX_FILES_PER_TURN)) {
+      try {
+        const payload = readPersistedImage(att, opts, MAX_TOTAL_BYTES - totalBytes);
+        totalBytes += payload.bytes;
+        content.push({ type: 'image', source: { type: 'base64', media_type: payload.mimeType, data: payload.data } });
+      } catch (error) {
+        content.push({ type: 'text', text: `[Uploaded image unavailable / 上传图片不可用: ${att.name || 'image'} — ${error.message}. Ask the user to upload it again / 请用户重新上传。]` });
+      }
+    }
+    if (images.length > MAX_FILES_PER_TURN) content.push({ type: 'text', text: '[Uploaded image unavailable: attachment count limit exceeded.]' });
+    return { ...row, content };
+  });
 }

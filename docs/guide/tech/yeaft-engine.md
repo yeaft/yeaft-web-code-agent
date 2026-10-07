@@ -133,6 +133,8 @@ The Coordinator uses the same model infrastructure but a restricted decision con
 
 Agent-local Session metadata, history, memory, tasks, and Work Center data live under the resolved Yeaft directory. A Session `workDir` is project context only.
 
+Web Session 上传附件保存在 `<yeaftDir>/sessions/<sessionId>/attachments/`，transcript 仅保存轻量引用，不写入图片 base64。当前消息直接携带图片；后续 turn 或重启恢复时，只要原消息仍在有界历史窗口中，provider 历史装配就会重新读取本 Session 的图片并直接传给模型，无须 `ViewImage`。历史预览与模型历史共用受控读取，拒绝跨 Session、跨实例、任意路径与符号链接；缺失或不可访问的图片会在模型上下文中明确提示重新上传。旧上传仅兼容 Agent CWD 下 `.claude-tmp-attachments/<sessionId>/` 的相对引用，不搜索项目 `workDir`。Session fork 不改变原附件归属，目标 Session 不能借复制的引用读取源 Session 图片。
+
 Older wire aliases, payload identifiers, and storage scope prefixes remain where changing them would break deployed clients or data. New code uses Session/Yeaft terminology and the canonical Session memory layout is `sessions/<id>`. Readers may still handle legacy `session/<id>` and `group/<id>` aliases during migration.
 
 ## Verification map
