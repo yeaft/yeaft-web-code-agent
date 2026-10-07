@@ -156,3 +156,7 @@ Dream/H2-AMS 已从当前 runtime 退役。原生 turn 只使用当前 Session t
 - [Provider 与 model 配置](../yeaft-config.md)
 - [Yeaft engine 内部实现](../tech/yeaft-engine.md)
 - [已退役的 H2-AMS 实现](../tech/yeaft-memory.md)
+
+## 图片与模型视觉输入
+
+原生 Yeaft Session 的受支持图片附件会随用户消息直接输入视觉模型，不需要调用 `ViewImage`。后续追问或恢复会话时，进入上下文窗口的历史图片从本实例、同 Session 的附件文件恢复；文件缺失或被上下文预算省略时，会明确标记，界面缩略图不代表模型仍能看到图片。`ViewImage` 用于读取本地文件，其结果直接作为多模态工具输入，不要求先裁剪或 OCR。新附件随 Session 存在实例数据根，不依赖 Agent 启动目录。

@@ -42,6 +42,7 @@ import {
 } from './history-window.js';
 import { recallConversationTurns } from './conversation/history-index.js';
 import { parseSeqFromId } from './conversation/persist.js';
+import { hydratePersistedAttachmentHistory } from './attachments.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
 import { cleanMemoryPromptText } from './memory/prompt-cleanup.js';
@@ -2180,7 +2181,13 @@ export class Engine {
       if (Number.isFinite(beforeSeq)) {
         const loadHistory = this.#conversationStore.loadProviderHistoryBySession
           || this.#conversationStore.loadRecentBySession;
-        const tail = await loadHistory.call(this.#conversationStore, runtimeSessionId, recentTurnCap, { beforeSeq });
+        // Materialize only provider copies from this Session's controlled assets.
+        // Hydrate before budgeting; never mutate/persist base64 into canonical rows.
+        const attachmentOptions = { yeaftDir: this.#yeaftDir, sessionId: runtimeSessionId, legacyRoot: process.cwd() };
+        const tail = hydratePersistedAttachmentHistory(
+          await loadHistory.call(this.#conversationStore, runtimeSessionId, recentTurnCap, { beforeSeq }),
+          attachmentOptions,
+        );
         messages = tail.filter(m => parseSeqFromId(m.id) < beforeSeq
           && (m.role !== 'tool' || !queryVpId || m.speakerVpId === queryVpId))
           .map(m => {
@@ -2193,7 +2200,19 @@ export class Engine {
             const recalled = await recallConversationTurns(this.#yeaftDir, runtimeSessionId, prompt, {
               beforeSeq, limit: relatedTurnCap,
             });
-            relatedHistoryTurns = recalled.turns || [];
+            relatedHistoryTurns = (recalled.turns || []).map(turn => ({
+              ...turn,
+              // Recall indexes intentionally contain text/identities, not assets.
+              // Reload only the exact same-Session user anchor's references.
+              messages: hydratePersistedAttachmentHistory((turn.messages || []).map(row => {
+                if (row.role !== 'user' || row.sessionId !== runtimeSessionId
+                  || !Number.isFinite(row.seq) || row.seq >= beforeSeq) return row;
+                const anchor = this.#conversationStore.loadRecentBySession(runtimeSessionId, 1, { beforeSeq: row.seq + 1 })
+                  .find(candidate => candidate.role === 'user' && candidate.sessionId === runtimeSessionId
+                    && candidate.id === row.messageId && parseSeqFromId(candidate.id) === row.seq);
+                return anchor?.attachments ? { ...row, attachments: anchor.attachments } : row;
+              }), attachmentOptions),
+            }));
             historyRecallMeta = { source: 'messages', status: 'ready', ...recalled.meta };
           } catch (error) {
             // Cold/stale index degrades to recent history, never a full scan.

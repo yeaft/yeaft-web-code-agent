@@ -143,3 +143,7 @@ See [Work Center](./work-center.md).
 - [Provider and model configuration](../yeaft-config.md)
 - [Yeaft engine internals](../tech/yeaft-engine.md)
 - [Retired H2-AMS implementation](../tech/yeaft-memory.md)
+
+## Images and model vision
+
+Native Yeaft Sessions send supported image attachments directly to vision models with the user message; `ViewImage` is not required. Follow-up turns and restored Sessions reload selected historical images from this instance’s Session-scoped files. Missing files or budget-omitted images are marked explicitly; a visible thumbnail does not mean the model still has the image. `ViewImage` reads local files and returns native multimodal tool input, without requiring cropping or OCR first. New attachments live under the instance’s Session data root, independently of the Agent launch directory.
