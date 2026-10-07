@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { beforeEach } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
-import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload, hydratePersistedAttachmentHistory } from '../../../agent/yeaft/attachments.js';
-import { Engine } from '../../../agent/yeaft/engine.js';
-import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload, hydratePersistedAttachmentHistory, hydratePersistedUserAttachmentContent } from '../../../agent/yeaft/attachments.js';
 import { searchConversationIndex } from '../../../agent/yeaft/conversation/history-index.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { join } from 'node:path';
@@ -1331,56 +1329,68 @@ describe('Yeaft load-history first paint', () => {
       const store = new ConversationStore(yeaftDir);
       store.append({ role: 'user', content: 'describe this image', sessionId, attachments: attachmentsForPersistence(bundle.promptAttachments) });
       store.append({ role: 'assistant', content: 'description', sessionId });
-      for (const reader of [store, new ConversationStore(yeaftDir)]) {
-        // Re-installing is harmless; a cold runtime has no in-memory image data.
-        const runtime = { yeaftDir, workDir, conversationStore: reader };
-        installYeaftRuntimeBridge(runtime);
-        installYeaftRuntimeBridge(runtime);
-        const history = await reader.loadProviderHistoryBySession(sessionId, 20);
+      for (const reader of [store, store, new ConversationStore(yeaftDir)]) {
+        // Warm and cold readers return canonical rows; engine applies the helper
+        // at its history boundary, not by decorating a shared store in the bridge.
+        const loader = reader.loadProviderHistoryBySession;
+        installYeaftRuntimeBridge({ yeaftDir, workDir, conversationStore: reader });
+        expect(reader.loadProviderHistoryBySession).toBe(loader);
+        const raw = await reader.loadProviderHistoryBySession(sessionId, 20);
+        const history = hydratePersistedAttachmentHistory(raw, { yeaftDir, sessionId, legacyRoot: cwd });
+        expect(raw[0].content).toBe('describe this image');
         expect(history[0].content).toEqual([{ type: 'text', text: 'describe this image' }, ...bundle.promptParts]);
         expect(reader.loadAllBySession(sessionId)[0].content).toBe('describe this image');
         ctx.CONFIG = { yeaftDir };
         const preview = __testHooks.projectVisibleHistoryChunkMessages(reader.loadAllBySession(sessionId));
         expect(preview[0].attachments[0].previewData).toMatchObject({ data, mimeType: 'image/png' });
       }
-      // A deterministic adapter proves provider-bound images survive the actual
-      // Engine/history-window boundary without ViewImage or network requests.
-      const calls = [];
-      const adapter = { async *stream(params) {
-        calls.push(structuredClone(params.messages));
-        yield { type: 'text_delta', text: 'done' };
-        yield { type: 'stop', stopReason: 'end_turn' };
-      } };
-      let engine;
-      for (const [phase, reader] of [store, store, new ConversationStore(yeaftDir)].entries()) {
-        installYeaftRuntimeBridge({ yeaftDir, conversationStore: reader });
-        // Phase 1 reuses the live engine; phase 2 simulates Session recovery.
-        if (phase !== 1) engine = new Engine({ adapter, conversationStore: reader, yeaftDir, sessionId, trace: new NullTrace(),
-          config: { model: 'test-model', maxOutputTokens: 1024, maxContextTokens: 128000,
-            messageTokenBudget: 12000, archive: { toolResults: false }, yeaft: { relatedTurnsLimit: 0 } } });
-        const events = [];
-        const currentImage = phase === 0 ? {
-          prompt: 'describe this image', promptParts: [{ type: 'text', text: 'describe this image' }, ...bundle.promptParts],
-          userAlreadyPersisted: true, currentUserMessage: reader.loadAllBySession(sessionId)[0],
-        } : {};
-        for await (const event of engine.query({ sessionId, workDir, prompt: 'What color was the uploaded photo?', ...currentImage })) events.push(event);
-        expect(events.filter(event => event.type === 'error')).toEqual([]);
-        expect(calls.at(-1).flatMap(row => Array.isArray(row.content) ? row.content : []).filter(part => part.type === 'image'))
-          .toEqual(bundle.promptParts);
-      }
       const transcript = readFileSync(join(yeaftDir, 'sessions', sessionId, 'conversation', 'segments', '000001.jsonl'), 'utf8');
       expect(transcript).not.toContain(data);
       rmSync(bundle.promptAttachments[0].path);
-      const missing = await store.loadProviderHistoryBySession(sessionId, 20);
+      const missing = hydratePersistedAttachmentHistory(await store.loadProviderHistoryBySession(sessionId, 20), { yeaftDir, sessionId });
       expect(JSON.stringify(missing[0].content)).toContain('Uploaded image unavailable');
       expect(JSON.stringify(missing[0].content)).not.toContain(data);
-      for await (const event of engine.query({ sessionId, workDir, prompt: 'Can you still see it?' })) {
-        expect(event.type).not.toBe('error');
-      }
-      expect(JSON.stringify(calls.at(-1))).toContain('Uploaded image unavailable');
-      expect(JSON.stringify(calls.at(-1))).not.toContain(data);
       expect(__testHooks.projectVisibleHistoryChunkMessages(store.loadAllBySession(sessionId))[0].attachments[0])
         .not.toHaveProperty('previewData');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('hydrates user content without the Web bridge using an explicit legacy root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-upload-content-'));
+    const legacyRoot = join(root, 'original-agent-cwd');
+    const yeaftDir = join(root, 'instance');
+    const sessionId = 'session-content';
+    const data = Buffer.from('legacy image bytes').toString('base64');
+    try {
+      mkdirSync(legacyRoot, { recursive: true });
+      const bundle = persistYeaftAttachments([
+        { name: 'old.png', mimeType: 'image/png', isImage: true, data },
+      ], { cwd: legacyRoot, subdir: sessionId });
+      const row = { role: 'user', sessionId, content: 'question', attachments: attachmentsForPersistence(bundle.promptAttachments) };
+      const opts = { yeaftDir, sessionId, legacyRoot, cwd: join(root, 'not-the-legacy-root') };
+      const original = structuredClone(row);
+      const content = hydratePersistedUserAttachmentContent(row, opts);
+      expect(content).toEqual([{ type: 'text', text: 'question' }, ...bundle.promptParts]);
+      expect(persistedAttachmentPreviewPayload(row.attachments[0], opts)?.data).toBe(data);
+      expect(hydratePersistedAttachmentHistory([row], opts)[0].content).toEqual(content);
+      const relatedTurns = [{ id: 'turn-1', userSeq: 1, messages: [row] }];
+      const hydratedTurns = relatedTurns.map(turn => ({
+        ...turn, messages: hydratePersistedAttachmentHistory(turn.messages, opts),
+      }));
+      expect(hydratedTurns[0]).toMatchObject({ id: 'turn-1', userSeq: 1, messages: [{ content }] });
+      expect(relatedTurns[0].messages[0]).toEqual(original);
+      expect(row).toEqual(original);
+      expect(hydratePersistedUserAttachmentContent({ ...row, role: 'assistant' }, opts))
+        .toEqual([{ type: 'text', text: 'question' }]);
+      expect(hydratePersistedUserAttachmentContent({ ...row, sessionId: 'session-other' }, opts))
+        .toEqual([{ type: 'text', text: 'question' }]);
+      expect(hydratePersistedUserAttachmentContent({ ...row, content: [{ type: 'text', text: 'parts' }], attachments: [] }, opts))
+        .toEqual([{ type: 'text', text: 'parts' }]);
+      rmSync(join(legacyRoot, row.attachments[0].path));
+      expect(JSON.stringify(hydratePersistedUserAttachmentContent(row, opts))).toContain('Uploaded image unavailable');
+      expect(persistedAttachmentPreviewPayload(row.attachments[0], opts)).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

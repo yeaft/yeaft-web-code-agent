@@ -106,7 +106,7 @@ import { updateSessionConfig } from './sessions/session-crud.js';
 import { createCoordinator } from './sessions/coordinator.js';
 import { seedDefaultSession } from './sessions/seed-default.js';
 import { trimHistoryCacheForRuntime } from './history-window.js';
-import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload, hydratePersistedAttachmentHistory } from './attachments.js';
+import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
 import { normalizeSessionMessageQuote, sessionMessageQuotePrompt } from './session-message-quote.js';
 import { ConversationStore, parseSeqFromId, projectVisibleSessionMessages } from './conversation/persist.js';
 import {
@@ -3991,22 +3991,6 @@ function buildVpPersona(vpId) {
   }
 }
 
-const attachmentHistoryStores = new WeakSet();
-
-// Only the provider reader is decorated. UI/FTS/raw transcript readers remain
-// lightweight, and every native Web VP shares this same canonical store.
-function installSessionAttachmentHistory(runtime) {
-  const store = runtime?.conversationStore;
-  if (!store?.loadProviderHistoryBySession || attachmentHistoryStores.has(store)) return;
-  const load = store.loadProviderHistoryBySession.bind(store);
-  const yeaftDir = runtime.yeaftDir || ctx.CONFIG?.yeaftDir;
-  if (!yeaftDir) return;
-  store.loadProviderHistoryBySession = async (sessionId, ...args) => hydratePersistedAttachmentHistory(
-    await load(sessionId, ...args), { yeaftDir, sessionId },
-  );
-  attachmentHistoryStores.add(store);
-}
-
 /**
  * Install task delivery and the runtime settings compatibility bridge.
  * Thread scheduling is owned by the group VP runtime below, not by mutable
@@ -4017,7 +4001,6 @@ function installSessionAttachmentHistory(runtime) {
  */
 export function installYeaftRuntimeBridge(s) {
   if (!s) return;
-  installSessionAttachmentHistory(s);
 
   if (s.taskManager && typeof s.taskManager.setEventSink === 'function') {
     s.taskManager.setEventSink((event) => {

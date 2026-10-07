@@ -283,12 +283,13 @@ function assertNoSymlinks(root, path, allowMissing = false) {
  * No workDir search/fallback: legacy Web uploads were written under Agent CWD.
  * Non-Session callers retain their original CWD-relative upload root.
  * @param {string} attachmentPath
- * @param {{cwd?:string, yeaftDir?:string, sessionId?:string}} [opts]
+ * @param {{cwd?:string, legacyRoot?:string, yeaftDir?:string, sessionId?:string}} [opts]
+ *        legacyRoot is the original Agent CWD (not workDir or the upload subdir).
  * @returns {string|null}
  */
 export function resolvePersistedAttachmentPath(attachmentPath, opts = {}) {
   if (!attachmentPath || typeof attachmentPath !== 'string' || attachmentPath.includes('\0')) return null;
-  const cwd = resolve(opts.cwd || process.cwd());
+  const cwd = resolve(opts.legacyRoot || opts.cwd || process.cwd());
   const scoped = opts.sessionId != null || opts.yeaftDir != null;
   const sessionRoot = sessionAttachmentRoot(opts);
   if (scoped && !sessionRoot) return null;
@@ -350,28 +351,40 @@ export function persistedAttachmentPreviewPayload(att, opts = {}) {
 }
 
 /**
- * Provider-only projection. Canonical rows keep text + lightweight references;
- * neither hydrated base64 nor unavailable-image notices are persisted.
+ * Build provider content from one canonical user row, without a Web runtime.
+ * Call once on raw transcript rows, before history-window budgeting (including
+ * recalled turns). Never persist the returned base64 or unavailable notices.
  * Ownership comes from the requested Session, not an attachment's metadata.
+ *
+ * @param {{role:string, sessionId?:string, content?:string|Array, attachments?:Array}} row
+ * @param {{yeaftDir:string, sessionId:string, legacyRoot?:string, cwd?:string}} opts
+ *        legacyRoot is the original Agent CWD; cwd is its compatibility alias.
+ * @returns {Array} Standard provider content parts; the input row is unchanged.
  */
+export function hydratePersistedUserAttachmentContent(row, opts = {}) {
+  const content = Array.isArray(row?.content) ? [...row.content]
+    : (row?.content ? [{ type: 'text', text: String(row.content) }] : []);
+  if (row?.role !== 'user' || row.sessionId !== opts.sessionId || !validSessionId(opts.sessionId)) return content;
+  const images = Array.isArray(row.attachments) ? row.attachments.filter(att => att?.isImage) : [];
+  let totalBytes = 0;
+  for (const att of images.slice(0, MAX_FILES_PER_TURN)) {
+    try {
+      const payload = readPersistedImage(att, opts, MAX_TOTAL_BYTES - totalBytes);
+      totalBytes += payload.bytes;
+      content.push({ type: 'image', source: { type: 'base64', media_type: payload.mimeType, data: payload.data } });
+    } catch (error) {
+      content.push({ type: 'text', text: `[Uploaded image unavailable / 上传图片不可用: ${att.name || 'image'} — ${error.message}. Ask the user to upload it again / 请用户重新上传。]` });
+    }
+  }
+  if (images.length > MAX_FILES_PER_TURN) content.push({ type: 'text', text: '[Uploaded image unavailable: attachment count limit exceeded.]' });
+  return content;
+}
+
+/** Provider-only projection for a canonical history array; no store decoration. */
 export function hydratePersistedAttachmentHistory(messages, opts = {}) {
   return messages.map(row => {
-    if (row?.role !== 'user' || row.sessionId !== opts.sessionId || !validSessionId(opts.sessionId)) return row;
-    const images = Array.isArray(row.attachments) ? row.attachments.filter(att => att?.isImage) : [];
-    if (!images.length) return row;
-    const content = Array.isArray(row.content) ? [...row.content]
-      : (row.content ? [{ type: 'text', text: String(row.content) }] : []);
-    let totalBytes = 0;
-    for (const att of images.slice(0, MAX_FILES_PER_TURN)) {
-      try {
-        const payload = readPersistedImage(att, opts, MAX_TOTAL_BYTES - totalBytes);
-        totalBytes += payload.bytes;
-        content.push({ type: 'image', source: { type: 'base64', media_type: payload.mimeType, data: payload.data } });
-      } catch (error) {
-        content.push({ type: 'text', text: `[Uploaded image unavailable / 上传图片不可用: ${att.name || 'image'} — ${error.message}. Ask the user to upload it again / 请用户重新上传。]` });
-      }
-    }
-    if (images.length > MAX_FILES_PER_TURN) content.push({ type: 'text', text: '[Uploaded image unavailable: attachment count limit exceeded.]' });
-    return { ...row, content };
+    if (row?.role !== 'user' || row.sessionId !== opts.sessionId || !validSessionId(opts.sessionId)
+      || !Array.isArray(row.attachments) || !row.attachments.some(att => att?.isImage)) return row;
+    return { ...row, content: hydratePersistedUserAttachmentContent(row, opts) };
   });
 }
