@@ -5,7 +5,8 @@ const sendToWebClient = vi.fn(async (target, msg) => { target.sent ??= []; targe
 const getForAgent = vi.fn(() => ({ id: 'sess-1', agentId: 'agent-1', userId: 'owner-1' }));
 const contextForSession = vi.fn(() => null);
 
-vi.mock('../../server/ws-utils.js', () => ({
+vi.mock('../../server/ws-utils.js', async (importOriginal) => ({
+  resolveAgentAccessError: (await importOriginal()).resolveAgentAccessError,
   sendToWebClient,
   forwardToAgent,
   broadcastAgentList: vi.fn(),
@@ -34,7 +35,7 @@ vi.mock('../../server/handlers/session-pin-router.js', () => ({
   routeSessionPin: vi.fn(() => false),
 }));
 
-const { pendingYeaftDebugRequests, webClients } = await import('../../server/context.js');
+const { agents, pendingYeaftDebugRequests, webClients } = await import('../../server/context.js');
 const { handleClientConversation } = await import('../../server/handlers/client-conversation.js');
 const allow = async () => true;
 const client = { authenticated: true, userId: 'owner-1', username: 'u', currentAgent: 'wrong-agent', sent: [] };
@@ -47,6 +48,7 @@ afterEach(() => {
   contextForSession.mockReturnValue(null);
   sendToWebClient.mockClear();
   pendingYeaftDebugRequests.clear();
+  agents.clear();
   webClients.clear();
   webClients.set('client-1', client);
   client.sent = [];
@@ -168,6 +170,7 @@ describe('Yeaft Session history search relay', () => {
     }, allow);
     expect(forwardToAgent).not.toHaveBeenCalled();
 
+    agents.set('agent-1', { ws: { readyState: 1 }, ownerId: 'owner-1' });
     contextForSession.mockReturnValue({
       projectId: 'project-1',
       projectName: 'Project 1',

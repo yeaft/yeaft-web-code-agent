@@ -48,7 +48,7 @@ Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是
 
 Fork 保留完整持久对话、公告、VP roster/default VP、工作目录和 Session model/effort 配置。原 Session 属于 Project 时，Server 会将新 Session 放入同一 Project，继续使用统一 instruction。原 Session 不变，之后两边的对话和 Session 配置修改彼此独立。
 
-正在生成回复时需等待结束；断线或 Fork 进行中时入口禁用。Fork 不复制后台进程、运行任务、debug trace 或 Session memory 文件；附件引用保持原所有权。Project 继承要求 Server 和 Agent 均支持此能力。
+正在生成回复时需等待结束；断线或 Fork 进行中时入口禁用。Fork 不复制后台进程、运行任务、debug trace 或 Session memory 文件；可读取的上传附件复制到新 Session 自己的数据目录；缺失或无法安全读取的旧附件仍明确标为不可用。Project 继承要求 Server 和 Agent 均支持此能力。
 
 在已完成 AI 回复下方选择 **从此轮分叉**，只复制持久历史开头到这轮回复结束（包含该轮），不包含后续消息。新会话仍继承相同配置和 Project，原会话不会截断或改变。需要新版 Agent 支持；旧记录缺少可靠轮次标识时不显示入口，边界不明确或会拆开工具调用/结果时会报错，不会退化为复制全部历史。多 VP 并行时以持久消息顺序为准，边界之前其他 VP 的消息也会保留。
 
@@ -156,3 +156,7 @@ Dream/H2-AMS 已从当前 runtime 退役。原生 turn 只使用当前 Session t
 - [Provider 与 model 配置](../yeaft-config.md)
 - [Yeaft engine 内部实现](../tech/yeaft-engine.md)
 - [已退役的 H2-AMS 实现](../tech/yeaft-memory.md)
+
+## 图片与模型视觉输入
+
+原生 Yeaft Session 的受支持图片附件会随用户消息直接输入视觉模型，不需要调用 `ViewImage`。后续追问或恢复会话时，进入上下文窗口的历史图片从本实例、同 Session 的附件文件恢复；文件缺失或被上下文预算省略时，会明确标记，界面缩略图不代表模型仍能看到图片。`ViewImage` 用于读取本地文件，其结果直接作为多模态工具输入，不要求先裁剪或 OCR。新附件随 Session 存在实例数据根，不依赖 Agent 启动目录。

@@ -126,7 +126,14 @@ const test = base.extend({
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true' } });
 
 async function openSession(page, agentId, sessionId = SESSION_A) {
-  await page.waitForFunction(() => window.Pinia?.useChatStore?.()?.connectionState === 'connected');
+  // After reload, wait for initial inventory before installing fixture Sessions;
+  // otherwise the in-flight empty catalog can overwrite this seeded snapshot.
+  await page.waitForFunction(agentId => {
+    const store = window.Pinia?.useChatStore?.();
+    return store?.connectionState === 'connected' && store._hasHandledAgentList
+      && store._hasHandledYeaftSessionHydrate
+      && store.agents.some(agent => agent.id === agentId && agent.online && agent.status === 'ready');
+  }, agentId);
   await page.evaluate(({ agentId, sessionId, conversationId, sessionIds }) => {
     const store = window.Pinia.useChatStore();
     window.Pinia.useSessionsStore().applySnapshot(sessionIds.map(id => ({
@@ -277,4 +284,49 @@ test('recovers the same complete transcript by pagination after a real fold revi
   const resetPages = persistedHistory.responses.slice(responseCount);
   expect(resetPages.some(response => response.mode === 'older' && response.revision === metadata.revision)).toBe(true);
   expect(resetPages.at(-1).hasMore).toBe(false);
+});
+
+test('relays uploaded images directly and rejects missing uploads without a text-only send', async ({ chatPage, mockAgent }) => {
+  await openSession(chatPage, mockAgent.agentId, SESSION_B);
+  await expect(chatPage.locator('.assistant-turn')).toContainText('Only Session B answer');
+  const upload = await chatPage.evaluate(async png => {
+    const blob = await (await fetch(png)).blob();
+    const form = new FormData();
+    form.append('files', blob, 'direct-image.png');
+    const response = await fetch('/api/upload', { method: 'POST', body: form });
+    if (!response.ok) throw new Error(`upload ${response.status}`);
+    return (await response.json()).files[0];
+  }, PNG);
+  const send = async (attachment, text) => chatPage.evaluate(({ attachment, text, sessionId, conversationId }) => {
+    const store = window.Pinia.useChatStore();
+    store.sendYeaftSessionMessage({ groupId: sessionId, text, attachments: [{ ...attachment, isImage: true }] });
+    return store.messagesMap[conversationId].filter(m => m.type === 'user').at(-1).clientMessageId;
+  }, { attachment, text, sessionId: SESSION_B, conversationId: CONVERSATION });
+  await send(upload, 'Inspect the uploaded picture directly');
+  const relayed = await mockAgent.waitForMessage('yeaft_session_send');
+  expect(relayed.files).toEqual([expect.objectContaining({ name: 'direct-image.png', mimeType: 'image/png', data: PNG.split(',')[1], isImage: true })]);
+  expect(relayed.attachments).toBeUndefined();
+  // Echo the accepted user row through the ordinary durable history contract.
+  // The fixture has no running VP; this send is no longer unacknowledged when
+  // checking rejection cleanup for the following independent send.
+  await chatPage.evaluate(({ agentId, sessionId, conversationId, sent }) => {
+    const store = window.Pinia.useChatStore();
+    const request = store.beginYeaftHistoryLoad({ agentId, sessionId, mode: 'delta', preserveLoaded: true });
+    store.handleMessage({
+      type: 'yeaft_history_chunk', agentId, sessionId, conversationId, requestId: request.requestId,
+      mode: 'delta', messages: [{ id: 'm999999', seq: 999999, role: 'user', content: sent.text,
+        clientMessageId: sent.id, sessionId, ts: Date.now() }], latestSeq: 999999, hasMore: false,
+    });
+    store.yeaftProcessingSessions = {};
+    store.processingConversations = {};
+  }, { agentId: mockAgent.agentId, sessionId: SESSION_B, conversationId: CONVERSATION, sent: relayed });
+  const rejectedId = await send({ ...upload, fileId: 'expired-image' }, 'Reject an expired image');
+  await expect.poll(() => chatPage.evaluate(({ id, conv }) =>
+    window.Pinia.useChatStore().messagesMap[conv].find(m => m.clientMessageId === id)?.status,
+  { id: rejectedId, conv: CONVERSATION })).toBe('error');
+  await expect(chatPage.getByText(/Session message was not sent: an attachment/).first()).toBeVisible();
+  expect(mockAgent._messageHistory.filter(msg => msg.type === 'yeaft_session_send')).toHaveLength(1);
+  await expect.poll(() => chatPage.evaluate(({ agentId, sessionId }) =>
+    !!window.Pinia.useChatStore().yeaftProcessingSessions[`${agentId}\u001f${sessionId}`],
+  { agentId: mockAgent.agentId, sessionId: SESSION_B })).toBe(false);
 });

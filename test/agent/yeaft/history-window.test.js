@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { extractToolPairsFromRange } from '../../../agent/yeaft/tool-folding/index.js';
+import { truncateToolResultIfNeeded, TOOL_RESULT_MAX_BYTES } from '../../../agent/yeaft/tools/registry.js';
 import { hasOrphanPairs } from '../../../agent/yeaft/pair-sanitize.js';
 import {
   estimateContentPartTokens,
@@ -485,5 +487,32 @@ describe('deterministic provider history window', () => {
       .toEqual(['call-3', 'call-4', 'call-5']);
     expect(window.filter(message => message.role === 'tool').map(message => message.toolCallId))
       .toEqual(['call-3', 'call-4', 'call-5']);
+  });
+});
+
+
+describe('multimodal tool history budget', () => {
+  it('bounds tool text without JSON-stringifying images and omits images whole when over budget', () => {
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'a'.repeat(4096) } };
+    const content = [{ type: 'text', text: 'x'.repeat(80_000) }, image];
+    const bounded = truncateToolResultIfNeeded(content);
+    expect(bounded[1]).toBe(image);
+    expect(Buffer.byteLength(bounded[0].text)).toBeLessThanOrEqual(TOOL_RESULT_MAX_BYTES);
+    const messages = [
+      { role: 'user', content: 'inspect' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'image', name: 'ViewImage', input: {} }] },
+      { role: 'tool', toolCallId: 'image', content: [{ type: 'text', text: 'metadata' }, image] },
+    ];
+    const normal = trimSnapshotForBudget(messages, { messageTokenBudget: 5000 });
+    expect(normal.at(-1).content).toEqual(messages.at(-1).content);
+    const tiny = trimSnapshotForBudget(messages, { messageTokenBudget: 100 });
+    expect(JSON.stringify(tiny)).not.toContain(image.source.data);
+    expect(hasOrphanPairs(tiny)).toBe(false);
+    expect(messages.at(-1).content[1]).toBe(image);
+    const reflection = extractToolPairsFromRange(messages, 0, 2);
+    expect(reflection.pairs[0].output).toContain('metadata');
+    expect(reflection.pairs[0].output).not.toContain(image.source.data);
+    // Arbitrary JSON arrays must retain their old text-output contract.
+    expect(truncateToolResultIfNeeded([{ value: 1 }])).toBe('[{"value":1}]');
   });
 });

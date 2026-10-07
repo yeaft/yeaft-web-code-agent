@@ -40,7 +40,8 @@ const deleteSessionUiMetadataForRoute = vi.fn(() => true);
 const verifyConversationOwnership = vi.fn(() => true);
 const verifyAgentOwnership = vi.fn(() => true);
 
-vi.mock('../../server/ws-utils.js', () => ({
+vi.mock('../../server/ws-utils.js', async (importOriginal) => ({
+  resolveAgentAccessError: (await importOriginal()).resolveAgentAccessError,
   sendToWebClient,
   forwardToAgent,
   forwardToClients,
@@ -100,7 +101,7 @@ vi.mock('../../server/handlers/session-pin-router.js', () => ({
 }));
 
 const { CONFIG } = await import('../../server/config.js');
-const { agents, pendingYeaftDebugRequests, webClients } = await import('../../server/context.js');
+const { agents, pendingFiles, pendingYeaftDebugRequests, webClients } = await import('../../server/context.js');
 const { handleAgentOutput, projectConfirmedAssetImages } = await import('../../server/handlers/agent-output.js');
 const {
   groupOnlineYeaftSessions,
@@ -113,6 +114,7 @@ const allow = async () => true;
 afterEach(() => {
   CONFIG.skipAuth = originalSkipAuth;
   agents.clear();
+  pendingFiles.clear();
   webClients.clear();
   pendingYeaftDebugRequests.clear();
   getByUser.mockReset();
@@ -163,6 +165,146 @@ afterEach(() => {
 });
 
 describe('Yeaft Session online Agent filtering', () => {
+  const sendIdentity = {
+    id: 'user-message-original', requestId: 'send-request-original',
+    sessionId: 'session-original', conversationId: 'conversation-original',
+  };
+  const uploadedImage = (overrides = {}) => ({
+    name: 'screen.png', mimeType: 'image/png', buffer: Buffer.from('image-bytes'),
+    uploadedAt: Date.now(), userId: 'user-1', ...overrides,
+  });
+  const expectSendFailure = (client, agentId, code) => {
+    expect(client.sent).toEqual([{
+      type: 'error', agentId, ...sendIdentity,
+      clientMessageId: sendIdentity.id, code, message: expect.any(String),
+    }]);
+    expect(client.sent[0].message.length).toBeGreaterThan(0);
+    expect(sendToWebClient).toHaveBeenLastCalledWith(client, client.sent[0]);
+  };
+
+  it('rejects the whole Session send for any invalid attachment without consuming valid uploads', async () => {
+    CONFIG.skipAuth = false;
+    agents.set('agent-online', { ws: { readyState: 1 }, ownerId: 'user-1' });
+    const invalidCases = [
+      { attachments: [{ fileId: 'missing' }] },
+      { attachments: [null] },
+      { attachments: [{}] },
+      { attachments: [{ fileId: '' }] },
+      { attachments: [{ fileId: 123 }] },
+      { attachments: [{ fileId: 'invalid' }], file: uploadedImage({ userId: 'other-owner' }) },
+      { attachments: [{ fileId: 'invalid' }], file: uploadedImage({ userId: null }) },
+      { attachments: [{ fileId: 'invalid' }], file: uploadedImage({ uploadedAt: Date.now() - CONFIG.fileCleanupInterval - 1000 }) },
+      { attachments: [{ fileId: 'invalid' }], file: uploadedImage({ buffer: null }) },
+      { attachments: [{ fileId: 'invalid' }], file: uploadedImage({ uploadedAt: undefined }) },
+      { attachments: { fileId: 'valid' } },
+      { attachments: 'valid' },
+      { attachments: null },
+    ];
+    for (const invalid of invalidCases) {
+      pendingFiles.clear();
+      forwardToAgent.mockClear();
+      const client = { userId: 'user-1', sent: [] };
+      const valid = uploadedImage();
+      pendingFiles.set('valid', valid);
+      if (invalid.file) pendingFiles.set('invalid', invalid.file);
+      const before = [...pendingFiles];
+      const attachments = Array.isArray(invalid.attachments)
+        ? [{ fileId: 'valid' }, ...invalid.attachments]
+        : invalid.attachments;
+      await handleClientConversation('client-send', client, {
+        type: 'yeaft_session_send', agentId: 'agent-online', ...sendIdentity,
+        text: 'Inspect this image', attachments,
+      }, allow);
+      expectSendFailure(client, 'agent-online', 'invalid_attachment');
+      expect(forwardToAgent).not.toHaveBeenCalled();
+      expect([...pendingFiles]).toEqual(before);
+    }
+  });
+
+  it('keeps Session uploads retryable on relay failure and reports the original send identity', async () => {
+    CONFIG.skipAuth = false;
+    for (const failure of ['false', 'throw', 'no-agent', 'denied', 'missing', 'closed']) {
+      pendingFiles.clear();
+      forwardToAgent.mockClear();
+      const image = uploadedImage();
+      pendingFiles.set('image', image);
+      const client = { userId: 'user-1', currentAgent: failure === 'no-agent' ? null : 'agent-other', sent: [] };
+      const agentId = failure === 'no-agent' ? null : failure === 'missing' ? 'missing-agent' : 'agent-send';
+      agents.set('agent-send', { ws: { readyState: failure === 'closed' ? 3 : 1 },
+        ownerId: failure === 'denied' ? 'other-owner' : 'user-1' });
+      if (failure === 'false') forwardToAgent.mockResolvedValueOnce(false);
+      if (failure === 'throw') forwardToAgent.mockRejectedValueOnce(new Error('private transport failure'));
+      const msg = {
+        type: 'yeaft_session_send', agentId, ...sendIdentity,
+        text: '(attached files)', attachments: [{ fileId: 'image', isImage: true }],
+      };
+      const legacyCheck = vi.fn(async () => {
+        await sendToWebClient(client, { type: 'error', message: 'uncorrelated access failure' });
+        return false;
+      });
+      await handleClientConversation('client-send', client, msg, legacyCheck);
+      expect(legacyCheck).not.toHaveBeenCalled();
+      expectSendFailure(client, agentId, failure === 'denied' ? 'agent_access_denied' : 'agent_unavailable');
+      expect(client.sent[0].message).not.toContain('private transport failure');
+      expect(pendingFiles.get('image')).toBe(image);
+      if (failure !== 'false' && failure !== 'throw') expect(forwardToAgent).not.toHaveBeenCalled();
+      else {
+        expect(forwardToAgent).toHaveBeenCalledTimes(1);
+        // Retrying the same request forwards the same image and message identity.
+        client.sent = [];
+        await handleClientConversation('client-send', client, msg, allow);
+        expect(forwardToAgent).toHaveBeenLastCalledWith(agentId, expect.objectContaining({
+          ...sendIdentity, files: [{ name: image.name, mimeType: image.mimeType,
+            data: image.buffer.toString('base64'), isImage: true }],
+        }));
+        expect(pendingFiles.has('image')).toBe(false);
+        expect(client.sent).toEqual([]);
+      }
+    }
+  });
+
+  it('consumes all Session attachments only after successful local dispatch, preserving aliases and identity', async () => {
+    agents.set('agent-online', { ws: { readyState: 1 }, ownerId: 'user-1' });
+    for (const type of ['yeaft_session_send', 'unify_session_send', 'yeaft_session_chat', 'unify_session_chat']) {
+      // Keep the existing skip-auth upload compatibility without weakening the authenticated path.
+      CONFIG.skipAuth = type.startsWith('unify_');
+      const image = uploadedImage({ userId: CONFIG.skipAuth ? 'other-owner' : 'user-1' });
+      const note = uploadedImage({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('note') });
+      pendingFiles.set('image', image);
+      pendingFiles.set('note', note);
+      const client = { userId: 'user-1', currentAgent: 'agent-online', sent: [] };
+      const msg = { type, ...sendIdentity, text: '(attached files)',
+        attachments: [{ fileId: 'image' }, { fileId: 'note' }, { fileId: 'image' }] };
+      const images = { name: image.name, mimeType: image.mimeType, data: image.buffer.toString('base64'), isImage: true };
+      forwardToAgent.mockImplementationOnce(async (agentId, forwarded) => {
+        expect(agentId).toBe('agent-online');
+        expect(pendingFiles.get('image')).toBe(image);
+        expect(pendingFiles.get('note')).toBe(note);
+        expect(forwarded).toMatchObject({
+          ...sendIdentity, type: type.replace(/^unify_/, 'yeaft_'), text: msg.text,
+          files: [images, { name: note.name, mimeType: note.mimeType,
+            data: note.buffer.toString('base64'), isImage: false }, images],
+        });
+        expect(forwarded).not.toHaveProperty('attachments');
+        return true;
+      });
+      await handleClientConversation('client-send', client, msg, allow);
+      expect(pendingFiles.size).toBe(0);
+      expect(msg.attachments).toHaveLength(3);
+      expect(client.sent).toEqual([]); // No Agent acknowledgement is synthesized.
+    }
+    const client = { userId: 'user-1', currentAgent: 'agent-online', sent: [] };
+    for (const extra of [{}, { attachments: [] }]) {
+      await handleClientConversation('client-send', client, {
+        type: 'yeaft_session_send', ...sendIdentity, text: 'text only', ...extra,
+      }, allow);
+      expect(forwardToAgent).toHaveBeenLastCalledWith('agent-online', expect.objectContaining({
+        ...sendIdentity, text: 'text only',
+      }));
+      expect(forwardToAgent.mock.calls.at(-1)[1]).not.toHaveProperty('files');
+    }
+  });
+
   it('projects confirmed images at source tools, including tool-only pages, without crossing VP ownership', () => {
     const scope = { ownerId: 'owner', agentId: 'agent', sessionId: 'session' };
     const source = { assetId: 'same-pixels', sourceToolCallId: 'call-image', vpId: 'vp1' };

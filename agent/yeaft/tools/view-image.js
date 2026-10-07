@@ -123,8 +123,9 @@ export default defineTool({
     en: `Load a local image file and attach it to the conversation so the LLM can see it.
 
 Returns a base64 data URI (\`image\` field) plus metadata (format, dimensions,
-size). The caller/bridge is responsible for turning the data URI into the
-provider-specific image content block.
+size). The engine delivers the image as a native multimodal tool result.
+Inspect the whole image first. Crop/zoom only details that are unreadable; OCR
+is optional for text extraction, not a prerequisite for seeing the image.
 
 When to call:
   - User references a local image path (screenshot, design, log/chart) and
@@ -151,8 +152,8 @@ Max size: 20 MiB by default (configurable via ctx.maxImageBytes).
 Path must live under the project directory or an explicit host allowlist.`,
     zh: `加载本地图片文件并附加到对话中，使 LLM 可以查看。
 
-返回 base64 data URI（image 字段）及元数据（格式、尺寸、大小）。调用方/桥接层负责将 data URI 转换为
-provider 特定的图片内容块。
+返回 base64 data URI（image 字段）及元数据（格式、尺寸、大小）。引擎将图片作为原生多模态工具结果交给模型。
+先直接查看整图；仅对确实看不清的细节裁剪/放大。OCR 用于需要时提取文字，不是看图的前置步骤。
 
 何时调用：
   - 用户引用本地图片路径（截图、设计稿、日志/图表）并要求你读取、分析或描述它。

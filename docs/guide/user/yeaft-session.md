@@ -36,7 +36,7 @@ Choose **Copy session** from the active Session’s sidebar menu, or the copy ic
 
 The fork copies the complete persisted conversation, announcement, VP roster/default VP, working directory, and Session model/effort overrides. If the source belongs to a Project, the Server puts the fork in the same Project, so the shared instruction continues to apply. The source remains unchanged; later conversation and Session setting changes are independent.
 
-Wait for a running response to finish before forking. Forking is unavailable while disconnected or another fork is pending. Background processes, running tasks, debug traces, and Session memory files are not cloned. Attachment references retain their original ownership. Both Server and Agent must support Project inheritance for this behavior.
+Wait for a running response to finish before forking. Forking is unavailable while disconnected or another fork is pending. Background processes, running tasks, debug traces, and Session memory files are not cloned. Available uploaded attachments are copied into the new Session’s own storage; missing or inaccessible legacy files remain explicitly unavailable. Both Server and Agent must support Project inheritance for this behavior.
 
 Choose **Fork from this turn** below a completed AI response to copy the chronological history prefix through that turn, inclusive, without later messages. The new Session inherits the same configuration and Project; the source is never truncated or changed. This requires a supporting Agent. Older responses without a reliable turn ID have no action; ambiguous boundaries or boundaries that split a tool call/result are rejected rather than falling back to a full copy. With parallel VPs, persisted message order is authoritative, so other VP messages before the boundary are included.
 
@@ -143,3 +143,7 @@ See [Work Center](./work-center.md).
 - [Provider and model configuration](../yeaft-config.md)
 - [Yeaft engine internals](../tech/yeaft-engine.md)
 - [Retired H2-AMS implementation](../tech/yeaft-memory.md)
+
+## Images and model vision
+
+Native Yeaft Sessions send supported image attachments directly to vision models with the user message; `ViewImage` is not required. Follow-up turns and restored Sessions reload selected historical images from this instance’s Session-scoped files. Missing files or budget-omitted images are marked explicitly; a visible thumbnail does not mean the model still has the image. `ViewImage` reads local files and returns native multimodal tool input, without requiring cropping or OCR first. New attachments live under the instance’s Session data root, independently of the Agent launch directory.

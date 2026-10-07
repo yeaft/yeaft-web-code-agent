@@ -19,7 +19,7 @@ import {
 import {
   sendToWebClient, forwardToAgent,
   broadcastAgentList, broadcastSessionCatalog, buildSessionCatalog, buildHiddenSessionCatalog,
-  verifyConversationOwnership, verifyAgentOwnership
+  verifyConversationOwnership, verifyAgentOwnership, resolveAgentAccessError
 } from '../ws-utils.js';
 import { routeSessionPin } from './session-pin-router.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
@@ -84,6 +84,26 @@ async function sendAskUserAgentUnavailable(client, msg, agentId) {
       toolCallId: msg.toolCallId || null,
       reason: 'agent_unavailable',
     },
+  });
+}
+
+async function sendYeaftSessionSendError(client, msg, agentId, code = 'agent_unavailable') {
+  // Keep the top-level error contract understood by existing Web clients.
+  // Correlation identifies the rejected send, not an Agent acknowledgement.
+  await sendToWebClient(client, {
+    type: 'error',
+    agentId: agentId || null,
+    sessionId: msg.sessionId ?? null,
+    conversationId: msg.conversationId ?? null,
+    requestId: msg.requestId ?? null,
+    id: msg.id ?? null,
+    clientMessageId: msg.id ?? null,
+    code,
+    message: code === 'invalid_attachment'
+      ? 'Session message was not sent: an attachment is missing, expired, invalid, or unavailable. Please upload the files again.'
+      : code === 'agent_access_denied'
+        ? 'Agent access denied; Session message was not sent.'
+        : 'No agent available; Session message was not sent. Please retry.',
   });
 }
 
@@ -1669,6 +1689,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       if (typeof msg.type === 'string' && (msg.type.startsWith('yeaft_') || msg.type.startsWith('unify_'))) {
         const relayType = msg.type.startsWith('unify_') ? `yeaft_${msg.type.slice('unify_'.length)}` : msg.type;
         const relayAgentId = msg.agentId || client.currentAgent;
+        const isSessionSend = relayType === 'yeaft_session_send' || relayType === 'yeaft_session_chat';
         if (msg.perfTraceId) {
           recordPerfTraceEvent({
             traceId: msg.perfTraceId,
@@ -1682,7 +1703,9 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           });
         }
         if (!relayAgentId) {
-          if (relayType === 'yeaft_ask_user_answer') {
+          if (isSessionSend) {
+            await sendYeaftSessionSendError(client, msg, relayAgentId);
+          } else if (relayType === 'yeaft_ask_user_answer') {
             await sendAskUserAgentUnavailable(client, msg, relayAgentId);
           } else if (relayType === 'yeaft_fetch_tool_stats') {
             await sendToWebClient(client, emptyYeaftToolStats('No agent selected.'));
@@ -1698,8 +1721,16 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           }
           return true; // swallow silently for legacy fire-and-forget messages
         }
-        if (!await checkAgentAccess(relayAgentId)) {
-          if (relayType === 'yeaft_ask_user_answer') {
+        // The shared checker emits an uncorrelated error. Session sends use the
+        // same access policy directly so rejection emits exactly one error.
+        const sessionAccessError = isSessionSend
+          ? resolveAgentAccessError(relayAgentId, client.userId, client.role)
+          : null;
+        if (isSessionSend ? sessionAccessError : !await checkAgentAccess(relayAgentId)) {
+          if (isSessionSend) {
+            await sendYeaftSessionSendError(client, msg, relayAgentId,
+              sessionAccessError === 'Agent access denied' ? 'agent_access_denied' : 'agent_unavailable');
+          } else if (relayType === 'yeaft_ask_user_answer') {
             await sendAskUserAgentUnavailable(client, msg, relayAgentId);
           } else if (relayType === 'yeaft_fetch_tool_stats') {
             await sendToWebClient(client, emptyYeaftToolStats('Agent is not available.'));
@@ -1748,6 +1779,10 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         }
         const relayAgent = agents.get(relayAgentId);
         if (!relayAgent || relayAgent.ws?.readyState !== 1) {
+          if (isSessionSend) {
+            await sendYeaftSessionSendError(client, msg, relayAgentId);
+            return true;
+          }
           if (relayType === 'yeaft_ask_user_answer') {
             await sendAskUserAgentUnavailable(client, msg, relayAgentId);
             return true;
@@ -1810,9 +1845,28 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           rest.id = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         }
 
-        // Resolve attachment fileIds → base64 BEFORE forwarding, mirroring
-        // The agent never sees fileIds — it
-        // only handles `files: [{ name, mimeType, data, isImage }]`.
+        // Validate the entire Session upload set before resolving or consuming
+        // any item. An invalid reference must never downgrade a send to text-only.
+        if (isSessionSend && rest.attachments !== undefined) {
+          const now = Date.now();
+          const valid = Array.isArray(rest.attachments) && rest.attachments.every(att => {
+            if (typeof att?.fileId !== 'string' || !att.fileId.trim()) return false;
+            const file = pendingFiles.get(att.fileId);
+            return file && Buffer.isBuffer(file.buffer)
+              && typeof file.mimeType === 'string'
+              && Number.isFinite(file.uploadedAt)
+              && now - file.uploadedAt <= CONFIG.fileCleanupInterval
+              && (CONFIG.skipAuth || (file.userId && file.userId === client.userId));
+          });
+          if (!valid) {
+            await sendYeaftSessionSendError(client, msg, relayAgentId, 'invalid_attachment');
+            return true;
+          }
+        }
+
+        // The Agent sees resolved bytes, never upload references. Session files
+        // remain retryable until local dispatch succeeds (not an Agent ack).
+        const sessionFileIds = new Set();
         if (Array.isArray(rest.attachments) && rest.attachments.length > 0) {
           const resolvedFiles = [];
           for (const att of rest.attachments) {
@@ -1825,7 +1879,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
                 data: file.buffer.toString('base64'),
                 isImage: !!att.isImage || (file.mimeType || '').startsWith('image/'),
               });
-              pendingFiles.delete(att.fileId);
+              if (isSessionSend) sessionFileIds.add(att.fileId);
+              else pendingFiles.delete(att.fileId);
             } else if (file && file.userId !== client.userId) {
               console.warn(`[Security] User ${client.userId} attempted to use yeaft file ${att.fileId} owned by ${file.userId}`);
             }
@@ -1833,8 +1888,6 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           if (resolvedFiles.length > 0) {
             rest.files = resolvedFiles;
           }
-          // Drop the fileId-bearing array so the agent only sees the
-          // resolved form on `files`.
           delete rest.attachments;
         }
 
@@ -1851,7 +1904,19 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             bytes: Buffer.byteLength(JSON.stringify(rest)),
           });
         }
-        await forwardToAgent(relayAgentId, rest);
+        if (isSessionSend) {
+          let dispatched = false;
+          try {
+            dispatched = await forwardToAgent(relayAgentId, rest);
+          } catch { /* Preserve uploads and report a correlated failure below. */ }
+          if (!dispatched) {
+            await sendYeaftSessionSendError(client, msg, relayAgentId);
+          } else {
+            for (const fileId of sessionFileIds) pendingFiles.delete(fileId);
+          }
+        } else {
+          await forwardToAgent(relayAgentId, rest);
+        }
         return true;
       }
       return false; // Not handled

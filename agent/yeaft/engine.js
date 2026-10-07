@@ -42,6 +42,7 @@ import {
 } from './history-window.js';
 import { recallConversationTurns } from './conversation/history-index.js';
 import { parseSeqFromId } from './conversation/persist.js';
+import { hydratePersistedAttachmentHistory } from './attachments.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
 import { cleanMemoryPromptText } from './memory/prompt-cleanup.js';
@@ -2180,7 +2181,13 @@ export class Engine {
       if (Number.isFinite(beforeSeq)) {
         const loadHistory = this.#conversationStore.loadProviderHistoryBySession
           || this.#conversationStore.loadRecentBySession;
-        const tail = await loadHistory.call(this.#conversationStore, runtimeSessionId, recentTurnCap, { beforeSeq });
+        // Materialize only provider copies from this Session's controlled assets.
+        // Hydrate before budgeting; never mutate/persist base64 into canonical rows.
+        const attachmentOptions = { yeaftDir: this.#yeaftDir, sessionId: runtimeSessionId, legacyRoot: process.cwd() };
+        const tail = hydratePersistedAttachmentHistory(
+          await loadHistory.call(this.#conversationStore, runtimeSessionId, recentTurnCap, { beforeSeq }),
+          attachmentOptions,
+        );
         messages = tail.filter(m => parseSeqFromId(m.id) < beforeSeq
           && (m.role !== 'tool' || !queryVpId || m.speakerVpId === queryVpId))
           .map(m => {
@@ -2193,7 +2200,19 @@ export class Engine {
             const recalled = await recallConversationTurns(this.#yeaftDir, runtimeSessionId, prompt, {
               beforeSeq, limit: relatedTurnCap,
             });
-            relatedHistoryTurns = recalled.turns || [];
+            relatedHistoryTurns = (recalled.turns || []).map(turn => ({
+              ...turn,
+              // Recall indexes intentionally contain text/identities, not assets.
+              // Reload only the exact same-Session user anchor's references.
+              messages: hydratePersistedAttachmentHistory((turn.messages || []).map(row => {
+                if (row.role !== 'user' || row.sessionId !== runtimeSessionId
+                  || !Number.isFinite(row.seq) || row.seq >= beforeSeq) return row;
+                const anchor = this.#conversationStore.loadRecentBySession(runtimeSessionId, 1, { beforeSeq: row.seq + 1 })
+                  .find(candidate => candidate.role === 'user' && candidate.sessionId === runtimeSessionId
+                    && candidate.id === row.messageId && parseSeqFromId(candidate.id) === row.seq);
+                return anchor?.attachments ? { ...row, attachments: anchor.attachments } : row;
+              }), attachmentOptions),
+            }));
             historyRecallMeta = { source: 'messages', status: 'ready', ...recalled.meta };
           } catch (error) {
             // Cold/stale index degrades to recent history, never a full scan.
@@ -4279,6 +4298,7 @@ export class Engine {
       // break out of the outer while-loop cleanly once the current
       // tool batch finishes reporting.
       let abortedDuringTools = false;
+      let batchHasUnseenImages = false;
       /** @type {string[]} */
       const pendingDupReminders = [];
       let terminateAfterDuplicateBatch = false;
@@ -4439,6 +4459,7 @@ export class Engine {
 
         let output;
         let displayImages = [];
+        let modelImages = [];
         let isError = false;
         let reusedReadOnlyResult = false;
         let reusedReadOnlyCallId = null;
@@ -4575,6 +4596,7 @@ export class Engine {
           const cachedReadOnly = readOnlyToolResults.get(duplicateKey);
           if (!readOnlyToolReuseDisabled && cachedReadOnly && cacheableTool) {
             output = cachedReadOnly.output;
+            modelImages = cachedReadOnly.modelImages || [];
             isError = Boolean(cachedReadOnly.isError);
             reusedReadOnlyResult = true;
             reusedReadOnlyCallId = cachedReadOnly.callId || null;
@@ -4619,6 +4641,13 @@ export class Engine {
             }
             displayImages = extractDisplayImages(tc.name, output);
             if (displayImages.length > 0) {
+              // UI asset delivery and model vision are independent consumers.
+              // Capture provider parts before yielding to the UI bridge; never
+              // persist base64 in transcript/exec-log or textual tool output.
+              modelImages = displayImages.map(image => ({
+                type: 'image',
+                source: { type: 'base64', media_type: image.mimeType, data: image.previewData.data },
+              }));
               output = stripDisplayImageData(output, displayImages);
             }
             isError = toolErrorOutput === 'json-error-envelope' && isToolErrorOutput(output);
@@ -4752,6 +4781,7 @@ export class Engine {
             && !readOnlyToolReuseDisabled && cacheableTool) {
           readOnlyToolResults.set(duplicateKey, {
             output,
+            modelImages,
             isError,
             callId: tc.id,
           });
@@ -4764,10 +4794,13 @@ export class Engine {
           toolName: tc.name,
           language: this.#config?.language,
         });
+        if (modelImages.length > 0) batchHasUnseenImages = true;
         const toolMessage = {
           role: 'tool',
           toolCallId: tc.id,
-          content: contextOutput,
+          content: modelImages.length > 0
+            ? [{ type: 'text', text: contextOutput }, ...modelImages]
+            : contextOutput,
           isError,
         };
         conversationMessages.push(toolMessage);
@@ -4896,7 +4929,9 @@ export class Engine {
       const completedToolLoops = toolLoopTurns + 1;
       const t1BatchDue = completedToolLoops - lastT1AtLoopCount
         >= TOOL_LOOP_REFLECTION_INTERVAL;
-      if (t1BatchDue && !toolBatchBarrier
+      // Text-only reflection cannot consume visual input. Defer folding until
+      // the primary provider has received this image batch at least once.
+      if (t1BatchDue && !batchHasUnseenImages && !toolBatchBarrier
           && !abortedDuringTools && !signal?.aborted) {
         const t1DedupKey = `${queryNumber}:t1-loop:${completedToolLoops}`;
         if (this.#reflectedTurns.has(t1DedupKey)) {

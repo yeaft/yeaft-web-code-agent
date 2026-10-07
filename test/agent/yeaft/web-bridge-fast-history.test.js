@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { beforeEach } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload, hydratePersistedAttachmentHistory, hydratePersistedUserAttachmentContent } from '../../../agent/yeaft/attachments.js';
 import { searchConversationIndex } from '../../../agent/yeaft/conversation/history-index.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { join } from 'node:path';
@@ -53,6 +54,7 @@ const {
   __testResetVpState,
   __testSeedAbortController,
   __testSetSession,
+  __testGetOrCreateVpEngine,
   __testHooks,
 } = await import('../../../agent/yeaft/web-bridge.js');
 
@@ -86,6 +88,17 @@ describe('Yeaft load-history first paint', () => {
     buildDreamOutputSnapshot.mockClear();
     resolveLoadSession = null;
     ctx.CONFIG = null;
+  });
+
+  it('constructs an uncached Session VP Engine without a history store decorator', () => {
+    const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-bridge-vision-'));
+    try {
+      __testSetSession({ yeaftDir, config: { dir: yeaftDir, model: 'test-model' } });
+      expect(__testGetOrCreateVpEngine('session-vision-construction', 'vp-vision')).toBeTruthy();
+    } finally {
+      __testResetVpState();
+      rmSync(yeaftDir, { recursive: true, force: true });
+    }
   });
 
   it('rejects old Dream triggers and omits retired output from normal debug', async () => {
@@ -1305,6 +1318,168 @@ describe('Yeaft load-history first paint', () => {
       expect(sent.some(m => m.event?.type === 'session_ready')).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps uploaded images in the instance and restores provider history without persisting base64', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-upload-history-'));
+    const yeaftDir = join(root, 'instance');
+    const cwd = join(root, 'agent-cwd');
+    const workDir = join(root, 'project');
+    const sessionId = 'session-images';
+    const data = Buffer.from('test image bytes').toString('base64');
+    try {
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(workDir, { recursive: true });
+      const bundle = persistYeaftAttachments([
+        { name: 'photo.png', mimeType: 'image/png', isImage: true, data },
+      ], { yeaftDir, sessionId, cwd });
+      expect(bundle.failed).toEqual([]);
+      expect(bundle.promptParts).toEqual([{ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }]);
+      expect(bundle.promptAttachments[0].path).toMatch(new RegExp(`^${yeaftDir}/sessions/${sessionId}/attachments/`));
+      expect(existsSync(join(cwd, '.claude-tmp-attachments'))).toBe(false);
+      const store = new ConversationStore(yeaftDir);
+      store.append({ role: 'user', content: 'describe this image', sessionId, attachments: attachmentsForPersistence(bundle.promptAttachments) });
+      store.append({ role: 'assistant', content: 'description', sessionId });
+      for (const reader of [store, store, new ConversationStore(yeaftDir)]) {
+        // Warm and cold readers return canonical rows; engine applies the helper
+        // at its history boundary, not by decorating a shared store in the bridge.
+        const loader = reader.loadProviderHistoryBySession;
+        installYeaftRuntimeBridge({ yeaftDir, workDir, conversationStore: reader });
+        expect(reader.loadProviderHistoryBySession).toBe(loader);
+        const raw = await reader.loadProviderHistoryBySession(sessionId, 20);
+        const history = hydratePersistedAttachmentHistory(raw, { yeaftDir, sessionId, legacyRoot: cwd });
+        expect(raw[0].content).toBe('describe this image');
+        expect(history[0].content).toEqual([{ type: 'text', text: 'describe this image' }, ...bundle.promptParts]);
+        expect(reader.loadAllBySession(sessionId)[0].content).toBe('describe this image');
+        ctx.CONFIG = { yeaftDir };
+        const preview = __testHooks.projectVisibleHistoryChunkMessages(reader.loadAllBySession(sessionId));
+        expect(preview[0].attachments[0].previewData).toMatchObject({ data, mimeType: 'image/png' });
+      }
+      const transcript = readFileSync(join(yeaftDir, 'sessions', sessionId, 'conversation', 'segments', '000001.jsonl'), 'utf8');
+      expect(transcript).not.toContain(data);
+      rmSync(bundle.promptAttachments[0].path);
+      const missing = hydratePersistedAttachmentHistory(await store.loadProviderHistoryBySession(sessionId, 20), { yeaftDir, sessionId });
+      expect(JSON.stringify(missing[0].content)).toContain('Uploaded image unavailable');
+      expect(JSON.stringify(missing[0].content)).not.toContain(data);
+      expect(__testHooks.projectVisibleHistoryChunkMessages(store.loadAllBySession(sessionId))[0].attachments[0])
+        .not.toHaveProperty('previewData');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('hydrates user content without the Web bridge using an explicit legacy root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-upload-content-'));
+    const legacyRoot = join(root, 'original-agent-cwd');
+    const yeaftDir = join(root, 'instance');
+    const sessionId = 'session-content';
+    const data = Buffer.from('legacy image bytes').toString('base64');
+    try {
+      mkdirSync(legacyRoot, { recursive: true });
+      const bundle = persistYeaftAttachments([
+        { name: 'old.png', mimeType: 'image/png', isImage: true, data },
+      ], { cwd: legacyRoot, subdir: sessionId });
+      const row = { role: 'user', sessionId, content: 'question', attachments: attachmentsForPersistence(bundle.promptAttachments) };
+      const opts = { yeaftDir, sessionId, legacyRoot, cwd: join(root, 'not-the-legacy-root') };
+      const original = structuredClone(row);
+      const content = hydratePersistedUserAttachmentContent(row, opts);
+      expect(content).toEqual([{ type: 'text', text: 'question' }, ...bundle.promptParts]);
+      expect(persistedAttachmentPreviewPayload(row.attachments[0], opts)?.data).toBe(data);
+      expect(hydratePersistedAttachmentHistory([row], opts)[0].content).toEqual(content);
+      const relatedTurns = [{ id: 'turn-1', userSeq: 1, messages: [row] }];
+      const hydratedTurns = relatedTurns.map(turn => ({
+        ...turn, messages: hydratePersistedAttachmentHistory(turn.messages, opts),
+      }));
+      expect(hydratedTurns[0]).toMatchObject({ id: 'turn-1', userSeq: 1, messages: [{ content }] });
+      expect(relatedTurns[0].messages[0]).toEqual(original);
+      expect(row).toEqual(original);
+      expect(hydratePersistedUserAttachmentContent({ ...row, role: 'assistant' }, opts))
+        .toEqual([{ type: 'text', text: 'question' }]);
+      expect(hydratePersistedUserAttachmentContent({ ...row, sessionId: 'session-other' }, opts))
+        .toEqual([{ type: 'text', text: 'question' }]);
+      expect(hydratePersistedUserAttachmentContent({ ...row, content: [{ type: 'text', text: 'parts' }], attachments: [] }, opts))
+        .toEqual([{ type: 'text', text: 'parts' }]);
+      rmSync(join(legacyRoot, row.attachments[0].path));
+      expect(JSON.stringify(hydratePersistedUserAttachmentContent(row, opts))).toContain('Uploaded image unavailable');
+      expect(persistedAttachmentPreviewPayload(row.attachments[0], opts)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('shares safe image reads between history and preview, including legacy uploads and hostile paths', () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-upload-ownership-'));
+    const yeaftDir = join(root, 'instance');
+    const cwd = join(root, 'agent-cwd');
+    const workDir = join(root, 'project');
+    const sessionId = 'session-owner';
+    const opts = { yeaftDir, sessionId, cwd };
+    const data = Buffer.from('private image bytes').toString('base64');
+    const file = { name: 'photo.png', mimeType: 'image/png', isImage: true, data };
+    const hydrate = att => hydratePersistedAttachmentHistory([
+      { role: 'user', sessionId, content: 'question', attachments: [att] },
+    ], opts)[0].content;
+    const assertDenied = att => {
+      expect(persistedAttachmentPreviewPayload(att, opts)).toBeNull();
+      const content = hydrate(att);
+      expect(content.some(part => part.type === 'image')).toBe(false);
+      expect(JSON.stringify(content)).toContain('Uploaded image unavailable');
+    };
+    try {
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(workDir, { recursive: true });
+      const [legacy] = persistYeaftAttachments([file], { cwd, subdir: sessionId }).promptAttachments;
+      expect(legacy.path).toMatch(/^\.claude-tmp-attachments/);
+      expect(persistedAttachmentPreviewPayload(legacy, opts)?.data).toBe(data);
+      expect(hydrate(legacy).at(-1).source.data).toBe(data);
+      // Non-Session/CLI callers still use relative paths and the original API.
+      const [cli] = persistYeaftAttachments([file], { cwd }).promptAttachments;
+      expect(persistedAttachmentPreviewPayload(cli, { cwd })?.data).toBe(data);
+      assertDenied(cli);
+      const [owned] = persistYeaftAttachments([file], opts).promptAttachments;
+      expect(persistedAttachmentPreviewPayload(owned, opts)?.data).toBe(data);
+      expect(persistedAttachmentPreviewPayload(owned, { ...opts, cwd: workDir })?.data).toBe(data);
+      const [foreign] = persistYeaftAttachments([file], { ...opts, sessionId: 'session-other' }).promptAttachments;
+      const [foreignLegacy] = persistYeaftAttachments([file], { cwd, subdir: 'session-other' }).promptAttachments;
+      const [foreignInstance] = persistYeaftAttachments([file], { ...opts, yeaftDir: join(root, 'other-instance') }).promptAttachments;
+      writeFileSync(join(root, 'outside.png'), Buffer.from(data, 'base64'));
+      for (const att of [foreign, foreignLegacy, foreignInstance,
+        { ...owned, path: join(root, 'outside.png') },
+        { ...owned, path: '.claude-tmp-attachments/session-owner/../session-other/photo.png' },
+        { ...owned, path: join(cwd, legacy.path) },
+        { ...owned, path: `${owned.path}.missing` },
+      ]) assertDenied(att);
+      // A filename and an intermediate directory symlink must both fail closed.
+      const assetDir = join(yeaftDir, 'sessions', sessionId, 'attachments');
+      const linkedFile = join(assetDir, 'linked.png');
+      symlinkSync(foreign.path, linkedFile);
+      assertDenied({ ...owned, path: linkedFile });
+      symlinkSync(join(yeaftDir, 'sessions', 'session-other', 'attachments'), join(assetDir, 'linked-dir'));
+      assertDenied({ ...owned, path: join(assetDir, 'linked-dir', foreign.path.split('/').at(-1)) });
+      const legacyLink = join(cwd, '.claude-tmp-attachments', sessionId, 'linked.png');
+      symlinkSync(foreign.path, legacyLink);
+      assertDenied({ ...owned, path: `.claude-tmp-attachments/${sessionId}/linked.png` });
+      // Writers also reject symlinked asset/session directories and bad IDs.
+      mkdirSync(join(yeaftDir, 'sessions', 'linked-owner'));
+      symlinkSync(assetDir, join(yeaftDir, 'sessions', 'linked-owner', 'attachments'));
+      symlinkSync(join(yeaftDir, 'sessions', sessionId), join(yeaftDir, 'sessions', 'linked-session'));
+      for (const badId of ['linked-owner', 'linked-session', '../session-owner', '..']) {
+        const failed = persistYeaftAttachments([file], { ...opts, sessionId: badId });
+        expect(failed.promptParts).toEqual([]);
+        expect(failed.failed).toHaveLength(1);
+      }
+      // Reject an aliased Session root even when it targets this same instance.
+      assertDenied({ ...owned, path: join(yeaftDir, 'sessions', 'linked-session', 'attachments', owned.path.split('/').at(-1)) });
+      const preview = persistedAttachmentPreviewPayload({ ...owned,
+        path: join(yeaftDir, 'sessions', 'linked-session', 'attachments', owned.path.split('/').at(-1)),
+      }, { ...opts, sessionId: 'linked-session' });
+      expect(preview).toBeNull();
+      expect(hydratePersistedAttachmentHistory([
+        { role: 'user', sessionId: 'session-other', content: 'foreign', attachments: [owned] },
+      ], opts)[0].content).toBe('foreign');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

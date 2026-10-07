@@ -238,6 +238,17 @@ function truncateUtf8(text, maxBytes) {
 }
 
 export function truncateToolResultIfNeeded(output, { toolName, language } = {}) {
+  // Provider content parts are not JSON text. Bound their text together while
+  // preserving binary blocks; history-window budgets/omits attachments whole.
+  // Arbitrary structured tool output still follows the legacy JSON path.
+  if (Array.isArray(output) && output.length > 0
+      && output.every(part => part && ['text', 'image', 'document'].includes(part.type))) {
+    const text = output.filter(part => part.type === 'text').map(part => part.text || '').join('\n');
+    return [
+      ...(text ? [{ type: 'text', text: truncateToolResultIfNeeded(text, { toolName, language }) }] : []),
+      ...output.filter(part => part.type !== 'text'),
+    ];
+  }
   const text = normalizeToolOutput(output);
   const originalBytes = Buffer.byteLength(text, 'utf8');
   if (originalBytes <= TOOL_RESULT_MAX_BYTES) return text;

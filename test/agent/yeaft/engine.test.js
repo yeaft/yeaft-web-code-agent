@@ -25,8 +25,9 @@ import { Engine, mapDebugMessage, buildResidentEntries, estimateProviderInputBre
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
+import { persistYeaftAttachments, attachmentsForPersistence } from '../../../agent/yeaft/attachments.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
-import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
+import { closeConversationHistoryIndexes, searchConversationIndex } from '../../../agent/yeaft/conversation/history-index.js';
 import { AmsRegistry } from '../../../agent/yeaft/memory/ams-registry.js';
 import { writeContent, writeSummary } from '../../../agent/yeaft/memory/store.js';
 import { NullTrace, DebugTrace, projectDebugDetailForWire } from '../../../agent/yeaft/debug-trace.js';
@@ -79,6 +80,9 @@ import { listFilesWithFd } from '../../../agent/yeaft/tools/glob.js';
 import { runProcess } from '../../../agent/yeaft/tools/process-runner.js';
 import bashTool, { createBashTool } from '../../../agent/yeaft/tools/bash.js';
 import agentTool, { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
+import viewImageTool from '../../../agent/yeaft/tools/view-image.js';
+import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
+import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import fileReadTool from '../../../agent/yeaft/tools/file-read.js';
 import fileWriteTool from '../../../agent/yeaft/tools/file-write.js';
 import {
@@ -12098,5 +12102,153 @@ describe('provider activity through Engine', () => {
     expect(JSON.stringify(adapter.callLog.at(-1))).not.toContain('provider_activity');
     expect(JSON.stringify(adapter.callLog.at(-1))).not.toContain('hidden-secret');
     expect(next).toContainEqual(expect.objectContaining({ type: 'turn_end', terminal: true, stopReason: 'end_turn' }));
+  });
+});
+
+
+describe('tool image model input', () => {
+  it('delivers images before T1 folding at both interval boundaries', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-fold-vision-'));
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS9sAAAAASUVORK5CYII=';
+    writeFileSync(join(dir, 'screen.png'), Buffer.from(png, 'base64'));
+    try {
+      const adapter = new MockAdapter();
+      adapter.call = vi.fn().mockResolvedValue({ text: 'summary', usage: {} });
+      for (let i = 1; i <= 62; i++) adapter.pushResponse([
+        { type: 'tool_call', id: `call-${i}`, name: [30, 60, 61].includes(i) ? 'ViewImage' : 'probe',
+          input: [30, 60, 61].includes(i) ? { file_path: 'screen.png' } : { i } },
+        { type: 'stop', stopReason: 'tool_use' },
+      ]);
+      adapter.pushResponse([{ type: 'text_delta', text: 'seen' }, { type: 'stop', stopReason: 'end_turn' }]);
+      const engine = new Engine({ adapter, trace, config: { model: 'test', maxOutputTokens: 1024, maxContextTokens: 128000 } });
+      engine.registerTool(viewImageTool);
+      engine.registerTool({ name: 'probe', description: 'probe', parameters: { type: 'object' }, execute: async ({ i }) => `result ${i}` });
+      const events = [];
+      for await (const event of engine.query({ prompt: 'inspect', workDir: dir })) events.push(event);
+      for (const i of [30, 60, 61]) {
+        const result = adapter.callLog[i].messages.find(m => m.role === 'tool' && m.toolCallId === `call-${i}`);
+        expect(result?.content).toContainEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } });
+      }
+      expect(events.filter(e => e.type === 'reflection' && e.trigger === 't1' && e.status === 'ready')).toHaveLength(2);
+      expect(JSON.stringify(adapter.call.mock.calls)).not.toContain(png);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it.each(['anthropic', 'openai-responses'])('delivers actual ViewImage bytes on the next %s request without leaking into tool history', async protocol => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-tool-vision-'));
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS9sAAAAASUVORK5CYII=';
+    writeFileSync(join(dir, 'screen.png'), Buffer.from(png, 'base64'));
+    const bodies = [];
+    const rows = [];
+    const registry = new ToolRegistry();
+    registry.register(viewImageTool);
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      const callId = `view-${bodies.length}`;
+      const call = { id: callId, name: 'ViewImage', input: { file_path: 'screen.png' } };
+      // Repeat the read once: read-only result reuse must also retain vision.
+      const body = protocol === 'anthropic'
+        ? (bodies.length < 3
+          ? { content: [{ type: 'tool_use', ...call }], stop_reason: 'tool_use' }
+          : { content: [{ type: 'text', text: 'seen' }], stop_reason: 'end_turn' })
+        : { status: 'completed', output: bodies.length < 3
+          ? [{ type: 'function_call', id: `fc-${callId}`, call_id: callId, name: call.name, arguments: JSON.stringify(call.input) }]
+          : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'seen' }] }] };
+      return { ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), json: async () => body };
+    }));
+    try {
+      const adapter = protocol === 'anthropic'
+        ? new AnthropicAdapter({ apiKey: 'test' }) : new OpenAIResponsesAdapter({ apiKey: 'test' });
+      const engine = new Engine({ adapter, trace: new NullTrace(), toolRegistry: registry,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+        conversationStore: { append: row => { rows.push(row); return { ...row, id: `row-${rows.length}` }; } },
+      });
+      const events = [];
+      for await (const event of engine.query({ prompt: 'Inspect screen.png', workDir: dir })) events.push(event);
+      expect(bodies).toHaveLength(3);
+      for (let index = 1; index < 3; index++) {
+        const body = bodies[index];
+        const output = protocol === 'anthropic'
+          ? body.messages.flatMap(m => Array.isArray(m.content) ? m.content : []).find(p => p.type === 'tool_result' && p.tool_use_id === `view-${index}`)?.content
+          : body.input.find(p => p.type === 'function_call_output' && p.call_id === `view-${index}`)?.output;
+        expect(output).toEqual(expect.arrayContaining([protocol === 'anthropic'
+          ? { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }
+          : { type: 'input_image', image_url: `data:image/png;base64,${png}` }]));
+      }
+      const imageEvent = events.find(e => e.type === 'tool_end' && e.id === 'view-1');
+      expect(imageEvent.displayImages).toHaveLength(1);
+      expect(imageEvent.output).not.toContain(png);
+      expect(JSON.stringify(rows)).not.toContain(png);
+      expect(rows.filter(row => row.role === 'tool')).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe('uploaded image model history', () => {
+  it.each(['anthropic', 'openai-responses'])('sends uploads directly and restores them for follow-up and cold %s requests', async protocol => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-upload-vision-'));
+    const yeaftDir = join(dir, 'instance');
+    const workDir = join(dir, 'unrelated-workspace');
+    mkdirSync(workDir);
+    const sessionId = 'session-vision';
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS9sAAAAASUVORK5CYII=';
+    const bundle = persistYeaftAttachments([{ name: 'screen.png', mimeType: 'image/png', isImage: true, data: png }], { yeaftDir, sessionId });
+    const bodies = [];
+    const makeAdapter = () => protocol === 'anthropic'
+      ? new AnthropicAdapter({ apiKey: 'test' }) : new OpenAIResponsesAdapter({ apiKey: 'test' });
+    const makeEngine = (store, relatedTurnsLimit = 0) => new Engine({ adapter: makeAdapter(), trace: new NullTrace(), conversationStore: store, yeaftDir,
+      config: { model: 'test-model', maxOutputTokens: 1024, yeaft: { relatedTurnsLimit } },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      const body = protocol === 'anthropic'
+        ? { content: [{ type: 'text', text: 'seen' }], stop_reason: 'end_turn' }
+        : { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'seen' }] }] };
+      return { ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), json: async () => body };
+    }));
+    try {
+      const store = new ConversationStore(yeaftDir);
+      const currentUserMessage = store.append({ role: 'user', sessionId, content: 'Inspect cedar migration diagram', userAuthored: true,
+        attachments: attachmentsForPersistence(bundle.promptAttachments),
+      });
+      const engine = makeEngine(store);
+      const run = async (eng, opts) => { for await (const event of eng.query({ sessionId, workDir, ...opts })) expect(event.type).not.toBe('error'); };
+      await run(engine, { prompt: 'Inspect this image', promptParts: [{ type: 'text', text: 'Inspect this image' }, ...bundle.promptParts], userAlreadyPersisted: true, currentUserMessage });
+      await run(engine, { prompt: 'What colour was it?' });
+      await run(makeEngine(new ConversationStore(yeaftDir)), { prompt: 'Look at that image again after restart' });
+      expect(bodies).toHaveLength(3);
+      for (const body of bodies) {
+        const parts = (protocol === 'anthropic' ? body.messages : body.input)
+          .filter(m => m.role === 'user').flatMap(m => Array.isArray(m.content) ? m.content : []);
+        expect(parts.filter(p => p.type === 'image' || p.type === 'input_image')).toEqual([protocol === 'anthropic'
+          ? { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }
+          : { type: 'input_image', image_url: `data:image/png;base64,${png}` }]);
+        expect(JSON.stringify(body)).not.toContain('ViewImage');
+      }
+      expect(JSON.stringify(store.loadRecentBySession(sessionId, 20))).not.toContain(png);
+      // Move the image outside the recent window: text-index recall must fetch
+      // only the exact user anchor's controlled attachment references.
+      for (let i = 0; i < 11; i++) {
+        store.append({ role: 'user', sessionId, userAuthored: true, content: `unrelated topic ${i}` });
+        store.append({ role: 'assistant', sessionId, content: 'unrelated answer' });
+      }
+      const recalledUser = store.append({ role: 'user', sessionId, userAuthored: true, content: 'cedar migration diagram' });
+      await searchConversationIndex(yeaftDir, sessionId, '', { limit: 1 });
+      await run(makeEngine(store, 5), { prompt: recalledUser.content, currentUserMessage: recalledUser, userAlreadyPersisted: true });
+      expect(JSON.stringify(bodies.at(-1))).toContain(png);
+      expect(JSON.stringify(bodies.at(-1))).not.toContain('ViewImage');
+      rmSync(bundle.promptAttachments[0].path);
+      await run(makeEngine(new ConversationStore(yeaftDir), 5), { prompt: 'cedar migration diagram' });
+      expect(JSON.stringify(bodies.at(-1))).toContain('Uploaded image unavailable');
+      expect(JSON.stringify(bodies.at(-1))).not.toContain(png);
+    } finally {
+      vi.unstubAllGlobals();
+      await closeConversationHistoryIndexes();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

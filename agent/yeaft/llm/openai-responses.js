@@ -205,7 +205,10 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         input.push({
           type: 'function_call_output',
           call_id: msg.toolCallId,
-          output: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+          output: Array.isArray(msg.content) && msg.content.length > 0
+              && msg.content.every(part => part && ['text', 'image', 'document'].includes(part.type))
+            ? this.#translateUserContent(msg.content)
+            : (typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)),
         });
       }
     }

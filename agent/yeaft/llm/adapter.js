@@ -59,9 +59,9 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  * @typedef {{ thinking: string, signature: string }} ThinkingBlock
  *
  * @typedef {{ role: 'system', content: string }} SystemMessage
- * @typedef {{ role: 'user', content: string }} UserMessage
+ * @typedef {{ role: 'user', content: string|Array<object> }} UserMessage
  * @typedef {{ role: 'assistant', content: string, toolCalls?: UnifiedToolCall[], thinkingBlocks?: ThinkingBlock[] }} AssistantMessage
- * @typedef {{ role: 'tool', toolCallId: string, content: string, isError?: boolean }} ToolMessage
+ * @typedef {{ role: 'tool', toolCallId: string, content: string|Array<object>, isError?: boolean }} ToolMessage
  *
  * @typedef {SystemMessage | UserMessage | AssistantMessage | ToolMessage} UnifiedMessage
  */

@@ -19,6 +19,7 @@ import {
   estimateTokens,
   projectVisibleSessionMessages,
 } from '../../../../agent/yeaft/conversation/persist.js';
+import { persistYeaftAttachments, hydratePersistedAttachmentHistory } from '../../../../agent/yeaft/attachments.js';
 import { searchMessages } from '../../../../agent/yeaft/conversation/search.js';
 import historySearch from '../../../../agent/yeaft/tools/history-search.js';
 import { createSession } from '../../../../agent/yeaft/sessions/session-store.js';
@@ -520,6 +521,25 @@ describe('ConversationStore', () => {
       });
       expect(store.loadRecentBySession(sourceSessionId, 10).map(row => row.id))
         .not.toContain(idMap.get(reflection.id));
+    });
+
+    it('copies owned upload bytes for independent Session and turn forks', () => {
+      const sessionId = 'session_copy_images';
+      const data = Buffer.from('image fixture').toString('base64');
+      const bundle = persistYeaftAttachments([{ name: 'screen.png', mimeType: 'image/png', data, isImage: true }], { yeaftDir: TEST_DIR, sessionId });
+      store.append({ role: 'user', sessionId, content: 'look', attachments: bundle.promptAttachments });
+      store.append({ role: 'assistant', sessionId, content: 'seen', turnId: 'vision-turn' });
+      for (const target of ['session_copy_images_all', 'session_copy_images_prefix']) {
+        store.copySession(sessionId, target, target.endsWith('prefix') ? { throughTurnId: 'vision-turn' } : {});
+      }
+      rmSync(join(TEST_DIR, 'sessions', sessionId), { recursive: true, force: true });
+      for (const target of ['session_copy_images_all', 'session_copy_images_prefix']) {
+        const rows = new ConversationStore(TEST_DIR).loadRecentBySession(target, 10);
+        expect(rows[0].attachments[0].path).toContain(join('sessions', target, 'attachments'));
+        expect(hydratePersistedAttachmentHistory(rows, { yeaftDir: TEST_DIR, sessionId: target })[0].content)
+          .toContainEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data } });
+        expect(JSON.stringify(rows)).not.toContain(data);
+      }
     });
 
     it('copies the chronological durable prefix through the selected assistant turn', () => {

@@ -6945,6 +6945,191 @@ describe('message flow regressions', () => {
     expect(store.yeaftActiveTasksBySession['agent-b\u001fsession-b']).toBeUndefined();
   });
 
+  describe('correlated Session send rejections', () => {
+    function setup() {
+      storeFactories.clear();
+      runtimeSessionsStore.sessionList = [
+        { id: 'same', agentId: 'agent-a' },
+        { id: 'other', agentId: 'agent-a' },
+        { id: 'same', agentId: 'agent-b' },
+      ];
+      const store = useChatStore();
+      store.sendWsMessage = vi.fn(() => true);
+      store.currentView = 'yeaft';
+      store.activeConversations = ['cli-current'];
+      store.messagesMap = { 'cli-current': [] };
+      store.processingConversations = { 'cli-current': true };
+      store.yeaftConversationIdsByAgent = { 'agent-a': 'yeaft-a', 'agent-b': 'yeaft-b' };
+      function send(agentId = 'agent-a', sessionId = 'same') {
+        runtimeSessionsStore.setActive(sessionId, agentId);
+        store.currentAgent = agentId;
+        store.yeaftAgentId = agentId;
+        store.yeaftActiveSessionFilter = sessionId;
+        store.yeaftConversationId = store.yeaftConversationIdsByAgent[agentId];
+        store.sendYeaftSessionMessage({
+          groupId: sessionId, text: `Send to ${agentId}/${sessionId}`,
+          attachments: [{ fileId: 'expired-upload', name: 'notes.txt' }],
+        });
+        return store.messagesMap[store.yeaftConversationId].at(-1);
+      }
+      const optimistic = send();
+      const reject = (overrides = {}) => store.handleMessage({
+        type: 'error', agentId: 'agent-a', sessionId: 'same', conversationId: null,
+        clientMessageId: optimistic.clientMessageId,
+        code: 'invalid_attachment', message: 'Session message was not sent: upload the files again.',
+        ...overrides,
+      });
+      return { store, send, optimistic, reject };
+    }
+
+    function cleanup() {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      storeFactories.clear();
+      runtimeSessionsStore.sessionList = [];
+      runtimeSessionsStore.setActive(null, null);
+    }
+
+    it.each([
+      ['invalid_attachment', 'Session message was not sent: upload the files again.'],
+      ['agent_unavailable', 'No agent available; Session message was not sent. Please retry.'],
+      ['agent_access_denied', 'Agent access denied; Session message was not sent.'],
+    ])('marks only the rejected optimistic send and clears its processing for %s', (code, message) => {
+      vi.useFakeTimers();
+      try {
+        const { store, send, optimistic, reject } = setup();
+        expect(store._processingWatchdogs['yeaft-a']).toBeTruthy();
+        reject({ code, message });
+        expect(optimistic).toMatchObject({ status: 'error', error: message });
+        expect(optimistic.attachments).toEqual([expect.objectContaining({ fileId: 'expired-upload' })]);
+        expect(store.yeaftProcessingSessions).toEqual({});
+        expect(store.processingConversations).toEqual({ 'cli-current': true });
+        expect(store._processingWatchdogs['yeaft-a']).toBeUndefined();
+        expect(store.messagesMap['yeaft-a'].at(-1)).toMatchObject({
+          type: 'error', content: message, agentId: 'agent-a', sessionId: 'same', turnId: optimistic.clientMessageId,
+        });
+        // Duplicate failures stay a single visible error after the old 5s
+        // transient-error window, without changing the optimistic identity.
+        reject({ code, message });
+        vi.advanceTimersByTime(5001);
+        expect(store.messagesMap['yeaft-a']).toHaveLength(2);
+        expect(store.messagesMap['cli-current']).toEqual([]);
+        const retry = send();
+        reject({ code, message });
+        expect(retry.status).toBeUndefined();
+        expect(store.yeaftProcessingSessions['agent-a\u001fsame']).toBe(true);
+        expect(store.processingConversations['yeaft-a']).toBe(true);
+      } finally { cleanup(); }
+    });
+
+    it.each([['agent-a', 'other'], ['agent-b', 'same'], ['agent-a', 'same']])(
+      'keeps %s/%s processing after switching or sending again', (agentId, sessionId) => {
+        vi.useFakeTimers();
+        try {
+          const { store, send, optimistic, reject } = setup();
+          const newer = send(agentId, sessionId);
+          const visibleConversation = store.yeaftConversationId;
+          const watchdog = store._processingWatchdogs[visibleConversation];
+          const finish = vi.spyOn(store, 'finishStreamingForConversation');
+          store.addMessageToConversation(visibleConversation, {
+            type: 'assistant', sessionId, turnId: 'other-turn', content: 'Still running', isStreaming: true,
+          });
+          store._currentYeaftSessionId = sessionId;
+          store._currentYeaftTurnId = 'other-turn';
+          // Even a stale/foreign conversationId cannot override the owner tuple.
+          reject({ conversationId: visibleConversation });
+          expect(optimistic.status).toBe('error');
+          expect(newer.status).toBeUndefined();
+          expect(store.messagesMap['yeaft-a'].filter(row => row.type === 'error'))
+            .toEqual([expect.objectContaining({ sessionId: 'same', turnId: optimistic.clientMessageId })]);
+          expect(store.yeaftProcessingSessions[`${agentId}\u001f${sessionId}`]).toBe(true);
+          if (agentId !== 'agent-a' || sessionId !== 'same') {
+            expect(store.yeaftProcessingSessions['agent-a\u001fsame']).toBeUndefined();
+          }
+          expect(store.processingConversations[visibleConversation]).toBe(true);
+          expect(store._processingWatchdogs[visibleConversation]).toBe(watchdog);
+          expect(store.messagesMap[visibleConversation].find(row => row.type === 'assistant').isStreaming).toBe(true);
+          expect(finish).not.toHaveBeenCalled();
+          reject();
+          expect(store.processingConversations[visibleConversation]).toBe(true);
+          expect(store.messagesMap['cli-current']).toEqual([]);
+        } finally { cleanup(); }
+      },
+    );
+
+    it('retains an earlier unacknowledged send when a later upload is rejected, then drains on both rejections', () => {
+      vi.useFakeTimers();
+      try {
+        const { store, send, optimistic, reject } = setup();
+        const later = send();
+        const watchdog = store._processingWatchdogs['yeaft-a'];
+        reject({ clientMessageId: later.clientMessageId });
+        expect(later.status).toBe('error');
+        expect(optimistic.status).toBeUndefined();
+        expect(store.yeaftProcessingSessions['agent-a\u001fsame']).toBe(true);
+        expect(store.processingConversations['yeaft-a']).toBe(true);
+        expect(store._processingWatchdogs['yeaft-a']).toBe(watchdog);
+        reject();
+        expect(store.yeaftProcessingSessions).toEqual({});
+        expect(store.processingConversations['yeaft-a']).toBeUndefined();
+        expect(store._processingWatchdogs['yeaft-a']).toBeUndefined();
+      } finally { cleanup(); }
+    });
+
+    it('does not treat an earlier persisted user row as an unacknowledged send', () => {
+      vi.useFakeTimers();
+      try {
+        const { store, send, optimistic, reject } = setup();
+        optimistic.messageId = 'm0001';
+        const later = send();
+        reject({ clientMessageId: later.clientMessageId });
+        expect(later.status).toBe('error');
+        expect(store.yeaftProcessingSessions).toEqual({});
+        expect(store.processingConversations['yeaft-a']).toBeUndefined();
+      } finally { cleanup(); }
+    });
+
+    it.each(['active turn', 'running status'])('does not clear an existing %s when another send is rejected', source => {
+      vi.useFakeTimers();
+      try {
+        const { store, optimistic, reject } = setup();
+        const running = { agentId: 'agent-a', sessionId: 'same', vpId: 'vp-a', turnId: 'running-turn' };
+        if (source === 'active turn') store.activeVpTurns = { 'running-turn': running };
+        else store.vpStatuses = { 'vp-a': { ...running, state: 'thinking' } };
+        const watchdog = store._processingWatchdogs['yeaft-a'];
+        reject();
+        expect(optimistic.status).toBe('error');
+        expect(store.yeaftProcessingSessions['agent-a\u001fsame']).toBe(true);
+        expect(store.processingConversations['yeaft-a']).toBe(true);
+        expect(store._processingWatchdogs['yeaft-a']).toBe(watchdog);
+      } finally { cleanup(); }
+    });
+
+    it('ignores missing identities, unmatched correlations and persisted echoes without touching active work', () => {
+      vi.useFakeTimers();
+      try {
+        const { store, optimistic, reject } = setup();
+        for (const overrides of [
+          { agentId: null }, { sessionId: null }, { agentId: 'unknown' },
+          { sessionId: 'other' }, { clientMessageId: 'unknown' }, { clientMessageId: null },
+        ]) reject(overrides);
+        expect(optimistic.status).toBeUndefined();
+        optimistic.messageId = 'm0001';
+        reject();
+        expect(optimistic.status).toBeUndefined();
+        expect(store.messagesMap['yeaft-a']).toHaveLength(1);
+        expect(store.processingConversations).toEqual({ 'cli-current': true, 'yeaft-a': true });
+        expect(store.yeaftProcessingSessions).toEqual({ 'agent-a\u001fsame': true });
+        expect(store.messagesMap['cli-current']).toEqual([]);
+        // Existing unscoped CLI rejections still use the legacy lifecycle.
+        store.handleMessage({ type: 'error', message: 'No agent available' });
+        expect(store.processingConversations['cli-current']).toBeUndefined();
+        expect(store.messagesMap['cli-current'][0]).toMatchObject({ type: 'error', transient: true });
+        expect(store.processingConversations['yeaft-a']).toBe(true);
+      } finally { cleanup(); }
+    });
+  });
+
   it('orders real optimistic sends before live replies and preserves order through history reconciliation', () => {
     storeFactories.clear();
     vi.useFakeTimers();

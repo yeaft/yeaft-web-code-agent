@@ -1454,12 +1454,15 @@ function projectPersistedToVisibleHistoryEntry(m) {
   return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
 }
 
-function hydrateHistoryAttachmentPreviews(attachments) {
+function hydrateHistoryAttachmentPreviews(attachments, sessionId) {
   if (!Array.isArray(attachments) || attachments.length === 0) return [];
   return attachments.map((att) => {
     if (!att || typeof att !== 'object') return att;
     if (!att.isImage || att.preview || att.previewData) return att;
-    const payload = persistedAttachmentPreviewPayload(att);
+    const payload = sessionId ? persistedAttachmentPreviewPayload(att, {
+      yeaftDir: session?.yeaftDir || ctx.CONFIG?.yeaftDir || DEFAULT_YEAFT_DIR,
+      sessionId,
+    }) : null;
     return payload ? { ...att, previewData: payload } : att;
   });
 }
@@ -1538,7 +1541,7 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       threadId: m.threadId || m.turnId || 'main',
       ...(m.turnId ? { turnId: m.turnId } : {}),
       ...(m.imageAssetAnchor === true ? { imageAssetAnchor: true } : {}),
-      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),
+      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments, m.sessionId) } : {}),
       ...(m.quote ? { quote: m.quote } : {}),
       ...(Array.isArray(m.images) && m.images.length > 0 ? { images: m.images } : {}),
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
@@ -1596,7 +1599,7 @@ function emitLegacyHistoryOutputFrames(replayEntries) {
         message: {
           content: entry.content,
           id: entry.id || null,
-          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
+          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments, entry.sessionId) } : {}),
           ...(entry.quote ? { quote: entry.quote } : {}),
         },
         ts: entry.ts || null,
@@ -4920,9 +4923,9 @@ async function runYeaftSessionSend(msg) {
   // ── Attachments (images + files) ───────────────────────────────
   // Server has already resolved fileId → { name, mimeType, data:base64,
   // isImage } via the client-conversation.js relay
-  // for `yeaft_*`). We persist files to disk under the agent's CWD so
-  // file-tools (file-read / bash) can pick them up with relative paths,
-  // and we build per-image content blocks for the LLM call. The
+  // for `yeaft_*`). Session files belong to the instance data root, not
+  // the agent CWD or project workDir. Absolute controlled references work
+  // with file-tools; per-image content blocks go directly to the model. The
   // resolved metadata WITHOUT base64 rides on coord.ingest meta so it
   // shows up in the persisted group log and on the envelope every VP
   // driver receives.
@@ -4931,9 +4934,10 @@ async function runYeaftSessionSend(msg) {
   const attachmentsStart = perfNowMs();
   if (inboundFiles.length > 0) {
     try {
-      attachmentBundle = persistYeaftAttachments(inboundFiles, { subdir: sessionId });
+      attachmentBundle = persistYeaftAttachments(inboundFiles, { yeaftDir, sessionId });
     } catch (err) {
       console.warn('[Yeaft] yeaft_session_chat: attachment persist failed', err?.message || err);
+      attachmentBundle.failed = inboundFiles.map(file => ({ name: file?.name || '<unknown>', error: err?.message || String(err) }));
     }
   }
   // Surface partial / total upload failures to the user. We don't abort
