@@ -157,7 +157,7 @@ describe('virtual transcript range calculation', () => {
 
   it('estimates taller heights for long messages before measurement', () => {
     const shortTurn = { id: 'short', type: 'assistant-turn', text: 'ok', toolMsgs: [] };
-    const longTurn = { id: 'long', type: 'assistant-turn', text: 'x'.repeat(5000), toolMsgs: [{ toolName: 'Bash' }] };
+    const longTurn = { id: 'long', type: 'assistant-turn', textContent: 'x'.repeat(5000), toolMsgs: [{ toolName: 'Bash' }] };
 
     expect(estimateVirtualItemHeight(longTurn)).toBeGreaterThan(estimateVirtualItemHeight(shortTurn));
     expect(getVirtualItemKey(longTurn, 0)).toBe('long');
@@ -179,7 +179,7 @@ describe('virtual transcript range calculation', () => {
 
   it('keeps bottom following disabled across layout updates until the user returns', () => {
     expect(resolveTranscriptBottomFollow({ following: false, atBottom: true })).toBe(false);
-    expect(resolveTranscriptBottomFollow({ following: true, atBottom: false })).toBe(false);
+    expect(resolveTranscriptBottomFollow({ following: true, atBottom: false })).toBe(true);
     expect(resolveTranscriptBottomFollow({ following: true, atBottom: true })).toBe(true);
     expect(resolveTranscriptBottomFollow({ following: false, atBottom: true, userScroll: true })).toBe(true);
     expect(resolveTranscriptBottomFollow({ following: true, atBottom: false, userScroll: true })).toBe(false);
@@ -190,6 +190,8 @@ describe('virtual transcript range calculation', () => {
     expect(resolveTranscriptUserFollow({ following: true, atBottom: false, userScroll: true })).toBe(false);
     expect(resolveTranscriptUserFollow({ following: false, atBottom: true, userScroll: true })).toBe(false);
     expect(resolveTranscriptUserFollow({ following: true, atBottom: true, userScroll: false })).toBe(true);
+    expect(resolveTranscriptUserFollow({ following: true, atBottom: false, userScroll: false })).toBe(true);
+    expect(resolveTranscriptUserFollow({ following: false, atBottom: true, userScroll: false })).toBe(false);
     expect(shouldFollowTranscriptBottom({ scrollTop: 890, scrollHeight: 1000, clientHeight: 80, threshold: 80 })).toBe(true);
     expect(shouldFollowTranscriptBottom({ scrollTop: 890, scrollHeight: 1000, clientHeight: 80, threshold: 2 })).toBe(false);
   });
@@ -220,13 +222,19 @@ describe('virtual transcript range calculation', () => {
     const documentElement = { closest: () => null };
     const scroller = { closest: () => null };
     const documentRef = { body, documentElement };
-    const button = { closest: () => button };
+    const button = { closest: selector => selector.startsWith('button') ? button : null };
     const messageChild = { closest: () => null };
+    const link = { closest: () => null };
+    const editor = { closest: selector => selector.startsWith('input') ? editor : null };
+    scroller.contains = target => [button, messageChild, link, editor].includes(target);
 
     expect(shouldMarkTranscriptKeyScroll({ key: 'End', target: scroller }, scroller, documentRef)).toBe(true);
     expect(shouldMarkTranscriptKeyScroll({ key: 'PageDown', target: body }, scroller, documentRef)).toBe(true);
     expect(shouldMarkTranscriptKeyScroll({ key: ' ', target: button }, scroller, documentRef)).toBe(false);
-    expect(shouldMarkTranscriptKeyScroll({ key: 'End', target: messageChild }, scroller, documentRef)).toBe(false);
+    expect(shouldMarkTranscriptKeyScroll({ key: 'End', target: messageChild }, scroller, documentRef)).toBe(true);
+    expect(shouldMarkTranscriptKeyScroll({ key: 'PageUp', target: link }, scroller, documentRef)).toBe(true);
+    expect(shouldMarkTranscriptKeyScroll({ key: 'PageUp', target: button }, scroller, documentRef)).toBe(true);
+    expect(shouldMarkTranscriptKeyScroll({ key: 'PageUp', target: editor }, scroller, documentRef)).toBe(false);
     expect(shouldMarkTranscriptKeyScroll({ key: 'End', target: scroller, defaultPrevented: true }, scroller, documentRef)).toBe(false);
     expect(shouldMarkTranscriptKeyScroll({ key: 'Enter', target: scroller }, scroller, documentRef)).toBe(false);
   });
