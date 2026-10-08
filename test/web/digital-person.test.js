@@ -22,7 +22,7 @@ function fixture(options = {}) {
     const result = override(request);
     if (result === false) return;
     const defaults = {
-      status: { configured: true }, open: {},
+      status: { configured: true }, open: {}, receipt: { found: false },
       snapshot: { person: { id: `person-${request.agentId}`, name: 'Person' }, state: { version: 1 }, messages: [], busy: false },
       messages: { items: [], nextCursor: null }, traces: { items: [], nextCursor: null },
       send: { episodeId: 'episode-1' }, think: { episodeId: 'episode-1' }, dream: { episodeId: 'episode-1' }, cancel: {},
@@ -129,8 +129,9 @@ describe('Digital Person owner / Agent request boundary', () => {
     const pending = f.controller.command('send', '', false, [{ fileId: 'file-1', name: 'not-authoritative.txt' }]);
     await vi.advanceTimersByTimeAsync(101); expect(await pending).toBe(false);
     expect(f.state.retryCommand.payload.attachments).toEqual([{ fileId: 'file-1' }]);
-    expect(await f.controller.settings(['p/m'])).toBe(false);
-    const first = f.requests.at(-1);
+    const first = f.requests.find(r => r.op === 'send');
+    expect(await f.controller.settings(['p/m'])).toBe(true);
+    expect(f.state.retryCommand.payload.clientMessageId).toBe(first.payload.clientMessageId);
     f.auto(); expect(await f.controller.command('send', '', true)).toBe(true);
     expect(f.requests.at(-1).payload).toEqual(first.payload);
     await vi.advanceTimersByTimeAsync(51);
@@ -153,6 +154,32 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
     expect(reupload).not.toHaveBeenCalled();
     expect(f.state.retryCommand).toBeNull();
+  });
+
+  it.each([true, false])('reconciles unknown attachments while model unavailable (receipt found=%s)', async found => {
+    vi.useFakeTimers();
+    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
+    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'send' ? false : undefined);
+    const pending = f.controller.command('send', 'original', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
+    const originalId = f.requests.at(-1).payload.clientMessageId;
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    f.state.modelReady = false;
+    f.auto(r => r.op === 'receipt' ? { found, episodeId: 'episode-1', status: 'completed', kind: 'send', text: 'original' }
+      : r.op === 'settings' ? { settings: r.payload } : r.op === 'status' ? { configured: true, modelReady: true } : undefined);
+    expect(await f.controller.command('send', '', true)).toBe(found);
+    expect(f.requests.find(r => r.op === 'receipt').payload.clientMessageId).toBe(originalId);
+    expect(reupload).not.toHaveBeenCalled();
+    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    if (found) expect(f.state.retryCommand).toBeNull();
+    else {
+      expect(f.state.retryCommand.payload.clientMessageId).toBe(originalId);
+      expect(await f.controller.settings(['p/replacement'])).toBe(true);
+      f.auto(r => r.op === 'receipt' ? { found: false } : undefined);
+      expect(await f.controller.command('send', '', true)).toBe(true);
+      expect(reupload).toHaveBeenCalledOnce();
+      expect(f.requests.filter(r => r.op === 'send').at(-1).payload.clientMessageId).toBe(originalId);
+    }
   });
 
   it('reuploads original files after missing receipt, preserving command identity and text', async () => {

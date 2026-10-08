@@ -152,7 +152,7 @@ export default {
           </select>
           <button type="button" class="btn-ghost person-icon-button" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>
           <ThemeToggle />
-          <button type="button" class="btn-ghost person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending || !!state.retryCommand" @click="settingsOpen = true">{{ $t('person.settings') }}</button>
+          <button type="button" class="btn-ghost person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending" @click="settingsOpen = true">{{ $t('person.settings') }}</button>
         </div>
       </header>
       <nav ref="viewNavigation" class="session-tab-bar person-views" :aria-label="$t('person.views')">
@@ -191,7 +191,7 @@ export default {
       </div>
       <div v-if="state.retryCommand && !state.commandPending" class="person-retry" role="status">
         <p>{{ $t('person.uncertain') }}</p>
-        <button type="button" class="btn-secondary" :disabled="!ready" @click="command(state.retryCommand.op, true)">{{ $t('person.retrySame') }}</button>
+        <button type="button" class="btn-secondary" :disabled="!!gate || state.loading || !state.person || state.settingsPending" @click="command(state.retryCommand.op, true)">{{ $t('person.retrySame') }}</button>
         <button type="button" class="btn-ghost" @click="controller.discardRetry()">{{ $t('person.discardRetry') }}</button>
       </div>
       <main v-show="view === 'conversation'" id="person-conversation" class="person-conversation" :aria-label="$t('person.conversation')">
@@ -235,7 +235,7 @@ export default {
           <p class="person-manual-hint person-muted">{{ $t('person.manualHint') }}</p>
         </div>
       </main>
-      <PersonSettingsModal v-if="settingsOpen" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :disabled="!!gate || state.loading || state.busy || state.commandPending || !!state.retryCommand" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
+      <PersonSettingsModal v-if="settingsOpen" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
       <PersonThoughtJournal v-if="view === 'thoughts'" :traces="state.traces" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
       <PersonDebugLog v-if="view === 'debug'" :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
     </div>

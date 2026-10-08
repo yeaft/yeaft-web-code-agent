@@ -263,7 +263,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   async function command(op, text = '', retry = false, attachments = []) {
-    if (state.settingsPending || state.commandPending || state.loading || !state.person || !state.configured || state.modelReady === false || digitalPersonGate(chat, agentId)) return false;
+    // Read-only receipt reconciliation must remain available when the selected model disappears.
+    if (state.settingsPending || state.commandPending || state.loading || !state.person || (!retry && (!state.configured || state.modelReady === false)) || digitalPersonGate(chat, agentId)) return false;
     if (state.retryCommand && !retry) return false;
     if (!retry && (state.busy || (op === 'send' && !text.trim() && !attachments.length))) return false;
     const envelope = retry ? state.retryCommand : {
@@ -286,13 +287,16 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
         if (!current(g)) throw failure('stale');
         envelope.payload = { ...envelope.payload, attachments: refs.map(({ fileId }) => ({ fileId })) };
       };
-      if (retry && hasFiles && reupload) {
+      if (retry) {
         const receipt = await request('receipt', { clientMessageId: envelope.payload.clientMessageId });
         if (!current(g)) return false;
         if (receipt.found) {
           if (receipt.kind !== envelope.op || receipt.text !== envelope.payload.text) throw failure('idempotency_conflict');
           data = receipt;
-        } else await renew();
+        } else {
+          if (!state.configured || state.modelReady === false) throw failure('model_unavailable');
+          if (hasFiles && reupload) await renew();
+        }
       }
       if (!data) {
         try { data = await request(envelope.op, envelope.payload); }
@@ -331,7 +335,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   async function settings(modelCandidates) {
-    if (!current() || state.settingsPending || state.loading || state.busy || state.commandPending || state.retryCommand || !state.person || digitalPersonGate(chat, agentId)) return false;
+    if (!current() || state.settingsPending || state.loading || state.busy || state.commandPending || !state.person || digitalPersonGate(chat, agentId)) return false;
     const g = generation;
     state.settingsPending = true;
     state.error = null;
