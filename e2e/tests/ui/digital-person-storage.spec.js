@@ -12,6 +12,7 @@ import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures
 // Real browser -> isolated Server -> Agent bridge -> local SQLite / optional MongoDB. Only inference is scripted.
 // No live Agent, native config or paid provider is used; all storage is isolated.
 const uri = process.env.PERSON_TEST_MONGO_URI;
+test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capability layers persist through relay and restart`, async ({ page, serverUrl, mockAgent }) => {
   test.setTimeout(90000);
   test.skip(storage === 'mongodb' && !uri, 'Requires an explicitly supplied isolated MongoDB replica set');
@@ -74,7 +75,7 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await page.getByRole('button', { name: 'Think', exact: true }).click();
     await expect.poll(() => calls).toBe(5);
     await expect(page.locator('#person-input')).toBeEnabled();
-    await page.getByRole('button', { name: 'Thought journal', exact: true }).click();
+    await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
     await expect(page.locator('#person-thoughts')).toContainText('Reconsider the available experience.');
     await expect(page.locator('#person-thoughts')).toContainText('A hypothesis is not a fact.');
     await expect(page.locator('#person-thoughts pre')).toHaveCount(0);
@@ -102,7 +103,7 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await expect(page.locator('.person-messages')).toContainText('Learned a reusable sum; result 12.', { timeout: 15000 });
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(calls).toBe(10);
-    await page.getByRole('button', { name: 'Thought journal', exact: true }).click();
+    await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
     await expect(page.locator('#person-thoughts')).toContainText('Script.sum');
     await bridge.close(); bridge = makeBridge();
     await page.reload();
@@ -117,10 +118,12 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     expect(calls).toBe(12);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Name', { exact: true }).fill('Mira');
     await dialog.getByLabel('Follow Agent model defaults').uncheck();
     await dialog.getByLabel('test/second', { exact: true }).check();
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(dialog).toHaveCount(0);
+    await expect(page.locator('.person-breadcrumb h1')).toHaveText('Mira');
     expect(calls).toBe(12); // Reading/saving candidates never starts cognition.
     await page.locator('input[type="file"]').setInputFiles({ name: 'reference.txt', mimeType: 'text/plain', buffer: Buffer.from('Private uploaded context marker.') });
     await expect(page.locator('.attachments-preview')).toContainText('reference.txt');
@@ -139,6 +142,23 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('#person-input')).toBeEnabled();
     await expect(page.locator('.person-sent-files')).toContainText('reference.txt');
+    await expect(page.locator('.person-breadcrumb h1')).toHaveText('Mira');
+    await page.locator('.person-search-button').click();
+    await page.locator('.person-search-form input').fill('Reuse the sum');
+    await page.locator('.person-search-form input').press('Enter');
+    await expect(page.locator('.person-search-result')).toContainText('Reuse the sum script.');
+    await page.locator('.person-panel-header .header-action-btn').click();
+    await page.locator('.person-thoughts-button').click();
+    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Memory', exact: true }).click();
+    await expect(page.locator('.person-knowledge')).toContainText('What would change my understanding?');
+    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Skills & capabilities', exact: true }).click();
+    await expect(page.locator('.person-knowledge')).toContainText('Script.sum');
+    const savedScript = page.locator('.person-knowledge-item').filter({ hasText: 'Script.sum' });
+    await savedScript.locator(':scope > summary').click();
+    await savedScript.getByText('Contract & definition', { exact: true }).click();
+    await expect(savedScript.locator('pre')).toContainText('return input.reduce');
+    expect(calls).toBe(14); // Browsing persisted data never invokes inference or scripts.
+    await page.locator('.person-panel-header .header-action-btn').click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await expect(page.getByRole('dialog').getByLabel('test/second', { exact: true })).toBeChecked();
     expect(calls).toBe(14);

@@ -32,6 +32,8 @@ export function acceptPersonResponse(chat, message) {
   return true;
 }
 
+const inspectionPage = () => ({ items: [], nextCursor: null, loading: false, loaded: false, error: null });
+
 export function personState() {
   return {
     loading: false, configured: null, storageReady: null, modelReady: null, reason: '', person: null, state: null, latestEpisode: null,
@@ -39,6 +41,7 @@ export function personState() {
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
     commandPending: false, cancelPending: false, retryCommand: null, tracesStale: false,
     models: [], modelCandidates: [], settingsPending: false,
+    memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
   };
 }
 
@@ -343,16 +346,55 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
 
-  async function settings(modelCandidates) {
+  // Each result page belongs to this identity and query, never to the chat window.
+  // Replacing a query invalidates pending responses without blocking a newer read.
+  async function inspect(section, more = false) {
+    if (!['memory', 'skills'].includes(section)) return;
+    return readPage(section, 'inspect', { section }, more);
+  }
+  async function search(query, more = false) {
+    const value = typeof query === 'string' ? query.trim() : '';
+    if (more && value !== state.search.query) return;
+    return readPage('search', 'search', { query: value }, more);
+  }
+  async function readPage(key, op, payload, more) {
+    if (!current()) return;
+    // Invalidation is local, not a network operation: edits during refresh or
+    // disconnect must fence an older response even when no new read can start.
+    if (!more) state[key] = { ...inspectionPage(), ...(key === 'search' ? { query: payload.query } : {}) };
+    if (!state.person || state.loading || digitalPersonGate(chat, agentId)) return;
+    if (more && (state[key].loading || state[key].nextCursor == null)) return;
+    const target = state[key];
+    if (key === 'search' && !payload.query) return;
+    const g = generation;
+    target.loading = true;
+    target.error = null;
+    try {
+      const data = await request(op, { ...payload, cursor: more ? target.nextCursor : null, limit: 20 });
+      if (!current(g) || target !== state[key]) return;
+      target.items = more ? [...new Map([...target.items, ...data.items].map(row => [row.id, row])).values()] : data.items;
+      target.nextCursor = data.nextCursor ?? null;
+      target.loaded = true;
+    } catch (error) {
+      if (current(g) && target === state[key]) target.error = { code: error.code, message: error.message };
+    } finally {
+      if (current(g) && target === state[key]) target.loading = false;
+    }
+  }
+
+  async function settings(update) {
     if (!current() || state.settingsPending || state.loading || state.busy || state.commandPending || !state.person || digitalPersonGate(chat, agentId)) return false;
     const g = generation;
     state.settingsPending = true;
     state.error = null;
     try {
-      const result = await request('settings', { modelCandidates: [...modelCandidates] });
+      const payload = Array.isArray(update) ? { modelCandidates: [...update] } : update;
+      const result = await request('settings', payload);
       if (!current(g)) return false;
       state.modelCandidates = result.settings.modelCandidates || [];
       state.person.settings = result.settings;
+      if (result.person?.id === state.person.id) state.person = result.person;
+      snapshotRequest += 1; // Fence an older snapshot from undoing a successful rename.
       // A candidate correction can recover model readiness without reopening the page.
       const status = await request('status');
       if (!current(g)) return false;
@@ -384,7 +426,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   return {
-    open, refresh, command, cancel, page, settings,
+    open, refresh, command, cancel, page, settings, inspect, search,
     discardRetry() { outbox().delete(agentId); retainedFiles().delete(agentId); state.retryCommand = null; },
     dispose() { reset(); disposed = true; },
   };

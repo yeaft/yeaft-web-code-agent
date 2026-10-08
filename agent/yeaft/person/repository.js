@@ -3,6 +3,8 @@ import { admissionReceipt, bytes, digest, fail, identifier, LIMITS, PersonError,
 import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
 import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
+import { conceptView, inspectionPage, inspectRequest, messageView, personName, searchRequest, settingsView, stateView } from './inspection.js';
+import { inspectCapabilities } from './capabilities.js';
 
 const COLLECTIONS = ['persons', 'attachments', 'messages', 'episodes', 'states', 'concepts', 'concept_revisions', 'state_commits', 'traces', 'created_capabilities', 'created_capability_revisions'];
 const txOptions = { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, readPreference: 'primary', maxCommitTimeMS: 5000, timeoutMS: 10000 };
@@ -97,7 +99,7 @@ export class MongoPersonRepository {
     finally { await session.endSession(); }
   }
   personView(p) {
-    return { id: p.personId, name: p.name, soul: p.soul, soulRevision: p.soulRevision, createdAt: iso(p.createdAt), settings: p.settings };
+    return { id: p.personId, name: p.name, soul: p.soul, soulRevision: p.soulRevision, createdAt: iso(p.createdAt), settings: settingsView(p.settings) };
   }
   async open(ownerId, name = 'Digital Person') {
     const scope = this.scope(ownerId);
@@ -334,9 +336,9 @@ export class MongoPersonRepository {
       this.collections.states.findOne(scope).then(s => this.collections.concepts.find({ ...scope, id: { $in: s.focusConceptIds } }).limit(12).toArray()),
       this.collections.concepts.find(scope).sort({ updatedAt: -1, id: 1 }).limit(12).toArray(),
     ]);
-    const concepts = [...new Map([...focused, ...recent].map(c => [c.id, publicDoc(c)])).values()];
+    const concepts = [...new Map([...focused, ...recent].map(c => [c.id, conceptView(c)])).values()];
     return { person: this.personView(p), capabilityExperience: capabilityExperienceView(p.capabilityExperience),
-      state: publicDoc(state), messages: messages.reverse().map(publicDoc), concepts };
+      state: stateView(state), messages: messages.reverse().map(messageView), concepts };
   }
   async recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 }) {
     const scope = this.scope(ownerId);
@@ -345,7 +347,7 @@ export class MongoPersonRepository {
     await this.init();
     const filter = { ...scope, ...(query ? { statement: { $regex: escaped, $options: 'i' } } : {}), ...(cursor ? { id: { $gt: cursor } } : {}) };
     const docs = await this.collections.concepts.find(filter).sort({ id: 1 }).limit(limit + 1).maxTimeMS(2000).toArray();
-    return { items: docs.slice(0, limit).map(publicDoc), nextCursor: docs.length > limit ? docs[limit - 1].id : null };
+    return { items: docs.slice(0, limit).map(conceptView), nextCursor: docs.length > limit ? docs[limit - 1].id : null };
   }
   async commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     return this.transaction(async session => {
@@ -376,12 +378,12 @@ export class MongoPersonRepository {
       const updated = await this.collections.states.replaceOne({ ...scope, version: episode.baseStateVersion }, state, { session });
       if (updated.matchedCount !== 1) fail('STALE');
       await this.collections.state_commits.insertOne(this.doc(scope, { id: randomUUID(), version: p.stateVersion, parentVersion: episode.baseStateVersion,
-        episodeId: episode.id, callId, conceptRevisions: revisions, state: publicDoc(state), createdAt: new Date() }), { session });
+        episodeId: episode.id, callId, conceptRevisions: revisions, state: stateView(state), createdAt: new Date() }), { session });
       if (proposal.reply) await this.collections.messages.insertOne(this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id,
         role: 'assistant', text: proposal.reply, createdAt: new Date() }), { session });
       await this.collections.episodes.updateOne({ ...scope, id: episode.id, status: 'running' }, { $set: { status: 'completed', endedAt: new Date(), stateVersion: p.stateVersion } }, { session });
       await this.trace(session, p, episode.id, 'committed', { callId, parentVersion: episode.baseStateVersion, stateVersion: p.stateVersion, conceptRevisions: revisions, decision: proposal.decision });
-      return { state: publicDoc(state) };
+      return { state: stateView(state) };
     });
   }
   async finish(episode, status, code) {
@@ -416,16 +418,39 @@ export class MongoPersonRepository {
       const p = await this.collections.persons.findOne(scope, { session });
       if (!p) fail('NOT_OPEN');
       if (p.activeEpisodeId) fail('BUSY'); // No implicit background API or deferred control effects.
-      const next = { ...p.settings, ...settings };
-      await this.collections.persons.updateOne(scope, { $set: { settings: next }, $inc: { controlVersion: 1, writeSerial: 1 } }, { session });
-      if (Object.keys(settings).length) await this.trace(session, p, null, 'settings', { settings: next });
-      return { settings: next };
+      const { name, ...patch } = settings;
+      if (Object.hasOwn(settings, 'name')) p.name = personName(name);
+      const next = { ...settingsView(p.settings), ...patch };
+      await this.collections.persons.updateOne(scope, { $set: { settings: next, name: p.name }, $inc: { controlVersion: 1, writeSerial: 1 } }, { session });
+      if (Object.keys(settings).length) await this.trace(session, p, null, 'settings', { settings: next, ...(name !== undefined ? { name: p.name } : {}) });
+      return { settings: next, person: this.personView({ ...p, settings: next }) };
     });
   }
+  async inspect(ownerId, options) {
+    const { section, cursor, limit } = inspectRequest(options);
+    await this.getPerson(ownerId);
+    const scope = this.scope(ownerId);
+    if (section === 'skills') {
+      const docs = await this.collections.created_capabilities.find(scope).sort({ id: 1 }).limit(32).maxTimeMS(2000).toArray();
+      return inspectCapabilities(docs.map(doc => JSON.parse(doc.record)), { cursor, limit });
+    }
+    const records = await this.collections.concepts.find({ ...scope, ...(cursor !== null ? { id: { $gt: cursor } } : {}) })
+      .collation({ locale: 'simple' }).sort({ id: 1 }).limit(limit + 1).maxTimeMS(2000).toArray();
+    return inspectionPage(records, limit, 'id', conceptView);
+  }
+  async search(ownerId, options) {
+    const { query, cursor, limit } = searchRequest(options);
+    await this.getPerson(ownerId);
+    const records = await this.collections.messages.find({ ...this.scope(ownerId),
+      text: { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' }, ...(cursor !== null ? { seq: { $lt: cursor } } : {}) })
+      .sort({ seq: -1 }).limit(limit + 1).maxTimeMS(2000).toArray();
+    return inspectionPage(records, limit, 'seq', messageView);
+  }
   async list(ownerId, collection, { cursor = null, limit = 20 }, filter = {}) {
+    if (!['messages', 'traces'].includes(collection)) fail('INVALID_REQUEST');
     await this.getPerson(ownerId);
     const docs = await this.collections[collection].find({ ...this.scope(ownerId), ...filter, ...(cursor ? { seq: { $lt: cursor } } : {}) }).sort({ seq: -1 }).limit(limit + 1).maxTimeMS(2000).toArray();
-    return { items: docs.slice(0, limit).map(collection === 'traces' ? publicTrace : publicDoc), nextCursor: docs.length > limit ? String(docs[limit - 1].seq) : null };
+    return { items: docs.slice(0, limit).map(collection === 'traces' ? publicTrace : messageView), nextCursor: docs.length > limit ? String(docs[limit - 1].seq) : null };
   }
   async snapshot(ownerId) {
     await this.recover(ownerId);
@@ -438,7 +463,7 @@ export class MongoPersonRepository {
       const concepts = await this.collections.concepts.find({ ...scope, id: { $in: state.focusConceptIds } }, { session }).limit(12).toArray();
       const episode = await this.collections.episodes.findOne(scope, { session, sort: { inputWatermark: -1 },
         projection: { _id: 0, id: 1, status: 1, terminalCode: 1, endedAt: 1 } });
-      return { latestEpisode: episode, person: this.personView(p), state: publicDoc(state), concepts: concepts.map(publicDoc), messages: messages.slice(0, 20).reverse().map(publicDoc),
+      return { latestEpisode: episode, person: this.personView(p), state: stateView(state), concepts: concepts.map(conceptView), messages: messages.slice(0, 20).reverse().map(messageView),
         nextMessagesCursor: messages.length > 20 ? String(messages[19].seq) : null, busy: Boolean(p.activeEpisodeId), episodeId: p.activeEpisodeId };
     });
   }

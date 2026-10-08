@@ -267,7 +267,8 @@ suite('Person real MongoDB replica-set integration', () => {
     }));
     await call(service, 'open');
     expect((await call(service, 'status')).configured).toBe(true);
-    expect(await call(service, 'settings', { autonomyEnabled: false })).toEqual({ settings: { autonomyEnabled: false } });
+    expect(await call(service, 'settings', { autonomyEnabled: false })).toEqual({ settings: { autonomyEnabled: false },
+      person: expect.objectContaining({ name: 'Digital Person', settings: { autonomyEnabled: false } }) });
     await expect(call(service, 'settings', { autonomyEnabled: true })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
     await expect(call(service, 'settings', { autonomyEnabled: 'false' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     await new Promise(resolve => setTimeout(resolve, 50));

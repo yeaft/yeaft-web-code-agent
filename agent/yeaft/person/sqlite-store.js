@@ -8,6 +8,8 @@ import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapa
 import { SCHEMA, TABLES } from './sqlite-schema.js';
 import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
+import { conceptView, inspectionPage, inspectRequest, messageView, personName, searchRequest, settingsView, stateView } from './inspection.js';
+import { inspectCapabilities } from './capabilities.js';
 
 const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
 const scopeValues = s => [s.namespace, s.ownerId, s.personId];
@@ -46,7 +48,7 @@ const publicOutput = (output, failed) => {
   return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
     : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
 };
-const READS = new Set(['receipt', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
+const READS = new Set(['receipt', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
 const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'commit', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
@@ -135,7 +137,7 @@ export class SqlitePersonStore {
       .run(...scopeValues(scope), kind, record.id, record.revision, JSON.stringify(publicDoc(record)));
   }
   personView(p) {
-    return { id: p.personId, name: p.name, soul: p.soul, soulRevision: p.soulRevision, createdAt: p.createdAt.toISOString(), settings: p.settings };
+    return { id: p.personId, name: p.name, soul: p.soul, soulRevision: p.soulRevision, createdAt: p.createdAt.toISOString(), settings: settingsView(p.settings) };
   }
   getPerson(ownerId) {
     const p = this.one('persons', this.scope(ownerId));
@@ -320,8 +322,8 @@ export class SqlitePersonStore {
     const focused = this.focused(scope, state.focusConceptIds).slice(0, 12);
     const recent = this.rows('concepts', scope, ' ORDER BY updatedAt DESC, id ASC LIMIT 12');
     return { person: this.personView(p), capabilityExperience: capabilityExperienceView(p.capabilityExperience),
-      state: publicDoc(state), messages: this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12').reverse().map(publicDoc),
-      concepts: [...new Map([...focused, ...recent].map(c => [c.id, publicDoc(c)])).values()] };
+      state: stateView(state), messages: this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12').reverse().map(messageView),
+      concepts: [...new Map([...focused, ...recent].map(c => [c.id, conceptView(c)])).values()] };
   }
   commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     const p = this.own(episode), scope = this.episodeScope(episode);
@@ -346,7 +348,7 @@ export class SqlitePersonStore {
     if (this.one('states', scope)?.version !== episode.baseStateVersion) fail('STALE');
     this.put('states', state);
     this.put('state_commits', this.doc(scope, { id: randomUUID(), version: p.stateVersion, parentVersion: episode.baseStateVersion,
-      episodeId: episode.id, callId, conceptRevisions: revisions, state: publicDoc(state), createdAt: this.now }), true);
+      episodeId: episode.id, callId, conceptRevisions: revisions, state: stateView(state), createdAt: this.now }), true);
     if (proposal.reply) {
       const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id, role: 'assistant', text: proposal.reply, createdAt: this.now });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
@@ -355,7 +357,7 @@ export class SqlitePersonStore {
     if (!record || record.status !== 'running') fail('STALE');
     Object.assign(record, { status: 'completed', endedAt: this.now, stateVersion: p.stateVersion }); this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'committed', { callId, parentVersion: episode.baseStateVersion, stateVersion: p.stateVersion, conceptRevisions: revisions, decision: proposal.decision });
-    return { state: publicDoc(state) };
+    return { state: stateView(state) };
   }
   finish(episode, status, code) {
     const p = this.fenced(episode, false);
@@ -383,9 +385,26 @@ export class SqlitePersonStore {
   settings(ownerId, settings) {
     const p = this.getPerson(ownerId);
     if (p.activeEpisodeId) fail('BUSY');
-    p.settings = { ...p.settings, ...settings }; p.controlVersion++; p.writeSerial++; this.put('persons', p);
-    if (Object.keys(settings).length) this.trace(ownerId, null, 'settings', { settings: p.settings });
-    return { settings: p.settings };
+    const { name, ...patch } = settings;
+    if (Object.hasOwn(settings, 'name')) p.name = personName(name);
+    p.settings = { ...settingsView(p.settings), ...patch }; p.controlVersion++; p.writeSerial++; this.put('persons', p);
+    if (Object.keys(settings).length) this.trace(ownerId, null, 'settings', { settings: p.settings, ...(name !== undefined ? { name: p.name } : {}) });
+    return { settings: settingsView(p.settings), person: this.personView(p) };
+  }
+  inspect(ownerId, options) {
+    const { section, cursor, limit } = inspectRequest(options);
+    this.getPerson(ownerId);
+    const scope = this.scope(ownerId);
+    if (section === 'skills') return inspectCapabilities(this.rows('created_capabilities', scope, ' ORDER BY id ASC LIMIT 32'), { cursor, limit });
+    const records = this.rows('concepts', scope, ' AND (? IS NULL OR id > ?) ORDER BY id ASC LIMIT ?', [cursor, cursor, limit + 1]);
+    return inspectionPage(records, limit, 'id', conceptView);
+  }
+  search(ownerId, options) {
+    const { query, cursor, limit } = searchRequest(options);
+    this.getPerson(ownerId);
+    const records = this.rows('messages', this.scope(ownerId),
+      ' AND (? IS NULL OR seq < ?) AND instr(text, ?) > 0 ORDER BY seq DESC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);
+    return inspectionPage(records, limit, 'seq', messageView);
   }
   list(ownerId, collection, { cursor = null, limit = 20 } = {}, filter = {}) {
     if (!['messages', 'traces'].includes(collection)) fail('INVALID_REQUEST');
@@ -398,7 +417,7 @@ export class SqlitePersonStore {
     if (cursor != null) { clause += ' AND seq < ?'; params.push(sequence(cursor)); }
     if (query) { clause += ' AND instr(text, ?) > 0'; params.push(query.toLowerCase()); }
     const docs = this.rows(collection, this.scope(ownerId), `${clause} ORDER BY seq DESC LIMIT ?`, [...params, limit + 1]);
-    return { items: docs.slice(0, limit).map(publicDoc), nextCursor: docs.length > limit ? String(docs[limit - 1].seq) : null };
+    return { items: docs.slice(0, limit).map(collection === 'messages' ? messageView : publicDoc), nextCursor: docs.length > limit ? String(docs[limit - 1].seq) : null };
   }
   recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 } = {}) {
     memoryKind(kind); text(query, LIMITS.inputBytes, true); boundedLimit(limit);
@@ -406,7 +425,7 @@ export class SqlitePersonStore {
     this.getPerson(ownerId);
     if (cursor != null) text(cursor, 128);
     const docs = this.rows('concepts', this.scope(ownerId), ' AND (? IS NULL OR id > ?) AND instr(statement, ?) > 0 ORDER BY id ASC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);
-    return { items: docs.slice(0, limit).map(publicDoc), nextCursor: docs.length > limit ? docs[limit - 1].id : null };
+    return { items: docs.slice(0, limit).map(conceptView), nextCursor: docs.length > limit ? docs[limit - 1].id : null };
   }
   snapshot(ownerId) {
     this.recover(ownerId);
@@ -415,15 +434,16 @@ export class SqlitePersonStore {
     const episode = this.one('episodes', scope, ' ORDER BY inputWatermark DESC');
     const latestEpisode = episode ? { id: episode.id, status: episode.status,
       ...(episode.terminalCode ? { terminalCode: episode.terminalCode } : {}), ...(episode.endedAt ? { endedAt: episode.endedAt } : {}) } : null;
-    return { latestEpisode, person: this.personView(p), state: publicDoc(state), concepts: this.focused(scope, state.focusConceptIds).slice(0, 12).map(publicDoc),
-      messages: messages.slice(0, 20).reverse().map(publicDoc), nextMessagesCursor: messages.length > 20 ? String(messages[19].seq) : null,
+    return { latestEpisode, person: this.personView(p), state: stateView(state), concepts: this.focused(scope, state.focusConceptIds).slice(0, 12).map(conceptView),
+      messages: messages.slice(0, 20).reverse().map(messageView), nextMessagesCursor: messages.length > 20 ? String(messages[19].seq) : null,
       busy: Boolean(p.activeEpisodeId), episodeId: p.activeEpisodeId };
   }
   searchChanges(ownerId, { after = 0, limit = 100 } = {}) {
     this.getPerson(ownerId); after = sequence(after); boundedLimit(limit, 1000);
     const rows = this.sql(`SELECT seq, kind, id, revision, record FROM memory_changes WHERE ${SCOPE} AND seq > ? ORDER BY seq ASC LIMIT ?`)
       .all(...scopeValues(this.scope(ownerId)), after, limit + 1);
-    const items = rows.slice(0, limit).map(row => ({ ...row, record: decode(row, row.kind) }));
+    const items = rows.slice(0, limit).map(row => ({ ...row,
+      record: (row.kind === 'messages' ? messageView : conceptView)(decode(row, row.kind)) }));
     return { items, lastSeq: items.at(-1)?.seq ?? after, hasMore: rows.length > limit };
   }
   resolveMemories(ownerId, kind, refs) {
@@ -433,7 +453,7 @@ export class SqlitePersonStore {
     for (const ref of refs) {
       if (!ref || typeof ref.id !== 'string' || !Number.isSafeInteger(ref.revision) || ref.revision < 1) fail('INVALID_REQUEST');
       const record = this.one(kind, scope, ' AND id = ? AND revision = ?', [ref.id, ref.revision]);
-      if (record && !seen.has(record.id)) { seen.add(record.id); records.push(publicDoc(record)); }
+      if (record && !seen.has(record.id)) { seen.add(record.id); records.push((kind === 'messages' ? messageView : conceptView)(record)); }
     }
     return records;
   }

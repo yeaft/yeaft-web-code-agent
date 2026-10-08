@@ -6,6 +6,7 @@ import { PersonRuntime } from './runtime.js';
 import { validateFiles } from './attachments.js';
 import { createPersonProvider, validateModelCandidates } from './provider.js';
 import { fail, identifier, LIMITS, object, page, safeError, text } from './contracts.js';
+import { inspectRequest, personName, searchRequest } from './inspection.js';
 
 /**
  * One durable Person per (namespace, authenticated ownerId). The transport MUST
@@ -102,6 +103,12 @@ export function createPersonService(options = {}) {
       }
       case 'traces': await repository.recover(ownerId); return repository.list(ownerId, 'traces', page(payload));
       case 'messages': return repository.list(ownerId, 'messages', page(payload));
+      // These reads deliberately bypass recover(), Recall and the runtime/provider.
+      case 'inspect': return repository.inspect(ownerId, inspectRequest(payload));
+      case 'search': {
+        searchRequest(payload);
+        return repository.search(ownerId, payload);
+      }
       case 'cancel': {
         object(payload, ['episodeId'], []);
         if (payload.episodeId != null) identifier(payload.episodeId);
@@ -110,7 +117,9 @@ export function createPersonService(options = {}) {
         return result;
       }
       case 'settings': {
-        object(payload, ['autonomyEnabled', 'modelCandidates'], []);
+        object(payload, ['name', 'autonomyEnabled', 'modelCandidates'], []);
+        const patch = { ...payload };
+        if (Object.hasOwn(patch, 'name')) patch.name = personName(patch.name);
         if (Object.hasOwn(payload, 'autonomyEnabled') && typeof payload.autonomyEnabled !== 'boolean') fail('INVALID_REQUEST');
         if (Object.hasOwn(payload, 'modelCandidates')) {
           const refs = payload.modelCandidates;
@@ -122,7 +131,7 @@ export function createPersonService(options = {}) {
         }
         // Timer-driven autonomy is deliberately not claimed or silently enabled.
         if (payload.autonomyEnabled === true) fail('UNSUPPORTED');
-        return repository.settings(ownerId, payload);
+        return repository.settings(ownerId, patch);
       }
       default: fail('INVALID_REQUEST');
     }

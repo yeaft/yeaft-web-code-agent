@@ -33,6 +33,16 @@ describe('digital person authenticated relay', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['inspect', { section: 'skills', cursor: 'Recall', limit: 2 }],
+    ['search', { query: 'literal .*', cursor: '20', limit: 5 }],
+    ['settings', { name: 'Renamed', modelCandidates: [] }],
+  ])('relays the exact %s API fields but never browser ownership or raw selectors', async (op, payload) => {
+    await relay.request(client, message({ op, payload: { ...payload, ownerId: 'victim', namespace: 'foreign', filter: { $ne: null }, files: [] } }));
+    expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op, payload });
+    expect(forward.mock.lastCall[1].payload).toEqual(payload);
+  });
+
   it('passes the exact cancellation episode and ignores a forged owner', async () => {
     await relay.request(client, message({ op: 'cancel', payload: { episodeId: 'old-episode', ownerId: 'victim' } }));
     expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op: 'cancel', payload: { episodeId: 'old-episode' } });

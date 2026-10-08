@@ -8,7 +8,8 @@ const FIELDS = Object.freeze({
   send: ['text', 'clientMessageId', 'attachments'], think: ['text', 'clientMessageId', 'attachments'],
   dream: ['clientMessageId'], cancel: ['episodeId'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'],
-  settings: ['autonomyEnabled', 'modelCandidates'],
+  inspect: ['section', 'cursor', 'limit'], search: ['query', 'cursor', 'limit'],
+  settings: ['name', 'autonomyEnabled', 'modelCandidates'],
 });
 
 /** Request-only relay: identity is supplied by the authenticated Server, never the browser.

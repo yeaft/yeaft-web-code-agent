@@ -10,6 +10,7 @@ export default {
   name: 'PersonSettingsModal',
   components: { NavigationIcon },
   props: {
+    name: { type: String, default: '' },
     models: { type: Array, default: () => [] },
     candidates: { type: Array, default: () => [] },
     saving: Boolean,
@@ -20,6 +21,9 @@ export default {
   emits: ['close', 'save'],
   setup(props, { emit }) {
     const selected = Vue.ref([...props.candidates]);
+    const personName = Vue.ref(props.name);
+    const nameEdited = Vue.ref(false);
+    const invalidName = Vue.computed(() => !personName.value.trim() || new TextEncoder().encode(personName.value.trim()).length > 160);
     const dialog = Vue.ref(null);
     const followingDefault = Vue.ref(!props.candidates.length);
     const edited = Vue.ref(false);
@@ -27,7 +31,7 @@ export default {
     const unavailable = Vue.computed(() => selected.value.filter(id => !props.models.some(model => model.id === id)));
     const invalid = Vue.computed(() => !followingDefault.value && (!selected.value.length || selected.value.length > 8 || unavailable.value.length > 0));
     const controlsDisabled = Vue.computed(() => props.saving || props.disabled || props.loading);
-    const cannotSave = Vue.computed(() => controlsDisabled.value || invalid.value || !props.models.length);
+    const cannotSave = Vue.computed(() => controlsDisabled.value || invalidName.value || (edited.value && invalid.value));
 
     function focusableControls() {
       return [...(dialog.value?.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex="0"]') || [])];
@@ -45,7 +49,12 @@ export default {
       if (shouldDismissFromOverlayClick(event)) requestClose();
     }
     function save() {
-      if (!cannotSave.value) emit('save', followingDefault.value ? [] : [...selected.value]);
+      if (!cannotSave.value) {
+        const update = {};
+        if (personName.value.trim() !== props.name) update.name = personName.value.trim();
+        if (edited.value) update.modelCandidates = followingDefault.value ? [] : [...selected.value];
+        emit('save', update);
+      }
     }
     function keydown(event) {
       if (event.key === 'Escape') {
@@ -86,6 +95,7 @@ export default {
     Vue.watch([controlsDisabled, followingDefault, unavailable], () => Vue.nextTick(keepFocusInside));
     // An initial/reconnect snapshot may arrive after the dialog opens. Do not
     // overwrite a user's in-progress selection with that snapshot.
+    Vue.watch(() => props.name, name => { if (!nameEdited.value) personName.value = name; });
     Vue.watch(() => props.candidates, candidates => {
       if (edited.value) return;
       selected.value = [...candidates];
@@ -93,7 +103,7 @@ export default {
     }, { deep: true });
 
     return {
-      selected, dialog, followingDefault, edited, invalid, unavailable, controlsDisabled, cannotSave,
+      personName, nameEdited, invalidName, selected, dialog, followingDefault, edited, invalid, unavailable, controlsDisabled, cannotSave,
       requestClose, save, onOverlayClick, trackOverlayPointerDown, trackOverlayPointerUp, clearOverlayPointerGesture,
     };
   },
@@ -108,32 +118,38 @@ export default {
           <button type="button" class="btn-ghost person-settings-close" :disabled="saving"
             :aria-label="$t('common.close')" @click="requestClose"><NavigationIcon name="close" :size="18" /></button>
         </header>
-        <div class="person-settings-body" @change="edited = true">
-          <div class="person-settings-intro">
-            <h3 id="person-model-heading">{{ $t('person.modelCandidates') }}</h3>
-            <p id="person-model-hint" class="person-settings-help">{{ $t('person.modelCandidatesHint') }}</p>
-          </div>
-          <label class="person-model-option person-model-default" :class="{ 'is-selected': followingDefault }">
-            <input type="checkbox" v-model="followingDefault" :disabled="controlsDisabled" aria-describedby="person-model-hint">
-            <span>{{ $t('person.modelsDefault') }}</span>
+        <div class="person-settings-body">
+          <label class="person-name-field" for="person-name">{{ $t('person.name') }}
+            <input id="person-name" v-model="personName" @input="nameEdited = true" :disabled="controlsDisabled" :aria-invalid="invalidName" maxlength="160" autocomplete="off">
           </label>
-          <p v-if="loading" class="person-settings-state" role="status">{{ $t('person.loading') }}</p>
-          <template v-else>
-            <p v-if="!models.length" class="person-settings-state" role="status">{{ $t('person.modelsEmpty') }}</p>
-            <div v-if="models.length || unavailable.length" class="person-model-list" role="group"
-              aria-labelledby="person-model-heading" aria-describedby="person-model-hint">
-              <label v-for="model in models" :key="model.id" class="person-model-option"
-                :class="{ 'is-selected': !followingDefault && selected.includes(model.id) }">
-                <input type="checkbox" v-model="selected" :value="model.id" :disabled="followingDefault || controlsDisabled">
-                <span class="person-model-name">{{ model.id }}</span>
-              </label>
-              <label v-for="id in unavailable" :key="id" class="person-model-option person-model-unavailable">
-                <input type="checkbox" v-model="selected" :value="id" :disabled="followingDefault || controlsDisabled">
-                <span class="person-model-description"><span class="person-model-name">{{ id }}</span><span class="person-model-warning">{{ $t('person.modelUnavailable') }}</span></span>
-              </label>
+          <p v-if="invalidName" class="person-settings-error" role="alert">{{ $t('person.nameInvalid') }}</p>
+          <div class="person-model-fields" @change="edited = true">
+            <div class="person-settings-intro">
+              <h3 id="person-model-heading">{{ $t('person.modelCandidates') }}</h3>
+              <p id="person-model-hint" class="person-settings-help">{{ $t('person.modelCandidatesHint') }}</p>
             </div>
-            <p v-if="invalid" role="alert" class="person-settings-error">{{ $t('person.modelsInvalid') }}</p>
-          </template>
+            <label class="person-model-option person-model-default" :class="{ 'is-selected': followingDefault }">
+              <input type="checkbox" v-model="followingDefault" :disabled="controlsDisabled" aria-describedby="person-model-hint">
+              <span>{{ $t('person.modelsDefault') }}</span>
+            </label>
+            <p v-if="loading" class="person-settings-state" role="status">{{ $t('person.loading') }}</p>
+            <template v-else>
+              <p v-if="!models.length" class="person-settings-state" role="status">{{ $t('person.modelsEmpty') }}</p>
+              <div v-if="models.length || unavailable.length" class="person-model-list" role="group"
+                aria-labelledby="person-model-heading" aria-describedby="person-model-hint">
+                <label v-for="model in models" :key="model.id" class="person-model-option"
+                  :class="{ 'is-selected': !followingDefault && selected.includes(model.id) }">
+                  <input type="checkbox" v-model="selected" :value="model.id" :disabled="followingDefault || controlsDisabled">
+                  <span class="person-model-name">{{ model.id }}</span>
+                </label>
+                <label v-for="id in unavailable" :key="id" class="person-model-option person-model-unavailable">
+                  <input type="checkbox" v-model="selected" :value="id" :disabled="followingDefault || controlsDisabled">
+                  <span class="person-model-description"><span class="person-model-name">{{ id }}</span><span class="person-model-warning">{{ $t('person.modelUnavailable') }}</span></span>
+                </label>
+              </div>
+              <p v-if="invalid" role="alert" class="person-settings-error">{{ $t('person.modelsInvalid') }}</p>
+            </template>
+          </div>
           <p v-if="error" role="alert" class="person-settings-error">{{ $t('person.requestFailed') }} {{ error.message }}</p>
           <p class="person-settings-help person-settings-scope">{{ $t('person.modelsScope') }}</p>
         </div>

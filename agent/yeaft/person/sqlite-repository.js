@@ -104,6 +104,8 @@ export class SqlitePersonRepository {
   async settings(ownerId, settings) { return this.request('settings', [ownerId, settings]); }
   async list(ownerId, collection, options, filter) { return this.request('list', [ownerId, collection, options, filter]); }
   async snapshot(ownerId) { return this.request('snapshot', [ownerId]); }
+  async inspect(ownerId, options) { return this.request('inspect', [ownerId, options]); }
+  async search(ownerId, options) { return this.request('search', [ownerId, options]); }
   /** Ascending durable journal, scoped before paging. Empty pages retain after. */
   async searchChanges(ownerId, options) { return this.request('searchChanges', [ownerId, options]); }
   /** kind is 'messages'|'concepts'; returns a deduplicated array of current public records. */
