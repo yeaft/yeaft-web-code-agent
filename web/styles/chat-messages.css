@@ -3177,9 +3177,12 @@
 }
 
 
-/* Viewport-owned transcript navigation. The long-response action shares the
-   existing latest-button anchor instead of adding a control to every reply. */
+/* Keep the Latest footprint constant. The optional current-turn action grows
+   upward, outside normal flow: its visibility depends on response geometry and
+   must never change that geometry via scrollHeight (including with typing dots). */
 .transcript-navigation {
+  --transcript-navigation-height: 32px;
+  height: var(--transcript-navigation-height);
   position: sticky;
   bottom: 12px;
   z-index: 10;
@@ -3212,6 +3215,12 @@
   transition: opacity 0.2s, transform 0.2s, background 0.15s, color 0.15s;
 }
 
+.transcript-navigation .response-origin-btn {
+  position: absolute;
+  bottom: calc(var(--transcript-navigation-height) + 8px);
+  right: 0;
+}
+
 .transcript-navigation-btn:hover,
 .transcript-navigation-btn:focus-visible {
   background: var(--sidebar-hover);
@@ -3235,6 +3244,7 @@
 
 @media (max-width: 640px) {
   .transcript-navigation {
+    --transcript-navigation-height: 36px;
     right: max(12px, env(safe-area-inset-right));
     margin-right: 0;
   }
