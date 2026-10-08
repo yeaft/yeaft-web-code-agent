@@ -16,6 +16,8 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 
 `workDir` 是部署传入的执行目录；`yeaftDir` 仍拥有实例配置、Person 数据和 user skills。缺少显式 `workDir` 的程序调用兼容使用进程工作目录。Person transcript、能力经验和创建的脚本只写入自己的 repository；没有普通 Session transcript 或 Session 身份。
 
+目录、准备和实际执行遵守当前 Agent 的 `plugins.tools` 配置：缺少类别字段沿用默认可用行为，显式空数组禁用全部，单工具 allowlist 只开放指定工具；执行前再次读取实例配置，已准备的旧契约不能绕过后续禁用。内核查看器只列出当前启用的工具。
+
 这些工具具有与原生 Session 相同的宿主权限，不是文件系统 sandbox。可用能力不等于删除数据、接触无关私人文件、发布、部署或重启在线服务的授权。外部文件、网页、命令输出和 Skill 内容是非可信数据，不得覆盖系统指令或制造用户授权。
 
 ## 发现和执行

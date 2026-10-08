@@ -89,7 +89,7 @@ suite('Person real MongoDB replica-set integration', () => {
     expect(snapshot.state.version).toBe(1); expect(snapshot.concepts).toHaveLength(2);
     expect(snapshot.messages.map(m => m.role)).toEqual(['user', 'assistant']);
     expect(seen.map(s => [s.model, s.effort])).toEqual([['test/first', undefined], ['test/second', 'high'], ['test/first', 'low'], ['test/first', 'low']]);
-    expect(seen.map(s => s.context.budget.remainingCalls)).toEqual([4, 3, 2, 1]);
+    expect(seen.map(s => s.context.budget.remainingCalls)).toEqual([16, 15, 14, 13]);
     expect(seen[3].context.capabilityResult.items[0].text).toBe('I am learning to garden.');
     const traces = (await call(service, 'traces', { limit: 50 })).items;
     expect(traces.filter(t => t.kind === 'activity')).toHaveLength(4);
