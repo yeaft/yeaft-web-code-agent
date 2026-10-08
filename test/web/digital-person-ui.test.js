@@ -175,10 +175,22 @@ describe('Digital Person surface', () => {
       await Vue.nextTick();
       expect(wrapper.get('.person-panel-error').attributes('role')).toBe('alert');
       expect(wrapper.get('.person-panel-error').text()).toContain('Trace request failed');
+      wrapper.get('.person-panel-error button').element.focus();
+      wrapper.vm.state.error = null;
+      await Vue.nextTick();
+      expect(document.activeElement).toBe(wrapper.get('.person-panel-header .header-action-btn').element);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await Vue.nextTick();
+      expect(wrapper.find('#person-side-panel').exists()).toBe(false);
+      await wrapper.get('.person-thoughts-button').trigger('click');
       chat.connectionState = 'reconnecting';
       await flushPromises();
       expect(wrapper.get('.person-panel-notice').text()).toContain(t('person.disconnected'));
       expect(wrapper.get('.person-panel-notice button').exists()).toBe(true);
+      wrapper.get('.person-panel-notice button').element.focus();
+      chat.connectionState = 'connected';
+      await flushPromises();
+      expect(document.activeElement).toBe(wrapper.get('.person-panel-header .header-action-btn').element);
       expect(wrapper.get('#person-input').element.value).toBe('draft');
     } finally { window.innerWidth = width; }
   });

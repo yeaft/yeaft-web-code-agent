@@ -67,8 +67,19 @@ export default {
       if (!agentId.value && chat.agents.length) agentId.value = chat.agents[0].id;
     });
     const resize = () => { compactPanel.value = window.innerWidth <= 900; };
-    Vue.onMounted(() => { returnButton.value?.focus(); window.addEventListener('resize', resize); });
-    Vue.onBeforeUnmount(() => { draftGeneration++; controller.dispose(); window.removeEventListener('resize', resize); });
+    Vue.onMounted(() => {
+      returnButton.value?.focus();
+      window.addEventListener('resize', resize);
+      document.addEventListener('keydown', panelKeydown);
+      document.addEventListener('focusin', keepPanelFocus);
+    });
+    Vue.onBeforeUnmount(() => {
+      draftGeneration++; controller.dispose();
+      window.removeEventListener('resize', resize);
+      document.removeEventListener('keydown', panelKeydown);
+      document.removeEventListener('focusin', keepPanelFocus);
+    });
+    Vue.onUpdated(keepPanelFocus);
     const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
     const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.settingsPending && !state.retryCommand);
     const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.uploadError) ? 'person.filesFailed' : ''));
@@ -105,7 +116,16 @@ export default {
       if (panel.value) closePanel();
       else openPanel();
     }
+    // Async refresh/reconnect can remove or disable the focused control. The
+    // compact drawer owns focus, but must yield to the settings dialog above it.
+    function keepPanelFocus() {
+      if (!panel.value || !compactPanel.value || settingsOpen.value || !sidePanel.value) return;
+      const active = document.activeElement;
+      if (!sidePanel.value.contains(active) || active?.disabled) closePanelButton.value?.focus();
+    }
     function panelKeydown(event) {
+      if (!panel.value || settingsOpen.value || !sidePanel.value) return;
+      if (!compactPanel.value && !sidePanel.value.contains(document.activeElement)) return;
       if (event.key === 'Escape') {
         event.preventDefault(); event.stopPropagation(); closePanel();
       }
@@ -213,7 +233,7 @@ export default {
           </div>
         </main>
         <div v-if="panel && compactPanel" class="person-panel-backdrop" aria-hidden="true" @click="closePanel()"></div>
-        <aside v-if="panel" id="person-side-panel" ref="sidePanel" class="person-side-panel" :role="compactPanel ? 'dialog' : 'complementary'" :aria-modal="compactPanel ? true : undefined" aria-labelledby="person-panel-title" @keydown="panelKeydown">
+        <aside v-if="panel" id="person-side-panel" ref="sidePanel" class="person-side-panel" :role="compactPanel ? 'dialog' : 'complementary'" :aria-modal="compactPanel ? true : undefined" aria-labelledby="person-panel-title">
           <header class="person-panel-header">
             <h2 id="person-panel-title">{{ $t(panel === 'debug' ? 'person.debug' : 'person.thoughts') }}</h2>
             <button v-if="panel === 'thoughts'" type="button" class="btn-ghost person-debug-link" @click="openPanel('debug')">{{ $t('person.debug') }}</button>

@@ -179,14 +179,27 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
       mock.failTraceRequest();
       await thoughts.getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();
       await expect(page.locator('.person-panel-error')).toContainText('Thought refresh failed');
-      await page.locator('.person-panel-error').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();
+      const recovery = page.locator('.person-panel-error').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true });
+      await recovery.focus(); await recovery.press('Enter');
       await expect(page.locator('.person-panel-error')).toHaveCount(0);
+      const closeDrawer = page.locator('.person-panel-header .header-action-btn');
+      await expect(closeDrawer).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('#person-side-panel')).toHaveCount(0);
+      await expect(page.locator('.person-thoughts-button')).toBeFocused();
+      await page.locator('.person-thoughts-button').click();
       await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
       await expect(page.locator('.person-panel-notice')).toContainText(zh ? '连接' : 'Connection');
       await expect(page.locator('.person-panel-notice button')).toBeVisible();
+      await page.locator('.person-panel-notice button').focus();
       await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
       await expect(page.locator('#person-conversation')).toHaveAttribute('inert', '');
       await expect.poll(() => mock.requests.filter(r => r.op === 'open').length).toBeGreaterThan(1);
+      await expect(closeDrawer).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('#person-side-panel')).toHaveCount(0);
+      await expect(page.locator('.person-thoughts-button')).toBeFocused();
+      await page.locator('.person-thoughts-button').click();
       if (scenario.width === 800) {
         await page.locator('.person-panel-backdrop').click({ position: { x: 5, y: 300 } });
         await expect(page.locator('.person-thoughts-button')).toBeFocused();
