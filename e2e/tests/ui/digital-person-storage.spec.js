@@ -66,6 +66,7 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(a => a.id === id && a.status === 'ready'), mockAgent.agentId);
     mockAgent.send({ type: 'agent_capabilities_updated', capabilities: ['digital_person', 'plaintext-ok'] });
     await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(a => a.id === id && a.capabilities?.includes('digital_person')), mockAgent.agentId);
+    await page.evaluate(id => window.Pinia.useChatStore().setDigitalPersonUiEnabled(true, id), mockAgent.agentId);
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('#person-input')).toBeEnabled();
     await page.locator('#person-input').fill('Recall our discussion about a curious digital person.');

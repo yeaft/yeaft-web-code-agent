@@ -3083,6 +3083,7 @@ describe('message flow regressions', () => {
       isYeaftSessionProcessing: () => false,
       isYeaftSessionUnread: () => false,
       agents: [{ id: 'agent-a', name: 'Agent A', online: true, capabilities: ['work_center'] }],
+      isDigitalPersonUiEnabled: () => false,
       workCenterOpen: false,
       workCenterAgentId: 'stale-agent',
       sessionProjects: [{ id: 'project-shared', name: 'Shared project', members: [] }],

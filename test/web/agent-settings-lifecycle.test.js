@@ -63,6 +63,47 @@ describe('Agent-scoped settings lifecycle', () => {
     webClients.clear();
   });
 
+  it('defaults Person UI off, persists by Agent and closes only the disabled surface', () => {
+    const store = freshStore();
+    store.closeSessionSidebar = vi.fn();
+    for (const agent of store.agents) agent.capabilities = ['digital_person'];
+    expect(store.isDigitalPersonUiEnabled()).toBe(false);
+    expect(store.enterDigitalPerson()).toBe(false);
+    expect(store.digitalPersonOpen).toBe(false);
+    store.setDigitalPersonUiEnabled(true, 'agent-a');
+    expect(store.isDigitalPersonUiEnabled('agent-a')).toBe(true);
+    expect(store.isDigitalPersonUiEnabled('agent-b')).toBe(false);
+    expect(store.enterDigitalPerson()).toBe(true);
+    store.setDigitalPersonUiEnabled(false, 'agent-b');
+    expect(store.digitalPersonOpen).toBe(true);
+    store.setDigitalPersonUiEnabled(false, 'agent-a');
+    expect(store.digitalPersonOpen).toBe(false);
+    expect(store.sendWsMessage).not.toHaveBeenCalled();
+    store.setDigitalPersonUiEnabled(true, 'agent-b');
+    const reloaded = freshStore();
+    reloaded.closeSessionSidebar = vi.fn();
+    for (const agent of reloaded.agents) agent.capabilities = ['digital_person'];
+    expect(reloaded.enterDigitalPerson()).toBe(false);
+    reloaded.currentAgent = null;
+    expect(reloaded.enterDigitalPerson()).toBe(true);
+    expect(reloaded.digitalPersonAgentId).toBe('agent-b');
+    expect(reloaded.isDigitalPersonUiEnabled('agent-a')).toBe(false);
+    expect(reloaded.isDigitalPersonUiEnabled('agent-b')).toBe(true);
+    expect(reloaded.isDigitalPersonUiEnabled('__proto__')).toBe(false);
+  });
+
+  it('fails closed for invalid saved Person preferences and survives unavailable storage', () => {
+    for (const value of ['broken', '[]', '{"agent-a":"true","agent-b":false}']) {
+      localStorage.setItem('digital-person-ui-enabled-by-agent', value);
+      expect(freshStore().digitalPersonUiEnabledByAgent).toEqual({});
+    }
+    const store = freshStore();
+    const write = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+    expect(store.setDigitalPersonUiEnabled(true, 'agent-a')).toBe(true);
+    expect(store.isDigitalPersonUiEnabled('agent-a')).toBe(true);
+    write.mockRestore();
+  });
+
   it('ignores legacy Dream events without retaining live state', () => {
     const store = freshStore();
 

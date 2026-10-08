@@ -6,7 +6,9 @@ import { personRecords } from '../../../test/fixtures/person-records.js';
 // This is not a model, MongoDB or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { longReading = false } = {}) {
+async function mockPersonSocket(page, { longReading = false, enableUi = true } = {}) {
+  if (enableUi) await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
+    JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
   const messages = [];
   let socket;
@@ -347,4 +349,42 @@ test('compact inner reading regions support keyboard scrolling and restore focus
   await page.keyboard.press('Escape');
   await expect(search).toBeFocused();
   await expect(page.locator('#person-input')).toHaveValue('Keep this draft');
+});
+
+// The UI preference never writes Agent runtime configuration or starts cognition.
+test('Person entry is opt-in per Agent via Agent settings and survives reload', async ({ page, serverUrl }) => {
+  const mock = await mockPersonSocket(page, { enableUi: false });
+  await page.goto(serverUrl);
+  await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+  await expect(page.locator('.sidebar-person-trigger')).toHaveCount(0);
+  expect(await page.evaluate(() => window.Pinia.useChatStore().enterDigitalPerson('person-a'))).toBe(false);
+  await page.locator('.agent-dropdown-trigger:visible').click();
+  await page.getByRole('button', { name: 'Agent settings', exact: true }).click();
+  const dialog = page.locator('.agent-settings-dialog');
+  const toggle = dialog.getByRole('switch', { name: 'Digital Person', exact: true });
+  await expect(toggle).not.toBeChecked();
+  await dialog.locator('.agent-settings-person-row .agent-settings-switch').click();
+  await expect(toggle).toBeChecked();
+  await dialog.getByRole('combobox', { name: 'Agent', exact: true }).click();
+  await page.getByRole('option').filter({ hasText: 'Owner Agent B' }).click();
+  await expect(toggle).not.toBeChecked();
+  await dialog.getByRole('combobox', { name: 'Agent', exact: true }).click();
+  await page.getByRole('option').filter({ hasText: 'Owner Agent A' }).click();
+  await expect(toggle).toBeChecked();
+  await dialog.locator('.agent-settings-close').click();
+  await expect(page.locator('.sidebar-person-trigger:visible')).toBeVisible();
+  await page.reload();
+  await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+  await expect(page.locator('.sidebar-person-trigger:visible')).toBeVisible();
+  await page.locator('.sidebar-person-trigger:visible').click();
+  await expect(page.locator('#person-input')).toBeEnabled();
+  await page.locator('#person-agent').click();
+  await expect(page.getByRole('option', { name: 'Owner Agent B', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  const before = mock.requests.length;
+  await page.evaluate(() => window.Pinia.useChatStore().setDigitalPersonUiEnabled(false, 'person-a'));
+  await expect(page.locator('.person-page')).toHaveCount(0);
+  await expect(page.locator('.sidebar-person-trigger')).toHaveCount(0);
+  expect(mock.requests.slice(before)).toEqual([]);
+  expect(mock.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op))).toEqual([]);
 });

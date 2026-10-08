@@ -112,7 +112,7 @@ describe('digital person authenticated relay', () => {
   it.each(['timeout', 'outcome_unknown'])('preserves the command ID across a relay %s before the browser timer', async code => {
     relay.close();
     const state = personState();
-    const chat = { authenticated: true, connectionState: 'connected', agents: [{ id: 'agent-a', online: true, capabilities: ['digital_person'] }],
+    const chat = { authenticated: true, connectionState: 'connected', digitalPersonUiEnabledByAgent: { 'agent-a': true }, agents: [{ id: 'agent-a', online: true, capabilities: ['digital_person'] }],
       sendWsMessage(msg) { void relay.request(client, msg); return true; } };
     let retry = false;
     const ids = [];

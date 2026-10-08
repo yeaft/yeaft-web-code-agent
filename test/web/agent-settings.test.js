@@ -230,8 +230,11 @@ describe('Agent settings surface', () => {
     expect(sessionSettings).not.toMatch(/dream/i);
     expect(vpStore).not.toMatch(/dream/i);
     expect(chatStore).not.toMatch(/setDreamEnabled|agentDreamState|yeaftDream/);
-    expect(en).not.toMatch(/dream/i);
-    expect(zh).not.toMatch(/dream/i);
+    // Person Dream is a separate product, not the retired Session Dream controls.
+    for (const source of [en, zh]) {
+      const sessionCopy = source.split('\n').filter(line => !/^\s*["']person\./.test(line)).join('\n');
+      expect(sessionCopy).not.toMatch(/dream/i);
+    }
   });
 
   it('reuses LlmTab with an explicit selected-Agent target', () => {
