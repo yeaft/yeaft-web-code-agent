@@ -1695,6 +1695,11 @@
 }
 
 /* Chat Container */
+.virtual-transcript-scroller {
+  /* Only virtual transcripts own anchor compensation and tail follow. */
+  overflow-anchor: none;
+}
+
 .chat-container {
   flex: 1;
   overflow-y: auto;

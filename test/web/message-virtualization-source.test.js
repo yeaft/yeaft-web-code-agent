@@ -134,7 +134,7 @@ describe('MessageList virtualization wiring', () => {
     expect(messageList).not.toContain('() => [store.activeConversationId, activeYeaftSessionId.value],');
     expect(transcript).toContain('function cancelPendingBottomFollow({ preserveTarget = false } = {}) {');
     expect(transcript).toContain('pendingScrollToBottom = false;');
-    expect(transcript).toContain('expose({ scrollToKey, scrollToIndex, anchorTarget, clearTargetAnchor, cancelPendingBottomFollow, setBottomFollowEnabled });');
+    expect(transcript).toContain('expose({ scrollToBottom, scrollToKey, scrollToIndex, anchorTarget, clearTargetAnchor, cancelPendingBottomFollow, setBottomFollowEnabled });');
   });
 
 });

@@ -23,7 +23,7 @@ function createScroller({ viewportHeight = 300, scrollHeight = 100000 } = {}) {
     scrollTop: {
       configurable: true,
       get: () => scrollTop,
-      set: value => { scrollTop = Math.max(0, Number(value) || 0); },
+      set: value => { scrollTop = Math.min(Math.max(0, scrollHeight - viewportHeight), Math.max(0, Number(value) || 0)); },
     },
   });
   document.body.appendChild(el);
@@ -111,7 +111,7 @@ describe('VirtualTranscript DOM windowing', () => {
       scrollTop: {
         configurable: true,
         get: () => scrollTop,
-        set: value => { scrollTop = Math.max(0, Number(value) || 0); },
+        set: value => { scrollTop = Math.min(scrollHeight - 300, Math.max(0, Number(value) || 0)); },
       },
     });
     document.body.appendChild(scroller);
@@ -148,7 +148,7 @@ describe('VirtualTranscript DOM windowing', () => {
     await flushAnimationFrame(4);
 
     expect(heightGrowthObserved).toBe(true);
-    expect(scrollTop).toBe(14000);
+    expect(scrollTop).toBe(13700);
     wrapper.unmount();
   });
 
@@ -175,13 +175,90 @@ describe('VirtualTranscript DOM windowing', () => {
     wrapper.unmount();
   });
 
+  it('follows changing sibling/viewport geometry only while enabled and observes late siblings', async () => {
+    const scroller = createScroller({ viewportHeight: 300, scrollHeight: 10000 });
+    let scrollHeight = 10000;
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    let scrollTop = 9700;
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: value => { scrollTop = Math.min(scrollHeight - scroller.clientHeight, Math.max(0, Number(value) || 0)); },
+    });
+    const observed = new Set();
+    let resizeCallback;
+    let mutationCallback;
+    const disconnectResize = vi.fn();
+    const disconnectMutation = vi.fn();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback) { resizeCallback = callback; }
+      observe(target) { observed.add(target); }
+      unobserve(target) { observed.delete(target); }
+      disconnect() { disconnectResize(); }
+    });
+    vi.stubGlobal('MutationObserver', class {
+      constructor(callback) { mutationCallback = callback; }
+      observe() {}
+      disconnect() { disconnectMutation(); }
+    });
+    const wrapper = mount(VirtualTranscript, {
+      props: { items: turns(100), estimateHeight: () => 100, initialAlign: 'end', itemGap: 0 },
+      slots: { default: ({ item }) => Vue.h('div', {}, item.id) },
+      attachTo: scroller,
+    });
+    await flushAnimationFrame(4);
+    expect(observed.has(scroller)).toBe(true);
+
+    const nav = document.createElement('nav');
+    scroller.appendChild(nav);
+    scrollHeight += 40;
+    mutationCallback();
+    await flushAnimationFrame(3);
+    expect(observed.has(nav)).toBe(true);
+    expect(scrollTop).toBe(scrollHeight - 300);
+    scrollHeight += 40;
+    resizeCallback([{ target: nav }]);
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(scrollHeight - 300);
+
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, get: () => 250 });
+    resizeCallback([{ target: scroller }]);
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(scrollHeight - 250);
+    wrapper.vm.setBottomFollowEnabled(false);
+    scroller.scrollTop = 3000;
+    scrollHeight += 80;
+    resizeCallback([{ target: nav }]);
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(3000);
+
+    nav.remove();
+    mutationCallback();
+    expect(observed.has(nav)).toBe(false);
+    wrapper.unmount();
+    expect(disconnectResize).toHaveBeenCalledOnce();
+    expect(disconnectMutation).toHaveBeenCalledOnce();
+  });
+
   it('fences stale bottom work and keeps a targeted child row aligned after block resize', async () => {
     const scroller = createScroller({ viewportHeight: 300, scrollHeight: 10000 });
     scroller.scrollTop = 9700;
-    let rowHeight = 90;
+    const rowHeights = new Map();
+    // Model actual DOM growth as rows resize, so anchor compensation cannot
+    // pass merely by being clamped at an unchanged fake scrollHeight.
+    let scrollHeight = 10000;
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    let scrollTop = 9700;
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: value => { scrollTop = Math.min(scrollHeight - 300, Math.max(0, Number(value) || 0)); },
+    });
+    let rowHeight = 100;
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function getBoundingClientRect() {
       if (this.classList?.contains('virtual-transcript-item')) {
-        return { x: 0, y: 0, top: 0, right: 100, bottom: rowHeight, left: 0, width: 100, height: rowHeight, toJSON: () => ({}) };
+        const height = rowHeights.get(this.dataset.virtualId) || 100;
+        return { x: 0, y: 0, top: 0, right: 100, bottom: height, left: 0, width: 100, height, toJSON: () => ({}) };
       }
       return { x: 0, y: 0, top: 0, right: 0, bottom: 0, left: 0, width: 0, height: 0, toJSON: () => ({}) };
     });
@@ -209,7 +286,7 @@ describe('VirtualTranscript DOM windowing', () => {
     };
 
     const wrapper = mount(VirtualTranscript, {
-      props: { items: turns(20), estimateHeight: () => 90, initialAlign: 'end', itemGap: 0, overscan: 1 },
+      props: { items: turns(100), estimateHeight: () => 100, initialAlign: 'end', itemGap: 0, overscan: 1 },
       slots: { default: ({ item }) => Vue.h('div', { 'data-turn-id': item.id }, item.id) },
       attachTo: scroller,
     });
@@ -219,6 +296,8 @@ describe('VirtualTranscript DOM windowing', () => {
 
     const row = wrapper.get('.virtual-transcript-item').element;
     rowHeight = 120;
+    scrollHeight += 20;
+    rowHeights.set(row.dataset.virtualId, rowHeight);
     resizeCallback([{ target: row }]);
     const queuedMeasurement = Array.from(rafCallbacks.values()).at(-1);
     rafCallbacks.clear();
@@ -231,22 +310,34 @@ describe('VirtualTranscript DOM windowing', () => {
 
     wrapper.vm.setBottomFollowEnabled(false);
     scroller.scrollTop = 9700;
-    rowHeight = 150;
-    resizeCallback([{ target: row }]);
+    scroller.dispatchEvent(new Event('scroll'));
+    await flushRafs();
+    await flushRafs();
+    // Select a still-mounted overscan predecessor after pausing. The earlier
+    // row belonged to the initial tail window and may now be unmounted.
+    const predecessorRow = wrapper.get('.virtual-transcript-item').element;
+    rowHeight = (rowHeights.get(predecessorRow.dataset.virtualId) || 100) + 30;
+    scrollHeight += 30;
+    rowHeights.set(predecessorRow.dataset.virtualId, rowHeight);
+    resizeCallback([{ target: predecessorRow }]);
     await flushRafs();
     await Vue.nextTick();
     await flushRafs();
-    // The measured row sits above the visible window, so preserving the same
-    // content anchor adds its 30px height delta rather than pinning the tail.
+    // Growth above the viewport preserves the content anchor (+30), not the
+    // tail: the original 20px bottom gap must survive the compensation.
     expect(scroller.scrollTop).toBe(9730);
+    expect(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight).toBe(20);
 
     wrapper.vm.setBottomFollowEnabled(true);
-    rowHeight = 180;
-    resizeCallback([{ target: row }]);
+    rowHeight += 30;
+    scrollHeight += 30;
+    rowHeights.set(predecessorRow.dataset.virtualId, rowHeight);
+    resizeCallback([{ target: predecessorRow }]);
     await flushRafs();
     await Vue.nextTick();
     await flushRafs();
-    expect(scroller.scrollTop).toBe(10000);
+    expect(scroller.scrollTop).toBe(9780);
+    expect(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight).toBe(0);
 
     wrapper.unmount();
 

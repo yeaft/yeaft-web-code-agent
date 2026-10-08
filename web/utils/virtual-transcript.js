@@ -31,10 +31,10 @@ function estimateMessageHeight(message) {
 
 function estimateAssistantTurnHeight(turn) {
   if (!turn) return DEFAULT_ITEM_HEIGHT;
-  const textLength = textLengthOf(turn.text || turn.content || '');
+  const textLength = textLengthOf(turn.textContent ?? turn.text ?? turn.content ?? '');
   const toolCount = Array.isArray(turn.toolMsgs) ? turn.toolMsgs.length : 0;
-  const imageCount = Array.isArray(turn.images) ? turn.images.length : 0;
-  const askCount = Array.isArray(turn.askRequests) ? turn.askRequests.length : 0;
+  const imageCount = Array.isArray(turn.imageMsgs) ? turn.imageMsgs.length : Array.isArray(turn.images) ? turn.images.length : 0;
+  const askCount = turn.askMsg ? 1 : Array.isArray(turn.askRequests) ? turn.askRequests.length : 0;
   return clamp(160 + Math.ceil(textLength / 95) * 18 + toolCount * 56 + imageCount * 140 + askCount * 96, 160, MAX_ESTIMATED_HEIGHT);
 }
 
@@ -181,7 +181,7 @@ export function historyPrefetchThreshold(clientHeight = 0, {
 
 export function resolveTranscriptBottomFollow({ following = true, atBottom = false, userScroll = false } = {}) {
   if (userScroll) return !!atBottom;
-  return !!following && !!atBottom;
+  return !!following;
 }
 
 export function resolveTranscriptUserFollow({
@@ -190,11 +190,11 @@ export function resolveTranscriptUserFollow({
   userScroll = false,
 } = {}) {
   if (userScroll) return false;
-  return !!following && !!atBottom;
+  return !!following;
 }
 
 const TRANSCRIPT_SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
-const INTERACTIVE_TARGET_SELECTOR = 'input, textarea, select, button, a, [contenteditable], [role="button"], [role="link"]';
+const EDITABLE_TARGET_SELECTOR = 'input, textarea, select, [contenteditable], [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="menu"], [role="tree"], [role="grid"]';
 
 export function isTranscriptScrollKey(key) {
   return TRANSCRIPT_SCROLL_KEYS.has(String(key || ''));
@@ -215,8 +215,12 @@ export function shouldMarkTranscriptKeyScroll(event, scroller, documentRef = glo
   if (!event || event.defaultPrevented || !scroller || !isTranscriptScrollKey(event.key)) return false;
   const target = event.target;
   if (!target) return false;
-  if (target.closest?.(INTERACTIVE_TARGET_SELECTOR)) return false;
-  return target === scroller || target === documentRef?.body || target === documentRef?.documentElement;
+  if (target.closest?.(EDITABLE_TARGET_SELECTOR)) return false;
+  // Space activates buttons; paging/arrows on links and ordinary message
+  // descendants still scroll the transcript unless a handler consumed them.
+  if (event.key === ' ' && target.closest?.('button, [role="button"]')) return false;
+  return target === scroller || scroller.contains?.(target)
+    || target === documentRef?.body || target === documentRef?.documentElement;
 }
 
 export function adjustedScrollTopForMeasuredHeight({
