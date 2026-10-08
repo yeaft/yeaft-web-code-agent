@@ -66,6 +66,9 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await page.setViewportSize({ width: scenario.width, height: 800 });
     await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
     await page.goto(serverUrl);
+    // Verify the served artifact, not just an environment variable on the test runner.
+    if (process.env.PERSON_UI_PRODUCTION === 'true') await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(1);
+    else await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(0);
     await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
     const zh = scenario.locale === 'zh-CN';
     if (scenario.width === 320) await page.locator('.header-sidebar-toggle').click();

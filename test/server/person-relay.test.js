@@ -116,7 +116,7 @@ describe('digital person authenticated relay', () => {
             return true; // Admission may have succeeded but the acknowledgement is lost.
           }
         }
-        const data = { status: { configured: true }, open: {}, snapshot: { person: { id: 'p' }, messages: [], busy: false }, messages: { items: [] }, traces: { items: [] }, send: { episodeId: 'original-episode', duplicate: true } }[msg.op];
+        const data = { status: { configured: true }, open: {}, snapshot: { person: { id: 'p' }, messages: [], busy: false }, messages: { items: [] }, traces: { items: [] }, send: { episodeId: 'original-episode', duplicate: true }, receipt: { found: false } }[msg.op];
         await relay.response(agentId, { type: 'person_response', requestId: msg.requestId, ok: true, data });
         return true;
       },

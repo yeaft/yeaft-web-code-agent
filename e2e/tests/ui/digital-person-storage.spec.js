@@ -13,7 +13,7 @@ import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures
 // No live Agent, native config or paid provider is used; all storage is isolated.
 const uri = process.env.PERSON_TEST_MONGO_URI;
 for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capability layers persist through relay and restart`, async ({ page, serverUrl, mockAgent }) => {
-  test.setTimeout(60000);
+  test.setTimeout(90000);
   test.skip(storage === 'mongodb' && !uri, 'Requires an explicitly supplied isolated MongoDB replica set');
   const dbName = `person_e2e_${randomUUID().replaceAll('-', '')}`;
   const yeaftDir = await mkdtemp(join(tmpdir(), 'person-e2e-'));
@@ -95,7 +95,9 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
     await page.locator('#person-input').fill('Learn a reusable sum script.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.locator('.person-messages')).toContainText('Learned a reusable sum; result 12.');
+    // Creation runs multiple fresh WASM workers plus cognition and snapshot polling.
+    // Wait for the terminal reply, not the shorter single-UI-operation timeout.
+    await expect(page.locator('.person-messages')).toContainText('Learned a reusable sum; result 12.', { timeout: 15000 });
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(calls).toBe(10);
     await page.getByRole('button', { name: 'Thought journal', exact: true }).click();

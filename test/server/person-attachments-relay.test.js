@@ -100,7 +100,9 @@ describe('Person uploaded reference relay', () => {
       expect(state.error.code).toBe('outcome_unknown');
       expect(state.retryCommand.payload.attachments).toEqual([{ fileId: 'upload' }]);
       expect(await controller.command('send', '', true)).toBe(true);
-      expect(envelopes[1]).toEqual(envelopes[0]);
+      // The original admission exists: reconcile its receipt instead of sending it again.
+      expect(envelopes).toHaveLength(1);
+      expect(state.retryCommand).toBeNull();
       for (let i = 0; i < 100; i++) {
         if (!(await service.request({ ownerId: 'alice', op: 'snapshot', payload: {} })).busy) break;
         await new Promise(resolve => setTimeout(resolve, 10));
