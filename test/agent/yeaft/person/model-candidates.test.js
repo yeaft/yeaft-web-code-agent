@@ -35,14 +35,21 @@ describe('owner-scoped model candidates', () => {
     await call(s, 'open'); await call(s, 'open', {}, 'bob');
     const status = await call(s, 'status');
     expect(status.models).toHaveLength(12);
+    expect(status.availableModels).toEqual(status.models);
+    expect(status.availableModelsTruncated).toBe(false);
+    const provider = await createPersonProvider({ config: native, adapter: {} });
+    expect(provider.catalog).toHaveLength(8);
+    expect(provider.availableModels).toHaveLength(12);
+    expect((await createPersonProvider({ config: native, adapter: {}, modelCandidates: ['test/model11'] })).catalog.map(m => m.id)).toEqual(['test/model11']);
     expect(JSON.stringify(status)).not.toContain('must-not-leak');
     expect(JSON.stringify(status)).not.toContain('private');
     expect(await call(s, 'settings', { modelCandidates: ['test/model11'] })).toMatchObject({ settings: { modelCandidates: ['test/model11'] } });
     expect((await call(s, 'status')).modelCandidates).toEqual(['test/model11']);
     expect((await call(s, 'status')).models).toHaveLength(12);
     expect((await call(s, 'status', {}, 'bob')).modelCandidates).toEqual([]);
-    for (const refs of [null, {}, ['model11'], ['test/missing'], ['test/model1', 'test/model1'], [42]]) {
+    for (const refs of [null, {}, ['model11'], ['test/missing'], ['test/model1', 'test/model1'], [42], native.availableModels.slice(0, 9).map(m => m.ref)]) {
       await expect(call(s, 'settings', { modelCandidates: refs })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+      await expect(createPersonProvider({ config: native, adapter: {}, modelCandidates: refs })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
     }
     await s.close();
     const restarted = create(dir, { config: native, adapter: {} });
@@ -81,6 +88,25 @@ describe('owner-scoped model candidates', () => {
     } finally { release(); }
     expect((await idle(s)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'MODEL_SELECTION' });
     expect(seen).toHaveLength(1);
+  });
+
+  it('reports stale owner selections as not ready while preserving the recovery catalog, and bounds the selectable catalog explicitly', async () => {
+    const native = manyModels(), s = create(await directory(), { config: native, adapter: {} });
+    await call(s, 'open');
+    await call(s, 'settings', { modelCandidates: ['test/model11'] });
+    native.availableModels.pop();
+    const stale = await call(s, 'status');
+    expect(stale).toMatchObject({ modelReady: false, modelCandidates: ['test/model11'] });
+    expect(stale.availableModels).toHaveLength(11);
+    expect(stale.models).toEqual(stale.availableModels);
+    await call(s, 'settings', { modelCandidates: [] });
+    expect((await call(s, 'status')).modelReady).toBe(true);
+    native.availableModels = Array.from({ length: 101 }, (_, i) => ({ ...native.availableModels[0], id: `model${i}`, ref: `test/model${i}` }));
+    const bounded = await call(s, 'status');
+    expect(bounded.availableModels).toHaveLength(100);
+    expect(bounded.availableModelsTruncated).toBe(true);
+    await call(s, 'settings', { modelCandidates: ['test/model99'] });
+    await expect(call(s, 'settings', { modelCandidates: ['test/model100'] })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
   });
 
   it('fails closed when a saved candidate disappears, and honors explicit image opt-out', async () => {

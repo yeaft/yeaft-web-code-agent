@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isMainThread } from 'node:worker_threads';
-import { bytes, digest, fail, identifier, LIMITS, PersonError, text } from './contracts.js';
+import { admissionReceipt, bytes, digest, fail, identifier, LIMITS, PersonError, text } from './contracts.js';
 import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
 import { SCHEMA, TABLES } from './sqlite-schema.js';
 import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
@@ -46,7 +46,7 @@ const publicOutput = (output, failed) => {
   return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
     : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
 };
-const READS = new Set(['getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
+const READS = new Set(['receipt', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
 const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'commit', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
@@ -190,6 +190,11 @@ export class SqlitePersonStore {
       this.abandonCall(ownerId, episode, 'CANCELLED');
     }
     return expired;
+  }
+  receipt(ownerId, clientMessageId, requestHash) {
+    identifier(clientMessageId);
+    const episode = this.one('episodes', this.scope(ownerId), ' AND clientMessageId = ?', [clientMessageId]);
+    return admissionReceipt(episode, clientMessageId, requestHash);
   }
   admit(ownerId, { kind, text: input, clientMessageId, workerId, budget, files = [] }) {
     if (!['send', 'think', 'dream'].includes(kind)) fail('INVALID_REQUEST');

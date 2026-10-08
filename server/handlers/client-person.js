@@ -4,7 +4,7 @@ import { agents, pendingFiles } from '../context.js';
 import { forwardToAgent, resolveAgentAccessError, sendToWebClient } from '../ws-utils.js';
 
 const FIELDS = Object.freeze({
-  status: [], open: [], snapshot: [],
+  status: [], open: [], snapshot: [], receipt: ['clientMessageId', 'requestHash'],
   send: ['text', 'clientMessageId', 'attachments'], think: ['text', 'clientMessageId', 'attachments'],
   dream: ['clientMessageId'], cancel: ['episodeId'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'],
@@ -80,7 +80,7 @@ export function createPersonRelay({
                 typeof ref.fileId !== 'string' || !ref.fileId || ref.fileId.length > 128 || seen.has(ref.fileId)) throw new Error('Invalid digital person attachment reference');
             seen.add(ref.fileId);
             const file = uploads.get(ref.fileId);
-            if (!file || !Number.isFinite(file.uploadedAt) || now() - file.uploadedAt >= uploadTtlMs || file.uploadedAt > now()) throw new Error('Digital person attachment expired; upload it again');
+            if (!file || !Number.isFinite(file.uploadedAt) || now() - file.uploadedAt >= uploadTtlMs || file.uploadedAt > now()) throw Object.assign(new Error('Digital person attachment expired; check receipt before re-uploading with the same clientMessageId'), { code: 'attachment_expired' });
             if (!skipAuth() && (!file.userId || file.userId !== client.userId)) throw new Error('Digital person attachment access denied');
             if (!Buffer.isBuffer(file.buffer)) throw new Error('Invalid digital person upload');
             total += file.buffer.length;
@@ -90,7 +90,7 @@ export function createPersonRelay({
           delete payload.attachments;
           if (files.length) payload.files = files;
         } catch (error) {
-          await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: error.message });
+          await reply(client, envelope, { ok: false, errorCode: error.code === 'attachment_expired' ? 'attachment_expired' : 'invalid_request', error: error.message });
           return true;
         }
       }

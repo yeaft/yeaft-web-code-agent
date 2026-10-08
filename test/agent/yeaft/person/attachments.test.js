@@ -100,6 +100,11 @@ describe('Person durable attachment admission', () => {
     expect(JSON.stringify(await call(s, 'traces', { limit: 50 }))).not.toContain(request.files[0].data);
     await s.close();
     const restarted = service(dir, { adapter: adapter(seen) });
+    const receipt = await call(restarted, 'receipt', { clientMessageId: request.clientMessageId });
+    expect(receipt).toMatchObject({ found: true, episodeId: accepted.episodeId, status: 'completed', kind: op, text: '', messageId: message.id, attachments: message.attachments });
+    expect(receipt.requestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(receipt)).not.toContain(request.files[0].data);
+    await expect(call(restarted, 'receipt', { clientMessageId: request.clientMessageId, requestHash: '0'.repeat(64) })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     expect(await call(restarted, op, request)).toMatchObject({ duplicate: true, episodeId: accepted.episodeId });
     await expect(call(restarted, op, { ...request, files: files('different') })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     expect(seen).toHaveLength(1);
@@ -127,6 +132,29 @@ describe('Person durable attachment admission', () => {
     await call(textOnly, 'send', { files: [image], clientMessageId: 'picture-2' });
     expect((await idle(textOnly)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'IMAGE_MODEL' });
     expect(seen).toHaveLength(1);
+  });
+
+  it('receipt reads are owner/namespace-scoped and never recover an expired lease or start work', async () => {
+    const dir = await directory();
+    const r = new SqlitePersonRepository({ yeaftDir: dir, leaseMs: 300 }); repos.push(r);
+    await r.open('alice');
+    const { episode } = await r.admit('alice', { kind: 'send', text: '', clientMessageId: 'receipt', workerId: 'crashed', budget: { calls: 1, timeoutMs: 1000 }, files: files() });
+    const before = await r.getPerson('alice');
+    await r.close();
+    await new Promise(resolve => setTimeout(resolve, 350));
+    let starts = 0;
+    const s = service(dir, { adapter: { async *stream() { starts++; } } });
+    expect(await call(s, 'receipt', { clientMessageId: 'receipt', requestHash: episode.requestHash })).toMatchObject({ found: true, status: 'running', episodeId: episode.id });
+    expect(await call(s, 'receipt', { clientMessageId: 'receipt' }, 'bob')).toEqual({ found: false, clientMessageId: 'receipt' });
+    const other = service(dir, { namespace: 'other', adapter: {} });
+    expect(await call(other, 'receipt', { clientMessageId: 'receipt' })).toEqual({ found: false, clientMessageId: 'receipt' });
+    for (const payload of [{}, { clientMessageId: '$bad' }, { clientMessageId: 'receipt', requestHash: 'bad' }, { clientMessageId: 'receipt', files: files() }]) {
+      await expect(call(s, 'receipt', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    }
+    const inspector = new SqlitePersonRepository({ yeaftDir: dir }); repos.push(inspector);
+    expect(await inspector.getPerson('alice')).toEqual(before);
+    expect((await inspector.list('alice', 'traces')).items).toHaveLength(1);
+    expect(starts).toBe(0);
   });
 
   it('does not persist any partial batch or expose bytes through forged episode ownership', async () => {

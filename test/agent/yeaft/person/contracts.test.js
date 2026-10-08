@@ -191,7 +191,8 @@ describe('digital Person strict contracts', () => {
   it.each(['model9', 'test/model9'])('prioritizes %s while exposing the full configured catalog', async primaryModel => {
     const normalized = configuredModels({ primaryModel, providers: [{ name: 'test', models: Array.from({ length: 10 }, (_, i) => `model${i}`) }] });
     const provider = await createPersonProvider({ config: normalized, adapter: {} });
-    expect(provider.catalog.map(m => m.id)).toEqual(['test/model9', ...Array.from({ length: 9 }, (_, i) => `test/model${i}`)]);
+    expect(provider.catalog.map(m => m.id)).toEqual(['test/model9', ...Array.from({ length: 7 }, (_, i) => `test/model${i}`)]);
+    expect(provider.availableModels.map(m => m.id)).toEqual(['test/model9', ...Array.from({ length: 9 }, (_, i) => `test/model${i}`)]);
     expect(provider.defaultSelection).toEqual({ model: 'test/model9', effort: null });
   });
   it.each([

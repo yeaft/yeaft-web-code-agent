@@ -5,6 +5,13 @@ import { normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '.
 import { utf8PrefixWithinBytes } from '../utf8.js';
 import { bytes, digest, fail, LIMITS, PersonError } from './contracts.js';
 
+export const MODEL_LIMITS = Object.freeze({ candidates: 8, available: 100 });
+export function validateModelCandidates(refs) {
+  if (!Array.isArray(refs) || refs.length > MODEL_LIMITS.candidates ||
+      refs.some(ref => typeof ref !== 'string' || !/^[^/\s]+\/[^\s]+$/u.test(ref) || ref.length > 256) ||
+      new Set(refs).size !== refs.length) fail('MODEL_SELECTION');
+}
+
 /** Only configured native API models; no Session initialization or implicit credential fallback. */
 export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1', modelCandidates = [] }) {
   const config = structuredClone(suppliedConfig || loadConfig({ dir: yeaftDir }));
@@ -16,9 +23,9 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
   const defaultModel = models.find(m => (m.ref || m.id) === requestedDefault)
     || models.find(m => m.id === requestedDefault);
   const defaultRef = defaultModel?.ref || defaultModel?.id;
-  if (modelCandidates.some(ref => !models.some(m => (m.ref || m.id) === ref && (!allowedModels || allowedModels.includes(ref))))) fail('MODEL_SELECTION');
-  const available = models.filter(m => (!allowedModels || allowedModels.includes(m.ref || m.id)) && (!modelCandidates.length || modelCandidates.includes(m.ref || m.id)));
-  const catalog = available.map(m => {
+  validateModelCandidates(modelCandidates);
+  const available = models.filter(m => !allowedModels || allowedModels.includes(m.ref || m.id));
+  const safeModels = available.map(m => {
     const maxOutput = Math.min(4096, Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m })));
     const effortContext = { ...m, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
     const efforts = effortEnabled ? (m.effortOptions || []).filter(e => {
@@ -38,11 +45,19 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     return { id: m.ref || m.id, efforts, maxOutput, supportsImages: supportsImages === true,
       contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };
   }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && m.contextWindow > m.maxOutput + 1024 && m.maxOutput >= 256);
-  catalog.sort((a, b) => Number(b.id === defaultRef) - Number(a.id === defaultRef));
-  if (modelCandidates.some(ref => !catalog.some(model => model.id === ref))) fail('MODEL_SELECTION');
+  safeModels.sort((a, b) => Number(b.id === defaultRef) - Number(a.id === defaultRef));
+  const seen = new Set();
+  const uniqueModels = safeModels.filter(model => !seen.has(model.id) && seen.add(model.id));
+  const availableModels = uniqueModels.slice(0, MODEL_LIMITS.available);
+  // A UI catalog must not be the bounded episode choice set: model 9+ remains selectable.
+  // Explicit lists are validated, never silently truncated or broadened on stale config.
+  if (modelCandidates.some(ref => !availableModels.some(model => model.id === ref))) fail('MODEL_SELECTION');
+  const catalog = modelCandidates.length ? availableModels.filter(model => modelCandidates.includes(model.id))
+    : availableModels.slice(0, MODEL_LIMITS.candidates);
   if (!catalog.length) fail('MODEL_UNAVAILABLE');
   const adapter = suppliedAdapter || await createLLMAdapter(config);
-  return { adapter, catalog, catalogRevision: digest(catalog), defaultSelection: { model: catalog[0].id, effort: null }, effortEnabled };
+  return { adapter, catalog, availableModels, availableModelsTruncated: uniqueModels.length > MODEL_LIMITS.available,
+    catalogRevision: digest(catalog), defaultSelection: { model: catalog[0].id, effort: null }, effortEnabled };
 }
 
 export function abortable(promise, signal) {

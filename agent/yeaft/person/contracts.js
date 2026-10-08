@@ -38,6 +38,14 @@ export function identifier(value, code = 'INVALID_REQUEST') {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)) fail(code);
   return value;
 }
+/** Durable admission lookup, not an execution or lease-recovery command. */
+export function admissionReceipt(episode, clientMessageId, requestHash) {
+  if (!episode) return { found: false, clientMessageId };
+  if (requestHash != null && requestHash !== episode.requestHash) fail('IDEMPOTENCY_CONFLICT');
+  return { found: true, clientMessageId, episodeId: episode.id, status: episode.status, kind: episode.kind,
+    requestHash: episode.requestHash, text: episode.text, messageId: episode.messageId,
+    attachments: (episode.attachments ?? []).map(({ id, name, mimeType, size, sha256, kind }) => ({ id, name, mimeType, size, sha256, kind })) };
+}
 export function page(payload = {}) {
   object(payload, ['cursor', 'limit'], []);
   const limit = payload.limit ?? 20;

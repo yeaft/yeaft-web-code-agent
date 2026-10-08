@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { bytes, digest, fail, LIMITS, PersonError, safeError } from './contracts.js';
+import { admissionReceipt, bytes, digest, fail, identifier, LIMITS, PersonError, safeError } from './contracts.js';
 import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
 import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
@@ -160,6 +160,12 @@ export class MongoPersonRepository {
       for (const episode of abandoned) await this.abandonCall(session, { ownerId }, episode, 'CANCELLED');
       return Boolean(p);
     });
+  }
+  async receipt(ownerId, clientMessageId, requestHash) {
+    identifier(clientMessageId);
+    await this.init();
+    const episode = await this.collections.episodes.findOne({ ...this.scope(ownerId), clientMessageId }, { readConcern: { level: 'majority' }, readPreference: 'primary' });
+    return admissionReceipt(episode, clientMessageId, requestHash);
   }
   async admit(ownerId, { kind, text, clientMessageId, workerId, budget, files = [] }) {
     const validated = validateFiles(files, text, kind), attachments = validated.map(attachmentMetadata);

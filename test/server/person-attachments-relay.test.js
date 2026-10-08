@@ -109,6 +109,67 @@ describe('Person uploaded reference relay', () => {
     } finally { controller.dispose(); await service.close(); await rm(dir, { recursive: true, force: true }); }
   });
 
+  it('reconciles lost ACK after upload expiry without a new start, and deduplicates re-uploaded identical bytes', async () => {
+    vi.useRealTimers(); relay.close();
+    const dir = await mkdtemp(join(tmpdir(), 'person-relay-receipt-'));
+    let calls = 0, lost = false;
+    const service = createPersonService({ yeaftDir: dir, config, embedding: { enabled: false }, adapter: { async *stream(params) {
+      calls++;
+      const proposal = finalProposal(JSON.parse(params.messages[0].content).state.version);
+      proposal.concepts = []; proposal.state.focusConceptIds = [];
+      yield { type: 'text_delta', text: JSON.stringify(proposal) }; yield { type: 'stop', stopReason: 'end_turn' };
+    } } });
+    const delivered = [];
+    relay = createPersonRelay({ uploads, accessError, send, agentMap: new Map([['agent', { capabilities: ['digital_person'] }]]),
+      forward: async (agentId, msg) => {
+        delivered.push(msg);
+        let data;
+        try { data = await service.request({ ownerId: msg.ownerId, op: msg.op, payload: msg.payload }); }
+        catch (error) {
+          await relay.response(agentId, { requestId: msg.requestId, type: 'person_response', ok: false, errorCode: error.code.toLowerCase() }); return true;
+        }
+        if (msg.op === 'send' && !lost) { lost = true; throw new Error('ACK lost'); }
+        await relay.response(agentId, { requestId: msg.requestId, type: 'person_response', ok: true, data }); return true;
+      } });
+    try {
+      await service.request({ ownerId: 'alice', op: 'open' });
+      await relay.request(client, request());
+      expect(send.mock.lastCall[1].errorCode).toBe('outcome_unknown');
+      uploads.get('upload').uploadedAt -= 600000;
+      await relay.request(client, request());
+      expect(send.mock.lastCall[1].errorCode).toBe('attachment_expired');
+      expect(delivered).toHaveLength(1); // No stripped/restarted send on expired refs.
+      const original = uploads.get('upload');
+      uploads.delete('upload'); // Cache cleanup or Server restart has the same safe outcome.
+      await relay.request(client, request());
+      expect(send.mock.lastCall[1].errorCode).toBe('attachment_expired');
+      expect(delivered).toHaveLength(1);
+      const receiptRequest = payload => ({ type: 'person_request', op: 'receipt', requestId: 'lookup', agentId: 'agent', payload });
+      await relay.request(client, receiptRequest({ clientMessageId: 'stable', ownerId: 'bob', attachments: [{ fileId: 'upload' }] }));
+      const receipt = send.mock.lastCall[1].data;
+      expect(receipt).toMatchObject({ found: true, clientMessageId: 'stable', kind: 'send', text: '', attachments: [{ name: 'notes.md' }] });
+      expect(receipt.requestHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(delivered.at(-1)).toMatchObject({ ownerId: 'alice', payload: { clientMessageId: 'stable' } });
+      expect(delivered.at(-1).payload).not.toHaveProperty('attachments');
+      await relay.request({ authenticated: true, userId: 'bob' }, receiptRequest({ clientMessageId: 'stable' }));
+      expect(send.mock.lastCall[1].data).toEqual({ found: false, clientMessageId: 'stable' });
+      await relay.request(client, receiptRequest({ clientMessageId: 'stable', requestHash: '0'.repeat(64) }));
+      expect(send.mock.lastCall[1].errorCode).toBe('idempotency_conflict');
+      uploads.set('reuploaded', { ...original, uploadedAt: Date.now() });
+      await relay.request(client, request({ attachments: [{ fileId: 'reuploaded' }] }));
+      expect(send.mock.lastCall[1].data).toMatchObject({ duplicate: true, episodeId: receipt.episodeId });
+      uploads.set('changed', { ...uploads.get('reuploaded'), buffer: Buffer.from('changed bytes') });
+      await relay.request(client, request({ attachments: [{ fileId: 'changed' }] }));
+      expect(send.mock.lastCall[1].errorCode).toBe('idempotency_conflict');
+      for (let i = 0; i < 100; i++) {
+        if (!(await service.request({ ownerId: 'alice', op: 'snapshot' })).busy) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(calls).toBe(1);
+      expect((await service.request({ ownerId: 'alice', op: 'messages' })).items.filter(m => m.role === 'user')).toHaveLength(1);
+    } finally { await service.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('forwards modelCandidates settings without accepting forged owner or global provider config', async () => {
     await relay.request(client, request({ modelCandidates: ['native/first'], ownerId: 'bob', providers: [{ apiKey: 'secret' }] }, { op: 'settings' }));
     expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'alice', payload: { modelCandidates: ['native/first'] } });

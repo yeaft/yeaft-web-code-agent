@@ -4,7 +4,7 @@ import { LocalPersonMemory } from './local-memory.js';
 import { selectPersonStorage, bindPersonStorage } from './storage.js';
 import { PersonRuntime } from './runtime.js';
 import { validateFiles } from './attachments.js';
-import { createPersonProvider } from './provider.js';
+import { createPersonProvider, validateModelCandidates } from './provider.js';
 import { fail, identifier, LIMITS, object, page, safeError, text } from './contracts.js';
 
 /**
@@ -61,8 +61,15 @@ export function createPersonService(options = {}) {
       catch (error) { if (error.code !== 'NOT_OPEN') throw error; }
       try {
         const provider = await getProvider();
-        return { configured: true, storage, reason: null, storageReady: true, modelReady: true, models: provider.catalog, modelCandidates, autonomySupported: false };
-      } catch { return { configured: true, storage, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false, models: [], modelCandidates }; }
+        let modelReady = true;
+        try {
+          validateModelCandidates(modelCandidates);
+          if (modelCandidates.some(ref => !provider.availableModels.some(model => model.id === ref))) modelReady = false;
+        } catch { modelReady = false; }
+        return { configured: true, storage, reason: modelReady ? null : 'Saved model candidates are unavailable; choose models or reset to Agent defaults.',
+          storageReady: true, modelReady, models: provider.availableModels, availableModels: provider.availableModels,
+          availableModelsTruncated: provider.availableModelsTruncated, modelCandidates, autonomySupported: false };
+      } catch { return { configured: true, storage, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false, models: [], availableModels: [], modelCandidates }; }
     }
     if (!configured) fail('NOT_CONFIGURED');
     switch (op) {
@@ -72,6 +79,13 @@ export function createPersonService(options = {}) {
         return repository.open(ownerId, payload.name);
       }
       case 'snapshot': object(payload, []); return repository.snapshot(ownerId);
+      case 'receipt': {
+        object(payload, ['clientMessageId', 'requestHash'], ['clientMessageId']);
+        identifier(payload.clientMessageId);
+        if (payload.requestHash != null && (typeof payload.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(payload.requestHash))) fail('INVALID_REQUEST');
+        // Read-only admission reconciliation: no files, recover, admission or runtime start.
+        return repository.receipt(ownerId, payload.clientMessageId, payload.requestHash);
+      }
       case 'send':
       case 'think':
       case 'dream': {
@@ -100,10 +114,10 @@ export function createPersonService(options = {}) {
         if (Object.hasOwn(payload, 'autonomyEnabled') && typeof payload.autonomyEnabled !== 'boolean') fail('INVALID_REQUEST');
         if (Object.hasOwn(payload, 'modelCandidates')) {
           const refs = payload.modelCandidates;
-          if (!Array.isArray(refs) || refs.some(ref => typeof ref !== 'string' || !ref.includes('/') || ref.length > 256) || new Set(refs).size !== refs.length) fail('MODEL_SELECTION');
+          validateModelCandidates(refs);
           if (refs.length) {
             const provider = await getProvider();
-            if (refs.some(ref => !provider.catalog.some(model => model.id === ref))) fail('MODEL_SELECTION');
+            if (refs.some(ref => !provider.availableModels.some(model => model.id === ref))) fail('MODEL_SELECTION');
           }
         }
         // Timer-driven autonomy is deliberately not claimed or silently enabled.
