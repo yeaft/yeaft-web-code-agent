@@ -1,3 +1,4 @@
+import { NATIVE_TOOL_IDS } from '../../../../agent/yeaft/person/native-tools.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -294,13 +295,13 @@ for (const backend of ['sqlite', 'mongo']) {
         const result = await call(s, 'inspect', { section: 'skills', cursor, limit: 2 });
         skills.push(...result.items); cursor = result.nextCursor;
       } while (cursor);
-      expect(skills.map(c => c.id)).toEqual(['Capability.create', 'Recall', 'Script.echo', 'Skill.associate', 'Skill.reconsider', 'Think']);
+      expect(skills.map(c => c.id)).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Recall', 'Script.echo', 'Skill.associate', 'Skill.reconsider', 'Think'].sort());
       const script = skills.find(c => c.id === 'Script.echo');
       expect(script).toMatchObject({ domain: 'script', description: 'Echo JSON', version: 1, code: 'return input;', tests: definition.tests,
         source: { kind: 'person-created', episodeId: episode.id, callId } });
       expect(script.contract).toMatchObject({ access: 'pure-computation', args: { input: expect.any(String) } });
       expect(skills.find(c => c.id === 'Think')).toMatchObject({ source: { kind: 'builtin' }, contract: { instructions: expect.any(String) } });
-      expect((await call(s, 'inspect', { section: 'skills' }, 'bob')).items).toHaveLength(5);
+      expect((await call(s, 'inspect', { section: 'skills' }, 'bob')).items).toHaveLength(5 + NATIVE_TOOL_IDS.length);
       expect((await call(s, 'inspect', { section: 'memory' }, 'bob')).items).toEqual([]);
       expect(await raw(r)).toEqual(before); expect(stream).not.toHaveBeenCalled();
       expect(JSON.stringify(skills)).not.toMatch(/ownerId|namespace|personId|leaseOwner|apiKey|attachments/);

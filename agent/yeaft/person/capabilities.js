@@ -1,25 +1,28 @@
+import { NATIVE_TOOL_MANIFESTS, NATIVE_TOOL_IDS, isNativeTool } from './native-tools.js';
 import { bytes, digest, fail, identifier, object, page, text } from './contracts.js';
 import { createdCapabilityRecord, validateCreatedDefinition } from './created-capability-contract.js';
 import { runPersonScript, scriptInput, testPersonScript } from './script-executor.js';
 import { createdSkillView, inspectionPage } from './inspection.js';
 
-// Built-in cognition plus bounded pure-script creation, not the Agent's full registry.
+// Intrinsic cognition, bounded pure scripts and supported native host tools.
 // No shell/filesystem/network/VP authority is exposed to generated code.
 const entries = [
   { id: 'Think', version: 1, domain: 'cognition', description: 'Intrinsic deliberate reflection, reorganization, association and reconsideration.', keywords: '思考 整理 反思 think reflection', useWhen: 'Think with the evidence already present, or rest when nothing warrants further work.', avoidWhen: 'Do not invent evidence or call a tool merely to appear thoughtful.', instructions: 'Revisit supplied experiences and current judgments; separate report from hypothesis, propose new concepts or associations, test a counterexample, and record the explicit finding with uncertainty. It is fine to rest. This is a method, not another model call or external action.', args: {} },
   { id: 'Recall', version: 1, domain: 'memory', description: 'Recall a bounded page of your own long-term messages or concepts.', keywords: '回忆 记忆 召回 历史 查找 搜索 memory recall history search', useWhen: 'Missing prior words, experiences or concepts could change your present understanding.', avoidWhen: 'Current evidence is sufficient; a similar memory cannot grant permission or establish truth.', instructions: 'args: {kind:"messages"|"concepts",query?:string,cursor?:string|null,limit?:1..5}. SQLite uses local hybrid keyword/semantic recall when available; inspect retrieval mode, coverage and degradation. Legacy storage may use literal matching. Results are not exhaustive or authorization. Preserve nextCursor for the same query; local ranking cursors expire after 5 minutes or restart.', args: { kind: 'messages|concepts', query: 'optional memory search text', cursor: 'optional opaque cursor', limit: '1..5' } },
-  { id: 'Capability.create', version: 1, domain: 'creation', description: 'Create or revise a reusable pure JavaScript capability; execute tests before publishing to your private catalog.', keywords: '创造 创建 固化 脚本 编程 学会 create script learn capability', useWhen: 'A reusable JSON data transformation or calculation is missing. Write a small script and concrete examples, including edge cases; successful tests publish it automatically.', avoidWhen: 'Do not save one-off constants, secrets, unnecessary duplicates, external actions or assumptions as verified facts. Tests you wrote are limited evidence, not proof of general correctness.', instructions: 'args: {id:"Script.<slug>",expectedVersion:0 for new or current version,description,useWhen,avoidWhen,inputDescription,outputDescription,code,tests:[{input:JSON,expected:JSON}]}. slug: lowercase letter followed by up to 47 lowercase letters/digits/hyphens. Metadata <=400 UTF-8 bytes each; code <=8192; total args <=24576; 1..8 tests with each input/expected <=4096 bytes. code is a synchronous function body receiving input and returning JSON. QuickJS only: no Node, imports, filesystem, network, shell, credentials or host tools. Runtime runs each test in a fresh limited VM; failure returns diagnostics without publishing, so you may revise within the remaining calls. Passing tests atomically publish an immutable version, independently of final cognitive commit; cancelling later does not undo a completed publication. Result prepares the capability for next call. Invoke it via its ID with {input:JSON}; no model generates its result. Search for existing capabilities before creating duplicates when uncertain. To revise, catalog.view returns saved definition. Preserve useful tests. Up to 32 capabilities and 32 versions each.', args: { id: 'Script.<slug>', expectedVersion: 'integer >= 0', description: 'string', useWhen: 'string', avoidWhen: 'string', inputDescription: 'string', outputDescription: 'string', code: 'JavaScript function body', tests: 'array of {input,expected}' }, access: 'create-pure-capability' },
+  { id: 'Capability.create', version: 1, domain: 'creation', description: 'Create or revise a reusable pure JavaScript capability; execute tests before publishing to your private catalog.', keywords: '创造 创建 固化 脚本 编程 学会 create script learn capability', useWhen: 'A reusable JSON data transformation or calculation is missing. Write a small script and concrete examples, including edge cases; successful tests publish it automatically.', avoidWhen: 'Do not save one-off constants, secrets, unnecessary duplicates, external actions or assumptions as verified facts. Tests you wrote are limited evidence, not proof of general correctness.', instructions: 'args: {id:"Script.<slug>",expectedVersion:0 for new or current version,description,useWhen,avoidWhen,inputDescription,outputDescription,code,tests:[{input:JSON,expected:JSON}]}. slug: lowercase letter followed by up to 47 lowercase letters/digits/hyphens. Metadata <=400 UTF-8 bytes each; code <=8192; total args <=24576; 1..8 tests with each input/expected <=4096 bytes. code is a synchronous function body receiving input and returning JSON. QuickJS only: no Node, imports, filesystem, network, shell, credentials or host tools. Each test runs in a fresh limited VM; failure returns diagnostics without publication. Passing tests atomically publish an immutable version independently of final cognitive commit. Later cancellation does not undo publication. Result prepares the ID for next call with {input:JSON}; no model generates that result. Tests are limited evidence, not proof of correctness/usefulness. Search before duplicating; catalog.view supplies the saved definition for revision. Preserve useful tests. Max 32 capabilities, 32 versions each.', args: { id: 'Script.<slug>', expectedVersion: 'integer >= 0', description: 'string', useWhen: 'string', avoidWhen: 'string', inputDescription: 'string', outputDescription: 'string', code: 'JavaScript function body', tests: 'array of {input,expected}' }, access: 'create-pure-capability' },
   { id: 'Skill.reconsider', version: 1, domain: 'method', description: 'Read-only method for revising a previous judgment.', keywords: '反思 复核 反例 修正 重新审视 reconsider revise counterexample', useWhen: 'A prior judgment meets conflicting evidence or may have overlooked an alternative.', avoidWhen: 'Do not force a revision or treat a hypothetical counterexample as observed evidence.', instructions: 'Identify one prior claim, list a concrete counterexample or missing evidence, and decide whether to retain, qualify or revise it. Mark what remains unresolved. Do not present the counterexample as an observed event without evidence.', args: {} },
   { id: 'Skill.associate', version: 1, domain: 'method', description: 'Read-only method for new conceptual associations.', keywords: '联想 关联 遐想 想象 associate association imagine dream', useWhen: 'Explore a possible relation between experiences or concepts and preserve it as a question or hypothesis.', avoidWhen: 'Do not equate similarity or co-occurrence with causation or verified experience.', instructions: 'Compare two recalled concepts or experiences. Propose a typed relation and a new question or hypothetical scenario. Co-occurrence is not causation; imagination is not an experience. Keep useful disagreement instead of forcing agreement.', args: {} },
 ];
-const manifests = entries.map(entry => {
+const manifests = [...entries.map(entry => {
   const contract = { ...entry, access: entry.access ?? 'read-only', dependencies: [] };
   return { ...contract, revision: digest(contract) };
-});
+}), ...NATIVE_TOOL_MANIFESTS];
 const foundationIds = new Set(['Think', 'Recall', 'Capability.create']);
 export const CAPABILITY_LIMITS = Object.freeze({ familiar: 2, familiarMaxAgeMs: 30 * 24 * 60 * 60 * 1000, activeBytes: 8192, searchContractBytes: 4096 });
 export const CAPABILITY_MAP = Object.freeze({
-  domains: ['cognition', 'memory', 'method', 'creation', 'script'], total: entries.length,
+  domains: [...new Set(manifests.map(m => m.domain)), 'script'], total: manifests.length,
+  nativeTools: NATIVE_TOOL_IDS,
+  nativeToolNotice: 'Default native host tools are in this catalog, not QuickJS. View a known nativeTools ID to prepare its complete schema, or search. Bash is foreground only; Session-specific tools are not registered.',
   discover: { id: 'catalog.search', args: '{query?:string,cursor?:string|null,limit?:1..5}', description: 'Browse/search summaries with budgeted complete contracts. Returned contracts are prepared for the next call; omitted contracts require catalog.view. All entries remain reachable by pagination.' },
   inspect: { id: 'catalog.view', args: '{id:string}', description: 'Load a known ID directly, or a contract omitted by search. No search is required first.' },
   intrinsic: 'Think is always available as a cognitive activity; no tool call is required.',
@@ -66,11 +69,12 @@ function scriptManifest(record) {
     origin: 'person-created', evidence: record.evidence };
 }
 
-/** Read the real catalog without preparing or executing any capability. No host
- * registry, file lookup, model configuration or script VM participates. */
+/** Read the real catalog without preparing or executing any capability.
+ * Native schemas/source revisions are captured from packaged modules at load;
+ * inspection performs no user-file lookup, config/skill load or script execution. */
 export function inspectCapabilities(created, { cursor, limit }) {
   const entries = manifests.map(contract => ({ id: contract.id, domain: contract.domain, description: contract.description,
-    version: contract.version, revision: contract.revision, contract: copy(contract), source: { kind: 'builtin' } }));
+    version: contract.version, revision: contract.revision, contract: copy(contract), source: copy(contract.source ?? { kind: 'builtin' }) }));
   for (const record of created) {
     const contract = scriptManifest(record);
     // Evidence is a fixed public shape even when reading older raw records.
@@ -85,8 +89,8 @@ export function inspectCapabilities(created, { cursor, limit }) {
 }
 
 export class PersonCapabilities {
-  constructor(repository, ownerId, { experience = [], triggerKind = 'think', now = Date.now(), created = [], episode } = {}) {
-    this.repository = repository; this.ownerId = ownerId; this.episode = episode;
+  constructor(repository, ownerId, { experience = [], triggerKind = 'think', now = Date.now(), created = [], episode, toolHost } = {}) {
+    this.repository = repository; this.ownerId = ownerId; this.episode = episode; this.toolHost = toolHost;
     this.scripts = new Map(created.map(record => [record.id, record]));
     this.byId = new Map([...manifests, ...created.map(scriptManifest)].map(m => [m.id, m]));
     this.prepared = new Map(foundationCapabilities().map(m => [m.id, m]));
@@ -160,6 +164,11 @@ export class PersonCapabilities {
     }
     const entry = this.byId.get(id);
     if (!entry || !this.executionManifest(id)) fail('UNSUPPORTED');
+    if (isNativeTool(id)) {
+      if (!this.toolHost) fail('UNSUPPORTED');
+      object(args, Object.keys(entry.args.properties ?? {}), entry.args.required ?? []);
+      return this.toolHost.execute(id, args, { signal, callId, episodeId: this.episode?.id });
+    }
     if (id === 'Capability.create') {
       if (!this.episode || !callId) fail('UNSUPPORTED');
       const definition = validateCreatedDefinition(args);

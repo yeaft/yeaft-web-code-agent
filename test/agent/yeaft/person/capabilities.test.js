@@ -1,3 +1,4 @@
+import { NATIVE_TOOL_IDS } from '../../../../agent/yeaft/person/native-tools.js';
 import { describe, expect, it, vi } from 'vitest';
 import { PersonCapabilities, foundationCapabilities, CAPABILITY_LIMITS } from '../../../../agent/yeaft/person/capabilities.js';
 import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
@@ -56,7 +57,7 @@ describe('Person three-layer capabilities without a selector', () => {
       const result = await cap.execute({ id: 'catalog.search', args: { cursor, limit: 1 } });
       paged.push(...result.items.map(m => m.id)); cursor = result.nextCursor;
     } while (cursor);
-    expect(paged).toEqual(['Capability.create', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think']);
+    expect(paged).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort((a, b) => a.localeCompare(b, 'en')));
   });
 
   it('leaves an over-budget search contract unprepared until explicitly viewed', async () => {

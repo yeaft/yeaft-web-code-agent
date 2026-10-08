@@ -1,3 +1,4 @@
+import { createPersonToolHost, isNativeTool, projectNativeResult } from './native-tools.js';
 import { randomUUID } from 'node:crypto';
 import { CAPABILITY_MAP, CAPABILITY_LIMITS, foundationCapabilities, PersonCapabilities, catalogRevision as capabilityCatalogRevision } from './capabilities.js';
 import { attachmentMetadata } from './attachments.js';
@@ -8,7 +9,7 @@ const messageRef = m => `message:${m.id}:${m.revision}`;
 const conceptRef = c => `concept:${c.id}:${c.revision}`;
 
 /** Assemble bounded request copies. Omitting a record never deletes or truncates its durable original. */
-export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [] }) {
+export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment }) {
   const model = validateSelection(selection, provider.catalog);
   // UTF-8 bytes is a conservative text-token bound; reserve explicit envelope/output overhead.
   const images = attachments.filter(file => file.kind === 'image');
@@ -28,6 +29,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     state: snapshot.state, trigger: { kind: episode.kind, text: episode.text, ref: triggerRef,
       ...(attachments.length ? { messageRef: inputMessageRef, attachments: attachments.map(file => ({ ...attachmentMetadata(file),
         ...(file.kind === 'text' ? { content: file.content } : { contentDelivery: 'image-block', ...(imageBudget?.detail ? { detail: imageBudget.detail } : {}) }), trust: 'untrusted-user-content' })) } : {}) },
+    ...(environment ? { environment } : {}),
     models: provider.catalog, modelCatalogRevision: provider.catalogRevision,
     capabilities: { ...capabilityMap, active: [] }, capabilityCatalogRevision: capabilityMap.revision ?? capabilityCatalogRevision,
     budget: { remainingCalls, maxOutputBytes: LIMITS.outputBytes },
@@ -52,6 +54,11 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   };
   const omitted = [];
   // A selected recall result is a full bounded page. Never silently shorten it after recording tool success.
+  if (capabilityResult?.sourceRef) {
+    sourceRefs.add(capabilityResult.sourceRef); renderedRefs.add(capabilityResult.sourceRef);
+    // External observations are usable provenance, never user-reported lineage.
+    sources.set(capabilityResult.sourceRef, { kind: 'external-tool-observation', reportedSourceRefs: [] });
+  }
   if (capabilityResult?.kind === 'messages') for (const m of capabilityResult.items) { sourceRefs.add(messageRef(m)); renderedRefs.add(messageRef(m)); seenMessage(m); }
   if (capabilityResult?.kind === 'concepts') for (const c of capabilityResult.items) { sourceRefs.add(conceptRef(c)); renderedRefs.add(conceptRef(c)); seenConcept(c); }
   context.sourceRefs = [...sourceRefs];
@@ -96,8 +103,9 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
 }
 
 export class PersonRuntime {
-  constructor({ repository, getProvider, budget }) {
+  constructor({ repository, getProvider, budget, workDir, yeaftDir, config }) {
     this.repository = repository; this.getProvider = getProvider; this.budget = budget;
+    this.toolOptions = { workDir, yeaftDir, config };
     this.running = new Map(); this.workerId = randomUUID(); this.closed = false;
   }
   start(episode) {
@@ -108,7 +116,14 @@ export class PersonRuntime {
     // Admission resolves independently of provider latency. No model work occurs without an explicit admission.
     job.promise = Promise.resolve().then(() => this.run(episode, controller)).catch(() => {}).finally(() => this.running.delete(episode.id));
   }
-  cancel(episodeId, code = 'CANCELLED') { this.running.get(episodeId)?.controller.abort(new PersonError(code)); }
+  async cancel(episodeId, code = 'CANCELLED', ownerId) {
+    const jobs = [...this.running.values()].filter(job =>
+      (episodeId == null || job.episode.id === episodeId) &&
+      (ownerId == null || job.episode.ownerId === ownerId));
+    for (const job of jobs) job.controller.abort(new PersonError(code));
+    await Promise.all(jobs.map(job => job.promise));
+  }
+  isOwnerRunning(ownerId) { return [...this.running.values()].some(job => job.episode.ownerId === ownerId); }
   async run(episode, controller) {
     const { signal } = controller;
     const timeout = setTimeout(() => controller.abort(new PersonError('TIMEOUT')), episode.budget.timeoutMs);
@@ -137,7 +152,8 @@ export class PersonRuntime {
         selection = { model: candidate.id, effort: null, reason: 'image-capable-candidate', origin: 'bootstrap' };
       }
       const created = await abortable(this.repository.createdCapabilities(episode), signal);
-      const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode });
+      const toolHost = createPersonToolHost(this.toolOptions);
+      const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost });
       let previous = null, capabilityResult = null, dependencyRefs = [];
       // Validation retains actual reads across calls, independently of the bounded rendered request.
       // Candidate proposals never enter this read-set or establish new provenance.
@@ -145,7 +161,7 @@ export class PersonRuntime {
       for (let index = 0; index < episode.budget.calls; index++) {
         signal.throwIfAborted();
         const callId = randomUUID();
-        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, dependencyRefs, remainingCalls: episode.budget.calls - index, attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog() });
+        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, dependencyRefs, remainingCalls: episode.budget.calls - index, attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment });
         capabilities.activate(context.activeCapabilities);
         dependencyRefs = context.manifest.inputDependencyRefs;
         for (const [id, concept] of context.concepts) readConcepts.set(id, concept);
@@ -205,17 +221,20 @@ export class PersonRuntime {
             signal.throwIfAborted();
             // Script cancellation joins its worker before runtime.close can finish.
             const executionPromise = capabilities.execute(invocation, { signal, callId });
-            capabilityResult = invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
+            capabilityResult = isNativeTool(invocation.id) || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
               ? await executionPromise : await abortable(executionPromise, signal);
             signal.throwIfAborted();
             if (capabilityResult?.ok === false) {
               await this.repository.append(episode, 'capability_failed', { callId, capabilityId: invocation.id, ...execution, code: capabilityResult.code, result: capabilityResult });
+              if (capabilityResult.terminal) fail('TOOL_EFFECT_UNCONFIRMED');
             } else {
               await this.repository.append(episode, 'capability_result', { callId, capability: invocation, ...execution, result: capabilityResult });
             }
+            // Raw tool result above remains durable; only this next-call copy is budgeted.
+            if (isNativeTool(invocation.id)) capabilityResult = projectNativeResult(capabilityResult);
           } catch (error) {
             const safe = safeError(error, 'UNSUPPORTED');
-            await this.repository.append(episode, 'capability_failed', { callId, capabilityId: invocation.id, ...execution, code: safe.code }).catch(() => {});
+            if (!capabilityResult?.terminal) await this.repository.append(episode, 'capability_failed', { callId, capabilityId: invocation.id, ...execution, code: safe.code }).catch(() => {});
             throw safe;
           }
         }

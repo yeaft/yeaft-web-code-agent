@@ -16,7 +16,7 @@ import { inspectRequest, personName, searchRequest } from './inspection.js';
  * SQLite is the local default; an existing Mongo URI retains Mongo. No authority fallback.
  */
 export function createPersonService(options = {}) {
-  const { uri, dbName = 'yeaft_person', namespace = 'default', yeaftDir, MongoClient, config, adapter, allowedModels } = options;
+  const { uri, dbName = 'yeaft_person', namespace = 'default', yeaftDir, workDir, MongoClient, config, adapter, allowedModels } = options;
   identifier(namespace);
   if (typeof dbName !== 'string' || !/^[a-zA-Z0-9_-]{1,63}$/.test(dbName)) fail('INVALID_REQUEST');
   if (uri != null && typeof uri !== 'string') fail('INVALID_REQUEST');
@@ -24,7 +24,7 @@ export function createPersonService(options = {}) {
   const calls = options.maxCalls ?? LIMITS.calls;
   const timeoutMs = options.timeoutMs ?? LIMITS.timeoutMs;
   const leaseMs = options.leaseMs ?? LIMITS.leaseMs;
-  if (!Number.isInteger(calls) || calls < 1 || calls > 8 || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300000 ||
+  if (!Number.isInteger(calls) || calls < 1 || calls > 32 || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300000 ||
       !Number.isInteger(leaseMs) || leaseMs < 300 || leaseMs > 60000) fail('INVALID_REQUEST');
   if (allowedModels != null && (!Array.isArray(allowedModels) || !allowedModels.length || allowedModels.some(m => typeof m !== 'string'))) fail('INVALID_REQUEST');
   const repository = !configured ? null : storage === 'mongodb'
@@ -45,7 +45,7 @@ export function createPersonService(options = {}) {
     ? memory.recall(ownerId, args, { signal }) : literalRecall(ownerId, args);
   // Config/adapter are loaded per explicit episode, not a permanent stale cache.
   const getProvider = (modelCandidates = []) => createPersonProvider({ yeaftDir, config, adapter, allowedModels, modelCandidates, effortEnabled: options.effortEnabled });
-  const runtime = new PersonRuntime({ repository, getProvider, budget: { calls, timeoutMs } });
+  const runtime = new PersonRuntime({ repository, getProvider, budget: { calls, timeoutMs }, workDir, yeaftDir, config });
   let closed = false;
   const requests = new Set();
   async function handle({ ownerId, op, payload = {} } = {}) {
@@ -93,6 +93,12 @@ export function createPersonService(options = {}) {
         object(payload, op === 'dream' ? ['clientMessageId'] : ['text', 'clientMessageId', 'files'], ['clientMessageId']);
         identifier(payload.clientMessageId);
         validateFiles(payload.files, payload.text ?? '', op);
+        // Durable cancellation may already fence the old episode; do not start a
+        // new local activity while its host effects are still being joined.
+        if (runtime.isOwnerRunning(ownerId)) {
+          const receipt = await repository.receipt(ownerId, payload.clientMessageId);
+          if (!receipt.found) fail('BUSY');
+        }
         const admitted = await repository.admit(ownerId, { kind: op, text: payload.text ?? '', clientMessageId: payload.clientMessageId,
           workerId: runtime.workerId, budget: runtime.budget, files: payload.files });
         if (!admitted.duplicate) {
@@ -113,7 +119,9 @@ export function createPersonService(options = {}) {
         object(payload, ['episodeId'], []);
         if (payload.episodeId != null) identifier(payload.episodeId);
         const result = await repository.cancel(ownerId, payload.episodeId);
-        if (result.cancelled) runtime.cancel(result.episodeId);
+        // Even a repeated cancel must join an already-fenced local execution.
+        // A durable cancelled status alone does not prove host effects stopped.
+        await runtime.cancel(result.episodeId ?? payload.episodeId, 'CANCELLED', ownerId);
         return result;
       }
       case 'settings': {
