@@ -68,7 +68,7 @@ describe('Digital Person surface', () => {
     expect(wrapper.find('[data-message-composer]').exists()).toBe(true);
     expect(wrapper.find('.person-views, .session-tab-bar, .person-manual-hint, .person-attachment-policy').exists()).toBe(false);
     expect(wrapper.find('#person-conversation').isVisible()).toBe(true);
-    expect(wrapper.get('.person-status').text()).toContain(en['person.ready']);
+    expect(wrapper.find('.person-status, .person-status-dot, .person-connection-notice').exists()).toBe(false);
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
     expect(wrapper.find('.person-message img').exists()).toBe(false);
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
@@ -251,7 +251,7 @@ describe('Digital Person surface', () => {
     chat.connectionState = 'reconnecting';
     await Vue.nextTick();
     expect(wrapper.find('.person-response-loading, .stop-btn').exists()).toBe(false);
-    expect(wrapper.get('.person-status').text()).toContain(t('person.disconnected'));
+    expect(wrapper.get('.person-connection-notice').text()).toContain(t('person.disconnected'));
   });
 
   it('clears loading after completion without losing the conversation', async () => {
@@ -262,7 +262,7 @@ describe('Digital Person surface', () => {
     wrapper.vm.state.busy = false;
     await Vue.nextTick();
     expect(wrapper.find('.person-response-loading, .message-composer-spinner, .stop-btn').exists()).toBe(false);
-    expect(wrapper.get('.person-status').text()).toContain(t('person.ready'));
+    expect(wrapper.find('.person-status, .person-status-dot, .person-connection-notice').exists()).toBe(false);
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
   });
@@ -317,11 +317,13 @@ describe('Digital Person surface', () => {
     expect(chat.closePluginCenter).toHaveBeenCalledOnce();
   });
 
-  it('uses Agent/name breadcrumbs, renames in settings and opens the read-only inner browser', async () => {
+  it('separates the centered name from the Agent picker, renames in settings and opens the read-only inner browser', async () => {
     await render();
     expect(wrapper.find('.theme-toggle').exists()).toBe(false);
-    expect(wrapper.get('.person-breadcrumb #person-agent').exists()).toBe(true);
-    expect(wrapper.get('.person-breadcrumb h1').text()).toBe('Ada');
+    expect(wrapper.get('.person-navigation #person-agent').exists()).toBe(true);
+    expect(wrapper.find('.person-breadcrumb h1, .person-status-dot').exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'ModernSelect' }).props('menuClass')).toBe('agent-select-menu');
+    expect(wrapper.get('.person-identity h1').text()).toBe('Ada');
     const detailsButton = wrapper.get('.person-thoughts-button');
     expect(detailsButton.findComponent({ name: 'NavigationIcon' }).props('name')).toBe('eye');
     expect(detailsButton.attributes('aria-label')).toBe(t('person.inside'));
@@ -331,7 +333,7 @@ describe('Digital Person surface', () => {
     await wrapper.get('[role="dialog"] .btn-primary').trigger('click');
     await flushPromises();
     expect(requests.find(r => r.op === 'settings').payload).toEqual({ name: 'Mira' });
-    expect(wrapper.get('.person-breadcrumb h1').text()).toBe('Mira');
+    expect(wrapper.get('.person-identity h1').text()).toBe('Mira');
     await wrapper.get('.person-thoughts-button').trigger('click');
     expect(wrapper.findAll('.person-inspector-nav svg')).toHaveLength(0);
     await wrapper.findAll('.person-inspector-nav button').find(b => b.text() === t('person.memory')).trigger('click');
@@ -369,7 +371,7 @@ describe('Digital Person surface', () => {
     await wrapper.get('[role="dialog"] .btn-primary').trigger('click');
     await flushPromises();
     expect(requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: ['provider/a'] });
-    expect(wrapper.get('.person-breadcrumb h1').text()).toBe('Ada');
+    expect(wrapper.get('.person-identity h1').text()).toBe('Ada');
     chat.sendWsMessage = send;
     await wrapper.vm.controller.refresh();
     await wrapper.get('.person-settings-button').trigger('click');

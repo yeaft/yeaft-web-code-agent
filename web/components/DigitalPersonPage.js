@@ -186,20 +186,12 @@ export default {
       <header class="chat-header person-header" :inert="compactPanel && panel ? true : undefined">
         <nav class="person-navigation" :aria-label="$t('person.navigation')">
           <button ref="returnButton" type="button" class="header-action-btn" @click="leave()" :aria-label="$t('yeaft.session.title')" :title="$t('yeaft.session.title')"><NavigationIcon name="back" /></button>
+          <div class="person-breadcrumb">
+            <ModernSelect id="person-agent" class="person-agent-select" menu-class="agent-select-menu" v-model="agentId" :options="agentOptions" :aria-label="$t('person.agent')" :placeholder="$t('person.noAgent')" :empty-text="$t('person.noAgent')" :disabled="!agentOptions.length" :menu-min-width="220" />
+          </div>
         </nav>
         <div class="person-identity">
-          <div class="person-breadcrumb">
-            <ModernSelect id="person-agent" class="person-agent-select" v-model="agentId" :options="agentOptions" :aria-label="$t('person.agent')" :placeholder="$t('person.noAgent')" :empty-text="$t('person.noAgent')" :disabled="!chat.agents.length" :menu-min-width="220" />
-            <NavigationIcon name="chevron" :size="14" />
-            <h1 :title="state.person?.name || $t('person.title')">{{ state.person?.name || $t('person.title') }}</h1>
-          </div>
-          <div v-if="!responding" class="person-status" role="status" aria-live="polite">
-            <span class="person-status-dot" :class="{ ready }" aria-hidden="true"></span>
-            <span v-if="gate">{{ $t('person.' + gate) }}</span>
-            <span v-else-if="state.loading">{{ $t('person.loading') }}</span>
-            <span v-else-if="ready">{{ $t('person.ready') }}</span>
-            <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
-          </div>
+          <h1 :title="state.person?.name || $t('person.title')">{{ state.person?.name || $t('person.title') }}</h1>
         </div>
         <div class="person-header-actions">
           <button type="button" class="header-action-btn" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>
@@ -208,6 +200,10 @@ export default {
           <button type="button" class="header-action-btn person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending" @click="settingsOpen = true" :aria-label="$t('person.settings')" :title="$t('person.settings')"><NavigationIcon name="settings" /></button>
         </div>
       </header>
+      <div v-if="gate || state.loading" class="person-connection-notice" :inert="compactPanel && panel ? true : undefined" role="status" aria-live="polite">
+        <span>{{ $t('person.' + (gate || 'loading')) }}</span>
+        <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
+      </div>
       <section v-if="(state.configured === false || state.storageReady === false || state.modelReady === false) && !gate" class="person-configuration" :inert="compactPanel && panel ? true : undefined" role="status">
         <h2>{{ $t('person.configureTitle') }}</h2>
         <p>{{ $t('person.configureAgent') }}</p>

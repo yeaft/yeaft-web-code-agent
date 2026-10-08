@@ -8,24 +8,25 @@
   background: var(--bg-main);
   color: var(--text-primary);
 }
-.person-header { justify-content: flex-start; align-items: center; gap: var(--work-center-space-3); padding: var(--work-center-space-3) var(--agent-setup-space-lg); }
-.person-identity { flex: 1; min-width: 0; }
-.person-identity h1 { min-width: 0; font-size: 16px; line-height: 1.5; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.person-header-actions { display: flex; align-items: center; gap: var(--work-center-space-2); min-width: 0; }
-.person-breadcrumb { display: flex; align-items: center; gap: var(--work-center-space-2); min-width: 0; }
-.person-breadcrumb > svg { flex-shrink: 0; color: var(--text-muted); }
-.person-agent-select { width: auto; max-width: 40%; min-width: 56px; flex-shrink: 1; }
-.person-agent-select .modern-select-trigger { min-height: 32px; padding: 4px 8px; border-color: transparent; background: transparent; box-shadow: none; }
+.person-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: var(--work-center-space-3); padding: var(--work-center-space-3) var(--agent-setup-space-lg); }
+.person-navigation { display: flex; align-items: center; gap: var(--work-center-space-2); min-width: 0; }
+.person-navigation > button { flex-shrink: 0; }
+.person-identity { min-width: 0; text-align: center; }
+.person-identity h1 { margin: 0; min-width: 0; font-size: 16px; line-height: 1.5; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-header-actions { display: flex; align-items: center; justify-self: end; gap: var(--work-center-space-2); min-width: 0; }
+.person-breadcrumb { min-width: 0; max-width: 100%; }
+.person-agent-select { width: auto; max-width: 100%; min-width: 0; font-family: var(--font-sans); }
+.person-agent-select .modern-select-trigger { min-height: 32px; padding: 4px 8px; border-color: transparent; background: transparent; box-shadow: none; font-size: 14px; }
 .person-agent-select .modern-select-trigger:hover:not(:disabled) { background: var(--sidebar-hover); }
-.person-agent-select .modern-select-label { font-size: 14px; }
+.person-agent-select .modern-select-label { font-weight: 400; }
 .person-page .btn-ghost, .person-retry .btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: var(--work-center-space-2); min-height: 32px; padding: 6px 12px; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
 .person-retry .btn-secondary { border: 1px solid var(--border-color); }
 .person-page .btn-ghost:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text-primary); }
 .person-page button:disabled { opacity: .45; cursor: not-allowed; }
 .person-page :is(button, summary, [tabindex]):focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 .person-page textarea:focus-visible { outline: none; } /* The shared composer owns its focus ring. */
-.person-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--work-center-space-2); color: var(--text-secondary); font-size: 11px; line-height: 1.6; }
-.person-status .btn-ghost { min-height: 24px; padding: 0 var(--work-center-space-2); font-size: 11px; }
+.person-connection-notice { display: flex; align-items: center; flex-wrap: wrap; gap: var(--work-center-space-2); padding: var(--work-center-space-2) var(--agent-setup-space-lg); color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.person-connection-notice .btn-ghost { min-height: 24px; padding: 0 var(--work-center-space-2); font-size: 12px; }
 .person-workspace { display: flex; position: relative; flex: 1; min-height: 0; min-width: 0; }
 .person-side-panel { display: flex; flex-direction: column; flex: 0 0 min(420px, 40%); min-width: 0; min-height: 0; background: var(--bg-main); border-left: 1px solid var(--border-color); }
 .person-panel-header { display: flex; align-items: center; gap: var(--work-center-space-2); flex-shrink: 0; padding: var(--work-center-space-3) var(--work-center-space-4); }
@@ -35,8 +36,6 @@
 .person-panel-error p { overflow-wrap: anywhere; flex: 1; min-width: 0; }
 .person-panel-header h2 { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
 .person-panel-header .person-debug-link { color: var(--text-muted); font-size: 12px; }
-.person-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
-.person-status-dot.ready { background: var(--success); }
 @media (prefers-reduced-motion: reduce) {
   .person-response-loading.typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { animation: none; }
   .person-composer .message-composer-spinner { animation: none; }
@@ -86,10 +85,10 @@
   .person-side-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100%); z-index: 31; box-shadow: var(--modal-shadow); padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
 @media (max-width: 600px) {
-  .person-header { padding: var(--work-center-space-2) var(--work-center-space-3); gap: var(--work-center-space-2); flex-wrap: wrap; }
-  .person-identity { flex-basis: calc(100% - 48px); }
-  .person-header-actions { margin-left: auto; }
-  .person-agent-select { max-width: 45%; }
+  .person-header { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: var(--work-center-space-2) var(--work-center-space-3); gap: var(--work-center-space-2); }
+  .person-identity { grid-column: 1 / -1; grid-row: 1; }
+  .person-navigation, .person-header-actions { grid-row: 2; }
+  .person-connection-notice { padding-left: var(--work-center-space-3); padding-right: var(--work-center-space-3); }
   .person-journal-toolbar, .person-notice { padding-left: var(--work-center-space-3); padding-right: var(--work-center-space-3); }
   .person-messages, .person-journal-scroll { padding: var(--work-center-space-3); }
   .person-reading-column, .person-composer .input-wrapper, .person-upload-error { width: 100%; }
