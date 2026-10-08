@@ -1,6 +1,7 @@
 import { bytes, digest, fail, identifier, object, page, text } from './contracts.js';
 import { createdCapabilityRecord, validateCreatedDefinition } from './created-capability-contract.js';
 import { runPersonScript, scriptInput, testPersonScript } from './script-executor.js';
+import { createdSkillView, inspectionPage } from './inspection.js';
 
 // Built-in cognition plus bounded pure-script creation, not the Agent's full registry.
 // No shell/filesystem/network/VP authority is exposed to generated code.
@@ -63,6 +64,24 @@ function scriptManifest(record) {
     instructions: `Pure JSON computation in a fresh restricted QuickJS VM. args: {input:JSON} <=8192 bytes; output JSON <=8192 bytes. Input: ${record.inputDescription} Output: ${record.outputDescription} No external access. Generated description/tests are fallible; inspect via catalog.view before revision.`,
     args: { input: 'JSON value matching inputDescription' }, access: 'pure-computation', dependencies: [],
     origin: 'person-created', evidence: record.evidence };
+}
+
+/** Read the real catalog without preparing or executing any capability. No host
+ * registry, file lookup, model configuration or script VM participates. */
+export function inspectCapabilities(created, { cursor, limit }) {
+  const entries = manifests.map(contract => ({ id: contract.id, domain: contract.domain, description: contract.description,
+    version: contract.version, revision: contract.revision, contract: copy(contract), source: { kind: 'builtin' } }));
+  for (const record of created) {
+    const contract = scriptManifest(record);
+    // Evidence is a fixed public shape even when reading older raw records.
+    const item = createdSkillView(record, contract);
+    contract.evidence = item.evidence;
+    entries.push(item);
+  }
+  // IDs are ASCII identifiers. Binary ordering matches SQLite and Mongo simple collation.
+  const matches = entries.filter(entry => cursor === null || entry.id > cursor)
+    .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return inspectionPage(matches, limit, 'id');
 }
 
 export class PersonCapabilities {
