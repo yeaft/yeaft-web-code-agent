@@ -34,6 +34,7 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 - 成功外部结果有 `tool:<episode>:<call>:<tool>:<sha256>` 引用和实际实现来源；这表示本次工具观察，不表示客观事实或用户报告。外部引用可以用于 hypothesis/uncertain 等记录，不能单独为 `reported` 提供 user-reported lineage。
 - 原生 JSON 错误结果记录为 `capability_failed`，不算成功经验。写入错误的 effects 默认为 unknown；不承诺回滚或自动安全重试。
 - 取消、服务关闭和工具超时会等待实际执行 promise 结束；支持 signal 的工具收到取消。已经交给文件系统的写入可能完成。工具不响应取消时，join 可能延长停止等待；不能在副作用还运行时声明停止成功。
+- 每次工具调用先记录绑定原 worker、episode、call 和参数摘要的 invocation。取消、关闭或活动超时后，原执行者仍可一次性归档真实结果为 `capability_finalized`，保留 raw output、SHA 和来源；不恢复认知提交权限，不增加成功经验。结果不可确认时明确标记 effects unknown，不能声称回滚。对话活动区只投影执行终态，原始内容留在调试记录，不进入公共思考文本。
 - `ToolRegistry` 超时仍是失败，即使底层 promise 随后成功。无法确认 Bash 进程树退出时终止当前活动，不继续安全重试或把结果算作成功。取消后本服务在旧活动 join 结束前不启动同 owner 的新活动。
 - 此本地 join fence 不提供跨进程宿主副作用锁。若多个服务进程使用同一 Person 存储，既有 repository lease/cancel fence 能阻止旧认知提交，但不能终止另一个进程或另一台宿主上的外部动作；不要在旧执行宿主退出未确认时恢复外部写操作。
 
