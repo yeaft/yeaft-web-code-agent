@@ -527,6 +527,10 @@ export function loadConfig(overrides = {}) {
     language: overrides.language || jsonConfig.language || DEFAULTS.language,
     debug: overrides.debug !== undefined ? overrides.debug : (jsonConfig.debug ?? DEFAULTS.debug),
     imageApiUrl: overrides.imageApiUrl || jsonConfig.imageApiUrl || null,
+    // Native tools use this same instance-owned runtime config. Retain search
+    // backend selection and fallback opt-out rather than silently scraping.
+    search: overrides.search ?? jsonConfig.search,
+    searchApiUrl: overrides.searchApiUrl ?? jsonConfig.searchApiUrl,
     dir,
 
     // Token limits. Resolution order:

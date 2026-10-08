@@ -3,7 +3,7 @@
  * These records describe observed execution, not an inferred plan or progress %.
  */
 const TERMINAL = { committed: 'completed', completed: 'completed', failed: 'failed', cancelled: 'cancelled', interrupted: 'interrupted', budget_exhausted: 'budgetExhausted' };
-const KINDS = new Set(['accepted', 'call_started', 'call_output', 'call_failed', 'capability_started', 'capability_result', 'capability_failed', ...Object.keys(TERMINAL)]);
+const KINDS = new Set(['accepted', 'call_started', 'call_output', 'call_failed', 'capability_started', 'capability_result', 'capability_failed', 'capability_finalized', ...Object.keys(TERMINAL)]);
 const key = name => `person.activity.${name}`;
 const timestamp = value => {
   const ms = value == null ? NaN : new Date(value).getTime();
@@ -33,7 +33,7 @@ export function personActivityRecords(traces) {
       id: t.id, episodeId: t.episodeId, callId: typeof t.callId === 'string' ? t.callId : null,
       seq: Number.isSafeInteger(t.seq) ? t.seq : 0, kind: t.kind, at: timestamp(t.createdAt),
       ...(t.kind === 'accepted' ? { trigger: ['send', 'think', 'dream'].includes(t.trigger?.kind) ? t.trigger.kind : null } : {}),
-      ...(t.kind.startsWith('capability_') ? { ...capability(t.capability?.id ?? t.capabilityId), failed: t.kind === 'capability_failed' || t.result?.ok === false } : {}),
+      ...(t.kind.startsWith('capability_') ? { ...capability(t.capability?.id ?? t.capabilityId), failed: t.kind === 'capability_failed' || t.outcome === 'capability_failed' || t.result?.ok === false } : {}),
     })).sort((a, b) => a.seq - b.seq).slice(-50);
 }
 

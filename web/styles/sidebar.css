@@ -195,13 +195,21 @@
   margin-top: 8px;
   width: min(360px, calc(var(--session-sidebar-width) - 12px), calc(100vw - 12px));
   box-sizing: border-box;
+  z-index: 100;
+  overflow: hidden;
+}
+
+/* The Person Agent picker uses the same menu surface and row typography,
+   including its teleported menu which cannot inherit from the trigger. */
+.agent-dropdown,
+.agent-select-menu.modern-select-menu {
   background: var(--bg-main);
   border: 1px solid var(--border-color);
   border-radius: 16px;
   box-shadow: 0 12px 32px color-mix(in srgb, var(--text-primary) 14%, transparent);
-  z-index: 100;
   padding: 8px;
-  overflow: hidden;
+  font-family: var(--font-sans);
+  font-size: 14px;
 }
 
 .agent-dropdown-list {
@@ -214,14 +222,23 @@
   grid-template-columns: 8px minmax(0, 1fr) 50px 56px;
   align-items: center;
   column-gap: 8px;
+}
+
+.agent-dropdown-item,
+.agent-select-menu .modern-select-option {
   min-height: 48px;
   padding: 8px 10px;
   border-radius: 10px;
   transition: background 0.15s;
-  font-weight: normal;
+  font-weight: 400;
 }
+.agent-select-menu .modern-select-option { display: flex; align-items: center; padding-right: 28px; }
+.agent-select-menu .modern-select-option-main { width: 100%; }
+.agent-select-menu .modern-select-list { padding: 0; }
 
-.agent-dropdown-item:hover {
+.agent-dropdown-item:hover,
+.agent-select-menu .modern-select-option:hover,
+.agent-select-menu .modern-select-option.is-active {
   background: var(--sidebar-hover);
 }
 
@@ -231,7 +248,8 @@
   animation: pulse 1.5s ease-in-out infinite;
 }
 
-.agent-dropdown-name {
+.agent-dropdown-name,
+.agent-select-menu .modern-select-option-label {
   min-width: 0;
   font-size: 14px;
   font-weight: 400;

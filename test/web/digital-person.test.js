@@ -663,6 +663,17 @@ describe('Digital Person conversation activity', () => {
     expect(project(events)).toMatchObject({ loading: true, label: 'person.activity.processingResponse' });
   });
 
+  it.each([true, false])('shows joined tool outcome after cancellation without reviving episode success (failed=%s)', failed => {
+    const events = [trace(1, 'capability_started', { callId: 'c', capability: { id: 'FileWrite', args: 'PRIVATE_ARGS' } }),
+      trace(2, 'cancelled'), trace(3, 'capability_finalized', { callId: 'c', capability: { id: 'FileWrite' },
+        outcome: failed ? 'capability_failed' : 'capability_result', afterTerminal: true, accepted: false,
+        result: { ok: !failed, output: 'PRIVATE_OUTPUT' } })];
+    const value = project(events, { busy: false, latestEpisode: { id: 'e', status: 'cancelled', endedAt: 2000 } });
+    expect(value).toMatchObject({ loading: false, label: 'person.activity.cancelled', endedAt: 2000,
+      rows: [expect.objectContaining({ status: failed ? 'failed' : 'completed', durationMs: 2000 })] });
+    expect(JSON.stringify(personActivityRecords(events))).not.toMatch(/PRIVATE_|"(?:args|output|result)":/);
+  });
+
   it.each(['completed', 'cancelled', 'failed', 'interrupted', 'budget_exhausted'])('fences late events with confirmed %s, including no assistant reply', status => {
     const value = project([trace(1, 'call_started', { callId: 'c' }), trace(2, 'call_failed', { callId: 'c' })], {
       busy: false, episodeId: null, latestEpisode: { id: 'e', status, endedAt: 3000 },

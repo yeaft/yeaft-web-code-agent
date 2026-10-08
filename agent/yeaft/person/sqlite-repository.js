@@ -93,6 +93,8 @@ export class SqlitePersonRepository {
   async append(episode, kind, data) { return this.request('append', [episode, kind, data]); }
   async startCall(episode, data) { return this.request('startCall', [episode, data]); }
   async finalizeCall(episode, data) { return this.request('finalizeCall', [episode, data]); }
+  async startCapability(episode, data) { return this.request('startCapability', [episode, data]); }
+  async finalizeCapability(episode, data) { return this.request('finalizeCapability', [episode, data]); }
   async createdCapabilities(episode) { return this.request('createdCapabilities', [episode]); }
   async saveCreatedCapability(episode, input) { return this.request('saveCreatedCapability', [episode, validateCreatedCapability(input)]); }
   async episodeAttachments(episode) { return this.request('episodeAttachments', [episode]); }
@@ -104,7 +106,7 @@ export class SqlitePersonRepository {
   async settings(ownerId, settings) { return this.request('settings', [ownerId, settings]); }
   async list(ownerId, collection, options, filter) { return this.request('list', [ownerId, collection, options, filter]); }
   async snapshot(ownerId) { return this.request('snapshot', [ownerId]); }
-  async inspect(ownerId, options) { return this.request('inspect', [ownerId, options]); }
+  async inspect(ownerId, options, nativeToolIds) { return this.request('inspect', [ownerId, options, nativeToolIds]); }
   async search(ownerId, options) { return this.request('search', [ownerId, options]); }
   /** Ascending durable journal, scoped before paging. Empty pages retain after. */
   async searchChanges(ownerId, options) { return this.request('searchChanges', [ownerId, options]); }

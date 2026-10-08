@@ -75,7 +75,7 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 
 **保留现有 MongoDB 配置。** `YEAFT_PERSON_MONGODB_URI` 选择 MongoDB，可选 `YEAFT_PERSON_MONGODB_DB`（默认 `yeaft_person`）。可用 `YEAFT_PERSON_STORAGE=sqlite|mongodb` 显式选择；已配置 MongoDB URI 时显式选 `sqlite` 会被拒绝，避免分叉出第二套权威。没有自动迁移或后端 fallback。MongoDB 仍需支持事务的 replica set／分片部署、专用凭据、非 loopback 的认证／TLS 与备份，不支持 standalone。两种后端都需备份权威库。已有服务的环境变更需要明确授权后重启，数字人功能不会自动重启它。
 
-功能仍**仅手动触发**：尚无空闲定时器、事件 Connector、VP 委派、外部写工具和 Rust 桌面身体。能力目录包含四个认知方法与基础 `Capability.create`：可编写参数化 JSON→JSON JavaScript，在受限 QuickJS/WASM worker 中实际运行测试，通过后原子发布私有 `Script.*` 版本，重启后仍能发现并复用。测试失败不发布；脚本不获得文件、网络、Shell 或凭据权限。已发布版本独立于后续认知提交持久保留；自写测试通过不证明普遍正确。尚非完整 Skills registry。每次活动最多四次模型调用／120 秒；数字人可从最多八个已配置原生模型中选择后续模型。动态 effort 需 `YEAFT_THINKING_V1=1` 及模型支持的元数据。持久记忆与有界模型 context 各有归属。事务、检索及剩余工作见[设计及实现边界](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版)。
+功能仍**仅手动触发**：尚无空闲定时器、事件 Connector、VP 委派和 Rust 桌面身体。默认能力目录已接入 **14 项真实 Session 原生工具**，支持文件读写编辑、查找、目录、补丁、Git 只读检查、前台 Bash、网页搜索／读取、现有 Skill 库与 Notebook。复用原生 schema 和执行器，在 Agent 配置的工作目录执行；它们是宿主操作，**不是文件或 Shell 沙箱**。工具通过已有有界能力分层按需准备，不将所有完整 schema 常驻 prompt；不注册 Session TaskManager、后台 Bash 或 Session 专属编排。取消会等待本机执行收尾，但不撤销已完成的副作用。能力目录还包含四个认知方法与基础 `Capability.create`：可编写参数化 JSON→JSON JavaScript，在受限 QuickJS/WASM worker 中实际运行测试，通过后原子发布私有 `Script.*` 版本，重启后仍能发现并复用。测试失败不发布；生成脚本仍不获得文件、网络、Shell 或凭据权限。已发布版本独立于后续认知提交持久保留；自写测试通过不证明普遍正确。每次活动默认最多 16 次模型调用／120 秒；数字人可从最多八个已配置原生模型中选择后续模型。动态 effort 需 `YEAFT_THINKING_V1=1` 及模型支持的元数据。持久记忆与有界模型 context 各有归属。事务、检索及剩余工作见[设计及实现边界](docs/notes/2026-09-24-digital-person-design.md#本轮实现边界显式认知首版)。
 
 ### Work Center
 
