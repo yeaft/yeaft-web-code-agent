@@ -64,6 +64,7 @@ export default {
     let measureRafId = null;
     let scrollAdjustRafId = null;
     let pendingScrollDelta = 0;
+    let pendingScrollBaseTop = null;
     let pendingScrollToBottom = false;
     let scrollAdjustmentGeneration = 0;
     const bottomFollowEnabled = Vue.ref(true);
@@ -72,6 +73,35 @@ export default {
     let activeTargetElement = null;
     let previousItems = [];
     let itemChangeGeneration = 0;
+    let transcriptContentTop = 0;
+    let geometryScrollTop = 0;
+    let lastGeometryDOMTop = 0;
+
+    function readTranscriptContentTop() {
+      const root = rootRef.value;
+      const scroller = scrollEl.value;
+      if (!root || !scroller) return 0;
+      return Number(root.getBoundingClientRect().top) - Number(scroller.getBoundingClientRect().top)
+        + Number(scroller.scrollTop || 0) - Number(scroller.clientTop || 0);
+    }
+
+    function reconcileGeometry() {
+      const nextTop = readTranscriptContentTop();
+      const delta = nextTop - transcriptContentTop;
+      transcriptContentTop = nextTop;
+      if (bottomFollowEnabled.value && props.initialAlign === 'end') {
+        scheduleScrollAdjustment({ toBottom: true });
+      } else if (Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) {
+        // Only the root's content origin belongs here. Row/prepend changes are
+        // compensated separately; total scrollHeight would count them twice.
+        // Restore from the pre-layout position. A shrinking sibling may have
+        // already clamped DOM scrollTop; adding delta to that would apply the
+        // browser's consumed displacement twice.
+        scheduleScrollAdjustment({ delta, baseTop: geometryScrollTop });
+      }
+      lastGeometryDOMTop = Number(scrollEl.value?.scrollTop || 0);
+      readScrollState();
+    }
 
     // Item offsets only change when the items, estimates, or measured heights
     // change. Keep them out of the scroll-dependent computed so wheel/touch
@@ -113,6 +143,12 @@ export default {
       // oldest Markdown/Mermaid rows before MessageList scrolls to the latest.
       if (!(initialEndPending && props.items.length === 0)) {
         scrollTop.value = Math.max(0, el.scrollTop || 0);
+      }
+      // Do not adopt a browser-clamped position while an origin compensation
+      // is pending or before the geometry observer has reconciled a layout shift.
+      if (pendingScrollBaseTop === null && Math.abs(pendingScrollDelta) < HEIGHT_CHANGE_THRESHOLD
+        && Math.abs(readTranscriptContentTop() - transcriptContentTop) < HEIGHT_CHANGE_THRESHOLD) {
+        geometryScrollTop = Number(el.scrollTop || 0);
       }
       emitScrollState(el);
     }
@@ -162,12 +198,22 @@ export default {
         if (generation !== itemChangeGeneration) return;
         const nextOffset = offsetForKey(next, anchorKey);
         if (!Number.isFinite(nextOffset)) return;
-        scroller.scrollTop += nextOffset - previousOffset;
-        readScrollState();
+        scheduleScrollAdjustment({ delta: nextOffset - previousOffset });
       });
     }
 
     function scheduleReadScrollState() {
+      // Capture user movement synchronously, before another scroll listener can
+      // mutate status layout. RAF is only for the reactive window projection.
+      const currentTop = Number(scrollEl.value?.scrollTop || 0);
+      if (Math.abs(readTranscriptContentTop() - transcriptContentTop) < HEIGHT_CHANGE_THRESHOLD) {
+        if (pendingScrollBaseTop !== null) {
+          pendingScrollBaseTop += currentTop - lastGeometryDOMTop;
+        } else {
+          geometryScrollTop = currentTop;
+        }
+      }
+      lastGeometryDOMTop = currentTop;
       if (rafId) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
@@ -175,8 +221,9 @@ export default {
       });
     }
 
-    function scheduleScrollAdjustment({ delta = 0, toBottom = false } = {}, generation = scrollAdjustmentGeneration) {
+    function scheduleScrollAdjustment({ delta = 0, baseTop, toBottom = false } = {}, generation = scrollAdjustmentGeneration) {
       if (generation !== scrollAdjustmentGeneration) return;
+      if (Number.isFinite(baseTop) && pendingScrollBaseTop === null) pendingScrollBaseTop = baseTop;
       if (Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) pendingScrollDelta += delta;
       if (toBottom) pendingScrollToBottom = true;
       if (scrollAdjustRafId) return;
@@ -187,15 +234,17 @@ export default {
         const scroller = scrollEl.value;
         if (!scroller) {
           pendingScrollDelta = 0;
+          pendingScrollBaseTop = null;
           pendingScrollToBottom = false;
           return;
         }
         if (pendingScrollToBottom) {
           scroller.scrollTop = scroller.scrollHeight;
-        } else if (Math.abs(pendingScrollDelta) >= HEIGHT_CHANGE_THRESHOLD) {
-          scroller.scrollTop += pendingScrollDelta;
+        } else if (pendingScrollBaseTop !== null || Math.abs(pendingScrollDelta) >= HEIGHT_CHANGE_THRESHOLD) {
+          scroller.scrollTop = (pendingScrollBaseTop ?? scroller.scrollTop) + pendingScrollDelta;
         }
         pendingScrollDelta = 0;
+        pendingScrollBaseTop = null;
         pendingScrollToBottom = false;
         readScrollState();
       });
@@ -210,6 +259,7 @@ export default {
       scrollAdjustmentGeneration += 1;
       pendingScrollToBottom = false;
       pendingScrollDelta = 0;
+      pendingScrollBaseTop = null;
       if (!preserveTarget) clearTargetAnchor();
       if (scrollAdjustRafId) cancelAnimationFrame(scrollAdjustRafId);
       scrollAdjustRafId = null;
@@ -301,6 +351,10 @@ export default {
       const scroller = scrollEl.value;
       const target = activeTargetElement || itemEls.get(String(key));
       if (!scroller || !target) return false;
+      // Final target geometry includes both root displacement and row growth.
+      // Consume queued deltas so a later frame cannot apply either twice.
+      cancelPendingBottomFollow({ preserveTarget: true });
+      transcriptContentTop = readTranscriptContentTop();
       const scrollerRect = scroller.getBoundingClientRect?.();
       const targetRect = target.getBoundingClientRect?.();
       if (!scrollerRect || !targetRect) return false;
@@ -441,12 +495,22 @@ export default {
     Vue.onMounted(() => {
       scrollEl.value = rootRef.value?.closest?.('.chat-container') || rootRef.value?.parentElement || null;
       syncInitialPosition();
+      transcriptContentTop = readTranscriptContentTop();
+      geometryScrollTop = Number(scrollEl.value?.scrollTop || 0);
+      lastGeometryDOMTop = geometryScrollTop;
       scrollEl.value?.addEventListener('scroll', scheduleReadScrollState, { passive: true });
       window.addEventListener('resize', scheduleReadScrollState);
 
       if (typeof ResizeObserver !== 'undefined') {
         const syncGeometryTargets = () => {
-          const nextTargets = new Set([rootRef.value, scrollEl.value, ...(scrollEl.value?.children || [])].filter(Boolean));
+          const nextTargets = new Set([rootRef.value, scrollEl.value].filter(Boolean));
+          // Banners can live beside the root inside .messages rather than
+          // directly inside the scroller. Observe only this ancestor path.
+          for (let parent = rootRef.value?.parentElement; parent; parent = parent.parentElement) {
+            nextTargets.add(parent);
+            for (const child of parent.children) nextTargets.add(child);
+            if (parent === scrollEl.value) break;
+          }
           for (const target of geometryTargets) {
             if (!nextTargets.has(target)) {
               resizeObserver.unobserve(target);
@@ -473,25 +537,20 @@ export default {
           }
           // Sibling navigation or the composer can change the true bottom or
           // viewport without resizing any row. Keep the same scroll owner.
-          if (geometryChanged) {
-            readScrollState();
-            if (bottomFollowEnabled.value && props.initialAlign === 'end') {
-              scheduleScrollAdjustment({ toBottom: true });
-            }
-          }
+          if (geometryChanged) reconcileGeometry();
         });
         syncGeometryTargets();
-        // Direct siblings (loading/status/navigation) may be inserted after
-        // mount. Do not watch row mutations: their ResizeObserver owns those.
+        // Loading/status siblings may be inserted into .messages after mount.
+        // Observe child lists only along the ancestor path, not row mutations.
         if (scrollEl.value && typeof MutationObserver !== 'undefined') {
           geometryObserver = new MutationObserver(() => {
             syncGeometryTargets();
-            readScrollState();
-            if (bottomFollowEnabled.value && props.initialAlign === 'end') {
-              scheduleScrollAdjustment({ toBottom: true });
-            }
+            reconcileGeometry();
           });
-          geometryObserver.observe(scrollEl.value, { childList: true });
+          for (let parent = rootRef.value?.parentElement; parent; parent = parent.parentElement) {
+            geometryObserver.observe(parent, { childList: true });
+            if (parent === scrollEl.value) break;
+          }
         }
         for (const [key, el] of itemEls.entries()) {
           const index = itemIndexByKey.get(key) ?? Number(el.dataset?.virtualIndex || 0);
@@ -511,6 +570,7 @@ export default {
       if (scrollAdjustRafId) cancelAnimationFrame(scrollAdjustRafId);
       pendingMeasurements.clear();
       pendingScrollDelta = 0;
+      pendingScrollBaseTop = null;
       pendingScrollToBottom = false;
     });
 

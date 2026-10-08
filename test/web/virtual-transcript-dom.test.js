@@ -185,6 +185,17 @@ describe('VirtualTranscript DOM windowing', () => {
       get: () => scrollTop,
       set: value => { scrollTop = Math.min(scrollHeight - scroller.clientHeight, Math.max(0, Number(value) || 0)); },
     });
+    let upperHeight = 0;
+    // Model viewport-relative root geometry: scrolling changes rect.top but
+    // cannot change its content origin; upper siblings can change that origin.
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: scroller.clientHeight, height: scroller.clientHeight });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (this.classList?.contains('virtual-transcript')) {
+        return { top: upperHeight - scrollTop, height: 10000, bottom: upperHeight - scrollTop + 10000 };
+      }
+      if (this.classList?.contains('virtual-transcript-item')) return { top: 0, height: 100, bottom: 100 };
+      return { top: 0, height: 0, bottom: 0 };
+    });
     const observed = new Set();
     let resizeCallback;
     let mutationCallback;
@@ -231,6 +242,80 @@ describe('VirtualTranscript DOM windowing', () => {
     resizeCallback([{ target: nav }]);
     await flushAnimationFrame(3);
     expect(scrollTop).toBe(3000);
+
+    const upperBanner = document.createElement('div');
+    scroller.insertBefore(upperBanner, scroller.firstElementChild);
+    upperHeight = 80;
+    scrollHeight += 80;
+    mutationCallback();
+    resizeCallback([{ target: scroller }, { target: wrapper.element }]);
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(3080);
+    expect(upperHeight - scrollTop).toBe(-3000);
+    upperHeight = 160;
+    scrollHeight += 80;
+    resizeCallback([{ target: upperBanner }]);
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(3160);
+    // Duplicate callbacks must not compensate the same displacement twice.
+    resizeCallback([{ target: scroller }]);
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(3160);
+    upperBanner.remove();
+    upperHeight = 0;
+    scrollHeight -= 160;
+    mutationCallback();
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(3000);
+
+    for (const gap of [0, 20, 40, 100]) {
+      upperHeight = 80;
+      scrollHeight += 80;
+      resizeCallback([{ target: wrapper.element }]);
+      await flushAnimationFrame(3);
+      scroller.scrollTop = scrollHeight - scroller.clientHeight - gap;
+      resizeCallback([{ target: nav }]);
+      await flushAnimationFrame(3);
+      const beforeTop = scrollTop;
+      upperHeight = 0;
+      scrollHeight -= 80;
+      // Browser boundary clamp happens before observer delivery, independently
+      // of overflow-anchor. Compensation must use the pre-layout position.
+      scroller.scrollTop = scrollTop;
+      resizeCallback([{ target: wrapper.element }]);
+      await flushAnimationFrame(3);
+      expect(scrollTop).toBe(beforeTop - 80);
+      expect(scrollHeight - scroller.clientHeight - scrollTop).toBe(gap);
+    }
+
+    upperHeight = 80;
+    scrollHeight += 80;
+    resizeCallback([{ target: wrapper.element }]);
+    await flushAnimationFrame(3);
+    scroller.scrollTop = scrollHeight - scroller.clientHeight - 20;
+    scroller.dispatchEvent(new Event('scroll'));
+    await flushAnimationFrame(3);
+    const beforeBounce = scrollTop;
+    upperHeight = 0;
+    scrollHeight -= 80;
+    scroller.scrollTop = scrollTop;
+    resizeCallback([{ target: wrapper.element }]);
+    upperHeight = 80;
+    scrollHeight += 80;
+    resizeCallback([{ target: wrapper.element }]);
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(beforeBounce);
+
+    scroller.scrollTop = 3000;
+    scroller.dispatchEvent(new Event('scroll'));
+    await flushAnimationFrame(3);
+    scroller.scrollTop = 2900;
+    scroller.dispatchEvent(new Event('scroll'));
+    upperHeight = 0;
+    scrollHeight -= 80;
+    resizeCallback([{ target: wrapper.element }]);
+    await flushAnimationFrame(3);
+    expect(scrollTop).toBe(2820);
 
     nav.remove();
     mutationCallback();
@@ -349,17 +434,21 @@ describe('VirtualTranscript DOM windowing', () => {
     targetScroller.getBoundingClientRect = () => ({
       x: 0, y: 0, top: 100, right: 800, bottom: 400, left: 0, width: 800, height: 300, toJSON: () => ({}),
     });
+    let targetUpperHeight = 0;
     const blockHeights = Array(12).fill(1000);
     const blockOffset = index => blockHeights.slice(0, index).reduce((sum, height) => sum + height, 0);
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function getBoundingClientRect() {
+      if (this.classList?.contains('virtual-transcript')) {
+        return { top: 100 + targetUpperHeight - targetScroller.scrollTop, height: 12000 };
+      }
       if (this.classList?.contains('virtual-transcript-item')) {
         const index = Number(this.dataset.virtualIndex || 0);
-        const top = 100 + blockOffset(index) - targetScroller.scrollTop;
+        const top = 100 + targetUpperHeight + blockOffset(index) - targetScroller.scrollTop;
         const height = blockHeights[index];
         return { x: 0, y: top, top, right: 800, bottom: top + height, left: 0, width: 800, height, toJSON: () => ({}) };
       }
       if (this.classList?.contains('target-child')) {
-        const top = 100 + blockOffset(5) + 600 - targetScroller.scrollTop;
+        const top = 100 + targetUpperHeight + blockOffset(5) + 600 - targetScroller.scrollTop;
         return { x: 0, y: top, top, right: 800, bottom: top + 40, left: 0, width: 800, height: 40, toJSON: () => ({}) };
       }
       return { x: 0, y: 0, top: 0, right: 0, bottom: 0, left: 0, width: 0, height: 0, toJSON: () => ({}) };
@@ -413,19 +502,36 @@ describe('VirtualTranscript DOM windowing', () => {
     expect(targetScroller.scrollTop).toBe(5800);
     expect(child.getBoundingClientRect().top).toBe(targetScroller.getBoundingClientRect().top);
 
+    // A banner shift and predecessor/target resize can land in the same batch.
+    // The child target's final geometry must own all compensation, not add the
+    // banner's queued delta again after alignment.
+    targetUpperHeight = 80;
+    blockHeights[4] = 1300;
+    blockHeights[5] = 1300;
+    resizeCallback([{ target: targetWrapper.element }, { target: predecessorBlock }, { target: targetBlock }]);
+    await flushRafs();
+    await flushRafs();
+    expect(targetScroller.scrollTop).toBe(5980);
+    expect(child.getBoundingClientRect().top).toBe(targetScroller.getBoundingClientRect().top);
+    targetUpperHeight = 0;
+    resizeCallback([{ target: targetWrapper.element }]);
+    await flushRafs();
+    expect(targetScroller.scrollTop).toBe(5900);
+    expect(child.getBoundingClientRect().top).toBe(targetScroller.getBoundingClientRect().top);
+
     // scrollToKey explicitly transfers ownership back to the aggregate block.
     expect(await targetWrapper.vm.scrollToKey('block-5', { align: 'start' })).toBe(true);
     await Vue.nextTick();
-    expect(targetScroller.scrollTop).toBe(5200);
+    expect(targetScroller.scrollTop).toBe(5300);
     expect(targetBlock.getBoundingClientRect().top).toBe(targetScroller.getBoundingClientRect().top);
 
-    blockHeights[4] = 1300;
-    blockHeights[5] = 1300;
+    blockHeights[4] = 1400;
+    blockHeights[5] = 1400;
     resizeCallback([{ target: predecessorBlock }, { target: targetBlock }]);
     await flushRafs();
     await Vue.nextTick();
     await flushRafs();
-    expect(targetScroller.scrollTop).toBe(5300);
+    expect(targetScroller.scrollTop).toBe(5400);
     expect(targetBlock.getBoundingClientRect().top).toBe(targetScroller.getBoundingClientRect().top);
     targetWrapper.unmount();
     targetScroller.remove();

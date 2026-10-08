@@ -131,6 +131,22 @@ async function sampleFrames(page, options = {}) {
         }
         content.style.height = `${resize.height}px`;
       }
+      const upperResize = options.upperResizes?.find(change => change.frame === frame);
+      if (upperResize) {
+        let status = container.querySelector('[data-test-upper-status]');
+        if (upperResize.height === 0) status?.remove();
+        else {
+          if (!status) {
+            status = document.createElement('div');
+            status.dataset.testUpperStatus = 'true';
+            status.setAttribute('role', 'status');
+            status.textContent = 'Test transcript status';
+            const transcript = container.querySelector('.virtual-transcript');
+            transcript.parentElement.insertBefore(status, transcript);
+          }
+          status.style.cssText = `height: ${upperResize.height}px; flex: none; padding: 0; margin: 0; border: 0;`;
+        }
+      }
       if (options.prepend && frame === 12) window.Pinia.useChatStore().loadMoreYeaftHistory(5);
       if (options.streaming && frame <= 60 && frame % 5 === 0) {
         const row = window.Pinia.useChatStore().messagesMap[conversationId].find(row => row.id === streamingId);
@@ -141,6 +157,7 @@ async function sampleFrames(page, options = {}) {
         .find(element => element.dataset.virtualId === options.anchorId);
       samples.push({ frame, top: container.scrollTop, height: container.scrollHeight,
         navigationHeight: container.querySelector('.transcript-navigation')?.getBoundingClientRect().height || 0,
+        upperStatusHeight: container.querySelector('[data-test-upper-status]')?.getBoundingClientRect().height || 0,
         gap: container.scrollHeight - container.clientHeight - container.scrollTop,
         ids: Array.from(container.querySelectorAll('[data-virtual-id]')).map(element => element.dataset.virtualId),
         ...(options.anchorId ? { anchorTop: anchor ? anchor.getBoundingClientRect().top - container.getBoundingClientRect().top : null } : {}),
@@ -159,7 +176,7 @@ function expectStable(samples, { start = 80, end = FRAME_COUNT, bottom = true } 
   expect(Math.max(...tops) - Math.min(...tops), 'scrollTop must converge, not alternate between virtual windows').toBeLessThanOrEqual(2);
   expect(new Set(settled.map(sample => sample.ids.join('|'))).size, 'mounted virtual ids must converge').toBe(1);
   if (bottom) expect(Math.max(...settled.map(sample => Math.abs(sample.gap))), 'Latest must remain at the true DOM bottom').toBeLessThanOrEqual(2);
-  else expect(Math.min(...settled.map(sample => sample.gap)), 'reader must not be pulled back to Latest').toBeGreaterThan(100);
+  else if (bottom === false) expect(Math.min(...settled.map(sample => sample.gap)), 'reader must not be pulled back to Latest').toBeGreaterThan(100);
 }
 
 async function scrollAway(page, delta = -20000) {
@@ -285,6 +302,132 @@ test('older history prepend preserves the visible anchor without resuming follow
     expect(Math.max(...samples.slice(80).map(sample => Math.abs(sample.anchorTop - anchor.top))), 'prepend must preserve the item viewport offset').toBeLessThanOrEqual(2);
     await page.locator('.scroll-to-latest').click();
     expectStable(await record(page, 'Latest after prepend'));
+  });
+});
+
+for (const targetAnchored of [false, true]) {
+  test(`${targetAnchored ? 'mounted anchorTarget' : 'wheel-paused reader'} preserves its viewport anchor when upper status layout changes`, async ({ chatPage: page, mockAgent }, testInfo) => {
+    test.setTimeout(45000);
+    await withScrollTrace(testInfo, async record => {
+      const requests = await openTranscript(page, mockAgent, { olderHistory: !targetAnchored });
+      if (!targetAnchored) {
+        await page.evaluate(sessionId => window.Pinia.useChatStore().expandYeaftMessageWindow(sessionId, 100), SESSION);
+      }
+      expectStable(await record(page, 'tail before upper layout changes'));
+      await scrollAway(page);
+      expectStable(await record(page, 'wheel-paused before upper layout changes'), { bottom: false });
+      const anchor = await page.locator('.chat-container').evaluate(async (container, targetAnchored) => {
+        const bounds = container.getBoundingClientRect();
+        const element = Array.from(container.querySelectorAll('[data-virtual-id]'))
+          .find(element => element.getBoundingClientRect().bottom > bounds.top
+            && element.getBoundingClientRect().top < bounds.bottom);
+        if (!element) throw new Error('No visible virtual row to anchor');
+        if (targetAnchored) {
+          // Exercise the mounted component's real public ref, not the currently
+          // broken search projection or a substitute implementation of anchoring.
+          function findTranscriptRef(vnode) {
+            if (!vnode) return null;
+            if (vnode.component?.refs.virtualTranscriptRef) return vnode.component.refs.virtualTranscriptRef;
+            const nested = findTranscriptRef(vnode.component?.subTree);
+            if (nested) return nested;
+            for (const child of Array.isArray(vnode.children) ? vnode.children : []) {
+              const found = findTranscriptRef(child);
+              if (found) return found;
+            }
+            return null;
+          }
+          const api = findTranscriptRef(document.querySelector('#app')._vnode);
+          const target = element.querySelector('[data-msg-id]');
+          if (!target || !api?.anchorTarget(element.dataset.virtualId, target, { align: 'start' })) {
+            throw new Error('Mounted VirtualTranscript ref did not accept the persisted target row');
+          }
+          await window.Vue.nextTick();
+          if (Math.abs(target.getBoundingClientRect().top - bounds.top) > 2) {
+            throw new Error('anchorTarget did not position the target row at the viewport start');
+          }
+        }
+        return { id: element.dataset.virtualId, top: element.getBoundingClientRect().top - bounds.top };
+      }, targetAnchored);
+      const assertAnchor = (samples, name) => {
+        expectStable(samples, { bottom: false });
+        expect(samples.slice(80).every(sample => sample.anchorTop !== null), `${name}: original visible row stays mounted`).toBe(true);
+        expect(Math.max(...samples.slice(80).map(sample => Math.abs(sample.anchorTop - anchor.top))),
+          `${name}: preserve the row viewport offset without double compensation`).toBeLessThanOrEqual(2);
+      };
+      assertAnchor(await record(page, 'settled reader anchor', { anchorId: anchor.id }), 'before status changes');
+      for (const height of [80, 160, 40, 0]) {
+        const name = `upper status ${height === 0 ? 'removed' : `${height}px`}`;
+        const samples = await record(page, name, { anchorId: anchor.id, upperResizes: [{ frame: 12, height }] });
+        expect(samples.slice(80).every(sample => sample.upperStatusHeight === height), 'status mutation must change real layout').toBe(true);
+        assertAnchor(samples, name);
+        await expect(page.locator('.scroll-to-latest')).not.toHaveClass(/is-hidden/);
+      }
+      if (!targetAnchored) {
+        const samples = await record(page, 'upper status and older history prepend together', {
+          anchorId: anchor.id, upperResizes: [{ frame: 12, height: 80 }], prepend: true,
+        });
+        expect(requests.some(request => request.type === 'yeaft_load_more_history')).toBe(true);
+        await expect.poll(() => page.evaluate(conversationId => window.Pinia.useChatStore().messagesMap[conversationId]
+          .some(row => row.id === 'm1'), CONVERSATION)).toBe(true);
+        expect(samples.slice(80).every(sample => sample.upperStatusHeight === 80)).toBe(true);
+        assertAnchor(samples, 'simultaneous upper layout and prepend');
+        await expect(page.locator('.scroll-to-latest')).not.toHaveClass(/is-hidden/);
+      }
+    });
+  });
+}
+
+test('paused reader near the bottom does not double compensate browser clamp on upper status shrink', async ({ chatPage: page, mockAgent }, testInfo) => {
+  test.setTimeout(60000);
+  await withScrollTrace(testInfo, async record => {
+    await openTranscript(page, mockAgent);
+    // This case isolates shrink above the transcript. The real sticky nav
+    // switches between 32/72px around its 100px threshold (covered by Latest
+    // cases); keep its unrelated below-transcript height fixed across gaps.
+    await page.locator('.transcript-navigation').evaluate(navigation => {
+      navigation.style.cssText = 'height: 72px; min-height: 72px; max-height: 72px; flex: none;';
+    });
+    expectStable(await record(page, 'initial tail before clamp case'));
+    for (const gap of [0, 20, 40, 100]) {
+      await page.locator('.scroll-to-latest').evaluate(button => button.click());
+      expectStable(await record(page, `upper status before paused gap ${gap}`, {
+        upperResizes: [{ frame: 12, height: 80 }],
+      }));
+      // Stay within the already measured tail; jumping several thousand pixels
+      // would unmount it and test estimate replacement rather than origin clamp.
+      await scrollAway(page, -400);
+      expectStable(await record(page, 'reader owns scroll before positioning'), { bottom: false });
+      await page.locator('.chat-container').evaluate((container, gap) => {
+        container.scrollTop = container.scrollHeight - container.clientHeight - gap;
+        const bounds = container.getBoundingClientRect();
+        const row = Array.from(container.querySelectorAll('[data-virtual-id]'))
+          .find(element => element.getBoundingClientRect().bottom > bounds.top
+            && element.getBoundingClientRect().top < bounds.bottom);
+        // This frame can still contain the previous virtual window. Capture the
+        // real visible anchor after the component has mounted its new window.
+        return row?.dataset.virtualId || null;
+      }, gap);
+      await record(page, 'settled near-bottom reader');
+      const position = await page.locator('.chat-container').evaluate(container => {
+        const bounds = container.getBoundingClientRect();
+        const row = Array.from(container.querySelectorAll('[data-virtual-id]'))
+          .find(element => element.getBoundingClientRect().bottom > bounds.top
+            && element.getBoundingClientRect().top < bounds.bottom);
+        if (!row) throw new Error('No actual visible near-bottom row');
+        return { id: row.dataset.virtualId, top: row.getBoundingClientRect().top - bounds.top,
+          gap: container.scrollHeight - container.clientHeight - container.scrollTop };
+      });
+      expect(Math.abs(position.gap - gap)).toBeLessThanOrEqual(2);
+      const samples = await record(page, `remove status with paused gap ${gap}`, {
+        anchorId: position.id, upperResizes: [{ frame: 12, height: 0 }],
+      });
+      expectStable(samples, { bottom: null });
+      expect(Math.max(...samples.slice(80).map(sample => Math.abs(sample.gap - gap)))).toBeLessThanOrEqual(2);
+      expect(samples.slice(80).every(sample => sample.anchorTop !== null)).toBe(true);
+      expect(Math.max(...samples.slice(80).map(sample => Math.abs(sample.anchorTop - position.top))),
+        'browser clamp must not be added to full origin displacement').toBeLessThanOrEqual(2);
+      await expect(page.locator('.scroll-to-latest')).not.toHaveClass(/is-hidden/);
+    }
   });
 });
 

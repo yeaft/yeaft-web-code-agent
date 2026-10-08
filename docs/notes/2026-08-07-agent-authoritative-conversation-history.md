@@ -293,7 +293,8 @@ new event
 - scroll lookup 为预计算 offsets + binary search。
 - prepend 前记录首个可见 stable key 与 offset；page commit 后恢复相对位置。
 - bottom follow 只在用户仍拥有 tail-follow 意图时执行；点击“最新”恢复该意图，显式滚轮、触摸、键盘滚动、滚动条拖动或历史定位暂停。布局测量暂时离底不取消跟随。
-- 跟随期间虚拟窗口固定选择尾部，`VirtualTranscript` 统一负责到底与高度补偿；实际滚动容器关闭浏览器原生 scroll anchoring，避免重复调整。切换到阅读或定位会使已排队的到底工作失效。
+- 跟随期间虚拟窗口固定选择尾部，`VirtualTranscript` 统一负责到底与高度补偿；仅虚拟 transcript 容器关闭浏览器原生 scroll anchoring，避免重复调整。切换到阅读或定位会使已排队的到底工作失效。
+- 暂停阅读时，虚拟行高度、prepend 与 transcript 上方状态节点的位移由同一滚动调度补偿。上方节点缩小时从布局变化前的位置恢复，避免浏览器边界 clamp 后重复补偿；目标定位使用最终 DOM 几何并消费待执行补偿。
 - 搜索定位使用 stable key/DOM child anchor；异步 Markdown、图片和 tool 展开后的高度变化继续由 active target alignment校正。
 
 分页默认 5 turns；virtual overscan 保持小值。5 turns 是网络/Agent读取批次，不是 DOM item数，也不是硬编码消息条数。Agent同时保留 maxRows/maxBytes，避免一个异常大 turn 无界返回。
