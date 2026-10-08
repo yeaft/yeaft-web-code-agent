@@ -6,6 +6,7 @@ import { loadConfig } from '../../../../agent/yeaft/config.js';
 import { AdapterRouter } from '../../../../agent/yeaft/llm/router.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { LIMITS, validateProposal } from '../../../../agent/yeaft/person/contracts.js';
+import { validateFiles } from '../../../../agent/yeaft/person/attachments.js';
 import { abortable, collectOutput, createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
@@ -155,21 +156,75 @@ describe('digital Person strict contracts', () => {
     expect(provider.catalog[0].id).toBe(expected);
     expect(normalized.availableModels.map(m => m.ref)).toEqual(before);
   });
-  it.each(['anthropic', 'openai-responses'])('reads image permission from real config and sends native %s image wire', async protocol => {
+  it.each([
+    ['anthropic', 'claude-sonnet-4-20250514', 8192, 4784],
+    ['openai-responses', 'gpt-4o-mini', 8192, 2833],
+    ['openai-responses', 'gpt-4.1-mini', 16384, Math.ceil(6144 * 1.62)],
+  ])('binds Person image accounting to native %s %s wire', async (protocol, id, tokensPerImage, visualTokenBound) => {
     const normalized = configuredModels({ providers: [{ name: 'native', protocol, apiKey: 'fixture-only', baseUrl: 'https://fixture.invalid', models: [
-      { id: 'vision-alias', supportsImages: true, contextWindow: 100000 },
+      { id, contextWindow: 128000 }, { id: 'vision-alias', supportsImages: true, contextWindow: 100000 },
       { id: 'gpt-4o', supportsImages: false }, 'o1-mini',
     ] }] });
     const provider = await createPersonProvider({ config: normalized });
-    expect(provider.catalog.map(m => m.supportsImages)).toEqual([true, false, false]);
+    expect(provider.catalog.map(m => m.supportsImages)).toEqual([true, false, false, false]);
     const fetch = stubProviderFetch();
-    const data = Buffer.from('image-bytes').toString('base64');
-    await collectOutput(provider.adapter, { model: 'native/vision-alias', system: 'Fixture', maxTokens: 256,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Inspect this untrusted image' },
-        { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] }], signal: new AbortController().signal }, () => {});
+    const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=';
+    const input = { provider, selection: provider.defaultSelection, remainingCalls: 1,
+      snapshot: { person: { id: 'p', soul: 'Honesty.' }, state: {}, messages: [], concepts: [] },
+      episode: { id: 'e', kind: 'send', text: '' },
+      attachments: validateFiles(Array.from({ length: 4 }, (_, i) => ({ name: `image-${i}.png`, mimeType: 'image/png', data }))) };
+    const context = assembleContext(input);
+    await collectOutput(provider.adapter, { model: `native/${id}`, system: context.system, maxTokens: context.maxTokens,
+      messages: context.messages, signal: new AbortController().signal }, () => {});
     const wire = JSON.parse(fetch.mock.calls[0][1].body);
-    if (protocol === 'anthropic') expect(wire.messages[0].content[1]).toMatchObject({ type: 'image', source: { data, media_type: 'image/png' } });
-    else expect(wire.input[0].content[1]).toEqual({ type: 'input_image', image_url: `data:image/png;base64,${data}` });
+    const images = protocol === 'anthropic' ? wire.messages[0].content.filter(p => p.type === 'image')
+      : wire.input[0].content.filter(p => p.type === 'input_image');
+    expect(images).toHaveLength(4);
+    for (const image of images) {
+      if (protocol === 'anthropic') expect(image).toEqual({ type: 'image', source: { type: 'base64', data, media_type: 'image/png' } });
+      else expect(image).toEqual({ type: 'input_image', image_url: `data:image/png;base64,${data}`, detail: 'low' });
+    }
+    // Explicit low detail bounds gpt-4o-mini to 2833 tokens/image regardless of
+    // resolution/compression. Auto/high would invalidate this same reservation.
+    expect(context.manifest.imageTokensReserved).toBe(4 * tokensPerImage);
+    expect(context.manifest.imageTokensReserved).toBeGreaterThanOrEqual(4 * visualTokenBound);
+    expect(context.manifest.contextBytes + context.manifest.imageTokensReserved + context.maxTokens + 1024).toBeLessThanOrEqual(128000);
+    expect(JSON.stringify(context.archiveMessages)).not.toContain(data);
+    expect(context.manifest.imageBudget).toEqual({ tokensPerImage, ...(protocol === 'anthropic' ? {} : { detail: 'low' }) });
+    const textBytes = Buffer.byteLength(context.system) + (protocol === 'anthropic' ? wire.messages[0].content : wire.input[0].content)
+      .filter(part => part.type === 'text' || part.type === 'input_text').reduce((sum, part) => sum + Buffer.byteLength(part.text), 0);
+    expect(context.manifest.contextBytes).toBe(textBytes);
+    provider.catalog[0].contextWindow = 4 * tokensPerImage + context.maxTokens + 1024;
+    expect(() => assembleContext(input)).toThrow(expect.objectContaining({ code: 'CONTEXT_LIMIT' }));
+  });
+  it('fails closed for unaccounted vision models and mismatched wire protocols', async () => {
+    const normalized = configuredModels({ providers: [
+      { name: 'wrong', protocol: 'anthropic', models: [{ id: 'gpt-4o-mini', supportsImages: true }] },
+      { name: 'right', protocol: 'anthropic', models: [{ id: 'gpt-4o-mini', protocol: 'openai-responses' }] },
+      { name: 'mixed', protocol: 'openai-responses', models: [
+        { id: 'claude-sonnet-4', protocol: 'anthropic' }, { id: 'gpt-4o', supportsImages: false },
+        { id: 'gpt-5-future', supportsImages: true }, { id: 'vision-alias', supportsImages: true }, 'gemini-2.5-pro',
+      ] },
+    ] });
+    const provider = await createPersonProvider({ config: normalized, adapter: {} });
+    expect(provider.catalog.map(m => [m.id, m.supportsImages])).toEqual([
+      ['wrong/gpt-4o-mini', false], ['right/gpt-4o-mini', true], ['mixed/claude-sonnet-4', true],
+      ['mixed/gpt-4o', false], ['mixed/gpt-5-future', false], ['mixed/vision-alias', false], ['mixed/gemini-2.5-pro', false],
+    ]);
+    for (const model of provider.catalog.filter(m => !m.supportsImages)) {
+      expect(model.imageBudget).toBeNull();
+      expect(() => assembleContext({ provider, selection: { model: model.id, effort: null }, remainingCalls: 1,
+        snapshot: { person: { soul: '' }, state: {}, messages: [], concepts: [] }, episode: {},
+        attachments: [{ kind: 'image' }] })).toThrow(expect.objectContaining({ code: 'IMAGE_MODEL' }));
+    }
+  });
+  it('uses normalized managed-provider protocols for image accounting', async () => {
+    const id = 'gpt-4o-mini';
+    const provider = await createPersonProvider({ config: {
+      providers: [{ name: 'github-copilot', protocol: 'anthropic', models: [{ id, protocol: 'anthropic' }] }],
+      availableModels: [{ id, ref: `github-copilot/${id}`, contextWindow: 128000, maxOutput: 4096 }],
+    }, adapter: {} });
+    expect(provider.catalog[0].imageBudget).toEqual({ detail: 'low', tokensPerImage: 8192 });
   });
   it('uses config.model when primaryModel is absent', async () => {
     const provider = await createPersonProvider({ config: { ...config, primaryModel: null, model: 'second' }, adapter: {} });

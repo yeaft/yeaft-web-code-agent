@@ -64,7 +64,19 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 
 模型当前 trigger 带有完整但有界的文本内容，标记 `untrusted-user-content`，图片通过独立 image block 传递。来源同时关联 trigger 与持久 `message:<id>:1`；附件内容不是系统指令。历史和 Recall 的附件只有 metadata，不表示再次读取了历史文件内容；上下文明确说明这一点。本版本不自动重发历史原件，避免隐式大量图片/文字注入。trace 记录文本请求副本、图片 metadata 与预算，**不记录图片 base64**；文本附件内容和普通用户正文一样属于 owner-scoped 敏感 trace。
 
-每次调用保留原有整体 64 KiB 文本上下文上限，并为每幅图片预留 8192 input tokens，计入模型 context window 检查；不足时明确 `CONTEXT_LIMIT`。图片可能按 provider 自身规则产生不同 token 计费，预留值不是 provider 的精确计费预测。
+每次调用保留原有整体 64 KiB 文本上下文上限。图片预算由已审核的 **模型 ID + 实际 wire 协议** 决定，而不是文件压缩大小或单独的 vision flag；预算随每次模型选择重新计算，不足时明确 `CONTEXT_LIMIT`，不静默删图。每次请求满足 `文本 UTF-8 bytes + 图片预留 tokens + maxOutput + 1024 envelope ≤ contextWindow`。trace manifest 的 `imageBudget`、`imageTokensReserved` 与真实 content blocks 使用同一策略：
+
+| 模型 / 协议 | 实际图片 wire | 每图预留 |
+| --- | --- | --- |
+| GPT-4o / 4o-mini、GPT-4.1、GPT-5 / 5.1、o1 / o1-pro / o3；`openai-responses` | 强制 `detail: "low"`，adapter 原样透传；不是默认 `auto` | 8192 tokens |
+| GPT-4.1-mini、GPT-5.2 / 5.4 / 5.5；`openai-responses` | 强制 `detail: "low"`；这些 patch 模型的 low 不一定比 high 便宜 | 16384 tokens |
+| Claude 3 Haiku/Sonnet/Opus、3.5 Haiku/Sonnet、3.7 Sonnet；Sonnet 4/4.5/4.6、Opus 4/4.1/4.5/4.6/4.7/4.8、Haiku 4.5；`anthropic` | 原生 image block，由 provider 有界缩放 | 8192 tokens |
+
+已审核家族可使用日期快照后缀；Claude 同时接受 `4.5` / `4-5` 命名和 `-latest`。其他别名、未来变种、Gemini 或不匹配的协议均没有已证明的预算，保守不开放 Person 图片输入，即使配置了 `supportsImages:true`。这里只收紧 Person，不改变其他原生引擎调用的默认 detail。
+
+上界依据：[OpenAI 图像 detail 与 tokenization](https://developers.openai.com/api/docs/guides/images-vision) 规定上述 tile 模型 low 只收基础 tokens，与尺寸无关，最高为 GPT-4o-mini 的 **2833**；patch 组 low 上界不超过 **6144 patches × 1.62**，向上取整后仍低于 16384。[Claude 缩放规则](https://platform.claude.com/docs/en/build-with-claude/vision-coordinates#how-claude-resizes-and-pads-images) 同时约束边长与 visual token budget，标准/高分辨率分别不超过 **1568 / 4784**，8192 保留额外余量。这是输入上界预留，不是精确计费预测；供应商变更这些规则后需重新审核。兼容端点也必须遵守其所声明模型及协议的图像语义。
+
+图片始终以真实 base64 多模态内容送达模型；low detail 会降低小字、密集截图、精确坐标等任务的辨识质量，不应声称已完整读出原图细节。用户可在上传前裁剪相关区域，不能通过模型输出或附件元数据请求绕过 low。provider 仍可因无效图像、尺寸、动画等自身限制拒绝请求；本修复不新增解码器或图像处理依赖。
 
 ## Owner-scoped 候选模型
 
@@ -74,10 +86,10 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 
 - `[]` 重置为 Agent 的默认允许候选集（默认模型优先、最多前 8 个），不更改实例全局配置。显式列表只能有 **1–8 个**模型，超过 8 个直接拒绝，不静默截断。
 - 只允许可选 native catalog 中的 provider-qualified refs，拒绝未知、重复、非字符串和 bare IDs；原有部署级 `allowedModels` 是更外层限制。
-- 状态返回 `models:[{id,efforts,maxOutput,contextWindow,supportsImages}]`、同内容的 `availableModels` 与持久化 `modelCandidates:[...]`；浏览器可读 `availableModels ?? models`。可选目录与 episode 候选集分离，前者最多 **100 个**允许且可用的已配置模型，超过时 `availableModelsTruncated:true`，不含 endpoint/key 等秘密；第 9–100 个模型也可显式选中。后者始终最多 8 个，只有该子集进入模型上下文。
+- 状态返回 `models:[{id,efforts,maxOutput,contextWindow,supportsImages,imageBudget}]`、同内容的 `availableModels` 与持久化 `modelCandidates:[...]`；浏览器可读 `availableModels ?? models`。可选目录与 episode 候选集分离，前者最多 **100 个**允许且可用的已配置模型，超过时 `availableModelsTruncated:true`，不含 endpoint/key 等秘密；第 9–100 个模型也可显式选中。后者始终最多 8 个，只有该子集进入模型上下文。
 - settings 写入既有 Person owner settings。busy 时禁止更改；episode admission 保存列表副本与 controlVersion，runtime 只使用该副本与本次 provider 配置快照。调用中的模型选择和后继 proposal 都不能逃离这个子集。
 - 已保存候选从 Agent catalog 移除后，status 返回 `modelReady:false`，仍返回完整可选目录供恢复；episode 明确失败，不自动扩权使用其他模型。仍可重选或用 `[]` 重置。
-- 图片能力优先读取原生 model/provider `supportsImages` 显式值；已知 Claude 3/4、GPT-4o/4.1/5、o1/o3/o4、Gemini 命名作为默认推断，未知别名保守不支持。需要图片时，只能在 owner 子集中选择图片候选；没有则 `IMAGE_MODEL`，不把图片默默丢掉。
+- 图片能力仅对上表具有已审核预算的模型/协议开放；原生 model/provider `supportsImages:false` 仍可显式关闭，`true` 不能为未知计费模型扩权。协议按实际 router 的 model override → provider override → ID 推断决定，managed provider 先使用相同的规范化。需要图片时，只能在 owner 子集中选择图片候选；没有则 `IMAGE_MODEL`，不把图片默默丢掉。
 
 ## 验证范围
 

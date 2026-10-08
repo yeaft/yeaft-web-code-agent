@@ -5,6 +5,10 @@ export const config = {
     { id: 'second', ref: 'test/second', contextWindow: 100000, maxOutput: 4096, effortOptions: ['low', 'high'] },
   ],
 };
+export const imageConfig = {
+  providers: [{ name: 'test', models: ['gpt-4o-mini', 'gpt-4.1-mini'] }], primaryModel: 'test/gpt-4o-mini',
+  availableModels: ['gpt-4o-mini', 'gpt-4.1-mini'].map(id => ({ id, ref: `test/${id}`, contextWindow: 128000, maxOutput: 4096 })),
+};
 export const finalProposal = (version = 0) => ({
   baseStateVersion: version, activity: { kind: 'think', summary: 'Reconsider the available experience.', sourceRefs: [] },
   decision: { summary: 'Keep an unresolved question.', uncertainties: ['No independent evidence yet.'], selfCheck: 'A hypothesis is not a fact.' },

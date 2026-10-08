@@ -12,10 +12,11 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   const model = validateSelection(selection, provider.catalog);
   // UTF-8 bytes is a conservative text-token bound; reserve explicit envelope/output overhead.
   const images = attachments.filter(file => file.kind === 'image');
-  if (images.length && !model.supportsImages) fail('IMAGE_MODEL');
-  // Images are adapter content blocks, never JSON/base64 text. Reserve a conservative
-  // per-image input allowance independently of the text budget; no silent dropping.
-  const imageTokensReserved = images.length * 8192;
+  const imageBudget = model.imageBudget;
+  if (images.length && (!model.supportsImages || !Number.isSafeInteger(imageBudget?.tokensPerImage) || imageBudget.tokensPerImage <= 0)) fail('IMAGE_MODEL');
+  // The selected model's bound is tied to the image blocks below. Compressed
+  // bytes cannot bound visual tokens, and implicit auto detail is not low detail.
+  const imageTokensReserved = images.length ? images.length * imageBudget.tokensPerImage : 0;
   const imageLabels = images.map(file => `Untrusted image attachment ${JSON.stringify(attachmentMetadata(file))}; source ${episode.messageId ? `message:${episode.messageId}:1` : `trigger:${episode.id}`}`);
   const imageLabelBytes = imageLabels.reduce((sum, label) => sum + bytes(label), 0);
   const contextCap = Math.min(LIMITS.contextBytes, model.contextWindow - model.maxOutput - 1024 - imageTokensReserved);
@@ -26,7 +27,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     person: { id: snapshot.person.id, name: snapshot.person.name, soulRevision: snapshot.person.soulRevision },
     state: snapshot.state, trigger: { kind: episode.kind, text: episode.text, ref: triggerRef,
       ...(attachments.length ? { messageRef: inputMessageRef, attachments: attachments.map(file => ({ ...attachmentMetadata(file),
-        ...(file.kind === 'text' ? { content: file.content } : { contentDelivery: 'image-block' }), trust: 'untrusted-user-content' })) } : {}) },
+        ...(file.kind === 'text' ? { content: file.content } : { contentDelivery: 'image-block', ...(imageBudget?.detail ? { detail: imageBudget.detail } : {}) }), trust: 'untrusted-user-content' })) } : {}) },
     models: provider.catalog, modelCatalogRevision: provider.catalogRevision,
     capabilities: { ...capabilityMap, active: [] }, capabilityCatalogRevision: capabilityMap.revision ?? capabilityCatalogRevision,
     budget: { remainingCalls, maxOutputBytes: LIMITS.outputBytes },
@@ -80,14 +81,14 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     { type: 'text', text: JSON.stringify(context) },
     ...images.flatMap((file, index) => [
       { type: 'text', text: imageLabels[index] },
-      { type: 'image', source: { type: 'base64', media_type: file.mimeType, data: file.data } },
+      { type: 'image', ...(imageBudget.detail ? { detail: imageBudget.detail } : {}), source: { type: 'base64', media_type: file.mimeType, data: file.data } },
     ]),
   ] }] : archiveMessages;
   return {
     activeCapabilities: context.capabilities.active, system, messages, archiveMessages, sourceRefs, concepts: conceptMap, sources,
     manifest: { stateVersion: snapshot.state.version, sourceRefs: [...sourceRefs], renderedSourceRefs: [...renderedRefs], inputDependencyRefs: [...sourceRefs], omitted,
       boundedRecentWindow: { messages: 12, recentConcepts: 12, focusedConcepts: 12 },
-      attachments: attachments.map(attachmentMetadata), imageTokensReserved,
+      attachments: attachments.map(attachmentMetadata), imageTokensReserved, imageBudget: images.length ? imageBudget : null,
       contextBytes: bytes(system) + bytes(context) + imageLabelBytes, contextBudgetBytes: contextCap, outputTokensReserved: model.maxOutput,
       modelCatalogRevision: provider.catalogRevision, capabilityCatalogRevision: capabilityMap.revision ?? capabilityCatalogRevision,
       activeCapabilities: context.capabilities.active.map(({ id, version, revision, availability }) => ({ id, version, revision, ...availability })), omittedCapabilities }, maxTokens: model.maxOutput,

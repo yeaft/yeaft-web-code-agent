@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { MongoPersonRepository } from '../../../../agent/yeaft/person/repository.js';
-import { config, finalProposal } from './fixtures.js';
+import { config, imageConfig, finalProposal } from './fixtures.js';
 
 // Explicit isolated replica-set opt-in. Never point this suite at a production database.
 const uri = process.env.PERSON_TEST_MONGO_URI;
@@ -111,16 +111,16 @@ suite('Person real MongoDB replica-set integration', () => {
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=';
     const files = [{ name: 'pixel.png', mimeType: 'image/png', data: png },
       { name: 'notes.md', mimeType: 'text/markdown', data: Buffer.from('Mongo durable UTF-8 附件').toString('base64') }];
-    const native = { ...config, availableModels: config.availableModels.map(m => ({ ...m, supportsImages: true })) };
+    const native = imageConfig;
     const adapter = adapterFor((context, params) => {
       seen.push(params);
       expect(context.trigger.attachments[1]).toMatchObject({ content: 'Mongo durable UTF-8 附件', trust: 'untrusted-user-content' });
       expect(params.messages[0].content.find(part => part.type === 'image').source.data).toBe(png);
-      expect(params.model).toBe('test/second');
+      expect(params.model).toBe('test/gpt-4.1-mini');
       const p = finalProposal(context.state.version); p.concepts = []; p.state.focusConceptIds = []; return p;
     });
     const s = create(namespace, adapter, { config: native });
-    await call(s, 'open'); await call(s, 'settings', { modelCandidates: ['test/second'] });
+    await call(s, 'open'); await call(s, 'settings', { modelCandidates: ['test/gpt-4.1-mini'] });
     const request = { clientMessageId: 'files', text: '', files };
     const accepted = await call(s, op, request);
     expect(await call(s, op, request)).toMatchObject({ duplicate: true, episodeId: accepted.episodeId });
@@ -134,7 +134,7 @@ suite('Person real MongoDB replica-set integration', () => {
     const receipt = await call(restarted, 'receipt', { clientMessageId: 'files' });
     expect(receipt).toMatchObject({ found: true, episodeId: accepted.episodeId, status: 'completed', kind: op, text: '', attachments: [{ name: 'pixel.png' }, { name: 'notes.md' }] });
     expect(JSON.stringify(receipt)).not.toContain(png);
-    expect((await call(restarted, 'status')).modelCandidates).toEqual(['test/second']);
+    expect((await call(restarted, 'status')).modelCandidates).toEqual(['test/gpt-4.1-mini']);
     expect(await call(restarted, op, structuredClone(request))).toMatchObject({ duplicate: true, episodeId: accepted.episodeId });
     await expect(call(restarted, op, { ...request, files: [files[0]] })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     await expect(call(restarted, 'receipt', { clientMessageId: 'files', requestHash: '0'.repeat(64) })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });

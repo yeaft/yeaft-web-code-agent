@@ -8,7 +8,7 @@ import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
-import { config, finalProposal } from './fixtures.js';
+import { config, imageConfig, finalProposal } from './fixtures.js';
 
 const files = (value = 'Private UTF-8 notes: 好奇心', name = 'notes.md', mimeType = 'text/markdown') => [{ name, mimeType, data: Buffer.from(value).toString('base64') }];
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=';
@@ -64,7 +64,7 @@ describe('Person attachment validation', () => {
     ['image/png', png], ['image/jpeg', Buffer.from('ffd8ffe000104a464946', 'hex').toString('base64')],
     ['image/gif', Buffer.from('GIF89a012345').toString('base64')], ['image/webp', Buffer.from('RIFF0123WEBPVP8 ').toString('base64')],
   ])('builds actual %s multimodal blocks and metadata-only archive', async (mimeType, data) => {
-    const provider = await createPersonProvider({ config: { ...config, availableModels: [{ ...config.availableModels[0], supportsImages: true }] }, adapter: {} });
+    const provider = await createPersonProvider({ config: imageConfig, adapter: {} });
     const attachments = validateFiles([{ name: 'image', mimeType, data }]);
     const context = assembleContext({ snapshot: { person: { id: 'p', soul: 's' }, state: {}, messages: [], concepts: [] },
       episode: { id: 'e', kind: 'send', text: '', messageId: 'user-message' }, provider, selection: provider.defaultSelection, remainingCalls: 1, attachments });
@@ -120,7 +120,7 @@ describe('Person durable attachment admission', () => {
 
   it('keeps image base64 out of history/traces and fails explicitly if no owner candidate permits images', async () => {
     const dir = await directory(), seen = [];
-    const s = service(dir, { config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, supportsImages: true })) }, adapter: adapter(seen) });
+    const s = service(dir, { config: imageConfig, adapter: adapter(seen) });
     await call(s, 'open');
     await call(s, 'send', { files: [image], clientMessageId: 'picture' });
     expect((await idle(s)).latestEpisode.status).toBe('completed');
