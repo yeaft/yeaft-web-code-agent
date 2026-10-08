@@ -215,6 +215,17 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.retryCommand).toBeNull();
   });
 
+  it('reconciles an admitted Dream whose payload has no text field', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'dream' ? false : undefined);
+    const pending = f.controller.command('dream');
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    f.auto(r => r.op === 'receipt' ? { found: true, episodeId: 'episode-1', status: 'completed', kind: 'dream', text: '' } : undefined);
+    expect(await f.controller.command('dream', '', true)).toBe(true);
+    expect(f.requests.filter(r => r.op === 'dream')).toHaveLength(1);
+    expect(f.state.retryCommand).toBeNull();
+  });
+
   it('never transfers an uncertain command between owners', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'think' ? false : undefined);

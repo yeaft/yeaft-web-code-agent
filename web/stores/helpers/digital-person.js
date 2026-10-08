@@ -291,7 +291,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
         const receipt = await request('receipt', { clientMessageId: envelope.payload.clientMessageId });
         if (!current(g)) return false;
         if (receipt.found) {
-          if (receipt.kind !== envelope.op || receipt.text !== envelope.payload.text) throw failure('idempotency_conflict');
+          if (receipt.kind !== envelope.op || receipt.text !== (envelope.payload.text ?? '')) throw failure('idempotency_conflict');
           data = receipt;
         } else {
           if (!state.configured || state.modelReady === false) throw failure('model_unavailable');
