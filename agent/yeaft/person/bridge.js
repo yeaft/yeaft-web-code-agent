@@ -64,7 +64,9 @@ export function createPersonBridge({
       // Driver/provider messages can include credential-bearing URLs. Never relay them.
       const safeErrors = {
         BUSY: 'The digital person is busy; wait or cancel before trying again',
-        INVALID_REQUEST: 'Invalid digital person input (maximum 8192 UTF-8 bytes)',
+        INVALID_REQUEST: response.op === 'settings'
+          ? 'Invalid digital person settings; use a non-empty name of at most 160 UTF-8 bytes and valid settings fields'
+          : 'Invalid digital person request',
         INVALID_ATTACHMENT: 'Invalid digital person attachment',
         UNSUPPORTED_ATTACHMENT: 'Use PNG/JPEG/WebP/GIF images or UTF-8 text; PDF and binary files are not supported',
         ATTACHMENT_LIMIT: 'Maximum 4 attachments, 5 MiB each, 10 MiB total; text plus extracted content must fit 24 KiB',

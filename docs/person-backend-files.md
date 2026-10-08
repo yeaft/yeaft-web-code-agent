@@ -95,6 +95,14 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 - 已保存候选从 Agent catalog 移除后，status 返回 `modelReady:false`，仍返回完整可选目录供恢复；episode 明确失败，不自动扩权使用其他模型。仍可重选或用 `[]` 重置。
 - 图片能力仅对上表具有已审核预算的模型/协议开放；原生 model/provider `supportsImages:false` 仍可显式关闭，`true` 不能为未知计费模型扩权。协议按实际 router 的 model override → provider override → ID 推断决定，managed provider 先使用相同的规范化。需要图片时，只能在 owner 子集中选择图片候选；没有则 `IMAGE_MODEL`，不把图片默默丢掉。
 
+## 名字与等待态兼容
+
+`settings` 接受可选 `name`，trim 后须非空且不超过 **160 UTF-8 bytes**。只改名字不需要模型可用，不启动思考，不改 Person 身份、历史、状态或未提供的持久设置；设置响应与 trace 仍只投影公开字段。
+
+`status.renameSupported:true` 表示 Agent 支持修改名字。浏览器将缺失此字段的旧 Agent 视为不支持，禁用名字输入并提示升级，其他模型配置仍可操作。旧 Agent（如 `1.0.596`）不接受 `name` 字段，不能仅升级 Web 后直接调用重命名。Agent 升级／重启属于单独的运行操作。
+
+对话等待时使用共享 typing loading 与 Composer 等待状态，停止操作留在 Composer；顶部不展示“处理中／取消”。普通对话不显示 tool call 或原始调试信息，思考与调试仍通过独立只读面板查看。连接中断时显示连接状态，而非持续伪装成正在生成。
+
 ## 验证范围
 
 聚焦测试覆盖 SQLite 真数据库的 attachment-only send/think、原件重启保留、owner/namespace fence、哈希冲突、实际 image block 与无 base64 trace、完整候选 catalog、跨 service busy settings 和 proposal 越界拒绝。Server 测试覆盖全量引用解析、未归属/跨 owner/过期/超限拒绝与 lost-response 重试。Mongo 测试仅在显式隔离 replica-set 环境 `PERSON_TEST_MONGO_URI` 下运行；不得指向线上数据库。

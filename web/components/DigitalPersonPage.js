@@ -88,6 +88,7 @@ export default {
     });
     Vue.onUpdated(keepPanelFocus);
     const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
+    const responding = Vue.computed(() => !gate.value && (state.busy || state.commandPending));
     const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.settingsPending && !state.retryCommand);
     const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.uploadError) ? 'person.filesFailed' : ''));
     const canSend = Vue.computed(() => canCompose.value && filesReady.value && (!!draft.value.trim() || !!attachments.value.length));
@@ -162,7 +163,7 @@ export default {
     Vue.watch(compactPanel, async compact => {
       if (compact && panel.value) { await Vue.nextTick(); closePanelButton.value?.focus(); }
     });
-    Vue.watch(() => state.messages.at(-1)?.id, async () => {
+    Vue.watch(() => [state.messages.at(-1)?.id, responding.value], async () => {
       const pane = messagePane.value;
       const nearBottom = pane && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 120;
       await Vue.nextTick();
@@ -178,7 +179,7 @@ export default {
     }
     const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, returnButton, gate, ready, canCompose, controller, command, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, returnButton, gate, ready, responding, canCompose, controller, command, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -192,14 +193,12 @@ export default {
             <NavigationIcon name="chevron" :size="14" />
             <h1 :title="state.person?.name || $t('person.title')">{{ state.person?.name || $t('person.title') }}</h1>
           </div>
-          <div class="person-status" role="status" aria-live="polite">
-            <span class="person-status-dot" :class="{ ready, busy: state.busy || state.commandPending }" aria-hidden="true"></span>
+          <div v-if="!responding" class="person-status" role="status" aria-live="polite">
+            <span class="person-status-dot" :class="{ ready }" aria-hidden="true"></span>
             <span v-if="gate">{{ $t('person.' + gate) }}</span>
             <span v-else-if="state.loading">{{ $t('person.loading') }}</span>
-            <span v-else-if="state.busy || state.commandPending">{{ $t('person.busy') }}</span>
             <span v-else-if="ready">{{ $t('person.ready') }}</span>
             <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
-            <button v-if="state.busy" type="button" class="btn-ghost" @click="controller.cancel()" :disabled="!!gate || state.cancelPending">{{ $t(state.cancelPending ? 'person.cancelling' : 'common.cancel') }}</button>
           </div>
         </div>
         <div class="person-header-actions">
@@ -233,7 +232,7 @@ export default {
           <div ref="messagePane" class="person-messages" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading">
             <div class="person-reading-column">
               <button v-if="state.messageCursor != null" type="button" class="btn-ghost person-load-more" @click="controller.page('messages', true)" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
-              <div v-if="!state.messages.length && ready" class="person-welcome"><NavigationIcon name="activity" :size="28" /><h2>{{ $t('person.welcome') }}</h2><p>{{ $t('person.empty') }}</p></div>
+              <div v-if="!state.messages.length && ready && !responding" class="person-welcome"><NavigationIcon name="activity" :size="28" /><h2>{{ $t('person.welcome') }}</h2><p>{{ $t('person.empty') }}</p></div>
               <template v-for="message in state.messages" :key="message.id">
                 <div v-if="message.role === 'user'">
                   <UserTurnBlock :message="asUserMessage(message)" :session-actions="false" />
@@ -244,13 +243,16 @@ export default {
                   <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
                 </article>
               </template>
+              <div v-if="responding" class="typing-indicator person-response-loading" role="status" :aria-label="$t(state.cancelPending ? 'person.cancelling' : 'person.busy')">
+                <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+              </div>
             </div>
           </div>
           <div class="input-area person-composer">
             <label class="person-sr-only" for="person-input">{{ $t('person.input') }}</label>
-            <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="state.commandPending" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')"
+            <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="responding" :show-stop="!gate && state.busy" :stop-disabled="state.cancelPending" :stop-label="$t(state.cancelPending ? 'person.cancelling' : 'chatInput.stop')" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')"
               keyboard-send attachments-enabled :attachments="attachments" :attachment-accept="PERSON_FILE_ACCEPT"
-              @send="command('send')" @files-selected="addFiles" @retry-attachment="retryAttachment" @remove-attachment="removeAttachment">
+              @send="command('send')" @stop="controller.cancel()" @files-selected="addFiles" @retry-attachment="retryAttachment" @remove-attachment="removeAttachment">
               <template #start-actions>
                 <button type="button" class="btn-ghost" :disabled="!canCompose || !filesReady" @click="command('think')" :title="$t('person.thinkHint')">{{ $t('person.think') }}</button>
                 <button type="button" class="btn-ghost" :disabled="!canCompose" @click="command('dream')">{{ $t('person.dream') }}</button>
@@ -309,7 +311,7 @@ export default {
           <PersonDebugLog v-if="panel === 'debug'" :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
         </aside>
       </div>
-      <PersonSettingsModal v-if="settingsOpen" :name="state.person?.name || ''" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :loading="state.loading" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
+      <PersonSettingsModal v-if="settingsOpen" :name="state.person?.name || ''" :rename-supported="state.renameSupported" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :loading="state.loading" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
     </div>
   `,
 };

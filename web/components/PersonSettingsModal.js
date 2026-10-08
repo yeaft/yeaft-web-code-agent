@@ -11,6 +11,7 @@ export default {
   components: { NavigationIcon },
   props: {
     name: { type: String, default: '' },
+    renameSupported: Boolean,
     models: { type: Array, default: () => [] },
     candidates: { type: Array, default: () => [] },
     saving: Boolean,
@@ -51,7 +52,7 @@ export default {
     function save() {
       if (!cannotSave.value) {
         const update = {};
-        if (personName.value.trim() !== props.name) update.name = personName.value.trim();
+        if (props.renameSupported && personName.value.trim() !== props.name) update.name = personName.value.trim();
         if (edited.value) update.modelCandidates = followingDefault.value ? [] : [...selected.value];
         emit('save', update);
       }
@@ -120,8 +121,9 @@ export default {
         </header>
         <div class="person-settings-body">
           <label class="person-name-field" for="person-name">{{ $t('person.name') }}
-            <input id="person-name" v-model="personName" @input="nameEdited = true" :disabled="controlsDisabled" :aria-invalid="invalidName" maxlength="160" autocomplete="off">
+            <input id="person-name" v-model="personName" @input="nameEdited = true" :disabled="controlsDisabled || !renameSupported" :aria-invalid="invalidName" maxlength="160" autocomplete="off">
           </label>
+          <p v-if="!renameSupported" class="person-settings-help" role="status">{{ $t('person.renameUpgrade') }}</p>
           <p v-if="invalidName" class="person-settings-error" role="alert">{{ $t('person.nameInvalid') }}</p>
           <div class="person-model-fields" @change="edited = true">
             <div class="person-settings-intro">

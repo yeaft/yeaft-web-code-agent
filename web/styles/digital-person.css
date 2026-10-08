@@ -37,7 +37,10 @@
 .person-panel-header .person-debug-link { color: var(--text-muted); font-size: 12px; }
 .person-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
 .person-status-dot.ready { background: var(--success); }
-.person-status-dot.busy { background: var(--accent-blue); }
+@media (prefers-reduced-motion: reduce) {
+  .person-response-loading.typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { animation: none; }
+  .person-composer .message-composer-spinner { animation: none; }
+}
 .person-conversation { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .person-messages { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--work-center-space-4) var(--agent-setup-space-lg); }
 .person-reading-column { width: min(var(--session-content-width), 880px); margin: 0 auto; }

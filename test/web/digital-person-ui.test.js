@@ -28,7 +28,7 @@ beforeEach(() => {
     sendWsMessage(request) {
       requests.push(request);
       const data = {
-        status: { configured, reason: 'Model unavailable', models: [{ id: 'provider/a' }, { id: 'provider/b' }] }, open: {},
+        status: { configured, renameSupported: true, reason: 'Model unavailable', models: [{ id: 'provider/a' }, { id: 'provider/b' }] }, open: {},
         snapshot: { person: { id: 'p', name: 'Ada' }, state: { version: 4 }, messages: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], busy: false },
         messages: { items: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], nextCursor: null }, traces: { items: personRecords(), nextCursor: 'older' },
         think: { episodeId: 'e' }, send: { episodeId: 'e' }, settings: { settings: { modelCandidates: request.payload.modelCandidates || [] }, person: { id: 'p', name: request.payload.name || 'Ada', settings: { modelCandidates: request.payload.modelCandidates || [] } } },
@@ -222,6 +222,51 @@ describe('Digital Person surface', () => {
     expect(think.attributes('disabled')).toBeDefined();
   });
 
+  it('shows conversation loading from admission through completion, without header cancel or tool calls', async () => {
+    await render();
+    expect(wrapper.find('.person-response-loading').exists()).toBe(false);
+    wrapper.vm.state.commandPending = true;
+    await Vue.nextTick();
+    expect(wrapper.get('.person-response-loading').attributes('role')).toBe('status');
+    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('person.busy'));
+    expect(wrapper.get('.person-response-loading').findAll('span[aria-hidden="true"]')).toHaveLength(3);
+    expect(wrapper.find('.person-status').exists()).toBe(false);
+    expect(wrapper.find('.message-composer-spinner').exists()).toBe(true);
+    expect(wrapper.find('.stop-btn').exists()).toBe(false); // No episode to stop before admission.
+    wrapper.vm.state.commandPending = false;
+    wrapper.vm.state.busy = true;
+    wrapper.vm.state.episodeId = 'e';
+    await Vue.nextTick();
+    expect(wrapper.find('.person-response-loading').exists()).toBe(true);
+    expect(wrapper.get('.person-composer .stop-btn').attributes('aria-label')).toBe(t('chatInput.stop'));
+    expect(wrapper.find('.person-header .stop-btn, .tool-line, .person-debug-row').exists()).toBe(false);
+    const cancel = vi.spyOn(wrapper.vm.controller, 'cancel').mockResolvedValue();
+    await wrapper.get('.person-composer .stop-btn').trigger('click');
+    expect(cancel).toHaveBeenCalledOnce();
+    wrapper.vm.state.cancelPending = true;
+    await Vue.nextTick();
+    expect(wrapper.get('.stop-btn').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('person.cancelling'));
+    wrapper.vm.state.cancelPending = false;
+    chat.connectionState = 'reconnecting';
+    await Vue.nextTick();
+    expect(wrapper.find('.person-response-loading, .stop-btn').exists()).toBe(false);
+    expect(wrapper.get('.person-status').text()).toContain(t('person.disconnected'));
+  });
+
+  it('clears loading after completion without losing the conversation', async () => {
+    await render();
+    wrapper.vm.state.busy = true;
+    await Vue.nextTick();
+    expect(wrapper.find('.person-response-loading').exists()).toBe(true);
+    wrapper.vm.state.busy = false;
+    await Vue.nextTick();
+    expect(wrapper.find('.person-response-loading, .message-composer-spinner, .stop-btn').exists()).toBe(false);
+    expect(wrapper.get('.person-status').text()).toContain(t('person.ready'));
+    expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
+  });
+
   it('waits for the complete reconnect auth handshake before opening and never resends commands', async () => {
     await render();
     chat.authenticated = false;
@@ -303,6 +348,33 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('.person-knowledge').text()).toContain('Script.sum');
     expect(wrapper.get('#person-conversation').isVisible()).toBe(true);
     expect(requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+  });
+
+  it('keeps model settings usable but disables rename for an older Agent without the capability', async () => {
+    const send = chat.sendWsMessage;
+    chat.sendWsMessage = request => {
+      if (request.op !== 'status') return send(request);
+      requests.push(request);
+      queueMicrotask(() => acceptPersonResponse(chat, { ...request, type: 'person_response', ok: true,
+        data: { configured: true, models: [{ id: 'provider/a' }] } }));
+      return true;
+    };
+    await render();
+    await wrapper.get('.person-settings-button').trigger('click');
+    expect(wrapper.get('#person-name').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[role="dialog"]').text()).toContain(t('person.renameUpgrade'));
+    await wrapper.get('#person-name').setValue('Not supported');
+    await wrapper.get('.person-model-default input').setValue(false);
+    await wrapper.get('.person-model-list input').setValue(true);
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click');
+    await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: ['provider/a'] });
+    expect(wrapper.get('.person-breadcrumb h1').text()).toBe('Ada');
+    chat.sendWsMessage = send;
+    await wrapper.vm.controller.refresh();
+    await wrapper.get('.person-settings-button').trigger('click');
+    expect(wrapper.get('#person-name').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('[role="dialog"]').text()).not.toContain(t('person.renameUpgrade'));
   });
 
   it('searches archived messages without replacing the conversation or losing the draft', async () => {

@@ -387,8 +387,9 @@ export class SqlitePersonStore {
     if (p.activeEpisodeId) fail('BUSY');
     const { name, ...patch } = settings;
     if (Object.hasOwn(settings, 'name')) p.name = personName(name);
-    p.settings = { ...settingsView(p.settings), ...patch }; p.controlVersion++; p.writeSerial++; this.put('persons', p);
-    if (Object.keys(settings).length) this.trace(ownerId, null, 'settings', { settings: p.settings, ...(name !== undefined ? { name: p.name } : {}) });
+    // A partial update must preserve durable fields omitted from the public view.
+    p.settings = { ...p.settings, ...patch }; p.controlVersion++; p.writeSerial++; this.put('persons', p);
+    if (Object.keys(settings).length) this.trace(ownerId, null, 'settings', { settings: settingsView(p.settings), ...(name !== undefined ? { name: p.name } : {}) });
     return { settings: settingsView(p.settings), person: this.personView(p) };
   }
   inspect(ownerId, options) {

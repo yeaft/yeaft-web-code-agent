@@ -420,10 +420,11 @@ export class MongoPersonRepository {
       if (p.activeEpisodeId) fail('BUSY'); // No implicit background API or deferred control effects.
       const { name, ...patch } = settings;
       if (Object.hasOwn(settings, 'name')) p.name = personName(name);
-      const next = { ...settingsView(p.settings), ...patch };
+      // A partial update must preserve durable fields omitted from the public view.
+      const next = { ...p.settings, ...patch };
       await this.collections.persons.updateOne(scope, { $set: { settings: next, name: p.name }, $inc: { controlVersion: 1, writeSerial: 1 } }, { session });
-      if (Object.keys(settings).length) await this.trace(session, p, null, 'settings', { settings: next, ...(name !== undefined ? { name: p.name } : {}) });
-      return { settings: next, person: this.personView({ ...p, settings: next }) };
+      if (Object.keys(settings).length) await this.trace(session, p, null, 'settings', { settings: settingsView(next), ...(name !== undefined ? { name: p.name } : {}) });
+      return { settings: settingsView(next), person: this.personView({ ...p, settings: next }) };
     });
   }
   async inspect(ownerId, options) {

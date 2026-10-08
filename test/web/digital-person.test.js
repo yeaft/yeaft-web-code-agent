@@ -23,7 +23,7 @@ function fixture(options = {}) {
     const result = override(request);
     if (result === false) return;
     const defaults = {
-      status: { configured: true }, open: {}, receipt: { found: false },
+      status: { configured: true, renameSupported: true }, open: {}, receipt: { found: false },
       snapshot: { person: { id: `person-${request.agentId}`, name: 'Person' }, state: { version: 1 }, messages: [], busy: false },
       messages: { items: [], nextCursor: null }, traces: { items: [], nextCursor: null },
       send: { episodeId: 'episode-1' }, think: { episodeId: 'episode-1' }, dream: { episodeId: 'episode-1' }, cancel: {},
