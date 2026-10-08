@@ -112,7 +112,7 @@ describe('Yeaft conversation outline UI', () => {
     expect(list).toContain('virtualTranscriptRef.value?.anchorTarget?.(blockId, row, options)');
     expect(store).toContain('this.isYeaftMessageCached(pending.sessionId, pending.messageId, conversationId, pending.agentId)');
     expect(store).not.toContain('containsAnchor || revealedInStore');
-    expect(virtual).toContain('expose({ scrollToKey, scrollToIndex, anchorTarget, clearTargetAnchor, cancelPendingBottomFollow, setBottomFollowEnabled })');
+    expect(virtual).toContain('expose({ scrollToBottom, scrollToKey, scrollToIndex, anchorTarget, clearTargetAnchor, cancelPendingBottomFollow, setBottomFollowEnabled })');
     expect(css).toContain('@keyframes yeaft-history-search-flash');
   });
 

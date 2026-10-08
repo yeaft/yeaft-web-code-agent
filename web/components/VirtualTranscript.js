@@ -3,7 +3,6 @@ import {
   computeVirtualWindowFromLayout,
   estimateVirtualItemHeight,
   getVirtualItemKey,
-  shouldFollowTranscriptBottom,
   virtualScrollTopForIndex,
   virtualTranscriptDefaults,
 } from '../utils/virtual-transcript.js';
@@ -59,18 +58,50 @@ export default {
     const itemEls = new Map();
     const pendingMeasurements = new Map();
     let resizeObserver = null;
+    let geometryObserver = null;
+    const geometryTargets = new Set();
     let rafId = null;
     let measureRafId = null;
     let scrollAdjustRafId = null;
     let pendingScrollDelta = 0;
+    let pendingScrollBaseTop = null;
     let pendingScrollToBottom = false;
     let scrollAdjustmentGeneration = 0;
-    let bottomFollowEnabled = true;
+    const bottomFollowEnabled = Vue.ref(true);
     let activeTargetKey = null;
     let activeTargetAlign = 'start';
     let activeTargetElement = null;
     let previousItems = [];
     let itemChangeGeneration = 0;
+    let transcriptContentTop = 0;
+    let geometryScrollTop = 0;
+    let lastGeometryDOMTop = 0;
+
+    function readTranscriptContentTop() {
+      const root = rootRef.value;
+      const scroller = scrollEl.value;
+      if (!root || !scroller) return 0;
+      return Number(root.getBoundingClientRect().top) - Number(scroller.getBoundingClientRect().top)
+        + Number(scroller.scrollTop || 0) - Number(scroller.clientTop || 0);
+    }
+
+    function reconcileGeometry() {
+      const nextTop = readTranscriptContentTop();
+      const delta = nextTop - transcriptContentTop;
+      transcriptContentTop = nextTop;
+      if (bottomFollowEnabled.value && props.initialAlign === 'end') {
+        scheduleScrollAdjustment({ toBottom: true });
+      } else if (Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) {
+        // Only the root's content origin belongs here. Row/prepend changes are
+        // compensated separately; total scrollHeight would count them twice.
+        // Restore from the pre-layout position. A shrinking sibling may have
+        // already clamped DOM scrollTop; adding delta to that would apply the
+        // browser's consumed displacement twice.
+        scheduleScrollAdjustment({ delta, baseTop: geometryScrollTop });
+      }
+      lastGeometryDOMTop = Number(scrollEl.value?.scrollTop || 0);
+      readScrollState();
+    }
 
     // Item offsets only change when the items, estimates, or measured heights
     // change. Keep them out of the scroll-dependent computed so wheel/touch
@@ -80,7 +111,12 @@ export default {
       estimateHeight: props.estimateHeight,
     }));
     const virtualWindow = Vue.computed(() => computeVirtualWindowFromLayout(props.items, virtualLayout.value, {
-      scrollTop: scrollTop.value,
+      // Following owns the tail window, even while DOM heights are settling.
+      // Selecting rows from a transient/clamped DOM scrollTop can unmount the
+      // tail, replace it with estimates, and oscillate between two windows.
+      scrollTop: bottomFollowEnabled.value && props.initialAlign === 'end'
+        ? Math.max(0, virtualLayout.value.totalHeight - viewportHeight.value)
+        : scrollTop.value,
       viewportHeight: viewportHeight.value,
       overscan: props.overscan,
     }));
@@ -107,6 +143,12 @@ export default {
       // oldest Markdown/Mermaid rows before MessageList scrolls to the latest.
       if (!(initialEndPending && props.items.length === 0)) {
         scrollTop.value = Math.max(0, el.scrollTop || 0);
+      }
+      // Do not adopt a browser-clamped position while an origin compensation
+      // is pending or before the geometry observer has reconciled a layout shift.
+      if (pendingScrollBaseTop === null && Math.abs(pendingScrollDelta) < HEIGHT_CHANGE_THRESHOLD
+        && Math.abs(readTranscriptContentTop() - transcriptContentTop) < HEIGHT_CHANGE_THRESHOLD) {
+        geometryScrollTop = Number(el.scrollTop || 0);
       }
       emitScrollState(el);
     }
@@ -139,7 +181,7 @@ export default {
 
     function preserveAnchorAcrossItems(previous, next, generation) {
       const scroller = scrollEl.value;
-      if (!scroller || bottomFollowEnabled || previous.length === 0 || next.length === 0) return;
+      if (!scroller || bottomFollowEnabled.value || previous.length === 0 || next.length === 0) return;
       const previousLayout = buildVirtualOffsets(previous, heightCache, {
         itemGap: props.itemGap,
         estimateHeight: props.estimateHeight,
@@ -156,12 +198,22 @@ export default {
         if (generation !== itemChangeGeneration) return;
         const nextOffset = offsetForKey(next, anchorKey);
         if (!Number.isFinite(nextOffset)) return;
-        scroller.scrollTop += nextOffset - previousOffset;
-        readScrollState();
+        scheduleScrollAdjustment({ delta: nextOffset - previousOffset });
       });
     }
 
     function scheduleReadScrollState() {
+      // Capture user movement synchronously, before another scroll listener can
+      // mutate status layout. RAF is only for the reactive window projection.
+      const currentTop = Number(scrollEl.value?.scrollTop || 0);
+      if (Math.abs(readTranscriptContentTop() - transcriptContentTop) < HEIGHT_CHANGE_THRESHOLD) {
+        if (pendingScrollBaseTop !== null) {
+          pendingScrollBaseTop += currentTop - lastGeometryDOMTop;
+        } else {
+          geometryScrollTop = currentTop;
+        }
+      }
+      lastGeometryDOMTop = currentTop;
       if (rafId) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
@@ -169,18 +221,9 @@ export default {
       });
     }
 
-    function isNearBottom(el) {
-      if (!el) return true;
-      return shouldFollowTranscriptBottom({
-        scrollTop: el.scrollTop,
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight,
-        threshold: virtualTranscriptDefaults.bottomThreshold,
-      });
-    }
-
-    function scheduleScrollAdjustment({ delta = 0, toBottom = false } = {}, generation = scrollAdjustmentGeneration) {
+    function scheduleScrollAdjustment({ delta = 0, baseTop, toBottom = false } = {}, generation = scrollAdjustmentGeneration) {
       if (generation !== scrollAdjustmentGeneration) return;
+      if (Number.isFinite(baseTop) && pendingScrollBaseTop === null) pendingScrollBaseTop = baseTop;
       if (Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) pendingScrollDelta += delta;
       if (toBottom) pendingScrollToBottom = true;
       if (scrollAdjustRafId) return;
@@ -191,15 +234,17 @@ export default {
         const scroller = scrollEl.value;
         if (!scroller) {
           pendingScrollDelta = 0;
+          pendingScrollBaseTop = null;
           pendingScrollToBottom = false;
           return;
         }
         if (pendingScrollToBottom) {
           scroller.scrollTop = scroller.scrollHeight;
-        } else if (Math.abs(pendingScrollDelta) >= HEIGHT_CHANGE_THRESHOLD) {
-          scroller.scrollTop += pendingScrollDelta;
+        } else if (pendingScrollBaseTop !== null || Math.abs(pendingScrollDelta) >= HEIGHT_CHANGE_THRESHOLD) {
+          scroller.scrollTop = (pendingScrollBaseTop ?? scroller.scrollTop) + pendingScrollDelta;
         }
         pendingScrollDelta = 0;
+        pendingScrollBaseTop = null;
         pendingScrollToBottom = false;
         readScrollState();
       });
@@ -214,6 +259,7 @@ export default {
       scrollAdjustmentGeneration += 1;
       pendingScrollToBottom = false;
       pendingScrollDelta = 0;
+      pendingScrollBaseTop = null;
       if (!preserveTarget) clearTargetAnchor();
       if (scrollAdjustRafId) cancelAnimationFrame(scrollAdjustRafId);
       scrollAdjustRafId = null;
@@ -254,24 +300,11 @@ export default {
       if (!measurements.length) return;
 
       const scroller = scrollEl.value;
-      const wasNearBottom = bottomFollowEnabled && isNearBottom(scroller);
-      // A newly mounted Session tail has no cached DOM heights yet. Measuring the
-      // first virtual window replaces estimates and can grow scrollHeight before
-      // any row has a finite previousHeight. Preserve tail ownership for that
-      // initial settling pass; otherwise the browser remains at the old maximum,
-      // mounts a different estimated window, and repeatedly oscillates until a
-      // user upward scroll disables bottom following.
-      const isInitialMeasurementBatch = measurements.some(measurement => !Number.isFinite(measurement.previousHeight));
       const windowStart = virtualWindow.value.visibleStart;
       const shouldRealignTarget = !!activeTargetKey && measurements.some(measurement => measurement.key === activeTargetKey);
       let anchorDelta = 0;
-      // Geometry can already report "not near bottom" by the time a first DOM
-      // measurement observes that actual rows grew beyond their estimates. For
-      // an end-aligned transcript, follow intent—not that transient geometry—is
-      // authoritative until the user explicitly pauses following.
-      let shouldScrollToBottom = bottomFollowEnabled
-        && props.initialAlign === 'end'
-        && isInitialMeasurementBatch;
+      // User intent, not transient layout geometry, owns bottom following.
+      const shouldScrollToBottom = bottomFollowEnabled.value && props.initialAlign === 'end';
 
       // Do not read virtualWindow or virtualLayout in this loop. Vue can then
       // collapse all cache invalidations into one render/layout recomputation.
@@ -289,8 +322,6 @@ export default {
         if (Math.abs(delta) < HEIGHT_CHANGE_THRESHOLD) continue;
         if (Number.isFinite(itemIndex) && itemIndex < windowStart) {
           anchorDelta += delta;
-        } else if (wasNearBottom) {
-          shouldScrollToBottom = true;
         }
       }
 
@@ -320,6 +351,10 @@ export default {
       const scroller = scrollEl.value;
       const target = activeTargetElement || itemEls.get(String(key));
       if (!scroller || !target) return false;
+      // Final target geometry includes both root displacement and row growth.
+      // Consume queued deltas so a later frame cannot apply either twice.
+      cancelPendingBottomFollow({ preserveTarget: true });
+      transcriptContentTop = readTranscriptContentTop();
       const scrollerRect = scroller.getBoundingClientRect?.();
       const targetRect = target.getBoundingClientRect?.();
       if (!scrollerRect || !targetRect) return false;
@@ -355,9 +390,27 @@ export default {
     function setBottomFollowEnabled(enabled) {
       const nextEnabled = !!enabled;
       if (nextEnabled) clearTargetAnchor();
-      if (bottomFollowEnabled === nextEnabled) return;
-      bottomFollowEnabled = nextEnabled;
-      if (!bottomFollowEnabled) cancelPendingBottomFollow();
+      if (bottomFollowEnabled.value === nextEnabled) return;
+      // Hand ownership to the user at the current DOM position, not a stale
+      // pre-follow scrollTop that selected a different virtual window.
+      if (!nextEnabled) readScrollState();
+      bottomFollowEnabled.value = nextEnabled;
+      if (!nextEnabled) cancelPendingBottomFollow();
+    }
+
+    function scrollToBottom() {
+      cancelPendingBottomFollow();
+      setBottomFollowEnabled(true);
+      const generation = scrollAdjustmentGeneration;
+      // Mount the tail window before reading its DOM height. Pausing follow
+      // invalidates this queued work, including a click followed by a wheel.
+      Vue.nextTick(() => {
+        if (generation !== scrollAdjustmentGeneration || !bottomFollowEnabled.value) return;
+        const scroller = scrollEl.value;
+        if (!scroller) return;
+        scroller.scrollTop = scroller.scrollHeight;
+        readScrollState();
+      });
     }
 
     function observeItem(key, index, el) {
@@ -417,7 +470,7 @@ export default {
       return true;
     }
 
-    expose({ scrollToKey, scrollToIndex, anchorTarget, clearTargetAnchor, cancelPendingBottomFollow, setBottomFollowEnabled });
+    expose({ scrollToBottom, scrollToKey, scrollToIndex, anchorTarget, clearTargetAnchor, cancelPendingBottomFollow, setBottomFollowEnabled });
 
     Vue.watch(
       () => props.items.map((item, index) => getVirtualItemKey(item, index)).join('\n'),
@@ -442,17 +495,63 @@ export default {
     Vue.onMounted(() => {
       scrollEl.value = rootRef.value?.closest?.('.chat-container') || rootRef.value?.parentElement || null;
       syncInitialPosition();
+      transcriptContentTop = readTranscriptContentTop();
+      geometryScrollTop = Number(scrollEl.value?.scrollTop || 0);
+      lastGeometryDOMTop = geometryScrollTop;
       scrollEl.value?.addEventListener('scroll', scheduleReadScrollState, { passive: true });
       window.addEventListener('resize', scheduleReadScrollState);
 
       if (typeof ResizeObserver !== 'undefined') {
+        const syncGeometryTargets = () => {
+          const nextTargets = new Set([rootRef.value, scrollEl.value].filter(Boolean));
+          // Banners can live beside the root inside .messages rather than
+          // directly inside the scroller. Observe only this ancestor path.
+          for (let parent = rootRef.value?.parentElement; parent; parent = parent.parentElement) {
+            nextTargets.add(parent);
+            for (const child of parent.children) nextTargets.add(child);
+            if (parent === scrollEl.value) break;
+          }
+          for (const target of geometryTargets) {
+            if (!nextTargets.has(target)) {
+              resizeObserver.unobserve(target);
+              geometryTargets.delete(target);
+            }
+          }
+          for (const target of nextTargets) {
+            if (!geometryTargets.has(target)) {
+              geometryTargets.add(target);
+              resizeObserver.observe(target);
+            }
+          }
+        };
         resizeObserver = new ResizeObserver((entries) => {
+          let geometryChanged = false;
           for (const entry of entries) {
+            if (geometryTargets.has(entry.target)) {
+              geometryChanged = true;
+              continue;
+            }
             const key = entry.target?.dataset?.virtualId;
             const index = Number(entry.target?.dataset?.virtualIndex);
             if (key) scheduleMeasureElement(key, index, entry.target);
           }
+          // Sibling navigation or the composer can change the true bottom or
+          // viewport without resizing any row. Keep the same scroll owner.
+          if (geometryChanged) reconcileGeometry();
         });
+        syncGeometryTargets();
+        // Loading/status siblings may be inserted into .messages after mount.
+        // Observe child lists only along the ancestor path, not row mutations.
+        if (scrollEl.value && typeof MutationObserver !== 'undefined') {
+          geometryObserver = new MutationObserver(() => {
+            syncGeometryTargets();
+            reconcileGeometry();
+          });
+          for (let parent = rootRef.value?.parentElement; parent; parent = parent.parentElement) {
+            geometryObserver.observe(parent, { childList: true });
+            if (parent === scrollEl.value) break;
+          }
+        }
         for (const [key, el] of itemEls.entries()) {
           const index = itemIndexByKey.get(key) ?? Number(el.dataset?.virtualIndex || 0);
           observeItem(key, index, el);
@@ -464,11 +563,14 @@ export default {
       scrollEl.value?.removeEventListener('scroll', scheduleReadScrollState);
       window.removeEventListener('resize', scheduleReadScrollState);
       if (resizeObserver) resizeObserver.disconnect();
+      if (geometryObserver) geometryObserver.disconnect();
+      geometryTargets.clear();
       if (rafId) cancelAnimationFrame(rafId);
       if (measureRafId) cancelAnimationFrame(measureRafId);
       if (scrollAdjustRafId) cancelAnimationFrame(scrollAdjustRafId);
       pendingMeasurements.clear();
       pendingScrollDelta = 0;
+      pendingScrollBaseTop = null;
       pendingScrollToBottom = false;
     });
 

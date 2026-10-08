@@ -358,6 +358,13 @@ describe('Yeaft history result rendered reveal', () => {
     await flushPromises();
     await Vue.nextTick();
 
+    const scroller = wrapper.get('.chat-container').element;
+    scroller.dispatchEvent(new Event('wheel'));
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new Event('scroll'));
+    await flushPromises();
+    await Vue.nextTick();
+
     const before = wrapper.findAll('[data-virtual-id]').map(row => row.attributes('data-virtual-id'));
     store.messagesMap['conv-a'].unshift({
       id: 'm49',

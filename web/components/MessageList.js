@@ -17,7 +17,6 @@ import {
   estimateVirtualItemHeight,
   historyPrefetchThreshold,
   isTranscriptScrollbarPointer,
-  resolveTranscriptBottomFollow,
   resolveTranscriptUserFollow,
   shouldFollowTranscriptBottom,
   shouldMarkTranscriptKeyScroll,
@@ -52,7 +51,7 @@ export default {
   name: 'MessageList',
   components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript },
   template: `
-    <main class="chat-container" ref="containerRef">
+    <main class="chat-container virtual-transcript-scroller" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
       <div class="session-loading-overlay" v-if="showSessionLoadingOverlay">
         <div class="session-loading-content">
@@ -1897,15 +1896,9 @@ export default {
         clientHeight: clientHeight || 0,
         threshold: SCROLL_THRESHOLD,
       });
-      // VirtualTranscript emits after both user scrolls and layout work such as
-      // delayed height measurement. Layout changes must never resume following
-      // while the user is reading history.
-      isAtBottom.value = resolveTranscriptBottomFollow({
-        following: !autoFollowPaused.value,
-        atBottom,
-      });
-      autoFollowPaused.value = !isAtBottom.value;
-      virtualTranscriptRef.value?.setBottomFollowEnabled?.(isAtBottom.value);
+      // Geometry only controls the Latest indicator. Layout and programmatic
+      // scrolling must not cancel the user's explicit follow intent.
+      isAtBottom.value = !autoFollowPaused.value && atBottom;
       if (!userScrollInteractionActive) lastObservedScrollTop = Number(scrollTop || 0);
       maybeLoadMoreNearTop(scrollTop || 0, clientHeight || 0);
       scheduleResponseNavigationUpdate();
@@ -2028,13 +2021,14 @@ export default {
       const wasFollowing = !autoFollowPaused.value;
       lastObservedScrollTop = currentScrollTop;
       const atBottom = checkIfAtBottom();
-      isAtBottom.value = resolveTranscriptUserFollow({
+      const following = resolveTranscriptUserFollow({
         following: wasFollowing,
         atBottom,
         userScroll: userScrollInteractionActive,
       });
-      autoFollowPaused.value = !isAtBottom.value;
-      virtualTranscriptRef.value?.setBottomFollowEnabled?.(isAtBottom.value);
+      autoFollowPaused.value = !following;
+      isAtBottom.value = following && atBottom;
+      virtualTranscriptRef.value?.setBottomFollowEnabled?.(following);
       if (userScrollInteractionActive) scheduleUserScrollInteractionEnd();
 
       if (containerRef.value) {
@@ -2047,10 +2041,8 @@ export default {
     };
 
     const scrollToBottom = () => {
-      if (containerRef.value) {
-        containerRef.value.scrollTop = containerRef.value.scrollHeight;
-        resumeAutoFollow();
-      }
+      if (autoFollowPaused.value) return;
+      virtualTranscriptRef.value?.scrollToBottom?.();
     };
 
     const scrollToLatest = () => {
@@ -2070,7 +2062,7 @@ export default {
     };
 
     const smartScrollToBottom = () => {
-      if (!autoFollowPaused.value && isAtBottom.value) {
+      if (!autoFollowPaused.value) {
         Vue.nextTick(scrollToBottom);
       }
     };
