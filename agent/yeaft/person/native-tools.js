@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ToolRegistry, isToolErrorOutput, toolErrorEffect, ToolExecutionTimeoutError, truncateToolResultIfNeeded } from '../tools/registry.js';
+import { ToolRegistry, isToolErrorOutput, toolErrorEffect, ToolExecutionTimeoutError, normalizeToolOutput, truncateToolResultIfNeeded } from '../tools/registry.js';
 import { createSkillManager } from '../skills.js';
 import { loadConfig } from '../config.js';
 import { getRuntimePlatformInfo } from '../runtime-platform.js';
@@ -78,7 +78,7 @@ export function projectNativeResult(result, maxBytes = 8192) {
 /** Episode-local host. Never creates a Session or writes Session transcripts.
  * Registry timeouts remain loud failures. Track and join the actual execute
  * promise as well: racing a timeout/abort cannot prove effects have stopped. */
-export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config } = {}) {
+export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config, onResult } = {}) {
   const cwd = resolve(workDir), runtimePlatform = getRuntimePlatformInfo();
   let skillManager;
   const currentConfig = () => config ?? loadConfig({ dir: yeaftDir });
@@ -105,31 +105,39 @@ export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config
         pending = Promise.resolve().then(() => tool.execute(input, context));
         return pending;
       } });
-      let output, error;
+      let output, error, joinedOutput, joined = false;
       try { output = await joinedRegistry.execute(id, args, { ...ctx, signal: controller.signal }); }
       catch (caught) { error = caught; controller.abort(caught); }
       finally {
-        // Also join tools that don't honor signal (e.g. a write already in fs).
-        if (pending) await pending.catch(() => {});
+        // Also retain the real result of tools that outlive the registry race.
+        if (pending) {
+          try { joinedOutput = normalizeToolOutput(await pending); joined = true; }
+          catch { /* No output proves neither rollback nor absence of effects. */ }
+        }
         signal?.removeEventListener('abort', onAbort);
       }
-      signal?.throwIfAborted();
+      if (joined) output = joinedOutput;
       const manifest = NATIVE_TOOL_MANIFESTS.find(m => m.id === id);
       const readOnly = tool.isReadOnly?.(args) === true;
-      if (error) {
-        return { ok: false, id, code: error instanceof ToolExecutionTimeoutError ? 'TOOL_TIMEOUT' : error.fatalToolTimeout ? 'TOOL_EFFECT_UNCONFIRMED' : 'TOOL_FAILED',
-          terminal: error instanceof ToolExecutionTimeoutError || error.fatalToolTimeout === true,
-          errorEffect: readOnly ? 'none' : 'unknown', output: String(error.message || error), replaySafe: readOnly };
-      }
-      const failed = isToolErrorOutput(output);
+      const failed = error || isToolErrorOutput(output);
       let failure;
-      if (failed) { try { failure = JSON.parse(output); } catch {} }
+      if (failed && !error) { try { failure = JSON.parse(output); } catch {} }
+      if (error && !joined) output = String(error.message || error);
       const sourceRef = `tool:${episodeId}:${callId}:${id}:${digest(output)}`;
-      return { ok: !failed, id, ...(failed ? { code: 'TOOL_FAILED', errorEffect: toolErrorEffect(output),
+      const result = { ok: !failed, id, ...(error ? {
+        code: error instanceof ToolExecutionTimeoutError ? 'TOOL_TIMEOUT' : error.fatalToolTimeout ? 'TOOL_EFFECT_UNCONFIRMED' : 'TOOL_FAILED',
+        terminal: error instanceof ToolExecutionTimeoutError || error.fatalToolTimeout === true,
+        errorEffect: readOnly ? 'none' : 'unknown', outputAvailability: joined ? 'captured' : 'unavailable',
+      } : failed ? { code: 'TOOL_FAILED', errorEffect: toolErrorEffect(output),
         terminal: failure?.failureType === 'timeout_unconfirmed' || failure?.failureType === 'exit_unconfirmed' } : {}),
         output, rawBytes: bytes(output), sha256: digest(output), sourceRef,
         source: { kind: 'external-tool-observation', capability: { id, version: manifest.version, revision: manifest.revision }, implementation: manifest.source },
         replaySafe: readOnly };
+      // Archive before rethrowing cancellation: joined after-effects are evidence,
+      // not authority to continue cognition or claim successful experience.
+      await onResult?.(result, { id, args, callId, episodeId });
+      signal?.throwIfAborted();
+      return result;
     },
   };
 }

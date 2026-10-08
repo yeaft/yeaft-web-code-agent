@@ -49,7 +49,7 @@ const publicOutput = (output, failed) => {
     : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
 };
 const READS = new Set(['receipt', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
-const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'commit', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
+const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
 const sequence = value => {
@@ -256,7 +256,7 @@ export class SqlitePersonStore {
   }
   append(episode, kind, data) {
     // Call proof/publication events are emitted only by their transactional methods.
-    if (['call_started', 'call_output', 'call_failed', 'capability_created'].includes(kind)) fail('INVALID_REQUEST');
+    if (['call_started', 'call_output', 'call_failed', 'capability_created', 'capability_finalized'].includes(kind)) fail('INVALID_REQUEST');
     const p = this.own(episode);
     const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running') fail('STALE');
@@ -268,7 +268,7 @@ export class SqlitePersonStore {
   startCall(episode, data) {
     const p = this.own(episode), scope = this.episodeScope(episode);
     const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
-    if (!record || record.status !== 'running' || record.openCall) fail('STALE');
+    if (!record || record.status !== 'running' || record.openCall || record.openCapability) fail('STALE');
     p.writeSerial++; this.put('persons', p);
     record.openCall = { callId: data.callId, requested: data.requested, effective: data.effective, ...(data.manifest ? { manifest: data.manifest } : {}) };
     this.put('episodes', record);
@@ -290,6 +290,43 @@ export class SqlitePersonStore {
       callId, requested: call.requested, effective: safeEffective, output: publicOutput(output, failed),
       ...(!failed && call.manifest ? { manifest: call.manifest } : {}), ...(failed ? { code: new PersonError(terminalCode).code } : {}),
     });
+    return live;
+  }
+  startCapability(episode, data) {
+    const p = this.own(episode), scope = this.episodeScope(episode);
+    const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    const proof = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, data.callId]);
+    if (!record || record.status !== 'running' || record.openCall || record.openCapability || !proof) fail('STALE');
+    const prior = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'capability_started' AND json_extract(record, '$.callId') = ?", [episode.id, data.callId]);
+    if (prior) fail('STALE');
+    record.openCapability = { ...data, invocationHash: digest(data.capability) };
+    this.put('episodes', record);
+    p.writeSerial++; this.put('persons', p);
+    return this.trace(episode.ownerId, episode.id, 'capability_started', data);
+  }
+  /** Original started invocation only; consuming this slot never restores cognitive authority. */
+  finalizeCapability(episode, { callId, capability, result, code = null, terminalCode = null }) {
+    const scope = this.episodeScope(episode), record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    if (!record || record.workerId !== episode.workerId || record.epoch !== episode.epoch ||
+        record.baseStateVersion !== episode.baseStateVersion || record.controlVersion !== episode.controlVersion || record.inputWatermark !== episode.inputWatermark ||
+        record.openCapability?.callId !== callId || record.openCapability.invocationHash !== digest(capability) ||
+        !['running', 'cancelled', 'interrupted', 'failed'].includes(record.status)) return false;
+    const p = record.status === 'running' && this.fenced(episode);
+    const live = Boolean(p && !terminalCode);
+    const started = record.openCapability;
+    const failed = Boolean(code || result?.ok === false);
+    const outcome = failed ? 'capability_failed' : 'capability_result';
+    const data = { callId, ...(started.capabilityManifest ? { capabilityManifest: started.capabilityManifest } : {}),
+      ...(failed ? { capabilityId: started.capability.id, code: code || result.code } : { capability: started.capability }),
+      ...(result !== undefined ? { result } : {}) };
+    delete record.openCapability; this.put('episodes', record);
+    if (live) {
+      const experience = recordCapabilityExperience(p.capabilityExperience, record, outcome, data, this.now.toISOString());
+      if (experience) { p.capabilityExperience = experience; this.put('persons', p); }
+    }
+    this.trace(episode.ownerId, episode.id, live ? outcome : 'capability_finalized', { ...data,
+      ...(!live ? { capability: started.capability, workerId: record.workerId, outcome, afterTerminal: true, accepted: false,
+        terminalCode: terminalCode || record.terminalCode || 'STALE' } : {}) });
     return live;
   }
   createdCapabilities(episode) {

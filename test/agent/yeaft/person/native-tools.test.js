@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,9 +7,13 @@ import { createPersonToolHost, NATIVE_TOOL_IDS, NATIVE_TOOL_MANIFESTS, projectNa
 import { PersonCapabilities, inspectCapabilities, CAPABILITY_LIMITS } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { digest, bytes, validateProposal, PersonError } from '../../../../agent/yeaft/person/contracts.js';
-import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
+import { assembleContext, PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { config, finalProposal } from './fixtures.js';
+import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
+import { MongoPersonRepository } from '../../../../agent/yeaft/person/repository.js';
 import fileWrite from '../../../../agent/yeaft/tools/file-write.js';
 import bash from '../../../../agent/yeaft/tools/bash.js';
 
@@ -320,3 +324,198 @@ describe('Person supported native host tools', () => {
     expect(await host.execute('Bash', { command: 'unknown' })).toMatchObject({ ok: false, terminal: true, replaySafe: false, errorEffect: 'unknown' });
   });
 });
+
+// Joined tool-result evidence shares this reviewed suite; Mongo remains opt-in.
+{
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+  const selection = { model: 'test/first', effort: null };
+  const capability = { id: 'FileWrite', args: { file_path: 'effect.txt', content: 'real after-effect 中' } };
+  const capabilityManifest = NATIVE_TOOL_MANIFESTS.find(m => m.id === 'FileWrite');
+  const manifest = { id: capabilityManifest.id, version: capabilityManifest.version, revision: capabilityManifest.revision };
+  const input = (workerId = 'worker') => ({ kind: 'think', text: 'Write once', clientMessageId: randomUUID(), workerId, budget: { calls: 4, timeoutMs: 2000 } });
+
+  for (const backend of ['sqlite', 'mongo']) {
+    const suite = backend === 'mongo' && !process.env.PERSON_TEST_MONGO_URI ? describe.skip : describe;
+    suite(`Person joined tool evidence: ${backend}`, () => {
+      let dir, repositories, runtimes, MongoClient, inspector, dbName, release;
+      const repo = (namespace = 'default') => {
+        const r = backend === 'sqlite' ? new SqlitePersonRepository({ yeaftDir: dir, namespace, leaseMs: 60000 })
+          : new MongoPersonRepository({ uri: process.env.PERSON_TEST_MONGO_URI, dbName, namespace, MongoClient, leaseMs: 60000 });
+        repositories.push(r); return r;
+      };
+      beforeEach(async () => {
+        repositories = []; runtimes = []; release = null;
+        dir = await mkdtemp(join(tmpdir(), 'person-tool-finalizer-'));
+        if (backend === 'mongo') {
+          const module = process.env.PERSON_TEST_MONGO_DRIVER ? pathToFileURL(process.env.PERSON_TEST_MONGO_DRIVER).href : 'mongodb';
+          ({ MongoClient } = await import(/* @vite-ignore */ module));
+          dbName = `person_tools_finalizer_${randomUUID().replaceAll('-', '')}`;
+          inspector = new MongoClient(process.env.PERSON_TEST_MONGO_URI); await inspector.connect();
+        }
+      });
+      afterEach(async () => {
+        release?.();
+        await Promise.all(runtimes.map(r => r.close()));
+        await Promise.all(repositories.map(r => r.close()));
+        if (inspector) { await inspector.db(dbName).dropDatabase(); await inspector.close(); }
+        await rm(dir, { recursive: true, force: true }); vi.restoreAllMocks();
+      });
+      const started = async r => {
+        await r.open('alice');
+        const { episode } = await r.admit('alice', input());
+        await r.startCall(episode, { callId: 'call', requested: selection, effective: selection });
+        await r.finalizeCall(episode, { callId: 'call', output: { text: 'complete proposal' } });
+        await r.startCapability(episode, { callId: 'call', capability, capabilityManifest: manifest, access: 'host-effect' });
+        return episode;
+      };
+      const result = { ok: true, id: 'FileWrite', output: 'original raw 中\\"', sha256: digest('original raw 中\\"'),
+        sourceRef: 'tool:original-source', source: { implementation: { revision: 'unchanged' } } };
+      const data = { callId: 'call', capability, result };
+
+      it('requires a completed call and rejects forged worker/owner/namespace/person/episode/call/invocation without consuming the slot', async () => {
+        const r = repo(), other = repo('other'); await r.open('alice');
+        const { episode } = await r.admit('alice', input());
+        await expect(r.startCapability(episode, { ...data, capabilityManifest: manifest })).rejects.toMatchObject({ code: 'STALE' });
+        await r.startCall(episode, { callId: 'call', requested: selection, effective: selection });
+        await expect(r.startCapability(episode, data)).rejects.toMatchObject({ code: 'STALE' });
+        await r.finalizeCall(episode, { callId: 'call', output: { text: 'complete' } });
+        await r.startCapability(episode, { callId: 'call', capability, capabilityManifest: manifest });
+        await expect(r.startCapability(episode, data)).rejects.toMatchObject({ code: 'STALE' });
+        for (const forged of [
+          { ...episode, workerId: 'other-worker' }, { ...episode, id: 'other-episode' }, { ...episode, epoch: episode.epoch + 1 },
+          { ...episode, controlVersion: episode.controlVersion + 1 }, { ...episode, inputWatermark: episode.inputWatermark + 1 },
+          { ...episode, baseStateVersion: episode.baseStateVersion + 1 },
+        ]) expect(await r.finalizeCapability(forged, data)).toBe(false);
+        for (const forged of [{ ...episode, ownerId: 'bob' }, { ...episode, namespace: 'other' }, { ...episode, personId: 'other-person' }]) {
+          await expect(r.finalizeCapability(forged, data)).rejects.toMatchObject({ code: 'STALE' });
+        }
+        await expect(other.finalizeCapability(episode, data)).rejects.toMatchObject({ code: 'STALE' });
+        expect(await r.finalizeCapability(episode, { ...data, callId: 'other-call' })).toBe(false);
+        expect(await r.finalizeCapability(episode, { ...data, capability: { ...capability, args: { ...capability.args, content: 'forged' } } })).toBe(false);
+        expect(await r.finalizeCapability(episode, data)).toBe(true);
+        expect((await r.context(episode)).capabilityExperience[0].observations).toMatchObject([{ outcome: 'succeeded', callId: 'call' }]);
+        const before = await r.list('alice', 'traces', { limit: 50 });
+        expect(await r.finalizeCapability(episode, { ...data, result: { output: 'replacement' } })).toBe(false);
+        expect(await r.list('alice', 'traces', { limit: 50 })).toEqual(before);
+        await expect(r.startCapability(episode, data)).rejects.toMatchObject({ code: 'STALE' });
+        expect(before.items.find(t => t.kind === 'capability_result')).toMatchObject({ callId: 'call', capability, capabilityManifest: manifest, result });
+      });
+
+      it.each(['cancelled', 'interrupted', 'failed'])('%s permits exactly one original-worker archive, never restored cognition or experience', async status => {
+        const r = repo(), competing = repo(), episode = await started(r);
+        if (status === 'cancelled') await r.cancel('alice');
+        else await r.finish(episode, status, status === 'failed' ? 'TIMEOUT' : 'INTERRUPTED');
+        const next = await r.admit('alice', input('new-worker'));
+        const authorityBefore = await r.getPerson('alice');
+        const tracesBefore = await r.list('alice', 'traces', { limit: 50 });
+        expect(await r.finalizeCapability({ ...episode, workerId: 'wrong-worker' }, data)).toBe(false);
+        expect(await r.finalizeCapability(episode, { ...data, callId: 'wrong-call' })).toBe(false);
+        expect(await r.finalizeCapability(episode, { ...data, capability: { ...capability, args: {} } })).toBe(false);
+        await expect(r.finalizeCapability({ ...episode, ownerId: 'wrong-owner' }, data)).rejects.toMatchObject({ code: 'STALE' });
+        expect(await r.list('alice', 'traces', { limit: 50 })).toEqual(tracesBefore);
+        await expect(r.append(next.episode, 'capability_finalized', data)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+        const completions = await Promise.all([r.finalizeCapability(episode, data), competing.finalizeCapability(episode, { ...data, result: { ...result, output: 'competing' } })]);
+        expect(completions).toEqual([false, false]);
+        const archives = (await r.list('alice', 'traces', { limit: 50 })).items.filter(t => t.kind === 'capability_finalized');
+        expect(archives).toHaveLength(1);
+        expect(archives[0]).toMatchObject({ callId: 'call', capability, capabilityManifest: manifest, afterTerminal: true, accepted: false });
+        const retained = archives[0];
+        expect(await r.finalizeCapability(episode, { ...data, result: { output: 'overwrite' } })).toBe(false);
+        expect((await r.list('alice', 'traces', { limit: 50 })).items.find(t => t.kind === 'capability_finalized')).toEqual(retained);
+        const authorityAfter = await r.getPerson('alice');
+        for (const key of ['epoch', 'controlVersion', 'inputWatermark', 'stateVersion', 'activeEpisodeId', 'leaseOwner', 'leaseUntil']) expect(authorityAfter[key]).toEqual(authorityBefore[key]);
+        await expect(r.commit(episode, finalProposal(), selection, 'call')).rejects.toMatchObject({ code: 'STALE' });
+        expect((await r.context(next.episode)).capabilityExperience).toEqual([]);
+        expect((await r.snapshot('alice')).state.version).toBe(0);
+      });
+
+      it.each(['completed', 'budget_exhausted'])('%s is an immutable final-status fence, not a result archive grant', async status => {
+        const r = repo(), episode = await started(r);
+        await r.finish(episode, status, 'CALL_BUDGET');
+        const before = await r.list('alice', 'traces', { limit: 50 });
+        expect(await r.finalizeCapability(episode, data)).toBe(false);
+        expect(await r.list('alice', 'traces', { limit: 50 })).toEqual(before);
+      });
+
+      it.each(['cancel', 'close', 'timeout'])('%s joins a delayed real FileWrite and retains raw result without success experience or another model call', async mode => {
+        const r = repo(), began = deferred(), gate = deferred(), aborted = deferred(); release = gate.resolve;
+        const real = fileWrite.execute;
+        let raw;
+        vi.spyOn(fileWrite, 'execute').mockImplementation(async (args, ctx) => {
+          ctx.signal.addEventListener('abort', aborted.resolve, { once: true });
+          began.resolve(); await gate.promise; raw = await real(args, ctx); return raw;
+        });
+        let calls = 0;
+        const adapter = { async *stream(params) {
+          const context = JSON.parse(params.messages[0].content), p = finalProposal(context.state.version);
+          p.concepts = []; p.state.focusConceptIds = []; p.activity.sourceRefs = [context.trigger.ref];
+          const invocation = ++calls === 1 ? { id: 'catalog.view', args: { id: 'FileWrite' } } : capability;
+          p.next = { ...selection, reason: 'Write the real file', capability: invocation };
+          yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
+        } };
+        const provider = await createPersonProvider({ config, adapter });
+        const runtime = new PersonRuntime({ repository: r, getProvider: async () => provider, workDir: dir, yeaftDir: dir, config }); runtimes.push(runtime);
+        await r.open('alice');
+        const { episode } = await r.admit('alice', input(runtime.workerId));
+        runtime.start(episode); const job = runtime.running.get(episode.id);
+        await began.promise;
+        let stopped = false;
+        const stopping = (async () => {
+          if (mode === 'cancel') { await r.cancel('alice', episode.id); await runtime.cancel(episode.id); }
+          else if (mode === 'close') await runtime.close();
+          else await job.promise;
+          stopped = true;
+        })();
+        await aborted.promise; await sleep(20); expect(stopped).toBe(false);
+        gate.resolve(); await stopping;
+        expect(await readFile(join(dir, 'effect.txt'), 'utf8')).toBe(capability.args.content);
+        expect(calls).toBe(2); expect(runtime.running.size).toBe(0);
+        const traces = (await r.list('alice', 'traces', { limit: 50 })).items;
+        const archives = traces.filter(t => t.kind === 'capability_finalized'); expect(archives).toHaveLength(1);
+        const code = mode === 'cancel' ? 'CANCELLED' : mode === 'close' ? 'INTERRUPTED' : 'TIMEOUT';
+        expect(archives[0]).toMatchObject({ capability, capabilityManifest: manifest, afterTerminal: true, accepted: false, terminalCode: code,
+          result: { ok: true, output: raw, sha256: digest(raw), rawBytes: Buffer.byteLength(raw), source: { implementation: capabilityManifest.source } } });
+        expect(archives[0].result.sourceRef).toBe(`tool:${episode.id}:${archives[0].callId}:FileWrite:${digest(raw)}`);
+        expect(traces.filter(t => ['capability_result', 'capability_failed'].includes(t.kind) && (t.capability?.id ?? t.capabilityId) === 'FileWrite')).toEqual([]);
+        expect((await r.getPerson('alice')).capabilityExperience ?? []).toEqual([]);
+        const snapshot = await r.snapshot('alice'); expect(snapshot.state.version).toBe(0);
+        expect(snapshot.latestEpisode).toMatchObject({ status: mode === 'cancel' ? 'cancelled' : mode === 'close' ? 'interrupted' : 'failed', terminalCode: code });
+        expect(snapshot.messages.filter(m => m.role === 'assistant')).toEqual([]);
+        await r.close(); const reopened = repo();
+        expect((await reopened.list('alice', 'traces', { limit: 50 })).items.find(t => t.kind === 'capability_finalized')).toEqual(archives[0]);
+      }, 10000);
+    });
+  }
+
+  describe('Person uncertain host outcomes', () => {
+    afterEach(() => vi.restoreAllMocks());
+    it('archives rejected cancellation with explicit unknown effects before rethrowing abort', async () => {
+      const controller = new AbortController(), began = deferred(), results = [];
+      vi.spyOn(fileWrite, 'execute').mockImplementation(async (_args, { signal }) => {
+        began.resolve(); await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+        throw signal.reason;
+      });
+      const host = createPersonToolHost({ config, onResult: result => results.push(result) });
+      const pending = host.execute('FileWrite', capability.args, { signal: controller.signal, episodeId: 'episode', callId: 'call' });
+      await began.promise; controller.abort(new PersonError('CANCELLED'));
+      await expect(pending).rejects.toMatchObject({ code: 'CANCELLED' });
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ ok: false, errorEffect: 'unknown', outputAvailability: 'unavailable', replaySafe: false });
+    });
+    it('retains joined raw output and provenance after registry timeout, while effects stay unknown and execution stays failed', async () => {
+      const gate = deferred(), began = deferred(), results = [];
+      vi.spyOn(fileWrite, 'execute').mockImplementation(async () => { began.resolve(); await gate.promise; return 'late real output 中'; });
+      const old = fileWrite.timeoutMs; fileWrite.timeoutMs = 5;
+      try {
+        const host = createPersonToolHost({ config, onResult: result => results.push(result) });
+        const pending = host.execute('FileWrite', capability.args, { episodeId: 'episode', callId: 'call' });
+        await began.promise; await sleep(20); expect(results).toEqual([]); gate.resolve();
+        const result = await pending;
+        expect(results).toEqual([result]);
+        expect(result).toMatchObject({ ok: false, code: 'TOOL_TIMEOUT', terminal: true, errorEffect: 'unknown', outputAvailability: 'captured',
+          output: 'late real output 中', sha256: digest('late real output 中'), sourceRef: `tool:episode:call:FileWrite:${digest('late real output 中')}` });
+      } finally { gate.resolve(); fileWrite.timeoutMs = old; }
+    });
+  });
+}

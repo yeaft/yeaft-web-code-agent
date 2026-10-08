@@ -220,7 +220,7 @@ export class MongoPersonRepository {
   }
   async append(episode, kind, data) {
     // Call proof/publication events are emitted only by their transactional methods.
-    if (['call_started', 'call_output', 'call_failed', 'capability_created'].includes(kind)) fail('INVALID_REQUEST');
+    if (['call_started', 'call_output', 'call_failed', 'capability_created', 'capability_finalized'].includes(kind)) fail('INVALID_REQUEST');
     return this.transaction(async session => {
       const p = await this.collections.persons.findOneAndUpdate(this.fence(episode), { $inc: { writeSerial: 1 } }, { session, returnDocument: 'after' });
       if (!p) fail('STALE');
@@ -236,7 +236,7 @@ export class MongoPersonRepository {
     return this.transaction(async session => {
       const p = await this.collections.persons.findOneAndUpdate(this.fence(episode), { $inc: { writeSerial: 1 } }, { session, returnDocument: 'after' });
       if (!p) fail('STALE');
-      const updated = await this.collections.episodes.updateOne({ ...this.scope(episode.ownerId), id: episode.id, status: 'running', openCall: { $exists: false } },
+      const updated = await this.collections.episodes.updateOne({ ...this.scope(episode.ownerId), id: episode.id, status: 'running', openCall: { $exists: false }, openCapability: { $exists: false } },
         { $set: { openCall: { callId: data.callId, requested: data.requested, effective: data.effective, ...(data.manifest ? { manifest: data.manifest } : {}) } } }, { session });
       if (!updated.modifiedCount) fail('STALE');
       return this.trace(session, p, episode.id, 'call_started', data);
@@ -273,6 +273,49 @@ export class MongoPersonRepository {
     await this.collections.episodes.updateOne({ ...this.scope(p.ownerId), id: episode.id, 'openCall.callId': episode.openCall.callId },
       { $unset: { openCall: '', callFinalizeUntil: '' } }, { session });
     await this.trace(session, p, episode.id, 'call_failed', { ...episode.openCall, code, output: unavailableOutput() });
+  }
+  async startCapability(episode, data) {
+    return this.transaction(async session => {
+      const p = await this.collections.persons.findOneAndUpdate(this.fence(episode), { $inc: { writeSerial: 1 } }, { session, returnDocument: 'after' });
+      if (!p) fail('STALE');
+      const scope = this.scope(episode.ownerId);
+      const proof = await this.collections.traces.findOne({ ...scope, episodeId: episode.id, kind: 'call_output', callId: data.callId, 'output.complete': true }, { session });
+      const prior = await this.collections.traces.findOne({ ...scope, episodeId: episode.id, kind: 'capability_started', callId: data.callId }, { session });
+      if (!proof || prior) fail('STALE');
+      const updated = await this.collections.episodes.updateOne({ ...scope, id: episode.id, status: 'running', openCall: { $exists: false }, openCapability: { $exists: false } },
+        { $set: { openCapability: { callId: data.callId, invocationHash: digest(data.capability), record: JSON.stringify(data) } } }, { session });
+      if (!updated.modifiedCount) fail('STALE');
+      return this.trace(session, p, episode.id, 'capability_started', data);
+    });
+  }
+  /** Original started invocation only; consuming this slot never restores cognitive authority. */
+  async finalizeCapability(episode, { callId, capability, result, code = null, terminalCode = null }) {
+    return this.transaction(async session => {
+      const scope = this.scope(episode.ownerId);
+      if (episode.namespace !== scope.namespace || episode.personId !== scope.personId) fail('STALE');
+      const record = await this.collections.episodes.findOne({ ...scope, id: episode.id, workerId: episode.workerId, epoch: episode.epoch,
+        baseStateVersion: episode.baseStateVersion, controlVersion: episode.controlVersion, inputWatermark: episode.inputWatermark,
+        'openCapability.callId': callId, 'openCapability.invocationHash': digest(capability), status: { $in: ['running', 'cancelled', 'interrupted', 'failed'] } }, { session });
+      if (!record) return false;
+      const p = record.status === 'running' && await this.collections.persons.findOne(this.fence(episode), { session });
+      const live = Boolean(p && !terminalCode);
+      const started = JSON.parse(record.openCapability.record);
+      const failed = Boolean(code || result?.ok === false);
+      const outcome = failed ? 'capability_failed' : 'capability_result';
+      const data = { callId, ...(started.capabilityManifest ? { capabilityManifest: started.capabilityManifest } : {}),
+        ...(failed ? { capabilityId: started.capability.id, code: code || result.code } : { capability: started.capability }),
+        ...(result !== undefined ? { result } : {}) };
+      // Competing finalizers and terminal transitions conflict on this episode write.
+      await this.collections.episodes.updateOne({ ...scope, id: episode.id, 'openCapability.callId': callId }, { $unset: { openCapability: '' } }, { session });
+      if (live) {
+        const experience = recordCapabilityExperience(p.capabilityExperience, record, outcome, data, new Date().toISOString());
+        if (experience) await this.collections.persons.updateOne(scope, { $set: { capabilityExperience: experience } }, { session });
+      }
+      await this.trace(session, { ownerId: episode.ownerId }, episode.id, live ? outcome : 'capability_finalized', { ...data,
+        ...(!live ? { capability: started.capability, workerId: record.workerId, outcome, afterTerminal: true, accepted: false,
+          terminalCode: terminalCode || record.terminalCode || 'STALE' } : {}) });
+      return live;
+    });
   }
   async createdCapabilities(episode) {
     return this.transaction(async session => {

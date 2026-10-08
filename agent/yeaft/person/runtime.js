@@ -152,7 +152,8 @@ export class PersonRuntime {
         selection = { model: candidate.id, effort: null, reason: 'image-capable-candidate', origin: 'bootstrap' };
       }
       const created = await abortable(this.repository.createdCapabilities(episode), signal);
-      const toolHost = createPersonToolHost(this.toolOptions);
+      let finalizeNativeResult;
+      const toolHost = createPersonToolHost({ ...this.toolOptions, onResult: result => finalizeNativeResult(result) });
       const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost });
       let previous = null, capabilityResult = null, dependencyRefs = [];
       // Validation retains actual reads across calls, independently of the bounded rendered request.
@@ -216,27 +217,35 @@ export class PersonRuntime {
           const invocation = proposal.next.capability;
           const manifest = capabilities.executionManifest(invocation.id);
           const execution = manifest ? { capabilityManifest: manifest } : {};
-          await this.repository.append(episode, 'capability_started', { callId, capability: invocation, ...execution, access: capabilities.active.get(invocation.id)?.access ?? 'catalog-read' });
+          await this.repository.startCapability(episode, { callId, capability: invocation, ...execution, access: capabilities.active.get(invocation.id)?.access ?? 'catalog-read' });
+          capabilityResult = null;
+          let finalized = false;
+          const finalize = async (result, code) => {
+            const accepted = await this.repository.finalizeCapability(episode, { callId, capability: invocation, result, code,
+              terminalCode: signal.aborted ? safeError(signal.reason, 'INTERRUPTED').code : null });
+            finalized = true;
+            return accepted;
+          };
+          finalizeNativeResult = async result => {
+            capabilityResult = result;
+            if (!await finalize(result) && !signal.aborted) fail('STALE');
+          };
           try {
             signal.throwIfAborted();
-            // Script cancellation joins its worker before runtime.close can finish.
+            // Native host and script execution join their actual work before close.
             const executionPromise = capabilities.execute(invocation, { signal, callId });
             capabilityResult = isNativeTool(invocation.id) || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
               ? await executionPromise : await abortable(executionPromise, signal);
+            if (!finalized && !await finalize(capabilityResult)) fail('STALE');
             signal.throwIfAborted();
-            if (capabilityResult?.ok === false) {
-              await this.repository.append(episode, 'capability_failed', { callId, capabilityId: invocation.id, ...execution, code: capabilityResult.code, result: capabilityResult });
-              if (capabilityResult.terminal) fail('TOOL_EFFECT_UNCONFIRMED');
-            } else {
-              await this.repository.append(episode, 'capability_result', { callId, capability: invocation, ...execution, result: capabilityResult });
-            }
+            if (capabilityResult?.terminal) fail('TOOL_EFFECT_UNCONFIRMED');
             // Raw tool result above remains durable; only this next-call copy is budgeted.
             if (isNativeTool(invocation.id)) capabilityResult = projectNativeResult(capabilityResult);
           } catch (error) {
             const safe = safeError(error, 'UNSUPPORTED');
-            if (!capabilityResult?.terminal) await this.repository.append(episode, 'capability_failed', { callId, capabilityId: invocation.id, ...execution, code: safe.code }).catch(() => {});
+            if (!finalized) await finalize(capabilityResult ?? undefined, safe.code).catch(() => {});
             throw safe;
-          }
+          } finally { finalizeNativeResult = null; }
         }
       }
     } catch (error) {
