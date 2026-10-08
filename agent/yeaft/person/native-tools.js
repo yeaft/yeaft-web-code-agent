@@ -55,6 +55,7 @@ export const NATIVE_TOOL_MANIFESTS = supported.map(([tool, file, domain]) => {
 });
 export const NATIVE_TOOL_IDS = Object.freeze(NATIVE_TOOL_MANIFESTS.map(m => m.id));
 export const isNativeTool = id => registry.has(id);
+export const allowedNativeToolIds = config => NATIVE_TOOL_IDS.filter(id => registry.isAllowed(id, { plugins: config?.plugins }));
 
 /** Small model projection only. The full raw result is persisted separately.
  * JSON escaping counts against the Person byte budget, unlike Session text. */
@@ -80,17 +81,21 @@ export function projectNativeResult(result, maxBytes = 8192) {
 export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config } = {}) {
   const cwd = resolve(workDir), runtimePlatform = getRuntimePlatformInfo();
   let skillManager;
+  const currentConfig = () => config ?? loadConfig({ dir: yeaftDir });
   return {
     environment: { cwd, runtimePlatform },
+    allowedToolIds: () => allowedNativeToolIds(currentConfig()),
     async execute(id, args, { signal, callId, episodeId } = {}) {
       signal?.throwIfAborted();
       const tool = registry.get(id);
       if (!tool) fail('UNSUPPORTED');
+      const executionConfig = currentConfig();
+      if (!registry.isAllowed(id, { plugins: executionConfig?.plugins })) return { ok: false, code: 'TOOL_DISABLED', id, errorEffect: 'none', output: 'This native tool is disabled by the Agent plugin configuration.', replaySafe: true };
       if (id === 'Bash' && args.background === true) return { ok: false, code: 'UNSUPPORTED', id, errorEffect: 'none', output: 'Person supports foreground Bash only; no Session TaskManager is attached.' };
       if (id === 'Skill') skillManager = createSkillManager(yeaftDir, cwd);
       // Configuration remains instance-owned, refreshed for each invocation.
       const ctx = { cwd, yeaftDir, runtimePlatform, signal, skillManager,
-        config: config ?? loadConfig({ dir: yeaftDir }) };
+        config: executionConfig };
       const controller = new AbortController();
       const onAbort = () => controller.abort(signal.reason);
       signal?.addEventListener('abort', onAbort, { once: true });

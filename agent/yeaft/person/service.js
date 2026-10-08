@@ -3,6 +3,8 @@ import { SqlitePersonRepository } from './sqlite-repository.js';
 import { LocalPersonMemory } from './local-memory.js';
 import { selectPersonStorage, bindPersonStorage } from './storage.js';
 import { PersonRuntime } from './runtime.js';
+import { allowedNativeToolIds } from './native-tools.js';
+import { loadConfig } from '../config.js';
 import { validateFiles } from './attachments.js';
 import { createPersonProvider, validateModelCandidates } from './provider.js';
 import { fail, identifier, LIMITS, object, page, safeError, text } from './contracts.js';
@@ -110,7 +112,10 @@ export function createPersonService(options = {}) {
       case 'traces': await repository.recover(ownerId); return repository.list(ownerId, 'traces', page(payload));
       case 'messages': return repository.list(ownerId, 'messages', page(payload));
       // These reads deliberately bypass recover(), Recall and the runtime/provider.
-      case 'inspect': return repository.inspect(ownerId, inspectRequest(payload));
+      case 'inspect': {
+        const request = inspectRequest(payload);
+        return repository.inspect(ownerId, request, request.section === 'skills' ? allowedNativeToolIds(config ?? loadConfig({ dir: yeaftDir })) : undefined);
+      }
       case 'search': {
         searchRequest(payload);
         return repository.search(ownerId, payload);

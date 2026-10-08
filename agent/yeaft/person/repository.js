@@ -427,13 +427,13 @@ export class MongoPersonRepository {
       return { settings: settingsView(next), person: this.personView({ ...p, settings: next }) };
     });
   }
-  async inspect(ownerId, options) {
+  async inspect(ownerId, options, nativeToolIds) {
     const { section, cursor, limit } = inspectRequest(options);
     await this.getPerson(ownerId);
     const scope = this.scope(ownerId);
     if (section === 'skills') {
       const docs = await this.collections.created_capabilities.find(scope).sort({ id: 1 }).limit(32).maxTimeMS(2000).toArray();
-      return inspectCapabilities(docs.map(doc => JSON.parse(doc.record)), { cursor, limit });
+      return inspectCapabilities(docs.map(doc => JSON.parse(doc.record)), { cursor, limit }, nativeToolIds);
     }
     const records = await this.collections.concepts.find({ ...scope, ...(cursor !== null ? { id: { $gt: cursor } } : {}) })
       .collation({ locale: 'simple' }).sort({ id: 1 }).limit(limit + 1).maxTimeMS(2000).toArray();

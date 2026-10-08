@@ -392,11 +392,11 @@ export class SqlitePersonStore {
     if (Object.keys(settings).length) this.trace(ownerId, null, 'settings', { settings: settingsView(p.settings), ...(name !== undefined ? { name: p.name } : {}) });
     return { settings: settingsView(p.settings), person: this.personView(p) };
   }
-  inspect(ownerId, options) {
+  inspect(ownerId, options, nativeToolIds) {
     const { section, cursor, limit } = inspectRequest(options);
     this.getPerson(ownerId);
     const scope = this.scope(ownerId);
-    if (section === 'skills') return inspectCapabilities(this.rows('created_capabilities', scope, ' ORDER BY id ASC LIMIT 32'), { cursor, limit });
+    if (section === 'skills') return inspectCapabilities(this.rows('created_capabilities', scope, ' ORDER BY id ASC LIMIT 32'), { cursor, limit }, nativeToolIds);
     const records = this.rows('concepts', scope, ' AND (? IS NULL OR id > ?) ORDER BY id ASC LIMIT ?', [cursor, cursor, limit + 1]);
     return inspectionPage(records, limit, 'id', conceptView);
   }

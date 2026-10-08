@@ -72,8 +72,9 @@ function scriptManifest(record) {
 /** Read the real catalog without preparing or executing any capability.
  * Native schemas/source revisions are captured from packaged modules at load;
  * inspection performs no user-file lookup, config/skill load or script execution. */
-export function inspectCapabilities(created, { cursor, limit }) {
-  const entries = manifests.map(contract => ({ id: contract.id, domain: contract.domain, description: contract.description,
+export function inspectCapabilities(created, { cursor, limit }, nativeToolIds = NATIVE_TOOL_IDS) {
+  const allowed = new Set(nativeToolIds);
+  const entries = manifests.filter(m => !isNativeTool(m.id) || allowed.has(m.id)).map(contract => ({ id: contract.id, domain: contract.domain, description: contract.description,
     version: contract.version, revision: contract.revision, contract: copy(contract), source: copy(contract.source ?? { kind: 'builtin' }) }));
   for (const record of created) {
     const contract = scriptManifest(record);
@@ -92,14 +93,16 @@ export class PersonCapabilities {
   constructor(repository, ownerId, { experience = [], triggerKind = 'think', now = Date.now(), created = [], episode, toolHost } = {}) {
     this.repository = repository; this.ownerId = ownerId; this.episode = episode; this.toolHost = toolHost;
     this.scripts = new Map(created.map(record => [record.id, record]));
-    this.byId = new Map([...manifests, ...created.map(scriptManifest)].map(m => [m.id, m]));
+    this.nativeToolIds = toolHost?.allowedToolIds?.() ?? NATIVE_TOOL_IDS;
+    const allowed = new Set(this.nativeToolIds);
+    this.byId = new Map([...manifests.filter(m => !isNativeTool(m.id) || allowed.has(m.id)), ...created.map(scriptManifest)].map(m => [m.id, m]));
     this.prepared = new Map(foundationCapabilities().map(m => [m.id, m]));
     for (const item of familiarCapabilities(experience, triggerKind, now, this.byId)) {
       if (bytes([...this.prepared.values(), item]) <= CAPABILITY_LIMITS.activeBytes) this.prepared.set(item.id, item);
     }
     this.active = new Map(this.prepared);
   }
-  catalog() { return { ...CAPABILITY_MAP, total: this.byId.size, revision: digest([...this.byId.values()]) }; }
+  catalog() { return { ...CAPABILITY_MAP, nativeTools: [...this.nativeToolIds], domains: [...new Set([...this.byId.values()].map(m => m.domain)), 'script'], total: this.byId.size, revision: digest([...this.byId.values()]) }; }
   context() { return copy([...this.prepared.values()]); }
   /** Freeze execution eligibility to the complete contracts actually rendered in this call. */
   activate(rendered) {
