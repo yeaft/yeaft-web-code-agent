@@ -4,6 +4,7 @@ import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { acceptPersonResponse } from '../../web/stores/helpers/digital-person.js';
 import DigitalPersonPage from '../../web/components/DigitalPersonPage.js';
+import SidebarDigitalPerson from '../../web/components/SidebarDigitalPerson.js';
 import PersonThoughtJournal from '../../web/components/PersonThoughtJournal.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
@@ -48,6 +49,12 @@ async function render() {
 }
 
 describe('Digital Person surface', () => {
+  it('hides the sidebar entry when the optional store host is absent', () => {
+    vi.stubGlobal('Pinia', {});
+    wrapper = mount(SidebarDigitalPerson, { global: { mocks: { $t: t } } });
+    expect(wrapper.find('button').exists()).toBe(false);
+  });
+
   it('only lists UI-enabled Agents in the Person breadcrumb', async () => {
     chat.agents.push({ id: 'disabled', online: true, capabilities: ['digital_person'] });
     await render();

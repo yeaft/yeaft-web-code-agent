@@ -78,7 +78,7 @@ describe('Person uploaded reference relay', () => {
       yield { type: 'text_delta', text: JSON.stringify(proposal) }; yield { type: 'stop', stopReason: 'end_turn' };
     } } });
     const state = personState(), envelopes = [];
-    const chat = { authenticated: true, connectionState: 'connected', agents: [{ id: 'agent', online: true, capabilities: ['digital_person'] }],
+    const chat = { authenticated: true, connectionState: 'connected', digitalPersonUiEnabledByAgent: { agent: true }, agents: [{ id: 'agent', online: true, capabilities: ['digital_person'] }],
       sendWsMessage(msg) { void relay.request(client, msg); return true; } };
     relay = createPersonRelay({ uploads, accessError, timeoutMs: 1000, agentMap: new Map([['agent', { capabilities: ['digital_person'] }]]),
       send: async (_client, msg) => acceptPersonResponse(chat, msg),

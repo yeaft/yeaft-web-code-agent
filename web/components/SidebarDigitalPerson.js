@@ -3,6 +3,7 @@ export default {
   props: { collapsed: { type: Boolean, default: false } },
   computed: {
     enabled() {
+      if (typeof Pinia === 'undefined' || typeof Pinia.useChatStore !== 'function') return false;
       const store = Pinia.useChatStore();
       return store.currentAgent ? store.isDigitalPersonUiEnabled()
         : store.agents.some(agent => store.isDigitalPersonUiEnabled(agent.id) && agent.capabilities?.includes('digital_person'));
