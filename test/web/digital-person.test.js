@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptPersonResponse, createPersonController, digitalPersonGate, personState } from '../../web/stores/helpers/digital-person.js';
+import { personActivityRecords, projectPersonActivity } from '../../web/utils/person-activity.js';
 
 const controllers = [];
 afterEach(() => { controllers.splice(0).forEach(c => c.dispose()); vi.useRealTimers(); });
@@ -361,18 +362,23 @@ describe('Digital Person owner / Agent request boundary', () => {
       const delayed = f.requests.at(-1);
       // Both polling and the cancel acknowledgement refresh terminal state
       // while a pre-terminal trace read is still in flight.
-      if (kind === 'cancelled') await f.controller.cancel();
-      else await vi.advanceTimersByTimeAsync(51);
+      const cancelling = kind === 'cancelled' ? f.controller.cancel() : null;
+      await vi.advanceTimersByTimeAsync(kind === 'cancelled' ? 0 : 51);
       expect(f.state.busy).toBe(false);
       expect(f.state.tracesStale).toBe(true);
       f.response(delayed, { items: more ? [older] : [latest], nextCursor: more ? null : 'older' });
       await vi.advanceTimersByTimeAsync(0);
       expect(f.state.tracesStale).toBe(true);
       if (more) {
+        // Live activity still reads the latest tail, without replacing the
+        // diagnostic window the user explicitly paged into.
+        const followup = f.requests.at(-1);
+        expect(followup).toMatchObject({ op: 'traces', payload: { cursor: null, limit: 50 } });
+        f.response(followup, { items: [latest, terminal], nextCursor: 'older' });
         await reading;
         expect(f.state.traces.map(t => t.id)).toEqual(['older', 'latest']);
         expect(f.state.traceCursor).toBeNull();
-        expect(f.requests.filter(r => r.op === 'traces')).toHaveLength(2);
+        expect(f.requests.filter(r => r.op === 'traces')).toHaveLength(3);
         // Only an explicit latest refresh may replace the paged window.
         f.auto(r => r.op === 'traces' ? { items: [latest, terminal], nextCursor: 'older' } : undefined);
         await f.controller.page('traces');
@@ -383,6 +389,7 @@ describe('Digital Person owner / Agent request boundary', () => {
         f.response(followup, { items: [latest, terminal], nextCursor: 'older' });
         await reading;
       }
+      await cancelling;
       expect(f.state.traces.at(-1)).toEqual(terminal);
       expect(f.state.tracesStale).toBe(false);
       const count = f.requests.length;
@@ -414,7 +421,7 @@ describe('Digital Person owner / Agent request boundary', () => {
       expect(followup.requestId).not.toBe(delayed.requestId);
       if (code === 'timeout') await vi.advanceTimersByTimeAsync(101);
       else f.response(followup, null, { ok: false, errorCode: code });
-      await reading;
+      await reading; await vi.advanceTimersByTimeAsync(0);
       expect(f.state.error.code).toBe(code);
       expect(f.state.tracesStale).toBe(true);
       expect(f.state.tracesLoading).toBe(false);
@@ -613,5 +620,202 @@ describe('Digital Person owner / Agent request boundary', () => {
     const f = fixture(); f.chat.sendWsMessage = () => false;
     await f.controller.open('a');
     expect(f.state.loading).toBe(false); expect(f.state.error.code).toBe('disconnected');
+  });
+});
+
+describe('Digital Person conversation activity', () => {
+  const trace = (seq, kind, extra = {}) => ({ id: `t${seq}`, episodeId: 'e', seq, kind, createdAt: seq * 1000, ...extra });
+  const project = (traces, extra = {}, gate = '') => projectPersonActivity({ ...personState(), busy: true, episodeId: 'e', activityRecords: personActivityRecords(traces), ...extra }, gate);
+
+  it('projects only execution facts and excludes private content and unrelated episodes', () => {
+    const records = [trace(1, 'accepted', { trigger: { kind: 'send', text: 'PRIVATE_TEXT' } }),
+      trace(2, 'call_started', { callId: 'c', request: 'PRIVATE_PROMPT' }),
+      trace(3, 'call_output', { callId: 'c', output: 'PRIVATE_OUTPUT' }),
+      trace(4, 'activity', { activity: { summary: 'PRIVATE_REASONING' } }),
+      trace(5, 'capability_started', { callId: 'c', capability: { id: 'Recall', args: { query: 'PRIVATE_QUERY' } } }),
+      trace(6, 'capability_started', { episodeId: 'another', capability: { id: 'Capability.create' } })];
+    const value = project(records);
+    expect(value.label).toBe('person.activity.recalling');
+    expect(value.rows.map(r => r.status)).toEqual(['completed', 'running']);
+    expect(value.rows[0].durationMs).toBe(1000);
+    expect(value.startedAt).toBe(1000);
+    expect(JSON.stringify(personActivityRecords(records))).not.toMatch(/PRIVATE_|"(?:request|output|args|summary)":/);
+    expect(value.rows).toHaveLength(2);
+  });
+
+  it.each([
+    ['catalog.search', 'searchingSkills'], ['catalog.view', 'readingSkill'],
+    ['Skill.reconsider', 'readingMethod'], ['Skill.associate', 'readingMethod'],
+    ['Capability.create', 'validatingCapability'], ['Script.sum', 'runningScript'],
+    ['<img src=x>', 'usingCapability'], ['__proto__', 'usingCapability'],
+  ])('uses a truthful fixed label for %s', (id, label) => {
+    const value = project([trace(1, 'capability_started', { capability: { id } })]);
+    expect(value.label).toBe(`person.activity.${label}`);
+    expect(value.params).toEqual(id === 'Script.sum' ? { name: id } : {});
+    expect(JSON.stringify(value)).not.toContain('<img');
+  });
+
+  it('does not call an invocation outcome or model output an episode success', () => {
+    const events = [trace(1, 'capability_started', { callId: 'c', capability: { id: 'Recall' } }),
+      trace(2, 'capability_result', { callId: 'c', capability: { id: 'Recall' } })];
+    expect(project(events)).toMatchObject({ loading: true, label: 'person.activity.preparing', rows: [expect.objectContaining({ status: 'completed' })] });
+    events.push(trace(3, 'call_started', { callId: 'd' }), trace(4, 'call_output', { callId: 'd' }));
+    expect(project(events)).toMatchObject({ loading: true, label: 'person.activity.processingResponse' });
+  });
+
+  it.each(['completed', 'cancelled', 'failed', 'interrupted', 'budget_exhausted'])('fences late events with confirmed %s, including no assistant reply', status => {
+    const value = project([trace(1, 'call_started', { callId: 'c' }), trace(2, 'call_failed', { callId: 'c' })], {
+      busy: false, episodeId: null, latestEpisode: { id: 'e', status, endedAt: 3000 },
+    });
+    expect(value.loading).toBe(false);
+    expect(value.label).toBe(`person.activity.${status === 'budget_exhausted' ? 'budgetExhausted' : status}`);
+    expect(value.endedAt).toBe(3000);
+    expect(value.rows.every(r => r.status !== 'running')).toBe(true);
+  });
+
+  it('stops pretending to know current work on stale reads or disconnection', () => {
+    const records = [trace(1, 'capability_started', { capability: { id: 'Recall' } })];
+    for (const state of [{ activityStale: true }, { progressStale: true }]) {
+      expect(project(records, state)).toMatchObject({ label: 'person.activity.stale', loading: false, rows: [expect.objectContaining({ status: 'unknown' })] });
+    }
+    expect(project(records, {}, 'disconnected')).toMatchObject({ label: 'person.activity.disconnected', loading: false });
+    expect(project(records, {}, 'offline').loading).toBe(false);
+    expect(project(records, {}, 'disabled').visible).toBe(false);
+    expect(project(records, { commandPending: true })).toMatchObject({ label: 'person.activity.confirming', rows: [] });
+    expect(project(records, { busy: false, retryCommand: {} }).label).toBe('person.activity.uncertain');
+    expect(project(records, { cancelPending: true }).label).toBe('person.activity.stopping');
+  });
+
+  it('does not reuse the last success for a new command with unknown admission', () => {
+    const value = project([trace(1, 'committed')], {
+      busy: false, episodeId: null, latestEpisode: { id: 'e', status: 'completed', endedAt: 2000 }, retryCommand: {},
+    });
+    expect(value).toMatchObject({ visible: true, loading: false, label: 'person.activity.uncertain', rows: [], startedAt: null, endedAt: null });
+  });
+
+  it('keeps the tail bounded and missing starts explicitly incomplete', () => {
+    const records = Array.from({ length: 80 }, (_, i) => trace(i + 1, 'capability_result', { callId: `c${i}`, capability: { id: 'Recall' } }));
+    const value = project(records);
+    expect(personActivityRecords(records)).toHaveLength(50);
+    expect(value.rows).toHaveLength(30);
+    expect(value.limited).toBe(true);
+    expect(value.startedAt).toBeNull();
+    expect(value.rows.every(r => r.durationMs === null)).toBe(true);
+  });
+
+  it('keeps live progress current after history pagination and preserves scope on disconnect only', async () => {
+    vi.useFakeTimers(); const f = fixture(); let records = [trace(1, 'accepted', { trigger: { kind: 'send' } })];
+    let busy = true;
+    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, messages: [], busy, episodeId: busy ? 'e' : null, latestEpisode: { id: 'e', status: busy ? 'running' : 'completed' } }
+      : r.op === 'traces' ? { items: r.payload.cursor ? [trace(0, 'accepted', { episodeId: 'old' })] : records, nextCursor: r.payload.cursor ? null : 'older' } : undefined);
+    await f.controller.open('a'); await f.controller.page('traces', true);
+    const historical = [...f.state.traces];
+    records = [...records, trace(2, 'capability_started', { callId: 'c', capability: { id: 'Recall', args: 'PRIVATE' } })];
+    await vi.advanceTimersByTimeAsync(51);
+    expect(projectPersonActivity(f.state).label).toBe('person.activity.recalling');
+    expect(f.state.traces).toEqual(historical);
+    expect(f.state.tracesStale).toBe(true);
+    expect(f.state.activityStale).toBe(false);
+    f.chat.connectionState = 'reconnecting'; await f.controller.open('a');
+    expect(projectPersonActivity(f.state, 'disconnected')).toMatchObject({ visible: true, loading: false, label: 'person.activity.disconnected' });
+    expect(f.state.traces).toEqual([]);
+    expect(JSON.stringify(f.state.activityRecords)).not.toContain('PRIVATE');
+    f.owner('other'); await f.controller.open('a');
+    expect(f.state.activityRecords).toEqual([]);
+    expect(f.state.busy).toBe(false);
+    f.chat.connectionState = 'connected'; busy = false; await f.controller.open('a');
+    expect(projectPersonActivity(f.state)).toMatchObject({ loading: false, label: 'person.activity.completed' });
+  });
+
+  it('refreshes live progress while a slow history page is still pending', async () => {
+    vi.useFakeTimers(); const f = fixture({ timeoutMs: 1000 }); let history;
+    let records = [trace(1, 'capability_started', { callId: 'c', capability: { id: 'Recall' } })];
+    f.auto(r => {
+      if (r.op === 'snapshot') return { person: { id: 'p' }, busy: true, episodeId: 'e' };
+      if (r.op === 'traces' && r.payload.cursor) { history = r; return false; }
+      if (r.op === 'traces') return { items: records, nextCursor: 'older' };
+    });
+    await f.controller.open('a');
+    const historical = [...f.state.traces];
+    const reading = f.controller.page('traces', true);
+    records = [...records, trace(2, 'capability_result', { callId: 'c', capability: { id: 'Recall' } }),
+      trace(3, 'capability_started', { callId: 'd', capability: { id: 'Script.sum' } })];
+    await vi.advanceTimersByTimeAsync(51);
+    expect(f.state.tracesLoading).toBe(true);
+    expect(f.state.traces).toEqual(historical);
+    expect(projectPersonActivity(f.state)).toMatchObject({ label: 'person.activity.runningScript', loading: true });
+    f.response(history, { items: [trace(0, 'committed', { episodeId: 'old' })], nextCursor: null });
+    await reading;
+    expect(f.state.traces).toHaveLength(2);
+    expect(f.state.activityRecords).toHaveLength(3);
+    expect(projectPersonActivity(f.state).label).toBe('person.activity.runningScript');
+  });
+
+  it('marks an explicit snapshot failure stale, recovers, and ignores an older failed snapshot', async () => {
+    vi.useFakeTimers(); const f = fixture(); let fail = false; let delayed;
+    const snapshot = { person: { id: 'p' }, busy: true, episodeId: 'e' };
+    f.auto(r => {
+      if (r.op === 'snapshot' && fail) { f.response(r, null, { ok: false, errorCode: 'requestFailed' }); return false; }
+      if (r.op === 'snapshot') return snapshot;
+      if (r.op === 'traces') return { items: [trace(1, 'call_started', { callId: 'c' })] };
+    });
+    await f.controller.open('a'); fail = true; await f.controller.refresh();
+    expect(projectPersonActivity(f.state)).toMatchObject({ label: 'person.activity.stale', loading: false });
+    fail = false; await f.controller.refresh();
+    expect(f.state.progressStale).toBe(false);
+    f.auto(r => r.op === 'snapshot' ? (delayed = r, false) : undefined);
+    await vi.advanceTimersByTimeAsync(51);
+    const old = delayed;
+    const refreshing = f.controller.refresh(); await vi.advanceTimersByTimeAsync(0);
+    f.response(delayed, snapshot); await refreshing;
+    f.response(old, null, { ok: false, errorCode: 'requestFailed' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.state.progressStale).toBe(false);
+    expect(f.state.error).toBeNull();
+  });
+
+  it('fences concurrent live tails against late success, failure and identity changes', async () => {
+    vi.useFakeTimers();
+    for (const result of ['success', 'failure', 'owner', 'agent']) {
+      const f = fixture();
+      f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, busy: true, episodeId: 'e' }
+        : r.op === 'traces' ? { items: [], nextCursor: 'older' } : undefined);
+      await f.controller.open('a'); await f.controller.page('traces', true);
+      f.auto(r => r.op === 'traces' ? false : r.op === 'snapshot' ? { person: { id: 'p' }, busy: true, episodeId: 'e' } : undefined);
+      await vi.advanceTimersByTimeAsync(51);
+      const older = f.requests.at(-1);
+      const refreshing = f.controller.refresh({ preserveHistory: true }); await vi.advanceTimersByTimeAsync(0);
+      const latest = f.requests.at(-1);
+      expect(latest.requestId).not.toBe(older.requestId);
+      f.response(latest, { items: [trace(3, 'capability_started', { callId: 'd', capability: { id: 'Script.sum' } })] });
+      await refreshing;
+      if (['owner', 'agent'].includes(result)) {
+        if (result === 'owner') f.owner('new-owner');
+        f.auto(); await f.controller.open(result === 'agent' ? 'b' : 'a');
+      }
+      f.response(older, { items: [trace(1, 'call_started')] }, result === 'failure' ? { ok: false, errorCode: 'requestFailed' } : {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.state.activityStale).toBe(false); expect(f.state.error).toBeNull();
+      if (['owner', 'agent'].includes(result)) expect(f.state.activityRecords).toEqual([]);
+      else expect(projectPersonActivity(f.state).label).toBe('person.activity.runningScript');
+      f.controller.dispose();
+    }
+  });
+
+  it('marks progress stale after a failed tail/snapshot and recovers automatically without cognition', async () => {
+    vi.useFakeTimers(); const f = fixture(); let fail = '';
+    f.auto(r => {
+      if (r.op === fail) { f.response(r, null, { ok: false, error: 'Unavailable' }); return false; }
+      if (r.op === 'snapshot') return { person: { id: 'p' }, busy: true, episodeId: 'e' };
+      if (r.op === 'traces') return { items: [trace(1, 'capability_started', { capability: { id: 'Recall' } })], nextCursor: null };
+    });
+    await f.controller.open('a');
+    for (const op of ['traces', 'snapshot']) {
+      fail = op; await vi.advanceTimersByTimeAsync(51);
+      expect(projectPersonActivity(f.state)).toMatchObject({ loading: false, label: 'person.activity.stale' });
+      fail = ''; await vi.advanceTimersByTimeAsync(51);
+      expect(projectPersonActivity(f.state)).toMatchObject({ loading: true, label: 'person.activity.recalling' });
+    }
+    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
   });
 });
