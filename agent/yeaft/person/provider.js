@@ -1,13 +1,45 @@
 import { loadConfig } from '../config.js';
 import { createLLMAdapter } from '../llm/adapter.js';
 import { applyAnthropicThinking } from '../llm/anthropic.js';
+import { inferProtocolFromModelId, normalizeModelEntry } from '../llm/router.js';
+import { normalizeKnownProviderForRuntime } from '../llm/known-providers.js';
 import { normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 import { bytes, digest, fail, LIMITS, PersonError } from './contracts.js';
 
+export const MODEL_LIMITS = Object.freeze({ candidates: 8, available: 100 });
+export function validateModelCandidates(refs) {
+  if (!Array.isArray(refs) || refs.length > MODEL_LIMITS.candidates ||
+      refs.some(ref => typeof ref !== 'string' || !/^[^/\s]+\/[^\s]+$/u.test(ref) || ref.length > 256) ||
+      new Set(refs).size !== refs.length) fail('MODEL_SELECTION');
+}
+
+// Bounds apply to the actual wire protocol, not a vision flag or compressed file size.
+// OpenAI tile models (including 2833 base tokens for gpt-4o-mini) have a fixed
+// cost only at explicit low detail. Known patch models below fit <=6144 patches
+// with multipliers <=1.62; reserve 16384, not the tile-model allowance.
+// Claude 3/4 resize to <=4784 visual tokens. Keep headroom for image overhead.
+// Sources and supported-model policy: docs/person-backend-files.md.
+function imageInputBudget(modelId, protocol) {
+  if (protocol === 'openai-responses') {
+    if (/^(?:gpt-(?:4o(?:-mini)?|4\.1|5(?:\.1)?)|o1(?:-pro)?|o3)(?:-\d{4}-\d{2}-\d{2})?$/.test(modelId)) {
+      return { detail: 'low', tokensPerImage: 8192 };
+    }
+    if (/^gpt-(?:4\.1-mini|5\.(?:2|4|5))(?:-\d{4}-\d{2}-\d{2})?$/.test(modelId)) {
+      return { detail: 'low', tokensPerImage: 16384 };
+    }
+  }
+  if (protocol === 'anthropic' && /^claude-(?:3-(?:haiku|sonnet|opus)|3-5-(?:haiku|sonnet)|3-7-sonnet|sonnet-4(?:[.-][56])?|opus-4(?:[.-][15678])?|haiku-4[.-]5)(?:-\d{8}|-latest)?$/.test(modelId)) {
+    return { tokensPerImage: 8192 };
+  }
+  // Unknown aliases/future variants need a reviewed bound, even with an explicit
+  // supportsImages:true. The adapter accepting an image is not token accounting.
+  return null;
+}
+
 /** Only configured native API models; no Session initialization or implicit credential fallback. */
-export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1' }) {
-  const config = suppliedConfig || loadConfig({ dir: yeaftDir });
+export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1', modelCandidates = [] }) {
+  const config = structuredClone(suppliedConfig || loadConfig({ dir: yeaftDir }));
   if (!config.providers?.length && !suppliedAdapter) fail('MODEL_UNAVAILABLE');
   const models = config.availableModels || [];
   const requestedDefault = config.primaryModel || config.model;
@@ -16,8 +48,10 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
   const defaultModel = models.find(m => (m.ref || m.id) === requestedDefault)
     || models.find(m => m.id === requestedDefault);
   const defaultRef = defaultModel?.ref || defaultModel?.id;
+  validateModelCandidates(modelCandidates);
   const available = models.filter(m => !allowedModels || allowedModels.includes(m.ref || m.id));
-  const catalog = available.map(m => {
+  const routingProviders = (config.providers || []).map(normalizeKnownProviderForRuntime);
+  const safeModels = available.map(m => {
     const maxOutput = Math.min(4096, Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m })));
     const effortContext = { ...m, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
     const efforts = effortEnabled ? (m.effortOptions || []).filter(e => {
@@ -29,14 +63,32 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
       applyAnthropicThinking(body, m.id, e, effortContext);
       return body.max_tokens === maxOutput;
     }) : [];
-    return { id: m.ref || m.id, efforts, maxOutput,
+    // Match the router's first owning row and managed-provider protocol normalization.
+    const routeIndex = routingProviders.findIndex(p => (!m.ref?.includes('/') || m.ref === `${p.name}/${m.id}`) &&
+      p.models?.some(item => normalizeModelEntry(item)?.id === m.id));
+    const routedProvider = routingProviders[routeIndex];
+    const routedModel = normalizeModelEntry(routedProvider?.models?.find(item => normalizeModelEntry(item)?.id === m.id));
+    const rawProvider = config.providers?.[routeIndex];
+    const rawModel = rawProvider?.models?.find(item => item && typeof item === 'object' && item.id === m.id);
+    const explicitImages = m.supportsImages ?? rawModel?.supportsImages ?? rawProvider?.supportsImages;
+    const protocol = routedModel?.protocol || routedProvider?.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
+    const imageBudget = !routedProvider || explicitImages === false ? null : imageInputBudget(m.id, protocol);
+    return { id: m.ref || m.id, efforts, maxOutput, supportsImages: imageBudget !== null, imageBudget,
       contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };
   }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && m.contextWindow > m.maxOutput + 1024 && m.maxOutput >= 256);
-  catalog.sort((a, b) => Number(b.id === defaultRef) - Number(a.id === defaultRef));
-  catalog.splice(8);
+  safeModels.sort((a, b) => Number(b.id === defaultRef) - Number(a.id === defaultRef));
+  const seen = new Set();
+  const uniqueModels = safeModels.filter(model => !seen.has(model.id) && seen.add(model.id));
+  const availableModels = uniqueModels.slice(0, MODEL_LIMITS.available);
+  // A UI catalog must not be the bounded episode choice set: model 9+ remains selectable.
+  // Explicit lists are validated, never silently truncated or broadened on stale config.
+  if (modelCandidates.some(ref => !availableModels.some(model => model.id === ref))) fail('MODEL_SELECTION');
+  const catalog = modelCandidates.length ? availableModels.filter(model => modelCandidates.includes(model.id))
+    : availableModels.slice(0, MODEL_LIMITS.candidates);
   if (!catalog.length) fail('MODEL_UNAVAILABLE');
   const adapter = suppliedAdapter || await createLLMAdapter(config);
-  return { adapter, catalog, catalogRevision: digest(catalog), defaultSelection: { model: catalog[0].id, effort: null }, effortEnabled };
+  return { adapter, catalog, availableModels, availableModelsTruncated: uniqueModels.length > MODEL_LIMITS.available,
+    catalogRevision: digest(catalog), defaultSelection: { model: catalog[0].id, effort: null }, effortEnabled };
 }
 
 export function abortable(promise, signal) {

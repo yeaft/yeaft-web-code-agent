@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { MongoPersonRepository } from '../../../../agent/yeaft/person/repository.js';
-import { config, finalProposal } from './fixtures.js';
+import { config, imageConfig, finalProposal } from './fixtures.js';
 
 // Explicit isolated replica-set opt-in. Never point this suite at a production database.
 const uri = process.env.PERSON_TEST_MONGO_URI;
@@ -21,7 +21,8 @@ suite('Person real MongoDB replica-set integration', () => {
   const services = [], repositories = [];
   const call = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
   const adapterFor = handler => ({ async *stream(params) {
-    const context = JSON.parse(params.messages[0].content);
+    const content = params.messages[0].content;
+    const context = JSON.parse(Array.isArray(content) ? content[0].text : content);
     params.onEffortDecision?.({ effective: params.effort ?? null, wireMode: 'test-wire' });
     const result = await handler(context, params);
     if (typeof result === 'string') yield { type: 'text_delta', text: result };
@@ -103,6 +104,61 @@ suite('Person real MongoDB replica-set integration', () => {
     expect((await call(restarted, 'messages')).items).toHaveLength(2);
     const collection = inspector.db(dbName).collection('person_concept_revisions');
     expect(await collection.countDocuments({ namespace: 'roundtrip' })).toBe(2);
+  });
+
+  it.each(['send', 'think'])('%s persists image/text files and owner candidates across restart, resolves receipts without replay', async op => {
+    const namespace = `files-${op}`, seen = [];
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=';
+    const files = [{ name: 'pixel.png', mimeType: 'image/png', data: png },
+      { name: 'notes.md', mimeType: 'text/markdown', data: Buffer.from('Mongo durable UTF-8 附件').toString('base64') }];
+    const native = imageConfig;
+    const adapter = adapterFor((context, params) => {
+      seen.push(params);
+      expect(context.trigger.attachments[1]).toMatchObject({ content: 'Mongo durable UTF-8 附件', trust: 'untrusted-user-content' });
+      expect(params.messages[0].content.find(part => part.type === 'image').source.data).toBe(png);
+      expect(params.model).toBe('test/gpt-4.1-mini');
+      const p = finalProposal(context.state.version); p.concepts = []; p.state.focusConceptIds = []; return p;
+    });
+    const s = create(namespace, adapter, { config: native });
+    await call(s, 'open'); await call(s, 'settings', { modelCandidates: ['test/gpt-4.1-mini'] });
+    const request = { clientMessageId: 'files', text: '', files };
+    const accepted = await call(s, op, request);
+    expect(await call(s, op, request)).toMatchObject({ duplicate: true, episodeId: accepted.episodeId });
+    const snapshot = await waitIdle(s);
+    expect(snapshot.latestEpisode.status).toBe('completed');
+    expect(snapshot.messages.find(m => m.role === 'user').attachments).toHaveLength(2);
+    expect(JSON.stringify(await call(s, 'messages'))).not.toContain(png);
+    expect(JSON.stringify(await call(s, 'traces'))).not.toContain(png);
+    await s.close();
+    const restarted = create(namespace, adapter, { config: native });
+    const receipt = await call(restarted, 'receipt', { clientMessageId: 'files' });
+    expect(receipt).toMatchObject({ found: true, episodeId: accepted.episodeId, status: 'completed', kind: op, text: '', attachments: [{ name: 'pixel.png' }, { name: 'notes.md' }] });
+    expect(JSON.stringify(receipt)).not.toContain(png);
+    expect((await call(restarted, 'status')).modelCandidates).toEqual(['test/gpt-4.1-mini']);
+    expect(await call(restarted, op, structuredClone(request))).toMatchObject({ duplicate: true, episodeId: accepted.episodeId });
+    await expect(call(restarted, op, { ...request, files: [files[0]] })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    await expect(call(restarted, 'receipt', { clientMessageId: 'files', requestHash: '0'.repeat(64) })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    expect(await call(restarted, 'receipt', { clientMessageId: 'files' }, 'bob')).toEqual({ found: false, clientMessageId: 'files' });
+    expect(await repo(`${namespace}-other`).receipt('alice', 'files')).toEqual({ found: false, clientMessageId: 'files' });
+    expect(seen).toHaveLength(1);
+    const stored = await inspector.db(dbName).collection('person_attachments').find({ namespace, ownerId: 'alice' }).toArray();
+    expect(stored).toHaveLength(2);
+    expect(stored.find(f => f.kind === 'image').data).toBe(png);
+    expect(stored.find(f => f.kind === 'text').data).toBe(files[1].data);
+  });
+
+  it('receipt is read-only even for expired Mongo leases', async () => {
+    const r = repo('receipt-expired', 300); await r.open('alice');
+    const { episode } = await r.admit('alice', { kind: 'think', text: '', clientMessageId: 'one', workerId: 'crashed', budget: { calls: 1, timeoutMs: 1000 } });
+    const before = await r.getPerson('alice');
+    await r.close();
+    await new Promise(resolve => setTimeout(resolve, 350));
+    const restarted = repo('receipt-expired');
+    expect(await restarted.receipt('alice', 'one', episode.requestHash)).toMatchObject({ found: true, status: 'running', episodeId: episode.id });
+    expect(await restarted.getPerson('alice')).toEqual(before);
+    expect((await restarted.list('alice', 'traces', { limit: 50 })).items).toHaveLength(1);
+    await restarted.recover('alice');
+    expect(await restarted.receipt('alice', 'one')).toMatchObject({ status: 'interrupted' });
   });
 
   it('retains previously read concept revisions and reported provenance across Recall pages without pretending to render them again', async () => {

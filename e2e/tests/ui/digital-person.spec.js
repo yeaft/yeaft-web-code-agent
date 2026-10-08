@@ -12,6 +12,7 @@ async function mockPersonSocket(page) {
   let socket;
   let configured = true;
   let busy = false;
+  let saveSettings;
   const agents = [
     { id: 'person-a', name: 'Owner Agent A', online: true, capabilities: ['digital_person'] },
     { id: 'person-b', name: 'Owner Agent B', online: true, capabilities: ['digital_person'] },
@@ -31,7 +32,7 @@ async function mockPersonSocket(page) {
       if (request.type !== 'person_request') { server.send(message); return; }
       requests.push(request);
       const reply = (data, extra = {}) => route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data, ...extra }));
-      if (request.op === 'status') reply({ configured, reason: configured ? '' : 'MongoDB is not configured' });
+      if (request.op === 'status') reply({ configured, reason: configured ? '' : 'MongoDB is not configured', models: [{ id: 'provider/model-a' }, { id: 'provider/model-b' }] });
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
       else if (request.op === 'snapshot') {
         reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea' }, state: { version: 4, currentEpisodeId: 'episode-1' }, messages: request.agentId === 'person-a' ? messages : [], busy, episodeId: busy ? 'episode-1' : null });
@@ -50,12 +51,13 @@ async function mockPersonSocket(page) {
         ];
         reply({ items: request.payload.cursor ? [{ id: 'trace-older', seq: 0, episodeId: 'older', kind: 'accepted', trigger: { kind: 'think', text: 'Earlier question' }, createdAt: 1 }] : [...personRecords(), ...capabilityRecords], nextCursor: request.payload.cursor ? null : 'trace-page-2' });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
-        if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
+        if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
         busy = true; reply({ episodeId: 'episode-1' });
-      } else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
+      } else if (request.op === 'settings') saveSettings = () => reply({ settings: request.payload });
+      else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
     });
   });
-  return { requests, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+  return { requests, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
 }
 
 for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 1280, theme: 'dark', locale: 'zh-CN' }, { width: 320, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
@@ -64,6 +66,9 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await page.setViewportSize({ width: scenario.width, height: 800 });
     await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
     await page.goto(serverUrl);
+    // Verify the served artifact, not just an environment variable on the test runner.
+    if (process.env.PERSON_UI_PRODUCTION === 'true') await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(1);
+    else await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(0);
     await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
     const zh = scenario.locale === 'zh-CN';
     if (scenario.width === 320) await page.locator('.header-sidebar-toggle').click();
@@ -79,8 +84,27 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     const input = page.getByLabel(zh ? '消息或思考主题' : 'Message or thought topic', { exact: true });
     await expect(input).toBeEnabled();
     await input.focus(); await expect(input).toBeFocused();
+    await expect(page.locator('.person-menu')).toHaveCount(0);
+    await expect(page.locator('.person-page')).not.toContainText(zh ? '工作中心' : 'Work Center');
+    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel(zh ? '沿用 Agent 默认模型范围' : 'Follow Agent model defaults').uncheck();
+    await dialog.getByLabel('provider/model-b', { exact: true }).check();
+    await dialog.getByRole('button', { name: zh ? '保存' : 'Save', exact: true }).click();
+    await expect(dialog).toBeFocused();
+    await page.keyboard.press('Tab'); await expect(dialog).toBeFocused();
+    await page.keyboard.press('Shift+Tab'); await expect(dialog).toBeFocused();
+    mock.finishSettings();
+    await expect(dialog).toHaveCount(0);
+    expect(mock.requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: ['provider/model-b'] });
+    await page.locator('input[type="file"]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('A small attachment with user-provided reference data.') });
+    await expect(page.locator('.person-attachment-list')).toContainText('notes.txt');
+    await expect(page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true })).toBeEnabled();
     await input.fill('Hello Person');
     await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
+    expect(mock.requests.find(r => r.op === 'send').payload.attachments).toEqual([{ fileId: expect.any(String) }]);
+    await expect(page.locator('.person-attachment-list')).toHaveCount(0);
     await expect(input).toBeDisabled();
     await expect(page.locator('.person-messages')).toContainText('Recorded mock response.');
     await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);

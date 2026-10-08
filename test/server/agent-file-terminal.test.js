@@ -50,6 +50,7 @@ const {
 
 vi.mock('../../server/context.js', () => ({
   agents,
+  pendingFiles: new Map(),
   previewFiles,
   userFileTabs,
   webClients,

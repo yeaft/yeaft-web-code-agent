@@ -395,6 +395,24 @@ describe('LLM adapter auth headers', () => {
     expect(output.output.length).toBeLessThan(500);
   });
 
+  it.each(['low', 'high', 'auto', undefined])('preserves explicit image detail %s without changing caller defaults', async detail => {
+    global.fetch = vi.fn(async () => jsonResponse({ output_text: 'ok', usage: {} }));
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'key', baseUrl: 'https://openai.test/v1' });
+    const sources = [{ type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=' }, { type: 'url', url: 'https://image.test/picture.png' }];
+    const parts = sources.map(source => ({ type: 'image', source, ...(detail ? { detail } : {}) }));
+    const before = structuredClone(parts);
+    await adapter.call({ model: 'gpt-4o-mini', system: '', messages: [
+      { role: 'user', content: parts }, { role: 'tool', toolCallId: 'image-result', content: parts },
+    ] });
+    const input = JSON.parse(global.fetch.mock.calls[0][1].body).input;
+    const expected = ['data:image/png;base64,aW1hZ2U=', 'https://image.test/picture.png'].map(image_url => ({
+      type: 'input_image', image_url, ...(detail ? { detail } : {}),
+    }));
+    expect(input[0].content).toEqual(expected);
+    expect(input[1].output).toEqual(expected);
+    expect(parts).toEqual(before);
+  });
+
   it('translates PDF document blocks to Responses input_file content', async () => {
     const calls = [];
     global.fetch = vi.fn(async (url, init) => {

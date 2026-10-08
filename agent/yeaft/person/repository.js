@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { bytes, digest, fail, LIMITS, PersonError, safeError } from './contracts.js';
+import { admissionReceipt, bytes, digest, fail, identifier, LIMITS, PersonError, safeError } from './contracts.js';
 import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
+import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
 
-const COLLECTIONS = ['persons', 'messages', 'episodes', 'states', 'concepts', 'concept_revisions', 'state_commits', 'traces', 'created_capabilities', 'created_capability_revisions'];
+const COLLECTIONS = ['persons', 'attachments', 'messages', 'episodes', 'states', 'concepts', 'concept_revisions', 'state_commits', 'traces', 'created_capabilities', 'created_capability_revisions'];
 const txOptions = { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, readPreference: 'primary', maxCommitTimeMS: 5000, timeoutMS: 10000 };
 const publicDoc = doc => {
   if (!doc) return null;
@@ -69,7 +70,7 @@ export class MongoPersonRepository {
     const unique = (name, fields) => this.collections[name].createIndex({ ...scope, ...fields }, { unique: true });
     await Promise.all([
       unique('persons', {}), unique('states', {}), unique('episodes', { clientMessageId: 1 }), unique('episodes', { id: 1 }),
-      unique('messages', { seq: 1 }), unique('traces', { seq: 1 }), unique('concepts', { id: 1 }),
+      unique('attachments', { id: 1 }), unique('messages', { seq: 1 }), unique('traces', { seq: 1 }), unique('concepts', { id: 1 }),
       this.collections.episodes.createIndex({ ...scope, inputWatermark: -1 }),
       unique('created_capabilities', { id: 1 }), unique('created_capability_revisions', { id: 1, version: 1 }),
       this.collections.traces.createIndex({ ...scope, episodeId: 1, kind: 1, callId: 1 }),
@@ -160,9 +161,16 @@ export class MongoPersonRepository {
       return Boolean(p);
     });
   }
-  async admit(ownerId, { kind, text, clientMessageId, workerId, budget }) {
+  async receipt(ownerId, clientMessageId, requestHash) {
+    identifier(clientMessageId);
+    await this.init();
+    const episode = await this.collections.episodes.findOne({ ...this.scope(ownerId), clientMessageId }, { readConcern: { level: 'majority' }, readPreference: 'primary' });
+    return admissionReceipt(episode, clientMessageId, requestHash);
+  }
+  async admit(ownerId, { kind, text, clientMessageId, workerId, budget, files = [] }) {
+    const validated = validateFiles(files, text, kind), attachments = validated.map(attachmentMetadata);
     await this.recover(ownerId);
-    const scope = this.scope(ownerId), requestHash = digest([kind, text]);
+    const scope = this.scope(ownerId), requestHash = attachmentRequestHash(kind, text, validated);
     return this.transaction(async session => {
       const existing = await this.collections.episodes.findOne({ ...scope, clientMessageId }, { session });
       if (existing) {
@@ -175,21 +183,23 @@ export class MongoPersonRepository {
       // Every admission is explicit. A manual Dream request authorizes this episode
       // only; it neither requires nor enables unsolicited background cognition.
       const id = randomUUID();
+      const hasMessage = kind === 'send' || (kind === 'think' && attachments.length > 0);
       p = await this.collections.persons.findOneAndUpdate({ ...scope, activeEpisodeId: null, epoch: p.epoch }, [{ $set: {
         activeEpisodeId: id, leaseOwner: workerId, leaseUntil: { $add: ['$$NOW', this.leaseMs] },
         epoch: { $add: ['$epoch', 1] }, writeSerial: { $add: ['$writeSerial', 1] },
-        inputWatermark: { $add: ['$inputWatermark', 1] }, messageSeq: { $add: ['$messageSeq', kind === 'send' ? 1 : 0] },
+        inputWatermark: { $add: ['$inputWatermark', 1] }, messageSeq: { $add: ['$messageSeq', hasMessage ? 1 : 0] },
       } }], { session, returnDocument: 'after' });
       if (!p) fail('BUSY');
       let messageId = null;
-      if (kind === 'send') {
+      for (const file of validated) await this.collections.attachments.updateOne({ ...scope, id: file.id }, { $setOnInsert: this.doc(scope, file) }, { session, upsert: true });
+      if (hasMessage) {
         messageId = randomUUID();
-        await this.collections.messages.insertOne(this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, role: 'user', text, createdAt: new Date(), clientMessageId }), { session });
+        await this.collections.messages.insertOne(this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, role: 'user', text, attachments, createdAt: new Date(), clientMessageId }), { session });
       }
-      const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text, messageId, status: 'running', workerId, epoch: p.epoch,
+      const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], status: 'running', workerId, epoch: p.epoch,
         baseStateVersion: p.stateVersion, inputWatermark: p.inputWatermark, controlVersion: p.controlVersion, budget, createdAt: new Date() });
       await this.collections.episodes.insertOne(episode, { session });
-      await this.trace(session, p, id, 'accepted', { trigger: { kind, text, messageId }, baseStateVersion: p.stateVersion, budget });
+      await this.trace(session, p, id, 'accepted', { trigger: { kind, text, messageId, attachments }, baseStateVersion: p.stateVersion, budget });
       return { episodeId: id, duplicate: false, status: 'running', episode };
     });
   }
@@ -299,6 +309,20 @@ export class MongoPersonRepository {
         capabilityManifest: { id: record.id, version: record.version, revision: record.revision }, evidence: record.evidence });
       return publicDoc(record);
     }, false);
+  }
+  async episodeAttachments(episode) {
+    return this.transaction(async session => {
+      if (!await this.collections.persons.findOne(this.fence(episode), { session })) fail('STALE');
+      const scope = this.scope(episode.ownerId);
+      const stored = await this.collections.episodes.findOne({ ...scope, id: episode.id }, { session });
+      const files = [];
+      for (const ref of stored.attachments ?? []) {
+        const file = await this.collections.attachments.findOne({ ...scope, id: ref.id }, { session });
+        if (!file || file.sha256 !== ref.sha256) fail('STORAGE_UNAVAILABLE');
+        files.push(publicDoc(file));
+      }
+      return files;
+    });
   }
   async context(episode) {
     await this.init();

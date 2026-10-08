@@ -139,7 +139,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           } else {
             imageUrl = '';
           }
-          return { type: 'input_image', image_url: imageUrl };
+          return { type: 'input_image', image_url: imageUrl, ...(part.detail ? { detail: part.detail } : {}) };
         }
         if (part.type === 'document') {
           const src = part.source || {};

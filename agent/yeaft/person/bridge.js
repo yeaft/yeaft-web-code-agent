@@ -65,6 +65,11 @@ export function createPersonBridge({
       const safeErrors = {
         BUSY: 'The digital person is busy; wait or cancel before trying again',
         INVALID_REQUEST: 'Invalid digital person input (maximum 8192 UTF-8 bytes)',
+        INVALID_ATTACHMENT: 'Invalid digital person attachment',
+        UNSUPPORTED_ATTACHMENT: 'Use PNG/JPEG/WebP/GIF images or UTF-8 text; PDF and binary files are not supported',
+        ATTACHMENT_LIMIT: 'Maximum 4 attachments, 5 MiB each, 10 MiB total; text plus extracted content must fit 24 KiB',
+        IMAGE_MODEL: 'No permitted selected model supports image input',
+        MODEL_SELECTION: 'Choose models from this Agent configured catalog',
         NOT_OPEN: 'Open the digital person first',
         STALE: 'Digital person state changed; refresh and try again',
         IDEMPOTENCY_CONFLICT: 'This message identifier already belongs to a different request',

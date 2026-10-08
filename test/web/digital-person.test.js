@@ -3,7 +3,7 @@ import { acceptPersonResponse, createPersonController, digitalPersonGate, person
 
 const controllers = [];
 afterEach(() => { controllers.splice(0).forEach(c => c.dispose()); vi.useRealTimers(); });
-function fixture() {
+function fixture(options = {}) {
   const requests = [];
   let owner = 'owner-a';
   let responder;
@@ -13,7 +13,7 @@ function fixture() {
     sendWsMessage(message) { requests.push(message); responder?.(message); return true; },
   };
   const state = personState();
-  const controller = createPersonController({ chat, state, scope: () => owner, timeoutMs: 100, pollMs: 50 });
+  const controller = createPersonController({ chat, state, scope: () => owner, timeoutMs: 100, pollMs: 50, ...options });
   controllers.push(controller);
   const response = (request, data, extra = {}) => acceptPersonResponse(chat, {
     ...request, type: 'person_response', ok: true, data, ...extra,
@@ -22,7 +22,7 @@ function fixture() {
     const result = override(request);
     if (result === false) return;
     const defaults = {
-      status: { configured: true }, open: {},
+      status: { configured: true }, open: {}, receipt: { found: false },
       snapshot: { person: { id: `person-${request.agentId}`, name: 'Person' }, state: { version: 1 }, messages: [], busy: false },
       messages: { items: [], nextCursor: null }, traces: { items: [], nextCursor: null },
       send: { episodeId: 'episode-1' }, think: { episodeId: 'episode-1' }, dream: { episodeId: 'episode-1' }, cancel: {},
@@ -121,6 +121,160 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(retry.payload).toEqual(first.payload);
     expect(retry.requestId).not.toBe(first.requestId);
     expect(f.state.retryCommand).toBeNull();
+  });
+
+  it('keeps file references in uncertain retry and isolates model settings from cognition', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'send' ? false : r.op === 'settings' ? { settings: r.payload } : undefined);
+    const pending = f.controller.command('send', '', false, [{ fileId: 'file-1', name: 'not-authoritative.txt' }]);
+    await vi.advanceTimersByTimeAsync(101); expect(await pending).toBe(false);
+    expect(f.state.retryCommand.payload.attachments).toEqual([{ fileId: 'file-1' }]);
+    const first = f.requests.find(r => r.op === 'send');
+    expect(await f.controller.settings(['p/m'])).toBe(true);
+    expect(f.state.retryCommand.payload.clientMessageId).toBe(first.payload.clientMessageId);
+    f.auto(); expect(await f.controller.command('send', '', true)).toBe(true);
+    expect(f.requests.at(-1).payload).toEqual(first.payload);
+    await vi.advanceTimersByTimeAsync(51);
+    f.auto(r => r.op === 'settings' ? { settings: r.payload } : undefined);
+    expect(await f.controller.settings(['p/m'])).toBe(true);
+    expect(f.state.modelCandidates).toEqual(['p/m']);
+    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(2);
+  });
+
+  it('reconciles an admitted file request without uploading or executing it again', async () => {
+    vi.useFakeTimers();
+    const reupload = vi.fn(); const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'send' ? false : undefined);
+    const pending = f.controller.command('send', '', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
+    const original = f.requests.at(-1);
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    f.auto(r => r.op === 'receipt' ? { found: true, episodeId: 'episode-1', status: 'completed', kind: 'send', text: '' } : undefined);
+    expect(await f.controller.command('send', '', true)).toBe(true);
+    expect(f.requests.find(r => r.op === 'receipt').payload.clientMessageId).toBe(original.payload.clientMessageId);
+    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    expect(reupload).not.toHaveBeenCalled();
+    expect(f.state.retryCommand).toBeNull();
+  });
+
+  it.each([true, false])('reconciles unknown attachments while model unavailable (receipt found=%s)', async found => {
+    vi.useFakeTimers();
+    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
+    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'send' ? false : undefined);
+    const pending = f.controller.command('send', 'original', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
+    const originalId = f.requests.at(-1).payload.clientMessageId;
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    f.state.modelReady = false;
+    f.auto(r => r.op === 'receipt' ? { found, episodeId: 'episode-1', status: 'completed', kind: 'send', text: 'original' }
+      : r.op === 'settings' ? { settings: r.payload } : r.op === 'status' ? { configured: true, modelReady: true } : undefined);
+    expect(await f.controller.command('send', '', true)).toBe(found);
+    expect(f.requests.find(r => r.op === 'receipt').payload.clientMessageId).toBe(originalId);
+    expect(reupload).not.toHaveBeenCalled();
+    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    if (found) expect(f.state.retryCommand).toBeNull();
+    else {
+      expect(f.state.retryCommand.payload.clientMessageId).toBe(originalId);
+      expect(await f.controller.settings(['p/replacement'])).toBe(true);
+      f.auto(r => r.op === 'receipt' ? { found: false } : undefined);
+      expect(await f.controller.command('send', '', true)).toBe(true);
+      expect(reupload).toHaveBeenCalledOnce();
+      expect(f.requests.filter(r => r.op === 'send').at(-1).payload.clientMessageId).toBe(originalId);
+    }
+  });
+
+  it('reuploads original files after missing receipt, preserving command identity and text', async () => {
+    vi.useFakeTimers();
+    const file = { name: 'x.txt' };
+    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
+    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'think' ? false : undefined);
+    const pending = f.controller.command('think', 'original', false, [{ fileId: 'expired', file }]);
+    const original = f.requests.at(-1);
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    await f.controller.open('b'); await f.controller.open('a');
+    f.auto(r => r.op === 'receipt' ? { found: false } : undefined);
+    expect(await f.controller.command('think', 'changed', true)).toBe(true);
+    expect(reupload).toHaveBeenCalledWith([file]);
+    expect(f.requests.at(-1).payload).toEqual({ ...original.payload, attachments: [{ fileId: 'renewed' }] });
+  });
+
+  it('renews a stale draft once, and fences renewal after owner changes', async () => {
+    let finish;
+    const reupload = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => {
+      if (r.op !== 'send') return;
+      f.response(r, null, { ok: false, errorCode: 'attachment_expired' }); return false;
+    });
+    const pending = f.controller.command('send', 'original', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
+    await Promise.resolve(); await Promise.resolve();
+    expect(reupload).toHaveBeenCalledOnce();
+    f.owner('owner-b'); f.auto(); await f.controller.open('a');
+    finish([{ fileId: 'private-renewed' }]); expect(await pending).toBe(false);
+    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    expect(f.state.retryCommand).toBeNull();
+  });
+
+  it('reconciles an admitted Dream whose payload has no text field', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'dream' ? false : undefined);
+    const pending = f.controller.command('dream');
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    f.auto(r => r.op === 'receipt' ? { found: true, episodeId: 'episode-1', status: 'completed', kind: 'dream', text: '' } : undefined);
+    expect(await f.controller.command('dream', '', true)).toBe(true);
+    expect(f.requests.filter(r => r.op === 'dream')).toHaveLength(1);
+    expect(f.state.retryCommand).toBeNull();
+  });
+
+  it('refreshes history after receipt miss races with a completed duplicate admission', async () => {
+    vi.useFakeTimers();
+    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
+    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'send' ? false : undefined);
+    const pending = f.controller.command('send', '', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
+    const originalId = f.requests.at(-1).payload.clientMessageId;
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    const final = { id: 'final', role: 'assistant', text: 'already completed' };
+    f.auto(r => r.op === 'send' ? { duplicate: true, status: 'completed', episodeId: 'episode-1' }
+      : r.op === 'messages' ? { items: [final], nextCursor: null } : undefined);
+    expect(await f.controller.command('send', '', true)).toBe(true);
+    expect(f.requests.filter(r => r.op === 'send').at(-1).payload.clientMessageId).toBe(originalId);
+    expect(f.state.messages).toEqual([final]);
+    expect(f.state.busy).toBe(false);
+    expect(f.state.retryCommand).toBeNull();
+    const count = f.requests.length;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.requests).toHaveLength(count);
+  });
+
+  it('refreshes model catalog and readiness without starting or reopening a Person', async () => {
+    const f = fixture();
+    let status = { configured: true, modelReady: true, availableModels: [{ ref: 'p/old' }], modelCandidates: ['p/old'] };
+    f.auto(r => r.op === 'status' ? status : undefined); await f.controller.open('a');
+    status = { configured: true, modelReady: false, reason: 'model_unavailable', availableModels: [{ ref: 'p/new' }], modelCandidates: ['p/old'] };
+    await f.controller.refresh();
+    expect(f.state.models).toEqual([{ ref: 'p/new' }]);
+    expect(f.state.modelReady).toBe(false);
+    status = { configured: true, modelReady: true, availableModels: [{ ref: 'p/replacement' }], modelCandidates: [] };
+    await f.controller.refresh();
+    expect(f.state.models).toEqual([{ ref: 'p/replacement' }]);
+    expect(f.state.modelCandidates).toEqual([]);
+    expect(f.state.modelReady).toBe(true);
+    expect(f.requests.filter(r => r.op === 'open')).toHaveLength(1);
+    expect(f.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op))).toHaveLength(0);
+  });
+
+  it('fences delayed catalog refresh across Agent and owner changes', async () => {
+    for (const boundary of ['agent', 'owner']) {
+      const f = fixture(); f.auto(); await f.controller.open('a');
+      f.auto(r => r.op === 'status' ? false : undefined);
+      const refreshing = f.controller.refresh(); const delayed = f.requests.at(-1);
+      if (boundary === 'owner') f.owner('owner-b');
+      f.auto(r => r.op === 'status' ? { configured: true, availableModels: [{ ref: 'p/current' }] } : undefined);
+      await f.controller.open(boundary === 'agent' ? 'b' : 'a'); await refreshing;
+      expect(f.response(delayed, { configured: true, availableModels: [{ ref: 'p/private' }] })).toBe(false);
+      expect(f.state.models).toEqual([{ ref: 'p/current' }]);
+    }
   });
 
   it('never transfers an uncertain command between owners', async () => {
@@ -279,6 +433,7 @@ describe('Digital Person owner / Agent request boundary', () => {
     await vi.advanceTimersByTimeAsync(51);
     expect(delayedSnapshot).toBeTruthy();
     const refreshing = f.controller.refresh();
+    await vi.advanceTimersByTimeAsync(0); // Catalog refresh precedes the snapshot request.
     const newerSnapshot = delayedSnapshot;
     f.response(newerSnapshot, { person: { id: 'p' }, state: {}, messages: [], busy: false });
     await refreshing;
@@ -360,7 +515,7 @@ describe('Digital Person owner / Agent request boundary', () => {
     await f.controller.open('a');
     hold = true;
     const refresh = f.controller.refresh();
-    await Promise.resolve(); await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0); // Wait for status, snapshot and latest-page dispatch.
     expect(delayed).toBeTruthy();
     const oldRows = records;
     records = [...records, { id: 'm51', seq: 51 }]; busy = false;

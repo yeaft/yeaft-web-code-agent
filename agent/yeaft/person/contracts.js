@@ -14,6 +14,10 @@ const ERRORS = {
   CONTEXT_LIMIT: 'The cognitive request exceeded its context budget.', TIMEOUT: 'The cognitive activity reached its time budget.',
   CANCELLED: 'The cognitive activity was cancelled.', INTERRUPTED: 'The cognitive activity was interrupted.',
   UNSUPPORTED: 'This digital person capability is not supported in this slice.',
+  INVALID_ATTACHMENT: 'Invalid digital person attachment.',
+  UNSUPPORTED_ATTACHMENT: 'Unsupported attachment: use PNG/JPEG/WebP/GIF images or UTF-8 text; PDF and binary files are not supported.',
+  ATTACHMENT_LIMIT: 'Attachments exceed the limit: 4 files, 5 MiB each, 10 MiB total; text plus extracted content must fit 24 KiB.',
+  IMAGE_MODEL: 'The selected model does not permit image input.',
   CLOSED: 'The digital person service is closed.',
 };
 export class PersonError extends Error {
@@ -33,6 +37,14 @@ export function text(value, max = LIMITS.inputBytes, empty = false, code = 'INVA
 export function identifier(value, code = 'INVALID_REQUEST') {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)) fail(code);
   return value;
+}
+/** Durable admission lookup, not an execution or lease-recovery command. */
+export function admissionReceipt(episode, clientMessageId, requestHash) {
+  if (!episode) return { found: false, clientMessageId };
+  if (requestHash != null && requestHash !== episode.requestHash) fail('IDEMPOTENCY_CONFLICT');
+  return { found: true, clientMessageId, episodeId: episode.id, status: episode.status, kind: episode.kind,
+    requestHash: episode.requestHash, text: episode.text, messageId: episode.messageId,
+    attachments: (episode.attachments ?? []).map(({ id, name, mimeType, size, sha256, kind }) => ({ id, name, mimeType, size, sha256, kind })) };
 }
 export function page(payload = {}) {
   object(payload, ['cursor', 'limit'], []);

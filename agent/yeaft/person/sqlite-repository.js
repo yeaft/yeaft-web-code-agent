@@ -88,12 +88,14 @@ export class SqlitePersonRepository {
   async getPerson(ownerId) { return this.request('getPerson', [ownerId]); }
   async recover(ownerId) { return this.request('recover', [ownerId]); }
   async admit(ownerId, input) { return this.request('admit', [ownerId, input]); }
+  async receipt(ownerId, clientMessageId, requestHash) { return this.request('receipt', [ownerId, clientMessageId, requestHash]); }
   async heartbeat(episode) { return this.request('heartbeat', [episode]); }
   async append(episode, kind, data) { return this.request('append', [episode, kind, data]); }
   async startCall(episode, data) { return this.request('startCall', [episode, data]); }
   async finalizeCall(episode, data) { return this.request('finalizeCall', [episode, data]); }
   async createdCapabilities(episode) { return this.request('createdCapabilities', [episode]); }
   async saveCreatedCapability(episode, input) { return this.request('saveCreatedCapability', [episode, validateCreatedCapability(input)]); }
+  async episodeAttachments(episode) { return this.request('episodeAttachments', [episode]); }
   async context(episode) { return this.request('context', [episode]); }
   async recall(ownerId, options) { return this.request('recall', [ownerId, options]); }
   async commit(episode, proposal, selection, callId, reportedSources = new Map()) { return this.request('commit', [episode, proposal, selection, callId, reportedSources]); }

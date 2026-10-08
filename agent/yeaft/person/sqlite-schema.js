@@ -3,6 +3,7 @@ export const TABLES = Object.freeze({
   persons: { keys: [], columns: [] },
   states: { keys: [], columns: ['version'] },
   episodes: { keys: ['id'], columns: ['clientMessageId', 'inputWatermark', 'status', 'callFinalizeUntil'] },
+  attachments: { keys: ['id'], columns: [] },
   messages: { keys: ['id'], columns: ['seq', 'revision', 'text'] },
   concepts: { keys: ['id'], columns: ['revision', 'updatedAt', 'statement'] },
   concept_revisions: { keys: ['id', 'revision'], columns: [] },
@@ -34,6 +35,12 @@ CREATE TABLE IF NOT EXISTS episodes (
 CREATE INDEX IF NOT EXISTS episodes_watermark ON episodes(namespace, ownerId, personId, inputWatermark DESC);
 CREATE INDEX IF NOT EXISTS episodes_drain ON episodes(namespace, ownerId, personId, status, callFinalizeUntil)
   WHERE json_type(record, '$.openCall') IS NOT NULL;
+CREATE TABLE IF NOT EXISTS attachments (
+  namespace TEXT NOT NULL, ownerId TEXT NOT NULL, personId TEXT NOT NULL,
+  id TEXT NOT NULL, record TEXT NOT NULL CHECK(json_valid(record)),
+  PRIMARY KEY(namespace, ownerId, personId, id),
+  FOREIGN KEY(namespace, ownerId, personId) REFERENCES persons(namespace, ownerId, personId)
+) STRICT;
 CREATE TABLE IF NOT EXISTS messages (
   namespace TEXT NOT NULL, ownerId TEXT NOT NULL, personId TEXT NOT NULL,
   id TEXT NOT NULL, seq INTEGER NOT NULL, revision INTEGER NOT NULL, text TEXT NOT NULL,

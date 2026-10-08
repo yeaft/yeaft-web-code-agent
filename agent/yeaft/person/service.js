@@ -3,7 +3,8 @@ import { SqlitePersonRepository } from './sqlite-repository.js';
 import { LocalPersonMemory } from './local-memory.js';
 import { selectPersonStorage, bindPersonStorage } from './storage.js';
 import { PersonRuntime } from './runtime.js';
-import { createPersonProvider } from './provider.js';
+import { validateFiles } from './attachments.js';
+import { createPersonProvider, validateModelCandidates } from './provider.js';
 import { fail, identifier, LIMITS, object, page, safeError, text } from './contracts.js';
 
 /**
@@ -24,7 +25,7 @@ export function createPersonService(options = {}) {
   const leaseMs = options.leaseMs ?? LIMITS.leaseMs;
   if (!Number.isInteger(calls) || calls < 1 || calls > 8 || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300000 ||
       !Number.isInteger(leaseMs) || leaseMs < 300 || leaseMs > 60000) fail('INVALID_REQUEST');
-  if (allowedModels != null && (!Array.isArray(allowedModels) || !allowedModels.length || allowedModels.length > 8 || allowedModels.some(m => typeof m !== 'string'))) fail('INVALID_REQUEST');
+  if (allowedModels != null && (!Array.isArray(allowedModels) || !allowedModels.length || allowedModels.some(m => typeof m !== 'string'))) fail('INVALID_REQUEST');
   const repository = !configured ? null : storage === 'mongodb'
     ? new MongoPersonRepository({ uri, dbName, namespace, MongoClient, leaseMs })
     : new SqlitePersonRepository({ yeaftDir, namespace, leaseMs });
@@ -42,7 +43,7 @@ export function createPersonService(options = {}) {
   if (memory) repository.recall = (ownerId, args = {}, { signal } = {}) => args.query?.trim()
     ? memory.recall(ownerId, args, { signal }) : literalRecall(ownerId, args);
   // Config/adapter are loaded per explicit episode, not a permanent stale cache.
-  const getProvider = () => createPersonProvider({ yeaftDir, config, adapter, allowedModels, effortEnabled: options.effortEnabled });
+  const getProvider = (modelCandidates = []) => createPersonProvider({ yeaftDir, config, adapter, allowedModels, modelCandidates, effortEnabled: options.effortEnabled });
   const runtime = new PersonRuntime({ repository, getProvider, budget: { calls, timeoutMs } });
   let closed = false;
   const requests = new Set();
@@ -55,10 +56,20 @@ export function createPersonService(options = {}) {
       if (!configured) return { configured: false, storage, reason: 'Digital person storage configuration is missing.', storageReady: false, modelReady: false };
       try { await repository.init(); }
       catch (error) { return { configured: true, storage, reason: safeError(error).message, storageReady: false, modelReady: false }; }
+      let modelCandidates = [];
+      try { modelCandidates = (await repository.getPerson(ownerId)).settings.modelCandidates ?? []; }
+      catch (error) { if (error.code !== 'NOT_OPEN') throw error; }
       try {
         const provider = await getProvider();
-        return { configured: true, storage, reason: null, storageReady: true, modelReady: true, models: provider.catalog, autonomySupported: false };
-      } catch { return { configured: true, storage, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false }; }
+        let modelReady = true;
+        try {
+          validateModelCandidates(modelCandidates);
+          if (modelCandidates.some(ref => !provider.availableModels.some(model => model.id === ref))) modelReady = false;
+        } catch { modelReady = false; }
+        return { configured: true, storage, reason: modelReady ? null : 'Saved model candidates are unavailable; choose models or reset to Agent defaults.',
+          storageReady: true, modelReady, models: provider.availableModels, availableModels: provider.availableModels,
+          availableModelsTruncated: provider.availableModelsTruncated, modelCandidates, autonomySupported: false };
+      } catch { return { configured: true, storage, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false, models: [], availableModels: [], modelCandidates }; }
     }
     if (!configured) fail('NOT_CONFIGURED');
     switch (op) {
@@ -68,14 +79,21 @@ export function createPersonService(options = {}) {
         return repository.open(ownerId, payload.name);
       }
       case 'snapshot': object(payload, []); return repository.snapshot(ownerId);
+      case 'receipt': {
+        object(payload, ['clientMessageId', 'requestHash'], ['clientMessageId']);
+        identifier(payload.clientMessageId);
+        if (payload.requestHash != null && (typeof payload.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(payload.requestHash))) fail('INVALID_REQUEST');
+        // Read-only admission reconciliation: no files, recover, admission or runtime start.
+        return repository.receipt(ownerId, payload.clientMessageId, payload.requestHash);
+      }
       case 'send':
       case 'think':
       case 'dream': {
-        object(payload, op === 'dream' ? ['clientMessageId'] : ['text', 'clientMessageId'], op === 'dream' ? ['clientMessageId'] : ['text', 'clientMessageId']);
+        object(payload, op === 'dream' ? ['clientMessageId'] : ['text', 'clientMessageId', 'files'], ['clientMessageId']);
         identifier(payload.clientMessageId);
-        if (op !== 'dream') text(payload.text, LIMITS.inputBytes, op === 'think');
+        validateFiles(payload.files, payload.text ?? '', op);
         const admitted = await repository.admit(ownerId, { kind: op, text: payload.text ?? '', clientMessageId: payload.clientMessageId,
-          workerId: runtime.workerId, budget: runtime.budget });
+          workerId: runtime.workerId, budget: runtime.budget, files: payload.files });
         if (!admitted.duplicate) {
           if (closed) await repository.finish(admitted.episode, 'interrupted', 'INTERRUPTED');
           else runtime.start(admitted.episode);
@@ -92,8 +110,16 @@ export function createPersonService(options = {}) {
         return result;
       }
       case 'settings': {
-        object(payload, ['autonomyEnabled'], []);
-        if (Object.values(payload).some(v => typeof v !== 'boolean')) fail('INVALID_REQUEST');
+        object(payload, ['autonomyEnabled', 'modelCandidates'], []);
+        if (Object.hasOwn(payload, 'autonomyEnabled') && typeof payload.autonomyEnabled !== 'boolean') fail('INVALID_REQUEST');
+        if (Object.hasOwn(payload, 'modelCandidates')) {
+          const refs = payload.modelCandidates;
+          validateModelCandidates(refs);
+          if (refs.length) {
+            const provider = await getProvider();
+            if (refs.some(ref => !provider.availableModels.some(model => model.id === ref))) fail('MODEL_SELECTION');
+          }
+        }
         // Timer-driven autonomy is deliberately not claimed or silently enabled.
         if (payload.autonomyEnabled === true) fail('UNSUPPORTED');
         return repository.settings(ownerId, payload);
