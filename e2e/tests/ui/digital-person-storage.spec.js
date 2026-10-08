@@ -121,7 +121,7 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await expect(dialog).toHaveCount(0);
     expect(calls).toBe(12); // Reading/saving candidates never starts cognition.
     await page.locator('input[type="file"]').setInputFiles({ name: 'reference.txt', mimeType: 'text/plain', buffer: Buffer.from('Private uploaded context marker.') });
-    await expect(page.locator('.person-attachment-list')).toContainText('reference.txt');
+    await expect(page.locator('.attachments-preview')).toContainText('reference.txt');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => calls).toBe(14);
     await expect(page.locator('#person-input')).toBeEnabled();

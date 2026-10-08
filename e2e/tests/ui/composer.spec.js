@@ -54,6 +54,50 @@ async function openYeaftComposer(page, serverUrl) {
 }
 
 test.describe('Yeaft composer menus', () => {
+  test('Session shares accessible attachment cards, drag/drop, clipboard and file-only send', async ({ page, serverUrl }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await openYeaftComposer(page, serverUrl);
+    await page.evaluate(() => {
+      window.Pinia.useChatStore().sendWsMessage = msg => { (window.__attachmentWire ||= []).push(msg); };
+    });
+    const composer = page.locator('.yeaft-session-input');
+    await expect(composer.locator('button.attach-btn')).toHaveAccessibleName('Upload file');
+    const picker = page.waitForEvent('filechooser');
+    await composer.locator('button.attach-btn').focus();
+    await page.keyboard.press('Enter');
+    await (await picker).setFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('notes') });
+    await expect(composer.locator('.attachment-status')).toHaveText('5 B');
+    await composer.locator('textarea').evaluate(input => {
+      const data = new DataTransfer();
+      data.items.add(new File(['pasted'], 'pasted.md', { type: 'text/plain' }));
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await expect(composer.locator('.attachment-item')).toHaveCount(2);
+    const dropped = await page.evaluateHandle(() => {
+      const data = new DataTransfer();
+      data.items.add(new File(['dropped'], 'dropped.txt', { type: 'text/plain' }));
+      return data;
+    });
+    await composer.locator('[data-message-composer]').dispatchEvent('drop', { dataTransfer: dropped });
+    await expect(composer.locator('.attachment-item')).toHaveCount(3);
+    await expect(composer.locator('.send-btn')).toBeEnabled();
+    await composer.locator('.attachment-remove').nth(1).click();
+    await expect(composer.locator('.attachment-item')).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await composer.locator('.send-btn').click();
+    const wire = await page.evaluate(() => window.__attachmentWire.find(msg => msg.type === 'yeaft_session_send'));
+    // Session's existing transport supplies the attachment-only fallback text.
+    expect(wire.text).toBe('(attached files)');
+    // Names/previews stay local; the existing Session wire sends only fileId/isImage.
+    expect(wire.attachments).toEqual([
+      { fileId: expect.any(String), isImage: false },
+      { fileId: expect.any(String), isImage: false },
+    ]);
+    await page.locator('.message-user-attachments button').click();
+    await expect(page.locator('.user-attachments .file-name')).toHaveText(['notes.txt', 'dropped.txt']);
+    await expect(composer.locator('.attachment-item')).toHaveCount(0);
+    await dropped.dispose();
+  });
   for (const theme of ['light', 'dark']) {
     for (const width of [320, 1280]) {
       test(`quick sends: ${theme}, ${width}px`, async ({ page, serverUrl }, testInfo) => {

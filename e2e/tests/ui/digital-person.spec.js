@@ -98,13 +98,25 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     mock.finishSettings();
     await expect(dialog).toHaveCount(0);
     expect(mock.requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: ['provider/model-b'] });
-    await page.locator('input[type="file"]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('A small attachment with user-provided reference data.') });
-    await expect(page.locator('.person-attachment-list')).toContainText('notes.txt');
+    const composer = page.locator('.person-composer');
+    await expect(composer.locator('.mobile-quick-send-bar, .yeaft-model-selector, select')).toHaveCount(0);
+    const picker = page.waitForEvent('filechooser');
+    await composer.getByRole('button', { name: zh ? '上传文件' : 'Upload file', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await (await picker).setFiles([
+      { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('A small attachment with user-provided reference data.') },
+      { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64') },
+    ]);
+    await expect(composer.locator('.attachments-preview')).toContainText('notes.txt');
+    await expect(composer.locator('.attachment-thumb')).toBeVisible();
+    await expect(composer.locator('.attachment-item')).toHaveCount(2);
     await expect(page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true })).toBeEnabled();
     await input.fill('Hello Person');
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`person-composer-${scenario.width}-${scenario.theme}.png`) });
     await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
-    expect(mock.requests.find(r => r.op === 'send').payload.attachments).toEqual([{ fileId: expect.any(String) }]);
-    await expect(page.locator('.person-attachment-list')).toHaveCount(0);
+    expect(mock.requests.find(r => r.op === 'send').payload.attachments).toEqual([{ fileId: expect.any(String) }, { fileId: expect.any(String) }]);
+    await expect(page.locator('.attachments-preview')).toHaveCount(0);
     await expect(input).toBeDisabled();
     await expect(page.locator('.person-messages')).toContainText('Recorded mock response.');
     await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
