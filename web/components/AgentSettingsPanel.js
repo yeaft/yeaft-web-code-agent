@@ -135,6 +135,24 @@ export default {
                     {{ $t('common.retry') }}
                   </button>
                 </div>
+                <div class="agent-settings-row agent-settings-person-row">
+                  <div>
+                    <strong>{{ $t('agentSettings.digitalPerson.title') }}</strong>
+                    <p>{{ $t('agentSettings.digitalPerson.description') }}</p>
+                  </div>
+                  <div class="agent-settings-setting-control">
+                    <span class="agent-settings-setting-status">{{ $t(digitalPersonUiEnabled ? 'agentSettings.workCenter.enabled' : 'agentSettings.workCenter.disabled') }}</span>
+                    <label class="agent-settings-switch">
+                      <input type="checkbox" role="switch"
+                             :aria-label="$t('agentSettings.digitalPerson.title')"
+                             :aria-checked="digitalPersonUiEnabled ? 'true' : 'false'"
+                             :checked="digitalPersonUiEnabled"
+                             :disabled="!selectedAgent.capabilities?.includes('digital_person') && !digitalPersonUiEnabled"
+                             @change="store.setDigitalPersonUiEnabled($event.target.checked, selectedAgentId)">
+                      <span aria-hidden="true"></span>
+                    </label>
+                  </div>
+                </div>
                 <div class="agent-settings-maintenance">
                   <p>{{ $t('agentSettings.maintenance.description') }}</p>
                   <div class="agent-settings-actions">
@@ -229,6 +247,8 @@ export default {
     operations() { return this.store.agentOperations?.[this.selectedAgentId] || {}; },
     restarting() { return this.operations.restart?.pending === true; },
     upgrading() { return this.operations.upgrade?.pending === true; },
+    digitalPersonUiEnabled() { return Object.hasOwn(this.store.digitalPersonUiEnabledByAgent || {}, this.selectedAgentId)
+      && this.store.digitalPersonUiEnabledByAgent[this.selectedAgentId] === true; },
     workCenterSettings() { return this.store.workCenterFeatureSettingsByAgent?.[this.selectedAgentId] || null; },
     workCenterEnabled() { return this.workCenterSettings?.enabled === true; },
     selectedWorkCenterAgentSignature() {

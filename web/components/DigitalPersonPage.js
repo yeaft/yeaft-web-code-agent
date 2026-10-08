@@ -19,9 +19,11 @@ export default {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
     const state = Vue.reactive(personState());
-    const agentId = Vue.ref(chat.agents.find(a => a.id === chat.currentAgent)?.id
-      || chat.agents.find(a => a.online && a.capabilities?.includes('digital_person'))?.id
-      || chat.agents[0]?.id || '');
+    const enabled = agent => chat.digitalPersonUiEnabledByAgent?.[agent.id] === true;
+    const agentId = Vue.ref(chat.agents.find(a => enabled(a) && a.id === chat.digitalPersonAgentId)?.id
+      || chat.agents.find(a => enabled(a) && a.id === chat.currentAgent)?.id
+      || chat.agents.find(enabled)?.id || '');
+    Vue.watch(agentId, value => { chat.digitalPersonAgentId = value; }, { immediate: true });
     const draft = Vue.ref('');
     const settingsOpen = Vue.ref(false);
     let draftGeneration = 0;
@@ -37,7 +39,7 @@ export default {
     let panelOpener = null;
     const closePanelButton = Vue.ref(null);
     const t = Vue.inject('t');
-    const agentOptions = Vue.computed(() => chat.agents.map(agent => ({
+    const agentOptions = Vue.computed(() => chat.agents.filter(enabled).map(agent => ({
       value: agent.id, label: agent.name || agent.id,
       badge: agent.online ? undefined : t('person.offlineShort'),
     })));
@@ -69,7 +71,7 @@ export default {
     // the previous connection's key during reconnect.
     }, { immediate: true });
     Vue.watch(() => chat.agents.map(agent => agent.id).join(','), () => {
-      if (!agentId.value && chat.agents.length) agentId.value = chat.agents[0].id;
+      if (!agentId.value) agentId.value = chat.agents.find(enabled)?.id || '';
     });
     const resize = () => { compactPanel.value = window.innerWidth <= 900; };
     Vue.onMounted(() => {

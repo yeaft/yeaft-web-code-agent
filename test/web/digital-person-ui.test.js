@@ -19,6 +19,7 @@ beforeEach(() => {
   configured = true;
   requests = [];
   chat = Vue.reactive({
+    digitalPersonUiEnabledByAgent: { a: true, b: true },
     currentAgent: 'a', connectionState: 'connected', authenticated: true, theme: 'light',
     agents: [{ id: 'a', online: true, capabilities: ['digital_person'] }],
     leaveDigitalPerson: vi.fn(), leaveWorkCenter: vi.fn(), closePluginCenter: vi.fn(), toggleTheme: vi.fn(),
@@ -47,6 +48,13 @@ async function render() {
 }
 
 describe('Digital Person surface', () => {
+  it('only lists UI-enabled Agents in the Person breadcrumb', async () => {
+    chat.agents.push({ id: 'disabled', online: true, capabilities: ['digital_person'] });
+    await render();
+    const options = wrapper.findComponent({ name: 'ModernSelect' }).props('options');
+    expect(options.map(row => row.value)).toEqual(['a']);
+  });
+
   it('shares the composer and separates readable thoughts from raw debug logs', async () => {
     await render();
     expect(wrapper.find('.session-sidebar-shell').exists()).toBe(false);
