@@ -1,7 +1,7 @@
 import { loadConfig } from '../config.js';
 import { createLLMAdapter } from '../llm/adapter.js';
 import { applyAnthropicThinking } from '../llm/anthropic.js';
-import { inferProtocolFromModelId } from '../llm/router.js';
+import { inferProtocolFromModelId, normalizeModelEntry } from '../llm/router.js';
 import { normalizeKnownProviderForRuntime } from '../llm/known-providers.js';
 import { normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
 import { utf8PrefixWithinBytes } from '../utf8.js';
@@ -65,11 +65,11 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     }) : [];
     // Match the router's first owning row and managed-provider protocol normalization.
     const routeIndex = routingProviders.findIndex(p => (!m.ref?.includes('/') || m.ref === `${p.name}/${m.id}`) &&
-      p.models?.some(item => (typeof item === 'string' ? item.trim() : item?.id?.trim()) === m.id));
+      p.models?.some(item => normalizeModelEntry(item)?.id === m.id));
     const routedProvider = routingProviders[routeIndex];
-    const routedModel = routedProvider?.models?.find(item => (typeof item === 'string' ? item.trim() : item?.id?.trim()) === m.id);
+    const routedModel = normalizeModelEntry(routedProvider?.models?.find(item => normalizeModelEntry(item)?.id === m.id));
     const rawProvider = config.providers?.[routeIndex];
-    const rawModel = rawProvider?.models?.find(item => item && typeof item === 'object' && item.id?.trim() === m.id);
+    const rawModel = rawProvider?.models?.find(item => item && typeof item === 'object' && item.id === m.id);
     const explicitImages = m.supportsImages ?? rawModel?.supportsImages ?? rawProvider?.supportsImages;
     const protocol = routedModel?.protocol || routedProvider?.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
     const imageBudget = !routedProvider || explicitImages === false ? null : imageInputBudget(m.id, protocol);

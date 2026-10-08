@@ -218,6 +218,15 @@ describe('digital Person strict contracts', () => {
         attachments: [{ kind: 'image' }] })).toThrow(expect.objectContaining({ code: 'IMAGE_MODEL' }));
     }
   });
+  it.each(['gpt-4o-mini ', { id: 'gpt-4o-mini ', protocol: 'anthropic', supportsImages: false }])('matches Router exact IDs rather than whitespace-normalized duplicates: %j', async staleEntry => {
+    const id = 'gpt-4o-mini';
+    const provider = await createPersonProvider({ config: {
+      providers: [{ name: 'native', protocol: 'openai-responses', models: [staleEntry, { id }] }],
+      availableModels: [{ id, ref: `native/${id}`, contextWindow: 128000, maxOutput: 4096 }],
+    }, adapter: {} });
+    expect(provider.catalog[0].supportsImages).toBe(true);
+    expect(provider.catalog[0].imageBudget).toEqual({ detail: 'low', tokensPerImage: 8192 });
+  });
   it('uses normalized managed-provider protocols for image accounting', async () => {
     const id = 'gpt-4o-mini';
     const provider = await createPersonProvider({ config: {
