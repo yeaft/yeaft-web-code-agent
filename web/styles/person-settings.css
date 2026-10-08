@@ -1,0 +1,259 @@
+/* Person settings shares the modal shell and control rhythm of Session settings.
+ * Keep these scoped rules after digital-person.css and the global modal styles. */
+.modal-overlay.person-settings-overlay {
+  padding: var(--work-center-space-4);
+  background: var(--modal-overlay-bg);
+}
+
+.modal.person-settings-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-width: 560px;
+  max-height: min(85dvh, calc(100dvh - 2 * var(--work-center-space-4)));
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--modal-shadow);
+}
+
+.person-settings-modal .person-settings-header,
+.person-settings-modal .person-settings-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--work-center-space-2);
+  padding: var(--work-center-space-4) calc(var(--work-center-space-4) + var(--work-center-space-1));
+}
+
+.person-settings-modal .person-settings-header {
+  justify-content: space-between;
+}
+
+.person-settings-modal .person-settings-header h2 {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.person-settings-modal .person-settings-close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--agent-setup-control-radius);
+  cursor: pointer;
+}
+
+.person-settings-modal .person-settings-close:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--sidebar-hover);
+}
+
+.person-settings-modal .person-settings-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--work-center-space-3);
+  min-height: 0;
+  padding: var(--work-center-space-2) calc(var(--work-center-space-4) + var(--work-center-space-1));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.person-settings-modal .person-settings-body h3 {
+  margin: 0 0 var(--work-center-space-2);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.person-settings-modal .person-settings-body p {
+  margin: 0;
+}
+
+.person-settings-modal .person-settings-help,
+.person-settings-modal .person-settings-state {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.person-settings-modal .person-settings-state {
+  padding: var(--work-center-space-4) var(--work-center-space-3);
+  background: var(--bg-sidebar);
+  border-radius: var(--agent-setup-control-radius);
+}
+
+.person-settings-modal .person-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--work-center-space-1);
+}
+
+.person-settings-modal .person-model-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--work-center-space-3);
+  min-height: 44px;
+  padding: var(--work-center-space-3);
+  border-radius: var(--agent-setup-control-radius);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.person-settings-modal .person-model-option:hover:not(:has(input:disabled)) {
+  background: var(--sidebar-hover);
+}
+
+.person-settings-modal .person-model-option.is-selected {
+  background: var(--bg-user-msg);
+}
+
+.person-settings-modal .person-model-option:has(input:disabled) {
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+.person-settings-modal .person-model-option input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+  accent-color: var(--accent-blue);
+  cursor: inherit;
+}
+
+.person-settings-modal .person-model-option span {
+  min-width: 0;
+}
+
+.person-settings-modal .person-model-default {
+  font-weight: 500;
+}
+
+.person-settings-modal .person-model-description {
+  display: flex;
+  flex-direction: column;
+  gap: var(--work-center-space-1);
+}
+
+.person-settings-modal .person-model-warning,
+.person-settings-modal .person-settings-error {
+  color: var(--error);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.person-settings-modal .person-settings-scope {
+  margin-top: auto;
+  padding-top: var(--work-center-space-2);
+}
+
+.person-settings-modal .person-settings-footer {
+  justify-content: flex-end;
+}
+
+/* Global button variants provide colors, not control geometry. */
+.person-settings-modal .person-settings-footer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 88px;
+  min-height: 40px;
+  padding: var(--work-center-space-2) var(--work-center-space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--agent-setup-control-radius);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.person-settings-modal .person-settings-footer .btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+.person-settings-modal .person-settings-footer .btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  opacity: 1;
+}
+
+.person-settings-modal .person-settings-footer .btn-secondary:disabled {
+  background: transparent;
+}
+
+.person-settings-modal button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.person-settings-modal button:focus-visible,
+.person-settings-modal input:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+/* Announce the asynchronous save without repeating its visible button label. */
+.person-settings-modal .person-settings-save-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .modal-overlay.person-settings-overlay {
+    padding: var(--work-center-space-2);
+  }
+
+  .modal.person-settings-modal {
+    height: min(600px, 90dvh);
+    max-height: calc(100dvh - 2 * var(--work-center-space-2));
+  }
+
+  .person-settings-modal .person-settings-header,
+  .person-settings-modal .person-settings-footer {
+    padding: var(--work-center-space-3);
+  }
+
+  .person-settings-modal .person-settings-body {
+    padding: var(--work-center-space-2) var(--work-center-space-3);
+  }
+
+  .person-settings-modal .person-settings-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .person-settings-modal .person-settings-footer button {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+  }
+}
