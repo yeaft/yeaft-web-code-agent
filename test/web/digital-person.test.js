@@ -362,8 +362,8 @@ describe('Digital Person owner / Agent request boundary', () => {
       const delayed = f.requests.at(-1);
       // Both polling and the cancel acknowledgement refresh terminal state
       // while a pre-terminal trace read is still in flight.
-      if (kind === 'cancelled') await f.controller.cancel();
-      else await vi.advanceTimersByTimeAsync(51);
+      const cancelling = kind === 'cancelled' ? f.controller.cancel() : null;
+      await vi.advanceTimersByTimeAsync(kind === 'cancelled' ? 0 : 51);
       expect(f.state.busy).toBe(false);
       expect(f.state.tracesStale).toBe(true);
       f.response(delayed, { items: more ? [older] : [latest], nextCursor: more ? null : 'older' });
@@ -389,6 +389,7 @@ describe('Digital Person owner / Agent request boundary', () => {
         f.response(followup, { items: [latest, terminal], nextCursor: 'older' });
         await reading;
       }
+      await cancelling;
       expect(f.state.traces.at(-1)).toEqual(terminal);
       expect(f.state.tracesStale).toBe(false);
       const count = f.requests.length;
@@ -420,7 +421,7 @@ describe('Digital Person owner / Agent request boundary', () => {
       expect(followup.requestId).not.toBe(delayed.requestId);
       if (code === 'timeout') await vi.advanceTimersByTimeAsync(101);
       else f.response(followup, null, { ok: false, errorCode: code });
-      await reading;
+      await reading; await vi.advanceTimersByTimeAsync(0);
       expect(f.state.error.code).toBe(code);
       expect(f.state.tracesStale).toBe(true);
       expect(f.state.tracesLoading).toBe(false);
@@ -659,7 +660,7 @@ describe('Digital Person conversation activity', () => {
       trace(2, 'capability_result', { callId: 'c', capability: { id: 'Recall' } })];
     expect(project(events)).toMatchObject({ loading: true, label: 'person.activity.preparing', rows: [expect.objectContaining({ status: 'completed' })] });
     events.push(trace(3, 'call_started', { callId: 'd' }), trace(4, 'call_output', { callId: 'd' }));
-    expect(project(events)).toMatchObject({ loading: true, label: 'person.activity.finishing' });
+    expect(project(events)).toMatchObject({ loading: true, label: 'person.activity.processingResponse' });
   });
 
   it.each(['completed', 'cancelled', 'failed', 'interrupted', 'budget_exhausted'])('fences late events with confirmed %s, including no assistant reply', status => {
@@ -724,6 +725,81 @@ describe('Digital Person conversation activity', () => {
     expect(f.state.busy).toBe(false);
     f.chat.connectionState = 'connected'; busy = false; await f.controller.open('a');
     expect(projectPersonActivity(f.state)).toMatchObject({ loading: false, label: 'person.activity.completed' });
+  });
+
+  it('refreshes live progress while a slow history page is still pending', async () => {
+    vi.useFakeTimers(); const f = fixture({ timeoutMs: 1000 }); let history;
+    let records = [trace(1, 'capability_started', { callId: 'c', capability: { id: 'Recall' } })];
+    f.auto(r => {
+      if (r.op === 'snapshot') return { person: { id: 'p' }, busy: true, episodeId: 'e' };
+      if (r.op === 'traces' && r.payload.cursor) { history = r; return false; }
+      if (r.op === 'traces') return { items: records, nextCursor: 'older' };
+    });
+    await f.controller.open('a');
+    const historical = [...f.state.traces];
+    const reading = f.controller.page('traces', true);
+    records = [...records, trace(2, 'capability_result', { callId: 'c', capability: { id: 'Recall' } }),
+      trace(3, 'capability_started', { callId: 'd', capability: { id: 'Script.sum' } })];
+    await vi.advanceTimersByTimeAsync(51);
+    expect(f.state.tracesLoading).toBe(true);
+    expect(f.state.traces).toEqual(historical);
+    expect(projectPersonActivity(f.state)).toMatchObject({ label: 'person.activity.runningScript', loading: true });
+    f.response(history, { items: [trace(0, 'committed', { episodeId: 'old' })], nextCursor: null });
+    await reading;
+    expect(f.state.traces).toHaveLength(2);
+    expect(f.state.activityRecords).toHaveLength(3);
+    expect(projectPersonActivity(f.state).label).toBe('person.activity.runningScript');
+  });
+
+  it('marks an explicit snapshot failure stale, recovers, and ignores an older failed snapshot', async () => {
+    vi.useFakeTimers(); const f = fixture(); let fail = false; let delayed;
+    const snapshot = { person: { id: 'p' }, busy: true, episodeId: 'e' };
+    f.auto(r => {
+      if (r.op === 'snapshot' && fail) { f.response(r, null, { ok: false, errorCode: 'requestFailed' }); return false; }
+      if (r.op === 'snapshot') return snapshot;
+      if (r.op === 'traces') return { items: [trace(1, 'call_started', { callId: 'c' })] };
+    });
+    await f.controller.open('a'); fail = true; await f.controller.refresh();
+    expect(projectPersonActivity(f.state)).toMatchObject({ label: 'person.activity.stale', loading: false });
+    fail = false; await f.controller.refresh();
+    expect(f.state.progressStale).toBe(false);
+    f.auto(r => r.op === 'snapshot' ? (delayed = r, false) : undefined);
+    await vi.advanceTimersByTimeAsync(51);
+    const old = delayed;
+    const refreshing = f.controller.refresh(); await vi.advanceTimersByTimeAsync(0);
+    f.response(delayed, snapshot); await refreshing;
+    f.response(old, null, { ok: false, errorCode: 'requestFailed' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.state.progressStale).toBe(false);
+    expect(f.state.error).toBeNull();
+  });
+
+  it('fences concurrent live tails against late success, failure and identity changes', async () => {
+    vi.useFakeTimers();
+    for (const result of ['success', 'failure', 'owner', 'agent']) {
+      const f = fixture();
+      f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, busy: true, episodeId: 'e' }
+        : r.op === 'traces' ? { items: [], nextCursor: 'older' } : undefined);
+      await f.controller.open('a'); await f.controller.page('traces', true);
+      f.auto(r => r.op === 'traces' ? false : r.op === 'snapshot' ? { person: { id: 'p' }, busy: true, episodeId: 'e' } : undefined);
+      await vi.advanceTimersByTimeAsync(51);
+      const older = f.requests.at(-1);
+      const refreshing = f.controller.refresh({ preserveHistory: true }); await vi.advanceTimersByTimeAsync(0);
+      const latest = f.requests.at(-1);
+      expect(latest.requestId).not.toBe(older.requestId);
+      f.response(latest, { items: [trace(3, 'capability_started', { callId: 'd', capability: { id: 'Script.sum' } })] });
+      await refreshing;
+      if (['owner', 'agent'].includes(result)) {
+        if (result === 'owner') f.owner('new-owner');
+        f.auto(); await f.controller.open(result === 'agent' ? 'b' : 'a');
+      }
+      f.response(older, { items: [trace(1, 'call_started')] }, result === 'failure' ? { ok: false, errorCode: 'requestFailed' } : {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.state.activityStale).toBe(false); expect(f.state.error).toBeNull();
+      if (['owner', 'agent'].includes(result)) expect(f.state.activityRecords).toEqual([]);
+      else expect(projectPersonActivity(f.state).label).toBe('person.activity.runningScript');
+      f.controller.dispose();
+    }
   });
 
   it('marks progress stale after a failed tail/snapshot and recovers automatically without cognition', async () => {

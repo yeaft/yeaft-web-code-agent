@@ -83,7 +83,7 @@ export default {
   "person.activity.validatingCapability": "Checking a new capability…",
   "person.activity.runningScript": "Running a script…",
   "person.activity.usingCapability": "Using a capability…",
-  "person.activity.finishing": "Wrapping up this round…",
+  "person.activity.processingResponse": "Processing the response…",
   "person.activity.stopping": "Stopping this round…",
   "person.activity.completed": "This activity is complete",
   "person.activity.failed": "This activity could not finish",

@@ -73,6 +73,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let snapshotRequest = 0;
   let messageWindowVersion = 0;
   let tracePaged = false;
+  let traceHistoryLoading = false;
+  let activityRequest = 0;
   let traceRefreshVersion = 0;
   let queuedTraceRefresh = null;
   let disposed = false;
@@ -133,6 +135,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     agentId = nextAgentId;
     activeScope = scope();
     tracePaged = false;
+    traceHistoryLoading = false;
+    activityRequest += 1;
     traceRefreshVersion = 0;
     queuedTraceRefresh = null;
     Object.assign(state, personState(), progress, { retryCommand: outbox().get(agentId) || null });
@@ -141,7 +145,13 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   async function snapshot() {
     const g = generation;
     const requestNumber = ++snapshotRequest;
-    const data = await request('snapshot');
+    let data;
+    try { data = await request('snapshot'); }
+    catch (error) {
+      if (!current(g) || requestNumber !== snapshotRequest) return;
+      state.progressStale = true;
+      throw error;
+    }
     if (!current(g) || requestNumber !== snapshotRequest) return;
     state.person = data.person;
     state.modelCandidates = data.person?.settings?.modelCandidates || [];
@@ -170,6 +180,24 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.progressStale = false;
   }
 
+  // Automatic activity reads must not wait for a slow diagnostic-history page.
+  // They own no history cursor/window and share a latest-request fence with
+  // ordinary latest reads so an older response cannot overwrite live progress.
+  async function activityTail() {
+    const g = generation;
+    const requestNumber = ++activityRequest;
+    try {
+      const data = await request('traces', { cursor: null, limit: PAGE_SIZE });
+      if (!current(g) || requestNumber !== activityRequest) return;
+      state.activityRecords = personActivityRecords(data.items);
+      state.activityStale = false;
+    } catch (error) {
+      if (!current(g) || requestNumber !== activityRequest) return;
+      state.activityStale = true;
+      showError(error);
+    }
+  }
+
   async function page(kind, more = false, { preserveHistory = false } = {}) {
     const g = generation;
     if (!current(g)) return;
@@ -178,6 +206,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     if (kind === 'traces' && !more) {
       traceRefreshVersion += 1;
       state.tracesStale = true;
+      if (preserveHistory && (tracePaged || traceHistoryLoading)) return activityTail();
       if (state.tracesLoading) {
         // Coalesce newer demands, but never let an automatic poll override an
         // explicit refresh. An in-flight pre-terminal read cannot satisfy them.
@@ -187,6 +216,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
     if (state[loadingKey] || (more && state[cursorKey] == null)) return;
     state[loadingKey] = true;
+    if (kind === 'traces' && more) traceHistoryLoading = true;
+    const activityVersion = kind === 'traces' && !more ? ++activityRequest : null;
     const traceVersion = traceRefreshVersion;
     const windowVersion = kind === 'messages' && !more ? ++messageWindowVersion : messageWindowVersion;
     try {
@@ -197,7 +228,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
         state[kind] = mergeRows(more ? state[kind] : [], data.items);
         state[cursorKey] = data.nextCursor ?? null;
       }
-      if (kind === 'traces' && !more && traceVersion === traceRefreshVersion) {
+      if (kind === 'traces' && !more && activityVersion === activityRequest && traceVersion === traceRefreshVersion) {
         state.activityRecords = personActivityRecords(data.items);
         state.activityStale = false;
       }
@@ -208,12 +239,13 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       }
     } catch (error) {
       if (current(g)) {
-        if (kind === 'traces' && !more) state.activityStale = true;
+        if (kind === 'traces' && !more && activityVersion === activityRequest) state.activityStale = true;
         showError(error);
       }
     } finally {
       if (current(g)) {
         state[loadingKey] = false;
+        if (kind === 'traces' && more) traceHistoryLoading = false;
         if (kind === 'traces' && queuedTraceRefresh) {
           const queued = queuedTraceRefresh;
           queuedTraceRefresh = null;
@@ -237,7 +269,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
         if (!current(g)) return;
         await page('traces', false, { preserveHistory: true });
       } catch (error) {
-        if (current(g)) { state.progressStale = true; showError(error); }
+        if (current(g)) showError(error);
       } finally {
         if (current(g)) { polling = false; schedule(); }
       }

@@ -83,7 +83,7 @@ export default {
   "person.activity.validatingCapability": "正在验证新能力…",
   "person.activity.runningScript": "正在运行脚本…",
   "person.activity.usingCapability": "正在使用能力…",
-  "person.activity.finishing": "正在收尾这一轮…",
+  "person.activity.processingResponse": "正在处理回应…",
   "person.activity.stopping": "正在停止这一轮…",
   "person.activity.completed": "本次活动已完成",
   "person.activity.failed": "本次活动未能完成",

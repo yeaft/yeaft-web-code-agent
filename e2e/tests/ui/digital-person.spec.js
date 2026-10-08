@@ -17,6 +17,7 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
   let busy = false;
   let activityRecords = [];
   let latestEpisode = null;
+  let historyReply;
   let saveSettings;
   let failTraces = false;
   let unknownCommand = false;
@@ -48,7 +49,11 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
         reply({ items: request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor ? null : 'older-page' });
       } else if (request.op === 'traces') {
         if (failTraces) { failTraces = false; reply(null, { ok: false, error: 'Thought refresh failed' }); return; }
-        if (activityFlow) { reply({ items: request.payload.cursor ? [] : activityRecords, nextCursor: request.payload.cursor ? null : 'trace-page-2' }); return; }
+        if (activityFlow) {
+          if (request.payload.cursor) historyReply = () => reply({ items: [], nextCursor: null });
+          else reply({ items: activityRecords, nextCursor: 'trace-page-2' });
+          return;
+        }
         const capabilityRecords = [
           { id: 'script-publication', seq: 19, episodeId: 'script', callId: 'create-call', kind: 'capability_created', capabilityId: 'Script.sum',
             capabilityManifest: { id: 'Script.sum', version: 1, revision: 'private-revision' }, evidence: { testsPassed: 2 } },
@@ -74,7 +79,7 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
     });
   });
-  return { requests, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+  return { requests, finishHistory() { historyReply(); historyReply = null; }, historyPending() { return !!historyReply; }, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
 }
 
 for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 1280, theme: 'dark', locale: 'zh-CN' }, { width: 320, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }, { width: 800, theme: 'light', locale: 'en' }]) {
@@ -454,6 +459,8 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     add('capability_started', { callId: 'b', capability: { id: 'Skill.reconsider' } });
     mock.activity(records);
     await expect(activity).toContainText(zh ? '正在查看思考方法' : 'Reading a thinking method');
+    expect(mock.historyPending()).toBe(true);
+    mock.finishHistory();
     add('capability_result', { callId: 'b', capability: { id: 'Skill.reconsider' } });
     add('capability_started', { callId: 'c', capability: { id: `Script.${'a'.repeat(48)}`, args: 'PRIVATE_CODE' } });
     mock.activity(records);

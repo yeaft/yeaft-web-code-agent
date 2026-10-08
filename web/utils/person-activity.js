@@ -75,7 +75,7 @@ export function projectPersonActivity(state, gate = '') {
     } else {
       row.status = record.kind === 'call_failed' || record.failed ? 'failed' : 'completed';
       row.durationMs = row.start != null && record.at != null && record.at >= row.start ? record.at - row.start : null;
-      phase = key(model ? 'finishing' : 'preparing'); params = {};
+      phase = key(model && record.kind === 'call_output' ? 'processingResponse' : 'preparing'); params = {};
     }
   }
   // Missing end records (e.g. the bounded tail or cancellation) never imply
