@@ -226,6 +226,57 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.retryCommand).toBeNull();
   });
 
+  it('refreshes history after receipt miss races with a completed duplicate admission', async () => {
+    vi.useFakeTimers();
+    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
+    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'send' ? false : undefined);
+    const pending = f.controller.command('send', '', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
+    const originalId = f.requests.at(-1).payload.clientMessageId;
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    const final = { id: 'final', role: 'assistant', text: 'already completed' };
+    f.auto(r => r.op === 'send' ? { duplicate: true, status: 'completed', episodeId: 'episode-1' }
+      : r.op === 'messages' ? { items: [final], nextCursor: null } : undefined);
+    expect(await f.controller.command('send', '', true)).toBe(true);
+    expect(f.requests.filter(r => r.op === 'send').at(-1).payload.clientMessageId).toBe(originalId);
+    expect(f.state.messages).toEqual([final]);
+    expect(f.state.busy).toBe(false);
+    expect(f.state.retryCommand).toBeNull();
+    const count = f.requests.length;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.requests).toHaveLength(count);
+  });
+
+  it('refreshes model catalog and readiness without starting or reopening a Person', async () => {
+    const f = fixture();
+    let status = { configured: true, modelReady: true, availableModels: [{ ref: 'p/old' }], modelCandidates: ['p/old'] };
+    f.auto(r => r.op === 'status' ? status : undefined); await f.controller.open('a');
+    status = { configured: true, modelReady: false, reason: 'model_unavailable', availableModels: [{ ref: 'p/new' }], modelCandidates: ['p/old'] };
+    await f.controller.refresh();
+    expect(f.state.models).toEqual([{ ref: 'p/new' }]);
+    expect(f.state.modelReady).toBe(false);
+    status = { configured: true, modelReady: true, availableModels: [{ ref: 'p/replacement' }], modelCandidates: [] };
+    await f.controller.refresh();
+    expect(f.state.models).toEqual([{ ref: 'p/replacement' }]);
+    expect(f.state.modelCandidates).toEqual([]);
+    expect(f.state.modelReady).toBe(true);
+    expect(f.requests.filter(r => r.op === 'open')).toHaveLength(1);
+    expect(f.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op))).toHaveLength(0);
+  });
+
+  it('fences delayed catalog refresh across Agent and owner changes', async () => {
+    for (const boundary of ['agent', 'owner']) {
+      const f = fixture(); f.auto(); await f.controller.open('a');
+      f.auto(r => r.op === 'status' ? false : undefined);
+      const refreshing = f.controller.refresh(); const delayed = f.requests.at(-1);
+      if (boundary === 'owner') f.owner('owner-b');
+      f.auto(r => r.op === 'status' ? { configured: true, availableModels: [{ ref: 'p/current' }] } : undefined);
+      await f.controller.open(boundary === 'agent' ? 'b' : 'a'); await refreshing;
+      expect(f.response(delayed, { configured: true, availableModels: [{ ref: 'p/private' }] })).toBe(false);
+      expect(f.state.models).toEqual([{ ref: 'p/current' }]);
+    }
+  });
+
   it('never transfers an uncertain command between owners', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'think' ? false : undefined);
@@ -382,6 +433,7 @@ describe('Digital Person owner / Agent request boundary', () => {
     await vi.advanceTimersByTimeAsync(51);
     expect(delayedSnapshot).toBeTruthy();
     const refreshing = f.controller.refresh();
+    await vi.advanceTimersByTimeAsync(0); // Catalog refresh precedes the snapshot request.
     const newerSnapshot = delayedSnapshot;
     f.response(newerSnapshot, { person: { id: 'p' }, state: {}, messages: [], busy: false });
     await refreshing;
@@ -463,7 +515,7 @@ describe('Digital Person owner / Agent request boundary', () => {
     await f.controller.open('a');
     hold = true;
     const refresh = f.controller.refresh();
-    await Promise.resolve(); await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0); // Wait for status, snapshot and latest-page dispatch.
     expect(delayed).toBeTruthy();
     const oldRows = records;
     records = [...records, { id: 'm51', seq: 51 }]; busy = false;

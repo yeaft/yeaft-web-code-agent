@@ -247,12 +247,21 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   async function refresh({ preserveHistory = false } = {}) {
-    if (!state.person || state.modelReady === false || state.storageReady === false) return open(agentId);
+    if (!state.person || state.storageReady === false) return open(agentId);
     const g = generation;
     if (state.loading) return;
     state.loading = true;
     state.error = null;
     try {
+      const status = await request('status');
+      if (!current(g)) return;
+      state.configured = status.configured === true;
+      state.storageReady = status.storageReady !== false;
+      state.modelReady = status.modelReady !== false;
+      state.reason = status.reason || '';
+      state.models = status.availableModels || status.models || [];
+      state.modelCandidates = status.modelCandidates || [];
+      if (!state.configured || !state.storageReady) return;
       await snapshot();
       if (current(g)) await Promise.all([page('messages'), page('traces', false, { preserveHistory })]);
     } catch (error) {
@@ -315,7 +324,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       state.busy = !data.status || ['accepted', 'running'].includes(data.status);
       // Poll rather than treating the acknowledgement as a completed model turn.
       schedule();
-      if (data.found) await refresh({ preserveHistory: true });
+      if (data.found || !state.busy) await refresh({ preserveHistory: true });
       return true;
     } catch (error) {
       if (current(g)) {
