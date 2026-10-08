@@ -274,7 +274,7 @@ export default {
           <nav v-if="panel !== 'search'" class="person-inspector-nav" :aria-label="$t('person.inside')">
             <button v-for="section in ['overview', 'thoughts', 'memory', 'skills']" :key="section" type="button" class="btn-ghost" :class="{ active: panel === section }" :aria-current="panel === section ? 'page' : undefined" @click="openPanel(section)">{{ $t('person.' + section) }}</button>
           </nav>
-          <section v-if="panel === 'overview'" class="person-journal-scroll person-overview">
+          <section v-if="panel === 'overview'" class="person-journal-scroll person-overview" tabindex="0" :aria-label="$t('person.overview')">
             <h3>{{ state.person?.name }}</h3>
             <p class="person-prose">{{ state.person?.soul }}</p>
             <h3>{{ $t('person.currentUnderstanding') }}</h3><p class="person-prose">{{ state.state?.summary || $t('person.knowledgeEmpty') }}</p>
@@ -286,7 +286,7 @@ export default {
               <input ref="searchInput" v-model="searchQuery" type="search" maxlength="200" :placeholder="$t('person.searchMessages')" :aria-label="$t('person.searchMessages')" @input="controller.search('')">
               <button type="submit" class="btn-ghost" :disabled="!!gate || state.loading || !state.person || !searchQuery.trim()">{{ $t('person.search') }}</button>
             </form>
-            <div class="person-journal-scroll" :aria-busy="state.search.loading">
+            <div class="person-journal-scroll" tabindex="0" role="region" :aria-label="$t('person.searchMessages')" :aria-busy="state.search.loading">
               <p v-if="state.search.error" role="alert" class="person-settings-error">{{ $t('person.requestFailed') }} {{ state.search.error.message }}</p>
               <p v-if="state.search.loading" role="status" class="person-muted">{{ $t('person.loading') }}</p>
               <p v-else-if="state.search.loaded && !state.search.items.length" class="person-empty">{{ $t('person.noSearchResults') }}</p>

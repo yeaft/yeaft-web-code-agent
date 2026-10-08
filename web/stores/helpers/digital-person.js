@@ -358,9 +358,12 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     return readPage('search', 'search', { query: value }, more);
   }
   async function readPage(key, op, payload, more) {
-    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId)) return;
-    if (more && (state[key].loading || state[key].nextCursor == null)) return;
+    if (!current()) return;
+    // Invalidation is local, not a network operation: edits during refresh or
+    // disconnect must fence an older response even when no new read can start.
     if (!more) state[key] = { ...inspectionPage(), ...(key === 'search' ? { query: payload.query } : {}) };
+    if (!state.person || state.loading || digitalPersonGate(chat, agentId)) return;
+    if (more && (state[key].loading || state[key].nextCursor == null)) return;
     const target = state[key];
     if (key === 'search' && !payload.query) return;
     const g = generation;

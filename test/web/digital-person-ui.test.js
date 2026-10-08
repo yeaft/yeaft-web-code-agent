@@ -310,6 +310,46 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('#person-input').element.value).toBe('my draft');
   });
 
+  it.each([
+    { next: '', ok: true }, { next: '', ok: false },
+    { next: 'beta', ok: true }, { next: 'beta', ok: false },
+  ])('invalidates a delayed search during refresh after editing to "$next" (success: $ok)', async ({ next, ok }) => {
+    await render();
+    await wrapper.get('.person-search-button').trigger('click');
+    const input = wrapper.get('.person-search-form input');
+    const send = chat.sendWsMessage;
+    let pendingSearch, resumeStatus;
+    chat.sendWsMessage = request => {
+      if (request.op === 'search') { requests.push(request); pendingSearch = request; return true; }
+      if (request.op === 'status') { resumeStatus = () => send(request); return true; }
+      return send(request);
+    };
+    await input.setValue('alpha');
+    await wrapper.get('.person-search-form').trigger('submit');
+    const oldSearch = pendingSearch;
+    const refreshing = wrapper.vm.controller.refresh();
+    await Vue.nextTick();
+    expect(wrapper.vm.state.loading).toBe(true);
+    await input.setValue(next);
+    expect(wrapper.vm.state.search.query).toBe('');
+    acceptPersonResponse(chat, { ...oldSearch, type: 'person_response', ok,
+      data: { items: [{ id: 'alpha', text: 'alpha archive message' }], nextCursor: null }, error: 'old search failed' });
+    await flushPromises();
+    expect(wrapper.vm.state.search.items).toEqual([]);
+    expect(wrapper.vm.state.search.error).toBeNull();
+    resumeStatus(); await refreshing; await flushPromises();
+    expect(input.element.value).toBe(next);
+    expect(wrapper.findAll('.person-search-result')).toHaveLength(0);
+    if (next) {
+      expect(pendingSearch.payload.query).toBe(next);
+      acceptPersonResponse(chat, { ...pendingSearch, type: 'person_response', ok: true,
+        data: { items: [{ id: 'beta', text: 'beta new result', role: 'user' }], nextCursor: null } });
+      await flushPromises();
+      expect(wrapper.get('.person-search-result').text()).toContain('beta new result');
+    } else expect(wrapper.vm.state.search.query).toBe('');
+    expect(wrapper.vm.state.search.error).toBeNull();
+  });
+
   it('uploads a file and explicitly sends it without text, clearing only after acknowledgement', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ files: [{ fileId: 'upload-1' }] }) })));
     await render();

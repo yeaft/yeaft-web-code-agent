@@ -24,7 +24,7 @@ export default {
         <span class="person-muted">{{ $t(section === 'memory' ? 'person.memoryScope' : 'person.skillsScope') }}</span>
         <button type="button" class="btn-ghost" :disabled="disabled || page.loading" @click="$emit('refresh')">{{ $t('common.refresh') }}</button>
       </div>
-      <div class="person-journal-scroll">
+      <div class="person-journal-scroll" tabindex="0" role="region" :aria-label="$t('person.' + section)">
         <p v-if="page.error" role="alert" class="person-settings-error">{{ $t('person.requestFailed') }} {{ page.error.message }}</p>
         <p v-if="page.loading" role="status" class="person-muted">{{ $t('person.loading') }}</p>
         <p v-else-if="page.loaded && !page.items.length" class="person-empty">{{ $t('person.knowledgeEmpty') }}</p>
