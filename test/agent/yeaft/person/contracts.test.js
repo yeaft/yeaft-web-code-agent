@@ -155,6 +155,22 @@ describe('digital Person strict contracts', () => {
     expect(provider.catalog[0].id).toBe(expected);
     expect(normalized.availableModels.map(m => m.ref)).toEqual(before);
   });
+  it.each(['anthropic', 'openai-responses'])('reads image permission from real config and sends native %s image wire', async protocol => {
+    const normalized = configuredModels({ providers: [{ name: 'native', protocol, apiKey: 'fixture-only', baseUrl: 'https://fixture.invalid', models: [
+      { id: 'vision-alias', supportsImages: true, contextWindow: 100000 },
+      { id: 'gpt-4o', supportsImages: false }, 'o1-mini',
+    ] }] });
+    const provider = await createPersonProvider({ config: normalized });
+    expect(provider.catalog.map(m => m.supportsImages)).toEqual([true, false, false]);
+    const fetch = stubProviderFetch();
+    const data = Buffer.from('image-bytes').toString('base64');
+    await collectOutput(provider.adapter, { model: 'native/vision-alias', system: 'Fixture', maxTokens: 256,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Inspect this untrusted image' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] }], signal: new AbortController().signal }, () => {});
+    const wire = JSON.parse(fetch.mock.calls[0][1].body);
+    if (protocol === 'anthropic') expect(wire.messages[0].content[1]).toMatchObject({ type: 'image', source: { data, media_type: 'image/png' } });
+    else expect(wire.input[0].content[1]).toEqual({ type: 'input_image', image_url: `data:image/png;base64,${data}` });
+  });
   it('uses config.model when primaryModel is absent', async () => {
     const provider = await createPersonProvider({ config: { ...config, primaryModel: null, model: 'second' }, adapter: {} });
     expect(provider.defaultSelection).toEqual({ model: 'test/second', effort: null });
@@ -172,10 +188,10 @@ describe('digital Person strict contracts', () => {
     const limited = await createPersonProvider({ config: normalized, adapter: {}, allowedModels: ['two/shared'] });
     expect(limited.catalog.map(m => m.id)).toEqual(['two/shared']);
   });
-  it.each(['model9', 'test/model9'])('prioritizes %s before the eight-model limit', async primaryModel => {
+  it.each(['model9', 'test/model9'])('prioritizes %s while exposing the full configured catalog', async primaryModel => {
     const normalized = configuredModels({ primaryModel, providers: [{ name: 'test', models: Array.from({ length: 10 }, (_, i) => `model${i}`) }] });
     const provider = await createPersonProvider({ config: normalized, adapter: {} });
-    expect(provider.catalog.map(m => m.id)).toEqual(['test/model9', ...Array.from({ length: 7 }, (_, i) => `test/model${i}`)]);
+    expect(provider.catalog.map(m => m.id)).toEqual(['test/model9', ...Array.from({ length: 9 }, (_, i) => `test/model${i}`)]);
     expect(provider.defaultSelection).toEqual({ model: 'test/model9', effort: null });
   });
   it.each([

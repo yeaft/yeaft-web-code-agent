@@ -14,6 +14,10 @@ const ERRORS = {
   CONTEXT_LIMIT: 'The cognitive request exceeded its context budget.', TIMEOUT: 'The cognitive activity reached its time budget.',
   CANCELLED: 'The cognitive activity was cancelled.', INTERRUPTED: 'The cognitive activity was interrupted.',
   UNSUPPORTED: 'This digital person capability is not supported in this slice.',
+  INVALID_ATTACHMENT: 'Invalid digital person attachment.',
+  UNSUPPORTED_ATTACHMENT: 'Unsupported attachment: use PNG/JPEG/WebP/GIF images or UTF-8 text; PDF and binary files are not supported.',
+  ATTACHMENT_LIMIT: 'Attachments exceed the limit: 4 files, 5 MiB each, 10 MiB total; text plus extracted content must fit 24 KiB.',
+  IMAGE_MODEL: 'The selected model does not permit image input.',
   CLOSED: 'The digital person service is closed.',
 };
 export class PersonError extends Error {

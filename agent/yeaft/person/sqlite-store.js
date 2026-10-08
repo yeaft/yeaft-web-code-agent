@@ -6,6 +6,7 @@ import { isMainThread } from 'node:worker_threads';
 import { bytes, digest, fail, identifier, LIMITS, PersonError, text } from './contracts.js';
 import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
 import { SCHEMA, TABLES } from './sqlite-schema.js';
+import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
 
 const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
@@ -45,7 +46,7 @@ const publicOutput = (output, failed) => {
   return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
     : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
 };
-const READS = new Set(['getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities']);
+const READS = new Set(['getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
 const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'commit', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
@@ -190,11 +191,12 @@ export class SqlitePersonStore {
     }
     return expired;
   }
-  admit(ownerId, { kind, text: input, clientMessageId, workerId, budget }) {
+  admit(ownerId, { kind, text: input, clientMessageId, workerId, budget, files = [] }) {
     if (!['send', 'think', 'dream'].includes(kind)) fail('INVALID_REQUEST');
-    text(input, LIMITS.inputBytes, kind !== 'send'); identifier(clientMessageId); text(workerId, 256);
+    const validated = validateFiles(files, input, kind), attachments = validated.map(attachmentMetadata);
+    identifier(clientMessageId); text(workerId, 256);
     this.recover(ownerId);
-    const scope = this.scope(ownerId), requestHash = digest([kind, input]);
+    const scope = this.scope(ownerId), requestHash = attachmentRequestHash(kind, input, validated);
     const existing = this.one('episodes', scope, ' AND clientMessageId = ?', [clientMessageId]);
     if (existing) {
       if (existing.requestHash !== requestHash) fail('IDEMPOTENCY_CONFLICT');
@@ -203,20 +205,32 @@ export class SqlitePersonStore {
     const p = this.getPerson(ownerId);
     if (p.activeEpisodeId) fail('BUSY');
     const id = randomUUID();
+    const hasMessage = kind === 'send' || (kind === 'think' && attachments.length > 0);
     p.activeEpisodeId = id; p.leaseOwner = workerId; p.leaseUntil = new Date(this.now.getTime() + this.leaseMs);
-    p.epoch++; p.writeSerial++; p.inputWatermark++; if (kind === 'send') p.messageSeq++;
+    p.epoch++; p.writeSerial++; p.inputWatermark++; if (hasMessage) p.messageSeq++;
     this.put('persons', p);
     let messageId = null;
-    if (kind === 'send') {
+    for (const file of validated) this.put('attachments', this.doc(scope, file));
+    if (hasMessage) {
       messageId = randomUUID();
-      const message = this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, role: 'user', text: input, createdAt: this.now, clientMessageId });
+      const message = this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, role: 'user', text: input, attachments, createdAt: this.now, clientMessageId });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
     }
-    const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text: input, messageId, status: 'running', workerId, epoch: p.epoch,
+    const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text: input, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], status: 'running', workerId, epoch: p.epoch,
       baseStateVersion: p.stateVersion, inputWatermark: p.inputWatermark, controlVersion: p.controlVersion, budget, createdAt: this.now });
     this.put('episodes', episode, true);
-    this.trace(ownerId, id, 'accepted', { trigger: { kind, text: input, messageId }, baseStateVersion: p.stateVersion, budget });
+    this.trace(ownerId, id, 'accepted', { trigger: { kind, text: input, messageId, attachments }, baseStateVersion: p.stateVersion, budget });
     return { episodeId: id, duplicate: false, status: 'running', episode };
+  }
+  episodeAttachments(episode) {
+    this.own(episode);
+    const scope = this.episodeScope(episode);
+    const stored = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    return (stored.attachments ?? []).map(ref => {
+      const file = this.one('attachments', scope, ' AND id = ?', [ref.id]);
+      if (!file || file.sha256 !== ref.sha256) fail('STORAGE_UNAVAILABLE');
+      return publicDoc(file);
+    });
   }
   episodeScope(episode) {
     const scope = this.scope(episode.ownerId);

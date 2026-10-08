@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { CONFIG } from '../config.js';
-import { agents } from '../context.js';
+import { agents, pendingFiles } from '../context.js';
 import { forwardToAgent, resolveAgentAccessError, sendToWebClient } from '../ws-utils.js';
 
 const FIELDS = Object.freeze({
   status: [], open: [], snapshot: [],
-  send: ['text', 'clientMessageId'], think: ['text', 'clientMessageId'],
+  send: ['text', 'clientMessageId', 'attachments'], think: ['text', 'clientMessageId', 'attachments'],
   dream: ['clientMessageId'], cancel: ['episodeId'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'],
-  settings: ['autonomyEnabled'],
+  settings: ['autonomyEnabled', 'modelCandidates'],
 });
 
 /** Request-only relay: identity is supplied by the authenticated Server, never the browser.
@@ -17,7 +17,7 @@ const FIELDS = Object.freeze({
 export function createPersonRelay({
   agentMap = agents, send = sendToWebClient, forward = forwardToAgent,
   accessError = resolveAgentAccessError, skipAuth = () => CONFIG.skipAuth,
-  timeoutMs = 30_000,
+  timeoutMs = 30_000, uploads = pendingFiles, uploadTtlMs = CONFIG.fileCleanupInterval ?? 600_000, now = Date.now,
 } = {}) {
   const pending = new Map();
   function forget(id) {
@@ -66,6 +66,34 @@ export function createPersonRelay({
         await reply(client, envelope, { ok: false, error: 'Digital person input is too large' });
         return true;
       }
+      if (op === 'send' || op === 'think') {
+        try {
+          if (payload.text != null && (typeof payload.text !== 'string' || Buffer.byteLength(payload.text) > 8192)) throw new Error('Digital person text exceeds 8192 UTF-8 bytes');
+          if (Object.hasOwn(source || {}, 'files')) throw new Error('Upload files first; only attachment fileId references are accepted');
+          const refs = payload.attachments ?? [];
+          if (!Array.isArray(refs) || refs.length > 4) throw new Error('Digital person supports at most 4 attachments');
+          const seen = new Set(); let total = 0;
+          // Resolve every reference before forwarding anything. Keep uploads until their original TTL:
+          // delivery/ack loss, disconnect and explicit retry all reuse exactly the same bytes.
+          const files = refs.map(ref => {
+            if (!ref || typeof ref !== 'object' || Array.isArray(ref) || Object.keys(ref).length !== 1 ||
+                typeof ref.fileId !== 'string' || !ref.fileId || ref.fileId.length > 128 || seen.has(ref.fileId)) throw new Error('Invalid digital person attachment reference');
+            seen.add(ref.fileId);
+            const file = uploads.get(ref.fileId);
+            if (!file || !Number.isFinite(file.uploadedAt) || now() - file.uploadedAt >= uploadTtlMs || file.uploadedAt > now()) throw new Error('Digital person attachment expired; upload it again');
+            if (!skipAuth() && (!file.userId || file.userId !== client.userId)) throw new Error('Digital person attachment access denied');
+            if (!Buffer.isBuffer(file.buffer)) throw new Error('Invalid digital person upload');
+            total += file.buffer.length;
+            if (file.buffer.length > Math.min(CONFIG.maxFileSize ?? Infinity, 5 * 1024 * 1024) || total > 10 * 1024 * 1024) throw new Error('Digital person attachments exceed 5 MiB per file or 10 MiB total');
+            return { name: file.name, mimeType: file.mimeType, data: file.buffer.toString('base64') };
+          });
+          delete payload.attachments;
+          if (files.length) payload.files = files;
+        } catch (error) {
+          await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: error.message });
+          return true;
+        }
+      }
       const relayId = randomUUID();
       const row = { client, agent, ownerId, agentId, envelope };
       row.timer = setTimeout(() => {
@@ -98,7 +126,7 @@ export function createPersonRelay({
       await reply(row.client, row.envelope, msg.ok === true
         ? { ok: true, data: msg.data }
         : { ok: false,
-          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
+          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict', 'invalid_attachment', 'unsupported_attachment', 'attachment_limit', 'image_model', 'model_selection'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
           error: typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'Digital person request failed' });
       return true;
     },

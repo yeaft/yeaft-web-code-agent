@@ -6,8 +6,8 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
 import { bytes, digest, fail, LIMITS, PersonError } from './contracts.js';
 
 /** Only configured native API models; no Session initialization or implicit credential fallback. */
-export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1' }) {
-  const config = suppliedConfig || loadConfig({ dir: yeaftDir });
+export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1', modelCandidates = [] }) {
+  const config = structuredClone(suppliedConfig || loadConfig({ dir: yeaftDir }));
   if (!config.providers?.length && !suppliedAdapter) fail('MODEL_UNAVAILABLE');
   const models = config.availableModels || [];
   const requestedDefault = config.primaryModel || config.model;
@@ -16,7 +16,8 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
   const defaultModel = models.find(m => (m.ref || m.id) === requestedDefault)
     || models.find(m => m.id === requestedDefault);
   const defaultRef = defaultModel?.ref || defaultModel?.id;
-  const available = models.filter(m => !allowedModels || allowedModels.includes(m.ref || m.id));
+  if (modelCandidates.some(ref => !models.some(m => (m.ref || m.id) === ref && (!allowedModels || allowedModels.includes(ref))))) fail('MODEL_SELECTION');
+  const available = models.filter(m => (!allowedModels || allowedModels.includes(m.ref || m.id)) && (!modelCandidates.length || modelCandidates.includes(m.ref || m.id)));
   const catalog = available.map(m => {
     const maxOutput = Math.min(4096, Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m })));
     const effortContext = { ...m, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
@@ -29,11 +30,16 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
       applyAnthropicThinking(body, m.id, e, effortContext);
       return body.max_tokens === maxOutput;
     }) : [];
-    return { id: m.ref || m.id, efforts, maxOutput,
+    const rawProvider = config.providers?.find(p => p.name && (p.name === m.provider || (m.ref || '').startsWith(`${p.name}/`)));
+    const rawModel = rawProvider?.models?.find(item => item && typeof item === 'object' && item.id?.trim() === m.id);
+    const explicitImages = m.supportsImages ?? rawModel?.supportsImages ?? rawProvider?.supportsImages;
+    // Unknown aliases and text-only reasoning variants must not gain vision by name prefix.
+    const supportsImages = explicitImages ?? /^(claude-(?:3|sonnet-4|opus-4|haiku-4)|gpt-(?:4o|4\.1|5)|o[13](?:$|-\d{4})|o4-mini(?:$|-)|gemini-)/i.test(m.id);
+    return { id: m.ref || m.id, efforts, maxOutput, supportsImages: supportsImages === true,
       contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };
   }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && m.contextWindow > m.maxOutput + 1024 && m.maxOutput >= 256);
   catalog.sort((a, b) => Number(b.id === defaultRef) - Number(a.id === defaultRef));
-  catalog.splice(8);
+  if (modelCandidates.some(ref => !catalog.some(model => model.id === ref))) fail('MODEL_SELECTION');
   if (!catalog.length) fail('MODEL_UNAVAILABLE');
   const adapter = suppliedAdapter || await createLLMAdapter(config);
   return { adapter, catalog, catalogRevision: digest(catalog), defaultSelection: { model: catalog[0].id, effort: null }, effortEnabled };
