@@ -24,6 +24,7 @@ beforeEach(() => {
   chat = Vue.reactive({
     activeConversationId: 'c1', currentConversation: 'c1', currentView: 'yeaft',
     currentAgent: 'a', agents: [{ id: 'a', online: true, capabilities: ['digital_person'] }],
+    digitalPersonUiEnabledByAgent: { a: true },
     connectionState: 'connected', authenticated: true, theme: 'light',
     btwMode: false, compactStatus: null, customExpertRoles: [], expertSelections: [], inputDrafts: {},
     isProcessing: false, slashCommandDescriptions: {}, yeaftActiveSessionFilter: 's1',

@@ -8,6 +8,7 @@ function fixture(options = {}) {
   let owner = 'owner-a';
   let responder;
   const chat = {
+    digitalPersonUiEnabledByAgent: { a: true, b: true },
     connectionState: 'connected', authenticated: true,
     agents: ['a', 'b'].map(id => ({ id, online: true, capabilities: ['digital_person'] })),
     sendWsMessage(message) { requests.push(message); responder?.(message); return true; },
@@ -61,6 +62,16 @@ describe('Digital Person owner / Agent request boundary', () => {
       expect(commands().filter(r => r.op === op)).toHaveLength(1);
     }
     expect(commands().map(r => r.op)).toEqual(['think', 'dream']);
+  });
+
+  it('does not read or command a UI-disabled Person even through direct controller access', async () => {
+    const f = fixture(); f.auto();
+    f.chat.digitalPersonUiEnabledByAgent.a = false;
+    expect(digitalPersonGate(f.chat, 'a')).toBe('disabled');
+    await f.controller.open('a');
+    expect(await f.controller.command('send', 'hidden')).toBe(false);
+    expect(f.requests).toEqual([]);
+    expect(digitalPersonGate(f.chat, 'b')).toBe('');
   });
 
   it('gates unsupported, offline and disconnected Agents without requests', async () => {

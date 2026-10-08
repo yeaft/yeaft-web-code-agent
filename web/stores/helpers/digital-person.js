@@ -10,6 +10,8 @@ const failure = code => Object.assign(new Error(code), { code });
 
 export function digitalPersonGate(chat, agentId) {
   if (!agentId) return 'noAgent';
+  if (!Object.hasOwn(chat.digitalPersonUiEnabledByAgent || {}, agentId)
+    || chat.digitalPersonUiEnabledByAgent[agentId] !== true) return 'disabled';
   if (chat.connectionState !== 'connected' || !chat.authenticated) return 'disconnected';
   const agent = chat.agents.find(row => row.id === agentId);
   if (!agent?.online) return 'offline';
