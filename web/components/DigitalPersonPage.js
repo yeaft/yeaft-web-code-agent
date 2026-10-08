@@ -1,7 +1,7 @@
 import UserTurnBlock from './UserTurnBlock.js';
 import MessageComposer from './MessageComposer.js';
 import NavigationIcon from './NavigationIcon.js';
-import ThemeToggle from './ThemeToggle.js';
+import PersonKnowledgeBrowser from './PersonKnowledgeBrowser.js';
 import ModernSelect from './ModernSelect.js';
 import PersonSettingsModal from './PersonSettingsModal.js';
 import { useComposerAttachments } from '../utils/composer-attachments.js';
@@ -14,7 +14,7 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
-  components: { UserTurnBlock, MessageComposer, NavigationIcon, ThemeToggle, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog },
+  components: { UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -31,6 +31,10 @@ export default {
     const compactPanel = Vue.ref(window.innerWidth <= 900);
     const sidePanel = Vue.ref(null);
     const thoughtButton = Vue.ref(null);
+    const searchButton = Vue.ref(null);
+    const searchInput = Vue.ref(null);
+    const searchQuery = Vue.ref('');
+    let panelOpener = null;
     const closePanelButton = Vue.ref(null);
     const t = Vue.inject('t');
     const agentOptions = Vue.computed(() => chat.agents.map(agent => ({
@@ -55,6 +59,7 @@ export default {
       pendingDraft = null;
       draft.value = '';
       settingsOpen.value = false;
+      searchQuery.value = '';
       closePanel();
     }, { flush: 'sync' });
     Vue.watch(() => JSON.stringify([scope(), agentId.value, gate.value, chat.chatHistoryConnectionGeneration]), () => {
@@ -102,18 +107,26 @@ export default {
       }
       pendingDraft = null;
     }
+    // A reconnect replaces cached pages. Refill the visible section after the
+    // identity is ready, including when the drawer was opened during loading.
+    Vue.watch([panel, () => state.loading, gate], () => {
+      const section = panel.value;
+      if (['memory', 'skills'].includes(section) && !gate.value && !state.loading && state.person
+        && !state[section].loaded && !state[section].loading) controller.inspect(section);
+    }, { flush: 'post' });
     async function openPanel(next = 'thoughts') {
+      if (!panel.value || next === 'search' || panel.value === 'search') panelOpener = next === 'search' ? searchButton.value : thoughtButton.value;
       panel.value = next;
       await Vue.nextTick();
-      closePanelButton.value?.focus();
+      (next === 'search' ? searchInput.value : closePanelButton.value)?.focus();
     }
     function closePanel() {
       const restoreFocus = compactPanel.value || sidePanel.value?.contains(document.activeElement);
       panel.value = null;
-      if (restoreFocus) Vue.nextTick(() => thoughtButton.value?.focus());
+      if (restoreFocus) Vue.nextTick(() => panelOpener?.focus());
     }
     function togglePanel() {
-      if (panel.value) closePanel();
+      if (panel.value && panel.value !== 'search') closePanel();
       else openPanel();
     }
     // Async refresh/reconnect can remove or disable the focused control. The
@@ -130,11 +143,20 @@ export default {
         event.preventDefault(); event.stopPropagation(); closePanel();
       }
       if (event.key !== 'Tab' || !compactPanel.value) return;
-      const controls = [...sidePanel.value.querySelectorAll('button:not(:disabled), summary, [tabindex="0"]')];
+      const controls = [...sidePanel.value.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')].filter(el => {
+        for (let parent = el.parentElement; parent && parent !== sidePanel.value; parent = parent.parentElement) {
+          if (parent.matches('details:not([open])') && parent.querySelector('summary') !== el) return false;
+        }
+        return true;
+      });
       const first = controls[0], last = controls.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
+    Vue.watch(() => state.loading, loading => {
+      if (!loading && ['memory', 'skills'].includes(panel.value) && !state[panel.value].loaded) controller.inspect(panel.value);
+      if (!loading && panel.value === 'search' && searchQuery.value.trim()) controller.search(searchQuery.value);
+    });
     Vue.watch(compactPanel, async compact => {
       if (compact && panel.value) { await Vue.nextTick(); closePanelButton.value?.focus(); }
     });
@@ -154,7 +176,7 @@ export default {
     }
     const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, closePanelButton, agentOptions, messagePane, returnButton, gate, ready, canCompose, controller, command, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, returnButton, gate, ready, canCompose, controller, command, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -163,7 +185,11 @@ export default {
           <button ref="returnButton" type="button" class="header-action-btn" @click="leave()" :aria-label="$t('yeaft.session.title')" :title="$t('yeaft.session.title')"><NavigationIcon name="back" /></button>
         </nav>
         <div class="person-identity">
-          <h1>{{ state.person?.name || $t('person.title') }}</h1>
+          <div class="person-breadcrumb">
+            <ModernSelect id="person-agent" class="person-agent-select" v-model="agentId" :options="agentOptions" :aria-label="$t('person.agent')" :placeholder="$t('person.noAgent')" :empty-text="$t('person.noAgent')" :disabled="!chat.agents.length" :menu-min-width="220" />
+            <NavigationIcon name="chevron" :size="14" />
+            <h1 :title="state.person?.name || $t('person.title')">{{ state.person?.name || $t('person.title') }}</h1>
+          </div>
           <div class="person-status" role="status" aria-live="polite">
             <span class="person-status-dot" :class="{ ready, busy: state.busy || state.commandPending }" aria-hidden="true"></span>
             <span v-if="gate">{{ $t('person.' + gate) }}</span>
@@ -175,10 +201,9 @@ export default {
           </div>
         </div>
         <div class="person-header-actions">
-          <ModernSelect id="person-agent" class="person-agent-select" v-model="agentId" :options="agentOptions" :aria-label="$t('person.agent')" :placeholder="$t('person.noAgent')" :empty-text="$t('person.noAgent')" :disabled="!chat.agents.length" :menu-min-width="220" />
           <button type="button" class="header-action-btn" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>
-          <ThemeToggle />
-          <button ref="thoughtButton" type="button" class="header-action-btn person-thoughts-button" :class="{ active: !!panel }" :aria-expanded="!!panel" aria-controls="person-side-panel" :aria-label="$t('person.thoughts')" :title="$t('person.thoughts')" @click="togglePanel()"><NavigationIcon name="workbench" /></button>
+          <button ref="searchButton" type="button" class="header-action-btn person-search-button" :class="{ active: panel === 'search' }" :aria-expanded="panel === 'search'" aria-controls="person-side-panel" :aria-label="$t('person.searchMessages')" :title="$t('person.searchMessages')" @click="panel === 'search' ? closePanel() : openPanel('search')"><NavigationIcon name="search" /></button>
+          <button ref="thoughtButton" type="button" class="header-action-btn person-thoughts-button" :class="{ active: !!panel && panel !== 'search' }" :aria-expanded="!!panel && panel !== 'search'" aria-controls="person-side-panel" :aria-label="$t('person.inside')" :title="$t('person.inside')" @click="togglePanel()"><NavigationIcon name="eye" /></button>
           <button type="button" class="header-action-btn person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending" @click="settingsOpen = true" :aria-label="$t('person.settings')" :title="$t('person.settings')"><NavigationIcon name="settings" /></button>
         </div>
       </header>
@@ -235,9 +260,7 @@ export default {
         <div v-if="panel && compactPanel" class="person-panel-backdrop" aria-hidden="true" @click="closePanel()"></div>
         <aside v-if="panel" id="person-side-panel" ref="sidePanel" class="person-side-panel" :role="compactPanel ? 'dialog' : 'complementary'" :aria-modal="compactPanel ? true : undefined" aria-labelledby="person-panel-title">
           <header class="person-panel-header">
-            <h2 id="person-panel-title">{{ $t(panel === 'debug' ? 'person.debug' : 'person.thoughts') }}</h2>
-            <button v-if="panel === 'thoughts'" type="button" class="btn-ghost person-debug-link" @click="openPanel('debug')">{{ $t('person.debug') }}</button>
-            <button v-else type="button" class="btn-ghost" @click="openPanel('thoughts')">{{ $t('person.back') }}</button>
+            <h2 id="person-panel-title">{{ $t(panel === 'search' ? 'person.searchMessages' : 'person.inside') }}</h2>
             <button ref="closePanelButton" type="button" class="header-action-btn" :aria-label="$t('common.close')" :title="$t('common.close')" @click="closePanel()"><NavigationIcon name="close" /></button>
           </header>
           <div v-if="compactPanel && (gate || state.loading)" class="person-panel-notice" role="status">
@@ -248,11 +271,43 @@ export default {
             <p>{{ $t('person.requestFailed') }} {{ state.error.message }}</p>
             <button type="button" class="btn-ghost" :disabled="!!gate || state.loading || state.tracesLoading" @click="controller.refresh()">{{ $t('common.refresh') }}</button>
           </div>
+          <nav v-if="panel !== 'search'" class="person-inspector-nav" :aria-label="$t('person.inside')">
+            <button v-for="section in ['overview', 'thoughts', 'memory', 'skills']" :key="section" type="button" class="btn-ghost" :class="{ active: panel === section }" :aria-current="panel === section ? 'page' : undefined" @click="openPanel(section)">{{ $t('person.' + section) }}</button>
+          </nav>
+          <section v-if="panel === 'overview'" class="person-journal-scroll person-overview">
+            <h3>{{ state.person?.name }}</h3>
+            <p class="person-prose">{{ state.person?.soul }}</p>
+            <h3>{{ $t('person.currentUnderstanding') }}</h3><p class="person-prose">{{ state.state?.summary || $t('person.knowledgeEmpty') }}</p>
+            <p class="person-prose">{{ state.state?.appraisal }}</p>
+            <dl><dt>{{ $t('person.revision') }}</dt><dd>{{ state.state?.version }}</dd><dt>{{ $t('person.createdAt') }}</dt><dd>{{ time(state.person?.createdAt) }}</dd></dl>
+          </section>
+          <section v-else-if="panel === 'search'" class="person-journal person-search">
+            <form class="person-search-form" @submit.prevent="controller.search(searchQuery)">
+              <input ref="searchInput" v-model="searchQuery" type="search" maxlength="200" :placeholder="$t('person.searchMessages')" :aria-label="$t('person.searchMessages')" @input="controller.search('')">
+              <button type="submit" class="btn-ghost" :disabled="!!gate || state.loading || !state.person || !searchQuery.trim()">{{ $t('person.search') }}</button>
+            </form>
+            <div class="person-journal-scroll" :aria-busy="state.search.loading">
+              <p v-if="state.search.error" role="alert" class="person-settings-error">{{ $t('person.requestFailed') }} {{ state.search.error.message }}</p>
+              <p v-if="state.search.loading" role="status" class="person-muted">{{ $t('person.loading') }}</p>
+              <p v-else-if="state.search.loaded && !state.search.items.length" class="person-empty">{{ $t('person.noSearchResults') }}</p>
+              <article v-for="message in state.search.items" :key="message.id" class="person-search-result">
+                <header class="person-message-meta"><strong>{{ message.role === 'user' ? $t('person.you') : (state.person?.name || $t('person.title')) }}</strong><time>{{ time(message.createdAt) }}</time></header>
+                <p class="person-prose">{{ message.text }}</p>
+              </article>
+              <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>
+            </div>
+          </section>
+          <PersonKnowledgeBrowser v-else-if="panel === 'memory' || panel === 'skills'" :key="panel" :section="panel" :page="state[panel]" :disabled="!!gate || state.loading || !state.person" @refresh="controller.inspect(panel)" @more="controller.inspect(panel, true)" />
+          <div v-if="panel === 'thoughts' || panel === 'debug'" class="person-journal-toolbar">
+            <span class="person-muted">{{ $t('person.thoughts') }}</span>
+            <button v-if="panel === 'thoughts'" type="button" class="btn-ghost person-debug-link" @click="openPanel('debug')">{{ $t('person.debug') }}</button>
+            <button v-else type="button" class="btn-ghost" @click="openPanel('thoughts')">{{ $t('person.back') }}</button>
+          </div>
           <PersonThoughtJournal v-if="panel === 'thoughts'" :traces="state.traces" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
-          <PersonDebugLog v-else :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
+          <PersonDebugLog v-if="panel === 'debug'" :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
         </aside>
       </div>
-      <PersonSettingsModal v-if="settingsOpen" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :loading="state.loading" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
+      <PersonSettingsModal v-if="settingsOpen" :name="state.person?.name || ''" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :loading="state.loading" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
     </div>
   `,
 };

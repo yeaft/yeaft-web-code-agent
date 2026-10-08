@@ -104,6 +104,29 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.person.id).toBe('person-a');
   });
 
+  it('fences stale search pages and inspector reads across query, Agent and owner changes', async () => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => ['search', 'inspect'].includes(r.op) ? false : undefined);
+    const oldSearch = f.controller.search('old'); const old = f.requests.at(-1);
+    const newSearch = f.controller.search('new'); const newer = f.requests.at(-1);
+    f.response(newer, { items: [{ id: 'new-message', text: 'new' }], nextCursor: 'next' }); await newSearch;
+    f.response(old, { items: [{ id: 'old-message' }], nextCursor: null }); await oldSearch;
+    expect(f.state.search.items.map(r => r.id)).toEqual(['new-message']);
+    const more = f.controller.search('new', true); const moreRequest = f.requests.at(-1);
+    await f.controller.search('');
+    f.response(moreRequest, { items: [{ id: 'late-page' }], nextCursor: null }); await more;
+    expect(f.state.search.items).toEqual([]);
+    const reading = f.controller.inspect('memory'); const read = f.requests.at(-1);
+    await f.controller.open('b'); await reading;
+    expect(f.response(read, { items: [{ id: 'private-a' }] })).toBe(false);
+    expect(f.state.memory.items).toEqual([]);
+    const skills = f.controller.inspect('skills'); const skillRead = f.requests.at(-1);
+    f.owner('another-owner');
+    expect(f.response(skillRead, { items: [{ id: 'private-skill' }] })).toBe(false);
+    await f.controller.open('b'); await skills;
+    expect(f.state.skills.items).toEqual([]);
+  });
+
   it('keeps uncertain command ID across re-entry and retries only on explicit action', async () => {
     vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'send' ? false : undefined);
@@ -121,6 +144,18 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(retry.payload).toEqual(first.payload);
     expect(retry.requestId).not.toBe(first.requestId);
     expect(f.state.retryCommand).toBeNull();
+  });
+
+  it('uses the returned Person identity on rename without model configuration or cognition', async () => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'settings' ? { settings: { modelCandidates: ['p/m'] }, person: { id: 'person-a', name: 'Mira', settings: { modelCandidates: ['p/m'] } } }
+      : r.op === 'status' ? { configured: true, storageReady: true, modelReady: false, models: [] } : undefined);
+    expect(await f.controller.settings({ name: 'Mira' })).toBe(true);
+    expect(f.state.person.name).toBe('Mira');
+    expect(f.state.modelCandidates).toEqual(['p/m']);
+    expect(f.state.modelReady).toBe(false);
+    expect(f.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ name: 'Mira' });
+    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
   });
 
   it('keeps file references in uncertain retry and isolates model settings from cognition', async () => {

@@ -29,7 +29,9 @@ beforeEach(() => {
         status: { configured, reason: 'Model unavailable', models: [{ id: 'provider/a' }, { id: 'provider/b' }] }, open: {},
         snapshot: { person: { id: 'p', name: 'Ada' }, state: { version: 4 }, messages: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], busy: false },
         messages: { items: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], nextCursor: null }, traces: { items: personRecords(), nextCursor: 'older' },
-        think: { episodeId: 'e' }, send: { episodeId: 'e' }, settings: { settings: request.payload },
+        think: { episodeId: 'e' }, send: { episodeId: 'e' }, settings: { settings: { modelCandidates: request.payload.modelCandidates || [] }, person: { id: 'p', name: request.payload.name || 'Ada', settings: { modelCandidates: request.payload.modelCandidates || [] } } },
+        inspect: { items: request.payload.section === 'memory' ? [{ id: 'idea', kind: 'interest', statement: '<script>Keep uncertainty</script>', epistemicState: 'reported', revision: 2, sourceRefs: ['message:1'] }] : [{ id: 'Script.sum', domain: 'script', version: 1, description: 'Sum', code: 'return input' }], nextCursor: null },
+        search: { items: [{ id: 'archive', role: 'user', text: '<img src=x> archived message', createdAt: 1 }], nextCursor: null },
       };
       queueMicrotask(() => acceptPersonResponse(chat, { ...request, type: 'person_response', ok: true, data: data[request.op] }));
       return true;
@@ -144,7 +146,7 @@ describe('Digital Person surface', () => {
       await Vue.nextTick();
       expect(wrapper.get('#person-side-panel').attributes('aria-modal')).toBe('true');
       expect(wrapper.get('#person-conversation').attributes('inert')).toBeDefined();
-      const first = wrapper.get('.person-debug-link');
+      const first = wrapper.get('.person-panel-header .header-action-btn');
       first.element.focus();
       await first.trigger('keydown', { key: 'Tab', shiftKey: true });
       const last = wrapper.get('.person-journal .person-load-more');
@@ -253,6 +255,59 @@ describe('Digital Person surface', () => {
     await wrapper.get('.person-navigation button').trigger('click');
     expect(chat.leaveDigitalPerson).toHaveBeenCalledOnce();
     expect(chat.closePluginCenter).toHaveBeenCalledOnce();
+  });
+
+  it('uses Agent/name breadcrumbs, renames in settings and opens the read-only inner browser', async () => {
+    await render();
+    expect(wrapper.find('.theme-toggle').exists()).toBe(false);
+    expect(wrapper.get('.person-breadcrumb #person-agent').exists()).toBe(true);
+    expect(wrapper.get('.person-breadcrumb h1').text()).toBe('Ada');
+    const detailsButton = wrapper.get('.person-thoughts-button');
+    expect(detailsButton.findComponent({ name: 'NavigationIcon' }).props('name')).toBe('eye');
+    expect(detailsButton.attributes('aria-label')).toBe(t('person.inside'));
+    expect(detailsButton.get('svg circle').attributes('r')).toBe('3');
+    await wrapper.get('.person-settings-button').trigger('click');
+    await wrapper.get('#person-name').setValue('Mira');
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click');
+    await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ name: 'Mira' });
+    expect(wrapper.get('.person-breadcrumb h1').text()).toBe('Mira');
+    await wrapper.get('.person-thoughts-button').trigger('click');
+    expect(wrapper.findAll('.person-inspector-nav svg')).toHaveLength(0);
+    await wrapper.findAll('.person-inspector-nav button').find(b => b.text() === t('person.memory')).trigger('click');
+    await flushPromises();
+    expect(wrapper.get('.person-knowledge').text()).toContain('<script>Keep uncertainty</script>');
+    expect(wrapper.get('.person-knowledge').find('script').exists()).toBe(false);
+    expect(requests.filter(r => r.op === 'inspect')).toHaveLength(1);
+    chat.connectionState = 'reconnecting'; await flushPromises();
+    chat.connectionState = 'connected'; await flushPromises();
+    expect(requests.filter(r => r.op === 'inspect' && r.payload.section === 'memory')).toHaveLength(2);
+    expect(wrapper.get('.person-knowledge').text()).toContain('<script>Keep uncertainty</script>');
+    await wrapper.findAll('.person-inspector-nav button').find(b => b.text() === t('person.skills')).trigger('click');
+    await flushPromises();
+    expect(wrapper.get('.person-knowledge').text()).toContain('Script.sum');
+    expect(wrapper.get('#person-conversation').isVisible()).toBe(true);
+    expect(requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+  });
+
+  it('searches archived messages without replacing the conversation or losing the draft', async () => {
+    await render();
+    await wrapper.get('#person-input').setValue('my draft');
+    await wrapper.get('.person-search-button').trigger('click');
+    await Vue.nextTick();
+    const input = wrapper.get('.person-search-form input');
+    expect(document.activeElement).toBe(input.element);
+    await input.setValue('archived');
+    await wrapper.get('.person-search-form').trigger('submit');
+    await flushPromises();
+    expect(requests.find(r => r.op === 'search').payload).toEqual({ query: 'archived', cursor: null, limit: 20 });
+    expect(wrapper.get('.person-search-result').text()).toContain('<img src=x> archived message');
+    expect(wrapper.get('.person-search-result').find('img').exists()).toBe(false);
+    expect(wrapper.get('.person-messages').text()).not.toContain('archived message');
+    await wrapper.get('.person-panel-header button').trigger('click');
+    await Vue.nextTick();
+    expect(document.activeElement).toBe(wrapper.get('.person-search-button').element);
+    expect(wrapper.get('#person-input').element.value).toBe('my draft');
   });
 
   it('uploads a file and explicitly sends it without text, clearing only after acknowledgement', async () => {

@@ -257,3 +257,8 @@
     min-height: 44px;
   }
 }
+
+.person-name-field { display: flex; flex-direction: column; gap: var(--work-center-space-2); font-size: 13px; }
+.person-name-field input { width: 100%; box-sizing: border-box; padding: var(--work-center-space-3); border: 1px solid var(--border-color); border-radius: var(--agent-setup-control-radius); color: var(--text-primary); background: var(--bg-main); font: inherit; }
+.person-name-field input:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+.person-model-fields { display: flex; flex-direction: column; gap: var(--work-center-space-3); }

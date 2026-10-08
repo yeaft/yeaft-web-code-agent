@@ -54,6 +54,12 @@ async function mockPersonSocket(page) {
           { id: 'script-cancelled', seq: 23, episodeId: 'script', kind: 'cancelled' },
         ];
         reply({ items: request.payload.cursor ? [{ id: 'trace-older', seq: 0, episodeId: 'older', kind: 'accepted', trigger: { kind: 'think', text: 'Earlier question' }, createdAt: 1 }] : [...personRecords(), ...capabilityRecords], nextCursor: request.payload.cursor ? null : 'trace-page-2' });
+      } else if (request.op === 'inspect') {
+        reply({ items: request.payload.section === 'memory'
+          ? [{ id: 'curiosity', kind: 'interest', statement: 'An interest saved in memory. <script>text only</script>', revision: 2, epistemicState: 'hypothesis', sourceRefs: ['message:older'] }]
+          : [{ id: 'Script.sum', domain: 'script', description: 'Sum numbers', version: 1, code: 'return input.reduce((a,b)=>a+b,0)' }], nextCursor: null });
+      } else if (request.op === 'search') {
+        reply({ items: [{ id: 'archived', role: 'user', text: 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
         if (unknownCommand) { unknownCommand = false; reply(null, { ok: false, error: 'Unknown outcome', errorCode: 'outcome_unknown' }); return; }
         if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
@@ -82,6 +88,8 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(page.locator('.person-page')).toBeVisible();
     await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
     await expect(page.locator('.person-header h1')).toHaveText('Ada');
+    await expect(page.locator('.person-page .theme-toggle')).toHaveCount(0);
+    await expect(page.locator('.person-breadcrumb #person-agent')).toBeVisible();
     await expect(page.locator('.person-views, .person-page .session-tab-bar, .person-manual-hint, .person-attachment-policy')).toHaveCount(0);
     await expect(page.locator('.person-status')).toContainText(zh ? '等待你发起' : 'Waiting for you');
     expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
@@ -133,7 +141,7 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await page.getByRole('button', { name: zh ? '加载更早消息' : 'Load older messages' }).click();
     await expect(page.locator('.person-messages')).toContainText('Older persisted message');
     await page.screenshot({ path: testInfo.outputPath(`person-messages-${scenario.width}.png`) });
-    await page.getByRole('button', { name: zh ? '思考记录' : 'Thought journal', exact: true }).click();
+    await page.getByRole('button', { name: zh ? '数字人内核' : 'Inside the digital person', exact: true }).click();
     const thoughts = page.locator('#person-thoughts');
     await expect(page.locator('#person-conversation')).toBeVisible();
     if (scenario.width > 900) {
@@ -143,7 +151,7 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     } else {
       await expect(page.locator('#person-side-panel')).toHaveAttribute('aria-modal', 'true');
       await expect(page.locator('#person-conversation')).toHaveAttribute('inert', '');
-      const first = page.locator('.person-debug-link');
+      const first = page.locator('.person-panel-header .header-action-btn');
       const last = thoughts.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' });
       await first.focus(); await page.keyboard.press('Shift+Tab'); await expect(last).toBeFocused();
       await page.keyboard.press('Tab'); await expect(first).toBeFocused();
@@ -206,8 +214,33 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
         await page.locator('.person-thoughts-button').click();
       }
     }
+    const innerNav = page.locator('.person-inspector-nav');
+    await innerNav.getByRole('button', { name: zh ? '记忆' : 'Memory', exact: true }).click();
+    await expect(page.locator('.person-knowledge')).toContainText('An interest saved in memory.');
+    await page.locator('.person-knowledge-item > summary').click();
+    await expect(page.locator('.person-knowledge')).toContainText(zh ? '假设' : 'Hypothesis');
+    await expect(page.locator('.person-knowledge script')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`person-memory-${scenario.width}-${scenario.theme}.png`) });
+    await innerNav.getByRole('button', { name: zh ? '技能与能力' : 'Skills & capabilities', exact: true }).click();
+    await expect(page.locator('.person-knowledge')).toContainText('Script.sum');
+    await page.locator('.person-panel-header .header-action-btn').click();
+    await input.fill('A preserved draft');
+    await page.locator('.person-search-button').click();
+    const searchInput = page.locator('.person-search-form input');
+    await expect(searchInput).toBeFocused();
+    await searchInput.fill('archive');
+    await searchInput.press('Enter');
+    await expect(page.locator('.person-search-result')).toContainText('A message from the durable archive.');
+    await expect(page.locator('.person-search-result img')).toHaveCount(0);
+    await expect(page.locator('.person-messages')).not.toContainText('durable archive');
+    await page.screenshot({ path: testInfo.outputPath(`person-search-${scenario.width}-${scenario.theme}.png`) });
+    await page.locator('.person-panel-header .header-action-btn').click();
+    await expect(page.locator('.person-search-button')).toBeFocused();
+    await expect(input).toHaveValue('A preserved draft');
+    await input.fill('');
+    await page.locator('.person-thoughts-button').click();
     await page.locator('.person-panel-header').getByRole('button', { name: zh ? '关闭' : 'Close', exact: true }).click();
-    await expect(page.getByRole('button', { name: zh ? '思考记录' : 'Thought journal', exact: true })).toBeFocused();
+    await expect(page.getByRole('button', { name: zh ? '数字人内核' : 'Inside the digital person', exact: true })).toBeFocused();
     await page.getByRole('button', { name: zh ? '思考' : 'Think', exact: true }).click();
     await expect.poll(() => mock.requests.filter(r => r.op === 'think').length).toBe(1);
     expect(mock.requests.find(r => r.op === 'think').payload.text).toBe('');
