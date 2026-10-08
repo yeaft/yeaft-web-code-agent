@@ -2,6 +2,8 @@
  * Request correlation lives outside Pinia serialization. No command is retried
  * automatically; an uncertain command keeps its original clientMessageId.
  */
+import { personActivityRecords } from '../../utils/person-activity.js';
+
 const channels = new WeakMap();
 const outboxes = new WeakMap();
 const PAGE_SIZE = 50;
@@ -42,6 +44,7 @@ export function personState() {
     messages: [], traces: [], busy: false, episodeId: null, error: null,
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
     commandPending: false, cancelPending: false, retryCommand: null, tracesStale: false,
+    activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false,
     models: [], modelCandidates: [], settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
   };
@@ -70,6 +73,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let snapshotRequest = 0;
   let messageWindowVersion = 0;
   let tracePaged = false;
+  let traceHistoryLoading = false;
+  let activityRequest = 0;
   let traceRefreshVersion = 0;
   let queuedTraceRefresh = null;
   let disposed = false;
@@ -111,6 +116,13 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   function reset(nextAgentId = '') {
+    // Keep only allowlisted progress while this same identity is unreachable.
+    // Disconnect does not cancel Agent work; never transfer it to another owner.
+    const unavailable = ['disconnected', 'offline'].includes(digitalPersonGate(chat, nextAgentId));
+    const progress = nextAgentId === agentId && activeScope === scope() && unavailable ? {
+      activityRecords: state.activityRecords, activityEpisodeId: state.episodeId || state.activityEpisodeId,
+      latestEpisode: state.latestEpisode, busy: state.busy, activityStale: true, progressStale: true,
+    } : {};
     generation += 1;
     clearTimeout(poll);
     poll = null;
@@ -123,15 +135,23 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     agentId = nextAgentId;
     activeScope = scope();
     tracePaged = false;
+    traceHistoryLoading = false;
+    activityRequest += 1;
     traceRefreshVersion = 0;
     queuedTraceRefresh = null;
-    Object.assign(state, personState(), { retryCommand: outbox().get(agentId) || null });
+    Object.assign(state, personState(), progress, { retryCommand: outbox().get(agentId) || null });
   }
 
   async function snapshot() {
     const g = generation;
     const requestNumber = ++snapshotRequest;
-    const data = await request('snapshot');
+    let data;
+    try { data = await request('snapshot'); }
+    catch (error) {
+      if (!current(g) || requestNumber !== snapshotRequest) return;
+      state.progressStale = true;
+      throw error;
+    }
     if (!current(g) || requestNumber !== snapshotRequest) return;
     state.person = data.person;
     state.modelCandidates = data.person?.settings?.modelCandidates || [];
@@ -156,6 +176,26 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
     state.busy = data.busy === true;
     state.episodeId = data.episodeId || null;
+    state.activityEpisodeId = state.episodeId || state.latestEpisode?.id || state.activityEpisodeId;
+    state.progressStale = false;
+  }
+
+  // Automatic activity reads must not wait for a slow diagnostic-history page.
+  // They own no history cursor/window and share a latest-request fence with
+  // ordinary latest reads so an older response cannot overwrite live progress.
+  async function activityTail() {
+    const g = generation;
+    const requestNumber = ++activityRequest;
+    try {
+      const data = await request('traces', { cursor: null, limit: PAGE_SIZE });
+      if (!current(g) || requestNumber !== activityRequest) return;
+      state.activityRecords = personActivityRecords(data.items);
+      state.activityStale = false;
+    } catch (error) {
+      if (!current(g) || requestNumber !== activityRequest) return;
+      state.activityStale = true;
+      showError(error);
+    }
   }
 
   async function page(kind, more = false, { preserveHistory = false } = {}) {
@@ -166,33 +206,46 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     if (kind === 'traces' && !more) {
       traceRefreshVersion += 1;
       state.tracesStale = true;
+      if (preserveHistory && (tracePaged || traceHistoryLoading)) return activityTail();
       if (state.tracesLoading) {
         // Coalesce newer demands, but never let an automatic poll override an
         // explicit refresh. An in-flight pre-terminal read cannot satisfy them.
         if (!queuedTraceRefresh || !preserveHistory) queuedTraceRefresh = { preserveHistory };
         return;
       }
-      if (preserveHistory && tracePaged) return;
     }
     if (state[loadingKey] || (more && state[cursorKey] == null)) return;
     state[loadingKey] = true;
+    if (kind === 'traces' && more) traceHistoryLoading = true;
+    const activityVersion = kind === 'traces' && !more ? ++activityRequest : null;
     const traceVersion = traceRefreshVersion;
     const windowVersion = kind === 'messages' && !more ? ++messageWindowVersion : messageWindowVersion;
     try {
       const data = await request(kind, { cursor: more ? state[cursorKey] : null, limit: PAGE_SIZE });
       if (!current(g) || (kind === 'messages' && windowVersion !== messageWindowVersion)) return;
-      state[kind] = mergeRows(more ? state[kind] : [], data.items);
-      state[cursorKey] = data.nextCursor ?? null;
-      if (kind === 'traces') {
+      const keepTraceWindow = kind === 'traces' && !more && preserveHistory && tracePaged;
+      if (!keepTraceWindow) {
+        state[kind] = mergeRows(more ? state[kind] : [], data.items);
+        state[cursorKey] = data.nextCursor ?? null;
+      }
+      if (kind === 'traces' && !more && activityVersion === activityRequest && traceVersion === traceRefreshVersion) {
+        state.activityRecords = personActivityRecords(data.items);
+        state.activityStale = false;
+      }
+      if (kind === 'traces' && !keepTraceWindow) {
         tracePaged = more;
         // Older pages extend history, not our knowledge of the latest tail.
         if (!more && traceVersion === traceRefreshVersion) state.tracesStale = false;
       }
     } catch (error) {
-      if (current(g)) showError(error);
+      if (current(g)) {
+        if (kind === 'traces' && !more && activityVersion === activityRequest) state.activityStale = true;
+        showError(error);
+      }
     } finally {
       if (current(g)) {
         state[loadingKey] = false;
+        if (kind === 'traces' && more) traceHistoryLoading = false;
         if (kind === 'traces' && queuedTraceRefresh) {
           const queued = queuedTraceRefresh;
           queuedTraceRefresh = null;
@@ -328,6 +381,9 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       state.retryCommand = null;
       snapshotRequest += 1; // An older in-flight idle snapshot cannot undo this acknowledgement.
       state.episodeId = data.episodeId || null;
+      state.activityEpisodeId = state.episodeId;
+      state.activityStale = false;
+      state.progressStale = false;
       state.busy = !data.status || ['accepted', 'running'].includes(data.status);
       // Poll rather than treating the acknowledgement as a completed model turn.
       schedule();

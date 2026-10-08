@@ -6,6 +6,7 @@ import { acceptPersonResponse } from '../../web/stores/helpers/digital-person.js
 import DigitalPersonPage from '../../web/components/DigitalPersonPage.js';
 import SidebarDigitalPerson from '../../web/components/SidebarDigitalPerson.js';
 import PersonThoughtJournal from '../../web/components/PersonThoughtJournal.js';
+import PersonActivity from '../../web/components/PersonActivity.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
@@ -15,7 +16,7 @@ let wrapper;
 let chat;
 let configured;
 let requests;
-const t = key => en[key] || key;
+const t = (key, params = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (match, name) => String(params[name] ?? match));
 beforeEach(() => {
   configured = true;
   requests = [];
@@ -228,8 +229,9 @@ describe('Digital Person surface', () => {
     wrapper.vm.state.commandPending = true;
     await Vue.nextTick();
     expect(wrapper.get('.person-response-loading').attributes('role')).toBe('status');
-    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('person.busy'));
-    expect(wrapper.get('.person-response-loading').findAll('span[aria-hidden="true"]')).toHaveLength(3);
+    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('person.activity.confirming'));
+    expect(wrapper.get('.person-response-loading').text()).toContain(t('person.activity.confirming'));
+    expect(wrapper.get('.person-response-loading').findAll('.typing-indicator > span')).toHaveLength(3);
     expect(wrapper.find('.person-status').exists()).toBe(false);
     expect(wrapper.find('.message-composer-spinner').exists()).toBe(true);
     expect(wrapper.find('.stop-btn').exists()).toBe(false); // No episode to stop before admission.
@@ -246,11 +248,12 @@ describe('Digital Person surface', () => {
     wrapper.vm.state.cancelPending = true;
     await Vue.nextTick();
     expect(wrapper.get('.stop-btn').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('person.cancelling'));
+    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('person.activity.stopping'));
     wrapper.vm.state.cancelPending = false;
     chat.connectionState = 'reconnecting';
     await Vue.nextTick();
-    expect(wrapper.find('.person-response-loading, .stop-btn').exists()).toBe(false);
+    expect(wrapper.find('.person-response-loading, .person-activity .typing-indicator, .stop-btn').exists()).toBe(false);
+    expect(wrapper.get('.person-activity-status').text()).toContain(t('person.activity.disconnected'));
     expect(wrapper.get('.person-connection-notice').text()).toContain(t('person.disconnected'));
   });
 
@@ -263,6 +266,24 @@ describe('Digital Person surface', () => {
     await Vue.nextTick();
     expect(wrapper.find('.person-response-loading, .message-composer-spinner, .stop-btn').exists()).toBe(false);
     expect(wrapper.find('.person-status, .person-status-dot, .person-connection-notice').exists()).toBe(false);
+    expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
+  });
+
+  it('keeps a completed round in the reply position with collapsed activity', async () => {
+    await render();
+    wrapper.vm.state.latestEpisode = { id: 'finished', status: 'completed', startedAt: 1000, endedAt: 3000 };
+    wrapper.vm.state.activityRecords = [
+      { id: 'accepted', episodeId: 'finished', kind: 'accepted', trigger: 'send', at: 1000 },
+      { id: 'model', episodeId: 'finished', kind: 'call_started', callId: 'call', at: 1000 },
+      { id: 'output', episodeId: 'finished', kind: 'call_output', callId: 'call', at: 3000 },
+    ];
+    await Vue.nextTick();
+    expect(wrapper.get('.person-activity-status').text()).toBe(t('person.activity.completed'));
+    expect(wrapper.get('details.person-activity').attributes('open')).toBeUndefined();
+    expect(wrapper.get('.person-activity-row-status').text()).toBe(t('person.activity.status.completed'));
+    expect(wrapper.find('.person-response-loading, .person-activity .typing-indicator').exists()).toBe(false);
+    expect(wrapper.get('.person-reading-column .person-activity').exists()).toBe(true);
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
   });
@@ -507,5 +528,78 @@ describe('Digital Person surface', () => {
     expect(requests.map(r => r.op)).toEqual(['status']);
     expect(wrapper.find('input[type="password"]').exists()).toBe(false);
     for (const key of Object.keys(en).filter(key => key.startsWith('person.'))) expect(zhCN[key]).toBeTruthy();
+  });
+});
+
+let activityWrapper;
+afterEach(() => activityWrapper?.unmount());
+const translator = messages => (key, params = {}) => (messages[key] || key).replace(/\{(\w+)\}/g, (match, name) => String(params[name] ?? match));
+const activityProject = overrides => ({ visible: true, loading: true, label: 'person.activity.thinking', params: {}, episodeId: 'episode', rows: [], startedAt: null, endedAt: null, limited: false, ...overrides });
+const renderActivity = (activity, messages = en) => {
+  activityWrapper = mount(PersonActivity, { props: { activity }, global: { mocks: { $t: translator(messages) } } });
+};
+
+describe('Person activity', () => {
+  it('shows one readable loading line without an empty disclosure or invented timer', async () => {
+    renderActivity(activityProject());
+    const status = activityWrapper.get('.person-response-loading');
+    expect(status.attributes()).toMatchObject({ role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true', 'aria-label': en['person.activity.thinking'] });
+    expect(status.text()).toBe(en['person.activity.thinking']);
+    expect(status.find('.typing-indicator').attributes('aria-hidden')).toBe('true');
+    expect(status.findAll('.typing-indicator > span')).toHaveLength(3);
+    expect(activityWrapper.find('details, summary, time, .person-activity-elapsed').exists()).toBe(false);
+    await activityWrapper.setProps({ activity: activityProject({ visible: false }) });
+    expect(activityWrapper.find('.person-activity').exists()).toBe(false);
+  });
+
+  it.each([en, zhCN])('defaults to a native collapsed disclosure with safe names, localized statuses and durations', messages => {
+    const name = 'Script.' + 'very-long-name-'.repeat(30) + '<img src=x onerror=alert(1)>';
+    const statuses = ['running', 'completed', 'failed', 'cancelled', 'interrupted', 'unknown'];
+    renderActivity(activityProject({ rows: statuses.map((status, index) => ({ id: `${index}`, label: 'person.activity.script', params: { name }, status, durationMs: index === 0 ? null : index === 1 ? 62500 : 5000 })), limited: true }), messages);
+    expect(activityWrapper.element.tagName).toBe('DETAILS');
+    expect(activityWrapper.attributes('open')).toBeUndefined();
+    expect(activityWrapper.get('summary').text()).toContain(messages['person.activity.details']);
+    expect(activityWrapper.findAll('summary')).toHaveLength(1);
+    expect(activityWrapper.findAll('li')).toHaveLength(6);
+    expect(activityWrapper.get('li').text()).toContain(name);
+    for (const status of statuses) expect(activityWrapper.text()).toContain(messages['person.activity.status.' + status]);
+    const duration = translator(messages)('person.activity.durationMinutes', { minutes: 1, seconds: 2 });
+    expect(activityWrapper.text()).toContain(translator(messages)('person.activity.elapsed', { duration }));
+    expect(activityWrapper.text()).toContain(messages['person.activity.limited']);
+    expect(activityWrapper.find('img, script, pre, .tool-line').exists()).toBe(false);
+    expect(activityWrapper.text()).not.toContain('person.activity.');
+    expect(activityWrapper.get('.person-activity-status').find('.person-activity-elapsed').exists()).toBe(false);
+    expect(activityWrapper.get('.person-activity-rows').attributes('aria-live')).toBeUndefined();
+  });
+
+  it('keeps the end-of-round summary and details without treating one capability result as the whole task', async () => {
+    const row = { id: 'script', label: 'person.activity.script', params: { name: 'Script.sum' }, status: 'completed', durationMs: 1200 };
+    renderActivity(activityProject({ rows: [row] }));
+    expect(activityWrapper.get('.person-response-loading').text()).toBe(en['person.activity.thinking']);
+    expect(activityWrapper.get('.person-activity-row-status').text()).toBe(en['person.activity.status.completed']);
+    await activityWrapper.setProps({ activity: activityProject({ label: 'person.activity.completed', loading: false, rows: [row] }) });
+    expect(activityWrapper.get('.person-activity-status').text()).toBe(en['person.activity.completed']);
+    expect(activityWrapper.find('.person-response-loading, .typing-indicator').exists()).toBe(false);
+    expect(activityWrapper.get('summary').exists()).toBe(true);
+  });
+
+  it.each(['stale', 'disconnected', 'uncertain'])('retains unknown progress without loading motion for %s', state => {
+    renderActivity(activityProject({ label: 'person.activity.' + state, loading: false, rows: [{ id: 'model', label: 'person.activity.model', params: {}, status: 'unknown', durationMs: null }] }));
+    expect(activityWrapper.get('[role="status"]').text()).toBe(en['person.activity.' + state]);
+    expect(activityWrapper.find('.typing-indicator, .person-response-loading').exists()).toBe(false);
+    expect(activityWrapper.get('li').text()).toContain(en['person.activity.status.unknown']);
+  });
+
+  it('does not show invalid durations and can disclose a limited projection with no remaining rows', () => {
+    renderActivity(activityProject({ loading: false, limited: true, rows: [-1, Infinity, undefined].map((durationMs, id) => ({ id, label: 'person.activity.model', params: {}, status: 'completed', durationMs })) }));
+    expect(activityWrapper.find('.person-activity-elapsed').exists()).toBe(false);
+    expect(activityWrapper.get('summary').exists()).toBe(true);
+  });
+
+  it('provides matching summary, row, status and timing keys in both languages', () => {
+    const keys = Object.keys(en).filter(key => key.startsWith('person.activity.'));
+    expect(keys).toHaveLength(40);
+    for (const key of keys) expect(zhCN[key]).toBeTruthy();
+    expect(Object.keys(zhCN).filter(key => key.startsWith('person.activity.')).sort()).toEqual(keys.sort());
   });
 });
