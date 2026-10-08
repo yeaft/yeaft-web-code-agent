@@ -54,9 +54,9 @@ export function createPersonService(options = {}) {
     if (typeof op !== 'string') fail('INVALID_REQUEST');
     if (op === 'status') {
       object(payload, []);
-      if (!configured) return { configured: false, storage, reason: 'Digital person storage configuration is missing.', storageReady: false, modelReady: false };
+      if (!configured) return { renameSupported: true, configured: false, storage, reason: 'Digital person storage configuration is missing.', storageReady: false, modelReady: false };
       try { await repository.init(); }
-      catch (error) { return { configured: true, storage, reason: safeError(error).message, storageReady: false, modelReady: false }; }
+      catch (error) { return { renameSupported: true, configured: true, storage, reason: safeError(error).message, storageReady: false, modelReady: false }; }
       let modelCandidates = [];
       try { modelCandidates = (await repository.getPerson(ownerId)).settings.modelCandidates ?? []; }
       catch (error) { if (error.code !== 'NOT_OPEN') throw error; }
@@ -67,10 +67,10 @@ export function createPersonService(options = {}) {
           validateModelCandidates(modelCandidates);
           if (modelCandidates.some(ref => !provider.availableModels.some(model => model.id === ref))) modelReady = false;
         } catch { modelReady = false; }
-        return { configured: true, storage, reason: modelReady ? null : 'Saved model candidates are unavailable; choose models or reset to Agent defaults.',
+        return { renameSupported: true, configured: true, storage, reason: modelReady ? null : 'Saved model candidates are unavailable; choose models or reset to Agent defaults.',
           storageReady: true, modelReady, models: provider.availableModels, availableModels: provider.availableModels,
           availableModelsTruncated: provider.availableModelsTruncated, modelCandidates, autonomySupported: false };
-      } catch { return { configured: true, storage, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false, models: [], availableModels: [], modelCandidates }; }
+      } catch { return { renameSupported: true, configured: true, storage, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false, models: [], availableModels: [], modelCandidates }; }
     }
     if (!configured) fail('NOT_CONFIGURED');
     switch (op) {

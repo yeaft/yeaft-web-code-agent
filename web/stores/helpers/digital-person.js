@@ -40,7 +40,7 @@ export function personState() {
     messages: [], traces: [], busy: false, episodeId: null, error: null,
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
     commandPending: false, cancelPending: false, retryCommand: null, tracesStale: false,
-    models: [], modelCandidates: [], settingsPending: false,
+    models: [], modelCandidates: [], settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
   };
 }
@@ -233,6 +233,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       state.storageReady = status.storageReady !== false;
       state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';
+      state.renameSupported = status.renameSupported === true;
       state.models = status.availableModels || status.models || [];
       state.modelCandidates = status.modelCandidates || [];
       if (!state.configured || !state.storageReady) return;
@@ -262,6 +263,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       state.storageReady = status.storageReady !== false;
       state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';
+      state.renameSupported = status.renameSupported === true;
       state.models = status.availableModels || status.models || [];
       state.modelCandidates = status.modelCandidates || [];
       if (!state.configured || !state.storageReady) return;
@@ -398,6 +400,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       // A candidate correction can recover model readiness without reopening the page.
       const status = await request('status');
       if (!current(g)) return false;
+      state.renameSupported = status.renameSupported === true;
       state.models = status.availableModels || status.models || [];
       state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';

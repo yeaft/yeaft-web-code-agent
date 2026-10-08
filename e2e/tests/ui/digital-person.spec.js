@@ -11,6 +11,7 @@ async function mockPersonSocket(page, { longReading = false } = {}) {
   const messages = [];
   let socket;
   let configured = true;
+  let renameSupported = true;
   let busy = false;
   let saveSettings;
   let failTraces = false;
@@ -35,7 +36,7 @@ async function mockPersonSocket(page, { longReading = false } = {}) {
       if (request.type !== 'person_request') { server.send(message); return; }
       requests.push(request);
       const reply = (data, extra = {}) => route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data, ...extra }));
-      if (request.op === 'status') reply({ configured, reason: configured ? '' : 'MongoDB is not configured', models });
+      if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'MongoDB is not configured', models });
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
       else if (request.op === 'snapshot') {
         reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea' }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: request.agentId === 'person-a' ? messages : [], busy, episodeId: busy ? 'episode-1' : null });
@@ -68,7 +69,7 @@ async function mockPersonSocket(page, { longReading = false } = {}) {
       else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
     });
   });
-  return { requests, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+  return { requests, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
 }
 
 for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 1280, theme: 'dark', locale: 'zh-CN' }, { width: 320, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }, { width: 800, theme: 'light', locale: 'en' }]) {
@@ -134,10 +135,30 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     expect(mock.requests.find(r => r.op === 'send').payload.attachments).toEqual([{ fileId: expect.any(String) }, { fileId: expect.any(String) }]);
     await expect(page.locator('.attachments-preview')).toHaveCount(0);
     await expect(input).toBeDisabled();
+    const loading = page.locator('.person-response-loading');
+    await expect(loading).toBeVisible();
+    await expect(loading).toHaveAttribute('role', 'status');
+    await expect(page.locator('.person-header')).not.toContainText(zh ? '处理中' : 'Processing');
+    await expect(page.locator('.person-header')).not.toContainText(zh ? '取消' : 'Cancel');
+    await expect(page.locator('.person-composer .message-composer-spinner')).toBeVisible();
+    await expect(page.locator('.person-conversation .tool-line, .person-conversation .person-debug-row')).toHaveCount(0);
+    const dot = loading.locator('span').first();
+    expect(await dot.evaluate(el => getComputedStyle(el).animationName)).toBe('typing');
+    expect(await dot.evaluate(el => getComputedStyle(el).backgroundColor)).toBe(await dot.evaluate(el => {
+      const sample = document.createElement('div');
+      sample.style.color = 'var(--text-secondary)';
+      el.append(sample);
+      const color = getComputedStyle(sample).color;
+      sample.remove();
+      return color;
+    }));
+    await page.screenshot({ path: testInfo.outputPath(`person-loading-${scenario.width}-${scenario.theme}.png`) });
     await expect(page.locator('.person-messages')).toContainText('Recorded mock response.');
     await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
-    await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+    await page.locator('.person-composer').getByRole('button', { name: zh ? '停止执行' : 'Stop execution', exact: true }).click();
     await expect(input).toBeEnabled();
+    await expect(loading).toHaveCount(0);
+    await expect(page.locator('.person-composer .stop-btn, .person-composer .message-composer-spinner')).toHaveCount(0);
     await page.getByRole('button', { name: zh ? '加载更早消息' : 'Load older messages' }).click();
     await expect(page.locator('.person-messages')).toContainText('Older persisted message');
     await page.screenshot({ path: testInfo.outputPath(`person-messages-${scenario.width}.png`) });
@@ -244,11 +265,11 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await page.getByRole('button', { name: zh ? '思考' : 'Think', exact: true }).click();
     await expect.poll(() => mock.requests.filter(r => r.op === 'think').length).toBe(1);
     expect(mock.requests.find(r => r.op === 'think').payload.text).toBe('');
-    await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+    await page.locator('.person-composer').getByRole('button', { name: zh ? '停止执行' : 'Stop execution', exact: true }).click();
     await expect(input).toBeEnabled();
     await page.getByRole('button', { name: zh ? '遐想' : 'Dream', exact: true }).click();
     await expect.poll(() => mock.requests.filter(r => r.op === 'dream').length).toBe(1);
-    await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+    await page.locator('.person-composer').getByRole('button', { name: zh ? '停止执行' : 'Stop execution', exact: true }).click();
     await page.getByRole('combobox', { name: zh ? 'Agent' : 'Agent', exact: true }).click();
     const agentMenu = page.locator('.modern-select-menu');
     expect(await agentMenu.evaluate(el => parseFloat(getComputedStyle(el).borderRadius))).toBeGreaterThan(0);
@@ -301,6 +322,14 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.keyboard.press('Escape');
     await expect(page.locator('.person-settings-button')).toBeFocused();
+    mock.setRenameSupported(false);
+    await page.locator('.person-header').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();
+    await expect(input).toBeEnabled();
+    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
+    await expect(page.getByLabel(zh ? '名字' : 'Name', { exact: true })).toBeDisabled();
+    await expect(page.getByRole('dialog')).toContainText(zh ? '请升级 Agent' : 'Upgrade the Agent');
+    await expect(page.locator('.person-model-default input')).toBeEnabled();
+    await page.keyboard.press('Escape');
     await page.locator('.person-navigation button').first().click();
     await expect(page.locator('.chat-page')).toBeVisible();
   });

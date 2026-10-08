@@ -68,6 +68,14 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(a => a.id === id && a.capabilities?.includes('digital_person')), mockAgent.agentId);
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('#person-input')).toBeEnabled();
+    // Name-only patch must reach the real service and persist without editing candidates.
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    let rename = page.getByRole('dialog');
+    await rename.getByLabel('Name', { exact: true }).fill('知微');
+    await rename.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(rename).toHaveCount(0);
+    await expect(page.locator('.person-breadcrumb h1')).toHaveText('知微');
+    expect(calls).toBe(0);
     await page.locator('#person-input').fill('Recall our discussion about a curious digital person.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.locator('.person-messages')).toContainText(reply);
@@ -89,6 +97,7 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await expect(page.locator('.person-messages')).toContainText(reply);
     await expect(page.locator('.person-status')).toContainText('Waiting for you');
     expect(calls).toBe(5);
+    await expect(page.locator('.person-breadcrumb h1')).toHaveText('知微');
     expect(requests[0].capabilities.active.find(c => c.id === 'Recall').availability.layer).toBe('foundation');
     expect(requests[3].capabilities.active.find(c => c.id === 'Skill.reconsider').availability.layer).toBe('discovered');
     await page.getByRole('button', { name: 'Dream', exact: true }).click();
@@ -125,6 +134,13 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await expect(dialog).toHaveCount(0);
     await expect(page.locator('.person-breadcrumb h1')).toHaveText('Mira');
     expect(calls).toBe(12); // Reading/saving candidates never starts cognition.
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    rename = page.getByRole('dialog');
+    await rename.getByLabel('Name', { exact: true }).fill('知微 Mira');
+    await rename.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(rename).toHaveCount(0);
+    await expect(page.locator('.person-breadcrumb h1')).toHaveText('知微 Mira');
+    expect(calls).toBe(12);
     await page.locator('input[type="file"]').setInputFiles({ name: 'reference.txt', mimeType: 'text/plain', buffer: Buffer.from('Private uploaded context marker.') });
     await expect(page.locator('.attachments-preview')).toContainText('reference.txt');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -142,7 +158,7 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('#person-input')).toBeEnabled();
     await expect(page.locator('.person-sent-files')).toContainText('reference.txt');
-    await expect(page.locator('.person-breadcrumb h1')).toHaveText('Mira');
+    await expect(page.locator('.person-breadcrumb h1')).toHaveText('知微 Mira');
     await page.locator('.person-search-button').click();
     await page.locator('.person-search-form input').fill('Reuse the sum');
     await page.locator('.person-search-form input').press('Enter');

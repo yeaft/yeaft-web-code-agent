@@ -23,6 +23,7 @@ export default {
   "person.filesUnsupported": "Supported: UTF-8 text, code, JSON, CSV and PNG/JPEG/WebP/GIF images. PDF and other binary files are not supported yet.",
   "person.filesFailed": "Upload failed. Retry or remove the file before sending.",
   "person.name": "Name",
+  "person.renameUpgrade": "This Agent does not support renaming yet. Upgrade the Agent to edit the name.",
   "person.nameInvalid": "Enter a name (up to 160 UTF-8 bytes).",
   "person.inside": "Inside the digital person",
   "person.overview": "Overview",

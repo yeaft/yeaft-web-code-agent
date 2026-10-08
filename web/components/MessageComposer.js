@@ -9,6 +9,7 @@ export default {
     canSend: { type: Boolean, default: false },
     sending: { type: Boolean, default: false },
     showStop: { type: Boolean, default: false },
+    stopDisabled: { type: Boolean, default: false },
     // Opt-in keeps other consumers' keyboard handling unchanged. Parent keydown
     // handlers (autocomplete / quick-send) run first and may preventDefault().
     keyboardSend: { type: Boolean, default: false },
@@ -226,6 +227,7 @@ export default {
             type="button"
             class="send-btn stop-btn"
             @click="$emit('stop')"
+            :disabled="stopDisabled"
             :title="stopLabel"
             :aria-label="stopLabel"
           >

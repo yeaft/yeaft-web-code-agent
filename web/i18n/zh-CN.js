@@ -23,6 +23,7 @@ export default {
   "person.filesUnsupported": "支持 UTF-8 文本、代码、JSON、CSV 和 PNG/JPEG/WebP/GIF 图片，暂不支持 PDF 等其他二进制文件。",
   "person.filesFailed": "上传失败，请重试或移除文件后再发送。",
   "person.name": "名字",
+  "person.renameUpgrade": "当前 Agent 尚不支持修改名字，请升级 Agent 后再修改。",
   "person.nameInvalid": "请输入名字（最多 160 UTF-8 字节）。",
   "person.inside": "数字人内核",
   "person.overview": "概览",

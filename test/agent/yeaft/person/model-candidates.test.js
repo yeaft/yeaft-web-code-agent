@@ -39,6 +39,7 @@ describe('owner-scoped model candidates', () => {
     expect((await call(s, 'status')).modelCandidates).toEqual([]);
     await call(s, 'open'); await call(s, 'open', {}, 'bob');
     const status = await call(s, 'status');
+    expect(status.renameSupported).toBe(true);
     expect(status.models).toHaveLength(12);
     expect(status.availableModels).toEqual(status.models);
     expect(status.availableModelsTruncated).toBe(false);
@@ -198,6 +199,47 @@ for (const backend of ['sqlite', 'mongo']) {
       expect((await call(s, 'settings', { name: 'a'.repeat(160), modelCandidates: [] })).person.name).toHaveLength(160);
       await s.close();
       expect((await call(service(), 'snapshot')).person.name).toHaveLength(160);
+      expect(stream).not.toHaveBeenCalled();
+    });
+
+    it('applies name-only repository and service patches without replacing durable settings or cognition', async () => {
+      const s = service(), r = repo(), other = repo('other');
+      await call(s, 'open'); await r.open('bob'); await other.open('alice');
+      await call(s, 'settings', { modelCandidates: ['test/first'], autonomyEnabled: false });
+      // Unknown durable settings must survive updates, but never appear in public
+      // responses/traces. Public projection is not a persistence merge base.
+      const savedSettings = { autonomyEnabled: false, modelCandidates: ['test/first'], internal: { token: 'private-setting' } };
+      await patchRecord(r, 'persons', { settings: savedSettings });
+      const { episode } = await admission(r);
+      await r.finish(episode, 'completed');
+      const before = await raw(r), snapshot = await call(s, 'snapshot');
+      const direct = await r.settings('alice', { name: '  Repository name  ' });
+      expect(direct.person.name).toBe('Repository name');
+      expect(direct.settings).toEqual({ autonomyEnabled: false, modelCandidates: ['test/first'] });
+      expect((await raw(r)).settings).toEqual(savedSettings);
+      const noModel = service('default', { config: { availableModels: [], providers: [] } });
+      const renamed = await call(noModel, 'settings', { name: '  服务名字  ' });
+      expect(renamed.person).toEqual({ ...snapshot.person, name: '服务名字' });
+      expect((await raw(r)).settings).toEqual(savedSettings);
+      expect(JSON.stringify([direct, renamed, await call(s, 'traces')])).not.toContain('private-setting');
+      const after = await raw(r);
+      for (const key of ['personId', 'soul', 'soulRevision', 'createdAt', 'stateVersion', 'messageSeq', 'epoch', 'capabilityExperience']) {
+        expect(after[key]).toEqual(before[key]);
+      }
+      expect((await call(s, 'snapshot')).state).toEqual(snapshot.state);
+      expect((await call(s, 'messages')).items).toEqual(snapshot.messages);
+      expect((await r.getPerson('bob')).name).toBe('Digital Person');
+      expect((await other.getPerson('alice')).name).toBe('Digital Person');
+      await expect(call(s, 'settings', { name: 'intruder' }, 'unopened')).rejects.toMatchObject({ code: 'NOT_OPEN' });
+      await expect(call(s, 'settings', { name: 'intruder', ownerId: 'bob' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      expect(await raw(r)).toEqual(after);
+      // Explicit updates touch only supplied settings, including an intentional reset.
+      await call(noModel, 'settings', { modelCandidates: [] });
+      expect((await raw(r)).settings).toEqual({ ...savedSettings, modelCandidates: [] });
+      expect((await raw(r)).name).toBe('服务名字');
+      await s.close(); await noModel.close(); await r.close();
+      expect((await call(service(), 'snapshot')).person).toEqual({ ...renamed.person,
+        settings: { autonomyEnabled: false, modelCandidates: [] } });
       expect(stream).not.toHaveBeenCalled();
     });
 
