@@ -8,13 +8,15 @@ import { useComposerAttachments } from '../utils/composer-attachments.js';
 import { PERSON_FILE_ACCEPT, validatePersonFiles, uploadPersonFiles } from '../stores/helpers/person-attachments.js';
 import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
+import PersonActivity from './PersonActivity.js';
+import { projectPersonActivity } from '../utils/person-activity.js';
 import { useAuthStore } from '../stores/auth.js';
 import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
 import { createPersonController, digitalPersonGate, personState } from '../stores/helpers/digital-person.js';
 
 export default {
   name: 'DigitalPersonPage',
-  components: { UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog },
+  components: { UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -88,6 +90,7 @@ export default {
     });
     Vue.onUpdated(keepPanelFocus);
     const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
+    const activity = Vue.computed(() => projectPersonActivity(state, gate.value));
     const responding = Vue.computed(() => !gate.value && (state.busy || state.commandPending));
     const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.settingsPending && !state.retryCommand);
     const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.uploadError) ? 'person.filesFailed' : ''));
@@ -163,7 +166,7 @@ export default {
     Vue.watch(compactPanel, async compact => {
       if (compact && panel.value) { await Vue.nextTick(); closePanelButton.value?.focus(); }
     });
-    Vue.watch(() => [state.messages.at(-1)?.id, responding.value], async () => {
+    Vue.watch(() => [state.messages.at(-1)?.id, responding.value, activity.value.label, activity.value.rows.length], async () => {
       const pane = messagePane.value;
       const nearBottom = pane && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 120;
       await Vue.nextTick();
@@ -179,7 +182,7 @@ export default {
     }
     const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, returnButton, gate, ready, responding, canCompose, controller, command, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, returnButton, gate, ready, activity, responding, canCompose, controller, command, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -243,9 +246,7 @@ export default {
                   <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
                 </article>
               </template>
-              <div v-if="responding" class="typing-indicator person-response-loading" role="status" :aria-label="$t(state.cancelPending ? 'person.cancelling' : 'person.busy')">
-                <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
-              </div>
+              <PersonActivity :key="activity.episodeId || 'pending'" :activity="activity" />
             </div>
           </div>
           <div class="input-area person-composer">
