@@ -78,6 +78,8 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await expect(page.locator('#person-thoughts')).toContainText('Reconsider the available experience.');
     await expect(page.locator('#person-thoughts')).toContainText('A hypothesis is not a fact.');
     await expect(page.locator('#person-thoughts pre')).toHaveCount(0);
+    await page.locator('.person-panel-header').getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(page.locator('#person-side-panel')).toHaveCount(0);
     expect(mockAgent.conversations.size).toBe(0);
     await bridge.close(); bridge = makeBridge();
     await page.reload();

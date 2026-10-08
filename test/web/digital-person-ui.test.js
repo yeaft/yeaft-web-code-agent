@@ -49,13 +49,13 @@ describe('Digital Person surface', () => {
     await render();
     expect(wrapper.find('.session-sidebar-shell').exists()).toBe(false);
     expect(wrapper.find('[data-message-composer]').exists()).toBe(true);
-    expect(wrapper.get('.person-identity').text()).toContain(en['person.manualMode']);
-    expect(wrapper.get('.person-manual-hint').text()).toBe(en['person.manualHint']);
+    expect(wrapper.find('.person-views, .session-tab-bar, .person-manual-hint, .person-attachment-policy').exists()).toBe(false);
+    expect(wrapper.find('#person-conversation').isVisible()).toBe(true);
     expect(wrapper.get('.person-status').text()).toContain(en['person.ready']);
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
     expect(wrapper.find('.person-message img').exists()).toBe(false);
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
-    await wrapper.get('[aria-controls="person-thoughts"]').trigger('click');
+    await wrapper.get('.person-thoughts-button').trigger('click');
     const thoughts = wrapper.get('#person-thoughts');
     expect(thoughts.text()).toContain('Maybe the delay came from the final verification step.');
     expect(thoughts.text()).toContain('A repeated guess is not new evidence.');
@@ -63,8 +63,9 @@ describe('Digital Person surface', () => {
     expect(thoughts.find('script').exists()).toBe(false);
     expect(thoughts.find('pre').exists()).toBe(false);
     for (const text of ['PRIVATE SYSTEM PROMPT', 'HIDDEN REASONING', 'contextBytes', 'test/model', 'secretCatalogField']) expect(thoughts.text()).not.toContain(text);
-    expect(document.activeElement).toBe(wrapper.get('[aria-controls="person-thoughts"]').element);
-    await wrapper.get('[aria-controls="person-debug"]').trigger('click');
+    expect(document.activeElement).toBe(wrapper.get('.person-panel-header .header-action-btn').element);
+    expect(wrapper.get('#person-conversation').isVisible()).toBe(true);
+    await wrapper.get('.person-debug-link').trigger('click');
     expect(wrapper.find('#person-thoughts').exists()).toBe(false);
     expect(wrapper.get('#person-debug').text()).toContain('contextBytes');
     expect(wrapper.get('#person-debug').text()).toContain('test/model');
@@ -123,12 +124,75 @@ describe('Digital Person surface', () => {
     await input.trigger('keydown', { key: 'Enter', shiftKey: true });
     await input.trigger('keydown', { key: 'Enter', keyCode: 229 });
     expect(requests.filter(r => r.op === 'send')).toHaveLength(0);
-    await wrapper.get('[aria-controls="person-thoughts"]').trigger('click');
-    await wrapper.get('[aria-controls="person-conversation"]').trigger('click');
+    await wrapper.get('.person-thoughts-button').trigger('click');
+    await wrapper.get('.person-panel-header .header-action-btn').trigger('click');
+    await Vue.nextTick();
+    expect(document.activeElement).toBe(wrapper.get('.person-thoughts-button').element);
     expect(input.element.value).toBe('A thought in progress');
     await input.trigger('keydown', { key: 'Enter' });
     await flushPromises();
     expect(requests.filter(r => r.op === 'send')).toHaveLength(1);
+  });
+
+  it('contains focus in the mobile thought drawer, returns focus on Escape, and preserves the composer', async () => {
+    const width = window.innerWidth;
+    window.innerWidth = 320;
+    try {
+      await render();
+      await wrapper.get('#person-input').setValue('mobile draft');
+      await wrapper.get('.person-thoughts-button').trigger('click');
+      await Vue.nextTick();
+      expect(wrapper.get('#person-side-panel').attributes('aria-modal')).toBe('true');
+      expect(wrapper.get('#person-conversation').attributes('inert')).toBeDefined();
+      const first = wrapper.get('.person-debug-link');
+      first.element.focus();
+      await first.trigger('keydown', { key: 'Tab', shiftKey: true });
+      const last = wrapper.get('.person-journal .person-load-more');
+      expect(document.activeElement).toBe(last.element);
+      await last.trigger('keydown', { key: 'Tab' });
+      expect(document.activeElement).toBe(first.element);
+      await first.trigger('keydown', { key: 'Escape' });
+      await Vue.nextTick();
+      expect(wrapper.find('#person-side-panel').exists()).toBe(false);
+      expect(document.activeElement).toBe(wrapper.get('.person-thoughts-button').element);
+      expect(wrapper.get('#person-input').element.value).toBe('mobile draft');
+      await wrapper.get('.person-thoughts-button').trigger('click');
+      document.body.focus();
+      await wrapper.get('.person-panel-backdrop').trigger('click');
+      await Vue.nextTick();
+      expect(document.activeElement).toBe(wrapper.get('.person-thoughts-button').element);
+    } finally { window.innerWidth = width; }
+  });
+
+  it('shows compact panel failures and connection state without hiding the conversation draft', async () => {
+    const width = window.innerWidth;
+    window.innerWidth = 800;
+    try {
+      await render();
+      await wrapper.get('#person-input').setValue('draft');
+      await wrapper.get('.person-thoughts-button').trigger('click');
+      wrapper.vm.state.error = { message: 'Trace request failed' };
+      await Vue.nextTick();
+      expect(wrapper.get('.person-panel-error').attributes('role')).toBe('alert');
+      expect(wrapper.get('.person-panel-error').text()).toContain('Trace request failed');
+      wrapper.get('.person-panel-error button').element.focus();
+      wrapper.vm.state.error = null;
+      await Vue.nextTick();
+      expect(document.activeElement).toBe(wrapper.get('.person-panel-header .header-action-btn').element);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await Vue.nextTick();
+      expect(wrapper.find('#person-side-panel').exists()).toBe(false);
+      await wrapper.get('.person-thoughts-button').trigger('click');
+      chat.connectionState = 'reconnecting';
+      await flushPromises();
+      expect(wrapper.get('.person-panel-notice').text()).toContain(t('person.disconnected'));
+      expect(wrapper.get('.person-panel-notice button').exists()).toBe(true);
+      wrapper.get('.person-panel-notice button').element.focus();
+      chat.connectionState = 'connected';
+      await flushPromises();
+      expect(document.activeElement).toBe(wrapper.get('.person-panel-header .header-action-btn').element);
+      expect(wrapper.get('#person-input').element.value).toBe('draft');
+    } finally { window.innerWidth = width; }
   });
 
   it('exposes explicit Think even with no topic; blocks repeated command while busy', async () => {
@@ -168,7 +232,7 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('#person-input').element.value).toBe('unfinished long thought');
     chat.agents.push({ id: 'b', online: true, capabilities: ['digital_person'] });
     await Vue.nextTick();
-    await wrapper.get('#person-agent').setValue('b'); await flushPromises();
+    await wrapper.findComponent({ name: 'ModernSelect' }).vm.$emit('update:modelValue', 'b'); await flushPromises();
     expect(wrapper.get('#person-input').element.value).toBe('');
   });
 
@@ -216,7 +280,7 @@ describe('Digital Person surface', () => {
     await wrapper.get('#person-input').setValue('an instruction');
     expect(wrapper.get('.send-btn').attributes('disabled')).toBeDefined();
     chat.agents.push({ id: 'b', online: true, capabilities: ['digital_person'] });
-    await Vue.nextTick(); await wrapper.get('#person-agent').setValue('b'); await flushPromises();
+    await Vue.nextTick(); await wrapper.findComponent({ name: 'ModernSelect' }).vm.$emit('update:modelValue', 'b'); await flushPromises();
     finish({ ok: true, json: async () => ({ files: [{ fileId: 'private-upload' }] }) }); await flushPromises();
     expect(wrapper.find('.attachments-preview').exists()).toBe(false);
     expect(wrapper.get('#person-input').element.value).toBe('');
