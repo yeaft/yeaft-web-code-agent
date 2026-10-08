@@ -5,6 +5,23 @@ import { zhCN as quickSend } from './quick-send.js';
 import { zhCN as userShortcuts } from './user-shortcuts.js';
 
 export default {
+  "person.settings": "配置",
+  "person.modelCandidates": "模型候选",
+  "person.modelCandidatesHint": "最多选择 8 个已配置的模型供数字人使用。修改候选不会启动思考。",
+  "person.modelsDefault": "沿用 Agent 默认模型范围",
+  "person.modelUnavailable": "不可用，可取消选择后保存其他候选",
+  "person.modelsEmpty": "请先在 Agent 上配置原生 API 模型。",
+  "person.modelsInvalid": "请选择 1–8 个当前已配置的模型，或沿用 Agent 默认范围。",
+  "person.modelsScope": "只保存在当前 Agent 上属于你的数字人，不修改凭据或 Agent 默认配置。",
+  "person.settingsSaving": "正在保存…",
+  "person.uploadFiles": "文件",
+  "person.attachedFiles": "附加文件",
+  "person.filesUploading": "正在上传…",
+  "person.filesRetry": "重试上传",
+  "person.filesRemove": "移除文件",
+  "person.filesLimit": "最多 4 个文件，每个不超过 5 MiB，总计不超过 10 MiB。文本文件与消息合计不超过 24 KiB。",
+  "person.filesUnsupported": "支持 UTF-8 文本、代码、JSON、CSV 和 PNG/JPEG/WebP/GIF 图片，暂不支持 PDF 等其他二进制文件。",
+  "person.filesFailed": "上传失败，请重试或移除文件后再发送。",
   "person.title": "数字人",
   "person.navigation": "全局导航",
   "person.plugins": "插件",

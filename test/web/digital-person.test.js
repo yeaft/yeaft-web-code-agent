@@ -3,7 +3,7 @@ import { acceptPersonResponse, createPersonController, digitalPersonGate, person
 
 const controllers = [];
 afterEach(() => { controllers.splice(0).forEach(c => c.dispose()); vi.useRealTimers(); });
-function fixture() {
+function fixture(options = {}) {
   const requests = [];
   let owner = 'owner-a';
   let responder;
@@ -13,7 +13,7 @@ function fixture() {
     sendWsMessage(message) { requests.push(message); responder?.(message); return true; },
   };
   const state = personState();
-  const controller = createPersonController({ chat, state, scope: () => owner, timeoutMs: 100, pollMs: 50 });
+  const controller = createPersonController({ chat, state, scope: () => owner, timeoutMs: 100, pollMs: 50, ...options });
   controllers.push(controller);
   const response = (request, data, extra = {}) => acceptPersonResponse(chat, {
     ...request, type: 'person_response', ok: true, data, ...extra,
@@ -120,6 +120,71 @@ describe('Digital Person owner / Agent request boundary', () => {
     const retry = f.requests.at(-1);
     expect(retry.payload).toEqual(first.payload);
     expect(retry.requestId).not.toBe(first.requestId);
+    expect(f.state.retryCommand).toBeNull();
+  });
+
+  it('keeps file references in uncertain retry and isolates model settings from cognition', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'send' ? false : r.op === 'settings' ? { settings: r.payload } : undefined);
+    const pending = f.controller.command('send', '', false, [{ fileId: 'file-1', name: 'not-authoritative.txt' }]);
+    await vi.advanceTimersByTimeAsync(101); expect(await pending).toBe(false);
+    expect(f.state.retryCommand.payload.attachments).toEqual([{ fileId: 'file-1' }]);
+    expect(await f.controller.settings(['p/m'])).toBe(false);
+    const first = f.requests.at(-1);
+    f.auto(); expect(await f.controller.command('send', '', true)).toBe(true);
+    expect(f.requests.at(-1).payload).toEqual(first.payload);
+    await vi.advanceTimersByTimeAsync(51);
+    f.auto(r => r.op === 'settings' ? { settings: r.payload } : undefined);
+    expect(await f.controller.settings(['p/m'])).toBe(true);
+    expect(f.state.modelCandidates).toEqual(['p/m']);
+    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(2);
+  });
+
+  it('reconciles an admitted file request without uploading or executing it again', async () => {
+    vi.useFakeTimers();
+    const reupload = vi.fn(); const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'send' ? false : undefined);
+    const pending = f.controller.command('send', '', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
+    const original = f.requests.at(-1);
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    f.auto(r => r.op === 'receipt' ? { found: true, episodeId: 'episode-1', status: 'completed', kind: 'send', text: '' } : undefined);
+    expect(await f.controller.command('send', '', true)).toBe(true);
+    expect(f.requests.find(r => r.op === 'receipt').payload.clientMessageId).toBe(original.payload.clientMessageId);
+    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    expect(reupload).not.toHaveBeenCalled();
+    expect(f.state.retryCommand).toBeNull();
+  });
+
+  it('reuploads original files after missing receipt, preserving command identity and text', async () => {
+    vi.useFakeTimers();
+    const file = { name: 'x.txt' };
+    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
+    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'think' ? false : undefined);
+    const pending = f.controller.command('think', 'original', false, [{ fileId: 'expired', file }]);
+    const original = f.requests.at(-1);
+    await vi.advanceTimersByTimeAsync(101); await pending;
+    await f.controller.open('b'); await f.controller.open('a');
+    f.auto(r => r.op === 'receipt' ? { found: false } : undefined);
+    expect(await f.controller.command('think', 'changed', true)).toBe(true);
+    expect(reupload).toHaveBeenCalledWith([file]);
+    expect(f.requests.at(-1).payload).toEqual({ ...original.payload, attachments: [{ fileId: 'renewed' }] });
+  });
+
+  it('renews a stale draft once, and fences renewal after owner changes', async () => {
+    let finish;
+    const reupload = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
+    f.auto(r => {
+      if (r.op !== 'send') return;
+      f.response(r, null, { ok: false, errorCode: 'attachment_expired' }); return false;
+    });
+    const pending = f.controller.command('send', 'original', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
+    await Promise.resolve(); await Promise.resolve();
+    expect(reupload).toHaveBeenCalledOnce();
+    f.owner('owner-b'); f.auto(); await f.controller.open('a');
+    finish([{ fileId: 'private-renewed' }]); expect(await pending).toBe(false);
+    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
     expect(f.state.retryCommand).toBeNull();
   });
 

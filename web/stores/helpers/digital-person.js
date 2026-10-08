@@ -38,6 +38,7 @@ export function personState() {
     messages: [], traces: [], busy: false, episodeId: null, error: null,
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
     commandPending: false, cancelPending: false, retryCommand: null, tracesStale: false,
+    models: [], modelCandidates: [], settingsPending: false,
   };
 }
 
@@ -54,7 +55,7 @@ function mergeRows(previous, next) {
 /** `scope` is the current authenticated browser identity, not a wire owner ID.
  * The Server owns authorization; no owner supplied by this client is trusted.
  */
-export function createPersonController({ chat, state, scope, timeoutMs = 30_000, pollMs = 1500 }) {
+export function createPersonController({ chat, state, scope, timeoutMs = 30_000, pollMs = 1500, reupload = null }) {
   if (!channels.has(chat)) channels.set(chat, new Map());
   let generation = 0;
   let agentId = '';
@@ -72,11 +73,12 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   const outbox = () => {
     let record = outboxes.get(chat);
     if (!record || record.scope !== scope()) {
-      record = { scope: scope(), commands: new Map() };
+      record = { scope: scope(), commands: new Map(), files: new Map() };
       outboxes.set(chat, record);
     }
     return record.commands;
   };
+  const retainedFiles = () => { outbox(); return outboxes.get(chat).files; };
   const showError = error => { state.error = { code: error.code || 'requestFailed', message: error.message }; };
 
   function request(op, payload = {}) {
@@ -127,6 +129,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     const data = await request('snapshot');
     if (!current(g) || requestNumber !== snapshotRequest) return;
     state.person = data.person;
+    state.modelCandidates = data.person?.settings?.modelCandidates || [];
     state.state = data.state;
     state.latestEpisode = data.latestEpisode || null;
     const incoming = data.messages || [];
@@ -227,6 +230,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       state.storageReady = status.storageReady !== false;
       state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';
+      state.models = status.availableModels || status.models || [];
+      state.modelCandidates = status.modelCandidates || [];
       if (!state.configured || !state.storageReady) return;
       await request('open');
       if (!current(g)) return;
@@ -257,29 +262,56 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
 
-  async function command(op, text = '', retry = false) {
-    if (state.commandPending || state.loading || !state.person || !state.configured || state.modelReady === false || digitalPersonGate(chat, agentId)) return false;
+  async function command(op, text = '', retry = false, attachments = []) {
+    if (state.settingsPending || state.commandPending || state.loading || !state.person || !state.configured || state.modelReady === false || digitalPersonGate(chat, agentId)) return false;
     if (state.retryCommand && !retry) return false;
-    if (!retry && (state.busy || (op === 'send' && !text.trim()))) return false;
+    if (!retry && (state.busy || (op === 'send' && !text.trim() && !attachments.length))) return false;
     const envelope = retry ? state.retryCommand : {
-      op, payload: { ...(op === 'dream' ? {} : { text: text.trim() }), clientMessageId: id() },
+      op, payload: { ...(op === 'dream' ? {} : { text: text.trim(), ...(attachments.length ? { attachments: attachments.map(({ fileId }) => ({ fileId })) } : {}) }), clientMessageId: id() },
     };
     if (!envelope) return false;
     const g = generation;
+    if (!retry) retainedFiles().set(agentId, attachments.map(row => row.file).filter(Boolean));
     outbox().set(agentId, envelope);
     state.retryCommand = envelope;
     state.commandPending = true;
     state.error = null;
     try {
-      const data = await request(envelope.op, envelope.payload);
+      let data;
+      const hasFiles = !!envelope.payload.attachments?.length;
+      const renew = async () => {
+        const files = retainedFiles().get(agentId);
+        if (!reupload || files?.length !== envelope.payload.attachments.length) throw failure('attachment_expired');
+        const refs = await reupload(files);
+        if (!current(g)) throw failure('stale');
+        envelope.payload = { ...envelope.payload, attachments: refs.map(({ fileId }) => ({ fileId })) };
+      };
+      if (retry && hasFiles && reupload) {
+        const receipt = await request('receipt', { clientMessageId: envelope.payload.clientMessageId });
+        if (!current(g)) return false;
+        if (receipt.found) {
+          if (receipt.kind !== envelope.op || receipt.text !== envelope.payload.text) throw failure('idempotency_conflict');
+          data = receipt;
+        } else await renew();
+      }
+      if (!data) {
+        try { data = await request(envelope.op, envelope.payload); }
+        catch (error) {
+          if (error.code !== 'attachment_expired' || !hasFiles || !reupload || !current(g)) throw error;
+          await renew();
+          data = await request(envelope.op, envelope.payload);
+        }
+      }
       if (!current(g)) return false;
       outbox().delete(agentId);
+      retainedFiles().delete(agentId);
       state.retryCommand = null;
       snapshotRequest += 1; // An older in-flight idle snapshot cannot undo this acknowledgement.
       state.episodeId = data.episodeId || null;
-      state.busy = true;
+      state.busy = !data.status || ['accepted', 'running'].includes(data.status);
       // Poll rather than treating the acknowledgement as a completed model turn.
       schedule();
+      if (data.found) await refresh({ preserveHistory: true });
       return true;
     } catch (error) {
       if (current(g)) {
@@ -287,6 +319,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
         // Only an acknowledgement (or explicit discard) resolves that envelope.
         if (!retry && !['timeout', 'outcome_unknown', 'disconnected', 'stale'].includes(error.code)) {
           outbox().delete(agentId);
+          retainedFiles().delete(agentId);
           state.retryCommand = null;
         }
         showError(error);
@@ -294,6 +327,31 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       return false;
     } finally {
       if (current(g)) state.commandPending = false;
+    }
+  }
+
+  async function settings(modelCandidates) {
+    if (!current() || state.settingsPending || state.loading || state.busy || state.commandPending || state.retryCommand || !state.person || digitalPersonGate(chat, agentId)) return false;
+    const g = generation;
+    state.settingsPending = true;
+    state.error = null;
+    try {
+      const result = await request('settings', { modelCandidates: [...modelCandidates] });
+      if (!current(g)) return false;
+      state.modelCandidates = result.settings.modelCandidates || [];
+      state.person.settings = result.settings;
+      // A candidate correction can recover model readiness without reopening the page.
+      const status = await request('status');
+      if (!current(g)) return false;
+      state.models = status.availableModels || status.models || [];
+      state.modelReady = status.modelReady !== false;
+      state.reason = status.reason || '';
+      return true;
+    } catch (error) {
+      if (current(g)) showError(error);
+      return false;
+    } finally {
+      if (current(g)) state.settingsPending = false;
     }
   }
 
@@ -313,8 +371,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   return {
-    open, refresh, command, cancel, page,
-    discardRetry() { outbox().delete(agentId); state.retryCommand = null; },
+    open, refresh, command, cancel, page, settings,
+    discardRetry() { outbox().delete(agentId); retainedFiles().delete(agentId); state.retryCommand = null; },
     dispose() { reset(); disposed = true; },
   };
 }

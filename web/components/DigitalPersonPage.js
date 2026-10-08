@@ -2,6 +2,8 @@ import UserTurnBlock from './UserTurnBlock.js';
 import MessageComposer from './MessageComposer.js';
 import NavigationIcon from './NavigationIcon.js';
 import ThemeToggle from './ThemeToggle.js';
+import PersonSettingsModal from './PersonSettingsModal.js';
+import { PERSON_FILE_ACCEPT, validatePersonFiles, uploadPersonFiles } from '../stores/helpers/person-attachments.js';
 import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
 import { useAuthStore } from '../stores/auth.js';
@@ -10,7 +12,7 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
-  components: { UserTurnBlock, MessageComposer, NavigationIcon, ThemeToggle, PersonThoughtJournal, PersonDebugLog },
+  components: { UserTurnBlock, MessageComposer, NavigationIcon, ThemeToggle, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -19,6 +21,20 @@ export default {
       || chat.agents.find(a => a.online && a.capabilities?.includes('digital_person'))?.id
       || chat.agents[0]?.id || '');
     const draft = Vue.ref('');
+    const attachments = Vue.ref([]);
+    const attachmentError = Vue.ref('');
+    const fileInput = Vue.ref(null);
+    const settingsOpen = Vue.ref(false);
+    const uploads = new Set();
+    let uploadGeneration = 0;
+    function clearAttachments() {
+      uploadGeneration++;
+      for (const upload of uploads) upload.abort();
+      uploads.clear();
+      attachments.value = [];
+      attachmentError.value = '';
+    }
+
     const view = Vue.ref('conversation');
     const previousView = Vue.ref('conversation');
     const messagePane = Vue.ref(null);
@@ -26,8 +42,8 @@ export default {
     const viewNavigation = Vue.ref(null);
     const gate = Vue.computed(() => digitalPersonGate(chat, agentId.value));
     const scope = () => JSON.stringify([auth.userId, auth.authGeneration]);
-    const controller = createPersonController({ chat, state, scope });
-    Vue.watch(() => JSON.stringify([scope(), agentId.value]), () => { draft.value = ''; view.value = 'conversation'; });
+    const controller = createPersonController({ chat, state, scope, reupload: files => uploadPersonFiles(files, auth) });
+    Vue.watch(() => JSON.stringify([scope(), agentId.value]), () => { draft.value = ''; clearAttachments(); settingsOpen.value = false; view.value = 'conversation'; });
     Vue.watch(() => JSON.stringify([scope(), agentId.value, gate.value, chat.chatHistoryConnectionGeneration]), () => {
       controller.open(agentId.value);
     // Batch auth_result mutations: authenticated is set before the new socket's
@@ -38,19 +54,60 @@ export default {
       if (!agentId.value && chat.agents.length) agentId.value = chat.agents[0].id;
     });
     Vue.onMounted(() => returnButton.value?.focus());
-    Vue.onBeforeUnmount(() => controller.dispose());
+    Vue.onBeforeUnmount(() => { clearAttachments(); controller.dispose(); });
     const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
-    const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.retryCommand);
+    const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.settingsPending && !state.retryCommand);
+    const filesReady = Vue.computed(() => attachments.value.every(file => file.fileId && !file.uploading && !file.error));
+    const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.error) ? 'person.filesFailed' : ''));
+    const canSend = Vue.computed(() => canCompose.value && filesReady.value && (!!draft.value.trim() || !!attachments.value.length));
+    async function uploadRows(rows) {
+      attachmentError.value = '';
+      const generation = uploadGeneration;
+      const upload = new AbortController();
+      uploads.add(upload);
+      rows.forEach(row => { row.uploading = true; row.error = false; });
+      try {
+        const result = await uploadPersonFiles(rows.map(row => row.file), auth, upload.signal);
+        if (generation !== uploadGeneration) return;
+        rows.forEach((row, index) => { row.fileId = result[index].fileId; row.uploading = false; });
+      } catch {
+        if (generation !== uploadGeneration) return;
+        rows.forEach(row => { row.uploading = false; row.error = true; });
+
+      } finally { uploads.delete(upload); }
+    }
+    async function addFiles(files) {
+      if (!canCompose.value || !files.length) return;
+      attachmentError.value = '';
+      try { validatePersonFiles(files, attachments.value); }
+      catch (error) { attachmentError.value = error.message; return; }
+      const rows = files.map(file => Vue.reactive({ localId: crypto.randomUUID(), file, name: file.name, size: file.size, fileId: null, uploading: true, error: false }));
+      attachments.value.push(...rows);
+      await uploadRows(rows);
+    }
+    function fileSelected(event) { const files = [...event.target.files]; event.target.value = ''; addFiles(files); }
+    function pasted(event) {
+      const files = [...(event.clipboardData?.files || [])];
+      if (files.length && canCompose.value) { event.preventDefault(); addFiles(files); }
+    }
+    function dropped(event) { addFiles([...(event.dataTransfer?.files || [])]); }
+    async function saveSettings(candidates) {
+      if (await controller.settings(candidates)) settingsOpen.value = false;
+    }
+
     async function command(op, retry = false) {
+      if (!retry && (op === 'send' ? !canSend.value : !canCompose.value || (op === 'think' && !filesReady.value))) return;
       const before = draft.value;
-      if (await controller.command(op, before, retry)) {
+      const sentFiles = attachments.value.slice();
+      if (await controller.command(op, before, retry, op === 'dream' ? [] : sentFiles)) {
         if (draft.value === before && op !== 'dream') draft.value = '';
+        if (op !== 'dream' && sentFiles.every(file => attachments.value.includes(file))) clearAttachments();
       }
     }
     function onKeydown(event) {
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
         event.preventDefault();
-        if (canCompose.value && draft.value.trim()) command('send');
+        if (canSend.value) command('send');
       }
     }
     async function selectView(next) {
@@ -65,27 +122,23 @@ export default {
       await Vue.nextTick();
       if (nearBottom && messagePane.value) messagePane.value.scrollTop = messagePane.value.scrollHeight;
     });
-    function leave(destination) {
+    function leave() {
       chat.leaveDigitalPerson();
-      if (destination === 'sessions') {
-        chat.leaveWorkCenter();
-        chat.closePluginCenter();
-        if (window.innerWidth <= 768) chat.sessionSidebarOpen = true;
-        Vue.nextTick(() => [...document.querySelectorAll('.sidebar-person-trigger')]
-          .find(button => button.getClientRects().length)?.focus());
-      }
-      if (destination === 'work') chat.enterWorkCenter(agentId.value);
-      if (destination === 'plugins') { chat.enterYeaft(); chat.openPluginCenter(agentId.value); }
+      chat.leaveWorkCenter();
+      chat.closePluginCenter();
+      if (window.innerWidth <= 768) chat.sessionSidebarOpen = true;
+      Vue.nextTick(() => [...document.querySelectorAll('.sidebar-person-trigger')]
+        .find(button => button.getClientRects().length)?.focus());
     }
-    const asUserMessage = message => ({ ...message, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
+    const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, view, previousView, messagePane, returnButton, viewNavigation, gate, ready, canCompose, controller, command, onKeydown, selectView, leave, asUserMessage, time, renderSafeMessageMarkdown };
+    return { chat, state, agentId, draft, view, previousView, messagePane, returnButton, viewNavigation, gate, ready, canCompose, controller, command, onKeydown, selectView, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, fileInput, filesReady, canSend, fileSelected, pasted, dropped, uploadRows, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
       <header class="person-header">
         <nav class="person-navigation" :aria-label="$t('person.navigation')">
-          <button ref="returnButton" type="button" class="btn-ghost person-icon-button" @click="leave('sessions')" :aria-label="$t('yeaft.session.title')" :title="$t('yeaft.session.title')"><NavigationIcon name="back" /></button>
+          <button ref="returnButton" type="button" class="btn-ghost person-icon-button" @click="leave()" :aria-label="$t('yeaft.session.title')" :title="$t('yeaft.session.title')"><NavigationIcon name="back" /></button>
         </nav>
         <div class="person-identity">
           <h1>{{ state.person?.name || $t('person.title') }}</h1>
@@ -98,14 +151,8 @@ export default {
             <option v-for="agent in chat.agents" :key="agent.id" :value="agent.id">{{ agent.name || agent.id }}{{ agent.online ? '' : ' · ' + $t('person.offlineShort') }}</option>
           </select>
           <button type="button" class="btn-ghost person-icon-button" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>
-          <details class="person-menu">
-            <summary class="btn-ghost">{{ $t('person.more') }}</summary>
-            <nav :aria-label="$t('person.navigation')">
-              <button v-if="chat.workCenterUiEnabled" type="button" class="btn-ghost" @click="leave('work')">{{ $t('workCenter.title') }}</button>
-              <button type="button" class="btn-ghost" @click="leave('plugins')" :disabled="!agentId || !!gate">{{ $t('person.plugins') }}</button>
-              <ThemeToggle />
-            </nav>
-          </details>
+          <ThemeToggle />
+          <button type="button" class="btn-ghost person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending || !!state.retryCommand" @click="settingsOpen = true">{{ $t('person.settings') }}</button>
         </div>
       </header>
       <nav ref="viewNavigation" class="session-tab-bar person-views" :aria-label="$t('person.views')">
@@ -153,7 +200,10 @@ export default {
             <button v-if="state.messageCursor != null" type="button" class="btn-ghost person-load-more" @click="controller.page('messages', true)" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
             <div v-if="!state.messages.length && ready" class="person-welcome"><NavigationIcon name="activity" :size="28" /><h2>{{ $t('person.welcome') }}</h2><p>{{ $t('person.empty') }}</p></div>
             <template v-for="message in state.messages" :key="message.id">
-              <UserTurnBlock v-if="message.role === 'user'" :message="asUserMessage(message)" :session-actions="false" />
+              <div v-if="message.role === 'user'">
+                <UserTurnBlock :message="asUserMessage(message)" :session-actions="false" />
+                <ul v-if="message.attachments?.length" class="person-sent-files" :aria-label="$t('person.attachedFiles')"><li v-for="(file, index) in message.attachments" :key="file.id || index">{{ file.name }}</li></ul>
+              </div>
               <article v-else class="person-message" :data-message-id="message.id">
                 <header class="person-message-meta"><strong>{{ message.role === 'assistant' ? (state.person?.name || $t('person.title')) : $t('person.system') }}</strong><time>{{ time(message.createdAt) }}</time></header>
                 <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
@@ -161,17 +211,31 @@ export default {
             </template>
           </div>
         </div>
-        <div class="input-area person-composer">
+        <div class="input-area person-composer" @dragover.prevent @drop.prevent="dropped">
           <label class="person-sr-only" for="person-input">{{ $t('person.input') }}</label>
-          <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canCompose && !!draft.trim()" :sending="state.commandPending" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')" @send="command('send')" @keydown="onKeydown">
+          <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="state.commandPending" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')" @send="command('send')" @keydown="onKeydown" @paste="pasted">
+            <template #overlays>
+              <ul v-if="attachments.length" class="person-attachment-list" :aria-label="$t('person.attachedFiles')">
+                <li v-for="file in attachments" :key="file.localId">
+                  <span class="person-attachment-name">{{ file.name }}</span>
+                  <span v-if="file.uploading" role="status">{{ $t('person.filesUploading') }}</span>
+                  <button v-if="file.error" type="button" class="btn-ghost" :disabled="!canCompose" @click="uploadRows([file])">{{ $t('person.filesRetry') }}</button>
+                  <button type="button" class="btn-ghost" :disabled="!canCompose" @click="attachments = attachments.filter(row => row !== file)" :aria-label="$t('person.filesRemove') + ' ' + file.name">×</button>
+                </li>
+              </ul>
+            </template>
             <template #start-actions>
-              <button type="button" class="btn-ghost" :disabled="!canCompose" @click="command('think')" :title="$t('person.thinkHint')">{{ $t('person.think') }}</button>
+              <input ref="fileInput" type="file" class="person-sr-only" tabindex="-1" multiple :accept="PERSON_FILE_ACCEPT" :disabled="!canCompose" @change="fileSelected" :aria-label="$t('person.uploadFiles')">
+              <button type="button" class="btn-ghost" :disabled="!canCompose" @click="fileInput?.click()">{{ $t('person.uploadFiles') }}</button>
+              <button type="button" class="btn-ghost" :disabled="!canCompose || !filesReady" @click="command('think')" :title="$t('person.thinkHint')">{{ $t('person.think') }}</button>
               <button type="button" class="btn-ghost" :disabled="!canCompose" @click="command('dream')">{{ $t('person.dream') }}</button>
             </template>
           </MessageComposer>
+          <p v-if="fileError" class="person-manual-hint person-settings-error" role="alert">{{ $t(fileError) }}</p>
           <p class="person-manual-hint person-muted">{{ $t('person.manualHint') }}</p>
         </div>
       </main>
+      <PersonSettingsModal v-if="settingsOpen" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :disabled="!!gate || state.loading || state.busy || state.commandPending || !!state.retryCommand" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
       <PersonThoughtJournal v-if="view === 'thoughts'" :traces="state.traces" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
       <PersonDebugLog v-if="view === 'debug'" :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
     </div>

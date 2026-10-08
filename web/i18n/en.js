@@ -5,6 +5,23 @@ import { en as quickSend } from './quick-send.js';
 import { en as userShortcuts } from './user-shortcuts.js';
 
 export default {
+  "person.settings": "Settings",
+  "person.modelCandidates": "Candidate models",
+  "person.modelCandidatesHint": "Choose up to 8 configured models this person may use. Changing candidates does not start thinking.",
+  "person.modelsDefault": "Follow Agent model defaults",
+  "person.modelUnavailable": "Unavailable — remove to save other candidates",
+  "person.modelsEmpty": "Configure native API models on the Agent first.",
+  "person.modelsInvalid": "Select 1–8 currently configured models, or follow Agent defaults.",
+  "person.modelsScope": "Saved for your digital person on this Agent only. Credentials and Agent defaults are not changed.",
+  "person.settingsSaving": "Saving…",
+  "person.uploadFiles": "Files",
+  "person.attachedFiles": "Attached files",
+  "person.filesUploading": "Uploading…",
+  "person.filesRetry": "Retry upload",
+  "person.filesRemove": "Remove file",
+  "person.filesLimit": "Up to 4 files, 5 MiB per file and 10 MiB total. Text files and message together must fit within 24 KiB.",
+  "person.filesUnsupported": "Supported: UTF-8 text, code, JSON, CSV and PNG/JPEG/WebP/GIF images. PDF and other binary files are not supported yet.",
+  "person.filesFailed": "Upload failed. Retry or remove the file before sending.",
   "person.title": "Digital Person",
   "person.navigation": "Global navigation",
   "person.plugins": "Plugins",

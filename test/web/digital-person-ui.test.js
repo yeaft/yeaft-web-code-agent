@@ -26,10 +26,10 @@ beforeEach(() => {
     sendWsMessage(request) {
       requests.push(request);
       const data = {
-        status: { configured, reason: 'Model unavailable' }, open: {},
+        status: { configured, reason: 'Model unavailable', models: [{ id: 'provider/a' }, { id: 'provider/b' }] }, open: {},
         snapshot: { person: { id: 'p', name: 'Ada' }, state: { version: 4 }, messages: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], busy: false },
         messages: { items: [{ id: 'm', role: 'assistant', text: '<img onerror=alert(1)>', createdAt: 1 }], nextCursor: null }, traces: { items: personRecords(), nextCursor: 'older' },
-        think: { episodeId: 'e' }, send: { episodeId: 'e' },
+        think: { episodeId: 'e' }, send: { episodeId: 'e' }, settings: { settings: request.payload },
       };
       queueMicrotask(() => acceptPersonResponse(chat, { ...request, type: 'person_response', ok: true, data: data[request.op] }));
       return true;
@@ -171,14 +171,84 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('#person-input').element.value).toBe('');
   });
 
-  it('uses the established Chat-to-Yeaft transition before opening Plugins for the selected Agent', async () => {
-    chat.currentView = 'chat';
+  it('only returns to Sessions; model candidates stay in an in-page modal', async () => {
     await render();
-    await wrapper.findAll('button').find(b => b.text() === t('person.plugins')).trigger('click');
-    expect(chat.enterYeaft).toHaveBeenCalledExactlyOnceWith();
-    expect(chat.openPluginCenter).toHaveBeenCalledExactlyOnceWith('a');
-    expect(chat.currentAgent).toBe('previous-session-agent');
-    expect(chat.enterYeaft.mock.invocationCallOrder[0]).toBeLessThan(chat.openPluginCenter.mock.invocationCallOrder[0]);
+    expect(wrapper.find('.person-menu').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain(t('person.plugins'));
+    await wrapper.get('.person-settings-button').trigger('click');
+    expect(wrapper.get('[role="dialog"]').text()).toContain(t('person.modelCandidates'));
+    await wrapper.get('[role="dialog"] input[type="checkbox"]').setValue(false);
+    await wrapper.findAll('[role="dialog"] input[type="checkbox"]')[2].setValue(true);
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: ['provider/b'] });
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+    expect(chat.enterYeaft).not.toHaveBeenCalled();
+    expect(chat.openPluginCenter).not.toHaveBeenCalled();
+    await wrapper.get('.person-navigation button').trigger('click');
+    expect(chat.leaveDigitalPerson).toHaveBeenCalledOnce();
+    expect(chat.closePluginCenter).toHaveBeenCalledOnce();
+  });
+
+  it('uploads a file and explicitly sends it without text, clearing only after acknowledgement', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ files: [{ fileId: 'upload-1' }] }) })));
+    await render();
+    const file = new File(['notes'], 'notes.txt', { type: 'text/plain' });
+    Object.defineProperty(wrapper.get('input[type="file"]').element, 'files', { value: [file], configurable: true });
+    await wrapper.get('input[type="file"]').trigger('change'); await flushPromises();
+    expect(wrapper.get('.person-attachment-list').text()).toContain('notes.txt');
+    expect(requests.filter(r => r.op === 'send')).toHaveLength(0);
+    expect(wrapper.get('.send-btn').attributes('disabled')).toBeUndefined();
+    await wrapper.get('.send-btn').trigger('click'); await flushPromises();
+    expect(requests.find(r => r.op === 'send').payload).toMatchObject({ text: '', attachments: [{ fileId: 'upload-1' }] });
+    expect(wrapper.find('.person-attachment-list').exists()).toBe(false);
+    expect(fetch.mock.calls[0][0]).toBe('/api/upload');
+  });
+
+  it('retains failed uploads, blocks send, and fences upload completion after Agent changes', async () => {
+    let finish;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { finish = resolve; })));
+    await render();
+    const files = wrapper.get('input[type="file"]');
+    Object.defineProperty(files.element, 'files', { value: [new File(['x'], 'private.txt', { type: 'text/plain' })], configurable: true });
+    await files.trigger('change');
+    await wrapper.get('#person-input').setValue('an instruction');
+    expect(wrapper.get('.send-btn').attributes('disabled')).toBeDefined();
+    chat.agents.push({ id: 'b', online: true, capabilities: ['digital_person'] });
+    await Vue.nextTick(); await wrapper.get('#person-agent').setValue('b'); await flushPromises();
+    finish({ ok: true, json: async () => ({ files: [{ fileId: 'private-upload' }] }) }); await flushPromises();
+    expect(wrapper.find('.person-attachment-list').exists()).toBe(false);
+    expect(wrapper.get('#person-input').element.value).toBe('');
+    expect(requests.some(r => r.payload.attachments)).toBe(false);
+  });
+
+  it('supports paste and rejects unsupported files instead of silently sending text', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })));
+    await render();
+    const event = { clipboardData: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } };
+    await wrapper.get('#person-input').trigger('paste', event); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain(t('person.filesFailed'));
+    expect(wrapper.get('.person-attachment-list').text()).toContain(t('person.filesRetry'));
+    expect(wrapper.get('.send-btn').attributes('disabled')).toBeDefined();
+    Object.defineProperty(wrapper.get('input[type="file"]').element, 'files', { value: [new File(['x'], 'report.pdf', { type: 'application/pdf' })], configurable: true });
+    await wrapper.get('input[type="file"]').trigger('change'); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain(t('person.filesUnsupported'));
+  });
+
+  it('clears upload failure after successful retry and permits removing unavailable model candidates', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: false }).mockResolvedValue({ ok: true, json: async () => ({ files: [{ fileId: 'restored' }] }) }));
+    await render();
+    await wrapper.get('#person-input').trigger('paste', { clipboardData: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } });
+    await flushPromises(); expect(wrapper.get('[role="alert"]').text()).toContain(t('person.filesFailed'));
+    await wrapper.findAll('.person-attachment-list button')[0].trigger('click'); await flushPromises();
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(wrapper.get('.send-btn').attributes('disabled')).toBeUndefined();
+    wrapper.vm.state.modelCandidates = ['provider/a', 'removed/model'];
+    await wrapper.get('.person-settings-button').trigger('click');
+    expect(wrapper.get('[role="dialog"]').text()).toContain('removed/model');
+    const checkbox = wrapper.findAll('[role="dialog"] input').find(input => input.element.value === 'removed/model');
+    await checkbox.setValue(false);
+    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeUndefined();
   });
 
   it('explains unavailable storage or model configuration without a credential form or fallback Session', async () => {
