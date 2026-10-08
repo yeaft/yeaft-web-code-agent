@@ -115,17 +115,18 @@ describe('Digital Person surface', () => {
     expect(wrapper.find('img, script, pre').exists()).toBe(false);
   });
 
-  it('preserves the draft between views and sends only on the explicit keyboard shortcut', async () => {
+  it('preserves the draft between views and shares Enter / Shift+Enter and IME behavior with Session', async () => {
     await render();
     const input = wrapper.get('#person-input');
     await input.setValue('A thought in progress');
     await input.trigger('keydown', { key: 'Enter', ctrlKey: true, isComposing: true });
-    await input.trigger('keydown', { key: 'Enter' });
+    await input.trigger('keydown', { key: 'Enter', shiftKey: true });
+    await input.trigger('keydown', { key: 'Enter', keyCode: 229 });
     expect(requests.filter(r => r.op === 'send')).toHaveLength(0);
     await wrapper.get('[aria-controls="person-thoughts"]').trigger('click');
     await wrapper.get('[aria-controls="person-conversation"]').trigger('click');
     expect(input.element.value).toBe('A thought in progress');
-    await input.trigger('keydown', { key: 'Enter', ctrlKey: true });
+    await input.trigger('keydown', { key: 'Enter' });
     await flushPromises();
     expect(requests.filter(r => r.op === 'send')).toHaveLength(1);
   });
@@ -196,12 +197,12 @@ describe('Digital Person surface', () => {
     const file = new File(['notes'], 'notes.txt', { type: 'text/plain' });
     Object.defineProperty(wrapper.get('input[type="file"]').element, 'files', { value: [file], configurable: true });
     await wrapper.get('input[type="file"]').trigger('change'); await flushPromises();
-    expect(wrapper.get('.person-attachment-list').text()).toContain('notes.txt');
+    expect(wrapper.get('.attachments-preview').text()).toContain('notes.txt');
     expect(requests.filter(r => r.op === 'send')).toHaveLength(0);
     expect(wrapper.get('.send-btn').attributes('disabled')).toBeUndefined();
     await wrapper.get('.send-btn').trigger('click'); await flushPromises();
     expect(requests.find(r => r.op === 'send').payload).toMatchObject({ text: '', attachments: [{ fileId: 'upload-1' }] });
-    expect(wrapper.find('.person-attachment-list').exists()).toBe(false);
+    expect(wrapper.find('.attachments-preview').exists()).toBe(false);
     expect(fetch.mock.calls[0][0]).toBe('/api/upload');
   });
 
@@ -217,7 +218,7 @@ describe('Digital Person surface', () => {
     chat.agents.push({ id: 'b', online: true, capabilities: ['digital_person'] });
     await Vue.nextTick(); await wrapper.get('#person-agent').setValue('b'); await flushPromises();
     finish({ ok: true, json: async () => ({ files: [{ fileId: 'private-upload' }] }) }); await flushPromises();
-    expect(wrapper.find('.person-attachment-list').exists()).toBe(false);
+    expect(wrapper.find('.attachments-preview').exists()).toBe(false);
     expect(wrapper.get('#person-input').element.value).toBe('');
     expect(requests.some(r => r.payload.attachments)).toBe(false);
   });
@@ -228,7 +229,7 @@ describe('Digital Person surface', () => {
     const event = { clipboardData: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } };
     await wrapper.get('#person-input').trigger('paste', event); await flushPromises();
     expect(wrapper.get('[role="alert"]').text()).toContain(t('person.filesFailed'));
-    expect(wrapper.get('.person-attachment-list').text()).toContain(t('person.filesRetry'));
+    expect(wrapper.get('.attachments-preview').text()).toContain(t('chatInput.retryUpload'));
     expect(wrapper.get('.send-btn').attributes('disabled')).toBeDefined();
     Object.defineProperty(wrapper.get('input[type="file"]').element, 'files', { value: [new File(['x'], 'report.pdf', { type: 'application/pdf' })], configurable: true });
     await wrapper.get('input[type="file"]').trigger('change'); await flushPromises();
@@ -240,7 +241,7 @@ describe('Digital Person surface', () => {
     await render();
     await wrapper.get('#person-input').trigger('paste', { clipboardData: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } });
     await flushPromises(); expect(wrapper.get('[role="alert"]').text()).toContain(t('person.filesFailed'));
-    await wrapper.findAll('.person-attachment-list button')[0].trigger('click'); await flushPromises();
+    await wrapper.findAll('.attachments-preview button')[0].trigger('click'); await flushPromises();
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     expect(wrapper.get('.send-btn').attributes('disabled')).toBeUndefined();
     wrapper.vm.state.modelCandidates = ['provider/a', 'removed/model'];

@@ -3,6 +3,7 @@ import MessageComposer from './MessageComposer.js';
 import NavigationIcon from './NavigationIcon.js';
 import ThemeToggle from './ThemeToggle.js';
 import PersonSettingsModal from './PersonSettingsModal.js';
+import { useComposerAttachments } from '../utils/composer-attachments.js';
 import { PERSON_FILE_ACCEPT, validatePersonFiles, uploadPersonFiles } from '../stores/helpers/person-attachments.js';
 import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
@@ -21,19 +22,9 @@ export default {
       || chat.agents.find(a => a.online && a.capabilities?.includes('digital_person'))?.id
       || chat.agents[0]?.id || '');
     const draft = Vue.ref('');
-    const attachments = Vue.ref([]);
-    const attachmentError = Vue.ref('');
-    const fileInput = Vue.ref(null);
     const settingsOpen = Vue.ref(false);
-    const uploads = new Set();
-    let uploadGeneration = 0;
-    function clearAttachments() {
-      uploadGeneration++;
-      for (const upload of uploads) upload.abort();
-      uploads.clear();
-      attachments.value = [];
-      attachmentError.value = '';
-    }
+    let draftGeneration = 0;
+    let pendingDraft = null;
 
     const view = Vue.ref('conversation');
     const previousView = Vue.ref('conversation');
@@ -41,9 +32,23 @@ export default {
     const returnButton = Vue.ref(null);
     const viewNavigation = Vue.ref(null);
     const gate = Vue.computed(() => digitalPersonGate(chat, agentId.value));
-    const scope = () => JSON.stringify([auth.userId, auth.authGeneration]);
-    const controller = createPersonController({ chat, state, scope, reupload: files => uploadPersonFiles(files, auth) });
-    Vue.watch(() => JSON.stringify([scope(), agentId.value]), () => { draft.value = ''; clearAttachments(); settingsOpen.value = false; view.value = 'conversation'; });
+    const scope = () => JSON.stringify([auth.userId, auth.authGeneration, auth.isAuthenticated]);
+    const attachmentScope = () => JSON.stringify([scope(), agentId.value]);
+    const attachmentQueue = useComposerAttachments({
+      scope: attachmentScope,
+      enabled: () => canCompose.value,
+      validate: validatePersonFiles,
+      upload: (rows, signal) => uploadPersonFiles(rows.map(row => row.file), auth, signal),
+    });
+    const { attachments, error: attachmentError, filesReady, addFiles, retryAttachment, removeAttachment } = attachmentQueue;
+    const controller = createPersonController({ chat, state, scope, reupload: attachmentQueue.uploadFiles });
+    Vue.watch(attachmentScope, () => {
+      draftGeneration++;
+      pendingDraft = null;
+      draft.value = '';
+      settingsOpen.value = false;
+      view.value = 'conversation';
+    }, { flush: 'sync' });
     Vue.watch(() => JSON.stringify([scope(), agentId.value, gate.value, chat.chatHistoryConnectionGeneration]), () => {
       controller.open(agentId.value);
     // Batch auth_result mutations: authenticated is set before the new socket's
@@ -54,61 +59,28 @@ export default {
       if (!agentId.value && chat.agents.length) agentId.value = chat.agents[0].id;
     });
     Vue.onMounted(() => returnButton.value?.focus());
-    Vue.onBeforeUnmount(() => { clearAttachments(); controller.dispose(); });
+    Vue.onBeforeUnmount(() => { draftGeneration++; controller.dispose(); });
     const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
     const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.settingsPending && !state.retryCommand);
-    const filesReady = Vue.computed(() => attachments.value.every(file => file.fileId && !file.uploading && !file.error));
-    const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.error) ? 'person.filesFailed' : ''));
+    const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.uploadError) ? 'person.filesFailed' : ''));
     const canSend = Vue.computed(() => canCompose.value && filesReady.value && (!!draft.value.trim() || !!attachments.value.length));
-    async function uploadRows(rows) {
-      attachmentError.value = '';
-      const generation = uploadGeneration;
-      const upload = new AbortController();
-      uploads.add(upload);
-      rows.forEach(row => { row.uploading = true; row.error = false; });
-      try {
-        const result = await uploadPersonFiles(rows.map(row => row.file), auth, upload.signal);
-        if (generation !== uploadGeneration) return;
-        rows.forEach((row, index) => { row.fileId = result[index].fileId; row.uploading = false; });
-      } catch {
-        if (generation !== uploadGeneration) return;
-        rows.forEach(row => { row.uploading = false; row.error = true; });
-
-      } finally { uploads.delete(upload); }
-    }
-    async function addFiles(files) {
-      if (!canCompose.value || !files.length) return;
-      attachmentError.value = '';
-      try { validatePersonFiles(files, attachments.value); }
-      catch (error) { attachmentError.value = error.message; return; }
-      const rows = files.map(file => Vue.reactive({ localId: crypto.randomUUID(), file, name: file.name, size: file.size, fileId: null, uploading: true, error: false }));
-      attachments.value.push(...rows);
-      await uploadRows(rows);
-    }
-    function fileSelected(event) { const files = [...event.target.files]; event.target.value = ''; addFiles(files); }
-    function pasted(event) {
-      const files = [...(event.clipboardData?.files || [])];
-      if (files.length && canCompose.value) { event.preventDefault(); addFiles(files); }
-    }
-    function dropped(event) { addFiles([...(event.dataTransfer?.files || [])]); }
     async function saveSettings(candidates) {
       if (await controller.settings(candidates)) settingsOpen.value = false;
     }
 
     async function command(op, retry = false) {
       if (!retry && (op === 'send' ? !canSend.value : !canCompose.value || (op === 'think' && !filesReady.value))) return;
-      const before = draft.value;
-      const sentFiles = attachments.value.slice();
-      if (await controller.command(op, before, retry, op === 'dream' ? [] : sentFiles)) {
-        if (draft.value === before && op !== 'dream') draft.value = '';
-        if (op !== 'dream' && sentFiles.every(file => attachments.value.includes(file))) clearAttachments();
+      const g = draftGeneration;
+      if (!retry) pendingDraft = { text: draft.value, rows: attachments.value.slice() };
+      const submitted = pendingDraft;
+      const accepted = await controller.command(op, draft.value, retry, op === 'dream' ? [] : attachments.value.slice());
+      if (!accepted || g !== draftGeneration) return;
+      if (op !== 'dream' && submitted) {
+        if (draft.value === submitted.text) draft.value = '';
+        // Person messages only retain server references, not local blob URLs.
+        attachmentQueue.release(submitted.rows, { transferPreviews: false });
       }
-    }
-    function onKeydown(event) {
-      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
-        event.preventDefault();
-        if (canSend.value) command('send');
-      }
+      pendingDraft = null;
     }
     async function selectView(next) {
       if (next === 'debug') previousView.value = view.value;
@@ -132,7 +104,7 @@ export default {
     }
     const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, view, previousView, messagePane, returnButton, viewNavigation, gate, ready, canCompose, controller, command, onKeydown, selectView, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, fileInput, filesReady, canSend, fileSelected, pasted, dropped, uploadRows, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { chat, state, agentId, draft, view, previousView, messagePane, returnButton, viewNavigation, gate, ready, canCompose, controller, command, selectView, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -211,28 +183,19 @@ export default {
             </template>
           </div>
         </div>
-        <div class="input-area person-composer" @dragover.prevent @drop.prevent="dropped">
+        <div class="input-area person-composer">
           <label class="person-sr-only" for="person-input">{{ $t('person.input') }}</label>
-          <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="state.commandPending" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')" @send="command('send')" @keydown="onKeydown" @paste="pasted">
-            <template #overlays>
-              <ul v-if="attachments.length" class="person-attachment-list" :aria-label="$t('person.attachedFiles')">
-                <li v-for="file in attachments" :key="file.localId">
-                  <span class="person-attachment-name">{{ file.name }}</span>
-                  <span v-if="file.uploading" role="status">{{ $t('person.filesUploading') }}</span>
-                  <button v-if="file.error" type="button" class="btn-ghost" :disabled="!canCompose" @click="uploadRows([file])">{{ $t('person.filesRetry') }}</button>
-                  <button type="button" class="btn-ghost" :disabled="!canCompose" @click="attachments = attachments.filter(row => row !== file)" :aria-label="$t('person.filesRemove') + ' ' + file.name">×</button>
-                </li>
-              </ul>
-            </template>
+          <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="state.commandPending" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')"
+            keyboard-send attachments-enabled :attachments="attachments" :attachment-accept="PERSON_FILE_ACCEPT"
+            @send="command('send')" @files-selected="addFiles" @retry-attachment="retryAttachment" @remove-attachment="removeAttachment">
             <template #start-actions>
-              <input ref="fileInput" type="file" class="person-sr-only" tabindex="-1" multiple :accept="PERSON_FILE_ACCEPT" :disabled="!canCompose" @change="fileSelected" :aria-label="$t('person.uploadFiles')">
-              <button type="button" class="btn-ghost" :disabled="!canCompose" @click="fileInput?.click()">{{ $t('person.uploadFiles') }}</button>
               <button type="button" class="btn-ghost" :disabled="!canCompose || !filesReady" @click="command('think')" :title="$t('person.thinkHint')">{{ $t('person.think') }}</button>
               <button type="button" class="btn-ghost" :disabled="!canCompose" @click="command('dream')">{{ $t('person.dream') }}</button>
             </template>
           </MessageComposer>
           <p v-if="fileError" class="person-manual-hint person-settings-error" role="alert">{{ $t(fileError) }}</p>
           <p class="person-manual-hint person-muted">{{ $t('person.manualHint') }}</p>
+          <p class="person-attachment-policy person-muted">{{ $t('person.filesLimit') }} {{ $t('person.filesUnsupported') }}</p>
         </div>
       </main>
       <PersonSettingsModal v-if="settingsOpen" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />

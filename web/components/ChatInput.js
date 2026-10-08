@@ -9,13 +9,15 @@ import VpMentionAutocomplete, {
   vpMentionOptionId,
 } from './VpMentionAutocomplete.js';
 import MessageComposer from './MessageComposer.js';
+import { useComposerAttachments, uploadSessionAttachments, hasAttachmentFileId, SESSION_FILE_ACCEPT } from '../utils/composer-attachments.js';
 import { useUserShortcuts, matchShortcut } from '../utils/user-shortcuts.js';
 
 export default {
   name: 'ChatInput',
   components: { MessageComposer, VpMentionAutocomplete },
   props: {
-    /** Custom send function: (text, attachmentInfos) => void. Overrides store.sendMessage. */
+    /** Custom send: (text, attachmentInfos, quote?, quickSend?) => value | Promise.
+     * false/rejection retains the draft; acceptance transfers previews to messages. */
     sendFn: { type: Function, default: null },
     /** Explicit opt-in: CLI / Work Center do not support native per-turn model overrides. */
     quickSendEnabled: { type: Boolean, default: false },
@@ -61,46 +63,6 @@ export default {
           <button class="chip-remove" @click="removeExpertSelection(index)">&times;</button>
         </span>
       </div>
-      <div class="attachments-preview" v-if="attachmentsAllowed && attachments.length > 0">
-        <div
-          class="attachment-item"
-          :class="{ 'is-uploading': file.uploading, 'has-error': file.uploadError }"
-          v-for="(file, index) in attachments"
-          :key="file.localId"
-        >
-          <img v-if="file.preview" :src="file.preview" class="attachment-thumb" />
-          <span v-else class="attachment-icon" aria-hidden="true">\u{1F4CE}</span>
-          <span class="attachment-details">
-            <span class="attachment-name">{{ file.name }}</span>
-            <span class="attachment-status">
-              {{ file.uploading ? $t('chatInput.uploading') : (file.uploadError ? $t('chatInput.uploadFailed') : formatFileSize(file.size)) }}
-            </span>
-          </span>
-          <button
-            v-if="file.uploadError"
-            type="button"
-            class="attachment-retry"
-            @click="retryAttachment(file)"
-          >{{ $t('chatInput.retryUpload') }}</button>
-          <button
-            type="button"
-            class="attachment-remove"
-            @click="removeAttachment(index)"
-            :title="$t('chatInput.removeAttachment')"
-            :aria-label="$t('chatInput.removeAttachment')"
-          >&times;</button>
-        </div>
-      </div>
-      <input
-        v-if="attachmentsAllowed"
-        type="file"
-        ref="fileInput"
-        id="chat-file-input"
-        @change="handleFileSelect"
-        multiple
-        accept="image/*,text/*,.pdf,.doc,.docx,.xls,.xlsx,.json,.md,.py,.js,.ts,.css,.html"
-        class="file-input-hidden"
-      />
       <div
         v-if="quickSends.length && inputFocused"
         class="mobile-quick-send-bar"
@@ -128,6 +90,14 @@ export default {
         :placeholder="disabled && disabledPlaceholderKey ? $t(disabledPlaceholderKey) : (store.btwMode ? $t('btw.placeholder') : (isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey)))"
         :disabled="isCompacting || disabled"
         :can-send="canSend"
+        :sending="sending"
+        keyboard-send
+        :attachments-enabled="attachmentsAllowed"
+        :attachments="attachments"
+        :attachment-accept="SESSION_FILE_ACCEPT"
+        @files-selected="addFiles"
+        @retry-attachment="retryAttachment"
+        @remove-attachment="removeAttachment"
         :show-stop="isStopVisible"
         :input-id="inputElementId"
         :send-label="$t('chatInput.send')"
@@ -138,7 +108,6 @@ export default {
         :aria-activedescendant="vpMentionActiveOptionId"
         @input="handleInput"
         @keydown="handleKeydown"
-        @paste="handlePaste"
         @focus="inputFocused = true"
         @blur="onBlur"
         @send="send"
@@ -190,15 +159,6 @@ export default {
           />
         </template>
         <template #start-actions>
-          <label
-            v-if="attachmentsAllowed"
-            class="attach-btn"
-            for="chat-file-input"
-            :title="$t('chatInput.upload')"
-            :aria-label="$t('chatInput.upload')"
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
-          </label>
           <span v-if="store.btwMode" class="btw-input-tag">BTW</span>
           <slot name="actions-start"></slot>
         </template>
@@ -220,9 +180,7 @@ export default {
     const inputRef = Vue.computed(() => messageComposerRef.value?.getTextarea?.() || null);
     const componentUid = Vue.getCurrentInstance()?.uid ?? 0;
     const inputElementId = `chat-input-${componentUid}`;
-    const fileInput = Vue.ref(null);
-    const attachments = Vue.ref([]); // { localId, file, name, size, preview?, uploading, uploadError, fileId? }
-    const uploading = Vue.computed(() => attachments.value.some(attachment => attachment.uploading));
+    const sending = Vue.ref(false);
     const inputAreaRef = Vue.ref(null);
     const autocompleteRef = Vue.ref(null);
     const expertAutocompleteRef = Vue.ref(null);
@@ -469,18 +427,31 @@ export default {
         && store.compactStatus?.conversationId === effectiveConversationId.value;
     });
 
-    const hasValidFileId = (attachment) => (
-      typeof attachment?.fileId === 'string' && attachment.fileId.trim().length > 0
-    );
+    const attachmentScope = () => JSON.stringify([
+      authStore.userId, authStore.authGeneration, authStore.isAuthenticated,
+      // Explicit logical drafts survive the placeholder -> real conversation migration.
+      store.currentAgent, effectiveDraftKey.value,
+    ]);
+    const attachmentQueue = useComposerAttachments({
+      scope: attachmentScope,
+      enabled: () => attachmentsAllowed.value && !props.disabled && !isCompacting.value && !sending.value,
+      upload: (rows, signal) => uploadSessionAttachments(rows, authStore, signal),
+    });
+    const { attachments, uploading, filesReady, addFiles, retryAttachment, removeAttachment } = attachmentQueue;
+    const hasValidFileId = hasAttachmentFileId;
+    let sendGeneration = 0;
+    Vue.watch(attachmentScope, () => { sendGeneration++; sending.value = false; }, { flush: 'sync' });
+    Vue.onBeforeUnmount(() => { sendGeneration++; });
 
     const canSend = Vue.computed(() => {
       if (props.disabled || isCompacting.value) return false;
+      if (sending.value) return false;
       const hasText = !!inputText.value.trim();
       const hasAttachments = attachments.value.length > 0;
 
       // Custom send mode (e.g. Yeaft page): simplified check — no conversation needed
       if (isCustomSend.value) {
-        const notUploading = !uploading.value && attachments.value.every(hasValidFileId);
+        const notUploading = filesReady.value;
         return (hasText || hasAttachments) && notUploading;
       }
 
@@ -488,7 +459,7 @@ export default {
       // Can send if: (text OR attachments OR (experts with action — pure role needs text))
       const hasActionExpert = expertSelections.value.some(s => s.action);
       const hasContent = hasText || hasAttachments || (hasExperts && (hasText || hasActionExpert));
-      const notUploading = !uploading.value && attachments.value.every(hasValidFileId);
+      const notUploading = filesReady.value;
       return hasContent && store.currentAgent && store.currentConversation && notUploading;
     });
 
@@ -590,157 +561,6 @@ export default {
       }, 150);
     };
 
-    const handleFileSelect = async (e) => {
-      const files = Array.from(e.target.files || []);
-      if (files.length > 0) {
-        await addFiles(files);
-      }
-      e.target.value = '';
-      Vue.nextTick(() => {
-        inputRef.value?.focus();
-      });
-    };
-
-    const handlePaste = async (e) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-
-      const files = [];
-      for (const item of items) {
-        if (item.kind === 'file') {
-          const file = item.getAsFile();
-          if (file) files.push(file);
-        }
-      }
-
-      if (files.length > 0) {
-        e.preventDefault();
-        await addFiles(files);
-      }
-    };
-
-    const extensionForMimeType = (mimeType) => {
-      const type = String(mimeType || '').toLowerCase();
-      if (type === 'image/png') return '.png';
-      if (type === 'image/jpeg') return '.jpg';
-      if (type === 'image/gif') return '.gif';
-      if (type === 'image/webp') return '.webp';
-      if (type === 'image/svg+xml') return '.svg';
-      if (type === 'text/plain') return '.txt';
-      if (type === 'application/json') return '.json';
-      return '';
-    };
-
-    const uploadNameForFile = (file, index) => {
-      const existing = typeof file?.name === 'string' ? file.name.trim() : '';
-      if (existing) return existing;
-      const isImage = String(file?.type || '').startsWith('image/');
-      const prefix = isImage ? 'pasted-image' : 'pasted-file';
-      return `${prefix}-${Date.now()}-${index + 1}${extensionForMimeType(file?.type)}`;
-    };
-
-    let nextAttachmentId = 1;
-
-    const formatFileSize = (bytes) => {
-      const size = Number(bytes);
-      if (!Number.isFinite(size) || size <= 0) return '';
-      if (size < 1024) return `${size} B`;
-      if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-      return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-    };
-
-    const uploadAttachments = async (pendingAttachments) => {
-      for (const attachment of pendingAttachments) {
-        attachment.uploading = true;
-        attachment.uploadError = false;
-      }
-
-      try {
-        const formData = new FormData();
-        for (const attachment of pendingAttachments) {
-          formData.append('files', attachment.file, attachment.uploadName);
-        }
-
-        const headers = {};
-        const requestToken = authStore.getActiveToken?.() || authStore.token || null;
-        if (requestToken) {
-          headers['Authorization'] = `Bearer ${requestToken}`;
-        }
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          headers,
-          body: formData
-        });
-
-        if (!response.ok) throw new Error('Upload failed');
-        const result = await response.json();
-        const uploadedFiles = Array.isArray(result.files) ? result.files : [];
-
-        for (const [index, attachment] of pendingAttachments.entries()) {
-          const uploaded = uploadedFiles[index];
-          const fileId = typeof uploaded?.fileId === 'string' ? uploaded.fileId.trim() : '';
-          if (!fileId) throw new Error('Upload response is incomplete');
-          attachment.fileId = fileId;
-          attachment.uploading = false;
-          delete attachment.uploadName;
-        }
-      } catch (error) {
-        console.error('Upload error:', error);
-        for (const attachment of pendingAttachments) {
-          if (!attachment.fileId) {
-            attachment.uploading = false;
-            attachment.uploadError = true;
-          }
-        }
-      } finally {
-        Vue.nextTick(() => inputRef.value?.focus());
-      }
-    };
-
-    const addFiles = async (files) => {
-      const pendingAttachments = [];
-      for (const [index, file] of files.entries()) {
-        const uploadName = uploadNameForFile(file, index);
-        const attachment = Vue.reactive({
-          localId: `attachment-${nextAttachmentId++}`,
-          file,
-          name: uploadName,
-          size: file.size,
-          uploadName,
-          preview: null,
-          uploading: false,
-          uploadError: false,
-          fileId: null
-        });
-
-        if (file.type.startsWith('image/')) {
-          attachment.preview = URL.createObjectURL(file);
-        }
-
-        attachments.value.push(attachment);
-        pendingAttachments.push(attachment);
-      }
-
-      await uploadAttachments(pendingAttachments);
-    };
-
-    const retryAttachment = async (attachment) => {
-      if (!attachment || attachment.uploading || attachment.fileId) return;
-      attachment.uploadName = attachment.name;
-      await uploadAttachments([attachment]);
-    };
-
-    const removeAttachment = (index) => {
-      const attachment = attachments.value[index];
-      if (attachment.preview) {
-        URL.revokeObjectURL(attachment.preview);
-      }
-      attachments.value.splice(index, 1);
-      Vue.nextTick(() => {
-        inputRef.value?.focus();
-      });
-    };
-
     const send = (quickSend = null) => {
       if (!canSend.value) return;
       // Vue's ordinary send event has no preset; never treat a DOM event as configuration.
@@ -765,17 +585,39 @@ export default {
           }));
 
         const attachmentPayload = attachmentInfos.length > 0 ? attachmentInfos : undefined;
-        const accepted = quickSend
-          ? props.sendFn(trimmed, attachmentPayload, props.quote, quickSend)
-          : props.quote ? props.sendFn(trimmed, attachmentPayload, props.quote) : props.sendFn(trimmed, attachmentPayload);
-        if (accepted === false) return;
-
-        attachments.value = [];
-        if (props.quote) emit('quote-consumed');
-        inputText.value = '';
-        if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
-        resetTextareaSize();
-        exitMobileInput();
+        const sentRows = attachments.value.slice();
+        const sentQuote = props.quote;
+        const before = inputText.value;
+        const identity = attachmentScope();
+        const g = ++sendGeneration;
+        const accept = accepted => {
+          if (accepted === false || g !== sendGeneration || identity !== attachmentScope()) return;
+          // Sent previews belong to the message projection, not the composer.
+          attachmentQueue.release(sentRows);
+          if (sentQuote && props.quote === sentQuote) emit('quote-consumed');
+          if (inputText.value === before) {
+            inputText.value = '';
+            if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
+            resetTextareaSize();
+          }
+          exitMobileInput();
+        };
+        sending.value = true;
+        try {
+          const accepted = quickSend
+            ? props.sendFn(trimmed, attachmentPayload, sentQuote, quickSend)
+            : sentQuote ? props.sendFn(trimmed, attachmentPayload, sentQuote) : props.sendFn(trimmed, attachmentPayload);
+          if (accepted && typeof accepted.then === 'function') {
+            Promise.resolve(accepted).then(accept).catch(error => console.error('Send failed:', error))
+              .finally(() => { if (g === sendGeneration) sending.value = false; });
+          } else {
+            accept(accepted);
+            sending.value = false;
+          }
+        } catch (error) {
+          sending.value = false;
+          console.error('Send failed:', error);
+        }
         return;
       }
 
@@ -838,7 +680,7 @@ export default {
           mentions,
           attachments: attachmentInfos,
         });
-        attachments.value = [];
+        attachmentQueue.release();
         inputText.value = '';
         if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
         resetTextareaSize();
@@ -849,7 +691,7 @@ export default {
       const currentExpertSelections = [...expertSelections.value];
       store.sendMessage(inputText.value.trim(), attachmentInfos, { expertSelections: currentExpertSelections });
 
-      attachments.value = [];
+      attachmentQueue.release();
       inputText.value = '';
       store.expertSelections = [];
       if (effectiveDraftKey.value) delete store.inputDrafts[effectiveDraftKey.value];
@@ -954,10 +796,6 @@ export default {
         }
       }
 
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        send();
-      }
     };
 
     const cancelExecution = () => {
@@ -987,9 +825,10 @@ export default {
       inputRef,
       messageComposerRef,
       inputAreaRef,
-      fileInput,
       attachments,
       uploading,
+      sending,
+      SESSION_FILE_ACCEPT,
       canSend,
       quickSends,
       canQuickSend,
@@ -1022,9 +861,7 @@ export default {
       handleInput,
       selectCommand,
       onBlur,
-      handleFileSelect,
-      handlePaste,
-      formatFileSize,
+      addFiles,
       retryAttachment,
       removeAttachment,
       send,

@@ -120,8 +120,19 @@
   border: 1px solid transparent;
   border-radius: 8px;
   font-size: 13px;
-  max-width: 260px;
+  max-width: min(260px, 100%);
+  min-width: 0;
 }
+
+.chat-composer > .attachments-preview {
+  width: 100%;
+  max-height: 140px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.attachment-thumb,
+.attachment-icon { flex-shrink: 0; }
 
 .attachment-item.has-error {
   border-color: var(--error);
@@ -172,7 +183,7 @@
   flex-shrink: 0;
 }
 
-.attachment-retry:hover {
+.attachment-retry:hover:not(:disabled) {
   color: var(--accent-blue-hover);
 }
 
@@ -193,7 +204,7 @@
   transition: background 0.15s;
 }
 
-.attachment-remove:hover {
+.attachment-remove:hover:not(:disabled) {
   background: var(--error);
 }
 
@@ -277,7 +288,10 @@
   min-width: 0;
 }
 
+.chat-composer-actions-start { flex-wrap: wrap; }
+
 .chat-composer-actions-end {
+  flex-shrink: 0;
   margin-left: auto;
 }
 
@@ -417,6 +431,13 @@
   pointer-events: none;
 }
 
+.attach-btn:disabled,
+.attachment-retry:disabled,
+.attachment-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Attach Button */
 .attach-btn {
   width: 36px;
@@ -433,7 +454,7 @@
   color: var(--text-secondary);
 }
 
-.attach-btn:hover {
+.attach-btn:hover:not(:disabled) {
   background: var(--sidebar-hover);
   color: var(--text-primary);
 }
