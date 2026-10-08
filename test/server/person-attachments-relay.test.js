@@ -37,6 +37,9 @@ describe('Person uploaded reference relay', () => {
     await relay.response('agent', { type: 'person_response', requestId: latest.requestId, ok: true, data: { episodeId: 'accepted-once', duplicate: true } });
     expect(uploads.has('upload')).toBe(true);
     expect(send.mock.lastCall[1].data.duplicate).toBe(true);
+    await relay.request(client, request({}, { requestId: 'expired-response' }));
+    await relay.response('agent', { type: 'person_response', requestId: forward.mock.lastCall[1].requestId, ok: false, errorCode: 'attachment_expired', error: 'Attachment expired' });
+    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, errorCode: 'attachment_expired' });
   });
 
   it.each(['foreign', 'unowned', 'expired', 'malformed', 'missing', 'duplicate', 'count', 'file-size', 'total-size', 'data', 'paths', 'raw-files', 'access', 'auth'])('rejects %s before forwarding any subset', async mode => {

@@ -126,7 +126,7 @@ export function createPersonRelay({
       await reply(row.client, row.envelope, msg.ok === true
         ? { ok: true, data: msg.data }
         : { ok: false,
-          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict', 'invalid_attachment', 'unsupported_attachment', 'attachment_limit', 'image_model', 'model_selection'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
+          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict', 'attachment_expired', 'invalid_attachment', 'unsupported_attachment', 'attachment_limit', 'image_model', 'model_selection'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
           error: typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'Digital person request failed' });
       return true;
     },
