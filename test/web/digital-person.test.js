@@ -685,6 +685,13 @@ describe('Digital Person conversation activity', () => {
     expect(project(records, { cancelPending: true }).label).toBe('person.activity.stopping');
   });
 
+  it('does not reuse the last success for a new command with unknown admission', () => {
+    const value = project([trace(1, 'committed')], {
+      busy: false, episodeId: null, latestEpisode: { id: 'e', status: 'completed', endedAt: 2000 }, retryCommand: {},
+    });
+    expect(value).toMatchObject({ visible: true, loading: false, label: 'person.activity.uncertain', rows: [], startedAt: null, endedAt: null });
+  });
+
   it('keeps the tail bounded and missing starts explicitly incomplete', () => {
     const records = Array.from({ length: 80 }, (_, i) => trace(i + 1, 'capability_result', { callId: `c${i}`, capability: { id: 'Recall' } }));
     const value = project(records);

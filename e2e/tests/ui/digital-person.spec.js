@@ -6,7 +6,7 @@ import { personRecords } from '../../../test/fixtures/person-records.js';
 // This is not a model, MongoDB or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { longReading = false, enableUi = true } = {}) {
+async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false } = {}) {
   if (enableUi) await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
@@ -15,6 +15,8 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true } =
   let configured = true;
   let renameSupported = true;
   let busy = false;
+  let activityRecords = [];
+  let latestEpisode = null;
   let saveSettings;
   let failTraces = false;
   let unknownCommand = false;
@@ -41,11 +43,12 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true } =
       if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'MongoDB is not configured', models });
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
       else if (request.op === 'snapshot') {
-        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea' }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: request.agentId === 'person-a' ? messages : [], busy, episodeId: busy ? 'episode-1' : null });
+        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea' }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: request.agentId === 'person-a' ? messages : [], busy, latestEpisode, episodeId: busy ? (activityFlow ? 'episode-1' : 'live-episode') : null });
       } else if (request.op === 'messages') {
         reply({ items: request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor ? null : 'older-page' });
       } else if (request.op === 'traces') {
         if (failTraces) { failTraces = false; reply(null, { ok: false, error: 'Thought refresh failed' }); return; }
+        if (activityFlow) { reply({ items: request.payload.cursor ? [] : activityRecords, nextCursor: request.payload.cursor ? null : 'trace-page-2' }); return; }
         const capabilityRecords = [
           { id: 'script-publication', seq: 19, episodeId: 'script', callId: 'create-call', kind: 'capability_created', capabilityId: 'Script.sum',
             capabilityManifest: { id: 'Script.sum', version: 1, revision: 'private-revision' }, evidence: { testsPassed: 2 } },
@@ -65,13 +68,13 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true } =
         reply({ items: [{ id: 'archived', role: 'user', text: longReading ? 'A message from the durable archive.\n'.repeat(100) : 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
         if (unknownCommand) { unknownCommand = false; reply(null, { ok: false, error: 'Unknown outcome', errorCode: 'outcome_unknown' }); return; }
-        if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
-        busy = true; reply({ episodeId: 'episode-1' });
+        if (request.op === 'send' && !activityFlow) messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
+        busy = true; reply({ episodeId: activityFlow ? 'episode-1' : 'live-episode' });
       } else if (request.op === 'settings') saveSettings = () => reply({ settings: request.payload });
       else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
     });
   });
-  return { requests, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+  return { requests, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
 }
 
 for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 1280, theme: 'dark', locale: 'zh-CN' }, { width: 320, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }, { width: 800, theme: 'light', locale: 'en' }]) {
@@ -144,7 +147,7 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(page.locator('.person-header')).not.toContainText(zh ? '取消' : 'Cancel');
     await expect(page.locator('.person-composer .message-composer-spinner')).toBeVisible();
     await expect(page.locator('.person-conversation .tool-line, .person-conversation .person-debug-row')).toHaveCount(0);
-    const dot = loading.locator('span').first();
+    const dot = loading.locator('.typing-indicator > span').first();
     expect(await dot.evaluate(el => getComputedStyle(el).animationName)).toBe('typing');
     expect(await dot.evaluate(el => getComputedStyle(el).backgroundColor)).toBe(await dot.evaluate(el => {
       const sample = document.createElement('div');
@@ -417,3 +420,68 @@ test('Person entry is opt-in per Agent via Agent settings and survives reload', 
   expect(mock.requests.slice(before)).toEqual([]);
   expect(mock.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op))).toEqual([]);
 });
+
+for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
+  test(`Digital Person live activity stays truthful ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
+    test.setTimeout(60000);
+    const mock = await mockPersonSocket(page, { activityFlow: true });
+    await page.setViewportSize({ width: scenario.width, height: 800 });
+    await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
+    await page.goto(serverUrl);
+    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+    if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
+    await page.locator('.sidebar-person-trigger:visible').click();
+    const zh = scenario.locale === 'zh-CN';
+    await page.getByRole('button', { name: zh ? '思考' : 'Think', exact: true }).click();
+    const records = [];
+    const add = (kind, extra = {}) => records.push({ id: `live-${records.length}`, seq: records.length + 1, episodeId: 'episode-1', createdAt: new Date().toISOString(), kind, ...extra });
+    add('accepted', { trigger: { kind: 'think', text: 'PRIVATE_INPUT' } });
+    add('call_started', { callId: 'a', request: { system: 'PRIVATE_PROMPT' } });
+    add('call_output', { callId: 'a', output: { text: 'PRIVATE_OUTPUT' } });
+    add('capability_started', { callId: 'a', capability: { id: 'Recall', args: { query: 'PRIVATE_QUERY' } } });
+    mock.activity(records);
+    const activity = page.locator('.person-activity');
+    await expect(activity).toContainText(zh ? '正在查找相关记忆' : 'Looking up relevant memories');
+    await expect(activity).not.toHaveAttribute('open', '');
+    const details = activity.locator('summary');
+    await details.focus(); await page.keyboard.press('Enter');
+    await expect(activity).toHaveAttribute('open', '');
+    // Paged journal remains readable while the live activity tail keeps polling.
+    await page.locator('.person-thoughts-button').click();
+    await page.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' }).click();
+    await page.locator('.person-panel-header .header-action-btn').click();
+    add('capability_result', { callId: 'a', capability: { id: 'Recall' }, result: { items: ['PRIVATE_MEMORY'] } });
+    add('capability_started', { callId: 'b', capability: { id: 'Skill.reconsider' } });
+    mock.activity(records);
+    await expect(activity).toContainText(zh ? '正在查看思考方法' : 'Reading a thinking method');
+    add('capability_result', { callId: 'b', capability: { id: 'Skill.reconsider' } });
+    add('capability_started', { callId: 'c', capability: { id: `Script.${'a'.repeat(48)}`, args: 'PRIVATE_CODE' } });
+    mock.activity(records);
+    await expect(activity).toContainText(`Script.${'a'.repeat(48)}`);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`person-activity-${scenario.width}-${scenario.theme}.png`) });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(await activity.locator('.typing-indicator > span').first().evaluate(el => getComputedStyle(el).animationName)).toBe('none');
+    await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
+    await expect(activity).toContainText(zh ? '暂时无法确认进展' : 'cannot confirm progress');
+    await expect(activity.locator('.person-response-loading')).toHaveCount(0);
+    await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
+    await expect(activity.locator('.person-response-loading')).toBeVisible();
+    // A capability failure is not necessarily an episode failure; the model may continue.
+    add('capability_failed', { callId: 'c', capabilityId: `Script.${'a'.repeat(48)}`, result: { message: 'PRIVATE_DIAGNOSTICS' } });
+    add('call_started', { callId: 'd' });
+    mock.activity(records);
+    await expect(activity).toContainText(zh ? '正在思考' : 'Thinking');
+    add('call_output', { callId: 'd' });
+    add('committed');
+    mock.activity(records, 'completed');
+    await expect(activity.locator('.person-response-loading')).toHaveCount(0);
+    await expect(activity).toContainText(zh ? '本次活动已完成' : 'This activity is complete');
+    await expect(page.locator('#person-input')).toBeEnabled();
+    if (!await activity.evaluate(el => el.open)) await activity.locator('summary').click();
+    await expect(activity).toContainText(zh ? '失败' : 'Failed');
+    await expect(activity.locator('pre, .tool-line, img, script')).toHaveCount(0);
+    for (const text of ['PRIVATE_INPUT', 'PRIVATE_PROMPT', 'PRIVATE_QUERY', 'PRIVATE_OUTPUT', 'PRIVATE_MEMORY', 'PRIVATE_CODE', 'PRIVATE_DIAGNOSTICS']) await expect(activity).not.toContainText(text);
+    expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(1);
+  });
+}

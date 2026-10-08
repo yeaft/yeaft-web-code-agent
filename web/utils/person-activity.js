@@ -42,8 +42,10 @@ export function personActivityRecords(traces) {
  */
 export function projectPersonActivity(state, gate = '') {
   const pending = state.commandPending;
-  const episodeId = pending ? null : state.episodeId || state.latestEpisode?.id || state.activityEpisodeId;
-  const records = pending ? [] : (state.activityRecords || []).filter(t => t.episodeId === episodeId);
+  // An unconfirmed new admission is not the previously completed episode.
+  const uncertain = !!state.retryCommand && !state.busy;
+  const episodeId = pending || uncertain ? null : state.episodeId || state.latestEpisode?.id || state.activityEpisodeId;
+  const records = pending || uncertain ? [] : (state.activityRecords || []).filter(t => t.episodeId === episodeId);
   const accepted = records.find(t => t.kind === 'accepted');
   const terminal = records.findLast(t => TERMINAL[t.kind]);
   const episode = state.latestEpisode?.id === episodeId ? state.latestEpisode : null;
