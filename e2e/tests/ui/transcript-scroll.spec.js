@@ -149,7 +149,7 @@ async function sampleFrames(page, options = {}) {
       }
       if (options.prepend && frame === 12) window.Pinia.useChatStore().loadMoreYeaftHistory(5);
       if (options.streaming && frame <= 60 && frame % 5 === 0) {
-        const row = window.Pinia.useChatStore().messagesMap[conversationId].find(row => row.id === streamingId);
+        const row = window.Pinia.useChatStore().messagesMap[conversationId].find(row => row.id === (options.streamingId || streamingId));
         row.content += `\n\nStreaming chunk ${frame}: ` + 'Implementation and verification notes. '.repeat(12);
         if (frame === 60) row.isStreaming = false;
       }
@@ -157,6 +157,8 @@ async function sampleFrames(page, options = {}) {
         .find(element => element.dataset.virtualId === options.anchorId);
       samples.push({ frame, top: container.scrollTop, height: container.scrollHeight,
         navigationHeight: container.querySelector('.transcript-navigation')?.getBoundingClientRect().height || 0,
+        originVisible: !!container.querySelector('.response-origin-btn'),
+        typingHeight: container.querySelector('.typing-indicator')?.getBoundingClientRect().height || 0,
         upperStatusHeight: container.querySelector('[data-test-upper-status]')?.getBoundingClientRect().height || 0,
         gap: container.scrollHeight - container.clientHeight - container.scrollTop,
         ids: Array.from(container.querySelectorAll('[data-virtual-id]')).map(element => element.dataset.virtualId),
@@ -430,6 +432,85 @@ test('paused reader near the bottom does not double compensate browser clamp on 
     }
   });
 });
+
+for (const { theme, width } of VIEWPORTS) {
+  test(`Latest stays stable across running cat and current-turn boundary (${theme} ${width}px)`, async ({ chatPage: page, mockAgent }, testInfo) => {
+    test.setTimeout(90000);
+    await page.setViewportSize({ width, height: 800 });
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await withScrollTrace(testInfo, async record => {
+      await openTranscript(page, mockAgent);
+      await page.evaluate(({ conversationId, sessionId, agentId }) => {
+        const store = window.Pinia.useChatStore();
+        store.addMessageToConversation(conversationId, {
+          id: 'cat-long-tail', type: 'assistant',
+          content: 'Long final response.\n\n' + 'Detailed implementation and verification notes.\n\n'.repeat(100),
+          sessionId, agentId, turnId: 'cat-turn', speakerVpId: 'omni',
+          responseKind: 'result', isStreaming: false, timestamp: Date.now(),
+        });
+        store.activeVpTurns['cat-turn'] = { sessionId, agentId, vpId: 'omni', startedAt: Date.now() };
+        // Pin only the health banner, not the animation or layout. Its real
+        // eight-second fallback is covered separately by upper-status tests.
+        store.sessionHealth[conversationId] = { status: 'normal' };
+      }, { conversationId: CONVERSATION, sessionId: SESSION, agentId: mockAgent.agentId });
+      await expect(page.locator('.typing-indicator .svg-cat-walk')).toBeVisible();
+      const navigationHeight = width === 320 ? 36 : 32;
+      for (const height of [470, 460, 450, 440, 430, 420, 410]) {
+        await page.setViewportSize({ width, height });
+        await page.locator('.scroll-to-latest').evaluate(button => button.click());
+        const samples = await record(page, `running cat boundary at ${height}px`);
+        expectStable(samples);
+        expect(new Set(samples.slice(80).map(sample => sample.navigationHeight))).toEqual(new Set([navigationHeight]));
+        expect(samples.every(sample => sample.typingHeight === 40)).toBe(true);
+      }
+      // The scan crosses the exact visibility boundary that used to alternate
+      // 32/72px (36/80px on mobile), feeding a per-frame bottom-follow loop.
+      await page.setViewportSize({ width, height: 470 });
+      const withOrigin = await record(page, 'long response origin visible');
+      expectStable(withOrigin);
+      expect(withOrigin.at(-1).originVisible).toBe(true);
+      const origin = page.locator('.response-origin-btn');
+      await expect(origin).toBeVisible();
+      const originGeometry = await origin.evaluate(button => {
+        const rect = button.getBoundingClientRect();
+        const viewport = button.closest('.chat-container').getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return { inside: rect.top >= viewport.top && rect.bottom <= viewport.bottom
+          && rect.left >= viewport.left && rect.right <= viewport.right,
+          hit: button.contains(hit) };
+      });
+      expect(originGeometry).toEqual({ inside: true, hit: true });
+      await origin.focus();
+      await expect(origin).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(page.locator('.scroll-to-latest')).not.toHaveClass(/is-hidden/);
+      expectStable(await record(page, 'keyboard returns to the current question'), { bottom: false });
+      await page.locator('.scroll-to-latest').click();
+      expectStable(await record(page, 'Latest after keyboard turn navigation'));
+      await page.setViewportSize({ width, height: 300 });
+      const withoutOrigin = await record(page, 'long response origin hidden');
+      expectStable(withoutOrigin);
+      expect(withoutOrigin.at(-1).originVisible).toBe(false);
+
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        await page.evaluate(conversationId => {
+          window.Pinia.useChatStore().messagesMap[conversationId].find(row => row.id === 'cat-long-tail').isStreaming = true;
+        }, CONVERSATION);
+        const streaming = await record(page, 'text grows while the cat exits and re-enters', { streaming: true, streamingId: 'cat-long-tail' });
+        expectStable(streaming);
+        expect(streaming.some(sample => sample.typingHeight === 0)).toBe(true);
+        expect(streaming.at(-1).typingHeight).toBe(40);
+      }
+      await scrollAway(page, -6000);
+      expectStable(await record(page, 'reader pauses with active cat'), { bottom: false });
+      await page.locator('.scroll-to-latest').click();
+      expectStable(await record(page, 'resume Latest with active cat'));
+      await page.evaluate(() => { delete window.Pinia.useChatStore().activeVpTurns['cat-turn']; });
+      await expect(page.locator('.typing-indicator')).toHaveCount(0);
+      expectStable(await record(page, 'terminal turn removes cat'));
+    });
+  });
+}
 
 // Baseline 204833ede reproduces this independent search-window projection
 // failure unchanged (focus m49 accepted, recent m241/m289/m337 still mounted).
