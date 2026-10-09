@@ -259,6 +259,7 @@ export class PersonRuntime {
           }) };
           output = await collectOutput(observingAdapter, {
             model: selection.model, effort: selection.effort ?? undefined, effortSource: 'auto',
+            usageCacheIncluded: provider.catalog.find(model => model.id === selection.model)?.usageCacheIncluded,
             system: context.system, messages: context.messages, maxTokens: context.maxTokens, signal,
           }, decision => {
             effective.effort = decision.effective; effective.effortObserved = true;

@@ -8,6 +8,8 @@ import SidebarDigitalPerson from '../../web/components/SidebarDigitalPerson.js';
 import PersonThoughtJournal from '../../web/components/PersonThoughtJournal.js';
 import PersonActivity from '../../web/components/PersonActivity.js';
 import PersonTaskBrowser from '../../web/components/PersonTaskBrowser.js';
+import PersonTurnUsage from '../../web/components/PersonTurnUsage.js';
+import { personTurn } from '../fixtures/person-turns.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
@@ -37,6 +39,7 @@ beforeEach(() => {
         inspect: { items: request.payload.section === 'memory' ? [{ id: 'idea', kind: 'interest', statement: '<script>Keep uncertainty</script>', epistemicState: 'reported', revision: 2, sourceRefs: ['message:1'] }] : [{ id: 'Script.sum', domain: 'script', version: 1, description: 'Sum', code: 'return input' }], nextCursor: null },
         search: { items: [{ id: 'archive', role: 'user', text: '<img src=x> archived message', createdAt: 1 }], nextCursor: null },
         tasks: { tasks: [{ id: 'background', title: '<script>build</script>', status: 'running' }], agents: [{ id: 'child', taskId: 'child-log', name: 'Research', status: 'completed' }] },
+        turns: { items: [personTurn()], nextCursor: null },
         task_log: { text: '<img onerror=alert(1)> shell output', nextOffset: 35 }, task_cancel: {}, agent_close: {},
       };
       queueMicrotask(() => acceptPersonResponse(chat, { ...request, type: 'person_response', ok: true, data: data[request.op] }));
@@ -93,6 +96,39 @@ describe('Digital Person surface', () => {
     await wrapper.findAll('button').find(b => b.text() === 'Back').trigger('click');
     expect(wrapper.find('#person-thoughts').exists()).toBe(true);
     expect(wrapper.find('#person-debug').exists()).toBe(false);
+  });
+
+  it('shows complete turn flow and token metadata only in the kernel, without clearing the draft or starting cognition', async () => {
+    await render(); await wrapper.get('#person-input').setValue('Keep my draft');
+    await wrapper.get('.person-thoughts-button').trigger('click');
+    await wrapper.findAll('.person-inspector-nav button').find(b => b.text() === 'Flow & usage').trigger('click');
+    await flushPromises();
+    const panel = wrapper.get('#person-turns');
+    expect(panel.text()).toContain('2 loops');
+    expect(panel.text()).toContain('Total tokens: 170');
+    expect(panel.text()).toContain('test/first → test/second');
+    expect(panel.text()).toContain('Recall');
+    expect(panel.text()).toContain('Loop 2');
+    expect(wrapper.get('#person-conversation').text()).not.toContain('170');
+    expect(wrapper.get('#person-input').element.value).toBe('Keep my draft');
+    expect(requests.filter(r => r.op === 'turns')).toHaveLength(1);
+    expect(requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
+  });
+
+  it.each([en, zhCN])('distinguishes missing usage, zero and incomplete turns, rendering metadata inertly', messages => {
+    const turn = personTurn(2, { status: 'failed', models: ['<img src=x>'], terminalCode: 'PROVIDER_FAILED',
+      usage: { totalTokens: 0, complete: false }, calls: [{ callId: 'partial', index: 1, status: 'failed',
+        dispatched: { model: '<script>model</script>' }, reason: '<img src=x>', usage: null }] });
+    wrapper = mount(PersonTurnUsage, { props: { page: { items: [turn], loaded: true, nextCursor: 1 } },
+      global: { config: { globalProperties: { $t: (key, params = {}) => (messages[key] || key).replace(/\{(\w+)\}/g, (m, name) => params[name] ?? m) } } } });
+    expect(wrapper.text()).toContain(messages['person.usage.partial']);
+    expect(wrapper.text()).toContain('0');
+    expect(wrapper.text()).toContain('—');
+    expect(wrapper.text()).toContain('<script>model</script>');
+    expect(wrapper.find('script, img').exists()).toBe(false);
+    expect(wrapper.text()).not.toMatch(/person\.usage\./);
+    wrapper.findAll('button').find(b => b.text() === messages['person.usage.older']).trigger('click');
+    expect(wrapper.emitted('more')).toHaveLength(1);
   });
 
   it('shows cross-episode task management in the kernel without starting cognition, keeping logs inert and draft intact', async () => {

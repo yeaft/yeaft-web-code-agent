@@ -59,6 +59,14 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 
 认知指令明确要求数字人在显式启动的 episode 中关注自己已授权的持续工作，而不只看最新消息；但这不代表任务完成会自动启动下一次认知。当前产品仍并列提供 Session、Work Center 和数字人，尚未改成以数字人为唯一顶层入口；此处没有新增自主调度、自动重试或后台模型唤回。
 
+## 内核中的运行与用量
+
+点击「查看内部」→「运行与用量」，按持久 turn（send/think/dream episode）查看调用次数、状态、模型选择与 token 明细。展开 turn 后按顺序显示每个 loop 的调用模型、有效 effort、选择来源、输入/输出/推理/缓存用量、上下文字节预算与输出 token 预留，以及该 loop 的能力执行结果。摘要分页以完整 turn 为单位，不依赖原始 trace 页是否已加载；仅在面板可见时轮询，不发起模型请求。重新加载页面后仍可查看历史。
+
+用量来源是 provider 实际返回的 usage，不从字符数估算计费 token；流式增量累加一次，OpenAI 输入已包含的缓存不再相加，Anthropic 独立报告的缓存计入输入总量。推理 token 是输出的子集，不重复计入总量。失败或取消仍保留已捕获用量；缺失 usage、尚未结束的调用或旧记录不能证明使用完整累加规则或缓存口径不明时明确标记未完整确认，已知值只能视为下限，不能以 0 代替未知。
+
+此页展示 **Person 主线程** 的用量，不包含独立子 Engine 的额外消耗，也不计算费用或执行用户可设的 token 硬限额。调用模型表示分派到配置的模型引用，不保证供应商内部 alias 对应的底层版本。每个 episode 既有的调用次数上限、超时与单次输出预留继续生效；查看页不能代替完整的跨线程费用预算。原始调试日志入口仍在思考记录内，不把 prompt、工具参数或隐式思考复制进用量摘要。
+
 ## 子 Agent 限制
 
 子 Engine 只继承 Person 已支持的真实 native 工具和当前插件 allowlist；原生 `DiscoverTools` 仅供子 Engine 使用，不进入 Person proposal catalog。角色 baseline 和 `allow_tools` 继续约束子工具，不能授予嵌套 orchestration。没有 Session HistorySearch、交互 AskUser、路由、MCP、Work Center 或 worktree 管理。

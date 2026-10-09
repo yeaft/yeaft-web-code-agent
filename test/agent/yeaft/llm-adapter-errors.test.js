@@ -608,7 +608,8 @@ describe('Anthropic tool input completion boundary', () => {
       vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ content: [start(0).content_block, start(1, input).content_block], stop_reason, usage })));
       const seen = [];
       await expect((async () => { for await (const e of adapter().stream(request)) seen.push(e); })()).rejects.toBeInstanceOf(LLMServerError);
-      expect(seen).toEqual([{ type: 'usage', inputTokens: 10, outputTokens: 65536, cacheReadTokens: 7, cacheWriteTokens: 3 }]);
+      expect(seen).toEqual([{ type: 'usage', inputTokens: 10, outputTokens: 65536, cacheReadTokens: 7, cacheWriteTokens: 3,
+        reportedTokenFields: ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'], usageIncomplete: false }]);
     }
   });
 });

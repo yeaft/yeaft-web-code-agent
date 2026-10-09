@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
@@ -9,6 +9,8 @@ import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { DatabaseSync } from 'node:sqlite';
+import { collectOutput, createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
+import { callUsage } from '../../../../agent/yeaft/person/turn-diagnostics.js';
 import { config, imageConfig, finalProposal } from './fixtures.js';
 
 // Real runtime lifecycle against an isolated SQLite authority, with scripted inference.
@@ -511,4 +513,264 @@ describe('Person real SQLite runtime integration', () => {
     }
   });
 
+});
+
+const turnResources = [], turnDirs = [];
+const turnRequest = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
+async function turnSetup(namespace = 'diagnostics', adapter) {
+  const dir = await mkdtemp(join(tmpdir(), 'person-turns-')); turnDirs.push(dir);
+  const repository = new SqlitePersonRepository({ yeaftDir: dir, namespace, leaseMs: 10000 });
+  const service = createPersonService({ yeaftDir: dir, namespace, config, adapter, embedding: { enabled: false }, effortEnabled: true });
+  turnResources.push(repository, service);
+  await turnRequest(service, 'open');
+  return { dir, repository, service };
+}
+async function turnAdmit(repository, id, ownerId = 'alice') {
+  return (await repository.admit(ownerId, { kind: 'think', text: 'private trigger', clientMessageId: id, workerId: 'worker', budget: { calls: 16, timeoutMs: 120000 } })).episode;
+}
+async function turnStart(repository, episode, callId, index = 0, model = 'test/first') {
+  await repository.startCall(episode, { callId, callIndex: index, requested: { model, effort: 'high' }, effective: { model, effort: null },
+    selectionOrigin: index ? 'person' : 'bootstrap', reason: 'configured-default',
+    manifest: { contextBytes: 500, contextBudgetBytes: 1000, outputTokensReserved: 4096, private: 'manifest-secret' },
+    request: { system: 'system-secret', messages: [{ content: 'raw-secret' }] } });
+}
+const turnOutput = (usage) => ({ text: 'output-secret', usage: usage ? { accountingVersion: 1, ...usage } : usage });
+async function turnIdle(service) {
+  for (let i = 0; i < 200; i++) {
+    const result = await turnRequest(service, 'turns');
+    if (result.items[0]?.status !== 'running') return result.items[0];
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error('runtime did not finish');
+}
+afterEach(async () => {
+  await Promise.all(turnResources.splice(0).map(resource => resource.close()));
+  await Promise.all(turnDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+});
+
+describe('Person additive provider usage', () => {
+  const consume = async (events, more = {}) => collectOutput({ async *stream() { yield* events; } }, { signal: new AbortController().signal, ...more }, () => {});
+  const stop = { type: 'stop', stopReason: 'end_turn' };
+  it('adds Anthropic input/turnStart and output deltas with uncached input plus caches; reasoning is a subset', async () => {
+    const result = await consume([
+      { type: 'usage', inputTokens: 12, outputTokens: 1, cacheReadTokens: 30, cacheWriteTokens: 8 },
+      { type: 'usage', inputTokens: 0, outputTokens: 9, reasoningTokens: 4 },
+      { type: 'usage', inputTokens: 0, outputTokens: 5, reasoningTokens: 2 }, stop,
+    ], { usageCacheIncluded: false });
+    expect(result.usage).toEqual({ accountingVersion: 1, inputTokens: 12, outputTokens: 15, reasoningTokens: 6, cacheReadTokens: 30, cacheWriteTokens: 8, cacheTokensAreIncludedInInput: false });
+    expect(callUsage(result.usage, true)).toMatchObject({ inputTotalTokens: 50, totalTokens: 65, complete: true });
+  });
+  it.each(['anthropic', 'openai-responses'])('consumes actual %s adapter events and configured cache semantics', async protocol => {
+    const id = protocol === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4.1';
+    const provider = await createPersonProvider({ config: {
+      providers: [{ name: 'native', protocol, models: [id], baseUrl: 'https://fixture.invalid', apiKey: 'fixture-only' }],
+      availableModels: [{ id, ref: `native/${id}`, contextWindow: 128000, maxOutput: 4096 }],
+    } });
+    const events = protocol === 'anthropic' ? [
+      ['message_start', { message: { id: 'msg-test', usage: { input_tokens: 12, output_tokens: 1, cache_read_input_tokens: 30, cache_creation_input_tokens: 8 } } }],
+      ['content_block_start', { index: 0, content_block: { type: 'text', text: '' } }],
+      ['content_block_delta', { index: 0, delta: { type: 'text_delta', text: '{}' } }],
+      ['content_block_stop', { index: 0 }],
+      ['message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 10 } }],
+      ['message_stop', {}],
+    ] : [['response.completed', { response: { id: 'resp-test', status: 'completed', output: [], usage: { input_tokens: 50, output_tokens: 10, input_tokens_details: { cached_tokens: 30 }, output_tokens_details: { reasoning_tokens: 4 } } } }]];
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } }));
+    try {
+      const result = await collectOutput(provider.adapter, { model: provider.defaultSelection.model, system: 'test', messages: [{ role: 'user', content: 'test' }], maxTokens: 4096,
+        signal: new AbortController().signal, usageCacheIncluded: provider.catalog[0].usageCacheIncluded }, () => {});
+      expect(result.usage.cacheTokensAreIncludedInInput).toBe(protocol !== 'anthropic');
+      expect(callUsage(result.usage, true)).toMatchObject({ inputTokens: protocol === 'anthropic' ? 12 : 50, outputTokens: 10, inputTotalTokens: 50, totalTokens: 60, complete: true });
+    } finally { fetch.mockRestore(); }
+  });
+  it.each(['anthropic', 'openai-responses'])('keeps missing %s usage unknown for SSE and JSON instead of inventing zero totals', async protocol => {
+    const id = protocol === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4.1';
+    const provider = await createPersonProvider({ config: {
+      providers: [{ name: 'native', protocol, models: [id], baseUrl: 'https://fixture.invalid', apiKey: 'fixture-only' }],
+      availableModels: [{ id, ref: `native/${id}`, contextWindow: 128000, maxOutput: 4096 }],
+    } });
+    for (const transport of ['sse', 'json']) for (const usage of [undefined, { input_tokens: 5 }, { output_tokens: 2 }, { input_tokens: 0, output_tokens: 0 }]) {
+      const complete = usage?.input_tokens === 0 && usage?.output_tokens === 0;
+      const body = protocol === 'anthropic' ? { id: 'msg', content: [{ type: 'text', text: '{}' }], stop_reason: 'end_turn', usage }
+        : { id: 'resp', status: 'completed', output: [], usage };
+      const events = protocol === 'anthropic' ? [
+        ['message_start', { message: { id: 'msg', usage } }],
+        ['message_delta', { delta: { stop_reason: 'end_turn' }, usage: usage === undefined ? undefined : { output_tokens: usage.output_tokens } }],
+        ['message_stop', {}],
+      ] : [['response.completed', { response: body }]];
+      const response = transport === 'json' ? new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+        : new Response(events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+      const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+      try {
+        const result = await collectOutput(provider.adapter, { model: provider.defaultSelection.model, system: 'test', messages: [{ role: 'user', content: 'test' }], maxTokens: 4096,
+          signal: new AbortController().signal, usageCacheIncluded: provider.catalog[0].usageCacheIncluded }, () => {});
+        expect(callUsage(result.usage, true)).toMatchObject({ totalTokens: complete ? 0 : null, complete });
+      } finally { fetch.mockRestore(); }
+    }
+  });
+
+  it('preserves the OpenAI inclusion flag across events without counting caches or reasoning twice', async () => {
+    const result = await consume([
+      { type: 'usage', inputTokens: 50, outputTokens: 10, reasoningTokens: 4, cacheReadTokens: 30, cacheTokensAreIncludedInInput: true },
+      { type: 'usage', inputTokens: 0, outputTokens: 5 }, stop,
+    ]);
+    expect(result.usage).toMatchObject({ inputTokens: 50, outputTokens: 15, reasoningTokens: 4, cacheTokensAreIncludedInInput: true });
+    expect(callUsage(result.usage, true)).toMatchObject({ inputTotalTokens: 50, totalTokens: 65, complete: true });
+  });
+  it('retains additive usage before provider failure and marks partial totals incomplete', async () => {
+    const error = await consume([
+      { type: 'usage', inputTokens: 15, outputTokens: 0, cacheReadTokens: 5, cacheTokensAreIncludedInInput: false },
+      { type: 'usage', inputTokens: 0, outputTokens: 7 }, { type: 'error', error: new Error('secret') },
+    ]).catch(error => error);
+    expect(error.code).toBe('PROVIDER_FAILED');
+    expect(callUsage(error.partialOutput.usage, false)).toMatchObject({ inputTokens: 15, outputTokens: 7, totalTokens: 27, complete: false });
+  });
+  it('does not invent legacy cache totals or missing usage, and rejects nonnumeric token data', () => {
+    expect(callUsage({ accountingVersion: 1, inputTokens: 20, outputTokens: 5, cacheReadTokens: 8 }, true)).toMatchObject({ inputTokens: 20, inputTotalTokens: null, totalTokens: null, complete: false });
+    expect(callUsage({ inputTokens: 0, outputTokens: 9 }, true)).toMatchObject({ totalTokens: null, complete: false });
+    expect(callUsage(null, true)).toMatchObject({ inputTokens: null, outputTokens: null, totalTokens: null, reportedCalls: 0, missingCalls: 1, complete: false });
+    expect(callUsage({ inputTokens: '20', outputTokens: -1 }, true).reportedCalls).toBe(0);
+  });
+});
+
+describe('Person durable turn metadata', () => {
+  it('returns complete mixed-model calls independently of raw trace pagination and survives reopening', async () => {
+    const { dir, repository, service } = await turnSetup();
+    const episode = await turnAdmit(repository, 'mixed');
+    await turnStart(repository, episode, 'one');
+    await repository.finalizeCall(episode, { callId: 'one', effective: { effort: 'low', effortObserved: true },
+      output: turnOutput({ inputTokens: 10, outputTokens: 8, reasoningTokens: 2, cacheReadTokens: 30, cacheWriteTokens: 5, cacheTokensAreIncludedInInput: false }) });
+    const capability = { id: 'Recall', args: { query: 'tool-args-secret' } };
+    await repository.startCapability(episode, { callId: 'one', capability });
+    await repository.finalizeCapability(episode, { callId: 'one', capability, result: { items: [{ text: 'tool-result-secret' }] } });
+    await turnStart(repository, episode, 'two', 1, 'test/second');
+    await repository.finalizeCall(episode, { callId: 'two', output: turnOutput({ inputTokens: 50, outputTokens: 7, cacheReadTokens: 20, cacheTokensAreIncludedInInput: true }) });
+    for (let i = 0; i < 30; i++) await repository.append(episode, 'activity', { summary: 'activity-secret' });
+    await repository.finish(episode, 'completed', null);
+    expect((await turnRequest(service, 'traces', { limit: 20 })).items.some(item => item.kind === 'call_started')).toBe(false);
+    const result = await turnRequest(service, 'turns');
+    expect(result.nextCursor).toBeNull();
+    const turn = result.items[0];
+    expect(turn).toMatchObject({ id: episode.id, seq: 1, kind: 'think', status: 'completed', terminalCode: null,
+      budget: { calls: 16, timeoutMs: 120000 }, models: ['test/first', 'test/second'],
+      usage: { inputTokens: 60, outputTokens: 15, reasoningTokens: 2, cacheReadTokens: 50, cacheWriteTokens: 5, inputTotalTokens: 95, totalTokens: 110, reportedCalls: 2, missingCalls: 0, complete: true } });
+    expect(turn.calls).toHaveLength(2);
+    expect(turn.calls[0]).toMatchObject({ callId: 'one', index: 1, status: 'completed', requested: { model: 'test/first', effort: 'high' },
+      dispatched: { model: 'test/first' }, effective: { model: null, effort: 'low' }, selectionOrigin: 'bootstrap',
+      contextBytes: 500, contextBudgetBytes: 1000, outputTokensReserved: 4096, capability: { id: 'Recall', status: 'completed', code: null } });
+    expect(turn.calls[1]).toMatchObject({ index: 2, dispatched: { model: 'test/second' }, effective: { model: null, effort: null } });
+    expect(typeof turn.createdAt).toBe('string'); expect(typeof turn.endedAt).toBe('string');
+    expect(JSON.stringify(result)).not.toMatch(/secret|private trigger|ownerId|namespace|personId|system|arguments/);
+    await service.close(); await repository.close();
+    const reopened = createPersonService({ yeaftDir: dir, namespace: 'diagnostics', config, embedding: { enabled: false } }); turnResources.push(reopened);
+    expect(await turnRequest(reopened, 'turns')).toEqual(result);
+  });
+
+  it('does not mark legacy overwritten Anthropic output deltas as exact usage', async () => {
+    const { repository, service } = await turnSetup(); const episode = await turnAdmit(repository, 'legacy');
+    await turnStart(repository, episode, 'old');
+    await repository.finalizeCall(episode, { callId: 'old', output: { text: 'old', usage: { inputTokens: 0, outputTokens: 9 } } });
+    await repository.finish(episode, 'completed', null);
+    const turn = (await turnRequest(service, 'turns')).items[0];
+    expect(turn.usage).toMatchObject({ totalTokens: null, complete: false });
+    expect(turn.calls[0].usage).toMatchObject({ inputTokens: 0, outputTokens: 9, totalTokens: null, complete: false });
+  });
+
+  it('includes zero-call accepted turns, running calls and partial failed/cancelled/missing provider usage', async () => {
+    const { repository, service } = await turnSetup();
+    const episode = await turnAdmit(repository, 'pending');
+    let turn = (await turnRequest(service, 'turns')).items[0];
+    expect(turn).toMatchObject({ status: 'running', calls: [], models: [], usage: { reportedCalls: 0, missingCalls: 0, complete: false, totalTokens: 0 } });
+    await turnStart(repository, episode, 'missing');
+    turn = (await turnRequest(service, 'turns')).items[0];
+    expect(turn.calls[0]).toMatchObject({ status: 'running', endedAt: null, usage: { missingCalls: 1, complete: false, totalTokens: null } });
+    await repository.finalizeCall(episode, { callId: 'missing', output: turnOutput(null) });
+    await turnStart(repository, episode, 'partial', 1);
+    await repository.finalizeCall(episode, { callId: 'partial', code: 'PROVIDER_FAILED', output: turnOutput({ inputTokens: 9, outputTokens: 2, cacheReadTokens: 4, cacheTokensAreIncludedInInput: false }) });
+    await repository.finish(episode, 'failed', 'PROVIDER_FAILED');
+    turn = (await turnRequest(service, 'turns')).items[0];
+    expect(turn).toMatchObject({ status: 'failed', terminalCode: 'PROVIDER_FAILED', usage: { inputTokens: 9, outputTokens: 2, reportedCalls: 1, missingCalls: 1, totalTokens: null, complete: false } });
+    expect(turn.calls[1]).toMatchObject({ status: 'failed', code: 'PROVIDER_FAILED', usage: { inputTotalTokens: 13, totalTokens: 15, complete: false } });
+    const cancelled = await turnAdmit(repository, 'cancelled'); await turnStart(repository, cancelled, 'cancel');
+    await repository.cancel('alice', cancelled.id);
+    await repository.finalizeCall(cancelled, { callId: 'cancel', output: turnOutput({ inputTokens: 6, outputTokens: 3 }) });
+    turn = (await turnRequest(service, 'turns')).items[0];
+    expect(turn.calls[0]).toMatchObject({ status: 'cancelled', code: 'CANCELLED', usage: { inputTokens: 6, outputTokens: 3, complete: false } });
+  });
+
+  it('projects running, failed and after-terminal capability results without raw arguments or output', async () => {
+    const { repository, service } = await turnSetup();
+    const episode = await turnAdmit(repository, 'tools');
+    await turnStart(repository, episode, 'tool-call');
+    await repository.finalizeCall(episode, { callId: 'tool-call', output: turnOutput({ inputTokens: 3, outputTokens: 2 }) });
+    const capability = { id: 'Recall', args: { query: 'tool-secret' } };
+    await repository.startCapability(episode, { callId: 'tool-call', capability });
+    expect((await turnRequest(service, 'turns')).items[0].calls[0].capability).toEqual({ id: 'Recall', status: 'running', code: null });
+    await repository.finalizeCapability(episode, { callId: 'tool-call', capability, result: { ok: false, code: 'UNSUPPORTED', error: 'tool-secret' } });
+    expect((await turnRequest(service, 'turns')).items[0].calls[0].capability).toEqual({ id: 'Recall', status: 'failed', code: 'UNSUPPORTED' });
+    await turnStart(repository, episode, 'late-call', 1);
+    await repository.finalizeCall(episode, { callId: 'late-call', output: turnOutput({ inputTokens: 3, outputTokens: 2 }) });
+    await repository.startCapability(episode, { callId: 'late-call', capability });
+    await repository.cancel('alice', episode.id);
+    await repository.finalizeCapability(episode, { callId: 'late-call', capability, result: { ok: true, text: 'tool-secret' } });
+    const result = await turnRequest(service, 'turns');
+    expect(result.items[0]).toMatchObject({ status: 'cancelled', terminalCode: 'CANCELLED' });
+    expect(result.items[0].calls[1].capability).toEqual({ id: 'Recall', status: 'completed', code: 'CANCELLED' });
+    expect(JSON.stringify(result)).not.toContain('tool-secret');
+  });
+
+  it('pages exclusive numeric watermarks, isolates owner/namespace, and does not recover expired leases or dispatch providers', async () => {
+    const invoke = vi.fn();
+    const { dir, repository, service } = await turnSetup('paging', { stream: invoke });
+    for (let i = 1; i <= 23; i++) { const episode = await turnAdmit(repository, `turn-${i}`); await repository.finish(episode, 'failed', 'PROVIDER_FAILED'); }
+    await repository.open('bob');
+    const bob = await turnAdmit(repository, 'bob', 'bob'); await repository.finish(bob, 'failed', 'PROVIDER_FAILED');
+    const foreign = new SqlitePersonRepository({ yeaftDir: dir, namespace: 'foreign', leaseMs: 10000 }); turnResources.push(foreign);
+    await foreign.open('alice'); const other = await turnAdmit(foreign, 'foreign'); await foreign.finish(other, 'failed', 'PROVIDER_FAILED');
+    const first = await turnRequest(service, 'turns');
+    expect(first.items.map(item => item.seq)).toEqual(Array.from({ length: 20 }, (_, i) => 23 - i));
+    expect(first.nextCursor).toBe(4);
+    const second = await turnRequest(service, 'turns', { cursor: first.nextCursor });
+    expect(second.items.map(item => item.seq)).toEqual([3, 2, 1]); expect(second.nextCursor).toBeNull();
+    expect((await turnRequest(service, 'turns', {}, 'bob')).items.map(item => item.id)).toEqual([bob.id]);
+    expect(first.items.some(item => item.id === other.id)).toBe(false);
+    const pending = await turnAdmit(repository, 'expired');
+    const db = new DatabaseSync(repository.dbPath);
+    try {
+      const values = repository.scope('alice');
+      db.prepare("UPDATE persons SET record = json_set(record, '$.leaseUntil', '2000-01-01T00:00:00.000Z') WHERE namespace = ? AND ownerId = ? AND personId = ?").run(values.namespace, values.ownerId, values.personId);
+      const before = db.prepare('SELECT record FROM persons WHERE namespace = ? AND ownerId = ?').get('paging', 'alice').record;
+      expect((await turnRequest(service, 'turns')).items[0]).toMatchObject({ id: pending.id, status: 'running', calls: [] });
+      expect(db.prepare('SELECT record FROM persons WHERE namespace = ? AND ownerId = ?').get('paging', 'alice').record).toBe(before);
+    } finally { db.close(); }
+    expect(invoke).not.toHaveBeenCalled();
+    await expect(turnRequest(service, 'turns', {}, 'absent')).rejects.toMatchObject({ code: 'NOT_OPEN' });
+  });
+
+  it.each([{ cursor: '2' }, { cursor: 0 }, { cursor: -1 }, { cursor: 1.5 }, { cursor: Number.MAX_SAFE_INTEGER + 1 }, { limit: 21 }, { limit: 0 }, { limit: null }, { ownerId: 'bob' }])('validates pages before repository work: %j', async payload => {
+    const { service, repository } = await turnSetup();
+    await expect(turnRequest(service, 'turns', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    if (!Object.hasOwn(payload, 'ownerId')) await expect(repository.turns('alice', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  });
+
+  it('records usage and model changes through a real multi-loop runtime', async () => {
+    let calls = 0;
+    const adapter = { async *stream(params) {
+      const context = JSON.parse(params.messages[0].content), proposal = finalProposal(context.state.version);
+      proposal.concepts = []; proposal.state.focusConceptIds = [];
+      calls++;
+      params.onEffortDecision?.({ effective: calls === 1 ? null : 'low', model: 'untrusted-model', wireMode: 'test' });
+      if (calls === 1) proposal.next = { model: 'test/second', effort: 'high', reason: 'Try another model.', capability: { id: 'catalog.view', args: { id: 'Recall' } } };
+      yield { type: 'text_delta', text: JSON.stringify(proposal) };
+      yield { type: 'usage', inputTokens: 20, outputTokens: 10, cacheReadTokens: 8, cacheTokensAreIncludedInInput: true };
+      yield { type: 'stop', stopReason: 'end_turn' };
+    } };
+    const { service } = await turnSetup('runtime', adapter);
+    await turnRequest(service, 'send', { text: 'hello', clientMessageId: 'runtime' });
+    const turn = await turnIdle(service);
+    expect(turn).toMatchObject({ status: 'completed', models: ['test/first', 'test/second'], usage: { inputTokens: 40, outputTokens: 20, totalTokens: 60, complete: true } });
+    expect(turn.calls.map(call => call.index)).toEqual([1, 2]);
+    expect(turn.calls[0].capability).toEqual({ id: 'catalog.view', status: 'completed', code: null });
+    expect(turn.calls[1]).toMatchObject({ selectionOrigin: 'person', requested: { effort: 'high' }, effective: { model: null, effort: 'low' } });
+    expect(calls).toBe(2);
+  });
 });

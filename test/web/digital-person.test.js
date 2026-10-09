@@ -911,3 +911,81 @@ describe('Digital Person conversation activity', () => {
     expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
   });
 });
+
+
+describe('Digital Person durable turn usage reads', () => {
+  const row = seq => ({ id: `turn-${seq}`, seq, calls: [] });
+  it('reads only while visible, preserves history and polls idle turns without inference', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    let latest = [row(3), row(2)];
+    f.auto(r => r.op === 'turns' ? { items: r.payload.cursor ? [row(1)] : latest, nextCursor: r.payload.cursor ? null : 2 } : undefined);
+    await f.controller.open('a');
+    expect(f.requests.some(r => r.op === 'turns')).toBe(false);
+    f.controller.showTurns(true); await vi.advanceTimersByTimeAsync(0);
+    await f.controller.readTurns(true);
+    expect(f.state.turns.items.map(r => r.seq)).toEqual([3, 2, 1]);
+    latest = [row(4), row(3)]; await vi.advanceTimersByTimeAsync(51);
+    expect(f.state.turns.items.map(r => r.seq)).toEqual([4, 3, 2, 1]);
+    expect(f.state.turns.nextCursor).toBeNull();
+    f.controller.showTurns(false); const count = f.requests.length;
+    await vi.advanceTimersByTimeAsync(151);
+    expect(f.requests.length).toBe(count);
+    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
+  });
+
+  it('does not let automatic refresh supersede a slow older-page read', async () => {
+    vi.useFakeTimers(); const f = fixture({ timeoutMs: 1000 });
+    f.auto(r => r.op === 'turns' ? { items: [row(3), row(2)], nextCursor: 2 } : undefined);
+    await f.controller.open('a'); f.controller.showTurns(true); await vi.advanceTimersByTimeAsync(0);
+    f.auto(r => r.op === 'turns' ? false : undefined);
+    const pending = f.controller.readTurns(true), request = f.requests.at(-1);
+    const count = f.requests.filter(r => r.op === 'turns').length;
+    await vi.advanceTimersByTimeAsync(201);
+    expect(f.requests.filter(r => r.op === 'turns')).toHaveLength(count);
+    f.response(request, { items: [row(1)], nextCursor: null }); await pending;
+    expect(f.state.turns.items.map(r => r.seq)).toEqual([3, 2, 1]);
+    f.chat.connectionState = 'reconnecting'; await vi.advanceTimersByTimeAsync(101);
+    expect(f.requests.filter(r => r.op === 'turns')).toHaveLength(count);
+  });
+
+  it('restarts the cursor chain if more than a page of remote turns was missed', async () => {
+    const f = fixture(); let latest = [row(2), row(1)];
+    f.auto(r => r.op === 'turns' ? { items: latest, nextCursor: latest.at(-1).seq } : undefined);
+    await f.controller.open('a'); await f.controller.readTurns();
+    latest = [row(30), row(29)]; await f.controller.readTurns();
+    expect(f.state.turns.items.map(r => r.seq)).toEqual([30, 29]);
+    expect(f.state.turns.nextCursor).toBe(29);
+  });
+
+  it('adopts the cursor when an already loaded empty list gains more than a page of turns', async () => {
+    const f = fixture(); let records = [];
+    f.auto(r => r.op === 'turns' ? { items: r.payload.cursor ? records.slice(20) : records.slice(0, 20), nextCursor: !r.payload.cursor && records.length > 20 ? records[19].seq : null } : undefined);
+    await f.controller.open('a'); await f.controller.readTurns();
+    expect(f.state.turns.loaded).toBe(true); expect(f.state.turns.items).toEqual([]);
+    records = Array.from({ length: 21 }, (_, i) => row(21 - i));
+    await f.controller.readTurns(); expect(f.state.turns.nextCursor).toBe(2);
+    await f.controller.readTurns(true); expect(f.state.turns.items).toHaveLength(21);
+    expect(f.state.turns.items.at(-1).seq).toBe(1); expect(f.state.turns.nextCursor).toBeNull();
+  });
+
+  it('fences delayed turn reads on newer refresh, Agent/owner switches, and keeps failures local', async () => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'turns' ? false : undefined);
+    const old = f.controller.readTurns(); const older = f.requests.at(-1);
+    const fresh = f.controller.readTurns(); const newer = f.requests.at(-1);
+    f.response(newer, { items: [row(2)], nextCursor: 2 }); await fresh;
+    f.response(older, { items: [row(1)], nextCursor: null }); await old;
+    expect(f.state.turns.items.map(r => r.seq)).toEqual([2]);
+    const failed = f.controller.readTurns();
+    f.response(f.requests.at(-1), null, { ok: false, error: 'Unavailable' }); await failed;
+    expect(f.state.turns.stale).toBe(true); expect(f.state.error).toBeNull();
+    for (const change of ['agent', 'owner']) {
+      const pending = f.controller.readTurns(); const request = f.requests.at(-1);
+      if (change === 'owner') f.owner('owner-b');
+      f.auto(); await f.controller.open(change === 'agent' ? 'b' : 'a');
+      expect(f.response(request, { items: [row(99)] })).toBe(false); await pending;
+      expect(f.state.turns.items).toEqual([]);
+      f.auto(r => r.op === 'turns' ? false : undefined);
+    }
+  });
+});

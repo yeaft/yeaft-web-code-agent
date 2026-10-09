@@ -64,7 +64,7 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
   }
 }
 
-import { ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage } from './provider-state.js';
+import { ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts } from './provider-state.js';
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const API_VERSION = '2023-06-01';
@@ -330,7 +330,7 @@ export class AnthropicAdapter extends LLMAdapter {
       const result = await response.json();
       // Account for consumed tokens even when the completed response cannot
       // safely publish tools. Budget consumers may abort on this usage event.
-      yield { type: 'usage', inputTokens: result.usage?.input_tokens || 0, outputTokens: result.usage?.output_tokens || 0,
+      yield { type: 'usage', reportedTokenFields: reportedUsageFields(result.usage, 'anthropic'), usageIncomplete: !hasUsageCounts(result.usage), inputTokens: result.usage?.input_tokens || 0, outputTokens: result.usage?.output_tokens || 0,
         cacheReadTokens: result.usage?.cache_read_input_tokens || 0, cacheWriteTokens: result.usage?.cache_creation_input_tokens || 0,
         ...reasoningUsage(result.usage, 'anthropic') };
       if (signal?.aborted) throw new LLMAbortError();
@@ -557,11 +557,13 @@ export class AnthropicAdapter extends LLMAdapter {
               }
               yield {
                 type: 'usage',
+                reportedTokenFields: reportedUsageFields(event.usage, 'anthropic'),
+                usageIncomplete: !hasUsageCounts(event.usage, ['output_tokens']),
                 ...reasoning,
                 inputTokens: 0, // Only in message_start
                 outputTokens,
               };
-            }
+            } else yield { type: 'usage', reportedTokenFields: [], usageIncomplete: true };
             if (signal?.aborted) throw new LLMAbortError();
             const stopReason = event.delta?.stop_reason;
             if (stopReason === 'max_tokens' && hasToolBlocks()) {
@@ -598,13 +600,15 @@ export class AnthropicAdapter extends LLMAdapter {
               cumulativeReasoningTokens = reasoning.reasoningTokens || 0;
               yield {
                 type: 'usage',
+                reportedTokenFields: reportedUsageFields(event.message.usage, 'anthropic'),
+                usageIncomplete: !hasUsageCounts(event.message.usage),
                 ...reasoning,
                 inputTokens: event.message.usage.input_tokens || 0,
                 outputTokens: cumulativeOutputTokens,
                 cacheReadTokens: event.message.usage.cache_read_input_tokens || 0,
                 cacheWriteTokens: event.message.usage.cache_creation_input_tokens || 0,
               };
-            }
+            } else yield { type: 'usage', reportedTokenFields: [], usageIncomplete: true };
           } else if (type === 'error') {
             stateFailed = true;
             yield {
