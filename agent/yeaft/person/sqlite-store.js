@@ -448,9 +448,9 @@ export class SqlitePersonStore {
   list(ownerId, collection, { cursor = null, limit = 20 } = {}, filter = {}) {
     if (!['messages', 'traces'].includes(collection)) fail('INVALID_REQUEST');
     this.getPerson(ownerId); boundedLimit(limit);
-    if (Object.keys(filter).some(k => k !== 'text') || (filter.text && (typeof filter.text.$regex !== 'string' || filter.text.$options !== 'i'))) fail('INVALID_REQUEST');
-    // Compatibility for Mongo's literal recall filter only; arbitrary selectors are forbidden.
-    const query = filter.text?.$regex?.replace(/\\([.*+?^${}()|[\]\\])/g, '$1') ?? '';
+    if (Object.keys(filter).some(k => k !== 'query')) fail('INVALID_REQUEST');
+    const query = filter.query ?? '';
+    text(query, LIMITS.inputBytes, true);
     if (query && collection !== 'messages') fail('INVALID_REQUEST');
     let clause = '', params = [];
     if (cursor != null) { clause += ' AND seq < ?'; params.push(sequence(cursor)); }
@@ -460,7 +460,7 @@ export class SqlitePersonStore {
   }
   recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 } = {}) {
     memoryKind(kind); text(query, LIMITS.inputBytes, true); boundedLimit(limit);
-    if (kind === 'messages') return this.list(ownerId, kind, { cursor, limit }, query ? { text: { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } } : {});
+    if (kind === 'messages') return this.list(ownerId, kind, { cursor, limit }, { query });
     this.getPerson(ownerId);
     if (cursor != null) text(cursor, 128);
     const docs = this.rows('concepts', this.scope(ownerId), ' AND (? IS NULL OR id > ?) AND instr(statement, ?) > 0 ORDER BY id ASC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);

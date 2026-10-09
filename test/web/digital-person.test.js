@@ -88,7 +88,7 @@ describe('Digital Person owner / Agent request boundary', () => {
   });
 
   it('unconfigured runtime never opens or creates a fallback Session', async () => {
-    const f = fixture(); f.auto(r => r.op === 'status' ? { configured: false, reason: 'MongoDB not configured' } : undefined);
+    const f = fixture(); f.auto(r => r.op === 'status' ? { configured: false, reason: 'Instance directory is not configured' } : undefined);
     await f.controller.open('a');
     expect(f.state.configured).toBe(false);
     expect(f.requests.map(r => r.op)).toEqual(['status']);

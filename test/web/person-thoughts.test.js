@@ -33,7 +33,7 @@ describe('Person thought journal projection', () => {
     const traces = [];
     const episode = { id: 'episode-a', kind: 'send', text: 'I am learning to garden.', baseStateVersion: 0, budget: { calls: 1, timeoutMs: 1000 } };
     const append = (_episode, kind, data) => { traces.push(trace(kind, traces.length + 1, data)); };
-    // The runtime creates the actual trace payloads; only the MongoDB envelope is in-memory.
+    // The runtime creates the actual trace payloads; only the storage envelope is in-memory.
     const repository = {
       leaseMs: 15000, heartbeat: async () => {}, context: async () => snapshot(), createdCapabilities: async () => [], append,
       startCall: async (e, data) => append(e, 'call_started', data),

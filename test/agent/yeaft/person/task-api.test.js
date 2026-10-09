@@ -109,7 +109,7 @@ describe('Digital Person owner-scoped task API', () => {
     const provider = { adapter, catalog: [{ id: 'test/model', maxOutput: 1024, contextWindow: 32000 }], defaultSelection: { model: 'test/model', effort: null } };
     const s = service(), h = await ownedHost(s);
     const ctx = await h.attach({ episodeId: 'child-source' }, { provider });
-    const child = JSON.parse(await ctx.nativeRegistry.execute('SpawnAgent', { name: 'child', mission: `Inspect ${root}/private password=private-secret token=private-token`, budget: { wall_time_ms: 5000 } }, ctx));
+    const child = JSON.parse(await ctx.nativeRegistry.execute('SpawnAgent', { name: 'child', mission: `Inspect ${root}/private password=private-secret token=private-token https://host-private/path custom+srv://user:uri-private@host/path`, budget: { wall_time_ms: 5000 } }, ctx));
     await vi.waitFor(() => expect(started).toBe(true));
     const list = await call(s, 'tasks');
     expect(list.agents[0]).toMatchObject({ id: child.agentId, sourceEpisodeId: 'child-source', recoveryStatus: null, executionPending: true,
@@ -118,6 +118,9 @@ describe('Digital Person owner-scoped task API', () => {
     expect(JSON.stringify(list)).not.toContain(root);
     expect(JSON.stringify(list)).not.toContain('private-secret');
     expect(JSON.stringify(list)).not.toContain('private-token');
+    expect(JSON.stringify(list)).not.toContain('host-private');
+    expect(JSON.stringify(list)).not.toContain('uri-private');
+    expect(list.agents[0].mission).toContain('[url]');
     const unrelated = ctx.taskManager.startShellTask({ command: command('setInterval(()=>{},1000)'), cwd: root, title: 'Unrelated work' });
     await call(s, 'open', {}, 'bob');
     await expect(call(s, 'agent_close', { agentId: child.agentId }, 'bob')).rejects.toMatchObject({ code: 'NOT_FOUND' });

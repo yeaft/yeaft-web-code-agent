@@ -42,7 +42,7 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 
 ## 异步生命周期与归属
 
-- task host 按 canonical `yeaftDir`、部署 namespace、authenticated owner 和 Person 隔离，跨正常 episode 提交保持稳定。构造服务、status/open 和只读 inspection 不创建 task host，不发起子模型请求。无实例根的 legacy direct Mongo embedding 仍不能执行异步工具。
+- task host 按 canonical `yeaftDir`、部署 namespace、authenticated owner 和 Person 隔离，跨正常 episode 提交保持稳定。构造服务、status/open 和只读 inspection 不创建 task host，不发起子模型请求。服务始终使用实例 `yeaftDir` 下的 SQLite；异步工具的私有数据也必须有明确的实例根。
 - 私有数据位于 `<yeaftDir>/person/tasks/<scope-hash>/`，保留任务元数据、shell logs、子 Agent JSONL logs、tool-results 和 completion records，不写入普通 Session transcript 或 manifest。实例配置始终从当前 `yeaftDir` 读取。
 - 正常认知提交不会关闭后台任务或子 Agent。所有任务强制 `status_only`；完成不会唤回模型，不自动创建 Person episode。完成/运行证据在**下一次显式 send/think/dream** 的上下文中可见，或由已运行 episode 主动执行 WaitAgent/WaitTask 收集。
 - 下一次模型上下文的 task evidence 使用总计最多 8 KiB、单条最多 2 KiB 的 JSON/UTF-8 预算；当前模型窗口还可进一步省略条目。完整 raw logs 和原始工具归档保留在私有目录，模型可使用 Task 工具分页检查。引用仅代表外部观察，不能单独建立 `reported` 用户来源。

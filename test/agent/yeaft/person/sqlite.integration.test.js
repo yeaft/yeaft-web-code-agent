@@ -6,10 +6,11 @@ import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { MongoPersonRepository } from '../../../../agent/yeaft/person/repository.js';
 import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
+import { digest } from '../../../../agent/yeaft/person/contracts.js';
+import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { finalProposal, config } from './fixtures.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -34,7 +35,7 @@ describe('Person real SQLite authority in managed workers', () => {
   it('persists deterministic identity, state, history and complete searchable revisions across reopen', async () => {
     const r = repo();
     const opened = await r.open('alice');
-    expect(opened.person.id).toBe(new MongoPersonRepository({ namespace: 'default' }).scope('alice').personId);
+    expect(opened.person.id).toBe(`person-${digest(['default', 'alice']).slice(0, 32)}`);
     expect((await r.open('alice', 'ignored')).person).toEqual(opened.person);
     const { episode } = await r.admit('alice', input());
     await call(r, episode);
@@ -429,12 +430,7 @@ describe('Person real SQLite authority in managed workers', () => {
     expect((await b.searchChanges('alice')).items).toHaveLength(1);
   });
 
-  it('shares authority between two existing services with SQLite substituted at their repository seam', async () => {
-    // service.js still selects Mongo in this worktree; integration wiring belongs to
-    // its owner. Exercise its real request/runtime lifecycle without editing it.
-    vi.doMock('../../../../agent/yeaft/person/repository.js', () => ({ MongoPersonRepository: class {
-      constructor(options) { return repo(options.namespace, { leaseMs: options.leaseMs }); }
-    } }));
+  it('shares real SQLite authority between two services', async () => {
     let release;
     const waiting = new Promise(resolve => { release = resolve; });
     let providerCalls = 0;
@@ -445,8 +441,7 @@ describe('Person real SQLite authority in managed workers', () => {
     } };
     let a, b;
     try {
-      const { createPersonService } = await import('../../../../agent/yeaft/person/service.js');
-      const options = { uri: 'unused-test-seam', namespace: 'services', yeaftDir, config, adapter };
+      const options = { namespace: 'services', yeaftDir, config, adapter };
       a = createPersonService(options); b = createPersonService(options);
       expect(await a.request({ ownerId: 'alice', op: 'status' })).toMatchObject({ storageReady: true, modelReady: true });
       await Promise.all([a, b].map(s => s.request({ ownerId: 'alice', op: 'open' })));
@@ -467,7 +462,6 @@ describe('Person real SQLite authority in managed workers', () => {
       expect(await a.request(request)).toMatchObject({ duplicate: true, status: 'completed' });
     } finally {
       release(); await Promise.all([a?.close(), b?.close()]);
-      vi.doUnmock('../../../../agent/yeaft/person/repository.js');
     }
   });
 

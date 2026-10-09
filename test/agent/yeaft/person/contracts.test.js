@@ -48,17 +48,17 @@ describe('digital Person strict contracts', () => {
     vi.restoreAllMocks(); vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
-  it('is inert without an instance directory or configured MongoDB', async () => {
-    const service = createPersonService();
-    expect(await service.request({ ownerId: 'owner', op: 'status' })).toMatchObject({ configured: false, storageReady: false });
+  it.each([undefined, null, '', '   ', 42, {}])('is inert without a valid instance directory (%s)', async yeaftDir => {
+    const service = createPersonService({ yeaftDir });
+    expect(await service.request({ ownerId: 'owner', op: 'status' })).toMatchObject({ storage: 'sqlite', configured: false, storageReady: false });
     await expect(service.request({ ownerId: 'owner', op: 'open' })).rejects.toMatchObject({ code: 'NOT_CONFIGURED' });
     await service.close();
     await expect(service.request({ ownerId: 'owner', op: 'status' })).rejects.toMatchObject({ code: 'CLOSED' });
   });
-  it('rejects automatic thinking activation even when MongoDB is configured', async () => {
-    // No database connection is needed to reject activation; this is a service
-    // admission contract, not a MongoDB integration test.
-    const service = createPersonService({ uri: 'mongodb://127.0.0.1:1', config });
+  it('rejects automatic thinking activation with a configured instance directory', async () => {
+    const yeaftDir = mkdtempSync(join(tmpdir(), 'person-admission-'));
+    tempDirs.push(yeaftDir);
+    const service = createPersonService({ yeaftDir, config });
     try {
       await expect(service.request({ ownerId: 'owner', op: 'settings', payload: { autonomyEnabled: true } }))
         .rejects.toMatchObject({ code: 'UNSUPPORTED' });

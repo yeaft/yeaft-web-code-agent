@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { LocalPersonMemory } from '../../../../agent/yeaft/person/local-memory.js';
-import { bindPersonStorage } from '../../../../agent/yeaft/person/storage.js';
+import { digest } from '../../../../agent/yeaft/person/contracts.js';
 import { config, finalProposal } from './fixtures.js';
 
 const probe = new DatabaseSync(':memory:');
@@ -43,7 +43,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
-describe('SQLite is the instance-local Person default', () => {
+describe('SQLite is the instance-local Person authority', () => {
   it('does not start cognition or download models on status/open/restart and keeps identity, messages and state', async () => {
     const dir = await directory();
     const think = vi.fn(final);
@@ -133,9 +133,10 @@ describe('SQLite is the instance-local Person default', () => {
     expect(modelCalls).toBe(2);
   });
 
-  it('refuses a previously bound Mongo authority instead of opening an empty local identity', async () => {
+  it('refuses a previously bound unsupported authority instead of opening an empty local identity', async () => {
     const dir = await directory();
-    await bindPersonStorage(dir, 'default', 'mongodb');
+    await mkdir(join(dir, 'person'), { recursive: true });
+    await writeFile(join(dir, 'person', `storage-${digest('default')}.json`), JSON.stringify({ version: 1, storage: 'unsupported' }));
     const service = create(dir, { adapter: adapterFor(final) });
     expect(await call(service, 'status')).toMatchObject({ storageReady: false, modelReady: false });
     await expect(call(service, 'open')).rejects.toMatchObject({ code: 'STORAGE_MISMATCH' });

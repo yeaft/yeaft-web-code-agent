@@ -83,7 +83,7 @@ export function inspectCapabilities(created, { cursor, limit }, nativeToolIds = 
     contract.evidence = item.evidence;
     entries.push(item);
   }
-  // IDs are ASCII identifiers. Binary ordering matches SQLite and Mongo simple collation.
+  // IDs are ASCII identifiers. Binary ordering matches SQLite.
   const matches = entries.filter(entry => cursor === null || entry.id > cursor)
     .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   return inspectionPage(matches, limit, 'id');

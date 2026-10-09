@@ -61,7 +61,7 @@ function privatePath(root, path) {
 // expose native command fallbacks; redact common sensitive forms before capping.
 function summary(value, maxBytes = 512) {
   const clean = String(value ?? '')
-    .replace(/https?:\/\/\S+|mongodb(?:\+srv)?:\/\/\S+/gi, '[url]')
+    .replace(/\b[a-z][a-z\d+.-]*:\/\/\S+/gi, '[url]')
     .replace(/(?:bearer\s+|(?:api[_-]?key|password|secret|token)\s*[:=]\s*)\S+/gi, '[redacted]')
     .replace(/\b(?:sk-[\w-]+|gh[pousr]_[\w]+|github_pat_[\w]+)\b/g, '[redacted]')
     .replace(/(?:\/[\w.@~+-]+)+(?:\/[^\s]*)?|(?:~|\.\.?|[A-Za-z]:)[\\/][^\s]+/g, '[path]')

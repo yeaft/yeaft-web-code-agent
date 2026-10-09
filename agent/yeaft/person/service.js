@@ -1,7 +1,6 @@
-import { MongoPersonRepository } from './repository.js';
 import { SqlitePersonRepository } from './sqlite-repository.js';
 import { LocalPersonMemory } from './local-memory.js';
-import { selectPersonStorage, bindPersonStorage } from './storage.js';
+import { ensurePersonStorage } from './sqlite-storage.js';
 import { PersonRuntime } from './runtime.js';
 import { allowedNativeToolIds } from './native-tools.js';
 import { loadConfig } from '../config.js';
@@ -12,35 +11,31 @@ import { inspectRequest, personName, searchRequest } from './inspection.js';
 
 /**
  * One durable Person per (namespace, authenticated ownerId). The transport MUST
- * supply authenticated ownerId, never accept it from a browser payload. URI/provider
+ * supply authenticated ownerId, never accept it from a browser payload. Provider
  * secrets stay inside this Agent. Constructor and status never initiate model calls.
- * Native provider configuration is read from yeaftDir only (no Session initialization).
- * SQLite is the local default; an existing Mongo URI retains Mongo. No authority fallback.
+ * SQLite storage and native provider configuration belong to yeaftDir only
+ * (no Session initialization or alternate storage authority).
  */
 export function createPersonService(options = {}) {
-  const { uri, dbName = 'yeaft_person', namespace = 'default', yeaftDir, workDir, MongoClient, config, adapter, allowedModels } = options;
+  const { namespace = 'default', yeaftDir, workDir, config, adapter, allowedModels } = options;
   identifier(namespace);
-  if (typeof dbName !== 'string' || !/^[a-zA-Z0-9_-]{1,63}$/.test(dbName)) fail('INVALID_REQUEST');
-  if (uri != null && typeof uri !== 'string') fail('INVALID_REQUEST');
-  const { storage, configured } = selectPersonStorage({ ...options, yeaftDir });
+  const configured = typeof yeaftDir === 'string' && Boolean(yeaftDir.trim());
   const calls = options.maxCalls ?? LIMITS.calls;
   const timeoutMs = options.timeoutMs ?? LIMITS.timeoutMs;
   const leaseMs = options.leaseMs ?? LIMITS.leaseMs;
   if (!Number.isInteger(calls) || calls < 1 || calls > 32 || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300000 ||
       !Number.isInteger(leaseMs) || leaseMs < 300 || leaseMs > 60000) fail('INVALID_REQUEST');
   if (allowedModels != null && (!Array.isArray(allowedModels) || !allowedModels.length || allowedModels.some(m => typeof m !== 'string'))) fail('INVALID_REQUEST');
-  const repository = !configured ? null : storage === 'mongodb'
-    ? new MongoPersonRepository({ uri, dbName, namespace, MongoClient, leaseMs })
-    : new SqlitePersonRepository({ yeaftDir, namespace, leaseMs });
+  const repository = configured ? new SqlitePersonRepository({ yeaftDir, namespace, leaseMs }) : null;
   const initialize = repository?.init.bind(repository);
   let binding;
   if (repository) repository.init = async () => {
-    if (!binding) binding = bindPersonStorage(yeaftDir, namespace, storage).catch(error => { binding = null; throw error; });
+    if (!binding) binding = ensurePersonStorage(yeaftDir, namespace).catch(error => { binding = null; throw error; });
     await binding;
     return initialize();
   };
   const literalRecall = repository?.recall.bind(repository);
-  const memory = repository && storage === 'sqlite' ? new LocalPersonMemory({
+  const memory = repository ? new LocalPersonMemory({
     repository, literalRecall, yeaftDir, namespace, embedding: options.embedding,
   }) : null;
   if (memory) repository.recall = (ownerId, args = {}, { signal } = {}) => args.query?.trim()
@@ -58,7 +53,7 @@ export function createPersonService(options = {}) {
       object(payload, []);
       let agentDefaultModel = null;
       try { agentDefaultModel = resolveAgentDefaultModel(config ?? loadConfig({ dir: yeaftDir })); } catch { /* Invalid/missing native config. */ }
-      const status = { renameSupported: true, defaultModelSupported: true, configured, storage, modelReady: false,
+      const status = { renameSupported: true, defaultModelSupported: true, configured, storage: 'sqlite', modelReady: false,
         defaultModel: null, agentDefaultModel, modelCandidates: [], effectiveModelCandidates: [], effectiveDefaultModel: null };
       if (!configured) return { ...status, reason: 'Digital person storage configuration is missing.', storageReady: false };
       try { await repository.init(); }

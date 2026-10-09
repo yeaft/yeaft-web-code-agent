@@ -147,8 +147,8 @@ export class PersonRuntime {
     this.running = new Map(); this.pendingCancellations = new Map(); this.workerId = randomUUID(); this.closed = false;
   }
   tasks() {
-    // Construction/status/open do not touch task storage. Legacy direct Mongo
-    // embeddings without an instance root retain foreground-only host support.
+    // Construction/status/open do not touch task storage. An instance root is
+    // required before creating the durable task host.
     if (!this.toolOptions.yeaftDir) return null;
     return this.taskHost ??= new PersonTaskHost({ ...this.toolOptions, namespace: this.namespace });
   }

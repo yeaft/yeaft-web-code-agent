@@ -48,7 +48,7 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 
 - 图片：PNG / JPEG / WebP / GIF，验证相应签名；以原生 `image` content block 交给支持图片的 adapter，而非把 base64 塞进 JSON。图片解码由 provider 完成，签名验证不是完整图片解码或安全扫描。
 - 文本：UTF-8 text、JSON、Markdown、CSV、代码等；严格 UTF-8 解码，拒绝二进制控制字符。PDF 明确不支持，不能伪装文本或假装已经读取。
-- 原始字节与 SHA-256 保存在当前 Person SQLite `attachments` 表或 Mongo `person_attachments` collection，由 `(namespace, ownerId, personId, id)` 隔离。附件与 episode、用户消息原子 admission，无 Session/workdir 文件落盘。
+- 原始字节与 SHA-256 保存在实例 `<yeaftDir>/person/person.db` 的 SQLite `attachments` 表，由 `(namespace, ownerId, personId, id)` 隔离。附件与 episode、用户消息原子 admission，无 Session/workdir 文件落盘。
 - `send` 及带附件的 `think` 都保存用户消息。`messages` / `snapshot.messages` 的附件显示字段为：
 
 ```json
@@ -92,8 +92,8 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 - 只允许可选 native catalog 中的 provider-qualified refs，拒绝未知、重复、非字符串和 bare IDs；原有部署级 `allowedModels` 是更外层限制。
 - 状态返回 `models:[{id,efforts,maxOutput,contextWindow,supportsImages,imageBudget}]`、同内容的 `availableModels` 与持久化 `modelCandidates:[...]`；浏览器可读 `availableModels ?? models`。可选目录与 episode 候选集分离，前者最多 **100 个**允许且可用的已配置模型，超过时 `availableModelsTruncated:true`，不含 endpoint/key 等秘密；第 9–100 个模型也可显式选中。后者始终最多 8 个，只有该子集进入模型上下文。
 - `defaultModel` 是 provider-qualified ref，`null` 表示自动；省略字段保留之前的值。显式默认必须属于当前**有效的最多 8 个候选**且满足配置、部署 allowlist 与安全上下文预算；继承 `[]` 时也只能从隐式前 8 个中选择默认，不因设置默认而扩大候选。第 9–100 个模型要先通过显式候选纳入。无效类型、bare ID、不可用或不属于候选的默认返回 `MODEL_SELECTION`。
-- settings 写入既有 Person owner settings，SQLite 重启保留，Mongo 同样持久化。busy 时禁止更改；修改任一模型字段按**已有设置与 patch 合并后的值**验证，不能通过分别修改绕过成员关系。删掉显式默认对应的候选会拒绝；要重置，客户端同时发送 `defaultModel:null`（如 `{modelCandidates:[],defaultModel:null}`）。全自动重置在没有可用模型时仍允许。跨服务并发更新由 `controlVersion` fence 拒绝过期合并（`STALE`），重新读取后再提交。
-- episode admission 在同一数据库事务中保存候选列表副本、`defaultModel` 与 controlVersion，SQLite/Mongo 相同；runtime 使用该副本与本次 provider 配置快照。显式默认优先于上次 `lastSelection`，作为首次调用的 bootstrap；自动 `null` 保留旧行为：可用的上次选择优先，否则 Agent 默认／首个候选。后续 proposal 仍可在候选内选择；图片输入保留既有图片候选回退策略。调用中的模型选择和后继 proposal 都不能逃离这个子集。
+- settings 写入既有 Person owner settings，由实例 SQLite 持久化，重启保留。busy 时禁止更改；修改任一模型字段按**已有设置与 patch 合并后的值**验证，不能通过分别修改绕过成员关系。删掉显式默认对应的候选会拒绝；要重置，客户端同时发送 `defaultModel:null`（如 `{modelCandidates:[],defaultModel:null}`）。全自动重置在没有可用模型时仍允许。跨服务并发更新由 `controlVersion` fence 拒绝过期合并（`STALE`），重新读取后再提交。
+- episode admission 在同一 SQLite 事务中保存候选列表副本、`defaultModel` 与 controlVersion；runtime 使用该副本与本次 provider 配置快照。显式默认优先于上次 `lastSelection`，作为首次调用的 bootstrap；自动 `null` 保留旧行为：可用的上次选择优先，否则 Agent 默认／首个候选。后续 proposal 仍可在候选内选择；图片输入保留既有图片候选回退策略。调用中的模型选择和后继 proposal 都不能逃离这个子集。
 - status 所有返回路径都带 `defaultModelSupported:true`；`defaultModel` 为保存的 ref 或 `null`，`agentDefaultModel` 为实例所配置默认经 router 所有权解析的 ref（没有可解析默认时为 `null`，即使它不在 owner 子集中也不替换此字段）。`effectiveModelCandidates` 是本次实际有界 catalog 的 ID 数组，而非完整 `availableModels`；`effectiveDefaultModel` 是显式默认或 Agent 默认／首候选的 ref，不是上次选择的投影。无法构造有效 catalog 时为 `[]`／`null`、`modelReady:false`，保存值与完整恢复目录仍保留。
 - 未保存过 `defaultModel` 的旧 Person 与 episode 按自动处理，不做数据库、实例 config 或 Session 数据迁移。status/settings 不调用模型；公开设置和 trace 只增加这个 ref，不暴露 provider 凭据。
 - 已保存候选从 Agent catalog 移除后，status 返回 `modelReady:false`，仍返回完整可选目录供恢复；episode 明确失败，不自动扩权使用其他模型。仍可重选或用 `[]` 重置。
@@ -111,4 +111,4 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 
 ## 验证范围
 
-聚焦测试覆盖 SQLite 真数据库的 attachment-only send/think、原件重启保留、owner/namespace fence、哈希冲突、实际 image block 与无 base64 trace、完整候选 catalog、跨 service busy settings 和 proposal 越界拒绝。Server 测试覆盖全量引用解析、未归属/跨 owner/过期/超限拒绝与 lost-response 重试。Mongo 测试仅在显式隔离 replica-set 环境 `PERSON_TEST_MONGO_URI` 下运行；不得指向线上数据库。
+聚焦测试覆盖 SQLite 真数据库的 attachment-only send/think、原件重启保留、owner/namespace fence、哈希冲突、实际 image block 与无 base64 trace、完整候选 catalog、跨 service busy settings 和 proposal 越界拒绝。Server 测试覆盖全量引用解析、未归属/跨 owner/过期/超限拒绝与 lost-response 重试。测试使用隔离的实例数据根，不得指向线上数据库。
