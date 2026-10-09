@@ -48,6 +48,8 @@ Workbench 使用规范的 Session route。即使两个 Session 位于同一个 A
 - 使用 `Ctrl+S` 保存到 Agent
 - 预览 Markdown、图片、PDF、支持的 Office 文档，以及浏览器支持的 MP4、M4V、WebM、OGV/OGG 和 MOV 视频；视频从 Agent 流式读取，也可直接下载
 
+HTML（`.html` / `.htm`）和 Markdown 默认打开预览，可通过 **预览 / 编辑** 切换；预览使用当前编辑内容，即使尚未保存。HTML 使用隔离的静态预览，保留内联样式及 data 图片，不执行脚本、不跳转链接、不提交表单，也不加载外部或相对路径资源；需要完整交互或多文件网页时，请使用项目的本地开发服务器。
+
 从回复中点击文件引用时，Workbench 会直接进入当前 Session route 对应的文件能力，加载文件内容；引用带行号时定位到起始行。支持 Markdown 链接、行内代码和普通文本中的路径，例如 `src/main.js:20-35`、`src/main.js#L20-L35`、`docs/设计说明.md`。包含空格的路径请使用行内代码或 Markdown 链接。
 
 文件引用会在流式输出期间分批识别，回复结束后再次确认。只有当前 Agent 确认存在于该 Session workspace 中的文件才显示为可点击链接；不存在、重名且无法唯一确定、或 workspace 外的路径不会自动链接。外部网页链接仍在浏览器中打开，不会映射成本地同名文件。

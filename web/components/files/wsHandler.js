@@ -2,7 +2,7 @@
  * wsHandler — WebSocket message handler composable for FilesTab.
  * Centralizes all workbench-message handling in one place.
  */
-import { getFileType, isMarkdownFile } from './fileEditor.js';
+import { getFileType, isPreviewableTextFile } from './fileEditor.js';
 import { requestFileContent } from './fileTabs.js';
 import { isWorkbenchMessageForRoute, workbenchMessageScope } from '../../utils/workbench-route.js';
 
@@ -21,7 +21,7 @@ export function createWsHandler({
   // File operations
   ops,
   // Preview
-  mdPreviewMode, renderOfficeLocal, editorContainer, t = key => key,
+  textPreviewMode, renderOfficeLocal, editorContainer, t = key => key,
   routeKey = '',
   workspaceGeneration = '',
 }) {
@@ -203,8 +203,8 @@ export function createWsHandler({
           file.isDirty = false;
           saveTabsState(store.currentConversation);
           if (tabIndex === activeFileIndex.value) {
-            if (isMarkdownFile(file.name) && mdPreviewMode.value) {
-              // mdRenderedHtml computed updates automatically
+            if (isPreviewableTextFile(file.name) && textPreviewMode.value) {
+              // Rendered Markdown/HTML computed updates automatically
             } else {
               Vue.nextTick(() => { setTimeout(() => createEditor(file), 100); });
             }

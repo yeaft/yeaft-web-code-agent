@@ -33,7 +33,7 @@ function harness() {
     openFiles, activeFileIndex, activeFile,
     fileSaving: Vue.ref(false), saveTabsState: vi.fn(), createEditor, openFileInTab,
     tree: {}, fp: {}, qo: {}, ops: { takePendingDownload: () => null },
-    mdPreviewMode: Vue.ref(false), renderOfficeLocal: vi.fn(), editorContainer: Vue.ref(null),
+    textPreviewMode: Vue.ref(false), renderOfficeLocal: vi.fn(), editorContainer: Vue.ref(null),
     routeKey: 'yeaft:agent-b:session-y', workspaceGeneration: 'generation-1',
   });
   return { ...handler, openFiles, createEditor, cursor };
