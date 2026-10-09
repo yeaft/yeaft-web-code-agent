@@ -35,6 +35,7 @@ describe('digital person authenticated relay', () => {
 
   it.each([
     ['inspect', { section: 'skills', cursor: 'Recall', limit: 2 }],
+    ['turns', { cursor: 40, limit: 20 }],
     ['search', { query: 'literal .*', cursor: '20', limit: 5 }],
     ['settings', { name: 'Renamed', modelCandidates: [] }],
     ['settings', { modelCandidates: ['provider/a', 'provider/b'], defaultModel: 'provider/b' }],
@@ -68,7 +69,13 @@ describe('digital person authenticated relay', () => {
     expect(send.mock.lastCall[1]).toMatchObject({ requestId: 'browser-1', op, ok: false, errorCode: 'invalid_request' });
   });
 
-  it.each(['tasks', 'task_log', 'task_cancel', 'agent_close'])('requires authentication and Agent access for %s', async op => {
+  it.each([{ cursor: '40' }, { cursor: -1 }, { cursor: 0 }, { cursor: 1.5 }, { cursor: Number.MAX_SAFE_INTEGER + 1 }, { limit: 21 }, { limit: 0 }, { limit: null }])('rejects malformed turn page %j before forwarding', async payload => {
+    await relay.request(client, message({ op: 'turns', payload }));
+    expect(forward).not.toHaveBeenCalled();
+    expect(send.mock.lastCall[1]).toMatchObject({ op: 'turns', ok: false, errorCode: 'invalid_request' });
+  });
+
+  it.each(['turns', 'tasks', 'task_log', 'task_cancel', 'agent_close'])('requires authentication and Agent access for %s', async op => {
     client.authenticated = false;
     await relay.request(client, message({ op }));
     expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Authentication required' });

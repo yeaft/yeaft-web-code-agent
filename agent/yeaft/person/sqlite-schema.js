@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS traces (
   PRIMARY KEY(namespace, ownerId, personId, id), UNIQUE(namespace, ownerId, personId, seq),
   FOREIGN KEY(namespace, ownerId, personId) REFERENCES persons(namespace, ownerId, personId)
 ) STRICT;
+CREATE INDEX IF NOT EXISTS traces_turn_metadata ON traces(namespace, ownerId, personId,
+  json_extract(record, '$.episodeId'), seq);
 CREATE INDEX IF NOT EXISTS traces_call_output ON traces(namespace, ownerId, personId,
   json_extract(record, '$.episodeId'), json_extract(record, '$.callId'))
   WHERE json_extract(record, '$.kind') = 'call_output';

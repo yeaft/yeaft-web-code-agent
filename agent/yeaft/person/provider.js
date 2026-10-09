@@ -6,6 +6,7 @@ import { normalizeKnownProviderForRuntime } from '../llm/known-providers.js';
 import { normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 import { bytes, digest, fail, LIMITS, PersonError } from './contracts.js';
+import { addUsage } from './turn-diagnostics.js';
 
 export const MODEL_LIMITS = Object.freeze({ candidates: 8, available: 100 });
 export function validateModelCandidates(refs) {
@@ -92,7 +93,7 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     const explicitImages = m.supportsImages ?? rawModel?.supportsImages ?? rawProvider?.supportsImages;
     const protocol = routedModel?.protocol || routedProvider?.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
     const imageBudget = !routedProvider || explicitImages === false ? null : imageInputBudget(m.id, protocol);
-    return { id: m.ref || m.id, efforts, maxOutput, supportsImages: imageBudget !== null, imageBudget,
+    return { id: m.ref || m.id, efforts, maxOutput, usageCacheIncluded: protocol === 'anthropic' ? false : undefined, supportsImages: imageBudget !== null, imageBudget,
       contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };
   }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && m.contextWindow > m.maxOutput + 1024 && m.maxOutput >= 256);
   safeModels.sort((a, b) => Number(b.id === agentDefaultModel) - Number(a.id === agentDefaultModel));
@@ -147,8 +148,7 @@ export async function collectOutput(adapter, params, onEffort) {
       else if (event.type === 'error') fail('PROVIDER_FAILED');
       else if (event.type === 'tool_call') fail('INVALID_PROPOSAL');
       else if (event.type === 'usage') {
-        usage = {};
-        for (const key of ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens']) if (Number.isFinite(event[key]) && event[key] >= 0) usage[key] = event[key];
+        usage = addUsage(usage, event, params.usageCacheIncluded);
       }
       // Hidden thinking, signatures, opaque provider state and raw HTTP exchanges are deliberately not archived.
     }

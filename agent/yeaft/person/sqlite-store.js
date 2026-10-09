@@ -9,6 +9,7 @@ import { SCHEMA, TABLES } from './sqlite-schema.js';
 import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
 import { conceptView, inspectionPage, inspectRequest, messageView, personName, searchRequest, settingsView, stateView } from './inspection.js';
+import { TOKEN_FIELDS, turnsPage, turnView } from './turn-diagnostics.js';
 import { inspectCapabilities } from './capabilities.js';
 
 const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
@@ -44,11 +45,12 @@ const publicOutput = (output, failed) => {
   if (usage) for (const key of ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens']) {
     if (Number.isFinite(output.usage[key]) && output.usage[key] >= 0) usage[key] = output.usage[key];
   }
+  if (usage && typeof output.usage.cacheTokensAreIncludedInInput === 'boolean') usage.cacheTokensAreIncludedInInput = output.usage.cacheTokensAreIncludedInInput;
   const stopReason = typeof output.stopReason === 'string' && bytes(output.stopReason) <= 128 ? output.stopReason : null;
   return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
     : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
 };
-const READS = new Set(['receipt', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
+const READS = new Set(['receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
 const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
@@ -444,6 +446,33 @@ export class SqlitePersonStore {
     const records = this.rows('messages', this.scope(ownerId),
       ' AND (? IS NULL OR seq < ?) AND instr(text, ?) > 0 ORDER BY seq DESC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);
     return inspectionPage(records, limit, 'seq', messageView);
+  }
+  turns(ownerId, options = {}) {
+    const { cursor, limit } = turnsPage(options);
+    const scope = this.scope(ownerId);
+    if (!this.sql(`SELECT 1 FROM persons WHERE ${SCOPE}`).get(...scopeValues(scope))) fail('NOT_OPEN');
+    const project = fields => `json_object(${Object.entries(fields).map(([key, path]) => `'${key}', json_extract(record, '$.${path}')`).join(', ')})`;
+    const episodes = this.sql(`SELECT ${project({ id: 'id', seq: 'inputWatermark', kind: 'kind', status: 'status', createdAt: 'createdAt', endedAt: 'endedAt', terminalCode: 'terminalCode', calls: 'budget.calls', timeoutMs: 'budget.timeoutMs' })} AS metadata
+      FROM episodes WHERE ${SCOPE} AND (? IS NULL OR inputWatermark < ?) ORDER BY inputWatermark DESC LIMIT ?`)
+      .all(...scopeValues(scope), cursor, cursor, limit + 1).map(row => JSON.parse(row.metadata));
+    const fields = { kind: 'kind', callId: 'callId', callIndex: 'callIndex', createdAt: 'createdAt',
+      requestedModel: 'requested.model', requestedEffort: 'requested.effort', effectiveEffort: 'effective.effort', effortObserved: 'effective.effortObserved',
+      selectionOrigin: 'selectionOrigin', reason: 'reason', code: 'code', terminalCode: 'terminalCode', outcome: 'outcome',
+      contextBytes: 'manifest.contextBytes', contextBudgetBytes: 'manifest.contextBudgetBytes', outputTokensReserved: 'manifest.outputTokensReserved' };
+    const usage = `json_object(${TOKEN_FIELDS.map(key => `'${key}', json_extract(record, '$.output.usage.${key}')`).join(', ')},
+      'cacheTokensAreIncludedInInput', json(CASE json_extract(record, '$.output.usage.cacheTokensAreIncludedInInput') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END))`;
+    const metadata = `${project(fields).slice(0, -1)}, 'capabilityId', COALESCE(json_extract(record, '$.capability.id'), json_extract(record, '$.capabilityId')),
+      'usage', ${usage})`;
+    const items = episodes.slice(0, limit).map(episode => {
+      const events = this.sql(`SELECT ${metadata} AS metadata FROM traces WHERE ${SCOPE}
+        AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') IN
+        ('call_started', 'call_output', 'call_failed', 'proposal_rejected', 'capability_started', 'capability_result', 'capability_failed', 'capability_finalized') ORDER BY seq ASC`)
+        .all(...scopeValues(scope), episode.id).map(row => {
+          const event = JSON.parse(row.metadata); event.effortObserved = event.effortObserved === 1; return event;
+        });
+      return turnView(episode, events);
+    });
+    return { items, nextCursor: episodes.length > limit ? items.at(-1).seq : null };
   }
   list(ownerId, collection, { cursor = null, limit = 20 } = {}, filter = {}) {
     if (!['messages', 'traces'].includes(collection)) fail('INVALID_REQUEST');

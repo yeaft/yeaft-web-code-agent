@@ -8,7 +8,7 @@ const FIELDS = Object.freeze({
   send: ['text', 'clientMessageId', 'attachments'], think: ['text', 'clientMessageId', 'attachments'],
   dream: ['clientMessageId'], cancel: ['episodeId'],
   tasks: [], task_log: ['taskId', 'offset', 'maxBytes'], task_cancel: ['taskId'], agent_close: ['agentId'],
-  messages: ['cursor', 'limit'], traces: ['cursor', 'limit'],
+  messages: ['cursor', 'limit'], traces: ['cursor', 'limit'], turns: ['cursor', 'limit'],
   inspect: ['section', 'cursor', 'limit'], search: ['query', 'cursor', 'limit'],
   settings: ['name', 'autonomyEnabled', 'modelCandidates', 'defaultModel'],
 });
@@ -61,6 +61,11 @@ export function createPersonRelay({
       const source = msg.payload;
       if (source != null && (typeof source !== 'object' || Array.isArray(source))) {
         await reply(client, envelope, { ok: false, error: 'Invalid digital person payload' });
+        return true;
+      }
+      if (op === 'turns' && ((source?.cursor != null && (!Number.isSafeInteger(source.cursor) || source.cursor < 1))
+        || (Object.hasOwn(source ?? {}, 'limit') && (!Number.isInteger(source.limit) || source.limit < 1 || source.limit > 20)))) {
+        await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: 'Invalid digital person turn page' });
         return true;
       }
       if (['tasks', 'task_log', 'task_cancel', 'agent_close'].includes(op)) {

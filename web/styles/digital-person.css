@@ -141,6 +141,23 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-search-form input { flex: 1; min-width: 0; padding: var(--work-center-space-2); border: 1px solid var(--border-color); border-radius: var(--agent-setup-control-radius); background: var(--bg-main); color: var(--text-primary); font: inherit; font-size: 13px; }
 .person-search-result { padding-bottom: var(--work-center-space-4); margin-bottom: var(--work-center-space-4); border-bottom: 1px solid var(--border-light); }
 
+.person-usage-note { margin-bottom: var(--work-center-space-3); }
+.person-turn-row { border-bottom: 1px solid var(--border-light); padding: var(--work-center-space-3) 0; font-size: 12px; overflow-wrap: anywhere; }
+.person-turn-row > summary { cursor: pointer; display: flex; flex-direction: column; gap: var(--work-center-space-1); list-style: none; border-radius: var(--agent-setup-control-radius); }
+.person-turn-row > summary::-webkit-details-marker { display: none; }
+.person-turn-row > summary strong::before { content: '› '; color: var(--text-muted); }
+.person-turn-row[open] > summary strong::before { content: '⌄ '; }
+.person-turn-heading, .person-turn-totals, .person-call-capability { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--work-center-space-2); }
+.person-turn-heading { justify-content: space-between; }
+.person-turn-models { color: var(--text-secondary); }
+.person-turn-detail { padding-top: var(--work-center-space-3); }
+.person-usage-metrics { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--work-center-space-1) var(--work-center-space-3); margin: var(--work-center-space-2) 0; }
+.person-usage-metrics dt { color: var(--text-secondary); }
+.person-usage-metrics dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.person-call-flow { list-style: none; padding: 0 0 0 var(--work-center-space-3); margin: var(--work-center-space-3) 0 0; border-left: 1px solid var(--border-light); }
+.person-call-step + .person-call-step { margin-top: var(--work-center-space-4); }
+.person-call-step p { margin-top: var(--work-center-space-2); }
+
 .person-task-group h3, .person-task-log h3 { font-size: 13px; margin: var(--work-center-space-3) 0; }
 .person-task-item { padding: var(--work-center-space-3) 0; border-bottom: 1px solid var(--border-light); overflow-wrap: anywhere; font-size: 12px; }
 .person-task-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--work-center-space-2); }

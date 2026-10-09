@@ -49,6 +49,7 @@ export function personState() {
     agentDefaultModel: null, effectiveDefaultModel: null, defaultModelSupported: false,
     settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
+    turns: { ...inspectionPage(), stale: false },
     tasks: { tasks: [], agents: [], loaded: false, loading: false, stale: false, error: null, pending: null },
     taskLog: { taskId: '', text: '', nextOffset: 0, loading: false, error: null },
   };
@@ -85,6 +86,9 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let tasksVisible = false;
   let taskPoll = null;
   let tasksRequest = 0;
+  let turnsVisible = false;
+  let turnPoll = null;
+  let turnRequest = 0;
   const owned = new Set();
   const current = (g = generation) => !disposed && g === generation && activeScope === scope();
   const outbox = () => {
@@ -144,6 +148,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     generation += 1;
     clearTimeout(poll);
     clearTimeout(taskPoll);
+    clearTimeout(turnPoll);
+    turnPoll = null;
+    turnRequest += 1;
+    turnsVisible = false;
     taskPoll = null;
     tasksRequest += 1;
     tasksVisible = false;
@@ -501,6 +509,52 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       if (current(g) && number === tasksRequest) { state.tasks.loading = false; scheduleTasks(); }
     }
   }
+  // Turn summaries are independent of raw trace pagination. Poll the latest page
+  // only while visible; merge it into already loaded history rather than erase it.
+  function scheduleTurns() {
+    clearTimeout(turnPoll);
+    if (!turnsVisible || !current() || digitalPersonGate(chat, agentId)) return;
+    const g = generation;
+    turnPoll = setTimeout(() => { if (current(g)) void readTurns(); }, pollMs);
+  }
+  function showTurns(visible) {
+    turnsVisible = visible;
+    clearTimeout(turnPoll);
+    if (visible && !state.loading) void readTurns();
+  }
+  async function readTurns(more = false) {
+    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId)) return;
+    if (more && (state.turns.loading || state.turns.nextCursor == null)) return;
+    // A new explicit refresh may supersede an older page read. Pause automatic
+    // refreshes during pagination so they cannot discard a slow history page.
+    clearTimeout(turnPoll);
+    const g = generation, number = ++turnRequest;
+    const target = state.turns;
+    const cursor = more ? target.nextCursor : null;
+    const wasLoaded = target.loaded;
+    target.loading = true;
+    target.error = null;
+    try {
+      const data = await request('turns', { cursor, limit: 20 });
+      if (!current(g) || number !== turnRequest || target !== state.turns) return;
+      const incoming = data.items || [];
+      const first = incoming.at(-1)?.seq;
+      const last = target.items[0]?.seq;
+      const gap = !more && Number.isSafeInteger(first) && Number.isSafeInteger(last) && first > last + 1;
+      target.items = (gap ? incoming : [...new Map([...target.items, ...incoming].map(row => [row.id, row])).values()])
+        .sort((a, b) => b.seq - a.seq);
+      if (more || !wasLoaded || gap) target.nextCursor = data.nextCursor ?? null;
+      target.loaded = true;
+      target.stale = false;
+    } catch (error) {
+      if (current(g) && number === turnRequest && target === state.turns) {
+        target.stale = true;
+        target.error = { code: error.code, message: error.message };
+      }
+    } finally {
+      if (current(g) && number === turnRequest && target === state.turns) { target.loading = false; scheduleTurns(); }
+    }
+  }
   async function readTaskLog(taskId, more = false) {
     if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId)) return;
     if (more && (state.taskLog.taskId !== taskId || state.taskLog.loading)) return;
@@ -585,7 +639,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   return {
-    open, refresh, command, cancel, page, settings, inspect, search, showTasks, readTasks, readTaskLog, stopTask,
+    open, refresh, command, cancel, page, settings, inspect, search, showTasks, readTasks, readTaskLog, stopTask, showTurns, readTurns,
     discardRetry() { outbox().delete(agentId); retainedFiles().delete(agentId); state.retryCommand = null; },
     dispose() { reset(); disposed = true; },
   };

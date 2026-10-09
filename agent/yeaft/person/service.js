@@ -7,6 +7,7 @@ import { loadConfig } from '../config.js';
 import { validateFiles } from './attachments.js';
 import { createPersonProvider, resolveAgentDefaultModel, selectPersonModels, validateDefaultModel, validateModelCandidates } from './provider.js';
 import { fail, identifier, LIMITS, object, page, personTaskRequest, safeError, text } from './contracts.js';
+import { turnsPage } from './turn-diagnostics.js';
 import { inspectRequest, personName, searchRequest } from './inspection.js';
 
 /**
@@ -125,6 +126,7 @@ export function createPersonService(options = {}) {
       }
       case 'traces': await repository.recover(ownerId); return repository.list(ownerId, 'traces', page(payload));
       case 'messages': return repository.list(ownerId, 'messages', page(payload));
+      case 'turns': return repository.turns(ownerId, turnsPage(payload));
       // These reads deliberately bypass recover(), Recall and the runtime/provider.
       case 'inspect': {
         const request = inspectRequest(payload);
