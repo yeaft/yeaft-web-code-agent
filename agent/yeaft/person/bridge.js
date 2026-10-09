@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import ctx from '../../context.js';
 import { sendToServer } from '../../connection/buffer.js';
 
-/** Lazy Person transport. Only deployment-local environment supplies database credentials.
- * Storage is lazy and instance-local by default; browser messages cannot choose a backend.
+/** Lazy Person transport. SQLite storage belongs to this Agent instance;
+ * browser messages cannot choose a storage authority or instance directory.
  */
 export function createPersonBridge({
   context = ctx, send = sendToServer, env = process.env,
@@ -32,7 +32,6 @@ export function createPersonBridge({
         await send({ ...response, ok: false, errorCode: 'invalid_request', error: 'Digital person request requires authenticated ownership' });
         return true;
       }
-      const uri = env.YEAFT_PERSON_MONGODB_URI;
       const agentId = context.agentId || context.AGENT_ID;
       if (!agentId || !context.CONFIG?.yeaftDir) throw new Error('identity');
       // Server+Agent is a storage boundary; a re-registration must not reuse the old runtime.
@@ -45,10 +44,7 @@ export function createPersonBridge({
       identity = namespace;
       if (!servicePromise) {
         servicePromise = Promise.resolve().then(() => createService({
-          uri,
-          storage: env.YEAFT_PERSON_STORAGE,
           embedding: { enabled: env.YEAFT_PERSON_EMBEDDING !== 'off', allowDownload: env.YEAFT_PERSON_EMBEDDING_DOWNLOAD !== '0' },
-          dbName: env.YEAFT_PERSON_MONGODB_DB || 'yeaft_person',
           namespace,
           yeaftDir: context.CONFIG.yeaftDir,
           workDir: context.CONFIG.workDir,
@@ -78,7 +74,7 @@ export function createPersonBridge({
         TASK_CONTROL_UNAVAILABLE: 'Task control could not be confirmed; refresh before retrying',
         STALE: 'Digital person state changed; refresh and try again',
         IDEMPOTENCY_CONFLICT: 'This message identifier already belongs to a different request',
-        STORAGE_MISMATCH: 'The configured storage differs from the existing Person authority; do not switch without a verified migration',
+        STORAGE_MISMATCH: 'Existing digital person storage is not a valid SQLite binding; check instance storage before retrying',
         UNSUPPORTED: 'This capability is not available in this digital person version',
       };
       const known = Object.hasOwn(safeErrors, error?.code);

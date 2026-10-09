@@ -5,7 +5,7 @@ export const LIMITS = Object.freeze({ inputBytes: 8192, outputBytes: 65536, cont
 const ERRORS = {
   INVALID_REQUEST: 'Invalid digital person request.', NOT_CONFIGURED: 'Digital person storage configuration is missing.',
   STORAGE_UNAVAILABLE: 'Digital person storage is unavailable. Check instance storage and database configuration.',
-  STORAGE_MISMATCH: 'Person storage is already bound to another backend; a verified migration is required.',
+  STORAGE_MISMATCH: 'Existing digital person storage is not a valid SQLite binding.',
   NOT_OPEN: 'Open your digital person first.', BUSY: 'The digital person is already active.',
   IDEMPOTENCY_CONFLICT: 'This clientMessageId was already used for a different request.',
   STALE: 'The activity no longer owns the current person revision.', INVALID_PROPOSAL: 'The model returned an invalid cognitive proposal.',
