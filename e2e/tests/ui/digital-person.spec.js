@@ -150,6 +150,8 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     const loading = page.locator('.person-response-loading');
     await expect(loading).toBeVisible();
     await expect(loading).toHaveAttribute('role', 'status');
+    await expect(loading).toHaveText('');
+    await expect(page.locator('#person-conversation .person-activity, #person-conversation details')).toHaveCount(0);
     await expect(page.locator('.person-header')).not.toContainText(zh ? '处理中' : 'Processing');
     await expect(page.locator('.person-header')).not.toContainText(zh ? '取消' : 'Cancel');
     await expect(page.locator('.person-composer .message-composer-spinner')).toBeVisible();
@@ -165,6 +167,9 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
       return color;
     }));
     await page.screenshot({ path: testInfo.outputPath(`person-loading-${scenario.width}-${scenario.theme}.png`) });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(await dot.evaluate(el => getComputedStyle(el).animationName)).toBe('none');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     await expect(page.locator('.person-messages')).toContainText('Recorded mock response.');
     await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
     await page.locator('.person-composer').getByRole('button', { name: zh ? '停止执行' : 'Stop execution', exact: true }).click();
@@ -448,7 +453,7 @@ test('Person entry is opt-in per Agent via Agent settings and survives reload', 
 });
 
 for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
-  test(`Digital Person live activity stays truthful ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
+  test(`Digital Person animation only in conversation, activity only inside ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
     test.setTimeout(60000);
     const mock = await mockPersonSocket(page, { activityFlow: true });
     await page.setViewportSize({ width: scenario.width, height: 800 });
@@ -466,19 +471,27 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     add('call_output', { callId: 'a', output: { text: 'PRIVATE_OUTPUT' } });
     add('capability_started', { callId: 'a', capability: { id: 'Recall', args: { query: 'PRIVATE_QUERY' } } });
     mock.activity(records);
-    const activity = page.locator('.person-activity');
+    const loading = page.locator('#person-conversation .person-response-loading');
+    await expect(loading).toBeVisible();
+    await expect(loading).toHaveText('');
+    await expect(page.locator('#person-conversation .person-activity')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`person-conversation-loading-${scenario.width}-${scenario.theme}.png`) });
+    await page.locator('.person-thoughts-button').click();
+    const activity = page.locator('#person-thoughts .person-activity');
     await expect(activity).toContainText(zh ? '正在查找相关记忆' : 'Looking up relevant memories');
     await expect(activity).not.toHaveAttribute('open', '');
     const details = activity.locator('summary');
     await details.focus(); await page.keyboard.press('Enter');
     await expect(activity).toHaveAttribute('open', '');
     // Paged journal remains readable while the live activity tail keeps polling.
-    await page.locator('.person-thoughts-button').click();
     await page.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' }).click();
     await page.locator('.person-panel-header .header-action-btn').click();
     add('capability_result', { callId: 'a', capability: { id: 'Recall' }, result: { items: ['PRIVATE_MEMORY'] } });
     add('capability_started', { callId: 'b', capability: { id: 'Skill.reconsider' } });
     mock.activity(records);
+    await expect(loading).toHaveText('');
+    await expect(page.locator('#person-conversation .person-activity')).toHaveCount(0);
+    await page.locator('.person-thoughts-button').click();
     await expect(activity).toContainText(zh ? '正在查看思考方法' : 'Reading a thinking method');
     expect(mock.historyPending()).toBe(true);
     mock.finishHistory();
@@ -492,6 +505,7 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     expect(await activity.locator('.typing-indicator > span').first().evaluate(el => getComputedStyle(el).animationName)).toBe('none');
     await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
     await expect(activity).toContainText(zh ? '暂时无法确认进展' : 'cannot confirm progress');
+    await expect(loading).toHaveCount(0);
     await expect(activity.locator('.person-response-loading')).toHaveCount(0);
     await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
     await expect(activity.locator('.person-response-loading')).toBeVisible();
@@ -505,11 +519,16 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     mock.activity(records, 'completed');
     await expect(activity.locator('.person-response-loading')).toHaveCount(0);
     await expect(activity).toContainText(zh ? '本次活动已完成' : 'This activity is complete');
+    await expect(loading).toHaveCount(0);
+    await expect(page.locator('#person-conversation .person-activity')).toHaveCount(0);
     await expect(page.locator('#person-input')).toBeEnabled();
     if (!await activity.evaluate(el => el.open)) await activity.locator('summary').click();
     await expect(activity).toContainText(zh ? '失败' : 'Failed');
     await expect(activity.locator('pre, .tool-line, img, script')).toHaveCount(0);
     for (const text of ['PRIVATE_INPUT', 'PRIVATE_PROMPT', 'PRIVATE_QUERY', 'PRIVATE_OUTPUT', 'PRIVATE_MEMORY', 'PRIVATE_CODE', 'PRIVATE_DIAGNOSTICS']) await expect(activity).not.toContainText(text);
     expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(1);
+    await page.locator('.person-panel-header .header-action-btn').click();
+    await expect(page.locator('.person-activity, .person-response-loading')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`person-conversation-completed-${scenario.width}-${scenario.theme}.png`) });
   });
 }

@@ -242,7 +242,9 @@ export default {
                   <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
                 </article>
               </template>
-              <PersonActivity :key="activity.episodeId || 'pending'" :activity="activity" />
+              <div v-if="activity.loading" class="person-response-loading" role="status" :aria-label="$t('sidebar.sessions.processing')">
+                <span class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></span>
+              </div>
             </div>
           </div>
           <div class="input-area person-composer">
@@ -304,7 +306,9 @@ export default {
             <button v-if="panel === 'thoughts'" type="button" class="btn-ghost person-debug-link" @click="openPanel('debug')">{{ $t('person.debug') }}</button>
             <button v-else type="button" class="btn-ghost" @click="openPanel('thoughts')">{{ $t('person.back') }}</button>
           </div>
-          <PersonThoughtJournal v-if="panel === 'thoughts'" :traces="state.traces" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
+          <PersonThoughtJournal v-if="panel === 'thoughts'" :traces="state.traces" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)">
+            <template #activity><PersonActivity :key="activity.episodeId || 'pending'" :activity="activity" /></template>
+          </PersonThoughtJournal>
           <PersonDebugLog v-if="panel === 'debug'" :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
         </aside>
       </div>
