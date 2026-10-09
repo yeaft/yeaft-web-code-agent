@@ -43,7 +43,7 @@ export function personState() {
     loading: false, configured: null, storageReady: null, modelReady: null, reason: '', person: null, state: null, latestEpisode: null,
     messages: [], traces: [], busy: false, episodeId: null, error: null,
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
-    commandPending: false, cancelPending: false, retryCommand: null, tracesStale: false,
+    commandPending: false, commandEpisodeId: null, cancelPending: false, retryCommand: null, tracesStale: false,
     activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false,
     models: [], modelCandidates: [], settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
@@ -345,6 +345,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     outbox().set(agentId, envelope);
     state.retryCommand = envelope;
     state.commandPending = true;
+    state.commandEpisodeId = null;
     state.error = null;
     try {
       let data;
@@ -380,7 +381,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       retainedFiles().delete(agentId);
       state.retryCommand = null;
       snapshotRequest += 1; // An older in-flight idle snapshot cannot undo this acknowledgement.
-      state.episodeId = data.episodeId || null;
+      // Receipt reconciliation refreshes live activity below; keep the original
+      // command identity separate so another tab's newer episode cannot replace it.
+      state.commandEpisodeId = data.episodeId || null;
+      state.episodeId = state.commandEpisodeId;
       state.activityEpisodeId = state.episodeId;
       state.activityStale = false;
       state.progressStale = false;
