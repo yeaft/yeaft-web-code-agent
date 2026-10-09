@@ -132,7 +132,10 @@ describe('Digital Person surface', () => {
       { id: 'cutoff', name: 'Cutoff', status: 'completed', outcome: { status: 'incomplete', complete: false, reason: 'budget_exceeded' } },
       { id: 'pending', name: 'After-effects', status: 'completed', executionPending: true, outcome: { status: 'succeeded', complete: true } },
       { id: 'orphan', name: 'Lost handle', status: 'failed', recoveryStatus: 'orphaned', executionPending: true },
-    ] }, log: {} }, global: { config: { globalProperties: { $t: t } } } });
+      ...Array.from({ length: 97 }, (_, i) => ({ id: `settled-${i}`, name: `Settled ${i}`, status: 'completed', executionPending: false })),
+    ], truncated: true }, log: {} }, global: { config: { globalProperties: { $t: t } } } });
+    expect(wrapper.findAll('.person-task-item')).toHaveLength(100);
+    expect(wrapper.findAll('button').filter(b => b.text() === 'Stop')).toHaveLength(1);
     expect(wrapper.get('[data-task-id="cutoff"]').text()).toContain('Incomplete — budget exhausted');
     expect(wrapper.get('[data-task-id="cutoff"]').findAll('button')).toHaveLength(0);
     expect(wrapper.get('[data-task-id="orphan"]').findAll('button')).toHaveLength(0);

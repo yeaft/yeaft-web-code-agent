@@ -452,9 +452,12 @@ class ScopedPersonTaskHost {
         const tasks = jsonFiles(this.#manager.store.sessionDir(this.sessionId))
           .filter(task => task.sessionId === this.sessionId && task.ownerVpId === this.parentVpId && ['shell', 'sub_agent'].includes(task.kind));
         const agents = [...this.#agents.values()].filter(agent => agentBelongsToScope(agent, this.agentScope));
-        const recent = (items, terminal) => items.sort((a, b) => Number(terminal(a.status)) - Number(terminal(b.status))
+        const recent = (items, settled) => items.sort((a, b) => Number(settled(a)) - Number(settled(b))
           || String(b.updatedAt ?? b.createdAt ?? '').localeCompare(String(a.updatedAt ?? a.createdAt ?? ''))).slice(0, PERSON_TASK_LIMITS.records);
-        return { tasks: recent(tasks, isTerminalTaskStatus).map(projectedTask), agents: recent(agents, isTerminalAgentStatus).map(agent => projectedAgent(agent, this.#executionPending(agent))),
+        // A terminal driver with actual tools still running is active work, not
+        // disposable history: keep its cleanup control ahead of settled records.
+        return { tasks: recent(tasks, task => isTerminalTaskStatus(task.status)).map(projectedTask),
+          agents: recent(agents, agent => isTerminalAgentStatus(agent.status) && !agent.executionPending).map(agent => projectedAgent(agent, agent.executionPending)),
           truncated: tasks.length > PERSON_TASK_LIMITS.records || agents.length > PERSON_TASK_LIMITS.records };
       }
       case 'task_log': {

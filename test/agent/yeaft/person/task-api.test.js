@@ -207,7 +207,16 @@ describe('Digital Person owner-scoped task API', () => {
       expect(agent.__driverStarted).toBe(false);
       expect(agent.status).toBe(status); // Read-only timeout permits continuation; side effects fail the query.
       expect(agent.execution.failedCalls).toBe(1); // Registry timeout, not actual tool completion.
+      // Settled history must not evict an older terminal child whose real tool
+      // still needs cleanup from the bounded inventory (and its UI Stop entry).
+      agent.createdAt = '2020-01-01';
+      for (let i = 0; i < PERSON_TASK_LIMITS.records + 5; i++) {
+        getAgentRegistry().set(`agent-settled-${i}`, { id: `agent-settled-${i}`, name: `Settled ${i}`, status: 'completed',
+          createdAt: '2026-01-01', parentSessionId: agent.parentSessionId, parentVpId: agent.parentVpId, parentThreadId: agent.parentThreadId });
+      }
       const list = await call(s, 'tasks');
+      expect(list.truncated).toBe(true);
+      expect(list.agents).toHaveLength(PERSON_TASK_LIMITS.records);
       expect(list.agents[0]).toMatchObject({ id: child.agentId, status, executionPending: true, recoveryStatus: null, outcome });
       expect(JSON.stringify(list)).not.toContain('private result');
       let settled = false;
@@ -219,7 +228,10 @@ describe('Digital Person owner-scoped task API', () => {
       const closed = await closing;
       expect(closed).toMatchObject({ agent: { id: child.agentId, status, executionPending: false, outcome }, pending: false });
       expect(JSON.stringify(closed)).not.toContain('private');
-      expect((await call(s, 'tasks')).agents[0].executionPending).toBe(false);
+      expect(getAgentRegistry().get(child.agentId).__driverStarted).toBe(false);
+      // Once joined it may fall outside the bounded history, but its durable
+      // record remains directly addressable and closing again is idempotent.
+      expect((await call(s, 'tasks')).agents.some(record => record.id === child.agentId)).toBe(false);
       expect(await call(s, 'agent_close', { agentId: child.agentId })).toEqual(closed);
       expect(h.evidence().toolResults.some(result => result.output === 'private late tool evidence')).toBe(true);
       expect(createPersonProvider).not.toHaveBeenCalled();
