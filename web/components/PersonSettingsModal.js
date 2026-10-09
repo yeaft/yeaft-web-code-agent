@@ -183,7 +183,7 @@ export default {
             <label for="person-default-model">{{ $t('person.defaultModel') }}</label>
             <p v-if="agentDefaultModel" class="person-settings-help">{{ $t('person.agentDefaultModel', { model: agentDefaultModel }) }}</p>
             <select id="person-default-model" v-model="preferredDefault" @change="defaultEdited = true"
-              :disabled="controlsDisabled || !defaultModelSupported || !defaultChoices.length"
+              :disabled="controlsDisabled || !defaultModelSupported"
               :aria-invalid="invalidDefault" aria-describedby="person-default-model-hint">
               <option value="">{{ $t('person.defaultModelAutomatic', { model: automaticDefault }) }}</option>
               <option v-for="model in defaultChoices" :key="model.id" :value="model.id">{{ model.id }}</option>

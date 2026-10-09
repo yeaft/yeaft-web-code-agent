@@ -613,6 +613,21 @@ describe('Digital Person surface', () => {
     expect(requests.find(r => r.op === 'settings').payload).toEqual({ name: 'Mira', modelCandidates: ['provider/a'], defaultModel: null });
   });
 
+  it('allows resetting stale candidates and default when no configured models remain', async () => {
+    await render();
+    Object.assign(wrapper.vm.state, { defaultModelSupported: true, models: [], modelCandidates: ['removed/model'],
+      defaultModel: 'removed/model', effectiveModelCandidates: [], agentDefaultModel: null });
+    await wrapper.get('.person-settings-button').trigger('click');
+    expect(wrapper.get('#person-default-model').attributes('disabled')).toBeUndefined();
+    await wrapper.get('.person-model-default input').setValue(true);
+    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeDefined();
+    await wrapper.get('#person-default-model').setValue('');
+    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeUndefined();
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: [], defaultModel: null });
+    expect(requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+  });
+
   it('does not invent inherited candidates or send unsupported default fields to an older Agent', async () => {
     await render();
     await wrapper.get('.person-settings-button').trigger('click');

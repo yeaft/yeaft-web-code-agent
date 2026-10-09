@@ -9,7 +9,7 @@ const FIELDS = Object.freeze({
   dream: ['clientMessageId'], cancel: ['episodeId'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'],
   inspect: ['section', 'cursor', 'limit'], search: ['query', 'cursor', 'limit'],
-  settings: ['name', 'autonomyEnabled', 'modelCandidates'],
+  settings: ['name', 'autonomyEnabled', 'modelCandidates', 'defaultModel'],
 });
 
 /** Request-only relay: identity is supplied by the authenticated Server, never the browser.
