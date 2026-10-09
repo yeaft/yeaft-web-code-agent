@@ -49,6 +49,14 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 - 显式取消指定 episode 时同时停止该 episode 已启动的后台效果，**即使认知已经 completed**；不指定 episode 则停止该 owner 的全部已知任务。异常、活动超时或认知调用预算耗尽停止 originating episode 的异步工作，不停止其他正常已提交 episode 的任务。服务 close 停止并 join 本 host 的实际工具效果和子 driver，而不是仅改变状态。
 - 重启后失去进程控制的任务标为 `orphaned`；未完成子 Agent 变为 failed 并保留 orphaned recovery evidence。保存的完成结果/日志可恢复，但不会假装仍持有进程句柄或自动重试外部动作。
 
+## 内核中的任务查看与管理
+
+点击数字人页右上角「查看内部」→「任务」，统一查看这个数字人跨 episode 的后台 Shell 与子线程，不以当前输入或对话轮次筛选。面板显示有界状态摘要，并可分页读取原始日志；日志只作为当前 owner 的不可信文本展示。列表最多各 100 条，未结束任务优先，超出时明确提示。Shell 可停止，子线程可关闭；成功响应必须等待进程/driver 与工具实际清理结束。失去控制的 orphaned 记录只供查看，不假装可以确认停止。
+
+管理 API 从 authenticated owner 的持久 Person identity 获取私有 task host，不初始化模型/provider，不触发 send/think/dream，也不恢复或取消无关活动。只在任务栏可见时轮询；关闭、切换 Agent/owner、断线及退出页面都会停止轮询或隔离迟到回复。模型不可用但存储仍可读时，任务管理继续可用。
+
+认知指令明确要求数字人在显式启动的 episode 中关注自己已授权的持续工作，而不只看最新消息；但这不代表任务完成会自动启动下一次认知。当前产品仍并列提供 Session、Work Center 和数字人，尚未改成以数字人为唯一顶层入口；此处没有新增自主调度、自动重试或后台模型唤回。
+
 ## 子 Agent 限制
 
 子 Engine 只继承 Person 已支持的真实 native 工具和当前插件 allowlist；原生 `DiscoverTools` 仅供子 Engine 使用，不进入 Person proposal catalog。角色 baseline 和 `allow_tools` 继续约束子工具，不能授予嵌套 orchestration。没有 Session HistorySearch、交互 AskUser、路由、MCP、Work Center 或 worktree 管理。

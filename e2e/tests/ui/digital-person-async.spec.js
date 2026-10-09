@@ -50,6 +50,12 @@ test('Person runs parallel independent threads and collects background shell log
         command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setTimeout(()=>console.log('durable shell result'),250)")}`, background: true,
       });
       else { taskId = input.capabilityResult.output.match(/Started background task (\S+)\./)[1]; p.reply = 'Started in background.'; }
+    } else if (input.trigger.text === 'Long background') {
+      if (!input.capabilityResult) use('catalog.view', { id: 'Bash' });
+      else if (input.capabilityResult.args) use('Bash', {
+        command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("console.log('long task ready');setInterval(()=>{},1000)")}`, background: true,
+      });
+      else p.reply = 'Long task started.';
     } else {
       inspectCalls++;
       switch (inspectCalls) {
@@ -95,6 +101,29 @@ test('Person runs parallel independent threads and collects background shell log
     await expect(page.locator('.person-messages')).toContainText('durable shell result', { timeout: 20000 });
     expect(mockAgent.conversations.size).toBe(0);
     await expect(page.locator('.person-messages')).not.toContainText('Activity details');
+    await send('Long background');
+    await expect(page.locator('.person-messages')).toContainText('Long task started.', { timeout: 20000 });
+    await page.locator('#person-input').fill('Keep this draft');
+    const beforeInspection = parentCalls;
+    await page.locator('.person-thoughts-button').click();
+    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Tasks', exact: true }).click();
+    await expect(page.locator('.person-task-browser')).toContainText('Background tasks');
+    await expect(page.locator('.person-task-browser')).toContainText('Child threads');
+    await expect(page.locator('.person-task-item')).toHaveCount(4);
+    const active = page.locator('.person-task-item').filter({ has: page.getByRole('button', { name: 'Stop', exact: true }) });
+    await expect(active).toHaveCount(1);
+    await active.getByRole('button', { name: 'View log', exact: true }).click();
+    await expect(page.locator('.person-task-log pre')).toContainText('long task ready');
+    await active.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(active).toContainText('Stop this task?');
+    await active.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(page.locator('.person-task-browser').getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
+    expect(parentCalls).toBe(beforeInspection);
+    await expect(page.locator('#person-input')).toHaveValue('Keep this draft');
+    await page.setViewportSize({ width: 320, height: 680 });
+    await page.locator('.person-task-browser .person-journal-scroll').focus();
+    await page.keyboard.press('End');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   } finally {
     mockAgent._messageHandlers.splice(mockAgent._messageHandlers.indexOf(listener), 1);
     release();

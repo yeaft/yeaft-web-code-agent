@@ -7,6 +7,7 @@ import DigitalPersonPage from '../../web/components/DigitalPersonPage.js';
 import SidebarDigitalPerson from '../../web/components/SidebarDigitalPerson.js';
 import PersonThoughtJournal from '../../web/components/PersonThoughtJournal.js';
 import PersonActivity from '../../web/components/PersonActivity.js';
+import PersonTaskBrowser from '../../web/components/PersonTaskBrowser.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
@@ -35,6 +36,8 @@ beforeEach(() => {
         think: { episodeId: 'e' }, send: { episodeId: 'e' }, settings: { settings: { modelCandidates: request.payload.modelCandidates || [] }, person: { id: 'p', name: request.payload.name || 'Ada', settings: { modelCandidates: request.payload.modelCandidates || [] } } },
         inspect: { items: request.payload.section === 'memory' ? [{ id: 'idea', kind: 'interest', statement: '<script>Keep uncertainty</script>', epistemicState: 'reported', revision: 2, sourceRefs: ['message:1'] }] : [{ id: 'Script.sum', domain: 'script', version: 1, description: 'Sum', code: 'return input' }], nextCursor: null },
         search: { items: [{ id: 'archive', role: 'user', text: '<img src=x> archived message', createdAt: 1 }], nextCursor: null },
+        tasks: { tasks: [{ id: 'background', title: '<script>build</script>', status: 'running' }], agents: [{ id: 'child', taskId: 'child-log', name: 'Research', status: 'completed' }] },
+        task_log: { text: '<img onerror=alert(1)> shell output', nextOffset: 35 }, task_cancel: {}, agent_close: {},
       };
       queueMicrotask(() => acceptPersonResponse(chat, { ...request, type: 'person_response', ok: true, data: data[request.op] }));
       return true;
@@ -90,6 +93,57 @@ describe('Digital Person surface', () => {
     await wrapper.findAll('button').find(b => b.text() === 'Back').trigger('click');
     expect(wrapper.find('#person-thoughts').exists()).toBe(true);
     expect(wrapper.find('#person-debug').exists()).toBe(false);
+  });
+
+  it('shows cross-episode task management in the kernel without starting cognition, keeping logs inert and draft intact', async () => {
+    await render(); await wrapper.get('#person-input').setValue('Keep this draft');
+    await wrapper.get('.person-thoughts-button').trigger('click');
+    await wrapper.findAll('.person-inspector-nav button').find(b => b.text() === 'Tasks').trigger('click');
+    await flushPromises();
+    const pane = wrapper.get('.person-task-browser');
+    expect(pane.text()).toContain('<script>build</script>');
+    expect(pane.find('script').exists()).toBe(false);
+    await pane.findAll('button').find(b => b.text() === 'View log').trigger('click'); await flushPromises();
+    expect(pane.get('pre').text()).toBe('<img onerror=alert(1)> shell output');
+    expect(pane.find('img').exists()).toBe(false);
+    await pane.findAll('button').find(b => b.text() === 'Stop').trigger('click');
+    expect(requests.some(r => r.op === 'task_cancel')).toBe(false);
+    await pane.findAll('button').find(b => b.text() === 'Stop').trigger('click'); await flushPromises();
+    expect(requests.filter(r => r.op === 'task_cancel')).toHaveLength(1);
+    expect(requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
+    expect(wrapper.get('#person-input').element.value).toBe('Keep this draft');
+  });
+
+  it('treats succeeded shells as terminal and associates child logs without duplicate task rows', () => {
+    wrapper = mount(PersonTaskBrowser, { props: { page: { tasks: [
+      { id: 'done', kind: 'shell', title: 'Finished', status: 'succeeded' },
+      { id: 'child-log', kind: 'sub_agent', agentId: 'child', status: 'succeeded' },
+    ], agents: [{ id: 'child', name: 'Research', status: 'completed' }] }, log: {} }, global: { config: { globalProperties: { $t: t } } } });
+    expect(wrapper.findAll('.person-task-item')).toHaveLength(2);
+    expect(wrapper.text()).toContain('Completed');
+    expect(wrapper.text()).not.toContain('person.taskStatus.');
+    expect(wrapper.findAll('button').some(button => button.text() === 'Stop')).toBe(false);
+    wrapper.findAll('button').filter(button => button.text() === 'View log')[1].trigger('click');
+    expect(wrapper.emitted('log')[0]).toEqual(['child-log']);
+  });
+
+  it('distinguishes incomplete outcomes and keeps terminal child cleanup controls available', async () => {
+    wrapper = mount(PersonTaskBrowser, { props: { page: { tasks: [], agents: [
+      { id: 'cutoff', name: 'Cutoff', status: 'completed', outcome: { status: 'incomplete', complete: false, reason: 'budget_exceeded' } },
+      { id: 'pending', name: 'After-effects', status: 'completed', executionPending: true, outcome: { status: 'succeeded', complete: true } },
+      { id: 'orphan', name: 'Lost handle', status: 'failed', recoveryStatus: 'orphaned', executionPending: true },
+    ] }, log: {} }, global: { config: { globalProperties: { $t: t } } } });
+    expect(wrapper.get('[data-task-id="cutoff"]').text()).toContain('Incomplete — budget exhausted');
+    expect(wrapper.get('[data-task-id="cutoff"]').findAll('button')).toHaveLength(0);
+    expect(wrapper.get('[data-task-id="orphan"]').findAll('button')).toHaveLength(0);
+    const pending = wrapper.get('[data-task-id="pending"]');
+    expect(pending.text()).toContain('Tool execution is still pending');
+    await pending.findAll('button').find(b => b.text() === 'Stop').trigger('click');
+    expect(wrapper.emitted('stop')).toBeUndefined();
+    await pending.findAll('button').find(b => b.text() === 'Stop').trigger('click');
+    expect(wrapper.emitted('stop')[0]).toEqual(['agent', 'pending']);
+    await wrapper.setProps({ page: { tasks: [], agents: [{ id: 'pending', status: 'closed', executionPending: false }] } });
+    expect(wrapper.findAll('button').some(b => b.text() === 'Stop')).toBe(false);
   });
 
   it('labels continuation input as earlier candidate and hides truncated technical output', () => {

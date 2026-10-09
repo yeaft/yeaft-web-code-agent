@@ -47,6 +47,8 @@ export function personState() {
     activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false,
     models: [], modelCandidates: [], settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
+    tasks: { tasks: [], agents: [], loaded: false, loading: false, stale: false, error: null, pending: null },
+    taskLog: { taskId: '', text: '', nextOffset: 0, loading: false, error: null },
   };
 }
 
@@ -78,6 +80,9 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let traceRefreshVersion = 0;
   let queuedTraceRefresh = null;
   let disposed = false;
+  let tasksVisible = false;
+  let taskPoll = null;
+  let tasksRequest = 0;
   const owned = new Set();
   const current = (g = generation) => !disposed && g === generation && activeScope === scope();
   const outbox = () => {
@@ -125,6 +130,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     } : {};
     generation += 1;
     clearTimeout(poll);
+    clearTimeout(taskPoll);
+    taskPoll = null;
+    tasksRequest += 1;
+    tasksVisible = false;
     poll = null;
     polling = false;
     for (const requestId of owned) {
@@ -446,6 +455,81 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
 
+  // Inspection is Person-scoped, independent of the current message/episode and
+  // model readiness. Poll only while its drawer is visible, including idle cognition.
+  function scheduleTasks() {
+    clearTimeout(taskPoll);
+    if (!tasksVisible || !current() || digitalPersonGate(chat, agentId)) return;
+    const g = generation;
+    taskPoll = setTimeout(() => { if (current(g)) void readTasks(); }, pollMs);
+  }
+  function showTasks(visible) {
+    tasksVisible = visible;
+    clearTimeout(taskPoll);
+    if (visible && !state.loading) void readTasks();
+  }
+  async function readTasks() {
+    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.loading) return;
+    const g = generation;
+    const number = ++tasksRequest;
+    state.tasks.loading = true;
+    state.tasks.error = null;
+    try {
+      const data = await request('tasks');
+      if (!current(g) || number !== tasksRequest) return;
+      state.tasks.tasks = data.tasks || [];
+      state.tasks.agents = data.agents || [];
+      state.tasks.truncated = data.truncated === true;
+      state.tasks.loaded = true;
+      state.tasks.stale = false;
+    } catch (error) {
+      if (current(g) && number === tasksRequest) {
+        state.tasks.stale = true;
+        state.tasks.error = { code: error.code, message: error.message };
+      }
+    } finally {
+      if (current(g) && number === tasksRequest) { state.tasks.loading = false; scheduleTasks(); }
+    }
+  }
+  async function readTaskLog(taskId, more = false) {
+    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId)) return;
+    if (more && (state.taskLog.taskId !== taskId || state.taskLog.loading)) return;
+    if (!more) state.taskLog = { taskId, text: '', nextOffset: 0, loading: false, error: null };
+    const target = state.taskLog;
+    const g = generation;
+    target.loading = true;
+    target.error = null;
+    try {
+      const data = await request('task_log', { taskId, offset: more ? target.nextOffset : 0, maxBytes: 32768 });
+      if (!current(g) || state.taskLog !== target) return;
+      // UI budget is independent of the raw durable log; keep the newest 64 KiB.
+      target.text = (more ? target.text + data.text : data.text).slice(-65536);
+      target.nextOffset = data.nextOffset;
+    } catch (error) {
+      if (current(g) && state.taskLog === target) target.error = { code: error.code, message: error.message };
+    } finally {
+      if (current(g) && state.taskLog === target) target.loading = false;
+    }
+  }
+  async function stopTask(kind, taskId) {
+    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.pending) return false;
+    const g = generation;
+    state.tasks.pending = taskId;
+    state.tasks.error = null;
+    try {
+      await request(kind === 'agent' ? 'agent_close' : 'task_cancel', kind === 'agent' ? { agentId: taskId } : { taskId });
+      if (!current(g)) return false;
+      // Fence older list responses, then read the actual post-cancellation state.
+      tasksRequest += 1;
+      state.tasks.loading = false;
+      await readTasks();
+      return true;
+    } catch (error) {
+      if (current(g)) { state.tasks.stale = true; state.tasks.error = { code: error.code, message: error.message }; }
+      return false;
+    } finally { if (current(g)) state.tasks.pending = null; }
+  }
+
   async function settings(update) {
     if (!current() || state.settingsPending || state.loading || state.busy || state.commandPending || !state.person || digitalPersonGate(chat, agentId)) return false;
     const g = generation;
@@ -491,7 +575,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   return {
-    open, refresh, command, cancel, page, settings, inspect, search,
+    open, refresh, command, cancel, page, settings, inspect, search, showTasks, readTasks, readTaskLog, stopTask,
     discardRetry() { outbox().delete(agentId); retainedFiles().delete(agentId); state.retryCommand = null; },
     dispose() { reset(); disposed = true; },
   };
