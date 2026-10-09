@@ -109,6 +109,7 @@ describe('Person supported native host tools', () => {
       expect(bytes(cap.context())).toBeLessThanOrEqual(CAPABILITY_LIMITS.activeBytes);
       cap.activate(cap.context()); expect(cap.executionManifest(id)).not.toBeNull();
     }
+    await cap.execute({ id: 'catalog.view', args: { id: 'NotebookEdit' } });
     const projection = cap.context(); projection.find(m => m.id === 'NotebookEdit').revision = 'forged';
     cap.activate(projection); expect(cap.executionManifest('NotebookEdit')).toBeNull();
     const provider = await createPersonProvider({ config, adapter: {} });
@@ -162,6 +163,7 @@ describe('Person supported native host tools', () => {
     const failure = await execute(cap, 'Bash', { command: 'printf failure; exit 7' });
     expect(failure).toMatchObject({ ok: false, errorEffect: 'unknown', replaySafe: false });
     expect(JSON.parse(failure.output)).toMatchObject({ code: 'bash_exit_nonzero', exitCode: 7, output: 'failure' });
+    // A direct standalone host has no task namespace; service integration below supplies one.
     expect(await execute(cap, 'Bash', { command: 'touch forbidden', background: true })).toMatchObject({ ok: false, code: 'UNSUPPORTED', errorEffect: 'none' });
   });
 
@@ -241,7 +243,7 @@ describe('Person supported native host tools', () => {
     expect(file.source.revision).toBe(digest(await readFile(new URL('../../../../agent/yeaft/tools/file-write.js', import.meta.url), 'utf8')));
     expect(file.contract.revision).toBe(NATIVE_TOOL_MANIFESTS.find(m => m.id === 'FileWrite').revision);
     expect(file.contract.access).toBe('host-effect');
-    for (const id of ['AskUser', 'HistorySearch', 'SpawnAgent', 'ListTasks', 'ViewImage', 'EnterWorktree']) expect(page.items.find(m => m.id === id)).toBeUndefined();
+    for (const id of ['AskUser', 'HistorySearch', 'DiscoverTools', 'ViewImage', 'EnterWorktree']) expect(page.items.find(m => m.id === id)).toBeUndefined();
     expect(execute).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
   });
 

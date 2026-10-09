@@ -307,6 +307,35 @@ describe('wait-agent envelope shape', () => {
   });
 
 
+  it('exposes an awaitable driver cleanup and optional host VP ownership', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'child-driver-join-'));
+    let observedVpId;
+    const owned = defineTool({
+      name: 'FileRead', description: 'observe ownership', parameters: { type: 'object', properties: {} },
+      isReadOnly: () => true,
+      async execute(_input, ctx) { observedVpId = ctx.currentVpId; return 'owned'; },
+    });
+    let calls = 0;
+    const adapter = { async *stream() {
+      if (calls++ === 0) { yield { type: 'tool_call', id: 'owned-call', name: 'FileRead', input: {} }; yield { type: 'stop', stopReason: 'tool_use' }; }
+      else { yield { type: 'text_delta', text: 'done' }; yield { type: 'stop', stopReason: 'end_turn' }; }
+    } };
+    try {
+      const manager = new TaskManager({ yeaftDir: dir });
+      const registry = mkParentRegistry().register(owned);
+      const deps = mkDeps(adapter, { parentToolRegistry: registry, parentSessionId: 'owned-scope', childVpId: 'owned-vp', taskManager: manager, subAgentLogDir: dir });
+      const spawned = JSON.parse(await agentTool.execute({ name: 'owned', mission: 'use owned' }, { parentEngineDeps: deps, taskManager: manager }));
+      const agent = getAgentRegistry().get(spawned.agentId);
+      expect(agent.driverPromise).toBeInstanceOf(Promise);
+      await agent.driverPromise;
+      expect(observedVpId).toBe('owned-vp');
+      expect(agent.result).toBe('done');
+      expect(agent.__driverStarted).toBe(false);
+      expect(agent.subEngine).toBe(null);
+      expect(agent.status).toBe(STATUS.COMPLETED);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('keeps a PromptAgent follow-up collectable across a bounded timeout', async () => {
     const agents = getAgentRegistry();
     const agent = {
