@@ -139,6 +139,64 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.skills.items).toEqual([]);
   });
 
+  it('inspects Person-wide tasks while cognition is idle or model unavailable, polling only in the drawer', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    f.auto(r => r.op === 'status' ? { configured: true, storageReady: true, modelReady: false } : r.op === 'tasks' ? { tasks: [{ id: 'old-episode-task', status: 'running' }], agents: [] } : undefined);
+    await f.controller.open('a');
+    expect(f.state.busy).toBe(false);
+    f.controller.showTasks(true); await vi.advanceTimersByTimeAsync(0);
+    expect(f.state.tasks.tasks[0].id).toBe('old-episode-task');
+    await vi.advanceTimersByTimeAsync(110);
+    expect(f.requests.filter(r => r.op === 'tasks')).toHaveLength(3);
+    f.controller.showTasks(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.requests.filter(r => r.op === 'tasks')).toHaveLength(3);
+    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
+  });
+
+  it('fences task lists and logs across Agent switches, disconnect and disposal', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => ['tasks', 'task_log'].includes(r.op) ? false : undefined);
+    const reading = f.controller.readTasks(); const list = f.requests.at(-1);
+    const logging = f.controller.readTaskLog('private-a'); const log = f.requests.at(-1);
+    await f.controller.open('b'); await Promise.all([reading, logging]);
+    expect(f.response(list, { tasks: [{ id: 'private-a' }], agents: [] })).toBe(false);
+    expect(f.response(log, { text: 'secret', nextOffset: 6 })).toBe(false);
+    expect(f.state.tasks.tasks).toEqual([]); expect(f.state.taskLog.text).toBe('');
+    f.auto(r => r.op === 'tasks' ? { tasks: [], agents: [] } : undefined);
+    f.controller.showTasks(true); await vi.advanceTimersByTimeAsync(0);
+    f.chat.connectionState = 'reconnecting';
+    const count = f.requests.length; await vi.advanceTimersByTimeAsync(1000);
+    expect(f.requests).toHaveLength(count);
+    f.controller.dispose(); await vi.advanceTimersByTimeAsync(1000);
+    expect(f.requests).toHaveLength(count);
+  });
+
+  it('refreshes the actual task state after stop and ignores an older in-flight list', async () => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'tasks' || r.op === 'task_cancel' ? false : undefined);
+    const reading = f.controller.readTasks(); const old = f.requests.at(-1);
+    const stopping = f.controller.stopTask('shell', 't'); const stop = f.requests.at(-1);
+    expect(stop.payload).toEqual({ taskId: 't' }); expect(f.state.tasks.pending).toBe('t');
+    f.response(stop, { ok: true }); await Promise.resolve(); await Promise.resolve();
+    const fresh = f.requests.at(-1); expect(fresh.op).toBe('tasks');
+    f.response(fresh, { tasks: [{ id: 't', status: 'cancelled' }], agents: [] }); await stopping;
+    f.response(old, { tasks: [{ id: 't', status: 'running' }], agents: [] }); await reading;
+    expect(f.state.tasks.tasks[0].status).toBe('cancelled'); expect(f.state.tasks.pending).toBeNull();
+  });
+
+  it('keeps task stop errors and reads log pages as bounded plain text', async () => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'task_log' ? { text: 'x'.repeat(40000), nextOffset: r.payload.offset + 40000 } : r.op === 'agent_close' ? false : undefined);
+    await f.controller.readTaskLog('child-log'); await f.controller.readTaskLog('child-log', true);
+    expect(f.state.taskLog.text).toHaveLength(65536); expect(f.state.taskLog.nextOffset).toBe(80000);
+    const stopping = f.controller.stopTask('agent', 'child'); const request = f.requests.at(-1);
+    expect(request.payload).toEqual({ agentId: 'child' });
+    f.response(request, null, { ok: false, error: { code: 'NOT_FOUND', message: 'No live handle' } });
+    expect(await stopping).toBe(false); expect(f.state.tasks.error.message).toBe('No live handle');
+    expect(f.state.tasks.stale).toBe(true);
+  });
+
   it('keeps uncertain command ID across re-entry and retries only on explicit action', async () => {
     vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'send' ? false : undefined);

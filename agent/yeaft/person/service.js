@@ -7,7 +7,7 @@ import { allowedNativeToolIds } from './native-tools.js';
 import { loadConfig } from '../config.js';
 import { validateFiles } from './attachments.js';
 import { createPersonProvider, resolveAgentDefaultModel, selectPersonModels, validateDefaultModel, validateModelCandidates } from './provider.js';
-import { fail, identifier, LIMITS, object, page, safeError, text } from './contracts.js';
+import { fail, identifier, LIMITS, object, page, personTaskRequest, safeError, text } from './contracts.js';
 import { inspectRequest, personName, searchRequest } from './inspection.js';
 
 /**
@@ -89,6 +89,16 @@ export function createPersonService(options = {}) {
         object(payload, ['name'], []);
         if (payload.name != null) text(payload.name, 160);
         return repository.open(ownerId, payload.name);
+      }
+      case 'tasks':
+      case 'task_log':
+      case 'task_cancel':
+      case 'agent_close': {
+        const args = personTaskRequest(op, payload);
+        const person = await repository.getPerson(ownerId);
+        const host = runtime.tasks();
+        if (!host) fail('UNSUPPORTED');
+        return host.request({ ownerId, personId: person.personId, namespace, op, payload: args });
       }
       case 'snapshot': object(payload, []); return repository.snapshot(ownerId);
       case 'receipt': {

@@ -45,6 +45,39 @@ describe('digital person authenticated relay', () => {
     expect(forward.mock.lastCall[1].payload).toEqual(payload);
   });
 
+  it.each([
+    ['tasks', {}], ['task_log', { taskId: 'task-one', offset: 4, maxBytes: 65536 }],
+    ['task_cancel', { taskId: 'task-one' }], ['agent_close', { agentId: 'agent-child' }],
+  ])('routes strict %s task payloads with authenticated ownership and correlation', async (op, payload) => {
+    await relay.request(client, message({ op, payload, ownerId: 'victim' }));
+    const outbound = forward.mock.lastCall[1];
+    expect(outbound).toMatchObject({ ownerId: 'owner-a', op, payload });
+    await relay.response('agent-a', { type: 'person_response', requestId: outbound.requestId, ok: false, errorCode: 'not_found', error: 'Digital person task or child not found' });
+    expect(send.mock.lastCall[1]).toMatchObject({ op, requestId: 'browser-1', ok: false, errorCode: 'not_found' });
+  });
+
+  it.each([
+    ['tasks', { namespace: 'foreign' }], ['task_cancel', { taskId: 'task-one', ownerId: 'victim' }],
+    ['agent_close', { agentId: 'agent-child', personId: 'victim' }], ['task_log', { taskId: 'task-one', path: '/etc/passwd' }],
+    ['task_log', { taskId: 'task-one', tail: true }], ['task_log', { taskId: 'task-one', offset: -1 }],
+    ['task_log', { taskId: 'task-one', maxBytes: 65537 }], ['task_log', { taskId: 'task-one', maxBytes: null }],
+    ['task_log', { taskId: '../task-one' }], ['task_cancel', {}], ['agent_close', { agentId: 1 }],
+  ])('rejects malformed %s task payload without forwarding', async (op, payload) => {
+    await relay.request(client, message({ op, payload }));
+    expect(forward).not.toHaveBeenCalled();
+    expect(send.mock.lastCall[1]).toMatchObject({ requestId: 'browser-1', op, ok: false, errorCode: 'invalid_request' });
+  });
+
+  it.each(['tasks', 'task_log', 'task_cancel', 'agent_close'])('requires authentication and Agent access for %s', async op => {
+    client.authenticated = false;
+    await relay.request(client, message({ op }));
+    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Authentication required' });
+    client.authenticated = true; accessError.mockReturnValue('Agent access denied');
+    await relay.request(client, message({ op }));
+    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Agent access denied' });
+    expect(forward).not.toHaveBeenCalled();
+  });
+
   it('passes the exact cancellation episode and ignores a forged owner', async () => {
     await relay.request(client, message({ op: 'cancel', payload: { episodeId: 'old-episode', ownerId: 'victim' } }));
     expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op: 'cancel', payload: { episodeId: 'old-episode' } });

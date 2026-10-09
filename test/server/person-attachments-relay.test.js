@@ -80,7 +80,9 @@ describe('Person uploaded reference relay', () => {
     const state = personState(), envelopes = [];
     const chat = { authenticated: true, connectionState: 'connected', digitalPersonUiEnabledByAgent: { agent: true }, agents: [{ id: 'agent', online: true, capabilities: ['digital_person'] }],
       sendWsMessage(msg) { void relay.request(client, msg); return true; } };
-    relay = createPersonRelay({ uploads, accessError, timeoutMs: 1000, agentMap: new Map([['agent', { capabilities: ['digital_person'] }]]),
+    // This case tests a thrown/lost ACK, not the independent relay timeout path.
+    // Allow cold SQLite/catalog initialization on slower CI workers to finish.
+    relay = createPersonRelay({ uploads, accessError, timeoutMs: 10000, agentMap: new Map([['agent', { capabilities: ['digital_person'] }]]),
       send: async (_client, msg) => acceptPersonResponse(chat, msg),
       forward: async (agentId, msg) => {
         const data = await service.request({ ownerId: msg.ownerId, op: msg.op, payload: msg.payload });
@@ -90,7 +92,7 @@ describe('Person uploaded reference relay', () => {
         }
         await relay.response(agentId, { requestId: msg.requestId, type: 'person_response', ok: true, data }); return true;
       } });
-    const controller = createPersonController({ chat, state, scope: () => 'alice', timeoutMs: 2000, pollMs: 100000 });
+    const controller = createPersonController({ chat, state, scope: () => 'alice', timeoutMs: 15000, pollMs: 100000 });
     try {
       await controller.open('agent');
       // The backend contract starts with an already prepared/recoverable controller envelope.

@@ -10,9 +10,10 @@ import { agentBelongsToScope, getAgentRegistry } from '../tools/agent.js';
 import closeAgent from '../tools/close-agent.js';
 import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
 import { isTerminalAgentStatus } from '../sub-agent/status.js';
+import { describeAgentOutcome } from '../sub-agent/outcome.js';
 import { NullTrace } from '../debug-trace.js';
 import { loadConfig } from '../config.js';
-import { digest } from './contracts.js';
+import { digest, fail, PERSON_TASK_LIMITS, personTaskRequest } from './contracts.js';
 
 // Deliberately not the full Session registry: no transcript search, routing,
 // interactive UI, MCP, Work Center, or nested orchestration authority.
@@ -56,6 +57,38 @@ function privatePath(root, path) {
   return path;
 }
 
+// Human-authored summaries can contain incidental credentials/paths. Do not
+// expose native command fallbacks; redact common sensitive forms before capping.
+function summary(value, maxBytes = 512) {
+  const clean = String(value ?? '')
+    .replace(/https?:\/\/\S+|mongodb(?:\+srv)?:\/\/\S+/gi, '[url]')
+    .replace(/(?:bearer\s+|(?:api[_-]?key|password|secret|token)\s*[:=]\s*)\S+/gi, '[redacted]')
+    .replace(/\b(?:sk-[\w-]+|gh[pousr]_[\w]+|github_pat_[\w]+)\b/g, '[redacted]')
+    .replace(/(?:\/[\w.@~+-]+)+(?:\/[^\s]*)?|(?:~|\.\.?|[A-Za-z]:)[\\/][^\s]+/g, '[path]')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ');
+  let out = '';
+  for (const char of clean) { if (Buffer.byteLength(out + char) > maxBytes) break; out += char; }
+  return out;
+}
+function projectedTask(task) {
+  const commandFallback = task.kind === 'shell' && task.runtime?.command?.startsWith(task.title);
+  return { id: task.id, title: commandFallback ? 'Shell task' : summary(task.title), kind: task.kind, status: task.status,
+    createdAt: task.createdAt ?? null, updatedAt: task.updatedAt ?? null,
+    sourceEpisodeId: task.source?.episodeId ?? null, agentId: task.runtime?.subAgentId ?? null,
+    recoveryStatus: task.status === 'orphaned' ? 'orphaned' : null };
+}
+function projectedAgent(agent, executionPending) {
+  const usage = Object.fromEntries(['tokens', 'turns', 'startedAt'].map(key => [key,
+    Number.isFinite(agent.usage?.[key]) && agent.usage[key] >= 0 ? agent.usage[key] : 0]));
+  // Only the helper's fixed outcome vocabulary crosses this boundary, never the
+  // native result, budget reason, final report, or partial output.
+  const { status, complete, reason, truncated } = describeAgentOutcome(agent);
+  return { id: agent.id, name: summary(agent.name, 160), status: agent.status,
+    outcome: { status, complete, reason, truncated }, executionPending,
+    mission: summary(agent.mission ?? agent.task, 1024), usage, createdAt: agent.createdAt ?? null,
+    sourceEpisodeId: agent.personEpisodeId ?? null, recoveryStatus: agent.recoveryStatus === 'orphaned' ? 'orphaned' : null };
+}
+
 function atomicJSON(path, value) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 });
@@ -87,6 +120,7 @@ class ScopedPersonTaskHost {
   #options;
   #agentEpisodes = new Map();
   #instrumentedAgents = new WeakSet();
+  #observedDrivers = new WeakMap();
 
   constructor(options = {}) {
     this.scope = Object.freeze(identity(options));
@@ -177,13 +211,20 @@ class ScopedPersonTaskHost {
     });
   }
 
+  #executionPending(agent) {
+    const live = getAgentRegistry().get(agent.id);
+    return Boolean(live && agentBelongsToScope(live, this.agentScope)
+      && (live.__driverStarted || [...this.#calls].some(call => call.childId === agent.id)));
+  }
+
   #persistAgents() {
     for (const agent of getAgentRegistry().values()) {
       if (!agentBelongsToScope(agent, this.agentScope)) continue;
       const fields = ['id', 'name', 'task', 'mission', 'persona', 'budget', 'allowTools', 'status', 'result', 'lastResult',
         'partial_output', 'error', 'outputFile', 'taskId', 'usage', 'createdAt', 'liveness', 'diagnostics', 'finalReport',
-        'parentSessionId', 'parentVpId', 'parentThreadId', 'recoveryStatus', 'personEpisodeId'];
-      this.#agents.set(agent.id, Object.fromEntries(fields.filter(key => agent[key] !== undefined).map(key => [key, clone(agent[key])])));
+        'finalizationRequested', 'parentSessionId', 'parentVpId', 'parentThreadId', 'recoveryStatus', 'personEpisodeId'];
+      this.#agents.set(agent.id, { ...Object.fromEntries(fields.filter(key => agent[key] !== undefined).map(key => [key, clone(agent[key])])),
+        executionPending: this.#executionPending(agent) });
     }
     atomicJSON(join(this.dataRoot, 'agents.json'), { scope: this.scope, agents: [...this.#agents.values()] });
   }
@@ -195,13 +236,14 @@ class ScopedPersonTaskHost {
     if (digest(saved.scope) !== digest(this.scope)) throw denied();
     for (const record of saved.agents ?? []) {
       if (!agentBelongsToScope(record, this.agentScope)) throw denied();
-      if (!isTerminalAgentStatus(record.status)) {
-        // Native Agent status has no orphaned state; make it terminal failed,
-        // retain the precise recovery fact, and let TaskManager orphan its task.
-        record.status = 'failed';
+      if (!isTerminalAgentStatus(record.status) || record.executionPending === true) {
+        // A terminal driver can still have detached tool effects. Preserve its
+        // outcome, but never claim recovered control of those effects.
+        if (!isTerminalAgentStatus(record.status)) record.status = 'failed';
         record.recoveryStatus = 'orphaned';
-        record.error = 'Agent restarted while child was running; child control was lost.';
+        record.error = 'Agent restarted while child execution was pending; child control was lost.';
       }
+      record.executionPending = false; // Only current live handles prove pending execution.
       const existing = getAgentRegistry().get(record.id);
       if (existing && !agentBelongsToScope(existing, this.agentScope)) throw denied();
       if (existing?.__driverStarted) throw Object.assign(new Error('Child driver is still live'), { code: 'TASK_HOST_BUSY' });
@@ -332,8 +374,13 @@ class ScopedPersonTaskHost {
       return output;
     }).catch(error => { this.#archiveToolResult(job, null, error); throw error; });
     this.#calls.add(job);
+    if (job.childId) this.#persistAgents();
     try { return await job.promise; }
-    finally { this.#calls.delete(job); caller.signal?.removeEventListener('abort', abort); }
+    finally {
+      this.#calls.delete(job);
+      caller.signal?.removeEventListener('abort', abort);
+      if (job.childId) this.#persistAgents();
+    }
   }
 
   #archiveToolResult(job, output, error) {
@@ -348,6 +395,12 @@ class ScopedPersonTaskHost {
     if (!agent || !agentBelongsToScope(agent, this.agentScope)) return;
     agent.personEpisodeId = deps.episodeId;
     this.#agentEpisodes.set(agent.id, deps.episodeId);
+    if (agent.driverPromise && this.#observedDrivers.get(agent) !== agent.driverPromise) {
+      this.#observedDrivers.set(agent, agent.driverPromise);
+      // Terminal events precede driver cleanup. Persist after cleanup too so a
+      // cleanly completed child is not falsely recovered as orphaned.
+      agent.driverPromise.then(() => this.#persistAgents(), () => this.#persistAgents()).catch(() => {});
+    }
     const registry = agent.subEngine?.toolRegistry;
     if (!registry || this.#instrumentedAgents.has(agent)) return;
     this.#instrumentedAgents.add(agent);
@@ -378,6 +431,62 @@ class ScopedPersonTaskHost {
   snapshot(ownerId) {
     if (ownerId !== this.scope.ownerId) throw denied();
     return this.evidence();
+  }
+
+  #ownedTask(taskId) {
+    privatePath(this.yeaftDir, this.#manager.store.taskPath(this.sessionId, taskId));
+    const task = this.taskManager.getTask(this.sessionId, taskId);
+    if (!task || task.id !== taskId || task.sessionId !== this.sessionId) fail('NOT_FOUND');
+    return task;
+  }
+
+  /** Owner-facing inspection/control: never attach a provider, schedule cognition
+   * or cancel unrelated work. Native snapshots remain private to evidence(). */
+  async request({ ownerId, personId, namespace = this.scope.namespace, op, payload = {} } = {}) {
+    if (ownerId !== this.scope.ownerId || personId !== this.scope.personId || namespace !== this.scope.namespace) throw denied();
+    this.#assertOpen();
+    const args = personTaskRequest(op, payload);
+    switch (op) {
+      case 'tasks': {
+        this.#persistAgents();
+        const tasks = jsonFiles(this.#manager.store.sessionDir(this.sessionId))
+          .filter(task => task.sessionId === this.sessionId && task.ownerVpId === this.parentVpId && ['shell', 'sub_agent'].includes(task.kind));
+        const agents = [...this.#agents.values()].filter(agent => agentBelongsToScope(agent, this.agentScope));
+        const recent = (items, settled) => items.sort((a, b) => Number(settled(a)) - Number(settled(b))
+          || String(b.updatedAt ?? b.createdAt ?? '').localeCompare(String(a.updatedAt ?? a.createdAt ?? ''))).slice(0, PERSON_TASK_LIMITS.records);
+        // A terminal driver with actual tools still running is active work, not
+        // disposable history: keep its cleanup control ahead of settled records.
+        return { tasks: recent(tasks, task => isTerminalTaskStatus(task.status)).map(projectedTask),
+          agents: recent(agents, agent => isTerminalAgentStatus(agent.status) && !agent.executionPending).map(agent => projectedAgent(agent, agent.executionPending)),
+          truncated: tasks.length > PERSON_TASK_LIMITS.records || agents.length > PERSON_TASK_LIMITS.records };
+      }
+      case 'task_log': {
+        const task = this.#ownedTask(args.taskId);
+        this.#privateLog(task.log?.path || this.#manager.store.logPath(this.sessionId, args.taskId));
+        const log = this.taskManager.readTaskLog(this.sessionId, args.taskId, { offset: args.offset, maxBytes: args.maxBytes, tail: false });
+        return { taskId: args.taskId, text: log.text, nextOffset: log.nextOffset, totalBytes: log.bytes, truncated: log.truncated === true, status: task.status };
+      }
+      case 'task_cancel': {
+        const task = this.#ownedTask(args.taskId);
+        if (task.kind !== 'shell') fail('INVALID_REQUEST');
+        // Orphaned is terminal metadata, not proof that external effects stopped.
+        if (task.status === 'orphaned') fail('TASK_CONTROL_UNAVAILABLE');
+        const result = this.taskManager.cancelTask(this.sessionId, args.taskId);
+        if (!result.ok) fail('TASK_CONTROL_UNAVAILABLE');
+        return { task: projectedTask(await this.#joinShell(args.taskId)), pending: false };
+      }
+      case 'agent_close': {
+        const agent = getAgentRegistry().get(args.agentId);
+        if (!agent || !agentBelongsToScope(agent, this.agentScope)) fail('NOT_FOUND');
+        if (agent.recoveryStatus === 'orphaned') fail('TASK_CONTROL_UNAVAILABLE');
+        const result = JSON.parse(await closeAgent.execute({ agent_id: agent.id }, { sessionId: this.sessionId,
+          parentEngineDeps: this.agentScope, taskManager: this.taskManager }));
+        if (!result.success) fail('TASK_CONTROL_UNAVAILABLE');
+        await this.#joinAgent(agent);
+        return { agent: projectedAgent(agent, this.#executionPending(agent)), pending: false };
+      }
+      default: fail('INVALID_REQUEST');
+    }
   }
 
   /** Convenience for non-Registry embedding; returns the untruncated native output. */
@@ -507,6 +616,12 @@ export class PersonTaskHost {
   }
 
   snapshot(ownerId) { return this.#host(ownerId).snapshot(ownerId); }
+
+  request(input = {}) {
+    if (typeof input.ownerId !== 'string' || !input.ownerId || typeof input.personId !== 'string' || !input.personId
+        || input.namespace !== this.#options.namespace) throw denied();
+    return this.#host(input.ownerId, input.personId).request(input);
+  }
 
   cancel(input = {}) {
     if (this.#bound) return this.#bound.cancel(input);

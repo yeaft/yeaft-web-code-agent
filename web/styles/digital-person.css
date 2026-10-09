@@ -140,3 +140,10 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-search-form { display: flex; gap: var(--work-center-space-2); padding: var(--work-center-space-3) var(--work-center-space-4); }
 .person-search-form input { flex: 1; min-width: 0; padding: var(--work-center-space-2); border: 1px solid var(--border-color); border-radius: var(--agent-setup-control-radius); background: var(--bg-main); color: var(--text-primary); font: inherit; font-size: 13px; }
 .person-search-result { padding-bottom: var(--work-center-space-4); margin-bottom: var(--work-center-space-4); border-bottom: 1px solid var(--border-light); }
+
+.person-task-group h3, .person-task-log h3 { font-size: 13px; margin: var(--work-center-space-3) 0; }
+.person-task-item { padding: var(--work-center-space-3) 0; border-bottom: 1px solid var(--border-light); overflow-wrap: anywhere; font-size: 12px; }
+.person-task-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--work-center-space-2); }
+.person-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--work-center-space-2); margin-top: var(--work-center-space-2); }
+.person-task-item summary { cursor: pointer; margin-top: var(--work-center-space-2); }
+.person-task-browser pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code-bg); color: var(--code-text); padding: var(--work-center-space-3); border-radius: var(--agent-setup-control-radius); font-size: 12px; max-height: 320px; overflow: auto; }

@@ -20,6 +20,9 @@ const ERRORS = {
   ATTACHMENT_LIMIT: 'Attachments exceed the limit: 4 files, 5 MiB each, 10 MiB total; text plus extracted content must fit 24 KiB.',
   IMAGE_MODEL: 'The selected model does not permit image input.',
   CLOSED: 'The digital person service is closed.',
+  NOT_FOUND: 'Digital person task or child not found.',
+  TASK_SCOPE_DENIED: 'Digital person task access denied.',
+  TASK_CONTROL_UNAVAILABLE: 'Task control could not be confirmed; refresh before retrying.',
 };
 export class PersonError extends Error {
   constructor(code) { super(ERRORS[code] || ERRORS.INVALID_REQUEST); this.name = 'PersonError'; this.code = code in ERRORS ? code : 'INVALID_REQUEST'; }
@@ -58,6 +61,26 @@ export function page(payload = {}) {
   }
   return { cursor, limit };
 }
+/** Task APIs are explicit owner actions, not cognitive admissions. Logs are raw
+ * owner-scoped output; list/control responses never include native runtime/log/result.
+ * Lists cap each collection at 100, preferring live records then recent history.
+ * Log offsets count raw UTF-8 bytes; an omitted offset starts at the beginning.
+ */
+export const PERSON_TASK_LIMITS = Object.freeze({ records: 100, logBytes: 16384, maxLogBytes: 65536 });
+export function personTaskRequest(op, payload = {}) {
+  if (op === 'tasks') { object(payload, []); return {}; }
+  const idKey = op === 'agent_close' ? 'agentId' : 'taskId';
+  object(payload, op === 'task_log' ? ['taskId', 'offset', 'maxBytes'] : [idKey], [idKey]);
+  // Native TaskStore normalizes punctuation. Reject aliases instead of letting
+  // two browser IDs resolve to the same persisted task.
+  if (typeof payload[idKey] !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(payload[idKey])) fail('INVALID_REQUEST');
+  if (op !== 'task_log') return { [idKey]: payload[idKey] };
+  const offset = payload.offset === undefined ? 0 : payload.offset;
+  const maxBytes = payload.maxBytes === undefined ? PERSON_TASK_LIMITS.logBytes : payload.maxBytes;
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > PERSON_TASK_LIMITS.maxLogBytes) fail('INVALID_REQUEST');
+  return { taskId: payload.taskId, offset, maxBytes };
+}
+
 const kinds = ['claim', 'question', 'method', 'self-model', 'scenario', 'interest'];
 const epistemics = ['reported', 'hypothesis', 'imagined', 'uncertain'];
 const activities = ['think', 'recall', 'reorganize', 'associate', 'rethink', 'imagine', 'respond', 'rest'];
@@ -130,4 +153,4 @@ Use the actual numeric baseStateVersion. New concept IDs use simple stable ident
 budget.remainingCalls includes this call. Reserve the final call for a proposal with next:null; An active Recall followed by a final proposal needs two calls total; search (with a returned contract), capability use and final proposal need three. Do not search or inspect an already active capability merely to follow stages. If evidence remains insufficient at the final call, record the uncertainty or rest instead of inventing a result. No additional call is granted after the budget ends.
 capabilities.active contains complete current contracts in foundation, familiar (actual execution observations), and discovered layers. Use any active capability directly; availability is not permission or a duty. Familiarity does not prove truth/usefulness; evaluate results in decision.selfCheck, ignore unhelpful habits, or rest. If no active ability fits, search or view a known catalog ID. Search prepares returned contracts; omitted contracts require view. Only rendered current contracts execute. No separate selector model or hidden cognition is involved.
 Capability.create tests pure JSON transformations in restricted QuickJS and publishes only passing versions to this Person's private catalog. Tests do not prove correctness/usefulness; publication is durable even if this episode fails. Follow its complete active contract. Script.* cannot access host tools, files, shell, network or credentials, grant permissions, install packages or run automatically. Search before duplicating existing capabilities; avoid embedding private data or one-off constants.
-Think is intrinsic: recall, reorganize, associate, reconsider, imagine or rest. You are the same enduring Person, not a task coordinator. Preserve uncertainty and self-check. Finish in one call or choose the next permitted model/effort and one capability with a brief reason. Intermediate proposals are NOT accepted state; only next:null commits the complete desired state/concept changes. Dream is idle imagination, not a user message or mandatory useful work; reply may be null.`;
+Think is intrinsic: recall, reorganize, associate, reconsider, imagine or rest. Own ongoing authorized work using task/child context, not only latest user text. Episode end is not task completion/cancellation; evidence never enables timers, autonomy or model re-entry. You remain one Person, not a task coordinator. Only next:null commits; intermediate proposals do not. Dream is idle imagination, not a user message or mandatory useful work; reply may be null.`;
