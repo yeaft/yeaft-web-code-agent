@@ -7,6 +7,7 @@ const FIELDS = Object.freeze({
   status: [], open: [], snapshot: [], receipt: ['clientMessageId', 'requestHash'],
   send: ['text', 'clientMessageId', 'attachments'], think: ['text', 'clientMessageId', 'attachments'],
   dream: ['clientMessageId'], cancel: ['episodeId'],
+  tasks: [], task_log: ['taskId', 'offset', 'maxBytes'], task_cancel: ['taskId'], agent_close: ['agentId'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'],
   inspect: ['section', 'cursor', 'limit'], search: ['query', 'cursor', 'limit'],
   settings: ['name', 'autonomyEnabled', 'modelCandidates'],
@@ -61,6 +62,18 @@ export function createPersonRelay({
       if (source != null && (typeof source !== 'object' || Array.isArray(source))) {
         await reply(client, envelope, { ok: false, error: 'Invalid digital person payload' });
         return true;
+      }
+      if (['tasks', 'task_log', 'task_cancel', 'agent_close'].includes(op)) {
+        const value = source ?? {};
+        const idKey = op === 'agent_close' ? 'agentId' : 'taskId';
+        const invalid = Object.keys(value).some(key => !FIELDS[op].includes(key))
+          || (op !== 'tasks' && (typeof value[idKey] !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value[idKey])))
+          || (Object.hasOwn(value, 'offset') && (!Number.isSafeInteger(value.offset) || value.offset < 0))
+          || (Object.hasOwn(value, 'maxBytes') && (!Number.isInteger(value.maxBytes) || value.maxBytes < 1 || value.maxBytes > 65536));
+        if (invalid) {
+          await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: 'Invalid digital person task payload' });
+          return true;
+        }
       }
       const payload = Object.fromEntries(FIELDS[op].filter(key => Object.hasOwn(source || {}, key)).map(key => [key, source[key]]));
       if (JSON.stringify(payload).length > 40_000) {
@@ -127,7 +140,7 @@ export function createPersonRelay({
       await reply(row.client, row.envelope, msg.ok === true
         ? { ok: true, data: msg.data }
         : { ok: false,
-          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict', 'attachment_expired', 'invalid_attachment', 'unsupported_attachment', 'attachment_limit', 'image_model', 'model_selection'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
+          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict', 'attachment_expired', 'invalid_attachment', 'unsupported_attachment', 'attachment_limit', 'image_model', 'model_selection', 'not_found', 'task_scope_denied', 'task_control_unavailable'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
           error: typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'Digital person request failed' });
       return true;
     },

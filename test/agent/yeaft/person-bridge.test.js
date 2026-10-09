@@ -68,6 +68,25 @@ describe('Person bridge is independent of Session and Work Center', () => {
     await f.bridge.close();
   });
 
+  it.each(['tasks', 'task_log', 'task_cancel', 'agent_close'])('routes %s task operations without losing authenticated identity', async op => {
+    const f = fixture({});
+    const payload = op === 'tasks' ? {} : op === 'agent_close' ? { agentId: 'agent-child' } : { taskId: 'task-one' };
+    await f.bridge.request(request({ op, payload }));
+    expect(f.service.request).toHaveBeenCalledWith({ ownerId: 'u1', op, payload });
+    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: true, requestId: 'r1', op });
+    await f.bridge.close();
+  });
+
+  it.each(['NOT_FOUND', 'TASK_SCOPE_DENIED', 'TASK_CONTROL_UNAVAILABLE'])('returns safe %s task errors, never internal credential-bearing messages', async code => {
+    const f = fixture({});
+    f.service.request.mockRejectedValue(Object.assign(new Error('mongodb://admin:password@example /internal/path'), { code }));
+    await f.bridge.request(request({ op: 'task_cancel', payload: { taskId: 'task-one' } }));
+    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: false, requestId: 'r1', op: 'task_cancel', errorCode: code.toLowerCase() });
+    expect(JSON.stringify(f.send.mock.lastCall[0])).not.toContain('password');
+    expect(JSON.stringify(f.send.mock.lastCall[0])).not.toContain('/internal/path');
+    await f.bridge.close();
+  });
+
   it('fences missing owner, closed transport and Agent identity changes', async () => {
     const f = fixture();
     await f.bridge.request(request({ ownerId: undefined }));
