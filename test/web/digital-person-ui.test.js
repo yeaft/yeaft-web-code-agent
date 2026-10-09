@@ -229,8 +229,9 @@ describe('Digital Person surface', () => {
     wrapper.vm.state.commandPending = true;
     await Vue.nextTick();
     expect(wrapper.get('.person-response-loading').attributes('role')).toBe('status');
-    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('person.activity.confirming'));
-    expect(wrapper.get('.person-response-loading').text()).toContain(t('person.activity.confirming'));
+    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('sidebar.sessions.processing'));
+    expect(wrapper.get('.person-response-loading').text()).toBe('');
+    expect(wrapper.find('#person-conversation .person-activity, #person-conversation details').exists()).toBe(false);
     expect(wrapper.get('.person-response-loading').findAll('.typing-indicator > span')).toHaveLength(3);
     expect(wrapper.find('.person-status').exists()).toBe(false);
     expect(wrapper.find('.message-composer-spinner').exists()).toBe(true);
@@ -248,12 +249,12 @@ describe('Digital Person surface', () => {
     wrapper.vm.state.cancelPending = true;
     await Vue.nextTick();
     expect(wrapper.get('.stop-btn').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('.person-response-loading').attributes('aria-label')).toBe(t('person.activity.stopping'));
+    expect(wrapper.get('.person-response-loading').text()).toBe('');
     wrapper.vm.state.cancelPending = false;
     chat.connectionState = 'reconnecting';
     await Vue.nextTick();
     expect(wrapper.find('.person-response-loading, .person-activity .typing-indicator, .stop-btn').exists()).toBe(false);
-    expect(wrapper.get('.person-activity-status').text()).toContain(t('person.activity.disconnected'));
+    expect(wrapper.find('#person-conversation .person-activity').exists()).toBe(false);
     expect(wrapper.get('.person-connection-notice').text()).toContain(t('person.disconnected'));
   });
 
@@ -270,7 +271,7 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
   });
 
-  it('keeps a completed round in the reply position with collapsed activity', async () => {
+  it('keeps completed activity only in the thought drawer, never below the reply', async () => {
     await render();
     wrapper.vm.state.latestEpisode = { id: 'finished', status: 'completed', startedAt: 1000, endedAt: 3000 };
     wrapper.vm.state.activityRecords = [
@@ -279,13 +280,39 @@ describe('Digital Person surface', () => {
       { id: 'output', episodeId: 'finished', kind: 'call_output', callId: 'call', at: 3000 },
     ];
     await Vue.nextTick();
-    expect(wrapper.get('.person-activity-status').text()).toBe(t('person.activity.completed'));
-    expect(wrapper.get('details.person-activity').attributes('open')).toBeUndefined();
-    expect(wrapper.get('.person-activity-row-status').text()).toBe(t('person.activity.status.completed'));
-    expect(wrapper.find('.person-response-loading, .person-activity .typing-indicator').exists()).toBe(false);
-    expect(wrapper.get('.person-reading-column .person-activity').exists()).toBe(true);
+    expect(wrapper.find('.person-response-loading, .person-activity').exists()).toBe(false);
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
+    await wrapper.get('.person-thoughts-button').trigger('click');
+    const activity = wrapper.get('#person-thoughts .person-activity');
+    expect(activity.get('.person-activity-status').text()).toBe(t('person.activity.completed'));
+    expect(activity.attributes('open')).toBeUndefined();
+    expect(activity.get('.person-activity-row-status').text()).toBe(t('person.activity.status.completed'));
+    expect(wrapper.find('#person-conversation .person-activity').exists()).toBe(false);
+    await wrapper.get('.person-panel-header .header-action-btn').trigger('click');
+    expect(wrapper.find('.person-activity').exists()).toBe(false);
+  });
+
+  it.each(['completed', 'committed', 'cancelled', 'failed', 'interrupted', 'budget_exhausted'])('removes the animation on %s even before the busy snapshot catches up', async status => {
+    await render();
+    wrapper.vm.state.busy = true;
+    wrapper.vm.state.episodeId = 'finished';
+    await Vue.nextTick();
+    expect(wrapper.find('#person-conversation .person-response-loading').exists()).toBe(true);
+    wrapper.vm.state.latestEpisode = { id: 'finished', status };
+    await Vue.nextTick();
+    expect(wrapper.find('#person-conversation .person-response-loading, #person-conversation .person-activity').exists()).toBe(false);
+    expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
+  });
+
+  it.each(['activityStale', 'progressStale'])('does not animate unconfirmed progress when %s is set', async flag => {
+    await render();
+    wrapper.vm.state.busy = true;
+    await Vue.nextTick();
+    expect(wrapper.find('#person-conversation .person-response-loading').exists()).toBe(true);
+    wrapper.vm.state[flag] = true;
+    await Vue.nextTick();
+    expect(wrapper.find('#person-conversation .person-response-loading, #person-conversation .person-activity').exists()).toBe(false);
   });
 
   it('waits for the complete reconnect auth handshake before opening and never resends commands', async () => {

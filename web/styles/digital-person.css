@@ -37,7 +37,7 @@
 .person-panel-header h2 { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
 .person-panel-header .person-debug-link { color: var(--text-muted); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) {
-  .person-activity .typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { animation: none; }
+  .person-page .typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { animation: none; }
   .person-composer .message-composer-spinner { animation: none; }
 }
 .person-activity { min-width: 0; padding: var(--work-center-space-3) 0 var(--work-center-space-4); color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
@@ -46,8 +46,9 @@
 details.person-activity > summary { cursor: pointer; border-radius: var(--agent-setup-control-radius); }
 .person-activity-status { display: inline-flex; align-items: center; gap: var(--work-center-space-2); min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .person-activity-status > span:first-child { min-width: 0; }
-.person-activity .typing-indicator { display: inline-flex; flex-shrink: 0; padding: 0; }
-.person-activity .typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { width: 4px; height: 4px; }
+.person-reading-column > .person-response-loading { padding: var(--work-center-space-3) 0 var(--work-center-space-4); }
+.person-page .typing-indicator { display: inline-flex; flex-shrink: 0; padding: 0; }
+.person-page .typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { width: 4px; height: 4px; }
 .person-activity-disclosure { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 .person-activity-disclosure::after { content: ' ›'; }
 .person-activity[open] .person-activity-disclosure::after { content: ' ⌄'; }

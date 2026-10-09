@@ -19,6 +19,7 @@ export default {
       <p v-if="stale" class="person-notice" role="status">{{ $t('person.recordsStale') }}</p>
       <div class="person-journal-scroll" tabindex="0" :aria-label="$t('person.thoughts')" :aria-busy="loading">
         <div class="person-reading-column">
+          <slot name="activity"></slot>
           <button v-if="more" type="button" class="btn-ghost person-load-more" :disabled="disabled || loading" @click="$emit('more')">{{ $t('person.olderThoughts') }}</button>
           <p v-if="!entries.length" class="person-empty" role="status">{{ $t(loading ? 'person.loading' : 'person.noThoughts') }}</p>
           <article v-for="entry in entries" :key="entry.id" class="person-thought" :data-thought-kind="entry.kind">
