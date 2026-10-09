@@ -76,8 +76,9 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
     });
   });
 
-  // Every newly active previewable file starts in Preview, including restores/close.
-  Vue.watch(activeFile, () => { textPreviewMode.value = true; }, { flush: 'sync' });
+  // Reset after synchronous tab mutations settle. Closing an earlier background
+  // tab temporarily changes its index, but must not exit the active file's Edit.
+  Vue.watch(activeFile, () => { textPreviewMode.value = true; });
 
   const mdRenderedHtml = Vue.computed(() => {
     const f = activeFile.value;

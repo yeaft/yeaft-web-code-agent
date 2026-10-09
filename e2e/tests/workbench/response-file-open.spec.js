@@ -416,6 +416,23 @@ for (const variant of [
   });
 }
 
+test('closing an earlier background tab preserves HTML Edit and undo', async ({ page, harness }) => {
+  await page.goto(htmlHarnessUrl(harness, { file: 'docs/guide.txt' }));
+  await openReference(page, 'docs/guide.txt');
+  await page.evaluate(() => window.harness.showReference('docs/mockup.html'));
+  await openReference(page, 'docs/mockup.html');
+  await editHtml(page);
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.replaceRange('Edited ', { line: 0, ch: 0 }));
+  await fileTab(page, 'guide.txt').locator('.workbench-item-close').click();
+  await expect(page.getByRole('button', { name: 'files.edit', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.html-preview-iframe')).toHaveCount(0);
+  await expect(page.locator('.CodeMirror')).toBeVisible();
+  await expect(page.locator('.file-content-dirty')).toBeVisible();
+  expect(await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.getValue())).toMatch(/^Edited /);
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.undo());
+  await expect(page.locator('.file-content-dirty')).toHaveCount(0);
+});
+
 test('HTML switches, closes, reopens and server-restores in Preview', async ({ page, harness }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   const file = 'docs/MOCKUP.HTM';

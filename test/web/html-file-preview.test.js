@@ -126,9 +126,18 @@ describe('HTML file preview', () => {
     theme.value = 'dark';
     expect(preview.htmlPreviewDocument.value).toContain('color-scheme: dark');
     preview.switchToTextEdit();
+    await Vue.nextTick();
+    // A tab splice may transiently select null before restoring the same file.
+    const sameFile = activeFile.value;
+    activeFile.value = null;
+    activeFile.value = sameFile;
+    await Vue.nextTick();
+    expect(preview.textPreviewMode.value).toBe(false);
     activeFile.value = { name: 'next.HTM', content: '<h1>Next</h1>' };
+    await Vue.nextTick();
     expect(preview.textPreviewMode.value).toBe(true);
     activeFile.value = { name: 'readme.md', content: '# Markdown' };
+    await Vue.nextTick();
     expect(preview.isActiveMarkdown.value).toBe(true);
     expect(preview.isActiveHtml.value).toBe(false);
     expect(preview.textPreviewMode.value).toBe(true);
