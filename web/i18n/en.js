@@ -1530,6 +1530,8 @@ export default {
   'files.previewLoadFailed': 'The image preview could not be loaded.',
   'files.videoPreviewLoadFailed': 'The video could not be played. Its codec may not be supported by this browser.',
   'files.videoStreamUnavailable': 'Video streaming is unavailable for this Agent or Session.',
+  'files.htmlPreviewStatic': 'Static preview · scripts and linked resources are disabled',
+  'files.htmlPreviewTitle': 'HTML preview: {name}',
   'files.preview': 'Preview',
   'files.edit': 'Edit',
   'files.pptxNotSupported': 'PPTX local preview is not supported. Please switch to Office Online mode in Settings.',

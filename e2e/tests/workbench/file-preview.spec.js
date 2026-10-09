@@ -119,7 +119,7 @@ function mountPreviewHarness() {
         store, normalizePath: path => path?.replace(/\\/g, '/'),
         getEffectiveWorkDir: () => '/fixture', openFiles, activeFileIndex, activeFile,
         fileSaving: ref(false), saveTabsState() {}, createEditor() {}, openFileInTab() {},
-        tree: {}, fp: {}, qo: {}, ops, mdPreviewMode: ref(false),
+        tree: {}, fp: {}, qo: {}, ops, textPreviewMode: ref(false),
         renderOfficeLocal() {}, editorContainer: ref(null), t,
       });
       window.previewHarness = {

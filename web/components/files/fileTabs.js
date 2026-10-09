@@ -3,7 +3,7 @@ import { confirmDialog } from '../../utils/dialog.js';
  * fileTabs — Tab management composable for FilesTab.
  * Manages open files, active tab, switching, closing, saving, tab state persistence.
  */
-import { getFileType, isMarkdownFile } from './fileEditor.js';
+import { getFileType, isPreviewableTextFile } from './fileEditor.js';
 
 const nextFileReadRequestId = () => `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -36,7 +36,7 @@ export function createFileTabs(store, {
   editorContainer, createEditor, destroyEditor,
   clearFindMarkers, saveCurrentUndoHistory, saveAllUndoHistory,
   cleanupUndoHistory, deleteConversationHistory,
-  mdPreviewMode, renderOfficeLocal,
+  textPreviewMode, renderOfficeLocal,
   performFind, findBarVisible, findQuery, t
 }) {
   const fileTabsMap = Vue.reactive({});
@@ -206,8 +206,8 @@ export function createFileTabs(store, {
       const file = openFiles.value[index];
       if (!file) return;
       if (!file.fileType || file.fileType === 'text') {
-        if (isMarkdownFile(file.name)) {
-          mdPreviewMode.value = true;
+        if (isPreviewableTextFile(file.name)) {
+          textPreviewMode.value = true;
         } else if (file.content != null && editorContainer.value) {
           createEditor(file);
           if (findBarVisible.value && findQuery.value) {

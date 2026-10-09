@@ -1528,6 +1528,8 @@ export default {
   'files.previewLoadFailed': '图片预览加载失败。',
   'files.videoPreviewLoadFailed': '视频无法播放，当前浏览器可能不支持该视频编码。',
   'files.videoStreamUnavailable': '当前 Agent 或 Session 不支持视频流式播放。',
+  'files.htmlPreviewStatic': '静态预览 · 不执行脚本或加载链接资源',
+  'files.htmlPreviewTitle': 'HTML 预览：{name}',
   'files.preview': '预览',
   'files.edit': '编辑',
   'files.pptxNotSupported': 'PPTX 本地预览暂不支持，请在设置中切换为 Office Online 模式。',

@@ -249,7 +249,7 @@ function createFileTabsHarness() {
     cleanupUndoHistory,
     deleteConversationHistory: vi.fn(),
     debugStatus: Vue.ref(''),
-    mdPreviewMode: Vue.ref(false),
+    textPreviewMode: Vue.ref(false),
     renderOfficeLocal: vi.fn(),
     performFind: vi.fn(),
     findBarVisible: Vue.ref(false),
