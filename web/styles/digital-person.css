@@ -61,7 +61,9 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-activity-limited { margin-top: var(--work-center-space-2); color: var(--text-muted); font-size: 11px; }
 .person-conversation { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .person-messages { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--work-center-space-4) var(--agent-setup-space-lg); }
-.person-reading-column { width: min(var(--session-content-width), 880px); margin: 0 auto; }
+.person-messages.is-response-pinned { overflow-anchor: none; }
+.person-reading-column { width: min(var(--session-content-width), 880px); margin: 0 auto; display: flow-root; }
+.person-response-start, .person-response-tail { height: 0; pointer-events: none; }
 .person-load-more { display: flex !important; margin: 0 auto var(--work-center-space-4); }
 .person-welcome { display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--work-center-space-3); margin: clamp(24px, 10vh, 96px) auto; max-width: 400px; color: var(--text-secondary); line-height: 1.7; }
 .person-welcome h2 { color: var(--text-primary); font-size: 20px; font-weight: 500; }

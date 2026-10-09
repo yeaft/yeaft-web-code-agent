@@ -152,6 +152,145 @@ describe('Digital Person surface', () => {
     expect(requests.filter(r => r.op === 'send')).toHaveLength(1);
   });
 
+  it('focuses the locally submitted reply start, not historical or autonomous messages, and cleans up layout work', async () => {
+    const frames = new Map(); let sequence = 0; let observe;
+    const disconnect = vi.fn();
+    let observerCount = 0;
+    vi.stubGlobal('requestAnimationFrame', callback => { frames.set(++sequence, callback); return sequence; });
+    vi.stubGlobal('cancelAnimationFrame', handle => frames.delete(handle));
+    vi.stubGlobal('ResizeObserver', class { constructor(callback) { observe = callback; observerCount++; } observe() {} disconnect = disconnect; });
+    await render();
+    const pane = wrapper.get('.person-messages').element;
+    Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 400 });
+    pane.getBoundingClientRect = () => ({ top: 100, left: 0, right: 800 });
+    let replyTop = 700, replyHeight = 100;
+    const rect = top => () => ({ top: 100 + top - pane.scrollTop });
+    async function layout() {
+      await Vue.nextTick();
+      if (wrapper.find('.person-response-start').exists()) wrapper.get('.person-response-start').element.getBoundingClientRect = rect(600);
+      if (wrapper.find('.person-response-tail').exists()) wrapper.get('.person-response-tail').element.getBoundingClientRect = () => rect(wrapper.vm.focusedResponseId ? replyTop + replyHeight : 620)();
+      for (const element of pane.querySelectorAll('.person-message')) element.getBoundingClientRect = rect(element.dataset.messageId === 'reply' ? replyTop : 0);
+      const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback());
+      await Vue.nextTick();
+    }
+    expect(wrapper.vm.hasResponseFocus).toBe(false);
+    wrapper.vm.state.messages.push({ id: 'remote', role: 'assistant', text: 'Remote response', createdAt: 2 });
+    await layout(); expect(pane.scrollTop).toBe(0);
+    await wrapper.get('#person-input').setValue('New question');
+    await wrapper.get('#person-input').trigger('keydown', { key: 'Enter' });
+    await flushPromises(); await layout();
+    expect(pane.scrollTop).toBe(600);
+    wrapper.vm.state.messages.push(
+      { id: 'other', role: 'assistant', episodeId: 'other-episode', text: 'Not this reply', createdAt: 3 },
+      { id: 'reply', role: 'assistant', episodeId: 'e', text: 'This reply', createdAt: 4 });
+    await layout(); observe(); await layout();
+    expect(wrapper.vm.focusedResponseId).toBe('reply');
+    expect(pane.scrollTop).toBe(700);
+    expect(wrapper.get('.person-response-tail').element.style.height).toBe('300px');
+    replyHeight = 600; observe(); await layout();
+    expect(pane.scrollTop).toBe(700);
+    expect(wrapper.get('.person-response-tail').element.style.height).toBe('0px');
+    wrapper.vm.state.busy = false; await layout();
+    expect(pane.scrollTop).toBe(700);
+    await wrapper.get('.person-messages').trigger('keydown', { key: 'PageUp' });
+    pane.scrollTop = 200; replyTop = 800; observe(); await layout();
+    expect(pane.scrollTop).toBe(200);
+    expect(wrapper.vm.state.messages.some(message => message.id === 'm')).toBe(true);
+    observe(); await Vue.nextTick(); expect(frames.size).toBe(1);
+    // A post-flush synchronous reconciliation must retain the already queued
+    // RAF handle. No frame runs between this update and unmount.
+    wrapper.vm.state.messages.at(-1).text = 'Update while a frame is queued';
+    await Vue.nextTick(); await Vue.nextTick();
+    expect(frames.size).toBe(1);
+    wrapper.unmount(); wrapper = null;
+    expect(disconnect).toHaveBeenCalledTimes(observerCount); expect(frames.size).toBe(0);
+  });
+
+  it.each(['wheel', 'touchmove'])('yields response focus to intentional %s and refocuses on the next send', async event => {
+    await render();
+    await wrapper.get('#person-input').setValue('First'); await wrapper.vm.command('send');
+    expect(wrapper.vm.hasResponseFocus).toBe(true);
+    await wrapper.get('.person-messages').trigger(event);
+    wrapper.vm.state.busy = false;
+    await wrapper.get('#person-input').setValue('Second'); await wrapper.vm.command('send');
+    expect(wrapper.vm.focusedResponseId).toBe('');
+    expect(wrapper.find('.person-response-start').exists()).toBe(true);
+    chat.chatHistoryConnectionGeneration = 2;
+    await flushPromises();
+    expect(wrapper.vm.hasResponseFocus).toBe(false);
+    expect(wrapper.find('.person-response-tail').exists()).toBe(false);
+  });
+
+  it('does not create reply focus for Think or failed admission, and preserves the target during receipt retry', async () => {
+    await render();
+    await wrapper.vm.command('think');
+    expect(wrapper.vm.hasResponseFocus).toBe(false);
+    wrapper.vm.state.busy = false;
+    wrapper.vm.state.latestEpisode = null;
+    wrapper.vm.state.activityRecords = [];
+    await Vue.nextTick();
+    const command = vi.spyOn(wrapper.vm.controller, 'command').mockResolvedValue(false);
+    await wrapper.get('#person-input').setValue('Question'); await wrapper.vm.command('send');
+    expect(wrapper.vm.hasResponseFocus).toBe(false);
+    command.mockImplementation(async () => {
+      wrapper.vm.state.retryCommand = { op: 'send', payload: {} };
+      return false;
+    });
+    await wrapper.vm.command('send');
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(wrapper.vm.state.retryCommand).not.toBeNull();
+    expect(wrapper.vm.hasResponseFocus).toBe(true);
+    wrapper.vm.focusedResponseId = 'already-visible-reply';
+    await wrapper.vm.command('send', true);
+    expect(wrapper.vm.focusedResponseId).toBe('already-visible-reply');
+    await wrapper.findAll('.person-retry button').at(-1).trigger('click');
+    expect(wrapper.vm.state.retryCommand).toBeNull();
+    expect(wrapper.vm.hasResponseFocus).toBe(false);
+    expect(wrapper.find('.person-response-tail').exists()).toBe(false);
+    await wrapper.vm.command('send');
+    expect(wrapper.vm.hasResponseFocus).toBe(true);
+    chat.agents.push({ id: 'b', online: true, capabilities: ['digital_person'] });
+    wrapper.vm.agentId = 'b'; await flushPromises();
+    expect(wrapper.vm.hasResponseFocus).toBe(false);
+  });
+
+  it('focuses the receipted local reply even when refresh sees a newer remote episode', async () => {
+    const frames = new Map(); let sequence = 0;
+    vi.stubGlobal('requestAnimationFrame', callback => { frames.set(++sequence, callback); return sequence; });
+    vi.stubGlobal('cancelAnimationFrame', handle => frames.delete(handle));
+    await render();
+    const originalSend = chat.sendWsMessage;
+    const replies = [
+      { id: 'local-reply', role: 'assistant', episodeId: 'local-episode', text: 'Local answer', createdAt: 2 },
+      { id: 'remote-reply', role: 'assistant', episodeId: 'remote-episode', text: 'Another tab', createdAt: 3 },
+    ];
+    chat.sendWsMessage = request => {
+      if (!['send', 'receipt', 'snapshot', 'messages'].includes(request.op)) return originalSend(request);
+      requests.push(request);
+      const data = request.op === 'receipt'
+        ? { found: true, kind: 'send', text: 'Local question', episodeId: 'local-episode', status: 'completed' }
+        : request.op === 'snapshot'
+          ? { person: { id: 'p', name: 'Ada' }, busy: true, episodeId: 'remote-episode', latestEpisode: { id: 'remote-episode', status: 'running' }, messages: replies }
+          : { items: replies, nextCursor: null };
+      queueMicrotask(() => acceptPersonResponse(chat, { ...request, type: 'person_response', ok: request.op !== 'send', data,
+        ...(request.op === 'send' ? { errorCode: 'outcome_unknown', error: 'Admission unknown' } : {}) }));
+      return true;
+    };
+    await wrapper.get('#person-input').setValue('Local question');
+    await wrapper.vm.command('send');
+    expect(wrapper.vm.state.retryCommand).not.toBeNull();
+    await wrapper.vm.command('send', true);
+    await flushPromises();
+    for (const callback of frames.values()) callback(); frames.clear();
+    await Vue.nextTick();
+    expect(wrapper.vm.state.episodeId).toBe('remote-episode');
+    expect(wrapper.vm.state.commandEpisodeId).toBe('local-episode');
+    expect(wrapper.vm.focusedResponseId).toBe('local-reply');
+    expect(wrapper.get('.person-messages').classes()).toContain('is-response-pinned');
+    await wrapper.get('.person-messages').trigger('wheel');
+    expect(wrapper.get('.person-messages').classes()).not.toContain('is-response-pinned');
+  });
+
   it('contains focus in the mobile thought drawer, returns focus on Escape, and preserves the composer', async () => {
     const width = window.innerWidth;
     window.innerWidth = 320;

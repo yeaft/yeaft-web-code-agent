@@ -6,11 +6,17 @@ import { personRecords } from '../../../test/fixtures/person-records.js';
 // This is not a model, MongoDB or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false } = {}) {
+async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, initialMessages = [], olderMessages = [] } = {}) {
   if (enableUi) await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
-  const messages = [];
+  const messages = initialMessages.map(message => ({ ...message }));
+  const agentMessages = new Map([['person-a', messages], ['person-b', []]]);
+  let admissionReply;
+  let holdAdmission = false;
+  let commandError = null;
+  let episodeNumber = 0;
+  let activeEpisode = 'live-episode';
   let socket;
   let configured = true;
   let renameSupported = true;
@@ -18,6 +24,8 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
   let activityRecords = [];
   let latestEpisode = null;
   let historyReply;
+  let messageHistoryReply;
+  let messageHistoryLoaded = false;
   let saveSettings;
   let failTraces = false;
   let unknownCommand = false;
@@ -44,9 +52,17 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'MongoDB is not configured', models });
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
       else if (request.op === 'snapshot') {
-        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea' }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: request.agentId === 'person-a' ? messages : [], busy, latestEpisode, episodeId: busy ? (activityFlow ? 'episode-1' : 'live-episode') : null });
+        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea' }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? (activityFlow ? 'episode-1' : activeEpisode) : null });
       } else if (request.op === 'messages') {
-        reply({ items: request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor ? null : 'older-page' });
+        if (conversationFlow && request.payload.cursor && olderMessages.length) {
+          messageHistoryReply = () => {
+            agentMessages.get(request.agentId).unshift(...olderMessages.map(row => ({ ...row })));
+            messageHistoryLoaded = true;
+            reply({ items: olderMessages, nextCursor: null });
+          };
+          return;
+        }
+        reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded ? null : 'older-page' });
       } else if (request.op === 'traces') {
         if (failTraces) { failTraces = false; reply(null, { ok: false, error: 'Thought refresh failed' }); return; }
         if (activityFlow) {
@@ -72,6 +88,18 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       } else if (request.op === 'search') {
         reply({ items: [{ id: 'archived', role: 'user', text: longReading ? 'A message from the durable archive.\n'.repeat(100) : 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
+        if (commandError) { const error = commandError; commandError = null; reply(null, { ok: false, error: 'Admission rejected', errorCode: error }); return; }
+        if (conversationFlow && request.op === 'send') {
+          const admit = () => {
+            activeEpisode = `conversation-${++episodeNumber}`;
+            agentMessages.get(request.agentId).push({ id: `user-${episodeNumber}`, role: 'user', text: request.payload.text, episodeId: activeEpisode, createdAt: new Date().toISOString() });
+            busy = true;
+            reply({ episodeId: activeEpisode });
+          };
+          if (holdAdmission) admissionReply = admit;
+          else admit();
+          return;
+        }
         if (unknownCommand) { unknownCommand = false; reply(null, { ok: false, error: 'Unknown outcome', errorCode: 'outcome_unknown' }); return; }
         if (request.op === 'send' && !activityFlow) messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
         busy = true; reply({ episodeId: activityFlow ? 'episode-1' : 'live-episode' });
@@ -79,7 +107,22 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
     });
   });
-  return { requests, finishHistory() { historyReply(); historyReply = null; }, historyPending() { return !!historyReply; }, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+  return { requests,
+    messageHistoryPending() { return !!messageHistoryReply; },
+    finishMessageHistory() { messageHistoryReply(); messageHistoryReply = null; },
+    holdAdmission() { holdAdmission = true; },
+    admissionPending() { return !!admissionReply; },
+    admit() { holdAdmission = false; admissionReply(); admissionReply = null; },
+    rejectNextSend(code = 'model_unavailable') { commandError = code; },
+    messages(rows, agentId = 'person-a') { agentMessages.set(agentId, rows.map(row => ({ ...row }))); },
+    reply(id, text, agentId = 'person-a', episodeId = activeEpisode) {
+      const rows = agentMessages.get(agentId);
+      const existing = rows.find(row => row.id === id);
+      if (existing) existing.text = text;
+      else rows.push({ id, role: 'assistant', text, episodeId, createdAt: new Date().toISOString() });
+    },
+    complete() { busy = false; latestEpisode = { id: activeEpisode, status: 'completed', endedAt: new Date().toISOString() }; },
+    finishHistory() { historyReply(); historyReply = null; }, historyPending() { return !!historyReply; }, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
 }
 
 for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 1280, theme: 'dark', locale: 'zh-CN' }, { width: 320, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }, { width: 800, theme: 'light', locale: 'en' }]) {
@@ -148,7 +191,9 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(page.locator('.attachments-preview')).toHaveCount(0);
     await expect(input).toBeDisabled();
     const loading = page.locator('.person-response-loading');
-    await expect(loading).toBeVisible();
+    // The waiting indicator is initially visible. Once the long reply arrives,
+    // its start is pinned instead of chasing the indicator below the reply.
+    await expect(loading).toHaveCount(1);
     await expect(loading).toHaveAttribute('role', 'status');
     await expect(loading).toHaveText('');
     await expect(page.locator('#person-conversation .person-activity, #person-conversation details')).toHaveCount(0);
@@ -172,6 +217,11 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await expect(page.locator('.person-messages')).toContainText('Recorded mock response.');
     await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    await expect.poll(() => page.locator('[data-message-id="m2"]').evaluate(el => {
+      const pane = el.closest('.person-messages');
+      return Math.abs(el.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop);
+    })).toBeLessThanOrEqual(2);
+    expect(await loading.evaluate(el => el.getBoundingClientRect().top >= el.closest('.person-messages').getBoundingClientRect().bottom)).toBe(true);
     await page.locator('.person-composer').getByRole('button', { name: zh ? '停止执行' : 'Stop execution', exact: true }).click();
     await expect(input).toBeEnabled();
     await expect(loading).toHaveCount(0);
@@ -532,3 +582,292 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await page.screenshot({ path: testInfo.outputPath(`person-conversation-completed-${scenario.width}-${scenario.theme}.png`) });
   });
 }
+const responseScenarios = [
+  { width: 1280, theme: 'light' }, { width: 1280, theme: 'dark' },
+  { width: 320, theme: 'light' }, { width: 320, theme: 'dark' },
+];
+const previousConversation = [
+  { id: 'history-user', role: 'user', text: 'Previous question stays in the transcript.', createdAt: 1 },
+  { id: 'history-reply', role: 'assistant', text: 'Previous answer stays in the transcript.\n'.repeat(35), createdAt: 2 },
+];
+const replySelector = id => `.person-message[data-message-id="${id}"]`;
+
+async function openResponseConversation(page, serverUrl, scenario) {
+  await page.setViewportSize({ width: scenario.width, height: 800 });
+  await page.addInitScript(s => { localStorage.setItem('locale', 'en'); localStorage.setItem('theme', s.theme); }, scenario);
+  await page.goto(serverUrl);
+  if (process.env.PERSON_UI_PRODUCTION === 'true') await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(1);
+  await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+  if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
+  await page.locator('.sidebar-person-trigger:visible').click();
+  await expect(page.locator('#person-input')).toBeEnabled();
+  await expect(page.locator(replySelector('history-reply'))).toHaveCount(1);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', scenario.theme);
+}
+
+// Record every animation frame across wire updates, not just the final layout.
+// A newly inserted target may need two frames for Vue's patch + scheduled layout.
+// Growth and completion of an existing target get no settling allowance.
+async function startResponseFrames(page, selector) {
+  await page.evaluate(selector => {
+    const recording = { samples: [], frame: null };
+    window.personResponseFrames = recording;
+    const sample = () => {
+      const pane = document.querySelector('.person-messages');
+      const target = document.querySelector(selector);
+      if (pane && target) recording.samples.push({
+        top: target.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop,
+        scrollTop: pane.scrollTop,
+      });
+      recording.frame = requestAnimationFrame(sample);
+    };
+    recording.frame = requestAnimationFrame(sample);
+  }, selector);
+}
+
+async function finishResponseFrames(page) {
+  return page.evaluate(async () => {
+    for (let i = 0; i < 16; i++) await new Promise(resolve => requestAnimationFrame(resolve));
+    const recording = window.personResponseFrames;
+    cancelAnimationFrame(recording.frame);
+    delete window.personResponseFrames;
+    return recording.samples;
+  });
+}
+
+function expectPinnedFrames(samples, { newTarget = false } = {}) {
+  const settled = newTarget ? samples.slice(2) : samples;
+  expect(settled.length).toBeGreaterThanOrEqual(12);
+  expect(Math.max(...settled.map(sample => Math.abs(sample.top))), JSON.stringify(settled.filter(sample => Math.abs(sample.top) > 2))).toBeLessThanOrEqual(2);
+  expect(Math.max(...settled.map(sample => sample.top)) - Math.min(...settled.map(sample => sample.top))).toBeLessThanOrEqual(2);
+}
+
+function expectScrollStable(samples, scrollTop) {
+  expect(samples.length).toBeGreaterThanOrEqual(12);
+  expect(Math.max(...samples.map(sample => Math.abs(sample.scrollTop - scrollTop))), 'No frame should jump away from the existing reading position').toBeLessThanOrEqual(2);
+}
+
+async function expectAbovePane(page, selector) {
+  await expect(page.locator(selector)).toHaveCount(1);
+  expect(await page.locator(selector).evaluate(el => {
+    const pane = el.closest('.person-messages');
+    return el.getBoundingClientRect().bottom <= pane.getBoundingClientRect().top + pane.clientTop + 2;
+  })).toBe(true);
+}
+
+async function sendWaiting(page, mock, text) {
+  mock.holdAdmission();
+  await page.locator('#person-input').fill(text);
+  await startResponseFrames(page, '.person-response-start');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => mock.admissionPending()).toBe(true);
+  await expect(page.locator('#person-input')).toBeDisabled();
+  await expect(page.locator('.person-response-loading')).toBeInViewport();
+  expectPinnedFrames(await finishResponseFrames(page), { newTarget: true });
+  await expectAbovePane(page, replySelector('history-reply'));
+  await expectAbovePane(page, '[data-msg-id="history-user"]');
+  await startResponseFrames(page, '.person-response-start');
+  mock.admit();
+  await expect(page.locator('.person-messages')).toContainText(text);
+  expectPinnedFrames(await finishResponseFrames(page));
+}
+
+async function showReply(page, mock, id, text) {
+  await startResponseFrames(page, replySelector(id));
+  mock.reply(id, text);
+  await expect(page.locator(replySelector(id))).toContainText(text.trim().split('\n').at(-1));
+  expectPinnedFrames(await finishResponseFrames(page), { newTarget: true });
+}
+
+async function completePinnedReply(page, mock, id) {
+  const scrollTop = await page.locator('.person-messages').evaluate(el => el.scrollTop);
+  await startResponseFrames(page, replySelector(id));
+  mock.complete();
+  await expect(page.locator('.person-response-loading')).toHaveCount(0);
+  await expect(page.locator('#person-input')).toBeEnabled();
+  const samples = await finishResponseFrames(page);
+  expectPinnedFrames(samples);
+  expectScrollStable(samples, scrollTop);
+}
+
+async function userScrollResponse(page, width) {
+  const pane = page.locator('.person-messages');
+  const before = await pane.evaluate(el => el.scrollTop);
+  const bounds = await pane.boundingBox();
+  if (width === 320) {
+    // Trusted touch input drives the browser's native scroller (not a synthetic
+    // touchmove event or a direct scrollTop assignment).
+    const session = await page.context().newCDPSession(page);
+    const x = bounds.x + bounds.width / 2;
+    const y = bounds.y + bounds.height * 0.75;
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    for (let i = 1; i <= 6; i++) {
+      await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y - i * 24 }] });
+      await page.waitForTimeout(30);
+    }
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await session.detach();
+  } else {
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.wheel(0, 220);
+  }
+  await expect.poll(() => pane.evaluate(el => el.scrollTop)).toBeGreaterThan(before + 30);
+  // Let native wheel/touch momentum settle before checking later wire updates.
+  await page.waitForTimeout(400);
+}
+
+for (const scenario of responseScenarios) {
+  test(`Digital Person local response focus survives growth and yields to user scroll ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
+    test.setTimeout(60000);
+    const mock = await mockPersonSocket(page, {
+      conversationFlow: true, initialMessages: previousConversation,
+      olderMessages: [{ id: 'prepended-reply', role: 'assistant', text: 'Earlier archived answer.\n'.repeat(45), createdAt: 0 }],
+    });
+    await openResponseConversation(page, serverUrl, scenario);
+
+    await sendWaiting(page, mock, 'First local question');
+    await showReply(page, mock, 'short-reply', 'A short first answer.');
+    await expectAbovePane(page, '[data-msg-id="user-1"]');
+    await completePinnedReply(page, mock, 'short-reply');
+
+    await sendWaiting(page, mock, 'Second local question');
+    await expectAbovePane(page, replySelector('short-reply'));
+    await showReply(page, mock, 'growing-reply', 'The new answer starts here.');
+    const pinnedScroll = await page.locator('.person-messages').evaluate(el => el.scrollTop);
+    await startResponseFrames(page, replySelector('growing-reply'));
+    mock.reply('growing-reply', 'The new answer starts here.\n' + 'A long response line.\n'.repeat(90) + 'Growth checkpoint.');
+    await expect(page.locator(replySelector('growing-reply'))).toContainText('Growth checkpoint.');
+    const growingFrames = await finishResponseFrames(page);
+    expectPinnedFrames(growingFrames);
+    expectScrollStable(growingFrames, pinnedScroll);
+    await expectAbovePane(page, '[data-msg-id="user-2"]');
+    await expect(page.locator('.person-response-loading')).not.toBeInViewport();
+    await completePinnedReply(page, mock, 'growing-reply');
+
+    await sendWaiting(page, mock, 'Third local question for free reading');
+    await showReply(page, mock, 'free-reading-reply', 'Free reading starts here.\n' + 'A long response line.\n'.repeat(90));
+    await userScrollResponse(page, scenario.width);
+    const userScroll = await page.locator('.person-messages').evaluate(el => el.scrollTop);
+    await startResponseFrames(page, replySelector('free-reading-reply'));
+    mock.reply('free-reading-reply', 'Free reading starts here.\n' + 'A long response line.\n'.repeat(130) + 'After user scroll.');
+    await expect(page.locator(replySelector('free-reading-reply'))).toContainText('After user scroll.');
+    expectScrollStable(await finishResponseFrames(page), userScroll);
+    await startResponseFrames(page, replySelector('free-reading-reply'));
+    mock.complete();
+    await expect(page.locator('#person-input')).toBeEnabled();
+    expectScrollStable(await finishResponseFrames(page), userScroll);
+
+    const releasedPane = page.locator('.person-messages');
+    await expect(releasedPane).not.toHaveClass(/is-response-pinned/);
+    expect(await releasedPane.evaluate(el => getComputedStyle(el).overflowAnchor)).toBe('auto');
+    // Invoke the real history button without Playwright scrolling the offscreen
+    // control into view: the reader must stay on the released response.
+    await page.locator('.person-load-more').evaluate(button => button.click());
+    await expect.poll(() => mock.messageHistoryPending()).toBe(true);
+    await startResponseFrames(page, replySelector('free-reading-reply'));
+    const anchorScroll = await releasedPane.evaluate(el => el.scrollTop);
+    const anchorTop = await page.locator(replySelector('free-reading-reply')).evaluate(el => {
+      const pane = el.closest('.person-messages');
+      return el.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop;
+    });
+    mock.finishMessageHistory();
+    await expect(page.locator(replySelector('prepended-reply'))).toHaveCount(1);
+    const historyFrames = await finishResponseFrames(page);
+    expect(historyFrames.length).toBeGreaterThanOrEqual(12);
+    expect(Math.max(...historyFrames.map(sample => Math.abs(sample.top - anchorTop))), 'History prepend must preserve the visible reading position on every frame').toBeLessThanOrEqual(2);
+    // scrollTop must compensate for the new history, unlike a disabled native
+    // anchor that leaves scrollTop unchanged and moves the current answer down.
+    expect(await releasedPane.evaluate(el => el.scrollTop)).toBeGreaterThan(anchorScroll + 500);
+    await expectAbovePane(page, replySelector('prepended-reply'));
+
+    await sendWaiting(page, mock, 'Fourth local question for keyboard reading');
+    await expectAbovePane(page, replySelector('growing-reply'));
+    await showReply(page, mock, 'keyboard-reply', 'Keyboard reading.\n' + 'Another long line.\n'.repeat(90));
+    const pane = page.locator('.person-messages');
+    const beforeKey = await pane.evaluate(el => el.scrollTop);
+    await pane.focus();
+    await page.keyboard.press('PageDown');
+    await expect.poll(() => pane.evaluate(el => el.scrollTop)).toBeGreaterThan(beforeKey + 30);
+    await page.waitForTimeout(400);
+    const keyboardScroll = await pane.evaluate(el => el.scrollTop);
+    await startResponseFrames(page, replySelector('keyboard-reply'));
+    mock.reply('keyboard-reply', 'Keyboard reading.\n' + 'Another long line.\n'.repeat(130) + 'After keyboard scroll.');
+    await expect(page.locator(replySelector('keyboard-reply'))).toContainText('After keyboard scroll.');
+    expectScrollStable(await finishResponseFrames(page), keyboardScroll);
+    mock.complete();
+    await expect(page.locator('#person-input')).toBeEnabled();
+
+    await sendWaiting(page, mock, 'Fifth local question refocuses');
+    await expectAbovePane(page, replySelector('keyboard-reply'));
+    await showReply(page, mock, 'final-reply', 'A final short answer.');
+    await completePinnedReply(page, mock, 'final-reply');
+    await expect(page.locator('.person-message')).toHaveCount(7);
+    await expect(page.locator('.user-turn-block')).toHaveCount(6);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}
+
+for (const scenario of [{ width: 1280, theme: 'dark' }, { width: 320, theme: 'light' }]) {
+  test(`Digital Person reconnect and Agent switch discard local response focus ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
+    test.setTimeout(45000);
+    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+    await openResponseConversation(page, serverUrl, scenario);
+    await sendWaiting(page, mock, 'Send before reconnect');
+    await showReply(page, mock, 'reconnect-reply', 'Reply before reconnect.\n' + 'Long persisted reply.\n'.repeat(90));
+    const opens = mock.requests.filter(request => request.op === 'open').length;
+    mock.disconnect();
+    await expect.poll(() => mock.requests.filter(request => request.op === 'open').length).toBeGreaterThan(opens);
+    await expect(page.locator(replySelector('reconnect-reply'))).toHaveCount(1);
+    await expect(page.locator('.person-response-tail, .person-response-start')).toHaveCount(0);
+    const pane = page.locator('.person-messages');
+    // Programmatic movement without a user-intent event proves the old lock was
+    // discarded by reconnect itself, rather than incidentally released by input.
+    await pane.evaluate(el => { el.scrollTop = 100; });
+    const reconnectScroll = await pane.evaluate(el => el.scrollTop);
+    await startResponseFrames(page, replySelector('reconnect-reply'));
+    mock.reply('reconnect-reply', 'Reply before reconnect.\n' + 'Long persisted reply.\n'.repeat(130) + 'Remote growth after reconnect.');
+    await expect(page.locator(replySelector('reconnect-reply'))).toContainText('Remote growth after reconnect.');
+    expectScrollStable(await finishResponseFrames(page), reconnectScroll);
+    mock.complete();
+    await expect(page.locator('#person-input')).toBeEnabled();
+    await sendWaiting(page, mock, 'New local send after reconnect');
+    await showReply(page, mock, 'switch-reply', 'Pinned before switching Agent.');
+    mock.messages(previousConversation, 'person-b');
+    await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
+    await page.getByRole('option', { name: 'Owner Agent B', exact: true }).click();
+    await expect(page.locator('.person-header h1')).toHaveText('Bea');
+    await expect(page.locator(replySelector('switch-reply'))).toHaveCount(0);
+    await expect(page.locator('.person-response-tail, .person-response-start')).toHaveCount(0);
+    await pane.evaluate(el => { el.scrollTop = 80; });
+    const switchedScroll = await pane.evaluate(el => el.scrollTop);
+    await startResponseFrames(page, replySelector('history-reply'));
+    mock.reply('remote-b', 'Remote Agent B reply.\n'.repeat(90), 'person-b');
+    await expect(page.locator(replySelector('remote-b'))).toHaveCount(1);
+    expectScrollStable(await finishResponseFrames(page), switchedScroll);
+    await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
+    await page.getByRole('option', { name: 'Owner Agent A', exact: true }).click();
+    await expect(page.locator('.person-header h1')).toHaveText('Ada');
+    await expect(page.locator(replySelector('switch-reply'))).toHaveCount(1);
+    await expect(page.locator('.person-response-tail, .person-response-start')).toHaveCount(0);
+    expect(await page.locator(replySelector('switch-reply')).evaluate(el => {
+      const pane = el.closest('.person-messages');
+      return el.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+    })).toBeGreaterThan(100);
+  });
+}
+
+test('Digital Person rejected admission removes waiting focus and next Send starts a fresh reply', async ({ page, serverUrl }) => {
+  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+  await openResponseConversation(page, serverUrl, { width: 320, theme: 'dark' });
+  mock.rejectNextSend();
+  await page.locator('#person-input').fill('Rejected local send');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.locator('.person-error')).toContainText('Admission rejected');
+  await expect(page.locator('#person-input')).toBeEnabled();
+  await expect(page.locator('#person-input')).toHaveValue('Rejected local send');
+  await expect(page.locator('.person-response-start, .person-response-tail, .person-response-loading')).toHaveCount(0);
+  await expect(page.locator('.user-turn-block')).toHaveCount(1);
+  await sendWaiting(page, mock, 'Accepted local send');
+  await showReply(page, mock, 'accepted-reply', 'Fresh accepted response.');
+  await completePinnedReply(page, mock, 'accepted-reply');
+});

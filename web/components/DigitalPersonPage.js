@@ -46,6 +46,17 @@ export default {
       badge: agent.online ? undefined : t('person.offlineShort'),
     })));
     const messagePane = Vue.ref(null);
+    const readingColumn = Vue.ref(null);
+    const responseStart = Vue.ref(null);
+    const responseTail = Vue.ref(null);
+    const focusedResponseId = Vue.ref('');
+    const hasResponseFocus = Vue.ref(false);
+    const responsePinned = Vue.ref(false);
+    let responseFocus = null;
+    let responseFocusGeneration = 0;
+    let responseLayoutObserver = null;
+    let responseLayoutFrame = null;
+    let disposed = false;
     const returnButton = Vue.ref(null);
     const gate = Vue.computed(() => digitalPersonGate(chat, agentId.value));
     const scope = () => JSON.stringify([auth.userId, auth.authGeneration, auth.isAuthenticated]);
@@ -59,6 +70,7 @@ export default {
     const { attachments, error: attachmentError, filesReady, addFiles, retryAttachment, removeAttachment } = attachmentQueue;
     const controller = createPersonController({ chat, state, scope, reupload: attachmentQueue.uploadFiles });
     Vue.watch(attachmentScope, () => {
+      resetResponseFocus();
       draftGeneration++;
       pendingDraft = null;
       draft.value = '';
@@ -104,14 +116,29 @@ export default {
       const g = draftGeneration;
       if (!retry) pendingDraft = { text: draft.value, rows: attachments.value.slice() };
       const submitted = pendingDraft;
+      // Focus only a locally submitted conversation turn, never a historical
+      // snapshot, reconnect, or autonomous think/dream episode.
+      const focusGeneration = op === 'send' ? (retry && responseFocus ? responseFocusGeneration : beginResponseFocus()) : null;
       const accepted = await controller.command(op, draft.value, retry, op === 'dream' ? [] : attachments.value.slice());
-      if (!accepted || g !== draftGeneration) return;
+      if (g !== draftGeneration) return;
+      if (focusGeneration === responseFocusGeneration && responseFocus) {
+        if (accepted) {
+          responseFocus.episodeId = state.commandEpisodeId || '';
+          scheduleResponseLayout();
+        } else if (!state.retryCommand) resetResponseFocus();
+      }
+      if (!accepted) return;
       if (op !== 'dream' && submitted) {
         if (draft.value === submitted.text) draft.value = '';
         // Person messages only retain server references, not local blob URLs.
         attachmentQueue.release(submitted.rows, { transferPreviews: false });
       }
       pendingDraft = null;
+    }
+    function discardRetry() {
+      controller.discardRetry();
+      pendingDraft = null;
+      resetResponseFocus();
     }
     // A reconnect replaces cached pages. Refill the visible section after the
     // identity is ready, including when the drawer was opened during loading.
@@ -166,11 +193,99 @@ export default {
     Vue.watch(compactPanel, async compact => {
       if (compact && panel.value) { await Vue.nextTick(); closePanelButton.value?.focus(); }
     });
-    Vue.watch(() => [state.messages.at(-1)?.id, responding.value, activity.value.label, activity.value.rows.length], async () => {
+    function resetResponseFocus() {
+      responseFocusGeneration++;
+      responseFocus = null;
+      focusedResponseId.value = '';
+      hasResponseFocus.value = false;
+      responsePinned.value = false;
+      if (responseLayoutFrame !== null) cancelAnimationFrame(responseLayoutFrame);
+      responseLayoutFrame = null;
+      if (responseTail.value) responseTail.value.style.height = '0px';
+    }
+    function beginResponseFocus() {
+      resetResponseFocus();
+      responseFocus = {
+        scope: attachmentScope(), episodeId: '',
+        previousIds: new Set(state.messages.map(message => message.id)),
+        locked: true,
+      };
+      hasResponseFocus.value = true;
+      responsePinned.value = true;
+      scheduleResponseLayout();
+      return responseFocusGeneration;
+    }
+    function releaseResponseFocus(event) {
+      if (event?.type === 'keydown') {
+        if (!['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)
+          || event.target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      }
+      if (event?.type === 'pointerdown') {
+        const pane = messagePane.value;
+        const bounds = pane?.getBoundingClientRect();
+        // Only a scrollbar drag is scroll intent; selecting reply text is not.
+        if (!bounds || pane.offsetWidth <= pane.clientWidth
+          || (event.clientX < bounds.right - (pane.offsetWidth - pane.clientWidth)
+            && event.clientX > bounds.left + (pane.offsetWidth - pane.clientWidth))) return;
+      }
+      if (responseFocus) responseFocus.locked = false;
+      responsePinned.value = false;
+    }
+    function reconcileResponseLayout() {
+      const focus = responseFocus;
       const pane = messagePane.value;
-      const nearBottom = pane && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 120;
-      await Vue.nextTick();
-      if (nearBottom && messagePane.value) messagePane.value.scrollTop = messagePane.value.scrollHeight;
+      const tail = responseTail.value;
+      if (disposed || !focus || focus.scope !== attachmentScope() || !pane || !tail) return;
+      if (!focusedResponseId.value && focus.episodeId) {
+        const firstReply = state.messages.find(message => message.role === 'assistant'
+          && !focus.previousIds.has(message.id)
+          && (!message.episodeId || message.episodeId === focus.episodeId));
+        if (firstReply) focusedResponseId.value = firstReply.id;
+      }
+      if (!focus.locked) return;
+      const target = focusedResponseId.value
+        ? [...pane.querySelectorAll('.person-message')].find(element => element.dataset.messageId === focusedResponseId.value)
+        : responseStart.value;
+      if (!target) return;
+      // Leave only the space needed to put a short response at the top. It is
+      // independent of loading state, so completion cannot clamp it upwards.
+      const afterTarget = tail.getBoundingClientRect().top - target.getBoundingClientRect().top;
+      const bottomPadding = parseFloat(getComputedStyle(pane).paddingBottom) || 0;
+      const needed = Math.max(0, pane.clientHeight - afterTarget - bottomPadding);
+      if (Math.abs((parseFloat(tail.style.height) || 0) - needed) > 1) tail.style.height = `${needed}px`;
+      const delta = target.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop;
+      if (Math.abs(delta) > 1) pane.scrollTop += delta;
+    }
+    function scheduleResponseLayout() {
+      const generation = responseFocusGeneration;
+      Vue.nextTick(() => {
+        if (disposed || generation !== responseFocusGeneration || responseLayoutFrame !== null) return;
+        responseLayoutFrame = requestAnimationFrame(() => {
+          responseLayoutFrame = null;
+          if (!disposed && generation === responseFocusGeneration) reconcileResponseLayout();
+        });
+      });
+    }
+    Vue.watch(() => [state.messages.map(message => [message.id, message.text, message.episodeId]), activity.value.loading], () => {
+      // Compensate removed loading space in the same DOM update, before the
+      // browser paints a clamped scroll position for a completed short reply.
+      reconcileResponseLayout();
+      scheduleResponseLayout();
+    }, { flush: 'post' });
+    // A reconnect replaces the entire projection. Do not carry an old DOM
+    // target or an admission awaiting acknowledgement into that generation.
+    Vue.watch(() => [gate.value, chat.chatHistoryConnectionGeneration], resetResponseFocus, { flush: 'sync' });
+    Vue.onMounted(() => {
+      if (typeof ResizeObserver !== 'undefined') {
+        responseLayoutObserver = new ResizeObserver(scheduleResponseLayout);
+        if (messagePane.value) responseLayoutObserver.observe(messagePane.value);
+        if (readingColumn.value) responseLayoutObserver.observe(readingColumn.value);
+      }
+    });
+    Vue.onBeforeUnmount(() => {
+      disposed = true;
+      resetResponseFocus();
+      responseLayoutObserver?.disconnect();
     });
     function leave() {
       chat.leaveDigitalPerson();
@@ -182,7 +297,7 @@ export default {
     }
     const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, returnButton, gate, ready, activity, responding, canCompose, controller, command, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, responding, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -224,12 +339,13 @@ export default {
       <div v-if="state.retryCommand && !state.commandPending" class="person-retry" :inert="compactPanel && panel ? true : undefined" role="status">
         <p>{{ $t('person.uncertain') }}</p>
         <button type="button" class="btn-secondary" :disabled="!!gate || state.loading || !state.person || state.settingsPending" @click="command(state.retryCommand.op, true)">{{ $t('person.retrySame') }}</button>
-        <button type="button" class="btn-ghost" @click="controller.discardRetry()">{{ $t('person.discardRetry') }}</button>
+        <button type="button" class="btn-ghost" @click="discardRetry()">{{ $t('person.discardRetry') }}</button>
       </div>
       <div class="person-workspace">
         <main id="person-conversation" :inert="compactPanel && panel ? true : undefined" class="person-conversation" :aria-label="$t('person.conversation')">
-          <div ref="messagePane" class="person-messages" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading">
-            <div class="person-reading-column">
+          <div ref="messagePane" class="person-messages" :class="{ 'is-response-pinned': responsePinned }" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading"
+            @wheel.passive="releaseResponseFocus" @touchmove.passive="releaseResponseFocus" @keydown="releaseResponseFocus" @pointerdown.passive="releaseResponseFocus">
+            <div ref="readingColumn" class="person-reading-column">
               <button v-if="state.messageCursor != null" type="button" class="btn-ghost person-load-more" @click="controller.page('messages', true)" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
               <div v-if="!state.messages.length && ready && !responding" class="person-welcome"><NavigationIcon name="activity" :size="28" /><h2>{{ $t('person.welcome') }}</h2><p>{{ $t('person.empty') }}</p></div>
               <template v-for="message in state.messages" :key="message.id">
@@ -242,9 +358,11 @@ export default {
                   <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
                 </article>
               </template>
+              <div v-if="hasResponseFocus && !focusedResponseId" ref="responseStart" class="person-response-start" aria-hidden="true"></div>
               <div v-if="activity.loading" class="person-response-loading" role="status" :aria-label="$t('sidebar.sessions.processing')">
                 <span class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></span>
               </div>
+              <div v-if="hasResponseFocus" ref="responseTail" class="person-response-tail" aria-hidden="true"></div>
             </div>
           </div>
           <div class="input-area person-composer">
