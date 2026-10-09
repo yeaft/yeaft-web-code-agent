@@ -45,7 +45,9 @@ export function personState() {
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
     commandPending: false, commandEpisodeId: null, cancelPending: false, retryCommand: null, tracesStale: false,
     activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false,
-    models: [], modelCandidates: [], settingsPending: false, renameSupported: false,
+    models: [], modelCandidates: [], effectiveModelCandidates: [], defaultModel: null,
+    agentDefaultModel: null, effectiveDefaultModel: null, defaultModelSupported: false,
+    settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
     tasks: { tasks: [], agents: [], loaded: false, loading: false, stale: false, error: null, pending: null },
     taskLog: { taskId: '', text: '', nextOffset: 0, loading: false, error: null },
@@ -95,6 +97,17 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   };
   const retainedFiles = () => { outbox(); return outboxes.get(chat).files; };
   const showError = error => { state.error = { code: error.code || 'requestFailed', message: error.message }; };
+
+  function applyModelStatus(status) {
+    state.renameSupported = status.renameSupported === true;
+    state.defaultModelSupported = status.defaultModelSupported === true;
+    state.models = status.availableModels || status.models || [];
+    if (Array.isArray(status.modelCandidates)) state.modelCandidates = status.modelCandidates;
+    if (Object.hasOwn(status, 'defaultModel')) state.defaultModel = status.defaultModel ?? null;
+    state.agentDefaultModel = status.agentDefaultModel ?? null;
+    state.effectiveDefaultModel = status.effectiveDefaultModel ?? null;
+    state.effectiveModelCandidates = status.effectiveModelCandidates || [];
+  }
 
   function request(op, payload = {}) {
     const g = generation;
@@ -164,6 +177,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     if (!current(g) || requestNumber !== snapshotRequest) return;
     state.person = data.person;
     state.modelCandidates = data.person?.settings?.modelCandidates || [];
+    state.defaultModel = data.person?.settings?.defaultModel ?? null;
     state.state = data.state;
     state.latestEpisode = data.latestEpisode || null;
     const incoming = data.messages || [];
@@ -297,9 +311,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       state.storageReady = status.storageReady !== false;
       state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';
-      state.renameSupported = status.renameSupported === true;
-      state.models = status.availableModels || status.models || [];
-      state.modelCandidates = status.modelCandidates || [];
+      applyModelStatus(status);
       if (!state.configured || !state.storageReady) return;
       await request('open');
       if (!current(g)) return;
@@ -327,9 +339,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       state.storageReady = status.storageReady !== false;
       state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';
-      state.renameSupported = status.renameSupported === true;
-      state.models = status.availableModels || status.models || [];
-      state.modelCandidates = status.modelCandidates || [];
+      applyModelStatus(status);
       if (!state.configured || !state.storageReady) return;
       await snapshot();
       if (current(g)) await Promise.all([page('messages'), page('traces', false, { preserveHistory })]);
@@ -540,14 +550,14 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       const result = await request('settings', payload);
       if (!current(g)) return false;
       state.modelCandidates = result.settings.modelCandidates || [];
+      state.defaultModel = result.settings.defaultModel ?? null;
       state.person.settings = result.settings;
       if (result.person?.id === state.person.id) state.person = result.person;
       snapshotRequest += 1; // Fence an older snapshot from undoing a successful rename.
       // A candidate correction can recover model readiness without reopening the page.
       const status = await request('status');
       if (!current(g)) return false;
-      state.renameSupported = status.renameSupported === true;
-      state.models = status.availableModels || status.models || [];
+      applyModelStatus(status);
       state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';
       return true;

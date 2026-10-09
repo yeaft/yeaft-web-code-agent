@@ -201,7 +201,7 @@ export class PersonRuntime {
     }, Math.max(100, Math.floor(this.repository.leaseMs / 3)));
     heartbeat.unref?.();
     try {
-      const provider = await abortable(this.getProvider(episode.modelCandidates ?? []), signal);
+      const provider = await abortable(this.getProvider(episode.modelCandidates ?? [], episode.defaultModel ?? null), signal);
       const snapshot = await abortable(this.repository.context(episode), signal);
       const attachments = episode.attachments?.length ? await abortable(this.repository.episodeAttachments(episode), signal) : [];
       // Bind recovered evidence using the repository's authoritative Person ID,
@@ -209,7 +209,7 @@ export class PersonRuntime {
       await this.tasks()?.context({ episode, parentToolRegistry: this.parentToolRegistry });
       signal.throwIfAborted();
       let selection = { ...provider.defaultSelection, reason: 'configured-default', origin: 'bootstrap' };
-      if (snapshot.state.lastSelection) {
+      if (episode.defaultModel == null && snapshot.state.lastSelection) {
         try { validateSelection(snapshot.state.lastSelection, provider.catalog); selection = { ...snapshot.state.lastSelection, reason: 'last-accepted-choice', origin: 'persisted' }; }
         catch { await this.repository.append(episode, 'selection_rejected', { requested: snapshot.state.lastSelection, code: 'MODEL_SELECTION', fallback: 'configured-default' }); }
       }

@@ -37,8 +37,10 @@ describe('digital person authenticated relay', () => {
     ['inspect', { section: 'skills', cursor: 'Recall', limit: 2 }],
     ['search', { query: 'literal .*', cursor: '20', limit: 5 }],
     ['settings', { name: 'Renamed', modelCandidates: [] }],
+    ['settings', { modelCandidates: ['provider/a', 'provider/b'], defaultModel: 'provider/b' }],
+    ['settings', { modelCandidates: [], defaultModel: null }],
   ])('relays the exact %s API fields but never browser ownership or raw selectors', async (op, payload) => {
-    await relay.request(client, message({ op, payload: { ...payload, ownerId: 'victim', namespace: 'foreign', filter: { $ne: null }, files: [] } }));
+    await relay.request(client, message({ op, payload: { ...payload, ownerId: 'victim', namespace: 'foreign', filter: { $ne: null }, files: [], providers: [{ apiKey: 'forged' }], agentDefaultModel: 'evil/model' } }));
     expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op, payload });
     expect(forward.mock.lastCall[1].payload).toEqual(payload);
   });

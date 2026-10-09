@@ -69,6 +69,109 @@ describe('owner-scoped model candidates', () => {
     await expect(call(limited, 'settings', { modelCandidates: ['test/model0'] })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
   });
 
+  it('reports bounded effective candidates and separates saved, Agent and effective defaults', async () => {
+    const native = manyModels(), stream = vi.fn(), s = create(await directory(), { config: native, adapter: { stream } });
+    const defaults = { defaultModelSupported: true, defaultModel: null, agentDefaultModel: 'test/model0',
+      effectiveModelCandidates: native.availableModels.slice(0, 8).map(m => m.ref), effectiveDefaultModel: 'test/model0' };
+    expect(await call(s, 'status')).toMatchObject(defaults);
+    await call(s, 'open');
+    await call(s, 'settings', { modelCandidates: ['test/model9', 'test/model11'], defaultModel: 'test/model11' });
+    expect(await call(s, 'status')).toMatchObject({ ...defaults, defaultModel: 'test/model11',
+      effectiveModelCandidates: ['test/model9', 'test/model11'], effectiveDefaultModel: 'test/model11' });
+    expect((await call(s, 'status')).availableModels).toHaveLength(12);
+    await call(s, 'settings', { defaultModel: null });
+    expect(await call(s, 'status')).toMatchObject({ defaultModel: null, effectiveDefaultModel: 'test/model9' });
+    native.primaryModel = 'model11';
+    expect(await call(s, 'status')).toMatchObject({ agentDefaultModel: 'test/model11', effectiveDefaultModel: 'test/model11' });
+    native.primaryModel = 'missing';
+    expect(await call(s, 'status')).toMatchObject({ agentDefaultModel: null, effectiveDefaultModel: 'test/model9' });
+    expect(stream).not.toHaveBeenCalled();
+    const limited = create(await directory(), { config: { ...native, primaryModel: 'test/model0' }, adapter: {}, allowedModels: ['test/model11'] });
+    expect(await call(limited, 'status')).toMatchObject({ agentDefaultModel: 'test/model0',
+      effectiveModelCandidates: ['test/model11'], effectiveDefaultModel: 'test/model11' });
+  });
+
+  it('validates explicit defaults against the merged subset, implicit first eight and safe allowlist without broadening', async () => {
+    const native = manyModels(), s = create(await directory(), { config: native, adapter: {} });
+    await call(s, 'open');
+    for (const defaultModel of [undefined, 7, {}, '', 'model1', 'test/missing', 'test/model8']) {
+      await expect(call(s, 'settings', { defaultModel })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+    }
+    await expect(createPersonProvider({ config: native, adapter: {}, defaultModel: 'test/model8' })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+    await call(s, 'settings', { defaultModel: 'test/model7' });
+    await expect(call(s, 'settings', { modelCandidates: ['test/model11'] })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+    expect((await call(s, 'snapshot')).person.settings).toMatchObject({ defaultModel: 'test/model7' });
+    await call(s, 'settings', { modelCandidates: ['test/model11'], defaultModel: 'test/model11' });
+    await expect(call(s, 'settings', { modelCandidates: [] })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+    await call(s, 'settings', { modelCandidates: [], defaultModel: null });
+    expect((await call(s, 'status')).effectiveModelCandidates).toHaveLength(8);
+    const provider = await createPersonProvider({ config: native, adapter: {}, modelCandidates: ['test/model9', 'test/model11'], defaultModel: 'test/model11' });
+    expect(provider.catalog.map(m => m.id)).toEqual(['test/model9', 'test/model11']);
+    expect(provider.defaultSelection).toEqual({ model: 'test/model11', effort: null });
+    await expect(createPersonProvider({ config: native, adapter: {}, allowedModels: ['test/model0'], defaultModel: 'test/model1' }))
+      .rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+    const unsafe = structuredClone(native); unsafe.availableModels[1].contextWindow = 100;
+    await expect(createPersonProvider({ config: unsafe, adapter: {}, defaultModel: 'test/model1' })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+  });
+
+  it('persists explicit defaults on SQLite restart and permits name-only edits of stale model settings', async () => {
+    const dir = await directory(), native = manyModels(), stream = vi.fn(), s = create(dir, { config: native, adapter: { stream } });
+    await call(s, 'open'); await call(s, 'open', {}, 'bob');
+    await call(s, 'settings', { modelCandidates: ['test/model11'], defaultModel: 'test/model11' });
+    await s.close();
+    const restarted = create(dir, { config: native, adapter: { stream } });
+    expect((await call(restarted, 'snapshot')).person.settings).toMatchObject({ defaultModel: 'test/model11', modelCandidates: ['test/model11'] });
+    expect(await call(restarted, 'status', {}, 'bob')).toMatchObject({ defaultModel: null });
+    native.availableModels.pop();
+    expect(await call(restarted, 'status')).toMatchObject({ modelReady: false, defaultModelSupported: true, defaultModel: 'test/model11' });
+    expect((await call(restarted, 'status')).availableModels).toHaveLength(11);
+    expect((await call(restarted, 'settings', { name: 'Saved name' })).settings).toMatchObject({ defaultModel: 'test/model11', modelCandidates: ['test/model11'] });
+    await expect(call(restarted, 'settings', { defaultModel: null })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+    await expect(call(restarted, 'settings', { modelCandidates: [] })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+    await call(restarted, 'send', { text: 'stale', clientMessageId: 'stale-default' });
+    expect((await idle(restarted)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'MODEL_SELECTION' });
+    expect(stream).not.toHaveBeenCalled();
+    await call(restarted, 'settings', { modelCandidates: [], defaultModel: null });
+    expect((await call(restarted, 'status')).modelReady).toBe(true);
+  });
+
+  it('bootstraps with explicit defaults instead of last selection, while automatic retains last selection and fallback', async () => {
+    const dir = await directory(), seen = [], s = create(dir, { adapter: { async *stream(params) {
+      seen.push(params.model);
+      const p = finalProposal(JSON.parse(params.messages[0].content).state.version); p.concepts = []; p.state.focusConceptIds = [];
+      yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
+    } } });
+    await call(s, 'open');
+    const r = new SqlitePersonRepository({ yeaftDir: dir });
+    try {
+      const { episode } = await r.admit('alice', { kind: 'think', text: '', clientMessageId: 'seed', workerId: 'seed', budget: { calls: 1, timeoutMs: 5000 } });
+      const callId = randomUUID(); await r.startCall(episode, { callId, requested: { model: 'test/second', effort: null } });
+      await r.finalizeCall(episode, { callId, output: { text: '{}' } });
+      const p = finalProposal(); p.concepts = []; p.state.focusConceptIds = [];
+      await r.commit(episode, p, { model: 'test/second', effort: null }, callId); await r.finish(episode, 'completed');
+    } finally { await r.close(); }
+    await call(s, 'think', { clientMessageId: 'automatic' }); expect((await idle(s)).latestEpisode.status).toBe('completed');
+    await call(s, 'settings', { defaultModel: 'test/first' });
+    await call(s, 'think', { clientMessageId: 'explicit' }); expect((await idle(s)).latestEpisode.status).toBe('completed');
+    await call(s, 'settings', { defaultModel: null });
+    await call(s, 'think', { clientMessageId: 'automatic-again' }); await idle(s);
+    await call(s, 'settings', { modelCandidates: ['test/second'] });
+    await call(s, 'think', { clientMessageId: 'invalid-last-choice' }); await idle(s);
+    expect(seen).toEqual(['test/second', 'test/first', 'test/first', 'test/second']);
+  });
+
+  it('advertises default-model support on unconfigured, unavailable and storage failure status paths', async () => {
+    const unconfigured = create(undefined, { storage: 'mongodb' });
+    const unavailable = create(await directory(), { config: { providers: [], availableModels: [] } });
+    const dir = await directory();
+    const { bindPersonStorage } = await import('../../../../agent/yeaft/person/storage.js');
+    await bindPersonStorage(dir, 'default', 'mongodb');
+    const mismatch = create(dir);
+    for (const s of [unconfigured, unavailable, mismatch]) expect(await call(s, 'status')).toMatchObject({
+      defaultModelSupported: true, defaultModel: null, effectiveModelCandidates: [], effectiveDefaultModel: null, modelReady: false,
+    });
+  });
+
   it('freezes the subset at admission, blocks busy settings across services, and rejects model escape in a proposal', async () => {
     const dir = await directory(), native = manyModels(), seen = [];
     let release, started;
@@ -82,16 +185,17 @@ describe('owner-scoped model candidates', () => {
       yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
     } } });
     const other = create(dir, { config: native, adapter: {} });
-    await call(s, 'open'); await call(s, 'settings', { modelCandidates: ['test/model11'] });
+    await call(s, 'open'); await call(s, 'settings', { modelCandidates: ['test/model9', 'test/model11'], defaultModel: 'test/model11' });
     await call(s, 'send', { text: 'hello', clientMessageId: 'one' }); await ready;
     try {
-      await expect(call(other, 'settings', { modelCandidates: [] })).rejects.toMatchObject({ code: 'BUSY' });
+      await expect(call(other, 'settings', { modelCandidates: [], defaultModel: null })).rejects.toMatchObject({ code: 'BUSY' });
       native.availableModels[11].ref = 'test/changed-after-start';
       expect(seen[0].model).toBe('test/model11');
-      expect(seen[0].context.models.map(m => m.id)).toEqual(['test/model11']);
+      expect(seen[0].context.models.map(m => m.id)).toEqual(['test/model9', 'test/model11']);
       const db = new DatabaseSync(join(dir, 'person/person.db'), { readOnly: true });
-      try { expect(JSON.parse(db.prepare('SELECT record FROM episodes').get().record).modelCandidates).toEqual(['test/model11']); }
-      finally { db.close(); }
+      try { expect(JSON.parse(db.prepare('SELECT record FROM episodes').get().record)).toMatchObject({
+        modelCandidates: ['test/model9', 'test/model11'], defaultModel: 'test/model11',
+      }); } finally { db.close(); }
     } finally { release(); }
     expect((await idle(s)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'MODEL_SELECTION' });
     expect(seen).toHaveLength(1);
@@ -175,6 +279,27 @@ for (const backend of ['sqlite', 'mongo']) {
       await Promise.all(resources.map(r => r.close())); vi.restoreAllMocks();
       if (inspector) { await inspector.db(dbName).dropDatabase(); await inspector.close(); inspector = null; }
       await rm(dir, { recursive: true, force: true });
+    });
+
+    it('snapshots default and candidates at admission and preserves them independently of later settings', async () => {
+      const s = service(), r = repo(); await call(s, 'open');
+      await call(s, 'settings', { modelCandidates: ['test/first', 'test/second'], defaultModel: 'test/second' });
+      const prior = await r.getPerson('alice'), { episode } = await admission(r);
+      expect(episode).toMatchObject({ defaultModel: 'test/second', modelCandidates: ['test/first', 'test/second'], controlVersion: prior.controlVersion });
+      await expect(call(s, 'settings', { defaultModel: null })).rejects.toMatchObject({ code: 'BUSY' });
+      await r.finish(episode, 'completed');
+      await call(s, 'settings', { modelCandidates: [], defaultModel: null });
+      expect(episode.defaultModel).toBe('test/second'); expect(episode.modelCandidates).toEqual(['test/first', 'test/second']);
+      const automatic = await admission(r);
+      expect(automatic.episode).toMatchObject({ defaultModel: null, modelCandidates: [] });
+      await r.finish(automatic.episode, 'completed');
+      // Pre-feature rows are read as automatic; no durable data migration.
+      await patchRecord(r, 'persons', { settings: { autonomyEnabled: false } });
+      const legacy = await admission(r);
+      expect(legacy.episode).toMatchObject({ defaultModel: null, modelCandidates: [] });
+      await r.finish(legacy.episode, 'completed');
+      await expect(r.settings('alice', { modelCandidates: ['test/first'] }, prior.controlVersion)).rejects.toMatchObject({ code: 'STALE' });
+      expect(stream).not.toHaveBeenCalled();
     });
 
     it('renames the Person atomically, persists and isolates it, without model configuration', async () => {

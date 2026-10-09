@@ -14,6 +14,29 @@ export function validateModelCandidates(refs) {
       new Set(refs).size !== refs.length) fail('MODEL_SELECTION');
 }
 
+export function validateDefaultModel(ref) {
+  if (ref !== null) validateModelCandidates([ref]);
+}
+
+/** Resolve router ownership before allowlisting or bounding the Person catalog. */
+export function resolveAgentDefaultModel(config) {
+  const models = config.availableModels || [], requested = config.primaryModel || config.model;
+  const model = models.find(m => (m.ref || m.id) === requested) || models.find(m => m.id === requested);
+  return model?.ref || (model?.id?.includes('/') ? model.id : null);
+}
+
+/** Shared validation for settings, status and runtime; never broaden an explicit subset. */
+export function selectPersonModels({ availableModels, modelCandidates = [], defaultModel = null }) {
+  validateModelCandidates(modelCandidates);
+  validateDefaultModel(defaultModel);
+  if (modelCandidates.some(ref => !availableModels.some(model => model.id === ref))) fail('MODEL_SELECTION');
+  const catalog = modelCandidates.length ? availableModels.filter(model => modelCandidates.includes(model.id))
+    : availableModels.slice(0, MODEL_LIMITS.candidates);
+  if (defaultModel !== null && !catalog.some(model => model.id === defaultModel)) fail('MODEL_SELECTION');
+  if (!catalog.length) fail('MODEL_UNAVAILABLE');
+  return { catalog, defaultSelection: { model: defaultModel ?? catalog[0].id, effort: null } };
+}
+
 // Bounds apply to the actual wire protocol, not a vision flag or compressed file size.
 // OpenAI tile models (including 2833 base tokens for gpt-4o-mini) have a fixed
 // cost only at explicit low detail. Known patch models below fit <=6144 patches
@@ -38,17 +61,13 @@ function imageInputBudget(modelId, protocol) {
 }
 
 /** Only configured native API models; no Session initialization or implicit credential fallback. */
-export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1', modelCandidates = [] }) {
+export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1', modelCandidates = [], defaultModel = null }) {
   const config = structuredClone(suppliedConfig || loadConfig({ dir: yeaftDir }));
   if (!config.providers?.length && !suppliedAdapter) fail('MODEL_UNAVAILABLE');
   const models = config.availableModels || [];
-  const requestedDefault = config.primaryModel || config.model;
-  // Match router ownership: exact qualified ref first; bare IDs use the first
-  // configured provider. Resolve before allowlisting, sorting or truncating.
-  const defaultModel = models.find(m => (m.ref || m.id) === requestedDefault)
-    || models.find(m => m.id === requestedDefault);
-  const defaultRef = defaultModel?.ref || defaultModel?.id;
+  const agentDefaultModel = resolveAgentDefaultModel(config);
   validateModelCandidates(modelCandidates);
+  validateDefaultModel(defaultModel);
   const available = models.filter(m => !allowedModels || allowedModels.includes(m.ref || m.id));
   const routingProviders = (config.providers || []).map(normalizeKnownProviderForRuntime);
   const safeModels = available.map(m => {
@@ -76,19 +95,16 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     return { id: m.ref || m.id, efforts, maxOutput, supportsImages: imageBudget !== null, imageBudget,
       contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };
   }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && m.contextWindow > m.maxOutput + 1024 && m.maxOutput >= 256);
-  safeModels.sort((a, b) => Number(b.id === defaultRef) - Number(a.id === defaultRef));
+  safeModels.sort((a, b) => Number(b.id === agentDefaultModel) - Number(a.id === agentDefaultModel));
   const seen = new Set();
   const uniqueModels = safeModels.filter(model => !seen.has(model.id) && seen.add(model.id));
   const availableModels = uniqueModels.slice(0, MODEL_LIMITS.available);
   // A UI catalog must not be the bounded episode choice set: model 9+ remains selectable.
   // Explicit lists are validated, never silently truncated or broadened on stale config.
-  if (modelCandidates.some(ref => !availableModels.some(model => model.id === ref))) fail('MODEL_SELECTION');
-  const catalog = modelCandidates.length ? availableModels.filter(model => modelCandidates.includes(model.id))
-    : availableModels.slice(0, MODEL_LIMITS.candidates);
-  if (!catalog.length) fail('MODEL_UNAVAILABLE');
+  const { catalog, defaultSelection } = selectPersonModels({ availableModels, modelCandidates, defaultModel });
   const adapter = suppliedAdapter || await createLLMAdapter(config);
   return { adapter, catalog, availableModels, availableModelsTruncated: uniqueModels.length > MODEL_LIMITS.available,
-    catalogRevision: digest(catalog), defaultSelection: { model: catalog[0].id, effort: null }, effortEnabled };
+    catalogRevision: digest(catalog), defaultSelection, agentDefaultModel, effortEnabled };
 }
 
 export function abortable(promise, signal) {

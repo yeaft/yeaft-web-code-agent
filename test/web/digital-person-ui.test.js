@@ -623,6 +623,97 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('[role="dialog"]').text()).not.toContain(t('person.renameUpgrade'));
   });
 
+  it('shows the reported inherited candidates and a configurable starting default', async () => {
+    await render();
+    Object.assign(wrapper.vm.state, { defaultModelSupported: true, effectiveModelCandidates: ['provider/b'],
+      agentDefaultModel: 'provider/a', effectiveDefaultModel: 'provider/b' });
+    await wrapper.get('.person-settings-button').trigger('click');
+    const models = wrapper.findAll('.person-model-list input');
+    expect(models.map(input => input.element.checked)).toEqual([false, true]);
+    expect(wrapper.get('.person-model-summary').text()).toContain(t('person.candidatesSummary', { count: 1 }));
+    expect(wrapper.get('.person-default-model-field').text()).toContain(t('person.agentDefaultModel', { model: 'provider/a' }));
+    expect(wrapper.get('#person-default-model').findAll('option').map(option => option.element.value)).toEqual(['', 'provider/b']);
+    await wrapper.get('#person-default-model').setValue('provider/b');
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ defaultModel: 'provider/b' });
+    expect(requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+  });
+
+  it('preselects inherited models when customizing candidates and saves both fields', async () => {
+    await render();
+    Object.assign(wrapper.vm.state, { defaultModelSupported: true, effectiveModelCandidates: ['provider/a', 'provider/b'],
+      agentDefaultModel: 'provider/a', effectiveDefaultModel: 'provider/a' });
+    await wrapper.get('.person-settings-button').trigger('click');
+    await wrapper.get('.person-model-default input').setValue(false);
+    const models = wrapper.findAll('.person-model-list input');
+    expect(models.every(input => input.element.checked)).toBe(true);
+    await models[0].setValue(false);
+    await wrapper.get('#person-default-model').setValue('provider/b');
+    expect(wrapper.get('.person-model-role').text()).toBe(t('person.defaultModel'));
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: ['provider/b'], defaultModel: 'provider/b' });
+  });
+
+  it('requires correcting a removed default but permits a name-only save with stale models', async () => {
+    await render();
+    Object.assign(wrapper.vm.state, { defaultModelSupported: true, modelCandidates: ['provider/a', 'removed/model'],
+      defaultModel: 'removed/model', agentDefaultModel: 'provider/a' });
+    await wrapper.get('.person-settings-button').trigger('click');
+    expect(wrapper.get('#person-default-model').element.value).toBe('removed/model');
+    await wrapper.get('#person-name').setValue('Mira');
+    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeUndefined();
+    await wrapper.findAll('.person-model-list input').find(input => input.element.value === 'removed/model').setValue(false);
+    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.person-default-model-field [role="alert"]').text()).toBe(t('person.defaultModelInvalid'));
+    await wrapper.get('#person-default-model').setValue('');
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ name: 'Mira', modelCandidates: ['provider/a'], defaultModel: null });
+  });
+
+  it('allows resetting stale candidates and default when no configured models remain', async () => {
+    await render();
+    Object.assign(wrapper.vm.state, { defaultModelSupported: true, models: [], modelCandidates: ['removed/model'],
+      defaultModel: 'removed/model', effectiveModelCandidates: [], agentDefaultModel: null });
+    await wrapper.get('.person-settings-button').trigger('click');
+    expect(wrapper.get('#person-default-model').attributes('disabled')).toBeUndefined();
+    await wrapper.get('.person-model-default input').setValue(true);
+    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeDefined();
+    await wrapper.get('#person-default-model').setValue('');
+    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeUndefined();
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: [], defaultModel: null });
+    expect(requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+  });
+
+  it('does not invent inherited candidates or send unsupported default fields to an older Agent', async () => {
+    await render();
+    await wrapper.get('.person-settings-button').trigger('click');
+    expect(wrapper.get('.person-model-summary').text()).toBe(t('person.candidatesUnknown'));
+    expect(wrapper.findAll('.person-model-list input').every(input => !input.element.checked)).toBe(true);
+    expect(wrapper.get('#person-default-model').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.person-default-model-field').text()).toContain(t('person.defaultModelUpgrade'));
+    await wrapper.get('#person-name').setValue('Mira');
+    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
+    expect(requests.find(r => r.op === 'settings').payload).toEqual({ name: 'Mira' });
+  });
+
+  it('preserves edited defaults during refresh and includes the select in the focus trap', async () => {
+    await render();
+    Object.assign(wrapper.vm.state, { defaultModelSupported: true, effectiveModelCandidates: ['provider/a', 'provider/b'],
+      agentDefaultModel: 'provider/a' });
+    await wrapper.get('.person-settings-button').trigger('click');
+    const select = wrapper.get('#person-default-model');
+    await select.setValue('provider/b');
+    wrapper.vm.state.defaultModel = 'provider/a'; await Vue.nextTick();
+    expect(select.element.value).toBe('provider/b');
+    select.element.focus();
+    await select.trigger('keydown', { key: 'Tab' });
+    expect(document.activeElement).toBe(select.element); // Interior controls must not wrap to the dialog header.
+    const save = wrapper.get('[role="dialog"] .btn-primary');
+    save.element.focus(); await save.trigger('keydown', { key: 'Tab' });
+    expect(document.activeElement).toBe(wrapper.get('.person-settings-close').element);
+  });
+
   it('searches archived messages without replacing the conversation or losing the draft', async () => {
     await render();
     await wrapper.get('#person-input').setValue('my draft');

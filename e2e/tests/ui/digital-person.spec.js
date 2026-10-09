@@ -6,7 +6,7 @@ import { personRecords } from '../../../test/fixtures/person-records.js';
 // This is not a model, MongoDB or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, initialMessages = [], olderMessages = [] } = {}) {
+async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [] } = {}) {
   if (enableUi) await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
@@ -30,6 +30,8 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
   let failTraces = false;
   let unknownCommand = false;
   let models = [{ id: 'provider/model-a' }, { id: 'provider/model-b' }];
+  let modelSettings = { modelCandidates: [], defaultModel: null };
+  const effectiveCandidates = () => modelSettings.modelCandidates.length ? modelSettings.modelCandidates : models.slice(0, 8).map(model => model.id);
   const agents = [
     { id: 'person-a', name: 'Owner Agent A', online: true, capabilities: ['digital_person'] },
     { id: 'person-b', name: 'Owner Agent B', online: true, capabilities: ['digital_person'] },
@@ -49,10 +51,12 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       if (request.type !== 'person_request') { server.send(message); return; }
       requests.push(request);
       const reply = (data, extra = {}) => route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data, ...extra }));
-      if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'MongoDB is not configured', models });
+      if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'MongoDB is not configured', models,
+        ...(modelPreferences ? { defaultModelSupported: true, ...modelSettings, agentDefaultModel: models[0]?.id || null,
+          effectiveModelCandidates: effectiveCandidates(), effectiveDefaultModel: modelSettings.defaultModel || effectiveCandidates()[0] || null } : {}) });
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
       else if (request.op === 'snapshot') {
-        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea' }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? (activityFlow ? 'episode-1' : activeEpisode) : null });
+        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea', ...(modelPreferences ? { settings: modelSettings } : {}) }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? (activityFlow ? 'episode-1' : activeEpisode) : null });
       } else if (request.op === 'messages') {
         if (conversationFlow && request.payload.cursor && olderMessages.length) {
           messageHistoryReply = () => {
@@ -103,7 +107,10 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
         if (unknownCommand) { unknownCommand = false; reply(null, { ok: false, error: 'Unknown outcome', errorCode: 'outcome_unknown' }); return; }
         if (request.op === 'send' && !activityFlow) messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
         busy = true; reply({ episodeId: activityFlow ? 'episode-1' : 'live-episode' });
-      } else if (request.op === 'settings') saveSettings = () => reply({ settings: request.payload });
+      } else if (request.op === 'settings') saveSettings = () => {
+        if (modelPreferences) modelSettings = { ...modelSettings, ...request.payload };
+        reply({ settings: modelPreferences ? modelSettings : request.payload });
+      };
       else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
     });
   });
@@ -871,3 +878,55 @@ test('Digital Person rejected admission removes waiting focus and next Send star
   await showReply(page, mock, 'accepted-reply', 'Fresh accepted response.');
   await completePinnedReply(page, mock, 'accepted-reply');
 });
+
+for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
+  test(`Digital Person candidate and default model preferences ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
+    const mock = await mockPersonSocket(page, { modelPreferences: true });
+    await page.setViewportSize({ width: scenario.width, height: 800 });
+    await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
+    await page.goto(serverUrl);
+    if (process.env.PERSON_UI_PRODUCTION === 'true') await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(1);
+    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+    const zh = scenario.locale === 'zh-CN';
+    if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
+    await page.locator('.sidebar-person-trigger:visible').click();
+    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    const list = dialog.locator('.person-model-list input');
+    await expect(list.nth(0)).toBeChecked();
+    await expect(list.nth(1)).toBeChecked();
+    await expect(list.nth(0)).toBeDisabled();
+    await expect(dialog.locator('.person-model-summary')).toContainText('2');
+    await expect(dialog.locator('.person-default-model-field')).toContainText('provider/model-a');
+    const select = dialog.locator('#person-default-model');
+    await select.selectOption('provider/model-b');
+    await select.focus(); await expect(select).toBeFocused();
+    await expect(dialog.locator('.person-model-role')).toContainText(zh ? '默认起始模型' : 'Default starting model');
+    const follow = dialog.locator('.person-model-default input');
+    await follow.uncheck();
+    await list.nth(1).uncheck();
+    await expect(dialog.locator('.btn-primary')).toBeDisabled();
+    await expect(dialog.locator('.person-default-model-field [role="alert"]')).toBeVisible();
+    await list.nth(1).check();
+    await list.nth(0).uncheck();
+    await expect(select.locator('option')).toHaveCount(2);
+    expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    expect(await dialog.locator('.person-settings-body').evaluate(el => getComputedStyle(el).overflowY)).toBe('auto');
+    await page.screenshot({ path: testInfo.outputPath(`person-model-preferences-${scenario.width}-${scenario.theme}.png`) });
+    await dialog.locator('.btn-primary').click();
+    await expect(dialog).toBeFocused();
+    mock.finishSettings();
+    await expect(dialog).toHaveCount(0);
+    expect(mock.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ modelCandidates: ['provider/model-b'], defaultModel: 'provider/model-b' });
+    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
+    await expect(select).toHaveValue('provider/model-b');
+    await expect(list.nth(0)).not.toBeChecked();
+    await expect(list.nth(1)).toBeChecked();
+    await follow.check();
+    await select.selectOption('');
+    await dialog.locator('.btn-primary').click(); mock.finishSettings();
+    await expect(dialog).toHaveCount(0);
+    expect(mock.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ modelCandidates: [], defaultModel: null });
+    expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+  });
+}

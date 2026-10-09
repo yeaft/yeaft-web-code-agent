@@ -14,6 +14,11 @@ export default {
     renameSupported: Boolean,
     models: { type: Array, default: () => [] },
     candidates: { type: Array, default: () => [] },
+    effectiveCandidates: { type: Array, default: () => [] },
+    defaultModel: { type: String, default: null },
+    agentDefaultModel: { type: String, default: null },
+    effectiveDefaultModel: { type: String, default: null },
+    defaultModelSupported: Boolean,
     saving: Boolean,
     disabled: Boolean,
     loading: Boolean,
@@ -21,7 +26,14 @@ export default {
   },
   emits: ['close', 'save'],
   setup(props, { emit }) {
-    const selected = Vue.ref([...props.candidates]);
+    // New Agents expose the effective set and a default-first eligible catalog.
+    // Older Agents expose only a catalog: do not guess their inherited choice set.
+    const inheritedCandidates = Vue.computed(() => !props.candidates.length && props.effectiveCandidates.length
+      ? props.effectiveCandidates : props.defaultModelSupported ? props.models.slice(0, 8).map(model => model.id) : []);
+    const inheritedKnown = Vue.computed(() => props.defaultModelSupported || !!props.effectiveCandidates.length);
+    const selected = Vue.ref(props.candidates.length ? [...props.candidates] : [...inheritedCandidates.value]);
+    const preferredDefault = Vue.ref(props.defaultModel || '');
+    const defaultEdited = Vue.ref(false);
     const personName = Vue.ref(props.name);
     const nameEdited = Vue.ref(false);
     const invalidName = Vue.computed(() => !personName.value.trim() || new TextEncoder().encode(personName.value.trim()).length > 160);
@@ -30,12 +42,19 @@ export default {
     const edited = Vue.ref(false);
     const previousFocus = document.activeElement;
     const unavailable = Vue.computed(() => selected.value.filter(id => !props.models.some(model => model.id === id)));
+    const candidateIds = Vue.computed(() => followingDefault.value ? inheritedCandidates.value : selected.value);
     const invalid = Vue.computed(() => !followingDefault.value && (!selected.value.length || selected.value.length > 8 || unavailable.value.length > 0));
+    const defaultChoices = Vue.computed(() => props.models.filter(model => candidateIds.value.includes(model.id)));
+    const invalidDefault = Vue.computed(() => !!preferredDefault.value && !defaultChoices.value.some(model => model.id === preferredDefault.value));
+    const automaticDefault = Vue.computed(() => props.defaultModelSupported
+      ? defaultChoices.value.find(model => model.id === props.agentDefaultModel)?.id || defaultChoices.value[0]?.id || '—' : '—');
+    const displayedDefault = Vue.computed(() => preferredDefault.value || automaticDefault.value);
     const controlsDisabled = Vue.computed(() => props.saving || props.disabled || props.loading);
-    const cannotSave = Vue.computed(() => controlsDisabled.value || invalidName.value || (edited.value && invalid.value));
+    const cannotSave = Vue.computed(() => controlsDisabled.value || invalidName.value ||
+      ((edited.value || defaultEdited.value) && (invalid.value || invalidDefault.value)));
 
     function focusableControls() {
-      return [...(dialog.value?.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex="0"]') || [])];
+      return [...(dialog.value?.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]') || [])];
     }
     function keepFocusInside() {
       const active = document.activeElement;
@@ -54,6 +73,7 @@ export default {
         const update = {};
         if (props.renameSupported && personName.value.trim() !== props.name) update.name = personName.value.trim();
         if (edited.value) update.modelCandidates = followingDefault.value ? [] : [...selected.value];
+        if (props.defaultModelSupported && defaultEdited.value) update.defaultModel = preferredDefault.value || null;
         emit('save', update);
       }
     }
@@ -97,14 +117,16 @@ export default {
     // An initial/reconnect snapshot may arrive after the dialog opens. Do not
     // overwrite a user's in-progress selection with that snapshot.
     Vue.watch(() => props.name, name => { if (!nameEdited.value) personName.value = name; });
-    Vue.watch(() => props.candidates, candidates => {
+    Vue.watch([() => props.candidates, inheritedCandidates], ([candidates]) => {
       if (edited.value) return;
-      selected.value = [...candidates];
+      selected.value = candidates.length ? [...candidates] : [...inheritedCandidates.value];
       followingDefault.value = !candidates.length;
     }, { deep: true });
+    Vue.watch(() => props.defaultModel, model => { if (!defaultEdited.value) preferredDefault.value = model || ''; });
 
     return {
       personName, nameEdited, invalidName, selected, dialog, followingDefault, edited, invalid, unavailable, controlsDisabled, cannotSave,
+      candidateIds, inheritedKnown, preferredDefault, defaultEdited, defaultChoices, invalidDefault, automaticDefault, displayedDefault,
       requestClose, save, onOverlayClick, trackOverlayPointerDown, trackOverlayPointerUp, clearOverlayPointerGesture,
     };
   },
@@ -140,9 +162,13 @@ export default {
               <div v-if="models.length || unavailable.length" class="person-model-list" role="group"
                 aria-labelledby="person-model-heading" aria-describedby="person-model-hint">
                 <label v-for="model in models" :key="model.id" class="person-model-option"
-                  :class="{ 'is-selected': !followingDefault && selected.includes(model.id) }">
-                  <input type="checkbox" v-model="selected" :value="model.id" :disabled="followingDefault || controlsDisabled">
-                  <span class="person-model-name">{{ model.id }}</span>
+                  :class="{ 'is-selected': candidateIds.includes(model.id) }">
+                  <input type="checkbox" :checked="candidateIds.includes(model.id)" :value="model.id" :aria-label="model.id"
+                    @change="selected = $event.target.checked ? [...selected, model.id] : selected.filter(id => id !== model.id)"
+                    :disabled="followingDefault || controlsDisabled">
+                  <span class="person-model-description"><span class="person-model-name">{{ model.id }}</span>
+                    <span v-if="model.id === displayedDefault && candidateIds.includes(model.id)" class="person-model-role">{{ $t('person.defaultModel') }}</span>
+                  </span>
                 </label>
                 <label v-for="id in unavailable" :key="id" class="person-model-option person-model-unavailable">
                   <input type="checkbox" v-model="selected" :value="id" :disabled="followingDefault || controlsDisabled">
@@ -150,7 +176,22 @@ export default {
                 </label>
               </div>
               <p v-if="invalid" role="alert" class="person-settings-error">{{ $t('person.modelsInvalid') }}</p>
+              <p class="person-settings-help person-model-summary">{{ $t(followingDefault && !inheritedKnown ? 'person.candidatesUnknown' : 'person.candidatesSummary', { count: candidateIds.length }) }}</p>
             </template>
+          </div>
+          <div class="person-default-model-field">
+            <label for="person-default-model">{{ $t('person.defaultModel') }}</label>
+            <p v-if="agentDefaultModel" class="person-settings-help">{{ $t('person.agentDefaultModel', { model: agentDefaultModel }) }}</p>
+            <select id="person-default-model" v-model="preferredDefault" @change="defaultEdited = true"
+              :disabled="controlsDisabled || !defaultModelSupported"
+              :aria-invalid="invalidDefault" aria-describedby="person-default-model-hint">
+              <option value="">{{ $t('person.defaultModelAutomatic', { model: automaticDefault }) }}</option>
+              <option v-for="model in defaultChoices" :key="model.id" :value="model.id">{{ model.id }}</option>
+              <option v-if="invalidDefault" :value="preferredDefault" disabled>{{ preferredDefault }}</option>
+            </select>
+            <p id="person-default-model-hint" class="person-settings-help">{{ $t('person.defaultModelHint') }}</p>
+            <p v-if="!defaultModelSupported" class="person-settings-help" role="status">{{ $t('person.defaultModelUpgrade') }}</p>
+            <p v-if="invalidDefault" class="person-settings-error" role="alert">{{ $t('person.defaultModelInvalid') }}</p>
           </div>
           <p v-if="error" role="alert" class="person-settings-error">{{ $t('person.requestFailed') }} {{ error.message }}</p>
           <p class="person-settings-help person-settings-scope">{{ $t('person.modelsScope') }}</p>

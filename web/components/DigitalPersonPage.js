@@ -433,7 +433,7 @@ export default {
           <PersonDebugLog v-if="panel === 'debug'" :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
         </aside>
       </div>
-      <PersonSettingsModal v-if="settingsOpen" :name="state.person?.name || ''" :rename-supported="state.renameSupported" :models="state.models" :candidates="state.modelCandidates" :saving="state.settingsPending" :loading="state.loading" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
+      <PersonSettingsModal v-if="settingsOpen" :name="state.person?.name || ''" :rename-supported="state.renameSupported" :models="state.models" :candidates="state.modelCandidates" :effective-candidates="state.effectiveModelCandidates" :default-model="state.defaultModel" :agent-default-model="state.agentDefaultModel" :effective-default-model="state.effectiveDefaultModel" :default-model-supported="state.defaultModelSupported" :saving="state.settingsPending" :loading="state.loading" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />
     </div>
   `,
 };

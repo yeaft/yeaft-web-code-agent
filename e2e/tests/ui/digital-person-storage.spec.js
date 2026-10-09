@@ -72,6 +72,9 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     // Name-only patch must reach the real service and persist without editing candidates.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     let rename = page.getByRole('dialog');
+    await expect(rename.locator('.person-model-list input:checked')).toHaveCount(2);
+    await expect(rename.locator('.person-default-model-field')).toContainText('Agent default: test/first');
+    await expect(rename.getByLabel('Default starting model', { exact: true })).toHaveValue('');
     await rename.getByLabel('Name', { exact: true }).fill('知微');
     await rename.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(rename).toHaveCount(0);
@@ -131,6 +134,8 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     await dialog.getByLabel('Name', { exact: true }).fill('Mira');
     await dialog.getByLabel('Follow Agent model defaults').uncheck();
     await dialog.getByLabel('test/second', { exact: true }).check();
+    await expect(dialog.getByLabel('test/first', { exact: true })).toBeChecked();
+    await dialog.getByLabel('Default starting model', { exact: true }).selectOption('test/second');
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.locator('.person-identity h1')).toHaveText('Mira');
@@ -177,8 +182,17 @@ for (const storage of ['sqlite', 'mongodb']) test(`Person ${storage} three capab
     expect(calls).toBe(14); // Browsing persisted data never invokes inference or scripts.
     await page.locator('.person-panel-header .header-action-btn').click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await expect(page.getByRole('dialog').getByLabel('test/second', { exact: true })).toBeChecked();
+    const reopened = page.getByRole('dialog');
+    await expect(reopened.getByLabel('test/first', { exact: true })).toBeChecked();
+    await expect(reopened.getByLabel('test/second', { exact: true })).toBeChecked();
+    await expect(reopened.getByLabel('Default starting model', { exact: true })).toHaveValue('test/second');
     expect(calls).toBe(14);
+    await reopened.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.locator('#person-input').fill('Use the saved starting model after restart.');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect.poll(() => calls).toBe(16);
+    await expect(page.locator('#person-input')).toBeEnabled();
+    expect(requestedModels.slice(-2)).toEqual(['test/second', 'test/second']);
   } finally {
     mockAgent._messageHandlers = mockAgent._messageHandlers.filter(h => h !== listener);
     await bridge.close();

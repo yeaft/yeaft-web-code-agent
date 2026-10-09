@@ -1,4 +1,4 @@
-# Digital Person：附件与候选模型后端契约
+# Digital Person：附件、候选与默认模型后端契约
 
 ## 按 Agent 的 UI 开关
 
@@ -85,19 +85,23 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 ## Owner-scoped 候选模型
 
 ```json
-{ "op": "settings", "payload": { "modelCandidates": ["provider/model"] } }
+{ "op": "settings", "payload": { "modelCandidates": ["provider/model-a", "provider/model-b"], "defaultModel": "provider/model-b" } }
 ```
 
-- `[]` 重置为 Agent 的默认允许候选集（默认模型优先、最多前 8 个），不更改实例全局配置。显式列表只能有 **1–8 个**模型，超过 8 个直接拒绝，不静默截断。
+- `modelCandidates:[]` 重置为 Agent 的默认允许候选集（默认模型优先、最多前 8 个），不更改实例全局配置。显式列表只能有 **1–8 个**模型，超过 8 个直接拒绝，不静默截断。
 - 只允许可选 native catalog 中的 provider-qualified refs，拒绝未知、重复、非字符串和 bare IDs；原有部署级 `allowedModels` 是更外层限制。
 - 状态返回 `models:[{id,efforts,maxOutput,contextWindow,supportsImages,imageBudget}]`、同内容的 `availableModels` 与持久化 `modelCandidates:[...]`；浏览器可读 `availableModels ?? models`。可选目录与 episode 候选集分离，前者最多 **100 个**允许且可用的已配置模型，超过时 `availableModelsTruncated:true`，不含 endpoint/key 等秘密；第 9–100 个模型也可显式选中。后者始终最多 8 个，只有该子集进入模型上下文。
-- settings 写入既有 Person owner settings。busy 时禁止更改；episode admission 保存列表副本与 controlVersion，runtime 只使用该副本与本次 provider 配置快照。调用中的模型选择和后继 proposal 都不能逃离这个子集。
+- `defaultModel` 是 provider-qualified ref，`null` 表示自动；省略字段保留之前的值。显式默认必须属于当前**有效的最多 8 个候选**且满足配置、部署 allowlist 与安全上下文预算；继承 `[]` 时也只能从隐式前 8 个中选择默认，不因设置默认而扩大候选。第 9–100 个模型要先通过显式候选纳入。无效类型、bare ID、不可用或不属于候选的默认返回 `MODEL_SELECTION`。
+- settings 写入既有 Person owner settings，SQLite 重启保留，Mongo 同样持久化。busy 时禁止更改；修改任一模型字段按**已有设置与 patch 合并后的值**验证，不能通过分别修改绕过成员关系。删掉显式默认对应的候选会拒绝；要重置，客户端同时发送 `defaultModel:null`（如 `{modelCandidates:[],defaultModel:null}`）。全自动重置在没有可用模型时仍允许。跨服务并发更新由 `controlVersion` fence 拒绝过期合并（`STALE`），重新读取后再提交。
+- episode admission 在同一数据库事务中保存候选列表副本、`defaultModel` 与 controlVersion，SQLite/Mongo 相同；runtime 使用该副本与本次 provider 配置快照。显式默认优先于上次 `lastSelection`，作为首次调用的 bootstrap；自动 `null` 保留旧行为：可用的上次选择优先，否则 Agent 默认／首个候选。后续 proposal 仍可在候选内选择；图片输入保留既有图片候选回退策略。调用中的模型选择和后继 proposal 都不能逃离这个子集。
+- status 所有返回路径都带 `defaultModelSupported:true`；`defaultModel` 为保存的 ref 或 `null`，`agentDefaultModel` 为实例所配置默认经 router 所有权解析的 ref（没有可解析默认时为 `null`，即使它不在 owner 子集中也不替换此字段）。`effectiveModelCandidates` 是本次实际有界 catalog 的 ID 数组，而非完整 `availableModels`；`effectiveDefaultModel` 是显式默认或 Agent 默认／首候选的 ref，不是上次选择的投影。无法构造有效 catalog 时为 `[]`／`null`、`modelReady:false`，保存值与完整恢复目录仍保留。
+- 未保存过 `defaultModel` 的旧 Person 与 episode 按自动处理，不做数据库、实例 config 或 Session 数据迁移。status/settings 不调用模型；公开设置和 trace 只增加这个 ref，不暴露 provider 凭据。
 - 已保存候选从 Agent catalog 移除后，status 返回 `modelReady:false`，仍返回完整可选目录供恢复；episode 明确失败，不自动扩权使用其他模型。仍可重选或用 `[]` 重置。
 - 图片能力仅对上表具有已审核预算的模型/协议开放；原生 model/provider `supportsImages:false` 仍可显式关闭，`true` 不能为未知计费模型扩权。协议按实际 router 的 model override → provider override → ID 推断决定，managed provider 先使用相同的规范化。需要图片时，只能在 owner 子集中选择图片候选；没有则 `IMAGE_MODEL`，不把图片默默丢掉。
 
 ## 名字与等待态兼容
 
-`settings` 接受可选 `name`，trim 后须非空且不超过 **160 UTF-8 bytes**。只改名字不需要模型可用，不启动思考，不改 Person 身份、历史、状态或未提供的持久设置；设置响应与 trace 仍只投影公开字段。
+`settings` 接受可选 `name`，trim 后须非空且不超过 **160 UTF-8 bytes**。只改名字不需要模型可用，即使已有候选／默认已失效也原样保留，不重新验证模型设置，不启动思考，不改 Person 身份、历史、状态或未提供的持久设置；设置响应与 trace 仍只投影公开字段。
 
 `status.renameSupported:true` 表示 Agent 支持修改名字。浏览器将缺失此字段的旧 Agent 视为不支持，禁用名字输入并提示升级，其他模型配置仍可操作。旧 Agent（如 `1.0.596`）不接受 `name` 字段，不能仅升级 Web 后直接调用重命名。Agent 升级／重启属于单独的运行操作。
 
