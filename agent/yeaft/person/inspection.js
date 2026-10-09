@@ -18,7 +18,7 @@ export function personName(value) {
   return text(value.trim(), 160);
 }
 const pick = (value, keys) => value == null ? null : Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
-export const settingsView = value => pick(value, ['autonomyEnabled', 'modelCandidates']);
+export const settingsView = value => pick(value, ['autonomyEnabled', 'modelCandidates', 'defaultModel']);
 export function messageView(value) {
   const result = pick(value, ['id', 'schemaVersion', 'revision', 'seq', 'episodeId', 'clientMessageId', 'role', 'text', 'createdAt']);
   if (result && Array.isArray(value.attachments)) result.attachments = value.attachments.slice(0, 4)

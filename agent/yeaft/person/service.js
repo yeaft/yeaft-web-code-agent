@@ -6,7 +6,7 @@ import { PersonRuntime } from './runtime.js';
 import { allowedNativeToolIds } from './native-tools.js';
 import { loadConfig } from '../config.js';
 import { validateFiles } from './attachments.js';
-import { createPersonProvider, validateModelCandidates } from './provider.js';
+import { createPersonProvider, resolveAgentDefaultModel, selectPersonModels, validateDefaultModel, validateModelCandidates } from './provider.js';
 import { fail, identifier, LIMITS, object, page, safeError, text } from './contracts.js';
 import { inspectRequest, personName, searchRequest } from './inspection.js';
 
@@ -46,7 +46,7 @@ export function createPersonService(options = {}) {
   if (memory) repository.recall = (ownerId, args = {}, { signal } = {}) => args.query?.trim()
     ? memory.recall(ownerId, args, { signal }) : literalRecall(ownerId, args);
   // Config/adapter are loaded per explicit episode, not a permanent stale cache.
-  const getProvider = (modelCandidates = []) => createPersonProvider({ yeaftDir, config, adapter, allowedModels, modelCandidates, effortEnabled: options.effortEnabled });
+  const getProvider = (modelCandidates = [], defaultModel = null) => createPersonProvider({ yeaftDir, config, adapter, allowedModels, modelCandidates, defaultModel, effortEnabled: options.effortEnabled });
   const runtime = new PersonRuntime({ repository, getProvider, budget: { calls, timeoutMs }, workDir, yeaftDir, config, namespace });
   let closed = false;
   const requests = new Set();
@@ -56,23 +56,32 @@ export function createPersonService(options = {}) {
     if (typeof op !== 'string') fail('INVALID_REQUEST');
     if (op === 'status') {
       object(payload, []);
-      if (!configured) return { renameSupported: true, configured: false, storage, reason: 'Digital person storage configuration is missing.', storageReady: false, modelReady: false };
+      let agentDefaultModel = null;
+      try { agentDefaultModel = resolveAgentDefaultModel(config ?? loadConfig({ dir: yeaftDir })); } catch { /* Invalid/missing native config. */ }
+      const status = { renameSupported: true, defaultModelSupported: true, configured, storage, modelReady: false,
+        defaultModel: null, agentDefaultModel, modelCandidates: [], effectiveModelCandidates: [], effectiveDefaultModel: null };
+      if (!configured) return { ...status, reason: 'Digital person storage configuration is missing.', storageReady: false };
       try { await repository.init(); }
-      catch (error) { return { renameSupported: true, configured: true, storage, reason: safeError(error).message, storageReady: false, modelReady: false }; }
-      let modelCandidates = [];
-      try { modelCandidates = (await repository.getPerson(ownerId)).settings.modelCandidates ?? []; }
-      catch (error) { if (error.code !== 'NOT_OPEN') throw error; }
+      catch (error) { return { ...status, reason: safeError(error).message, storageReady: false }; }
+      try {
+        const settings = (await repository.getPerson(ownerId)).settings;
+        status.modelCandidates = settings.modelCandidates ?? [];
+        status.defaultModel = settings.defaultModel ?? null;
+      } catch (error) { if (error.code !== 'NOT_OPEN') throw error; }
       try {
         const provider = await getProvider();
-        let modelReady = true;
         try {
-          validateModelCandidates(modelCandidates);
-          if (modelCandidates.some(ref => !provider.availableModels.some(model => model.id === ref))) modelReady = false;
-        } catch { modelReady = false; }
-        return { renameSupported: true, configured: true, storage, reason: modelReady ? null : 'Saved model candidates are unavailable; choose models or reset to Agent defaults.',
-          storageReady: true, modelReady, models: provider.availableModels, availableModels: provider.availableModels,
-          availableModelsTruncated: provider.availableModelsTruncated, modelCandidates, autonomySupported: false };
-      } catch { return { renameSupported: true, configured: true, storage, reason: 'No permitted native model is configured for digital person.', storageReady: true, modelReady: false, models: [], availableModels: [], modelCandidates }; }
+          const selected = selectPersonModels({ availableModels: provider.availableModels,
+            modelCandidates: status.modelCandidates, defaultModel: status.defaultModel });
+          status.modelReady = true;
+          status.effectiveModelCandidates = selected.catalog.map(model => model.id);
+          status.effectiveDefaultModel = selected.defaultSelection.model;
+        } catch { /* Stale settings remain visible, but do not grant fallback candidates. */ }
+        return { ...status, agentDefaultModel: provider.agentDefaultModel,
+          reason: status.modelReady ? null : 'Saved model settings are unavailable; choose models or reset to Agent defaults.',
+          storageReady: true, models: provider.availableModels, availableModels: provider.availableModels,
+          availableModelsTruncated: provider.availableModelsTruncated, autonomySupported: false };
+      } catch { return { ...status, reason: 'No permitted native model is configured for digital person.', storageReady: true, models: [], availableModels: [] }; }
     }
     if (!configured) fail('NOT_CONFIGURED');
     switch (op) {
@@ -133,21 +142,30 @@ export function createPersonService(options = {}) {
         } finally { release(); }
       }
       case 'settings': {
-        object(payload, ['name', 'autonomyEnabled', 'modelCandidates'], []);
+        object(payload, ['name', 'autonomyEnabled', 'modelCandidates', 'defaultModel'], []);
         const patch = { ...payload };
         if (Object.hasOwn(patch, 'name')) patch.name = personName(patch.name);
         if (Object.hasOwn(payload, 'autonomyEnabled') && typeof payload.autonomyEnabled !== 'boolean') fail('INVALID_REQUEST');
-        if (Object.hasOwn(payload, 'modelCandidates')) {
-          const refs = payload.modelCandidates;
-          validateModelCandidates(refs);
-          if (refs.length) {
-            const provider = await getProvider();
-            if (refs.some(ref => !provider.availableModels.some(model => model.id === ref))) fail('MODEL_SELECTION');
-          }
-        }
+        if (Object.hasOwn(payload, 'modelCandidates')) validateModelCandidates(payload.modelCandidates);
+        if (Object.hasOwn(payload, 'defaultModel')) validateDefaultModel(payload.defaultModel);
         // Timer-driven autonomy is deliberately not claimed or silently enabled.
         if (payload.autonomyEnabled === true) fail('UNSUPPORTED');
-        return repository.settings(ownerId, patch);
+        let expectedControlVersion;
+        if (Object.hasOwn(payload, 'modelCandidates') || Object.hasOwn(payload, 'defaultModel')) {
+          const prior = await repository.getPerson(ownerId);
+          if (prior.activeEpisodeId) fail('BUSY');
+          const merged = { modelCandidates: [], defaultModel: null, ...prior.settings, ...patch };
+          validateModelCandidates(merged.modelCandidates);
+          validateDefaultModel(merged.defaultModel);
+          // An automatic reset must also work when no model is currently available.
+          if (merged.modelCandidates.length || merged.defaultModel !== null) {
+            const provider = await getProvider();
+            selectPersonModels({ availableModels: provider.availableModels, modelCandidates: merged.modelCandidates, defaultModel: merged.defaultModel });
+          }
+          // Fence the merge base across concurrent services; retry from fresh settings.
+          expectedControlVersion = prior.controlVersion;
+        }
+        return repository.settings(ownerId, patch, expectedControlVersion);
       }
       default: fail('INVALID_REQUEST');
     }

@@ -80,7 +80,7 @@ suite('Person real MongoDB replica-set integration', () => {
     const service = create('roundtrip', adapter);
     const opened = await call(service, 'open');
     expect((await call(service, 'open')).person.id).toBe(opened.person.id);
-    expect((await call(service, 'snapshot')).person.settings).toEqual({ autonomyEnabled: false });
+    expect((await call(service, 'snapshot')).person.settings).toEqual({ autonomyEnabled: false, defaultModel: null });
     const accepted = await call(service, 'send', { text: 'I am learning to garden.', clientMessageId: 'message-1' });
     expect(accepted.episodeId).toBeTruthy();
     const duplicate = await call(service, 'send', { text: 'I am learning to garden.', clientMessageId: 'message-1' });
@@ -267,8 +267,8 @@ suite('Person real MongoDB replica-set integration', () => {
     }));
     await call(service, 'open');
     expect((await call(service, 'status')).configured).toBe(true);
-    expect(await call(service, 'settings', { autonomyEnabled: false })).toEqual({ settings: { autonomyEnabled: false },
-      person: expect.objectContaining({ name: 'Digital Person', settings: { autonomyEnabled: false } }) });
+    expect(await call(service, 'settings', { autonomyEnabled: false })).toEqual({ settings: { autonomyEnabled: false, defaultModel: null },
+      person: expect.objectContaining({ name: 'Digital Person', settings: { autonomyEnabled: false, defaultModel: null } }) });
     await expect(call(service, 'settings', { autonomyEnabled: true })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
     await expect(call(service, 'settings', { autonomyEnabled: 'false' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -280,7 +280,7 @@ suite('Person real MongoDB replica-set integration', () => {
     await call(service, 'dream', { clientMessageId: 'dream' });
     const snapshot = await waitIdle(service);
     expect(snapshot.state.version).toBe(2); expect(snapshot.concepts[0].epistemicState).toBe('imagined');
-    expect(snapshot.person.settings).toEqual({ autonomyEnabled: false });
+    expect(snapshot.person.settings).toEqual({ autonomyEnabled: false, defaultModel: null });
     expect(snapshot.messages).toEqual([]);
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(count).toBe(2);

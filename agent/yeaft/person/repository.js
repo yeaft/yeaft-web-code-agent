@@ -109,7 +109,7 @@ export class MongoPersonRepository {
         if (!p) {
           p = this.doc(scope, {
             name, soul: 'A continuous, curious and honest digital person. Preserve uncertainty, reconsider your judgments, distinguish imagination from experience, and respect permissions. You may disagree without acting without authority.',
-            soulRevision: 1, createdAt: new Date(), settings: { autonomyEnabled: false },
+            soulRevision: 1, createdAt: new Date(), settings: { autonomyEnabled: false, defaultModel: null },
             epoch: 0, writeSerial: 0, inputWatermark: 0, controlVersion: 0, stateVersion: 0,
             traceSeq: 0, messageSeq: 0, activeEpisodeId: null, leaseOwner: null, leaseUntil: new Date(0),
           });
@@ -198,7 +198,7 @@ export class MongoPersonRepository {
         messageId = randomUUID();
         await this.collections.messages.insertOne(this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, role: 'user', text, attachments, createdAt: new Date(), clientMessageId }), { session });
       }
-      const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], status: 'running', workerId, epoch: p.epoch,
+      const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], defaultModel: p.settings.defaultModel ?? null, status: 'running', workerId, epoch: p.epoch,
         baseStateVersion: p.stateVersion, inputWatermark: p.inputWatermark, controlVersion: p.controlVersion, budget, createdAt: new Date() });
       await this.collections.episodes.insertOne(episode, { session });
       await this.trace(session, p, id, 'accepted', { trigger: { kind, text, messageId, attachments }, baseStateVersion: p.stateVersion, budget });
@@ -455,12 +455,13 @@ export class MongoPersonRepository {
       return { cancelled: true, episodeId: p.activeEpisodeId };
     });
   }
-  async settings(ownerId, settings) {
+  async settings(ownerId, settings, expectedControlVersion) {
     return this.transaction(async session => {
       const scope = this.scope(ownerId);
       const p = await this.collections.persons.findOne(scope, { session });
       if (!p) fail('NOT_OPEN');
       if (p.activeEpisodeId) fail('BUSY'); // No implicit background API or deferred control effects.
+      if (expectedControlVersion !== undefined && p.controlVersion !== expectedControlVersion) fail('STALE');
       const { name, ...patch } = settings;
       if (Object.hasOwn(settings, 'name')) p.name = personName(name);
       // A partial update must preserve durable fields omitted from the public view.

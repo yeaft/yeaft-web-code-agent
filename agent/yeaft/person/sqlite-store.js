@@ -151,7 +151,7 @@ export class SqlitePersonStore {
     if (!p) {
       p = this.doc(scope, {
         name, soul: 'A continuous, curious and honest digital person. Preserve uncertainty, reconsider your judgments, distinguish imagination from experience, and respect permissions. You may disagree without acting without authority.',
-        soulRevision: 1, createdAt: this.now, settings: { autonomyEnabled: false },
+        soulRevision: 1, createdAt: this.now, settings: { autonomyEnabled: false, defaultModel: null },
         epoch: 0, writeSerial: 0, inputWatermark: 0, controlVersion: 0, stateVersion: 0,
         traceSeq: 0, messageSeq: 0, activeEpisodeId: null, leaseOwner: null, leaseUntil: new Date(0),
       });
@@ -223,7 +223,7 @@ export class SqlitePersonStore {
       const message = this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, role: 'user', text: input, attachments, createdAt: this.now, clientMessageId });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
     }
-    const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text: input, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], status: 'running', workerId, epoch: p.epoch,
+    const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text: input, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], defaultModel: p.settings.defaultModel ?? null, status: 'running', workerId, epoch: p.epoch,
       baseStateVersion: p.stateVersion, inputWatermark: p.inputWatermark, controlVersion: p.controlVersion, budget, createdAt: this.now });
     this.put('episodes', episode, true);
     this.trace(ownerId, id, 'accepted', { trigger: { kind, text: input, messageId, attachments }, baseStateVersion: p.stateVersion, budget });
@@ -419,9 +419,10 @@ export class SqlitePersonStore {
     this.trace(ownerId, id, 'cancelled', { code: 'CANCELLED' });
     return { cancelled: true, episodeId: id };
   }
-  settings(ownerId, settings) {
+  settings(ownerId, settings, expectedControlVersion) {
     const p = this.getPerson(ownerId);
     if (p.activeEpisodeId) fail('BUSY');
+    if (expectedControlVersion !== undefined && p.controlVersion !== expectedControlVersion) fail('STALE');
     const { name, ...patch } = settings;
     if (Object.hasOwn(settings, 'name')) p.name = personName(name);
     // A partial update must preserve durable fields omitted from the public view.

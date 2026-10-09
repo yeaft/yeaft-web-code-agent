@@ -103,7 +103,7 @@ export class SqlitePersonRepository {
   async commit(episode, proposal, selection, callId, reportedSources = new Map()) { return this.request('commit', [episode, proposal, selection, callId, reportedSources]); }
   async finish(episode, status, code) { return this.request('finish', [episode, status, code]); }
   async cancel(ownerId, episodeId) { return this.request('cancel', [ownerId, episodeId]); }
-  async settings(ownerId, settings) { return this.request('settings', [ownerId, settings]); }
+  async settings(ownerId, settings, expectedControlVersion) { return this.request('settings', [ownerId, settings, expectedControlVersion]); }
   async list(ownerId, collection, options, filter) { return this.request('list', [ownerId, collection, options, filter]); }
   async snapshot(ownerId) { return this.request('snapshot', [ownerId]); }
   async inspect(ownerId, options, nativeToolIds) { return this.request('inspect', [ownerId, options, nativeToolIds]); }
