@@ -37,6 +37,23 @@ export function personActivityRecords(traces) {
     })).sort((a, b) => a.seq - b.seq).slice(-50);
 }
 
+/** Backend-confirmed wait status only; no clock, inferred progress or raw capability details. */
+export function projectPersonFeedback(state, gate = '') {
+  const episode = state.latestEpisode;
+  if (!state.busy || state.commandPending || state.cancelPending || state.loading || state.retryCommand
+    || episode?.status !== 'running' || episode.id !== state.episodeId
+    || state.feedbackSuppressedEpisodeId === episode.id || !projectPersonActivity(state, gate).loading) return null;
+  const at = timestamp(episode.feedback?.at);
+  const createdAt = timestamp(episode.createdAt);
+  const phase = episode.feedback?.phase;
+  if (at == null || createdAt == null || at < createdAt || !['model', 'capability', 'preparing'].includes(phase)) return null;
+  // Snapshot status is replaced, never appended to the transcript. A newer
+  // substantive reply supersedes it even if an older snapshot retained it.
+  if ((state.messages || []).some(message => message.role === 'assistant' && message.episodeId === episode.id
+    && typeof message.text === 'string' && message.text.trim() && timestamp(message.createdAt) >= at)) return null;
+  return { at: new Date(at).toISOString(), label: `person.feedback.${phase}` };
+}
+
 /** Input belongs to one controller owner/Agent generation. Only latest-tail
  * activityRecords are consumed: paged diagnostic history is not live progress.
  */

@@ -11,7 +11,7 @@ import { PERSON_FILE_ACCEPT, validatePersonFiles, uploadPersonFiles } from '../s
 import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
 import PersonActivity from './PersonActivity.js';
-import { projectPersonActivity } from '../utils/person-activity.js';
+import { projectPersonActivity, projectPersonFeedback } from '../utils/person-activity.js';
 import { useAuthStore } from '../stores/auth.js';
 import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
 import { createPersonController, digitalPersonGate, personState } from '../stores/helpers/digital-person.js';
@@ -105,6 +105,7 @@ export default {
     Vue.onUpdated(keepPanelFocus);
     const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
     const activity = Vue.computed(() => projectPersonActivity(state, gate.value));
+    const feedback = Vue.computed(() => projectPersonFeedback(state, gate.value));
     const responding = Vue.computed(() => !gate.value && (state.busy || state.commandPending));
     const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.settingsPending && !state.retryCommand);
     const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.uploadError) ? 'person.filesFailed' : ''));
@@ -270,7 +271,7 @@ export default {
         });
       });
     }
-    Vue.watch(() => [state.messages.map(message => [message.id, message.text, message.episodeId]), activity.value.loading], () => {
+    Vue.watch(() => [state.messages.map(message => [message.id, message.text, message.episodeId]), activity.value.loading, feedback.value?.at, feedback.value?.label], () => {
       // Compensate removed loading space in the same DOM update, before the
       // browser paints a clamped scroll position for a completed short reply.
       reconcileResponseLayout();
@@ -301,7 +302,7 @@ export default {
     }
     const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, responding, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -358,12 +359,16 @@ export default {
                   <ul v-if="message.attachments?.length" class="person-sent-files" :aria-label="$t('person.attachedFiles')"><li v-for="(file, index) in message.attachments" :key="file.id || index">{{ file.name }}</li></ul>
                 </div>
                 <article v-else class="person-message" :data-message-id="message.id">
-                  <header class="person-message-meta"><strong>{{ message.role === 'assistant' ? (state.person?.name || $t('person.title')) : $t('person.system') }}</strong><time>{{ time(message.createdAt) }}</time></header>
+                  <header class="person-message-meta"><strong>{{ message.role === 'assistant' ? (state.person?.name || $t('person.title')) : $t('person.system') }}</strong><span v-if="message.role === 'assistant' && message.replyKind === 'progress'" class="person-reply-kind">{{ $t('person.progressReply') }}</span><time>{{ time(message.createdAt) }}</time></header>
                   <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
                 </article>
               </template>
               <div v-if="hasResponseFocus && !focusedResponseId" ref="responseStart" class="person-response-start" aria-hidden="true"></div>
-              <div v-if="activity.loading" class="person-response-loading" role="status" :aria-label="$t('sidebar.sessions.processing')">
+              <div v-if="activity.loading" class="person-response-loading" role="status" aria-live="polite" aria-atomic="true" :aria-label="$t('sidebar.sessions.processing')">
+                <div v-if="feedback" class="person-wait-feedback">
+                  <span>{{ $t(feedback.label) }}</span>
+                  <time :datetime="feedback.at">{{ $t('person.feedback.confirmedAt', { time: time(feedback.at) }) }}</time>
+                </div>
                 <span class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></span>
               </div>
               <div v-if="hasResponseFocus" ref="responseTail" class="person-response-tail" aria-hidden="true"></div>
@@ -416,7 +421,7 @@ export default {
               <p v-if="state.search.loading" role="status" class="person-muted">{{ $t('person.loading') }}</p>
               <p v-else-if="state.search.loaded && !state.search.items.length" class="person-empty">{{ $t('person.noSearchResults') }}</p>
               <article v-for="message in state.search.items" :key="message.id" class="person-search-result">
-                <header class="person-message-meta"><strong>{{ message.role === 'user' ? $t('person.you') : (state.person?.name || $t('person.title')) }}</strong><time>{{ time(message.createdAt) }}</time></header>
+                <header class="person-message-meta"><strong>{{ message.role === 'user' ? $t('person.you') : (state.person?.name || $t('person.title')) }}</strong><span v-if="message.role === 'assistant' && message.replyKind === 'progress'" class="person-reply-kind">{{ $t('person.progressReply') }}</span><time>{{ time(message.createdAt) }}</time></header>
                 <p class="person-prose">{{ message.text }}</p>
               </article>
               <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>

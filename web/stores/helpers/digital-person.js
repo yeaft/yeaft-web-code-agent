@@ -44,7 +44,7 @@ export function personState() {
     messages: [], traces: [], busy: false, episodeId: null, error: null,
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
     commandPending: false, commandEpisodeId: null, cancelPending: false, retryCommand: null, tracesStale: false,
-    activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false,
+    activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false, feedbackSuppressedEpisodeId: null,
     models: [], modelCandidates: [], effectiveModelCandidates: [], defaultModel: null,
     agentDefaultModel: null, effectiveDefaultModel: null, defaultModelSupported: false,
     settingsPending: false, renameSupported: false,
@@ -145,6 +145,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       activityRecords: state.activityRecords, activityEpisodeId: state.episodeId || state.activityEpisodeId,
       latestEpisode: state.latestEpisode, busy: state.busy, activityStale: true, progressStale: true,
     } : {};
+    const feedbackSuppressedEpisodeId = nextAgentId === agentId && activeScope === scope() ? state.feedbackSuppressedEpisodeId : null;
     generation += 1;
     clearTimeout(poll);
     clearTimeout(taskPoll);
@@ -169,7 +170,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     activityRequest += 1;
     traceRefreshVersion = 0;
     queuedTraceRefresh = null;
-    Object.assign(state, personState(), progress, { retryCommand: outbox().get(agentId) || null });
+    Object.assign(state, personState(), progress, { feedbackSuppressedEpisodeId, retryCommand: outbox().get(agentId) || null });
   }
 
   async function snapshot() {
@@ -188,6 +189,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.defaultModel = data.person?.settings?.defaultModel ?? null;
     state.state = data.state;
     state.latestEpisode = data.latestEpisode || null;
+    if (state.latestEpisode && !['accepted', 'running'].includes(state.latestEpisode.status)) state.feedbackSuppressedEpisodeId = state.latestEpisode.id;
     const incoming = data.messages || [];
     const lastSeq = state.messages.at(-1)?.seq;
     const firstSeq = incoming[0]?.seq;
@@ -628,6 +630,9 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     if (state.cancelPending || !state.busy || !state.episodeId) return;
     const episodeId = state.episodeId;
     const g = generation;
+    // A cancellation request makes the last running status unreliable, even
+    // if acknowledgement is lost or a reconnect sees an older running snapshot.
+    state.feedbackSuppressedEpisodeId = episodeId;
     state.cancelPending = true;
     try {
       await request('cancel', { episodeId });

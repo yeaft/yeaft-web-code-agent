@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptPersonResponse, createPersonController, digitalPersonGate, personState } from '../../web/stores/helpers/digital-person.js';
-import { personActivityRecords, projectPersonActivity } from '../../web/utils/person-activity.js';
+import { personActivityRecords, projectPersonActivity, projectPersonFeedback } from '../../web/utils/person-activity.js';
 
 const controllers = [];
 afterEach(() => { controllers.splice(0).forEach(c => c.dispose()); vi.useRealTimers(); });
@@ -987,5 +987,68 @@ describe('Digital Person durable turn usage reads', () => {
       expect(f.state.turns.items).toEqual([]);
       f.auto(r => r.op === 'turns' ? false : undefined);
     }
+  });
+});
+
+
+describe('Person snapshot waiting feedback', () => {
+  const waiting = (extra = {}) => ({ ...personState(), busy: true, episodeId: 'e', latestEpisode: {
+    id: 'e', status: 'running', createdAt: 1000, feedback: { at: 61000, phase: 'model', capabilityId: 'PRIVATE_CAPABILITY' },
+  }, ...extra });
+
+  it('requires an authoritative running snapshot and valid timestamped phase, without a local clock', () => {
+    expect(projectPersonFeedback(waiting())).toEqual({ at: new Date(61000).toISOString(), label: 'person.feedback.model' });
+    for (const extra of [{ busy: false }, { episodeId: 'other' }, { latestEpisode: null }, { retryCommand: {} },
+      { latestEpisode: { id: 'e', status: 'running' } }, { feedbackSuppressedEpisodeId: 'e' }]) {
+      expect(projectPersonFeedback(waiting(extra))).toBeNull();
+    }
+    for (const phase of ['model', 'capability', 'preparing']) {
+      const state = waiting(); state.latestEpisode.feedback.phase = phase;
+      expect(projectPersonFeedback(state).label).toBe(`person.feedback.${phase}`);
+    }
+    for (const feedback of [undefined, {}, { at: 'invalid', phase: 'model' }, { at: 500, phase: 'model' }, { at: 61000, phase: 'PRIVATE_DECISION' }]) {
+      const state = waiting(); state.latestEpisode.feedback = feedback;
+      expect(projectPersonFeedback(state)).toBeNull();
+    }
+    for (const gate of ['offline', 'disconnected', 'disabled', 'unsupported', 'noAgent']) expect(projectPersonFeedback(waiting(), gate)).toBeNull();
+  });
+
+  it.each(['accepted', 'completed', 'committed', 'failed', 'cancelled', 'interrupted', 'budget_exhausted'])('hides feedback for %s even if busy is behind', status => {
+    const state = waiting(); state.latestEpisode.status = status;
+    expect(projectPersonFeedback(state)).toBeNull();
+  });
+
+  it('uses the newest substantive reply as a fence, not raw traces or unrelated history', () => {
+    const state = waiting({ messages: [{ id: 'other', role: 'assistant', text: 'Other episode', episodeId: 'older', createdAt: 70000 }] });
+    expect(projectPersonFeedback(state)).not.toBeNull();
+    state.messages.push({ id: 'progress', role: 'assistant', replyKind: 'progress', episodeId: 'e', text: 'Verified finding', createdAt: 62000 });
+    expect(projectPersonFeedback(state)).toBeNull();
+    state.latestEpisode.feedback.at = 122000;
+    expect(projectPersonFeedback(state)).not.toBeNull();
+    state.activityRecords = personActivityRecords([{ id: 'end', episodeId: 'e', kind: 'cancelled', createdAt: 123000 }]);
+    expect(projectPersonFeedback(state)).toBeNull();
+  });
+
+  it.each(['cancel', 'completed'])('does not resurrect %s feedback on an older reconnect snapshot, but new episodes can show it', async transition => {
+    vi.useFakeTimers();
+    const f = fixture(); let snapshot = { person: { id: 'p' }, messages: [], busy: true, episodeId: 'e', latestEpisode: waiting().latestEpisode };
+    f.auto(request => request.op === 'snapshot' ? snapshot : undefined);
+    await f.controller.open('a');
+    expect(projectPersonFeedback(f.state)).not.toBeNull();
+    if (transition === 'cancel') await f.controller.cancel();
+    else {
+      snapshot = { ...snapshot, busy: false, episodeId: null, latestEpisode: { ...snapshot.latestEpisode, status: 'completed' } };
+      await f.controller.refresh();
+    }
+    expect(projectPersonFeedback(f.state)).toBeNull();
+    f.chat.connectionState = 'reconnecting'; await f.controller.open('a');
+    f.chat.connectionState = 'connected';
+    snapshot = { ...snapshot, busy: true, episodeId: 'e', latestEpisode: waiting().latestEpisode };
+    await f.controller.open('a');
+    expect(projectPersonFeedback(f.state)).toBeNull();
+    snapshot = { ...snapshot, episodeId: 'new', latestEpisode: { ...waiting().latestEpisode, id: 'new' } };
+    await f.controller.refresh();
+    expect(projectPersonFeedback(f.state)).not.toBeNull();
+    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toEqual([]);
   });
 });
