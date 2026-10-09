@@ -79,6 +79,17 @@ describe('HTML file preview', () => {
     expect(doc.querySelector('set, animate')).toBeNull();
   });
 
+  it('excludes template contents that could activate as declarative Shadow DOM and MathML navigation', () => {
+    const result = createHtmlPreviewDocument(`<div><template shadowrootmode="open"><a href="/private">link</a>
+      <div><template shadowrootmode="closed"><svg><a href="/private"><set attributeName="href" to="/private"/></a></svg></template></div>
+      </template></div><div><template shadowrootmode="closed"><a href="/private">closed</a></template></div>
+      <math href="/private"><mtext href="/private">math link</mtext></math>`);
+    const doc = new DOMParser().parseFromString(result, 'text/html');
+    expect(doc.querySelector('template')).toBeNull();
+    expect(result).not.toContain('/private');
+    expect(doc.querySelector('math, mtext').hasAttribute('href')).toBe(false);
+  });
+
   it('normalizes fragments, empty/malformed documents, and rejects CSS injection in defaults', () => {
     for (const content of ['', '<h1>Fragment', '<html><body><p>Unclosed']) {
       const result = createHtmlPreviewDocument(content, { background: 'red; } body { display:none', colorScheme: 'dark' });

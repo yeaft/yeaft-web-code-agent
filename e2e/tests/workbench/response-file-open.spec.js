@@ -483,6 +483,11 @@ const SECURITY_CONTENT = `<!doctype html><html><head>
       <animate attributeName="xlink:href" to="/__html-preview-probe__/animate" begin="0s" dur="1s" fill="freeze"/>
       <rect x="120" width="100" height="100" fill="blue"/></a>
   </svg>
+  <div id="shadow-open"><template shadowrootmode="open"><a href="/__html-preview-probe__/shadow-open">Open shadow link</a>
+    <div><template shadowrootmode="closed"><svg xmlns:xlink="http://www.w3.org/1999/xlink"><a xlink:href="/__html-preview-probe__/shadow-nested"><set attributeName="href" to="/__html-preview-probe__/shadow-smil" begin="0s"/><rect width="50" height="50"/></a></svg></template></div>
+  </template></div>
+  <div id="shadow-closed"><template shadowrootmode="closed"><a href="/__html-preview-probe__/shadow-closed">Closed shadow link</a></template></div>
+  <math><mtext id="math-link" href="/__html-preview-probe__/math-link">Math link</mtext></math>
   <form action="/__html-preview-probe__/form" method="post"><input name="secret" value="preview-only"><button type="submit">Submit form</button></form>
   <iframe src="/__html-preview-probe__/frame"></iframe><object data="/__html-preview-probe__/object"></object>
 </body></html>`;
@@ -518,7 +523,12 @@ test('HTML static sandbox renders inline styles/data images but cannot execute o
   await expect(frame.locator('#anchor-link')).not.toHaveAttribute('href');
   await expect(frame.locator('#svg-xlink')).not.toHaveAttribute('xlink:href');
   await expect(frame.locator('#svg-smil')).not.toHaveAttribute('href');
-  await expect(frame.locator('set, animate')).toHaveCount(0);
+  await expect(frame.locator('set, animate, template')).toHaveCount(0);
+  await expect(frame.locator('#shadow-open')).toBeEmpty();
+  await expect(frame.locator('#shadow-closed')).toBeEmpty();
+  expect(await frame.locator('#shadow-open').evaluate(el => el.shadowRoot)).toBeNull();
+  await expect(frame.locator('#math-link')).not.toHaveAttribute('href');
+  await frame.locator('#math-link').click();
   await frame.locator('#svg-xlink rect').click();
   await frame.locator('#svg-smil rect').click();
   await frame.locator('#remote-link').click();

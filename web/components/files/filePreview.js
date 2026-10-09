@@ -23,13 +23,24 @@ export function createHtmlPreviewDocument(content, { background = '', color = ''
     }
     node.removeAttribute('srcset');
   });
-  doc.querySelectorAll('script, base, meta[http-equiv], iframe, frame, frameset, object, embed, link, animate, animateMotion, animateTransform, set, discard').forEach(node => node.remove());
+  // Templates are inert during this parse but declarative Shadow DOM can become
+  // active when srcdoc is parsed. querySelectorAll does not visit template.content;
+  // exclude templates entirely rather than serialize uninspected hidden subtrees.
+  doc.querySelectorAll('script, base, meta[http-equiv], iframe, frame, frameset, object, embed, link, template, animate, animateMotion, animateTransform, set, discard').forEach(node => node.remove());
   // Sandbox does not block self-navigation. Even fragments in srcdoc can resolve
   // against the app URL (not this document), so disable all link navigation.
   // SVG supports namespaced xlink:href, and SMIL could restore a URL dynamically;
   // remove both link attributes and animation elements for this static preview.
-  doc.querySelectorAll('a, area').forEach(node => {
-    for (const name of ['href', 'xlink:href', 'target', 'ping']) node.removeAttribute(name);
+  doc.querySelectorAll('*').forEach(node => {
+    // MathML can also make elements into links, not only HTML/SVG <a>.
+    for (const attr of [...node.attributes]) {
+      if (attr.localName === 'href' || attr.name === 'xlink:href') {
+        const isDataImage = node.localName === 'image' && attr.value.trim().toLowerCase().startsWith('data:');
+        if (!isDataImage) node.removeAttributeNode(attr);
+      }
+    }
+    node.removeAttribute('target');
+    node.removeAttribute('ping');
   });
   const csp = doc.createElement('meta');
   csp.httpEquiv = 'Content-Security-Policy';
