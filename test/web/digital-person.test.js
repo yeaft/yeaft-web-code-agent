@@ -170,6 +170,29 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
   });
 
+  it('projects model references and saves a nullable default without starting cognition', async () => {
+    const f = fixture();
+    const settings = { modelCandidates: ['p/a', 'p/b'], defaultModel: 'p/b' };
+    const status = { configured: true, defaultModelSupported: true, models: [{ id: 'p/a' }, { id: 'p/b' }],
+      ...settings, agentDefaultModel: 'p/a', effectiveDefaultModel: 'p/b', effectiveModelCandidates: ['p/a', 'p/b'] };
+    f.auto(r => r.op === 'status' ? status : r.op === 'snapshot' ? { person: { id: 'person-a', settings }, messages: [], busy: false } : undefined);
+    await f.controller.open('a');
+    expect(f.state).toMatchObject({ defaultModelSupported: true, defaultModel: 'p/b', agentDefaultModel: 'p/a',
+      effectiveDefaultModel: 'p/b', effectiveModelCandidates: ['p/a', 'p/b'] });
+    f.auto(r => r.op === 'settings' ? { settings: { ...settings, defaultModel: null } } : r.op === 'status'
+      ? { ...status, defaultModel: null, effectiveDefaultModel: 'p/a' } : undefined);
+    expect(await f.controller.settings({ defaultModel: null })).toBe(true);
+    expect(f.state.defaultModel).toBeNull();
+    expect(f.state.effectiveDefaultModel).toBe('p/a');
+    expect(f.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ defaultModel: null });
+    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+    f.auto(r => r.op === 'status' ? { configured: true, models: [] } : undefined);
+    await f.controller.refresh();
+    expect(f.state.defaultModelSupported).toBe(false);
+    expect(f.state.agentDefaultModel).toBeNull();
+    expect(f.state.effectiveModelCandidates).toEqual([]);
+  });
+
   it('keeps file references in uncertain retry and isolates model settings from cognition', async () => {
     vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'send' ? false : r.op === 'settings' ? { settings: r.payload } : undefined);
