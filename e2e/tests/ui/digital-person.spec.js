@@ -3,7 +3,7 @@ import { test } from '../../fixtures/test-server.js';
 import { personRecords } from '../../../test/fixtures/person-records.js';
 
 // Real browser entry + WebSocket framing with an explicit mock Person runtime.
-// This is not a model, MongoDB or Server authorization integration test.
+// This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
 async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [] } = {}) {
@@ -51,7 +51,7 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       if (request.type !== 'person_request') { server.send(message); return; }
       requests.push(request);
       const reply = (data, extra = {}) => route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data, ...extra }));
-      if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'MongoDB is not configured', models,
+      if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'Instance directory is not configured', models,
         ...(modelPreferences ? { defaultModelSupported: true, ...modelSettings, agentDefaultModel: models[0]?.id || null,
           effectiveModelCandidates: effectiveCandidates(), effectiveDefaultModel: modelSettings.defaultModel || effectiveCandidates()[0] || null } : {}) });
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
@@ -377,7 +377,7 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     mock.configure(false);
     await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
     await page.getByRole('option', { name: 'Owner Agent A', exact: true }).click();
-    await expect(page.locator('.person-configuration')).toContainText('MongoDB');
+    await expect(page.locator('.person-configuration')).toBeVisible();
     await expect(page.locator('.person-configuration')).toContainText(zh ? '不要将凭据' : 'Do not paste credentials');
     mock.configure(true);
     await page.locator('.person-header').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();

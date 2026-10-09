@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
@@ -9,15 +7,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
-import { MongoPersonRepository } from '../../../../agent/yeaft/person/repository.js';
+import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
+import { DatabaseSync } from 'node:sqlite';
 import { config, imageConfig, finalProposal } from './fixtures.js';
 
-// Explicit isolated replica-set opt-in. Never point this suite at a production database.
-const uri = process.env.PERSON_TEST_MONGO_URI;
-const suite = uri ? describe : describe.skip;
-suite('Person real MongoDB replica-set integration', () => {
-  let MongoClient, inspector;
-  const dbName = `person_test_${randomUUID().replaceAll('-', '')}`;
+// Real runtime lifecycle against an isolated SQLite authority, with scripted inference.
+describe('Person real SQLite runtime integration', () => {
+  let yeaftDir;
   const services = [], repositories = [];
   const call = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
   const adapterFor = handler => ({ async *stream(params) {
@@ -31,14 +27,25 @@ suite('Person real MongoDB replica-set integration', () => {
     yield { type: 'stop', stopReason: 'end_turn' };
   } });
   const create = (namespace, adapter, more = {}) => {
-    const service = createPersonService({ uri, dbName, namespace, MongoClient, config, adapter, effortEnabled: true, ...more });
+    const service = createPersonService({ yeaftDir, namespace, config, adapter, embedding: { enabled: false }, effortEnabled: true, ...more });
     services.push(service); return service;
   };
   const repo = (namespace, leaseMs = 10_000) => {
-    // Only expiry tests use a short lease. Unrelated transaction/cancel tests
+    // Only expiry tests use a short lease. Unrelated commit/cancel tests
     // must not lose ownership merely because a shared CI host pauses for 400ms.
-    const repository = new MongoPersonRepository({ uri, dbName, namespace, MongoClient, leaseMs });
+    const repository = new SqlitePersonRepository({ yeaftDir, namespace, leaseMs });
     repositories.push(repository); return repository;
+  };
+  const sql = (r, fn) => { const db = new DatabaseSync(r.dbPath); try { return fn(db); } finally { db.close(); } };
+  const records = (r, table) => sql(r, db => db.prepare(`SELECT record FROM ${table} WHERE namespace = ?`).all(r.namespace).map(row => JSON.parse(row.record)));
+  const insert = (r, table, record, columns) => sql(r, db => {
+    const scope = r.scope('alice'), row = { ...record, ...scope };
+    db.prepare(`INSERT INTO ${table} (namespace, ownerId, personId, ${Object.keys(columns).join(', ')}, record) VALUES (?, ?, ?, ${Object.keys(columns).map(() => '?').join(', ')}, ?)`)
+      .run(scope.namespace, scope.ownerId, scope.personId, ...Object.values(columns), JSON.stringify(row));
+  });
+  const finalize = async (r, episode, callId) => {
+    await r.startCall(episode, { callId, requested: { model: 'test/first', effort: null } });
+    await r.finalizeCall(episode, { callId, output: { text: '{}' } });
   };
   const waitIdle = async service => {
     for (let i = 0; i < 200; i++) {
@@ -48,15 +55,11 @@ suite('Person real MongoDB replica-set integration', () => {
     }
     throw new Error('Person did not become idle');
   };
-  beforeAll(async () => {
-    const module = process.env.PERSON_TEST_MONGO_DRIVER ? pathToFileURL(process.env.PERSON_TEST_MONGO_DRIVER).href : 'mongodb';
-    ({ MongoClient } = await import(/* @vite-ignore */ module));
-    inspector = new MongoClient(uri); await inspector.connect();
-  });
+  beforeAll(async () => { yeaftDir = await mkdtemp(join(tmpdir(), 'person-sqlite-runtime-')); });
   afterAll(async () => {
     await Promise.all(services.map(s => s.close()));
     await Promise.all(repositories.map(r => r.close()));
-    if (inspector) { await inspector.db(dbName).dropDatabase(); await inspector.close(); }
+    await rm(yeaftDir, { recursive: true, force: true });
   });
 
   it('admits real messages asynchronously, chooses models per call, recalls, commits concepts and survives restart', async () => {
@@ -102,19 +105,18 @@ suite('Person real MongoDB replica-set integration', () => {
     const restarted = create('roundtrip', adapter);
     expect((await call(restarted, 'snapshot')).state.version).toBe(1);
     expect((await call(restarted, 'messages')).items).toHaveLength(2);
-    const collection = inspector.db(dbName).collection('person_concept_revisions');
-    expect(await collection.countDocuments({ namespace: 'roundtrip' })).toBe(2);
+    expect(records(repo('roundtrip'), 'concept_revisions')).toHaveLength(2);
   });
 
   it.each(['send', 'think'])('%s persists image/text files and owner candidates across restart, resolves receipts without replay', async op => {
     const namespace = `files-${op}`, seen = [];
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=';
     const files = [{ name: 'pixel.png', mimeType: 'image/png', data: png },
-      { name: 'notes.md', mimeType: 'text/markdown', data: Buffer.from('Mongo durable UTF-8 附件').toString('base64') }];
+      { name: 'notes.md', mimeType: 'text/markdown', data: Buffer.from('SQLite durable UTF-8 附件').toString('base64') }];
     const native = imageConfig;
     const adapter = adapterFor((context, params) => {
       seen.push(params);
-      expect(context.trigger.attachments[1]).toMatchObject({ content: 'Mongo durable UTF-8 附件', trust: 'untrusted-user-content' });
+      expect(context.trigger.attachments[1]).toMatchObject({ content: 'SQLite durable UTF-8 附件', trust: 'untrusted-user-content' });
       expect(params.messages[0].content.find(part => part.type === 'image').source.data).toBe(png);
       expect(params.model).toBe('test/gpt-4.1-mini');
       const p = finalProposal(context.state.version); p.concepts = []; p.state.focusConceptIds = []; return p;
@@ -141,13 +143,13 @@ suite('Person real MongoDB replica-set integration', () => {
     expect(await call(restarted, 'receipt', { clientMessageId: 'files' }, 'bob')).toEqual({ found: false, clientMessageId: 'files' });
     expect(await repo(`${namespace}-other`).receipt('alice', 'files')).toEqual({ found: false, clientMessageId: 'files' });
     expect(seen).toHaveLength(1);
-    const stored = await inspector.db(dbName).collection('person_attachments').find({ namespace, ownerId: 'alice' }).toArray();
+    const stored = records(repo(namespace), 'attachments');
     expect(stored).toHaveLength(2);
     expect(stored.find(f => f.kind === 'image').data).toBe(png);
     expect(stored.find(f => f.kind === 'text').data).toBe(files[1].data);
   });
 
-  it('receipt is read-only even for expired Mongo leases', async () => {
+  it('receipt is read-only even for expired SQLite leases', async () => {
     const r = repo('receipt-expired', 300); await r.open('alice');
     const { episode } = await r.admit('alice', { kind: 'think', text: '', clientMessageId: 'one', workerId: 'crashed', budget: { calls: 1, timeoutMs: 1000 } });
     const before = await r.getPerson('alice');
@@ -177,16 +179,15 @@ suite('Person real MongoDB replica-set integration', () => {
       return p;
     }));
     const r = repo('concept-read-set'); await r.open('alice');
-    await inspector.db(dbName).collection('person_messages').insertOne(r.doc(r.scope('alice'), {
-      id: 'original-report', revision: 1, seq: 1, role: 'user', text: 'An earlier user report.',
-    }));
+    insert(r, 'messages', { id: 'original-report', revision: 1, seq: 1, role: 'user', text: 'An earlier user report.' },
+      { id: 'original-report', seq: 1, revision: 1, text: 'An earlier user report.' });
     // Neither the focused nor recent bootstrap window includes c00 (more than 24 concepts).
-    await inspector.db(dbName).collection('person_concepts').insertMany(Array.from({ length: 30 }, (_, i) => r.doc(r.scope('alice'), {
-      id: `c${String(i).padStart(2, '0')}`, revision: 1, kind: 'claim', epistemicState: i === 0 ? 'reported' : 'uncertain', statement: `Old concept ${i}`,
-      reportedSourceRefs: i === 0 ? ['message:original-report:1'] : [],
-      sourceRefs: [], associations: [], updatedAt: new Date(1000 + i),
-    })));
-    await inspector.db(dbName).collection('person_persons').updateOne(r.scope('alice'), { $set: { messageSeq: 1 } });
+    for (let i = 0; i < 30; i++) {
+      const record = { id: `c${String(i).padStart(2, '0')}`, revision: 1, kind: 'claim', epistemicState: i === 0 ? 'reported' : 'uncertain', statement: `Old concept ${i}`,
+        reportedSourceRefs: i === 0 ? ['message:original-report:1'] : [], sourceRefs: [], associations: [], updatedAt: new Date(1000 + i) };
+      insert(r, 'concepts', record, { id: record.id, revision: 1, updatedAt: 1000 + i, statement: record.statement });
+    }
+    sql(r, db => db.prepare("UPDATE persons SET record = json_set(record, '$.messageSeq', 1) WHERE namespace = ?").run(r.namespace));
     await call(service, 'think', { text: '', clientMessageId: 'pages' });
     const snapshot = await waitIdle(service);
     expect(snapshot.state.version).toBe(1);
@@ -284,7 +285,7 @@ suite('Person real MongoDB replica-set integration', () => {
     expect(snapshot.messages).toEqual([]);
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(count).toBe(2);
-    expect(await inspector.db(dbName).collection('person_concept_revisions').countDocuments({ namespace: 'intrinsic' })).toBe(2);
+    expect(records(repo('intrinsic'), 'concept_revisions')).toHaveLength(2);
   });
 
   it('has durable invalid-output failures, finite calls/timeouts, and secret-free errors', async () => {
@@ -302,7 +303,7 @@ suite('Person real MongoDB replica-set integration', () => {
     const hanging = create('timeout', adapterFor(() => new Promise(() => {})), { timeoutMs: 150 });
     await call(hanging, 'open'); await call(hanging, 'think', { text: '', clientMessageId: 'hang' }); await waitIdle(hanging);
     expect((await call(hanging, 'traces')).items[0]).toMatchObject({ kind: 'failed', code: 'TIMEOUT' });
-    const secret = create('secret', adapterFor(() => { throw new Error('mongodb://admin:password@host API_KEY_SECRET'); }));
+    const secret = create('secret', adapterFor(() => { throw new Error('https://admin:password@host API_KEY_SECRET'); }));
     await call(secret, 'open'); await call(secret, 'think', { text: '', clientMessageId: 'secret' }); await waitIdle(secret);
     const serialized = JSON.stringify(await call(secret, 'traces'));
     expect(serialized).not.toContain('password'); expect(serialized).not.toContain('API_KEY_SECRET');
@@ -388,12 +389,12 @@ suite('Person real MongoDB replica-set integration', () => {
     expect((await r.snapshot('alice')).state.version).toBe(0);
   });
 
-  it('uses database-time leases, epoch takeover fences and transaction rollback of every state write', async () => {
+  it('uses durable leases, epoch takeover fences and atomic rollback of every state write', async () => {
     const first = repo('fences', 400), second = repo('fences', 400);
     await first.open('alice');
     const one = await first.admit('alice', { kind: 'think', text: '', clientMessageId: 'one', workerId: 'worker-a', budget: { calls: 1, timeoutMs: 1000 } });
     expect(await second.recover('alice')).toBe(false);
-    const leased = await inspector.db(dbName).collection('person_persons').findOne({ namespace: 'fences' });
+    const leased = await first.getPerson('alice');
     expect(leased.leaseUntil).toBeInstanceOf(Date);
     expect(leased.leaseUntil.getTime()).toBeGreaterThan(Date.now());
     await expect(second.admit('alice', { kind: 'think', text: '', clientMessageId: 'premature', workerId: 'worker-b', budget: { calls: 1, timeoutMs: 1000 } })).rejects.toMatchObject({ code: 'BUSY' });
@@ -402,17 +403,19 @@ suite('Person real MongoDB replica-set integration', () => {
     await second.recover('alice');
     const two = await second.admit('alice', { kind: 'think', text: '', clientMessageId: 'two', workerId: 'worker-b', budget: { calls: 1, timeoutMs: 1000 } });
     await expect(first.commit(one.episode, finalProposal(), { model: 'test/first', effort: null }, 'old-call')).rejects.toMatchObject({ code: 'STALE' });
+    await finalize(second, two.episode, 'bad-call');
     const wrong = finalProposal(); wrong.concepts[0].expectedRevision = 100;
     await expect(second.commit(two.episode, wrong, { model: 'test/first', effort: null }, 'bad-call')).rejects.toMatchObject({ code: 'STALE' });
     const afterRollback = await second.snapshot('alice');
     expect(afterRollback.state.version).toBe(0); expect(afterRollback.busy).toBe(true);
-    expect(await inspector.db(dbName).collection('person_state_commits').countDocuments({ namespace: 'fences' })).toBe(0);
+    expect(records(second, 'state_commits')).toHaveLength(0);
+    await finalize(second, two.episode, 'good-call');
     await second.commit(two.episode, finalProposal(), { model: 'test/first', effort: null }, 'good-call');
     expect((await second.snapshot('alice')).state.version).toBe(1);
     expect((await second.list('alice', 'traces', { limit: 50 })).items.some(t => t.kind === 'interrupted')).toBe(true);
   });
 
-  it('serializes concurrent idempotent admission over separate Mongo clients', async () => {
+  it('serializes concurrent idempotent admission over separate SQLite workers', async () => {
     const a = repo('concurrent'), b = repo('concurrent');
     await Promise.all([a.open('alice'), b.open('alice')]);
     const input = { kind: 'send', text: 'one accepted message', clientMessageId: 'identical', workerId: 'worker-a', budget: { calls: 1, timeoutMs: 1000 } };
@@ -440,8 +443,8 @@ suite('Person real MongoDB replica-set integration', () => {
   });
 
   it('fences concurrent admissions from independent OS processes', async () => {
-    const children = [0, 1].map(() => fork(new URL('./process-admission.js', import.meta.url), [], {
-      env: { ...process.env, PERSON_TEST_DB: dbName }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    const children = [0, 1].map(() => fork(new URL('./sqlite-process-admission.js', import.meta.url), [], {
+      env: { ...process.env, PERSON_SQLITE_TEST_DIR: yeaftDir }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     }));
     try {
       const exited = children.map(child => once(child, 'exit'));
@@ -453,7 +456,7 @@ suite('Person real MongoDB replica-set integration', () => {
       expect(admitted[0].episodeId).toBe(admitted[1].episodeId);
       expect(admitted.filter(r => !r.duplicate)).toHaveLength(1);
       await Promise.all(exited);
-      expect(await inspector.db(dbName).collection('person_messages').countDocuments({ namespace: 'processes' })).toBe(1);
+      expect(records(repo('processes'), 'messages')).toHaveLength(1);
       await repo('processes').cancel('alice');
     } finally { for (const child of children) if (child.exitCode === null) child.kill(); }
   });
@@ -484,7 +487,7 @@ suite('Person real MongoDB replica-set integration', () => {
         providers: [{ name: 'local-test', protocol: 'anthropic', baseUrl: `http://127.0.0.1:${server.address().port}`, apiKey: 'local-test-secret',
           models: [{ id: 'person-test-model', contextWindow: 100000, maxOutput: 4096 }] }], primaryModel: 'local-test/person-test-model',
       }));
-      service = createPersonService({ uri, dbName, namespace: 'native-provider', MongoClient, yeaftDir });
+      service = createPersonService({ namespace: 'native-provider', yeaftDir, embedding: { enabled: false } });
       services.push(service);
       expect(await call(service, 'status')).toMatchObject({ storageReady: true, modelReady: true });
       expect(requests).toHaveLength(0);
@@ -495,8 +498,10 @@ suite('Person real MongoDB replica-set integration', () => {
       expect(requests).toHaveLength(1); expect(requests[0].path).toBe('/v1/messages');
       expect(requests[0].body.model).toBe('person-test-model');
       expect((await readdir(yeaftDir)).sort()).toEqual(['config.json', 'person']);
-      // Only the backend binding marker is local; Mongo mode creates no SQLite authority or index.
-      expect(await readdir(join(yeaftDir, 'person'))).toEqual([expect.stringMatching(/^storage-[a-f0-9]+\.json$/)]);
+      const storedFiles = await readdir(join(yeaftDir, 'person'));
+      expect(storedFiles).toContain('person.db');
+      expect(storedFiles.some(name => /^storage-[a-f0-9]+\.json$/.test(name))).toBe(true);
+      expect(storedFiles).not.toContain('models');
       const traces = await call(service, 'traces');
       expect(JSON.stringify(traces)).not.toContain('local-test-secret');
       expect(traces.items.find(t => t.kind === 'call_output').effective.effortObserved).toBe(true);

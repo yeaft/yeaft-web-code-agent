@@ -58,9 +58,10 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/person/capability-experience.test.js',
   'test/agent/yeaft/person/capability-experience.persistence.test.js',
   'test/agent/yeaft/person/created-capability.persistence.test.js',
-  'test/agent/yeaft/person/storage.test.js',
+  'test/agent/yeaft/person/sqlite-storage.test.js',
   'test/agent/yeaft/person/sqlite.integration.test.js',
   'test/agent/yeaft/person/sqlite-service.test.js',
+  'test/agent/yeaft/person/sqlite-runtime.integration.test.js',
   'test/person-local-memory.test.js',
   'test/person-local-memory-cache.test.js',
   'test/server/person-relay.test.js',
@@ -175,18 +176,12 @@ export const SANDBOX_TEST_FILES = Object.freeze([
   'test/web/agent-settings.test.js',
 ]);
 
-// Explicit isolated MongoDB replica set; focused invocation required (no live DB fallback).
-export const PERSON_MONGO_TEST_FILES = Object.freeze([
-  'test/agent/yeaft/person/mongo.integration.test.js',
-]);
-
 // Explicit real CPU/download smoke; never part of an offline default test run.
 export const PERSON_CPU_TEST_FILES = Object.freeze(['test/person-local-memory-cpu.test.js']);
 
 export const REVIEWED_TEST_FILES = Object.freeze([
   ...CORE_TEST_FILES,
   ...SANDBOX_TEST_FILES,
-  ...PERSON_MONGO_TEST_FILES,
   ...PERSON_CPU_TEST_FILES,
 ]);
 

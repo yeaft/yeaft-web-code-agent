@@ -21,7 +21,7 @@ const message = (extra = {}) => ({ type: 'person_request', agentId: 'agent-a', r
 
 describe('digital person authenticated relay', () => {
   it('replaces identity and correlation, strips forged payload fields, never broadcasts', async () => {
-    await relay.request(client, message({ ownerId: 'victim', op: 'send', payload: { ownerId: 'victim', personId: 'victim', text: 'hello', clientMessageId: 'm1', uri: 'mongodb://evil' } }));
+    await relay.request(client, message({ ownerId: 'victim', op: 'send', payload: { ownerId: 'victim', personId: 'victim', text: 'hello', clientMessageId: 'm1', yeaftDir: '/browser/override' } }));
     const outbound = forward.mock.calls[0][1];
     expect(outbound).toMatchObject({ ownerId: 'owner-a', op: 'send', payload: { text: 'hello', clientMessageId: 'm1' } });
     expect(outbound.payload).not.toHaveProperty('ownerId');
