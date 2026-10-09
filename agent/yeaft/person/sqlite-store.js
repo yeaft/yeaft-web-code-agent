@@ -31,7 +31,7 @@ const decode = (row, table) => {
 };
 const publicDoc = doc => {
   if (!doc) return null;
-  const { ownerId, namespace, personId, ...rest } = doc;
+  const { _id, ownerId, namespace, personId, ...rest } = doc;
   return rest;
 };
 const unavailableOutput = () => ({ text: '', retainedBytes: 0, observedBytes: null, complete: false, accepted: false, availability: 'unavailable', reason: 'worker-unavailable' });

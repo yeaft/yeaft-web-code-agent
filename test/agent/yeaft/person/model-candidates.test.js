@@ -427,7 +427,7 @@ describe('Person inspection, search and name: SQLite', () => {
       epistemicState: 'hypothesis', sourceRefs: [], associations: [{ targetId: 'safe', relation: 'related' }] }],
     state: { summary: 'saved', appraisal: '', focusConceptIds: ['safe'] },
     decision: { summary: 'test', uncertainties: [], selfCheck: 'test' }, reply: null }, { model: 'test/first', effort: null }, callId);
-    const secret = { apiKey: 'HOST-SECRET', files: [{ content: 'HOST-SECRET' }], workerId: 'HOST-SECRET' };
+    const secret = { _id: 'HOST-SECRET', apiKey: 'HOST-SECRET', files: [{ content: 'HOST-SECRET' }], workerId: 'HOST-SECRET' };
     await patchRecord(r, 'persons', { ...secret, settings: { autonomyEnabled: false, ...secret } });
     await patchRecord(r, 'states', { ...secret, lastSelection: { model: 'test/first', effort: null, ...secret } });
     await patchRecord(r, 'messages', { ...secret, attachments: [{ id: 'file', name: 'safe.txt', mimeType: 'text/plain', size: 12,

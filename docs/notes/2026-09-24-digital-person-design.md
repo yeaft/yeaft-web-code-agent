@@ -201,7 +201,7 @@ Person Turn
 - 已观察到 Cancel/过期/最后调用耗尽后，不再派发隐形额外调用；刷新、重连及未来 VP 迟到回报也不自动启动新 Turn。并发取消可能与在途派发相遇，因此仍需提交 fence；已派发的外部计算不保证立即停止。
 - 未来委派中，合同内局部执行不要求人物逐步确认；合同变化必须交回，且必须通过人物验收才可成为其认知更新。
 
-当前源码依据：`person/service.js#createPersonService()`、`person/runtime.js#PersonRuntime.run()`、`person/provider.js#collectOutput()`、`person/contracts.js#PROPOSAL_INSTRUCTIONS`、`person/repository.js#commit()`；Engine 的 query 终态与执行 loop 另见 `engine.js` 的 `query()` / `#runQuery()`。本文澄清边界，不改现有运行时或新增自动调度。
+当前源码依据：`person/service.js#createPersonService()`、`person/runtime.js#PersonRuntime.run()`、`person/provider.js#collectOutput()`、`person/contracts.js#PROPOSAL_INSTRUCTIONS`、`person/sqlite-store.js#commit()`；Engine 的 query 终态与执行 loop 另见 `engine.js` 的 `query()` / `#runQuery()`。本文澄清边界，不改现有运行时或新增自动调度。
 
 ## 阅读地图
 
