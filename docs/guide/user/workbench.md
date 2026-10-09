@@ -48,6 +48,8 @@ Files provides a VS Code-style file tree, editor, and preview surface.
 - use `Ctrl+S` to save on the Agent
 - preview Markdown, images, PDFs, supported Office documents, and browser-supported MP4, M4V, WebM, OGV/OGG, and MOV videos; videos stream from the Agent and can also be downloaded
 
+HTML (`.html` / `.htm`) and Markdown open in Preview by default. Switch between **Preview / Edit**; preview reflects your current edits, including unsaved changes. HTML uses an isolated static preview with inline styles and data images. Scripts, link navigation, form submission, and external or relative-path resources are disabled. Use your project’s local development server for interactive or multi-file pages.
+
 Clicking a file reference in a response opens Workbench directly in Files for the current Session route, loads the file, and reveals the starting line when specified. Markdown links, inline code, and plain-text paths are supported, including `src/main.js:20-35`, `src/main.js#L20-L35`, and Unicode filenames. Put paths containing spaces in inline code or Markdown links.
 
 References are resolved in batches during streaming and checked again when the response finishes. Only files confirmed by the current Agent inside the Session workspace become clickable; missing, ambiguous, and out-of-workspace paths are not automatically linked. External web links remain web links and are never mapped to local files with the same name.

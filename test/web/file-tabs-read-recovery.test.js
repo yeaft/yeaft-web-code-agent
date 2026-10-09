@@ -27,7 +27,7 @@ function harness(sendWsMessage = vi.fn(() => true)) {
     saveAllUndoHistory: vi.fn(),
     cleanupUndoHistory: vi.fn(),
     deleteConversationHistory: vi.fn(),
-    mdPreviewMode: Vue.ref(false),
+    textPreviewMode: Vue.ref(false),
     renderOfficeLocal: vi.fn(),
     performFind: vi.fn(),
     findBarVisible: Vue.ref(false),
