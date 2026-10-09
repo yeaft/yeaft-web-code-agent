@@ -14,6 +14,8 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
   const agentMessages = new Map([['person-a', messages], ['person-b', []]]);
   let admissionReply;
   let holdAdmission = false;
+  let cancelReply;
+  let holdCancel = false;
   let commandError = null;
   let episodeNumber = 0;
   let activeEpisode = 'live-episode';
@@ -98,6 +100,7 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
             activeEpisode = `conversation-${++episodeNumber}`;
             agentMessages.get(request.agentId).push({ id: `user-${episodeNumber}`, role: 'user', text: request.payload.text, episodeId: activeEpisode, createdAt: new Date().toISOString() });
             busy = true;
+            latestEpisode = { id: activeEpisode, status: 'running', createdAt: new Date().toISOString() };
             reply({ episodeId: activeEpisode });
           };
           if (holdAdmission) admissionReply = admit;
@@ -111,7 +114,10 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
         if (modelPreferences) modelSettings = { ...modelSettings, ...request.payload };
         reply({ settings: modelPreferences ? modelSettings : request.payload });
       };
-      else if (request.op === 'cancel') { busy = false; reply({ cancelled: true }); }
+      else if (request.op === 'cancel') {
+        const finish = () => { busy = false; latestEpisode = { ...latestEpisode, id: activeEpisode, status: 'cancelled' }; reply({ cancelled: true }); };
+        if (holdCancel) cancelReply = finish; else finish();
+      }
     });
   });
   return { requests,
@@ -122,12 +128,17 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     admit() { holdAdmission = false; admissionReply(); admissionReply = null; },
     rejectNextSend(code = 'model_unavailable') { commandError = code; },
     messages(rows, agentId = 'person-a') { agentMessages.set(agentId, rows.map(row => ({ ...row }))); },
-    reply(id, text, agentId = 'person-a', episodeId = activeEpisode) {
+    reply(id, text, agentId = 'person-a', episodeId = activeEpisode, metadata = {}) {
       const rows = agentMessages.get(agentId);
       const existing = rows.find(row => row.id === id);
       if (existing) existing.text = text;
-      else rows.push({ id, role: 'assistant', text, episodeId, createdAt: new Date().toISOString() });
+      else rows.push({ id, role: 'assistant', text, episodeId, createdAt: new Date().toISOString(), ...metadata });
     },
+    waiting(phase, offset = 61000) {
+      busy = true; latestEpisode = { ...latestEpisode, id: activeEpisode, status: 'running', feedback: { at: new Date(new Date(latestEpisode.createdAt).getTime() + offset).toISOString(), phase, capabilityId: 'PRIVATE_CAPABILITY' } };
+    },
+    replyAt(offset) { return new Date(new Date(latestEpisode.createdAt).getTime() + offset).toISOString(); },
+    holdCancel() { holdCancel = true; }, cancelPending() { return !!cancelReply; }, finishCancel() { holdCancel = false; cancelReply(); cancelReply = null; },
     complete() { busy = false; latestEpisode = { id: activeEpisode, status: 'completed', endedAt: new Date().toISOString() }; },
     finishHistory() { historyReply(); historyReply = null; }, historyPending() { return !!historyReply; }, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
 }
@@ -928,5 +939,104 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(dialog).toHaveCount(0);
     expect(mock.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ modelCandidates: [], defaultModel: null });
     expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+  });
+}
+
+
+// Delays are authoritative backend timestamps, not a browser-generated timer.
+// Only the wire runtime is scripted; rendering, polling, input and scrolling are real.
+for (const scenario of responseScenarios) {
+  test(`Digital Person adaptive progress and waiting feedback ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
+    test.setTimeout(60000);
+    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+    await openResponseConversation(page, serverUrl, scenario);
+    const zh = scenario.theme === 'dark';
+    if (zh) await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
+    const input = page.locator('#person-input');
+    await input.fill('Delayed verified work');
+    await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
+    await expect(input).toBeDisabled();
+    const feedback = page.locator('#person-conversation .person-wait-feedback');
+    await expect(feedback).toHaveCount(0); // older servers / before any backend status
+    await startResponseFrames(page, replySelector('progress-one'));
+    mock.reply('progress-one', 'Verified finding at 31 seconds.', 'person-a', undefined,
+      { replyKind: 'progress', callId: 'call-1', createdAt: mock.replyAt(31000) });
+    await expect(page.locator(replySelector('progress-one'))).toContainText(zh ? '阶段回复' : 'Progress update');
+    expectPinnedFrames(await finishResponseFrames(page), { newTarget: true });
+    await expect(input).toBeDisabled();
+    await expect(page.locator('.person-response-loading')).toBeVisible();
+    const rows = await page.locator('.person-message').count();
+    const statusAt = mock.replyAt(91000);
+    mock.waiting('model', 91000);
+    await expect(feedback).toContainText(zh ? '仍在等待模型回复。' : 'Still waiting for the model response.');
+    await expect(feedback.locator('time')).toHaveAttribute('datetime', statusAt);
+    await expect(feedback).not.toContainText('PRIVATE_CAPABILITY');
+    await expect(feedback).toHaveCount(1);
+    await startResponseFrames(page, replySelector('progress-one'));
+    // Several polls replace one snapshot status, never add synthetic messages.
+    const snapshots = mock.requests.filter(r => r.op === 'snapshot').length;
+    await expect.poll(() => mock.requests.filter(r => r.op === 'snapshot').length).toBeGreaterThan(snapshots + 1);
+    await expect(page.locator('.person-message')).toHaveCount(rows);
+    expectPinnedFrames(await finishResponseFrames(page));
+    mock.waiting('capability', 92000);
+    await expect(feedback).toContainText(zh ? '仍在等待能力执行结束。' : 'Still waiting for the capability to finish.');
+    await page.screenshot({ path: testInfo.outputPath(`person-feedback-${scenario.width}-${scenario.theme}.png`) });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // Adding a later reply supersedes status but leaves the first reply focused.
+    await startResponseFrames(page, replySelector('progress-one'));
+    mock.reply('progress-two', 'A later verified finding.\n' + 'Readable evidence.\n'.repeat(90), 'person-a', undefined,
+      { replyKind: 'progress', callId: 'call-2', createdAt: mock.replyAt(93000) });
+    await expect(page.locator(replySelector('progress-two'))).toContainText('A later verified finding.');
+    await expect(feedback).toHaveCount(0);
+    expectPinnedFrames(await finishResponseFrames(page));
+    await expect(input).toBeDisabled();
+    await userScrollResponse(page, scenario.width);
+    const scrollTop = await page.locator('.person-messages').evaluate(el => el.scrollTop);
+    await startResponseFrames(page, replySelector('progress-two'));
+    mock.waiting('preparing', 154000);
+    await expect(feedback).toContainText(zh ? '正在准备下一次回复。' : 'Preparing the next response.');
+    mock.reply('progress-after-scroll', 'Another verified finding after scrolling.', 'person-a', undefined,
+      { replyKind: 'progress', callId: 'call-3', createdAt: mock.replyAt(155000) });
+    await expect(page.locator(replySelector('progress-after-scroll'))).toBeAttached();
+    await expect(feedback).toHaveCount(0);
+    await expect(page.locator('.person-response-loading')).toBeAttached();
+    await expect(page.locator('.person-messages')).not.toHaveClass(/is-response-pinned/);
+    mock.reply('final-answer', 'The final verified result.', 'person-a', undefined,
+      { replyKind: 'final', createdAt: mock.replyAt(156000) });
+    await expect(page.locator(replySelector('final-answer'))).toBeAttached();
+    await expect(feedback).toHaveCount(0);
+    mock.complete();
+    await expect(input).toBeEnabled();
+    await expect(page.locator('.person-response-loading')).toHaveCount(0);
+    await expect(page.locator(`${replySelector('final-answer')} .person-reply-kind`)).toHaveCount(0);
+    expectScrollStable(await finishResponseFrames(page), scrollTop);
+    await expect(page.locator('.person-messages')).not.toHaveClass(/is-response-pinned/);
+
+    // Cancel immediately suppresses the confirmed line, and even an older
+    // running snapshot after a reconnect cannot revive that episode's status.
+    await input.fill('Cancel waiting work');
+    await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
+    mock.waiting('model');
+    await expect(feedback).toHaveCount(1);
+    mock.holdCancel();
+    await page.locator('.stop-btn').click();
+    await expect.poll(() => mock.cancelPending()).toBe(true);
+    await expect(feedback).toHaveCount(0);
+    await expect(page.locator('.stop-btn')).toBeDisabled();
+    mock.finishCancel();
+    await expect(input).toBeEnabled();
+    mock.waiting('model', 122000); // deliberately replay an older running status
+    await page.locator('.person-header-actions button').first().click();
+    await expect(input).toBeDisabled();
+    await expect(feedback).toHaveCount(0);
+    mock.disconnect();
+    await expect(page.locator('.person-connection-notice')).toBeVisible();
+    await expect(feedback).toHaveCount(0);
+    await page.getByRole('button', { name: zh ? '重连' : 'Reconnect', exact: true }).click();
+    await expect(page.locator('.person-connection-notice')).toHaveCount(0);
+    await expect(page.locator(`${replySelector('progress-one')} .person-reply-kind`)).toContainText(zh ? '阶段回复' : 'Progress update');
+    await expect(feedback).toHaveCount(0);
+    await expect(page.locator('.person-messages')).not.toHaveClass(/is-response-pinned/);
+    expect(mock.requests.filter(r => r.op === 'send')).toHaveLength(2);
   });
 }

@@ -50,8 +50,9 @@ beforeEach(() => {
   vi.stubGlobal('Pinia', { useChatStore: () => chat });
 });
 afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals(); });
-async function render() {
-  wrapper = mount(DigitalPersonPage, { attachTo: document.body, global: { provide: { t }, config: { globalProperties: { $t: t } } } });
+async function render(messages = en) {
+  const localize = (key, params = {}) => (messages[key] || key).replace(/\{(\w+)\}/g, (match, name) => String(params[name] ?? match));
+  wrapper = mount(DigitalPersonPage, { attachTo: document.body, global: { provide: { t: localize }, config: { globalProperties: { $t: localize } } } });
   await flushPromises();
 }
 
@@ -67,6 +68,50 @@ describe('Digital Person surface', () => {
     await render();
     const options = wrapper.findComponent({ name: 'ModernSelect' }).props('options');
     expect(options.map(row => row.value)).toEqual(['a']);
+  });
+
+  it.each([en, zhCN])('labels intermediate replies and renders only backend-confirmed waiting feedback inline', async messages => {
+    await render(messages);
+    wrapper.vm.state.busy = true;
+    wrapper.vm.state.episodeId = 'waiting';
+    wrapper.vm.state.latestEpisode = { id: 'waiting', status: 'running', createdAt: 1000 };
+    await Vue.nextTick();
+    expect(wrapper.find('.person-wait-feedback').exists()).toBe(false);
+    wrapper.vm.state.messages.push({ id: 'progress', role: 'assistant', text: 'A verified finding.', replyKind: 'progress', episodeId: 'waiting', callId: 'call', createdAt: 31000 });
+    await Vue.nextTick();
+    expect(wrapper.get('[data-message-id="progress"] .person-reply-kind').text()).toBe(messages['person.progressReply']);
+    expect(wrapper.find('.person-response-loading').exists()).toBe(true);
+    expect(messages['person.progressReply']).toBeTruthy();
+    for (const phase of ['model', 'capability', 'preparing']) {
+      wrapper.vm.state.latestEpisode.feedback = { at: 91000, phase, capabilityId: '<script>PRIVATE_CAPABILITY</script>', output: 'PRIVATE_OUTPUT', decision: 'PRIVATE_DECISION' };
+      await Vue.nextTick();
+      const feedback = wrapper.get('#person-conversation .person-wait-feedback');
+      expect(feedback.text()).toContain(messages[`person.feedback.${phase}`]);
+      expect(messages[`person.feedback.${phase}`]).toBeTruthy();
+      expect(feedback.get('time').attributes('datetime')).toBe(new Date(91000).toISOString());
+      expect(wrapper.findAll('.person-wait-feedback')).toHaveLength(1);
+      expect(feedback.text()).not.toMatch(/PRIVATE_|person\.feedback\./);
+    }
+    wrapper.vm.state.messages.push({ id: 'later-progress', role: 'assistant', text: 'Another verified finding.', replyKind: 'progress', episodeId: 'waiting', createdAt: 92000 });
+    await Vue.nextTick();
+    expect(wrapper.find('.person-wait-feedback').exists()).toBe(false);
+    expect(wrapper.find('.person-response-loading').exists()).toBe(true);
+    wrapper.vm.state.latestEpisode.feedback.at = 153000;
+    await Vue.nextTick();
+    expect(wrapper.find('.person-wait-feedback').exists()).toBe(true);
+    wrapper.vm.state.latestEpisode.status = 'completed';
+    await Vue.nextTick();
+    expect(wrapper.find('.person-wait-feedback, .person-response-loading').exists()).toBe(false);
+  });
+
+  it.each(['cancelPending', 'commandPending', 'loading', 'activityStale', 'progressStale'])('suppresses backend waiting feedback while %s', async flag => {
+    await render();
+    Object.assign(wrapper.vm.state, { busy: true, episodeId: 'waiting', latestEpisode: { id: 'waiting', status: 'running', createdAt: 1000, feedback: { at: 61000, phase: 'model' } } });
+    await Vue.nextTick();
+    expect(wrapper.find('.person-wait-feedback').exists()).toBe(true);
+    wrapper.vm.state[flag] = true;
+    await Vue.nextTick();
+    expect(wrapper.find('.person-wait-feedback').exists()).toBe(false);
   });
 
   it('shares the composer and separates readable thoughts from raw debug logs', async () => {
@@ -275,19 +320,33 @@ describe('Digital Person surface', () => {
     expect(pane.scrollTop).toBe(600);
     wrapper.vm.state.messages.push(
       { id: 'other', role: 'assistant', episodeId: 'other-episode', text: 'Not this reply', createdAt: 3 },
-      { id: 'reply', role: 'assistant', episodeId: 'e', text: 'This reply', createdAt: 4 });
+      { id: 'reply', role: 'assistant', replyKind: 'progress', episodeId: 'e', text: 'This reply', createdAt: 4 });
     await layout(); observe(); await layout();
     expect(wrapper.vm.focusedResponseId).toBe('reply');
     expect(pane.scrollTop).toBe(700);
     expect(wrapper.get('.person-response-tail').element.style.height).toBe('300px');
+    wrapper.vm.state.messages.push({ id: 'second-progress', role: 'assistant', replyKind: 'progress', episodeId: 'e', text: 'Another update', createdAt: 5 });
+    await layout();
+    expect(wrapper.vm.focusedResponseId).toBe('reply');
+    expect(pane.scrollTop).toBe(700);
+    expect(wrapper.find('.person-response-loading').exists()).toBe(true);
     replyHeight = 600; observe(); await layout();
     expect(pane.scrollTop).toBe(700);
     expect(wrapper.get('.person-response-tail').element.style.height).toBe('0px');
-    wrapper.vm.state.busy = false; await layout();
-    expect(pane.scrollTop).toBe(700);
     await wrapper.get('.person-messages').trigger('keydown', { key: 'PageUp' });
     pane.scrollTop = 200; replyTop = 800; observe(); await layout();
     expect(pane.scrollTop).toBe(200);
+    wrapper.vm.state.messages.push({ id: 'progress-after-scroll', role: 'assistant', replyKind: 'progress', episodeId: 'e', text: 'Another verified finding', createdAt: 6 });
+    await layout();
+    expect(wrapper.vm.focusedResponseId).toBe('reply');
+    expect(wrapper.vm.responsePinned).toBe(false);
+    expect(pane.scrollTop).toBe(200);
+    expect(wrapper.find('.person-response-loading').exists()).toBe(true);
+    wrapper.vm.state.messages.push({ id: 'final-after-scroll', role: 'assistant', replyKind: 'final', episodeId: 'e', text: 'Final answer', createdAt: 7 });
+    wrapper.vm.state.busy = false;
+    await layout();
+    expect(pane.scrollTop).toBe(200);
+    expect(wrapper.find('.person-response-loading').exists()).toBe(false);
     expect(wrapper.vm.state.messages.some(message => message.id === 'm')).toBe(true);
     observe(); await Vue.nextTick(); expect(frames.size).toBe(1);
     // A post-flush synchronous reconciliation must retain the already queued

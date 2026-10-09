@@ -22,9 +22,9 @@ export function createPersonService(options = {}) {
   identifier(namespace);
   const configured = typeof yeaftDir === 'string' && Boolean(yeaftDir.trim());
   const calls = options.maxCalls ?? LIMITS.calls;
-  const timeoutMs = options.timeoutMs ?? LIMITS.timeoutMs;
+  // Legacy timeoutMs is intentionally ignored: an episode has no wall-clock deadline.
   const leaseMs = options.leaseMs ?? LIMITS.leaseMs;
-  if (!Number.isInteger(calls) || calls < 1 || calls > 32 || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300000 ||
+  if (!Number.isInteger(calls) || calls < 1 || calls > 32 ||
       !Number.isInteger(leaseMs) || leaseMs < 300 || leaseMs > 60000) fail('INVALID_REQUEST');
   if (allowedModels != null && (!Array.isArray(allowedModels) || !allowedModels.length || allowedModels.some(m => typeof m !== 'string'))) fail('INVALID_REQUEST');
   const repository = configured ? new SqlitePersonRepository({ yeaftDir, namespace, leaseMs }) : null;
@@ -43,7 +43,7 @@ export function createPersonService(options = {}) {
     ? memory.recall(ownerId, args, { signal }) : literalRecall(ownerId, args);
   // Config/adapter are loaded per explicit episode, not a permanent stale cache.
   const getProvider = (modelCandidates = [], defaultModel = null) => createPersonProvider({ yeaftDir, config, adapter, allowedModels, modelCandidates, defaultModel, effortEnabled: options.effortEnabled });
-  const runtime = new PersonRuntime({ repository, getProvider, budget: { calls, timeoutMs }, workDir, yeaftDir, config, namespace });
+  const runtime = new PersonRuntime({ repository, getProvider, budget: { calls }, workDir, yeaftDir, config, namespace });
   let closed = false;
   const requests = new Set();
   async function handle({ ownerId, op, payload = {} } = {}) {

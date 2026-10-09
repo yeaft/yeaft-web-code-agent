@@ -93,7 +93,7 @@ describe('SQLite is the instance-local Person authority', () => {
     expect((await call(service, 'messages', {}, 'bob')).items).toEqual([]);
   });
 
-  it.skipIf(!hasFts).each(['cancel', 'timeout'])('stops supervised recall when the owning episode ends by %s', async mode => {
+  it.skipIf(!hasFts).each(['cancel', 'close'])('stops supervised recall when the owning episode ends by %s', async mode => {
     const dir = await directory();
     let memory, searching = false, modelCalls = 0, signal;
     const originalRecall = LocalPersonMemory.prototype.recall;
@@ -115,7 +115,7 @@ describe('SQLite is the instance-local Person authority', () => {
       if (n === 2) p.next = { model: 'test/first', effort: null, reason: 'Recall.', capability: { id: 'Recall', args: { kind: 'messages', query: 'curious' } } };
       return p;
     });
-    const service = create(dir, { adapter, timeoutMs: mode === 'timeout' ? 1500 : 10000 });
+    const service = create(dir, { adapter });
     await call(service, 'open');
     await call(service, 'send', { text: 'Be curious.', clientMessageId: 'slow-recall' });
     await vi.waitFor(() => expect(searching).toBe(true), { timeout: 3000 });
@@ -123,10 +123,11 @@ describe('SQLite is the instance-local Person authority', () => {
     const worker = memory.worker;
     const exited = new Promise(resolve => worker.once('exit', resolve));
     if (mode === 'cancel') await call(service, 'cancel');
-    const snapshot = await idle(service);
+    else await service.close();
+    const snapshot = await idle(mode === 'close' ? create(dir, { adapter }) : service);
     expect(signal.aborted).toBe(true);
     expect(snapshot.state.version).toBe(0);
-    expect(snapshot.latestEpisode.status).toBe(mode === 'cancel' ? 'cancelled' : 'failed');
+    expect(snapshot.latestEpisode.status).toBe(mode === 'cancel' ? 'cancelled' : 'interrupted');
     await exited;
     await vi.waitFor(() => expect(memory.active).toBeNull());
     expect(memory.worker).toBeNull();

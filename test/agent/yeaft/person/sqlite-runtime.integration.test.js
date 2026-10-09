@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, writeFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
@@ -62,6 +63,115 @@ describe('Person real SQLite runtime integration', () => {
     await Promise.all(services.map(s => s.close()));
     await Promise.all(repositories.map(r => r.close()));
     await rm(yeaftDir, { recursive: true, force: true });
+  });
+
+  // Age only isolated fixture records; production runtime uses authoritative wall time.
+  const ageEpisode = (r, episode, fields = ['createdAt'], ms = 65000) => sql(r, db => {
+    const row = db.prepare('SELECT record FROM episodes WHERE namespace = ? AND id = ?').get(r.namespace, episode.id);
+    const record = JSON.parse(row.record);
+    for (const field of fields) record[field] = new Date(Date.now() - ms).toISOString();
+    db.prepare('UPDATE episodes SET record = ? WHERE namespace = ? AND id = ?').run(JSON.stringify(record), r.namespace, episode.id);
+  });
+  const candidate = () => { const p = finalProposal(); p.reply = 'Confirmed the first finding; checking the remaining evidence.';
+    p.next = { model: 'test/first', effort: null, reason: 'Check the remaining evidence.', capability: null }; return p; };
+  const acceptCandidate = async (r, episode, callId, p = candidate()) => {
+    await r.startCall(episode, { callId, requested: { model: 'test/first', effort: null } });
+    await r.finalizeCall(episode, { callId, output: { text: JSON.stringify(p) } });
+    await r.append(episode, 'activity', { callId, activity: p.activity, decision: p.decision, disposition: 'candidate' });
+    return p;
+  };
+
+  it('publishes fenced, idempotent progress without committing cognition; survives cancellation and restart', async () => {
+    const r = repo('progress'); await r.open('alice'); await r.open('bob');
+    const { episode } = await r.admit('alice', { kind: 'send', text: 'Investigate.', clientMessageId: 'progress', workerId: 'worker', budget: { calls: 16 } });
+    const p = await acceptCandidate(r, episode, 'one');
+    expect(await r.publishProgress(episode, { callId: 'one', reply: p.reply })).toBeNull(); // No per-call chatter.
+    ageEpisode(r, episode);
+    await expect(r.publishProgress(episode, { callId: 'unknown', reply: p.reply })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    await expect(r.publishProgress({ ...episode, ownerId: 'bob' }, { callId: 'one', reply: p.reply })).rejects.toMatchObject({ code: 'STALE' });
+    const message = await r.publishProgress(episode, { callId: 'one', reply: p.reply });
+    expect(message).toMatchObject({ replyKind: 'progress', episodeId: episode.id, callId: 'one', role: 'assistant' });
+    expect(await r.publishProgress(episode, { callId: 'one', reply: p.reply })).toEqual(message);
+    let snapshot = await r.snapshot('alice');
+    expect(snapshot).toMatchObject({ busy: true, state: { version: 0 } });
+    expect(snapshot.concepts).toHaveLength(0);
+    expect(records(r, 'state_commits')).toHaveLength(0);
+    expect((await r.searchChanges('alice')).items.filter(m => m.kind === 'messages')).toHaveLength(2);
+    expect((await r.recall('alice', { kind: 'messages', limit: 10 })).items.find(m => m.id === message.id)).toMatchObject({ replyKind: 'progress' });
+    await acceptCandidate(r, episode, 'two'); ageEpisode(r, episode, ['lastReplyAt']);
+    expect(await r.publishProgress(episode, { callId: 'two', reply: p.reply })).toBeNull(); // Identical content never repeats.
+    await r.cancel('alice', episode.id);
+    await expect(r.publishProgress(episode, { callId: 'two', reply: 'Late output' })).rejects.toMatchObject({ code: 'STALE' });
+    await r.close();
+    snapshot = await repo('progress').snapshot('alice');
+    expect(snapshot.latestEpisode.status).toBe('cancelled');
+    expect(snapshot.messages.filter(m => m.replyKind === 'progress')).toHaveLength(1);
+    expect((await repo('progress').snapshot('bob')).messages).toHaveLength(0);
+  });
+
+  it('refreshes one truthful wait status without messages or model calls; progress resets its cadence', async () => {
+    const r = repo('wait-status'); await r.open('alice');
+    const { episode } = await r.admit('alice', { kind: 'think', text: '', clientMessageId: 'wait', workerId: 'worker', budget: { calls: 16 } });
+    await r.startCall(episode, { callId: 'one', requested: { model: 'test/first', effort: null } });
+    await r.heartbeat(episode);
+    expect((await r.snapshot('alice')).latestEpisode.feedback).toBeUndefined();
+    ageEpisode(r, episode); await r.heartbeat(episode);
+    expect((await r.snapshot('alice')).latestEpisode.feedback).toMatchObject({ phase: 'model', at: expect.any(String) });
+    await r.heartbeat(episode);
+    expect((await r.snapshot('alice')).messages).toHaveLength(0);
+    const p = candidate();
+    await r.finalizeCall(episode, { callId: 'one', output: { text: JSON.stringify(p) } });
+    await r.append(episode, 'activity', { callId: 'one', disposition: 'candidate' });
+    await r.publishProgress(episode, { callId: 'one', reply: p.reply });
+    expect((await r.snapshot('alice')).latestEpisode.feedback).toBeUndefined();
+    await r.startCapability(episode, { callId: 'one', capability: { id: 'Recall', args: {} } });
+    ageEpisode(r, episode, ['lastReplyAt']); await r.heartbeat(episode);
+    expect((await r.snapshot('alice')).latestEpisode.feedback).toMatchObject({ phase: 'capability', capabilityId: 'Recall' });
+    await r.finish(episode, 'failed', 'PROVIDER_FAILED');
+    expect((await r.snapshot('alice')).latestEpisode.feedback).toBeUndefined();
+    await expect(r.heartbeat(episode)).rejects.toMatchObject({ code: 'STALE' });
+  });
+
+  it.each([100000, 32768])('runtime delivers progress then final output through real SQLite with a %i model window', async contextWindow => {
+    const namespace = `progress-runtime-${contextWindow}`, progress = candidate();
+    if (contextWindow === 32768) progress.reply = 'x'.repeat(8192);
+    let count = 0, resolveStarted, releaseFirst, resolveSecond, releaseSecond;
+    const firstStarted = new Promise(r => { resolveStarted = r; });
+    const secondStarted = new Promise(r => { resolveSecond = r; });
+    const firstWait = new Promise(r => { releaseFirst = r; });
+    const secondWait = new Promise(r => { releaseSecond = r; });
+    const s = create(namespace, adapterFor(async context => {
+      if (++count === 1) { resolveStarted(); await firstWait; return progress; }
+      expect(context.feedback).toMatchObject({ minIntervalMs: 30000, maxIntervalMs: 60000, lastReply: progress.reply.slice(0, 512) });
+      expect(context.previousProposal.reply).toBe(progress.reply);
+      resolveSecond(); await secondWait; const p = finalProposal(); p.reply = 'Final conclusion.'; return p;
+    }), { config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow })) } });
+    await call(s, 'open'); const admitted = await call(s, 'send', { text: 'Investigate.', clientMessageId: 'one' });
+    await firstStarted; ageEpisode(repo(namespace), { id: admitted.episodeId }); releaseFirst(); await secondStarted;
+    expect(await call(s, 'snapshot')).toMatchObject({ busy: true, state: { version: 0 }, messages: [expect.any(Object), expect.objectContaining({ replyKind: 'progress' })] });
+    releaseSecond(); const snapshot = await waitIdle(s);
+    expect(snapshot.state.version).toBe(1);
+    expect(snapshot.messages.map(m => m.replyKind)).toEqual([undefined, 'progress', 'final']);
+    expect(count).toBe(2);
+  });
+
+  it('does not abort a working episode beyond 120s; remaining calls and cancellation stay bounded', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController(); let started = false;
+    const repository = { leaseMs: 15000, namespace: 'test', heartbeat: vi.fn().mockResolvedValue(), append: vi.fn().mockResolvedValue(), startCall: vi.fn().mockResolvedValue(), finalizeCall: vi.fn().mockResolvedValue(true), finish: vi.fn().mockResolvedValue(), createdCapabilities: vi.fn().mockResolvedValue([]),
+      context: vi.fn().mockResolvedValue({ person: { id: 'p', soul: '', soulRevision: 1 }, state: { version: 0 }, messages: [], concepts: [] }) };
+    const provider = await createPersonProvider({ config, adapter: { async *stream({ signal }) {
+      started = true; await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    } } });
+    const runtime = new PersonRuntime({ repository, getProvider: async () => provider });
+    const episode = { id: 'one', ownerId: 'alice', createdAt: new Date(), budget: { calls: 16, timeoutMs: 120000 } };
+    const work = runtime.run(episode, controller);
+    try {
+      await vi.advanceTimersByTimeAsync(180000);
+      expect(started).toBe(true); expect(controller.signal.aborted).toBe(false);
+      expect(repository.heartbeat.mock.calls.length).toBeGreaterThan(30);
+      expect(repository.finish).not.toHaveBeenCalled();
+    } finally { try { controller.abort(); await work; } finally { vi.useRealTimers(); } }
   });
 
   it('admits real messages asynchronously, chooses models per call, recalls, commits concepts and survives restart', async () => {
@@ -290,7 +400,7 @@ describe('Person real SQLite runtime integration', () => {
     expect(records(repo('intrinsic'), 'concept_revisions')).toHaveLength(2);
   });
 
-  it('has durable invalid-output failures, finite calls/timeouts, and secret-free errors', async () => {
+  it('has durable invalid-output failures, finite calls, cancellable waits, and secret-free errors', async () => {
     const invalid = create('invalid', adapterFor(() => '{"arbitrary":"not a proposal"}'));
     await call(invalid, 'open'); await call(invalid, 'send', { text: 'hello', clientMessageId: 'invalid' });
     expect((await waitIdle(invalid)).state.version).toBe(0);
@@ -303,8 +413,12 @@ describe('Person real SQLite runtime integration', () => {
     expect(budgetTraces.filter(t => t.kind === 'call_started')).toHaveLength(2);
     expect(budgetTraces[0].kind).toBe('budget_exhausted');
     const hanging = create('timeout', adapterFor(() => new Promise(() => {})), { timeoutMs: 150 });
-    await call(hanging, 'open'); await call(hanging, 'think', { text: '', clientMessageId: 'hang' }); await waitIdle(hanging);
-    expect((await call(hanging, 'traces')).items[0]).toMatchObject({ kind: 'failed', code: 'TIMEOUT' });
+    await call(hanging, 'open'); await call(hanging, 'think', { text: '', clientMessageId: 'hang' });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect((await call(hanging, 'snapshot')).busy).toBe(true); // Legacy timeout option is inert.
+    await call(hanging, 'cancel');
+    expect((await call(hanging, 'traces')).items.find(t => t.kind === 'cancelled')).toMatchObject({ code: 'CANCELLED' });
+    expect((await call(hanging, 'snapshot')).latestEpisode).toMatchObject({ status: 'cancelled', terminalCode: 'CANCELLED' });
     const secret = create('secret', adapterFor(() => { throw new Error('https://admin:password@host API_KEY_SECRET'); }));
     await call(secret, 'open'); await call(secret, 'think', { text: '', clientMessageId: 'secret' }); await waitIdle(secret);
     const serialized = JSON.stringify(await call(secret, 'traces'));
@@ -401,7 +515,7 @@ describe('Person real SQLite runtime integration', () => {
   });
 
   it('uses durable leases, epoch takeover fences and atomic rollback of every state write', async () => {
-    const first = repo('fences', 400), second = repo('fences', 400);
+    const first = repo('fences'), second = repo('fences');
     await first.open('alice');
     const one = await first.admit('alice', { kind: 'think', text: '', clientMessageId: 'one', workerId: 'worker-a', budget: { calls: 1, timeoutMs: 1000 } });
     expect(await second.recover('alice')).toBe(false);
@@ -409,8 +523,12 @@ describe('Person real SQLite runtime integration', () => {
     expect(leased.leaseUntil).toBeInstanceOf(Date);
     expect(leased.leaseUntil.getTime()).toBeGreaterThan(Date.now());
     await expect(second.admit('alice', { kind: 'think', text: '', clientMessageId: 'premature', workerId: 'worker-b', budget: { calls: 1, timeoutMs: 1000 } })).rejects.toMatchObject({ code: 'BUSY' });
-    // No runtime heartbeat: this simulates a crashed process, not a fake repository.
-    await new Promise(resolve => setTimeout(resolve, 450));
+    // Expire this isolated fixture deterministically; no scheduling-sensitive 400ms lease.
+    sql(first, db => {
+      const row = db.prepare('SELECT record FROM persons WHERE namespace = ? AND ownerId = ?').get(first.namespace, 'alice');
+      const p = JSON.parse(row.record); p.leaseUntil = new Date(0).toISOString();
+      db.prepare('UPDATE persons SET record = ? WHERE namespace = ? AND ownerId = ?').run(JSON.stringify(p), first.namespace, 'alice');
+    });
     await second.recover('alice');
     const two = await second.admit('alice', { kind: 'think', text: '', clientMessageId: 'two', workerId: 'worker-b', budget: { calls: 1, timeoutMs: 1000 } });
     await expect(first.commit(one.episode, finalProposal(), { model: 'test/first', effort: null }, 'old-call')).rejects.toMatchObject({ code: 'STALE' });

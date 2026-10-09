@@ -428,7 +428,7 @@ describe('Person supported native host tools', () => {
       expect(await r.list('alice', 'traces', { limit: 50 })).toEqual(before);
     });
 
-    it.each(['cancel', 'close', 'timeout'])('%s joins a delayed real FileWrite and retains raw result without success experience or another model call', async mode => {
+    it.each(['cancel', 'close'])('%s joins a delayed real FileWrite and retains raw result without success experience or another model call', async mode => {
       const r = repo(), began = deferred(), gate = deferred(), aborted = deferred(); release = gate.resolve;
       const real = fileWrite.execute;
       let raw;
@@ -448,13 +448,12 @@ describe('Person supported native host tools', () => {
       const runtime = new PersonRuntime({ repository: r, getProvider: async () => provider, workDir: dir, yeaftDir: dir, config }); runtimes.push(runtime);
       await r.open('alice');
       const { episode } = await r.admit('alice', input(runtime.workerId));
-      runtime.start(episode); const job = runtime.running.get(episode.id);
+      runtime.start(episode);
       await began.promise;
       let stopped = false;
       const stopping = (async () => {
         if (mode === 'cancel') { await r.cancel('alice', episode.id); await runtime.cancel(episode.id); }
-        else if (mode === 'close') await runtime.close();
-        else await job.promise;
+        else await runtime.close();
         stopped = true;
       })();
       await aborted.promise; await sleep(20); expect(stopped).toBe(false);
@@ -463,14 +462,14 @@ describe('Person supported native host tools', () => {
       expect(calls).toBe(2); expect(runtime.running.size).toBe(0);
       const traces = (await r.list('alice', 'traces', { limit: 50 })).items;
       const archives = traces.filter(t => t.kind === 'capability_finalized'); expect(archives).toHaveLength(1);
-      const code = mode === 'cancel' ? 'CANCELLED' : mode === 'close' ? 'INTERRUPTED' : 'TIMEOUT';
+      const code = mode === 'cancel' ? 'CANCELLED' : 'INTERRUPTED';
       expect(archives[0]).toMatchObject({ capability, capabilityManifest: manifest, afterTerminal: true, accepted: false, terminalCode: code,
         result: { ok: true, output: raw, sha256: digest(raw), rawBytes: Buffer.byteLength(raw), source: { implementation: capabilityManifest.source } } });
       expect(archives[0].result.sourceRef).toBe(`tool:${episode.id}:${archives[0].callId}:FileWrite:${digest(raw)}`);
       expect(traces.filter(t => ['capability_result', 'capability_failed'].includes(t.kind) && (t.capability?.id ?? t.capabilityId) === 'FileWrite')).toEqual([]);
       expect((await r.getPerson('alice')).capabilityExperience ?? []).toEqual([]);
       const snapshot = await r.snapshot('alice'); expect(snapshot.state.version).toBe(0);
-      expect(snapshot.latestEpisode).toMatchObject({ status: mode === 'cancel' ? 'cancelled' : mode === 'close' ? 'interrupted' : 'failed', terminalCode: code });
+      expect(snapshot.latestEpisode).toMatchObject({ status: mode === 'cancel' ? 'cancelled' : 'interrupted', terminalCode: code });
       expect(snapshot.messages.filter(m => m.role === 'assistant')).toEqual([]);
       await r.close(); const reopened = repo();
       expect((await reopened.list('alice', 'traces', { limit: 50 })).items.find(t => t.kind === 'capability_finalized')).toEqual(archives[0]);

@@ -19,7 +19,7 @@
 - **共享 Composer**：数字人与 Session 复用 `MessageComposer` 的附件卡片、回形针入口及上传状态管理，支持图片缩略图、名称／大小、失败重试和移除；选择、粘贴、拖入走同一附件生命周期。Enter 发送、Shift+Enter 换行，输入法确认不触发发送；上传未完成或失败时不能发送。数字人不注入 Session 的模型／effort／快捷模型选择，候选模型继续在页内配置；保留 Think／Dream 动作。共享交互不改变各运行时可接受的附件类型与大小。
 - **文件输入**：支持选择、粘贴、拖入 UTF-8 文本／代码／JSON／CSV 和 PNG/JPEG/WebP/GIF 图片，允许无正文发送或带附件 Think；Dream 不消费输入中的附件。最多 4 个、单个 5 MiB、合计 10 MiB；正文最多 8 KiB，正文与文本附件合计最多 24 KiB，超限明确拒绝而不静默截断。Server 只接受认证 owner 的上传引用，Agent 校验后随消息／活动持久保存；附件原文是非指令的用户参考，图片使用原生内容块并要求候选模型支持图像。公共历史只返回名称、类型、大小和摘要，不返回 base64／内部路径；历史元数据不表示当前模型重新读取了文件。PDF／Office 暂不支持，选择不支持的附件时明确提示，不把“上传”冒充“已阅读”。
 - **当前触发策略：仅手动**。只有用户发送消息、点击“思考”或“遐想”才开始一轮；Think 可指定主题或留空，Dream 不要求主题。打开页面、刷新、重连、Agent 重启、空闲计时及上一轮结束都不启动下一轮。一次操作内仍可按预算进行多次模型调用、召回与自判，无需逐步点击；完成、取消或失败后等待下一次显式操作。刷新只同步已有活动与记录，不派发模型计算；未知结果仅由用户以原命令 ID 显式重试，取消不回滚已经提交的认识。UI 待机不常驻状态点或说明；对话中只用无文字的轻量加载动效表示响应中，完成、取消或断线后移除，保留停止入口。活动阶段、完成状态、工具与耗时只在右侧内核的思考记录查看，不占用聊天区域；当前不提供自动模式开关，后端拒绝 `autonomyEnabled: true`。这是当前产品策略，不是由旧 Dream 限制产生的临时缺陷；以后完善后再单独交付自主触发，不因升级静默开启。自动化免去逐轮点击，不取消停止入口或行为/数据授权边界。
-- **能力与模型边界**：四个内置认知方法与 `Capability.create` 元能力；Think / Recall / Capability.create 为基础层，真实使用经验形成有界熟悉层，陌生能力按需 search/view。自创 `Script.*` 仅在隔离 QuickJS 中计算 JSON，不取得宿主或外部权限。搜索可直接准备有界完整合同，不必再查看一遍；不增加 Laya、Jev 或其他选择模型。默认目录另接入 14 项 Session 原生工具：FileRead／FileWrite／FileEdit／Glob／Grep／ListDir／DiskUsage／ApplyPatch／GitRead／Bash／WebSearch／WebFetch／Skill／NotebookEdit，复用原生 schema 与执行器，通过已有目录按需准备完整合同。Skill 读取现有 bundled／instance／project 库；自建 Script 仍不获得这些权限。执行 cwd 来自 Agent 配置，绝对路径与 Shell 权限沿用宿主能力，不是沙箱；可用性不代表部署、删除、重启或读取无关私密数据的授权。不注册 Session 专属管理器、后台 Bash、VP executor 或 MCP。工具原始结果独立归档，模型副本有明确截断标记；外部结果可作来源但不能伪装成用户报告。取消等待本机执行收尾，不能承诺回滚或停止 Shell 已派发的外部效果。每次 episode 默认最多 16 次调用、120 秒；后续模型可自主选自最多八个已配置原生模型，effort 仅在 `YEAFT_THINKING_V1=1`、模型元数据支持且实际请求不突破本轮输出预留时可选。当前输出预留为模型上限与 4096 token 中较小者；Anthropic manual thinking 会扩大 `max_tokens` 的组合不进入可选目录，adaptive / Responses 在预算内仍可选。不是万级能力装配的最终实现。
+- **能力与模型边界**：四个内置认知方法与 `Capability.create` 元能力；Think / Recall / Capability.create 为基础层，真实使用经验形成有界熟悉层，陌生能力按需 search/view。自创 `Script.*` 仅在隔离 QuickJS 中计算 JSON，不取得宿主或外部权限。搜索可直接准备有界完整合同，不必再查看一遍；不增加 Laya、Jev 或其他选择模型。默认目录另接入 14 项 Session 原生工具：FileRead／FileWrite／FileEdit／Glob／Grep／ListDir／DiskUsage／ApplyPatch／GitRead／Bash／WebSearch／WebFetch／Skill／NotebookEdit，复用原生 schema 与执行器，通过已有目录按需准备完整合同。Skill 读取现有 bundled／instance／project 库；自建 Script 仍不获得这些权限。执行 cwd 来自 Agent 配置，绝对路径与 Shell 权限沿用宿主能力，不是沙箱；可用性不代表部署、删除、重启或读取无关私密数据的授权。不注册 Session 专属管理器、后台 Bash、VP executor 或 MCP。工具原始结果独立归档，模型副本有明确截断标记；外部结果可作来源但不能伪装成用户报告。取消等待本机执行收尾，不能承诺回滚或停止 Shell 已派发的外部效果。每次 episode 默认最多 16 次调用，不设整轮时间截止，约 30～60 秒按实际进展反馈；后续模型可自主选自最多八个已配置原生模型，effort 仅在 `YEAFT_THINKING_V1=1`、模型元数据支持且实际请求不突破本轮输出预留时可选。当前输出预留为模型上限与 4096 token 中较小者；Anthropic manual thinking 会扩大 `max_tokens` 的组合不进入可选目录，adaptive / Responses 在预算内仍可选。不是万级能力装配的最终实现。
 - **本地 embedding**：默认固定版本的 multilingual-e5-small q8 ONNX，经 `@huggingface/transformers` 在 CPU 上推理，缓存于 `<yeaftDir>/person/models`。仅首次显式非空 Recall 才可按需下载；启动、页面打开、空查询和普通写入不下载。`YEAFT_PERSON_EMBEDDING=off` 禁用；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止下载，已有缓存可用。关键词 FTS5 + 余弦向量 + RRF 支持中英文，向量是有界精确扫描而非 ANN／百万条规模承诺；缺模型或索引时返回明确降级元数据，Trace 不做向量索引。推理／检索在本机，模型文件下载会连接 Hugging Face；认知 LLM 仍可能把获准 context 发给远端 provider。
 - **未实现**：自主空闲唤醒、事件 Connector、并行多视角、外部 VP 委派、基于语义效果反馈的场景熟练度学习、数据删除/撤权控制台、Rust 身体、外部数据库导入和跨设备迁移。手动 Dream 不等于完整自主 Dream；本地召回不等于完整知识图谱治理。不要用本实验处理依赖未实现撤权/删除治理的敏感数据。
 - **配置**：服务只使用实例 `yeaftDir` 下的 SQLite，不接受存储后端选择或外部数据库配置。旧外部数据库数据不会被自动导入、迁移或删除；本地空库不代表迁移完成。原生认知模型来自实例 `config.json`。建议隔离实例、最小权限与备份；已有服务配置变更须明确授权后重启，不由本功能自动执行。
@@ -39,7 +39,7 @@
 | 2. 鉴权与中继 | Browser → Server → 指定 Agent；Server 提供认证 owner，校验 Agent 访问权及请求关联 | Server 不执行推理；不创建隐藏 Session、WorkItem 或 Coordinator |
 | 3. 准入与持久化 | 认知库去重、忙检查，创建 episode（一轮活动）、租约与版本保护；仅 Send 写用户消息 | 同一命令重试不重复启动；未知结果只能人工以原 ID 重试。过期活动标记中断，不自动续跑 |
 | 4. 激活短期记忆 | Soul、当前状态、触发、模型/能力目录摘要，以及有界历史消息和 Concept 进入 context | 初始候选窗口为最近 12 条消息、最多 12 个关注 Concept + 12 个近期 Concept，再按预算省略整条记录；不是把数据库全部塞进去 |
-| 5. 认知调用 | 第一次采用有效的上次已接受选择，否则采用配置默认模型；后续调用采用数字人指定的模型/effort | 调用前校验可用性和预算、记录输入与选择；默认最多 16 次调用、120 秒，支持的模型最多 8 个 |
+| 5. 认知调用 | 第一次采用有效的上次已接受选择，否则采用配置默认模型；后续调用采用数字人指定的模型/effort | 调用前校验可用性和预算、记录输入与选择；默认最多 16 次调用，无整轮时间截止；约 30～60 秒给阶段回复或真实等待状态，支持的模型最多 8 个 |
 | 6. 保存与校验 | 保存公开输出，解析结构化 proposal，检查格式、实际读取过的来源、Concept 修订、想象标记及后续模型选择 | 代码只能验证来源关系，不能证明语义真实；无效提案失败结束，当前没有自动修复重试回路 |
 | 7. 继续想 | `next` 指定下一模型、effort、原因和可选能力；能力结果与上一提案进入下一次 context | 中间提案只是候选，不覆盖当前认识；已激活能力可直接用，搜索可附完整合同；准备流程不是必经阶段，所有调用仍受同一预算约束 |
 | 8. 接受当前认识 | `next: null` 后，在一个权威库短事务中提交 Concept/revision、state、commit、episode 终态、可选回复与 Trace；SQLite 同事务写对应 `memory_changes` | 必须仍拥有当前租约及正确状态/控制版本；取消、失联 worker 或旧版本不能提交。取消不回滚已完成的提交 |
@@ -133,7 +133,7 @@
        └─ next 为空：尝试原子 commit → completed               [运行时]
 ```
 
-生产入口默认 **最多 4 次逻辑调用、120 秒**；不是无界循环。最后一次若还要求 `next`，runtime 标记 `budget_exhausted`，不额外送一次“收尾调用”，也不提交候选。最终输出应携带需要保留的全部 Concept 修改，而不是假定前几轮已提交；成功活动只有一次认知状态提交。召回和过程记录可以先入库，不等于已采纳认识。
+生产入口默认 **最多 16 次逻辑调用，无整轮时间截止**；不是无界调用循环。约 30～60 秒按实际进展提供阶段回复；长请求尚未返回时仅更新真实等待状态，不额外调用模型。单次 provider 停流保护、工具超时和用户取消仍保留。最后一次若还要求 `next`，runtime 标记 `budget_exhausted`，不额外送一次“收尾调用”，也不提交候选。最终输出应携带需要保留的全部 Concept 修改，而不是假定前几轮已提交；成功活动只有一次认知状态提交。召回和过程记录可以先入库，不等于已采纳认识。
 
 ### 数字人不是模型之外的另一位隐形决策者
 

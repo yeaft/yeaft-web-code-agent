@@ -55,6 +55,27 @@ describe('digital Person strict contracts', () => {
     await service.close();
     await expect(service.request({ ownerId: 'owner', op: 'status' })).rejects.toMatchObject({ code: 'CLOSED' });
   });
+  it('bounds optional feedback without duplicating long replies or exhausting a small model window', async () => {
+    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 32768 })) }, adapter: {} });
+    const previous = finalProposal(); previous.reply = '中'.repeat(2730);
+    const input = { provider, selection: provider.defaultSelection, remainingCalls: 1, previous,
+      snapshot: { person: { id: 'p', soul: 'Honesty.' }, state: { version: 0 }, messages: [], concepts: [] },
+      episode: { id: 'e', kind: 'think', text: '' } };
+    const feedback = { minIntervalMs: 30000, maxIntervalMs: 60000, elapsedSinceReplyMs: 0, due: false, lastReply: previous.reply };
+    const context = assembleContext({ ...input, feedback });
+    const body = JSON.parse(context.messages[0].content);
+    expect(body.previousProposal.reply).toBe(previous.reply);
+    expect(Buffer.byteLength(body.feedback.lastReply)).toBeLessThanOrEqual(512);
+    expect(body.feedback.lastReplyTruncated).toBe(true);
+    expect(body.feedback.lastReply).not.toContain('\ufffd');
+    expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
+    // Put mandatory content exactly at its limit: feedback is omitted, not a failure.
+    const baseline = assembleContext(input);
+    input.snapshot.person.soul += 'x'.repeat(baseline.manifest.contextBudgetBytes - baseline.manifest.contextBytes);
+    const full = assembleContext({ ...input, feedback });
+    expect(JSON.parse(full.messages[0].content).feedback).toBeUndefined();
+  });
+
   it('rejects automatic thinking activation with a configured instance directory', async () => {
     const yeaftDir = mkdtempSync(join(tmpdir(), 'person-admission-'));
     tempDirs.push(yeaftDir);

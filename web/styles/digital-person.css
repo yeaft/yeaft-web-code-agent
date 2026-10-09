@@ -47,6 +47,8 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-activity-status { display: inline-flex; align-items: center; gap: var(--work-center-space-2); min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .person-activity-status > span:first-child { min-width: 0; }
 .person-reading-column > .person-response-loading { padding: var(--work-center-space-3) 0 var(--work-center-space-4); }
+.person-wait-feedback { display: flex; flex-direction: column; gap: var(--work-center-space-1); margin-bottom: var(--work-center-space-2); color: var(--text-secondary); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.person-wait-feedback time, .person-reply-kind { color: var(--text-muted); font-size: 11px; }
 .person-page .typing-indicator { display: inline-flex; flex-shrink: 0; padding: 0; }
 .person-page .typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):not(.svg-dog-scene) { width: 4px; height: 4px; }
 .person-activity-disclosure { color: var(--text-muted); font-size: 11px; white-space: nowrap; }

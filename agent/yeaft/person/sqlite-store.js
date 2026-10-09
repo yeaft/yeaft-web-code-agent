@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isMainThread } from 'node:worker_threads';
-import { admissionReceipt, bytes, digest, fail, identifier, LIMITS, PersonError, text } from './contracts.js';
+import { admissionReceipt, bytes, digest, fail, FEEDBACK, identifier, LIMITS, PersonError, text } from './contracts.js';
 import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
 import { SCHEMA, TABLES } from './sqlite-schema.js';
 import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
@@ -53,7 +53,7 @@ const publicOutput = (output, failed) => {
     : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
 };
 const READS = new Set(['receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
-const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
+const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
 const sequence = value => {
@@ -257,6 +257,17 @@ export class SqlitePersonStore {
   own(episode) { const p = this.fenced(episode); if (!p) fail('STALE'); return p; }
   heartbeat(episode) {
     const p = this.own(episode); p.leaseUntil = new Date(this.now.getTime() + this.leaseMs); p.writeSerial++; this.put('persons', p);
+    const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
+    if (!record || record.status !== 'running') fail('STALE');
+    const lastAt = new Date(record.feedback?.at ?? record.lastReplyAt ?? record.createdAt).getTime();
+    // Heartbeats are at most 5s apart: publish the fallback between 55–60s.
+    // This updates one snapshot field, never adds messages or schedules cognition.
+    if (this.now.getTime() - lastAt >= FEEDBACK.maxMs - 5000 || record.feedback) {
+      const phase = record.openCall ? 'model' : record.openCapability ? 'capability' : 'preparing';
+      record.feedback = { at: this.now.getTime() - lastAt >= FEEDBACK.maxMs - 5000 ? this.now.toISOString() : record.feedback.at, phase };
+      if (phase === 'capability') record.feedback.capabilityId = record.openCapability.capability?.id;
+      this.put('episodes', record);
+    }
   }
   append(episode, kind, data) {
     // Call proof/publication events are emitted only by their transactional methods.
@@ -366,6 +377,32 @@ export class SqlitePersonStore {
       state: stateView(state), messages: this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12').reverse().map(messageView),
       concepts: [...new Map([...focused, ...recent].map(c => [c.id, conceptView(c)])).values()] };
   }
+  /** Publish only a validated, complete call's reply. This is communication, not
+   * a state/Concept commit. Fencing, dedupe and the memory journal share one transaction. */
+  publishProgress(episode, { callId, reply }) {
+    const p = this.own(episode), scope = this.episodeScope(episode);
+    identifier(callId); text(reply, 8192);
+    const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    if (!record || record.status !== 'running' || record.openCall || record.openCapability) fail('STALE');
+    const prior = this.rows('messages', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') = 'progress'", [episode.id]);
+    const duplicate = prior.find(m => m.callId === callId);
+    if (duplicate) { if (duplicate.text !== reply) fail('INVALID_REQUEST'); return messageView(duplicate); }
+    const proof = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, callId]);
+    const accepted = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'activity' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.disposition') = 'candidate'", [episode.id, callId]);
+    let proposal;
+    try { proposal = JSON.parse(proof?.output?.text); } catch { fail('INVALID_REQUEST'); }
+    if (!accepted || !proposal.next || proposal.reply !== reply) fail('INVALID_REQUEST');
+    // Provider latency counts too: a call started before 30s can finish after it.
+    if (this.now.getTime() - new Date(record.lastReplyAt ?? record.createdAt).getTime() < FEEDBACK.minMs ||
+        prior.some(m => m.text.trim() === reply.trim())) return null;
+    p.messageSeq++; p.writeSerial++; this.put('persons', p);
+    const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id,
+      callId, replyKind: 'progress', role: 'assistant', text: reply, createdAt: this.now });
+    this.put('messages', message, true); this.journal(scope, 'messages', message);
+    record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
+    this.trace(episode.ownerId, episode.id, 'progress_reply', { callId, messageId: message.id });
+    return messageView(message);
+  }
   commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     const p = this.own(episode), scope = this.episodeScope(episode);
     if (proposal.baseStateVersion !== episode.baseStateVersion) fail('STALE');
@@ -391,7 +428,7 @@ export class SqlitePersonStore {
     this.put('state_commits', this.doc(scope, { id: randomUUID(), version: p.stateVersion, parentVersion: episode.baseStateVersion,
       episodeId: episode.id, callId, conceptRevisions: revisions, state: stateView(state), createdAt: this.now }), true);
     if (proposal.reply) {
-      const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id, role: 'assistant', text: proposal.reply, createdAt: this.now });
+      const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id, callId, replyKind: 'final', role: 'assistant', text: proposal.reply, createdAt: this.now });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
     }
     const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
@@ -504,7 +541,8 @@ export class SqlitePersonStore {
     const scope = this.scope(ownerId), p = this.getPerson(ownerId), state = this.one('states', scope);
     const messages = this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 21');
     const episode = this.one('episodes', scope, ' ORDER BY inputWatermark DESC');
-    const latestEpisode = episode ? { id: episode.id, status: episode.status,
+    const latestEpisode = episode ? { id: episode.id, status: episode.status, createdAt: episode.createdAt,
+      ...(episode.status === 'running' && episode.feedback ? { feedback: episode.feedback } : {}),
       ...(episode.terminalCode ? { terminalCode: episode.terminalCode } : {}), ...(episode.endedAt ? { endedAt: episode.endedAt } : {}) } : null;
     return { latestEpisode, person: this.personView(p), state: stateView(state), concepts: this.focused(scope, state.focusConceptIds).slice(0, 12).map(conceptView),
       messages: messages.slice(0, 20).reverse().map(messageView), nextMessagesCursor: messages.length > 20 ? String(messages[19].seq) : null,

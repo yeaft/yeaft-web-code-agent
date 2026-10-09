@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 
 // 只允许应用层显式产物；不要求或保存 provider 的隐藏推理。
-export const LIMITS = Object.freeze({ inputBytes: 8192, outputBytes: 65536, contextBytes: 65536, calls: 16, timeoutMs: 120000, leaseMs: 15000 });
+export const LIMITS = Object.freeze({ inputBytes: 8192, outputBytes: 65536, contextBytes: 65536, calls: 16, leaseMs: 15000 });
+// Feedback cadence is not an execution deadline. Slow providers/tools remain cancellable.
+export const FEEDBACK = Object.freeze({ minMs: 30000, maxMs: 60000 });
+export const FEEDBACK_INSTRUCTIONS = "feedback describes user-visible communication, not a deadline. After about 30 seconds without a substantive reply, use reply for a concise, useful progress update at a natural execution boundary; aim for 30\u201360 seconds according to actual progress. Explain verified findings, limitations and what you are checking next, in the user's language. Do not repeat feedback.lastReply, invent progress, expose internal deliberation/decision/selfCheck, or claim an unexecuted tool succeeded. If no meaningful update exists, reply:null is appropriate; the host shows an honest waiting status around 60 seconds without interrupting the current request. With next non-null, a validated reply may be published as progress independently of cognitive state, and retained on cancellation/failure. Only next:null commits cognition and supplies the final reply. Do not call a tool or an extra model just to report progress. Each final reply should stand on its own and note unfinished work.";
 const ERRORS = {
   INVALID_REQUEST: 'Invalid digital person request.', NOT_CONFIGURED: 'Digital person storage configuration is missing.',
   STORAGE_UNAVAILABLE: 'Digital person storage is unavailable. Check instance storage and database configuration.',

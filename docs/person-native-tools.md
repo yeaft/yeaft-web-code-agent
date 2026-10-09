@@ -26,9 +26,17 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 
 基础认知能力继续在 foundation 层；所有上述工具默认注册在 Person catalog，名称在认知上下文 `capabilities.nativeTools` 中列出。`catalog.view` 可直接按已知 ID 加载完整原生 JSON Schema；`catalog.search` 可准备预算内的完整契约，未返回契约的条目必须再 view。只有实际渲染且版本/revision 当前的 active 契约能执行，搜索和只读 inspection 本身不制造成功经验。
 
-默认认知调用预算从 4 增至 **16**（服务可配置 1..32），仍须预留最后一次提交；超时默认仍为 120 秒。预算不保证工具链必然完成；模型上下文不足时明确失败，不静默执行未渲染能力。较小模型窗口可能不足以同时容纳 foundation、完整原生契约、工具结果和既有记录。
+默认认知调用预算为 **16**（服务可配置 1..32），仍须预留最后一次提交；**不设整轮墙钟截止时间**，旧服务选项 `timeoutMs` 不再决定 episode 的生命周期。单次 provider 停流保护、原生工具超时、worker lease 与用户取消仍生效。预算不保证工具链必然完成；模型上下文不足时明确失败，不静默执行未渲染能力。较小模型窗口可能不足以同时容纳 foundation、完整原生契约、工具结果和既有记录。
 
 原生能力 inspection 返回真实模块路径、模块内容 SHA-256、registry dispatch revision 和所列公共执行依赖 revision；能力 revision 同时绑定这些来源与完整契约。它不是 npm 版本或环境二进制版本证明。创建脚本的来源仍是 Person episode/call 及实际 QuickJS 测试证据；版本/revision 匹配才可恢复经验。
+
+## 30～60 秒阶段反馈
+
+数字人以距上次实质回复的时间提示认知模型：约 30 秒后，在自然调用边界使用 `reply` 给出有依据的发现、限制与下一步；`next` 非空仍可继续执行。只发布完整解析、校验通过的回复，不投影 proposal JSON 碎片、内部 decision/selfCheck 或工具原始内容，不为了汇报增加模型调用或打断正在等待的请求。没有新结论可以不写阶段回复。
+
+如果到约 60 秒仍无实质回复，现有心跳在 episode snapshot 中更新同一条等待状态，区分模型、能力执行和准备阶段；不制造对话消息，不编造百分比或完成结论。阶段回复到达后清除等待状态并重新计时。反馈是近似节奏，不是执行超时；断网、服务失联或浏览器暂停不能保证准点送达。
+
+阶段消息带 `replyKind: progress`、`episodeId` 与 `callId`，按当前执行权和调用证据去重入库，并进入自己的 message journal；它们不提交 Concept 或认知 state version。最终 `next:null` 仍走原子提交，回复标为 `final`。取消、失败或重启保留已经发布的阶段回复，旧 worker 不可继续发布。只适用于 Digital Person，不改变普通 Session。界面在同一轮下区分阶段回复和最终回复，等待状态不刷屏，也不因后续反馈重复置顶。
 
 ## 结果、错误、取消
 
@@ -36,7 +44,7 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 - 成功外部结果有 `tool:<episode>:<call>:<tool>:<sha256>` 引用和实际实现来源；这表示本次工具观察，不表示客观事实或用户报告。外部引用可以用于 hypothesis/uncertain 等记录，不能单独为 `reported` 提供 user-reported lineage。
 - 原生 JSON 错误结果记录为 `capability_failed`，不算成功经验。写入错误的 effects 默认为 unknown；不承诺回滚或自动安全重试。
 - 取消、服务关闭和工具超时会等待实际执行 promise 结束；支持 signal 的工具收到取消。已经交给文件系统的写入可能完成。工具不响应取消时，join 可能延长停止等待；不能在副作用还运行时声明停止成功。
-- 每次工具调用先记录绑定原 worker、episode、call 和参数摘要的 invocation。取消、关闭或活动超时后，原执行者仍可一次性归档真实结果为 `capability_finalized`，保留 raw output、SHA 和来源；不恢复认知提交权限，不增加成功经验。结果不可确认时明确标记 effects unknown，不能声称回滚。对话活动区只投影执行终态，原始内容留在调试记录，不进入公共思考文本。
+- 每次工具调用先记录绑定原 worker、episode、call 和参数摘要的 invocation。取消、关闭或工具超时后，原执行者仍可一次性归档真实结果为 `capability_finalized`，保留 raw output、SHA 和来源；不恢复认知提交权限，不增加成功经验。结果不可确认时明确标记 effects unknown，不能声称回滚。对话活动区只投影执行终态，原始内容留在调试记录，不进入公共思考文本。
 - `ToolRegistry` 超时仍是失败，即使底层 promise 随后成功。无法确认 Bash 进程树退出时终止当前活动，不继续安全重试或把结果算作成功。取消后本服务在旧活动 join 结束前不启动同 owner 的新活动。
 - 此本地 join fence 不提供跨进程宿主副作用锁。若多个服务进程使用同一 Person 存储，既有 repository lease/cancel fence 能阻止旧认知提交，但不能终止另一个进程或另一台宿主上的外部动作；不要在旧执行宿主退出未确认时恢复外部写操作。
 
@@ -46,7 +54,7 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 - 私有数据位于 `<yeaftDir>/person/tasks/<scope-hash>/`，保留任务元数据、shell logs、子 Agent JSONL logs、tool-results 和 completion records，不写入普通 Session transcript 或 manifest。实例配置始终从当前 `yeaftDir` 读取。
 - 正常认知提交不会关闭后台任务或子 Agent。所有任务强制 `status_only`；完成不会唤回模型，不自动创建 Person episode。完成/运行证据在**下一次显式 send/think/dream** 的上下文中可见，或由已运行 episode 主动执行 WaitAgent/WaitTask 收集。
 - 下一次模型上下文的 task evidence 使用总计最多 8 KiB、单条最多 2 KiB 的 JSON/UTF-8 预算；当前模型窗口还可进一步省略条目。完整 raw logs 和原始工具归档保留在私有目录，模型可使用 Task 工具分页检查。引用仅代表外部观察，不能单独建立 `reported` 用户来源。
-- 显式取消指定 episode 时同时停止该 episode 已启动的后台效果，**即使认知已经 completed**；不指定 episode 则停止该 owner 的全部已知任务。异常、活动超时或认知调用预算耗尽停止 originating episode 的异步工作，不停止其他正常已提交 episode 的任务。服务 close 停止并 join 本 host 的实际工具效果和子 driver，而不是仅改变状态。
+- 显式取消指定 episode 时同时停止该 episode 已启动的后台效果，**即使认知已经 completed**；不指定 episode 则停止该 owner 的全部已知任务。异常、工具超时或认知调用预算耗尽停止 originating episode 的异步工作，不停止其他正常已提交 episode 的任务。服务 close 停止并 join 本 host 的实际工具效果和子 driver，而不是仅改变状态。
 - 重启后失去进程控制的任务标为 `orphaned`；未完成子 Agent 变为 failed 并保留 orphaned recovery evidence。保存的完成结果/日志可恢复，但不会假装仍持有进程句柄或自动重试外部动作。
 
 ## 内核中的任务查看与管理
@@ -65,7 +73,7 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 
 用量来源是 provider 实际返回的 usage，不从字符数估算计费 token；流式增量累加一次，OpenAI 输入已包含的缓存不再相加，Anthropic 独立报告的缓存计入输入总量。推理 token 是输出的子集，不重复计入总量。失败或取消仍保留已捕获用量；缺失 usage、尚未结束的调用或旧记录不能证明使用完整累加规则或缓存口径不明时明确标记未完整确认，已知值只能视为下限，不能以 0 代替未知。
 
-此页展示 **Person 主线程** 的用量，不包含独立子 Engine 的额外消耗，也不计算费用或执行用户可设的 token 硬限额。调用模型表示分派到配置的模型引用，不保证供应商内部 alias 对应的底层版本。每个 episode 既有的调用次数上限、超时与单次输出预留继续生效；查看页不能代替完整的跨线程费用预算。原始调试日志入口仍在思考记录内，不把 prompt、工具参数或隐式思考复制进用量摘要。
+此页展示 **Person 主线程** 的用量，不包含独立子 Engine 的额外消耗，也不计算费用或执行用户可设的 token 硬限额。调用模型表示分派到配置的模型引用，不保证供应商内部 alias 对应的底层版本。每个 episode 的调用次数上限与单次输出预留继续生效，单次 provider/工具保留自身超时保护；查看页不能代替完整的跨线程费用预算。原始调试日志入口仍在思考记录内，不把 prompt、工具参数或隐式思考复制进用量摘要。
 
 ## 子 Agent 限制
 
