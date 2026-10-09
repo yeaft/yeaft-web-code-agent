@@ -8,6 +8,7 @@ const OFFICE_EXT = new Set(['.docx', '.xlsx', '.xls', '.pptx', '.ppt']);
 const PDF_EXT = new Set(['.pdf']);
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico']);
 const VIDEO_EXT = new Set(['.mp4', '.m4v', '.webm', '.ogv', '.ogg', '.mov']);
+const HTML_EXT = new Set(['.html', '.htm']);
 const MD_EXT = new Set(['.md', '.markdown', '.mdx']);
 
 export function getFileType(name) {
@@ -25,6 +26,15 @@ export function isMarkdownFile(name) {
   const dot = name.lastIndexOf('.');
   if (dot < 0) return false;
   return MD_EXT.has(name.substring(dot).toLowerCase());
+}
+
+export function isHtmlFile(name) {
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 && HTML_EXT.has(name.substring(dot).toLowerCase());
+}
+
+export function isPreviewableTextFile(name) {
+  return isMarkdownFile(name) || isHtmlFile(name);
 }
 
 export function getModeForFile(filename) {
@@ -50,7 +60,7 @@ export function getModeForFile(filename) {
 
 export function createFileEditor(store, {
   activeFile, editorContainer, fontSize,
-  clearFindMarkers, openFindBar, saveFile
+  clearFindMarkers, openFindBar, saveFile, canCreateEditor = () => true
 }) {
   const debugStatus = Vue.ref('');
   const undoHistoryMap = Vue.reactive({});
@@ -66,6 +76,8 @@ export function createFileEditor(store, {
   };
 
   const createEditor = (fileObj, retryCount = 0) => {
+    // Delayed reads/retries may outlive a tab or a switch back to Preview.
+    if (!fileObj || Vue.toRaw(fileObj) !== Vue.toRaw(activeFile.value) || !canCreateEditor(fileObj)) return;
     if (!editorContainer.value) {
       if (retryCount < 20) {
         setTimeout(() => createEditor(fileObj, retryCount + 1), 100);

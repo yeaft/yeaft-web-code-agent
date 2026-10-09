@@ -2,7 +2,7 @@ import { getFileIconSvg, getFolderIconSvg } from '../utils/fileIcons.js';
 import { createFindReplace } from './files/findReplace.js';
 import { createFileOperations } from './files/fileOperations.js';
 import { createFileTree } from './files/fileTree.js';
-import { createFileEditor, getFileType, isMarkdownFile } from './files/fileEditor.js';
+import { createFileEditor, getFileType, isPreviewableTextFile } from './files/fileEditor.js';
 import { createFilePreview } from './files/filePreview.js';
 import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
@@ -295,9 +295,9 @@ export default {
             <span v-if="activeFile.isDirty" class="file-content-dirty" :title="$t('files.unsaved')">●</span>
           </div>
           <div class="file-content-actions">
-            <template v-if="isActiveMarkdown">
-              <button type="button" class="file-action-btn file-action-text" :class="{ active: mdPreviewMode }" @click="mdPreviewMode = true">{{ $t('files.preview') }}</button>
-              <button type="button" class="file-action-btn file-action-text" :class="{ active: !mdPreviewMode }" @click="switchToMdEdit">{{ $t('files.edit') }}</button>
+            <template v-if="isActiveTextPreview">
+              <button type="button" class="file-action-btn file-action-text" :class="{ active: textPreviewMode }" :aria-pressed="textPreviewMode" @click="switchToTextPreview">{{ $t('files.preview') }}</button>
+              <button type="button" class="file-action-btn file-action-text" :class="{ active: !textPreviewMode }" :aria-pressed="!textPreviewMode" @click="switchToTextEdit">{{ $t('files.edit') }}</button>
             </template>
             <template v-if="isTextZoomAvailable">
               <button type="button" class="zoom-btn" @click="zoomOut" :title="$t('git.zoomOut')">−</button>
@@ -326,11 +326,17 @@ export default {
           <!-- 文本文件: CodeMirror 编辑器 -->
           <template v-if="!activeFile.fileType || activeFile.fileType === 'text'">
           <!-- Markdown 渲染预览 -->
-          <div v-if="isActiveMarkdown && mdPreviewMode" class="file-preview-container md-preview-container" ref="mdPreviewRef">
+          <div v-if="isActiveMarkdown && textPreviewMode" class="file-preview-container md-preview-container" ref="mdPreviewRef">
             <div class="markdown-body md-file-preview" :style="{ fontSize: fontSize + 'px' }" v-html="mdRenderedHtml"></div>
           </div>
+          <!-- HTML 静态预览：不授予脚本或同源权限 -->
+          <div v-if="isActiveHtml && textPreviewMode" class="file-preview-container html-preview-container">
+            <div class="html-preview-note">{{ $t('files.htmlPreviewStatic') }}</div>
+            <iframe :key="activeFile.path" :srcdoc="htmlPreviewDocument" sandbox="" referrerpolicy="no-referrer"
+              :title="$t('files.htmlPreviewTitle', { name: activeFile.name })" class="file-preview-iframe html-preview-iframe"></iframe>
+          </div>
           <!-- 搜索/替换栏 + CodeMirror 编辑器 -->
-          <template v-if="!isActiveMarkdown || !mdPreviewMode">
+          <template v-if="!isActiveTextPreview || !textPreviewMode">
           <div class="find-replace-bar" v-if="findBarVisible">
             <div class="find-row">
               <input
@@ -669,7 +675,8 @@ export default {
     const zoomOut = () => setFontSize(fontSize.value - 1);
     const isTextZoomAvailable = Vue.computed(() => {
       const file = tabs?.activeFile.value;
-      return !!file && (!file.fileType || file.fileType === 'text');
+      return !!file && (!file.fileType || file.fileType === 'text')
+        && !(preview?.isActiveHtml.value && preview.textPreviewMode.value);
     });
     const onWheel = (e) => {
       if (!isTextZoomAvailable.value) return;
@@ -716,7 +723,10 @@ export default {
 
     // Shared computed refs: created before composables, passed to those that need them.
     // These use getter functions to safely defer access to `tabs` (assigned later).
-    const activeFileRef = Vue.computed(() => tabs ? tabs.activeFile.value : null);
+    // Preview watches this ref during construction, before tabs exists.
+    // Keep that late binding reactive so the initial null cannot stay cached.
+    const tabsRef = Vue.shallowRef(null);
+    const activeFileRef = Vue.computed(() => tabsRef.value?.activeFile.value ?? null);
     const treePathRef = Vue.computed(() => tree ? tree.treePath.value : '');
 
     // 1. Find/Replace
@@ -728,12 +738,14 @@ export default {
       editorContainer, fontSize,
       clearFindMarkers: find.clearFindMarkers,
       openFindBar: find.openFindBar,
-      saveFile: () => tabs.saveFile()
+      saveFile: () => tabs.saveFile(),
+      canCreateEditor: file => !isPreviewableTextFile(file.name) || !preview.textPreviewMode.value
     });
 
     // 3. File preview
     const preview = createFilePreview(activeFileRef, {
-      editorContainer, createEditor: editor.createEditor, t
+      editorContainer, createEditor: editor.createEditor,
+      destroyEditor: editor.destroyEditor, saveCurrentUndoHistory: editor.saveCurrentUndoHistory, getTheme: () => store.theme, t
     });
 
     // 4. File operations
@@ -750,13 +762,14 @@ export default {
       saveAllUndoHistory: editor.saveAllUndoHistory,
       cleanupUndoHistory: editor.cleanupUndoHistory,
       deleteConversationHistory: editor.deleteConversationHistory,
-      mdPreviewMode: preview.mdPreviewMode,
+      textPreviewMode: preview.textPreviewMode,
       renderOfficeLocal: preview.renderOfficeLocal,
       performFind: find.performFind,
       findBarVisible: find.findBarVisible,
       findQuery: find.findQuery,
       t
     });
+    tabsRef.value = tabs;
 
     // 6. File tree (depends on ops, tabs)
     tree = createFileTree(store, {
@@ -805,7 +818,7 @@ export default {
       bumpTabRevision: tabs.bumpTabRevision,
       acceptTabsRestoreRequest: tabs.acceptTabsRestoreRequest,
       tree, fp, qo, ops,
-      mdPreviewMode: preview.mdPreviewMode,
+      textPreviewMode: preview.textPreviewMode,
       renderOfficeLocal: preview.renderOfficeLocal,
       editorContainer, t,
       routeKey: props.routeKey,
@@ -874,14 +887,14 @@ export default {
       (newContent, oldContent) => {
         const file = tabs.activeFile.value;
         if (file && newContent != null && oldContent == null && !file.cmInstance && (!file.fileType || file.fileType === 'text')) {
-          if (isMarkdownFile(file.name) && preview.mdPreviewMode.value) return;
+          if (isPreviewableTextFile(file.name) && preview.textPreviewMode.value) return;
           Vue.nextTick(() => { setTimeout(() => { if (!file.cmInstance) editor.createEditor(file); }, 150); });
         }
       }
     );
 
     Vue.watch(
-      [preview.mdRenderedHtml, preview.mdPreviewMode],
+      [preview.mdRenderedHtml, preview.textPreviewMode],
       ([html, previewOn]) => {
         if (html && previewOn) Vue.nextTick(() => { setTimeout(() => preview.renderMermaidBlocks(), 50); });
       }
@@ -1035,8 +1048,11 @@ export default {
       fileLoading: tabs.fileLoading, fileSaving: tabs.fileSaving,
       editorContainer, officePreviewContainer: preview.officePreviewContainer,
       mdPreviewRef: preview.mdPreviewRef,
-      isActiveMarkdown: preview.isActiveMarkdown, mdPreviewMode: preview.mdPreviewMode,
-      mdRenderedHtml: preview.mdRenderedHtml, switchToMdEdit: preview.switchToMdEdit,
+      isActiveMarkdown: preview.isActiveMarkdown, textPreviewMode: preview.textPreviewMode,
+      mdRenderedHtml: preview.mdRenderedHtml, switchToTextEdit: preview.switchToTextEdit,
+      switchToTextPreview: preview.switchToTextPreview,
+      isActiveTextPreview: preview.isActiveTextPreview, isActiveHtml: preview.isActiveHtml,
+      htmlPreviewDocument: preview.htmlPreviewDocument,
       folderPickerOpen: fp.folderPickerOpen, folderPickerPath: fp.folderPickerPath,
       folderPickerEntries: fp.folderPickerEntries, folderPickerLoading: fp.folderPickerLoading,
       folderPickerSelected: fp.folderPickerSelected,
