@@ -22,7 +22,7 @@ export const CAPABILITY_LIMITS = Object.freeze({ familiar: 2, familiarMaxAgeMs: 
 export const CAPABILITY_MAP = Object.freeze({
   domains: [...new Set(manifests.map(m => m.domain)), 'script'], total: manifests.length,
   nativeTools: NATIVE_TOOL_IDS,
-  nativeToolNotice: 'Default native host tools are in this catalog, not QuickJS. View a known nativeTools ID to prepare its complete schema, or search. Bash is foreground only; Session-specific tools are not registered.',
+  nativeToolNotice: 'Default native host tools are in this catalog, not QuickJS. View a known nativeTools ID to prepare its complete schema, or search. Bash supports background tasks and SpawnAgent supports independent parallel threads in the private Person task namespace. Collect results explicitly; completion does not start cognition. Session-specific tools are not registered.',
   discover: { id: 'catalog.search', args: '{query?:string,cursor?:string|null,limit?:1..5}', description: 'Browse/search summaries with budgeted complete contracts. Returned contracts are prepared for the next call; omitted contracts require catalog.view. All entries remain reachable by pagination.' },
   inspect: { id: 'catalog.view', args: '{id:string}', description: 'Load a known ID directly, or a contract omitted by search. No search is required first.' },
   intrinsic: 'Think is always available as a cognitive activity; no tool call is required.',

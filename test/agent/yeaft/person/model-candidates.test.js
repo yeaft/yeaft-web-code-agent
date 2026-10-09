@@ -301,10 +301,12 @@ for (const backend of ['sqlite', 'mongo']) {
         source: { kind: 'person-created', episodeId: episode.id, callId } });
       expect(script.contract).toMatchObject({ access: 'pure-computation', args: { input: expect.any(String) } });
       expect(skills.find(c => c.id === 'Think')).toMatchObject({ source: { kind: 'builtin' }, contract: { instructions: expect.any(String) } });
-      expect((await call(s, 'inspect', { section: 'skills' }, 'bob')).items).toHaveLength(5 + NATIVE_TOOL_IDS.length);
+      expect((await call(s, 'inspect', { section: 'skills', limit: 50 }, 'bob')).items).toHaveLength(5 + NATIVE_TOOL_IDS.length);
       expect((await call(s, 'inspect', { section: 'memory' }, 'bob')).items).toEqual([]);
       expect(await raw(r)).toEqual(before); expect(stream).not.toHaveBeenCalled();
-      expect(JSON.stringify(skills)).not.toMatch(/ownerId|namespace|personId|leaseOwner|apiKey|attachments/);
+      // Native descriptions may mention "namespace" or attachments; reject
+      // private record fields rather than ordinary contract prose.
+      expect(JSON.stringify(skills)).not.toMatch(/"(?:ownerId|namespace|personId|leaseOwner|apiKey|attachments)"\s*:/);
     });
 
     it('projects legacy/raw records through explicit public fields without exposing host data', async () => {

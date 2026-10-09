@@ -1,6 +1,6 @@
 # Digital Person 原生基础工具
 
-Digital Person 默认具备一组真实的原生工具，不再只有认知方法和纯计算脚本。工具直接复用 `agent/yeaft/tools/` 的定义、JSON Schema、执行函数和 `ToolRegistry` dispatch；仍由当前认知模型通过 `next.capability` 请求，不增加选择器模型或另一条 Agent/Session。
+Digital Person 默认具备一组真实的原生工具，不再只有认知方法和纯计算脚本。工具直接复用 `agent/yeaft/tools/` 的定义、JSON Schema、执行函数和 `ToolRegistry` dispatch；仍由当前认知模型通过 `next.capability` 请求，不增加选择器模型或普通 Session。子 Agent 使用真正的原生 Engine，执行自己的工具 loop，不使用 Person proposal JSON collector。
 
 ## 当前支持
 
@@ -10,11 +10,13 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 | `Glob` / `Grep` / `ListDir` / `DiskUsage` | 使用原生查找、目录和磁盘占用工具。未提供 managed CLI 安装生命周期，已有 CLI 可用时使用，其他情况按原生工具回退 Node 实现。 |
 | `ApplyPatch` / `NotebookEdit` | 使用原生补丁校验和 notebook 编辑；运行时写入失败可能留下部分修改。 |
 | `GitRead` | 使用原生只读 Git 证据契约，不 fetch、不创建 worktree；执行目录来自部署工作目录。 |
-| `Bash` | 只支持前台 Shell。原生超时、进程树清理和输出捕获约定保持不变；Linux 需要原生工具所要求的 systemd 或 unshare 支持。不支持 `background:true`，也不创建假的 Session TaskManager。 |
+| `Bash` | 支持前台和 `background:true` 后台 Shell。原生超时、进程树清理和输出捕获约定保持不变；Linux 需要原生工具所要求的 systemd 或 unshare 支持。后台任务由 Person 私有 TaskManager 管理。 |
 | `WebSearch` / `WebFetch` | 使用原生网络实现和 AbortSignal；搜索配置来自实例配置。搜索源不可用时返回真实错误，不伪造搜索结果。 |
 | `Skill` | 使用现有 SkillManager 的 bundled → instance user → project tiers 和覆盖顺序，只读 list/view/search/load。不会把 Person-created `Script.*` 发布到普通 Skill 库。 |
+| `SpawnAgent` / `ListAgents` / `WaitAgent` / `PromptAgent` / `CloseAgent` / `UpdateAgent` | 复用原生子 Agent 生命周期、角色工具权限、显式预算和日志；仅操作当前 Person 的子 Agent。 |
+| `ListTasks` / `ReadTaskLog` / `WaitTask` / `CancelTask` | 查看、分页读日志、有界等待、取消当前 Person 私有任务；WaitTask 只返回状态和日志引用，子 Agent 结果使用 WaitAgent。 |
 
-`workDir` 是部署传入的执行目录；`yeaftDir` 仍拥有实例配置、Person 数据和 user skills。缺少显式 `workDir` 的程序调用兼容使用进程工作目录。Person transcript、能力经验和创建的脚本只写入自己的 repository；没有普通 Session transcript 或 Session 身份。
+`workDir` 是部署传入的执行目录；`yeaftDir` 仍拥有实例配置、Person 数据和 user skills。缺少显式 `workDir` 的程序调用兼容使用进程工作目录。Person transcript、能力经验和创建的脚本只写入自己的 repository；没有普通 Session transcript 或 Session catalog 注册。TaskManager 为兼容原生存储接口使用内部 Session-shaped key，它不是用户 Session。
 
 目录、准备和实际执行遵守当前 Agent 的 `plugins.tools` 配置：缺少类别字段沿用默认可用行为，显式空数组禁用全部，单工具 allowlist 只开放指定工具；执行前再次读取实例配置，已准备的旧契约不能绕过后续禁用。内核查看器只列出当前启用的工具。
 
@@ -38,8 +40,25 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 - `ToolRegistry` 超时仍是失败，即使底层 promise 随后成功。无法确认 Bash 进程树退出时终止当前活动，不继续安全重试或把结果算作成功。取消后本服务在旧活动 join 结束前不启动同 owner 的新活动。
 - 此本地 join fence 不提供跨进程宿主副作用锁。若多个服务进程使用同一 Person 存储，既有 repository lease/cancel fence 能阻止旧认知提交，但不能终止另一个进程或另一台宿主上的外部动作；不要在旧执行宿主退出未确认时恢复外部写操作。
 
+## 异步生命周期与归属
+
+- task host 按 canonical `yeaftDir`、部署 namespace、authenticated owner 和 Person 隔离，跨正常 episode 提交保持稳定。构造服务、status/open 和只读 inspection 不创建 task host，不发起子模型请求。无实例根的 legacy direct Mongo embedding 仍不能执行异步工具。
+- 私有数据位于 `<yeaftDir>/person/tasks/<scope-hash>/`，保留任务元数据、shell logs、子 Agent JSONL logs、tool-results 和 completion records，不写入普通 Session transcript 或 manifest。实例配置始终从当前 `yeaftDir` 读取。
+- 正常认知提交不会关闭后台任务或子 Agent。所有任务强制 `status_only`；完成不会唤回模型，不自动创建 Person episode。完成/运行证据在**下一次显式 send/think/dream** 的上下文中可见，或由已运行 episode 主动执行 WaitAgent/WaitTask 收集。
+- 下一次模型上下文的 task evidence 使用总计最多 8 KiB、单条最多 2 KiB 的 JSON/UTF-8 预算；当前模型窗口还可进一步省略条目。完整 raw logs 和原始工具归档保留在私有目录，模型可使用 Task 工具分页检查。引用仅代表外部观察，不能单独建立 `reported` 用户来源。
+- 显式取消指定 episode 时同时停止该 episode 已启动的后台效果，**即使认知已经 completed**；不指定 episode 则停止该 owner 的全部已知任务。异常、活动超时或认知调用预算耗尽停止 originating episode 的异步工作，不停止其他正常已提交 episode 的任务。服务 close 停止并 join 本 host 的实际工具效果和子 driver，而不是仅改变状态。
+- 重启后失去进程控制的任务标为 `orphaned`；未完成子 Agent 变为 failed 并保留 orphaned recovery evidence。保存的完成结果/日志可恢复，但不会假装仍持有进程句柄或自动重试外部动作。
+
+## 子 Agent 限制
+
+子 Engine 只继承 Person 已支持的真实 native 工具和当前插件 allowlist；原生 `DiscoverTools` 仅供子 Engine 使用，不进入 Person proposal catalog。角色 baseline 和 `allow_tools` 继续约束子工具，不能授予嵌套 orchestration。没有 Session HistorySearch、交互 AskUser、路由、MCP、Work Center 或 worktree 管理。
+
+子 provider 被固定到产生 SpawnAgent proposal 的实际父模型，而不是 `proposal.next.model`。实际父 requested/effective effort 与 wire decision 传入原生子 Engine；子请求不能通过 role/fast/fallback 映射切换到其他候选模型或提升继承 effort 上限。子模型照常处理原生 tools/messages/events，非 Person JSON 提案协议。
+
+不同子 Agent 拥有独立上下文、日志和预算，**不提供共享可写工作区并发隔离或操作系统 sandbox**。实现者角色或显式 Bash/write grant 拥有真实写权限；调用者须自行安排非重叠工作或独立 cwd，不能据角色名宣称只读，也不能用并发任务覆盖同一文件。子 Agent 不具备 SpawnAgent/PromptAgent/WaitAgent/CloseAgent/ListAgents/UpdateAgent 权限。
+
 ## 尚不支持的 Session 专属工具
 
-不注册 `AskUser`、`HistorySearch`、后台 Task 工具、子 Agent/VP 工具、`RouteForward`、Work Center 创建、MCP、worktree 管理、JS REPL、图像生成与 `ViewImage`。这些分别需要交互中继、Session 历史归属、持久任务/Agent/路由生命周期、连接管理或 provider 图像内容块传递，当前 Person 不能完整提供。
+不注册 `AskUser`、`HistorySearch`、Session VP 工具、`RouteForward`、Work Center 创建、MCP、worktree 管理、JS REPL、图像生成与 `ViewImage`。这些分别需要交互中继、Session 历史归属、Session VP/路由生命周期、连接管理或 provider 图像内容块传递，当前 Person 不能完整提供。
 
-Person 使用自己的 `Recall` 和只读 history search API，不混查普通 Session。工具发现使用自己的 catalog，不创建第二个 DiscoverTools 选择器。生成的 QuickJS 脚本仍只能进行纯 JSON 计算，绝不能通过创建能力得到任何原生 host 权限。
+Person 使用自己的 `Recall` 和只读 history search API，不混查普通 Session。Person 工具发现使用自己的 catalog；子 Engine 使用原生 DiscoverTools，不创建另一个模型选择器。生成的 QuickJS 脚本仍只能进行纯 JSON 计算，绝不能通过创建能力得到任何原生 host 权限。

@@ -47,7 +47,7 @@ export function createPersonService(options = {}) {
     ? memory.recall(ownerId, args, { signal }) : literalRecall(ownerId, args);
   // Config/adapter are loaded per explicit episode, not a permanent stale cache.
   const getProvider = (modelCandidates = []) => createPersonProvider({ yeaftDir, config, adapter, allowedModels, modelCandidates, effortEnabled: options.effortEnabled });
-  const runtime = new PersonRuntime({ repository, getProvider, budget: { calls, timeoutMs }, workDir, yeaftDir, config });
+  const runtime = new PersonRuntime({ repository, getProvider, budget: { calls, timeoutMs }, workDir, yeaftDir, config, namespace });
   let closed = false;
   const requests = new Set();
   async function handle({ ownerId, op, payload = {} } = {}) {
@@ -123,11 +123,14 @@ export function createPersonService(options = {}) {
       case 'cancel': {
         object(payload, ['episodeId'], []);
         if (payload.episodeId != null) identifier(payload.episodeId);
-        const result = await repository.cancel(ownerId, payload.episodeId);
-        // Even a repeated cancel must join an already-fenced local execution.
-        // A durable cancelled status alone does not prove host effects stopped.
-        await runtime.cancel(result.episodeId ?? payload.episodeId, 'CANCELLED', ownerId);
-        return result;
+        const release = runtime.beginCancellation(ownerId);
+        try {
+          const result = await repository.cancel(ownerId, payload.episodeId);
+          // Even a repeated cancel must join an already-fenced local execution.
+          // A durable cancelled status alone does not prove host effects stopped.
+          await runtime.cancel(payload.episodeId, 'CANCELLED', ownerId);
+          return result;
+        } finally { release(); }
       }
       case 'settings': {
         object(payload, ['name', 'autonomyEnabled', 'modelCandidates'], []);

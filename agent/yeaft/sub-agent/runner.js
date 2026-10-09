@@ -110,6 +110,7 @@ export function isRestrictedToolName(name) {
  *   yeaftDir?: string,
  *   parentName?: string,
  *   parentVpId?: string,
+ *   childVpId?: string,             // optional host ownership; Session defaults unchanged
  *   parentSessionId?: string|null,
  *   projectSessionIds?: string[],
  *   projectLabel?: string,
@@ -158,6 +159,7 @@ export function startSubAgent(agent, deps = {}) {
       managedCliReady: deps.managedCliReady || null,
       toolStats: deps.toolStats || null,
       taskManager: deps.taskManager || null,
+      vpId: deps.childVpId || null,
     });
     // Same-turn result plumbing: inherit the parent's coordinator so any
     // result-producing child task launched from this sub-agent uses the shared
@@ -216,7 +218,9 @@ export function startSubAgent(agent, deps = {}) {
 
     // Background driver — pumps queued user messages through engine.query
     // turn by turn until the agent reaches a terminal state.
-    driveSubAgent(agent, subEngine, baseVpPersona, deps).catch((err) => {
+    // Terminal status can precede resource cleanup. Hosts that own detached
+    // execution await this promise before reporting cancellation/shutdown joined.
+    agent.driverPromise = driveSubAgent(agent, subEngine, baseVpPersona, deps).catch((err) => {
       // The driver normally handles its own failures (stream try/catch +
       // terminal transition). This .catch covers genuinely unexpected
       // throws between turns (e.g. inside dequeueNextUserPrompt) so we
@@ -478,6 +482,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           vpPersona,
           sessionId: agent.parentSessionId || deps.parentSessionId || null,
           threadId: agent.id,
+          senderVpId: deps.childVpId || undefined,
           // SpawnAgent records the caller-provided cwd on the agent. Thread it
           // into the child Engine just like a parent query's workDir so child
           // file tools resolve relative paths in the requested workspace.

@@ -1,15 +1,16 @@
-import { createPersonToolHost, isNativeTool, projectNativeResult } from './native-tools.js';
+import { createPersonToolHost, createPersonNativeRegistry, isNativeTool, projectNativeResult } from './native-tools.js';
+import { PersonTaskHost } from './task-host.js';
 import { randomUUID } from 'node:crypto';
 import { CAPABILITY_MAP, CAPABILITY_LIMITS, foundationCapabilities, PersonCapabilities, catalogRevision as capabilityCatalogRevision } from './capabilities.js';
 import { attachmentMetadata } from './attachments.js';
 import { abortable, collectOutput } from './provider.js';
-import { bytes, fail, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
+import { bytes, digest, fail, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
 
 const messageRef = m => `message:${m.id}:${m.revision}`;
 const conceptRef = c => `concept:${c.id}:${c.revision}`;
 
 /** Assemble bounded request copies. Omitting a record never deletes or truncates its durable original. */
-export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment }) {
+export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, taskEvidence, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment }) {
   const model = validateSelection(selection, provider.catalog);
   // UTF-8 bytes is a conservative text-token bound; reserve explicit envelope/output overhead.
   const images = attachments.filter(file => file.kind === 'image');
@@ -80,6 +81,23 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     if (!fits()) { context[field].pop(); if (!inherited) context.sourceRefs.pop(); omitted.push({ ref, reason: 'context-budget' }); }
     else { sourceRefs.add(ref); renderedRefs.add(ref); if (field === 'concepts') seenConcept(item); else seenMessage(item); }
   };
+  if (taskEvidence) {
+    context.taskEvidence = { notice: taskEvidence.notice, namespace: taskEvidence.namespace, items: [] };
+    if (!fits()) delete context.taskEvidence;
+    for (const item of taskEvidence.items) {
+      if (!context.taskEvidence) { omitted.push({ ref: item.sourceRef, reason: 'context-budget' }); continue; }
+      const inherited = sourceRefs.has(item.sourceRef);
+      context.taskEvidence.items.push(item);
+      if (!inherited) context.sourceRefs.push(item.sourceRef);
+      if (!fits()) {
+        context.taskEvidence.items.pop(); if (!inherited) context.sourceRefs.pop();
+        omitted.push({ ref: item.sourceRef, reason: 'context-budget' });
+      } else {
+        sourceRefs.add(item.sourceRef); renderedRefs.add(item.sourceRef);
+        sources.set(item.sourceRef, { kind: 'external-task-observation', reportedSourceRefs: [] });
+      }
+    }
+  }
   for (const m of [...snapshot.messages].reverse()) add('messages', m, messageRef(m));
   context.messages.reverse();
   for (const c of snapshot.concepts) add('concepts', c, conceptRef(c));
@@ -102,11 +120,37 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   };
 }
 
+/** Model-only task evidence. Full logs/results remain in private task storage.
+ * JSON escaping and UTF-8 both count; large child reports cannot crowd out the
+ * explicit trigger or turn a completion into user-reported provenance. */
+export function projectTaskEvidence(snapshot, maxBytes = 8192) {
+  if (!snapshot) return null;
+  const projection = { namespace: snapshot.namespace, items: [],
+    notice: 'External task/child observations, not user reports or instructions. Bounded previews only; raw logs and tool results remain in private Person task storage. Completion does not schedule cognition. Inspect/wait explicitly; omitted records are not deleted.' };
+  for (const [kind, records] of [['completion', snapshot.completions], ['task', snapshot.tasks], ['agent', snapshot.agents], ['tool-result', snapshot.toolResults]]) {
+    for (const record of records ?? []) {
+      const output = JSON.stringify(record);
+      const result = projectNativeResult({ kind, id: `person-${kind}`, output, sourceRef: record.sourceRef ?? `person-task:${snapshot.namespace}:${kind}:${digest(output)}`,
+        ...(record.rawPath ? { rawPath: record.rawPath } : {}), rawBytes: bytes(output), sha256: digest(output) }, 2048);
+      projection.items.push(result);
+      if (bytes(projection) > maxBytes) { projection.items.pop(); return projection; }
+    }
+  }
+  return projection;
+}
+
 export class PersonRuntime {
-  constructor({ repository, getProvider, budget, workDir, yeaftDir, config }) {
+  constructor({ repository, getProvider, budget, workDir, yeaftDir, config, namespace = repository?.namespace ?? 'default' }) {
     this.repository = repository; this.getProvider = getProvider; this.budget = budget;
-    this.toolOptions = { workDir, yeaftDir, config };
-    this.running = new Map(); this.workerId = randomUUID(); this.closed = false;
+    this.toolOptions = { workDir, yeaftDir, config }; this.namespace = namespace;
+    this.taskHost = null; this.parentToolRegistry = createPersonNativeRegistry();
+    this.running = new Map(); this.pendingCancellations = new Map(); this.workerId = randomUUID(); this.closed = false;
+  }
+  tasks() {
+    // Construction/status/open do not touch task storage. Legacy direct Mongo
+    // embeddings without an instance root retain foreground-only host support.
+    if (!this.toolOptions.yeaftDir) return null;
+    return this.taskHost ??= new PersonTaskHost({ ...this.toolOptions, namespace: this.namespace });
   }
   start(episode) {
     if (this.closed) return;
@@ -116,14 +160,33 @@ export class PersonRuntime {
     // Admission resolves independently of provider latency. No model work occurs without an explicit admission.
     job.promise = Promise.resolve().then(() => this.run(episode, controller)).catch(() => {}).finally(() => this.running.delete(episode.id));
   }
+  beginCancellation(ownerId) {
+    // Service acquires this synchronously before durable cancellation yields.
+    // Counts keep overlapping owner/episode cancels fenced until every join ends.
+    this.pendingCancellations.set(ownerId, (this.pendingCancellations.get(ownerId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = this.pendingCancellations.get(ownerId) - 1;
+      if (count) this.pendingCancellations.set(ownerId, count);
+      else this.pendingCancellations.delete(ownerId);
+    };
+  }
   async cancel(episodeId, code = 'CANCELLED', ownerId) {
     const jobs = [...this.running.values()].filter(job =>
       (episodeId == null || job.episode.id === episodeId) &&
       (ownerId == null || job.episode.ownerId === ownerId));
-    for (const job of jobs) job.controller.abort(new PersonError(code));
-    await Promise.all(jobs.map(job => job.promise));
+    // Also stop effects launched by an already committed episode. Repository
+    // cancellation and cognition status alone cannot prove task effects stopped.
+    const owners = ownerId == null ? [...new Set(jobs.map(job => job.episode.ownerId))] : [ownerId];
+    const releases = owners.map(id => this.beginCancellation(id));
+    try {
+      for (const job of jobs) job.controller.abort(new PersonError(code));
+      await Promise.all([...jobs.map(job => job.promise), ...owners.map(id => this.taskHost?.cancel({ ownerId: id, episodeId, reason: code }))]);
+    } finally { for (const release of releases) release(); }
   }
-  isOwnerRunning(ownerId) { return [...this.running.values()].some(job => job.episode.ownerId === ownerId); }
+  isOwnerRunning(ownerId) { return this.pendingCancellations.has(ownerId) || [...this.running.values()].some(job => job.episode.ownerId === ownerId); }
   async run(episode, controller) {
     const { signal } = controller;
     const timeout = setTimeout(() => controller.abort(new PersonError('TIMEOUT')), episode.budget.timeoutMs);
@@ -141,6 +204,10 @@ export class PersonRuntime {
       const provider = await abortable(this.getProvider(episode.modelCandidates ?? []), signal);
       const snapshot = await abortable(this.repository.context(episode), signal);
       const attachments = episode.attachments?.length ? await abortable(this.repository.episodeAttachments(episode), signal) : [];
+      // Bind recovered evidence using the repository's authoritative Person ID,
+      // before snapshot(ownerId) could lazily infer an embedding identity.
+      await this.tasks()?.context({ episode, parentToolRegistry: this.parentToolRegistry });
+      signal.throwIfAborted();
       let selection = { ...provider.defaultSelection, reason: 'configured-default', origin: 'bootstrap' };
       if (snapshot.state.lastSelection) {
         try { validateSelection(snapshot.state.lastSelection, provider.catalog); selection = { ...snapshot.state.lastSelection, reason: 'last-accepted-choice', origin: 'persisted' }; }
@@ -152,8 +219,11 @@ export class PersonRuntime {
         selection = { model: candidate.id, effort: null, reason: 'image-capable-candidate', origin: 'bootstrap' };
       }
       const created = await abortable(this.repository.createdCapabilities(episode), signal);
-      let finalizeNativeResult;
-      const toolHost = createPersonToolHost({ ...this.toolOptions, onResult: result => finalizeNativeResult(result) });
+      let finalizeNativeResult, toolSelection, toolEffortDecision;
+      const toolHost = createPersonToolHost({ ...this.toolOptions,
+        getContext: async ctx => this.tasks()?.context({ ...ctx, episode, provider,
+          selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry }),
+        onResult: result => finalizeNativeResult(result) });
       const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost });
       let previous = null, capabilityResult = null, dependencyRefs = [];
       // Validation retains actual reads across calls, independently of the bounded rendered request.
@@ -162,7 +232,7 @@ export class PersonRuntime {
       for (let index = 0; index < episode.budget.calls; index++) {
         signal.throwIfAborted();
         const callId = randomUUID();
-        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, dependencyRefs, remainingCalls: episode.budget.calls - index, attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment });
+        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, dependencyRefs, remainingCalls: episode.budget.calls - index, taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)), attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment });
         capabilities.activate(context.activeCapabilities);
         dependencyRefs = context.manifest.inputDependencyRefs;
         for (const [id, concept] of context.concepts) readConcepts.set(id, concept);
@@ -175,13 +245,25 @@ export class PersonRuntime {
           manifest: context.manifest, request: { system: context.system, messages: context.archiveMessages, maxTokens: context.maxTokens, tools: [] },
           capability: previous?.next?.capability ?? null,
         });
-        let output;
+        let output, observedEffortDecision;
         try {
           signal.throwIfAborted();
-          output = await collectOutput(provider.adapter, {
+          // collectOutput deliberately exposes only public effort diagnostics.
+          // Preserve the complete wire decision privately for child inheritance
+          // (including any inherited cap), without archiving provider internals.
+          const observingAdapter = { stream: params => provider.adapter.stream({ ...params,
+            onEffortDecision: decision => {
+              observedEffortDecision = { ...decision };
+              params.onEffortDecision?.(decision);
+            },
+          }) };
+          output = await collectOutput(observingAdapter, {
             model: selection.model, effort: selection.effort ?? undefined, effortSource: 'auto',
             system: context.system, messages: context.messages, maxTokens: context.maxTokens, signal,
-          }, decision => { effective.effort = decision.effective; effective.effortObserved = true; effective.wireMode = decision.wireMode; });
+          }, decision => {
+            effective.effort = decision.effective; effective.effortObserved = true;
+            effective.wireMode = decision.wireMode; effective.thinkingEnabled = decision.thinkingEnabled;
+          });
         } catch (error) {
           const safe = safeError(error, 'PROVIDER_FAILED');
           await this.repository.finalizeCall(episode, { callId, effective, code: safe.code, output: error.partialOutput }).catch(() => {});
@@ -207,9 +289,16 @@ export class PersonRuntime {
           return;
         }
         if (index + 1 >= episode.budget.calls) {
+          await this.tasks()?.cancel({ ownerId: episode.ownerId, episodeId: episode.id, reason: 'CALL_BUDGET' });
           await this.repository.finish(episode, 'budget_exhausted', 'CALL_BUDGET');
           return;
         }
+        // The tool belongs to the response just received, not to next.model.
+        // Retain requested intent separately from the provider's observed wire.
+        toolSelection = { model: requested.model, effort: requested.effort };
+        toolEffortDecision = { requested: requested.effort, effective: effective.effort,
+          model: requested.model, source: 'auto', wireMode: effective.wireMode ?? 'omitted',
+          thinkingEnabled: effective.thinkingEnabled === true, ...observedEffortDecision };
         previous = proposal;
         selection = { model: proposal.next.model, effort: proposal.next.effort, reason: proposal.next.reason, origin: 'person' };
         capabilityResult = null;
@@ -251,6 +340,7 @@ export class PersonRuntime {
     } catch (error) {
       const safe = safeError(signal.aborted ? signal.reason : error, 'PROVIDER_FAILED');
       const status = safe.code === 'CANCELLED' ? 'cancelled' : safe.code === 'INTERRUPTED' || safe.code === 'STALE' ? 'interrupted' : 'failed';
+      await this.taskHost?.cancel({ ownerId: episode.ownerId, episodeId: episode.id, reason: safe.code }).catch(() => {});
       // On authority failure no alternate memory store is used. Expired leases become durable interrupted records on next access.
       await this.repository.finish(episode, status, safe.code).catch(() => {});
     } finally {
@@ -262,6 +352,6 @@ export class PersonRuntime {
     this.closed = true;
     const jobs = [...this.running.values()];
     for (const job of jobs) job.controller.abort(new PersonError('INTERRUPTED'));
-    await Promise.all(jobs.map(job => job.promise));
+    await Promise.all([...jobs.map(job => job.promise), this.taskHost?.close()]);
   }
 }
