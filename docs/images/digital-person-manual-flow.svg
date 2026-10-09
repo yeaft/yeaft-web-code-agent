@@ -99,6 +99,6 @@
   <text class="small" x="913" y="1217" text-anchor="middle">技术事件、请求参数、状态版本</text>
 
   <text class="detail" x="560" y="1280" text-anchor="middle">取消 / 失败 / 超时 / 调用耗尽：终止并记载结果，不提交候选认识</text>
-  <text class="small" x="560" y="1312" text-anchor="middle">最多 4 次调用 / 120 秒；Agent 退出停止 worker，已提交记忆保留</text>
+  <text class="small" x="560" y="1312" text-anchor="middle">最多 16 次调用 / 无整轮时限；约 30～60 秒反馈；已提交记忆保留</text>
   <text class="small" x="560" y="1344" text-anchor="middle">旧外部数据库不迁移、不删除；重连 / 刷新 / 空闲不启动思考</text>
 </svg>

@@ -100,6 +100,7 @@ export class SqlitePersonRepository {
   async episodeAttachments(episode) { return this.request('episodeAttachments', [episode]); }
   async context(episode) { return this.request('context', [episode]); }
   async recall(ownerId, options) { return this.request('recall', [ownerId, options]); }
+  async publishProgress(episode, data) { return this.request('publishProgress', [episode, data]); }
   async commit(episode, proposal, selection, callId, reportedSources = new Map()) { return this.request('commit', [episode, proposal, selection, callId, reportedSources]); }
   async finish(episode, status, code) { return this.request('finish', [episode, status, code]); }
   async cancel(ownerId, episodeId) { return this.request('cancel', [ownerId, episodeId]); }

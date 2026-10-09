@@ -1,16 +1,17 @@
 import { createPersonToolHost, createPersonNativeRegistry, isNativeTool, projectNativeResult } from './native-tools.js';
 import { PersonTaskHost } from './task-host.js';
 import { randomUUID } from 'node:crypto';
+import { utf8PrefixWithinBytes } from '../utf8.js';
 import { CAPABILITY_MAP, CAPABILITY_LIMITS, foundationCapabilities, PersonCapabilities, catalogRevision as capabilityCatalogRevision } from './capabilities.js';
 import { attachmentMetadata } from './attachments.js';
 import { abortable, collectOutput } from './provider.js';
-import { bytes, digest, fail, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
+import { bytes, digest, fail, FEEDBACK, FEEDBACK_INSTRUCTIONS, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
 
 const messageRef = m => `message:${m.id}:${m.revision}`;
 const conceptRef = c => `concept:${c.id}:${c.revision}`;
 
 /** Assemble bounded request copies. Omitting a record never deletes or truncates its durable original. */
-export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, taskEvidence, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment }) {
+export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, taskEvidence, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment, feedback }) {
   const model = validateSelection(selection, provider.catalog);
   // UTF-8 bytes is a conservative text-token bound; reserve explicit envelope/output overhead.
   const images = attachments.filter(file => file.kind === 'image');
@@ -73,6 +74,16 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
       if (contract.availability.layer === 'foundation') fail('CONTEXT_LIMIT');
       omittedCapabilities.push({ id: contract.id, reason: 'context-budget', inspect: 'catalog.view' });
     }
+  }
+  // Feedback is a request-only hint, never grounds to fail the next call.
+  // Keep durable replies intact; avoid duplicating up to 8 KiB from previousProposal.
+  if (feedback) {
+    const preview = utf8PrefixWithinBytes(feedback.lastReply ?? '', 512).text;
+    context.feedback = { ...feedback, instructions: FEEDBACK_INSTRUCTIONS, lastReply: preview || null,
+      lastReplyTruncated: bytes(feedback.lastReply ?? '') > bytes(preview) };
+    if (!fits()) { context.feedback.lastReply = null; context.feedback.lastReplyTruncated = Boolean(feedback.lastReply); }
+    if (!fits()) delete context.feedback.instructions;
+    if (!fits()) delete context.feedback;
   }
   const add = (field, item, ref) => {
     if (renderedRefs.has(ref)) return;
@@ -189,8 +200,8 @@ export class PersonRuntime {
   isOwnerRunning(ownerId) { return this.pendingCancellations.has(ownerId) || [...this.running.values()].some(job => job.episode.ownerId === ownerId); }
   async run(episode, controller) {
     const { signal } = controller;
-    const timeout = setTimeout(() => controller.abort(new PersonError('TIMEOUT')), episode.budget.timeoutMs);
-    timeout.unref?.();
+    let lastReplyAt = new Date(episode.createdAt).getTime() || Date.now();
+    let lastReply = null;
     let heartbeatRunning = false;
     const heartbeat = setInterval(async () => {
       if (heartbeatRunning || signal.aborted) return;
@@ -198,7 +209,7 @@ export class PersonRuntime {
       try { await this.repository.heartbeat(episode); }
       catch (error) { controller.abort(safeError(error)); }
       finally { heartbeatRunning = false; }
-    }, Math.max(100, Math.floor(this.repository.leaseMs / 3)));
+    }, Math.max(100, Math.min(5000, Math.floor(this.repository.leaseMs / 3))));
     heartbeat.unref?.();
     try {
       const provider = await abortable(this.getProvider(episode.modelCandidates ?? [], episode.defaultModel ?? null), signal);
@@ -232,7 +243,11 @@ export class PersonRuntime {
       for (let index = 0; index < episode.budget.calls; index++) {
         signal.throwIfAborted();
         const callId = randomUUID();
-        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, dependencyRefs, remainingCalls: episode.budget.calls - index, taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)), attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment });
+        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, dependencyRefs, remainingCalls: episode.budget.calls - index, taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)), attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment, feedback: {
+          minIntervalMs: FEEDBACK.minMs, maxIntervalMs: FEEDBACK.maxMs,
+          elapsedSinceReplyMs: Math.max(0, Date.now() - lastReplyAt),
+          due: Date.now() - lastReplyAt >= FEEDBACK.minMs, lastReply,
+        } });
         capabilities.activate(context.activeCapabilities);
         dependencyRefs = context.manifest.inputDependencyRefs;
         for (const [id, concept] of context.concepts) readConcepts.set(id, concept);
@@ -288,6 +303,11 @@ export class PersonRuntime {
           signal.throwIfAborted();
           await this.repository.commit(episode, proposal, selection, callId, new Map(proposal.concepts.map(c => [c.id, c.epistemicState === 'reported' ? reportedLineage(c, readSources) : []])));
           return;
+        }
+        if (proposal.reply) {
+          signal.throwIfAborted();
+          const published = await this.repository.publishProgress(episode, { callId, reply: proposal.reply });
+          if (published) { lastReply = published.text; lastReplyAt = new Date(published.createdAt).getTime(); }
         }
         if (index + 1 >= episode.budget.calls) {
           await this.tasks()?.cancel({ ownerId: episode.ownerId, episodeId: episode.id, reason: 'CALL_BUDGET' });
@@ -345,7 +365,7 @@ export class PersonRuntime {
       // On authority failure no alternate memory store is used. Expired leases become durable interrupted records on next access.
       await this.repository.finish(episode, status, safe.code).catch(() => {});
     } finally {
-      clearTimeout(timeout); clearInterval(heartbeat);
+      clearInterval(heartbeat);
       if (!signal.aborted) controller.abort(new PersonError('INTERRUPTED'));
     }
   }
