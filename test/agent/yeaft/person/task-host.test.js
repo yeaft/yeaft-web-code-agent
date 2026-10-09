@@ -106,6 +106,7 @@ describe('Person task host', () => {
     const agent = getAgentRegistry().get(child.agentId);
     expect(agent.subEngine.toolRegistry.get('Bash')).toBe(tool);
     await vi.waitFor(() => expect(agent.__driverStarted).toBe(false));
+    expect(JSON.parse(readFileSync(join(h.dataRoot, 'agents.json'), 'utf8')).agents.find(record => record.id === agent.id).executionPending).toBe(true);
     // A join must also honor the driver's exposed promise rather than status alone.
     agent.driverPromise = driverGate.promise;
     const finished = vi.fn();

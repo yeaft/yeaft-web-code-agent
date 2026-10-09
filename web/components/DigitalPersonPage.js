@@ -2,6 +2,7 @@ import UserTurnBlock from './UserTurnBlock.js';
 import MessageComposer from './MessageComposer.js';
 import NavigationIcon from './NavigationIcon.js';
 import PersonKnowledgeBrowser from './PersonKnowledgeBrowser.js';
+import PersonTaskBrowser from './PersonTaskBrowser.js';
 import ModernSelect from './ModernSelect.js';
 import PersonSettingsModal from './PersonSettingsModal.js';
 import { useComposerAttachments } from '../utils/composer-attachments.js';
@@ -16,7 +17,7 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
-  components: { UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity },
+  components: { UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonTaskBrowser, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -144,6 +145,7 @@ export default {
     // identity is ready, including when the drawer was opened during loading.
     Vue.watch([panel, () => state.loading, gate], () => {
       const section = panel.value;
+      controller.showTasks(section === 'tasks' && !gate.value && !state.loading && !!state.person);
       if (['memory', 'skills'].includes(section) && !gate.value && !state.loading && state.person
         && !state[section].loaded && !state[section].loading) controller.inspect(section);
     }, { flush: 'post' });
@@ -393,7 +395,7 @@ export default {
             <button type="button" class="btn-ghost" :disabled="!!gate || state.loading || state.tracesLoading" @click="controller.refresh()">{{ $t('common.refresh') }}</button>
           </div>
           <nav v-if="panel !== 'search'" class="person-inspector-nav" :aria-label="$t('person.inside')">
-            <button v-for="section in ['overview', 'thoughts', 'memory', 'skills']" :key="section" type="button" class="btn-ghost" :class="{ active: panel === section }" :aria-current="panel === section ? 'page' : undefined" @click="openPanel(section)">{{ $t('person.' + section) }}</button>
+            <button v-for="section in ['overview', 'thoughts', 'tasks', 'memory', 'skills']" :key="section" type="button" class="btn-ghost" :class="{ active: panel === section }" :aria-current="panel === section ? 'page' : undefined" @click="openPanel(section)">{{ $t('person.' + section) }}</button>
           </nav>
           <section v-if="panel === 'overview'" class="person-journal-scroll person-overview" tabindex="0" :aria-label="$t('person.overview')">
             <h3>{{ state.person?.name }}</h3>
@@ -418,6 +420,7 @@ export default {
               <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>
             </div>
           </section>
+          <PersonTaskBrowser v-else-if="panel === 'tasks'" :page="state.tasks" :log="state.taskLog" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTasks()" @log="controller.readTaskLog" @stop="controller.stopTask" />
           <PersonKnowledgeBrowser v-else-if="panel === 'memory' || panel === 'skills'" :key="panel" :section="panel" :page="state[panel]" :disabled="!!gate || state.loading || !state.person" @refresh="controller.inspect(panel)" @more="controller.inspect(panel, true)" />
           <div v-if="panel === 'thoughts' || panel === 'debug'" class="person-journal-toolbar">
             <span class="person-muted">{{ $t('person.thoughts') }}</span>
