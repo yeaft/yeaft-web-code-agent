@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1380" viewBox="0 0 1120 1380" role="img" aria-labelledby="title desc">
   <title id="title">数字人当前手动认知工作流</title>
-  <desc id="desc">用户发送消息、点击思考或遐想，经 Server 鉴权和 Agent 认知库准入后，组装短期上下文并在事务外调用模型。默认 SQLite person.db 是认知权威，已配置 MongoDB URI 则保留原后端，不自动迁移。独立 recall.db 在 worker 中追平 search_changes，FTS5 和本地向量混合召回后回读权威当前版本；Trace 不做向量索引。结束时短事务原子提交认识与检索变更日志。页面只读同步消息、思考记录和调试日志。Agent 退出停止计算但记忆保留，没有自动唤醒。</desc>
+  <desc id="desc">用户发送消息、点击思考或遐想，经 Server 鉴权和 Agent 认知库准入后，组装短期上下文并在事务外调用模型。实例 yeaftDir 下的 SQLite person.db 是唯一认知权威；旧外部数据库数据不会被迁移或删除。独立 recall.db 在 worker 中追平 memory_changes，FTS5 和本地向量混合召回后回读权威当前版本；Trace 不做向量索引。结束时短事务原子提交认识与检索变更日志。页面只读同步消息、思考记录和调试日志。Agent 退出停止计算但记忆保留，没有自动唤醒。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#526078"/></marker>
     <style>
@@ -18,7 +18,7 @@
   </defs>
   <rect width="1120" height="1380" rx="16" fill="#f7f9fc"/>
   <text class="title" x="560" y="45" text-anchor="middle">数字人如何完成一轮“想”</text>
-  <text class="detail" x="560" y="77" text-anchor="middle">手动模式 · 默认 SQLite 权威 + 本地召回 · 一次操作可含多个认知 Loop</text>
+  <text class="detail" x="560" y="77" text-anchor="middle">手动模式 · SQLite 唯一权威 + 本地召回 · 一次操作可含多个认知 Loop</text>
 
   <rect class="accent" x="230" y="102" width="590" height="80"/>
   <text class="label" x="525" y="134" text-anchor="middle">1. 用户显式触发</text>
@@ -29,7 +29,7 @@
   <text class="detail" x="525" y="275" text-anchor="middle">校验用户与 Agent 访问权，关联请求，不做推理</text>
   <path class="line" d="M525 294V323"/>
   <rect class="box" x="230" y="326" width="590" height="90"/>
-  <text class="label" x="525" y="357" text-anchor="middle">3. 认知库准入（默认 SQLite）</text>
+  <text class="label" x="525" y="357" text-anchor="middle">3. 认知库准入（SQLite）</text>
   <text class="detail" x="525" y="386" text-anchor="middle">命令去重 · 忙检查 · 创建活动 / 租约 / 版本保护</text>
   <text class="small" x="525" y="407" text-anchor="middle">仅 Send 写用户消息；Think / Dream 保存为活动触发</text>
   <path class="line" d="M525 416V445"/>
@@ -80,7 +80,7 @@
 
   <rect class="storage" x="230" y="926" width="590" height="90"/>
   <text class="label" x="525" y="959" text-anchor="middle">8. 权威库短事务原子提交</text>
-  <text class="small" x="525" y="985" text-anchor="middle">Concept / state / episode / 回复 / Trace + search_changes</text>
+  <text class="small" x="525" y="985" text-anchor="middle">Concept / state / episode / 回复 / Trace + memory_changes</text>
   <text class="small" x="525" y="1007" text-anchor="middle">同库提交 · lease / revision fence · 索引异步追平</text>
   <path class="line" d="M525 1016V1045"/>
   <rect class="box" x="230" y="1048" width="590" height="65"/>
@@ -100,5 +100,5 @@
 
   <text class="detail" x="560" y="1280" text-anchor="middle">取消 / 失败 / 超时 / 调用耗尽：终止并记载结果，不提交候选认识</text>
   <text class="small" x="560" y="1312" text-anchor="middle">最多 4 次调用 / 120 秒；Agent 退出停止 worker，已提交记忆保留</text>
-  <text class="small" x="560" y="1344" text-anchor="middle">既有 MongoDB URI 保留原后端，无自动迁移；重连 / 刷新 / 空闲不启动思考</text>
+  <text class="small" x="560" y="1344" text-anchor="middle">旧外部数据库不迁移、不删除；重连 / 刷新 / 空闲不启动思考</text>
 </svg>
