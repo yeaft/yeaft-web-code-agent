@@ -349,9 +349,18 @@ describe('Person real SQLite runtime integration', () => {
   });
 
   it('bounds the cancelled-call drain right and makes crash/takeover output explicitly unavailable', async () => {
-    const r = repo('terminal-right', 400); await r.open('alice');
+    const r = repo('terminal-right'); await r.open('alice');
     const admit = id => r.admit('alice', { kind: 'think', text: '', clientMessageId: id, workerId: 'original', budget: { calls: 1, timeoutMs: 1000 } });
     const start = (episode, callId) => r.startCall(episode, { callId, requested: { model: 'test/first', effort: null }, effective: { model: 'test/first', effort: null } });
+    // Simulate persisted crash deadlines, not CI scheduling: live drain assertions
+    // must not lose their right while unrelated worker/SQLite requests are queued.
+    const expire = episodeId => sql(r, db => {
+      const scope = r.scope('alice'), expired = '2000-01-01T00:00:00.000Z';
+      if (episodeId) db.prepare("UPDATE episodes SET callFinalizeUntil = ?, record = json_set(record, '$.callFinalizeUntil', ?) WHERE namespace = ? AND ownerId = ? AND personId = ? AND id = ?")
+        .run(Date.parse(expired), expired, scope.namespace, scope.ownerId, scope.personId, episodeId);
+      else db.prepare("UPDATE persons SET record = json_set(record, '$.leaseUntil', ?) WHERE namespace = ? AND ownerId = ? AND personId = ?")
+        .run(expired, scope.namespace, scope.ownerId, scope.personId);
+    });
     const one = await admit('one'); await start(one.episode, 'one-call'); await r.cancel('alice');
     const terminal = { callId: 'one-call', output: { text: 'consumed prefix', observedBytes: 15 }, code: 'CANCELLED' };
     expect(await r.finalizeCall({ ...one.episode, workerId: 'imposter' }, terminal)).toBe(false);
@@ -361,11 +370,11 @@ describe('Person real SQLite runtime integration', () => {
     await expect(r.append(one.episode, 'activity', {})).rejects.toMatchObject({ code: 'STALE' });
     await expect(r.commit(one.episode, finalProposal(), { model: 'test/first', effort: null }, 'one-call')).rejects.toMatchObject({ code: 'STALE' });
     await start(two.episode, 'two-call');
-    await new Promise(resolve => setTimeout(resolve, 450));
+    expire();
     await r.recover('alice'); // Crashed worker had a started call; no output can be reconstructed.
     expect(await r.finalizeCall(two.episode, { ...terminal, callId: 'two-call' })).toBe(false);
     const three = await admit('three'); await start(three.episode, 'three-call'); await r.cancel('alice');
-    await new Promise(resolve => setTimeout(resolve, 450));
+    expire(three.episode.id);
     await r.recover('alice'); // A cancelled worker can crash before its drain finalizer too.
     expect(await r.finalizeCall(three.episode, { ...terminal, callId: 'three-call' })).toBe(false);
     const traces = (await r.list('alice', 'traces', { limit: 50 })).items;
