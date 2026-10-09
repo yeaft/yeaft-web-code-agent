@@ -957,6 +957,17 @@ describe('Digital Person durable turn usage reads', () => {
     expect(f.state.turns.nextCursor).toBe(29);
   });
 
+  it('adopts the cursor when an already loaded empty list gains more than a page of turns', async () => {
+    const f = fixture(); let records = [];
+    f.auto(r => r.op === 'turns' ? { items: r.payload.cursor ? records.slice(20) : records.slice(0, 20), nextCursor: !r.payload.cursor && records.length > 20 ? records[19].seq : null } : undefined);
+    await f.controller.open('a'); await f.controller.readTurns();
+    expect(f.state.turns.loaded).toBe(true); expect(f.state.turns.items).toEqual([]);
+    records = Array.from({ length: 21 }, (_, i) => row(21 - i));
+    await f.controller.readTurns(); expect(f.state.turns.nextCursor).toBe(2);
+    await f.controller.readTurns(true); expect(f.state.turns.items).toHaveLength(21);
+    expect(f.state.turns.items.at(-1).seq).toBe(1); expect(f.state.turns.nextCursor).toBeNull();
+  });
+
   it('fences delayed turn reads on newer refresh, Agent/owner switches, and keeps failures local', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'turns' ? false : undefined);

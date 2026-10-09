@@ -241,3 +241,16 @@ export function reasoningUsage(usage, protocol) {
   const value = protocol === 'anthropic' ? usage?.output_tokens_details?.thinking_tokens : usage?.output_tokens_details?.reasoning_tokens;
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? { reasoningTokens: value } : {};
 }
+
+/** Which counters the provider actually reported, before legacy zero defaults. */
+export function hasUsageCounts(usage, fields = ['input_tokens', 'output_tokens']) {
+  return fields.every(key => Number.isSafeInteger(usage?.[key]) && usage[key] >= 0);
+}
+
+export function reportedUsageFields(usage, protocol) {
+  const counts = { inputTokens: usage?.input_tokens, outputTokens: usage?.output_tokens,
+    cacheReadTokens: protocol === 'anthropic' ? usage?.cache_read_input_tokens : usage?.input_tokens_details?.cached_tokens,
+    cacheWriteTokens: protocol === 'anthropic' ? usage?.cache_creation_input_tokens : undefined,
+    reasoningTokens: protocol === 'anthropic' ? usage?.output_tokens_details?.thinking_tokens : usage?.output_tokens_details?.reasoning_tokens };
+  return Object.keys(counts).filter(key => Number.isSafeInteger(counts[key]) && counts[key] >= 0);
+}

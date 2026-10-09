@@ -16,8 +16,9 @@ export function turnsPage(payload = {}) {
 
 /** Adapter usage events are additive. Keep unknown fields unknown, including cache semantics. */
 export function addUsage(usage, event, inclusion) {
-  const result = { ...usage };
-  for (const key of TOKEN_FIELDS) if (numeric(event[key])) result[key] = (result[key] ?? 0) + event[key];
+  const result = { ...usage, accountingVersion: 1 };
+  if (event.usageIncomplete === true) result.accountingIncomplete = true;
+  for (const key of TOKEN_FIELDS) if ((!Array.isArray(event.reportedTokenFields) || event.reportedTokenFields.includes(key)) && numeric(event[key])) result[key] = (result[key] ?? 0) + event[key];
   const flag = typeof event.cacheTokensAreIncludedInInput === 'boolean' ? event.cacheTokensAreIncludedInInput : inclusion;
   if (typeof flag === 'boolean') {
     if (typeof result.cacheTokensAreIncludedInInput === 'boolean' && result.cacheTokensAreIncludedInInput !== flag) result.cacheTokensAreIncludedInInput = null;
@@ -31,7 +32,7 @@ export function callUsage(raw, completed) {
   const reported = TOKEN_FIELDS.some(key => usage[key] !== null);
   const caches = (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
   // Historical traces dropped the flag. Nonzero cache counts without it are ambiguous.
-  usage.inputTotalTokens = usage.inputTokens === null || (caches > 0 && typeof raw?.cacheTokensAreIncludedInInput !== 'boolean') ? null
+  usage.inputTotalTokens = raw?.accountingVersion !== 1 || raw.accountingIncomplete === true || usage.inputTokens === null || (caches > 0 && typeof raw?.cacheTokensAreIncludedInInput !== 'boolean') ? null
     : usage.inputTokens + (raw?.cacheTokensAreIncludedInInput === false ? caches : 0);
   usage.totalTokens = usage.inputTotalTokens === null || usage.outputTokens === null ? null : usage.inputTotalTokens + usage.outputTokens;
   // Reasoning is a subset of output, not an additional billable output quantity.

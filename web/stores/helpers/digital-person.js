@@ -532,6 +532,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     const target = state.turns;
     const cursor = more ? target.nextCursor : null;
     const wasLoaded = target.loaded;
+    const wasEmpty = !target.items.length;
     target.loading = true;
     target.error = null;
     try {
@@ -543,7 +544,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       const gap = !more && Number.isSafeInteger(first) && Number.isSafeInteger(last) && first > last + 1;
       target.items = (gap ? incoming : [...new Map([...target.items, ...incoming].map(row => [row.id, row])).values()])
         .sort((a, b) => b.seq - a.seq);
-      if (more || !wasLoaded || gap) target.nextCursor = data.nextCursor ?? null;
+      if (more || !wasLoaded || wasEmpty || gap) target.nextCursor = data.nextCursor ?? null;
       target.loaded = true;
       target.stale = false;
     } catch (error) {

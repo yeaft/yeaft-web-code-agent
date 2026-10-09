@@ -52,7 +52,7 @@ import {
   mapEffortToOpenAIReasoning,
 } from '../models.js';
 
-import { createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyResponsesContinuity, reasoningUsage } from './provider-state.js';
+import { createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyResponsesContinuity, reasoningUsage, reportedUsageFields, hasUsageCounts } from './provider-state.js';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 
@@ -369,7 +369,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
       }
       const usage = result.usage || {};
-      yield { type: 'usage', inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0,
+      yield { type: 'usage', reportedTokenFields: reportedUsageFields(result.usage, 'openai-responses'), usageIncomplete: !hasUsageCounts(result.usage), inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0,
         cacheReadTokens: usage.input_tokens_details?.cached_tokens || 0, cacheWriteTokens: 0,
         cacheTokensAreIncludedInInput: true,
               ...reasoningUsage(usage, 'openai-responses') };
@@ -528,6 +528,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             const usage = respObj.usage || {};
             yield {
               type: 'usage',
+              reportedTokenFields: reportedUsageFields(respObj.usage, 'openai-responses'),
+              usageIncomplete: !hasUsageCounts(respObj.usage),
               inputTokens: usage.input_tokens || 0,
               outputTokens: usage.output_tokens || 0,
               cacheReadTokens: usage.input_tokens_details?.cached_tokens || 0,

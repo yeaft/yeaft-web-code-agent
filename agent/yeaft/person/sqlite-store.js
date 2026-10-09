@@ -45,6 +45,8 @@ const publicOutput = (output, failed) => {
   if (usage) for (const key of ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens']) {
     if (Number.isFinite(output.usage[key]) && output.usage[key] >= 0) usage[key] = output.usage[key];
   }
+  if (usage && output.usage.accountingVersion === 1) usage.accountingVersion = 1;
+  if (usage && output.usage.accountingIncomplete === true) usage.accountingIncomplete = true;
   if (usage && typeof output.usage.cacheTokensAreIncludedInInput === 'boolean') usage.cacheTokensAreIncludedInInput = output.usage.cacheTokensAreIncludedInInput;
   const stopReason = typeof output.stopReason === 'string' && bytes(output.stopReason) <= 128 ? output.stopReason : null;
   return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
@@ -460,6 +462,8 @@ export class SqlitePersonStore {
       selectionOrigin: 'selectionOrigin', reason: 'reason', code: 'code', terminalCode: 'terminalCode', outcome: 'outcome',
       contextBytes: 'manifest.contextBytes', contextBudgetBytes: 'manifest.contextBudgetBytes', outputTokensReserved: 'manifest.outputTokensReserved' };
     const usage = `json_object(${TOKEN_FIELDS.map(key => `'${key}', json_extract(record, '$.output.usage.${key}')`).join(', ')},
+      'accountingVersion', json_extract(record, '$.output.usage.accountingVersion'),
+      'accountingIncomplete', json(CASE json_extract(record, '$.output.usage.accountingIncomplete') WHEN 1 THEN 'true' ELSE 'false' END),
       'cacheTokensAreIncludedInInput', json(CASE json_extract(record, '$.output.usage.cacheTokensAreIncludedInInput') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END))`;
     const metadata = `${project(fields).slice(0, -1)}, 'capabilityId', COALESCE(json_extract(record, '$.capability.id'), json_extract(record, '$.capabilityId')),
       'usage', ${usage})`;

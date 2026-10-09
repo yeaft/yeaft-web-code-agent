@@ -46,7 +46,7 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  * @typedef {{ type: 'tool_call', id: string, name: string, input: object }} ToolCallEvent
  * @typedef {{ type: 'provider_activity' }} ProviderActivityEvent Content-free progress on a non-empty hidden delta; watchdog only, never UI/history.
  * @typedef {{ type: 'provider_state', providerState: object, providerStateBytes: number }} ProviderStateEvent Internal only; never forward to UI/search.
- * @typedef {{ type: 'usage', inputTokens: number, outputTokens: number, reasoningTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number, cacheTokensAreIncludedInInput?: boolean }} UsageEvent
+ * @typedef {{ type: 'usage', inputTokens: number, outputTokens: number, reasoningTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number, cacheTokensAreIncludedInInput?: boolean, reportedTokenFields?: string[], usageIncomplete?: boolean }} UsageEvent
  * @typedef {{ type: 'stop', stopReason: 'end_turn' | 'tool_use' | 'max_tokens' }} StopEvent
  * @typedef {{ type: 'error', error: Error, retryable: boolean }} ErrorEvent
  *

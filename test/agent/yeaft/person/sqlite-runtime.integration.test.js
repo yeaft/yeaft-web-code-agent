@@ -534,7 +534,7 @@ async function turnStart(repository, episode, callId, index = 0, model = 'test/f
     manifest: { contextBytes: 500, contextBudgetBytes: 1000, outputTokensReserved: 4096, private: 'manifest-secret' },
     request: { system: 'system-secret', messages: [{ content: 'raw-secret' }] } });
 }
-const turnOutput = (usage) => ({ text: 'output-secret', usage });
+const turnOutput = (usage) => ({ text: 'output-secret', usage: usage ? { accountingVersion: 1, ...usage } : usage });
 async function turnIdle(service) {
   for (let i = 0; i < 200; i++) {
     const result = await turnRequest(service, 'turns');
@@ -557,7 +557,7 @@ describe('Person additive provider usage', () => {
       { type: 'usage', inputTokens: 0, outputTokens: 9, reasoningTokens: 4 },
       { type: 'usage', inputTokens: 0, outputTokens: 5, reasoningTokens: 2 }, stop,
     ], { usageCacheIncluded: false });
-    expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 15, reasoningTokens: 6, cacheReadTokens: 30, cacheWriteTokens: 8, cacheTokensAreIncludedInInput: false });
+    expect(result.usage).toEqual({ accountingVersion: 1, inputTokens: 12, outputTokens: 15, reasoningTokens: 6, cacheReadTokens: 30, cacheWriteTokens: 8, cacheTokensAreIncludedInInput: false });
     expect(callUsage(result.usage, true)).toMatchObject({ inputTotalTokens: 50, totalTokens: 65, complete: true });
   });
   it.each(['anthropic', 'openai-responses'])('consumes actual %s adapter events and configured cache semantics', async protocol => {
@@ -582,6 +582,32 @@ describe('Person additive provider usage', () => {
       expect(callUsage(result.usage, true)).toMatchObject({ inputTokens: protocol === 'anthropic' ? 12 : 50, outputTokens: 10, inputTotalTokens: 50, totalTokens: 60, complete: true });
     } finally { fetch.mockRestore(); }
   });
+  it.each(['anthropic', 'openai-responses'])('keeps missing %s usage unknown for SSE and JSON instead of inventing zero totals', async protocol => {
+    const id = protocol === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4.1';
+    const provider = await createPersonProvider({ config: {
+      providers: [{ name: 'native', protocol, models: [id], baseUrl: 'https://fixture.invalid', apiKey: 'fixture-only' }],
+      availableModels: [{ id, ref: `native/${id}`, contextWindow: 128000, maxOutput: 4096 }],
+    } });
+    for (const transport of ['sse', 'json']) for (const usage of [undefined, { input_tokens: 5 }, { output_tokens: 2 }, { input_tokens: 0, output_tokens: 0 }]) {
+      const complete = usage?.input_tokens === 0 && usage?.output_tokens === 0;
+      const body = protocol === 'anthropic' ? { id: 'msg', content: [{ type: 'text', text: '{}' }], stop_reason: 'end_turn', usage }
+        : { id: 'resp', status: 'completed', output: [], usage };
+      const events = protocol === 'anthropic' ? [
+        ['message_start', { message: { id: 'msg', usage } }],
+        ['message_delta', { delta: { stop_reason: 'end_turn' }, usage: usage === undefined ? undefined : { output_tokens: usage.output_tokens } }],
+        ['message_stop', {}],
+      ] : [['response.completed', { response: body }]];
+      const response = transport === 'json' ? new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+        : new Response(events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+      const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+      try {
+        const result = await collectOutput(provider.adapter, { model: provider.defaultSelection.model, system: 'test', messages: [{ role: 'user', content: 'test' }], maxTokens: 4096,
+          signal: new AbortController().signal, usageCacheIncluded: provider.catalog[0].usageCacheIncluded }, () => {});
+        expect(callUsage(result.usage, true)).toMatchObject({ totalTokens: complete ? 0 : null, complete });
+      } finally { fetch.mockRestore(); }
+    }
+  });
+
   it('preserves the OpenAI inclusion flag across events without counting caches or reasoning twice', async () => {
     const result = await consume([
       { type: 'usage', inputTokens: 50, outputTokens: 10, reasoningTokens: 4, cacheReadTokens: 30, cacheTokensAreIncludedInInput: true },
@@ -599,7 +625,8 @@ describe('Person additive provider usage', () => {
     expect(callUsage(error.partialOutput.usage, false)).toMatchObject({ inputTokens: 15, outputTokens: 7, totalTokens: 27, complete: false });
   });
   it('does not invent legacy cache totals or missing usage, and rejects nonnumeric token data', () => {
-    expect(callUsage({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 8 }, true)).toMatchObject({ inputTokens: 20, inputTotalTokens: null, totalTokens: null, complete: false });
+    expect(callUsage({ accountingVersion: 1, inputTokens: 20, outputTokens: 5, cacheReadTokens: 8 }, true)).toMatchObject({ inputTokens: 20, inputTotalTokens: null, totalTokens: null, complete: false });
+    expect(callUsage({ inputTokens: 0, outputTokens: 9 }, true)).toMatchObject({ totalTokens: null, complete: false });
     expect(callUsage(null, true)).toMatchObject({ inputTokens: null, outputTokens: null, totalTokens: null, reportedCalls: 0, missingCalls: 1, complete: false });
     expect(callUsage({ inputTokens: '20', outputTokens: -1 }, true).reportedCalls).toBe(0);
   });
@@ -636,6 +663,16 @@ describe('Person durable turn metadata', () => {
     await service.close(); await repository.close();
     const reopened = createPersonService({ yeaftDir: dir, namespace: 'diagnostics', config, embedding: { enabled: false } }); turnResources.push(reopened);
     expect(await turnRequest(reopened, 'turns')).toEqual(result);
+  });
+
+  it('does not mark legacy overwritten Anthropic output deltas as exact usage', async () => {
+    const { repository, service } = await turnSetup(); const episode = await turnAdmit(repository, 'legacy');
+    await turnStart(repository, episode, 'old');
+    await repository.finalizeCall(episode, { callId: 'old', output: { text: 'old', usage: { inputTokens: 0, outputTokens: 9 } } });
+    await repository.finish(episode, 'completed', null);
+    const turn = (await turnRequest(service, 'turns')).items[0];
+    expect(turn.usage).toMatchObject({ totalTokens: null, complete: false });
+    expect(turn.calls[0].usage).toMatchObject({ inputTokens: 0, outputTokens: 9, totalTokens: null, complete: false });
   });
 
   it('includes zero-call accepted turns, running calls and partial failed/cancelled/missing provider usage', async () => {
