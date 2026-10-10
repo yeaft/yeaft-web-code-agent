@@ -54,12 +54,12 @@ afterEach(() => {
 });
 
 describe('client-only Workbench BrowserPanel', () => {
-  it('starts empty, keeps the client-network hint visible, and navigates from the address form', async () => {
+  it('starts empty without persistent guidance and navigates from the address form', async () => {
     const wrapper = mountPanel();
     expect(wrapper.find('iframe').exists()).toBe(false);
     expect(wrapper.get('[type="submit"]').element.disabled).toBe(true);
     expect(wrapper.get('.browser-actions button').element.disabled).toBe(true);
-    expect(wrapper.get('.browser-hint').text()).toMatch(/localhost.*this device/);
+    expect(wrapper.find('.browser-hint').exists()).toBe(false);
     expect(wrapper.get('input').attributes('aria-label')).toBe(en['workbench.browserAddressLabel']);
     document.body.appendChild(wrapper.element);
     wrapper.get('input').element.focus();
@@ -76,7 +76,7 @@ describe('client-only Workbench BrowserPanel', () => {
     expect(wrapper.get('[role="status"]').text()).toBe(en['workbench.browserFrameLoading']);
     await wrapper.get('iframe').trigger('load');
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
-    expect(wrapper.get('.browser-hint').text()).toContain('Sites may block embedding');
+    expect(wrapper.find('.browser-hint').exists()).toBe(false);
     expect(wrapper.text()).not.toMatch(/successfully|connected|WebRTC/);
     expect(wrapper.find('video').exists()).toBe(false);
     expect(wrapper.find('textarea').exists()).toBe(false);
@@ -203,9 +203,9 @@ describe('client-only Workbench BrowserPanel', () => {
     expect(storageSpy).not.toHaveBeenCalled();
   });
 
-  it('renders Chinese browser actions and the same always-visible limitations hint', () => {
+  it('renders Chinese browser actions without a persistent limitations hint', () => {
     const wrapper = mountPanel({ initialUrl: 'https://example.com/' }, zhCN);
-    expect(wrapper.get('.browser-hint').text()).toBe(zhCN['workbench.browserClientHint']);
+    expect(wrapper.find('.browser-hint').exists()).toBe(false);
     expect(wrapper.get('.browser-actions button').text()).toBe('刷新');
     expect(wrapper.get('.browser-external').text()).toBe('新标签页打开');
     for (const key of BrowserPanel.template.matchAll(/\$t\('([^']+)'\)/g)) {
