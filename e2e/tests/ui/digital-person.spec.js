@@ -1,12 +1,44 @@
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/test-server.js';
 import { personRecords } from '../../../test/fixtures/person-records.js';
+import { personTurn } from '../../../test/fixtures/person-turns.js';
+
+const usageCopy = {
+  en: {
+    'person.turns': 'Flow & usage', 'common.refresh': 'Refresh', 'person.loading': 'Loading…',
+    'person.usage.inputTotalTokens': 'Input incl. cache', 'person.usage.inputTokens': 'Input (raw)',
+    'person.usage.outputTokens': 'Output', 'person.usage.total': 'Total tokens',
+    'person.usage.cacheReadTokens': 'Cache read', 'person.usage.cacheWriteTokens': 'Cache write', 'person.usage.reasoningTokens': 'Reasoning subset',
+    'person.usage.modelWindow': 'Model context window', 'person.usage.requestSize': 'Request size', 'person.usage.bytes': 'bytes',
+    'person.usage.history': 'Recent history', 'person.usage.concepts': 'Recent / focused concepts', 'person.usage.recall': 'Recall included in request',
+    'person.usage.messagesCount': '{n} messages', 'person.usage.conceptsCount': '{n} concepts',
+    'person.usage.omitted': 'Not included due to budget: {messages} messages, {concepts} concepts (originals retained).',
+    'person.usage.contextNote': 'Request size is UTF-8 bytes, not token usage.',
+    'person.usage.accounting': 'Reported main-thread usage only; child threads excluded. Reasoning is part of output, not added twice. Missing usage is not zero. Monitoring only, not a cost or token cap.',
+    'person.usage.older': 'Older turns', 'person.usage.empty': 'No turn records yet.',
+    'person.usage.stale': 'Usage records could not be refreshed. Displayed values may be stale.',
+  },
+  'zh-CN': {
+    'person.turns': '运行与用量', 'common.refresh': '刷新', 'person.loading': '加载中…',
+    'person.usage.inputTotalTokens': '输入（含缓存）', 'person.usage.inputTokens': '输入（原始值）',
+    'person.usage.outputTokens': '输出', 'person.usage.total': 'Token 合计',
+    'person.usage.cacheReadTokens': '缓存读取', 'person.usage.cacheWriteTokens': '缓存写入', 'person.usage.reasoningTokens': '其中推理',
+    'person.usage.modelWindow': '模型上下文窗口', 'person.usage.requestSize': '本次请求大小', 'person.usage.bytes': '字节',
+    'person.usage.history': '近期历史', 'person.usage.concepts': '近期／关注概念', 'person.usage.recall': '本次带入召回',
+    'person.usage.messagesCount': '{n} 条消息', 'person.usage.conceptsCount': '{n} 个概念',
+    'person.usage.omitted': '预算未带入：{messages} 条消息、{concepts} 个概念（原记录仍保留）。',
+    'person.usage.contextNote': '请求大小按 UTF-8 字节统计，不是 token 用量。',
+    'person.usage.accounting': '供应商已报告的主线程用量，不含子线程。推理 token 属于输出，不重复累加；缺失用量不是 0。这里只监测，不是费用或 token 硬限额。',
+    'person.usage.older': '更早的 turn', 'person.usage.empty': '暂无运行记录。',
+    'person.usage.stale': '用量记录暂时无法更新，当前显示值可能不是最新。',
+  },
+};
 
 // Real browser entry + WebSocket framing with an explicit mock Person runtime.
 // This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [] } = {}) {
+async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], turnItems = [], olderTurns = [] } = {}) {
   if (enableUi) await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
@@ -30,6 +62,9 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
   let messageHistoryLoaded = false;
   let saveSettings;
   let failTraces = false;
+  let holdTurns = false;
+  let turnHistoryReply;
+  let turnError = null;
   let unknownCommand = false;
   let models = [{ id: 'provider/model-a' }, { id: 'provider/model-b' }];
   let modelSettings = { modelCandidates: [], defaultModel: null };
@@ -69,6 +104,13 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
           return;
         }
         reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded ? null : 'older-page' });
+      } else if (request.op === 'turns') {
+        const finish = () => {
+          if (turnError) { const error = turnError; turnError = null; reply(null, { ok: false, error }); return; }
+          reply({ items: request.payload.cursor ? olderTurns : turnItems, nextCursor: !request.payload.cursor && olderTurns.length ? 'turn-page-2' : null });
+        };
+        if (holdTurns) turnHistoryReply = finish;
+        else finish();
       } else if (request.op === 'traces') {
         if (failTraces) { failTraces = false; reply(null, { ok: false, error: 'Thought refresh failed' }); return; }
         if (activityFlow) {
@@ -126,6 +168,11 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     });
   });
   return { requests,
+    turns(items) { turnItems = items; },
+    holdTurns() { holdTurns = true; },
+    turnsPending() { return !!turnHistoryReply; },
+    finishTurns() { holdTurns = false; turnHistoryReply(); turnHistoryReply = null; },
+    failTurnRequest() { turnError = 'Usage refresh failed'; },
     messageHistoryPending() { return !!messageHistoryReply; },
     finishMessageHistory() { messageHistoryReply(); messageHistoryReply = null; },
     holdAdmission() { holdAdmission = true; },
@@ -146,6 +193,216 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     holdCancel() { holdCancel = true; }, cancelPending() { return !!cancelReply; }, finishCancel() { holdCancel = false; cancelReply(); cancelReply = null; },
     complete() { busy = false; latestEpisode = { id: activeEpisode, status: 'completed', endedAt: new Date().toISOString() }; },
     finishHistory() { historyReply(); historyReply = null; }, historyPending() { return !!historyReply; }, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+}
+
+async function openPersonUsage(page, serverUrl, scenario) {
+  // Keep automatic 1.5s polling from consuming a deliberately held manual read.
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.setViewportSize({ width: scenario.width, height: 800 });
+  await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
+  await page.goto(serverUrl);
+  await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(process.env.PERSON_UI_PRODUCTION === 'true' ? 1 : 0);
+  await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+  if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
+  await page.locator('.sidebar-person-trigger:visible').click();
+  await expect(page.locator('#person-input')).toBeEnabled();
+  await page.locator('#person-input').fill('Keep this conversation draft while inspecting usage');
+  await page.locator('.person-thoughts-button').click();
+  const messages = usageCopy[scenario.locale];
+  await page.locator('.person-inspector-nav').getByRole('button', { name: messages['person.turns'], exact: true }).click();
+  await expect(page.locator('#person-turns')).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', scenario.theme);
+  return messages;
+}
+
+async function expectUsageFits(page) {
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  for (const selector of ['#person-side-panel', '#person-turns', '#person-turns .person-journal-scroll']) {
+    expect(await page.locator(selector).evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  }
+}
+
+for (const width of [320, 1280]) for (const theme of ['light', 'dark']) for (const locale of ['en', 'zh-CN']) {
+  test(`Digital Person usage summary, loops and history ${width}px ${theme} ${locale}`, async ({ page, serverUrl }, testInfo) => {
+    const historical = personTurn(1, { models: ['legacy/model'], usage: { inputTokens: 0, outputTokens: 0, complete: false }, calls: [
+      { callId: 'historical-zero', index: 1, status: 'completed', dispatched: { model: 'legacy/model' },
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 }, contextBytes: 16309, contextBudgetBytes: 65536 },
+    ] });
+    const missing = personTurn(2, { models: ['<script>legacy-model</script>'], usage: { complete: false }, calls: [
+      { callId: 'historical-missing', index: 1, status: 'failed', dispatched: { model: '<script>legacy-model</script>' },
+        reason: '<img src=x onerror="alert(1)">', usage: { reasoningTokens: null, cacheReadTokens: null } },
+    ] });
+    const mock = await mockPersonSocket(page, { conversationFlow: true, turnItems: [personTurn(3)], olderTurns: [missing, historical],
+      initialMessages: [{ id: 'persisted-user', role: 'user', text: 'Existing conversation', createdAt: 1 },
+        { id: 'persisted-reply', role: 'assistant', text: 'A persisted response, not a usage result.\n'.repeat(60), createdAt: 2 }] });
+    const t = await openPersonUsage(page, serverUrl, { width, theme, locale });
+    const usage = page.locator('#person-turns');
+    const row = usage.locator('[data-turn-id="turn-3"]');
+    const summary = row.locator(':scope > summary');
+    const accounting = usage.locator('.person-usage-accounting');
+    await expect(row).toBeVisible();
+    await expect(summary).toContainText(`${t['person.usage.inputTotalTokens']}: 140`);
+    await expect(summary).toContainText(`${t['person.usage.outputTokens']}: 30`);
+    await expect(summary).toContainText(`${t['person.usage.total']}: 170`);
+    await expect(summary.locator('.person-turn-models')).toHaveText('test/first → test/second');
+    await expect(row).not.toHaveAttribute('open', '');
+    await expect(row.locator('.person-turn-detail')).not.toBeVisible();
+    await expect(accounting).not.toHaveAttribute('open', '');
+    await expect(accounting.locator('p')).not.toBeVisible();
+    await expectUsageFits(page);
+
+    const pane = page.locator('.person-messages');
+    await pane.evaluate(el => { el.scrollTop = 80; });
+    const conversation = await pane.evaluate(el => ({ text: el.innerText, scroll: el.scrollTop, pinned: el.classList.contains('is-response-pinned') }));
+    await summary.focus();
+    await summary.press('Enter');
+    await expect(row).toHaveAttribute('open', '');
+    await expect(summary).toBeFocused();
+    const first = row.locator('[data-call-id="call-3-1"]');
+    const second = row.locator('[data-call-id="call-3-2"]');
+    await expect(first.locator('.person-call-tokens > span')).toHaveText([`${t['person.usage.inputTotalTokens']}: 120`, `${t['person.usage.outputTokens']}: 20`, `${t['person.usage.cacheReadTokens']}: 20`]);
+    await expect(second.locator('.person-call-tokens > span')).toHaveText([`${t['person.usage.inputTokens']}: 20`, `${t['person.usage.outputTokens']}: 10`, `${t['person.usage.reasoningTokens']}: 10`]);
+    await expect(first.locator('.person-call-tokens')).not.toContainText(t['person.usage.cacheWriteTokens']);
+    await expect(first.locator('.person-call-tokens')).not.toContainText(t['person.usage.reasoningTokens']);
+    const metric = (call, label) => call.locator('.person-context-metrics dt').filter({ hasText: label }).locator('xpath=following-sibling::dd[1]');
+    for (const call of [first, second]) {
+      await expect(metric(call, t['person.usage.modelWindow'])).toHaveText('1,048,576 tokens');
+      await expect(metric(call, t['person.usage.history'])).toHaveText(t['person.usage.messagesCount'].replace('{n}', '4'));
+      await expect(metric(call, t['person.usage.concepts'])).toHaveText(t['person.usage.conceptsCount'].replace('{n}', '3'));
+      await expect(call.locator('.person-call-diagnostics')).not.toHaveAttribute('open', '');
+      await expect(call.locator('.person-call-diagnostics dl')).not.toBeVisible();
+      expect(await call.evaluate(el => el.innerText)).not.toMatch(/configured-default|Check recalled evidence|bootstrap|person\.usage\./);
+    }
+    await expect(metric(first, t['person.usage.requestSize'])).toHaveText(`2,000 ${t['person.usage.bytes']}`);
+    await expect(metric(second, t['person.usage.requestSize'])).toHaveText(`3,000 ${t['person.usage.bytes']}`);
+    await expect(metric(first, t['person.usage.recall'])).toHaveCount(0);
+    await expect(metric(second, t['person.usage.recall'])).toHaveText(t['person.usage.messagesCount'].replace('{n}', '5'));
+    await expect(second).toContainText(t['person.usage.omitted'].replace('{messages}', '1').replace('{concepts}', '2'));
+    await expect(first.getByText(t['person.usage.omitted'].replace('{messages}', '0').replace('{concepts}', '0'), { exact: true })).toHaveCount(0);
+    await expectUsageFits(page);
+    await page.screenshot({ path: testInfo.outputPath(`person-usage-${width}-${theme}-${locale}.png`) });
+
+    const diagnostics = first.locator('.person-call-diagnostics');
+    await diagnostics.locator('summary').focus();
+    await diagnostics.locator('summary').press('Space');
+    await expect(diagnostics).toHaveAttribute('open', '');
+    await expect(diagnostics.locator('p').first()).toHaveText('configured-default');
+    await expect(diagnostics).toContainText(`1,043,456 ${t['person.usage.bytes']}`);
+    await expect(diagnostics).toContainText(t['person.usage.contextNote']);
+    await diagnostics.locator('summary').press('Enter');
+    await expect(diagnostics.locator('dl')).not.toBeVisible();
+    await accounting.locator('summary').focus();
+    await accounting.locator('summary').press('Enter');
+    await expect(accounting.locator('p')).toHaveText(t['person.usage.accounting']);
+    await accounting.locator('summary').press('Space');
+    await expect(accounting.locator('p')).not.toBeVisible();
+    await expectUsageFits(page);
+
+    // Pause the actual WS response: loading disables both read controls, not cognition.
+    mock.holdTurns();
+    await usage.getByRole('button', { name: t['person.usage.older'], exact: true }).click();
+    await expect.poll(() => mock.turnsPending()).toBe(true);
+    await expect(usage).toHaveAttribute('aria-busy', 'true');
+    await expect(usage.getByRole('button', { name: t['common.refresh'], exact: true })).toBeDisabled();
+    await expect(usage.getByRole('button', { name: t['person.usage.older'], exact: true })).toBeDisabled();
+    await summary.focus();
+    mock.finishTurns();
+    await expect(usage.locator('.person-turn-row')).toHaveCount(3);
+    await expect(summary).toBeFocused();
+    expect(mock.requests.find(request => request.op === 'turns' && request.payload.cursor).payload).toEqual({ cursor: 'turn-page-2', limit: 20 });
+    await expect(usage.locator('.person-load-more')).toHaveCount(0);
+    const oldRow = usage.locator('[data-turn-id="turn-1"]');
+    await oldRow.locator(':scope > summary').focus();
+    await oldRow.locator(':scope > summary').press('Enter');
+    await expect(oldRow.locator(':scope > summary')).toContainText(`${t['person.usage.inputTokens']}: 0`);
+    await expect(oldRow.locator(':scope > summary')).toContainText(`${t['person.usage.outputTokens']}: 0`);
+    await expect(oldRow.locator(':scope > summary')).not.toContainText(t['person.usage.total']);
+    const oldCall = oldRow.locator('.person-call-step');
+    await expect(metric(oldCall, t['person.usage.requestSize'])).toHaveText(`16,309 ${t['person.usage.bytes']}`);
+    for (const label of [t['person.usage.modelWindow'], t['person.usage.history'], t['person.usage.concepts'], t['person.usage.recall']]) {
+      await expect(metric(oldCall, label)).toHaveCount(0);
+    }
+    await expect(oldCall.locator('.person-call-tokens > span')).toHaveText([`${t['person.usage.inputTokens']}: 0`, `${t['person.usage.outputTokens']}: 0`]);
+    expect(await oldCall.evaluate(el => el.innerText)).not.toMatch(/65,536|1,048,576/);
+    const missingRow = usage.locator('[data-turn-id="turn-2"]');
+    await missingRow.locator(':scope > summary').focus();
+    await missingRow.locator(':scope > summary').press('Enter');
+    await expect(missingRow.locator(':scope > summary')).toContainText(`${t['person.usage.inputTokens']}: —`);
+    await expect(missingRow.locator(':scope > summary')).toContainText(`${t['person.usage.outputTokens']}: —`);
+    await expect(missingRow.locator(':scope > summary')).not.toContainText(t['person.usage.total']);
+    await expect(missingRow.locator('.person-call-tokens > span')).toHaveText([`${t['person.usage.inputTokens']}: —`, `${t['person.usage.outputTokens']}: —`]);
+    await expect(missingRow.locator('.person-context-metrics dt')).toHaveCount(0);
+    await expect(missingRow.locator('script, img')).toHaveCount(0);
+    await expect(missingRow.locator('.person-call-model')).toHaveText('<script>legacy-model</script>');
+    await expectUsageFits(page);
+
+    // Refresh merges the latest page without erasing older records or their state.
+    mock.turns([personTurn(3, { usage: { ...personTurn(3).usage, inputTotalTokens: 150, totalTokens: 180 } })]);
+    mock.holdTurns();
+    await usage.getByRole('button', { name: t['common.refresh'], exact: true }).click();
+    await expect.poll(() => mock.turnsPending()).toBe(true);
+    if (width > 900) await page.locator('#person-input').focus();
+    else await summary.focus();
+    mock.finishTurns();
+    await expect(summary).toContainText(`${t['person.usage.total']}: 180`);
+    await expect(usage.locator('.person-turn-row')).toHaveCount(3);
+    await expect(usage.locator('.person-load-more')).toHaveCount(0);
+    await expect(row).toHaveAttribute('open', '');
+    await expect(width > 900 ? page.locator('#person-input') : summary).toBeFocused();
+    await expect(page.locator('#person-input')).toHaveValue('Keep this conversation draft while inspecting usage');
+    await expect(page.locator('.person-response-loading, .person-return-response')).toHaveCount(0);
+    expect(await pane.evaluate(el => ({ text: el.innerText, scroll: el.scrollTop, pinned: el.classList.contains('is-response-pinned') }))).toEqual(conversation);
+    expect(mock.requests.filter(request => ['send', 'think', 'dream', 'settings', 'cancel'].includes(request.op))).toEqual([]);
+    expect(await usage.innerText()).not.toMatch(/person\.usage\./);
+    await expectUsageFits(page);
+    await summary.focus();
+    await summary.press('Escape');
+    await expect(page.locator('#person-side-panel')).toHaveCount(0);
+    await expect(page.locator('.person-thoughts-button')).toBeFocused();
+    await expect(page.locator('#person-input')).toHaveValue('Keep this conversation draft while inspecting usage');
+  });
+}
+
+for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
+  test(`Digital Person usage loading, empty, error and stale recovery ${scenario.width}px`, async ({ page, serverUrl }) => {
+    const mock = await mockPersonSocket(page);
+    mock.holdTurns();
+    const t = await openPersonUsage(page, serverUrl, scenario);
+    const usage = page.locator('#person-turns');
+    const refresh = usage.getByRole('button', { name: t['common.refresh'], exact: true });
+    await expect.poll(() => mock.turnsPending()).toBe(true);
+    await expect(usage).toHaveAttribute('aria-busy', 'true');
+    await expect(usage.getByRole('status')).toHaveText(t['person.loading']);
+    await expect(refresh).toBeDisabled();
+    mock.finishTurns();
+    await expect(usage.locator('.person-empty')).toHaveText(t['person.usage.empty']);
+    await expect(usage.locator('.person-usage-accounting')).toHaveCount(0);
+    await expect(refresh).toBeEnabled();
+    mock.turns([personTurn()]);
+    await refresh.click();
+    await expect(usage.locator('.person-turn-row')).toHaveCount(1);
+    // Hold failure until the browser is ready, avoiding the 1.5s poll clearing it.
+    mock.holdTurns();
+    mock.failTurnRequest();
+    await refresh.click();
+    await expect.poll(() => mock.turnsPending()).toBe(true);
+    mock.finishTurns();
+    mock.holdTurns();
+    await expect(usage.getByRole('alert')).toContainText('Usage refresh failed');
+    await expect(usage.getByRole('status')).toHaveText(t['person.usage.stale']);
+    await expect(usage.locator('.person-turn-row')).toHaveCount(1);
+    await expectUsageFits(page);
+    await refresh.click();
+    await expect.poll(() => mock.turnsPending()).toBe(true);
+    mock.finishTurns();
+    await expect(usage.getByRole('alert')).toHaveCount(0);
+    await expect(usage.getByRole('status')).toHaveCount(0);
+    await expect(usage.locator('.person-turn-row')).toHaveCount(1);
+    await expect(page.locator('#person-input')).toHaveValue('Keep this conversation draft while inspecting usage');
+    expect(mock.requests.filter(request => ['send', 'think', 'dream'].includes(request.op))).toEqual([]);
+    await expectUsageFits(page);
+  });
 }
 
 for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 1280, theme: 'dark', locale: 'zh-CN' }, { width: 320, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }, { width: 800, theme: 'light', locale: 'en' }]) {

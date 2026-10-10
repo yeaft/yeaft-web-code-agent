@@ -9,6 +9,7 @@ import { bytes, digest, fail, FEEDBACK, FEEDBACK_INSTRUCTIONS, LIMITS, PersonErr
 
 const messageRef = m => `message:${m.id}:${m.revision}`;
 const conceptRef = c => `concept:${c.id}:${c.revision}`;
+const ENVELOPE_TOKENS_RESERVED = 1024;
 
 /** Assemble bounded request copies. Omitting a record never deletes or truncates its durable original. */
 export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, taskEvidence, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment, feedback }) {
@@ -22,7 +23,11 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   const imageTokensReserved = images.length ? images.length * imageBudget.tokensPerImage : 0;
   const imageLabels = images.map(file => `Untrusted image attachment ${JSON.stringify(attachmentMetadata(file))}; source ${episode.messageId ? `message:${episode.messageId}:1` : `trigger:${episode.id}`}`);
   const imageLabelBytes = imageLabels.reduce((sum, label) => sum + bytes(label), 0);
-  const contextCap = Math.min(LIMITS.contextBytes, model.contextWindow - model.maxOutput - 1024 - imageTokensReserved);
+  // This is a byte allowance derived from the selected model's token window,
+  // not a token estimate or an independent fixed-size Person context limit.
+  const contextCap = model.contextWindow - model.maxOutput - ENVELOPE_TOKENS_RESERVED - imageTokensReserved;
+  if (!Number.isSafeInteger(model.contextWindow) || !Number.isSafeInteger(model.maxOutput) || model.maxOutput < 1 ||
+      !Number.isSafeInteger(contextCap) || contextCap < 1) fail('CONTEXT_LIMIT');
   const system = `${snapshot.person.soul}\n\n${PROPOSAL_INSTRUCTIONS}`;
   const triggerRef = `trigger:${episode.id}`;
   const inputMessageRef = episode.messageId ? `message:${episode.messageId}:1` : null;
@@ -125,7 +130,17 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     manifest: { stateVersion: snapshot.state.version, sourceRefs: [...sourceRefs], renderedSourceRefs: [...renderedRefs], inputDependencyRefs: [...sourceRefs], omitted,
       boundedRecentWindow: { messages: 12, recentConcepts: 12, focusedConcepts: 12 },
       attachments: attachments.map(attachmentMetadata), imageTokensReserved, imageBudget: images.length ? imageBudget : null,
-      contextBytes: bytes(system) + bytes(context) + imageLabelBytes, contextBudgetBytes: contextCap, outputTokensReserved: model.maxOutput,
+      contextBytes: bytes(system) + bytes(context) + imageLabelBytes, contextBudgetBytes: contextCap,
+      contextWindowTokens: model.contextWindow, outputTokensReserved: model.maxOutput, envelopeTokensReserved: ENVELOPE_TOKENS_RESERVED,
+      // Counts describe actual rendered sources, not the activity label or the
+      // inherited provenance read-set. Recall duplicates are counted in its page,
+      // not again as recent injection. Omitted counts cover byte-budget omissions
+      // from the bounded snapshot, not all records outside that window.
+      contextSources: { recentMessages: context.messages.length, recentConcepts: context.concepts.length,
+        omittedMessages: omitted.filter(item => item.ref.startsWith('message:')).length,
+        omittedConcepts: omitted.filter(item => item.ref.startsWith('concept:')).length,
+        recall: { kind: ['messages', 'concepts'].includes(capabilityResult?.kind) ? capabilityResult.kind : null,
+          count: ['messages', 'concepts'].includes(capabilityResult?.kind) ? capabilityResult.items.length : 0 } },
       modelCatalogRevision: provider.catalogRevision, capabilityCatalogRevision: capabilityMap.revision ?? capabilityCatalogRevision,
       activeCapabilities: context.capabilities.active.map(({ id, version, revision, availability }) => ({ id, version, revision, ...availability })), omittedCapabilities }, maxTokens: model.maxOutput,
   };

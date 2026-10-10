@@ -658,7 +658,9 @@ async function turnAdmit(repository, id, ownerId = 'alice') {
 async function turnStart(repository, episode, callId, index = 0, model = 'test/first') {
   await repository.startCall(episode, { callId, callIndex: index, requested: { model, effort: 'high' }, effective: { model, effort: null },
     selectionOrigin: index ? 'person' : 'bootstrap', reason: 'configured-default',
-    manifest: { contextBytes: 500, contextBudgetBytes: 1000, outputTokensReserved: 4096, private: 'manifest-secret' },
+    manifest: { contextBytes: 500, contextBudgetBytes: 1000, contextWindowTokens: 1048576, outputTokensReserved: 4096, imageTokensReserved: 8192, envelopeTokensReserved: 1024,
+      contextSources: { recentMessages: 3, recentConcepts: 2, omittedMessages: 1, omittedConcepts: 4, recall: { kind: 'concepts', count: 2, sourceRefs: ['recall-ref-secret'] },
+        contents: 'context-sources-secret', sourceRefs: ['source-ref-secret'] }, private: 'manifest-secret' },
     request: { system: 'system-secret', messages: [{ content: 'raw-secret' }] } });
 }
 const turnOutput = (usage) => ({ text: 'output-secret', usage: usage ? { accountingVersion: 1, ...usage } : usage });
@@ -783,13 +785,47 @@ describe('Person durable turn metadata', () => {
     expect(turn.calls).toHaveLength(2);
     expect(turn.calls[0]).toMatchObject({ callId: 'one', index: 1, status: 'completed', requested: { model: 'test/first', effort: 'high' },
       dispatched: { model: 'test/first' }, effective: { model: null, effort: 'low' }, selectionOrigin: 'bootstrap',
-      contextBytes: 500, contextBudgetBytes: 1000, outputTokensReserved: 4096, capability: { id: 'Recall', status: 'completed', code: null } });
+      contextBytes: 500, contextBudgetBytes: 1000, contextWindowTokens: 1048576, outputTokensReserved: 4096, imageTokensReserved: 8192, envelopeTokensReserved: 1024,
+      contextSources: { recentMessages: 3, recentConcepts: 2, omittedMessages: 1, omittedConcepts: 4, recall: { kind: 'concepts', count: 2 } },
+      capability: { id: 'Recall', status: 'completed', code: null } });
     expect(turn.calls[1]).toMatchObject({ index: 2, dispatched: { model: 'test/second' }, effective: { model: null, effort: null } });
     expect(typeof turn.createdAt).toBe('string'); expect(typeof turn.endedAt).toBe('string');
     expect(JSON.stringify(result)).not.toMatch(/secret|private trigger|ownerId|namespace|personId|system|arguments/);
     await service.close(); await repository.close();
     const reopened = createPersonService({ yeaftDir: dir, namespace: 'diagnostics', config, embedding: { enabled: false } }); turnResources.push(reopened);
     expect(await turnRequest(reopened, 'turns')).toEqual(result);
+  });
+
+  it('keeps missing legacy context diagnostics unknown and projects only safe scalar statistics in SQLite', async () => {
+    const { repository, service } = await turnSetup(); const episode = await turnAdmit(repository, 'context-projection');
+    await repository.startCall(episode, { callId: 'legacy', requested: { model: 'test/first', effort: null } });
+    await repository.finalizeCall(episode, { callId: 'legacy', output: turnOutput() });
+    await repository.startCall(episode, { callId: 'malformed', callIndex: 1, requested: { model: 'test/first', effort: null },
+      manifest: { contextWindowTokens: 'window-secret', imageTokensReserved: { ref: 'image-secret' }, envelopeTokensReserved: -1,
+        contextSources: { recentMessages: 'message-secret', recentConcepts: { statement: 'concept-secret' }, omittedMessages: 13,
+          omittedConcepts: 25, recall: { kind: 'recall-kind-secret', count: 6, content: 'recall-content-secret' }, sourceRefs: ['refs-secret'] } } });
+    await repository.finalizeCall(episode, { callId: 'malformed', output: turnOutput() });
+    const result = await turnRequest(service, 'turns');
+    expect(result.items[0].calls[0]).toMatchObject({ contextWindowTokens: null, imageTokensReserved: null, envelopeTokensReserved: null, contextSources: null });
+    expect(result.items[0].calls[1]).toMatchObject({ contextWindowTokens: null, imageTokensReserved: null, envelopeTokensReserved: null, contextSources: null });
+    expect(JSON.stringify(result)).not.toMatch(/secret|sourceRefs|statement|content/);
+    // Inspect the SQL boundary itself, not merely the JS view after private values
+    // have already left the managed SQLite worker.
+    const { SqlitePersonStore } = await import('../../../../agent/yeaft/person/sqlite-store.js');
+    const db = new DatabaseSync(repository.dbPath, { readOnly: true }), projected = [];
+    try {
+      const store = Object.create(SqlitePersonStore.prototype); store.namespace = repository.namespace;
+      store.sql = query => {
+        expect(query).not.toMatch(/SELECT\s+record\b|json_extract\(record, '\$\.manifest\.contextSources'\)/i);
+        const statement = db.prepare(query);
+        return { get: (...args) => statement.get(...args), all: (...args) => {
+          const rows = statement.all(...args); projected.push(...rows); return rows;
+        } };
+      };
+      expect(store.turns('alice')).toEqual(result);
+      expect(JSON.stringify(projected)).not.toMatch(/secret|sourceRefs|statement|content/);
+      expect(JSON.parse(projected.at(-1).metadata)).toMatchObject({ contextWindowTokens: null, imageTokensReserved: null, recentMessages: null, recentConcepts: null, recallKind: null });
+    } finally { db.close(); }
   });
 
   it('does not mark legacy overwritten Anthropic output deltas as exact usage', async () => {
@@ -877,6 +913,30 @@ describe('Person durable turn metadata', () => {
     const { service, repository } = await turnSetup();
     await expect(turnRequest(service, 'turns', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     if (!Object.hasOwn(payload, 'ownerId')) await expect(repository.turns('alice', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  });
+
+  it.each(['messages', 'concepts'])('records only actual rendered %s Recall results in the next call diagnostics', async kind => {
+    const inputs = [];
+    const adapter = { async *stream(params) {
+      const input = JSON.parse(params.messages[0].content), proposal = finalProposal(input.state.version);
+      inputs.push(input); proposal.concepts = []; proposal.state.focusConceptIds = [];
+      // An activity named recall is not evidence of an executed result.
+      proposal.activity.kind = 'recall';
+      if (inputs.length === 1) proposal.next = { model: 'test/second', effort: null, reason: 'Read actual memory.', capability: { id: 'Recall', args: { kind, limit: 2 } } };
+      yield { type: 'text_delta', text: JSON.stringify(proposal) }; yield { type: 'stop', stopReason: 'end_turn' };
+    } };
+    const { service } = await turnSetup(`recall-${kind}`, adapter);
+    await turnRequest(service, 'send', { text: 'private recall report', clientMessageId: `recall-${kind}` });
+    const turn = await turnIdle(service);
+    expect(turn.status).toBe('completed'); expect(inputs).toHaveLength(2);
+    expect(inputs[0].capabilityResult).toBeNull();
+    const actual = inputs[1].capabilityResult;
+    expect(actual.kind).toBe(kind);
+    expect(turn.calls[0].contextSources.recall).toEqual({ kind: null, count: 0 });
+    expect(turn.calls[1].contextSources.recall).toEqual({ kind, count: actual.items.length });
+    expect(turn.calls[1].contextSources).toMatchObject({ recentMessages: inputs[1].messages.length, recentConcepts: inputs[1].concepts.length });
+    expect(actual.items.length).toBe(kind === 'messages' ? 1 : 0);
+    expect(JSON.stringify(turn)).not.toMatch(/private recall|message:|concept:|sourceRef/);
   });
 
   it('records usage and model changes through a real multi-loop runtime', async () => {

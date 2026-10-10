@@ -68,7 +68,7 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 
 模型当前 trigger 带有完整但有界的文本内容，标记 `untrusted-user-content`，图片通过独立 image block 传递。来源同时关联 trigger 与持久 `message:<id>:1`；附件内容不是系统指令。历史和 Recall 的附件只有 metadata，不表示再次读取了历史文件内容；上下文明确说明这一点。本版本不自动重发历史原件，避免隐式大量图片/文字注入。trace 记录文本请求副本、图片 metadata 与预算，**不记录图片 base64**；文本附件内容和普通用户正文一样属于 owner-scoped 敏感 trace。
 
-每次调用保留原有整体 64 KiB 文本上下文上限。图片预算由已审核的 **模型 ID + 实际 wire 协议** 决定，而不是文件压缩大小或单独的 vision flag；预算随每次模型选择重新计算，不足时明确 `CONTEXT_LIMIT`，不静默删图。每次请求满足 `文本 UTF-8 bytes + 图片预留 tokens + maxOutput + 1024 envelope ≤ contextWindow`。trace manifest 的 `imageBudget`、`imageTokensReserved` 与真实 content blocks 使用同一策略：
+每次调用不再另设固定 64 KiB 文本上下文上限；文本预算取当前选定模型的上下文窗口，减去输出、图片与协议预留。窗口沿用原生配置解析（模型配置 override → models.dev cache → runtime 配置 →保守默认值），不在数字人或 UI 中硬编码 1M；切换模型后重新计算。图片预算由已审核的 **模型 ID + 实际 wire 协议** 决定，而不是文件压缩大小或单独的 vision flag；预算随每次模型选择重新计算，不足时明确 `CONTEXT_LIMIT`，不静默删图。每次请求满足 `文本 UTF-8 bytes + 图片预留 tokens + maxOutput + 1024 envelope ≤ contextWindow`。trace manifest 的 `imageBudget`、`imageTokensReserved` 与真实 content blocks 使用同一策略：
 
 | 模型 / 协议 | 实际图片 wire | 每图预留 |
 | --- | --- | --- |
@@ -108,6 +108,14 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 对话等待时使用共享 typing loading 与 Composer 等待状态，停止操作留在 Composer；顶部不展示“处理中／取消”。消息区同时显示基于真实执行事件的简短活动提示，可展开查看本次模型请求、记忆查找、方法读取或能力执行的状态与已确认耗时。默认收起，不显示工具参数、原始输出、代码或内部推理；思考与调试仍通过独立只读面板查看。
 
 活动提示复用现有 snapshot / traces 轮询，不新增模型调用或自主后台任务。`Skill.*` 的方法读取不描述为已执行外部操作，能力成功不等于整次活动完成；终态以 episode 的完成、失败、取消、中断或预算耗尽为准。连接中断或进展读取失败时显示暂时无法确认，而非持续伪装成正在生成；恢复连接后重新获取权威状态，不自动重发命令。查看历史分页不会阻断独立最新活动窗口的刷新；活动只保留有界最新记录，缺少起点或较早步骤时明确提示记录不完整。
+
+## 运行与用量
+
+数字人的“运行与用量”是 metadata-only 只读投影，不触发思考。默认摘要保留调用次数、输入、输出、可确认的总量和模型；展开每次调用可看非零推理／缓存用量、模型窗口（tokens）、本次请求大小（UTF-8 字节）和实际带入来源数量。零值主指标仍显示；未知用量不是 0，不推算缺少缓存口径的总量。供应商报出的原始输入与含缓存输入只显示可用的一种，推理包含在输出中，不再累加。统计口径、模型选择来源／理由、输出预留和保守字节预算收在折叠详情中。
+
+上下文快照默认读取最新 12 条消息、近期 12 个概念和最多 12 个当前关注概念（概念按 ID 去重），再按模型请求预算装配；不会因大窗口自动加载全部历史。`Recall` 能按当前数字人的 owner / namespace 查历史消息或概念，返回有界整页并注入下一次调用的 `capabilityResult`，而不是普通 Session 的 history 或旧 Dream 记忆自动召回。来源数量分别表示本次装配的近期消息／概念及当前 Recall 整页；它们可能指向同一记录，不应相加作为唯一记忆总数。预算省略的记录仍在长期存储中。
+
+新 trace manifest 增加 `contextWindowTokens` 与 `contextSources` 计数，SQLite 只投影白名单数值与召回类型，不把消息正文、概念陈述、来源 refs、prompt 或 provider 配置送到用量面板。旧 trace 缺失新字段时保持未知，不用当前模型配置回填历史窗口，也不迁移数据库。
 
 ## 验证范围
 

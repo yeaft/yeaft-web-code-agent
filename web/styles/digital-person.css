@@ -165,6 +165,12 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-call-flow { list-style: none; padding: 0 0 0 var(--work-center-space-3); margin: var(--work-center-space-3) 0 0; border-left: 1px solid var(--border-light); }
 .person-call-step + .person-call-step { margin-top: var(--work-center-space-4); }
 .person-call-step p { margin-top: var(--work-center-space-2); }
+.person-call-model { overflow-wrap: anywhere; margin-bottom: var(--work-center-space-1); }
+.person-call-tokens { font-variant-numeric: tabular-nums; }
+.person-usage-accounting, .person-call-diagnostics { color: var(--text-secondary); font-size: 12px; }
+.person-usage-accounting > summary, .person-call-diagnostics > summary { cursor: pointer; width: fit-content; border-radius: var(--agent-setup-control-radius); }
+.person-usage-accounting p, .person-call-diagnostics p { margin: var(--work-center-space-2) 0; }
+.person-call-diagnostics { margin-top: var(--work-center-space-2); }
 
 .person-task-group h3, .person-task-log h3 { font-size: 13px; margin: var(--work-center-space-3) 0; }
 .person-task-item { padding: var(--work-center-space-3) 0; border-bottom: 1px solid var(--border-light); overflow-wrap: anywhere; font-size: 12px; }
