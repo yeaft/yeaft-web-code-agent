@@ -1,5 +1,6 @@
 import WorkbenchCapabilityHost from './WorkbenchCapabilityHost.js';
 import BrowserPanel from './BrowserPanel.js';
+import { normalizeBrowserAddress } from '../utils/browser-address.js';
 import {
   workbenchConversationId,
   workbenchRouteKey,
@@ -172,20 +173,12 @@ export default {
           </section>
 
           <BrowserPanel
-            v-if="activeCapability === 'browser' && canOpenBrowser"
+            v-if="activeCapability === 'browser'"
             :key="'browser:' + workbenchContextKey"
             v-bind="routeProps"
-            :runtime-ready="hasBrowser"
+            :navigation="browserNavigation"
+            @navigate="rememberBrowserNavigation"
           />
-
-          <section v-else-if="activeCapability === 'browser'" class="workbench-capability-empty workbench-browser-view">
-            <span class="workbench-capability-icon workbench-capability-empty-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 14H4V9h16v9zM4 7V6h16v1H4zm2-1h2v1H6V6z"/></svg>
-            </span>
-            <h2>{{ $t('workbench.browser') }}</h2>
-            <p>{{ $t('workbench.browserUnavailable') }}</p>
-            <button type="button" class="btn-secondary" @click="closeCapability">{{ $t('workbench.backToCapabilities') }}</button>
-          </section>
         </div>
 
         <div
@@ -319,22 +312,9 @@ export default {
       && store.hasAgentCapability(activeRoute.value?.agentId, 'terminal'));
     const hasExplorer = Vue.computed(() => hasSessionRoutes.value
       && store.hasAgentCapability(activeRoute.value?.agentId, 'file_editor'));
-    const canSetupBrowser = Vue.computed(() => (
-      !isWorkCenterRoute.value
-      && store.browserRuntimeServerEnabled === true
-      && store.browserRuntimeProtocolSupported === true
-      && store.browserRuntimeSetupProtocolSupported === true
-      && store.hasCapability('browser_runtime_setup')
-    ));
-    const hasBrowser = Vue.computed(() => (
-      !isWorkCenterRoute.value
-      && store.browserRuntimeServerEnabled === true
-      && store.browserRuntimeProtocolSupported === true
-      && store.hasCapability('browser_runtime')
-      && store.hasCapability('browser_webrtc')
-      && (store.hasCapability('browser_capture_tab') || store.hasCapability('browser_capture_cdp'))
-    ));
-    const canOpenBrowser = Vue.computed(() => hasBrowser.value || canSetupBrowser.value);
+    // Browser is client-only; Agent capabilities and transport do not gate it.
+    const canOpenBrowser = Vue.computed(() => Boolean(activeRouteKey.value));
+    const hasBrowser = canOpenBrowser;
 
     const capabilityCard = (id, titleKey, descriptionKey, available, ready = available) => ({
       id,
@@ -359,6 +339,27 @@ export default {
       ),
     ]);
 
+    const browserNavigationByContext = Vue.reactive(new Map());
+    let browserNavigationRevision = 0;
+    const browserNavigation = Vue.computed(() => browserNavigationByContext.get(workbenchContextKey.value) || null);
+    const retainBrowserNavigation = navigation => {
+      const key = workbenchContextKey.value;
+      browserNavigationByContext.delete(key);
+      browserNavigationByContext.set(key, navigation);
+      // URLs may include private query parameters. Retain at most 100 contexts
+      // in this mounted Workbench; never persist them or share across users.
+      if (browserNavigationByContext.size > 100) {
+        browserNavigationByContext.delete(browserNavigationByContext.keys().next().value);
+      }
+    };
+    const rememberBrowserNavigation = ({ routeKey, url }) => {
+      if (routeKey !== activeRouteKey.value) return;
+      const normalized = normalizeBrowserAddress(url);
+      if (!normalized || browserNavigation.value?.url === normalized) return;
+      retainBrowserNavigation({
+        url: normalized, revision: browserNavigation.value?.revision ?? 0,
+      });
+    };
     const activeCapability = Vue.ref(null);
     const activatedCapabilities = Vue.reactive(new Set());
     const openCapabilities = Vue.reactive([]);
@@ -531,10 +532,23 @@ export default {
       return true;
     };
 
+    const handleOpenBrowser = event => {
+      const detail = event.detail;
+      if (!canOpenBrowser.value || !detail || detail.routeKey !== activeRouteKey.value
+        || detail.workspaceGeneration !== activeWorkspaceGeneration.value) return;
+      const url = normalizeBrowserAddress(detail.url);
+      if (!url || !openCapability('browser')) return;
+      retainBrowserNavigation({
+        url, revision: ++browserNavigationRevision,
+      });
+      store.openWorkbench();
+      detail.accepted = true;
+    };
+
     const handleOpenCapability = event => {
       const detail = event.detail;
       if (!detail || detail.routeKey !== activeRouteKey.value
-        || !['terminal', 'files', 'git'].includes(detail.capabilityId)
+        || !['terminal', 'files', 'git', 'browser'].includes(detail.capabilityId)
         || !capabilityCards.value.some(item => item.id === detail.capabilityId && item.available)) return;
       if (!openCapability(detail.capabilityId)) return;
       store.openWorkbench();
@@ -554,6 +568,7 @@ export default {
       }
       openCapabilities.splice(index, 1);
       activatedCapabilities.delete(capabilityActivationKey(capabilityId));
+      if (capabilityId === 'browser') browserNavigationByContext.delete(workbenchContextKey.value);
       if (capabilityId === 'files') {
         openFileItems.value = [];
         activeFilePath.value = '';
@@ -765,6 +780,8 @@ export default {
       workbenchContextKey,
       (contextKey, previousContextKey) => {
         if (contextKey === previousContextKey) return;
+        const retainedNavigation = browserNavigationByContext.get(contextKey);
+        if (retainedNavigation) retainBrowserNavigation(retainedNavigation);
         cancelActiveResize();
         if (previousContextKey) {
           capabilityState.set(previousContextKey, {
@@ -998,6 +1015,7 @@ export default {
 
     Vue.onMounted(() => {
       window.addEventListener('open-file-in-explorer', handleOpenFile);
+      window.addEventListener('workbench-open-browser', handleOpenBrowser);
       window.addEventListener('workbench-open-capability', handleOpenCapability);
       window.addEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.addEventListener('click', handleDocumentClick);
@@ -1021,6 +1039,7 @@ export default {
     Vue.onUnmounted(() => {
       cancelActiveResize();
       window.removeEventListener('open-file-in-explorer', handleOpenFile);
+      window.removeEventListener('workbench-open-browser', handleOpenBrowser);
       window.removeEventListener('workbench-open-capability', handleOpenCapability);
       window.removeEventListener('workbench-file-items-changed', handleFileItemsChanged);
       document.removeEventListener('click', handleDocumentClick);
@@ -1031,6 +1050,8 @@ export default {
 
     return {
       store,
+      browserNavigation,
+      rememberBrowserNavigation,
       panelRoot,
       tabRail,
       tabList,

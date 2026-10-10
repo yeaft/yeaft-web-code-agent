@@ -25,7 +25,7 @@ describe('Work Center Workbench context', () => {
     });
     expect(value.ownerRoute).not.toHaveProperty('sessionId');
     expect(value.ownerWorkDir).toBe('/workspace/repo');
-    expect(value.browserAvailable).toBe(false);
+    expect(value.browserAvailable).toBe(true);
   });
 
   it('gates old clients and Agents before exposing Workbench', () => {

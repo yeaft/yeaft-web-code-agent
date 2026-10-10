@@ -105,6 +105,13 @@ afterEach(() => {
 });
 
 describe('YeaftPage setup', () => {
+  it('makes client Browser accessible for a Session route without any Agent capabilities', () => {
+    chatStore.activeSessionRoute = { runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-1' };
+    const page = YeaftPage.setup();
+    expect(page.canUseWorkbench.value).toBe(true);
+    chatStore.activeSessionRoute = null;
+    expect(page.canUseWorkbench.value).toBe(false);
+  });
   it('uses an accessible flat tab bar for Yeaft settings', () => {
     const panel = readFileSync(resolve(import.meta.dirname, '../../web/components/SettingsPanel.js'), 'utf8');
     const css = readFileSync(resolve(import.meta.dirname, '../../web/styles/settings.css'), 'utf8');

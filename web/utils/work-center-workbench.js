@@ -79,11 +79,11 @@ export function createWorkCenterWorkbenchContext({
   const available = routeProtocolSupported === true
     && Boolean(routeKey && workDir)
     && missingCapabilities.length === 0;
-  const workspaceGeneration = available ? workbenchWorkspaceGeneration(routeKey, workDir) : '';
+  const workspaceGeneration = routeKey ? workbenchWorkspaceGeneration(routeKey, workDir) : '';
 
   return {
     available,
-    browserAvailable: false,
+    browserAvailable: Boolean(routeKey),
     missingCapabilities,
     ownerRoute,
     ownerWorkDir: workDir,
