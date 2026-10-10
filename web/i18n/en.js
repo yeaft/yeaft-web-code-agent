@@ -63,6 +63,8 @@ export default {
   "person.renameUpgrade": "This Agent does not support renaming yet. Upgrade the Agent to edit the name.",
   "person.nameInvalid": "Enter a name (up to 160 UTF-8 bytes).",
   "person.turns": "Flow & usage",
+  "person.outputTruncated": "The model response reached its output token limit, not an activity timeout. Work remains unfinished; inspect Flow & usage before continuing.",
+  "person.outputTruncatedDetail": "Response cut off at the output token limit; this proposal did not execute a tool or commit cognition. Recovery, if attempted, appears as another loop within the same call budget.",
   "person.usage.requestedEffort": "Requested effort",
   "person.usage.status.rejected": "Proposal rejected",
   "person.usage.scope": "Model calls and usage for each turn.",

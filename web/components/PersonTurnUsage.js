@@ -74,7 +74,7 @@ export default {
                 </dl>
                 <p v-if="call.contextSources && (call.contextSources.omittedMessages > 0 || call.contextSources.omittedConcepts > 0)" class="person-muted">{{ $t('person.usage.omitted', { messages: number(call.contextSources.omittedMessages), concepts: number(call.contextSources.omittedConcepts) }) }}</p>
                 <p v-if="call.capability" class="person-call-capability"><span>{{ call.capability.id }}</span><span class="person-muted">{{ $t('person.usage.status.' + statusKey(call.capability.status)) }}<template v-if="call.capability.code"> · {{ call.capability.code }}</template></span></p>
-                <p v-if="call.code" class="person-muted">{{ call.code }}</p>
+                <p v-if="call.code" class="person-muted">{{ call.code }}<template v-if="call.code === 'OUTPUT_TRUNCATED'"> · {{ $t('person.outputTruncatedDetail') }}</template></p>
                 <details class="person-call-diagnostics">
                   <summary>{{ $t('person.usage.diagnostics') }}</summary>
                   <dl class="person-usage-metrics">

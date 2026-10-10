@@ -482,7 +482,7 @@ export default {
         <p v-if="state.reason" class="person-muted">{{ state.reason }}</p>
       </section>
       <div v-if="state.latestEpisode && ['failed', 'interrupted', 'budget_exhausted'].includes(state.latestEpisode.status)" class="person-error" :inert="modalPanel && panel ? true : undefined" role="alert">
-        {{ $t('person.episodeFailed') }}
+        {{ $t(state.latestEpisode.terminalCode === 'OUTPUT_TRUNCATED' ? 'person.outputTruncated' : 'person.episodeFailed') }}
       </div>
       <div v-if="state.error" class="person-error" :inert="modalPanel && panel ? true : undefined" role="alert">
         <p>{{ $t('person.requestFailed') }} {{ state.error.message }}</p>

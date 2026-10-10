@@ -57,6 +57,16 @@ describe('Person native child provider boundary', () => {
     expect(provider.catalog).toEqual(catalog());
   });
 
+  it('inherits native catalog capacities above 4K while preserving an explicit smaller instance ceiling', async () => {
+    const calls = [], provider = { adapter: { async *stream(params) { calls.push(params); yield* textEvents; } },
+      catalog: [{ id: MODEL, contextWindow: 1048576, maxOutput: 131072, efforts: [] }], defaultSelection: { model: MODEL, effort: null } };
+    for (const ceiling of [undefined, 32768]) {
+      const { adapter, config } = createPersonChildProvider(provider, null, ceiling ? { maxOutputTokens: ceiling } : {});
+      await collect(adapter.stream({ model: MODEL, maxTokens: 131072 }));
+      expect(calls.at(-1).maxTokens).toBe(ceiling ?? 131072);
+      expect(resolveMaxOutputTokens(MODEL, config)).toBe(ceiling ?? 131072);
+    }
+  });
   it('uses only the default selection when omitted and rejects stale or invalid explicit selections', () => {
     const adapter = { async *stream() {} };
     const provider = { adapter, catalog: catalog(), defaultSelection: { model: MODEL, effort: null } };

@@ -9,7 +9,7 @@ import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-re
 import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
-import { digest } from '../../../../agent/yeaft/person/contracts.js';
+import { digest, LIMITS } from '../../../../agent/yeaft/person/contracts.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { finalProposal, config } from './fixtures.js';
 
@@ -298,7 +298,7 @@ describe('Person real SQLite authority in managed workers', () => {
     const next = await b.admit('alice', input('two'));
     const terminal = { callId: 'call', output: { text: '已读取', observedBytes: 9, secret: 'must-not-copy' }, effective: { model: 'spoof', effort: 'low', secret: 'must-not-copy' } };
     expect(await a.finalizeCall({ ...episode, workerId: 'imposter' }, terminal)).toBe(false);
-    await expect(a.finalizeCall(episode, { ...terminal, output: { text: 'x'.repeat(65537) } })).rejects.toMatchObject({ code: 'OUTPUT_LIMIT' });
+    await expect(a.finalizeCall(episode, { ...terminal, output: { text: 'x'.repeat(LIMITS.outputBytes + 1) } })).rejects.toMatchObject({ code: 'OUTPUT_LIMIT' });
     expect(await Promise.all([a.finalizeCall(episode, terminal), b.finalizeCall(episode, terminal)])).toEqual([false, false]);
     await expect(a.commit(episode, finalProposal(), selection, 'call')).rejects.toMatchObject({ code: 'STALE' });
     const traces = (await b.list('alice', 'traces', { limit: 50 })).items.filter(t => t.kind === 'call_failed');

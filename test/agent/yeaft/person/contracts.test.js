@@ -76,6 +76,35 @@ describe('digital Person strict contracts', () => {
     expect(JSON.parse(full.messages[0].content).feedback).toBeUndefined();
   });
 
+  it('shrinks or omits recovery guidance without displacing mandatory context or successful tool evidence', async () => {
+    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 32768 })) }, adapter: {} });
+    const previous = finalProposal(), capabilityResult = { id: 'FileWrite', ok: true, output: 'written once', sourceRef: 'tool:episode:call:FileWrite:evidence' };
+    const input = { provider, selection: provider.defaultSelection, remainingCalls: 1, previous, capabilityResult,
+      snapshot: { person: { id: 'p', soul: 'Honesty.' }, state: { version: 0 }, messages: [], concepts: [] },
+      episode: { id: 'e', kind: 'think', text: '' } };
+    const outputRecovery = { code: 'OUTPUT_TRUNCATED', failedCallId: 'failed-call', rejectedBeforeExecution: true, instruction: 'Replan a smaller complete proposal. '.repeat(30) };
+    const baseline = assembleContext(input), fullBody = JSON.parse(baseline.messages[0].content);
+    // Removing an optional property also removes its separator from the existing JSON object.
+    const optionalBytes = Buffer.byteLength(JSON.stringify({ outputInstructions: fullBody.outputInstructions })) - 1;
+    const room = baseline.manifest.contextBudgetBytes - baseline.manifest.contextBytes + optionalBytes;
+    input.snapshot.person.soul += 'x'.repeat(room - 200);
+    const shortened = assembleContext({ ...input, outputRecovery }), body = JSON.parse(shortened.messages[0].content);
+    expect(body.outputRecovery).toMatchObject({ code: 'OUTPUT_TRUNCATED', rejectedBeforeExecution: true });
+    expect(body.outputRecovery.failedCallId).toBeUndefined();
+    expect(body.capabilityResult).toEqual(capabilityResult);
+    expect(shortened.manifest.contextBytes).toBeLessThanOrEqual(shortened.manifest.contextBudgetBytes);
+    input.snapshot.person.soul += 'x'.repeat(200);
+    const full = assembleContext({ ...input, outputRecovery }), fullRecoveryBody = JSON.parse(full.messages[0].content);
+    expect(full.manifest.contextBytes).toBe(full.manifest.contextBudgetBytes);
+    expect(fullRecoveryBody.outputRecovery).toBeUndefined();
+    expect(fullRecoveryBody.capabilityResult).toEqual(capabilityResult);
+    expect(fullRecoveryBody.previousProposal).toEqual(previous);
+    expect(fullRecoveryBody.capabilities.active).toHaveLength(fullBody.capabilities.active.length);
+    expect(full.sourceRefs).toContain(capabilityResult.sourceRef);
+    input.snapshot.person.soul += 'x';
+    expect(() => assembleContext({ ...input, outputRecovery })).toThrow(/context budget/);
+  });
+
   it('rejects automatic thinking activation with a configured instance directory', async () => {
     const yeaftDir = mkdtempSync(join(tmpdir(), 'person-admission-'));
     tempDirs.push(yeaftDir);
@@ -96,7 +125,7 @@ describe('digital Person strict contracts', () => {
       p => { p.concepts[0].associations = [{ targetId: 'unread', relation: 'related' }]; },
       p => { p.concepts[0].expectedRevision = 2; }, p => { p.concepts[0].kind = 'scenario'; },
       p => { p.concepts[0].epistemicState = 'reported'; }, p => { p.state.focusConceptIds.push('missing'); },
-      p => { p.reply = 'x'.repeat(8193); }, p => { p.activity.hiddenReasoning = 'no'; },
+      p => { p.reply = 'x'.repeat(LIMITS.outputBytes + 1); }, p => { p.activity.hiddenReasoning = 'no'; },
     ]) {
       const proposal = finalProposal(); mutate(proposal);
       expect(() => validateProposal(proposal, validation)).toThrow();
@@ -354,6 +383,44 @@ describe('digital Person strict contracts', () => {
       }
     }
   });
+  it.each([
+    ['anthropic', 'claude-opus-4-7', 16384], ['anthropic', 'claude-sonnet-4-20250514', 32768],
+    ['openai-responses', 'gpt-5.5', 131072],
+  ])('uses the native %s output capacity for %s (%i), not a Person 4K ceiling', async (protocol, id, maxOutput) => {
+    const fetchMock = stubProviderFetch();
+    const normalized = configuredModels({ primaryModel: `test/${id}`, providers: [{ name: 'test', apiKey: 'test-only',
+      baseUrl: 'https://person.invalid', protocol, models: [{ id, contextWindow: 1048576, maxOutput }] }] });
+    const provider = await createPersonProvider({ config: normalized, effortEnabled: true });
+    expect(provider.catalog[0].maxOutput).toBe(maxOutput);
+    const { context } = await dispatch(provider, { model: `test/${id}`, effort: 'high' });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(protocol === 'anthropic' ? body.max_tokens : body.max_output_tokens).toBe(maxOutput);
+    expect(context.maxTokens).toBe(maxOutput);
+    expect(context.manifest.outputTokensReserved).toBe(maxOutput);
+    expect(context.manifest.contextBudgetBytes + maxOutput + 1024).toBe(1048576);
+    expect(JSON.parse(context.messages[0].content).budget.maxOutputTokens).toBe(maxOutput);
+  });
+  it('resolves an unspecified output allowance through native instance/default configuration', async () => {
+    const models = config.availableModels.map(({ maxOutput, ...model }) => model);
+    const provider = await createPersonProvider({ config: { ...config, availableModels: models, maxOutputTokens: 32768 }, adapter: {} });
+    expect(provider.catalog.map(model => model.maxOutput)).toEqual([32768, 32768]);
+  });
+  it('accepts complete public replies and native tool arguments larger than their old byte limits', async () => {
+    const proposal = finalProposal();
+    proposal.reply = '文'.repeat(30000);
+    proposal.next = { model: 'test/first', effort: 'low', reason: 'Write a large valid artifact.',
+      capability: { id: 'FileWrite', args: { file_path: 'artifact.md', content: '文'.repeat(30000) } } };
+    const raw = JSON.stringify(proposal);
+    expect(Buffer.byteLength(raw)).toBeGreaterThan(65536);
+    const adapter = { async *stream() {
+      yield { type: 'text_delta', text: raw.slice(0, 1000) };
+      yield { type: 'text_delta', text: raw.slice(1000) };
+      yield { type: 'stop', stopReason: 'end_turn' };
+    } };
+    const output = await collectOutput(adapter, { maxTokens: 131072, signal: new AbortController().signal }, () => {});
+    expect(output.text).toBe(raw);
+    expect(validateProposal(JSON.parse(output.text), validation)).toEqual(proposal);
+  });
   it('bounds short-term copies without mutating complete historical records', async () => {
     const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 65536 })) }, adapter: {} });
     const snapshot = { person: { id: 'person', name: 'Person', soul: 'Honesty.', soulRevision: 1 }, state: { version: 0 }, concepts: [],
@@ -455,7 +522,7 @@ describe('digital Person strict contracts', () => {
     const adapter = { async *stream() { yield { type: 'text_delta', text: '文'.repeat(LIMITS.outputBytes) }; } };
     const error = await collectOutput(adapter, { signal: new AbortController().signal }, () => {}).catch(e => e);
     expect(error.partialOutput.text).not.toContain('\uFFFD');
-    expect(error.partialOutput.retainedBytes).toBe(LIMITS.outputBytes - 1);
+    expect(error.partialOutput.retainedBytes).toBe(Math.floor(LIMITS.outputBytes / 3) * 3);
     expect(error.partialOutput).toMatchObject({ complete: false, accepted: false });
   });
 

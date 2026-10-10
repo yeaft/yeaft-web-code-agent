@@ -72,12 +72,13 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
   const available = models.filter(m => !allowedModels || allowedModels.includes(m.ref || m.id));
   const routingProviders = (config.providers || []).map(normalizeKnownProviderForRuntime);
   const safeModels = available.map(m => {
-    const maxOutput = Math.min(4096, Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m })));
+    // Use the same model/config resolution as the native Engine, without a Person-only token ceiling.
+    const maxOutput = Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m }));
     const effortContext = { ...m, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
     const efforts = effortEnabled ? (m.effortOptions || []).filter(e => {
       if (!normalizeEffort(e)) return false;
       // Manual thinking can silently expand native max_tokens. Use the exact
-      // adapter rules to admit only combinations that fit this fixed reserve;
+      // adapter rules to admit only combinations that fit this model's reserve;
       // adaptive and Responses effort do not require a larger output budget.
       const body = { max_tokens: maxOutput };
       applyAnthropicThinking(body, m.id, e, effortContext);
@@ -152,6 +153,7 @@ export async function collectOutput(adapter, params, onEffort) {
       }
       // Hidden thinking, signatures, opaque provider state and raw HTTP exchanges are deliberately not archived.
     }
+    if (stopReason === 'max_tokens') fail('OUTPUT_TRUNCATED');
     if (stopReason !== 'end_turn') fail('INVALID_PROPOSAL');
     return { text: output, bytes: size, usage, stopReason };
   } catch (error) {
