@@ -1,4 +1,5 @@
-import PersonInspectorList, { newestPersonRecords } from './PersonInspectorList.js';
+import PersonInspectorList from './PersonInspectorList.js';
+import { comparePersonTasks } from '../utils/person-tasks.js';
 
 /** Person-owned effects across episodes, not just the last conversation turn.
  * Logs and child reports are untrusted text; never rendered as HTML.
@@ -22,10 +23,10 @@ export default {
       const agentIds = new Set((active?.agents || []).map(item => item.id));
       // A truncated snapshot cannot prove that an omitted historical row settled.
       const live = (item, ids) => active ? ids.has(item.id) || (active.truncated === true && (!!item.executionPending || !terminal(item.status))) : null;
-      const records = newestPersonRecords([
+      const records = [
         ...tasks.filter(task => task.kind !== 'sub_agent').map(task => ({ ...task, recordId: task.id, id: 'shell:' + task.id, recordKind: 'shell', controlActive: live(task, taskIds) })),
         ...agents.map(agent => ({ ...agent, recordId: agent.id, id: 'agent:' + agent.id, recordKind: 'agent', controlActive: live(agent, agentIds), taskId: agent.taskId || tasks.find(task => task.agentId === agent.id)?.id })),
-      ]);
+      ].sort(comparePersonTasks);
       // Controls stay discoverable ahead of settled history, with latest-first
       // ordering inside both groups, even for work older than the history cursor.
       return active ? [...records.filter(item => item.controlActive), ...records.filter(item => !item.controlActive)] : records;
@@ -57,9 +58,9 @@ export default {
       if (item.outcome?.status === 'incomplete') return 'incomplete';
       return item.status;
     };
-    const canStop = item => item.controlActive !== false && item.recoveryStatus !== 'orphaned' && item.status !== 'orphaned'
+    const canStop = item => !props.page.stale && item.controlActive !== false && item.recoveryStatus !== 'orphaned' && item.status !== 'orphaned'
       && (item.executionPending || !terminal(item.status));
-    Vue.watch(entries, items => {
+    Vue.watch([entries, () => props.page.stale], ([items]) => {
       if (confirming.value && !items.some(item => item.id === confirming.value && canStop(item))) cancelConfirm();
     });
     function stop(kind, id) {

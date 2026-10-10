@@ -112,7 +112,7 @@ describe('Digital Person owner-scoped task API', () => {
     const child = JSON.parse(await ctx.nativeRegistry.execute('SpawnAgent', { name: 'child', mission: `Inspect ${root}/private password=private-secret token=private-token https://host-private/path custom+srv://user:uri-private@host/path`, budget: { wall_time_ms: 5000 } }, ctx));
     await vi.waitFor(() => expect(started).toBe(true));
     const list = await call(s, 'tasks');
-    expect(list.agents[0]).toMatchObject({ id: child.agentId, sourceEpisodeId: 'child-source', recoveryStatus: null, executionPending: true,
+    expect(list.agents[0]).toMatchObject({ id: child.agentId, taskId: child.taskId, sourceEpisodeId: 'child-source', recoveryStatus: null, executionPending: true,
       outcome: { status: 'pending', complete: false, reason: null, truncated: false } });
     expect(list.tasks[0]).toMatchObject({ id: child.taskId, kind: 'sub_agent', agentId: child.agentId });
     expect(JSON.stringify(list)).not.toContain(root);
@@ -221,10 +221,18 @@ describe('Digital Person owner-scoped task API', () => {
       expect(list.truncated).toBe(true);
       expect(list.agents).toHaveLength(PERSON_TASK_LIMITS.records);
       expect(list.agents[0]).toMatchObject({ id: child.agentId, status, executionPending: true, recoveryStatus: null, outcome });
+      const store = new TaskStore({ yeaftDir: h.dataRoot });
+      for (let i = 0; i < 25; i++) store.writeTask({ id: 'newer-shell-' + i, sessionId: h.sessionId,
+        ownerVpId: h.parentVpId, kind: 'shell', status: 'succeeded', createdAt: '2030-01-01' });
       const page = await call(s, 'tasks', { cursor: null, limit: 20 });
       expect(page.agents).toHaveLength(20);
       expect(page.agents.some(record => record.id === child.agentId)).toBe(false);
-      expect(page.active.agents).toEqual([expect.objectContaining({ id: child.agentId, status, executionPending: true, outcome })]);
+      expect(page.active.agents).toEqual([expect.objectContaining({ id: child.agentId, taskId: child.taskId, status, executionPending: true, outcome })]);
+      expect(page.tasks.some(record => record.id === child.taskId)).toBe(false);
+      expect(page.active.tasks.some(record => record.id === child.taskId)).toBe(false);
+      const childLog = await call(s, 'task_log', { taskId: page.active.agents[0].taskId });
+      expect(childLog.taskId).toBe(child.taskId);
+      expect(childLog.text).toContain(child.agentId);
       expect(page.active.truncated).toBe(false);
       expect(JSON.stringify(page)).not.toMatch(/private result|private-token/);
       expect(JSON.stringify(list)).not.toContain('private result');
@@ -259,7 +267,7 @@ describe('Digital Person owner-scoped task API', () => {
     store.writeTask({ id: 'orphan-shell', sessionId, ownerVpId: parentVpId, kind: 'shell', title: 'Interrupted shell', status: 'running', source: { episodeId: 'lost-episode' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' });
     store.writeTask({ id: 'orphan-child-task', sessionId, ownerVpId: parentVpId, kind: 'sub_agent', title: 'Interrupted child', status: 'running', runtime: { subAgentId: 'agent-orphan' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' });
     writeFileSync(join(dataRoot, 'agents.json'), JSON.stringify({ scope, agents: [
-      { id: 'agent-orphan', name: 'Recovered child', mission: 'Inspect recovery', status: 'running', parentSessionId: sessionId, parentVpId, parentThreadId, personEpisodeId: 'lost-episode' },
+      { id: 'agent-orphan', taskId: 'orphan-child-task', name: 'Recovered child', mission: 'Inspect recovery', status: 'running', parentSessionId: sessionId, parentVpId, parentThreadId, personEpisodeId: 'lost-episode' },
       { id: 'agent-detached', name: 'Terminal with detached tool', status: 'completed', executionPending: true,
         result: { status: 'budget_exceeded', reason: `private reason ${root} token=private-token`, partial_output: 'private partial output' },
         parentSessionId: sessionId, parentVpId, parentThreadId },
@@ -270,7 +278,7 @@ describe('Digital Person owner-scoped task API', () => {
     const list = await call(restarted, 'tasks');
     expect(list.tasks.find(task => task.id === done.id).status).toBe('succeeded');
     expect(list.tasks.find(task => task.id === 'orphan-shell')).toMatchObject({ status: 'orphaned', recoveryStatus: 'orphaned', sourceEpisodeId: 'lost-episode' });
-    expect(list.agents.find(agent => agent.id === 'agent-orphan')).toMatchObject({ status: 'failed', recoveryStatus: 'orphaned', executionPending: false });
+    expect(list.agents.find(agent => agent.id === 'agent-orphan')).toMatchObject({ taskId: 'orphan-child-task', status: 'failed', recoveryStatus: 'orphaned', executionPending: false });
     expect(list.agents.find(agent => agent.id === 'agent-detached')).toMatchObject({ status: 'completed', recoveryStatus: 'orphaned', executionPending: false,
       outcome: { status: 'incomplete', complete: false, reason: 'budget_exceeded', truncated: false } });
     expect(list.agents.find(agent => agent.id === 'agent-finalized')).toMatchObject({ status: 'completed', recoveryStatus: null, executionPending: false,
@@ -320,6 +328,36 @@ describe('Digital Person owner-scoped task API', () => {
     await expect(request(other, 'tasks', { limit: 2, cursor: first.nextCursor })).rejects.toMatchObject({ code: 'TASK_SCOPE_DENIED' });
     expect(JSON.stringify([first, second, third])).not.toMatch(/task-foreign|agent-foreign|another-owner/);
     expect(createPersonProvider).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy active-first groups creation-ordered with binary IDs despite later updates', async () => {
+    const s = service(), h = await ownedHost(s), store = new TaskStore({ yeaftDir: h.dataRoot });
+    for (const [id, createdAt, updatedAt, status] of [
+      ['a', '2026-01-01', '2027-01-01', 'succeeded'], ['Z', '2026-01-01', '2027-01-01', 'succeeded'],
+      ['old-updated', '2020-01-01', '2030-01-01', 'succeeded'], ['active-old', '2019-01-01', '2019-01-01', 'running'],
+    ]) {
+      store.writeTask({ id, sessionId: h.sessionId, ownerVpId: h.parentVpId, kind: 'shell', status, createdAt, updatedAt });
+      getAgentRegistry().set(id, { id, messages: [], abortController: new AbortController(), status: status === 'succeeded' ? 'completed' : status, createdAt, updatedAt,
+        parentSessionId: h.sessionId, parentVpId: h.parentVpId, parentThreadId: h.threadId });
+    }
+    const legacy = await call(s, 'tasks');
+    expect(legacy.tasks.map(record => record.id)).toEqual(['active-old', 'Z', 'a', 'old-updated']);
+    expect(legacy.agents.map(record => record.id)).toEqual(['active-old', 'Z', 'a', 'old-updated']);
+  });
+
+  it('projects only canonical child task IDs backed by the same scoped native child', async () => {
+    const s = service(), h = await ownedHost(s), store = new TaskStore({ yeaftDir: h.dataRoot });
+    const cases = [['agent-valid', 'valid-child'], ['agent-alias', '../valid-child'],
+      ['agent-missing', 'missing-child'], ['agent-foreign', 'foreign-child'], ['agent-wrong', 'valid-child']];
+    store.writeTask({ id: 'valid-child', sessionId: h.sessionId, ownerVpId: h.parentVpId,
+      kind: 'sub_agent', status: 'succeeded', runtime: { subAgentId: 'agent-valid' } });
+    store.writeTask({ id: 'foreign-child', sessionId: h.sessionId, ownerVpId: 'another-owner',
+      kind: 'sub_agent', status: 'succeeded', runtime: { subAgentId: 'agent-foreign' } });
+    for (const [id, taskId] of cases) getAgentRegistry().set(id, { id, taskId, status: 'completed',
+      parentSessionId: h.sessionId, parentVpId: h.parentVpId, parentThreadId: h.threadId });
+    const page = await call(s, 'tasks', { limit: 20 });
+    expect(page.agents.find(agent => agent.id === 'agent-valid').taskId).toBe('valid-child');
+    for (const [id] of cases.slice(1)) expect(page.agents.find(agent => agent.id === id).taskId).toBeNull();
   });
 
   it('keeps older active shell controls separate from newest-first history with bounded scope-fenced snapshots', async () => {

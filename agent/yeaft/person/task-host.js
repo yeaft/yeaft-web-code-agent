@@ -78,13 +78,13 @@ function projectedTask(task) {
     sourceEpisodeId: task.source?.episodeId ?? null, agentId: task.runtime?.subAgentId ?? null,
     recoveryStatus: task.status === 'orphaned' ? 'orphaned' : null };
 }
-function projectedAgent(agent, executionPending) {
+function projectedAgent(agent, executionPending, taskId) {
   const usage = Object.fromEntries(['tokens', 'turns', 'startedAt'].map(key => [key,
     Number.isFinite(agent.usage?.[key]) && agent.usage[key] >= 0 ? agent.usage[key] : 0]));
   // Only the helper's fixed outcome vocabulary crosses this boundary, never the
   // native result, budget reason, final report, or partial output.
   const { status, complete, reason, truncated } = describeAgentOutcome(agent);
-  return { id: agent.id, name: summary(agent.name, 160), status: agent.status,
+  return { id: agent.id, taskId, name: summary(agent.name, 160), status: agent.status,
     outcome: { status, complete, reason, truncated }, executionPending,
     mission: summary(agent.mission ?? agent.task, 1024), usage, createdAt: agent.createdAt ?? null,
     sourceEpisodeId: agent.personEpisodeId ?? null, recoveryStatus: agent.recoveryStatus === 'orphaned' ? 'orphaned' : null };
@@ -441,6 +441,17 @@ class ScopedPersonTaskHost {
     return task;
   }
 
+  #projectAgent(agent, executionPending) {
+    // The persistent link is independent of either history page. Only canonical
+    // IDs of this Person's actual child tasks may become owner log controls.
+    const id = agent.taskId;
+    const task = typeof id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id)
+      ? this.taskManager.getTask(this.sessionId, id, this.parentVpId) : null;
+    const taskId = task && task.id === id && task.sessionId === this.sessionId && task.kind === 'sub_agent'
+      && task.runtime?.subAgentId === agent.id ? id : null;
+    return projectedAgent(agent, executionPending, taskId);
+  }
+
   /** Owner-facing inspection/control: never attach a provider, schedule cognition
    * or cancel unrelated work. Native snapshots remain private to evidence(). */
   async request({ ownerId, personId, namespace = this.scope.namespace, op, payload = {} } = {}) {
@@ -455,8 +466,8 @@ class ScopedPersonTaskHost {
         const tasks = jsonFiles(this.#manager.store.sessionDir(this.sessionId))
           .filter(task => task.sessionId === this.sessionId && task.ownerVpId === this.parentVpId && ['shell', 'sub_agent'].includes(task.kind));
         const agents = [...this.#agents.values()].filter(agent => agentBelongsToScope(agent, this.agentScope));
+        const byCreation = (a, b) => inspectionTime(b.createdAt) - inspectionTime(a.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
         if (args.limit !== undefined) {
-          const byCreation = (a, b) => inspectionTime(b.createdAt) - inspectionTime(a.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
           const readPage = (items, key, view) => {
             const boundary = continuation?.[key];
             if (continuation && boundary === null) return { items: [], nextCursor: null };
@@ -467,7 +478,7 @@ class ScopedPersonTaskHost {
             return inspectionPage(records, args.limit, item => ({ time: inspectionTime(item.createdAt), id: item.id }), view);
           };
           const taskPage = readPage(tasks, 'tasks', projectedTask);
-          const agentPage = readPage(agents, 'agents', agent => projectedAgent(agent, agent.executionPending));
+          const agentPage = readPage(agents, 'agents', agent => this.#projectAgent(agent, agent.executionPending));
           const more = taskPage.nextCursor !== null || agentPage.nextCursor !== null;
           const nextCursor = more ? `t1:${Buffer.from(JSON.stringify({ scope: this.scope.key,
             tasks: taskPage.nextCursor, agents: agentPage.nextCursor })).toString('base64url')}` : null;
@@ -478,18 +489,17 @@ class ScopedPersonTaskHost {
             PERSON_TASK_LIMITS.records, 'id', view);
           const activeTasks = activePage(tasks, task => !isTerminalTaskStatus(task.status), projectedTask);
           const activeAgents = activePage(agents, agent => !isTerminalAgentStatus(agent.status) || agent.executionPending,
-            agent => projectedAgent(agent, agent.executionPending));
+            agent => this.#projectAgent(agent, agent.executionPending));
           return { tasks: taskPage.items, agents: agentPage.items, nextCursor, truncated: more,
             active: { tasks: activeTasks.items, agents: activeAgents.items,
               truncated: activeTasks.nextCursor !== null || activeAgents.nextCursor !== null } };
         }
         const recent = (items, settled) => items.sort((a, b) => Number(settled(a)) - Number(settled(b))
-          || String(b.updatedAt ?? b.createdAt ?? '').localeCompare(String(a.updatedAt ?? a.createdAt ?? ''))
-          || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, PERSON_TASK_LIMITS.records);
+          || byCreation(a, b)).slice(0, PERSON_TASK_LIMITS.records);
         // A terminal driver with actual tools still running is active work, not
         // disposable history: keep its cleanup control ahead of settled records.
         return { tasks: recent(tasks, task => isTerminalTaskStatus(task.status)).map(projectedTask),
-          agents: recent(agents, agent => isTerminalAgentStatus(agent.status) && !agent.executionPending).map(agent => projectedAgent(agent, agent.executionPending)),
+          agents: recent(agents, agent => isTerminalAgentStatus(agent.status) && !agent.executionPending).map(agent => this.#projectAgent(agent, agent.executionPending)),
           truncated: tasks.length > PERSON_TASK_LIMITS.records || agents.length > PERSON_TASK_LIMITS.records };
       }
       case 'task_log': {
@@ -515,7 +525,7 @@ class ScopedPersonTaskHost {
           parentEngineDeps: this.agentScope, taskManager: this.taskManager }));
         if (!result.success) fail('TASK_CONTROL_UNAVAILABLE');
         await this.#joinAgent(agent);
-        return { agent: projectedAgent(agent, this.#executionPending(agent)), pending: false };
+        return { agent: this.#projectAgent(agent, this.#executionPending(agent)), pending: false };
       }
       default: fail('INVALID_REQUEST');
     }

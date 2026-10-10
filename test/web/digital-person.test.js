@@ -203,6 +203,65 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.requests).toHaveLength(before);
   });
 
+  it.each(['tasks', 'agents'])('recovers the %s cursor when an empty drawer receives 21 settled records on poll', async kind => {
+    vi.useFakeTimers(); const f = fixture();
+    const rows = Array.from({ length: 21 }, (_, i) => ({ id: 'settled-' + i, createdAt: 100 - i, status: 'completed' }));
+    let latest = [];
+    f.auto(r => r.op === 'tasks' ? { tasks: [], agents: [], [kind]: r.payload.cursor ? rows.slice(20) : latest,
+      nextCursor: !r.payload.cursor && latest.length ? 'older' : null } : undefined);
+    await f.controller.open('a'); f.controller.showTasks(true); await vi.advanceTimersByTimeAsync(0);
+    latest = rows.slice(0, 20); await vi.advanceTimersByTimeAsync(50);
+    expect(f.state.tasks.nextCursor).toBe('older');
+    expect(f.requests.filter(r => r.op === 'tasks')).toHaveLength(2);
+    await f.controller.readTasks(true);
+    expect(f.requests.at(-1).payload.cursor).toBe('older');
+    expect(f.state.tasks[kind]).toHaveLength(21);
+  });
+
+  it.each(['tasks', 'agents'])('rewinds a burst gap in %s without discarding loaded history or eagerly draining pages', async kind => {
+    const f = fixture();
+    const rows = Array.from({ length: 61 }, (_, i) => ({ id: 'record-' + i, createdAt: 100 - i, status: 'completed' }));
+    let burst = false;
+    f.auto(r => {
+      if (r.op !== 'tasks') return;
+      const start = r.payload.cursor == null ? (burst ? 0 : 40) : Number(r.payload.cursor);
+      return { tasks: [], agents: [], [kind]: rows.slice(start, start + 20), nextCursor: start + 20 < rows.length ? String(start + 20) : null };
+    });
+    await f.controller.open('a'); await f.controller.readTasks(); await f.controller.readTasks(true);
+    expect(f.state.tasks[kind]).toHaveLength(21);
+    burst = true; const before = f.requests.length; await f.controller.readTasks();
+    expect(f.requests.length).toBe(before + 1);
+    expect(f.state.tasks.nextCursor).toBe('20');
+    expect(f.state.tasks[kind].some(row => row.id === 'record-60')).toBe(true);
+    await f.controller.readTasks(true);
+    expect(f.state.tasks[kind]).toHaveLength(61);
+  });
+
+  it('orders task and agent history by creation and binary IDs, never updates or locale ties', async () => {
+    const f = fixture(); const rows = [{ id: 'a', createdAt: 30 }, { id: 'Z', createdAt: 30 }, { id: 'old', createdAt: 1, updatedAt: 100 }];
+    f.auto(r => r.op === 'tasks' ? { tasks: rows, agents: rows, nextCursor: null } : undefined);
+    await f.controller.open('a'); await f.controller.readTasks();
+    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['Z', 'a', 'old']);
+    expect(f.state.tasks.agents.map(row => row.id)).toEqual(['Z', 'a', 'old']);
+  });
+
+  it.each(['shell', 'agent'])('retains read-only logs but gates stale %s mutation until a successful refresh', async kind => {
+    const f = fixture();
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 't', status: 'running' }], agents: [{ id: 't', executionPending: true }] }
+      : r.op === 'task_log' ? { text: 'Retained log', nextOffset: 12 } : undefined);
+    await f.controller.open('a'); await f.controller.readTasks();
+    f.auto(r => r.op === 'tasks' ? false : r.op === 'task_log' ? { text: 'Retained log', nextOffset: 12 } : undefined);
+    const reading = f.controller.readTasks(); f.response(f.requests.at(-1), null, { ok: false, error: { code: 'FAILED', message: 'Unavailable' } }); await reading;
+    expect(f.state.tasks.stale).toBe(true);
+    const before = f.requests.length;
+    expect(await f.controller.stopTask(kind, 't')).toBe(false);
+    expect(f.requests).toHaveLength(before);
+    await f.controller.readTaskLog('t'); expect(f.state.taskLog.text).toBe('Retained log');
+    f.auto(r => r.op === 'tasks' ? { tasks: [], agents: [] } : {});
+    await f.controller.readTasks(); expect(f.state.tasks.stale).toBe(false);
+    expect(await f.controller.stopTask(kind, 't')).toBe(true);
+  });
+
   it('replaces the active cleanup snapshot without consuming the history cursor', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30 }], agents: [], nextCursor: 'older',

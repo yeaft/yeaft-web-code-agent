@@ -105,6 +105,37 @@ describe('Person task active control snapshot', () => {
     expect(wrapper.text()).toContain(t('person.tasksTruncated'));
   });
 
+  it('revokes confirmation on stale snapshots while preserving read-only logs and refresh', async () => {
+    render({ active: snapshot() });
+    const child = wrapper.get('[data-task-id="old-agent"]');
+    await child.findAll('button').find(button => button.text() === t('person.stopTask')).trigger('click');
+    expect(wrapper.find('.btn-secondary').exists()).toBe(true);
+    await wrapper.setProps({ page: { ...wrapper.props('page'), stale: true } });
+    expect(wrapper.find('.btn-secondary').exists()).toBe(false);
+    expect(wrapper.findAll('button').some(button => button.text() === t('person.stopTask'))).toBe(false);
+    await child.findAll('button').find(button => button.text() === t('person.taskLog')).trigger('click');
+    expect(wrapper.emitted('log')[0]).toEqual(['child-task']);
+    await wrapper.get('.person-journal-toolbar button').trigger('click');
+    expect(wrapper.emitted('refresh')).toHaveLength(1);
+    await wrapper.setProps({ page: { ...wrapper.props('page'), stale: false } });
+    expect(wrapper.findAll('button').filter(button => button.text() === t('person.stopTask'))).toHaveLength(2);
+    expect(wrapper.find('.btn-secondary').exists()).toBe(false);
+  });
+
+  it('uses creation time and binary ID ties within active-first groups', () => {
+    render({ tasks: [{ id: 'a', createdAt: 30, status: 'completed' }, { id: 'Z', createdAt: 30, status: 'completed' },
+      { id: 'old', createdAt: 1, updatedAt: 100, status: 'completed' }],
+      agents: [{ id: 'child', createdAt: 20, updatedAt: 200, status: 'completed' }], active: snapshot() });
+    expect(wrapper.findAll('.person-task-item').map(row => row.attributes('data-task-id')))
+      .toEqual(['old-agent', 'old-shell', 'Z', 'a', 'child', 'old']);
+  });
+
+  it('opens a projected child log without a matching task in either independently paged window', async () => {
+    render({ active: { tasks: [], agents: [{ id: 'old-child', taskId: 'durable-child-log', status: 'completed', executionPending: true }] } });
+    await wrapper.get('[data-task-id="old-child"] button').trigger('click');
+    expect(wrapper.emitted('log')[0]).toEqual(['durable-child-log']);
+  });
+
   it('pages once on forward scroll intent with an accessible fallback and no response-driven drain', async () => {
     render({ tasks: history(5), active: snapshot(), nextCursor: 'older-1' });
     const list = wrapper.get('.person-inspector-list');

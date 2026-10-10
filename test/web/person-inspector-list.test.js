@@ -164,6 +164,35 @@ describe('Person inspector window and keyboard continuity', () => {
     expect(returned.get('summary').element).toBe(document.activeElement);
   });
 
+  it.each([
+    ['wheel', { deltaY: -100 }],
+    ['touchstart', { touches: [{ clientY: 100 }] }],
+    ['pointerdown', {}],
+  ])('releases a keyboard target and pending adjustments on intentional %s, even while loading', async (type, event) => {
+    renderList({ items: records(200) });
+    geometry(0); await flushFrames();
+    await wrapper.trigger('keydown', { key: 'Home' }); await flushFrames();
+    const transcript = wrapper.vm.transcript;
+    const clear = vi.spyOn(transcript, 'clearTargetAnchor');
+    const cancel = vi.spyOn(transcript, 'cancelPendingBottomFollow');
+    await wrapper.setProps({ loading: true });
+    await wrapper.trigger(type, event);
+    expect(clear).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    await wrapper.trigger('scroll'); await flushFrames();
+    expect(wrapper.emitted('more')).toBeUndefined();
+  });
+
+  it('keeps keyboard targeting pinned through scroll and resize events', async () => {
+    renderList({ items: records(200) }); geometry(0); await flushFrames();
+    const transcript = wrapper.vm.transcript;
+    const clear = vi.spyOn(transcript, 'clearTargetAnchor');
+    const cancel = vi.spyOn(transcript, 'cancelPendingBottomFollow');
+    await wrapper.trigger('keydown', { key: 'ArrowDown' }); await flushFrames();
+    await wrapper.trigger('scroll'); window.dispatchEvent(new Event('resize')); await flushFrames();
+    expect(clear).not.toHaveBeenCalled(); expect(cancel).not.toHaveBeenCalled();
+  });
+
   it('resets window, disclosure and paging fences on identity replacement, including reused row ids', async () => {
     renderList({ resetKey: 'agent-a:person', items: records(200) });
     geometry(0);
@@ -232,8 +261,8 @@ describe('Latest-first Person inspector projections', () => {
     expect(wrapper.get('.person-load-more').text()).toBe(t('person.usage.older'));
   });
 
-  it('orders tasks and child threads by latest activity, with distinct keys for reused ids and correct log ownership', async () => {
-    wrapper = mount(PersonTaskBrowser, { props: { page: { tasks: [{ id: 'same', title: 'Old shell', createdAt: 1 }], agents: [{ id: 'same', name: 'New thread', taskId: 'child-log', updatedAt: 2 }], truncated: true }, log: {} }, global });
+  it('orders tasks and child threads by creation, with distinct keys for reused ids and correct log ownership', async () => {
+    wrapper = mount(PersonTaskBrowser, { props: { page: { tasks: [{ id: 'same', title: 'Old shell', createdAt: 1 }], agents: [{ id: 'same', name: 'New thread', taskId: 'child-log', createdAt: 2 }], truncated: true }, log: {} }, global });
     const rows = wrapper.findAll('.person-task-item');
     expect(rows[0].text()).toContain('New thread');
     await rows[0].get('button').trigger('click');

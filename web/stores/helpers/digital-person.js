@@ -3,6 +3,7 @@
  * automatically; an uncertain command keeps its original clientMessageId.
  */
 import { personActivityRecords } from '../../utils/person-activity.js';
+import { comparePersonTasks } from '../../utils/person-tasks.js';
 
 const channels = new WeakMap();
 const outboxes = new WeakMap();
@@ -504,13 +505,19 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       const data = await request('tasks', { cursor, limit: 20 });
       if (!current(g) || number !== tasksRequest || target !== state.tasks) return;
       const merge = (previous, incoming) => [...new Map([...previous, ...(incoming || [])].map(row => [row.id, row])).values()]
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || String(a.id).localeCompare(String(b.id)));
+        .sort(comparePersonTasks);
+      // Tasks and children have independent keysets in one opaque cursor. If
+      // either new head cannot bridge its loaded window, rewind the combined
+      // chain. Keep cached history; deliberate paging fills the gap with dedup.
+      const disconnectedHead = (previous, incoming = []) => incoming.length > 0 &&
+        (!previous.length || comparePersonTasks(incoming.at(-1), previous[0]) < 0);
+      const rewind = !more && (disconnectedHead(target.tasks, data.tasks) || disconnectedHead(target.agents, data.agents));
       // Active cleanup is a fresh scope-wide control snapshot, independent of
       // the loaded history window. Do not accumulate it when work settles.
       target.active = data.active || null;
       target.tasks = merge(target.tasks, data.tasks);
       target.agents = merge(target.agents, data.agents);
-      if (more || !wasLoaded) target.nextCursor = data.nextCursor ?? null;
+      if (more || !wasLoaded || rewind) target.nextCursor = data.nextCursor ?? null;
       target.truncated = target.nextCursor != null;
       target.loaded = true;
       target.stale = false;
@@ -591,7 +598,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
   async function stopTask(kind, taskId) {
-    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.pending) return false;
+    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.pending || state.tasks.stale) return false;
     const g = generation;
     state.tasks.pending = taskId;
     state.tasks.error = null;

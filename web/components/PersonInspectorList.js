@@ -64,12 +64,18 @@ export default {
         if (performance.now() > intentUntil) intent = false;
       });
     }
+    function releaseKeyboardTarget() {
+      navigation += 1; // Do not steal focus after a superseded async keyboard jump.
+      transcript.value?.clearTargetAnchor();
+      transcript.value?.cancelPendingBottomFollow();
+    }
     function forwardIntent(event) {
-      if (props.loading || props.disabled || inFlight) return;
       // Scrolling a long JSON/result pane belongs to that pane, not its list.
       for (let el = event.target; el && el !== scroller.value; el = el.parentElement) {
         if (el.scrollHeight > el.clientHeight && ['auto', 'scroll'].includes(getComputedStyle(el).overflowY)) return;
       }
+      if (['wheel', 'touchmove', 'pointerdown'].includes(event.type)) releaseKeyboardTarget();
+      if (props.loading || props.disabled || inFlight) return;
       if (event.type === 'wheel' && event.deltaY <= 0) { intent = false; return; }
       if (event.type === 'touchmove') {
         const y = event.touches?.[0]?.clientY;
@@ -81,7 +87,10 @@ export default {
       intentUntil = performance.now() + 500;
       scheduleIntentCheck();
     }
-    function startTouch(event) { touchY = event.touches?.[0]?.clientY; }
+    function startTouch(event) {
+      releaseKeyboardTarget();
+      touchY = event.touches?.[0]?.clientY;
+    }
     function onScroll() {
       const el = scroller.value;
       if (!el) return;

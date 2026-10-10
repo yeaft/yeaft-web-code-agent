@@ -121,6 +121,43 @@ for (const theme of ['light', 'dark']) {
       expect(errors).toEqual([]);
     });
 
+    for (const gesture of ['wheel', 'touch', 'scrollbar']) {
+      test(`keyboard target yields to ${gesture} before resize: ${theme}, ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 600 });
+        await page.goto(origin); await page.waitForFunction(() => window.fixtureReady);
+        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+        const scroller = page.getByRole('region', { name: 'Inspector records' });
+        const row = page.locator('[data-row-id="row-0"]');
+        await scroller.focus(); await page.keyboard.press('Home');
+        await expect(row.locator('summary')).toBeFocused();
+        await page.keyboard.press('Enter'); await expect(row).toHaveAttribute('open', '');
+        await page.waitForTimeout(150);
+        // Keyboard pin still keeps the row aligned while measurements settle.
+        const pinned = await scroller.evaluate(el => el.scrollTop);
+        await page.setViewportSize({ width, height: 550 }); await page.waitForTimeout(150);
+        expect(Math.abs(await scroller.evaluate(el => el.scrollTop) - pinned)).toBeLessThan(4);
+        if (gesture === 'wheel') {
+          await scroller.hover(); await page.mouse.wheel(0, 400);
+        } else {
+          // Chromium desktop fixture: synthesize the same touch/scrollbar intent
+          // and then its resulting native scroll, without external services.
+          await scroller.evaluate((el, gesture) => {
+            if (gesture === 'touch') {
+              el.dispatchEvent(new TouchEvent('touchstart', { bubbles:true, touches:[new Touch({identifier:1,target:el,clientY:500})] }));
+              el.dispatchEvent(new TouchEvent('touchmove', { bubbles:true, touches:[new Touch({identifier:1,target:el,clientY:100})] }));
+            } else el.dispatchEvent(new PointerEvent('pointerdown', { bubbles:true }));
+            el.scrollTop += 400;
+          }, gesture);
+        }
+        await page.waitForTimeout(180);
+        const middle = await scroller.evaluate(el => el.scrollTop);
+        expect(middle - pinned).toBeGreaterThan(250);
+        await page.setViewportSize({ width, height: 500 }); await page.waitForTimeout(200);
+        expect(Math.abs(await scroller.evaluate(el => el.scrollTop) - middle)).toBeLessThan(4);
+        expect(await page.evaluate(() => window.fixtureState.requests)).toBe(0);
+      });
+    }
+
     test(`old active task controls and history paging: ${theme}, ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 600 });
       const errors = [];
