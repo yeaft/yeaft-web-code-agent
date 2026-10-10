@@ -111,7 +111,7 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (max-width: 900px) {
   .person-panel-backdrop { position: fixed; inset: 0; z-index: 30; background: var(--modal-overlay-bg); }
-  .person-side-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100%); z-index: 31; box-shadow: var(--modal-shadow); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .person-side-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; z-index: 31; box-shadow: var(--modal-shadow); padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
 @media (max-width: 600px) {
   .person-header { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: var(--work-center-space-2) var(--work-center-space-3); gap: var(--work-center-space-2); }
@@ -178,6 +178,56 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--work-center-space-2); margin-top: var(--work-center-space-2); }
 .person-task-item summary { cursor: pointer; margin-top: var(--work-center-space-2); }
 .person-task-browser pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code-bg); color: var(--code-text); padding: var(--work-center-space-3); border-radius: var(--agent-setup-control-radius); font-size: 12px; max-height: 320px; overflow: auto; }
+
+/* Reader and inspector share a resizable side area, never their navigation. */
+.person-side-panel.is-expanded { position: fixed; inset: 0; width: 100%; z-index: 31; }
+.person-workspace > .pane-resize-handle { position: relative; z-index: 1; flex: 0 0 8px; margin: 0 -4px; cursor: col-resize; touch-action: none; }
+.person-workspace > .pane-resize-handle::after { content: ''; position: absolute; inset: 0 3.5px; background: transparent; }
+.person-workspace > .pane-resize-handle:hover::after,
+.person-workspace > .pane-resize-handle.is-dragging::after,
+.person-workspace > .pane-resize-handle:focus-visible::after { background: var(--accent-blue); }
+.person-workspace > .pane-resize-handle:focus-visible { outline: none; }
+.person-delivered-outputs { display: flex; flex-wrap: wrap; gap: var(--work-center-space-2); margin-top: var(--work-center-space-3); }
+.person-delivered-output { max-width: 100%; overflow-wrap: anywhere; text-align: left; padding: 6px 12px; min-height: 32px; border: 1px solid var(--border-color); border-radius: var(--agent-setup-control-radius); background: var(--bg-main); color: var(--text-primary); font: inherit; font-size: 13px; cursor: pointer; }
+.person-delivered-output:hover:not(:disabled) { background: var(--sidebar-hover); }
+@media (max-width: 900px) { .person-delivered-output { min-height: 44px; } }
+.person-outputs-toolbar { display: flex; align-items: center; flex-shrink: 0; gap: var(--work-center-space-1); min-width: 0; padding: var(--work-center-space-1); border-bottom: 1px solid var(--border-light); }
+.person-output-tabs { display: flex; align-items: center; flex: 1; min-width: 0; overflow-x: auto; }
+.person-output-tab { display: flex; align-items: center; flex-shrink: 0; max-width: 200px; border-radius: var(--agent-setup-control-radius); color: var(--text-secondary); }
+.person-output-tab.active { color: var(--text-primary); background: var(--sidebar-hover); }
+.person-output-tab-select { min-width: 0; gap: var(--work-center-space-2); }
+.person-output-tab-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-output-tab-select svg { flex-shrink: 0; }
+.person-output-tab-close { flex-shrink: 0; }
+.person-output-tab .btn-ghost { padding: var(--work-center-space-2); }
+.person-output-tab .person-output-tab-close { padding-left: var(--work-center-space-1); padding-right: var(--work-center-space-1); }
+.person-output-library-label { padding: var(--work-center-space-2); font-size: 13px; color: var(--text-secondary); }
+.person-output-actions { display: flex; align-items: center; flex-shrink: 0; }
+.person-output-actions .btn-ghost { display: inline-flex; justify-content: center; padding: var(--work-center-space-2); text-decoration: none; }
+.person-output-library { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--work-center-space-3); }
+.person-output-library-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--work-center-space-2); margin-bottom: var(--work-center-space-3); }
+.person-output-library-heading h3 { font-size: 13px; font-weight: 500; }
+.person-output-library-heading button { gap: var(--work-center-space-2); }
+.person-outputs .person-output-item { display: flex !important; justify-content: flex-start; width: 100%; gap: var(--work-center-space-3); text-align: left; overflow-wrap: anywhere; }
+.person-output-item svg { flex-shrink: 0; }
+.person-output-item small { display: block; color: var(--text-muted); font-size: 11px; }
+.person-output-item.active { background: var(--sidebar-hover); color: var(--text-primary); }
+.person-output-image-tools { display: flex; align-items: center; gap: var(--work-center-space-2); padding: var(--work-center-space-1) var(--work-center-space-3); }
+.person-output-preview { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: var(--work-center-space-4); }
+.person-output-preview img { display: block; }
+.person-output-preview img.is-fit { max-width: 100%; max-height: 100%; object-fit: contain; margin: auto; }
+.person-output-preview iframe { display: block; width: 100%; height: max(320px, 95%); border: 0; background: var(--bg-main); }
+.person-output-safety-note { color: var(--text-muted); font-size: 11px; line-height: 1.5; margin-bottom: var(--work-center-space-2); }
+.person-output-code { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 var(--font-mono); color: var(--text-primary); }
+.person-output-progress { color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.person-output-progress progress { width: 100%; accent-color: var(--accent-blue); }
+@media (max-width: 900px) {
+  .person-outputs .btn-ghost, .person-inspector-nav .btn-ghost, .person-panel-header button { min-height: 44px; }
+}
+@media (max-width: 600px) {
+  .person-header-actions { gap: 0; }
+  .person-header-actions .header-action-btn { width: 32px; padding: 4px; }
+}
 
 /* Inspector windows keep the scroll owner directly above VirtualTranscript. */
 .person-inspector-list > .virtual-transcript,

@@ -69,6 +69,8 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 
 侧栏的**数字人**入口打开独立的 Message／输入页面，提供**想**、显式**遐想**、取消和可分页查看的应用层 **Trace**。没有 Session 列表，不创建隐藏 Session 或 WorkItem。“想”可召回消息／概念、整理经历、提出关联，记录自判和版本化结论。Trace 展示显式输入、输出和修订，不是 provider 的隐藏推理。发送新消息后，等待状态和本轮 AI 回复起点自动置于消息区顶部，旧消息保留在视口上方；回复增长时不追底，主动滚动即可自由阅读历史或长回复。
 
+**输出**提供对话旁的轻量只读预览：查看明确交付的 Markdown、图片、文本／代码和隔离静态 HTML，下载 PDF 阅读，也可预览网页链接并随时在外部打开。阅读器只有已打开的文件／网页标签，不混入思考、任务或记忆标签，交付历史按需浏览。面板可调宽、全屏和关闭，不删除结果或停止任务；窄屏采用全屏预览。文件通过 `Output.publish` 显式交付，按 owner 保存在 SQLite 快照中，源文件变更或重启后仍可查看。此处没有目录树、编辑器、Terminal 或 Git。详见[输出预览与交付边界](docs/person-outputs.md)。
+
 建议在**新建隔离 Agent 实例**中体验：SQLite 是唯一存储后端，无需另行部署数据库服务。`<yeaftDir>/person/person.db` 是 SQLite 认知权威，保存消息、概念、活动、状态和 Trace；独立的 `<yeaftDir>/person/recall.db` 是可重建检索索引，不是第二套记忆真源。Worker 由同一 Agent 管理生命周期，退出停止计算，但持久记忆保留。数据按认证 owner 与部署 namespace 隔离；场景是同一权威内的视图／范围，不是分别建库。使用 `yeaft-agent llm setup --config <path>` 配置实例 `<yeaftDir>/config.json` 中的原生 API 模型；凭据不要放进浏览器或聊天。
 
 SQLite 上的 Recall 结合中英文关键词 FTS5、本地向量余弦排序与 RRF。默认 embedding 模型是 **multilingual-e5-small**，通过 `@huggingface/transformers` 在 CPU 上运行固定版本 q8 ONNX，缓存于 `<yeaftDir>/person/models`。仅首次显式、非空 Recall 才可能下载模型；打开页面、普通启动和空 Recall 均不下载。`YEAFT_PERSON_EMBEDDING=off` 禁用 embedding；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止下载，已有缓存模型仍可运行。Embedding 推理和查询留在本机；模型文件下载会连接 Hugging Face，认知 LLM 仍使用配置的 provider，可能发送到远端。模型／索引不可用时明确返回降级元数据，不伪称语义检索。向量检索是有界精确扫描，不是 ANN，也不承诺百万条规模性能；Trace 不做向量索引。 完整 FTS5／混合召回推荐 Node 24；缺少 FTS5 的早期受支持 Node 22 仍可保存权威数据及字面召回，明确返回 `FTS_UNAVAILABLE`，不启动 embedding。模型文件按大小和 SHA-256 校验后原子发布，下载中断可在下次显式 Recall 修复；强制退出可能留下被忽略的 `.partial` 文件。

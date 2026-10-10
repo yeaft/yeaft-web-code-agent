@@ -11,6 +11,7 @@ import { capabilityExperienceView, recordCapabilityExperience } from './capabili
 import { chronologicalCursor, conceptView, inspectionCursor, inspectionPage, inspectRequest, messageView, personName, searchRequest, settingsView, stateView } from './inspection.js';
 import { TOKEN_FIELDS, turnsPage, turnView } from './turn-diagnostics.js';
 import { inspectCapabilities } from './capabilities.js';
+import { OUTPUT_LIMITS, outputArgs, outputMime, outputReadRequest, outputsPage, outputUrl, outputView } from './outputs.js';
 
 const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
 const scopeValues = s => [s.namespace, s.ownerId, s.personId];
@@ -52,8 +53,19 @@ const publicOutput = (output, failed) => {
   return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
     : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
 };
-const READS = new Set(['receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
-const WRITES = new Set(['open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
+const objectOutput = (record, data) => {
+  if (!record || !['file', 'link'].includes(record.kind)) fail('INVALID_REQUEST');
+  text(record.title, 240);
+  if (!Number.isSafeInteger(record.size) || record.size < 0 || record.size > OUTPUT_LIMITS.fileBytes) fail('OUTPUT_QUOTA');
+  if (record.kind === 'link') {
+    if (record.mimeType !== null || record.size !== 0 || data !== null || outputUrl(record.url) !== record.url) fail('INVALID_REQUEST');
+  } else {
+    const mimes = ['text/plain', 'text/markdown', 'text/html', 'application/json', 'application/pdf', 'application/octet-stream', 'image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+    if (!mimes.includes(record.mimeType) || !(data instanceof Uint8Array) || data.length !== record.size) fail('INVALID_REQUEST');
+  }
+};
+const READS = new Set(['outputs', 'outputRead', 'checkOutputPublication', 'receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
+const WRITES = new Set(['saveOutput', 'open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
 const sequence = value => {
@@ -271,7 +283,7 @@ export class SqlitePersonStore {
   }
   append(episode, kind, data) {
     // Call proof/publication events are emitted only by their transactional methods.
-    if (['call_started', 'call_output', 'call_failed', 'capability_created', 'capability_finalized'].includes(kind)) fail('INVALID_REQUEST');
+    if (['call_started', 'call_output', 'call_failed', 'capability_created', 'capability_finalized', 'output_published'].includes(kind)) fail('INVALID_REQUEST');
     const p = this.own(episode);
     const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running') fail('STALE');
@@ -553,6 +565,52 @@ export class SqlitePersonStore {
     const docs = this.rows('concepts', this.scope(ownerId), ' AND (? IS NULL OR id > ?) AND instr(statement, ?) > 0 ORDER BY id ASC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);
     return { items: docs.slice(0, limit).map(conceptView), nextCursor: docs.length > limit ? docs[limit - 1].id : null };
   }
+  checkOutputPublication(episode, { callId, args }) {
+    outputArgs(args); this.own(episode);
+    const scope = this.episodeScope(episode), active = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    if (!active || active.status !== 'running' || active.openCapability?.callId !== callId ||
+        active.openCapability.invocationHash !== digest({ id: 'Output.publish', args })) fail('STALE');
+    return true;
+  }
+  saveOutput(episode, { callId, args, record, data }) {
+    this.checkOutputPublication(episode, { callId, args });
+    const scope = this.episodeScope(episode);
+    objectOutput(record, data);
+    // Recheck MIME against the invocation filename/bytes at the authority boundary.
+    if ((record.kind === 'file' && (!Object.hasOwn(args, 'file_path') || outputMime(args.file_path, Buffer.from(data)) !== record.mimeType)) ||
+        (record.kind === 'link' && (!Object.hasOwn(args, 'url') || outputUrl(args.url) !== record.url))) fail('INVALID_REQUEST');
+    const totals = this.sql(`SELECT count(*) AS count, coalesce(sum(size), 0) AS size FROM outputs WHERE ${SCOPE}`).get(...scopeValues(scope));
+    if (totals.count >= OUTPUT_LIMITS.personCount || totals.size + record.size > OUTPUT_LIMITS.personBytes) fail('OUTPUT_QUOTA');
+    // Exactly one durable publication per started invocation, even before finalize.
+    if (this.sql(`SELECT 1 FROM outputs WHERE ${SCOPE} AND episodeId = ? AND callId = ?`).get(...scopeValues(scope), episode.id, callId)) fail('STALE');
+    const item = outputView({ ...record, id: randomUUID(), episodeId: episode.id, createdAt: this.now.toISOString() });
+    this.sql('INSERT INTO outputs(namespace, ownerId, personId, id, episodeId, callId, size, record, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(...scopeValues(scope), item.id, item.episodeId, callId, item.size, JSON.stringify(item), data == null ? null : Buffer.from(data));
+    this.trace(episode.ownerId, episode.id, 'output_published', { callId, output: item });
+    return item;
+  }
+  outputs(ownerId, options = {}) {
+    const { cursor, limit } = outputsPage(options);
+    this.getPerson(ownerId);
+    const rows = this.sql(`SELECT seq, record FROM outputs WHERE ${SCOPE} AND (? IS NULL OR seq < ?) ORDER BY seq DESC LIMIT ?`)
+      .all(...scopeValues(this.scope(ownerId)), cursor, cursor, limit + 1);
+    return { items: rows.slice(0, limit).map(row => outputView(JSON.parse(row.record))), nextCursor: rows.length > limit ? String(rows[limit - 1].seq) : null };
+  }
+  outputRead(ownerId, options) {
+    const { outputId, offset, maxBytes } = outputReadRequest(options);
+    this.getPerson(ownerId);
+    const scope = this.scope(ownerId);
+    const row = this.sql(`SELECT size, record FROM outputs WHERE ${SCOPE} AND id = ?`).get(...scopeValues(scope), outputId);
+    if (!row) fail('NOT_FOUND');
+    const item = outputView(JSON.parse(row.record));
+    if (item.kind !== 'file') fail('OUTPUT_NOT_FILE');
+    if (offset > row.size) fail('INVALID_REQUEST');
+    // SQLite substr uses 1-based byte indices for BLOBs; never load the whole file.
+    const chunk = this.sql(`SELECT substr(data, ?, ?) AS data FROM outputs WHERE ${SCOPE} AND id = ?`)
+      .get(offset + 1, maxBytes, ...scopeValues(scope), outputId).data;
+    const data = Buffer.from(chunk), nextOffset = offset + data.length;
+    return { outputId, data: data.toString('base64'), offset, nextOffset, eof: nextOffset === row.size, totalBytes: row.size, mimeType: item.mimeType };
+  }
   snapshot(ownerId) {
     this.recover(ownerId);
     const scope = this.scope(ownerId), p = this.getPerson(ownerId), state = this.one('states', scope);
@@ -563,7 +621,7 @@ export class SqlitePersonStore {
       ...(episode.terminalCode ? { terminalCode: episode.terminalCode } : {}), ...(episode.endedAt ? { endedAt: episode.endedAt } : {}) } : null;
     return { latestEpisode, person: this.personView(p), state: stateView(state), concepts: this.focused(scope, state.focusConceptIds).slice(0, 12).map(conceptView),
       messages: messages.slice(0, 20).reverse().map(messageView), nextMessagesCursor: messages.length > 20 ? String(messages[19].seq) : null,
-      busy: Boolean(p.activeEpisodeId), episodeId: p.activeEpisodeId };
+      outputs: this.outputs(ownerId), busy: Boolean(p.activeEpisodeId), episodeId: p.activeEpisodeId };
   }
   searchChanges(ownerId, { after = 0, limit = 100 } = {}) {
     this.getPerson(ownerId); after = sequence(after); boundedLimit(limit, 1000);

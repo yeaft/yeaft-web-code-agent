@@ -8,9 +8,19 @@ const FIELDS = Object.freeze({
   send: ['text', 'clientMessageId', 'attachments'], think: ['text', 'clientMessageId', 'attachments'],
   dream: ['clientMessageId'], cancel: ['episodeId'],
   tasks: ['cursor', 'limit'], task_log: ['taskId', 'offset', 'maxBytes'], task_cancel: ['taskId'], agent_close: ['agentId'],
+  outputs: ['cursor', 'limit'], output_read: ['outputId', 'offset', 'maxBytes'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'], turns: ['cursor', 'limit'],
   inspect: ['section', 'cursor', 'limit'], search: ['query', 'cursor', 'limit'],
   settings: ['name', 'autonomyEnabled', 'modelCandidates', 'defaultModel'],
+});
+const OUTPUT_ERRORS = Object.freeze({
+  not_found: 'Digital person output not found',
+  output_not_file: 'Only published file snapshots can be read; links are not fetched',
+  output_quota: 'Maximum 10 MiB per file, 100 MiB or 200 outputs per person',
+  output_path: 'Output must be a regular file strictly within workDir; symlinks are not permitted',
+  output_platform: 'File publication requires Linux with accessible procfs and no-follow directory descriptors; links and existing snapshots remain available',
+  invalid_request: 'Invalid digital person output request',
+  not_open: 'Open the digital person first',
 });
 
 /** Request-only relay: identity is supplied by the authenticated Server, never the browser.
@@ -60,13 +70,26 @@ export function createPersonRelay({
       }
       const source = msg.payload;
       if (source != null && (typeof source !== 'object' || Array.isArray(source))) {
-        await reply(client, envelope, { ok: false, error: 'Invalid digital person payload' });
+        await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: 'Invalid digital person payload' });
         return true;
       }
       if (op === 'turns' && ((source?.cursor != null && (!Number.isSafeInteger(source.cursor) || source.cursor < 1))
         || (Object.hasOwn(source ?? {}, 'limit') && (!Number.isInteger(source.limit) || source.limit < 1 || source.limit > 20)))) {
         await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: 'Invalid digital person turn page' });
         return true;
+      }
+      if (op === 'outputs' || op === 'output_read') {
+        const value = source ?? {};
+        const invalid = Object.keys(value).some(key => !FIELDS[op].includes(key))
+          || (op === 'outputs' && ((value.cursor != null && (typeof value.cursor !== 'string' || !/^[1-9][0-9]{0,14}$/.test(value.cursor)))
+            || (Object.hasOwn(value, 'limit') && (!Number.isInteger(value.limit) || value.limit < 1 || value.limit > 50))))
+          || (op === 'output_read' && (typeof value.outputId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value.outputId)
+            || (Object.hasOwn(value, 'offset') && (!Number.isSafeInteger(value.offset) || value.offset < 0))
+            || (Object.hasOwn(value, 'maxBytes') && (!Number.isInteger(value.maxBytes) || value.maxBytes < 1 || value.maxBytes > 65536))));
+        if (invalid) {
+          await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: 'Invalid digital person output request' });
+          return true;
+        }
       }
       if (['tasks', 'task_log', 'task_cancel', 'agent_close'].includes(op)) {
         const value = source ?? {};
@@ -147,8 +170,10 @@ export function createPersonRelay({
       await reply(row.client, row.envelope, msg.ok === true
         ? { ok: true, data: msg.data }
         : { ok: false,
-          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict', 'attachment_expired', 'invalid_attachment', 'unsupported_attachment', 'attachment_limit', 'image_model', 'model_selection', 'not_found', 'task_scope_denied', 'task_control_unavailable'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
-          error: typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'Digital person request failed' });
+          errorCode: ['outcome_unknown', 'invalid_request', 'busy', 'unsupported', 'not_configured', 'not_open', 'stale', 'idempotency_conflict', 'attachment_expired', 'invalid_attachment', 'unsupported_attachment', 'attachment_limit', 'image_model', 'model_selection', 'not_found', 'task_scope_denied', 'task_control_unavailable', 'output_path', 'output_platform', 'output_quota', 'output_not_file'].includes(msg.errorCode) ? msg.errorCode : 'requestFailed',
+          error: ['outputs', 'output_read'].includes(row.envelope.op)
+            ? (Object.hasOwn(OUTPUT_ERRORS, msg.errorCode) ? OUTPUT_ERRORS[msg.errorCode] : 'Digital person output request failed; refresh before retrying')
+            : typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'Digital person request failed' });
       return true;
     },
     clearClient(client) {

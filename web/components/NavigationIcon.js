@@ -15,6 +15,12 @@ export default {
       <g v-else fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <template v-if="name === 'eye'"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></template>
         <template v-else-if="name === 'activity'"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 9h8M8 14h5"/></template>
+        <template v-else-if="name === 'file'"><path d="M14 2H5v20h14V7Z"/><path d="M14 2v5h5M8 12h8M8 16h6"/></template>
+        <template v-else-if="name === 'globe'"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z"/></template>
+        <template v-else-if="name === 'external'"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></template>
+        <template v-else-if="name === 'download'"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></template>
+        <template v-else-if="name === 'expand'"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></template>
+        <template v-else-if="name === 'restore'"><path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5"/></template>
         <template v-else-if="name === 'search'"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></template>
         <template v-else-if="name === 'refresh'"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></template>
         <path v-else-if="name === 'add'" d="M12 5v14M5 12h14"/>

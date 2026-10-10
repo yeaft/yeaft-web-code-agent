@@ -107,6 +107,10 @@ export class SqlitePersonRepository {
   async settings(ownerId, settings, expectedControlVersion) { return this.request('settings', [ownerId, settings, expectedControlVersion]); }
   async list(ownerId, collection, options, filter) { return this.request('list', [ownerId, collection, options, filter]); }
   async turns(ownerId, options) { return this.request('turns', [ownerId, options]); }
+  async checkOutputPublication(episode, input) { return this.request('checkOutputPublication', [episode, input]); }
+  async saveOutput(episode, input) { return this.request('saveOutput', [episode, input]); }
+  async outputs(ownerId, options = {}) { return this.request('outputs', [ownerId, options]); }
+  async outputRead(ownerId, options) { return this.request('outputRead', [ownerId, options]); }
   async snapshot(ownerId) { return this.request('snapshot', [ownerId]); }
   async inspect(ownerId, options, nativeToolIds) { return this.request('inspect', [ownerId, options, nativeToolIds]); }
   async search(ownerId, options) { return this.request('search', [ownerId, options]); }

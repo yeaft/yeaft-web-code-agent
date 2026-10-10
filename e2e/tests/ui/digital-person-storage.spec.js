@@ -120,7 +120,8 @@ test('Person SQLite three capability layers persist through relay and restart', 
     expect(calls).toBe(10);
     await page.locator('#person-input').fill('Reuse the sum script.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.locator('.person-messages')).toContainText('Reused the saved sum; result 17.');
+    // Reuse also launches a fresh bounded WASM worker before the terminal reply.
+    await expect(page.locator('.person-messages')).toContainText('Reused the saved sum; result 17.', { timeout: 15000 });
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(calls).toBe(12);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -168,8 +169,19 @@ test('Person SQLite three capability layers persist through relay and restart', 
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Memory', exact: true }).click();
     await expect(page.locator('.person-knowledge')).toContainText('What would change my understanding?');
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Skills & capabilities', exact: true }).click();
-    await expect(page.locator('.person-knowledge')).toContainText('Script.sum');
     const savedScript = page.locator('.person-knowledge-item').filter({ hasText: 'Script.sum' });
+    // The growing built-in catalog can place created scripts beyond page one.
+    // Browse real bounded pages instead of assuming a fixed catalog size/order.
+    await expect(page.locator('.person-knowledge')).toHaveAttribute('aria-busy', 'false');
+    for (let pages = 0; pages < 5 && await savedScript.count() === 0; pages++) {
+      const count = await page.locator('.person-knowledge-item').count();
+      const more = page.locator('.person-knowledge').getByRole('button', { name: 'Load more', exact: true });
+      await expect(more).toBeEnabled();
+      await more.click();
+      await expect.poll(() => page.locator('.person-knowledge-item').count()).toBeGreaterThan(count);
+      await expect(page.locator('.person-knowledge')).toHaveAttribute('aria-busy', 'false');
+    }
+    await expect(savedScript).toHaveCount(1);
     await savedScript.locator(':scope > summary').click();
     await savedScript.getByText('Contract & definition', { exact: true }).click();
     await expect(savedScript.locator('pre')).toContainText('return input.reduce');
