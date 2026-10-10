@@ -474,18 +474,18 @@ export default {
               <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>
             </div>
           </section>
-          <PersonTurnUsage v-else-if="panel === 'turns'" :page="state.turns" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTurns()" @more="controller.readTurns(true)" />
-          <PersonTaskBrowser v-else-if="panel === 'tasks'" :page="state.tasks" :log="state.taskLog" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTasks()" @log="controller.readTaskLog" @stop="controller.stopTask" />
-          <PersonKnowledgeBrowser v-else-if="panel === 'memory' || panel === 'skills'" :key="panel" :section="panel" :page="state[panel]" :disabled="!!gate || state.loading || !state.person" @refresh="controller.inspect(panel)" @more="controller.inspect(panel, true)" />
+          <PersonTurnUsage v-else-if="panel === 'turns'" :page="state.turns" :identity-key="transcriptIdentity" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTurns()" @more="controller.readTurns(true)" />
+          <PersonTaskBrowser v-else-if="panel === 'tasks'" :page="state.tasks" :identity-key="transcriptIdentity" :log="state.taskLog" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTasks()" @more="controller.readTasks(true)" @log="controller.readTaskLog" @stop="controller.stopTask" />
+          <PersonKnowledgeBrowser v-else-if="panel === 'memory' || panel === 'skills'" :key="panel" :section="panel" :identity-key="transcriptIdentity + panel" :page="state[panel]" :disabled="!!gate || state.loading || !state.person" @refresh="controller.inspect(panel)" @more="controller.inspect(panel, true)" />
           <div v-if="panel === 'thoughts' || panel === 'debug'" class="person-journal-toolbar">
             <span class="person-muted">{{ $t('person.thoughts') }}</span>
             <button v-if="panel === 'thoughts'" type="button" class="btn-ghost person-debug-link" @click="openPanel('debug')">{{ $t('person.debug') }}</button>
             <button v-else type="button" class="btn-ghost" @click="openPanel('thoughts')">{{ $t('person.back') }}</button>
           </div>
-          <PersonThoughtJournal v-if="panel === 'thoughts'" :traces="state.traces" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)">
+          <PersonThoughtJournal v-if="panel === 'thoughts'" :traces="state.traces" :identity-key="transcriptIdentity" :page-token="state.traceCursor" :error="!!state.error" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)">
             <template #activity><PersonActivity :key="activity.episodeId || 'pending'" :activity="activity" /></template>
           </PersonThoughtJournal>
-          <PersonDebugLog v-if="panel === 'debug'" :traces="state.traces" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
+          <PersonDebugLog v-if="panel === 'debug'" :traces="state.traces" :identity-key="transcriptIdentity" :page-token="state.traceCursor" :error="!!state.error" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
         </aside>
       </div>
       <PersonSettingsModal v-if="settingsOpen" :name="state.person?.name || ''" :rename-supported="state.renameSupported" :models="state.models" :candidates="state.modelCandidates" :effective-candidates="state.effectiveModelCandidates" :default-model="state.defaultModel" :agent-default-model="state.agentDefaultModel" :effective-default-model="state.effectiveDefaultModel" :default-model-supported="state.defaultModelSupported" :saving="state.settingsPending" :loading="state.loading" :disabled="!!gate || state.loading || state.busy || state.commandPending" :error="state.error" @close="settingsOpen = false" @save="saveSettings" />

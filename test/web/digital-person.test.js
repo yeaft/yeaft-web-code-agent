@@ -203,6 +203,21 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.requests).toHaveLength(before);
   });
 
+  it('replaces the active cleanup snapshot without consuming the history cursor', async () => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30 }], agents: [], nextCursor: 'older',
+      active: { tasks: [{ id: 'old-active', status: 'running' }], agents: [{ id: 'cleaning', executionPending: true }], truncated: false } } : undefined);
+    await f.controller.readTasks();
+    expect(f.state.tasks.active.tasks[0].id).toBe('old-active');
+    expect(f.state.tasks.active.agents[0].executionPending).toBe(true);
+    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new']);
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30 }], agents: [], nextCursor: 'changed', active: { tasks: [], agents: [], truncated: false } } : undefined);
+    await f.controller.readTasks();
+    expect(f.state.tasks.active.tasks).toEqual([]);
+    expect(f.state.tasks.active.agents).toEqual([]);
+    expect(f.state.tasks.nextCursor).toBe('older');
+  });
+
   it('keeps task stop errors and reads log pages as bounded plain text', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'task_log' ? { text: 'x'.repeat(40000), nextOffset: r.payload.offset + 40000 } : r.op === 'agent_close' ? false : undefined);

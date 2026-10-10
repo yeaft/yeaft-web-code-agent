@@ -50,7 +50,7 @@ export function personState() {
     settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
     turns: { ...inspectionPage(), stale: false },
-    tasks: { tasks: [], agents: [], nextCursor: null, loaded: false, loading: false, stale: false, error: null, pending: null },
+    tasks: { tasks: [], agents: [], active: { tasks: [], agents: [], truncated: false }, nextCursor: null, loaded: false, loading: false, stale: false, error: null, pending: null },
     taskLog: { taskId: '', text: '', nextOffset: 0, loading: false, error: null },
   };
 }
@@ -505,6 +505,9 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       if (!current(g) || number !== tasksRequest || target !== state.tasks) return;
       const merge = (previous, incoming) => [...new Map([...previous, ...(incoming || [])].map(row => [row.id, row])).values()]
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || String(a.id).localeCompare(String(b.id)));
+      // Active cleanup is a fresh scope-wide control snapshot, independent of
+      // the loaded history window. Do not accumulate it when work settles.
+      target.active = data.active || null;
       target.tasks = merge(target.tasks, data.tasks);
       target.agents = merge(target.agents, data.agents);
       if (more || !wasLoaded) target.nextCursor = data.nextCursor ?? null;
