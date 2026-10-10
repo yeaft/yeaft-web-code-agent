@@ -10,9 +10,16 @@ export default {
   emits: ['refresh', 'more'],
   setup(props) {
     const entries = Vue.computed(() => newestPersonRecords(props.page.items));
-    const estimate = () => 100;
+    const estimate = () => props.section === 'memory' ? 80 : 92;
     const json = value => JSON.stringify(value, null, 2);
-    return { entries, estimate, json };
+    const translate = Vue.getCurrentInstance().appContext.config.globalProperties.$t;
+    const groupLabel = item => {
+      const group = props.section === 'memory' ? item.kind : item.domain;
+      const key = 'person.group.' + group;
+      const label = translate(key);
+      return label === key ? group : label;
+    };
+    return { entries, estimate, json, groupLabel };
   },
   template: `
     <section class="person-knowledge person-journal" :aria-label="$t('person.' + section)" :aria-busy="page.loading">
@@ -29,7 +36,12 @@ export default {
         </template>
         <template #default="{ item }">
             <details class="person-knowledge-item" :data-knowledge-id="item.id">
-              <summary><small class="person-muted person-knowledge-kind">{{ $t('person.group.' + (section === 'memory' ? item.kind : item.domain)) }}</small><span>{{ section === 'memory' ? item.statement : item.id }}</span></summary>
+              <summary :class="{ 'is-memory': section === 'memory' }">
+                <span v-if="section === 'memory'" class="person-knowledge-excerpt">{{ item.statement }}</span>
+                <span v-else class="person-knowledge-name">{{ item.id }}</span>
+                <small class="person-muted person-knowledge-kind" :title="groupLabel(item)">{{ groupLabel(item) }}</small>
+                <span v-if="section !== 'memory' && item.description" class="person-knowledge-excerpt">{{ item.description }}</span>
+              </summary>
               <div class="person-knowledge-detail">
                 <template v-if="section === 'memory'">
                   <p class="person-prose">{{ item.statement }}</p>

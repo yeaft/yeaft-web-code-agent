@@ -592,7 +592,12 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
       await expect(page.locator('.person-thoughts-button')).toBeFocused();
       await page.locator('.person-thoughts-button').click();
       if (scenario.width === 800) {
-        await page.locator('.person-panel-backdrop').click({ position: { x: 5, y: 300 } });
+        // Tablet uses the same full-width inner panel as mobile. Its backdrop is
+        // entirely covered; close through the visible control, not a hidden hit target.
+        const panelBounds = await page.locator('#person-side-panel').boundingBox();
+        expect(panelBounds.x).toBe(0);
+        expect(panelBounds.width).toBe(scenario.width);
+        await closeDrawer.click();
         await expect(page.locator('.person-thoughts-button')).toBeFocused();
         await page.locator('.person-thoughts-button').click();
       }

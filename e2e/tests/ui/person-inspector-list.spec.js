@@ -51,9 +51,36 @@ app.config.globalProperties.$t = key => en[key] || key;
 app.mount('#fixture'); window.fixtureReady = true;
 </script></body></html>`;
 
+const knowledgeFixture = `<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="/web/styles/index.css">
+<style>body{margin:0;display:block}.person-page{height:100dvh;width:min(100%,460px);margin:auto}.person-panel-header{display:flex;justify-content:space-between}button{min-height:32px}</style>
+</head><body><div id="fixture"></div><script src="/web/vendor/vue.global.prod.js"></script>
+<script type="module">
+import PersonKnowledgeBrowser from '/web/components/PersonKnowledgeBrowser.js';
+import zhCN from '/web/i18n/zh-CN.js';
+const statement = '数据核查宜分别记录源码入口、连接与集合存在、记录数、时间范围，并区分已确认的事实与仍需验证的假设。'.repeat(8);
+const description = 'Read and manage background work and collect the actual result, without starting another model call. '.repeat(8);
+window.fixtureState = Vue.reactive({section:'memory', requests:0, loading:false, token:'older-1', identity:'agent-a'});
+const memories = Array.from({length:40}, (_,i) => ({id:'memory-' + i, kind:i === 0 ? 'method' : 'claim', statement:i + ' ' + statement, epistemicState:'uncertain', revision:1, updatedAt:1000-i}));
+const tools = Array.from({length:40}, (_,i) => ({id:i === 0 ? 'CancelTask' : i === 1 ? 'CloseAgent' : i === 2 ? 'Output.publish' : 'Tool.' + i, domain:i === 0 ? 'tasks' : i === 1 ? 'orchestration' : i === 2 ? 'delivery' : 'filesystem', version:1, description, contract:{useWhen:'Actual work requires this tool.'}}));
+const app = Vue.createApp({components:{PersonKnowledgeBrowser}, setup(){
+  const state = window.fixtureState;
+  const page = Vue.computed(() => ({items:state.section === 'memory' ? memories : tools, loaded:true, loading:state.loading, nextCursor:state.token}));
+  function more(){state.requests++; state.loading=true; setTimeout(() => {state.token='older-' + (state.requests+1); state.loading=false},80)}
+  return {state,page,more};
+}, template: \`<div class="person-page"><header class="person-panel-header"><h3>数字人内核</h3><button class="btn-ghost" @click="state.section = state.section === 'memory' ? 'skills' : 'memory'">切换</button></header>
+<PersonKnowledgeBrowser :section="state.section" :page="page" :identity-key="state.identity + ':' + state.section" @more="more" /></div>\`});
+app.config.globalProperties.$t = key => zhCN[key] || key;
+app.mount('#fixture'); window.fixtureReady=true;
+</script></body></html>`;
+
 test.beforeAll(async () => {
   server = createServer(async (request, response) => {
-    if (request.url === '/' || request.url === '/tasks') { response.setHeader('Content-Type', 'text/html'); response.end(request.url === '/tasks' ? taskFixture : fixture); return; }
+    if (['/', '/tasks', '/knowledge'].includes(request.url)) {
+      response.setHeader('Content-Type', 'text/html');
+      response.end(request.url === '/tasks' ? taskFixture : request.url === '/knowledge' ? knowledgeFixture : fixture);
+      return;
+    }
     const path = resolve(webRoot, decodeURIComponent(request.url.replace(/^\/web\//, '')));
     if (!request.url.startsWith('/web/') || !path.startsWith(webRoot + sep)) { response.writeHead(404).end(); return; }
     try {
@@ -67,6 +94,58 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await new Promise(resolve => server.close(resolve)); });
 
 for (const theme of ['light', 'dark']) {
+  for (const width of [1280, 320, 1920]) {
+    test(`compact knowledge shows useful content without clipped lines: ${theme}, ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 700 });
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.goto(origin + '/knowledge');
+      await page.waitForFunction(() => window.fixtureReady);
+      if (width === 1920) await page.locator('.person-page').evaluate(el => { el.style.width = '100%'; });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      const scroller = page.locator('.person-inspector-list');
+      const memory = page.locator('[data-knowledge-id="memory-0"]');
+      await expect(memory).toBeVisible();
+      expect(await page.locator('[data-knowledge-id]').count()).toBeLessThan(20);
+      const excerpt = memory.locator('summary .person-knowledge-excerpt');
+      const geometry = await memory.locator('summary').evaluate(el => {
+        const text = el.querySelector('.person-knowledge-excerpt');
+        const kind = el.querySelector('.person-knowledge-kind');
+        return {height:el.getBoundingClientRect().height, textHeight:text.getBoundingClientRect().height, lineHeight:parseFloat(getComputedStyle(text).lineHeight),
+          sameRow:Math.abs(text.getBoundingClientRect().top - kind.getBoundingClientRect().top) < 4, fullText:text.textContent.length};
+      });
+      expect(geometry.height).toBeLessThanOrEqual(60);
+      expect(geometry.textHeight).toBe(geometry.lineHeight * 2);
+      expect(geometry.sameRow).toBe(true);
+      expect(geometry.fullText).toBeGreaterThan(300);
+      if (width === 1920) expect((await memory.boundingBox()).width).toBeLessThanOrEqual(880);
+      await page.screenshot({path:test.info().outputPath(`memory-${theme}-${width}.png`)});
+      await memory.locator('summary').focus();
+      await page.keyboard.press('Enter');
+      await expect(memory).toHaveAttribute('open', '');
+      await expect(memory.locator('.person-knowledge-detail .person-prose')).toHaveText(await excerpt.textContent());
+      await page.keyboard.press('Escape');
+      await expect(memory).not.toHaveAttribute('open', '');
+      await expect(memory.locator('summary')).toBeFocused();
+      await scroller.evaluate(el => {el.scrollTop=el.scrollHeight});
+      await page.waitForTimeout(150);
+      expect(await page.evaluate(() => window.fixtureState.requests)).toBe(0);
+      await scroller.hover(); await page.mouse.wheel(0,150);
+      await expect.poll(() => page.evaluate(() => window.fixtureState.requests)).toBe(1);
+      await page.getByRole('button', {name:'切换', exact:true}).click();
+      const task = page.locator('[data-knowledge-id="CancelTask"]');
+      await expect(task).toBeVisible();
+      await expect(task.locator('summary .person-knowledge-kind')).toHaveText('后台任务');
+      await expect(page.locator('[data-knowledge-id="CloseAgent"] summary .person-knowledge-kind')).toHaveText('子线程');
+      await expect(task.locator('summary .person-knowledge-excerpt')).toBeVisible();
+      expect((await task.locator(':scope > summary').boundingBox()).height).toBeLessThanOrEqual(84);
+      await expect(page.locator('.person-knowledge')).not.toContainText('person.group.');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(errors).toEqual([]);
+      await page.screenshot({path:test.info().outputPath(`knowledge-${theme}-${width}.png`)});
+    });
+  }
+
   for (const width of [1280, 320]) {
     test(`bounded inspector scroll and keyboard continuity: ${theme}, ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 600 });

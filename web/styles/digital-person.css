@@ -137,12 +137,20 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-overview dt, .person-knowledge dt { color: var(--text-secondary); }
 .person-overview dd, .person-knowledge dd { margin: 0; overflow-wrap: anywhere; }
 .person-knowledge summary { cursor: pointer; padding: var(--work-center-space-2) 0; font-size: 13px; overflow-wrap: anywhere; }
-.person-knowledge-branch { margin-left: var(--work-center-space-2); padding-left: var(--work-center-space-3); border-left: 1px solid var(--border-light); }
-.person-knowledge-item > summary span { display: inline; }
-.person-knowledge-item > summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
-.person-knowledge-item > summary::before { content: '› '; color: var(--text-muted); }
-.person-knowledge-item[open] > summary::before { content: '⌄ '; }
-.person-knowledge-detail { padding: var(--work-center-space-2) 0 var(--work-center-space-3); }
+.person-knowledge .person-journal-toolbar { padding-inline: var(--work-center-space-3); }
+.person-knowledge .person-inspector-list { padding: var(--work-center-space-1) var(--work-center-space-3) var(--work-center-space-3); }
+.person-knowledge .person-inspector-list > :is(.virtual-transcript, .person-inspector-small, .person-inspector-before, .person-inspector-after) { width: min(100%, 880px); }
+.person-knowledge-item > summary { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: var(--work-center-space-1) var(--work-center-space-2); align-items: baseline; min-height: 44px; padding: var(--work-center-space-2); list-style: none; border-radius: var(--agent-setup-control-radius); line-height: 1.6; }
+.person-knowledge-item > summary::-webkit-details-marker { display: none; }
+.person-knowledge-item > summary::before { content: '›'; grid-column: 1; grid-row: 1; color: var(--text-muted); }
+.person-knowledge-item[open] > summary::before { content: '⌄'; }
+.person-knowledge-item > summary:hover { background: var(--sidebar-hover); }
+.person-knowledge-name { grid-column: 2; grid-row: 1; min-width: 0; color: var(--text-primary); font-weight: 500; }
+.person-knowledge-kind { grid-column: 3; grid-row: 1; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.person-knowledge-excerpt { grid-column: 2 / -1; grid-row: 2; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--text-secondary); line-height: 20px; }
+.person-knowledge-item > summary.is-memory .person-knowledge-excerpt { grid-column: 2; grid-row: 1; color: var(--text-primary); }
+.person-knowledge-detail { padding: var(--work-center-space-2) var(--work-center-space-2) var(--work-center-space-3) calc(12px + 2 * var(--work-center-space-2)); }
+.person-knowledge-detail > .person-prose { font-size: 13px; line-height: 1.6; }
 .person-knowledge-detail ul { padding-left: var(--work-center-space-4); font-size: 12px; overflow-wrap: anywhere; }
 .person-knowledge-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code-bg); color: var(--code-text); padding: var(--work-center-space-3); border-radius: var(--agent-setup-control-radius); font-size: 12px; }
 .person-search-form { display: flex; gap: var(--work-center-space-2); padding: var(--work-center-space-3) var(--work-center-space-4); }
@@ -238,8 +246,6 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-inspector-list .person-load-more { margin-top: var(--work-center-space-3); }
 .person-inspector-list summary:focus-visible,
 .person-inspector-list [data-inspector-index]:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 3px; border-radius: var(--agent-setup-control-radius); }
-.person-inspector-list .person-knowledge-item { padding-block: var(--work-center-space-2); border-bottom: 1px solid var(--border-light); }
-.person-inspector-list .person-knowledge-kind { display: block; margin-bottom: var(--work-center-space-1); }
 .person-inspector-list .person-thought { border-bottom: 1px solid var(--border-light); }
 .person-inspector-list .person-debug-row pre { max-height: 60vh; overflow: auto; }
 
