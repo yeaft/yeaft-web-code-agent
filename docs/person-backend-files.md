@@ -119,7 +119,7 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 
 `tasks` 显式传 `{limit:1..100,cursor?:string|null}` 启用检查分页，limit 是**每个集合**的条数上限。返回 `{tasks,agents,nextCursor,truncated}`：两个集合均按 **创建时间降序、ID 二进制升序**，状态／updatedAt 改变不会使记录跨页移动。`nextCursor` 为一个 owner / Person / namespace / canonical instance 绑定的 `t1:…` 不透明字符串，分别保存两个集合的 continuation；一个集合已结束后，后续页该集合为空数组。两个集合均结束时 `nextCursor:null,truncated:false`。跨 scope 游标拒绝，不会读取别人的记录。空 payload `{}` 保留旧的 active-first、最多每集合 100 条的库存行为（没有 `nextCursor`）；新浏览器应始终显式传 limit 获取真正可到末尾的分页。响应条数／字节有界，但当前文件库存仍需读取和排序 scope 内的全部 metadata，并非有索引的磁盘查询。
 
-浏览器首屏仅取一页，滚动续页原样传 `nextCursor`，不要把 `truncated` 当作数据丢失。独立轮询使用**不带 continuation 的首页**，按 collection + ID 合并刷新已加载项；memory 修订按 revision 防止旧响应覆盖新版本。轮询首页的 cursor 不应覆盖已加载历史的 continuation，否则会重复滚动同一段历史。概念修订／能力新版本可能移到首页，合并需要去重并重新按上述时间／tie 顺序投影。tasks 的首页不是 active-only 列表；保留旧的 active-first 调用可单独用于控制提示，不取代有界检查分页。
+浏览器首屏仅取一页，滚动续页原样传 `nextCursor`，不要把 `truncated` 当作数据丢失。独立轮询使用**不带 continuation 的首页**，按 collection + ID 合并刷新已加载项；memory 修订按 revision 防止旧响应覆盖新版本。轮询首页的 cursor 不应覆盖已加载历史的 continuation，否则会重复滚动同一段历史。概念修订／能力新版本可能移到首页，合并需要去重并重新按上述时间／tie 顺序投影。tasks 的首页不是 active-only 列表；分页响应另外包含 `active:{tasks,agents,truncated}` 控制快照，与历史 continuation 无关，每个集合最多 100 条且有完整记录字节预算。它包含非终态 shell/task 及仍有 `executionPending` 的终态 child，不包含已 orphaned 的不可确认控制。浏览器可独立显示／按 ID 合并这些旧的活跃记录，以保证 Stop／Close 不被大量新终态历史埋没；每次刷新替换 active 快照而不是累计已结束的控制，并按每条记录当前状态决定可用按钮。`active.truncated:true` 诚实标识控制快照不完整，全部库存仍可通过历史 cursor 遍历。保留旧的 active-first 调用，但新浏览器无须额外请求它。
 
 现行 Agent 只包含 SQLite managed-worker authority，没有 Mongo runtime、store 或依赖；本契约不新增 Mongo 存储或迁移实例数据。
 

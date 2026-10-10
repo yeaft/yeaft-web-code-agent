@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => { relay.close(); vi.useRealTimers(); });
 const message = (extra = {}) => ({ type: 'person_request', agentId: 'agent-a', requestId: 'browser-1', op: 'snapshot', payload: {}, ...extra });
+const taskCursor = `t1:${Buffer.from(JSON.stringify({ scope: 'a'.repeat(64), tasks: { time: 1767225600000, id: 'task-one' }, agents: null })).toString('base64url')}`;
 
 describe('digital person authenticated relay', () => {
   it('replaces identity and correlation, strips forged payload fields, never broadcasts', async () => {
@@ -47,7 +48,7 @@ describe('digital person authenticated relay', () => {
   });
 
   it.each([
-    ['tasks', {}], ['tasks', { limit: 20, cursor: 't1:eyJzY29wZSI6Im9wYXF1ZSJ9' }], ['task_log', { taskId: 'task-one', offset: 4, maxBytes: 65536 }],
+    ['tasks', {}], ['tasks', { limit: 20, cursor: null }], ['tasks', { limit: 20, cursor: taskCursor }], ['task_log', { taskId: 'task-one', offset: 4, maxBytes: 65536 }],
     ['task_cancel', { taskId: 'task-one' }], ['agent_close', { agentId: 'agent-child' }],
   ])('routes strict %s task payloads with authenticated ownership and correlation', async (op, payload) => {
     await relay.request(client, message({ op, payload, ownerId: 'victim' }));
@@ -55,6 +56,22 @@ describe('digital person authenticated relay', () => {
     expect(outbound).toMatchObject({ ownerId: 'owner-a', op, payload });
     await relay.response('agent-a', { type: 'person_response', requestId: outbound.requestId, ok: false, errorCode: 'not_found', error: 'Digital person task or child not found' });
     expect(send.mock.lastCall[1]).toMatchObject({ op, requestId: 'browser-1', ok: false, errorCode: 'not_found' });
+  });
+
+  it('forwards first and continuation task pages and returns active controls/opaque cursor only to the requester', async () => {
+    for (const cursor of [null, taskCursor]) {
+      await relay.request(client, message({ op: 'tasks', payload: { cursor, limit: 20 } }));
+      const outbound = forward.mock.lastCall[1];
+      expect(outbound.payload).toEqual({ cursor, limit: 20 });
+      const data = { tasks: [{ id: 'new-settled', createdAt: '2026-01-01', status: 'succeeded' }], agents: [],
+        nextCursor: cursor === null ? taskCursor : null, truncated: cursor === null,
+        active: { tasks: [{ id: 'old-live', createdAt: '2020-01-01', status: 'running' }], agents: [], truncated: false } };
+      await relay.response('agent-b', { type: 'person_response', requestId: outbound.requestId, ok: true, data });
+      const previousCalls = send.mock.calls.length;
+      await relay.response('agent-a', { type: 'person_response', requestId: outbound.requestId, ok: true, data });
+      expect(send).toHaveBeenCalledTimes(previousCalls + 1);
+      expect(send.mock.lastCall).toEqual([client, { type: 'person_response', agentId: 'agent-a', requestId: 'browser-1', op: 'tasks', ok: true, data }]);
+    }
   });
 
   it.each([

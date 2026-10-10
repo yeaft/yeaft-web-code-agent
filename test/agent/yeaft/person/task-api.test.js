@@ -221,6 +221,12 @@ describe('Digital Person owner-scoped task API', () => {
       expect(list.truncated).toBe(true);
       expect(list.agents).toHaveLength(PERSON_TASK_LIMITS.records);
       expect(list.agents[0]).toMatchObject({ id: child.agentId, status, executionPending: true, recoveryStatus: null, outcome });
+      const page = await call(s, 'tasks', { cursor: null, limit: 20 });
+      expect(page.agents).toHaveLength(20);
+      expect(page.agents.some(record => record.id === child.agentId)).toBe(false);
+      expect(page.active.agents).toEqual([expect.objectContaining({ id: child.agentId, status, executionPending: true, outcome })]);
+      expect(page.active.truncated).toBe(false);
+      expect(JSON.stringify(page)).not.toMatch(/private result|private-token/);
       expect(JSON.stringify(list)).not.toContain('private result');
       let settled = false;
       const closing = call(s, 'agent_close', { agentId: child.agentId }).then(result => { settled = true; return result; });
@@ -232,6 +238,7 @@ describe('Digital Person owner-scoped task API', () => {
       expect(closed).toMatchObject({ agent: { id: child.agentId, status, executionPending: false, outcome }, pending: false });
       expect(JSON.stringify(closed)).not.toContain('private');
       expect(getAgentRegistry().get(child.agentId).__driverStarted).toBe(false);
+      expect((await call(s, 'tasks', { cursor: null, limit: 20 })).active.agents).toEqual([]);
       // Once joined it may fall outside the bounded history, but its durable
       // record remains directly addressable and closing again is idempotent.
       expect((await call(s, 'tasks')).agents.some(record => record.id === child.agentId)).toBe(false);
@@ -315,6 +322,40 @@ describe('Digital Person owner-scoped task API', () => {
     expect(createPersonProvider).not.toHaveBeenCalled();
   });
 
+  it('keeps older active shell controls separate from newest-first history with bounded scope-fenced snapshots', async () => {
+    const s = service(), h = await ownedHost(s), store = new TaskStore({ yeaftDir: h.dataRoot });
+    const write = (id, createdAt, status, ownerVpId = h.parentVpId) => store.writeTask({ id,
+      sessionId: h.sessionId, ownerVpId, kind: 'shell', title: `secret=private-token ${root}/private`, status, createdAt });
+    write('old-live', '2020-01-01', 'running');
+    write('old-orphan', '2020-01-01', 'orphaned');
+    write('new-settled', '2026-01-01', 'succeeded');
+    write('foreign-live', '2030-01-01', 'running', 'another-owner');
+    const first = await call(s, 'tasks', { cursor: null, limit: 1 });
+    expect(first.tasks.map(item => item.id)).toEqual(['new-settled']);
+    expect(first.active.tasks.map(item => item.id)).toEqual(['old-live']);
+    expect(first.active).toMatchObject({ agents: [], truncated: false });
+    expect(JSON.stringify(first)).not.toMatch(/private-token|foreign-live|another-owner/);
+    expect(JSON.stringify(first)).not.toContain(root);
+    const next = await call(s, 'tasks', { cursor: first.nextCursor, limit: 1 });
+    expect(next.tasks.map(item => item.id)).toEqual(['old-live']);
+    expect(next.active.tasks.map(item => item.id)).toEqual(['old-live']);
+    for (let i = 0; i < PERSON_TASK_LIMITS.records; i++) write(`live-${i}`, '2026-01-01', 'running');
+    const crowded = await call(s, 'tasks', { cursor: null, limit: 1 });
+    expect(crowded.tasks).toHaveLength(1);
+    expect(crowded.active.tasks).toHaveLength(PERSON_TASK_LIMITS.records);
+    expect(crowded.active.truncated).toBe(true);
+    // Active snapshot is only a control aid; all history remains cursor-readable.
+    const all = []; let cursor = null;
+    do {
+      const page = await call(s, 'tasks', { cursor, limit: 20 });
+      all.push(...page.tasks); cursor = page.nextCursor;
+    } while (cursor);
+    expect(all).toHaveLength(103);
+    expect(new Set(all.map(item => item.id)).size).toBe(103);
+    expect(all.map(item => item.id)).toContain('old-live');
+    expect(createPersonProvider).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed task page limits and continuation shapes before exposing inventory', async () => {
     const s = service(); await ownedHost(s);
     const encode = value => `t1:${Buffer.from(JSON.stringify(value)).toString('base64url')}`;
@@ -324,7 +365,8 @@ describe('Digital Person owner-scoped task API', () => {
       { cursor: encode({ scope: 'a'.repeat(64), tasks: { time: 0, id: '../task' }, agents: null }) }]) {
       await expect(call(s, 'tasks', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     }
-    expect(await call(s, 'tasks', { limit: 1 })).toEqual({ tasks: [], agents: [], nextCursor: null, truncated: false });
+    expect(await call(s, 'tasks', { cursor: null, limit: 1 })).toEqual({ tasks: [], agents: [], nextCursor: null, truncated: false,
+      active: { tasks: [], agents: [], truncated: false } });
   });
 
   it('bounds inventory summaries and rejects extra fields, native ID aliases and invalid log budgets', async () => {

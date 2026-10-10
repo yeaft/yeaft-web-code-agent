@@ -456,12 +456,13 @@ class ScopedPersonTaskHost {
           .filter(task => task.sessionId === this.sessionId && task.ownerVpId === this.parentVpId && ['shell', 'sub_agent'].includes(task.kind));
         const agents = [...this.#agents.values()].filter(agent => agentBelongsToScope(agent, this.agentScope));
         if (args.limit !== undefined) {
+          const byCreation = (a, b) => inspectionTime(b.createdAt) - inspectionTime(a.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
           const readPage = (items, key, view) => {
             const boundary = continuation?.[key];
             if (continuation && boundary === null) return { items: [], nextCursor: null };
             const records = items.filter(item => !boundary || inspectionTime(item.createdAt) < boundary.time ||
               (inspectionTime(item.createdAt) === boundary.time && item.id > boundary.id))
-              .sort((a, b) => inspectionTime(b.createdAt) - inspectionTime(a.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+              .sort(byCreation)
               .slice(0, args.limit + 1);
             return inspectionPage(records, args.limit, item => ({ time: inspectionTime(item.createdAt), id: item.id }), view);
           };
@@ -470,7 +471,17 @@ class ScopedPersonTaskHost {
           const more = taskPage.nextCursor !== null || agentPage.nextCursor !== null;
           const nextCursor = more ? `t1:${Buffer.from(JSON.stringify({ scope: this.scope.key,
             tasks: taskPage.nextCursor, agents: agentPage.nextCursor })).toString('base64url')}` : null;
-          return { tasks: taskPage.items, agents: agentPage.items, nextCursor, truncated: more };
+          // History stays strictly newest-created first. A separate, bounded
+          // control snapshot keeps older live shells and terminal children with
+          // detached tools reachable without scrolling through settled history.
+          const activePage = (items, isActive, view) => inspectionPage(items.filter(isActive).sort(byCreation),
+            PERSON_TASK_LIMITS.records, 'id', view);
+          const activeTasks = activePage(tasks, task => !isTerminalTaskStatus(task.status), projectedTask);
+          const activeAgents = activePage(agents, agent => !isTerminalAgentStatus(agent.status) || agent.executionPending,
+            agent => projectedAgent(agent, agent.executionPending));
+          return { tasks: taskPage.items, agents: agentPage.items, nextCursor, truncated: more,
+            active: { tasks: activeTasks.items, agents: activeAgents.items,
+              truncated: activeTasks.nextCursor !== null || activeAgents.nextCursor !== null } };
         }
         const recent = (items, settled) => items.sort((a, b) => Number(settled(a)) - Number(settled(b))
           || String(b.updatedAt ?? b.createdAt ?? '').localeCompare(String(a.updatedAt ?? a.createdAt ?? ''))

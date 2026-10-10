@@ -69,6 +69,8 @@ export function page(payload = {}) {
  * Empty list payloads retain the legacy active-first capped inventory. Explicit
  * {limit,cursor?} pages each collection newest-created first, with immutable
  * creation-time/ID keysets and one scope-bound continuation for both collections.
+ * Paged responses also carry a bounded active control snapshot independent of
+ * history position (including terminal children with pending actual execution).
  * Log offsets count raw UTF-8 bytes; an omitted offset starts at the beginning.
  */
 export const PERSON_TASK_LIMITS = Object.freeze({ records: 100, logBytes: 16384, maxLogBytes: 65536 });
