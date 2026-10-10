@@ -12200,7 +12200,9 @@ describe('uploaded image model history', () => {
     const bodies = [];
     const makeAdapter = () => protocol === 'anthropic'
       ? new AnthropicAdapter({ apiKey: 'test' }) : new OpenAIResponsesAdapter({ apiKey: 'test' });
-    const makeEngine = (store, relatedTurnsLimit = 0) => new Engine({ adapter: makeAdapter(), trace: new NullTrace(), conversationStore: store, yeaftDir,
+    const trace = new NullTrace();
+    trace.log = vi.fn();
+    const makeEngine = (store, relatedTurnsLimit = 0) => new Engine({ adapter: makeAdapter(), trace, conversationStore: store, yeaftDir,
       config: { model: 'test-model', maxOutputTokens: 1024, yeaft: { relatedTurnsLimit } },
     });
     vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
@@ -12242,7 +12244,17 @@ describe('uploaded image model history', () => {
       expect(JSON.stringify(bodies.at(-1))).toContain(png);
       expect(JSON.stringify(bodies.at(-1))).not.toContain('ViewImage');
       rmSync(bundle.promptAttachments[0].path);
-      await run(makeEngine(new ConversationStore(yeaftDir), 5), { prompt: 'cedar migration diagram' });
+      // Warm after the previous assistant and this user append so missing-asset
+      // hydration is tested without racing the bounded index rebuild.
+      const missingImageUser = store.append({ role: 'user', sessionId, userAuthored: true, content: 'cedar migration diagram' });
+      await searchConversationIndex(yeaftDir, sessionId, '', { limit: 1 });
+      await run(makeEngine(new ConversationStore(yeaftDir), 5), {
+        prompt: missingImageUser.content, currentUserMessage: missingImageUser, userAlreadyPersisted: true,
+      });
+      const historyMeta = trace.log.mock.calls.filter(([name]) => name === 'history_buckets').at(-1)[1];
+      expect(historyMeta.status).toBe('ready');
+      expect(historyMeta.related.sourceMessageIds).toContain(currentUserMessage.id);
+      expect(historyMeta.recent.sourceMessageIds).not.toContain(currentUserMessage.id);
       expect(JSON.stringify(bodies.at(-1))).toContain('Uploaded image unavailable');
       expect(JSON.stringify(bodies.at(-1))).not.toContain(png);
     } finally {
