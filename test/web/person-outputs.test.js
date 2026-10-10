@@ -188,6 +188,22 @@ describe('Digital Person output boundaries', () => {
     expect(state.items).toEqual(rows); // includes the previously missing 21st new output
     expect(state.selected).toBe(rows.at(-1));
   });
+  it('fences an older manual latest response after an overlapping automatic snapshot', async () => {
+    let reply;
+    const request = vi.fn(() => new Promise(resolve => { reply = resolve; }));
+    const { controller, state } = harness(request);
+    const rows = Array.from({ length: 22 }, (_, i) => ({ ...file, id: String(22 - i) }));
+    controller.snapshot({ items: rows.slice(2), nextCursor: null });
+    const refresh = controller.list();
+    controller.snapshot({ items: rows.slice(0, 20), nextCursor: '3' });
+    expect(request.mock.calls[0][2].signal.aborted).toBe(true);
+    reply({ items: rows.slice(2), nextCursor: null });
+    await refresh;
+    expect(state.items).toEqual(rows);
+    expect(state.nextCursor).toBe('3');
+    expect(state.loading).toBe(false);
+    expect(state.error).toBeNull();
+  });
   it('invalidates in-flight old history when a disconnected latest snapshot resets the window', async () => {
     let reply;
     const { controller, state } = harness(() => new Promise(resolve => { reply = resolve; }));

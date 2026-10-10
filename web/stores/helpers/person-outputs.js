@@ -64,6 +64,7 @@ export function createPersonOutputs({ state, request, identity, urls = URL }) {
   let listVersion = 0;
   let abort = null;
   let listAbort = null;
+  let listIsLatest = false;
   const current = (v, key) => v === version && key === identity();
   function release() {
     version++;
@@ -82,6 +83,14 @@ export function createPersonOutputs({ state, request, identity, urls = URL }) {
   }
   function snapshot(page) {
     if (!page || !Array.isArray(page.items)) return;
+    // An automatic snapshot supersedes an earlier manual latest-page request,
+    // even when the pages overlap. Keep older-history requests unless a gap resets
+    // their cursor below. Abort is advisory; the version fence is authoritative.
+    if (state.loading && listIsLatest) {
+      listVersion++;
+      listAbort?.abort(); listAbort = null;
+      state.loading = false;
+    }
     const previous = new Set(state.items.map(item => item.id));
     // Latest-page refreshes must stay connected to the cached contiguous window.
     // More than one page of new deliveries can otherwise strand the missing page
@@ -102,6 +111,7 @@ export function createPersonOutputs({ state, request, identity, urls = URL }) {
   async function list(more = false) {
     if (state.loading || (more && state.nextCursor == null)) return;
     const key = identity(), v = ++listVersion;
+    listIsLatest = !more;
     state.loading = true; state.error = null;
     listAbort = new AbortController();
     const signal = listAbort.signal;
@@ -113,7 +123,10 @@ export function createPersonOutputs({ state, request, identity, urls = URL }) {
         state.historyPaged = true;
         state.nextCursor = page.nextCursor ?? null;
         state.loaded = true;
-      } else snapshot(page);
+      } else {
+        state.loading = false; listAbort = null;
+        snapshot(page);
+      }
     } catch (error) {
       if (v === listVersion && key === identity()) state.error = { code: error.code || 'requestFailed', message: error.message };
     } finally {
