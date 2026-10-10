@@ -380,28 +380,27 @@ test('external redirects back to Yeaft keep the opaque sandbox and cannot reach 
   const requests = await externalPages(page);
   await sessionFixture(page, mockAgent, ['plaintext-ok']);
   const appUrl = page.url();
-  const target = `${new URL(appUrl).origin}/client-browser-sandbox-target`;
+  // Playwright routing handles only the first URL of a redirect chain. Use
+  // the real fixture Server document rather than claiming a second fulfill ran.
+  const target = `${new URL(appUrl).origin}/`;
   await page.route(`${ORIGIN}/redirect`, route => route.fulfill({ status: 302, headers: { location: target }, body: '' }));
-  await page.route(target, route => route.fulfill({
-    status: 200, contentType: 'text/html',
-    body: `<!doctype html><h1>Redirect isolation</h1><pre id="result"></pre><script>
-      const result = {};
-      try { void parent.document.cookie; result.parent = 'allowed'; } catch { result.parent = 'denied'; }
-      try { void localStorage.length; result.storage = 'allowed'; } catch { result.storage = 'denied'; }
-      result.popup = window.open('about:blank') === null ? 'denied' : 'allowed';
-      try { top.location.href = ${JSON.stringify(`${ORIGIN}/escaped`)}; result.top = 'allowed'; } catch { result.top = 'denied'; }
-      document.querySelector('#result').textContent = JSON.stringify(result);
-    </script>`,
-  }));
   await responseLink(page).click();
   await rendered(page, '/response-a');
   const panel = page.locator('.workbench-panel:visible');
   const address = panel.getByRole('textbox', { name: 'Browser address', exact: true });
   await address.fill(`${ORIGIN}/redirect`);
   await address.press('Enter');
-  const frame = panel.frameLocator('.browser-frame');
-  await expect(frame.getByRole('heading', { name: 'Redirect isolation', exact: true })).toBeVisible();
-  await expect(frame.locator('#result')).toHaveText(JSON.stringify({ parent: 'denied', storage: 'denied', popup: 'denied', top: 'denied' }));
+  await expect.poll(() => page.frames().filter(frame => frame.parentFrame() && frame.url() === target).length).toBe(1);
+  const redirectedFrame = page.frames().find(frame => frame.parentFrame() && frame.url() === target);
+  const isolation = await redirectedFrame.evaluate(escape => {
+    const result = {};
+    try { void parent.document.cookie; result.parent = 'allowed'; } catch { result.parent = 'denied'; }
+    try { void localStorage.length; result.storage = 'allowed'; } catch { result.storage = 'denied'; }
+    result.popup = window.open('about:blank') === null ? 'denied' : 'allowed';
+    try { top.location.href = escape; result.top = 'allowed'; } catch { result.top = 'denied'; }
+    return result;
+  }, `${ORIGIN}/escaped`);
+  expect(isolation).toEqual({ parent: 'denied', storage: 'denied', popup: 'denied', top: 'denied' });
   expect(page.url()).toBe(appUrl);
   expect(page.context().pages()).toHaveLength(1);
   await expect(address).toHaveValue(`${ORIGIN}/redirect`);
