@@ -8,7 +8,7 @@ import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapa
 import { SCHEMA, TABLES } from './sqlite-schema.js';
 import { attachmentMetadata, attachmentRequestHash, validateFiles } from './attachments.js';
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
-import { conceptView, inspectionPage, inspectRequest, messageView, personName, searchRequest, settingsView, stateView } from './inspection.js';
+import { chronologicalCursor, conceptView, inspectionCursor, inspectionPage, inspectRequest, messageView, personName, searchRequest, settingsView, stateView } from './inspection.js';
 import { TOKEN_FIELDS, turnsPage, turnView } from './turn-diagnostics.js';
 import { inspectCapabilities } from './capabilities.js';
 
@@ -476,8 +476,15 @@ export class SqlitePersonStore {
     this.getPerson(ownerId);
     const scope = this.scope(ownerId);
     if (section === 'skills') return inspectCapabilities(this.rows('created_capabilities', scope, ' ORDER BY id ASC LIMIT 32'), { cursor, limit }, nativeToolIds);
-    const records = this.rows('concepts', scope, ' AND (? IS NULL OR id > ?) ORDER BY id ASC LIMIT ?', [cursor, cursor, limit + 1]);
-    return inspectionPage(records, limit, 'id', conceptView);
+    const boundary = inspectionCursor(cursor, section);
+    if (boundary?.legacy) {
+      const records = this.rows('concepts', scope, ' AND id > ? ORDER BY id ASC LIMIT ?', [boundary.id, limit + 1]);
+      return inspectionPage(records, limit, 'id', conceptView);
+    }
+    const records = this.rows('concepts', scope,
+      ' AND (? IS NULL OR updatedAt < ? OR (updatedAt = ? AND id > ?)) ORDER BY updatedAt DESC, id ASC LIMIT ?',
+      [boundary?.time ?? null, boundary?.time ?? null, boundary?.time ?? null, boundary?.id ?? null, limit + 1]);
+    return inspectionPage(records, limit, record => chronologicalCursor(section, record), conceptView);
   }
   search(ownerId, options) {
     const { query, cursor, limit } = searchRequest(options);

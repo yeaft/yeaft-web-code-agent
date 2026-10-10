@@ -117,6 +117,20 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 
 新 trace manifest 增加 `contextWindowTokens` 与 `contextSources` 计数，SQLite 只投影白名单数值与召回类型，不把消息正文、概念陈述、来源 refs、prompt 或 provider 配置送到用量面板。旧 trace 缺失新字段时保持未知，不用当前模型配置回填历史窗口，也不迁移数据库。
 
+## 内核检查分页
+
+`inspect` 使用 `{section:"memory"|"skills",limit?:1..50,cursor?:string|null}`，默认 20 条；响应为 `{items,nextCursor}`。只读请求不触发 Recall、模型、admission 或租约恢复，所有查询先按 authenticated owner / namespace / Person 隔离。
+
+- `memory` 按 **更新时间降序、ID 二进制升序** 返回当前概念版本，而非 ID 字母顺序。cursor 保存时间和 tie ID，即使边界记录删除也可继续；静态数据集中的同毫秒记录可完整续页。新写入或移到列表前面的修订在新的首页轮询中读取，不插入旧 continuation；分页不是并发修订下的历史快照。
+- `skills` 先返回 Person 创建的当前能力版本，按 **createdAt 降序、ID 升序**；这里的 `createdAt` 是当前不可变版本创建时间，不是假定的首次学会时间。然后返回 **无日期的内置／native catalogue，按 ID 升序**，不为其伪造新旧时间。受实例允许工具目录限制，检查不会读取用户 Skill 文件或执行脚本。
+- cursor 是不透明字符串：新 memory 为 `m1:…`，skills 为 `s1:…`，不能跨 section 使用；直接原样传回。旧裸 ID cursor 继续执行旧的 ID 升序 continuation，兼容仍保存旧游标的客户端；新的首页使用新顺序。每页最多 256 KiB 完整记录，字节预算可能使条数低于 limit，续页始终从实际最后返回记录继续。
+
+`tasks` 显式传 `{limit:1..100,cursor?:string|null}` 启用检查分页，limit 是**每个集合**的条数上限。返回 `{tasks,agents,nextCursor,truncated}`：两个集合均按 **创建时间降序、ID 二进制升序**，状态／updatedAt 改变不会使记录跨页移动。`nextCursor` 为一个 owner / Person / namespace / canonical instance 绑定的 `t1:…` 不透明字符串，分别保存两个集合的 continuation；一个集合已结束后，后续页该集合为空数组。两个集合均结束时 `nextCursor:null,truncated:false`。跨 scope 游标拒绝，不会读取别人的记录。空 payload `{}` 保留旧的 active-first、最多每集合 100 条的库存行为（没有 `nextCursor`）；新浏览器应始终显式传 limit 获取真正可到末尾的分页。响应条数／字节有界，但当前文件库存仍需读取和排序 scope 内的全部 metadata，并非有索引的磁盘查询。
+
+浏览器首屏仅取一页，滚动续页原样传 `nextCursor`，不要把 `truncated` 当作数据丢失。独立轮询使用**不带 continuation 的首页**，按 collection + ID 合并刷新已加载项；memory 修订按 revision 防止旧响应覆盖新版本。轮询首页的 cursor 不应覆盖已加载历史的 continuation，否则会重复滚动同一段历史。概念修订／能力新版本可能移到首页，合并需要去重并重新按上述时间／tie 顺序投影。tasks 的首页不是 active-only 列表；分页响应另外包含 `active:{tasks,agents,truncated}` 控制快照，与历史 continuation 无关，每个集合最多 100 条且有完整记录字节预算。它包含非终态 shell/task 及仍有 `executionPending` 的终态 child，不包含已 orphaned 的不可确认控制。浏览器可独立显示／按 ID 合并这些旧的活跃记录，以保证 Stop／Close 不被大量新终态历史埋没；每次刷新替换 active 快照而不是累计已结束的控制，并按每条记录当前状态决定可用按钮。`active.truncated:true` 诚实标识控制快照不完整，全部库存仍可通过历史 cursor 遍历。保留旧的 active-first 调用，但新浏览器无须额外请求它。
+
+现行 Agent 只包含 SQLite managed-worker authority，没有 Mongo runtime、store 或依赖；本契约不新增 Mongo 存储或迁移实例数据。
+
 ## 验证范围
 
 聚焦测试覆盖 SQLite 真数据库的 attachment-only send/think、原件重启保留、owner/namespace fence、哈希冲突、实际 image block 与无 base64 trace、完整候选 catalog、跨 service busy settings 和 proposal 越界拒绝。Server 测试覆盖全量引用解析、未归属/跨 owner/过期/超限拒绝与 lost-response 重试。测试使用隔离的实例数据根，不得指向线上数据库。
