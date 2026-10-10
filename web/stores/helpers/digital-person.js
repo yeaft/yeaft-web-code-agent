@@ -3,6 +3,7 @@
  * automatically; an uncertain command keeps its original clientMessageId.
  */
 import { personActivityRecords } from '../../utils/person-activity.js';
+import { createPersonOutputs, outputState } from './person-outputs.js';
 
 const channels = new WeakMap();
 const outboxes = new WeakMap();
@@ -47,7 +48,7 @@ export function personState() {
     activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false, feedbackSuppressedEpisodeId: null,
     models: [], modelCandidates: [], effectiveModelCandidates: [], defaultModel: null,
     agentDefaultModel: null, effectiveDefaultModel: null, defaultModelSupported: false,
-    settingsPending: false, renameSupported: false,
+    settingsPending: false, renameSupported: false, outputsSupported: false, outputsFileSupported: null, outputs: outputState(),
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
     turns: { ...inspectionPage(), stale: false },
     tasks: { tasks: [], agents: [], loaded: false, loading: false, stale: false, error: null, pending: null },
@@ -90,6 +91,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let turnPoll = null;
   let turnRequest = 0;
   const owned = new Set();
+  const outputs = createPersonOutputs({
+    state: state.outputs, request,
+    identity: () => JSON.stringify([scope(), agentId, state.person?.id, generation]),
+  });
   const current = (g = generation) => !disposed && g === generation && activeScope === scope();
   const outbox = () => {
     let record = outboxes.get(chat);
@@ -104,6 +109,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
 
   function applyModelStatus(status) {
     state.renameSupported = status.renameSupported === true;
+    state.outputsSupported = status.outputsSupported === true;
+    state.outputsFileSupported = typeof status.outputsFileSupported === 'boolean' ? status.outputsFileSupported : null;
     state.defaultModelSupported = status.defaultModelSupported === true;
     state.models = status.availableModels || status.models || [];
     if (Array.isArray(status.modelCandidates)) state.modelCandidates = status.modelCandidates;
@@ -113,19 +120,22 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.effectiveModelCandidates = status.effectiveModelCandidates || [];
   }
 
-  function request(op, payload = {}) {
+  function request(op, payload = {}, { signal } = {}) {
     const g = generation;
-    if (!current(g)) return Promise.reject(failure('stale'));
+    if (!current(g) || signal?.aborted) return Promise.reject(failure('stale'));
     const gate = digitalPersonGate(chat, agentId);
     if (gate) return Promise.reject(failure(gate));
     const requestId = `person-${id()}`;
     return new Promise((resolve, reject) => {
       const finish = () => {
+        signal?.removeEventListener('abort', onAbort);
         clearTimeout(timer);
         channels.get(chat).delete(requestId);
         owned.delete(requestId);
       };
+      const onAbort = () => { finish(); reject(failure('stale')); };
       const timer = setTimeout(() => { finish(); reject(failure('timeout')); }, timeoutMs);
+      signal?.addEventListener('abort', onAbort, { once: true });
       channels.get(chat).set(requestId, {
         agentId, op, current: () => current(g), finish, resolve, reject,
       });
@@ -146,6 +156,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       latestEpisode: state.latestEpisode, busy: state.busy, activityStale: true, progressStale: true,
     } : {};
     const feedbackSuppressedEpisodeId = nextAgentId === agentId && activeScope === scope() ? state.feedbackSuppressedEpisodeId : null;
+    outputs.reset();
     generation += 1;
     clearTimeout(poll);
     clearTimeout(taskPoll);
@@ -170,7 +181,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     activityRequest += 1;
     traceRefreshVersion = 0;
     queuedTraceRefresh = null;
-    Object.assign(state, personState(), progress, { feedbackSuppressedEpisodeId, retryCommand: outbox().get(agentId) || null });
+    Object.assign(state, personState(), progress, { outputs: state.outputs, feedbackSuppressedEpisodeId, retryCommand: outbox().get(agentId) || null });
   }
 
   async function snapshot() {
@@ -184,7 +195,9 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       throw error;
     }
     if (!current(g) || requestNumber !== snapshotRequest) return;
+    if (state.person && state.person.id !== data.person?.id) outputs.reset();
     state.person = data.person;
+    if (state.outputsSupported) outputs.snapshot(data.outputs);
     state.modelCandidates = data.person?.settings?.modelCandidates || [];
     state.defaultModel = data.person?.settings?.defaultModel ?? null;
     state.state = data.state;
@@ -645,7 +658,11 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   return {
-    open, refresh, command, cancel, page, settings, inspect, search, showTasks, readTasks, readTaskLog, stopTask, showTurns, readTurns,
+    open, refresh, command, cancel, page, settings, inspect, search,
+    readOutputs(more = false) { if (current() && state.person && state.outputsSupported) return outputs.list(more); },
+    selectOutput(item) { if (current() && state.person && !digitalPersonGate(chat, agentId) && (state.outputsSupported || item?.kind === 'link')) return outputs.select(item); },
+    closeOutput: outputs.close, resumeOutput() { if (current() && !digitalPersonGate(chat, agentId)) return outputs.resume(); },
+    showTasks, readTasks, readTaskLog, stopTask, showTurns, readTurns,
     discardRetry() { outbox().delete(agentId); retainedFiles().delete(agentId); state.retryCommand = null; },
     dispose() { reset(); disposed = true; },
   };

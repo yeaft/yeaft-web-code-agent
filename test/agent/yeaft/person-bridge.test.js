@@ -87,6 +87,25 @@ describe('Person bridge is independent of Session and Work Center', () => {
     await f.bridge.close();
   });
 
+  it.each(['outputs', 'output_read'])('routes %s with authenticated ownership and original correlation', async op => {
+    const f = fixture();
+    const payload = op === 'outputs' ? { cursor: '20', limit: 10 } : { outputId: '550e8400-e29b-41d4-a716-446655440000', offset: 64, maxBytes: 65536 };
+    await f.bridge.request(request({ op, payload }));
+    expect(f.service.request).toHaveBeenCalledWith({ ownerId: 'u1', op, payload });
+    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: true, requestId: 'r1', op });
+    await f.bridge.close();
+  });
+
+  it.each(['OUTPUT_PATH', 'OUTPUT_QUOTA', 'OUTPUT_NOT_FILE', 'OUTPUT_PLATFORM'])('returns fixed safe %s output errors', async code => {
+    const f = fixture();
+    f.service.request.mockRejectedValue(Object.assign(new Error('https://admin:password@example /internal/path'), { code }));
+    await f.bridge.request(request({ op: 'output_read', payload: { outputId: '550e8400-e29b-41d4-a716-446655440000' } }));
+    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: false, requestId: 'r1', op: 'output_read', errorCode: code.toLowerCase() });
+    expect(JSON.stringify(f.send.mock.lastCall[0])).not.toContain('password');
+    expect(JSON.stringify(f.send.mock.lastCall[0])).not.toContain('/internal/path');
+    await f.bridge.close();
+  });
+
   it('fences missing owner, closed transport and Agent identity changes', async () => {
     const f = fixture();
     await f.bridge.request(request({ ownerId: undefined }));

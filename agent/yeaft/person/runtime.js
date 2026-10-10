@@ -1,3 +1,4 @@
+import { OUTPUT_INSTRUCTIONS } from './outputs.js';
 import { createPersonToolHost, createPersonNativeRegistry, isNativeTool, projectNativeResult } from './native-tools.js';
 import { PersonTaskHost } from './task-host.js';
 import { randomUUID } from 'node:crypto';
@@ -23,7 +24,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   const imageLabels = images.map(file => `Untrusted image attachment ${JSON.stringify(attachmentMetadata(file))}; source ${episode.messageId ? `message:${episode.messageId}:1` : `trigger:${episode.id}`}`);
   const imageLabelBytes = imageLabels.reduce((sum, label) => sum + bytes(label), 0);
   const contextCap = Math.min(LIMITS.contextBytes, model.contextWindow - model.maxOutput - 1024 - imageTokensReserved);
-  const system = `${snapshot.person.soul}\n\n${PROPOSAL_INSTRUCTIONS}`;
+  const system = `${snapshot.person.soul}\n\n${PROPOSAL_INSTRUCTIONS}\n\n${OUTPUT_INSTRUCTIONS}`;
   const triggerRef = `trigger:${episode.id}`;
   const inputMessageRef = episode.messageId ? `message:${episode.messageId}:1` : null;
   const context = {
@@ -235,7 +236,7 @@ export class PersonRuntime {
         getContext: async ctx => this.tasks()?.context({ ...ctx, episode, provider,
           selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry }),
         onResult: result => finalizeNativeResult(result) });
-      const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost });
+      const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost, workDir: this.toolOptions.workDir });
       let previous = null, capabilityResult = null, dependencyRefs = [];
       // Validation retains actual reads across calls, independently of the bounded rendered request.
       // Candidate proposals never enter this read-set or establish new provenance.
@@ -344,7 +345,7 @@ export class PersonRuntime {
             signal.throwIfAborted();
             // Native host and script execution join their actual work before close.
             const executionPromise = capabilities.execute(invocation, { signal, callId });
-            capabilityResult = isNativeTool(invocation.id) || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
+            capabilityResult = isNativeTool(invocation.id) || invocation.id === 'Output.publish' || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
               ? await executionPromise : await abortable(executionPromise, signal);
             if (!finalized && !await finalize(capabilityResult)) fail('STALE');
             signal.throwIfAborted();

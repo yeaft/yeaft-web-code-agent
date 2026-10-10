@@ -7,6 +7,7 @@ import { loadConfig } from '../config.js';
 import { validateFiles } from './attachments.js';
 import { createPersonProvider, resolveAgentDefaultModel, selectPersonModels, validateDefaultModel, validateModelCandidates } from './provider.js';
 import { fail, identifier, LIMITS, object, page, personTaskRequest, safeError, text } from './contracts.js';
+import { outputFilePublicationSupport, outputReadRequest } from './outputs.js';
 import { turnsPage } from './turn-diagnostics.js';
 import { inspectRequest, personName, searchRequest } from './inspection.js';
 
@@ -54,7 +55,9 @@ export function createPersonService(options = {}) {
       object(payload, []);
       let agentDefaultModel = null;
       try { agentDefaultModel = resolveAgentDefaultModel(config ?? loadConfig({ dir: yeaftDir })); } catch { /* Invalid/missing native config. */ }
-      const status = { renameSupported: true, defaultModelSupported: true, configured, storage: 'sqlite', modelReady: false,
+      const filePublication = outputFilePublicationSupport();
+      const status = { outputsSupported: true, outputsFileSupported: filePublication.supported, outputsFileReason: filePublication.reason,
+        renameSupported: true, defaultModelSupported: true, configured, storage: 'sqlite', modelReady: false,
         defaultModel: null, agentDefaultModel, modelCandidates: [], effectiveModelCandidates: [], effectiveDefaultModel: null };
       if (!configured) return { ...status, reason: 'Digital person storage configuration is missing.', storageReady: false };
       try { await repository.init(); }
@@ -96,6 +99,8 @@ export function createPersonService(options = {}) {
         if (!host) fail('UNSUPPORTED');
         return host.request({ ownerId, personId: person.personId, namespace, op, payload: args });
       }
+      case 'outputs': return repository.outputs(ownerId, payload);
+      case 'output_read': return repository.outputRead(ownerId, outputReadRequest(payload));
       case 'snapshot': object(payload, []); return repository.snapshot(ownerId);
       case 'receipt': {
         object(payload, ['clientMessageId', 'requestHash'], ['clientMessageId']);

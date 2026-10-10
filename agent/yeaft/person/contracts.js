@@ -23,7 +23,11 @@ const ERRORS = {
   ATTACHMENT_LIMIT: 'Attachments exceed the limit: 4 files, 5 MiB each, 10 MiB total; text plus extracted content must fit 24 KiB.',
   IMAGE_MODEL: 'The selected model does not permit image input.',
   CLOSED: 'The digital person service is closed.',
-  NOT_FOUND: 'Digital person task or child not found.',
+  NOT_FOUND: 'Digital person output, task or child not found.',
+  OUTPUT_PLATFORM: 'File publication requires Linux with accessible procfs and no-follow directory descriptors; links and existing snapshots remain available.',
+  OUTPUT_PATH: 'Output must be a regular, unchanged file strictly within workDir; symlinks are not permitted.',
+  OUTPUT_QUOTA: 'Outputs exceed the limit: 10 MiB per file, 100 MiB or 200 outputs per person.',
+  OUTPUT_NOT_FILE: 'Only published file snapshots can be read; links are not fetched.',
   TASK_SCOPE_DENIED: 'Digital person task access denied.',
   TASK_CONTROL_UNAVAILABLE: 'Task control could not be confirmed; refresh before retrying.',
 };

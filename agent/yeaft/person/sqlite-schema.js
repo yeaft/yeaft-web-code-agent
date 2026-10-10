@@ -14,6 +14,22 @@ export const TABLES = Object.freeze({
 });
 
 export const SCHEMA = `
+-- Additive migration: old schemaVersion/user_version=1 readers remain compatible.
+-- Output bytes have exactly one authority, this instance SQLite database.
+CREATE TABLE IF NOT EXISTS outputs (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  namespace TEXT NOT NULL, ownerId TEXT NOT NULL, personId TEXT NOT NULL,
+  id TEXT NOT NULL, episodeId TEXT NOT NULL, callId TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK(size BETWEEN 0 AND 10485760),
+  record TEXT NOT NULL CHECK(json_valid(record)), data BLOB,
+  UNIQUE(namespace, ownerId, personId, id),
+  UNIQUE(namespace, ownerId, personId, episodeId, callId),
+  FOREIGN KEY(namespace, ownerId, personId, episodeId) REFERENCES episodes(namespace, ownerId, personId, id),
+  CHECK((json_extract(record, '$.kind') = 'file' AND data IS NOT NULL AND length(data) = size)
+    OR (json_extract(record, '$.kind') = 'link' AND data IS NULL AND size = 0))
+) STRICT;
+CREATE INDEX IF NOT EXISTS outputs_recent ON outputs(namespace, ownerId, personId, seq DESC);
+
 CREATE TABLE IF NOT EXISTS persons (
   namespace TEXT NOT NULL, ownerId TEXT NOT NULL, personId TEXT NOT NULL,
   record TEXT NOT NULL CHECK(json_valid(record)), PRIMARY KEY(namespace, ownerId, personId)
