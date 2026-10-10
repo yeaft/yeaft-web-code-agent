@@ -27,7 +27,8 @@ export const CAPABILITY_MAP = Object.freeze({
   nativeToolNotice: 'Default native host tools are in this catalog, not QuickJS. View a known nativeTools ID to prepare its complete schema, or search. Bash supports background tasks and SpawnAgent supports independent parallel threads in the private Person task namespace. Collect results explicitly; completion does not start cognition. Session-specific tools are not registered.',
   discover: { id: 'catalog.search', args: '{query?:string,cursor?:string|null,limit?:1..5}', description: 'Browse/search summaries with budgeted complete contracts. Returned contracts are prepared for the next call; omitted contracts require catalog.view. All entries remain reachable by pagination.' },
   inspect: { id: 'catalog.view', args: '{id:string}', description: 'Load a known ID directly, or a contract omitted by search. No search is required first.' },
-  delivery: { id: 'Output.publish', description: 'Explicitly deliver file snapshots or HTTP(S) links; view this ID to prepare the full contract.' },
+  // Discoverable entry only; full delivery/safety instructions are demand-loaded.
+  delivery: { id: 'Output.publish' },
   intrinsic: 'Think is always available as a cognitive activity; no tool call is required.',
 });
 export const catalogRevision = digest(manifests);

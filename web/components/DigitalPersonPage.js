@@ -49,6 +49,7 @@ export default {
     const outputButton = Vue.ref(null);
     const outputVisited = Vue.ref(false);
     const sidePanel = Vue.ref(null);
+    const outputReader = Vue.ref(null);
     const thoughtButton = Vue.ref(null);
     const searchButton = Vue.ref(null);
     const searchInput = Vue.ref(null);
@@ -177,13 +178,14 @@ export default {
         && !state[section].loaded && !state[section].loading) controller.inspect(section);
     }, { flush: 'post' });
     async function openPanel(next = 'thoughts') {
-      if (!panel.value || next === 'search' || panel.value === 'search') panelOpener = next === 'outputs'
+      if (panel.value !== next) panelOpener = next === 'outputs'
         ? (document.activeElement?.matches('.person-delivered-output') ? document.activeElement : outputButton.value)
         : next === 'search' ? searchButton.value : thoughtButton.value;
       if (next === 'outputs') outputVisited.value = true;
       panel.value = next;
       await Vue.nextTick();
-      (next === 'search' ? searchInput.value : closePanelButton.value)?.focus();
+      if (next === 'outputs') outputReader.value?.focusClose();
+      else (next === 'search' ? searchInput.value : closePanelButton.value)?.focus();
     }
     function closePanel() {
       const restoreFocus = modalPanel.value || sidePanel.value?.contains(document.activeElement);
@@ -199,10 +201,14 @@ export default {
     }
     // Async refresh/reconnect can remove or disable the focused control. The
     // compact drawer owns focus, but must yield to the settings dialog above it.
+    function focusPanelClose() {
+      if (panel.value === 'outputs') outputReader.value?.focusClose();
+      else closePanelButton.value?.focus();
+    }
     function keepPanelFocus() {
       if (!panel.value || !modalPanel.value || settingsOpen.value || !sidePanel.value) return;
       const active = document.activeElement;
-      if (!sidePanel.value.contains(active) || active?.disabled) closePanelButton.value?.focus();
+      if (!sidePanel.value.contains(active) || active?.disabled) focusPanelClose();
     }
     function panelKeydown(event) {
       if (!panel.value || settingsOpen.value || !sidePanel.value) return;
@@ -212,6 +218,7 @@ export default {
       }
       if (event.key !== 'Tab' || !modalPanel.value) return;
       const controls = [...sidePanel.value.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')].filter(el => {
+        if (el.tabIndex < 0) return false;
         for (let parent = el.parentElement; parent && parent !== sidePanel.value; parent = parent.parentElement) {
           if (parent.style.display === 'none' || parent.hidden || parent.inert) return false;
           if (parent.matches('details:not([open])') && parent.querySelector('summary') !== el) return false;
@@ -227,7 +234,7 @@ export default {
       if (!loading && panel.value === 'search' && searchQuery.value.trim()) controller.search(searchQuery.value);
     });
     Vue.watch(modalPanel, async compact => {
-      if (compact && panel.value) { await Vue.nextTick(); closePanelButton.value?.focus(); }
+      if (compact && panel.value) { await Vue.nextTick(); focusPanelClose(); }
     });
     function resetResponseFocus() {
       responseFocusGeneration++;
@@ -333,7 +340,7 @@ export default {
     }
     async function selectOutput(item) {
       const reading = controller.selectOutput(item);
-      await openPanel('outputs');
+      if (panel.value !== 'outputs') await openPanel('outputs');
       await reading;
     }
     function previewReplyLink(event) {
@@ -349,7 +356,7 @@ export default {
     const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -366,7 +373,7 @@ export default {
         <div class="person-header-actions">
           <button type="button" class="header-action-btn" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>
           <button ref="searchButton" type="button" class="header-action-btn person-search-button" :class="{ active: panel === 'search' }" :aria-expanded="panel === 'search'" aria-controls="person-side-panel" :aria-label="$t('person.searchMessages')" :title="$t('person.searchMessages')" @click="panel === 'search' ? closePanel() : openPanel('search')"><NavigationIcon name="search" /></button>
-          <button ref="outputButton" type="button" class="header-action-btn person-outputs-button" :class="{ active: panel === 'outputs' }" :aria-expanded="panel === 'outputs'" aria-controls="person-side-panel" :aria-label="$t('person.outputs')" :title="$t('person.outputs')" @click="panel === 'outputs' ? closePanel() : openPanel('outputs')"><NavigationIcon name="activity" /></button>
+          <button ref="outputButton" type="button" class="header-action-btn person-outputs-button" :class="{ active: panel === 'outputs' }" :aria-expanded="panel === 'outputs'" aria-controls="person-side-panel" :aria-label="$t('person.outputs')" :title="$t('person.outputs')" @click="panel === 'outputs' ? closePanel() : openPanel('outputs')"><NavigationIcon name="file" /></button>
           <button ref="thoughtButton" type="button" class="header-action-btn person-thoughts-button" :class="{ active: !!panel && !['search', 'outputs'].includes(panel) }" :aria-expanded="!!panel && !['search', 'outputs'].includes(panel)" aria-controls="person-side-panel" :aria-label="$t('person.inside')" :title="$t('person.inside')" @click="togglePanel()"><NavigationIcon name="eye" /></button>
           <button type="button" class="header-action-btn person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending" @click="settingsOpen = true" :aria-label="$t('person.settings')" :title="$t('person.settings')"><NavigationIcon name="settings" /></button>
         </div>
@@ -443,24 +450,24 @@ export default {
         </main>
         <PaneResizeHandle v-if="panel && !modalPanel" v-model="panelWidth" :label="$t('person.outputsResize')" controls="person-side-panel" :min-size="280" :min-remaining="360" :default-size="420" />
         <div v-if="panel && modalPanel" class="person-panel-backdrop" aria-hidden="true" @click="closePanel()"></div>
-        <aside v-if="panel" id="person-side-panel" ref="sidePanel" class="person-side-panel" :class="{ 'is-expanded': expandedPanel }" :style="!modalPanel ? { flexBasis: 'min(' + panelWidth + 'px, calc(100% - 360px))' } : {}" :role="modalPanel ? 'dialog' : 'complementary'" :aria-modal="modalPanel ? true : undefined" aria-labelledby="person-panel-title">
-          <header class="person-panel-header">
-            <h2 id="person-panel-title">{{ $t(panel === 'search' ? 'person.searchMessages' : panel === 'outputs' ? 'person.outputs' : 'person.inside') }}</h2>
+        <aside v-if="panel" id="person-side-panel" ref="sidePanel" class="person-side-panel" :class="{ 'is-expanded': expandedPanel }" :style="!modalPanel ? { flexBasis: 'min(' + panelWidth + 'px, calc(100% - 360px))' } : {}" :role="modalPanel ? 'dialog' : 'complementary'" :aria-modal="modalPanel ? true : undefined" :aria-labelledby="panel !== 'outputs' ? 'person-panel-title' : undefined" :aria-label="panel === 'outputs' ? $t('person.outputs') : undefined">
+          <header v-if="panel !== 'outputs'" class="person-panel-header">
+            <h2 id="person-panel-title">{{ $t(panel === 'search' ? 'person.searchMessages' : 'person.inside') }}</h2>
             <button ref="closePanelButton" type="button" class="header-action-btn" :aria-label="$t('common.close')" :title="$t('common.close')" @click="closePanel()"><NavigationIcon name="close" /></button>
             <button v-if="!compactPanel" type="button" class="btn-ghost person-output-expand" :aria-pressed="expandedPanel" @click="expandedPanel = !expandedPanel">{{ $t(expandedPanel ? 'person.outputsCollapse' : 'person.outputsExpand') }}</button>
           </header>
-          <div v-if="modalPanel && (gate || state.loading)" class="person-panel-notice" role="status">
+          <div v-if="panel !== 'outputs' && modalPanel && (gate || state.loading)" class="person-panel-notice" role="status">
             <span>{{ $t('person.' + (gate || 'loading')) }}</span>
             <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
           </div>
-          <div v-if="modalPanel && state.error" class="person-panel-error" role="alert">
+          <div v-if="panel !== 'outputs' && modalPanel && state.error" class="person-panel-error" role="alert">
             <p>{{ $t('person.requestFailed') }} {{ state.error.message }}</p>
             <button type="button" class="btn-ghost" :disabled="!!gate || state.loading || state.tracesLoading" @click="controller.refresh()">{{ $t('common.refresh') }}</button>
           </div>
-          <nav v-if="panel !== 'search'" class="person-inspector-nav" :aria-label="$t('person.inside')">
-            <button v-for="section in ['outputs', 'overview', 'thoughts', 'turns', 'tasks', 'memory', 'skills']" :key="section" type="button" class="btn-ghost" :class="{ active: panel === section }" :aria-current="panel === section ? 'page' : undefined" @click="openPanel(section)">{{ $t('person.' + section) }}</button>
+          <nav v-if="!['search', 'outputs'].includes(panel)" class="person-inspector-nav" :aria-label="$t('person.inside')">
+            <button v-for="section in ['overview', 'thoughts', 'turns', 'tasks', 'memory', 'skills']" :key="section" type="button" class="btn-ghost" :class="{ active: panel === section }" :aria-current="panel === section ? 'page' : undefined" @click="openPanel(section)">{{ $t('person.' + section) }}</button>
           </nav>
-          <PersonOutputs v-if="outputVisited" v-show="panel === 'outputs'" :state="state.outputs" :supported="state.outputsSupported" :file-supported="state.outputsFileSupported" :disabled="!!gate || state.loading" :gate="gate" @select="selectOutput" @refresh="controller.readOutputs()" @more="controller.readOutputs(true)" @retry="controller.selectOutput(state.outputs.selected)" />
+          <PersonOutputs ref="outputReader" v-if="outputVisited" v-show="panel === 'outputs'" :state="state.outputs" :supported="state.outputsSupported" :file-supported="state.outputsFileSupported" :disabled="!!gate || state.loading" :gate="gate || (state.loading ? 'loading' : '')" :expanded="expandedPanel" :compact="compactPanel" @close="closePanel()" @expand="expandedPanel = !expandedPanel" @close-tab="controller.closeOutputTab" @select="selectOutput" @refresh="controller.readOutputs()" @more="controller.readOutputs(true)" @retry="controller.selectOutput(state.outputs.selected)" />
           <section v-if="panel === 'overview'" class="person-journal-scroll person-overview" tabindex="0" :aria-label="$t('person.overview')">
             <h3>{{ state.person?.name }}</h3>
             <p class="person-prose">{{ state.person?.soul }}</p>

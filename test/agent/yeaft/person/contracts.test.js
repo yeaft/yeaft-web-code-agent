@@ -156,7 +156,7 @@ describe('digital Person strict contracts', () => {
       const result = await capabilities.execute({ id: 'catalog.search', args: { cursor, limit: 1 } });
       ids.push(...result.items.map(i => i.id)); cursor = result.nextCursor;
     } while (cursor);
-    expect(ids).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort((a, b) => a.localeCompare(b, 'en')));
+    expect(ids).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort((a, b) => a.localeCompare(b, 'en')));
     expect(await capabilities.execute({ id: 'catalog.view', args: { id: 'Skill.associate' } })).toMatchObject({ access: 'read-only', version: 1 });
     expect(await capabilities.execute({ id: 'Skill.associate', args: {} })).toMatchObject({ access: 'method-only' });
     await expect(capabilities.execute({ id: 'Bash', args: { command: 'touch /tmp/not-allowed' } })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
@@ -286,9 +286,11 @@ describe('digital Person strict contracts', () => {
   ])('rejects %s manual thinking that expands the %i output reserve before dispatch', async (id, maxOutput) => {
     vi.stubEnv('YEAFT_THINKING_V1', '1');
     const fetchMock = stubProviderFetch();
+    // The discoverable output entry must not bloat mandatory small-window context.
+    const contextWindow = 16384;
     const normalized = configuredModels({ primaryModel: `test/${id}`, providers: [{
       name: 'test', apiKey: 'test-only', baseUrl: 'https://person.invalid', protocol: 'anthropic',
-      models: [{ id, contextWindow: 16384, maxOutput, ...(id === 'manual-alias' ? { supportsEffort: true } : {}) }],
+      models: [{ id, contextWindow, maxOutput, ...(id === 'manual-alias' ? { supportsEffort: true } : {}) }],
     }] });
     const provider = await createPersonProvider({ config: normalized });
     expect(provider.adapter).toBeInstanceOf(AdapterRouter);
@@ -303,7 +305,8 @@ describe('digital Person strict contracts', () => {
     expect(body.max_tokens).toBe(maxOutput);
     expect(body.thinking).toBeUndefined();
     expect(context.manifest.outputTokensReserved).toBe(body.max_tokens);
-    expect(context.manifest.contextBudgetBytes + body.max_tokens + 1024).toBe(16384);
+    expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
+    expect(context.manifest.contextBudgetBytes + body.max_tokens + 1024).toBe(contextWindow);
     expect(decision).toEqual({ effective: null, wireMode: 'omitted', thinkingEnabled: false });
     // The exported preflight must not change ordinary native engine behavior.
     await provider.adapter.call({ model: provider.defaultSelection.model, system: 's', messages: [{ role: 'user', content: 'hi' }], maxTokens: maxOutput, effort: 'high' });

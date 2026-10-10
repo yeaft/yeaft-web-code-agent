@@ -204,10 +204,18 @@ describe('Person durable output delivery', () => {
     let calls = 0, published, ready; const waiting = new Promise(resolve => { ready = resolve; });
     const adapter = { async *stream(params) {
       const input = JSON.parse(params.messages[0].content), p = finalProposal(input.state.version);
-      expect(params.system).toContain('Deliver meaningful user-facing artifacts explicitly with Output.publish');
+      expect(input.capabilities.delivery.id).toBe('Output.publish');
       p.concepts = []; p.state.focusConceptIds = []; p.activity.sourceRefs = [input.trigger.ref];
-      if (++calls === 1) p.next = { model: 'test/first', effort: null, reason: 'Prepare delivery.', capability: { id: 'catalog.view', args: { id: 'Output.publish' } } };
-      else if (calls === 2) p.next = { model: 'test/first', effort: null, reason: 'Deliver verified child file.', capability: { id: 'Output.publish', args: { file_path: 'child-result.md', title: 'Child result' } } };
+      if (++calls === 1) {
+        expect(input.capabilities.active.some(c => c.id === 'Output.publish')).toBe(false);
+        p.next = { model: 'test/first', effort: null, reason: 'Prepare delivery.', capability: { id: 'catalog.view', args: { id: 'Output.publish' } } };
+      } else if (calls === 2) {
+        const contract = input.capabilities.active.find(c => c.id === 'Output.publish');
+        expect(contract.access).toBe('publish-owner-output');
+        expect(contract.instructions).toContain('no symlinks/directories');
+        expect(contract.instructions).toContain('Successful publications survive later cancellation/failure');
+        p.next = { model: 'test/first', effort: null, reason: 'Deliver verified child file.', capability: { id: 'Output.publish', args: { file_path: 'child-result.md', title: 'Child result' } } };
+      }
       else {
         published = input.capabilityResult; ready();
         await new Promise(resolve => { if (params.signal.aborted) resolve(); else params.signal.addEventListener('abort', resolve, { once: true }); });

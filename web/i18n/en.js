@@ -7,6 +7,9 @@ import { en as userShortcuts } from './user-shortcuts.js';
 export default {
   "person.outputs": "Outputs",
   "person.outputsHistory": "Delivered outputs",
+  "person.outputsOpenDocuments": "Open documents",
+  "person.outputsCloseDocument": "Close document",
+  "person.outputsCloseReader": "Close reader",
   "person.outputsPreview": "Preview",
   "person.outputsUnsupported": "This Agent does not support file outputs yet. Upgrade the Agent.",
   "person.outputsFileUnsupported": "New file deliveries require a supported Linux Agent. Links and previously delivered files remain available.",

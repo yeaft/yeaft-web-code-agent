@@ -3,7 +3,6 @@ import { basename, extname, relative, resolve, sep } from 'node:path';
 import { fail, object, page, PersonError, text } from './contracts.js';
 
 export const OUTPUT_LIMITS = Object.freeze({ fileBytes: 10 * 1024 * 1024, personBytes: 100 * 1024 * 1024, personCount: 200, readBytes: 65536 });
-export const OUTPUT_INSTRUCTIONS = 'Deliver meaningful user-facing artifacts explicitly with Output.publish, not guessed paths or Markdown file links. Use catalog.view {id:"Output.publish"} to prepare its contract, then publish the actual file within workDir or a credential-free HTTP(S) link. Files are immutable snapshots, not live workspace views. File publication requires Linux with accessible procfs and no-follow directory descriptors; other platforms fail closed with OUTPUT_PLATFORM. Links and previously published snapshots remain available. Check publication success before claiming delivery. Ask children to return their artifact paths/results; the parent verifies and publishes them within its workDir. Children do not have Output.publish. Respect user authorization; publishing makes the selected bytes available to this owner. Partial publications survive cancellation or failure; never claim rollback.';
 const BINARY = 'application/octet-stream';
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 

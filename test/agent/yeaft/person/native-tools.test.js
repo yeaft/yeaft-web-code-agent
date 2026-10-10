@@ -234,14 +234,18 @@ describe('Person supported native host tools', () => {
 
   it('inspection exposes real native schema/module revisions without loading skills, configuration or executing tools', async () => {
     const execute = vi.spyOn(fileWrite, 'execute'), fetch = vi.spyOn(globalThis, 'fetch');
-    const page = inspectCapabilities([], { cursor: null, limit: 50 });
-    expect(page.items).toHaveLength(5 + NATIVE_TOOL_IDS.length);
-    const file = page.items.find(m => m.id === 'FileWrite');
+    const items = []; let cursor = null;
+    do {
+      const page = inspectCapabilities([], { cursor, limit: 50 });
+      items.push(...page.items); cursor = page.nextCursor;
+    } while (cursor);
+    expect(items.map(m => m.id)).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort());
+    const file = items.find(m => m.id === 'FileWrite');
     expect(file.source).toEqual(file.contract.source);
     expect(file.source.revision).toBe(digest(await readFile(new URL('../../../../agent/yeaft/tools/file-write.js', import.meta.url), 'utf8')));
     expect(file.contract.revision).toBe(NATIVE_TOOL_MANIFESTS.find(m => m.id === 'FileWrite').revision);
     expect(file.contract.access).toBe('host-effect');
-    for (const id of ['AskUser', 'HistorySearch', 'DiscoverTools', 'ViewImage', 'EnterWorktree']) expect(page.items.find(m => m.id === id)).toBeUndefined();
+    for (const id of ['AskUser', 'HistorySearch', 'DiscoverTools', 'ViewImage', 'EnterWorktree']) expect(items.find(m => m.id === id)).toBeUndefined();
     expect(execute).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
   });
 

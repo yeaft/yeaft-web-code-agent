@@ -7,6 +7,9 @@ import { zhCN as userShortcuts } from './user-shortcuts.js';
 export default {
   "person.outputs": "产出",
   "person.outputsHistory": "已交付产出",
+  "person.outputsOpenDocuments": "已打开的文档",
+  "person.outputsCloseDocument": "关闭文档",
+  "person.outputsCloseReader": "关闭阅读器",
   "person.outputsPreview": "预览",
   "person.outputsUnsupported": "当前 Agent 尚不支持文件产出，请升级 Agent。",
   "person.outputsFileUnsupported": "交付新文件需要受支持的 Linux Agent。链接与已交付文件仍可查看。",

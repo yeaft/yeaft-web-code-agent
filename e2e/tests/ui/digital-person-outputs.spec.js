@@ -114,8 +114,28 @@ async function openOutputs(page) {
   await expect(page.locator('#person-side-panel')).toBeVisible();
 }
 
+async function openOutputLibrary(page) {
+  const panel = page.locator('#person-side-panel');
+  const library = panel.locator('#person-output-library');
+  if (!await library.isVisible()) {
+    await panel.getByRole('button', { name: 'Delivered outputs', exact: true }).click();
+  }
+  await expect(library).toBeVisible();
+}
+
 async function selectOutput(page, title) {
-  await page.locator('#person-side-panel .person-output-item').filter({ has: page.getByText(title, { exact: true }) }).click();
+  await openOutputLibrary(page);
+  await page.locator('#person-output-library .person-output-item').filter({ hasText: title }).click();
+  await expect(documentTab(page, title)).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#person-output-library')).toHaveCount(0);
+}
+
+function documentTab(page, title) {
+  return page.locator('#person-side-panel').getByRole('tab', { name: title, exact: true });
+}
+
+async function closeDocumentTab(page, title) {
+  await page.locator('#person-side-panel').getByRole('button', { name: `Close document: ${title}`, exact: true }).click();
 }
 
 async function downloadOutput(page, expectedBytes) {
@@ -149,6 +169,7 @@ test('Output.publish markdown travels through relay and survives source deletion
     const panel = page.locator('#person-side-panel');
     await expect(panel.getByRole('heading', { name: 'Immutable deliverable', exact: true })).toBeVisible();
     await expect(panel.locator('strong')).toHaveText('stored evidence');
+    await openOutputLibrary(page);
     await panel.getByRole('button', { name: 'Refresh', exact: true }).click();
     await expect.poll(() => runtime.requests.filter(r => r.op === 'outputs').length).toBe(1);
     expect(runtime.requests.find(r => r.op === 'outputs').payload).toEqual({ limit: 20 });
@@ -348,7 +369,7 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
     await panel.getByRole('button', { name: 'Restore split view', exact: true }).click();
     await expect.poll(async () => Math.abs((await panel.boundingBox()).width - resized.width)).toBeLessThan(2);
     await panel.getByRole('button', { name: 'Expand', exact: true }).click();
-    await panel.getByRole('button', { name: 'Close', exact: true }).click();
+    await panel.getByRole('button', { name: 'Close reader', exact: true }).click();
     await expect(panel).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Outputs', exact: true }).first()).toBeFocused();
     await openOutputs(page);
@@ -391,6 +412,109 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
   } finally { await runtime.close(); }
 });
 
+test('Output reader keeps only explicitly opened document tabs and stays separate from the inspector', async ({ page, context, serverUrl, mockAgent }) => {
+  test.setTimeout(60000);
+  const runtime = await outputRuntime(mockAgent, serverUrl);
+  const url = 'https://reader-deliverable.invalid/reference';
+  await context.route(url, route => route.fulfill({ contentType: 'text/html', body: '<h1>Reader reference</h1>' }));
+  try {
+    await runtime.file('first.md', '# First document\n\n' + Array.from({ length: 100 }, (_, i) => `First document paragraph ${i}.\n\n`).join(''), 'First document');
+    await runtime.file('second.txt', Array.from({ length: 100 }, (_, i) => `Second document line ${i}.`).join('\n'), 'Second document');
+    runtime.link(url, 'Reference link');
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await openPerson(page, serverUrl, mockAgent);
+    for (const title of ['First document', 'Second document', 'Reference link']) await publish(page, title);
+    await expect(page.locator('#person-side-panel')).toHaveCount(0); // Deliveries never open the reader.
+    await openOutputs(page);
+    const panel = page.locator('#person-side-panel');
+    await expect(panel.locator('.person-inspector-nav')).toHaveCount(0);
+    await expect(panel.getByRole('tab')).toHaveCount(0);
+    for (const title of ['Overview', 'Thought journal', 'Flow & usage', 'Tasks', 'Memory', 'Skills & capabilities']) {
+      await expect(panel.getByRole('button', { name: title, exact: true })).toHaveCount(0);
+      await expect(panel.getByRole('tab', { name: title, exact: true })).toHaveCount(0);
+    }
+
+    await selectOutput(page, 'First document');
+    const firstTab = documentTab(page, 'First document');
+    const secondTab = documentTab(page, 'Second document');
+    const linkTab = documentTab(page, 'Reference link');
+    const preview = panel.locator('.person-output-preview');
+    await expect(firstTab).toHaveAttribute('aria-selected', 'true');
+    await expect(panel.locator('.person-output-item')).toHaveCount(0); // The library is not persistent history.
+    await expect(preview.getByRole('heading', { name: 'First document', exact: true })).toBeVisible();
+    const firstScroll = await preview.evaluate(el => {
+      el.scrollTop = 480;
+      return el.scrollTop;
+    });
+    expect(firstScroll).toBeGreaterThan(300);
+    await selectOutput(page, 'Second document');
+    await expect(preview.locator('pre')).toContainText('Second document line 99.');
+    await expect(panel.getByRole('link', { name: 'Download', exact: true })).toBeVisible();
+    await expect(panel.getByRole('link', { name: 'Open externally', exact: true })).toHaveCount(0);
+    const secondScroll = await preview.evaluate(el => {
+      el.scrollTop = 260;
+      return el.scrollTop;
+    });
+    expect(secondScroll).toBeGreaterThan(200);
+    await selectOutput(page, 'Reference link');
+    await expect(linkTab).toHaveAttribute('aria-selected', 'true');
+    await expect(panel.getByRole('link', { name: 'Download', exact: true })).toHaveCount(0);
+    await expect(panel.getByRole('link', { name: 'Open externally', exact: true })).toHaveAttribute('href', url);
+    await expect(preview.locator('iframe').contentFrame().getByRole('heading', { name: 'Reader reference', exact: true })).toBeVisible();
+    await expect(panel.getByRole('tab')).toHaveCount(3);
+    await expect(firstTab).toHaveCount(1);
+    await expect(secondTab).toHaveCount(1);
+    await expect(linkTab).toHaveCount(1);
+    await firstTab.click();
+    await expect(preview.getByRole('heading', { name: 'First document', exact: true })).toBeVisible();
+    await expect.poll(async () => Math.abs(await preview.evaluate(el => el.scrollTop) - firstScroll)).toBeLessThan(2);
+    await secondTab.click();
+    await expect(preview.locator('pre')).toContainText('Second document line 99.');
+    await expect.poll(async () => Math.abs(await preview.evaluate(el => el.scrollTop) - secondScroll)).toBeLessThan(2);
+
+    // A fourth delivery updates the library, never the selected reader or tabs.
+    await runtime.file('later.txt', 'New delivery must stay unopened.', 'Later delivery');
+    await publish(page, 'Later delivery');
+    await expect(secondTab).toHaveAttribute('aria-selected', 'true');
+    await expect(panel.getByRole('tab')).toHaveCount(3);
+    await expect(documentTab(page, 'Later delivery')).toHaveCount(0);
+    await expect(preview.locator('pre')).toContainText('Second document line 99.');
+    await expect.poll(async () => Math.abs(await preview.evaluate(el => el.scrollTop) - secondScroll)).toBeLessThan(2);
+
+    await closeDocumentTab(page, 'Second document');
+    await expect(secondTab).toHaveCount(0);
+    await expect(linkTab).toHaveAttribute('aria-selected', 'true'); // Closing the middle selects its right neighbor.
+    await panel.getByRole('button', { name: 'Close reader', exact: true }).click();
+    await expect(panel).toHaveCount(0);
+    await openOutputs(page);
+    await expect(panel.getByRole('tab')).toHaveCount(2);
+    await expect(linkTab).toHaveAttribute('aria-selected', 'true');
+    await expect(preview.locator('iframe')).toHaveAttribute('src', url);
+    await closeDocumentTab(page, 'Reference link');
+    await expect(firstTab).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(async () => Math.abs(await preview.evaluate(el => el.scrollTop) - firstScroll)).toBeLessThan(2);
+    await closeDocumentTab(page, 'First document');
+    await expect(panel.getByRole('tab')).toHaveCount(0);
+    await expect(panel.locator('iframe, img, pre, .markdown-body')).toHaveCount(0);
+    await expect(panel.locator('.person-output-item')).toHaveCount(4); // Empty reader exposes the picker, not a resurrected document.
+    await expect(panel.locator('#person-output-library')).toBeVisible();
+    await expect(panel.getByRole('link', { name: 'Download', exact: true })).toHaveCount(0);
+    await expect(panel.getByRole('link', { name: 'Open externally', exact: true })).toHaveCount(0);
+    await panel.getByRole('button', { name: 'Close reader', exact: true }).click();
+    await openOutputs(page);
+    await expect(panel.getByRole('tab')).toHaveCount(0);
+    await expect(panel.locator('iframe, img, pre, .markdown-body')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
+    await expect(panel.locator('.person-inspector-nav')).toBeVisible();
+    await expect(panel.locator('.person-inspector-nav').getByRole('button', { name: 'Outputs', exact: true })).toHaveCount(0);
+    await expect(panel.getByRole('tab')).toHaveCount(0);
+    await expect(panel.locator('.person-outputs')).not.toBeVisible();
+    expect(runtime.inputs).toHaveLength(12); // All reader/inspector operations stay inference-free.
+    expect(mockAgent.conversations.size).toBe(0);
+  } finally { await runtime.close(); }
+});
+
 test('Agent switch fences delayed output bytes and clears another Agent private deliveries', async ({ page, serverUrl, mockAgent }) => {
   test.setTimeout(60000);
   const runtime = await outputRuntime(mockAgent, serverUrl);
@@ -420,7 +544,7 @@ test('Agent switch fences delayed output bytes and clears another Agent private 
     await expect(page.locator('.person-messages')).not.toContainText('Published Private Agent A report.');
     expect(otherRuntime.inputs).toHaveLength(0);
     // Returning to A re-reads A's immutable delivery; it was not deleted by close/switch.
-    await panel.getByRole('button', { name: 'Close', exact: true }).click();
+    await panel.getByRole('button', { name: 'Close reader', exact: true }).click();
     await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
     await page.getByRole('option', { name: 'test-agent', exact: true }).click();
     await expect(page.locator('#person-input')).toBeEnabled();

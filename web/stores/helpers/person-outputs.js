@@ -4,7 +4,7 @@ export const OUTPUT_MAX_BYTES = 10 * 1024 * 1024;
 const CHUNK_BYTES = 65536;
 const fail = code => Object.assign(new Error(code), { code });
 const previewState = () => ({ status: 'idle', text: '', url: '', bytes: 0, totalBytes: 0, error: null, kind: '', blob: null });
-export const outputState = () => ({ items: [], nextCursor: null, loaded: false, loading: false, error: null, historyPaged: false, selected: null, preview: previewState() });
+export const outputState = () => ({ items: [], nextCursor: null, loaded: false, loading: false, error: null, historyPaged: false, tabs: [], selected: null, preview: previewState() });
 
 export function safeOutputUrl(value) {
   if (typeof value !== 'string' || value.length > 4096 || !/^https?:\/\//i.test(value)
@@ -134,9 +134,11 @@ export function createPersonOutputs({ state, request, identity, urls = URL }) {
     }
   }
   async function select(item) {
+    if (item?.id === state.selected?.id && ['ready', 'loading'].includes(state.preview.status)) return;
     release();
     state.selected = item;
     if (!item) return;
+    if (!state.tabs.some(tab => tab.item.id === item.id)) state.tabs.push({ item, scrollTop: 0, scrollLeft: 0 });
     const v = version, key = identity();
     const preview = state.preview;
     preview.kind = outputPreviewKind(item);
@@ -189,7 +191,13 @@ export function createPersonOutputs({ state, request, identity, urls = URL }) {
       preview.error = { code: error.code || 'requestFailed', message: error.message };
     }
   }
-  return { reset, snapshot, list, select, close,
+  function closeTab(id) {
+    const index = state.tabs.findIndex(tab => tab.item.id === id);
+    if (index < 0) return;
+    state.tabs.splice(index, 1);
+    if (state.selected?.id === id) return select(state.tabs[Math.min(index, state.tabs.length - 1)]?.item || null);
+  }
+  return { reset, snapshot, list, select, close, closeTab,
     resume() { if (state.selected && state.preview.status === 'idle') return select(state.selected); },
   };
 }

@@ -1,4 +1,3 @@
-import { OUTPUT_INSTRUCTIONS } from './outputs.js';
 import { createPersonToolHost, createPersonNativeRegistry, isNativeTool, projectNativeResult } from './native-tools.js';
 import { PersonTaskHost } from './task-host.js';
 import { randomUUID } from 'node:crypto';
@@ -24,7 +23,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   const imageLabels = images.map(file => `Untrusted image attachment ${JSON.stringify(attachmentMetadata(file))}; source ${episode.messageId ? `message:${episode.messageId}:1` : `trigger:${episode.id}`}`);
   const imageLabelBytes = imageLabels.reduce((sum, label) => sum + bytes(label), 0);
   const contextCap = Math.min(LIMITS.contextBytes, model.contextWindow - model.maxOutput - 1024 - imageTokensReserved);
-  const system = `${snapshot.person.soul}\n\n${PROPOSAL_INSTRUCTIONS}\n\n${OUTPUT_INSTRUCTIONS}`;
+  const system = `${snapshot.person.soul}\n\n${PROPOSAL_INSTRUCTIONS}`;
   const triggerRef = `trigger:${episode.id}`;
   const inputMessageRef = episode.messageId ? `message:${episode.messageId}:1` : null;
   const context = {
