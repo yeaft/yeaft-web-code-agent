@@ -109,6 +109,20 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 
 活动提示复用现有 snapshot / traces 轮询，不新增模型调用或自主后台任务。`Skill.*` 的方法读取不描述为已执行外部操作，能力成功不等于整次活动完成；终态以 episode 的完成、失败、取消、中断或预算耗尽为准。连接中断或进展读取失败时显示暂时无法确认，而非持续伪装成正在生成；恢复连接后重新获取权威状态，不自动重发命令。查看历史分页不会阻断独立最新活动窗口的刷新；活动只保留有界最新记录，缺少起点或较早步骤时明确提示记录不完整。
 
+## 内核检查分页
+
+`inspect` 使用 `{section:"memory"|"skills",limit?:1..50,cursor?:string|null}`，默认 20 条；响应为 `{items,nextCursor}`。只读请求不触发 Recall、模型、admission 或租约恢复，所有查询先按 authenticated owner / namespace / Person 隔离。
+
+- `memory` 按 **更新时间降序、ID 二进制升序** 返回当前概念版本，而非 ID 字母顺序。cursor 保存时间和 tie ID，即使边界记录删除也可继续；静态数据集中的同毫秒记录可完整续页。新写入或移到列表前面的修订在新的首页轮询中读取，不插入旧 continuation；分页不是并发修订下的历史快照。
+- `skills` 先返回 Person 创建的当前能力版本，按 **createdAt 降序、ID 升序**；这里的 `createdAt` 是当前不可变版本创建时间，不是假定的首次学会时间。然后返回 **无日期的内置／native catalogue，按 ID 升序**，不为其伪造新旧时间。受实例允许工具目录限制，检查不会读取用户 Skill 文件或执行脚本。
+- cursor 是不透明字符串：新 memory 为 `m1:…`，skills 为 `s1:…`，不能跨 section 使用；直接原样传回。旧裸 ID cursor 继续执行旧的 ID 升序 continuation，兼容仍保存旧游标的客户端；新的首页使用新顺序。每页最多 256 KiB 完整记录，字节预算可能使条数低于 limit，续页始终从实际最后返回记录继续。
+
+`tasks` 显式传 `{limit:1..100,cursor?:string|null}` 启用检查分页，limit 是**每个集合**的条数上限。返回 `{tasks,agents,nextCursor,truncated}`：两个集合均按 **创建时间降序、ID 二进制升序**，状态／updatedAt 改变不会使记录跨页移动。`nextCursor` 为一个 owner / Person / namespace / canonical instance 绑定的 `t1:…` 不透明字符串，分别保存两个集合的 continuation；一个集合已结束后，后续页该集合为空数组。两个集合均结束时 `nextCursor:null,truncated:false`。跨 scope 游标拒绝，不会读取别人的记录。空 payload `{}` 保留旧的 active-first、最多每集合 100 条的库存行为（没有 `nextCursor`）；新浏览器应始终显式传 limit 获取真正可到末尾的分页。响应条数／字节有界，但当前文件库存仍需读取和排序 scope 内的全部 metadata，并非有索引的磁盘查询。
+
+浏览器首屏仅取一页，滚动续页原样传 `nextCursor`，不要把 `truncated` 当作数据丢失。独立轮询使用**不带 continuation 的首页**，按 collection + ID 合并刷新已加载项；memory 修订按 revision 防止旧响应覆盖新版本。轮询首页的 cursor 不应覆盖已加载历史的 continuation，否则会重复滚动同一段历史。概念修订／能力新版本可能移到首页，合并需要去重并重新按上述时间／tie 顺序投影。tasks 的首页不是 active-only 列表；保留旧的 active-first 调用可单独用于控制提示，不取代有界检查分页。
+
+现行 Agent 只包含 SQLite managed-worker authority，没有 Mongo runtime、store 或依赖；本契约不新增 Mongo 存储或迁移实例数据。
+
 ## 验证范围
 
 聚焦测试覆盖 SQLite 真数据库的 attachment-only send/think、原件重启保留、owner/namespace fence、哈希冲突、实际 image block 与无 base64 trace、完整候选 catalog、跨 service busy settings 和 proposal 越界拒绝。Server 测试覆盖全量引用解析、未归属/跨 owner/过期/超限拒绝与 lost-response 重试。测试使用隔离的实例数据根，不得指向线上数据库。

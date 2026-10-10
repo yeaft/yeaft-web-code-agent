@@ -7,7 +7,7 @@ const FIELDS = Object.freeze({
   status: [], open: [], snapshot: [], receipt: ['clientMessageId', 'requestHash'],
   send: ['text', 'clientMessageId', 'attachments'], think: ['text', 'clientMessageId', 'attachments'],
   dream: ['clientMessageId'], cancel: ['episodeId'],
-  tasks: [], task_log: ['taskId', 'offset', 'maxBytes'], task_cancel: ['taskId'], agent_close: ['agentId'],
+  tasks: ['cursor', 'limit'], task_log: ['taskId', 'offset', 'maxBytes'], task_cancel: ['taskId'], agent_close: ['agentId'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'], turns: ['cursor', 'limit'],
   inspect: ['section', 'cursor', 'limit'], search: ['query', 'cursor', 'limit'],
   settings: ['name', 'autonomyEnabled', 'modelCandidates', 'defaultModel'],
@@ -74,7 +74,9 @@ export function createPersonRelay({
         const invalid = Object.keys(value).some(key => !FIELDS[op].includes(key))
           || (op !== 'tasks' && (typeof value[idKey] !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value[idKey])))
           || (Object.hasOwn(value, 'offset') && (!Number.isSafeInteger(value.offset) || value.offset < 0))
-          || (Object.hasOwn(value, 'maxBytes') && (!Number.isInteger(value.maxBytes) || value.maxBytes < 1 || value.maxBytes > 65536));
+          || (Object.hasOwn(value, 'maxBytes') && (!Number.isInteger(value.maxBytes) || value.maxBytes < 1 || value.maxBytes > 65536))
+          || (Object.hasOwn(value, 'limit') && (!Number.isInteger(value.limit) || value.limit < 1 || value.limit > 100))
+          || (value.cursor != null && (typeof value.cursor !== 'string' || !/^t1:[A-Za-z0-9_-]{1,2048}$/.test(value.cursor)));
         if (invalid) {
           await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: 'Invalid digital person task payload' });
           return true;

@@ -282,6 +282,51 @@ describe('Digital Person owner-scoped task API', () => {
     expect(createPersonProvider).not.toHaveBeenCalled();
   });
 
+  it('pages all scoped tasks and children using stable creation/ID ties, without losing history on polling', async () => {
+    const s = service(), h = await ownedHost(s), store = new TaskStore({ yeaftDir: h.dataRoot });
+    const writeTask = (id, createdAt, status = 'succeeded', ownerVpId = h.parentVpId) => store.writeTask({ id,
+      sessionId: h.sessionId, ownerVpId, kind: 'shell', title: id, status, createdAt, updatedAt: '2029-01-01' });
+    for (const [id, date] of [['task-old', '2020-01-01'], ['task-middle', '2021-01-01'], ['task-Z-tie', '2026-01-01'], ['task-a-tie', '2026-01-01']]) writeTask(id, date);
+    writeTask('task-foreign', '2030-01-01', 'succeeded', 'another-owner');
+    for (let i = 0; i < 5; i++) getAgentRegistry().set(`agent-${i}`, { id: `agent-${i}`, name: `Child ${i}`, status: 'completed',
+      createdAt: '2026-01-01', parentSessionId: h.sessionId, parentVpId: h.parentVpId, parentThreadId: h.threadId });
+    getAgentRegistry().set('agent-foreign', { id: 'agent-foreign', name: 'Private', status: 'completed', createdAt: '2030-01-01',
+      parentSessionId: h.sessionId, parentVpId: 'another-owner', parentThreadId: h.threadId });
+    const first = await call(s, 'tasks', { limit: 2 });
+    expect(first.tasks.map(item => item.id)).toEqual(['task-Z-tie', 'task-a-tie']);
+    expect(first.agents.map(item => item.id)).toEqual(['agent-0', 'agent-1']); expect(first.nextCursor).toMatch(/^t1:/);
+    rmSync(store.taskPath(h.sessionId, 'task-a-tie'));
+    writeTask('task-new-head', '2030-01-01'); writeTask('task-middle', '2021-01-01', 'failed');
+    getAgentRegistry().get('agent-2').status = 'failed';
+    const second = await call(s, 'tasks', { limit: 2, cursor: first.nextCursor });
+    expect(second.tasks.map(item => item.id)).toEqual(['task-middle', 'task-old']); expect(second.tasks[0].status).toBe('failed');
+    expect(second.agents.map(item => item.id)).toEqual(['agent-2', 'agent-3']); expect(second.agents[0].status).toBe('failed');
+    const third = await call(s, 'tasks', { limit: 2, cursor: second.nextCursor });
+    expect(third.tasks).toEqual([]); expect(third.agents.map(item => item.id)).toEqual(['agent-4']);
+    expect(third.nextCursor).toBeNull(); expect(third.truncated).toBe(false);
+    const polled = await call(s, 'tasks', { limit: 2 });
+    expect(polled.tasks.map(item => item.id)).toEqual(['task-new-head', 'task-Z-tie']);
+    // Fresh polls merge by collection+ID; append history using its original cursor.
+    const merged = new Map([...first.tasks, ...second.tasks, ...third.tasks, ...polled.tasks].map(item => [item.id, item]));
+    expect(merged.get('task-middle').status).toBe('failed'); expect(merged.size).toBe(5);
+    const other = host({ ownerId: 'bob' });
+    await expect(request(other, 'tasks', { limit: 2, cursor: first.nextCursor })).rejects.toMatchObject({ code: 'TASK_SCOPE_DENIED' });
+    expect(JSON.stringify([first, second, third])).not.toMatch(/task-foreign|agent-foreign|another-owner/);
+    expect(createPersonProvider).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed task page limits and continuation shapes before exposing inventory', async () => {
+    const s = service(); await ownedHost(s);
+    const encode = value => `t1:${Buffer.from(JSON.stringify(value)).toString('base64url')}`;
+    for (const payload of [{ limit: 0 }, { limit: 101 }, { limit: null }, { limit: 1.5 }, { cursor: '' }, { cursor: 1 },
+      { cursor: 't1:bad-json' }, { cursor: encode({ scope: 'a'.repeat(64), tasks: null, agents: null }) },
+      { cursor: encode({ scope: 'a'.repeat(64), tasks: { time: -1, id: 'task' }, agents: null }) },
+      { cursor: encode({ scope: 'a'.repeat(64), tasks: { time: 0, id: '../task' }, agents: null }) }]) {
+      await expect(call(s, 'tasks', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    }
+    expect(await call(s, 'tasks', { limit: 1 })).toEqual({ tasks: [], agents: [], nextCursor: null, truncated: false });
+  });
+
   it('bounds inventory summaries and rejects extra fields, native ID aliases and invalid log budgets', async () => {
     const s = service(), h = await ownedHost(s);
     const store = new TaskStore({ yeaftDir: h.dataRoot });
@@ -291,6 +336,14 @@ describe('Digital Person owner-scoped task API', () => {
     expect(list.truncated).toBe(true);
     expect(list.tasks[0].id).toBe('history-0');
     expect(list.tasks.every(task => Buffer.byteLength(task.title) <= 512)).toBe(true);
+    const all = []; let cursor = null;
+    do {
+      const result = await call(s, 'tasks', { limit: 20, cursor });
+      expect(result.tasks.length).toBeLessThanOrEqual(20); expect(result.agents).toEqual([]);
+      all.push(...result.tasks); cursor = result.nextCursor;
+    } while (cursor);
+    expect(all).toHaveLength(105); expect(new Set(all.map(task => task.id)).size).toBe(105);
+    expect(all.map(task => task.id)).toEqual(all.map(task => task.id).sort());
     for (const payload of [{ taskId: 'history-1', maxBytes: 65537 }, { taskId: 'history-1', maxBytes: 0 }, { taskId: 'history-1', offset: -1 }, { taskId: 'history-1', offset: 0.5 }, { taskId: 'history-1', offset: Number.MAX_SAFE_INTEGER + 1 }, { taskId: 'history-1', tail: true }, { taskId: '../history-1' }, { taskId: 'history:1' }, { taskId: 'history-1', ownerId: 'bob' }]) {
       await expect(call(s, 'task_log', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     }

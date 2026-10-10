@@ -47,7 +47,7 @@ describe('digital person authenticated relay', () => {
   });
 
   it.each([
-    ['tasks', {}], ['task_log', { taskId: 'task-one', offset: 4, maxBytes: 65536 }],
+    ['tasks', {}], ['tasks', { limit: 20, cursor: 't1:eyJzY29wZSI6Im9wYXF1ZSJ9' }], ['task_log', { taskId: 'task-one', offset: 4, maxBytes: 65536 }],
     ['task_cancel', { taskId: 'task-one' }], ['agent_close', { agentId: 'agent-child' }],
   ])('routes strict %s task payloads with authenticated ownership and correlation', async (op, payload) => {
     await relay.request(client, message({ op, payload, ownerId: 'victim' }));
@@ -58,7 +58,8 @@ describe('digital person authenticated relay', () => {
   });
 
   it.each([
-    ['tasks', { namespace: 'foreign' }], ['task_cancel', { taskId: 'task-one', ownerId: 'victim' }],
+    ['tasks', { namespace: 'foreign' }], ['tasks', { limit: 101 }], ['tasks', { limit: null }], ['tasks', { cursor: 'invalid' }], ['tasks', { cursor: 1 }],
+    ['task_cancel', { taskId: 'task-one', ownerId: 'victim' }],
     ['agent_close', { agentId: 'agent-child', personId: 'victim' }], ['task_log', { taskId: 'task-one', path: '/etc/passwd' }],
     ['task_log', { taskId: 'task-one', tail: true }], ['task_log', { taskId: 'task-one', offset: -1 }],
     ['task_log', { taskId: 'task-one', maxBytes: 65537 }], ['task_log', { taskId: 'task-one', maxBytes: null }],

@@ -13,7 +13,8 @@ import { isTerminalAgentStatus } from '../sub-agent/status.js';
 import { describeAgentOutcome } from '../sub-agent/outcome.js';
 import { NullTrace } from '../debug-trace.js';
 import { loadConfig } from '../config.js';
-import { digest, fail, PERSON_TASK_LIMITS, personTaskRequest } from './contracts.js';
+import { digest, fail, PERSON_TASK_LIMITS, personTaskRequest, taskInspectionCursor } from './contracts.js';
+import { inspectionPage, inspectionTime } from './inspection.js';
 
 // Deliberately not the full Session registry: no transcript search, routing,
 // interactive UI, MCP, Work Center, or nested orchestration authority.
@@ -448,12 +449,32 @@ class ScopedPersonTaskHost {
     const args = personTaskRequest(op, payload);
     switch (op) {
       case 'tasks': {
+        const continuation = args.cursor ? taskInspectionCursor(args.cursor) : null;
+        if (continuation && continuation.scope !== this.scope.key) throw denied();
         this.#persistAgents();
         const tasks = jsonFiles(this.#manager.store.sessionDir(this.sessionId))
           .filter(task => task.sessionId === this.sessionId && task.ownerVpId === this.parentVpId && ['shell', 'sub_agent'].includes(task.kind));
         const agents = [...this.#agents.values()].filter(agent => agentBelongsToScope(agent, this.agentScope));
+        if (args.limit !== undefined) {
+          const readPage = (items, key, view) => {
+            const boundary = continuation?.[key];
+            if (continuation && boundary === null) return { items: [], nextCursor: null };
+            const records = items.filter(item => !boundary || inspectionTime(item.createdAt) < boundary.time ||
+              (inspectionTime(item.createdAt) === boundary.time && item.id > boundary.id))
+              .sort((a, b) => inspectionTime(b.createdAt) - inspectionTime(a.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+              .slice(0, args.limit + 1);
+            return inspectionPage(records, args.limit, item => ({ time: inspectionTime(item.createdAt), id: item.id }), view);
+          };
+          const taskPage = readPage(tasks, 'tasks', projectedTask);
+          const agentPage = readPage(agents, 'agents', agent => projectedAgent(agent, agent.executionPending));
+          const more = taskPage.nextCursor !== null || agentPage.nextCursor !== null;
+          const nextCursor = more ? `t1:${Buffer.from(JSON.stringify({ scope: this.scope.key,
+            tasks: taskPage.nextCursor, agents: agentPage.nextCursor })).toString('base64url')}` : null;
+          return { tasks: taskPage.items, agents: agentPage.items, nextCursor, truncated: more };
+        }
         const recent = (items, settled) => items.sort((a, b) => Number(settled(a)) - Number(settled(b))
-          || String(b.updatedAt ?? b.createdAt ?? '').localeCompare(String(a.updatedAt ?? a.createdAt ?? ''))).slice(0, PERSON_TASK_LIMITS.records);
+          || String(b.updatedAt ?? b.createdAt ?? '').localeCompare(String(a.updatedAt ?? a.createdAt ?? ''))
+          || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, PERSON_TASK_LIMITS.records);
         // A terminal driver with actual tools still running is active work, not
         // disposable history: keep its cleanup control ahead of settled records.
         return { tasks: recent(tasks, task => isTerminalTaskStatus(task.status)).map(projectedTask),
