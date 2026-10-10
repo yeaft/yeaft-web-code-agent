@@ -95,6 +95,37 @@ describe('Digital Person conversation projection', () => {
 });
 
 describe('Digital Person surface', () => {
+  it('uses the Session virtual transcript, starts at the latest page, and loads history only on scroll intent', async () => {
+    await render();
+    const virtual = wrapper.findComponent({ name: 'VirtualTranscript' });
+    expect(virtual.props('initialAlign')).toBe('end');
+    expect(virtual.props('scrollContainer')).toBe('.person-messages');
+    wrapper.vm.state.messageCursor = 'older';
+    const page = vi.spyOn(wrapper.vm.controller, 'page').mockResolvedValue();
+    wrapper.vm.conversationScroll({ scrollTop: 0 });
+    expect(page).not.toHaveBeenCalled();
+    await wrapper.get('.person-messages').trigger('wheel');
+    wrapper.vm.conversationScroll({ scrollTop: 100 });
+    wrapper.vm.conversationScroll({ scrollTop: 80 });
+    expect(page).toHaveBeenCalledTimes(1);
+    expect(page).toHaveBeenCalledWith('messages', true);
+    wrapper.vm.state.messagesLoading = true;
+    await wrapper.get('.person-messages').trigger('wheel');
+    wrapper.vm.conversationScroll({ scrollTop: 80 });
+    expect(page).toHaveBeenCalledTimes(1);
+    wrapper.vm.state.messagesLoading = false;
+    wrapper.vm.conversationScroll({ scrollTop: 60 });
+    expect(page).toHaveBeenCalledTimes(2);
+  });
+
+  it('mounts only a viewport of a large loaded conversation rather than every Markdown row', async () => {
+    await render();
+    wrapper.vm.state.messages = Array.from({ length: 500 }, (_, i) => ({ id: `history-${i}`, role: 'assistant', text: `Message ${i}`, createdAt: i + 1 }));
+    await Vue.nextTick(); await Vue.nextTick();
+    expect(wrapper.findAll('.person-message').length).toBeLessThan(40);
+    expect(wrapper.findAll('.virtual-transcript-spacer').length).toBeGreaterThan(0);
+  });
+
   it('hides the sidebar entry when the optional store host is absent', () => {
     vi.stubGlobal('Pinia', {});
     wrapper = mount(SidebarDigitalPerson, { global: { mocks: { $t: t } } });
@@ -424,7 +455,7 @@ describe('Digital Person surface', () => {
     let observerCount = 0;
     vi.stubGlobal('requestAnimationFrame', callback => { frames.set(++sequence, callback); return sequence; });
     vi.stubGlobal('cancelAnimationFrame', handle => frames.delete(handle));
-    vi.stubGlobal('ResizeObserver', class { constructor(callback) { observe = callback; observerCount++; } observe() {} disconnect = disconnect; });
+    vi.stubGlobal('ResizeObserver', class { constructor(callback) { this.callback = callback; observerCount++; } observe(element) { if (element.classList?.contains('person-reading-column')) observe = () => this.callback([]); } unobserve() {} disconnect = disconnect; });
     await render();
     const pane = wrapper.get('.person-messages').element;
     Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 400 });
@@ -476,12 +507,12 @@ describe('Digital Person surface', () => {
     expect(pane.scrollTop).toBe(200);
     expect(wrapper.find('.person-response-loading').exists()).toBe(false);
     expect(wrapper.vm.state.messages.some(message => message.id === 'm')).toBe(true);
-    observe(); await Vue.nextTick(); expect(frames.size).toBe(1);
+    observe(); await Vue.nextTick(); const queuedFrames = frames.size; expect(queuedFrames).toBeGreaterThan(0);
     // A post-flush synchronous reconciliation must retain the already queued
     // RAF handle. No frame runs between this update and unmount.
     wrapper.vm.state.messages.at(-1).text = 'Update while a frame is queued';
     await Vue.nextTick(); await Vue.nextTick();
-    expect(frames.size).toBe(1);
+    expect(frames.size).toBe(queuedFrames);
     wrapper.unmount(); wrapper = null;
     expect(disconnect).toHaveBeenCalledTimes(observerCount); expect(frames.size).toBe(0);
   });

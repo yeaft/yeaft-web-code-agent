@@ -77,6 +77,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let polling = false;
   let snapshotRequest = 0;
   let messageWindowVersion = 0;
+  let messageHistoryVersion = 0;
   let tracePaged = false;
   let traceHistoryLoading = false;
   let activityRequest = 0;
@@ -147,6 +148,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     } : {};
     const feedbackSuppressedEpisodeId = nextAgentId === agentId && activeScope === scope() ? state.feedbackSuppressedEpisodeId : null;
     generation += 1;
+    messageHistoryVersion += 1;
     clearTimeout(poll);
     clearTimeout(taskPoll);
     clearTimeout(turnPoll);
@@ -197,12 +199,12 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     // contiguous pagination chain rather than leaving an unreachable middle gap.
     if (!state.messages.length || (Number.isSafeInteger(firstSeq) && Number.isSafeInteger(lastSeq) && firstSeq > lastSeq + 1)) {
       messageWindowVersion += 1;
+      messageHistoryVersion += 1;
       state.messages = mergeRows([], incoming);
       state.messageCursor = data.nextMessagesCursor ?? null;
     } else {
-      // Any newly observed tail invalidates an older page read, even without a
-      // gap. Otherwise a delayed latest page could erase a completed reply after
-      // polling has stopped. An invalidated older page can be requested again.
+      // New tail rows invalidate replacement/latest reads, not independent
+      // older pages. Only a gap reset changes the history cursor generation.
       const existing = new Set(state.messages.map(row => row.id));
       if (incoming.some(row => !existing.has(row.id))) messageWindowVersion += 1;
       state.messages = mergeRows(state.messages, incoming);
@@ -253,9 +255,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     const activityVersion = kind === 'traces' && !more ? ++activityRequest : null;
     const traceVersion = traceRefreshVersion;
     const windowVersion = kind === 'messages' && !more ? ++messageWindowVersion : messageWindowVersion;
+    const historyVersion = messageHistoryVersion;
     try {
       const data = await request(kind, { cursor: more ? state[cursorKey] : null, limit: PAGE_SIZE });
-      if (!current(g) || (kind === 'messages' && windowVersion !== messageWindowVersion)) return;
+      if (!current(g) || (kind === 'messages' && (more ? historyVersion !== messageHistoryVersion : windowVersion !== messageWindowVersion))) return;
       const keepTraceWindow = kind === 'traces' && !more && preserveHistory && tracePaged;
       if (!keepTraceWindow) {
         state[kind] = mergeRows(more ? state[kind] : [], data.items);

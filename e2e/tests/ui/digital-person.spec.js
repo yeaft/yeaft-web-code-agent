@@ -249,7 +249,9 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(input).toBeEnabled();
     await expect(loading).toHaveCount(0);
     await expect(page.locator('.person-composer .stop-btn, .person-composer .message-composer-spinner')).toHaveCount(0);
-    await page.getByRole('button', { name: zh ? '加载更早消息' : 'Load older messages' }).click();
+    await page.locator('.person-messages').hover();
+    await page.mouse.wheel(0, -10000);
+    await page.locator('.person-messages').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await expect(page.locator('.person-messages')).toContainText('Older persisted message');
     await page.screenshot({ path: testInfo.outputPath(`person-messages-${scenario.width}.png`) });
     await page.getByRole('button', { name: zh ? '数字人内核' : 'Inside the digital person', exact: true }).click();
@@ -1187,5 +1189,40 @@ for (const scenario of responseScenarios) {
     await expect(feedback).toHaveCount(0);
     await expect(page.locator('.person-messages')).not.toHaveClass(/is-response-pinned/);
     expect(mock.requests.filter(r => r.op === 'send')).toHaveLength(2);
+  });
+}
+
+for (const width of [1280, 320]) {
+  test(`Digital Person starts at latest, windows long history and prepends on scroll ${width}px`, async ({ page, serverUrl }) => {
+    const rows = Array.from({ length: 240 }, (_, i) => ({ id: `message-${i + 101}`, role: 'assistant', text: `Latest window item ${i + 101}. ` + 'Readable content. '.repeat(15), seq: i + 101, createdAt: i + 101 }));
+    const older = Array.from({ length: 50 }, (_, i) => ({ id: `old-${i}`, role: 'assistant', text: `Historical item ${i}. ` + 'Earlier content. '.repeat(15), seq: i + 51, createdAt: i + 51 }));
+    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: rows, olderMessages: older });
+    await page.setViewportSize({ width, height: 800 });
+    await page.addInitScript(() => { localStorage.setItem('locale', 'en'); localStorage.setItem('theme', 'dark'); });
+    await page.goto(serverUrl);
+    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+    if (width <= 768) await page.locator('.header-sidebar-toggle').click();
+    await page.locator('.sidebar-person-trigger:visible').click();
+    const pane = page.locator('.person-messages');
+    await expect(pane.locator('[data-message-id="message-340"]')).toBeVisible();
+    await expect.poll(() => pane.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(4);
+    expect(await pane.locator('.person-message').count()).toBeLessThan(40);
+    expect(mock.requests.filter(row => row.op === 'messages' && row.payload.cursor)).toHaveLength(0);
+    await pane.hover(); await page.mouse.wheel(0, -100000);
+    await pane.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    await expect.poll(() => mock.messageHistoryPending()).toBe(true);
+    const before = await pane.locator('.person-message').first().getAttribute('data-message-id');
+    const topBefore = await pane.locator(`[data-message-id="${before}"]`).evaluate(el => el.getBoundingClientRect().top);
+    mock.finishMessageHistory();
+    await expect(page.getByRole('button', { name: 'Load older messages' })).toHaveCount(0);
+    await expect.poll(() => pane.locator(`[data-message-id="${before}"]`).evaluate(el => el.getBoundingClientRect().top)).toBeCloseTo(topBefore, 0);
+    expect(await pane.locator('.person-message').count()).toBeLessThan(40);
+    await pane.hover(); await page.mouse.wheel(0, -100000);
+    await pane.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    await expect(pane).toContainText('Historical item 0');
+    await page.locator('.person-thoughts-button').click();
+    const thoughts = page.locator('#person-thoughts');
+    await expect(thoughts.locator('.person-thought').first()).toHaveAttribute('data-thought-kind', 'interrupted');
+    await expect.poll(() => thoughts.locator('.person-thought').count()).toBeLessThan(30);
   });
 }

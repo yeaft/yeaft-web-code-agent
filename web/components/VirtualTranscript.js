@@ -17,6 +17,7 @@ export default {
     itemGap: { type: Number, default: virtualTranscriptDefaults.itemGap },
     estimateHeight: { type: Function, default: estimateVirtualItemHeight },
     initialAlign: { type: String, default: 'start' },
+    scrollContainer: { type: String, default: '.chat-container' },
   },
   emits: ['scroll-state'],
   template: `
@@ -493,7 +494,7 @@ export default {
     );
 
     Vue.onMounted(() => {
-      scrollEl.value = rootRef.value?.closest?.('.chat-container') || rootRef.value?.parentElement || null;
+      scrollEl.value = rootRef.value?.closest?.(props.scrollContainer) || rootRef.value?.parentElement || null;
       syncInitialPosition();
       transcriptContentTop = readTranscriptContentTop();
       geometryScrollTop = Number(scrollEl.value?.scrollTop || 0);

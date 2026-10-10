@@ -662,6 +662,26 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.messageCursor).toBeNull();
   });
 
+  it('merges a slow older page during live output instead of starving scroll pagination', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    let rows = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
+    let delayed;
+    f.auto(r => {
+      if (r.op === 'snapshot') return { person: { id: 'p' }, messages: rows.slice(-20), nextMessagesCursor: String(rows.at(-20).seq), busy: true };
+      if (r.op === 'messages') {
+        if (r.payload.cursor) { delayed = r; return false; }
+        return { items: rows.slice(-50), nextCursor: '31' };
+      }
+    });
+    await f.controller.open('a');
+    const older = f.controller.page('messages', true);
+    rows.push({ id: 'm81', seq: 81 });
+    await vi.advanceTimersByTimeAsync(51);
+    f.response(delayed, { items: rows.slice(0, 30), nextCursor: null }); await older;
+    expect(f.state.messages.map(row => row.seq)).toEqual(rows.map(row => row.seq));
+    expect(f.state.messageCursor).toBeNull();
+  });
+
   it('fences an older page when a newer snapshot resets a gap window', async () => {
     vi.useFakeTimers(); const f = fixture();
     let records = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));

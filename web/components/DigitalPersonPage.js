@@ -1,3 +1,4 @@
+import VirtualTranscript from './VirtualTranscript.js';
 import UserTurnBlock from './UserTurnBlock.js';
 import MessageComposer from './MessageComposer.js';
 import NavigationIcon from './NavigationIcon.js';
@@ -20,7 +21,7 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
-  components: { UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonTaskBrowser, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity, PersonResponseLoading },
+  components: { VirtualTranscript, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonTaskBrowser, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity, PersonResponseLoading },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -51,6 +52,22 @@ export default {
     })));
     const messagePane = Vue.ref(null);
     const readingColumn = Vue.ref(null);
+    const transcript = Vue.ref(null);
+    const transcriptIdentity = Vue.computed(() => JSON.stringify([attachmentScope(), chat.chatHistoryConnectionGeneration, state.person?.id]));
+    let historyArmed = false;
+    function conversationScroll(position) {
+      if (historyArmed && position.scrollTop < 240 && !gate.value && !state.loading && !state.messagesLoading && state.messageCursor != null) {
+        historyArmed = false;
+        controller.page('messages', true);
+      }
+      if (position.scrollTop > 320) historyArmed = true;
+    }
+    function loadOlderMessages() {
+      historyArmed = false;
+      transcript.value?.setBottomFollowEnabled(false);
+      return controller.page('messages', true);
+    }
+    const estimateConversationHeight = item => Math.min(2400, 100 + Math.ceil((item.parts || [item]).reduce((sum, part) => sum + (part.text?.length || 0), 0) / 70) * 22);
     const responseStart = Vue.ref(null);
     const responseTail = Vue.ref(null);
     const focusedResponseId = Vue.ref('');
@@ -110,7 +127,7 @@ export default {
     const feedback = Vue.computed(() => projectPersonFeedback(state, gate.value));
     const responding = Vue.computed(() => !gate.value && (state.busy || state.commandPending));
     const projectConversation = createPersonConversationProjector();
-    const conversation = Vue.computed(() => projectConversation(state.messages, JSON.stringify([attachmentScope(), state.person?.id])));
+    const conversation = Vue.computed(() => projectConversation(state.messages, JSON.stringify([attachmentScope(), state.person?.id])).map(block => ({ ...block, id: block.key, messageId: block.id })));
     const loadingReplyKey = Vue.computed(() => {
       const tail = conversation.value.at(-1);
       return activity.value.loading && !state.commandPending && tail?.role === 'assistant'
@@ -224,6 +241,8 @@ export default {
         previousIds: new Set(state.messages.map(message => message.id)),
         locked: true,
       };
+      transcript.value?.setBottomFollowEnabled(false);
+      transcript.value?.clearTargetAnchor();
       hasResponseFocus.value = true;
       responsePinned.value = true;
       scheduleResponseLayout();
@@ -242,6 +261,9 @@ export default {
           || (event.clientX < bounds.right - (pane.offsetWidth - pane.clientWidth)
             && event.clientX > bounds.left + (pane.offsetWidth - pane.clientWidth))) return;
       }
+      historyArmed = true;
+      transcript.value?.setBottomFollowEnabled(false);
+      transcript.value?.clearTargetAnchor();
       if (responseFocus) responseFocus.locked = false;
       responsePinned.value = false;
     }
@@ -254,13 +276,20 @@ export default {
         const firstReply = state.messages.find(message => message.role === 'assistant'
           && !focus.previousIds.has(message.id)
           && (!message.episodeId || message.episodeId === focus.episodeId));
-        if (firstReply) focusedResponseId.value = firstReply.id;
+        if (firstReply) {
+          focusedResponseId.value = firstReply.id;
+          const block = conversation.value.find(row => row.parts?.some(part => part.id === firstReply.id));
+          if (focus.locked && block) transcript.value?.scrollToKey(block.id, { align: 'start' }).then(scheduleResponseLayout);
+        }
       }
       if (!focus.locked) return;
       const target = focusedResponseId.value
         ? [...pane.querySelectorAll('.person-message, .person-reply-part')].find(element => element.dataset.messageId === focusedResponseId.value)
         : responseStart.value;
-      if (!target) return;
+      if (!target) {
+        if (!focusedResponseId.value) pane.scrollTop = pane.scrollHeight;
+        return;
+      }
       // Leave only the space needed to put a short response at the top. It is
       // independent of loading state, so completion cannot clamp it upwards.
       const afterTarget = tail.getBoundingClientRect().top - target.getBoundingClientRect().top;
@@ -289,6 +318,7 @@ export default {
     // A reconnect replaces the entire projection. Do not carry an old DOM
     // target or an admission awaiting acknowledgement into that generation.
     Vue.watch(() => [gate.value, chat.chatHistoryConnectionGeneration], resetResponseFocus, { flush: 'sync' });
+    Vue.watch(transcriptIdentity, () => { historyArmed = false; }, { flush: 'sync' });
     Vue.onMounted(() => {
       if (typeof ResizeObserver !== 'undefined') {
         responseLayoutObserver = new ResizeObserver(scheduleResponseLayout);
@@ -309,10 +339,10 @@ export default {
       Vue.nextTick(() => [...document.querySelectorAll('.sidebar-person-trigger')]
         .find(button => button.getClientRects().length)?.focus());
     }
-    const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
+    const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -358,17 +388,18 @@ export default {
       </div>
       <div class="person-workspace">
         <main id="person-conversation" :inert="compactPanel && panel ? true : undefined" class="person-conversation" :aria-label="$t('person.conversation')">
-          <div ref="messagePane" class="person-messages" :class="{ 'is-response-pinned': responsePinned }" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading"
+          <div ref="messagePane" class="person-messages virtual-transcript-scroller" :class="{ 'is-response-pinned': responsePinned }" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading"
             @wheel.passive="releaseResponseFocus" @touchmove.passive="releaseResponseFocus" @keydown="releaseResponseFocus" @pointerdown.passive="releaseResponseFocus">
             <div ref="readingColumn" class="person-reading-column">
-              <button v-if="state.messageCursor != null" type="button" class="btn-ghost person-load-more" @click="controller.page('messages', true)" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
+              <button v-if="state.messageCursor != null" type="button" class="btn-ghost person-load-more" @click="loadOlderMessages" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
               <div v-if="!state.messages.length && ready && !responding" class="person-welcome"><NavigationIcon name="activity" :size="28" /><h2>{{ $t('person.welcome') }}</h2><p>{{ $t('person.empty') }}</p></div>
-              <template v-for="message in conversation" :key="message.key">
+              <VirtualTranscript :key="transcriptIdentity" ref="transcript" :items="conversation" initial-align="end" scroll-container=".person-messages" :item-gap="0" :estimate-height="estimateConversationHeight" @scroll-state="conversationScroll">
+                <template #default="{ item: message }">
                 <div v-if="message.role === 'user'">
                   <UserTurnBlock :message="asUserMessage(message)" :session-actions="false" />
                   <ul v-if="message.attachments?.length" class="person-sent-files" :aria-label="$t('person.attachedFiles')"><li v-for="(file, index) in message.attachments" :key="file.id || index">{{ file.name }}</li></ul>
                 </div>
-                <article v-else-if="message.role === 'assistant'" class="person-message person-reply" :data-message-id="message.id" :data-episode-id="message.episodeId">
+                <article v-else-if="message.role === 'assistant'" class="person-message person-reply" :data-message-id="message.messageId" :data-episode-id="message.episodeId">
                   <header class="person-message-meta"><strong>{{ state.person?.name || $t('person.title') }}</strong></header>
                   <section v-for="(part, index) in message.parts" :key="part.id" class="person-reply-part" :data-message-id="part.id">
                     <div class="person-reply-part-meta" :class="{ 'person-reply-divider': index > 0 }">
@@ -379,11 +410,12 @@ export default {
                   </section>
                   <PersonResponseLoading v-if="loadingReplyKey === message.key" :feedback="feedback" />
                 </article>
-                <article v-else class="person-message" :data-message-id="message.id">
+                <article v-else class="person-message" :data-message-id="message.messageId">
                   <header class="person-message-meta"><strong>{{ $t('person.system') }}</strong><time>{{ time(message.createdAt) }}</time></header>
                   <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
                 </article>
-              </template>
+                </template>
+              </VirtualTranscript>
               <div v-if="hasResponseFocus && !focusedResponseId" ref="responseStart" class="person-response-start" aria-hidden="true"></div>
               <PersonResponseLoading v-if="activity.loading && !loadingReplyKey" :feedback="feedback" />
               <div v-if="hasResponseFocus" ref="responseTail" class="person-response-tail" aria-hidden="true"></div>
