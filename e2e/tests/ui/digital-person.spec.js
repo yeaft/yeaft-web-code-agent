@@ -98,9 +98,14 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
         if (conversationFlow && request.op === 'send') {
           const admit = () => {
             activeEpisode = `conversation-${++episodeNumber}`;
-            agentMessages.get(request.agentId).push({ id: `user-${episodeNumber}`, role: 'user', text: request.payload.text, episodeId: activeEpisode, createdAt: new Date().toISOString() });
+            // Simulated 30–156s feedback is ahead of the real browser clock.
+            // Keep the next user record after the completed episode, just as a
+            // real runtime does, so timestamp sorting cannot interleave turns.
+            const rows = agentMessages.get(request.agentId);
+            const createdAt = new Date(Math.max(Date.now(), ...rows.map(row => new Date(row.createdAt).getTime() + 1))).toISOString();
+            rows.push({ id: `user-${episodeNumber}`, role: 'user', text: request.payload.text, episodeId: activeEpisode, createdAt });
             busy = true;
-            latestEpisode = { id: activeEpisode, status: 'running', createdAt: new Date().toISOString() };
+            latestEpisode = { id: activeEpisode, status: 'running', createdAt };
             reply({ episodeId: activeEpisode });
           };
           if (holdAdmission) admissionReply = admit;
@@ -132,7 +137,7 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       const rows = agentMessages.get(agentId);
       const existing = rows.find(row => row.id === id);
       if (existing) existing.text = text;
-      else rows.push({ id, role: 'assistant', text, episodeId, createdAt: new Date().toISOString(), ...metadata });
+      else rows.push({ id, role: 'assistant', text, episodeId, createdAt: new Date(Math.max(Date.now(), ...rows.map(row => new Date(row.createdAt).getTime() + 1))).toISOString(), ...metadata });
     },
     waiting(phase, offset = 61000) {
       busy = true; latestEpisode = { ...latestEpisode, id: activeEpisode, status: 'running', feedback: { at: new Date(new Date(latestEpisode.createdAt).getTime() + offset).toISOString(), phase, capabilityId: 'PRIVATE_CAPABILITY' } };
@@ -235,7 +240,7 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await expect(page.locator('.person-messages')).toContainText('Recorded mock response.');
     await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
-    await expect.poll(() => page.locator('[data-message-id="m2"]').evaluate(el => {
+    await expect.poll(() => page.locator('.person-message[data-message-id="m2"]').evaluate(el => {
       const pane = el.closest('.person-messages');
       return Math.abs(el.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop);
     })).toBeLessThanOrEqual(2);
@@ -608,7 +613,45 @@ const previousConversation = [
   { id: 'history-user', role: 'user', text: 'Previous question stays in the transcript.', createdAt: 1 },
   { id: 'history-reply', role: 'assistant', text: 'Previous answer stays in the transcript.\n'.repeat(35), createdAt: 2 },
 ];
-const replySelector = id => `.person-message[data-message-id="${id}"]`;
+// A group's article and its first section share an ID. Select the section for
+// assistant content, or the article for system messages, never both at once.
+const replySelector = id => `:is(.person-message:not(:has(.person-reply-part)), .person-reply-part)[data-message-id="${id}"]`;
+const replyArticleSelector = id => `.person-message[data-message-id="${id}"]`;
+
+async function expectReplyGroup(page, firstId, ids, { zh = false, kinds = [] } = {}) {
+  const article = page.locator(replyArticleSelector(firstId));
+  await expect(article).toHaveCount(1);
+  const parts = article.locator('section.person-reply-part');
+  await expect(parts).toHaveCount(ids.length);
+  expect(await parts.evaluateAll(elements => elements.map(el => el.dataset.messageId))).toEqual(ids);
+  await expect(article.locator('header.person-message-meta')).toHaveCount(1);
+  await expect(article.locator('header.person-message-meta strong')).toHaveText('Ada');
+  await expect(parts.locator('header.person-message-meta, .person-reply-part-meta strong')).toHaveCount(0);
+  for (const [index, id] of ids.entries()) {
+    const part = page.locator(replySelector(id));
+    await expect(part).toHaveCount(1);
+    const meta = part.locator('.person-reply-part-meta');
+    await expect(meta).toHaveCount(1);
+    await expect(meta.locator('time')).toHaveCount(1);
+    await expect(meta.locator('time')).not.toHaveText('');
+    if (index) {
+      await expect(meta).toHaveClass(/person-reply-divider/);
+      const divider = await meta.evaluate(el => {
+        const style = getComputedStyle(el, '::before');
+        return { width: parseFloat(style.flexBasis), border: parseFloat(style.borderTopWidth), content: style.content, partWidth: el.closest('.person-reply-part').clientWidth };
+      });
+      expect(divider.content).toBe('""');
+      expect(divider.border).toBeGreaterThan(0);
+      expect(divider.width).toBeGreaterThan(0);
+      expect(divider.width).toBeLessThan(divider.partWidth / 2);
+    } else await expect(meta).not.toHaveClass(/person-reply-divider/);
+    const label = meta.locator('.person-reply-kind');
+    if (kinds[index] === 'progress') await expect(label).toHaveText(zh ? '阶段回复' : 'Progress update');
+    else if (kinds[index] === 'final') await expect(label).toHaveText(zh ? '最终回复' : 'Final response');
+    else await expect(label).toHaveCount(0);
+  }
+  return article;
+}
 
 async function openResponseConversation(page, serverUrl, scenario) {
   await page.setViewportSize({ width: scenario.width, height: 800 });
@@ -624,6 +667,8 @@ async function openResponseConversation(page, serverUrl, scenario) {
 }
 
 // Record every animation frame across wire updates, not just the final layout.
+// Reply parts use their article as the stable anchor: appending a later part
+// must not move the focus from the first reply to the new part's own top.
 // A newly inserted target may need two frames for Vue's patch + scheduled layout.
 // Growth and completion of an existing target get no settling allowance.
 async function startResponseFrames(page, selector) {
@@ -632,7 +677,8 @@ async function startResponseFrames(page, selector) {
     window.personResponseFrames = recording;
     const sample = () => {
       const pane = document.querySelector('.person-messages');
-      const target = document.querySelector(selector);
+      const selected = document.querySelector(selector);
+      const target = selected?.closest('.person-message') || selected;
       if (pane && target) recording.samples.push({
         top: target.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop,
         scrollTop: pane.scrollTop,
@@ -735,11 +781,63 @@ async function userScrollResponse(page, width) {
 }
 
 for (const scenario of responseScenarios) {
+  test(`Digital Person groups only contiguous replies with an episode ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
+    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: [
+      ...previousConversation,
+      { id: 'group-progress', role: 'assistant', episodeId: 'group-one', replyKind: 'progress', text: 'First verified finding. [Evidence](https://example.com/evidence)', createdAt: 3 },
+      { id: 'group-final', role: 'assistant', episodeId: 'group-one', replyKind: 'final', text: 'Completed first episode.', createdAt: 4 },
+      { id: 'adjacent-episode', role: 'assistant', episodeId: 'group-two', text: 'Different episode without a user separator.', createdAt: 5 },
+      { id: 'system-boundary', role: 'system', episodeId: 'group-two', text: 'System boundary remains visible.', createdAt: 6 },
+      { id: 'after-system', role: 'assistant', episodeId: 'group-two', replyKind: 'progress', text: 'New block after system.', createdAt: 7 },
+      { id: 'after-system-final', role: 'assistant', episodeId: 'group-two', replyKind: 'final', text: 'Same episode continues contiguously.', createdAt: 8 },
+      { id: 'user-boundary', role: 'user', episodeId: 'group-two', text: 'User boundary remains visible.', createdAt: 9 },
+      { id: 'after-user', role: 'assistant', episodeId: 'group-two', text: 'New block after user.', createdAt: 10 },
+      { id: 'legacy-reply', role: 'assistant', text: 'Legacy reply without an episode.', createdAt: 11 },
+      { id: 'empty-episode-reply', role: 'assistant', episodeId: '', text: 'Empty episode does not group legacy replies.', createdAt: 12 },
+    ] });
+    await openResponseConversation(page, serverUrl, scenario);
+    const zh = scenario.theme === 'dark';
+    if (zh) await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
+    await expectReplyGroup(page, 'history-reply', ['history-reply'], { zh });
+    await expectReplyGroup(page, 'group-progress', ['group-progress', 'group-final'], { zh, kinds: ['progress', 'final'] });
+    await expectReplyGroup(page, 'adjacent-episode', ['adjacent-episode'], { zh });
+    await expectReplyGroup(page, 'after-system', ['after-system', 'after-system-final'], { zh, kinds: ['progress', 'final'] });
+    await expectReplyGroup(page, 'after-user', ['after-user'], { zh });
+    await expectReplyGroup(page, 'legacy-reply', ['legacy-reply'], { zh });
+    await expectReplyGroup(page, 'empty-episode-reply', ['empty-episode-reply'], { zh });
+    await expect(page.locator(replySelector('system-boundary'))).toContainText('System boundary remains visible.');
+    await expect(page.locator(`${replyArticleSelector('system-boundary')} .person-reply-part`)).toHaveCount(0);
+    await expect(page.locator('article.person-message')).toHaveCount(8);
+    await expect(page.locator('section.person-reply-part')).toHaveCount(9);
+    await expect(page.locator('.user-turn-block')).toHaveCount(2);
+    await expect(page.locator('.person-response-loading')).toHaveCount(0);
+    expect(mock.requests.filter(request => request.op === 'send')).toHaveLength(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const originalArticle = await page.locator(replyArticleSelector('group-progress')).elementHandle();
+    const originalPart = await page.locator(replySelector('group-progress')).elementHandle();
+    const link = page.locator(`${replySelector('group-progress')} a`);
+    await link.focus();
+    const originalLink = await link.elementHandle();
+    mock.reply('separated-run', 'Same episode returns after intervening messages.', 'person-a', 'group-one');
+    // This is an idle archive: explicitly fetch its updated snapshot, without
+    // moving keyboard focus to the Refresh control via a physical click.
+    await page.getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).evaluate(button => button.click());
+    await expectReplyGroup(page, 'separated-run', ['separated-run'], { zh });
+    expect(await page.locator(replyArticleSelector('group-progress')).evaluate((el, old) => el === old, originalArticle)).toBe(true);
+    expect(await page.locator(replySelector('group-progress')).evaluate((el, old) => el === old, originalPart)).toBe(true);
+    expect(await page.evaluate(old => document.activeElement === old, originalLink)).toBe(true);
+    await expectReplyGroup(page, 'group-progress', ['group-progress', 'group-final'], { zh, kinds: ['progress', 'final'] });
+  });
+
   test(`Digital Person local response focus survives growth and yields to user scroll ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
     test.setTimeout(60000);
     const mock = await mockPersonSocket(page, {
-      conversationFlow: true, initialMessages: previousConversation,
-      olderMessages: [{ id: 'prepended-reply', role: 'assistant', text: 'Earlier archived answer.\n'.repeat(45), createdAt: 0 }],
+      conversationFlow: true,
+      initialMessages: [
+        { id: 'history-boundary-reply', role: 'assistant', episodeId: 'archive-episode', text: 'Archived final answer at the page boundary.', replyKind: 'final', createdAt: '1970-01-01T00:00:00.000Z' },
+        ...previousConversation,
+      ],
+      olderMessages: [{ id: 'prepended-reply', role: 'assistant', episodeId: 'archive-episode', text: 'Earlier archived answer.\n'.repeat(45), replyKind: 'progress', createdAt: '1969-12-31T23:59:59.000Z' }],
     });
     await openResponseConversation(page, serverUrl, scenario);
 
@@ -779,17 +877,22 @@ for (const scenario of responseScenarios) {
     await expect(releasedPane).not.toHaveClass(/is-response-pinned/);
     expect(await releasedPane.evaluate(el => getComputedStyle(el).overflowAnchor)).toBe('auto');
     // Invoke the real history button without Playwright scrolling the offscreen
-    // control into view: the reader must stay on the released response.
+    // control into view: the reader must stay on the released response, even
+    // when the older page changes an existing group's first ID and its shell.
+    await expectReplyGroup(page, 'history-boundary-reply', ['history-boundary-reply'], { kinds: ['final'] });
+    const beforeHistoryArticles = await page.locator('article.person-message').count();
     await page.locator('.person-load-more').evaluate(button => button.click());
     await expect.poll(() => mock.messageHistoryPending()).toBe(true);
     await startResponseFrames(page, replySelector('free-reading-reply'));
     const anchorScroll = await releasedPane.evaluate(el => el.scrollTop);
-    const anchorTop = await page.locator(replySelector('free-reading-reply')).evaluate(el => {
+    const anchorTop = await page.locator(replyArticleSelector('free-reading-reply')).evaluate(el => {
       const pane = el.closest('.person-messages');
       return el.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop;
     });
     mock.finishMessageHistory();
-    await expect(page.locator(replySelector('prepended-reply'))).toHaveCount(1);
+    await expectReplyGroup(page, 'prepended-reply', ['prepended-reply', 'history-boundary-reply'], { kinds: ['progress', 'final'] });
+    await expect(page.locator(replyArticleSelector('history-boundary-reply'))).toHaveCount(0);
+    await expect(page.locator('article.person-message')).toHaveCount(beforeHistoryArticles);
     const historyFrames = await finishResponseFrames(page);
     expect(historyFrames.length).toBeGreaterThanOrEqual(12);
     expect(Math.max(...historyFrames.map(sample => Math.abs(sample.top - anchorTop))), 'History prepend must preserve the visible reading position on every frame').toBeLessThanOrEqual(2);
@@ -832,10 +935,16 @@ for (const scenario of [{ width: 1280, theme: 'dark' }, { width: 320, theme: 'li
     await openResponseConversation(page, serverUrl, scenario);
     await sendWaiting(page, mock, 'Send before reconnect');
     await showReply(page, mock, 'reconnect-reply', 'Reply before reconnect.\n' + 'Long persisted reply.\n'.repeat(90));
+    await startResponseFrames(page, replySelector('reconnect-reply'));
+    mock.reply('reconnect-progress', 'Verified follow-up before reconnect.', 'person-a', undefined, { replyKind: 'progress' });
+    await expectReplyGroup(page, 'reconnect-reply', ['reconnect-reply', 'reconnect-progress'], { kinds: [null, 'progress'] });
+    expectPinnedFrames(await finishResponseFrames(page));
+    await expect(page.locator('article.person-message')).toHaveCount(2);
     const opens = mock.requests.filter(request => request.op === 'open').length;
     mock.disconnect();
     await expect.poll(() => mock.requests.filter(request => request.op === 'open').length).toBeGreaterThan(opens);
-    await expect(page.locator(replySelector('reconnect-reply'))).toHaveCount(1);
+    await expectReplyGroup(page, 'reconnect-reply', ['reconnect-reply', 'reconnect-progress'], { kinds: [null, 'progress'] });
+    await expect(page.locator('article.person-message')).toHaveCount(2);
     await expect(page.locator('.person-response-tail, .person-response-start')).toHaveCount(0);
     const pane = page.locator('.person-messages');
     // Programmatic movement without a user-intent event proves the old lock was
@@ -850,6 +959,9 @@ for (const scenario of [{ width: 1280, theme: 'dark' }, { width: 320, theme: 'li
     await expect(page.locator('#person-input')).toBeEnabled();
     await sendWaiting(page, mock, 'New local send after reconnect');
     await showReply(page, mock, 'switch-reply', 'Pinned before switching Agent.');
+    await expectReplyGroup(page, 'switch-reply', ['switch-reply']);
+    await expectReplyGroup(page, 'reconnect-reply', ['reconnect-reply', 'reconnect-progress'], { kinds: [null, 'progress'] });
+    await expect(page.locator('article.person-message')).toHaveCount(3); // next episode has its own shell
     mock.messages(previousConversation, 'person-b');
     await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
     await page.getByRole('option', { name: 'Owner Agent B', exact: true }).click();
@@ -962,13 +1074,19 @@ for (const scenario of responseScenarios) {
     mock.reply('progress-one', 'Verified finding at 31 seconds.', 'person-a', undefined,
       { replyKind: 'progress', callId: 'call-1', createdAt: mock.replyAt(31000) });
     await expect(page.locator(replySelector('progress-one'))).toContainText(zh ? '阶段回复' : 'Progress update');
+    const group = await expectReplyGroup(page, 'progress-one', ['progress-one'], { zh, kinds: ['progress'] });
     expectPinnedFrames(await finishResponseFrames(page), { newTarget: true });
+    const firstArticle = await group.elementHandle();
     await expect(input).toBeDisabled();
     await expect(page.locator('.person-response-loading')).toBeVisible();
-    const rows = await page.locator('.person-message').count();
+    await expect(group.locator('.person-response-loading')).toHaveCount(1);
+    const rows = 2; // one historical answer and one live episode, not one article per part
+    await expect(page.locator('article.person-message')).toHaveCount(rows);
+    await expect(page.locator('section.person-reply-part')).toHaveCount(2);
     const statusAt = mock.replyAt(91000);
     mock.waiting('model', 91000);
     await expect(feedback).toContainText(zh ? '仍在等待模型回复。' : 'Still waiting for the model response.');
+    await expect(group.locator('.person-wait-feedback')).toHaveCount(1);
     await expect(feedback.locator('time')).toHaveAttribute('datetime', statusAt);
     await expect(feedback).not.toContainText('PRIVATE_CAPABILITY');
     await expect(feedback).toHaveCount(1);
@@ -976,7 +1094,8 @@ for (const scenario of responseScenarios) {
     // Several polls replace one snapshot status, never add synthetic messages.
     const snapshots = mock.requests.filter(r => r.op === 'snapshot').length;
     await expect.poll(() => mock.requests.filter(r => r.op === 'snapshot').length).toBeGreaterThan(snapshots + 1);
-    await expect(page.locator('.person-message')).toHaveCount(rows);
+    await expect(page.locator('article.person-message')).toHaveCount(rows);
+    await expect(group.locator('section.person-reply-part')).toHaveCount(1);
     expectPinnedFrames(await finishResponseFrames(page));
     mock.waiting('capability', 92000);
     await expect(feedback).toContainText(zh ? '仍在等待能力执行结束。' : 'Still waiting for the capability to finish.');
@@ -988,11 +1107,14 @@ for (const scenario of responseScenarios) {
       { replyKind: 'progress', callId: 'call-2', createdAt: mock.replyAt(93000) });
     await expect(page.locator(replySelector('progress-two'))).toContainText('A later verified finding.');
     await expect(feedback).toHaveCount(0);
+    await expectReplyGroup(page, 'progress-one', ['progress-one', 'progress-two'], { zh, kinds: ['progress', 'progress'] });
+    await expect(page.locator('article.person-message')).toHaveCount(rows);
+    expect(await group.evaluate((el, original) => el === original, firstArticle)).toBe(true);
     expectPinnedFrames(await finishResponseFrames(page));
     await expect(input).toBeDisabled();
     await userScrollResponse(page, scenario.width);
     const scrollTop = await page.locator('.person-messages').evaluate(el => el.scrollTop);
-    await startResponseFrames(page, replySelector('progress-two'));
+    await startResponseFrames(page, replySelector('progress-one'));
     mock.waiting('preparing', 154000);
     await expect(feedback).toContainText(zh ? '正在准备下一次回复。' : 'Preparing the next response.');
     mock.reply('progress-after-scroll', 'Another verified finding after scrolling.', 'person-a', undefined,
@@ -1008,16 +1130,41 @@ for (const scenario of responseScenarios) {
     mock.complete();
     await expect(input).toBeEnabled();
     await expect(page.locator('.person-response-loading')).toHaveCount(0);
-    await expect(page.locator(`${replySelector('final-answer')} .person-reply-kind`)).toHaveCount(0);
+    const completedIds = ['progress-one', 'progress-two', 'progress-after-scroll', 'final-answer'];
+    const completedKinds = ['progress', 'progress', 'progress', 'final'];
+    await expectReplyGroup(page, 'progress-one', completedIds, { zh, kinds: completedKinds });
+    await expect(page.locator('article.person-message')).toHaveCount(rows);
+    await expect(page.locator('section.person-reply-part')).toHaveCount(5);
+    expect(await group.evaluate((el, original) => el === original, firstArticle)).toBe(true);
     expectScrollStable(await finishResponseFrames(page), scrollTop);
     await expect(page.locator('.person-messages')).not.toHaveClass(/is-response-pinned/);
+    await page.screenshot({ path: testInfo.outputPath(`person-grouped-completed-${scenario.width}-${scenario.theme}.png`) });
+
+    // Replaying a completed snapshot must rebuild the same group, not duplicate
+    // parts or depend on local send/focus state.
+    const opens = mock.requests.filter(request => request.op === 'open').length;
+    mock.disconnect();
+    await expect.poll(() => mock.requests.filter(request => request.op === 'open').length).toBeGreaterThan(opens);
+    await expect(input).toBeEnabled();
+    await expectReplyGroup(page, 'progress-one', completedIds, { zh, kinds: completedKinds });
+    await expect(page.locator('article.person-message')).toHaveCount(rows);
+    await expect(page.locator('section.person-reply-part')).toHaveCount(5);
+    await expect(page.locator('.person-response-loading')).toHaveCount(0);
 
     // Cancel immediately suppresses the confirmed line, and even an older
     // running snapshot after a reconnect cannot revive that episode's status.
     await input.fill('Cancel waiting work');
     await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
-    mock.waiting('model');
+    await expect(input).toBeDisabled();
+    mock.reply('next-episode-progress', 'A separate episode starts here.', 'person-a', undefined,
+      { replyKind: 'progress', createdAt: mock.replyAt(31000) });
+    const nextGroup = await expectReplyGroup(page, 'next-episode-progress', ['next-episode-progress'], { zh, kinds: ['progress'] });
+    await expectReplyGroup(page, 'progress-one', completedIds, { zh, kinds: completedKinds });
+    await expect(page.locator('article.person-message')).toHaveCount(rows + 1);
+    mock.waiting('model', 92000);
     await expect(feedback).toHaveCount(1);
+    await expect(nextGroup.locator('.person-response-loading')).toHaveCount(1);
+    await expect(nextGroup.locator('.person-wait-feedback')).toHaveCount(1);
     mock.holdCancel();
     await page.locator('.stop-btn').click();
     await expect.poll(() => mock.cancelPending()).toBe(true);
@@ -1034,7 +1181,9 @@ for (const scenario of responseScenarios) {
     await expect(feedback).toHaveCount(0);
     await page.getByRole('button', { name: zh ? '重连' : 'Reconnect', exact: true }).click();
     await expect(page.locator('.person-connection-notice')).toHaveCount(0);
-    await expect(page.locator(`${replySelector('progress-one')} .person-reply-kind`)).toContainText(zh ? '阶段回复' : 'Progress update');
+    await expectReplyGroup(page, 'progress-one', completedIds, { zh, kinds: completedKinds });
+    await expectReplyGroup(page, 'next-episode-progress', ['next-episode-progress'], { zh, kinds: ['progress'] });
+    await expect(page.locator('article.person-message')).toHaveCount(rows + 1);
     await expect(feedback).toHaveCount(0);
     await expect(page.locator('.person-messages')).not.toHaveClass(/is-response-pinned/);
     expect(mock.requests.filter(r => r.op === 'send')).toHaveLength(2);

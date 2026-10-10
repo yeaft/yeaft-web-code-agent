@@ -147,6 +147,7 @@ export default {
   "person.loading": "Loading…",
   "person.busy": "Working…",
   "person.progressReply": "Progress update",
+  "person.finalReply": "Final response",
   "person.feedback.model": "Still waiting for the model response.",
   "person.feedback.capability": "Still waiting for the capability to finish.",
   "person.feedback.preparing": "Preparing the next response.",
