@@ -1,14 +1,19 @@
+import PersonInspectorList, { newestPersonRecords } from './PersonInspectorList.js';
+
 /** Durable, metadata-only turn diagnostics. No prompt or hidden reasoning is shown. */
 export default {
   name: 'PersonTurnUsage',
-  props: { page: Object, disabled: Boolean },
+  components: { PersonInspectorList },
+  props: { page: Object, disabled: Boolean, identityKey: { default: '' } },
   emits: ['refresh', 'more'],
-  setup() {
+  setup(props) {
+    const entries = Vue.computed(() => newestPersonRecords(props.page.items));
+    const estimate = () => 160;
     const number = value => Number.isFinite(value) && value >= 0 ? value.toLocaleString() : '—';
     const time = value => value ? new Date(value).toLocaleString() : '';
     const statusKey = value => ['running', 'completed', 'failed', 'cancelled', 'interrupted', 'budget_exhausted', 'rejected'].includes(value) ? value : 'unknown';
     const usageFields = ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens'];
-    return { number, time, statusKey, usageFields };
+    return { entries, estimate, number, time, statusKey, usageFields };
   },
   template: `
     <section id="person-turns" class="person-journal person-turn-usage" :aria-label="$t('person.turns')" :aria-busy="page.loading">
@@ -16,13 +21,17 @@ export default {
         <span class="person-muted">{{ $t('person.usage.scope') }}</span>
         <button type="button" class="btn-ghost" :disabled="disabled || page.loading" @click="$emit('refresh')">{{ $t('common.refresh') }}</button>
       </div>
-      <div class="person-journal-scroll" tabindex="0" role="region" :aria-label="$t('person.turns')">
+      <PersonInspectorList :items="entries" :label="$t('person.turns')" :reset-key="identityKey || page" :page-token="page.nextCursor" :estimate-height="estimate"
+        :more="page.nextCursor != null" :more-label="$t('person.usage.older')" :loading="page.loading" :disabled="disabled" :stale="page.stale" :error="!!page.error" @more="$emit('more')">
+        <template #before>
         <p v-if="page.error" class="person-settings-error" role="alert">{{ $t('person.requestFailed') }} {{ page.error.message }}</p>
         <p v-if="page.stale" class="person-muted" role="status">{{ $t('person.usage.stale') }}</p>
         <p v-if="page.loading && !page.loaded" class="person-muted" role="status">{{ $t('person.loading') }}</p>
         <p v-else-if="page.loaded && !page.items.length" class="person-empty">{{ $t('person.usage.empty') }}</p>
         <p v-if="page.items.length" class="person-muted person-usage-note">{{ $t('person.usage.accounting') }}</p>
-        <details v-for="turn in page.items" :key="turn.id" class="person-turn-row" :data-turn-id="turn.id">
+        </template>
+        <template #default="{ item: turn }">
+        <details class="person-turn-row" :data-turn-id="turn.id">
           <summary>
             <span class="person-turn-heading"><strong>{{ $t('person.usage.turn', { n: turn.seq }) }} · {{ $t('person.' + turn.kind) }}</strong><span class="person-muted">{{ $t('person.usage.status.' + statusKey(turn.status)) }}</span></span>
             <time class="person-muted">{{ time(turn.createdAt) }}</time>
@@ -59,8 +68,8 @@ export default {
             </ol>
           </div>
         </details>
-        <button v-if="page.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="disabled || page.loading" @click="$emit('more')">{{ $t('person.usage.older') }}</button>
-      </div>
+        </template>
+      </PersonInspectorList>
     </section>
   `,
 };

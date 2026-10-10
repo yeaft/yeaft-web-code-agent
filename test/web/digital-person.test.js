@@ -185,6 +185,98 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.tasks.tasks[0].status).toBe('cancelled'); expect(f.state.tasks.pending).toBeNull();
   });
 
+  it('pages newest tasks without erasing history during polling and fences delayed continuation on stop', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30, status: 'running' }], agents: [], nextCursor: 'older' } : undefined);
+    await f.controller.readTasks();
+    expect(f.requests.at(-1).payload).toEqual({ cursor: null, limit: 20 });
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'old', createdAt: 10, status: 'completed' }], agents: [], nextCursor: null } : undefined);
+    await f.controller.readTasks(true);
+    expect(f.requests.at(-1).payload.cursor).toBe('older');
+    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new', 'old']);
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30, status: 'completed' }], agents: [], nextCursor: 'older' } : undefined);
+    await f.controller.readTasks();
+    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new', 'old']);
+    expect(f.state.tasks.tasks[0].status).toBe('completed');
+    expect(f.state.tasks.nextCursor).toBeNull();
+    const before = f.requests.length; await f.controller.readTasks(true);
+    expect(f.requests).toHaveLength(before);
+  });
+
+  it.each(['tasks', 'agents'])('recovers the %s cursor when an empty drawer receives 21 settled records on poll', async kind => {
+    vi.useFakeTimers(); const f = fixture();
+    const rows = Array.from({ length: 21 }, (_, i) => ({ id: 'settled-' + i, createdAt: 100 - i, status: 'completed' }));
+    let latest = [];
+    f.auto(r => r.op === 'tasks' ? { tasks: [], agents: [], [kind]: r.payload.cursor ? rows.slice(20) : latest,
+      nextCursor: !r.payload.cursor && latest.length ? 'older' : null } : undefined);
+    await f.controller.open('a'); f.controller.showTasks(true); await vi.advanceTimersByTimeAsync(0);
+    latest = rows.slice(0, 20); await vi.advanceTimersByTimeAsync(50);
+    expect(f.state.tasks.nextCursor).toBe('older');
+    expect(f.requests.filter(r => r.op === 'tasks')).toHaveLength(2);
+    await f.controller.readTasks(true);
+    expect(f.requests.at(-1).payload.cursor).toBe('older');
+    expect(f.state.tasks[kind]).toHaveLength(21);
+  });
+
+  it.each(['tasks', 'agents'])('rewinds a burst gap in %s without discarding loaded history or eagerly draining pages', async kind => {
+    const f = fixture();
+    const rows = Array.from({ length: 61 }, (_, i) => ({ id: 'record-' + i, createdAt: 100 - i, status: 'completed' }));
+    let burst = false;
+    f.auto(r => {
+      if (r.op !== 'tasks') return;
+      const start = r.payload.cursor == null ? (burst ? 0 : 40) : Number(r.payload.cursor);
+      return { tasks: [], agents: [], [kind]: rows.slice(start, start + 20), nextCursor: start + 20 < rows.length ? String(start + 20) : null };
+    });
+    await f.controller.open('a'); await f.controller.readTasks(); await f.controller.readTasks(true);
+    expect(f.state.tasks[kind]).toHaveLength(21);
+    burst = true; const before = f.requests.length; await f.controller.readTasks();
+    expect(f.requests.length).toBe(before + 1);
+    expect(f.state.tasks.nextCursor).toBe('20');
+    expect(f.state.tasks[kind].some(row => row.id === 'record-60')).toBe(true);
+    await f.controller.readTasks(true);
+    expect(f.state.tasks[kind]).toHaveLength(61);
+  });
+
+  it('orders task and agent history by creation and binary IDs, never updates or locale ties', async () => {
+    const f = fixture(); const rows = [{ id: 'a', createdAt: 30 }, { id: 'Z', createdAt: 30 }, { id: 'old', createdAt: 1, updatedAt: 100 }];
+    f.auto(r => r.op === 'tasks' ? { tasks: rows, agents: rows, nextCursor: null } : undefined);
+    await f.controller.open('a'); await f.controller.readTasks();
+    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['Z', 'a', 'old']);
+    expect(f.state.tasks.agents.map(row => row.id)).toEqual(['Z', 'a', 'old']);
+  });
+
+  it.each(['shell', 'agent'])('retains read-only logs but gates stale %s mutation until a successful refresh', async kind => {
+    const f = fixture();
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 't', status: 'running' }], agents: [{ id: 't', executionPending: true }] }
+      : r.op === 'task_log' ? { text: 'Retained log', nextOffset: 12 } : undefined);
+    await f.controller.open('a'); await f.controller.readTasks();
+    f.auto(r => r.op === 'tasks' ? false : r.op === 'task_log' ? { text: 'Retained log', nextOffset: 12 } : undefined);
+    const reading = f.controller.readTasks(); f.response(f.requests.at(-1), null, { ok: false, error: { code: 'FAILED', message: 'Unavailable' } }); await reading;
+    expect(f.state.tasks.stale).toBe(true);
+    const before = f.requests.length;
+    expect(await f.controller.stopTask(kind, 't')).toBe(false);
+    expect(f.requests).toHaveLength(before);
+    await f.controller.readTaskLog('t'); expect(f.state.taskLog.text).toBe('Retained log');
+    f.auto(r => r.op === 'tasks' ? { tasks: [], agents: [] } : {});
+    await f.controller.readTasks(); expect(f.state.tasks.stale).toBe(false);
+    expect(await f.controller.stopTask(kind, 't')).toBe(true);
+  });
+
+  it('replaces the active cleanup snapshot without consuming the history cursor', async () => {
+    const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30 }], agents: [], nextCursor: 'older',
+      active: { tasks: [{ id: 'old-active', status: 'running' }], agents: [{ id: 'cleaning', executionPending: true }], truncated: false } } : undefined);
+    await f.controller.readTasks();
+    expect(f.state.tasks.active.tasks[0].id).toBe('old-active');
+    expect(f.state.tasks.active.agents[0].executionPending).toBe(true);
+    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new']);
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30 }], agents: [], nextCursor: 'changed', active: { tasks: [], agents: [], truncated: false } } : undefined);
+    await f.controller.readTasks();
+    expect(f.state.tasks.active.tasks).toEqual([]);
+    expect(f.state.tasks.active.agents).toEqual([]);
+    expect(f.state.tasks.nextCursor).toBe('older');
+  });
+
   it('keeps task stop errors and reads log pages as bounded plain text', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'task_log' ? { text: 'x'.repeat(40000), nextOffset: r.payload.offset + 40000 } : r.op === 'agent_close' ? false : undefined);
@@ -659,6 +751,26 @@ describe('Digital Person owner / Agent request boundary', () => {
     f.response(delayed, { items: oldRows, nextCursor: null }); await refresh;
     expect(f.state.messages.at(-1).seq).toBe(51);
     expect(f.state.messages).toHaveLength(51);
+    expect(f.state.messageCursor).toBeNull();
+  });
+
+  it('merges a slow older page during live output instead of starving scroll pagination', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    let rows = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
+    let delayed;
+    f.auto(r => {
+      if (r.op === 'snapshot') return { person: { id: 'p' }, messages: rows.slice(-20), nextMessagesCursor: String(rows.at(-20).seq), busy: true };
+      if (r.op === 'messages') {
+        if (r.payload.cursor) { delayed = r; return false; }
+        return { items: rows.slice(-50), nextCursor: '31' };
+      }
+    });
+    await f.controller.open('a');
+    const older = f.controller.page('messages', true);
+    rows.push({ id: 'm81', seq: 81 });
+    await vi.advanceTimersByTimeAsync(51);
+    f.response(delayed, { items: rows.slice(0, 30), nextCursor: null }); await older;
+    expect(f.state.messages.map(row => row.seq)).toEqual(rows.map(row => row.seq));
     expect(f.state.messageCursor).toBeNull();
   });
 

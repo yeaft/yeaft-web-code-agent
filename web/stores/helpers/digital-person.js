@@ -3,6 +3,7 @@
  * automatically; an uncertain command keeps its original clientMessageId.
  */
 import { personActivityRecords } from '../../utils/person-activity.js';
+import { comparePersonTasks } from '../../utils/person-tasks.js';
 
 const channels = new WeakMap();
 const outboxes = new WeakMap();
@@ -50,7 +51,7 @@ export function personState() {
     settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
     turns: { ...inspectionPage(), stale: false },
-    tasks: { tasks: [], agents: [], loaded: false, loading: false, stale: false, error: null, pending: null },
+    tasks: { tasks: [], agents: [], active: { tasks: [], agents: [], truncated: false }, nextCursor: null, loaded: false, loading: false, stale: false, error: null, pending: null },
     taskLog: { taskId: '', text: '', nextOffset: 0, loading: false, error: null },
   };
 }
@@ -77,6 +78,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let polling = false;
   let snapshotRequest = 0;
   let messageWindowVersion = 0;
+  let messageHistoryVersion = 0;
   let tracePaged = false;
   let traceHistoryLoading = false;
   let activityRequest = 0;
@@ -147,6 +149,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     } : {};
     const feedbackSuppressedEpisodeId = nextAgentId === agentId && activeScope === scope() ? state.feedbackSuppressedEpisodeId : null;
     generation += 1;
+    messageHistoryVersion += 1;
     clearTimeout(poll);
     clearTimeout(taskPoll);
     clearTimeout(turnPoll);
@@ -197,12 +200,12 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     // contiguous pagination chain rather than leaving an unreachable middle gap.
     if (!state.messages.length || (Number.isSafeInteger(firstSeq) && Number.isSafeInteger(lastSeq) && firstSeq > lastSeq + 1)) {
       messageWindowVersion += 1;
+      messageHistoryVersion += 1;
       state.messages = mergeRows([], incoming);
       state.messageCursor = data.nextMessagesCursor ?? null;
     } else {
-      // Any newly observed tail invalidates an older page read, even without a
-      // gap. Otherwise a delayed latest page could erase a completed reply after
-      // polling has stopped. An invalidated older page can be requested again.
+      // New tail rows invalidate replacement/latest reads, not independent
+      // older pages. Only a gap reset changes the history cursor generation.
       const existing = new Set(state.messages.map(row => row.id));
       if (incoming.some(row => !existing.has(row.id))) messageWindowVersion += 1;
       state.messages = mergeRows(state.messages, incoming);
@@ -253,9 +256,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     const activityVersion = kind === 'traces' && !more ? ++activityRequest : null;
     const traceVersion = traceRefreshVersion;
     const windowVersion = kind === 'messages' && !more ? ++messageWindowVersion : messageWindowVersion;
+    const historyVersion = messageHistoryVersion;
     try {
       const data = await request(kind, { cursor: more ? state[cursorKey] : null, limit: PAGE_SIZE });
-      if (!current(g) || (kind === 'messages' && windowVersion !== messageWindowVersion)) return;
+      if (!current(g) || (kind === 'messages' && (more ? historyVersion !== messageHistoryVersion : windowVersion !== messageWindowVersion))) return;
       const keepTraceWindow = kind === 'traces' && !more && preserveHistory && tracePaged;
       if (!keepTraceWindow) {
         state[kind] = mergeRows(more ? state[kind] : [], data.items);
@@ -488,27 +492,42 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     clearTimeout(taskPoll);
     if (visible && !state.loading) void readTasks();
   }
-  async function readTasks() {
+  async function readTasks(more = false) {
     if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.loading) return;
-    const g = generation;
-    const number = ++tasksRequest;
-    state.tasks.loading = true;
-    state.tasks.error = null;
+    if (more && state.tasks.nextCursor == null) return;
+    clearTimeout(taskPoll);
+    const g = generation, number = ++tasksRequest, target = state.tasks;
+    const cursor = more ? target.nextCursor : null;
+    const wasLoaded = target.loaded;
+    target.loading = true;
+    target.error = null;
     try {
-      const data = await request('tasks');
-      if (!current(g) || number !== tasksRequest) return;
-      state.tasks.tasks = data.tasks || [];
-      state.tasks.agents = data.agents || [];
-      state.tasks.truncated = data.truncated === true;
-      state.tasks.loaded = true;
-      state.tasks.stale = false;
+      const data = await request('tasks', { cursor, limit: 20 });
+      if (!current(g) || number !== tasksRequest || target !== state.tasks) return;
+      const merge = (previous, incoming) => [...new Map([...previous, ...(incoming || [])].map(row => [row.id, row])).values()]
+        .sort(comparePersonTasks);
+      // Tasks and children have independent keysets in one opaque cursor. If
+      // either new head cannot bridge its loaded window, rewind the combined
+      // chain. Keep cached history; deliberate paging fills the gap with dedup.
+      const disconnectedHead = (previous, incoming = []) => incoming.length > 0 &&
+        (!previous.length || comparePersonTasks(incoming.at(-1), previous[0]) < 0);
+      const rewind = !more && (disconnectedHead(target.tasks, data.tasks) || disconnectedHead(target.agents, data.agents));
+      // Active cleanup is a fresh scope-wide control snapshot, independent of
+      // the loaded history window. Do not accumulate it when work settles.
+      target.active = data.active || null;
+      target.tasks = merge(target.tasks, data.tasks);
+      target.agents = merge(target.agents, data.agents);
+      if (more || !wasLoaded || rewind) target.nextCursor = data.nextCursor ?? null;
+      target.truncated = target.nextCursor != null;
+      target.loaded = true;
+      target.stale = false;
     } catch (error) {
-      if (current(g) && number === tasksRequest) {
-        state.tasks.stale = true;
-        state.tasks.error = { code: error.code, message: error.message };
+      if (current(g) && number === tasksRequest && target === state.tasks) {
+        target.stale = true;
+        target.error = { code: error.code, message: error.message };
       }
     } finally {
-      if (current(g) && number === tasksRequest) { state.tasks.loading = false; scheduleTasks(); }
+      if (current(g) && number === tasksRequest && target === state.tasks) { target.loading = false; scheduleTasks(); }
     }
   }
   // Turn summaries are independent of raw trace pagination. Poll the latest page
@@ -579,7 +598,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
   async function stopTask(kind, taskId) {
-    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.pending) return false;
+    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.pending || state.tasks.stale) return false;
     const g = generation;
     state.tasks.pending = taskId;
     state.tasks.error = null;
