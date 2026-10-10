@@ -67,6 +67,7 @@ const workbenchStore = Vue.reactive({
   hasAgentCapability(agentId, capability) {
     return agentId === this.currentAgent && this.capabilities.includes(capability);
   },
+  openWorkbench: vi.fn(),
   toggleWorkbench: vi.fn(),
   toggleWorkbenchMaximized: vi.fn(),
   rememberWorkbenchPanelState: vi.fn(),
@@ -125,6 +126,7 @@ describe('Workbench capability launcher', () => {
     workbenchStore.browserRuntimeSetupProtocolSupported = false;
     capabilityMounts.length = 0;
     capabilityUnmounts.length = 0;
+    workbenchStore.openWorkbench.mockClear();
     workbenchStore.toggleWorkbench.mockClear();
     workbenchStore.toggleWorkbenchMaximized.mockClear();
     workbenchStore.rememberWorkbenchPanelState.mockClear();
@@ -156,7 +158,7 @@ describe('Workbench capability launcher', () => {
     expect(items.map(item => item.attributes('data-workbench-capability')))
       .toEqual(['terminal', 'git', 'files', 'browser']);
     expect(wrapper.get('[data-workbench-capability="terminal"] small').text()).toBe('workbench.available');
-    expect(wrapper.get('[data-workbench-capability="browser"] small').text()).toBe('workbench.unavailable');
+    expect(wrapper.get('[data-workbench-capability="browser"] small').text()).toBe('workbench.available');
     expect(wrapper.get('[data-workbench-capability="browser"]').attributes('disabled')).toBeUndefined();
 
     await wrapper.get('[data-workbench-capability="files"]').trigger('click');
@@ -562,28 +564,77 @@ describe('Workbench capability launcher', () => {
     }
   });
 
-  it('keeps Browser discoverable and distinguishes setup-required from unsupported', async () => {
-    const unsupported = mountWorkbench();
-    await unsupported.get('.workbench-add-btn').trigger('click');
-    await unsupported.get('[data-workbench-capability="browser"]').trigger('click');
-    expect(unsupported.get('.workbench-browser-view').text()).toContain('workbench.browserUnavailable');
-    expect(unsupported.find('video').exists()).toBe(false);
-    expect(unsupported.find('iframe').exists()).toBe(false);
-    unsupported.unmount();
+  it('opens client Browser without any Agent runtime/setup capability', async () => {
+    const wrapper = mountWorkbench();
+    await wrapper.get('.workbench-add-btn').trigger('click');
+    expect(wrapper.get('[data-workbench-capability="browser"] small').text()).toBe('workbench.available');
+    await wrapper.get('[data-workbench-capability="browser"]').trigger('click');
+    expect(wrapper.get('.browser-panel-stub').attributes('data-route-key')).toBe('yeaft:agent-1:session-a');
+    expect(wrapper.find('.workbench-browser-view').exists()).toBe(false);
+    wrapper.unmount();
+  });
 
-    workbenchStore.browserRuntimeServerEnabled = true;
-    workbenchStore.browserRuntimeProtocolSupported = true;
-    workbenchStore.browserRuntimeSetupProtocolSupported = true;
-    workbenchStore.capabilities = ['terminal', 'file_editor', 'workbench_session_routes', 'browser_runtime_setup'];
-    const setup = mountWorkbench();
-    await setup.get('.workbench-add-btn').trigger('click');
-    expect(setup.get('[data-workbench-capability="browser"] small').text())
-      .toBe('workbench.enableRequired');
-    await setup.get('[data-workbench-capability="browser"]').trigger('click');
-    expect(setup.find('.workbench-browser-view').exists()).toBe(false);
-    expect(setup.get('.browser-panel-stub').attributes('data-route-key'))
-      .toBe('yeaft:agent-1:session-a');
-    setup.unmount();
+  it('bounds retained Browser URLs to the latest 100 contexts and starts evicted contexts empty', async () => {
+    const wrapper = mountWorkbench();
+    try {
+      for (let index = 0; index < 101; index++) {
+        workbenchStore.effectiveWorkDir = `/workspace/${index}`;
+        await Vue.nextTick();
+        wrapper.vm.rememberBrowserNavigation({ routeKey: 'yeaft:agent-1:session-a', url: `https://example.com/${index}` });
+      }
+      workbenchStore.effectiveWorkDir = '/workspace/0';
+      await Vue.nextTick();
+      expect(wrapper.vm.browserNavigation).toBeNull();
+      workbenchStore.effectiveWorkDir = '/workspace/1';
+      await Vue.nextTick();
+      expect(wrapper.vm.browserNavigation.url).toBe('https://example.com/1');
+    } finally { wrapper.unmount(); }
+  });
+
+  it('accepts only URL intents for the current route and workspace', async () => {
+    const wrapper = mountWorkbench();
+    const detail = {
+      routeKey: 'yeaft:agent-1:session-a',
+      workspaceGeneration: workbenchWorkspaceGeneration('yeaft:agent-1:session-a', '/workspace/a'),
+      url: 'https://example.com/page.html', accepted: false,
+    };
+    for (const change of [{ routeKey: 'yeaft:agent-2:session-a' }, { workspaceGeneration: 'old' }, { url: 'javascript:alert(1)' }]) {
+      const rejected = { ...detail, ...change };
+      window.dispatchEvent(new CustomEvent('workbench-open-browser', { detail: rejected }));
+      expect(rejected.accepted).toBe(false);
+    }
+    window.dispatchEvent(new CustomEvent('workbench-open-browser', { detail }));
+    await Vue.nextTick();
+    expect(detail.accepted).toBe(true);
+    expect(wrapper.vm.browserNavigation.url).toBe('https://example.com/page.html');
+    const firstRevision = wrapper.vm.browserNavigation.revision;
+    window.dispatchEvent(new CustomEvent('workbench-open-browser', { detail }));
+    expect(wrapper.vm.browserNavigation.revision).toBeGreaterThan(firstRevision);
+    wrapper.unmount();
+  });
+
+  it('retains manual Browser URLs across tool switches, isolates workspaces and clears on close', async () => {
+    const wrapper = mountWorkbench();
+    await openWorkbenchCapability(wrapper, 'browser');
+    wrapper.vm.rememberBrowserNavigation({ routeKey: 'yeaft:agent-1:session-a', url: 'https://example.com/manual' });
+    await Vue.nextTick();
+    expect(wrapper.vm.browserNavigation.url).toBe('https://example.com/manual');
+    const revision = wrapper.vm.browserNavigation.revision;
+    await openWorkbenchCapability(wrapper, 'git');
+    await wrapper.get('[data-workbench-item-id="browser"] .workbench-item-select').trigger('click');
+    expect(wrapper.vm.browserNavigation).toEqual({ url: 'https://example.com/manual', revision });
+    workbenchStore.effectiveWorkDir = '/workspace/other';
+    await Vue.nextTick();
+    expect(wrapper.vm.browserNavigation).toBeNull();
+    await openWorkbenchCapability(wrapper, 'browser');
+    wrapper.vm.rememberBrowserNavigation({ routeKey: 'yeaft:agent-1:session-a', url: 'https://example.org/other' });
+    await Vue.nextTick();
+    workbenchStore.effectiveWorkDir = '/workspace/a';
+    await Vue.nextTick();
+    expect(wrapper.vm.browserNavigation.url).toBe('https://example.com/manual');
+    await wrapper.get('[data-workbench-item-id="browser"] .workbench-item-close').trigger('click');
+    expect(wrapper.vm.browserNavigation).toBeNull();
+    wrapper.unmount();
   });
 
   it('maps route-scoped open files into the Workbench tabs and delegates file selection or close', async () => {
@@ -1612,11 +1663,9 @@ describe('message file preview', () => {
     expect(terminalTab).toContain('terminalResizeObserver = new ResizeObserver(handleResize)');
     expect(terminalTab).not.toContain('<span>Split');
     expect(terminalTab).not.toContain('<span>Close</span>');
-    expect(browserPanel).toContain("['installing', 'probing'].includes(status.state)");
-    expect(browserPanel).toContain('<template v-if="setupError">');
-    expect(browserPanel).toContain('class="browser-install-percent">{{ progressPercent }}%</strong>');
-    expect(browserPanel).toContain("code === 'browser_ice_servers_missing'");
-    expect(browserPanel).toContain("t('workbench.browserIceConnectionFailed')");
+    expect(browserPanel).toContain('<iframe');
+    expect(browserPanel).not.toContain('useBrowserStore');
+    expect(browserPanel).not.toContain('RTCPeerConnection');
     expect(capabilityHost).toContain("files: 'FilesTab'");
     expect(capabilityHost).toContain('v-for="capability in mountedCapabilities"');
     expect(capabilityHost).toContain('v-show="activeCapability === capability.id"');

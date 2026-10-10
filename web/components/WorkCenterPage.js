@@ -1,3 +1,4 @@
+import { handleWorkbenchBrowserLink, openWorkbenchBrowser } from '../utils/workbench-browser.js';
 import FolderPickerDialog from './FolderPickerDialog.js';
 import NavigationIcon from './NavigationIcon.js';
 import { formatElapsed } from '../stores/helpers/turn-timing.js';
@@ -47,6 +48,13 @@ export default {
     WorkCenterSettingsModal, AgentSettingsPanel, ModernSelect, WorkCenterResourceControl, WorkbenchPanel, PaneResizeHandle, WorkCenterSidebar, WorkCenterScheduleEditor,
   },
   mixins: [folderPickerMixin],
+  provide() {
+    // Coordinator and Action replies must target this WorkItem, never the
+    // hidden Chat Session that stays selected while Work Center is open.
+    return { 'workbench-browser-opener': url => openWorkbenchBrowser(
+      url, this.workbenchContext.ownerRoute, this.workbenchContext.ownerWorkDir,
+    ) };
+  },
   data() {
     return {
       sidebarExpanded: window.innerWidth > 1100,
@@ -734,6 +742,11 @@ export default {
       return this.workbenchContext.available
         && this.store.hasAgentCapability(this.agentId, 'file_editor')
         && workCenterOutputTarget(output, this.workbenchContext.ownerWorkDir)?.type === 'file';
+    },
+    openExternalOutput(event) {
+      return handleWorkbenchBrowserLink(event, url => openWorkbenchBrowser(
+        url, this.workbenchContext.ownerRoute, this.workbenchContext.ownerWorkDir,
+      ));
     },
     openOutput(output) {
       if (this.canOpenOutput(output)) this.workbenchContext.openOutput(output);
@@ -1900,8 +1913,8 @@ export default {
                   </button>
                 </template>
                 <button v-if="narrowPane !== 'items' && selected" class="work-center-icon-button work-center-workbench-toggle" type="button"
-                  :disabled="!workbenchContext.available" :class="{ active: workbenchExpanded }" :aria-pressed="workbenchExpanded"
-                  :title="workbenchContext.available ? $t('workbench.title') : $t('workCenter.workbenchUnavailable')"
+                  :disabled="!workbenchContext.browserAvailable" :class="{ active: workbenchExpanded }" :aria-pressed="workbenchExpanded"
+                  :title="workbenchContext.browserAvailable ? $t('workbench.title') : $t('workCenter.workbenchUnavailable')"
                   :aria-label="$t('workbench.title')" @click="toggleWorkbench">
                   <NavigationIcon name="workbench" :size="16" />
                 </button>
@@ -1949,8 +1962,8 @@ export default {
                 </template>
               </nav>
               <button v-if="narrowPane !== 'items' && selected" class="work-center-icon-button work-center-workbench-toggle work-center-content-workbench" type="button"
-                :disabled="!workbenchContext.available" :class="{ active: workbenchExpanded }" :aria-pressed="workbenchExpanded"
-                :title="workbenchContext.available ? $t('workbench.title') : $t('workCenter.workbenchUnavailable')"
+                :disabled="!workbenchContext.browserAvailable" :class="{ active: workbenchExpanded }" :aria-pressed="workbenchExpanded"
+                :title="workbenchContext.browserAvailable ? $t('workbench.title') : $t('workCenter.workbenchUnavailable')"
                 :aria-label="$t('workbench.title')" @click="toggleWorkbench">
                 <NavigationIcon name="workbench" :size="16" />
               </button>
@@ -2157,7 +2170,7 @@ export default {
                             <ul class="work-center-output-list">
                               <li v-for="output in selected.outputs" :key="output.kind + ':' + output.ref">
                                 <strong>{{ output.label }}</strong>
-                                <a v-if="isExternalOutput(output)" :href="output.ref" target="_blank" rel="noopener noreferrer">{{ output.ref }}</a>
+                                <a v-if="isExternalOutput(output)" :href="output.ref" target="_blank" rel="noopener noreferrer" @click="openExternalOutput">{{ output.ref }}</a>
                                 <button v-else-if="canOpenOutput(output)" type="button" class="work-center-output-file" @click="openOutput(output)"
                                         :aria-label="$t('workCenter.openOutputFile', { name: output.label || output.ref })"><code>{{ output.ref }}</code></button>
                                 <code v-else>{{ output.ref }}</code>
@@ -2422,7 +2435,7 @@ export default {
 
           </div>
         </div>
-        <WorkbenchPanel :inert="mobileNavigation && sidebarExpanded" v-if="workbenchContext.available" ref="workbench" :key="workbenchContext.workspaceGeneration"
+        <WorkbenchPanel :inert="mobileNavigation && sidebarExpanded" v-if="workbenchContext.browserAvailable" ref="workbench" :key="workbenchContext.workspaceGeneration"
                         :owner-route="workbenchContext.ownerRoute" :owner-work-dir="workbenchContext.ownerWorkDir"
                         @expanded-change="workbenchExpanded = $event" />
     </main>
