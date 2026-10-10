@@ -5,10 +5,12 @@ export const personTurn = (seq = 1, overrides = {}) => ({
     inputTotalTokens: 140, totalTokens: 170, reportedCalls: 2, missingCalls: 0, complete: true },
   calls: [
     { callId: `call-${seq}-1`, index: 1, status: 'completed', requested: { model: 'test/first', effort: null }, dispatched: { model: 'test/first' }, effective: { model: null, effort: null },
-      selectionOrigin: 'bootstrap', reason: 'configured-default', contextBytes: 2000, contextBudgetBytes: 32000, outputTokensReserved: 4096,
+      selectionOrigin: 'bootstrap', reason: 'configured-default', contextBytes: 2000, contextBudgetBytes: 1043456, outputTokensReserved: 4096, contextWindowTokens: 1048576,
+      contextSources: { recentMessages: 4, recentConcepts: 3, omittedMessages: 0, omittedConcepts: 0, recall: { kind: null, count: 0 } },
       capability: { id: 'Recall', status: 'completed' }, usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 20, cacheWriteTokens: 0, inputTotalTokens: 120, totalTokens: 140, complete: true } },
     { callId: `call-${seq}-2`, index: 2, status: 'completed', requested: { model: 'test/second', effort: 'low' }, dispatched: { model: 'test/second' }, effective: { model: null, effort: 'low' },
-      selectionOrigin: 'person', reason: 'Check recalled evidence', contextBytes: 3000, contextBudgetBytes: 32000, outputTokensReserved: 4096,
+      selectionOrigin: 'person', reason: 'Check recalled evidence', contextBytes: 3000, contextBudgetBytes: 1043456, outputTokensReserved: 4096, contextWindowTokens: 1048576,
+      contextSources: { recentMessages: 4, recentConcepts: 3, omittedMessages: 1, omittedConcepts: 2, recall: { kind: 'messages', count: 5 } },
       usage: { inputTokens: 20, outputTokens: 10, reasoningTokens: 10, totalTokens: 30, complete: true } },
   ], ...overrides,
 });

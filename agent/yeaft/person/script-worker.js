@@ -9,8 +9,6 @@ try {
   runtime = engine.newRuntime();
   runtime.setMemoryLimit(16 * 1024 * 1024);
   runtime.setMaxStackSize(256 * 1024);
-  const deadline = Date.now() + 200;
-  runtime.setInterruptHandler(() => Date.now() > deadline);
   context = runtime.newContext();
   const { code, input } = workerData;
   // Capture intrinsics before executing generated code; Function compiles ONLY a
@@ -57,6 +55,11 @@ try {
     if (typeof json !== 'string' || json.length > 8192) throw new ErrorType('JSON output limit');
     return json;
   })()`;
+  // Only guest evaluation consumes the 200ms execution budget. QuickJS context
+  // initialization and host source preparation are bounded by the parent's 3s
+  // worker deadline instead, including cancellation and cleanup.
+  const deadline = Date.now() + 200;
+  runtime.setInterruptHandler(() => Date.now() > deadline);
   const result = context.evalCode(source, 'created-capability.js');
   if (result.error) {
     result.error.dispose();

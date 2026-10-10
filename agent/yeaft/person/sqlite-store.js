@@ -517,12 +517,22 @@ export class SqlitePersonStore {
       requestedModel: 'requested.model', requestedEffort: 'requested.effort', effectiveEffort: 'effective.effort', effortObserved: 'effective.effortObserved',
       selectionOrigin: 'selectionOrigin', reason: 'reason', code: 'code', terminalCode: 'terminalCode', outcome: 'outcome',
       contextBytes: 'manifest.contextBytes', contextBudgetBytes: 'manifest.contextBudgetBytes', outputTokensReserved: 'manifest.outputTokensReserved' };
+    // Never project a whole manifest/contextSources object: even malformed legacy
+    // records must not transfer arbitrary strings, refs or private nested data.
+    const number = (path, max = Number.MAX_SAFE_INTEGER) => `CASE WHEN json_type(record, '$.${path}') = 'integer'
+      AND json_extract(record, '$.${path}') BETWEEN 0 AND ${max} THEN json_extract(record, '$.${path}') ELSE NULL END`;
+    const contextMetadata = Object.entries({ contextWindowTokens: ['manifest.contextWindowTokens'], imageTokensReserved: ['manifest.imageTokensReserved'],
+      envelopeTokensReserved: ['manifest.envelopeTokensReserved'], recentMessages: ['manifest.contextSources.recentMessages', 12],
+      recentConcepts: ['manifest.contextSources.recentConcepts', 24], omittedMessages: ['manifest.contextSources.omittedMessages', 12],
+      omittedConcepts: ['manifest.contextSources.omittedConcepts', 24], recallCount: ['manifest.contextSources.recall.count', 5] })
+      .map(([key, args]) => `'${key}', ${number(...args)}`).join(', ');
+    const recallKind = `CASE json_extract(record, '$.manifest.contextSources.recall.kind') WHEN 'messages' THEN 'messages' WHEN 'concepts' THEN 'concepts' ELSE NULL END`;
     const usage = `json_object(${TOKEN_FIELDS.map(key => `'${key}', json_extract(record, '$.output.usage.${key}')`).join(', ')},
       'accountingVersion', json_extract(record, '$.output.usage.accountingVersion'),
       'accountingIncomplete', json(CASE json_extract(record, '$.output.usage.accountingIncomplete') WHEN 1 THEN 'true' ELSE 'false' END),
       'cacheTokensAreIncludedInInput', json(CASE json_extract(record, '$.output.usage.cacheTokensAreIncludedInInput') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END))`;
     const metadata = `${project(fields).slice(0, -1)}, 'capabilityId', COALESCE(json_extract(record, '$.capability.id'), json_extract(record, '$.capabilityId')),
-      'usage', ${usage})`;
+      ${contextMetadata}, 'recallKind', ${recallKind}, 'usage', ${usage})`;
     const items = episodes.slice(0, limit).map(episode => {
       const events = this.sql(`SELECT ${metadata} AS metadata FROM traces WHERE ${SCOPE}
         AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') IN

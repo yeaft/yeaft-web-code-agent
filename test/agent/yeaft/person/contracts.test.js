@@ -209,6 +209,8 @@ describe('digital Person strict contracts', () => {
     // Explicit low detail bounds gpt-4o-mini to 2833 tokens/image regardless of
     // resolution/compression. Auto/high would invalidate this same reservation.
     expect(context.manifest.imageTokensReserved).toBe(4 * tokensPerImage);
+    expect(context.manifest.contextWindowTokens).toBe(128000);
+    expect(context.manifest.contextBudgetBytes).toBe(128000 - context.maxTokens - 1024 - 4 * tokensPerImage);
     expect(context.manifest.imageTokensReserved).toBeGreaterThanOrEqual(4 * visualTokenBound);
     expect(context.manifest.contextBytes + context.manifest.imageTokensReserved + context.maxTokens + 1024).toBeLessThanOrEqual(128000);
     expect(JSON.stringify(context.archiveMessages)).not.toContain(data);
@@ -353,14 +355,71 @@ describe('digital Person strict contracts', () => {
     }
   });
   it('bounds short-term copies without mutating complete historical records', async () => {
-    const provider = await createPersonProvider({ config, adapter: {} });
+    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 65536 })) }, adapter: {} });
     const snapshot = { person: { id: 'person', name: 'Person', soul: 'Honesty.', soulRevision: 1 }, state: { version: 0 }, concepts: [],
       messages: Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, revision: 1, role: 'user', text: '文'.repeat(2500) })) };
     const context = assembleContext({ snapshot, episode: { id: 'e', kind: 'think', text: '' }, provider, selection: provider.defaultSelection, remainingCalls: 1 });
     expect(context.manifest.omitted.length).toBeGreaterThan(0);
-    expect(context.manifest.contextBytes).toBeLessThanOrEqual(LIMITS.contextBytes);
+    expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
+    expect(context.manifest.contextSources).toEqual({ recentMessages: JSON.parse(context.messages[0].content).messages.length, recentConcepts: 0,
+      omittedMessages: context.manifest.omitted.length, omittedConcepts: 0, recall: { kind: null, count: 0 } });
     expect(snapshot.messages.every(m => m.text.length === 2500)).toBe(true);
   });
+  it('uses each selected model window and dispatches a complete request larger than 64 KiB', async () => {
+    const models = config.availableModels.map((m, i) => ({ ...m, contextWindow: i ? 1048576 : 32768 }));
+    let request;
+    const provider = await createPersonProvider({ config: { ...config, availableModels: models }, adapter: { async *stream(params) {
+      request = params; yield { type: 'text_delta', text: '{}' }; yield { type: 'stop', stopReason: 'end_turn' };
+    } } });
+    const snapshot = { person: { id: 'p', soul: 'Honesty.' }, state: { version: 0 }, concepts: [],
+      messages: Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, revision: 1, role: 'user', text: '文'.repeat(2500) })) };
+    for (const model of provider.catalog) {
+      const context = assembleContext({ provider, snapshot, episode: { id: 'e', kind: 'think', text: '' }, remainingCalls: 1,
+        selection: { model: model.id, effort: null } });
+      expect(context.manifest.contextWindowTokens).toBe(model.contextWindow);
+      expect(context.manifest.contextBudgetBytes).toBe(model.contextWindow - model.maxOutput - 1024);
+      expect(context.manifest.envelopeTokensReserved).toBe(1024);
+      expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
+      if (model.contextWindow === 1048576) {
+        expect(context.manifest.contextBytes).toBeGreaterThan(65536);
+        expect(context.manifest.contextSources).toMatchObject({ recentMessages: 12, omittedMessages: 0 });
+        await collectOutput(provider.adapter, { model: model.id, system: context.system, messages: context.messages,
+          maxTokens: context.maxTokens, signal: new AbortController().signal }, () => {});
+        expect(Buffer.byteLength(request.system) + Buffer.byteLength(request.messages[0].content)).toBe(context.manifest.contextBytes);
+        expect(JSON.parse(request.messages[0].content).messages).toEqual(snapshot.messages);
+      } else {
+        expect(context.manifest.contextSources.omittedMessages).toBeGreaterThan(0);
+        expect(context.manifest.contextSources.recentMessages + context.manifest.contextSources.omittedMessages).toBe(12);
+        expect(() => assembleContext({ provider, snapshot: { ...snapshot, person: { soul: 'x'.repeat(32768) } },
+          episode: { id: 'e', kind: 'think', text: '' }, remainingCalls: 1, selection: { model: model.id, effort: null } }))
+          .toThrow(expect.objectContaining({ code: 'CONTEXT_LIMIT' }));
+      }
+    }
+    expect(LIMITS).not.toHaveProperty('contextBytes');
+  });
+
+  it.each(['messages', 'concepts'])('counts actual %s Recall pages separately from deduplicated recent injection', async kind => {
+    const provider = await createPersonProvider({ config, adapter: {} });
+    const messages = [{ id: 'm', revision: 1, role: 'user', text: 'private report' }, { id: 'm2', revision: 1, role: 'assistant', text: 'private response' }];
+    const concepts = [{ id: 'c', revision: 1, statement: 'private concept', epistemicState: 'uncertain' }];
+    const snapshot = { person: { soul: 'Honesty.' }, state: {}, messages, concepts };
+    const capabilities = new PersonCapabilities({ recall: async () => ({ items: kind === 'messages' ? messages.slice(0, 1) : concepts, nextCursor: null }) }, 'alice');
+    const capabilityResult = await capabilities.execute({ id: 'Recall', args: { kind } });
+    const input = { provider, selection: provider.defaultSelection, snapshot, episode: { id: 'e', kind: 'think', text: '' }, remainingCalls: 1 };
+    const context = assembleContext({ ...input, capabilityResult });
+    const rendered = JSON.parse(context.messages[0].content);
+    expect(rendered.capabilityResult).toEqual(capabilityResult);
+    expect(context.manifest.contextSources).toEqual({ recentMessages: kind === 'messages' ? 1 : 2, recentConcepts: kind === 'concepts' ? 0 : 1,
+      omittedMessages: 0, omittedConcepts: 0, recall: { kind, count: 1 } });
+    expect(JSON.stringify(context.manifest.contextSources)).not.toMatch(/private|message:|concept:|sourceRef|items/);
+    expect(assembleContext({ ...input, capabilityResult: { ...capabilityResult, items: [] } }).manifest.contextSources.recall).toEqual({ kind, count: 0 });
+    expect(assembleContext({ ...input, capabilityResult: { items: concepts } }).manifest.contextSources.recall).toEqual({ kind: null, count: 0 });
+    const tiny = { ...provider, catalog: provider.catalog.map(m => ({ ...m, contextWindow: 16384 })) };
+    const omitted = assembleContext({ ...input, provider: tiny, snapshot: { ...snapshot, messages: [], concepts: [{ ...concepts[0], statement: '文'.repeat(8000) }] } });
+    expect(omitted.manifest.contextSources).toMatchObject({ recentConcepts: 0, omittedConcepts: 1 });
+    expect(omitted.manifest.omitted).toContainEqual({ ref: 'concept:c:1', reason: 'context-budget' });
+  });
+
   it('never archives hidden thinking and labels rejected oversize prefixes incomplete', async () => {
     const controller = new AbortController();
     const adapter = { async *stream() {

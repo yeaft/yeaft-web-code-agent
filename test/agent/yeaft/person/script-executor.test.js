@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Worker } from 'node:worker_threads';
 import { runPersonScript, testPersonScript, scriptInput } from '../../../../agent/yeaft/person/script-executor.js';
 
 // Real QuickJS/WASM execution, no mocked VM or claimed Node vm sandbox.
@@ -9,6 +10,34 @@ describe('Person pure script executor', () => {
     expect(await runPersonScript(code, [8, 4])).toEqual({ ok: true, output: { count: 1, total: 12 } });
     const special = JSON.parse('{"__proto__":{"value":1},"quotes":"\\\"\\n","中文":true}');
     expect(await runPersonScript('return input;', special)).toEqual({ ok: true, output: special });
+
+  });
+
+  it('does not charge real VM initialization against the guest execution budget', async () => {
+    // Delay real VM construction past the 200ms guest budget. Initialization is
+    // trusted host work, not generated code, and must not consume that budget.
+    const worker = new Worker(`(async () => {
+      const { getQuickJS } = await import('quickjs-emscripten');
+      const engine = await getQuickJS(), newRuntime = engine.newRuntime.bind(engine);
+      engine.newRuntime = (...args) => {
+        const runtime = newRuntime(...args), newContext = runtime.newContext.bind(runtime);
+        runtime.newContext = (...args) => {
+          const context = newContext(...args);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+          return context;
+        };
+        return runtime;
+      };
+      await import(${JSON.stringify(new URL('../../../../agent/yeaft/person/script-worker.js', import.meta.url).href)});
+    })()`, { eval: true, workerData: { code: 'return input + 1;', input: 2 } });
+    try {
+      const result = await new Promise((resolve, reject) => {
+        worker.once('message', resolve);
+        worker.once('error', reject);
+        worker.once('exit', code => reject(new Error(`Script worker exited: ${code}`)));
+      });
+      expect(result).toEqual({ ok: true, output: 3 });
+    } finally { await worker.terminate(); }
   });
 
   it('has no host process, environment, filesystem, network, timers, imports or Node constructors', async () => {

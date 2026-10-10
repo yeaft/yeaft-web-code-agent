@@ -338,6 +338,40 @@ describe('Digital Person surface', () => {
     expect(wrapper.emitted('more')).toHaveLength(1);
   });
 
+  it.each([en, zhCN])('keeps usage dense, distinguishing model tokens, request bytes and actual recall sources', messages => {
+    wrapper = mount(PersonTurnUsage, { props: { page: { items: [personTurn()], loaded: true } },
+      global: { config: { globalProperties: { $t: (key, params = {}) => (messages[key] || key).replace(/\{(\w+)\}/g, (m, name) => params[name] ?? m) } } } });
+    const call = wrapper.get('[data-call-id="call-1-2"]');
+    expect(call.get('.person-context-metrics').text()).toContain('1,048,576 tokens');
+    expect(call.get('.person-context-metrics').text()).toContain(`3,000 ${messages['person.usage.bytes']}`);
+    expect(call.get('.person-context-metrics').text()).toContain(messages['person.usage.recall']);
+    expect(call.get('.person-context-metrics').text()).toContain(messages['person.usage.messagesCount'].replace('{n}', '5'));
+    expect(call.text()).toContain(messages['person.usage.omitted'].replace('{messages}', '1').replace('{concepts}', '2'));
+    const totals = wrapper.get('.person-turn-row > summary .person-turn-totals');
+    expect(totals.text()).toContain(messages['person.usage.inputTotalTokens']);
+    expect(totals.text()).not.toContain(messages['person.usage.inputTokens']);
+    expect(wrapper.get('.person-usage-accounting').attributes('open')).toBeUndefined();
+    for (const detail of wrapper.findAll('.person-call-diagnostics')) expect(detail.attributes('open')).toBeUndefined();
+    const tokens = wrapper.get('[data-call-id="call-1-1"] .person-call-tokens');
+    expect(tokens.text()).toContain(messages['person.usage.cacheReadTokens']);
+    expect(tokens.text()).not.toContain(messages['person.usage.cacheWriteTokens']);
+    expect(wrapper.text()).not.toMatch(/person\.usage\./);
+  });
+
+  it('does not invent model windows or source counts for historical records, and keeps zero primary usage', () => {
+    const turn = personTurn(3, { usage: { inputTokens: 0, outputTokens: 0, complete: false }, calls: [{ callId: 'old', index: 1, status: 'completed',
+      usage: { inputTokens: 0, outputTokens: 0 }, contextBytes: 16309, contextBudgetBytes: 65536 }] });
+    wrapper = mount(PersonTurnUsage, { props: { page: { items: [turn], loaded: true } }, global: { config: { globalProperties: { $t: t } } } });
+    const call = wrapper.get('[data-call-id="old"]');
+    expect(call.get('.person-call-tokens').text()).toContain('Input (raw): 0');
+    expect(call.get('.person-call-tokens').text()).toContain('Output: 0');
+    expect(call.get('.person-context-metrics').text()).toContain('16,309 bytes');
+    expect(call.get('.person-context-metrics').text()).not.toContain('65,536');
+    expect(call.get('.person-context-metrics').text()).not.toContain('Model context window');
+    expect(call.get('.person-context-metrics').text()).not.toContain('Recent history');
+    expect(call.get('.person-call-diagnostics').text()).toContain('65,536 bytes');
+  });
+
   it('shows cross-episode task management in the kernel without starting cognition, keeping logs inert and draft intact', async () => {
     await render(); await wrapper.get('#person-input').setValue('Keep this draft');
     await wrapper.get('.person-thoughts-button').trigger('click');

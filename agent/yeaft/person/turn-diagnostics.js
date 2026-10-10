@@ -4,6 +4,18 @@ export const TOKEN_FIELDS = Object.freeze(['inputTokens', 'outputTokens', 'reaso
 const numeric = value => Number.isSafeInteger(value) && value >= 0;
 const token = value => numeric(value) ? value : null;
 const string = value => typeof value === 'string' ? value : null;
+const count = (value, max) => numeric(value) && value <= max ? value : null;
+
+/** Bounded scalar counts only; missing legacy statistics remain unknown. */
+function contextSources(event) {
+  const recentMessages = count(event.recentMessages, 12), recentConcepts = count(event.recentConcepts, 24);
+  const omittedMessages = count(event.omittedMessages, 12), omittedConcepts = count(event.omittedConcepts, 24);
+  const recallCount = count(event.recallCount, 5);
+  const kind = ['messages', 'concepts'].includes(event.recallKind) ? event.recallKind : null;
+  if ([recentMessages, recentConcepts, omittedMessages, omittedConcepts, recallCount].every(value => value === null) && kind === null) return null;
+  return { recentMessages, recentConcepts, omittedMessages, omittedConcepts,
+    recall: recallCount === null && kind === null ? null : { kind, count: recallCount } };
+}
 
 /** Turn cursor is an exclusive numeric episode watermark, never a trace offset. */
 export function turnsPage(payload = {}) {
@@ -62,7 +74,9 @@ export function turnView(episode, events) {
         // It does not expose the response model: do not label configured intent as observed reality.
         dispatched: { model: string(event.requestedModel) }, effective: { model: null, effort: null },
         selectionOrigin: string(event.selectionOrigin), reason: string(event.reason), createdAt: event.createdAt, endedAt: null, code: null,
-        contextBytes: token(event.contextBytes), contextBudgetBytes: token(event.contextBudgetBytes), outputTokensReserved: token(event.outputTokensReserved),
+        contextBytes: token(event.contextBytes), contextBudgetBytes: token(event.contextBudgetBytes), contextWindowTokens: token(event.contextWindowTokens),
+        outputTokensReserved: token(event.outputTokensReserved), imageTokensReserved: token(event.imageTokensReserved), envelopeTokensReserved: token(event.envelopeTokensReserved),
+        contextSources: contextSources(event),
         usage: callUsage(null, false) });
       continue;
     }
