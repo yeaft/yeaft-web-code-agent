@@ -1,6 +1,6 @@
 # Workbench
 
-Workbench is the development panel on the right side of Chat and Yeaft Sessions. Its tools run on the selected Agent and are scoped to the currently selected Session and working directory.
+Workbench is the development panel on the right side of Chat and Yeaft Sessions. Terminal, Git, and Files run on the selected Agent; Browser loads pages directly on your device. Tools are scoped to the currently selected Session and working directory.
 
 ## Open and close Workbench
 
@@ -11,7 +11,7 @@ Workbench opens on a launcher with four capability cards:
 - **Terminal** — run commands in the current Session working directory
 - **Git** — inspect repository status and diffs
 - **Files** — browse, preview, and edit Agent-local files
-- **Browser** — view and control the Agent-local browser when Browser Runtime is available
+- **Browser** — open external HTTP/HTTPS pages in a client-side iframe without Agent setup
 
 All four cards remain visible. A card marked **Unavailable on this Agent** can be opened to see the current availability explanation, but it does not start a fake or partial tool.
 
@@ -52,7 +52,7 @@ HTML (`.html` / `.htm`) and Markdown open in Preview by default. Switch between 
 
 Clicking a file reference in a response opens Workbench directly in Files for the current Session route, loads the file, and reveals the starting line when specified. Markdown links, inline code, and plain-text paths are supported, including `src/main.js:20-35`, `src/main.js#L20-L35`, and Unicode filenames. Put paths containing spaces in inline code or Markdown links.
 
-References are resolved in batches during streaming and checked again when the response finishes. Only files confirmed by the current Agent inside the Session workspace become clickable; missing, ambiguous, and out-of-workspace paths are not automatically linked. External web links remain web links and are never mapped to local files with the same name.
+References are resolved in batches during streaming and checked again when the response finishes. Only files confirmed by the current Agent inside the Session workspace become clickable; missing, ambiguous, and out-of-workspace paths are not automatically linked. External HTTP/HTTPS links open in Workbench Browser and are never mapped to local files with the same name. Ctrl/Cmd-click keeps the native new-tab behavior.
 
 Temporary resolution errors are retried up to twice. Unresolved paths in completed responses are checked up to twice more when subsequent work in the current Session finishes, so newly created files can appear without endless polling. If a read fails or the connection drops, Files shows an error; after reconnecting, click the same reference to retry without closing its tab. Repeated clicks do not overwrite loaded content or unsaved edits.
 
@@ -72,54 +72,22 @@ Use Terminal for merge-conflict resolution and interactive rebase.
 
 ## Browser
 
-Browser opens an isolated Chromium process on the selected Agent and displays its active tab as a live WebRTC video stream. Browser Sessions are memory-only, use a temporary profile, and are bounded by the Agent's configured Session and idle limits.
+Browser embeds HTTP/HTTPS pages directly in your client browser. It does not start an Agent browser, install Chromium, use WebRTC, or proxy page traffic through the Server. It works without Browser Runtime capabilities, including in Work Center.
 
-The current viewer is read-only. Navigation, keyboard, pointer, and scroll control arrive in the next Browser Runtime phase; the UI does not pretend those controls are available in this release.
+- Plain-click external links in responses, Markdown previews, or WorkItem outputs to open them here. Ctrl/Cmd-click, middle-click, and downloads keep native browser behavior.
+- Enter an address, refresh, or use **Open in new tab**. The address stays at the URL you opened; cross-origin redirects and in-page navigation cannot be observed reliably, so no fake back/forward controls are shown.
+- URLs are scoped to the owning Agent/Session or WorkItem and workspace, kept only for the lifetime of the Workbench component. Switching tools restores the last opened URL; closing the Browser tab clears it. Refreshing Yeaft clears this ephemeral state.
+- `localhost` and private network addresses refer to your **client device and network**, not the Agent. An HTTPS Yeaft page may block HTTP content.
+- Sites can refuse embedding using CSP or `X-Frame-Options`. A blank iframe is not proof the site loaded; use **Open in new tab**. Yeaft does not bypass these restrictions.
+- The iframe allows scripts and forms but not same-origin access, popups, or top-level navigation. This protects the control plane, but may limit sign-in, storage, and interaction. Credentials in URLs and destinations on Yeaft’s origin are rejected. Embedded content does not inherit Yeaft’s visual theme.
 
-### Enable Browser Runtime
-
-The viewer data plane currently supports **Linux x64 Agents only**. Other platforms may be able to run CLI install/status commands, but they do not advertise a ready viewer capability.
-
-Browser routes are available on the Server by default. The selected Agent still stays disabled and downloads nothing until the user explicitly enables Browser:
-
-1. Select the Linux x64 Agent and open **Workbench → Browser**. If Browser is not ready, the launcher says **Enable required** and the setup panel shows the exact pinned build and platform download size. Opening the panel does not start a download.
-2. Click **Enable Browser** once. Workbench shows the real byte count and percentage while the Agent downloads and verifies the archive. The Agent installs it only in that Agent instance's data directory, persists enablement, runs the local media probe, refreshes capabilities, and automatically starts the Viewer attachment. There is no second enable button and no Agent restart on this UI path.
-3. Configure ICE for the deployment. The Agent probe validates Chrome, tab capture, VP8, and a same-host WebRTC loop; it cannot validate the remote Web-to-Agent network path. `BROWSER_STUN_URLS` is optional for direct connectivity. Production deployments across NATs or restrictive networks should deploy TURN and configure `BROWSER_TURN_URLS` plus `BROWSER_TURN_SECRET`; use `BROWSER_ICE_TRANSPORT_POLICY=relay` when direct candidates are not allowed. The URLs are comma-separated. Use the repository's `deploy/browser-turn/` directory for the self-hosted template.
-
-Administrators can set `BROWSER_RUNTIME_ENABLED=false` and restart the Server to disable Browser setup, signaling, and viewer routes globally. This is an administrative off switch, not a normal user setup step.
-
-For unattended administration, use the equivalent instance-scoped CLI. Every command must select the same `--name` or `--yeaft-dir` as the running Agent:
-
-```bash
-yeaft-agent browser install --name <agent-instance>
-yeaft-agent browser probe --name <agent-instance>
-yeaft-agent browser enable --name <agent-instance>
-yeaft-agent restart --name <agent-instance>  # managed Agent service
-yeaft-agent browser status --name <agent-instance>
-```
-
-The CLI `enable` command persists `browserRuntime.enabled=true`; it does not refresh an already running Agent process. Restart a managed service, or stop and start a foreground Agent, after CLI enablement. `browser probe` exercises the pinned Chrome build, extension, tab capture, offscreen runtime, and WebRTC media path. `browser status` only reports selected-instance configuration and managed-browser installation state, so `installed: true` by itself does not mean the viewer is ready.
-
-A successful Linux tab-capture probe advertises `browser_runtime`, `browser_webrtc`, and `browser_capture_tab`. Workbench enables the viewer only after Web protocol negotiation, the Server's administrative off switch, and the complete Agent capability combination all allow it. Older Agents that do not advertise `browser_runtime_setup` remain compatible when they already advertise the probe-ready viewer capabilities.
-
-A deployment without TURN may work over direct ICE, but it is a degraded direct-only setup and is not a production availability guarantee across NATs or restrictive networks.
-
-### Session lifecycle
-
-- opening Browser restores an existing ready Browser Session for that Agent or creates one
-- closing the Browser capability detaches only the viewer; the Agent reclaims a no-viewer Session after the configured idle timeout
-- **End browser** closes Chromium and deletes its temporary profile immediately
-- WebSocket or Agent transport replacement invalidates the peer generation and closes Agent-owned Browser Sessions fail-closed
-- SDP, ICE candidates, TURN credentials, video, and temporary profile data are never written to Chat or Yeaft transcripts
+Legacy Agent Browser Runtime configuration/CLI remains for compatibility; this Workbench view does not use it. No existing runtime process or instance data is changed by opening this view.
 
 ## Troubleshooting
 
 **A capability is unavailable**
 
-- for Browser, first run `yeaft-agent browser status --name <agent-instance>` and confirm that the command reports the same `yeaftDir` as the running Agent
-- run `yeaft-agent browser probe --name <agent-instance>`; a nonzero exit or `ok: false` means the Chrome/media path is not ready
-- confirm the Agent is Linux x64, the Server was not explicitly started with `BROWSER_RUNTIME_ENABLED=false`, and the Agent advertises `browser_runtime`, `browser_webrtc`, and `browser_capture_tab`
-- for other capabilities, verify that the selected Agent advertises the required capability, including `workbench_session_routes` for route-scoped tools
+- Terminal, Git, and Files require the selected Agent’s capabilities, including `workbench_session_routes` for route-scoped tools. Browser does not require an Agent browser capability.
 - upgrade the Agent if necessary and check its startup logs
 
 **Terminal does not open**

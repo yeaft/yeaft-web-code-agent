@@ -1,6 +1,6 @@
 # Workbench 工作台
 
-Workbench 是 Chat 和 Yeaft Session 右侧的开发工具面板。工具运行在所选 Agent 上，并严格绑定当前 Session 及其工作目录。
+Workbench 是 Chat 和 Yeaft Session 右侧的开发工具面板。终端、Git 和文件运行在所选 Agent 上；浏览器直接使用客户端设备。工具状态绑定所属 Session 及其工作目录。
 
 ## 打开和关闭 Workbench
 
@@ -11,7 +11,7 @@ Workbench 首先显示包含四张能力卡的选择页：
 - **终端** — 在当前 Session 工作目录中运行命令
 - **Git** — 查看仓库状态和代码差异
 - **文件** — 浏览、预览和编辑 Agent 本地文件
-- **浏览器** — Browser Runtime 可用时查看并控制 Agent 本地浏览器
+- **浏览器** — 通过客户端 iframe 打开外部 HTTP/HTTPS 网页，无需配置 Agent 浏览器
 
 四张卡始终可见。标记为**当前 Agent 不可用**的卡仍可打开查看可用性说明，但不会启动虚假或残缺的工具。
 
@@ -52,7 +52,7 @@ HTML（`.html` / `.htm`）和 Markdown 默认打开预览，可通过 **预览 /
 
 从回复中点击文件引用时，Workbench 会直接进入当前 Session route 对应的文件能力，加载文件内容；引用带行号时定位到起始行。支持 Markdown 链接、行内代码和普通文本中的路径，例如 `src/main.js:20-35`、`src/main.js#L20-L35`、`docs/设计说明.md`。包含空格的路径请使用行内代码或 Markdown 链接。
 
-文件引用会在流式输出期间分批识别，回复结束后再次确认。只有当前 Agent 确认存在于该 Session workspace 中的文件才显示为可点击链接；不存在、重名且无法唯一确定、或 workspace 外的路径不会自动链接。外部网页链接仍在浏览器中打开，不会映射成本地同名文件。
+文件引用会在流式输出期间分批识别，回复结束后再次确认。只有当前 Agent 确认存在于该 Session workspace 中的文件才显示为可点击链接；不存在、重名且无法唯一确定、或 workspace 外的路径不会自动链接。外部 HTTP/HTTPS 链接在 Workbench 浏览器中打开，不会映射成本地同名文件；Ctrl/Cmd 点击保留浏览器原生新标签页行为。
 
 临时解析错误最多自动重试两次。已完成回复中尚未解析的路径，在当前 Session 后续工作结束时最多再检查两次，以识别稍后创建的文件，不会无限轮询。若点击后读取失败或连接中断，Files 会显示错误；连接恢复后再次点击同一引用即可重新读取，无需关闭页签。已加载的内容和未保存的编辑不会因重复点击而被覆盖。
 
@@ -72,54 +72,22 @@ Git 显示当前 Session 所选仓库的状态：
 
 ## 浏览器
 
-浏览器能力会在所选 Agent 上启动一个隔离的 Chromium 进程，并通过实时 WebRTC 视频显示当前标签页。Browser Session 只保存在内存中，使用临时 profile，并受 Agent 配置的 Session 数量和空闲回收上限约束。
+浏览器直接在客户端 iframe 中打开 HTTP/HTTPS 页面，不启动 Agent 浏览器、不安装 Chromium、不使用 WebRTC，也不经 Server 代理页面流量。无需 Browser Runtime 能力，Work Center 中也可使用。
 
-当前查看器是只读的。导航、键盘、鼠标和滚动控制将在下一阶段交付；本版本不会伪装这些控制已经可用。
+- 普通点击回复、Markdown 文件预览或工作项交付物中的外链，会在这里打开；Ctrl/Cmd 点击、中键和下载链接保留原生行为。
+- 支持地址输入、刷新和**新标签页打开**。地址栏保留打开时的地址；跨域重定向和页面内部导航无法可靠观测，因此不提供虚假的前进/后退按钮。
+- 地址仅在所属 Agent/Session 或工作项及 workspace 内恢复，只保留到 Workbench 组件销毁。切换工具可恢复最后打开的地址；关闭浏览器标签清除地址，刷新 Yeaft 页面也会清除临时状态。
+- `localhost` 和内网地址指的是**客户端设备和网络**，不是 Agent。HTTPS 的 Yeaft 页面可能阻止 HTTP 内容。
+- 网站可以通过 CSP 或 `X-Frame-Options` 禁止嵌入。空白 iframe 不代表加载成功，可用**新标签页打开**；Yeaft 不绕过这些限制。
+- 沙箱允许脚本和表单，不授予同源、弹窗和顶层导航权限。这保护控制面，但可能限制登录、存储和交互。拒绝包含凭据的地址及 Yeaft 同源目的地。外部网页不继承 Yeaft 的深浅主题。
 
-### 启用 Browser Runtime
-
-Viewer 数据面目前**只支持 Linux x64 Agent**。其他平台可能可以执行 CLI install/status，但不会声明 ready viewer capability。
-
-Server 默认开放浏览器路由。所选 Agent 仍保持未启用状态，只有用户明确操作后才会下载浏览器：
-
-1. 选择 Linux x64 Agent，打开 **Workbench → 浏览器**。浏览器未就绪时，能力卡显示**需要启用**，设置面板会显示准确的固定构建号和当前平台下载大小。仅打开面板不会开始下载。
-2. 点击一次**启用浏览器**。Workbench 会显示真实字节数和百分比；Agent 下载并校验归档，只安装到该 Agent instance 的数据目录，持久化启用配置，执行本机媒体 probe，刷新 capability，然后自动开始连接 Viewer。UI 路径没有第二个启用按钮，也不需要重启 Agent。
-3. 为部署配置 ICE。Agent probe 会验证 Chrome、tab capture、VP8 和同机 WebRTC 回环，但无法验证远程 Web 到 Agent 的网络路径。`BROWSER_STUN_URLS` 可用于直连；跨 NAT 或受限网络的生产部署应部署 TURN，并配置 `BROWSER_TURN_URLS` 和 `BROWSER_TURN_SECRET`。禁止直连候选时设置 `BROWSER_ICE_TRANSPORT_POLICY=relay`。多个 URL 使用英文逗号分隔。自托管模板位于仓库的 `deploy/browser-turn/` 目录。
-
-管理员可以设置 `BROWSER_RUNTIME_ENABLED=false` 并重启 Server，从而全局关闭 Browser setup、信令和 viewer route。这是管理员停用开关，不是普通用户设置步骤。
-
-无人值守运维可使用等价的 instance-scoped CLI。每条命令都必须选择与运行中 Agent 相同的 `--name` 或 `--yeaft-dir`：
-
-```bash
-yeaft-agent browser install --name <agent-instance>
-yeaft-agent browser probe --name <agent-instance>
-yeaft-agent browser enable --name <agent-instance>
-yeaft-agent restart --name <agent-instance>  # managed Agent service
-yeaft-agent browser status --name <agent-instance>
-```
-
-CLI `enable` 会持久化 `browserRuntime.enabled=true`，但不会刷新已经运行的 Agent 进程。CLI enable 后应重启 managed service；前台 Agent 则要停止后重新启动。`browser probe` 会实际检查固定 Chrome build、扩展、tab capture、offscreen runtime 和 WebRTC 媒体链路。`browser status` 只报告所选 instance 的配置和 managed browser 安装状态，因此仅有 `installed: true` 不代表 viewer 已 ready。
-
-Linux tab-capture probe 成功后会声明 `browser_runtime`、`browser_webrtc` 和 `browser_capture_tab`。只有 Web 协议协商、Server 管理员停用开关和完整 Agent capability 组合都允许时，Workbench 才会启用 viewer。未声明 `browser_runtime_setup` 的旧 Agent 若已经声明 probe-ready viewer capabilities，仍保持兼容。
-
-未配置 TURN 时可能通过 direct ICE 工作，但这只是降级的 direct-only 部署，不能保证跨 NAT 或受限网络的生产可用性。
-
-### Session 生命周期
-
-- 打开浏览器时会恢复该 Agent 上已有的 ready Browser Session；没有时才新建
-- 关闭浏览器能力只会 detach viewer；无 viewer 后 Agent 会按空闲超时回收 Session
-- 点击“结束浏览器”会立即关闭 Chromium 并删除临时 profile
-- WebSocket 或 Agent transport replacement 会使旧 peer generation 失效，并 fail-closed 关闭 Agent Browser Session
-- SDP、ICE candidate、TURN credential、视频和临时 profile 数据都不会写入 Chat 或 Yeaft transcript
+旧 Agent Browser Runtime 配置和 CLI 保留兼容，当前 Workbench 视图不使用它们。打开此视图不会修改已有 Runtime 进程或实例数据。
 
 ## 常见问题
 
 **某项能力不可用**
 
-- Browser 应先执行 `yeaft-agent browser status --name <agent-instance>`，确认输出的 `yeaftDir` 与运行中的 Agent 相同
-- 执行 `yeaft-agent browser probe --name <agent-instance>`；非零退出或 `ok: false` 都表示 Chrome/媒体链路未 ready
-- 确认 Agent 是 Linux x64、Server 没有显式设置 `BROWSER_RUNTIME_ENABLED=false`，并且 Agent 声明了 `browser_runtime`、`browser_webrtc` 和 `browser_capture_tab`
-- 其他能力应确认所选 Agent 声明了对应 capability；route-scoped 工具还需要 `workbench_session_routes`
+- 终端、Git 和文件需要所选 Agent 的对应 capability；route-scoped 工具还需要 `workbench_session_routes`。浏览器不需要 Agent 浏览器能力。
 - 必要时升级 Agent，并检查启动日志
 
 **终端打不开**
