@@ -1488,7 +1488,6 @@ export default {
   'workbench.browserOpenExternal': '新标签页打开',
   'workbench.browserFrameLabel': '嵌入网页',
   'workbench.browserFrameLoading': '正在加载嵌入网页…',
-  'workbench.browserClientHint': '使用你的设备和网络，而非 Agent；localhost 指当前设备。网站可能禁止嵌入，沙箱也可能限制登录或交互。HTTPS 页面可能拦截 HTTP 网页。若显示空白，请在新标签页打开。地址栏保留你打开的地址。',
   'workbench.browserStart': '启动浏览器',
   'workbench.browserAddressLabel': '浏览器地址',
   'workbench.browserAddressPlaceholder': 'example.com',

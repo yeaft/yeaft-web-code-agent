@@ -1490,7 +1490,6 @@ export default {
   'workbench.browserOpenExternal': 'Open in new tab',
   'workbench.browserFrameLabel': 'Embedded web page',
   'workbench.browserFrameLoading': 'Loading embedded page…',
-  'workbench.browserClientHint': 'Uses your device and network, not the Agent; localhost is this device. Sites may block embedding, and the sandbox may limit sign-in or interactions. HTTPS may block HTTP pages. If blank, open in a new tab. The address stays at the URL you opened.',
   'workbench.browserStart': 'Start browser',
   'workbench.browserAddressLabel': 'Browser address',
   'workbench.browserAddressPlaceholder': 'example.com',
