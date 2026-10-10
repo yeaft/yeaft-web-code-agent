@@ -1,3 +1,4 @@
+import { handleWorkbenchBrowserLink, openWorkbenchBrowser } from '../utils/workbench-browser.js';
 import { getFileIconSvg, getFolderIconSvg } from '../utils/fileIcons.js';
 import { createFindReplace } from './files/findReplace.js';
 import { createFileOperations } from './files/fileOperations.js';
@@ -327,7 +328,7 @@ export default {
           <template v-if="!activeFile.fileType || activeFile.fileType === 'text'">
           <!-- Markdown 渲染预览 -->
           <div v-if="isActiveMarkdown && textPreviewMode" class="file-preview-container md-preview-container" ref="mdPreviewRef">
-            <div class="markdown-body md-file-preview" :style="{ fontSize: fontSize + 'px' }" v-html="mdRenderedHtml"></div>
+            <div class="markdown-body md-file-preview" :style="{ fontSize: fontSize + 'px' }" v-html="mdRenderedHtml" @click="openPreviewLink"></div>
           </div>
           <!-- HTML 静态预览：不授予脚本或同源权限 -->
           <div v-if="isActiveHtml && textPreviewMode" class="file-preview-container html-preview-container">
@@ -1043,6 +1044,9 @@ export default {
       startTreePathEdit: tree.startTreePathEdit,
       confirmTreePath: tree.confirmTreePath, cancelTreePathEdit: tree.cancelTreePathEdit,
       treePanelWidth, isTreeResizing, startTreeResize,
+      openPreviewLink: event => handleWorkbenchBrowserLink(event, url => openWorkbenchBrowser(
+        url, store.activeSessionRoute, store.effectiveWorkDir || '',
+      )),
       openFiles: tabs.openFiles, activeFileIndex: tabs.activeFileIndex,
       activeFile: tabs.activeFile, activeFileFolder,
       fileLoading: tabs.fileLoading, fileSaving: tabs.fileSaving,

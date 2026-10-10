@@ -62,6 +62,7 @@ select option:checked {
   --work-center-space-2: 8px;
   --work-center-space-3: 12px;
   --work-center-space-4: 16px;
+  --browser-document-canvas: #ffffff;
 
   /* Agent 接入页：与现有 Composer / 设置控件保持同一间距和圆角节奏。 */
   --agent-setup-space-xs: 4px;
@@ -331,6 +332,7 @@ select option:checked {
   --work-center-space-2: 8px;
   --work-center-space-3: 12px;
   --work-center-space-4: 16px;
+  --browser-document-canvas: #ffffff;
 
   /* Agent 接入页：与现有 Composer / 设置控件保持同一间距和圆角节奏。 */
   --agent-setup-space-xs: 4px;
