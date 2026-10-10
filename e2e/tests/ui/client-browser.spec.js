@@ -163,8 +163,7 @@ for (const width of [1440, 320]) {
       await expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
       await expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
       await expect(address).toHaveValue(URL_A);
-      await expect(panel.locator('.browser-hint')).toContainText('not the Agent');
-      await expect(panel.locator('.browser-hint')).toContainText('address stays at the URL you opened');
+      await expect(panel.locator('.browser-hint')).toHaveCount(0);
 
       await address.focus();
       await expect(address).toBeFocused();
@@ -345,7 +344,7 @@ test('Work Center output, Coordinator and Action reply links own their WorkItem 
   await noRemoteBrowser(page, mockAgent);
 });
 
-test('blocked embeds keep honest guidance and a working native Open in new tab fallback', async ({ chatPage: page, mockAgent }) => {
+test('blocked embeds keep a working native Open in new tab fallback without persistent guidance', async ({ chatPage: page, mockAgent }) => {
   await externalPages(page);
   await sessionFixture(page, mockAgent);
   await responseLink(page).click();
@@ -361,8 +360,7 @@ test('blocked embeds keep honest guidance and a working native Open in new tab f
   // A load event can also fire for a blocked document: it is deliberately NOT
   // asserted as success, nor treated as reliable XFO/CSP failure detection.
   await expect(panel.frameLocator('.browser-frame').getByRole('heading', { name: 'External /blocked', exact: true })).toHaveCount(0);
-  await expect(panel.locator('.browser-hint')).toContainText('Sites may block embedding');
-  await expect(panel.locator('.browser-hint')).toContainText('If blank, open in a new tab');
+  await expect(panel.locator('.browser-hint')).toHaveCount(0);
   const external = panel.getByRole('link', { name: 'Open in new tab', exact: true });
   await expect(external).toHaveAttribute('href', `${ORIGIN}/blocked`);
   await expect(external).toHaveAttribute('rel', 'noopener noreferrer');
