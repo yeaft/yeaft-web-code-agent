@@ -400,13 +400,18 @@ describe('Person inspection, search and name: SQLite', () => {
       const result = await call(s, 'inspect', { section: 'skills', cursor, limit: 2 });
       skills.push(...result.items); cursor = result.nextCursor;
     } while (cursor);
-    expect(skills.map(c => c.id)).toEqual(['Script.echo', ...[...NATIVE_TOOL_IDS, 'Capability.create', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort()]);
+    expect(skills.map(c => c.id)).toEqual(['Script.echo', ...[...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort()]);
     const script = skills.find(c => c.id === 'Script.echo');
     expect(script).toMatchObject({ domain: 'script', description: 'Echo JSON', version: 1, code: 'return input;', tests: definition.tests,
       source: { kind: 'person-created', episodeId: episode.id, callId } });
     expect(script.contract).toMatchObject({ access: 'pure-computation', args: { input: expect.any(String) } });
     expect(skills.find(c => c.id === 'Think')).toMatchObject({ source: { kind: 'builtin' }, contract: { instructions: expect.any(String) } });
-    expect((await call(s, 'inspect', { section: 'skills', limit: 50 }, 'bob')).items).toHaveLength(5 + NATIVE_TOOL_IDS.length);
+    const bobSkills = []; cursor = null;
+    do {
+      const result = await call(s, 'inspect', { section: 'skills', cursor, limit: 50 }, 'bob');
+      bobSkills.push(...result.items); cursor = result.nextCursor;
+    } while (cursor);
+    expect(bobSkills.map(c => c.id)).toEqual(skills.filter(c => c.id !== 'Script.echo').map(c => c.id));
     expect((await call(s, 'inspect', { section: 'memory' }, 'bob')).items).toEqual([]);
     expect(await raw(r)).toEqual(before); expect(stream).not.toHaveBeenCalled();
     // Native descriptions may mention "namespace" or attachments; reject

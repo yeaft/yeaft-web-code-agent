@@ -235,7 +235,7 @@ export class PersonRuntime {
         getContext: async ctx => this.tasks()?.context({ ...ctx, episode, provider,
           selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry }),
         onResult: result => finalizeNativeResult(result) });
-      const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost });
+      const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost, workDir: this.toolOptions.workDir });
       let previous = null, capabilityResult = null, dependencyRefs = [];
       // Validation retains actual reads across calls, independently of the bounded rendered request.
       // Candidate proposals never enter this read-set or establish new provenance.
@@ -344,7 +344,7 @@ export class PersonRuntime {
             signal.throwIfAborted();
             // Native host and script execution join their actual work before close.
             const executionPromise = capabilities.execute(invocation, { signal, callId });
-            capabilityResult = isNativeTool(invocation.id) || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
+            capabilityResult = isNativeTool(invocation.id) || invocation.id === 'Output.publish' || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
               ? await executionPromise : await abortable(executionPromise, signal);
             if (!finalized && !await finalize(capabilityResult)) fail('STALE');
             signal.throwIfAborted();

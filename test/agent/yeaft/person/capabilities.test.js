@@ -57,7 +57,7 @@ describe('Person three-layer capabilities without a selector', () => {
       const result = await cap.execute({ id: 'catalog.search', args: { cursor, limit: 1 } });
       paged.push(...result.items.map(m => m.id)); cursor = result.nextCursor;
     } while (cursor);
-    expect(paged).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort((a, b) => a.localeCompare(b, 'en')));
+    expect(paged).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort((a, b) => a.localeCompare(b, 'en')));
   });
 
   it('leaves an over-budget search contract unprepared until explicitly viewed', async () => {
