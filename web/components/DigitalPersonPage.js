@@ -12,7 +12,7 @@ import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
 import PersonActivity from './PersonActivity.js';
 import PersonResponseLoading from './PersonResponseLoading.js';
-import { projectPersonConversation } from '../utils/person-conversation.js';
+import { createPersonConversationProjector } from '../utils/person-conversation.js';
 import { projectPersonActivity, projectPersonFeedback } from '../utils/person-activity.js';
 import { useAuthStore } from '../stores/auth.js';
 import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
@@ -109,7 +109,8 @@ export default {
     const activity = Vue.computed(() => projectPersonActivity(state, gate.value));
     const feedback = Vue.computed(() => projectPersonFeedback(state, gate.value));
     const responding = Vue.computed(() => !gate.value && (state.busy || state.commandPending));
-    const conversation = Vue.computed(() => projectPersonConversation(state.messages));
+    const projectConversation = createPersonConversationProjector();
+    const conversation = Vue.computed(() => projectConversation(state.messages, JSON.stringify([attachmentScope(), state.person?.id])));
     const loadingReplyKey = Vue.computed(() => {
       const tail = conversation.value.at(-1);
       return activity.value.loading && !state.commandPending && tail?.role === 'assistant'

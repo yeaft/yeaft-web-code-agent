@@ -98,9 +98,14 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
         if (conversationFlow && request.op === 'send') {
           const admit = () => {
             activeEpisode = `conversation-${++episodeNumber}`;
-            agentMessages.get(request.agentId).push({ id: `user-${episodeNumber}`, role: 'user', text: request.payload.text, episodeId: activeEpisode, createdAt: new Date().toISOString() });
+            // Simulated 30–156s feedback is ahead of the real browser clock.
+            // Keep the next user record after the completed episode, just as a
+            // real runtime does, so timestamp sorting cannot interleave turns.
+            const rows = agentMessages.get(request.agentId);
+            const createdAt = new Date(Math.max(Date.now(), ...rows.map(row => new Date(row.createdAt).getTime() + 1))).toISOString();
+            rows.push({ id: `user-${episodeNumber}`, role: 'user', text: request.payload.text, episodeId: activeEpisode, createdAt });
             busy = true;
-            latestEpisode = { id: activeEpisode, status: 'running', createdAt: new Date().toISOString() };
+            latestEpisode = { id: activeEpisode, status: 'running', createdAt };
             reply({ episodeId: activeEpisode });
           };
           if (holdAdmission) admissionReply = admit;
@@ -132,7 +137,7 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       const rows = agentMessages.get(agentId);
       const existing = rows.find(row => row.id === id);
       if (existing) existing.text = text;
-      else rows.push({ id, role: 'assistant', text, episodeId, createdAt: new Date().toISOString(), ...metadata });
+      else rows.push({ id, role: 'assistant', text, episodeId, createdAt: new Date(Math.max(Date.now(), ...rows.map(row => new Date(row.createdAt).getTime() + 1))).toISOString(), ...metadata });
     },
     waiting(phase, offset = 61000) {
       busy = true; latestEpisode = { ...latestEpisode, id: activeEpisode, status: 'running', feedback: { at: new Date(new Date(latestEpisode.createdAt).getTime() + offset).toISOString(), phase, capabilityId: 'PRIVATE_CAPABILITY' } };
@@ -779,7 +784,7 @@ for (const scenario of responseScenarios) {
   test(`Digital Person groups only contiguous replies with an episode ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
     const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: [
       ...previousConversation,
-      { id: 'group-progress', role: 'assistant', episodeId: 'group-one', replyKind: 'progress', text: 'First verified finding.', createdAt: 3 },
+      { id: 'group-progress', role: 'assistant', episodeId: 'group-one', replyKind: 'progress', text: 'First verified finding. [Evidence](https://example.com/evidence)', createdAt: 3 },
       { id: 'group-final', role: 'assistant', episodeId: 'group-one', replyKind: 'final', text: 'Completed first episode.', createdAt: 4 },
       { id: 'adjacent-episode', role: 'assistant', episodeId: 'group-two', text: 'Different episode without a user separator.', createdAt: 5 },
       { id: 'system-boundary', role: 'system', episodeId: 'group-two', text: 'System boundary remains visible.', createdAt: 6 },
@@ -808,6 +813,17 @@ for (const scenario of responseScenarios) {
     await expect(page.locator('.person-response-loading')).toHaveCount(0);
     expect(mock.requests.filter(request => request.op === 'send')).toHaveLength(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const originalArticle = await page.locator(replyArticleSelector('group-progress')).elementHandle();
+    const originalPart = await page.locator(replySelector('group-progress')).elementHandle();
+    const link = page.locator(`${replySelector('group-progress')} a`);
+    await link.focus();
+    const originalLink = await link.elementHandle();
+    mock.reply('separated-run', 'Same episode returns after intervening messages.', 'person-a', 'group-one');
+    await expectReplyGroup(page, 'separated-run', ['separated-run'], { zh });
+    expect(await page.locator(replyArticleSelector('group-progress')).evaluate((el, old) => el === old, originalArticle)).toBe(true);
+    expect(await page.locator(replySelector('group-progress')).evaluate((el, old) => el === old, originalPart)).toBe(true);
+    expect(await page.evaluate(old => document.activeElement === old, originalLink)).toBe(true);
+    await expectReplyGroup(page, 'group-progress', ['group-progress', 'group-final'], { zh, kinds: ['progress', 'final'] });
   });
 
   test(`Digital Person local response focus survives growth and yields to user scroll ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {

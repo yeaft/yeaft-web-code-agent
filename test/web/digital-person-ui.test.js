@@ -7,7 +7,7 @@ import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { acceptPersonResponse } from '../../web/stores/helpers/digital-person.js';
 import DigitalPersonPage from '../../web/components/DigitalPersonPage.js';
-import { projectPersonConversation } from '../../web/utils/person-conversation.js';
+import { createPersonConversationProjector, projectPersonConversation } from '../../web/utils/person-conversation.js';
 import SidebarDigitalPerson from '../../web/components/SidebarDigitalPerson.js';
 import PersonThoughtJournal from '../../web/components/PersonThoughtJournal.js';
 import PersonActivity from '../../web/components/PersonActivity.js';
@@ -79,13 +79,18 @@ describe('Digital Person conversation projection', () => {
 
   it('keeps an extended episode key stable through append, replay and older page prepend', () => {
     const rows = [reply('p2', 'a'), reply('f', 'a')];
-    const key = projectPersonConversation(rows)[0].key;
-    expect(projectPersonConversation(rows.map(row => ({ ...row })))[0].key).toBe(key);
-    expect(projectPersonConversation([...rows, reply('next', 'b')])[0].key).toBe(key);
-    expect(projectPersonConversation([reply('p1', 'a'), ...rows])[0].key).toBe(key);
-    const split = projectPersonConversation([reply('old-run', 'a'), { id: 'boundary', role: 'user' }, ...rows]);
+    const project = createPersonConversationProjector();
+    const key = project(rows, 'owner/a')[0].key;
+    expect(project(rows.map(row => ({ ...row })), 'owner/a')[0].key).toBe(key);
+    expect(project([...rows, reply('next', 'b')], 'owner/a')[0].key).toBe(key);
+    expect(project([reply('p1', 'a'), ...rows], 'owner/a')[0].key).toBe(key);
+    const split = project([reply('old-run', 'a'), { id: 'boundary', role: 'user' }, ...rows], 'owner/a');
     expect(split.at(-1).key).toBe(key);
     expect(split[0].key).not.toBe(key);
+    const appended = project([...rows, { id: 'new-boundary', role: 'system' }, reply('new-run', 'a')], 'owner/a');
+    expect(appended[0].key).toBe(key);
+    expect(appended.at(-1).key).not.toBe(key);
+    expect(project(rows, 'other-owner/a')[0].key).not.toBe(key);
   });
 });
 
@@ -153,6 +158,30 @@ describe('Digital Person surface', () => {
     expect(wrapper.findAll('.person-reply-part')).toHaveLength(2);
     expect(wrapper.findAll('.person-reply-kind').every(node => node.text() === en['person.progressReply'])).toBe(true);
     expect(wrapper.find('.person-response-loading').exists()).toBe(false);
+  });
+
+  it('preserves article, section and focused link when a separated same-episode reply is appended', async () => {
+    const markdown = {};
+    runInNewContext(readFileSync(resolve(process.cwd(), 'web/vendor/marked.min.js'), 'utf8'), markdown);
+    vi.stubGlobal('marked', markdown.marked);
+    await render();
+    const first = { id: 'first', role: 'assistant', episodeId: 'turn', text: '[Verified evidence](https://example.com/evidence)', createdAt: 1 };
+    wrapper.vm.state.messages = [first];
+    await Vue.nextTick();
+    const article = wrapper.get('.person-reply').element;
+    const part = wrapper.get('.person-reply-part').element;
+    const link = wrapper.get('.person-reply-part a').element;
+    link.focus();
+    expect(document.activeElement).toBe(link);
+    wrapper.vm.state.messages.push({ id: 'boundary', role: 'system', text: 'Boundary', createdAt: 2 }, { ...first, id: 'later', text: 'Later reply', createdAt: 3 });
+    await Vue.nextTick();
+    expect(wrapper.findAll('.person-reply')).toHaveLength(2);
+    expect(wrapper.get('.person-reply[data-message-id="first"]').element).toBe(article);
+    expect(wrapper.get('.person-reply-part[data-message-id="first"]').element).toBe(part);
+    expect(document.activeElement).toBe(link);
+    wrapper.vm.state.messages = wrapper.vm.state.messages.map(row => ({ ...row }));
+    await Vue.nextTick();
+    expect(document.activeElement).toBe(link);
   });
 
   it('preserves reply and part DOM identity when an older page extends the same episode', async () => {
