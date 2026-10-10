@@ -150,7 +150,6 @@ export default {
           </a>
         </div>
       </div>
-      <p class="browser-hint">{{ $t('workbench.browserClientHint') }}</p>
       <p v-if="state.error" class="browser-error" role="alert">{{ $t(state.error) }}</p>
       <p v-if="loading" class="browser-status" role="status">{{ $t('workbench.browserFrameLoading') }}</p>
       <div class="browser-stage">

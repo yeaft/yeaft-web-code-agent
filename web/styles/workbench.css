@@ -762,7 +762,6 @@
   outline-offset: 2px;
 }
 
-.browser-hint,
 .browser-status,
 .browser-error {
   flex: 0 0 auto;
@@ -772,10 +771,6 @@
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-.browser-hint {
-  padding-bottom: 8px;
 }
 
 .browser-error {
