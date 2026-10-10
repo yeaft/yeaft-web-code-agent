@@ -102,6 +102,9 @@ describe('Digital Person surface', () => {
     expect(virtual.props('scrollContainer')).toBe('.person-messages');
     wrapper.vm.state.messageCursor = 'older';
     const page = vi.spyOn(wrapper.vm.controller, 'page').mockResolvedValue();
+    // Initial estimated tail can exceed 320px and then shrink near the top
+    // after measurements. Neither geometry event is user paging intent.
+    wrapper.vm.conversationScroll({ scrollTop: 600 });
     wrapper.vm.conversationScroll({ scrollTop: 0 });
     expect(page).not.toHaveBeenCalled();
     await wrapper.get('.person-messages').trigger('wheel');

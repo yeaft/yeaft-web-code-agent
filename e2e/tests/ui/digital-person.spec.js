@@ -16,7 +16,7 @@ const conversationRecords = new WeakMap();
 // This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [] } = {}) {
+async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], historyAvailable = true } = {}) {
   if (enableUi) await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
@@ -81,7 +81,7 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
           };
           return;
         }
-        reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded ? null : 'older-page' });
+        reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded || !historyAvailable ? null : 'older-page' });
       } else if (request.op === 'traces') {
         if (failTraces) { failTraces = false; reply(null, { ok: false, error: 'Thought refresh failed' }); return; }
         if (activityFlow) {
@@ -989,7 +989,7 @@ for (const scenario of responseScenarios) {
 for (const scenario of [{ width: 1280, theme: 'dark' }, { width: 320, theme: 'light' }]) {
   test(`Digital Person reconnect and Agent switch discard local response focus ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
     test.setTimeout(45000);
-    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation, historyAvailable: false });
     await openResponseConversation(page, serverUrl, scenario);
     await sendWaiting(page, mock, 'Send before reconnect');
     await showReply(page, mock, 'reconnect-reply', 'Reply before reconnect.\n' + 'Long persisted reply.\n'.repeat(90));
@@ -1047,7 +1047,7 @@ for (const scenario of [{ width: 1280, theme: 'dark' }, { width: 320, theme: 'li
 }
 
 test('Digital Person rejected admission removes waiting focus and next Send starts a fresh reply', async ({ page, serverUrl }) => {
-  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation, historyAvailable: false });
   await openResponseConversation(page, serverUrl, { width: 320, theme: 'dark' });
   mock.rejectNextSend();
   await page.locator('#person-input').fill('Rejected local send');
@@ -1291,7 +1291,8 @@ for (const width of [1280, 320]) {
     await expect(pane).toContainText('Historical item 0');
     await page.locator('.person-thoughts-button').click();
     const thoughts = page.locator('#person-thoughts');
-    await expect(thoughts.locator('.person-thought').first()).toHaveAttribute('data-thought-kind', 'think');
+    // Highest sequence in this fixture is script-cancelled (23).
+    await expect(thoughts.locator('.person-thought').first()).toHaveAttribute('data-thought-kind', 'cancelled');
     await expect.poll(() => thoughts.locator('.person-thought').count()).toBeLessThan(30);
   });
 }

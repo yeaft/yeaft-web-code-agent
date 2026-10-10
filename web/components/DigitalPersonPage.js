@@ -75,7 +75,8 @@ export default {
         captureHistoryAnchor();
         controller.page('messages', true);
       }
-      if (position.scrollTop > 320) historyArmed = true;
+      // Layout/measurement and initial tail alignment also emit scroll-state.
+      // Only a real reading gesture arms paging; geometry cannot request pages.
     }
     function loadOlderMessages() {
       historyArmed = false;
