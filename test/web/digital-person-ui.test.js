@@ -363,7 +363,8 @@ describe('Digital Person surface', () => {
     expect(wrapper.text()).toContain('Completed');
     expect(wrapper.text()).not.toContain('person.taskStatus.');
     expect(wrapper.findAll('button').some(button => button.text() === 'Stop')).toBe(false);
-    wrapper.findAll('button').filter(button => button.text() === 'View log')[1].trigger('click');
+    expect(wrapper.findAll('.person-task-item').map(row => row.attributes('data-task-id'))).toEqual(['child', 'done']);
+    wrapper.get('[data-task-id="child"]').findAll('button').find(button => button.text() === 'View log').trigger('click');
     expect(wrapper.emitted('log')[0]).toEqual(['child-log']);
   });
 
