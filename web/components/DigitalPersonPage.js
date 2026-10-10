@@ -55,9 +55,24 @@ export default {
     const transcript = Vue.ref(null);
     const transcriptIdentity = Vue.computed(() => JSON.stringify([attachmentScope(), chat.chatHistoryConnectionGeneration, state.person?.id]));
     let historyArmed = false;
+    let historyAnchor = null;
+    let historyPending = false;
+    let historyLayoutObserver = null;
+    function captureHistoryAnchor() {
+      const pane = messagePane.value;
+      if (!pane) return;
+      const top = pane.getBoundingClientRect().top + pane.clientTop;
+      const entry = [...pane.querySelectorAll('.virtual-transcript-item')].find(element => {
+        const rect = element.getBoundingClientRect();
+        return rect.bottom > top && rect.top < top + pane.clientHeight;
+      });
+      historyAnchor = entry ? { key: entry.dataset.virtualId, top: entry.getBoundingClientRect().top - top } : null;
+    }
     function conversationScroll(position) {
       if (historyArmed && position.scrollTop < 240 && !gate.value && !state.loading && !state.messagesLoading && state.messageCursor != null) {
         historyArmed = false;
+        historyPending = true;
+        captureHistoryAnchor();
         controller.page('messages', true);
       }
       if (position.scrollTop > 320) historyArmed = true;
@@ -65,6 +80,8 @@ export default {
     function loadOlderMessages() {
       historyArmed = false;
       transcript.value?.setBottomFollowEnabled(false);
+      historyPending = true;
+      captureHistoryAnchor();
       return controller.page('messages', true);
     }
     const estimateConversationHeight = item => Math.min(2400, 100 + Math.ceil((item.parts || [item]).reduce((sum, part) => sum + (part.text?.length || 0), 0) / 70) * 22);
@@ -236,10 +253,11 @@ export default {
     }
     function beginResponseFocus() {
       resetResponseFocus();
+      historyAnchor = null;
       responseFocus = {
         scope: attachmentScope(), episodeId: '',
         previousIds: new Set(state.messages.map(message => message.id)),
-        locked: true,
+        locked: true, viewportHeight: messagePane.value?.clientHeight || 0,
       };
       transcript.value?.setBottomFollowEnabled(false);
       transcript.value?.clearTargetAnchor();
@@ -262,10 +280,20 @@ export default {
             && event.clientX > bounds.left + (pane.offsetWidth - pane.clientWidth))) return;
       }
       historyArmed = true;
+      historyAnchor = null;
       transcript.value?.setBottomFollowEnabled(false);
       transcript.value?.clearTargetAnchor();
       if (responseFocus) responseFocus.locked = false;
       responsePinned.value = false;
+    }
+    function reconcileHistoryAnchor() {
+      if (!historyAnchor || state.messagesLoading) return;
+      const pane = messagePane.value;
+      const entry = [...(pane?.querySelectorAll('.virtual-transcript-item') || [])].find(element => element.dataset.virtualId === historyAnchor.key);
+      if (!entry) return;
+      transcript.value?.cancelPendingBottomFollow();
+      const delta = entry.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop - historyAnchor.top;
+      if (Math.abs(delta) > 1) pane.scrollTop += delta;
     }
     function reconcileResponseLayout() {
       const focus = responseFocus;
@@ -294,22 +322,29 @@ export default {
       // independent of loading state, so completion cannot clamp it upwards.
       const afterTarget = tail.getBoundingClientRect().top - target.getBoundingClientRect().top;
       const bottomPadding = parseFloat(getComputedStyle(pane).paddingBottom) || 0;
-      const needed = Math.max(0, pane.clientHeight - afterTarget - bottomPadding);
+      // A temporary composer/status expansion must not shrink the reserve.
+      // Keeping this focus generation's largest viewport prevents the browser
+      // clamping the reply when the composer collapses again on completion.
+      focus.viewportHeight = Math.max(focus.viewportHeight, pane.clientHeight);
+      const needed = Math.max(0, focus.viewportHeight - afterTarget - bottomPadding);
       if (Math.abs((parseFloat(tail.style.height) || 0) - needed) > 1) tail.style.height = `${needed}px`;
       const delta = target.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop;
+      transcript.value?.cancelPendingBottomFollow({ preserveTarget: true });
       if (Math.abs(delta) > 1) pane.scrollTop += delta;
     }
     function scheduleResponseLayout() {
       const generation = responseFocusGeneration;
       Vue.nextTick(() => {
         if (disposed || generation !== responseFocusGeneration || responseLayoutFrame !== null) return;
+        reconcileResponseLayout();
         responseLayoutFrame = requestAnimationFrame(() => {
           responseLayoutFrame = null;
           if (!disposed && generation === responseFocusGeneration) reconcileResponseLayout();
         });
       });
     }
-    Vue.watch(() => [state.messages.map(message => [message.id, message.text, message.episodeId]), activity.value.loading, feedback.value?.at, feedback.value?.label], () => {
+    const responseLayoutState = () => [state.messages.map(message => [message.id, message.text, message.episodeId]), activity.value.loading, feedback.value?.at, feedback.value?.label];
+    Vue.watch(responseLayoutState, () => {
       // Compensate removed loading space in the same DOM update, before the
       // browser paints a clamped scroll position for a completed short reply.
       reconcileResponseLayout();
@@ -318,10 +353,35 @@ export default {
     // A reconnect replaces the entire projection. Do not carry an old DOM
     // target or an admission awaiting acknowledgement into that generation.
     Vue.watch(() => [gate.value, chat.chatHistoryConnectionGeneration], resetResponseFocus, { flush: 'sync' });
-    Vue.watch(transcriptIdentity, () => { historyArmed = false; }, { flush: 'sync' });
+    Vue.watch(() => state.messagesLoading, loading => {
+      // Read the current visible row before the prepend is patched. The user
+      // may have moved since requesting the page.
+      if (!loading && historyPending) { historyPending = false; captureHistoryAnchor(); }
+    });
+    Vue.watch(() => state.messagesLoading, async loading => {
+      if (loading || !historyAnchor) return;
+      const anchor = historyAnchor;
+      const index = conversation.value.findIndex(item => item.id === anchor.key);
+      if (index < 0) { historyAnchor = null; return; }
+      transcript.value?.cancelPendingBottomFollow();
+      const mounted = [...(messagePane.value?.querySelectorAll('.virtual-transcript-item') || [])]
+        .some(element => element.dataset.virtualId === anchor.key);
+      if (!mounted) await transcript.value?.scrollToIndex(index, { align: 'start' });
+      if (historyAnchor !== anchor || disposed) return;
+      transcript.value?.clearTargetAnchor();
+      reconcileHistoryAnchor();
+    }, { flush: 'post' });
+    Vue.watch(transcriptIdentity, () => { historyArmed = false; historyAnchor = null; historyPending = false; }, { flush: 'sync' });
     Vue.onMounted(() => {
+      // Virtual spacer/row updates can run after the pane ResizeObserver.
+      // Restore the visible reader in the same DOM batch, before paint, and
+      // consume the transcript's queued estimate-based compensation.
+      if (typeof MutationObserver !== 'undefined' && readingColumn.value) {
+        historyLayoutObserver = new MutationObserver(reconcileHistoryAnchor);
+        historyLayoutObserver.observe(readingColumn.value, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+      }
       if (typeof ResizeObserver !== 'undefined') {
-        responseLayoutObserver = new ResizeObserver(scheduleResponseLayout);
+        responseLayoutObserver = new ResizeObserver(() => { reconcileHistoryAnchor(); reconcileResponseLayout(); scheduleResponseLayout(); });
         if (messagePane.value) responseLayoutObserver.observe(messagePane.value);
         if (readingColumn.value) responseLayoutObserver.observe(readingColumn.value);
       }
@@ -330,6 +390,7 @@ export default {
       disposed = true;
       resetResponseFocus();
       responseLayoutObserver?.disconnect();
+      historyLayoutObserver?.disconnect();
     });
     function leave() {
       chat.leaveDigitalPerson();
