@@ -819,6 +819,9 @@ for (const scenario of responseScenarios) {
     await link.focus();
     const originalLink = await link.elementHandle();
     mock.reply('separated-run', 'Same episode returns after intervening messages.', 'person-a', 'group-one');
+    // This is an idle archive: explicitly fetch its updated snapshot, without
+    // moving keyboard focus to the Refresh control via a physical click.
+    await page.getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).evaluate(button => button.click());
     await expectReplyGroup(page, 'separated-run', ['separated-run'], { zh });
     expect(await page.locator(replyArticleSelector('group-progress')).evaluate((el, old) => el === old, originalArticle)).toBe(true);
     expect(await page.locator(replySelector('group-progress')).evaluate((el, old) => el === old, originalPart)).toBe(true);
