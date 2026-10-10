@@ -70,12 +70,39 @@ export function page(payload = {}) {
 }
 /** Task APIs are explicit owner actions, not cognitive admissions. Logs are raw
  * owner-scoped output; list/control responses never include native runtime/log/result.
- * Lists cap each collection at 100, preferring live records then recent history.
+ * Empty list payloads retain the legacy active-first capped inventory. Explicit
+ * {limit,cursor?} pages each collection newest-created first, with immutable
+ * creation-time/ID keysets and one scope-bound continuation for both collections.
+ * Paged responses also carry a bounded active control snapshot independent of
+ * history position (including terminal children with pending actual execution).
  * Log offsets count raw UTF-8 bytes; an omitted offset starts at the beginning.
  */
 export const PERSON_TASK_LIMITS = Object.freeze({ records: 100, logBytes: 16384, maxLogBytes: 65536 });
+export function taskInspectionCursor(cursor) {
+  if (typeof cursor !== 'string' || !/^t1:[A-Za-z0-9_-]{1,2048}$/.test(cursor)) fail('INVALID_REQUEST');
+  let value;
+  try { value = JSON.parse(Buffer.from(cursor.slice(3), 'base64url').toString('utf8')); } catch { fail('INVALID_REQUEST'); }
+  object(value, ['scope', 'tasks', 'agents']);
+  if (typeof value.scope !== 'string' || !/^[a-f0-9]{64}$/.test(value.scope)) fail('INVALID_REQUEST');
+  for (const key of ['tasks', 'agents']) {
+    const boundary = value[key];
+    if (boundary === null) continue;
+    object(boundary, ['time', 'id']);
+    if (!Number.isSafeInteger(boundary.time) || boundary.time < 0 || typeof boundary.id !== 'string' ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(boundary.id)) fail('INVALID_REQUEST');
+  }
+  if ((value.tasks === null && value.agents === null) || Buffer.from(JSON.stringify(value)).toString('base64url') !== cursor.slice(3)) fail('INVALID_REQUEST');
+  return value;
+}
 export function personTaskRequest(op, payload = {}) {
-  if (op === 'tasks') { object(payload, []); return {}; }
+  if (op === 'tasks') {
+    object(payload, ['cursor', 'limit'], []);
+    if (!Object.keys(payload).length) return {};
+    const limit = payload.limit === undefined ? PERSON_TASK_LIMITS.records : payload.limit, cursor = payload.cursor ?? null;
+    if (!Number.isInteger(limit) || limit < 1 || limit > PERSON_TASK_LIMITS.records) fail('INVALID_REQUEST');
+    if (cursor !== null) taskInspectionCursor(cursor);
+    return { cursor, limit };
+  }
   const idKey = op === 'agent_close' ? 'agentId' : 'taskId';
   object(payload, op === 'task_log' ? ['taskId', 'offset', 'maxBytes'] : [idKey], [idKey]);
   // Native TaskStore normalizes punctuation. Reject aliases instead of letting

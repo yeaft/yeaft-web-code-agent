@@ -32,6 +32,94 @@ describe('Person real SQLite authority in managed workers', () => {
     vi.restoreAllMocks();
   });
 
+  it('pages latest memory by update time with binary ties, independent owner/namespace fences and durable boundaries', async () => {
+    const r = repo(), foreign = repo('foreign');
+    await r.open('alice'); await r.open('bob'); await foreign.open('alice');
+    const seed = (repository, ownerId, id, time, revision = 1) => inspect(repository, db => {
+      const scope = repository.scope(ownerId);
+      const record = { ...scope, id, schemaVersion: 1, revision, updatedAt: new Date(time).toISOString(),
+        statement: id, kind: 'claim', epistemicState: 'hypothesis', sourceRefs: [], associations: [],
+        workerId: 'private-worker', apiKey: 'private-token' };
+      db.prepare(`INSERT INTO concepts(namespace, ownerId, personId, id, revision, updatedAt, statement, record)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(namespace, ownerId, personId, id)
+        DO UPDATE SET revision=excluded.revision, updatedAt=excluded.updatedAt, record=excluded.record`)
+        .run(scope.namespace, scope.ownerId, scope.personId, id, revision, time, id, JSON.stringify(record));
+    });
+    for (const [id, time] of [['old', 1000], ['middle', 2000], ['z-new', 3000], ['A-tie', 3000], ['a-tie', 3000]]) seed(r, 'alice', id, time);
+    seed(r, 'bob', 'foreign-owner', 9000); seed(foreign, 'alice', 'foreign-namespace', 9000);
+    const first = await r.inspect('alice', { section: 'memory', limit: 2 });
+    expect(first.items.map(item => item.id)).toEqual(['A-tie', 'a-tie']);
+    expect(first.nextCursor).toMatch(/^m1:c:3000:/);
+    expect(JSON.stringify(first)).not.toMatch(/private-worker|private-token|ownerId|namespace|personId/);
+    // A boundary need not exist anymore. New/revised records at the head are
+    // observed on polling, never reinserted into an older continuation page.
+    inspect(r, db => db.prepare('DELETE FROM concepts WHERE ownerId = ? AND id = ?').run('alice', 'a-tie'));
+    seed(r, 'alice', 'new-head', 4000); seed(r, 'alice', 'old', 5000, 2);
+    await r.close();
+    const reopened = repo();
+    const second = await reopened.inspect('alice', { section: 'memory', cursor: first.nextCursor, limit: 2 });
+    expect(second.items.map(item => item.id)).toEqual(['z-new', 'middle']); expect(second.nextCursor).toBeNull();
+    const refreshed = await reopened.inspect('alice', { section: 'memory', limit: 2 });
+    expect(refreshed.items.map(item => item.id)).toEqual(['old', 'new-head']); expect(refreshed.items[0].revision).toBe(2);
+    // Bare legacy cursors keep the former ID-ascending continuation semantics.
+    expect((await reopened.inspect('alice', { section: 'memory', cursor: 'middle', limit: 50 })).items.map(item => item.id)).toEqual(['new-head', 'old', 'z-new']);
+    await expect(reopened.inspect('unknown', { section: 'memory' })).rejects.toMatchObject({ code: 'NOT_OPEN' });
+    for (const cursor of ['m1:c:01:QQ', 'm1:c:1:_w', 'm1:b:0:QQ', 's1:c:1:QQ', 'm1:c:1:QQ=', 'm1:c:9007199254740992:QQ']) {
+      await expect(reopened.inspect('alice', { section: 'memory', cursor })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    }
+  });
+
+  it('pages custom skills newest version-created first, then an honestly undated deterministic builtin catalogue', async () => {
+    const r = repo(), foreign = repo('foreign');
+    await r.open('alice'); await r.open('bob'); await foreign.open('alice');
+    const seed = (repository, ownerId, id, createdAt) => inspect(repository, db => {
+      const scope = repository.scope(ownerId);
+      const record = { ...scope, id, version: 1, revision: `hash-${id}`, createdAt, updatedAt: createdAt,
+        description: id, useWhen: 'pure calculation', avoidWhen: '', inputDescription: 'JSON', outputDescription: 'JSON',
+        code: 'return input;', tests: [{ input: 1, expected: 1 }], evidence: { engine: 'quickjs', testsPassed: 1, testedAt: createdAt },
+        createdEpisodeId: 'episode', createdCallId: 'call', apiKey: 'private-token' };
+      db.prepare('INSERT INTO created_capabilities(namespace, ownerId, personId, id, version, record) VALUES (?, ?, ?, ?, 1, ?)')
+        .run(scope.namespace, scope.ownerId, scope.personId, id, JSON.stringify(record));
+    });
+    for (const [id, date] of [['Script.a-old', '2020-01-01T00:00:00.000Z'], ['Script.z-new', '2026-01-01T00:00:00.000Z'], ['Script.b-tie', '2026-01-01T00:00:00.000Z']]) seed(r, 'alice', id, date);
+    seed(r, 'bob', 'Script.private-owner', '2027-01-01T00:00:00.000Z'); seed(foreign, 'alice', 'Script.private-namespace', '2027-01-01T00:00:00.000Z');
+    const first = await r.inspect('alice', { section: 'skills', limit: 2 });
+    expect(first.items.map(item => item.id)).toEqual(['Script.b-tie', 'Script.z-new']); expect(first.nextCursor).toMatch(/^s1:c:/);
+    seed(r, 'alice', 'Script.new-head', '2028-01-01T00:00:00.000Z');
+    inspect(r, db => db.prepare('DELETE FROM created_capabilities WHERE ownerId = ? AND id = ?').run('alice', 'Script.z-new'));
+    const all = [...first.items]; let cursor = first.nextCursor;
+    do {
+      const result = await r.inspect('alice', { section: 'skills', limit: 2, cursor });
+      all.push(...result.items); cursor = result.nextCursor;
+    } while (cursor);
+    expect(all.slice(0, 3).map(item => item.id)).toEqual(['Script.b-tie', 'Script.z-new', 'Script.a-old']);
+    const builtinIds = all.slice(3).map(item => item.id);
+    expect(builtinIds).toEqual([...builtinIds].sort()); expect(new Set(all.map(item => item.id)).size).toBe(all.length);
+    for (const builtin of all.slice(3)) { expect(builtin).not.toHaveProperty('createdAt'); expect(builtin).not.toHaveProperty('updatedAt'); }
+    expect(JSON.stringify(all)).not.toMatch(/private-token|Script.private/);
+    expect((await r.inspect('alice', { section: 'skills', limit: 1 })).items[0].id).toBe('Script.new-head');
+    expect((await r.inspect('alice', { section: 'skills', cursor: 'Script.z-new', limit: 50 })).items.map(item => item.id)).toEqual(builtinIds.filter(id => id > 'Script.z-new'));
+    await expect(r.inspect('alice', { section: 'skills', cursor: 'm1:c:1:QQ' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  });
+
+  it('continues memory after the actual byte-limited item rather than the requested count', async () => {
+    const r = repo(); await r.open('alice'); const scope = r.scope('alice');
+    inspect(r, db => {
+      const insert = db.prepare('INSERT INTO concepts(namespace, ownerId, personId, id, revision, updatedAt, statement, record) VALUES (?, ?, ?, ?, 1, ?, ?, ?)');
+      for (let i = 0; i < 40; i++) {
+        const id = `concept-${String(i).padStart(2, '0')}`, record = { ...scope, id, revision: 1,
+          statement: 'x'.repeat(8100), updatedAt: new Date(i + 1).toISOString(), kind: 'claim', epistemicState: 'hypothesis' };
+        insert.run(scope.namespace, scope.ownerId, scope.personId, id, i + 1, record.statement, JSON.stringify(record));
+      }
+    });
+    const first = await r.inspect('alice', { section: 'memory', limit: 50 });
+    expect(first.items.length).toBeGreaterThan(0); expect(first.items.length).toBeLessThan(40);
+    expect(Buffer.byteLength(JSON.stringify(first.items))).toBeLessThan(257 * 1024);
+    const second = await r.inspect('alice', { section: 'memory', cursor: first.nextCursor, limit: 50 });
+    expect([...first.items, ...second.items].map(item => item.id)).toEqual(Array.from({ length: 40 }, (_, i) => `concept-${String(39 - i).padStart(2, '0')}`));
+    expect(second.nextCursor).toBeNull();
+  });
+
   it('persists deterministic identity, state, history and complete searchable revisions across reopen', async () => {
     const r = repo();
     const opened = await r.open('alice');

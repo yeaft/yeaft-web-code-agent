@@ -222,3 +222,19 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
   .person-header-actions { gap: 0; }
   .person-header-actions .header-action-btn { width: 32px; padding: 4px; }
 }
+
+/* Inspector windows keep the scroll owner directly above VirtualTranscript. */
+.person-inspector-list > .virtual-transcript,
+.person-inspector-list > .person-inspector-small,
+.person-inspector-list > .person-inspector-before,
+.person-inspector-list > .person-inspector-after { width: min(var(--session-content-width), 880px); margin-inline: auto; }
+.person-inspector-list .virtual-transcript-item { min-width: 0; }
+.person-inspector-list .person-load-more { margin-top: var(--work-center-space-3); }
+.person-inspector-list summary:focus-visible,
+.person-inspector-list [data-inspector-index]:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 3px; border-radius: var(--agent-setup-control-radius); }
+.person-inspector-list .person-knowledge-item { padding-block: var(--work-center-space-2); border-bottom: 1px solid var(--border-light); }
+.person-inspector-list .person-knowledge-kind { display: block; margin-bottom: var(--work-center-space-1); }
+.person-inspector-list .person-thought { border-bottom: 1px solid var(--border-light); }
+.person-inspector-list .person-debug-row pre { max-height: 60vh; overflow: auto; }
+
+.person-inspector-list { overflow-anchor: none; }

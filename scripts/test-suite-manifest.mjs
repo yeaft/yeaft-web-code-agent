@@ -144,6 +144,8 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/web/person-outputs.test.js',
   'test/web/person-output-ui.test.js',
   'test/web/person-thoughts.test.js',
+  'test/web/person-inspector-list.test.js',
+  'test/web/person-task-active-snapshot.test.js',
   'test/web/safe-message-markdown.test.js',
   'test/web/history-sender-filter.test.js',
   'test/web/file-tree-refresh.test.js',

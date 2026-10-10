@@ -2,7 +2,7 @@ import { NATIVE_TOOL_MANIFESTS, NATIVE_TOOL_IDS, isNativeTool } from './native-t
 import { bytes, digest, fail, identifier, object, page, text } from './contracts.js';
 import { createdCapabilityRecord, validateCreatedDefinition } from './created-capability-contract.js';
 import { runPersonScript, scriptInput, testPersonScript } from './script-executor.js';
-import { createdSkillView, inspectionPage } from './inspection.js';
+import { chronologicalCursor, createdSkillView, inspectionCursor, inspectionPage, inspectionTime } from './inspection.js';
 import { publishOutput } from './outputs.js';
 
 // Intrinsic cognition, bounded pure scripts and supported native host tools.
@@ -87,10 +87,19 @@ export function inspectCapabilities(created, { cursor, limit }, nativeToolIds = 
     contract.evidence = item.evidence;
     entries.push(item);
   }
-  // IDs are ASCII identifiers. Binary ordering matches SQLite.
-  const matches = entries.filter(entry => cursor === null || entry.id > cursor)
-    .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-  return inspectionPage(matches, limit, 'id');
+  const boundary = inspectionCursor(cursor, 'skills');
+  // IDs are ASCII identifiers. Binary ordering matches SQLite. Only custom
+  // versions have creation dates; builtins follow as an undated ID catalogue.
+  const byId = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  if (boundary?.legacy) return inspectionPage(entries.filter(entry => entry.id > boundary.id).sort(byId), limit, 'id');
+  const custom = entries.filter(entry => entry.source.kind === 'person-created')
+    .filter(entry => !boundary || (boundary.stage === 'c' && (inspectionTime(entry.createdAt) < boundary.time ||
+      (inspectionTime(entry.createdAt) === boundary.time && entry.id > boundary.id))))
+    .sort((a, b) => inspectionTime(b.createdAt) - inspectionTime(a.createdAt) || byId(a, b));
+  const builtin = entries.filter(entry => entry.source.kind !== 'person-created')
+    .filter(entry => boundary?.stage !== 'b' || entry.id > boundary.id).sort(byId);
+  return inspectionPage([...custom, ...builtin], limit,
+    record => chronologicalCursor('skills', record, record.source.kind === 'person-created' ? 'c' : 'b'));
 }
 
 export class PersonCapabilities {

@@ -377,7 +377,7 @@ describe('Person inspection, search and name: SQLite', () => {
     expect(JSON.stringify(first)).not.toMatch(/ownerId|namespace|personId|workerId|leaseUntil/);
   });
 
-  it('inspects all committed concepts and actual builtin/created contracts, with stable ID pages', async () => {
+  it('inspects all committed concepts and actual builtin/created contracts, with newest-first keyset pages', async () => {
     const s = service(), r = repo(); await call(s, 'open'); await r.open('bob');
     const { episode } = await admission(r);
     const callId = randomUUID();
@@ -392,7 +392,7 @@ describe('Person inspection, search and name: SQLite', () => {
       decision: { summary: 'test', uncertainties: [], selfCheck: 'test' }, reply: null }, { model: 'test/first', effort: null }, callId);
     const before = await raw(r);
     const first = await call(s, 'inspect', { section: 'memory', limit: 2 });
-    expect(first.items.map(c => c.id)).toEqual(['A-first', 'm-middle']); expect(first.nextCursor).toBe('m-middle');
+    expect(first.items.map(c => c.id)).toEqual(['A-first', 'm-middle']); expect(first.nextCursor).toMatch(/^m1:c:/);
     expect(first.items[0]).toMatchObject({ kind: 'claim', statement: 'A-first', epistemicState: 'hypothesis', revision: 1, sourceRefs: [], associations: [] });
     expect((await call(s, 'inspect', { section: 'memory', cursor: first.nextCursor })).items.map(c => c.id)).toEqual(['z-last']);
     const skills = []; let cursor = null;
@@ -400,7 +400,7 @@ describe('Person inspection, search and name: SQLite', () => {
       const result = await call(s, 'inspect', { section: 'skills', cursor, limit: 2 });
       skills.push(...result.items); cursor = result.nextCursor;
     } while (cursor);
-    expect(skills.map(c => c.id)).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'Recall', 'Script.echo', 'Skill.associate', 'Skill.reconsider', 'Think'].sort());
+    expect(skills.map(c => c.id)).toEqual(['Script.echo', ...[...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort()]);
     const script = skills.find(c => c.id === 'Script.echo');
     expect(script).toMatchObject({ domain: 'script', description: 'Echo JSON', version: 1, code: 'return input;', tests: definition.tests,
       source: { kind: 'person-created', episodeId: episode.id, callId } });

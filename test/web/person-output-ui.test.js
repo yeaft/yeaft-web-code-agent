@@ -17,7 +17,7 @@ beforeEach(() => {
   iframeLoadingDisabled = window.happyDOM.settings.disableIframePageLoading;
   window.happyDOM.settings.disableIframePageLoading = true;
   vi.stubGlobal('Vue', Vue);
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   window.innerWidth = 1200;
   localStorage.removeItem('person-output-panel-width');
   authStore.value = Vue.reactive({ userId: 'owner', authGeneration: 1, isAuthenticated: true });
