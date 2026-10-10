@@ -163,26 +163,13 @@ yeaft-agent install --server wss://your-server.example --name my-worker --secret
 yeaft-agent status --name my-worker
 ```
 
-### 启用 Browser Runtime（Linux x64）
+### Workbench 浏览器
 
-Workbench 浏览器查看器目前支持 Linux x64 Agent。Server 默认开放浏览器路由，但浏览器二进制仍然需要在每个 Agent 上由用户明确启用：
+Workbench 浏览器通过客户端 iframe 直接打开 HTTP/HTTPS 网页，支持回复、Markdown 预览和工作项交付物中的外链。不安装或透传 Agent 浏览器、不使用 WebRTC，也不通过 Server 代理网页；无需 Agent 浏览器 capability。
 
-1. 在 Yeaft 中选择 Agent，打开 **Workbench → 浏览器**。浏览器未就绪时，能力卡显示**需要启用**，面板会显示固定版本 Chrome for Testing 的下载大小。
-2. 点击一次**启用浏览器**。Yeaft 会显示真实下载百分比，在该 Agent instance 的数据目录中完成浏览器校验和安装，持久化启用配置，执行媒体链路探测，刷新 capability，并自动打开 Viewer；不需要重启 Agent，也不需要再点一次启用。
+支持地址输入、**刷新**和**新标签页打开**。`localhost` 指你的设备，不是 Agent。网站可能禁止 iframe 嵌入，沙箱可能限制登录和交互，HTTPS 页面也可能拦截 HTTP 网页；Yeaft 不绕过这些浏览器限制。Ctrl/Cmd 点击保留原生新标签页行为。
 
-仅安装 Yeaft 或 Agent 不会触发浏览器二进制下载。管理员可以设置 `BROWSER_RUNTIME_ENABLED=false` 关闭整个浏览器能力。Agent 媒体 probe 只验证 Chrome、tab capture、VP8 和本机 WebRTC，无法证明远程 Web Viewer 到 Agent 具备可达的 ICE 路径。`BROWSER_STUN_URLS` 可选，用于 direct ICE。生产环境如果需要跨 NAT 或受限网络连接，应部署 TURN，并配置 `BROWSER_TURN_URLS` 和 `BROWSER_TURN_SECRET`；禁止 direct candidate 时设置 `BROWSER_ICE_TRANSPORT_POLICY=relay`。仓库在 [`deploy/browser-turn/`](deploy/browser-turn/README.md) 提供了加固的自托管模板。
-
-无人值守安装必须在所有命令中使用同一个 named instance：
-
-```bash
-yeaft-agent browser install --name my-worker
-yeaft-agent browser probe --name my-worker
-yeaft-agent browser enable --name my-worker
-yeaft-agent restart --name my-worker   # managed Agent service
-yeaft-agent browser status --name my-worker
-```
-
-`browser probe` 才是 readiness 检查；`browser status` 只报告配置和安装状态。前台运行的 Agent 在 CLI enable 后需要手动停止并重新启动。ICE/TURN、生命周期和故障排查见 [Workbench：启用 Browser Runtime](docs/zh-CN/guide/user/workbench.md#启用-browser-runtime)。
+旧 Agent Browser Runtime CLI 和配置保留兼容，但此 Workbench 视图不使用它们。详见 [Workbench：浏览器](docs/zh-CN/guide/user/workbench.md#浏览器)。
 
 ### 从源码运行
 

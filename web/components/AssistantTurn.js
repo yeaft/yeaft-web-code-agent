@@ -1,3 +1,4 @@
+import { handleWorkbenchBrowserLink, openWorkbenchBrowser } from '../utils/workbench-browser.js';
 import ToolLine from './ToolLine.js';
 import AskCard from './AskCard.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
@@ -290,6 +291,8 @@ export default {
   `,
   setup(props, { emit }) {
     const store = Pinia.useChatStore();
+    const openBrowser = Vue.inject('workbench-browser-opener', null)
+      || (url => openWorkbenchBrowser(url, store.activeSessionRoute, store.effectiveWorkDir || ''));
     const copied = Vue.ref(false);
     const fullCopied = Vue.ref(false);
     const internalExpanded = Vue.ref(false);
@@ -434,6 +437,7 @@ export default {
         }
         return;
       }
+      if (handleWorkbenchBrowserLink(event, openBrowser)) return;
       const anchor = event.target?.closest?.('a[href]');
       if (!anchor || !event.currentTarget?.contains?.(anchor)) return;
       const reference = resolveMessageFileReference(anchor.getAttribute('href'), { htmlEncoded: false });

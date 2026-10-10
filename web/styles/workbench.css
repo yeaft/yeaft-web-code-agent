@@ -662,36 +662,41 @@
 
 .browser-panel {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--browser-stage-bg);
+  background: var(--bg-workbench);
 }
 
 .browser-toolbar {
+  flex: 0 0 auto;
   min-height: 44px;
   padding: 6px 10px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-workbench);
+  gap: 6px 10px;
   color: var(--text-secondary);
 }
 
 .browser-location {
-  flex: 1;
+  flex: 1 1 220px;
   min-width: 0;
-  height: 30px;
-  padding: 0 10px;
+  height: 32px;
+  padding: 0 6px 0 10px;
   border: 1px solid var(--border-color);
-  border-radius: 7px;
+  border-radius: var(--agent-setup-control-radius);
   background: var(--bg-input);
   display: flex;
   align-items: center;
   gap: 8px;
-  overflow: hidden;
   font-size: 12px;
+}
+
+.browser-location:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .browser-location input {
@@ -706,170 +711,115 @@
   font: inherit;
 }
 
+.browser-toolbar .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--agent-setup-control-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.browser-toolbar .btn-ghost:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.browser-toolbar .btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .browser-go-button {
   flex: 0 0 auto;
   min-height: 24px;
   padding: 0 8px;
 }
 
-.browser-start-form {
+.browser-actions {
   display: flex;
-  gap: 10px;
-  width: min(560px, 100%);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
 }
 
-.browser-start-form input {
-  flex: 1;
-  min-width: 0;
+.browser-external {
+  text-decoration: none;
 }
 
-.browser-connection-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
+.browser-toolbar button:focus-visible,
+.browser-external:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.browser-hint,
+.browser-status,
+.browser-error {
   flex: 0 0 auto;
-  background: var(--text-muted);
-}
-
-.browser-connection-dot.connected {
-  background: var(--success);
-}
-
-.browser-connection-dot.failed {
-  background: var(--error);
-}
-
-.browser-status {
-  flex: 0 0 auto;
-  max-width: 160px;
-  overflow: hidden;
+  margin: 0;
+  padding: 4px 10px;
   color: var(--text-muted);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
-.browser-end-button {
-  flex: 0 0 auto;
-  min-height: 30px;
+.browser-hint {
+  padding-bottom: 8px;
+}
+
+.browser-error {
+  color: var(--error);
 }
 
 .browser-stage {
-  position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--browser-stage-bg);
+  background: var(--bg-main);
+}
+
+.browser-frame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  border: 0;
+  /* External documents own their theme. A transparent, unstyled page needs
+     its normal light canvas even while the surrounding Workbench is dark. */
+  color-scheme: light;
+  background: var(--browser-document-canvas);
 }
 
 .browser-stage-placeholder {
-  flex-direction: column;
-  gap: 16px;
-  padding: 32px;
-  background: var(--bg-workbench);
+  flex: 1;
+  min-width: 0;
+  padding: 24px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
   color: var(--text-secondary);
   text-align: center;
 }
 
-.browser-stage-placeholder h2,
 .browser-stage-placeholder p {
   margin: 0;
-}
-
-.browser-stage-placeholder p {
   max-width: 480px;
   font-size: 13px;
   line-height: 1.6;
-}
-
-.browser-setup-stage {
-  overflow-y: auto;
-}
-
-.browser-install-progress-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: min(400px, 100%);
-}
-
-.browser-install-progress {
-  flex: 1;
-  min-width: 0;
-  height: 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--border-color);
-}
-
-.browser-install-progress > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent-blue);
-  transition: width 0.2s ease;
-}
-
-.browser-install-percent {
-  min-width: 3ch;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.browser-stage-placeholder .browser-install-meta,
-.browser-stage-placeholder .browser-install-note {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.browser-stage-placeholder .browser-setup-error {
-  color: var(--error);
-}
-
-.browser-video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  background: var(--browser-stage-bg);
-  cursor: default;
-  outline: none;
-}
-
-.browser-stage:focus-within .browser-video {
-  box-shadow: inset 0 0 0 2px var(--accent-blue);
-}
-
-.browser-input-sink {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  border: 0;
-  opacity: 0;
-  pointer-events: none;
-  resize: none;
-}
-
-.browser-video-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  background: var(--bg-workbench);
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.browser-video-overlay .session-loading-spinner {
-  width: 24px;
-  height: 24px;
 }
 
 @media (max-width: 520px) {
@@ -877,17 +827,8 @@
     padding: 24px 20px;
   }
 
-  .browser-toolbar {
-    flex-wrap: wrap;
-  }
-
   .browser-location {
     flex-basis: 100%;
-    order: 2;
-  }
-
-  .browser-start-form {
-    flex-direction: column;
   }
 }
 

@@ -137,6 +137,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/web/auth-fetch.test.js',
   'test/web/agent-setup-commands.test.js',
   'test/web/browser-runtime-store.test.js',
+  'test/web/client-browser-panel.test.js',
   'test/web/dashboard-tab.test.js',
   'test/web/digital-person.test.js',
   'test/web/digital-person-ui.test.js',

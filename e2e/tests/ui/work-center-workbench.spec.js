@@ -70,7 +70,8 @@ for (const { width, theme } of [
     const toggle = page.locator('.work-center-workbench-toggle:visible');
     await expect(toggle).toBeEnabled();
     await page.evaluate(() => { window.Pinia.useChatStore().workCenterWorkbenchProtocolSupported = false; });
-    await expect(toggle).toBeDisabled();
+    // Client Browser remains available while Agent-local file routes are disabled.
+    await expect(toggle).toBeEnabled();
     await expect(page.locator('.work-center-output-file')).toHaveCount(0);
     await page.evaluate(() => { window.Pinia.useChatStore().workCenterWorkbenchProtocolSupported = true; });
     await expect(toggle).toBeEnabled();
