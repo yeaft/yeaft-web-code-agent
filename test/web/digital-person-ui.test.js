@@ -374,7 +374,7 @@ describe('Digital Person surface', () => {
       { id: 'orphan', name: 'Lost handle', status: 'failed', recoveryStatus: 'orphaned', executionPending: true },
       ...Array.from({ length: 97 }, (_, i) => ({ id: `settled-${i}`, name: `Settled ${i}`, status: 'completed', executionPending: false })),
     ], truncated: true }, log: {} }, global: { config: { globalProperties: { $t: t } } } });
-    expect(wrapper.findAll('.person-task-item')).toHaveLength(100);
+    expect(wrapper.findAll('.person-task-item').length).toBeLessThan(20); // Bounded virtual window, not all 100 catalog records.
     expect(wrapper.findAll('button').filter(b => b.text() === 'Stop')).toHaveLength(1);
     expect(wrapper.get('[data-task-id="cutoff"]').text()).toContain('Incomplete — budget exhausted');
     expect(wrapper.get('[data-task-id="cutoff"]').findAll('button')).toHaveLength(0);
