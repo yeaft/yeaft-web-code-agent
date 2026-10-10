@@ -11,6 +11,7 @@ import PersonTurnUsage from '../../web/components/PersonTurnUsage.js';
 import { personRecords } from '../fixtures/person-records.js';
 import { personTurn } from '../fixtures/person-turns.js';
 import en from '../../web/i18n/en.js';
+import zhCN from '../../web/i18n/zh-CN.js';
 
 const t = (key, params = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (match, name) => String(params[name] ?? match));
 const records = (count, prefix = 'row') => Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}`, seq: count - index, kind: `${prefix}-${index}`, createdAt: count - index }));
@@ -253,6 +254,36 @@ describe('Latest-first Person inspector projections', () => {
     ] } }, global });
     expect(wrapper.findAll('[data-knowledge-id]').map(row => row.attributes('data-knowledge-id'))).toEqual(['new', 'old']);
     expect(wrapper.get('[data-knowledge-id="new"] summary').text()).toContain(t('person.group.interest'));
+  });
+
+  it('puts memory content first and preserves the complete text and escaped detail', () => {
+    const statement = '<script>Never run this</script> ' + 'Full memory content. '.repeat(30);
+    wrapper = mount(PersonKnowledgeBrowser, { props: { section: 'memory', page: { items: [
+      { id: 'memory', kind: 'method', statement, revision: 1, epistemicState: 'uncertain' },
+    ] } }, global });
+    const summary = wrapper.get('summary');
+    expect(summary.classes()).toContain('is-memory');
+    expect(summary.element.firstElementChild.className).toBe('person-knowledge-excerpt');
+    expect(summary.get('.person-knowledge-excerpt').text()).toBe(statement.trim());
+    expect(wrapper.get('.person-knowledge-detail .person-prose').text()).toBe(statement.trim());
+    expect(wrapper.find('script').exists()).toBe(false);
+  });
+
+  it.each([en, zhCN])('shows capability name, useful description and translated category without debug keys', messages => {
+    wrapper = mount(PersonKnowledgeBrowser, { props: { section: 'skills', page: { items: [
+      { id: 'CancelTask', domain: 'tasks', description: 'Cancel a background task.' },
+      { id: 'CloseAgent', domain: 'orchestration', description: 'Close a child thread.' },
+      { id: 'Output.publish', domain: 'delivery', description: 'Deliver a file snapshot.' },
+      { id: 'FutureTool', domain: 'custom-domain', description: 'A future capability.' },
+    ] } }, global: { config: { globalProperties: { $t: key => messages[key] || key } } } });
+    const task = wrapper.get('[data-knowledge-id="CancelTask"] summary');
+    expect(task.element.firstElementChild.className).toBe('person-knowledge-name');
+    expect(task.get('.person-knowledge-name').text()).toBe('CancelTask');
+    expect(task.get('.person-knowledge-excerpt').text()).toBe('Cancel a background task.');
+    for (const domain of ['tasks', 'orchestration', 'delivery']) expect(messages['person.group.' + domain]).toBeTruthy();
+    expect(task.get('.person-knowledge-kind').text()).toBe(messages['person.group.tasks']);
+    expect(wrapper.get('[data-knowledge-id="FutureTool"] .person-knowledge-kind').text()).toBe('custom-domain');
+    expect(wrapper.text()).not.toContain('person.group.');
   });
 
   it('keeps turns latest-first and presents older-page fallback even when stale', () => {
