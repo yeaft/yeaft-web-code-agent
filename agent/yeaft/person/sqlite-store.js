@@ -393,7 +393,7 @@ export class SqlitePersonStore {
    * a state/Concept commit. Fencing, dedupe and the memory journal share one transaction. */
   publishProgress(episode, { callId, reply }) {
     const p = this.own(episode), scope = this.episodeScope(episode);
-    identifier(callId); text(reply, 8192);
+    identifier(callId); text(reply, LIMITS.outputBytes);
     const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running' || record.openCall || record.openCapability) fail('STALE');
     const prior = this.rows('messages', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') = 'progress'", [episode.id]);
@@ -503,7 +503,7 @@ export class SqlitePersonStore {
     this.getPerson(ownerId);
     const records = this.rows('messages', this.scope(ownerId),
       ' AND (? IS NULL OR seq < ?) AND instr(text, ?) > 0 ORDER BY seq DESC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);
-    return inspectionPage(records, limit, 'seq', messageView);
+    return inspectionPage(records, limit, 'seq', messageView, LIMITS.responseBytes);
   }
   turns(ownerId, options = {}) {
     const { cursor, limit } = turnsPage(options);
@@ -555,7 +555,7 @@ export class SqlitePersonStore {
     if (cursor != null) { clause += ' AND seq < ?'; params.push(sequence(cursor)); }
     if (query) { clause += ' AND instr(text, ?) > 0'; params.push(query.toLowerCase()); }
     const docs = this.rows(collection, this.scope(ownerId), `${clause} ORDER BY seq DESC LIMIT ?`, [...params, limit + 1]);
-    return { items: docs.slice(0, limit).map(collection === 'messages' ? messageView : publicDoc), nextCursor: docs.length > limit ? String(docs[limit - 1].seq) : null };
+    return inspectionPage(docs, limit, record => String(record.seq), collection === 'messages' ? messageView : publicDoc, LIMITS.responseBytes);
   }
   recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 } = {}) {
     memoryKind(kind); text(query, LIMITS.inputBytes, true); boundedLimit(limit);
@@ -615,12 +615,13 @@ export class SqlitePersonStore {
     this.recover(ownerId);
     const scope = this.scope(ownerId), p = this.getPerson(ownerId), state = this.one('states', scope);
     const messages = this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 21');
+    const messagePage = inspectionPage(messages, 20, record => String(record.seq), messageView, LIMITS.responseBytes);
     const episode = this.one('episodes', scope, ' ORDER BY inputWatermark DESC');
     const latestEpisode = episode ? { id: episode.id, status: episode.status, createdAt: episode.createdAt,
       ...(episode.status === 'running' && episode.feedback ? { feedback: episode.feedback } : {}),
       ...(episode.terminalCode ? { terminalCode: episode.terminalCode } : {}), ...(episode.endedAt ? { endedAt: episode.endedAt } : {}) } : null;
     return { latestEpisode, person: this.personView(p), state: stateView(state), concepts: this.focused(scope, state.focusConceptIds).slice(0, 12).map(conceptView),
-      messages: messages.slice(0, 20).reverse().map(messageView), nextMessagesCursor: messages.length > 20 ? String(messages[19].seq) : null,
+      messages: messagePage.items.reverse(), nextMessagesCursor: messagePage.nextCursor,
       outputs: this.outputs(ownerId), busy: Boolean(p.activeEpisodeId), episodeId: p.activeEpisodeId };
   }
   searchChanges(ownerId, { after = 0, limit = 100 } = {}) {

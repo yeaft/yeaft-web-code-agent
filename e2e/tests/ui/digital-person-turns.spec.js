@@ -23,6 +23,12 @@ test('Person turn diagnostics persist complete flow and partial usage without st
       yield { type: 'error', error: new Error('private provider error') };
       return;
     }
+    if (input.trigger.text === 'Output too long') {
+      yield { type: 'text_delta', text: '{"unfinished":' };
+      yield { type: 'usage', inputTokens: 5, outputTokens: 4096 };
+      yield { type: 'stop', stopReason: 'max_tokens' };
+      return;
+    }
     const proposal = finalProposal(input.state.version);
     proposal.concepts = []; proposal.state.focusConceptIds = [];
     proposal.activity.sourceRefs = [input.trigger.ref];
@@ -59,7 +65,7 @@ test('Person turn diagnostics persist complete flow and partial usage without st
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Flow & usage', exact: true }).click();
     await expect(page.locator('.person-turn-row')).toHaveCount(1);
     await expect(page.locator('.person-turn-row')).toContainText('Running');
-    await expect(page.locator('.person-turn-row')).toContainText('Usage not fully confirmed');
+    await expect(page.locator('.person-turn-row')).toContainText('Incomplete usage (known values)');
     await page.locator('.person-turn-row > summary').click();
     await expect(page.locator('.person-call-step')).toHaveCount(1);
     release();
@@ -96,7 +102,7 @@ test('Person turn diagnostics persist complete flow and partial usage without st
     const failed = page.locator('.person-turn-row').first();
     await expect(failed).toContainText('Failed');
     await expect(failed).toContainText('Total tokens: 7');
-    await expect(failed).toContainText('Usage not fully confirmed');
+    await expect(failed).toContainText('Incomplete usage (known values)');
     await expect(failed).not.toContainText('private provider error');
     await failed.locator(':scope > summary').click();
     await page.setViewportSize({ width: 320, height: 680 });
@@ -107,6 +113,19 @@ test('Person turn diagnostics persist complete flow and partial usage without st
     await page.locator('.person-panel-header .header-action-btn').click();
     await expect(page.locator('#person-input')).toHaveValue('');
     expect(calls).toBe(3);
+    await page.locator('#person-input').fill('Output too long');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect.poll(() => calls).toBe(5); // At most one replan; no unbounded retries.
+    await expect(page.locator('.person-error')).toContainText('not an activity timeout');
+    await page.locator('.person-thoughts-button').click();
+    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Flow & usage', exact: true }).click();
+    const truncated = page.locator('.person-turn-row').first();
+    await expect(truncated).toContainText('2 loops');
+    await expect(truncated).toContainText('Output: 8,192');
+    await truncated.locator(':scope > summary').click();
+    await expect(truncated).toContainText('OUTPUT_TRUNCATED');
+    await expect(truncated).toContainText('this proposal did not execute a tool');
+    await expect(truncated).not.toContainText('unfinished');
     expect(mockAgent.conversations.size).toBe(0);
   } finally {
     mockAgent._messageHandlers.splice(mockAgent._messageHandlers.indexOf(listener), 1);

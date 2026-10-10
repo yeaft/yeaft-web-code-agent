@@ -73,13 +73,13 @@ export function createdSkillView(record, contract) {
 }
 /** Complete records only. Continuation follows the last returned key even when the
  * byte budget, rather than the requested count, ends a page. No attachment bytes. */
-export function inspectionPage(records, limit, key, view = value => value) {
+export function inspectionPage(records, limit, key, view = value => value, maxBytes = 256 * 1024) {
   const items = []; let size = 0, lastRecord;
   for (const record of records) {
     if (items.length === limit) break;
     const item = view(record), cost = bytes(item);
-    if (cost > 256 * 1024) fail('OUTPUT_LIMIT');
-    if (items.length && size + cost > 256 * 1024) break;
+    if (cost > maxBytes) fail('OUTPUT_LIMIT');
+    if (items.length && size + cost > maxBytes) break;
     items.push(item); size += cost; lastRecord = record;
   }
   return { items, nextCursor: records.length > items.length ? (typeof key === 'function' ? key(lastRecord) : String(items.at(-1)[key])) : null };

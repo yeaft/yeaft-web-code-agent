@@ -63,6 +63,8 @@ export default {
   "person.renameUpgrade": "当前 Agent 尚不支持修改名字，请升级 Agent 后再修改。",
   "person.nameInvalid": "请输入名字（最多 160 UTF-8 字节）。",
   "person.turns": "运行与用量",
+  "person.outputTruncated": "模型回复触及输出 token 上限，并非整轮执行超时。工作尚未完成，请在“运行与用量”中查看记录后再继续。",
+  "person.outputTruncatedDetail": "回复被输出 token 上限截断；本提案未执行工具、未提交认识。若尝试恢复，会在同一调用预算内显示为下一次 loop。",
   "person.usage.requestedEffort": "请求 effort",
   "person.usage.status.rejected": "提案未通过",
   "person.usage.scope": "每次 turn 的模型调用与消耗。",

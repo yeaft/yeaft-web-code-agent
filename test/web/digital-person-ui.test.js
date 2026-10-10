@@ -358,6 +358,16 @@ describe('Digital Person surface', () => {
     expect(wrapper.text()).not.toMatch(/person\.usage\./);
   });
 
+  it.each([en, zhCN])('explains output truncation in usage without exposing partial model content', messages => {
+    const turn = personTurn(3, { status: 'completed', calls: [{ callId: 'cut', index: 1, status: 'failed', code: 'OUTPUT_TRUNCATED', usage: { outputTokens: 4096 } },
+      { callId: 'recovery', index: 2, status: 'completed', selectionOrigin: 'output-recovery', usage: { outputTokens: 25 } }] });
+    wrapper = mount(PersonTurnUsage, { props: { page: { items: [turn], loaded: true } },
+      global: { config: { globalProperties: { $t: (key, params = {}) => (messages[key] || key).replace(/\{(\w+)\}/g, (m, name) => params[name] ?? m) } } } });
+    expect(wrapper.text()).toContain(messages['person.outputTruncatedDetail']);
+    expect(wrapper.text()).toContain('4,096'); expect(wrapper.text()).toContain('output-recovery');
+    expect(wrapper.text()).not.toMatch(/person\.[a-z]/);
+  });
+
   it('does not invent model windows or source counts for historical records, and keeps zero primary usage', () => {
     const turn = personTurn(3, { usage: { inputTokens: 0, outputTokens: 0, complete: false }, calls: [{ callId: 'old', index: 1, status: 'completed',
       usage: { inputTokens: 0, outputTokens: 0 }, contextBytes: 16309, contextBudgetBytes: 65536 }] });

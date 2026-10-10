@@ -219,7 +219,8 @@ export class PersonCapabilities {
       if (cursor != null && (localCursor || args.kind === 'concepts')) identifier(cursor);
       const result = await this.repository.recall(this.ownerId, { ...args, cursor, limit }, { signal });
       signal?.throwIfAborted();
-      if (bytes(result) > 60000) fail('CONTEXT_LIMIT');
+      // Complete recall pages are checked against the selected model's actual
+      // context in assembleContext, not an unrelated fixed 60 KiB allowance.
       return { ...result, kind: args.kind, version: entry.version };
     }
     object(args, []);

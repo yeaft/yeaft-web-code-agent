@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { digest } from '../../../../agent/yeaft/person/contracts.js';
+import { digest, LIMITS } from '../../../../agent/yeaft/person/contracts.js';
 import { LocalPersonMemory } from '../../../../agent/yeaft/person/local-memory.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
@@ -459,13 +459,21 @@ describe('Person inspection, search and name: SQLite', () => {
     const s = service(), r = repo(); await call(s, 'open');
     for (let i = 0; i < 40; i++) {
       const { episode } = await admission(r, 'alice', 'needle ' + 'x'.repeat(8100));
-      await r.finish(episode, 'completed');
+      const callId = randomUUID();
+      await r.startCall(episode, { callId, requested: { model: 'test/first', effort: null } });
+      await r.finalizeCall(episode, { callId, output: { text: '{}' } });
+      // Large complete replies cross the transport budget with fewer records
+      // than the requested count, even after lifting the old 256KiB cap.
+      const proposal = finalProposal(episode.baseStateVersion);
+      proposal.concepts = []; proposal.state.focusConceptIds = [];
+      proposal.reply = 'needle ' + '文'.repeat(100000);
+      await r.commit(episode, proposal, { model: 'test/first', effort: null }, callId);
     }
     const first = await call(s, 'search', { query: 'needle', limit: 50 });
-    expect(first.items.length).toBeGreaterThan(0); expect(first.items.length).toBeLessThan(40);
-    expect(Buffer.byteLength(JSON.stringify(first.items))).toBeLessThan(257 * 1024);
+    expect(first.items.length).toBeGreaterThan(0); expect(first.items.length).toBeLessThan(50);
+    expect(Buffer.byteLength(JSON.stringify(first.items))).toBeLessThan(LIMITS.responseBytes);
     const second = await call(s, 'search', { query: 'needle', cursor: first.nextCursor, limit: 50 });
-    expect([...first.items, ...second.items].map(m => m.seq)).toEqual(Array.from({ length: 40 }, (_, i) => 40 - i));
+    expect([...first.items, ...second.items].map(m => m.seq)).toEqual(Array.from({ length: 80 }, (_, i) => 80 - i));
     expect(second.nextCursor).toBeNull(); expect(stream).not.toHaveBeenCalled();
   });
 

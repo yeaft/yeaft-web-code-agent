@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
@@ -12,6 +12,7 @@ import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-re
 import { DatabaseSync } from 'node:sqlite';
 import { collectOutput, createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { callUsage } from '../../../../agent/yeaft/person/turn-diagnostics.js';
+import { LIMITS } from '../../../../agent/yeaft/person/contracts.js';
 import { config, imageConfig, finalProposal } from './fixtures.js';
 
 // Real runtime lifecycle against an isolated SQLite authority, with scripted inference.
@@ -80,6 +81,46 @@ describe('Person real SQLite runtime integration', () => {
     await r.append(episode, 'activity', { callId, activity: p.activity, decision: p.decision, disposition: 'candidate' });
     return p;
   };
+
+  it('persists and reopens a large complete reply using native output capacity, not old 4K/64KiB limits', async () => {
+    const namespace = 'large-public-output', reply = '文'.repeat(100000);
+    let dispatched;
+    const largeConfig = { ...config, availableModels: config.availableModels.map(model => ({ ...model, contextWindow: 1048576, maxOutput: 131072 })) };
+    const s = create(namespace, adapterFor((context, params) => {
+      dispatched = params.maxTokens;
+      expect(context.budget.maxOutputTokens).toBe(131072);
+      const p = finalProposal(); p.reply = reply; return p;
+    }), { config: largeConfig });
+    await call(s, 'open'); await call(s, 'send', { text: 'Produce the full artifact.', clientMessageId: 'large' });
+    expect((await waitIdle(s)).latestEpisode.status).toBe('completed');
+    expect(dispatched).toBe(131072);
+    const messages = await call(s, 'messages');
+    expect(messages.items[0].text).toBe(reply);
+    expect((await call(s, 'search', { query: '文' })).items[0].text).toBe(reply);
+    const output = (await call(s, 'traces')).items.find(trace => trace.kind === 'call_output');
+    expect(JSON.parse(output.output.text).reply).toBe(reply);
+    expect(output.output.bytes).toBeGreaterThan(65536);
+    await s.close();
+    const reopened = create(namespace, adapterFor(() => { throw new Error('Reads must not infer'); }), { config: largeConfig });
+    expect((await call(reopened, 'messages')).items[0].text).toBe(reply);
+  });
+
+  it('pages large trace records completely under a transport byte budget without gaps', async () => {
+    const r = repo('large-trace-pages'); await r.open('alice');
+    const { episode } = await r.admit('alice', { kind: 'think', text: '', clientMessageId: 'large-pages', workerId: 'worker', budget: { calls: 1 } });
+    const text = 'x'.repeat(1000000);
+    for (let index = 0; index < 8; index++) await r.append(episode, 'probe', { index, text });
+    let cursor = null, pages = 0;
+    const seen = [];
+    do {
+      const page = await r.list('alice', 'traces', { cursor, limit: 50 }); pages++;
+      expect(Buffer.byteLength(JSON.stringify(page.items))).toBeLessThan(LIMITS.responseBytes);
+      for (const trace of page.items.filter(trace => trace.kind === 'probe')) { expect(trace.text).toBe(text); seen.push(trace.index); }
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(pages).toBeGreaterThan(1);
+    expect(seen).toEqual([7, 6, 5, 4, 3, 2, 1, 0]);
+  });
 
   it('publishes fenced, idempotent progress without committing cognition; survives cancellation and restart', async () => {
     const r = repo('progress'); await r.open('alice'); await r.open('bob');
@@ -172,6 +213,121 @@ describe('Person real SQLite runtime integration', () => {
       expect(repository.heartbeat.mock.calls.length).toBeGreaterThan(30);
       expect(repository.finish).not.toHaveBeenCalled();
     } finally { try { controller.abort(); await work; } finally { vi.useRealTimers(); } }
+  });
+
+  it('replans a truncated proposal once within budget, retaining evidence and never replaying tools', async () => {
+    let count = 0, adapterError;
+    const executed = vi.spyOn(PersonCapabilities.prototype, 'execute');
+    const service = create('truncated-recovery', { async *stream(params) {
+      try {
+        const context = JSON.parse(params.messages[0].content);
+        count++;
+        expect(context.budget.maxOutputTokens).toBe(params.maxTokens);
+        expect(context.budget.remainingCalls).toBe(4 - count);
+        if (count === 2) {
+          yield { type: 'text_delta', text: '{"next":{"capability":{"id":"FileWrite","args":{"content":"truncated-tool-payload-marker' };
+          yield { type: 'usage', inputTokens: 50, outputTokens: 4096 };
+          yield { type: 'stop', stopReason: 'max_tokens' }; return;
+        }
+        const p = finalProposal();
+        if (count === 1) p.next = { model: 'test/first', effort: null, reason: 'Inspect a contract.', capability: { id: 'catalog.view', args: { id: 'FileWrite' } } };
+        else {
+          expect(context.outputRecovery).toMatchObject({ code: 'OUTPUT_TRUNCATED', rejectedBeforeExecution: true });
+          expect(context.capabilityResult.id).toBe('FileWrite');
+          expect(context.previousProposal.next.capability.id).toBe('catalog.view');
+          expect(JSON.stringify(context)).not.toContain('truncated-tool-payload-marker');
+        }
+        yield { type: 'text_delta', text: JSON.stringify(p) };
+        yield { type: 'usage', inputTokens: 10, outputTokens: 20 };
+        yield { type: 'stop', stopReason: 'end_turn' };
+      } catch (error) { adapterError = error; throw error; }
+    } }, { maxCalls: 3 });
+    try {
+      await call(service, 'open'); await call(service, 'send', { text: 'Build a large script.', clientMessageId: 'recover' });
+      const snapshot = await waitIdle(service);
+      if (adapterError) throw adapterError;
+      expect(snapshot.latestEpisode.status).toBe('completed'); expect(snapshot.state.version).toBe(1);
+      expect(executed.mock.calls.map(([invocation]) => invocation.id)).toEqual(['catalog.view']);
+      const turn = (await call(service, 'turns')).items[0];
+      expect(turn.calls).toHaveLength(3);
+      expect(turn.calls[1]).toMatchObject({ status: 'failed', code: 'OUTPUT_TRUNCATED', usage: { outputTokens: 4096 } });
+      expect(turn.calls[2].selectionOrigin).toBe('output-recovery');
+      expect(turn.usage).toMatchObject({ outputTokens: 4136, inputTokens: 70 });
+      const traces = (await call(service, 'traces', { limit: 50 })).items;
+      expect(traces.filter(t => t.kind === 'call_failed')).toHaveLength(1);
+      expect(traces.filter(t => t.kind === 'capability_started')).toHaveLength(1);
+      expect(traces.find(t => t.kind === 'call_failed').output).toMatchObject({ complete: false, accepted: false, stopReason: 'max_tokens' });
+    } finally { executed.mockRestore(); }
+  });
+
+  it('retains a successful host write as recovery evidence and never replays its effects', async () => {
+    const file = join(yeaftDir, 'recovery-once.txt');
+    let count = 0, adapterError;
+    const executions = vi.spyOn(PersonCapabilities.prototype, 'execute');
+    const service = create('truncated-after-write', { async *stream(params) {
+      try {
+        count++;
+        const context = JSON.parse(params.messages[0].content), p = finalProposal();
+        if (count === 3) {
+          yield { type: 'text_delta', text: '{"reply":"rejected-fragment-marker' };
+          yield { type: 'usage', outputTokens: 4096 };
+          yield { type: 'stop', stopReason: 'max_tokens' }; return;
+        }
+        if (count <= 2) p.next = { model: 'test/first', effort: null, reason: 'Write once.', capability: count === 1
+          ? { id: 'catalog.view', args: { id: 'FileWrite' } }
+          : { id: 'FileWrite', args: { file_path: file, content: 'written-once' } } };
+        else {
+          expect(context.outputRecovery.rejectedBeforeExecution).toBe(true);
+          expect(context.capabilityResult).toMatchObject({ id: 'FileWrite', ok: true, sourceRef: expect.stringMatching(/^tool:/) });
+          expect(context.sourceRefs).toContain(context.capabilityResult.sourceRef);
+          expect(context.previousProposal.next.capability.id).toBe('FileWrite');
+          expect(JSON.stringify(context)).not.toContain('rejected-fragment-marker');
+          expect(await readFile(file, 'utf8')).toBe('written-once');
+        }
+        yield { type: 'text_delta', text: JSON.stringify(p) };
+        yield { type: 'stop', stopReason: 'end_turn' };
+      } catch (error) { adapterError = error; throw error; }
+    } }, { maxCalls: 4 });
+    try {
+      await call(service, 'open'); await call(service, 'send', { text: 'Write and report.', clientMessageId: 'write-recovery' });
+      const snapshot = await waitIdle(service);
+      if (adapterError) throw adapterError;
+      expect(snapshot.latestEpisode.status).toBe('completed');
+      expect(executions.mock.calls.map(([invocation]) => invocation.id)).toEqual(['catalog.view', 'FileWrite']);
+      expect((await call(service, 'turns')).items[0].calls.map(c => c.status)).toEqual(['completed', 'completed', 'failed', 'completed']);
+    } finally { executions.mockRestore(); }
+  });
+
+  it.each([1, 4])('stops after at most one truncation recovery with a %i-call budget, never accepting partial actions', async maxCalls => {
+    let count = 0;
+    const service = create(`truncated-bounded-${maxCalls}`, { async *stream() {
+      count++;
+      // Even syntactically complete JSON cannot be accepted with a max_tokens stop.
+      yield { type: 'text_delta', text: JSON.stringify(finalProposal()) };
+      yield { type: 'usage', inputTokens: 5, outputTokens: 7 };
+      yield { type: 'stop', stopReason: 'max_tokens' };
+    } }, { maxCalls });
+    await call(service, 'open'); await call(service, 'think', { text: '', clientMessageId: 'truncated' });
+    const snapshot = await waitIdle(service);
+    expect(count).toBe(Math.min(maxCalls, 2));
+    expect(snapshot.latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'OUTPUT_TRUNCATED' });
+    expect(snapshot.state.version).toBe(0); expect(snapshot.concepts).toHaveLength(0); expect(snapshot.messages).toHaveLength(0);
+    const turn = (await call(service, 'turns')).items[0];
+    expect(turn.usage.outputTokens).toBe(7 * count); expect(turn.calls).toHaveLength(count);
+  });
+
+  it('can cancel a recovery without a late commit or additional retry', async () => {
+    let count = 0, started;
+    const recoveryStarted = new Promise(resolve => { started = resolve; });
+    const service = create('truncated-cancel', { async *stream({ signal }) {
+      count++;
+      if (count === 1) { yield { type: 'text_delta', text: '{' }; yield { type: 'stop', stopReason: 'max_tokens' }; return; }
+      started(); await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    } });
+    await call(service, 'open'); await call(service, 'think', { text: '', clientMessageId: 'cancel-recovery' });
+    await recoveryStarted; await call(service, 'cancel');
+    const snapshot = await waitIdle(service);
+    expect(snapshot.latestEpisode.status).toBe('cancelled'); expect(snapshot.state.version).toBe(0); expect(count).toBe(2);
   });
 
   it('admits real messages asynchronously, chooses models per call, recalls, commits concepts and survives restart', async () => {
@@ -478,7 +634,7 @@ describe('Person real SQLite runtime integration', () => {
     const one = await admit('one'); await start(one.episode, 'one-call'); await r.cancel('alice');
     const terminal = { callId: 'one-call', output: { text: 'consumed prefix', observedBytes: 15 }, code: 'CANCELLED' };
     expect(await r.finalizeCall({ ...one.episode, workerId: 'imposter' }, terminal)).toBe(false);
-    await expect(r.finalizeCall(one.episode, { ...terminal, output: { text: 'x'.repeat(65537) } })).rejects.toMatchObject({ code: 'OUTPUT_LIMIT' });
+    await expect(r.finalizeCall(one.episode, { ...terminal, output: { text: 'x'.repeat(LIMITS.outputBytes + 1) } })).rejects.toMatchObject({ code: 'OUTPUT_LIMIT' });
     const two = await admit('two'); // A new state owner does not erase the old call's bounded trace-only right.
     await Promise.all([r.finalizeCall(one.episode, terminal), r.finalizeCall(one.episode, terminal)]);
     await expect(r.append(one.episode, 'activity', {})).rejects.toMatchObject({ code: 'STALE' });
@@ -680,6 +836,17 @@ afterEach(async () => {
 describe('Person additive provider usage', () => {
   const consume = async (events, more = {}) => collectOutput({ async *stream() { yield* events; } }, { signal: new AbortController().signal, ...more }, () => {});
   const stop = { type: 'stop', stopReason: 'end_turn' };
+  it('distinguishes output-token truncation from invalid output and retains provider usage', async () => {
+    const error = await consume([
+      { type: 'text_delta', text: '{"unfinished":' },
+      { type: 'usage', inputTokens: 20, outputTokens: 4096 },
+      { type: 'stop', stopReason: 'max_tokens' },
+    ]).catch(error => error);
+    expect(error.code).toBe('OUTPUT_TRUNCATED');
+    expect(error.partialOutput).toMatchObject({ text: '{"unfinished":', complete: false, accepted: false,
+      stopReason: 'max_tokens', usage: { inputTokens: 20, outputTokens: 4096 } });
+    await expect(consume([{ type: 'stop', stopReason: 'tool_use' }])).rejects.toMatchObject({ code: 'INVALID_PROPOSAL' });
+  });
   it('adds Anthropic input/turnStart and output deltas with uncached input plus caches; reasoning is a subset', async () => {
     const result = await consume([
       { type: 'usage', inputTokens: 12, outputTokens: 1, cacheReadTokens: 30, cacheWriteTokens: 8 },
