@@ -29,9 +29,31 @@ Vue.createApp({components:{PersonInspectorList}, setup(){
 window.fixtureReady = true;
 </script></body></html>`;
 
+const taskFixture = `<!doctype html><html><head>
+<link rel="stylesheet" href="/web/styles/variables.css"><link rel="stylesheet" href="/web/styles/digital-person.css">
+<style>*{box-sizing:border-box}body{margin:0}.person-page{height:100dvh}.person-inspector-list{padding:12px}button{min-height:32px}</style>
+</head><body><div id="fixture"></div><script src="/web/vendor/vue.global.prod.js"></script>
+<script type="module">
+import PersonTaskBrowser from '/web/components/PersonTaskBrowser.js';
+import en from '/web/i18n/en.js';
+const makeHistory = count => Array.from({length:count}, (_, i) => ({id:'history-' + i, title:'Settled ' + i, status:'completed', createdAt:1000-i}));
+window.fixtureState = Vue.reactive({ identity:'agent-a', requests:0, stops:[], logs:[], page:{tasks:makeHistory(200), agents:[], nextCursor:'older-1', loaded:true, loading:false,
+  active:{ tasks:[{id:'old-shell', title:'Old running shell', status:'running', createdAt:1}, {id:'child-task', kind:'sub_agent', agentId:'old-agent', status:'running', createdAt:2}],
+    agents:[{id:'old-agent', name:'Detached tools', status:'completed', executionPending:true, createdAt:2}], truncated:false }} });
+const app = Vue.createApp({components:{PersonTaskBrowser}, setup(){
+  const state = window.fixtureState;
+  function more(){ state.requests++; state.page.loading = true; setTimeout(() => {
+    state.page.tasks.push({id:'older-page', title:'Older record', status:'completed', createdAt:0}); state.page.nextCursor='older-2'; state.page.loading=false;
+  },80); }
+  return {state, more};
+}, template: \`<div class="person-page"><PersonTaskBrowser :page="state.page" :log="{}" :identity-key="state.identity" @more="more" @log="id => state.logs.push(id)" @stop="(kind,id) => state.stops.push([kind,id])" /></div>\`});
+app.config.globalProperties.$t = key => en[key] || key;
+app.mount('#fixture'); window.fixtureReady = true;
+</script></body></html>`;
+
 test.beforeAll(async () => {
   server = createServer(async (request, response) => {
-    if (request.url === '/') { response.setHeader('Content-Type', 'text/html'); response.end(fixture); return; }
+    if (request.url === '/' || request.url === '/tasks') { response.setHeader('Content-Type', 'text/html'); response.end(request.url === '/tasks' ? taskFixture : fixture); return; }
     const path = resolve(webRoot, decodeURIComponent(request.url.replace(/^\/web\//, '')));
     if (!request.url.startsWith('/web/') || !path.startsWith(webRoot + sep)) { response.writeHead(404).end(); return; }
     try {
@@ -95,6 +117,54 @@ for (const theme of ['light', 'dark']) {
       await expect(row0).not.toHaveAttribute('open', '');
       await expect(row0.locator('summary')).toHaveText('Replacement 0');
       await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBe(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(errors).toEqual([]);
+    });
+
+    test(`old active task controls and history paging: ${theme}, ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 600 });
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.goto(origin + '/tasks');
+      await page.waitForFunction(() => window.fixtureReady);
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      const scroller = page.locator('.person-inspector-list');
+      const child = page.locator('[data-task-id="old-agent"]');
+      const shell = page.locator('[data-task-id="old-shell"]');
+      await expect(child).toBeVisible();
+      await expect(shell).toBeVisible();
+      expect(await page.locator('[data-task-id]').count()).toBeLessThan(20);
+      await child.getByRole('button', { name: 'View log', exact: true }).click();
+      expect(await page.evaluate(() => window.fixtureState.logs)).toEqual(['child-task']);
+      await child.getByRole('button', { name: 'Stop', exact: true }).click();
+      await expect(child.locator('.btn-secondary')).toBeFocused();
+      await page.keyboard.press('Enter');
+      expect(await page.evaluate(() => window.fixtureState.stops)).toEqual([['agent', 'old-agent']]);
+
+      // A fresh empty control snapshot removes active-only records immediately,
+      // without draining history or retaining executable cleanup controls.
+      await page.evaluate(() => { window.fixtureState.page.active = {tasks:[], agents:[], truncated:false}; });
+      await expect(child).toHaveCount(0);
+      await expect(shell).toHaveCount(0);
+      await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await page.waitForTimeout(120);
+      expect(await page.evaluate(() => window.fixtureState.requests)).toBe(0);
+      await scroller.hover();
+      await page.mouse.wheel(0, 150);
+      await expect.poll(() => page.evaluate(() => window.fixtureState.page.tasks.length)).toBe(201);
+      await page.waitForTimeout(200);
+      expect(await page.evaluate(() => window.fixtureState.requests)).toBe(1);
+      await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await page.getByRole('button', { name: 'Load more', exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.fixtureState.requests)).toBe(2);
+      await expect.poll(() => page.evaluate(() => window.fixtureState.page.loading)).toBe(false);
+
+      await page.evaluate(() => {
+        window.fixtureState.identity = 'agent-b';
+        window.fixtureState.page = {tasks:[], agents:[], active:{tasks:[], agents:[]}, loaded:true, nextCursor:null};
+      });
+      await expect(page.getByText('No background tasks or child threads yet.')).toBeVisible();
+      await expect(page.locator('[data-task-id]')).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       expect(errors).toEqual([]);
     });
