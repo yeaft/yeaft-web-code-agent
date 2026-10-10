@@ -1,9 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { acceptPersonResponse } from '../../web/stores/helpers/digital-person.js';
 import DigitalPersonPage from '../../web/components/DigitalPersonPage.js';
+import { projectPersonConversation } from '../../web/utils/person-conversation.js';
 import SidebarDigitalPerson from '../../web/components/SidebarDigitalPerson.js';
 import PersonThoughtJournal from '../../web/components/PersonThoughtJournal.js';
 import PersonActivity from '../../web/components/PersonActivity.js';
@@ -56,6 +60,35 @@ async function render(messages = en) {
   await flushPromises();
 }
 
+describe('Digital Person conversation projection', () => {
+  const reply = (id, episodeId, extra = {}) => ({ id, role: 'assistant', episodeId, text: id, createdAt: 1, ...extra });
+
+  it('groups only contiguous replies with an explicit episode, never legacy, user or system records', () => {
+    const rows = [reply('p1', 'a'), reply('p2', 'a'), reply('f', 'a', { replyKind: 'final' }),
+      reply('other', 'b'), { id: 'user', role: 'user', episodeId: 'b' }, reply('later', 'b'),
+      { id: 'system', role: 'system', episodeId: 'b' }, reply('after-system', 'b'), reply('legacy'), reply('legacy2')];
+    const before = JSON.stringify(rows);
+    const blocks = projectPersonConversation(rows);
+    expect(blocks.map(block => block.parts?.map(part => part.id) || block.id)).toEqual([
+      ['p1', 'p2', 'f'], ['other'], 'user', ['later'], 'system', ['after-system'], ['legacy'], ['legacy2'],
+    ]);
+    expect(new Set(blocks.map(block => block.key)).size).toBe(blocks.length);
+    expect(JSON.stringify(rows)).toBe(before);
+    expect(blocks[0].parts[0]).toBe(rows[0]);
+  });
+
+  it('keeps an extended episode key stable through append, replay and older page prepend', () => {
+    const rows = [reply('p2', 'a'), reply('f', 'a')];
+    const key = projectPersonConversation(rows)[0].key;
+    expect(projectPersonConversation(rows.map(row => ({ ...row })))[0].key).toBe(key);
+    expect(projectPersonConversation([...rows, reply('next', 'b')])[0].key).toBe(key);
+    expect(projectPersonConversation([reply('p1', 'a'), ...rows])[0].key).toBe(key);
+    const split = projectPersonConversation([reply('old-run', 'a'), { id: 'boundary', role: 'user' }, ...rows]);
+    expect(split.at(-1).key).toBe(key);
+    expect(split[0].key).not.toBe(key);
+  });
+});
+
 describe('Digital Person surface', () => {
   it('hides the sidebar entry when the optional store host is absent', () => {
     vi.stubGlobal('Pinia', {});
@@ -68,6 +101,72 @@ describe('Digital Person surface', () => {
     await render();
     const options = wrapper.findComponent({ name: 'ModernSelect' }).props('options');
     expect(options.map(row => row.value)).toEqual(['a']);
+  });
+
+  it.each([en, zhCN])('renders one reply header with timestamped progress/final parts and a single inline waiting status', async messages => {
+    const markdown = {};
+    runInNewContext(readFileSync(resolve(process.cwd(), 'web/vendor/marked.min.js'), 'utf8'), markdown);
+    vi.stubGlobal('marked', markdown.marked);
+    await render(messages);
+    const state = wrapper.vm.state;
+    const p1 = { id: 'p1', role: 'assistant', episodeId: 'turn', replyKind: 'progress', text: 'First verified finding.', createdAt: 31000 };
+    Object.assign(state, { messages: [{ id: 'question', role: 'user', text: 'Question', episodeId: 'turn', createdAt: 1 }, p1],
+      busy: true, episodeId: 'turn', latestEpisode: { id: 'turn', status: 'running' } });
+    await Vue.nextTick();
+    const article = wrapper.get('.person-reply');
+    const articleElement = article.element;
+    const firstPartElement = article.get('.person-reply-part').element;
+    expect(article.get('.person-response-loading').exists()).toBe(true);
+    state.messages.push({ ...p1, id: 'p2', text: '<script>Not active HTML</script>', createdAt: 62000 },
+      { ...p1, id: 'final', replyKind: 'final', text: '## Final conclusion', createdAt: 93000 });
+    await Vue.nextTick();
+    expect(wrapper.findAll('.person-reply')).toHaveLength(1);
+    expect(article.findAll('.person-message-meta')).toHaveLength(1);
+    expect(article.get('.person-message-meta').text()).toBe('Ada');
+    expect(article.findAll('.person-reply-part')).toHaveLength(3);
+    expect(article.findAll('.person-reply-divider')).toHaveLength(2);
+    expect(article.findAll('.person-reply-kind').map(node => node.text())).toEqual([
+      messages['person.progressReply'], messages['person.progressReply'], messages['person.finalReply'],
+    ]);
+    expect(article.findAll('time').map(node => node.attributes('datetime'))).toEqual([31000, 62000, 93000].map(at => new Date(at).toISOString()));
+    expect(article.find('script').exists()).toBe(false);
+    expect(article.get('.person-reply-part[data-message-id="final"] .person-message-text h2').text()).toBe('Final conclusion');
+    state.messages = state.messages.map(row => ({ ...row })); // snapshot replay
+    await Vue.nextTick();
+    expect(wrapper.get('.person-reply').element).toBe(articleElement);
+    expect(wrapper.get('.person-reply-part').element).toBe(firstPartElement);
+    Object.assign(state, { busy: false, episodeId: null, latestEpisode: { id: 'turn', status: 'completed' } });
+    await Vue.nextTick();
+    expect(wrapper.find('.person-response-loading').exists()).toBe(false);
+    expect(article.findAll('.person-reply-part')).toHaveLength(3);
+    state.messages.push({ id: 'question2', role: 'user', text: 'New question', createdAt: 94000 }, { ...p1, id: 'next', episodeId: 'next-turn' });
+    await Vue.nextTick();
+    expect(wrapper.findAll('.person-reply')).toHaveLength(2);
+  });
+
+  it.each(['cancelled', 'failed', 'interrupted', 'budget_exhausted'])('keeps grouped progress on %s without labelling it final', async status => {
+    await render();
+    Object.assign(wrapper.vm.state, { messages: [1, 2].map(index => ({ id: `p${index}`, role: 'assistant', episodeId: 'turn', replyKind: 'progress', text: `Finding ${index}`, createdAt: index })),
+      busy: false, episodeId: null, latestEpisode: { id: 'turn', status } });
+    await Vue.nextTick();
+    expect(wrapper.findAll('.person-reply')).toHaveLength(1);
+    expect(wrapper.findAll('.person-reply-part')).toHaveLength(2);
+    expect(wrapper.findAll('.person-reply-kind').every(node => node.text() === en['person.progressReply'])).toBe(true);
+    expect(wrapper.find('.person-response-loading').exists()).toBe(false);
+  });
+
+  it('preserves reply and part DOM identity when an older page extends the same episode', async () => {
+    await render();
+    const last = { id: 'tail', role: 'assistant', episodeId: 'turn', text: 'Visible final part', createdAt: 90000 };
+    wrapper.vm.state.messages = [last];
+    await Vue.nextTick();
+    const article = wrapper.get('.person-reply').element;
+    const tail = wrapper.get('[data-message-id="tail"] .person-reply-part').element;
+    wrapper.vm.state.messages.unshift({ ...last, id: 'earlier', text: 'Earlier progress', createdAt: 30000 });
+    await Vue.nextTick();
+    expect(wrapper.get('.person-reply').element).toBe(article);
+    expect(wrapper.get('.person-reply-part[data-message-id="tail"]').element).toBe(tail);
+    expect(wrapper.findAll('.person-message-meta')).toHaveLength(1);
   });
 
   it.each([en, zhCN])('labels intermediate replies and renders only backend-confirmed waiting feedback inline', async messages => {

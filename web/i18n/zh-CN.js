@@ -147,6 +147,7 @@ export default {
   "person.loading": "加载中…",
   "person.busy": "处理中…",
   "person.progressReply": "阶段回复",
+  "person.finalReply": "最终回复",
   "person.feedback.model": "仍在等待模型回复。",
   "person.feedback.capability": "仍在等待能力执行结束。",
   "person.feedback.preparing": "正在准备下一次回复。",

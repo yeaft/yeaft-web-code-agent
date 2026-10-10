@@ -11,6 +11,8 @@ import { PERSON_FILE_ACCEPT, validatePersonFiles, uploadPersonFiles } from '../s
 import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
 import PersonActivity from './PersonActivity.js';
+import PersonResponseLoading from './PersonResponseLoading.js';
+import { projectPersonConversation } from '../utils/person-conversation.js';
 import { projectPersonActivity, projectPersonFeedback } from '../utils/person-activity.js';
 import { useAuthStore } from '../stores/auth.js';
 import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
@@ -18,7 +20,7 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
-  components: { UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonTaskBrowser, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity },
+  components: { UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonTaskBrowser, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity, PersonResponseLoading },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -107,6 +109,12 @@ export default {
     const activity = Vue.computed(() => projectPersonActivity(state, gate.value));
     const feedback = Vue.computed(() => projectPersonFeedback(state, gate.value));
     const responding = Vue.computed(() => !gate.value && (state.busy || state.commandPending));
+    const conversation = Vue.computed(() => projectPersonConversation(state.messages));
+    const loadingReplyKey = Vue.computed(() => {
+      const tail = conversation.value.at(-1);
+      return activity.value.loading && !state.commandPending && tail?.role === 'assistant'
+        && tail.episodeId && tail.episodeId === state.episodeId ? tail.key : null;
+    });
     const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.settingsPending && !state.retryCommand);
     const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.uploadError) ? 'person.filesFailed' : ''));
     const canSend = Vue.computed(() => canCompose.value && filesReady.value && (!!draft.value.trim() || !!attachments.value.length));
@@ -249,7 +257,7 @@ export default {
       }
       if (!focus.locked) return;
       const target = focusedResponseId.value
-        ? [...pane.querySelectorAll('.person-message')].find(element => element.dataset.messageId === focusedResponseId.value)
+        ? [...pane.querySelectorAll('.person-message, .person-reply-part')].find(element => element.dataset.messageId === focusedResponseId.value)
         : responseStart.value;
       if (!target) return;
       // Leave only the space needed to put a short response at the top. It is
@@ -302,7 +310,8 @@ export default {
     }
     const asUserMessage = message => ({ id: message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
+    return { chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -353,24 +362,29 @@ export default {
             <div ref="readingColumn" class="person-reading-column">
               <button v-if="state.messageCursor != null" type="button" class="btn-ghost person-load-more" @click="controller.page('messages', true)" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
               <div v-if="!state.messages.length && ready && !responding" class="person-welcome"><NavigationIcon name="activity" :size="28" /><h2>{{ $t('person.welcome') }}</h2><p>{{ $t('person.empty') }}</p></div>
-              <template v-for="message in state.messages" :key="message.id">
+              <template v-for="message in conversation" :key="message.key">
                 <div v-if="message.role === 'user'">
                   <UserTurnBlock :message="asUserMessage(message)" :session-actions="false" />
                   <ul v-if="message.attachments?.length" class="person-sent-files" :aria-label="$t('person.attachedFiles')"><li v-for="(file, index) in message.attachments" :key="file.id || index">{{ file.name }}</li></ul>
                 </div>
+                <article v-else-if="message.role === 'assistant'" class="person-message person-reply" :data-message-id="message.id" :data-episode-id="message.episodeId">
+                  <header class="person-message-meta"><strong>{{ state.person?.name || $t('person.title') }}</strong></header>
+                  <section v-for="(part, index) in message.parts" :key="part.id" class="person-reply-part" :data-message-id="part.id">
+                    <div class="person-reply-part-meta" :class="{ 'person-reply-divider': index > 0 }">
+                      <span v-if="part.replyKind === 'progress' || part.replyKind === 'final'" class="person-reply-kind">{{ $t(part.replyKind === 'progress' ? 'person.progressReply' : 'person.finalReply') }}</span>
+                      <time :datetime="datetime(part.createdAt)">{{ time(part.createdAt) }}</time>
+                    </div>
+                    <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(part.text)"></div>
+                  </section>
+                  <PersonResponseLoading v-if="loadingReplyKey === message.key" :feedback="feedback" />
+                </article>
                 <article v-else class="person-message" :data-message-id="message.id">
-                  <header class="person-message-meta"><strong>{{ message.role === 'assistant' ? (state.person?.name || $t('person.title')) : $t('person.system') }}</strong><span v-if="message.role === 'assistant' && message.replyKind === 'progress'" class="person-reply-kind">{{ $t('person.progressReply') }}</span><time>{{ time(message.createdAt) }}</time></header>
+                  <header class="person-message-meta"><strong>{{ $t('person.system') }}</strong><time>{{ time(message.createdAt) }}</time></header>
                   <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
                 </article>
               </template>
               <div v-if="hasResponseFocus && !focusedResponseId" ref="responseStart" class="person-response-start" aria-hidden="true"></div>
-              <div v-if="activity.loading" class="person-response-loading" role="status" aria-live="polite" aria-atomic="true" :aria-label="$t('sidebar.sessions.processing')">
-                <div v-if="feedback" class="person-wait-feedback">
-                  <span>{{ $t(feedback.label) }}</span>
-                  <time :datetime="feedback.at">{{ $t('person.feedback.confirmedAt', { time: time(feedback.at) }) }}</time>
-                </div>
-                <span class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></span>
-              </div>
+              <PersonResponseLoading v-if="activity.loading && !loadingReplyKey" :feedback="feedback" />
               <div v-if="hasResponseFocus" ref="responseTail" class="person-response-tail" aria-hidden="true"></div>
             </div>
           </div>

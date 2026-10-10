@@ -629,17 +629,20 @@ async function expectReplyGroup(page, firstId, ids, { zh = false, kinds = [] } =
     await expect(meta).toHaveCount(1);
     await expect(meta.locator('time')).toHaveCount(1);
     await expect(meta.locator('time')).not.toHaveText('');
-    const divider = meta.locator('.person-reply-divider');
-    await expect(divider).toHaveCount(index ? 1 : 0);
     if (index) {
-      const dividerBounds = await divider.boundingBox();
-      const partBounds = await part.boundingBox();
-      expect(dividerBounds.width).toBeGreaterThan(0);
-      expect(dividerBounds.width).toBeLessThan(partBounds.width / 2);
-    }
+      await expect(meta).toHaveClass(/person-reply-divider/);
+      const divider = await meta.evaluate(el => {
+        const style = getComputedStyle(el, '::before');
+        return { width: parseFloat(style.flexBasis), border: parseFloat(style.borderTopWidth), content: style.content, partWidth: el.closest('.person-reply-part').clientWidth };
+      });
+      expect(divider.content).toBe('""');
+      expect(divider.border).toBeGreaterThan(0);
+      expect(divider.width).toBeGreaterThan(0);
+      expect(divider.width).toBeLessThan(divider.partWidth / 2);
+    } else await expect(meta).not.toHaveClass(/person-reply-divider/);
     const label = meta.locator('.person-reply-kind');
     if (kinds[index] === 'progress') await expect(label).toHaveText(zh ? '阶段回复' : 'Progress update');
-    else if (kinds[index] === 'final') await expect(label).toHaveText(zh ? /最终|最后/ : /final/i);
+    else if (kinds[index] === 'final') await expect(label).toHaveText(zh ? '最终回复' : 'Final response');
     else await expect(label).toHaveCount(0);
   }
   return article;
@@ -1057,16 +1060,14 @@ for (const scenario of responseScenarios) {
     const firstArticle = await group.elementHandle();
     await expect(input).toBeDisabled();
     await expect(page.locator('.person-response-loading')).toBeVisible();
-    // Support either placement while enforcing same-block feedback when the
-    // implementation nests the loading indicator in the live reply article.
-    const nestedLoading = await group.locator('.person-response-loading').count() > 0;
+    await expect(group.locator('.person-response-loading')).toHaveCount(1);
     const rows = 2; // one historical answer and one live episode, not one article per part
     await expect(page.locator('article.person-message')).toHaveCount(rows);
     await expect(page.locator('section.person-reply-part')).toHaveCount(2);
     const statusAt = mock.replyAt(91000);
     mock.waiting('model', 91000);
     await expect(feedback).toContainText(zh ? '仍在等待模型回复。' : 'Still waiting for the model response.');
-    if (nestedLoading) await expect(group.locator('.person-wait-feedback')).toHaveCount(1);
+    await expect(group.locator('.person-wait-feedback')).toHaveCount(1);
     await expect(feedback.locator('time')).toHaveAttribute('datetime', statusAt);
     await expect(feedback).not.toContainText('PRIVATE_CAPABILITY');
     await expect(feedback).toHaveCount(1);
@@ -1143,10 +1144,8 @@ for (const scenario of responseScenarios) {
     await expect(page.locator('article.person-message')).toHaveCount(rows + 1);
     mock.waiting('model', 92000);
     await expect(feedback).toHaveCount(1);
-    if (nestedLoading) {
-      await expect(nextGroup.locator('.person-response-loading')).toHaveCount(1);
-      await expect(nextGroup.locator('.person-wait-feedback')).toHaveCount(1);
-    }
+    await expect(nextGroup.locator('.person-response-loading')).toHaveCount(1);
+    await expect(nextGroup.locator('.person-wait-feedback')).toHaveCount(1);
     mock.holdCancel();
     await page.locator('.stop-btn').click();
     await expect.poll(() => mock.cancelPending()).toBe(true);
