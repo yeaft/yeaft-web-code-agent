@@ -185,6 +185,24 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.tasks.tasks[0].status).toBe('cancelled'); expect(f.state.tasks.pending).toBeNull();
   });
 
+  it('pages newest tasks without erasing history during polling and fences delayed continuation on stop', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30, status: 'running' }], agents: [], nextCursor: 'older' } : undefined);
+    await f.controller.readTasks();
+    expect(f.requests.at(-1).payload).toEqual({ cursor: null, limit: 20 });
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'old', createdAt: 10, status: 'completed' }], agents: [], nextCursor: null } : undefined);
+    await f.controller.readTasks(true);
+    expect(f.requests.at(-1).payload.cursor).toBe('older');
+    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new', 'old']);
+    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30, status: 'completed' }], agents: [], nextCursor: 'older' } : undefined);
+    await f.controller.readTasks();
+    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new', 'old']);
+    expect(f.state.tasks.tasks[0].status).toBe('completed');
+    expect(f.state.tasks.nextCursor).toBeNull();
+    const before = f.requests.length; await f.controller.readTasks(true);
+    expect(f.requests).toHaveLength(before);
+  });
+
   it('keeps task stop errors and reads log pages as bounded plain text', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'task_log' ? { text: 'x'.repeat(40000), nextOffset: r.payload.offset + 40000 } : r.op === 'agent_close' ? false : undefined);

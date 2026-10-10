@@ -50,7 +50,7 @@ export function personState() {
     settingsPending: false, renameSupported: false,
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
     turns: { ...inspectionPage(), stale: false },
-    tasks: { tasks: [], agents: [], loaded: false, loading: false, stale: false, error: null, pending: null },
+    tasks: { tasks: [], agents: [], nextCursor: null, loaded: false, loading: false, stale: false, error: null, pending: null },
     taskLog: { taskId: '', text: '', nextOffset: 0, loading: false, error: null },
   };
 }
@@ -491,27 +491,33 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     clearTimeout(taskPoll);
     if (visible && !state.loading) void readTasks();
   }
-  async function readTasks() {
+  async function readTasks(more = false) {
     if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.loading) return;
-    const g = generation;
-    const number = ++tasksRequest;
-    state.tasks.loading = true;
-    state.tasks.error = null;
+    if (more && state.tasks.nextCursor == null) return;
+    clearTimeout(taskPoll);
+    const g = generation, number = ++tasksRequest, target = state.tasks;
+    const cursor = more ? target.nextCursor : null;
+    const wasLoaded = target.loaded;
+    target.loading = true;
+    target.error = null;
     try {
-      const data = await request('tasks');
-      if (!current(g) || number !== tasksRequest) return;
-      state.tasks.tasks = data.tasks || [];
-      state.tasks.agents = data.agents || [];
-      state.tasks.truncated = data.truncated === true;
-      state.tasks.loaded = true;
-      state.tasks.stale = false;
+      const data = await request('tasks', { cursor, limit: 20 });
+      if (!current(g) || number !== tasksRequest || target !== state.tasks) return;
+      const merge = (previous, incoming) => [...new Map([...previous, ...(incoming || [])].map(row => [row.id, row])).values()]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || String(a.id).localeCompare(String(b.id)));
+      target.tasks = merge(target.tasks, data.tasks);
+      target.agents = merge(target.agents, data.agents);
+      if (more || !wasLoaded) target.nextCursor = data.nextCursor ?? null;
+      target.truncated = target.nextCursor != null;
+      target.loaded = true;
+      target.stale = false;
     } catch (error) {
-      if (current(g) && number === tasksRequest) {
-        state.tasks.stale = true;
-        state.tasks.error = { code: error.code, message: error.message };
+      if (current(g) && number === tasksRequest && target === state.tasks) {
+        target.stale = true;
+        target.error = { code: error.code, message: error.message };
       }
     } finally {
-      if (current(g) && number === tasksRequest) { state.tasks.loading = false; scheduleTasks(); }
+      if (current(g) && number === tasksRequest && target === state.tasks) { target.loading = false; scheduleTasks(); }
     }
   }
   // Turn summaries are independent of raw trace pagination. Poll the latest page
