@@ -85,7 +85,9 @@ export function turnView(episode, events) {
     if (event.kind === 'call_output' || event.kind === 'call_failed') {
       call.status = event.kind === 'call_output' ? 'completed' : ['CANCELLED', 'INTERRUPTED'].includes(event.code) ? event.code.toLowerCase() : 'failed';
       call.endedAt = event.createdAt;
-      call.elapsedMs = Math.max(0, new Date(call.endedAt).getTime() - new Date(call.createdAt).getTime());
+      // Legacy call lifecycle timestamps include queue/pause time. Do not label
+      // them as provider duration when no actual dispatch measurement was stored.
+      call.elapsedMs = token(event.requestElapsedMs);
       call.code = string(event.code);
       call.effective.effort = event.effortObserved === true ? string(event.effectiveEffort) : null;
       call.usage = callUsage(event.usage, event.kind === 'call_output');

@@ -9,6 +9,7 @@ import { comparePersonTasks } from '../../utils/person-tasks.js';
 const channels = new WeakMap();
 const outboxes = new WeakMap();
 const PAGE_SIZE = 50;
+const TERMINAL_EPISODE_STATUSES = new Set(['committed', 'completed', 'failed', 'cancelled', 'interrupted', 'budget_exhausted']);
 const id = () => globalThis.crypto.randomUUID();
 const failure = code => Object.assign(new Error(code), { code });
 
@@ -214,7 +215,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.defaultModel = data.person?.settings?.defaultModel ?? null;
     state.state = data.state;
     state.latestEpisode = data.latestEpisode || null;
-    if (state.latestEpisode && !['accepted', 'running'].includes(state.latestEpisode.status)) state.feedbackSuppressedEpisodeId = state.latestEpisode.id;
+    if (TERMINAL_EPISODE_STATUSES.has(state.latestEpisode?.status)) state.feedbackSuppressedEpisodeId = state.latestEpisode.id;
     const incoming = data.messages || [];
     const lastSeq = state.messages.at(-1)?.seq;
     const firstSeq = incoming[0]?.seq;
@@ -503,9 +504,16 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
 
   // Management observes one live main episode, independently of background work
   // and model readiness. These polls can never admit or replay a model command.
+  function invalidateExecutions() {
+    clearTimeout(executionPoll);
+    executionPoll = null;
+    executionsRequest += 1;
+    state.executions.loading = false;
+    state.executions.stale = true;
+  }
   function scheduleExecutions() {
     clearTimeout(executionPoll);
-    if (!managementVisible || !foreground() || !current() || digitalPersonGate(chat, agentId)) return;
+    if (!managementVisible || !foreground() || !current() || state.executions.pending || state.cancelPending || digitalPersonGate(chat, agentId)) return;
     const g = generation;
     executionPoll = setTimeout(() => { if (current(g)) void readExecutions(); }, pollMs);
   }
@@ -523,7 +531,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     if (tasksVisible) void readTasks();
   }
   async function readExecutions() {
-    if (!current() || !foreground() || !state.person || state.loading || digitalPersonGate(chat, agentId)) return;
+    if (!current() || !foreground() || !state.person || state.executions.pending || state.cancelPending || digitalPersonGate(chat, agentId)) return;
+    if (state.loading) { scheduleExecutions(); return; }
     clearTimeout(executionPoll);
     const g = generation, number = ++executionsRequest, target = state.executions;
     target.loading = true;
@@ -567,22 +576,31 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       return cancel(episodeId);
     }
     const g = generation, control = ++executionControl;
+    invalidateExecutions();
     target.pending = op;
     target.error = null;
+    let acknowledged = false;
     try {
       await request(op, { episodeId });
       if (!current(g) || target !== state.executions || control !== executionControl) return false;
-      // Fence pre-ack reads. An ack is not a safe-boundary pause: only the fresh
-      // Agent snapshot may report paused. Resume never replays send/think.
-      executionsRequest += 1;
-      target.loading = false;
+      // An ack is not a safe-boundary pause: only a post-result Agent read may
+      // report paused. Resume never replays send/think.
       if (target.active?.episodeId === episodeId) target.active = { ...target.active, status: op === 'pause' ? 'pausing' : 'running' };
-      await readExecutions();
+      acknowledged = true;
       return true;
     } catch (error) {
-      if (current(g) && target === state.executions && control === executionControl) { target.stale = true; target.error = { code: error.code, message: error.message }; }
+      if (current(g) && target === state.executions && control === executionControl) target.error = { code: error.code, message: error.message };
       return false;
-    } finally { if (current(g) && target === state.executions && control === executionControl) target.pending = null; }
+    } finally {
+      if (current(g) && target === state.executions && control === executionControl) {
+        // Fence reads on both sides of the control, including any overlapping
+        // visibility/manual refresh. Failure is not evidence of unchanged state.
+        invalidateExecutions();
+        target.pending = null;
+        if (acknowledged) await readExecutions();
+        scheduleExecutions();
+      }
+    }
   }
 
   // Inspection is Person-scoped, independent of the current message/episode and
@@ -755,29 +773,35 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     const episodeId = expectedEpisodeId || state.episodeId;
     if (!current() || state.cancelPending || digitalPersonGate(chat, agentId) || !episodeId) return false;
     if (expectedEpisodeId ? state.executions.active?.episodeId !== expectedEpisodeId : !state.busy) return false;
-    const g = generation;
+    const g = generation, target = state.executions;
     // Composer Stop remains available while pausing; its cancellation wins over
     // any late pause/resume acknowledgement and owns the pending indicator.
-    executionControl += 1;
+    const control = ++executionControl;
+    invalidateExecutions();
     // A cancellation request makes the last running status unreliable, even
     // if acknowledgement is lost or a reconnect sees an older running snapshot.
     state.feedbackSuppressedEpisodeId = episodeId;
     state.cancelPending = true;
-    state.executions.pending = 'cancel';
+    target.pending = 'cancel';
+    let acknowledged = false;
     try {
       await request('cancel', { episodeId });
-      if (!current(g)) return false;
-      executionsRequest += 1;
-      state.executions.loading = false;
-      if (state.executions.active?.episodeId === episodeId) state.executions.active = { ...state.executions.active, status: 'cancelling' };
+      if (!current(g) || target !== state.executions || control !== executionControl) return false;
+      if (target.active?.episodeId === episodeId) target.active = { ...target.active, status: 'cancelling' };
+      acknowledged = true;
       await refresh({ preserveHistory: true });
-      if (current(g) && managementVisible) await readExecutions();
       return current(g);
     } catch (error) {
-      if (current(g)) { state.executions.stale = true; showError(error); }
+      if (current(g) && target === state.executions && control === executionControl) showError(error);
       return false;
     } finally {
-      if (current(g)) { state.cancelPending = false; state.executions.pending = null; }
+      if (current(g) && target === state.executions && control === executionControl) {
+        invalidateExecutions();
+        state.cancelPending = false;
+        target.pending = null;
+        if (acknowledged && managementVisible) await readExecutions();
+        scheduleExecutions();
+      }
     }
   }
 

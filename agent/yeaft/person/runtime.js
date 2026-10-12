@@ -310,9 +310,11 @@ export class PersonRuntime {
     if (!call) return;
     const model = job.models.get(call.model);
     model[completed ? 'completedCalls' : 'failedCalls']++;
-    model.elapsedMs += Math.max(0, Date.now() - call.startedAt);
+    const requestElapsedMs = Math.max(0, Date.now() - call.startedAt);
+    model.elapsedMs += requestElapsedMs;
     model.usage = sumUsage([...(model.usage ? [{ usage: model.usage }] : []), { usage: callUsage(call.usage, completed) }], true);
     job.currentCall = null;
+    return requestElapsedMs;
   }
   beginCancellation(ownerId) {
     // Service acquires this synchronously before durable cancellation yields.
@@ -448,9 +450,9 @@ export class PersonRuntime {
             });
           });
         } catch (error) {
-          this.finishUsage(job, false);
+          const requestElapsedMs = this.finishUsage(job, false);
           const safe = safeError(error, 'PROVIDER_FAILED');
-          const finalized = await this.repository.finalizeCall(episode, { callId, effective, code: safe.code, output: error.partialOutput }).catch(() => false);
+          const finalized = await this.repository.finalizeCall(episode, { callId, effective, requestElapsedMs, code: safe.code, output: error.partialOutput }).catch(() => false);
           // A truncated proposal has never passed validation or executed its tool.
           // Attempt one fresh, smaller proposal after truncation;
           // preserve completed tool evidence, never splice JSON or replay effects.
@@ -464,10 +466,10 @@ export class PersonRuntime {
           }
           throw safe;
         }
-        this.finishUsage(job, true);
+        const requestElapsedMs = this.finishUsage(job, true);
         // A narrow once-only finalizer can retain consumed output after cancellation, never state.
         // Complete public output remains durable even if proposal validation subsequently rejects it.
-        if (!await this.repository.finalizeCall(episode, { callId, effective, output })) fail('STALE');
+        if (!await this.repository.finalizeCall(episode, { callId, effective, output, requestElapsedMs })) fail('STALE');
         outputRecovery = null;
         await this.boundary(job, 'validating');
         let proposal;

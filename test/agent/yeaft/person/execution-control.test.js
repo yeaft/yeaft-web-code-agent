@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
+import { turnView } from '../../../../agent/yeaft/person/turn-diagnostics.js';
 import { config, finalProposal } from './fixtures.js';
 
 const services = [], directories = [];
@@ -33,6 +34,20 @@ afterEach(async () => {
 });
 
 describe('Person unlimited main execution controls', () => {
+  it.each([
+    ['call_output', null, 7, 'completed'],
+    ['call_failed', 'PROVIDER_FAILED', 8, 'failed'],
+    ['call_failed', 'CANCELLED', 9, 'cancelled'],
+    ['call_failed', 'INTERRUPTED', undefined, 'interrupted'],
+    ['call_output', null, undefined, 'completed'],
+  ])('projects actual duration for %s/%s, keeping unmeasured legacy time unknown', (kind, code, requestElapsedMs, status) => {
+    const turn = turnView({ id: 'duration', status: 'completed' }, [
+      { kind: 'call_started', callId: 'c', createdAt: '2026-10-12T00:00:00Z', requestedModel: 'm' },
+      { kind, code, callId: 'c', createdAt: '2026-10-12T01:00:00Z', requestElapsedMs },
+    ]);
+    expect(turn.calls[0]).toMatchObject({ status, elapsedMs: requestElapsedMs ?? null });
+  });
+
   it('ignores legacy quotas, runs 45 model calls with bounded requests and diagnostics, retaining original traces', async () => {
     let count = 0;
     const service = await create(async function* (params) {
@@ -192,6 +207,43 @@ describe('Person unlimited main execution controls', () => {
       providerRelease.resolve(); pausedWriteRelease.resolve();
       job.controller.abort(); await job.promise;
     }
+  });
+
+  it('persists actual provider duration, excluding a pause after durable start but before dispatch', async () => {
+    const started = deferred(), releaseStart = deferred(); let dispatched = 0, measured;
+    const originalStart = PersonRuntime.prototype.start;
+    const originalFinish = PersonRuntime.prototype.finishUsage;
+    vi.spyOn(PersonRuntime.prototype, 'finishUsage').mockImplementation(function (...args) {
+      measured = originalFinish.apply(this, args); return measured;
+    });
+    vi.spyOn(PersonRuntime.prototype, 'start').mockImplementation(function (episode) {
+      const startCall = this.repository.startCall.bind(this.repository);
+      this.repository.startCall = async (...args) => {
+        const result = await startCall(...args); started.resolve(); await releaseStart.promise; return result;
+      };
+      return originalStart.call(this, episode);
+    });
+    const service = await create(async function* (params) {
+      dispatched++;
+      yield { type: 'text_delta', text: JSON.stringify(proposal(JSON.parse(params.messages[0].content))) };
+      yield { type: 'stop', stopReason: 'end_turn' };
+    });
+    const { episodeId } = await call(service, 'think', { clientMessageId: 'duration-after-pause' });
+    try {
+      await started.promise;
+      await call(service, 'pause', { episodeId }); releaseStart.resolve();
+      await until(() => call(service, 'executions'), result => result.main?.status === 'paused');
+      expect(dispatched).toBe(0);
+      await sleep(70);
+      await call(service, 'resume', { episodeId });
+      await until(() => call(service, 'snapshot'), result => !result.busy);
+      const recorded = (await call(service, 'turns')).items[0].calls[0];
+      expect(dispatched).toBe(1);
+      expect(Number.isSafeInteger(measured)).toBe(true);
+      expect(recorded.elapsedMs).toBe(measured);
+      const lifecycleMs = new Date(recorded.endedAt) - new Date(recorded.createdAt);
+      expect(lifecycleMs - recorded.elapsedMs).toBeGreaterThanOrEqual(60);
+    } finally { releaseStart.resolve(); }
   });
 
   it('pauses a final provider response before committing and exposes exact mixed-model live usage', async () => {

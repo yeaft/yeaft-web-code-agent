@@ -310,7 +310,7 @@ export class SqlitePersonStore {
     this.put('episodes', record);
     return this.trace(episode.ownerId, episode.id, 'call_started', data);
   }
-  finalizeCall(episode, { callId, effective, output, code = null }) {
+  finalizeCall(episode, { callId, effective, output, requestElapsedMs, code = null }) {
     const scope = this.episodeScope(episode), record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
     if (!record || record.workerId !== episode.workerId || record.epoch !== episode.epoch || record.openCall?.callId !== callId) return false;
     const live = record.status === 'running' && Boolean(this.fenced(episode));
@@ -324,6 +324,8 @@ export class SqlitePersonStore {
     delete record.openCall; delete record.callFinalizeUntil; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, failed ? 'call_failed' : 'call_output', {
       callId, requested: call.requested, effective: safeEffective, output: publicOutput(output, failed),
+      // Actual provider time excludes any pause between journal start and dispatch.
+      ...(Number.isSafeInteger(requestElapsedMs) && requestElapsedMs >= 0 ? { requestElapsedMs } : {}),
       ...(!failed && call.manifest ? { manifest: call.manifest } : {}), ...(failed ? { code: new PersonError(terminalCode).code } : {}),
     });
     return live;
@@ -548,7 +550,7 @@ export class SqlitePersonStore {
       'accountingIncomplete', json(CASE json_extract(record, '$.output.usage.accountingIncomplete') WHEN 1 THEN 'true' ELSE 'false' END),
       'cacheTokensAreIncludedInInput', json(CASE json_extract(record, '$.output.usage.cacheTokensAreIncludedInInput') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END))`;
     const metadata = `${project(fields).slice(0, -1)}, 'capabilityId', substr(COALESCE(CASE WHEN json_type(record, '$.capability.id') = 'text' THEN json_extract(record, '$.capability.id') END, CASE WHEN json_type(record, '$.capabilityId') = 'text' THEN json_extract(record, '$.capabilityId') END), 1, 128),
-      ${contextMetadata}, 'recallKind', ${recallKind}, 'usage', ${usage})`;
+      ${contextMetadata}, 'requestElapsedMs', ${number('requestElapsedMs')}, 'recallKind', ${recallKind}, 'usage', ${usage})`;
     const items = episodes.slice(0, limit).map(episode => {
       const starts = this.sql(`SELECT seq, ${number('callIndex')} AS callIndex FROM traces WHERE ${SCOPE} AND json_extract(record, '$.episodeId') = ?
         AND json_extract(record, '$.kind') = 'call_started' ORDER BY seq DESC LIMIT 33`)

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { acceptPersonResponse, createPersonController, personState } from '../../web/stores/helpers/digital-person.js';
+import { projectPersonFeedback } from '../../web/utils/person-activity.js';
 import PersonManagement from '../../web/components/PersonManagement.js';
 import en from '../../web/i18n/en.js';
 import zh from '../../web/i18n/zh-CN.js';
@@ -15,24 +16,25 @@ let wrapper;
 const controllers = [];
 beforeEach(() => { vi.stubGlobal('Vue', Vue); });
 afterEach(() => { wrapper?.unmount(); wrapper = null; controllers.splice(0).forEach(c => c.dispose()); vi.useRealTimers(); vi.unstubAllGlobals(); document.body.innerHTML = ''; });
-function fixture() {
+function fixture({ timeoutMs = 30_000 } = {}) {
   const requests = [], held = [];
   let owner = 'owner', hold = false, foreground = true, execution = active();
+  let snapshot = { person: { id: 'p' }, messages: [], busy: true, episodeId: 'live' };
   const state = personState();
   const chat = { digitalPersonUiEnabledByAgent: { a: true, b: true }, connectionState: 'connected', authenticated: true,
     agents: ['a', 'b'].map(id => ({ id, online: true, capabilities: ['digital_person'] })),
     sendWsMessage(request) {
       requests.push(request);
       if (hold && ['executions', 'pause', 'resume', 'cancel'].includes(request.op)) { held.push(request); return true; }
-      const defaults = { status: { configured: true }, open: {}, snapshot: { person: { id: 'p' }, messages: [], busy: true, episodeId: 'live' },
+      const defaults = { status: { configured: true }, open: {}, snapshot,
         messages: { items: [] }, traces: { items: [] }, tasks: { tasks: [], agents: [], active: { tasks: [], agents: [] } }, executions: { active: execution }, pause: {}, resume: {}, cancel: {} };
       queueMicrotask(() => respond(request, defaults[request.op])); return true;
     },
   };
   const respond = (request, data) => acceptPersonResponse(chat, { ...request, ok: true, data });
-  const controller = createPersonController({ chat, state, scope: () => owner, pollMs: 100, foreground: () => foreground });
+  const controller = createPersonController({ chat, state, scope: () => owner, timeoutMs, pollMs: 100, foreground: () => foreground });
   controllers.push(controller);
-  return { state, chat, controller, requests, held, respond, owner: value => { owner = value; }, hold: value => { hold = value; }, foreground: value => { foreground = value; }, execution: value => { execution = value; } };
+  return { state, chat, controller, requests, held, respond, owner: value => { owner = value; }, hold: value => { hold = value; }, foreground: value => { foreground = value; }, execution: value => { execution = value; }, snapshot: value => { snapshot = value; } };
 }
 
 describe('Person Management read and control fences', () => {
@@ -95,6 +97,80 @@ describe('Person Management read and control fences', () => {
     expect(f.state.executions.stale).toBe(false);
     expect(await f.controller.controlExecution('pause', 'live')).toBe(true);
   });
+  it.each(['pause', 'resume', 'cancel'].flatMap(op => ['STALE', 'outcome_unknown', 'timeout'].map(code => [op, code])))('%s failure (%s) fences pre-control reads and resumes only post-result polling', async (op, code) => {
+    vi.useFakeTimers(); const f = fixture();
+    const initial = active(op === 'resume' ? 'paused' : 'running'); f.execution(initial);
+    await f.controller.open('a'); f.controller.showManagement(true); await flushPromises(); f.hold(true);
+    const firstRead = f.controller.readExecutions(), firstRequest = f.held.at(-1);
+    const lastRead = f.controller.readExecutions(), lastRequest = f.held.at(-1);
+    const controlling = f.controller.controlExecution(op, 'live'), controlRequest = f.held.at(-1);
+    expect(controlRequest.op).toBe(op);
+    expect(f.state.executions).toMatchObject({ pending: op, stale: true, loading: false });
+    const reads = f.requests.filter(r => r.op === 'executions').length;
+    // Manual/visibility reads and previously scheduled polls must not observe a
+    // control whose outcome is still unknown, even while the drawer stays open.
+    await f.controller.readExecutions(); f.controller.visibilityChanged(); f.controller.showManagement(true);
+    await vi.advanceTimersByTimeAsync(350);
+    expect(f.requests.filter(r => r.op === 'executions')).toHaveLength(reads);
+    f.respond(firstRequest, { active: active(op === 'resume' ? 'running' : 'paused') }); await firstRead;
+    expect(f.state.executions.active.status).toBe(initial.status);
+    expect(f.state.executions.stale).toBe(true);
+    acceptPersonResponse(f.chat, { ...controlRequest, ok: false, error: 'Unconfirmed control', errorCode: code });
+    expect(await controlling).toBe(false);
+    // This was the latest read before control, so only the control fence (not
+    // another read superseding it) can stop its late response clearing stale.
+    f.respond(lastRequest, { active: active(op === 'resume' ? 'running' : 'paused') }); await lastRead;
+    expect(f.state.executions).toMatchObject({ pending: null, stale: true, loading: false });
+    expect(f.state.executions.active.status).toBe(initial.status);
+    expect(f.state.cancelPending).toBe(false);
+    expect(await f.controller.controlExecution(op, 'live')).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    const fresh = f.held.at(-1);
+    expect(fresh.op).toBe('executions'); expect(fresh).not.toBe(firstRequest); expect(fresh).not.toBe(lastRequest);
+    expect(f.state.executions.stale).toBe(true);
+    f.respond(fresh, { active: active('paused') }); await flushPromises();
+    expect(f.state.executions).toMatchObject({ pending: null, stale: false, loading: false });
+    expect(f.state.executions.active.status).toBe('paused');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.requests.filter(r => r.op === 'executions')).toHaveLength(reads + 2);
+    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
+  });
+  it.each(['pause', 'resume', 'cancel'])('%s start fences the latest read even before acknowledgement', async op => {
+    const f = fixture(); const initial = active(op === 'resume' ? 'paused' : 'running'); f.execution(initial);
+    await f.controller.open('a'); await f.controller.readExecutions(); f.hold(true);
+    const reading = f.controller.readExecutions(), readRequest = f.held.at(-1);
+    const controlling = f.controller.controlExecution(op, 'live'), controlRequest = f.held.at(-1);
+    f.respond(readRequest, { active: active(op === 'resume' ? 'running' : 'paused') }); await reading;
+    expect(f.state.executions).toMatchObject({ pending: op, stale: true, loading: false });
+    expect(f.state.executions.active.status).toBe(initial.status);
+    acceptPersonResponse(f.chat, { ...controlRequest, ok: false, errorCode: 'outcome_unknown' });
+    expect(await controlling).toBe(false);
+    expect(f.state.executions.stale).toBe(true);
+  });
+  it.each(['pause', 'resume', 'cancel'])('%s deadline keeps stale until a settled foreground read and rejects late acknowledgement', async op => {
+    vi.useFakeTimers(); const f = fixture({ timeoutMs: 1000 });
+    f.execution(active(op === 'resume' ? 'paused' : 'running'));
+    await f.controller.open('a'); f.controller.showManagement(true); await flushPromises(); f.hold(true);
+    const older = f.controller.readExecutions(), oldRequest = f.held.at(-1);
+    const controlling = f.controller.controlExecution(op, 'live'), controlRequest = f.held.at(-1);
+    await vi.advanceTimersByTimeAsync(900);
+    f.respond(oldRequest, { active: active() }); await older;
+    expect(f.state.executions.stale).toBe(true);
+    f.foreground(false); f.controller.visibilityChanged();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await controlling).toBe(false);
+    expect(f.state.executions).toMatchObject({ pending: null, stale: true, loading: false });
+    expect(op === 'cancel' ? f.state.error.code : f.state.executions.error.code).toBe('timeout');
+    expect(f.respond(controlRequest, {})).toBe(false);
+    const reads = f.requests.filter(r => r.op === 'executions').length;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(f.requests.filter(r => r.op === 'executions')).toHaveLength(reads);
+    f.foreground(true); f.controller.visibilityChanged();
+    const fresh = f.held.at(-1); expect(fresh.op).toBe('executions');
+    f.respond(fresh, { active: null }); await flushPromises();
+    expect(f.state.executions).toMatchObject({ active: null, stale: false, loading: false });
+    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
+  });
   it('an existing composer cancel supersedes a pending pause acknowledgement', async () => {
     const f = fixture(); await f.controller.open('a'); await f.controller.readExecutions(); f.hold(true);
     const pausing = f.controller.controlExecution('pause', 'live'), pauseRequest = f.held.at(-1);
@@ -107,6 +183,59 @@ describe('Person Management read and control fences', () => {
     f.respond(cancelRequest, {}); expect(await cancelling).toBe(true);
     expect(f.state.executions.active.status).toBe('cancelling');
     expect(f.state.executions.pending).toBeNull();
+  });
+  it.each(['pause', 'resume'])('late %s acknowledgement cannot restore executions after composer cancel settles', async op => {
+    vi.useFakeTimers(); const f = fixture(); f.execution(active(op === 'resume' ? 'paused' : 'running'));
+    await f.controller.open('a'); f.controller.showManagement(true); await flushPromises(); f.hold(true);
+    const controlling = f.controller.controlExecution(op, 'live'), controlRequest = f.held.at(-1);
+    const cancelling = f.controller.cancel(), cancelRequest = f.held.at(-1);
+    f.respond(cancelRequest, {}); await flushPromises();
+    const fresh = f.held.at(-1); expect(fresh.op).toBe('executions');
+    f.respond(fresh, { active: null }); expect(await cancelling).toBe(true);
+    f.respond(controlRequest, {}); expect(await controlling).toBe(false);
+    expect(f.state.executions).toMatchObject({ active: null, pending: null, stale: false });
+    expect(f.state.feedbackSuppressedEpisodeId).toBe('live');
+    expect(f.held.at(-1)).toBe(fresh);
+  });
+  it('does not stall recovery polling when the next read overlaps a Person refresh', async () => {
+    vi.useFakeTimers(); const f = fixture(); await f.controller.open('a');
+    f.controller.showManagement(true); await flushPromises(); f.hold(true);
+    const pausing = f.controller.controlExecution('pause', 'live'), request = f.held.at(-1);
+    acceptPersonResponse(f.chat, { ...request, ok: false, errorCode: 'outcome_unknown' }); expect(await pausing).toBe(false);
+    f.state.loading = true; const reads = f.requests.filter(r => r.op === 'executions').length;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(f.requests.filter(r => r.op === 'executions')).toHaveLength(reads);
+    expect(f.state.executions.stale).toBe(true);
+    f.state.loading = false; await vi.advanceTimersByTimeAsync(100);
+    expect(f.held.at(-1).op).toBe('executions');
+    f.respond(f.held.at(-1), { active: active('paused') }); await flushPromises();
+    expect(f.state.executions.stale).toBe(false);
+  });
+  it('pause snapshots do not suppress fresh backend waiting feedback after resume', async () => {
+    const f = fixture();
+    const snapshot = status => ({ person: { id: 'p' }, messages: [], busy: true, episodeId: 'live', latestEpisode: {
+      id: 'live', status, createdAt: 1000, feedback: { at: 61000, phase: 'model' },
+    } });
+    f.snapshot(snapshot('running')); await f.controller.open('a'); await f.controller.readExecutions();
+    expect(projectPersonFeedback(f.state)).not.toBeNull();
+    f.execution(active('pausing')); expect(await f.controller.controlExecution('pause', 'live')).toBe(true);
+    for (const status of ['pausing', 'paused']) {
+      f.snapshot(snapshot(status)); await f.controller.refresh();
+      expect(f.state.feedbackSuppressedEpisodeId).toBeNull();
+      expect(projectPersonFeedback(f.state)).toBeNull();
+    }
+    f.execution(active('paused')); await f.controller.readExecutions();
+    f.execution(active()); expect(await f.controller.controlExecution('resume', 'live')).toBe(true);
+    f.snapshot(snapshot('running')); await f.controller.refresh();
+    expect(projectPersonFeedback(f.state)).toEqual({ at: new Date(61000).toISOString(), label: 'person.feedback.model' });
+    // Paused/running snapshots must not clear cancellation's independent fence.
+    await f.controller.cancel();
+    for (const status of ['paused', 'running']) {
+      f.snapshot(snapshot(status)); await f.controller.refresh();
+      expect(f.state.feedbackSuppressedEpisodeId).toBe('live');
+      expect(projectPersonFeedback(f.state)).toBeNull();
+    }
+    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
   });
   it('does not transfer a pending control acknowledgement to a new owner', async () => {
     const f = fixture(); await f.controller.open('a'); await f.controller.readExecutions(); f.hold(true);
