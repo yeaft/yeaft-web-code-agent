@@ -62,6 +62,7 @@ export function stateView(value) {
   if (Array.isArray(value.conceptRefs)) result.conceptRefs = value.conceptRefs.map(ref => pick(ref, ['id', 'revision']));
   if (Object.hasOwn(value, 'decision')) result.decision = pick(value.decision, ['summary', 'uncertainties', 'selfCheck']);
   if (Object.hasOwn(value, 'lastSelection')) result.lastSelection = pick(value.lastSelection, ['model', 'effort']);
+  if (Object.hasOwn(value, 'continuation')) result.continuation = pick(value.continuation, ['goal', 'nextStep', 'status', 'condition']);
   return result;
 }
 export function createdSkillView(record, contract) {

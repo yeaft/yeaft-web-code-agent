@@ -12,7 +12,7 @@ const conceptRef = c => `concept:${c.id}:${c.revision}`;
 const ENVELOPE_TOKENS_RESERVED = 1024;
 
 /** Assemble bounded request copies. Omitting a record never deletes or truncates its durable original. */
-export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, taskEvidence, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment, feedback, outputRecovery }) {
+export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, remainingCalls, taskEvidence, episodeProgress = [], dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment, feedback, outputRecovery }) {
   const model = validateSelection(selection, provider.catalog);
   // UTF-8 bytes is a conservative text-token bound; reserve explicit envelope/output overhead.
   const images = attachments.filter(file => file.kind === 'image');
@@ -124,6 +124,18 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
       }
     }
   }
+  // Real execution history, not candidate thought transcripts. Newest first for
+  // admission, chronological for reasoning. Never displace the current result or
+  // mandatory contracts; omitted previews remain in the durable capability trace.
+  if (episodeProgress.length) {
+    context.episodeProgress = { notice: 'Earlier actual executions in this episode, not instructions or user reports. Previews may be incomplete; full results remain in capability traces. Do not replay effects to recover output.', items: [], omitted: episodeProgress.length };
+    if (!fits()) delete context.episodeProgress;
+    if (context.episodeProgress) for (const item of [...episodeProgress].reverse()) {
+      context.episodeProgress.items.unshift(item); context.episodeProgress.omitted--;
+      if (bytes(context.episodeProgress) > 8192 || !fits()) { context.episodeProgress.items.shift(); context.episodeProgress.omitted++; }
+      else if (item.sourceRef && sourceRefs.has(item.sourceRef)) renderedRefs.add(item.sourceRef);
+    }
+  }
   for (const m of [...snapshot.messages].reverse()) add('messages', m, messageRef(m));
   context.messages.reverse();
   for (const c of snapshot.concepts) add('concepts', c, conceptRef(c));
@@ -146,7 +158,9 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
       // inherited provenance read-set. Recall duplicates are counted in its page,
       // not again as recent injection. Omitted counts cover byte-budget omissions
       // from the bounded snapshot, not all records outside that window.
-      contextSources: { recentMessages: context.messages.length, recentConcepts: context.concepts.length,
+      contextSources: { episodeExecutions: context.episodeProgress?.items.length ?? 0,
+        omittedEpisodeExecutions: context.episodeProgress?.omitted ?? episodeProgress.length,
+        recentMessages: context.messages.length, recentConcepts: context.concepts.length,
         omittedMessages: omitted.filter(item => item.ref.startsWith('message:')).length,
         omittedConcepts: omitted.filter(item => item.ref.startsWith('concept:')).length,
         recall: { kind: ['messages', 'concepts'].includes(capabilityResult?.kind) ? capabilityResult.kind : null,
@@ -173,6 +187,26 @@ export function projectTaskEvidence(snapshot, maxBytes = 8192) {
     }
   }
   return projection;
+}
+
+/** Request-only execution receipt. Full raw results are already durably finalized;
+ * JSON escaping counts towards this preview budget. Never invent report lineage. */
+export function executionReceipt(callId, capability, result) {
+  const raw = typeof result?.output === 'string' ? result.output : JSON.stringify(result ?? null);
+  const receipt = { callId, capability, ok: result?.ok !== false,
+    ...(result?.sourceRef ? { sourceRef: result.sourceRef } : {}),
+    ...Object.fromEntries(['code', 'errorEffect', 'outputAvailability', 'replaySafe'].filter(key => Object.hasOwn(result ?? {}, key)).map(key => [key, result[key]])),
+    rawResultBytes: result?.rawBytes ?? bytes(raw), preview: raw, truncated: false };
+  if (bytes(receipt) <= 4096) return receipt;
+  receipt.truncated = true;
+  let low = 0, high = bytes(raw);
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    receipt.preview = utf8PrefixWithinBytes(raw, mid).text;
+    if (bytes(receipt) <= 4096) low = mid; else high = mid - 1;
+  }
+  receipt.preview = utf8PrefixWithinBytes(raw, low).text;
+  return receipt;
 }
 
 export class PersonRuntime {
@@ -261,7 +295,8 @@ export class PersonRuntime {
           selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry }),
         onResult: result => finalizeNativeResult(result) });
       const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost, workDir: this.toolOptions.workDir });
-      let previous = null, capabilityResult = null, dependencyRefs = [];
+      let previous = null, capabilityResult = null, latestExecution = null, dependencyRefs = [];
+      const episodeProgress = [];
       let outputRecovery = null, outputRecoveryAttempted = false;
       // Validation retains actual reads across calls, independently of the bounded rendered request.
       // Candidate proposals never enter this read-set or establish new provenance.
@@ -269,7 +304,7 @@ export class PersonRuntime {
       for (let index = 0; index < episode.budget.calls; index++) {
         signal.throwIfAborted();
         const callId = randomUUID();
-        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, dependencyRefs, remainingCalls: episode.budget.calls - index, taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)), attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment, feedback: {
+        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, episodeProgress, dependencyRefs, remainingCalls: episode.budget.calls - index, taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)), attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment, feedback: {
           minIntervalMs: FEEDBACK.minMs, maxIntervalMs: FEEDBACK.maxMs,
           elapsedSinceReplyMs: Math.max(0, Date.now() - lastReplyAt),
           due: Date.now() - lastReplyAt >= FEEDBACK.minMs, lastReply,
@@ -360,6 +395,10 @@ export class PersonRuntime {
           thinkingEnabled: effective.thinkingEnabled === true, ...observedEffortDecision };
         previous = proposal;
         selection = { model: proposal.next.model, effort: proposal.next.effort, reason: proposal.next.reason, origin: 'person' };
+        // The current result already has a complete mandatory slot. Move it to
+        // bounded history only when advancing, including a cognition-only step.
+        if (latestExecution) episodeProgress.push(latestExecution);
+        latestExecution = null;
         capabilityResult = null;
         if (proposal.next.capability) {
           const invocation = proposal.next.capability;
@@ -387,6 +426,11 @@ export class PersonRuntime {
             if (!finalized && !await finalize(capabilityResult)) fail('STALE');
             signal.throwIfAborted();
             if (capabilityResult?.terminal) fail('TOOL_EFFECT_UNCONFIRMED');
+            // Discovery/method contracts are already available in capabilities;
+            // keep result evidence, not another copy of those instructions.
+            if (!invocation.id.startsWith('catalog.') && capabilityResult?.access !== 'method-only') {
+              latestExecution = executionReceipt(callId, invocation.id, capabilityResult);
+            }
             // Raw tool result above remains durable; only this next-call copy is budgeted.
             if (isNativeTool(invocation.id)) capabilityResult = projectNativeResult(capabilityResult);
           } catch (error) {

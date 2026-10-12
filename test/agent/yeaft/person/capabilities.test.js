@@ -82,7 +82,8 @@ describe('Person three-layer capabilities without a selector', () => {
 
   it('prepares a complete search page as one budgeted set without evicting earlier returned contracts', async () => {
     const created = Array.from({ length: 4 }, (_, i) => createdCapabilityRecord({
-      id: `Script.t${i}`, expectedVersion: 0, description: 'd'.repeat(160), useWhen: 'u'.repeat(100), avoidWhen: '',
+      // Large valid metadata exercises combined admission independently of Think wording.
+      id: `Script.t${i}`, expectedVersion: 0, description: 'd'.repeat(400), useWhen: 'u'.repeat(400), avoidWhen: '',
       inputDescription: 'JSON', outputDescription: 'JSON', code: 'return input;', tests: [{ input: 1, expected: 1 }],
     }, { engine: 'quickjs', testsPassed: 1, testedAt: new Date(now).toISOString() }, { episode: { id: 'ep' }, callId: 'call', now: new Date(now) }));
     const cap = new PersonCapabilities({}, 'owner', { created });
