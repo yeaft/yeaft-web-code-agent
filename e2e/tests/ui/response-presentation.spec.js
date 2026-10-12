@@ -161,6 +161,8 @@ test('automatic image loading, no-referrer, error/retry, preview and URL replace
 
 test('malicious markup/URLs never execute or request; clipboard denied retains selectable summary', async ({ page }) => {
   await open(page);
+  // Finish the legitimate initial image request before observing the malicious replacement.
+  await expect(page.getByRole('button', { name: 'Retry image' })).toBeVisible();
   const external = [];
   page.on('request', request => { if (!request.url().startsWith(origin)) external.push(request.url()); });
   await page.evaluate(() => {

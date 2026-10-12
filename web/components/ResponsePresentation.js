@@ -1,5 +1,7 @@
 import { normalizeBrowserAddress } from '../utils/browser-address.js';
-import { projectPresentation, chartGeometry, diagramGeometry, mapGeometry, responseMarkdown } from '../utils/response-presentation.js';
+import { projectPresentation, chartGeometry, diagramGeometry, mapGeometry, mapEmbedUrl, responseMarkdown } from '../utils/response-presentation.js';
+import ResponseImage from './ResponseImage.js';
+import ResponseMapEmbed from './ResponseMapEmbed.js';
 
 // Tags/attributes come exclusively from our token adapter, never from model-provided HTML.
 const ResponseMarkdownNode = {
@@ -16,34 +18,6 @@ const ResponseMarkdownNode = {
     :aria-label="$t('richResponse.newTab') + ': ' + node.href" :title="$t('richResponse.newTab')">↗</a>`,
 };
 
-const ResponseImage = {
-  name: 'ResponseImage',
-  props: ['block'],
-  data: () => ({ state: 'loading', expanded: false, revision: 0 }),
-  watch: { 'block.url'() { this.retry(); } },
-  computed: { host() { return new URL(this.block.url).host; } },
-  methods: {
-    retry() { this.revision++; this.state = 'loading'; this.expanded = false; },
-    settle(event, state) {
-      // A detached image can finish after URL replacement or retry.
-      if (event.currentTarget?.dataset.imageRevision === String(this.revision)) this.state = state;
-    },
-  },
-  template: `<figure class="response-image" :class="{ 'is-expanded': expanded }">
-    <div v-if="state !== 'loaded'" class="response-image-placeholder" :aria-busy="state === 'loading'">
-      <strong>{{ block.alt }}</strong><span>{{ host }}</span>
-      <p role="status">{{ $t(state === 'error' ? 'richResponse.imageError' : 'richResponse.loading') }}</p>
-      <button v-if="state === 'error'" type="button" class="btn-secondary" @click="retry">{{ $t('richResponse.retryImage') }}</button>
-    </div>
-    <img v-if="state === 'loading' || state === 'loaded'" :key="revision" :data-image-revision="revision"
-      v-show="state === 'loaded'" :src="block.url" :alt="block.alt"
-      referrerpolicy="no-referrer" decoding="async" @load="settle($event, 'loaded')" @error="settle($event, 'error')" />
-    <figcaption v-if="block.caption">{{ block.caption }}</figcaption>
-    <button v-if="state === 'loaded'" type="button" class="btn-ghost" :aria-expanded="expanded" @click="expanded = !expanded">
-      {{ $t(expanded ? 'richResponse.closePreview' : 'richResponse.previewImage') }}
-    </button>
-  </figure>`,
-};
 
 /** Shared display-only v1 renderer. `presentation` is canonical JSON; no store or network ownership.
  * Summary stays selectable and copyable even when the version/blocks are unsupported.
@@ -51,7 +25,7 @@ const ResponseImage = {
  */
 export default {
   name: 'ResponsePresentation',
-  components: { ResponseMarkdownNode, ResponseImage },
+  components: { ResponseMarkdownNode, ResponseImage, ResponseMapEmbed },
   props: { presentation: { type: Object, default: null }, fallbackText: { type: String, default: '' },
     openLink: { type: Function, default: null } },
   inject: { browserOpener: { from: 'workbench-browser-opener', default: null } },
@@ -97,6 +71,7 @@ export default {
         this.copyState = 'richResponse.copyFallback';
       }
     },
+    mapEmbedUrl,
     number(value) { return new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(value); },
     coordinates(point) { return `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}`; },
   },
@@ -117,7 +92,11 @@ export default {
         <ResponseMarkdownNode v-for="(node, i) in block.markdown" :key="i" :node="node" />
       </div>
       <ul v-else-if="block.type === 'cards'" class="response-cards">
-        <li v-for="(item, i) in block.items" :key="i"><span v-if="item.label" class="response-eyebrow">{{ item.label }}</span><h4>{{ item.title }}</h4><p>{{ item.text }}</p></li>
+        <li v-for="(item, i) in block.items" :key="i">
+          <ResponseImage v-if="item.image" :block="item.image" card />
+          <span v-if="item.label" class="response-eyebrow">{{ item.label }}</span><h4>{{ item.title }}</h4><p>{{ item.text }}</p>
+          <div v-if="item.url" class="response-card-source"><a :href="item.url" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ $t('richResponse.viewSource') }}</a><a class="response-external" data-response-external :href="item.url" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" :aria-label="$t('richResponse.newTab') + ': ' + item.title" :title="$t('richResponse.newTab')">↗</a></div>
+        </li>
       </ul>
       <dl v-else-if="block.type === 'metrics'" class="response-metrics">
         <div v-for="(item, i) in block.items" :key="i"><dt>{{ item.label }}</dt><dd class="response-metric-value">{{ item.value }}</dd><dd v-if="item.detail" class="response-metric-detail">{{ item.detail }}</dd></div>
@@ -162,6 +141,8 @@ export default {
           :title="$t('richResponse.newTab')">↗</a>
       </div>
       <figure v-else-if="block.type === 'map'" class="response-map">
+        <ResponseMapEmbed v-if="mapEmbedUrl(block)" :block="block" />
+        <template v-else>
         <figcaption><strong>{{ $t('richResponse.coordinateSketch') }}</strong><span>{{ $t('richResponse.mapNotice') }}</span></figcaption>
         <svg viewBox="0 0 600 290" role="img" :aria-label="$t('richResponse.coordinateSketch')">
           <g class="response-map-grid"><line v-for="x in [60, 180, 300, 420, 540]" :key="'x' + x" :x1="x" :x2="x" y1="44" y2="236" /><line v-for="y in [44, 92, 140, 188, 236]" :key="'y' + y" x1="60" x2="540" :y1="y" :y2="y" /></g>
@@ -169,6 +150,7 @@ export default {
           <g v-for="point in block.geometry.points" :key="point.number" class="response-map-point"><circle :cx="point.x" :cy="point.y" r="12" /><text :x="point.x" :y="point.y + 4" text-anchor="middle">{{ point.number }}</text><title>{{ point.label }} · {{ coordinates(point) }}</title></g>
         </svg>
         <ol class="response-map-list"><li v-for="(point, pi) in block.points" :key="pi"><div><strong>{{ point.label }}</strong><span>{{ coordinates(point) }}</span></div><p v-if="point.detail">{{ point.detail }}</p></li></ol>
+        </template>
       </figure>
       <p v-else class="response-notice">{{ $t('richResponse.unsupported') }}</p>
     </section>
