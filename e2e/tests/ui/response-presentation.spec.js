@@ -116,6 +116,9 @@ for (const scenario of [
     expect(external).toEqual([]);
     expect(errors).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // Fractional SVG sizing can round the document height by one blank bottom pixel.
+    // Stabilize only the empty page extent; every component pixel is still compared.
+    await page.evaluate(() => { document.body.style.minHeight = `${Math.ceil(document.documentElement.scrollHeight / 8) * 8}px`; });
     await expect(page).toHaveScreenshot(`${scenario.name}.png`, { fullPage: true, animations: 'disabled' });
     const summary = page.locator('.response-chart .response-data summary').first();
     await summary.focus();
