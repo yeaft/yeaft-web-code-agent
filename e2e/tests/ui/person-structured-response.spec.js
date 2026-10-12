@@ -36,7 +36,7 @@ test('Person publishes shared progress and final structures, persists and replay
     yield { type: 'stop', stopReason: 'end_turn' };
   } };
   const makeBridge = () => createPersonBridge({ context: { agentId: mockAgent.agentId, CONFIG: { serverUrl, yeaftDir: dir, workDir: dir } },
-    send: frame => mockAgent.send(frame), createService: options => createPersonService({ ...options, config, adapter, embedding: { enabled: false } }) });
+    send: frame => mockAgent.send(frame), createService: options => createPersonService({ ...options, config, adapter, effortEnabled: true, embedding: { enabled: false } }) });
   let bridge = makeBridge();
   const listener = frame => { if (frame.type === 'person_request') void bridge.request(frame); };
   mockAgent._messageHandlers.push(listener);

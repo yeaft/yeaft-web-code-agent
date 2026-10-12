@@ -8,7 +8,7 @@ export function safeResponseUrl(value) {
   if (!text(value, 2000) || /[\u0000-\u0020\u007f]/.test(value)) return '';
   try {
     const url = new URL(value);
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : '';
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && url.href.length <= 2000 ? url.href : '';
   } catch { return ''; }
 }
 
@@ -34,8 +34,8 @@ function validBlock(b) {
 }
 
 /** Preserve summary even if a newer/invalid presentation cannot be drawn; reject invalid blocks independently. */
-export function projectPresentation(input) {
-  const summary = typeof input?.summary === 'string' ? input.summary.slice(0, 8000) : '';
+export function projectPresentation(input, fallbackText = '') {
+  const summary = text(input?.summary, 8000) ? input.summary : typeof fallbackText === 'string' && fallbackText.trim() ? fallbackText : typeof input?.summary === 'string' ? input.summary.slice(0, 8000) : '';
   const title = text(input?.title, 160) ? input.title : '';
   const base = { title, summary, phase: input?.phase === 'progress' ? 'progress' : 'final', blocks: [], invalid: true };
   if (input?.version !== 1 || !text(input.summary, 8000) || !list(input.blocks, 12)) return base;

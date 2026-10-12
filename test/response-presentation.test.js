@@ -81,6 +81,22 @@ describe('response presentation contract and security', () => {
     for (const url of ['javascript:alert(1)', 'data:image/svg+xml,x', '//example.com', '/local', 'file:///etc/passwd', 'https://user:pass@example.com', 'https://user@example.com', 'https://example.com/\npath', ' https://example.com', 'ftp://example.com']) expect(safeResponseUrl(url)).toBe('');
     expect(safeResponseUrl('https://example.com/x?y=1#part')).toBe('https://example.com/x?y=1#part');
     expect(safeResponseUrl('http://example.com')).toBe('http://example.com/');
+    expect(safeResponseUrl('https://example.com/' + '中'.repeat(300))).toBe('');
+    const accepted = canonical([{ type: 'link', url: 'https://example.com/' + '中'.repeat(220), text: 'Report' }]);
+    expect(projectPresentation(accepted).blocks[0].type).toBe('link');
+    expect(projectPresentation({ ...accepted, blocks: [{ type: 'link', url: 'https://example.com/' + '中'.repeat(300), text: 'Too long' }] }).blocks[0].type).toBe('unsupported');
+  });
+
+  it('preserves and copies the ordinary text fallback when presentation summaries are unusable', async () => {
+    const writeText = vi.fn().mockResolvedValue();
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    for (const summary of [undefined, null, 42, '', '   ', 'x'.repeat(8001)]) {
+      wrapper = mount(ResponsePresentation, { props: { presentation: { version: 1, summary, blocks: [] }, fallbackText: 'Readable answer' }, global: { mocks: { $t: key => en[key] || key } } });
+      expect(wrapper.get('.response-summary').text()).toBe('Readable answer');
+      await wrapper.get('.response-copy').trigger('click');
+      expect(writeText).toHaveBeenLastCalledWith('Readable answer');
+      wrapper.unmount();
+    }
   });
 
   it('renders markdown through safe tokens, never mounts raw HTML, image, SVG or event handlers', () => {

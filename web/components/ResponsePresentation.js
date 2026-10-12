@@ -44,11 +44,11 @@ const ResponseImage = {
 export default {
   name: 'ResponsePresentation',
   components: { ResponseMarkdownNode, ResponseImage },
-  props: { presentation: { type: Object, default: null } },
+  props: { presentation: { type: Object, default: null }, fallbackText: { type: String, default: '' } },
   data: () => ({ copyState: '' }),
   computed: {
     view() {
-      const projected = projectPresentation(this.presentation);
+      const projected = projectPresentation(this.presentation, this.fallbackText);
       return { ...projected, blocks: projected.blocks.map(b => ({ ...b,
         geometry: b.type === 'chart' ? chartGeometry(b) : b.type === 'diagram' ? diagramGeometry(b) : b.type === 'map' ? mapGeometry(b) : null,
         markdown: b.type === 'markdown' ? responseMarkdown(b.text) : null,

@@ -55,6 +55,14 @@ describe('shared response presentation contract', () => {
     }
     expect(safePresentationUrl('https://example.com')).toBe('https://example.com/');
     expect(safePresentationUrl('https://example.com/地图?x=1&y=2')).toContain('example.com/');
+    const boundaryUrl = 'https://example.com/' + '中'.repeat(220);
+    const accepted = normalizePresentation(payload([{ type: 'link', url: boundaryUrl, text: 'Report' }]));
+    expect(accepted.blocks[0].url).toHaveLength(2000);
+    expect(normalizePresentation({ summary: accepted.summary, blocks: accepted.blocks })).toEqual(accepted);
+    for (const type of ['link', 'image']) {
+      const input = { type, url: 'https://example.com/' + '中'.repeat(221), ...(type === 'link' ? { text: 'Report' } : { alt: 'Preview' }) };
+      expect(() => normalizePresentation(payload([input]))).toThrow('URL exceeds 2000');
+    }
     const suspicious = normalizePresentation(payload([{ type: 'cards', items: [{ title: '<img onerror=run()>', text: '<script>run()</script>' }] }]));
     expect(suspicious.blocks[0].items[0].text).toBe('<script>run()</script>'); // text stays data; renderer must escape it
   });

@@ -875,6 +875,32 @@ describe('Session presentation UI projection', () => {
     expect(quoteFromAssistantTurn(turn, 'Assistant').content).toBe(presentation.summary);
   });
 
+  it('keeps live and replay text visible, copyable and quotable despite malformed presentation summaries', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    for (const summary of [undefined, null, 42, '', '   ']) {
+      const malformed = { version: 1, summary, blocks: [] };
+      for (const source of ['live', 'replay']) {
+        const store = storeFixture();
+        if (source === 'live') handleAssistantOutputFrame(store, 'c', { ...frame, message: { ...frame.message, content: 'Readable answer', presentation: malformed } }, 'a');
+        else replay(store, { ...persisted, content: 'Readable answer', presentation: malformed });
+        const row = store.messagesMap.c[0];
+        expect(row.content).toBe('Readable answer');
+        const turn = { id: 't', turnId: 't', messages: [row], textSegments: [], toolMsgs: [], imageMsgs: [], textContent: '' };
+        appendTurnResponseSegment(turn, row);
+        const wrapper = mount(AssistantTurn, { props: { turn }, global: { mocks: { $t: key => key }, provide: { t: key => key }, stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true } } });
+        expect(wrapper.get('.response-summary').text()).toBe('Readable answer');
+        await wrapper.get('.response-copy').trigger('click');
+        expect(writeText).toHaveBeenLastCalledWith('Readable answer');
+        expect(quoteFromAssistantTurn(turn, 'Assistant').content).toBe('Readable answer');
+        wrapper.unmount();
+      }
+    }
+  });
+
   it('wires the shared renderer to canonical objects and keeps copy/quote summary fallback', async () => {
     vi.stubGlobal('Vue', Vue);
     vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });

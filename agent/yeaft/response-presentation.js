@@ -74,5 +74,8 @@ export function safePresentationUrl(value) {
   let url;
   try { url = new URL(value); } catch { throw new Error('response: invalid absolute URL'); }
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('response: unsafe URL');
+  // Canonical URLs are encoded, so input length alone is not a safe bound.
+  // Persisted snapshots must pass exactly the same limits on replay.
+  if (url.href.length > 2000) throw new Error('response: URL exceeds 2000 characters');
   return url.href;
 }

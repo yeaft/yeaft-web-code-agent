@@ -303,6 +303,7 @@ describe('Person presentation publication', () => {
         { ...args, blocks: [] }, { ...args, blocks: [{ type: 'html', text: '<script>bad</script>' }] },
         { ...args, blocks: [{ type: 'image', url: 'javascript:alert(1)', alt: 'Unsafe' }] },
         { ...args, blocks: [{ type: 'link', url: 'https://user:secret@example.com', text: 'Unsafe' }] },
+        { ...args, blocks: [{ type: 'link', url: 'https://example.com/' + '中'.repeat(300), text: 'Encoded too long' }] },
         { ...args, blocks: [{ type: 'table', columns: ['Name'], rows: [['a', 'b']] }] },
         { ...args, blocks: [{ type: 'chart', style: 'bar', labels: ['a'], series: [{ label: 'Count', values: [1, 2] }] }] },
         { ...args, blocks: [{ type: 'map', points: [{ label: 'Invalid', latitude: 91, longitude: 0 }] }] },
@@ -336,6 +337,18 @@ describe('Person presentation publication', () => {
       const blocks = projectPersonConversation([...snapshot.messages, { id: 'plain', role: 'assistant', episodeId: episode.id, text: 'A distinct later reply.' }]);
       expect(blocks.at(-1).parts.map(m => m.id)).toEqual([message.id, 'plain']);
       await started.finish(result);
+    });
+
+    it('publishes Unicode links only when canonical URLs survive receipt and restart validation', async () => {
+      const input = { ...args, blocks: [{ type: 'link', url: 'https://example.com/' + '中'.repeat(220), text: 'Verified link' }] };
+      const started = await prepare(input), result = await started.publish();
+      expect(result).toMatchObject({ ok: true, published: true, phase: 'final' });
+      await started.finish(result);
+      const canonical = normalizePresentation(input);
+      expect((await r.snapshot('alice')).messages.at(-1).presentation).toEqual(canonical);
+      await r.close(); r = repo();
+      expect((await r.snapshot('alice')).messages.at(-1).presentation).toEqual(canonical);
+      expect((await r.savePresentation(episode, { callId: started.callId, args: input })).id).toBe(result.messageId);
     });
 
     it('deduplicates retries and repeated deliveries but rejects changed invocation hashes', async () => {

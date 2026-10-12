@@ -95,7 +95,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       store.finishStreamingForConversation(conversationId, { completeLifecycle: false });
       const row = store.addMessageToConversation(conversationId, {
         id: data.message.id, messageId: data.message.id, type: 'assistant',
-        content: data.message.presentation.summary,
+        content: normalizeUserVisibleContent(content),
         presentation: data.message.presentation,
         presentationCallId: data.message.presentationCallId,
         responseKind: data.message.responseKind === 'result' ? 'result' : 'progress',
