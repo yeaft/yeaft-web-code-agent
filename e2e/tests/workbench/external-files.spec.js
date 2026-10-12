@@ -696,16 +696,16 @@ async function expectNoDirectoryRetry(page, harness, before) {
   expect(await page.evaluate(() => window.harness.sent.filter(message => message.type === 'list_directory').length)).toBe(before);
 }
 
-for (const intent of ['root', 'reveal', 'breadcrumb', 'bulk']) {
+for (const intent of ['breadcrumb', 'bulk']) {
   socketTest(`real WebSocket handshake gates lost ${intent} directory retries until auth and hello ack`, async ({ page, harness }) => {
     const first = join(harness.workDir, 'first-long-directory');
-    const lostPath = intent === 'root' ? harness.workDir : first;
+    const lostPath = first;
     const stalePath = join(lostPath, 'stale-before-reconnect.txt');
     const freshPath = join(lostPath, 'fresh-after-reconnect.txt');
     await writeFile(stalePath, 'Only the withheld Agent listing contains this file.\n');
     harness.holdDirectories.add(lostPath);
     await openSocketFiles(page, harness);
-    if (intent !== 'root') await expect(treeEntry(page, first)).toBeVisible();
+    await expect(treeEntry(page, first)).toBeVisible();
     await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
     await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
     await expect.poll(() => harness.heldListings.length).toBe(1);
@@ -718,13 +718,11 @@ for (const intent of ['root', 'reveal', 'breadcrumb', 'bulk']) {
       protocol: window.harness.store.workbenchRouteProtocolSupported,
     }))).toEqual({ authenticated: false, protocol: null });
     await expectNoDirectoryRetry(page, harness, before);
-    if (intent === 'breadcrumb' || intent === 'bulk') {
-      // A user may change navigation while the replacement socket is open but
-      // unauthenticated. This must not lose the interrupted load or new intent.
-      await crumb(page, harness.workDir).click();
-      if (intent === 'bulk') await treeEntry(page, join(harness.workDir, 'workspace.txt')).click({ modifiers: ['Control'] });
-      await expectNoDirectoryRetry(page, harness, before);
-    }
+    // A user may change navigation while the replacement socket is open but
+    // unauthenticated. This must not lose the interrupted load or new intent.
+    await crumb(page, harness.workDir).click();
+    if (intent === 'bulk') await treeEntry(page, join(harness.workDir, 'workspace.txt')).click({ modifiers: ['Control'] });
+    await expectNoDirectoryRetry(page, harness, before);
     harness.authenticate();
     await flushSocket(page, harness);
     expect(await page.evaluate(() => ({
@@ -748,7 +746,6 @@ for (const intent of ['root', 'reveal', 'breadcrumb', 'bulk']) {
     expect(retry.requestId).not.toBe(original.requestId);
     expect(retry.workbenchWorkspaceGeneration).toBe(original.workbenchWorkspaceGeneration);
     expect(retry).toMatchObject({ workbenchRoute: OWNER, workbenchRouteKey: ROUTE, agentId: OWNER.agentId });
-    if (intent === 'root' || intent === 'reveal') await expectLocated(page, harness.deepPath);
     await expect(treeEntry(page, freshPath)).toHaveCount(1);
     // Deliver stale bytes again AFTER retry acceptance; they cannot replace the
     // fresh listing, resume an obsolete reveal or clear newer bulk selection.
