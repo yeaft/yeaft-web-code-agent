@@ -2,6 +2,7 @@ import { Worker } from 'node:worker_threads';
 import { join, resolve } from 'node:path';
 import { digest, fail, identifier, PersonError, text } from './contracts.js';
 import { validateCreatedCapability } from './created-capability-contract.js';
+import { executionReadRequest } from './execution-evidence.js';
 
 const storageError = code => {
   const error = new PersonError(code);
@@ -96,6 +97,12 @@ export class SqlitePersonRepository {
   async finalizeCall(episode, data) { return this.request('finalizeCall', [episode, data]); }
   async startCapability(episode, data) { return this.request('startCapability', [episode, data]); }
   async finalizeCapability(episode, data) { return this.request('finalizeCapability', [episode, data]); }
+  async executionRead(episode, args, { signal } = {}) {
+    signal?.throwIfAborted();
+    const result = await this.request('executionRead', [episode, executionReadRequest(args)]);
+    signal?.throwIfAborted();
+    return result;
+  }
   async createdCapabilities(episode) { return this.request('createdCapabilities', [episode]); }
   async saveCreatedCapability(episode, input) { return this.request('saveCreatedCapability', [episode, validateCreatedCapability(input)]); }
   async episodeAttachments(episode) { return this.request('episodeAttachments', [episode]); }

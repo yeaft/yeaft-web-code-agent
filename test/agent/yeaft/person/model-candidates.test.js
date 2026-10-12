@@ -400,7 +400,7 @@ describe('Person inspection, search and name: SQLite', () => {
       const result = await call(s, 'inspect', { section: 'skills', cursor, limit: 2 });
       skills.push(...result.items); cursor = result.nextCursor;
     } while (cursor);
-    expect(skills.map(c => c.id)).toEqual(['Script.echo', ...[...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'PresentResponse', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort()]);
+    expect(skills.map(c => c.id)).toEqual(['Script.echo', ...[...NATIVE_TOOL_IDS, 'Capability.create', 'Execution.read', 'Output.publish', 'PresentResponse', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort()]);
     const script = skills.find(c => c.id === 'Script.echo');
     expect(script).toMatchObject({ domain: 'script', description: 'Echo JSON', version: 1, code: 'return input;', tests: definition.tests,
       source: { kind: 'person-created', episodeId: episode.id, callId } });

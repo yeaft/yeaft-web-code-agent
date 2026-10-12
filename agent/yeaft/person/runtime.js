@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 import { CAPABILITY_MAP, capabilityContextBudget, foundationCapabilities, PersonCapabilities, catalogRevision as capabilityCatalogRevision } from './capabilities.js';
 import { attachmentMetadata } from './attachments.js';
+import { ExecutionProgress } from './execution-progress.js';
 import { personPresentation } from './presentation.js';
 import { abortable, collectOutput } from './provider.js';
 import { callUsage, sumUsage } from './turn-diagnostics.js';
@@ -14,7 +15,7 @@ const conceptRef = c => `concept:${c.id}:${c.revision}`;
 const ENVELOPE_TOKENS_RESERVED = 1024;
 
 /** Assemble bounded request copies. Omitting a record never deletes or truncates its durable original. */
-export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, taskEvidence, episodeProgress = [], omittedEpisodeProgress = 0, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment, feedback, outputRecovery }) {
+export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, taskEvidence, episodeProgress = [], omittedEpisodeProgress = 0, episodeWork = null, executionPattern = null, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment, feedback, outputRecovery }) {
   const model = validateSelection(selection, provider.catalog);
   // UTF-8 bytes is a conservative text-token bound; reserve explicit envelope/output overhead.
   const images = attachments.filter(file => file.kind === 'image');
@@ -90,7 +91,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
       instruction: 'Output truncated; no action executed. Return smaller complete JSON, without repeating successful tools.' };
     if (!fits()) delete context.outputRecovery;
   }
-  context.outputInstructions = 'Fit complete JSON/tool args within budget.maxOutputTokens (reasoning included). Split big scripts or use SpawnAgent; long Shell work uses background:true and explicit result collection.';
+  context.outputInstructions = 'Fit complete JSON/tool args within budget.maxOutputTokens (reasoning included). Split big scripts or use SpawnAgent; long Shell work uses background:true and explicit result collection. For authorized edits, read relevant ranges, edit, inspect diff/checks. Missing broader validation need not block independently testable work. Recover omitted output via Execution.read or narrow reads, not reruns. Repeated evidence is not progress; diagnostics impose no quota/forced write. Optional work:null|{goal:string,findings:[{summary:string,sourceRefs:string[]}],nextStep:string,blocker:string}. Max 6 findings, summary<=600 UTF-8 bytes, 1..4 exact evidence refs each; other strings<=1000 bytes, total<=6144. Retain relevant findings, retract errors, integrate results before next action.';
   if (!fits()) delete context.outputInstructions;
   // Feedback is a request-only hint, never grounds to fail the next call.
   // Keep durable replies intact; avoid duplicating up to 8 KiB from previousProposal.
@@ -138,6 +139,17 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
       else if (item.sourceRef && sourceRefs.has(item.sourceRef)) renderedRefs.add(item.sourceRef);
     }
   }
+  // Public working notes survive cognition-only/catalog steps without pretending
+  // to be committed state. Admit them after real evidence and mandatory contracts;
+  // source refs in omitted notes never enter the validation read-set by themselves.
+  if (episodeWork) {
+    context.episodeWork = episodeWork;
+    if (!fits()) delete context.episodeWork;
+  }
+  if (executionPattern) {
+    context.executionPattern = executionPattern;
+    if (!fits()) delete context.executionPattern;
+  }
   for (const m of [...snapshot.messages].reverse()) add('messages', m, messageRef(m));
   context.messages.reverse();
   for (const c of snapshot.concepts) add('concepts', c, conceptRef(c));
@@ -162,6 +174,8 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
       // from the bounded snapshot, not all records outside that window.
       contextSources: { episodeExecutions: context.episodeProgress?.items.length ?? 0,
         omittedEpisodeExecutions: context.episodeProgress?.omitted ?? (episodeProgress.length + omittedEpisodeProgress),
+        ...(episodeWork !== null ? { episodeWorkRendered: Boolean(context.episodeWork) } : {}),
+        ...(executionPattern !== null ? { executionPatternRendered: Boolean(context.executionPattern) } : {}),
         recentMessages: context.messages.length, recentConcepts: context.concepts.length,
         omittedMessages: omitted.filter(item => item.ref.startsWith('message:')).length,
         omittedConcepts: omitted.filter(item => item.ref.startsWith('concept:')).length,
@@ -384,7 +398,8 @@ export class PersonRuntime {
           selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry }),
         onResult: result => finalizeNativeResult(result) });
       const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost, workDir: this.toolOptions.workDir });
-      let previous = null, capabilityResult = null, latestExecution = null, dependencyRefs = [];
+      let previous = null, capabilityResult = null, latestExecution = null, dependencyRefs = [], episodeWork = null;
+      const executionProgress = new ExecutionProgress();
       const episodeProgress = [];
       let outputRecovery = null, outputRecoveryAttempted = false, omittedEpisodeProgress = 0;
       // Retain a bounded actual read window. Older provenance must be recalled again.
@@ -393,13 +408,14 @@ export class PersonRuntime {
       for (let index = 0; ; index++) {
         await this.boundary(job, 'preparing');
         const callId = randomUUID();
-        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, episodeProgress, omittedEpisodeProgress, dependencyRefs, taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)), attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment, feedback: {
+        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, episodeProgress, omittedEpisodeProgress, episodeWork, executionPattern: executionProgress.context(), dependencyRefs, taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)), attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment, feedback: {
           minIntervalMs: FEEDBACK.minMs, maxIntervalMs: FEEDBACK.maxMs,
           elapsedSinceReplyMs: Math.max(0, Date.now() - lastReplyAt),
           due: Date.now() - lastReplyAt >= FEEDBACK.minMs, lastReply,
         }, outputRecovery });
         capabilities.activate(context.activeCapabilities);
-        dependencyRefs = context.manifest.inputDependencyRefs.slice(-128);
+        const workRefs = episodeWork?.findings.flatMap(finding => finding.sourceRefs) ?? [];
+        dependencyRefs = [...new Set([...context.manifest.inputDependencyRefs.filter(ref => !workRefs.includes(ref)), ...workRefs.filter(ref => context.sourceRefs.has(ref))])].slice(-128);
         for (const [id, concept] of context.concepts) { readConcepts.delete(id); readConcepts.set(id, concept); }
         for (const [ref, source] of context.sources) { readSources.delete(ref); readSources.set(ref, source); }
         // Refresh existing reads above, then evict only historical entries. A
@@ -482,6 +498,7 @@ export class PersonRuntime {
           await this.repository.append(episode, 'proposal_rejected', { callId, code: safe.code });
           throw safe;
         }
+        if (Object.hasOwn(proposal, 'work')) episodeWork = proposal.work;
         await this.repository.append(episode, 'activity', { callId, activity: proposal.activity, decision: proposal.decision, disposition: proposal.next ? 'candidate' : 'proposed-commit' });
         if (!proposal.next) {
           await this.boundary(job, 'committing', null, () => this.repository.commit(episode, proposal, selection, callId, new Map(proposal.concepts.map(c => [c.id, c.epistemicState === 'reported' ? reportedLineage(c, readSources) : []]))));
@@ -549,6 +566,7 @@ export class PersonRuntime {
             // keep result evidence, not another copy of those instructions.
             if (!invocation.id.startsWith('catalog.') && capabilityResult?.access !== 'method-only') {
               latestExecution = executionReceipt(callId, invocation.id, capabilityResult);
+              executionProgress.observe(callId, invocation, capabilityResult);
             }
             // Raw tool result above remains durable; only this next-call copy is budgeted.
             if (isNativeTool(invocation.id)) capabilityResult = projectNativeResult(capabilityResult);

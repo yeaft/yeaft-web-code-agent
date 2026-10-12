@@ -46,8 +46,8 @@ describe('Person cognitive progress', () => {
       if (value !== undefined) p.state.continuation = value;
       expect(validateProposal(p, validation)).toBe(p);
     }
-    expect(PROPOSAL_INSTRUCTIONS).toContain('Progress, not status narration');
-    expect(PROPOSAL_INSTRUCTIONS).toContain('No forced novelty or compulsory tools');
+    expect(PROPOSAL_INSTRUCTIONS).toContain('promises are not progress');
+    expect(PROPOSAL_INSTRUCTIONS).toContain('No compulsory tools/novelty');
     expect(PROPOSAL_INSTRUCTIONS).toContain('newer cancellation/prohibitions win');
     expect(PROPOSAL_INSTRUCTIONS).toContain('Do not claim you will automatically follow up');
     expect(stateView({ ...proposal(0).state, continuation: { ...continuation, private: 'omit' } }).continuation).toEqual(continuation);
