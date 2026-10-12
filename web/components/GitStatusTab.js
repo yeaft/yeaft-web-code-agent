@@ -242,6 +242,11 @@ export default {
             </div>
             <div class="folder-picker-list">
               <div class="git-loading" v-if="folderPickerLoading" style="padding:12px"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
+              <div class="folder-picker-state folder-picker-error" v-else-if="folderPickerError" role="alert">
+                <span>{{ $t('modal.folderPicker.loadFailed') }}</span>
+                <span class="folder-picker-error-detail">{{ folderPickerError }}</span>
+                <button class="btn btn-secondary" type="button" @click="loadFolderPickerDir(folderPickerPath)">{{ $t('common.retry') }}</button>
+              </div>
               <template v-else>
                 <div
                   v-for="entry in folderPickerEntries"
@@ -258,7 +263,7 @@ export default {
               </template>
             </div>
             <div class="folder-picker-footer">
-              <button class="wb-btn" @click="confirmFolderPicker" :disabled="!folderPickerPath">{{ $t('common.open') }}</button>
+              <button class="wb-btn" @click="confirmFolderPicker" :disabled="!folderPickerPath || folderPickerLoading || !!folderPickerError">{{ $t('common.open') }}</button>
             </div>
           </div>
         </div>
@@ -548,6 +553,7 @@ export default {
       folderPickerOpen: picker.folderPickerOpen, folderPickerPath: picker.folderPickerPath,
       folderPickerEntries: picker.folderPickerEntries,
       folderPickerLoading: picker.folderPickerLoading, folderPickerSelected: picker.folderPickerSelected,
+      folderPickerError: picker.folderPickerError, loadFolderPickerDir: picker.loadFolderPickerDir,
       getFolderIcon, openFolderPicker: picker.openFolderPicker,
       folderPickerNavigateUp: picker.folderPickerNavigateUp,
       folderPickerSelectItem: picker.folderPickerSelectItem,

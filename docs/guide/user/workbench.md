@@ -45,6 +45,8 @@ In ordinary Sessions, manually selected files can be outside the Session working
 
 Opening or switching files expands their parent folders and highlights the active file. Click any segment of the editor path to show and locate that folder (or the filename to locate the file). In ordinary Sessions, an external file can move the tree root to its parent without changing the Session working directory or discarding edits; WorkItem navigation stays inside its workspace.
 
+On Windows, the top-level drive list shows only fixed disks, not mapped network drives, removable drives, or optical drives. The Agent queries drive types asynchronously through Windows PowerShell with a five-second execution timeout, without probing drive roots; concurrent requests share the query, and subsequent requests refresh it. Enumeration failures appear as errors with a retry action instead of an empty list. Other paths remain accessible through existing direct-path inputs, subject to the same permissions and workspace boundaries. macOS/Linux root browsing is unchanged.
+
 ### Editor and previews
 
 - edit multiple files with syntax highlighting
