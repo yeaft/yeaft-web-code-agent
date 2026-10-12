@@ -58,6 +58,14 @@ select option:checked {
 
 /* Light Theme (default) - warm, eye-friendly tones */
 :root {
+  --response-space-sm: 8px;
+  --response-space-md: 16px;
+  --response-space-lg: 28px;
+  --response-radius: 10px;
+  --response-series-0: #365f9d;
+  --response-series-1: #307267;
+  --response-series-2: #8b5a97;
+  --response-series-3: #976720;
   --work-center-space-1: 4px;
   --work-center-space-2: 8px;
   --work-center-space-3: 12px;
@@ -328,6 +336,14 @@ select option:checked {
 
 /* Dark Theme - warm, eye-friendly tones */
 [data-theme="dark"] {
+  --response-space-sm: 8px;
+  --response-space-md: 16px;
+  --response-space-lg: 28px;
+  --response-radius: 10px;
+  --response-series-0: #84a9e0;
+  --response-series-1: #72baac;
+  --response-series-2: #c596d1;
+  --response-series-3: #d4ae70;
   --work-center-space-1: 4px;
   --work-center-space-2: 8px;
   --work-center-space-3: 12px;
