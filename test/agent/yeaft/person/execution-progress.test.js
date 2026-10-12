@@ -60,10 +60,12 @@ describe('Person execution continuity', () => {
     const provider = await createPersonProvider({ config, adapter: {} });
     const input = { provider, selection: provider.defaultSelection,
       snapshot: { person: { id: 'p', soul: 'Honesty.' }, state: { version: 0, summary: 'Old state' }, messages: [], concepts: [] },
-      episode: { id: 'e', kind: 'think', text: '' } };
+      episode: { id: 'e', kind: 'think', text: '' }, previous: { ...proposal(), work: notes } };
     const progress = new ExecutionProgress(); progress.observe('call', { id: 'FileRead', args: {} }, { output: 'text' });
     const context = assembleContext({ ...input, episodeWork: notes, executionPattern: progress.context() });
     expect(JSON.parse(context.messages[0].content).episodeWork).toEqual(notes);
+    expect(JSON.parse(context.messages[0].content).previousProposal).not.toHaveProperty('work');
+    expect(input.previous.work).toEqual(notes); // The archived proposal is not mutated.
     expect(context.sourceRefs.has('tool:read')).toBe(false);
     expect(context.manifest.contextSources).toMatchObject({ episodeWorkRendered: true, executionPatternRendered: true });
     const baseline = assembleContext(input), body = JSON.parse(baseline.messages[0].content);
@@ -73,6 +75,34 @@ describe('Person execution continuity', () => {
     expect(JSON.parse(full.messages[0].content).episodeWork).toBeUndefined();
     expect(full.manifest.contextSources).toMatchObject({ episodeWorkRendered: false, executionPatternRendered: false });
     expect(full.manifest.contextBytes).toBe(full.manifest.contextBudgetBytes);
+  });
+
+  it('continues a tight-window real loop after a valid large work proposal without mandatory duplication', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'person-work-budget-')); dirs.push(dir);
+    const smallConfig = { ...config, availableModels: config.availableModels.map(model => ({ ...model, contextWindow: 32768 })) };
+    let step = 0, archivedWork;
+    const adapter = { async *stream(params) {
+      const input = JSON.parse(params.messages[0].content), p = proposal(input.state.version); step++;
+      if (step === 1) {
+        p.activity.summary = 'a'.repeat(1500); p.decision.summary = 'd'.repeat(1000);
+        p.decision.selfCheck = 's'.repeat(1000); p.state.summary = 's'.repeat(3500);
+        p.work = { ...notes, findings: Array.from({ length: 6 }, () => ({ summary: '中'.repeat(200), sourceRefs: [input.trigger.ref] })) };
+        archivedWork = p.work; use(p, null);
+      } else {
+        expect(input.previousProposal).not.toHaveProperty('work');
+        expect(input.episodeWork).toBeUndefined(); // Fits only when the optional work slot can be omitted.
+        p.state.summary = 'Finished the distinct check.';
+      }
+      yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
+    } };
+    const service = createPersonService({ yeaftDir: dir, workDir: dir, config: smallConfig, adapter, embedding: { enabled: false } }); services.push(service);
+    await request(service, 'open'); await request(service, 'think', { text: 'x'.repeat(7000), clientMessageId: 'tight-window' });
+    const snapshot = await idle(service);
+    expect(snapshot.latestEpisode).toMatchObject({ status: 'completed' }); expect(step).toBe(2);
+    const traces = (await request(service, 'traces', { limit: 50 })).items;
+    const archived = traces.find(t => t.kind === 'call_output' && t.output?.text?.includes('"work"'));
+    expect(JSON.parse(archived.output.text).work).toEqual(archivedWork);
+    expect(archivedWork.findings).toHaveLength(6);
   });
 
   it('keeps findings across cognition/catalog steps, performs a real edit/check, then clears notes for the next episode', async () => {
@@ -99,7 +129,7 @@ describe('Person execution continuity', () => {
           saved = { ...notes, findings: [{ summary: 'The clock is wall time; edit this assignment.', sourceRefs: [input.capabilityResult.sourceRef] }] };
           p.work = saved; use(p, null);
         }
-        if (step === 6) { expect(input.episodeWork).toEqual(saved); use(p, 'catalog.view', { id: 'FileEdit' }); }
+        if (step === 6) { expect(input.previousProposal).not.toHaveProperty('work'); expect(input.episodeWork).toEqual(saved); use(p, 'catalog.view', { id: 'FileEdit' }); }
         if (step === 7) {
           expect(input.previousProposal).not.toHaveProperty('work'); expect(input.episodeWork).toEqual(saved);
           use(p, 'FileEdit', { file_path: path, old_string: '"wall"', new_string: '"trading"' });
