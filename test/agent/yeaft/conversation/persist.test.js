@@ -837,6 +837,163 @@ describe('ConversationStore', () => {
       expect(index.segments).toHaveLength(1);
     });
 
+    it('preserves a first committed row and stream identity when its index target fails', () => {
+      const sessionId = 'session_first_commit_index';
+      const before = store.getSessionHistoryMetadata(sessionId);
+      const conversationDir = join(TEST_DIR, 'sessions', sessionId, 'conversation');
+      const indexPath = join(conversationDir, 'index.json');
+      // A directory target injects a real EISDIR write failure on every platform.
+      mkdirSync(indexPath);
+      const committed = store.append({ role: 'assistant', content: 'first publication', sessionId }, { strict: true });
+      const restarted = new ConversationStore(TEST_DIR);
+      expect(restarted.loadAllBySession(sessionId)).toEqual([expect.objectContaining(committed)]);
+      expect(restarted.getSessionHistoryMetadata(sessionId)).toEqual({
+        ...before, headSeq: Number(committed.id.slice(1)),
+      });
+      rmSync(indexPath, { recursive: true });
+      expect(new ConversationStore(TEST_DIR).loadAllBySession(sessionId)).toHaveLength(1);
+      expect(JSON.parse(readFileSync(indexPath, 'utf8'))).toMatchObject({
+        totalMessages: 1, lastMessageId: committed.id,
+        streamId: before.streamId.replace(/:visible-v2$/, ''), revision: before.revision,
+      });
+    });
+
+    it.skipIf(process.platform === 'win32')('returns committed identities after actual index failures without retry publication', () => {
+      for (const strict of [true, false]) {
+        const sessionId = `session_index_commit_${strict}`;
+        const user = store.append({ role: 'user', content: 'question', sessionId });
+        const before = store.getSessionHistoryMetadata(sessionId);
+        const conversationDir = join(TEST_DIR, 'sessions', sessionId, 'conversation');
+        const indexPath = join(conversationDir, 'index.json');
+        const staleIndex = readFileSync(indexPath, 'utf8');
+        const publications = [];
+        let attempts = 0;
+        const publish = () => {
+          attempts += 1;
+          const row = store.append({
+            role: 'assistant', content: 'published once', sessionId,
+            responseKind: 'result', turnId: 'turn_committed', speakerVpId: 'vp-author',
+          }, { strict });
+          publications.push(row);
+          return row;
+        };
+
+        chmodSync(indexPath, 0o444);
+        let committed;
+        try {
+          // A false post-commit error causes callers to retry publication. Keep
+          // that retry executable so physical duplicate rows cannot go unnoticed.
+          try { committed = publish(); }
+          catch {
+            chmodSync(indexPath, 0o644);
+            committed = publish();
+          }
+          expect(attempts).toBe(1);
+          expect(publications).toEqual([committed]);
+          expect(readFileSync(indexPath, 'utf8')).toBe(staleIndex);
+          const restarted = new ConversationStore(TEST_DIR);
+          expect(restarted.loadAllBySession(sessionId).map(row => row.id)).toEqual([user.id, committed.id]);
+          expect(restarted.loadVisibleBySession(sessionId, null, 10).messages).toEqual([
+            expect.objectContaining({ id: user.id }),
+            expect.objectContaining({ id: committed.id, turnId: 'turn_committed', speakerVpId: 'vp-author', responseKind: 'result' }),
+          ]);
+          expect(restarted.getSessionHistoryMetadata(sessionId)).toEqual({
+            ...before, headSeq: Number(committed.id.slice(1)),
+          });
+        } finally {
+          chmodSync(indexPath, 0o644);
+        }
+        const recovered = new ConversationStore(TEST_DIR);
+        expect(recovered.loadAllBySession(sessionId).map(row => row.id)).toEqual([user.id, committed.id]);
+        expect(JSON.parse(readFileSync(indexPath, 'utf8'))).toMatchObject({
+          totalMessages: 2, lastMessageId: committed.id,
+          streamId: before.streamId.replace(/:visible-v2$/, ''), revision: before.revision,
+        });
+        const physical = readFileSync(join(conversationDir, 'segments', '000001.jsonl'), 'utf8')
+          .trim().split('\n').map(JSON.parse);
+        expect(physical.map(row => row.id)).toEqual([user.id, committed.id]);
+      }
+    });
+
+    it.skipIf(process.platform === 'win32')('recovers committed fold tombstones and revision while its index is unwritable', () => {
+      const sessionId = 'session_fold_index_commit';
+      const user = store.append({ role: 'user', content: 'question', sessionId });
+      const assistant = store.append({ role: 'assistant', content: 'original answer', sessionId });
+      const before = store.getSessionHistoryMetadata(sessionId);
+      const conversationDir = join(TEST_DIR, 'sessions', sessionId, 'conversation');
+      const indexPath = join(conversationDir, 'index.json');
+      chmodSync(indexPath, 0o444);
+      let reflection;
+      try {
+        reflection = store.append({
+          role: 'user', content: 'folded context', sessionId,
+          _reflection: true, foldedMessageIds: [assistant.id],
+        }, { strict: true });
+        const restarted = new ConversationStore(TEST_DIR);
+        expect(restarted.getSessionHistoryMetadata(sessionId)).toEqual({
+          streamId: before.streamId, revision: before.revision + 1,
+          headSeq: Number(reflection.id.slice(1)),
+        });
+        expect(restarted.loadRecentBySession(sessionId, Infinity, { includeReflections: true }).map(row => row.id))
+          .toEqual([user.id, reflection.id]);
+        expect(restarted.loadVisibleBySession(sessionId, null, 10).messages.map(row => row.id))
+          .toEqual([user.id, assistant.id]);
+        expect(JSON.parse(readFileSync(join(conversationDir, 'lineage.json'), 'utf8')).revision)
+          .toBe(before.revision + 1);
+      } finally {
+        chmodSync(indexPath, 0o644);
+      }
+      new ConversationStore(TEST_DIR).loadAllBySession(sessionId);
+      expect(JSON.parse(readFileSync(indexPath, 'utf8'))).toMatchObject({
+        totalMessages: 3, foldedMessageIds: [assistant.id], revision: before.revision + 1,
+      });
+    });
+
+    it.skipIf(process.platform === 'win32')('rejects strict lineage preparation and JSONL failures before transcript commit', () => {
+      const sessionId = 'session_precommit_failure';
+      const user = store.append({ role: 'user', content: 'original', sessionId });
+      const before = store.getSessionHistoryMetadata(sessionId);
+      const conversationDir = join(TEST_DIR, 'sessions', sessionId, 'conversation');
+      const segmentPath = join(conversationDir, 'segments', '000001.jsonl');
+      const original = readFileSync(segmentPath, 'utf8');
+
+      // A fold needs an atomic lineage write. Deny that write, not JSONL, to
+      // prove a lineage error cannot occur after publishing its reflection.
+      chmodSync(conversationDir, 0o555);
+      try {
+        expect(() => store.append({
+          role: 'user', content: 'must not commit', sessionId,
+          _reflection: true, foldedMessageIds: [user.id],
+        }, { strict: true })).toThrow(/EACCES/);
+        expect(readFileSync(segmentPath, 'utf8')).toBe(original);
+      } finally {
+        chmodSync(conversationDir, 0o755);
+      }
+      expect(new ConversationStore(TEST_DIR).getSessionHistoryMetadata(sessionId)).toEqual(before);
+
+      chmodSync(segmentPath, 0o444);
+      try {
+        expect(() => store.append({ role: 'assistant', content: 'strict failure', sessionId }, { strict: true }))
+          .toThrow(/EACCES/);
+        expect(store.append({ role: 'assistant', content: 'best-effort fallback', sessionId }))
+          .toMatchObject({ content: 'best-effort fallback', id: expect.stringMatching(/^m\d+$/) });
+        expect(() => store.append({
+          role: 'user', content: 'uncommitted fold', sessionId,
+          _reflection: true, foldedMessageIds: [user.id],
+        }, { strict: true })).toThrow(/EACCES/);
+        expect(readFileSync(segmentPath, 'utf8')).toBe(original);
+      } finally {
+        chmodSync(segmentPath, 0o644);
+      }
+      const restarted = new ConversationStore(TEST_DIR);
+      expect(restarted.loadAllBySession(sessionId).map(row => row.id)).toEqual([user.id]);
+      expect(restarted.loadRecentBySession(sessionId, Infinity, { includeReflections: true }).map(row => row.id))
+        .toEqual([user.id]);
+      // The pre-written fence is allowed to invalidate caches conservatively,
+      // but it must not remove a source row when JSONL never committed the fold.
+      expect(restarted.getSessionHistoryMetadata(sessionId)).toEqual({ ...before, revision: before.revision + 1 });
+    });
+
     it('keeps legacy transcript lineage stable across metadata loss and alternating readers', () => {
       const sessionId = 'session_legacy_lineage';
       store.append({ role: 'user', content: 'legacy question', sessionId });
