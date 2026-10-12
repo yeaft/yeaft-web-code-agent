@@ -24,6 +24,7 @@ export function createWorkbenchPreview(fileId, pending, filePath) {
   const source = {
     fileId, filePath, agentId: pending.agentId, userId: pending.userId,
     route: pending.route, workspaceGeneration: pending.workspaceGeneration,
+    responseImagePreview: pending.responseImagePreview === true,
   };
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key(), iv);
@@ -39,6 +40,7 @@ export function createWorkbenchVideo(fileId, pending, metadata) {
     mimeType: metadata.mimeType, filename: metadata.filePath.split(/[\\/]/).pop(),
     agentId: pending.agentId, userId: pending.userId,
     route: pending.route, workspaceGeneration: pending.workspaceGeneration,
+    workspaceBoundPreview: false,
   };
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key(), iv);
@@ -104,6 +106,10 @@ async function refill(source, token, { client, resolved }) {
       if (!requestId) return reject(failure(503, 'Preview read unavailable'));
       Promise.resolve(forwardToAgent(source.agentId, {
         type: 'read_file', filePath: source.filePath, workDir: resolved.workDir,
+        ...(source.responseImagePreview === true ? { responseImagePreview: true } : {}),
+        // Missing purpose identifies an old workspace-bound capability, not a
+        // new explicit file selection. PDF/Office refills must remain supported.
+        ...(source.responseImagePreview === undefined ? { workspaceBoundPreview: true } : {}),
         conversationId: resolved.conversationId, workbenchRoute: source.route,
         workbenchRouteKey: resolved.routeKey, workbenchWorkspaceGeneration: source.workspaceGeneration,
         _workbenchRequestId: requestId, _requestUserId: source.userId,
@@ -157,6 +163,7 @@ async function requestVideoChunk(source, start, end, signal) {
       if (!requestId) return reject(failure(503, 'Video stream unavailable'));
       Promise.resolve(forwardToAgent(source.agentId, {
         type: 'video_chunk', filePath: source.filePath, workDir: resolved.workDir,
+        ...(source.workspaceBoundPreview !== false ? { workspaceBoundPreview: true } : {}),
         conversationId: resolved.conversationId, workbenchRoute: source.route,
         workbenchRouteKey: resolved.routeKey, workbenchWorkspaceGeneration: source.workspaceGeneration,
         _workbenchRequestId: requestId, _requestUserId: source.userId,

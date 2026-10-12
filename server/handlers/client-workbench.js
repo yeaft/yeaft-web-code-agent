@@ -231,6 +231,7 @@ function correlateWorkbenchRequest({ agentId, clientId, client, msg, resolved, c
     route: resolved.route,
     role: client.role,
     requestType: msg.type,
+    responseImagePreview: msg.type === 'read_file' && msg.responseImagePreview === true,
     expectedResponseTypes,
     publicRequestId: typeof msg.requestId === 'string' ? msg.requestId : null,
     terminalId: msg.terminalId || null,

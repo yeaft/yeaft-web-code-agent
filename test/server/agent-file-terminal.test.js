@@ -79,6 +79,7 @@ const {
   getWorkbenchTerminalOwner,
 } = await import('../../server/workbench-correlation.js');
 const { __testResetFileContentAssemblies } = await import('../../server/file-content-assembly.js');
+const { readWorkbenchPreview } = await import('../../server/workbench-preview.js');
 const {
   workbenchRouteKey,
   workbenchWorkspaceGeneration,
@@ -298,6 +299,66 @@ describe('Agent file terminal forwarding', () => {
       ),
       error: 'Response image preview is not supported by this Agent',
     }));
+  });
+
+  it('keeps the automatic image purpose through route correlation, binary projection and cache refill', async () => {
+    const { outbound, client } = await registerRouteRequest({
+      type: 'read_file', requestId: 'automatic-image',
+      extra: { filePath: 'picture.png', responseImagePreview: true },
+      agentCapabilities: ['workbench_session_routes', 'workbench_request_correlation', 'response_image_preview'],
+    });
+    expect(outbound).toMatchObject({ type: 'read_file', responseImagePreview: true });
+    await handleAgentFileTerminal('agent-1', agents.get('agent-1'), {
+      type: 'file_content', conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      filePath: '/workspace/session-1/picture.png', requestedFilePath: 'picture.png',
+      binary: true, mimeType: 'image/png', content: Buffer.from('image').toString('base64'),
+      // The response must not be the source of the security purpose.
+      responseImagePreview: false,
+    });
+    const projected = sendToWebClient.mock.calls.find(([target, msg]) => target === client && msg.previewToken)?.[1];
+    expect(projected).toMatchObject({ previewToken: expect.stringMatching(/^wb1\./) });
+    previewFiles.clear();
+    forwardToAgent.mockClear();
+    const result = readWorkbenchPreview(projected.fileId, projected.previewToken);
+    const refill = forwardToAgent.mock.calls.at(-1)[1];
+    expect(refill).toMatchObject({ type: 'read_file', responseImagePreview: true, workDir: '/workspace/session-1' });
+    const rejected = expect(result).rejects.toMatchObject({ status: 502 });
+    await handleAgentFileTerminal('agent-1', agents.get('agent-1'), {
+      type: 'file_content', conversationId: refill.conversationId, _workbenchRequestId: refill._workbenchRequestId,
+      filePath: refill.filePath, content: '', error: 'Response image is outside the active workspace.', errorCode: 'FILE_OUTSIDE_WORKSPACE',
+    });
+    await rejected;
+  });
+
+  it('preserves an external Windows file path and its Session identity through the relay', async () => {
+    const filePath = 'Q:/Projects/main/picasso/Tests/ParentalControlServiceTests.cs';
+    const { outbound, client } = await registerRouteRequest({
+      type: 'read_file', workDir: 'C:/Projects/active', requestId: 'external-source',
+      extra: { filePath },
+    });
+    expect(outbound).toMatchObject({
+      filePath, workDir: 'C:/Projects/active',
+      conversationId: '_workbench:yeaft:agent-1:session-1',
+      workbenchRoute: { runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-1' },
+    });
+    sendToWebClient.mockClear();
+    await handleAgentFileTerminal('agent-1', agents.get('agent-1'), {
+      type: 'file_content', conversationId: outbound.conversationId,
+      _workbenchRequestId: outbound._workbenchRequestId,
+      filePath: filePath.replace(/\//g, '\\'), requestedFilePath: filePath,
+      content: 'external source', language: 'text/x-csharp',
+    });
+    expect(sendToWebClient).toHaveBeenCalledWith(client, expect.objectContaining({
+      agentId: 'agent-1', requestId: 'external-source', requestedFilePath: filePath,
+      workbenchRouteKey: 'yeaft:agent-1:session-1', content: 'external source',
+    }));
+    forwardToAgent.mockClear();
+    await handleClientWorkbench('client-1', client, {
+      type: 'read_file', agentId: 'agent-1', filePath,
+      workbenchRoute: { runtimeProvider: 'yeaft', agentId: 'agent-1', sessionId: 'session-1' },
+    }, async () => false);
+    expect(forwardToAgent).not.toHaveBeenCalled();
   });
 
   it('authorizes a Yeaft Workbench route and replaces browser cwd with canonical Session metadata', async () => {
@@ -1410,36 +1471,119 @@ describe('Agent file terminal forwarding', () => {
     expect(sent.filter(msg => msg.type === 'write_file')).toHaveLength(3);
   });
 
-  it('confines file editor reads to real files inside the canonical workspace', async () => {
+  it('opens and saves user-selected Agent files outside the Session cwd', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'yeaft-file-read-root-'));
     const outside = mkdtempSync(join(tmpdir(), 'yeaft-file-read-outside-'));
     const sent = [];
     const previousConfig = ctx.CONFIG;
     const previousSend = ctx.sendToServer;
     writeFileSync(join(workDir, 'README.md'), 'inside readme');
-    writeFileSync(join(outside, 'secret.md'), 'outside secret');
-    symlinkSync(join(outside, 'secret.md'), join(workDir, 'escaped.md'));
+    const externalFile = join(outside, 'ParentalControlServiceTests.cs');
+    writeFileSync(externalFile, 'outside source');
+    writeFileSync(join(outside, 'picture.png'), Buffer.from('external image'));
+    symlinkSync(externalFile, join(workDir, 'linked.cs'));
     ctx.CONFIG = { workDir };
     ctx.sendToServer = msg => sent.push(msg);
     try {
+      const base = { conversationId: '_explorer', workDir };
+      await handleListDirectory({ ...base, dirPath: outside });
+      expect(sent.shift()).toMatchObject({ dirPath: outside, entries: expect.arrayContaining([
+        expect.objectContaining({ name: 'ParentalControlServiceTests.cs', type: 'file' }),
+      ]) });
       for (const [requestId, filePath] of [
         ['inside', 'README.md'],
-        ['parent', join('..', outside.split(/[\\/]/).pop(), 'secret.md')],
-        ['absolute', join(outside, 'secret.md')],
-        ['symlink', 'escaped.md'],
+        ['parent', join('..', outside.split(/[\\/]/).pop(), 'ParentalControlServiceTests.cs')],
+        ['absolute', externalFile],
+        ['symlink', 'linked.cs'],
       ]) {
-        await handleReadFile({ conversationId: '_explorer', requestId, workDir, filePath });
+        await handleReadFile({ ...base, requestId, filePath });
       }
       expect(sent[0]).toMatchObject({ requestId: 'inside', content: 'inside readme' });
       for (const response of sent.slice(1)) {
-        expect(response).toMatchObject({
-          error: 'File is outside the active workspace.',
-          errorCode: 'FILE_OUTSIDE_WORKSPACE',
-        });
-        expect(response.content).toBe('');
+        expect(response).toMatchObject({ content: 'outside source', language: 'text/x-csharp', filePath: externalFile });
+        expect(response.error).toBeUndefined();
       }
+      await handleWriteFile({ ...base, requestId: 'save', filePath: externalFile, content: 'edited source' });
+      expect(sent.at(-1)).toMatchObject({ type: 'file_saved', requestId: 'save', success: true });
+      expect(readFileSync(externalFile, 'utf-8')).toBe('edited source');
+      await handleReadFile({ ...base, filePath: join(outside, 'picture.png') });
+      expect(sent.at(-1)).toMatchObject({ binary: true, mimeType: 'image/png', content: Buffer.from('external image').toString('base64') });
+      // An absolute selection does not depend on the old cwd still existing.
+      await handleReadFile({ ...base, workDir: join(workDir, 'removed'), filePath: externalFile });
+      expect(sent.at(-1)).toMatchObject({ content: 'edited source', requestedFilePath: externalFile });
+      await handleReadFile({ ...base, filePath: join(outside, 'missing.cs') });
+      expect(sent.at(-1)).toMatchObject({ content: '', errorCode: 'ENOENT' });
     } finally {
       ctx.CONFIG = previousConfig;
+      ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps WorkItem editor and video reads confined, including symlink targets', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-workitem-read-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'yeaft-workitem-read-outside-'));
+    const sent = [];
+    const previousSend = ctx.sendToServer;
+    const externalFile = join(outside, 'external.txt');
+    const externalVideo = join(outside, 'external.mp4');
+    writeFileSync(join(workDir, 'inside.txt'), 'inside');
+    writeFileSync(externalFile, 'outside');
+    writeFileSync(externalVideo, '0123456789');
+    symlinkSync(externalFile, join(workDir, 'linked.txt'));
+    symlinkSync(externalVideo, join(workDir, 'linked.mp4'));
+    ctx.sendToServer = msg => sent.push(msg);
+    try {
+      const base = { conversationId: '_workbench:work-center:agent:item', workDir,
+        workbenchRoute: { runtimeProvider: 'work-center', agentId: 'agent', workItemId: 'item' } };
+      await handleReadFile({ ...base, filePath: 'inside.txt' });
+      expect(sent.shift()).toMatchObject({ content: 'inside' });
+      for (const filePath of [externalFile, join('..', outside.split(/[\\/]/).pop(), 'external.txt'), 'linked.txt']) {
+        await handleReadFile({ ...base, filePath });
+        expect(sent.at(-1)).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE', content: '' });
+      }
+      for (const filePath of [externalVideo, 'linked.mp4']) {
+        await handleVideoMetadata({ ...base, filePath });
+        expect(sent.at(-1)).toMatchObject({ type: 'video_metadata', errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+        await handleVideoChunk({ ...base, filePath, start: 0, end: 2 });
+        expect(sent.at(-1)).toMatchObject({ type: 'video_chunk', errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+        expect(sent.at(-1).content).toBeUndefined();
+      }
+    } finally {
+      ctx.sendToServer = previousSend;
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('streams user-selected videos outside the Session cwd with the same range fences', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-video-read-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'yeaft-video-read-outside-'));
+    const sent = [];
+    const previousSend = ctx.sendToServer;
+    const video = join(outside, 'external.mp4');
+    writeFileSync(video, '0123456789');
+    symlinkSync(video, join(workDir, 'linked.mp4'));
+    ctx.sendToServer = msg => sent.push(msg);
+    try {
+      const base = { conversationId: '_explorer', workDir };
+      for (const filePath of [video, 'linked.mp4']) {
+        await handleVideoMetadata({ ...base, filePath });
+        const metadata = sent.at(-1);
+        expect(metadata).toMatchObject({ filePath: video, size: 10, mimeType: 'video/mp4' });
+        await handleVideoChunk({ ...base, filePath, start: 2, end: 5, expectedSize: metadata.size, expectedMtimeMs: metadata.mtimeMs });
+        expect(sent.at(-1)).toMatchObject({ filePath: video, content: Buffer.from('2345').toString('base64') });
+        await handleVideoChunk({ ...base, filePath, start: 2, end: 5, expectedSize: 11, expectedMtimeMs: metadata.mtimeMs });
+        expect(sent.at(-1)).toMatchObject({ errorCode: 'VIDEO_FILE_CHANGED' });
+      }
+      // Refills of pre-external-access video URLs keep their old restriction.
+      for (const filePath of [video, 'linked.mp4']) {
+        await handleVideoChunk({ ...base, filePath, workspaceBoundPreview: true, start: 0, end: 2 });
+        expect(sent.at(-1)).toMatchObject({ errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+        expect(sent.at(-1).content).toBeUndefined();
+      }
+    } finally {
       ctx.sendToServer = previousSend;
       rmSync(workDir, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });

@@ -39,7 +39,9 @@ Workbench 使用规范的 Session route。即使两个 Session 位于同一个 A
 - 展开和折叠目录
 - 使用 `Ctrl+P` 快速打开文件
 - 新建、删除、移动、复制或上传文件
-- 刷新目录树，或在当前 Session workspace 中选择其他文件夹
+- 刷新目录树，或在所选 Agent 上选择其他文件夹
+
+普通 Session 中，手动选择的文件可位于 Session 工作目录之外；浏览、编辑和预览使用 Agent 运行账号的文件系统权限，不会修改 Session 工作目录。工作项的文件能力仍限制在工作项 workspace 内；回复中的自动文件和图片引用仍要求位于 Session workspace 内。
 
 ### 编辑和预览
 

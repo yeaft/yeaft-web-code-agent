@@ -39,7 +39,9 @@ Files provides a VS Code-style file tree, editor, and preview surface.
 - expand and collapse directories
 - use `Ctrl+P` for quick open
 - create, delete, move, copy, or upload files
-- refresh the tree or choose another folder inside the current Session workspace
+- refresh the tree or choose another folder on the selected Agent
+
+In ordinary Sessions, manually selected files can be outside the Session working directory; browsing, editing, and previews use the Agent account’s filesystem permissions and do not change the Session working directory. WorkItem Files remain confined to the WorkItem workspace. Automatic response file/image references still require paths inside the Session workspace.
 
 ### Editor and previews
 
