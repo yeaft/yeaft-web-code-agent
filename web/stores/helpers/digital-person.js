@@ -52,6 +52,7 @@ export function personState() {
     settingsPending: false, renameSupported: false, outputsSupported: false, outputsFileSupported: null, outputs: outputState(),
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
     turns: { ...inspectionPage(), stale: false },
+    executions: { active: null, loaded: false, loading: false, stale: false, error: null, pending: null },
     tasks: { tasks: [], agents: [], active: { tasks: [], agents: [], truncated: false }, nextCursor: null, loaded: false, loading: false, stale: false, error: null, pending: null },
     taskLog: { taskId: '', text: '', nextOffset: 0, loading: false, error: null },
   };
@@ -70,7 +71,7 @@ function mergeRows(previous, next) {
 /** `scope` is the current authenticated browser identity, not a wire owner ID.
  * The Server owns authorization; no owner supplied by this client is trusted.
  */
-export function createPersonController({ chat, state, scope, timeoutMs = 30_000, pollMs = 1500, reupload = null }) {
+export function createPersonController({ chat, state, scope, timeoutMs = 30_000, pollMs = 1500, reupload = null, foreground = () => globalThis.document?.visibilityState !== 'hidden' }) {
   if (!channels.has(chat)) channels.set(chat, new Map());
   let generation = 0;
   let agentId = '';
@@ -86,6 +87,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   let traceRefreshVersion = 0;
   let queuedTraceRefresh = null;
   let disposed = false;
+  let managementVisible = false;
+  let executionPoll = null;
+  let executionsRequest = 0;
+  let executionControl = 0;
   let tasksVisible = false;
   let taskPoll = null;
   let tasksRequest = 0;
@@ -163,6 +168,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     messageHistoryVersion += 1;
     clearTimeout(poll);
     clearTimeout(taskPoll);
+    clearTimeout(executionPoll);
+    executionPoll = null;
+    executionsRequest += 1;
+    managementVisible = false;
     clearTimeout(turnPoll);
     turnPoll = null;
     turnRequest += 1;
@@ -492,21 +501,105 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
 
+  // Management observes one live main episode, independently of background work
+  // and model readiness. These polls can never admit or replay a model command.
+  function scheduleExecutions() {
+    clearTimeout(executionPoll);
+    if (!managementVisible || !foreground() || !current() || digitalPersonGate(chat, agentId)) return;
+    const g = generation;
+    executionPoll = setTimeout(() => { if (current(g)) void readExecutions(); }, pollMs);
+  }
+  function showManagement(visible) {
+    managementVisible = visible;
+    clearTimeout(executionPoll);
+    showTasks(visible);
+    if (visible && foreground() && !state.loading) void readExecutions();
+  }
+  function visibilityChanged() {
+    clearTimeout(executionPoll);
+    clearTimeout(taskPoll);
+    if (!foreground()) return;
+    if (managementVisible) void readExecutions();
+    if (tasksVisible) void readTasks();
+  }
+  async function readExecutions() {
+    if (!current() || !foreground() || !state.person || state.loading || digitalPersonGate(chat, agentId)) return;
+    clearTimeout(executionPoll);
+    const g = generation, number = ++executionsRequest, target = state.executions;
+    target.loading = true;
+    target.error = null;
+    try {
+      const data = await request('executions');
+      if (!current(g) || number !== executionsRequest || target !== state.executions) return;
+      // Production wire is { main, items } (durable metadata), while older
+      // development bridges used { active }. Keep one allowlisted live shape.
+      const main = Object.hasOwn(data || {}, 'main') ? data.main : data?.active;
+      const turn = data?.items?.find(turn => turn.id === main?.episodeId);
+      const calls = main?.calls || turn?.calls || [];
+      target.active = main ? {
+        episodeId: main.episodeId, kind: main.kind, status: main.status, phase: main.phase, model: main.model,
+        capabilityId: main.capabilityId ?? main.capability, startedAt: main.startedAt,
+        elapsedMs: main.elapsedMs, loopCount: main.loopCount ?? main.loops, resumable: main.resumable,
+        models: (main.models || []).map(model => ({ model: model.model, durationMs: model.durationMs ?? model.elapsedMs, usage: model.usage })),
+        callsTruncated: calls.length > 10 || !!(main.callsTruncated ?? turn?.callsTruncated),
+        calls: calls.slice(-10).map(call => ({ callId: call.callId, index: call.index, status: call.status,
+          model: call.model || call.dispatched?.model || call.requested?.model,
+          durationMs: call.durationMs ?? call.elapsedMs, usage: call.usage })),
+      } : null;
+      target.loaded = true;
+      target.stale = false;
+    } catch (error) {
+      if (current(g) && number === executionsRequest && target === state.executions) {
+        target.stale = true;
+        target.error = { code: error.code, message: error.message };
+      }
+    } finally {
+      if (current(g) && number === executionsRequest && target === state.executions) { target.loading = false; scheduleExecutions(); }
+    }
+  }
+  async function controlExecution(op, episodeId) {
+    const target = state.executions;
+    if (!current() || state.loading || !state.person || digitalPersonGate(chat, agentId) || target.pending || target.stale || state.cancelPending
+      || !episodeId || target.active?.episodeId !== episodeId) return false;
+    if (op === 'pause' && target.active.status !== 'running' || op === 'resume' && (target.active.status !== 'paused' || target.active.resumable === false) || !['pause', 'resume', 'cancel'].includes(op)) return false;
+    if (op === 'cancel') {
+      if (!['running', 'pausing', 'paused'].includes(target.active.status)) return false;
+      return cancel(episodeId);
+    }
+    const g = generation, control = ++executionControl;
+    target.pending = op;
+    target.error = null;
+    try {
+      await request(op, { episodeId });
+      if (!current(g) || target !== state.executions || control !== executionControl) return false;
+      // Fence pre-ack reads. An ack is not a safe-boundary pause: only the fresh
+      // Agent snapshot may report paused. Resume never replays send/think.
+      executionsRequest += 1;
+      target.loading = false;
+      if (target.active?.episodeId === episodeId) target.active = { ...target.active, status: op === 'pause' ? 'pausing' : 'running' };
+      await readExecutions();
+      return true;
+    } catch (error) {
+      if (current(g) && target === state.executions && control === executionControl) { target.stale = true; target.error = { code: error.code, message: error.message }; }
+      return false;
+    } finally { if (current(g) && target === state.executions && control === executionControl) target.pending = null; }
+  }
+
   // Inspection is Person-scoped, independent of the current message/episode and
   // model readiness. Poll only while its drawer is visible, including idle cognition.
   function scheduleTasks() {
     clearTimeout(taskPoll);
-    if (!tasksVisible || !current() || digitalPersonGate(chat, agentId)) return;
+    if (!tasksVisible || !foreground() || !current() || digitalPersonGate(chat, agentId)) return;
     const g = generation;
     taskPoll = setTimeout(() => { if (current(g)) void readTasks(); }, pollMs);
   }
   function showTasks(visible) {
     tasksVisible = visible;
     clearTimeout(taskPoll);
-    if (visible && !state.loading) void readTasks();
+    if (visible && foreground() && !state.loading) void readTasks();
   }
   async function readTasks(more = false) {
-    if (!current() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.loading) return;
+    if (!current() || !foreground() || !state.person || state.loading || digitalPersonGate(chat, agentId) || state.tasks.loading) return;
     if (more && state.tasks.nextCursor == null) return;
     clearTimeout(taskPoll);
     const g = generation, number = ++tasksRequest, target = state.tasks;
@@ -658,21 +751,33 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
 
-  async function cancel() {
-    if (state.cancelPending || !state.busy || !state.episodeId) return;
-    const episodeId = state.episodeId;
+  async function cancel(expectedEpisodeId = null) {
+    const episodeId = expectedEpisodeId || state.episodeId;
+    if (!current() || state.cancelPending || digitalPersonGate(chat, agentId) || !episodeId) return false;
+    if (expectedEpisodeId ? state.executions.active?.episodeId !== expectedEpisodeId : !state.busy) return false;
     const g = generation;
+    // Composer Stop remains available while pausing; its cancellation wins over
+    // any late pause/resume acknowledgement and owns the pending indicator.
+    executionControl += 1;
     // A cancellation request makes the last running status unreliable, even
     // if acknowledgement is lost or a reconnect sees an older running snapshot.
     state.feedbackSuppressedEpisodeId = episodeId;
     state.cancelPending = true;
+    state.executions.pending = 'cancel';
     try {
       await request('cancel', { episodeId });
-      if (current(g)) await refresh({ preserveHistory: true });
+      if (!current(g)) return false;
+      executionsRequest += 1;
+      state.executions.loading = false;
+      if (state.executions.active?.episodeId === episodeId) state.executions.active = { ...state.executions.active, status: 'cancelling' };
+      await refresh({ preserveHistory: true });
+      if (current(g) && managementVisible) await readExecutions();
+      return current(g);
     } catch (error) {
-      if (current(g)) showError(error);
+      if (current(g)) { state.executions.stale = true; showError(error); }
+      return false;
     } finally {
-      if (current(g)) state.cancelPending = false;
+      if (current(g)) { state.cancelPending = false; state.executions.pending = null; }
     }
   }
 
@@ -682,6 +787,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     selectOutput(item) { if (current() && state.person && !digitalPersonGate(chat, agentId) && (state.outputsSupported || item?.kind === 'link')) return outputs.select(item); },
     closeOutput: outputs.close, closeOutputTab: outputs.closeTab,
     resumeOutput() { if (current() && !digitalPersonGate(chat, agentId)) return outputs.resume(); },
+    showManagement, readExecutions, controlExecution, visibilityChanged,
     showTasks, readTasks, readTaskLog, stopTask, showTurns, readTurns,
     discardRetry() { outbox().delete(agentId); retainedFiles().delete(agentId); state.retryCommand = null; },
     dispose() { reset(); disposed = true; },

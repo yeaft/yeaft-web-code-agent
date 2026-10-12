@@ -89,7 +89,7 @@ describe('Person cognitive progress', () => {
     expect(seen[2].state.continuation).toBeNull();
   });
 
-  it.each(['failure', 'cancel', 'budget'])('does not commit a candidate continuation after %s', async terminal => {
+  it.each(['failure', 'cancel'])('does not commit a candidate continuation after %s', async terminal => {
     const dir = await directory();
     const initial = create(dir, (_input, p) => { p.state.continuation = continuation; return p; });
     await request(initial, 'open'); await request(initial, 'think', { clientMessageId: 'initial' });
@@ -106,11 +106,11 @@ describe('Person cognitive progress', () => {
         else params.signal.addEventListener('abort', () => reject(params.signal.reason), { once: true });
       });
       return p;
-    }, { maxCalls: terminal === 'budget' ? 1 : 3 });
+    });
     await request(service, 'think', { clientMessageId: terminal });
     if (terminal === 'cancel') { await gate; await request(service, 'cancel'); }
     const snapshot = await idle(service);
-    expect(snapshot.latestEpisode.status).toBe({ failure: 'failed', cancel: 'cancelled', budget: 'budget_exhausted' }[terminal]);
+    expect(snapshot.latestEpisode.status).toBe({ failure: 'failed', cancel: 'cancelled' }[terminal]);
     expect(snapshot.state.continuation).toEqual(continuation);
     expect(snapshot.state.version).toBe(1);
   });

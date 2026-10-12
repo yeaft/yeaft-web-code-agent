@@ -65,7 +65,7 @@ const objectOutput = (record, data) => {
   }
 };
 const READS = new Set(['outputs', 'outputRead', 'checkOutputPublication', 'receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
-const WRITES = new Set(['saveOutput', 'open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
+const WRITES = new Set(['executionControl', 'saveOutput', 'open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
 const sequence = value => {
@@ -199,6 +199,7 @@ export class SqlitePersonStore {
       this.put('persons', p);
       const episode = this.one('episodes', scope, ' AND id = ?', [id]);
       if (episode?.status === 'running') {
+        delete episode.executionControl;
         Object.assign(episode, { status: 'interrupted', terminalCode: 'INTERRUPTED', endedAt: this.now });
         this.put('episodes', episode); this.abandonCall(ownerId, episode, 'INTERRUPTED');
       }
@@ -267,6 +268,14 @@ export class SqlitePersonStore {
       (!withLease || p.leaseUntil > this.now) ? p : null;
   }
   own(episode) { const p = this.fenced(episode); if (!p) fail('STALE'); return p; }
+  executionControl(episode, control) {
+    this.own(episode);
+    const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
+    if (!record || record.status !== 'running' || !['running', 'pausing', 'paused'].includes(control.status)) fail('STALE');
+    record.executionControl = { status: control.status, updatedAt: this.now.toISOString() };
+    this.put('episodes', record);
+    return { episodeId: episode.id, ...record.executionControl };
+  }
   heartbeat(episode) {
     const p = this.own(episode); p.leaseUntil = new Date(this.now.getTime() + this.leaseMs); p.writeSerial++; this.put('persons', p);
     const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
@@ -275,7 +284,7 @@ export class SqlitePersonStore {
     // Heartbeats are at most 5s apart: publish the fallback between 55–60s.
     // This updates one snapshot field, never adds messages or schedules cognition.
     if (this.now.getTime() - lastAt >= FEEDBACK.maxMs - 5000 || record.feedback) {
-      const phase = record.openCall ? 'model' : record.openCapability ? 'capability' : 'preparing';
+      const phase = record.executionControl?.status === 'paused' ? 'paused' : record.openCall ? 'model' : record.openCapability ? 'capability' : 'preparing';
       record.feedback = { at: this.now.getTime() - lastAt >= FEEDBACK.maxMs - 5000 ? this.now.toISOString() : record.feedback.at, phase };
       if (phase === 'capability') record.feedback.capabilityId = record.openCapability.capability?.id;
       this.put('episodes', record);
@@ -447,6 +456,7 @@ export class SqlitePersonStore {
     }
     const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running') fail('STALE');
+    delete record.executionControl;
     Object.assign(record, { status: 'completed', endedAt: this.now, stateVersion: p.stateVersion }); this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'committed', { callId, parentVersion: episode.baseStateVersion, stateVersion: p.stateVersion, conceptRevisions: revisions, decision: proposal.decision });
     return { state: stateView(state) };
@@ -457,6 +467,7 @@ export class SqlitePersonStore {
     p.writeSerial++; p.epoch++; p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0); this.put('persons', p);
     const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
     if (record?.status === 'running') {
+      delete record.executionControl;
       Object.assign(record, { status, terminalCode: code, endedAt: this.now }); this.put('episodes', record); this.abandonCall(episode.ownerId, record, code);
     }
     this.trace(episode.ownerId, episode.id, status, { code, baseStateVersion: episode.baseStateVersion });
@@ -469,6 +480,7 @@ export class SqlitePersonStore {
     p.epoch++; p.controlVersion++; p.writeSerial++; p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0); this.put('persons', p);
     const record = this.one('episodes', scope, ' AND id = ?', [id]);
     if (record?.status === 'running') {
+      delete record.executionControl;
       Object.assign(record, { status: 'cancelled', terminalCode: 'CANCELLED', endedAt: this.now, callFinalizeUntil: until }); this.put('episodes', record);
     }
     this.trace(ownerId, id, 'cancelled', { code: 'CANCELLED' });
@@ -511,8 +523,10 @@ export class SqlitePersonStore {
     const { cursor, limit } = turnsPage(options);
     const scope = this.scope(ownerId);
     if (!this.sql(`SELECT 1 FROM persons WHERE ${SCOPE}`).get(...scopeValues(scope))) fail('NOT_OPEN');
-    const project = fields => `json_object(${Object.entries(fields).map(([key, path]) => `'${key}', json_extract(record, '$.${path}')`).join(', ')})`;
-    const episodes = this.sql(`SELECT ${project({ id: 'id', seq: 'inputWatermark', kind: 'kind', status: 'status', createdAt: 'createdAt', endedAt: 'endedAt', terminalCode: 'terminalCode', calls: 'budget.calls', timeoutMs: 'budget.timeoutMs' })} AS metadata
+    const project = fields => `json_object(${Object.entries(fields).map(([key, path]) => `'${key}', CASE json_type(record, '$.${path}')
+      WHEN 'text' THEN substr(json_extract(record, '$.${path}'), 1, 1000)
+      WHEN 'integer' THEN json_extract(record, '$.${path}') WHEN 'true' THEN 1 WHEN 'false' THEN 0 ELSE NULL END`).join(', ')})`;
+    const episodes = this.sql(`SELECT ${project({ id: 'id', seq: 'inputWatermark', kind: 'kind', status: 'status', createdAt: 'createdAt', endedAt: 'endedAt', terminalCode: 'terminalCode', controlStatus: 'executionControl.status', calls: 'budget.calls', timeoutMs: 'budget.timeoutMs' })} AS metadata
       FROM episodes WHERE ${SCOPE} AND (? IS NULL OR inputWatermark < ?) ORDER BY inputWatermark DESC LIMIT ?`)
       .all(...scopeValues(scope), cursor, cursor, limit + 1).map(row => JSON.parse(row.metadata));
     const fields = { kind: 'kind', callId: 'callId', callIndex: 'callIndex', createdAt: 'createdAt',
@@ -529,20 +543,27 @@ export class SqlitePersonStore {
       omittedConcepts: ['manifest.contextSources.omittedConcepts', 24], recallCount: ['manifest.contextSources.recall.count', 5] })
       .map(([key, args]) => `'${key}', ${number(...args)}`).join(', ');
     const recallKind = `CASE json_extract(record, '$.manifest.contextSources.recall.kind') WHEN 'messages' THEN 'messages' WHEN 'concepts' THEN 'concepts' ELSE NULL END`;
-    const usage = `json_object(${TOKEN_FIELDS.map(key => `'${key}', json_extract(record, '$.output.usage.${key}')`).join(', ')},
-      'accountingVersion', json_extract(record, '$.output.usage.accountingVersion'),
+    const usage = `json_object(${TOKEN_FIELDS.map(key => `'${key}', ${number(`output.usage.${key}`)}`).join(', ')},
+      'accountingVersion', ${number('output.usage.accountingVersion', 1)},
       'accountingIncomplete', json(CASE json_extract(record, '$.output.usage.accountingIncomplete') WHEN 1 THEN 'true' ELSE 'false' END),
       'cacheTokensAreIncludedInInput', json(CASE json_extract(record, '$.output.usage.cacheTokensAreIncludedInInput') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END))`;
-    const metadata = `${project(fields).slice(0, -1)}, 'capabilityId', COALESCE(json_extract(record, '$.capability.id'), json_extract(record, '$.capabilityId')),
+    const metadata = `${project(fields).slice(0, -1)}, 'capabilityId', substr(COALESCE(CASE WHEN json_type(record, '$.capability.id') = 'text' THEN json_extract(record, '$.capability.id') END, CASE WHEN json_type(record, '$.capabilityId') = 'text' THEN json_extract(record, '$.capabilityId') END), 1, 128),
       ${contextMetadata}, 'recallKind', ${recallKind}, 'usage', ${usage})`;
     const items = episodes.slice(0, limit).map(episode => {
-      const events = this.sql(`SELECT ${metadata} AS metadata FROM traces WHERE ${SCOPE}
+      const starts = this.sql(`SELECT seq, ${number('callIndex')} AS callIndex FROM traces WHERE ${SCOPE} AND json_extract(record, '$.episodeId') = ?
+        AND json_extract(record, '$.kind') = 'call_started' ORDER BY seq DESC LIMIT 33`)
+        .all(...scopeValues(scope), episode.id);
+      const oldest = starts[Math.min(starts.length, 32) - 1]?.seq ?? 0;
+      const events = this.sql(`SELECT ${metadata} AS metadata FROM traces WHERE ${SCOPE} AND seq >= ?
         AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') IN
-        ('call_started', 'call_output', 'call_failed', 'proposal_rejected', 'capability_started', 'capability_result', 'capability_failed', 'capability_finalized') ORDER BY seq ASC`)
-        .all(...scopeValues(scope), episode.id).map(row => {
+        ('call_started', 'call_output', 'call_failed', 'proposal_rejected', 'capability_started', 'capability_result', 'capability_failed', 'capability_finalized') ORDER BY seq DESC LIMIT 257`)
+        .all(...scopeValues(scope), oldest, episode.id).map(row => {
           const event = JSON.parse(row.metadata); event.effortObserved = event.effortObserved === 1; return event;
         });
-      return turnView(episode, events);
+      return { ...turnView(episode, events.slice(0, 256).reverse()),
+        loopCount: starts[0]?.callIndex != null ? starts[0].callIndex + 1 : starts.length > 32 ? null : starts.length,
+        callsTruncated: starts.length > 32 || events.length > 256, callWindowLimit: 32,
+        usageScope: starts.length > 32 || events.length > 256 ? 'latest-call-window' : 'episode' };
     });
     return { items, nextCursor: episodes.length > limit ? items.at(-1).seq : null };
   }

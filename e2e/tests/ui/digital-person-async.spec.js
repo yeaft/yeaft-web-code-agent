@@ -9,11 +9,12 @@ import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures
 
 // Real browser/relay/SQLite/native child drivers and shell. Only inference is scripted.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
-test('Person runs parallel independent threads and collects background shell logs on the next message', async ({ page, serverUrl, mockAgent }) => {
+test('Person runs parallel independent threads and collects background shell logs on the next message', async ({ page, serverUrl, mockAgent }, testInfo) => {
   test.setTimeout(90000);
   const dir = await mkdtemp(join(tmpdir(), 'person-async-e2e-'));
   const children = [], childRequests = [], results = [];
-  let parentCalls = 0, parallelCalls = 0, backgroundCalls = 0, inspectCalls = 0, taskId, release;
+  let parentCalls = 0, parallelCalls = 0, backgroundCalls = 0, inspectCalls = 0, pauseCalls = 0, taskId, release, releaseMain;
+  const mainGate = new Promise(resolve => { releaseMain = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
   const adapter = { async *stream(params) {
     if (params.tools?.length) {
@@ -50,6 +51,10 @@ test('Person runs parallel independent threads and collects background shell log
         command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setTimeout(()=>console.log('durable shell result'),250)")}`, background: true,
       });
       else { taskId = input.capabilityResult.output.match(/Started background task (\S+)\./)[1]; p.reply = 'Started in background.'; }
+    } else if (input.trigger.text === 'Pause main') {
+      pauseCalls++;
+      if (pauseCalls === 1) { await mainGate; use('catalog.view', { id: 'Recall' }); }
+      else p.reply = 'Resumed the same main execution.';
     } else if (input.trigger.text === 'Long background') {
       if (!input.capabilityResult) use('catalog.view', { id: 'Bash' });
       else if (input.capabilityResult.args) use('Bash', {
@@ -104,14 +109,50 @@ test('Person runs parallel independent threads and collects background shell log
     await send('Long background');
     await expect(page.locator('.person-messages')).toContainText('Long task started.', { timeout: 20000 });
     await page.locator('#person-input').fill('Keep this draft');
-    const beforeInspection = parentCalls;
+    let beforeInspection = parentCalls;
     await page.locator('.person-thoughts-button').click();
-    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Tasks', exact: true }).click();
+    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();
     await expect(page.locator('.person-task-browser')).toContainText('Background tasks');
     await expect(page.locator('.person-task-browser')).toContainText('Child threads');
     await expect(page.locator('.person-task-item')).toHaveCount(4);
     const active = page.locator('.person-task-item').filter({ has: page.getByRole('button', { name: 'Stop', exact: true }) });
     await expect(active).toHaveCount(1);
+    // Main and independently owned work share one Management surface. Pause
+    // must wait for the in-flight request without replaying it on resume.
+    await page.locator('.person-panel-header .header-action-btn').click();
+    await send('Pause main');
+    await expect.poll(() => pauseCalls).toBe(1);
+    await page.locator('.person-thoughts-button').click();
+    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();
+    const main = page.locator('.person-main-execution');
+    await expect(main).toContainText('Requesting model');
+    await expect(main.locator('.person-execution-models')).toContainText('—');
+    const episodeId = await main.getAttribute('data-episode-id');
+    await main.getByRole('button', { name: 'Pause', exact: true }).click();
+    await expect(main).toContainText('Pausing at the next safe boundary');
+    await expect(main.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0);
+    expect(pauseCalls).toBe(1);
+    releaseMain();
+    await expect(main.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
+    expect(await main.getAttribute('data-episode-id')).toBe(episodeId);
+    expect(pauseCalls).toBe(1);
+    await expect(page.locator('.person-task-item')).toHaveCount(4);
+    await page.screenshot({ path: testInfo.outputPath('person-management-light.png'), fullPage: true });
+    await page.setViewportSize({ width: 320, height: 680 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('person-management-light-mobile.png'), fullPage: true });
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('person-management-dark-mobile.png'), fullPage: true });
+    await main.getByRole('button', { name: 'Resume', exact: true }).click();
+    await expect(page.locator('.person-messages')).toContainText('Resumed the same main execution.');
+    await expect(main).toContainText('No live main execution.');
+    expect(pauseCalls).toBe(2);
+    beforeInspection = parentCalls;
+    await page.locator('.person-panel-header .header-action-btn').click();
+    await page.locator('#person-input').fill('Keep this draft');
+    await page.locator('.person-thoughts-button').click();
+    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();
     await active.getByRole('button', { name: 'View log', exact: true }).click();
     await expect(page.locator('.person-task-log pre')).toContainText('long task ready');
     await active.getByRole('button', { name: 'Stop', exact: true }).click();
@@ -126,7 +167,7 @@ test('Person runs parallel independent threads and collects background shell log
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   } finally {
     mockAgent._messageHandlers.splice(mockAgent._messageHandlers.indexOf(listener), 1);
-    release();
+    release(); releaseMain();
     await bridge.close();
     await rm(dir, { recursive: true, force: true });
   }

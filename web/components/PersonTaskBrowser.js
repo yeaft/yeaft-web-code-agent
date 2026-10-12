@@ -79,6 +79,7 @@ export default {
       <PersonInspectorList :items="entries" :label="$t('person.tasks')" :reset-key="identityKey || page" :estimate-height="estimate" :page-token="page.nextCursor"
         :more="page.nextCursor != null" :more-label="$t('person.loadMore')" :loading="page.loading" :disabled="disabled" :stale="page.stale" :error="!!page.error" @more="$emit('more')">
         <template #before>
+        <slot name="before" />
         <p v-if="page.error" class="person-settings-error" role="alert">{{ $t('person.requestFailed') }} {{ page.error.message }}</p>
         <p v-if="page.stale" class="person-muted" role="status">{{ $t('person.tasksStale') }}</p>
         <p v-if="page.loading && !page.loaded" class="person-muted" role="status">{{ $t('person.loading') }}</p>
