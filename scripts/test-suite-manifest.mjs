@@ -23,6 +23,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/git-read.test.js',
   'test/agent/yeaft/tools/apply-patch.test.js',
   'test/agent/terminal-routing.test.js',
+  'test/agent/directory-listing.test.js',
   'test/agent/file-reference-resolver.test.js',
   'test/agent/windows-upgrade-handoff.test.js',
   'test/agent/yeaft/conversation/persist.test.js',

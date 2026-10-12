@@ -1,7 +1,7 @@
 import { test as base, expect } from '@playwright/test';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { useTestServer } from '../../fixtures/test-server.js';
 import { handleCreateFile, handleListDirectory, handleReadFile, handleWriteFile } from '../../../agent/workbench/file-ops.js';
 import { handleFileSearch } from '../../../agent/workbench/file-search.js';
+import { handleGitStatus } from '../../../agent/workbench/git-ops.js';
 import agentContext from '../../../agent/context.js';
 
 // Component + Agent integration, not an authenticated Server/owner-relay test.
@@ -261,7 +262,7 @@ class ExternalFilesServer {
     // synthesized only for the tab-restore test; file/directory replies are real.
     if (message.type === 'restore_file_tabs' && this.restoreFiles) return [{ ...message, type: 'file_tabs_restored', openFiles: this.restoreFiles.map(path => ({ path })), activeIndex: this.restoreIndex || 0 }];
     if (['restore_file_tabs', 'update_file_tabs'].includes(message.type)) return [];
-    const handler = { create_file: handleCreateFile, list_directory: handleListDirectory, read_file: handleReadFile, write_file: handleWriteFile, file_search: handleFileSearch }[message.type];
+    const handler = { create_file: handleCreateFile, list_directory: handleListDirectory, read_file: handleReadFile, write_file: handleWriteFile, file_search: handleFileSearch, git_status: handleGitStatus }[message.type];
     if (!handler) throw new Error(`Unexpected bridge request: ${message.type}`);
     const results = [];
     const previous = { sendToServer: agentContext.sendToServer, CONFIG: agentContext.CONFIG };
@@ -401,6 +402,45 @@ async function expectOriginalOwner(page, harness) {
   }))).toMatchObject({
     route: OWNER, workDir: harness.workDir, currentAgent: 'agent-a',
     session: { id: 'session-y', agentId: 'agent-b', workDir: harness.workDir },
+  });
+}
+
+for (const capability of ['files', 'git']) {
+  test(`${capability} folder picker exposes directory errors and retries in desktop and narrow themes`, async ({ page, harness }) => {
+    await page.goto(harness.url);
+    await openFiles(page);
+    await expect(page.locator('.tree-name').filter({ hasText: /^workspace\.txt$/ })).toBeVisible();
+    if (capability === 'git') {
+      await page.locator('.workbench-add-btn').click();
+      await page.locator('[data-workbench-capability="git"]').click();
+      await expect(page.locator('.git-error-msg')).toBeVisible();
+    }
+    await rename(harness.workDir, `${harness.workDir}-unavailable`);
+    await page.locator(capability === 'files'
+      ? '.vscode-action-btn[title="Open Folder"]' : '.git-workdir-row button').first().click();
+    const picker = page.locator('.folder-picker-dialog');
+    await expect(picker.getByRole('alert')).toContainText('ENOENT');
+    await expect(picker.getByRole('button', { name: 'Open', exact: true })).toBeDisabled();
+    await expect(picker.locator('.tree-empty')).toHaveCount(0);
+    await expect(picker.locator('.folder-picker-current')).toHaveText(harness.workDir);
+    for (const theme of ['light', 'dark']) {
+      for (const width of [1280, 320]) {
+        await page.setViewportSize({ width, height: 800 });
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        const retry = picker.getByRole('button', { name: 'Retry', exact: true });
+        await retry.focus();
+        await expect(retry).toBeFocused();
+        const alert = picker.getByRole('alert');
+        await expect(alert).toBeVisible();
+        expect(await alert.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      }
+    }
+    await rename(`${harness.workDir}-unavailable`, harness.workDir);
+    await picker.getByRole('button', { name: 'Retry', exact: true }).press('Enter');
+    await expect(picker.getByRole('alert')).toHaveCount(0);
+    await expect(picker.locator('.folder-picker-item')).toContainText('first-long-directory');
+    await expect(picker.getByRole('button', { name: 'Open', exact: true })).toBeEnabled();
+    await expectOriginalOwner(page, harness);
   });
 }
 
