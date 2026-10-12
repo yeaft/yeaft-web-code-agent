@@ -45,6 +45,11 @@ function addState(sections, state) {
   if (!isRecord(state)) return;
   addText(sections, 'state_summary', state.summary);
   addText(sections, 'appraisal', state.appraisal);
+  if (isRecord(state.continuation)) {
+    addText(sections, 'continuation_goal', state.continuation.goal);
+    addText(sections, 'continuation_step', state.continuation.nextStep);
+    addText(sections, 'continuation_condition', state.continuation.condition);
+  }
 }
 
 function addDecision(sections, decision) {
@@ -304,4 +309,47 @@ export function projectPersonThoughts(traces) {
     }
   }
   return entries;
+}
+
+/** One public cognition record per trigger/episode, not one record per LLM call.
+ * Reuse the field allowlist and exact call/commit matching above. Request context
+ * is deliberately excluded: repeating it is neither a new insight nor an outcome.
+ * Partial pages stay explicit; a missing committed output never adopts an earlier
+ * candidate. Durable capability effects remain independent of cognition commits.
+ */
+export function projectPersonJournal(traces) {
+  const groups = new Map();
+  const entries = projectPersonThoughts(traces);
+  for (const [rank, entry] of entries.entries()) {
+    if (['context', 'memory'].includes(entry.kind)) continue;
+    let group = groups.get(entry.episodeId);
+    if (!group) {
+      group = { id: entry.episodeId, episodeId: entry.episodeId, kind: 'episode', status: 'candidate',
+        createdAt: entry.createdAt, sections: [], outcomes: [], trigger: null, thoughts: [], terminal: null };
+      groups.set(entry.episodeId, group);
+    }
+    group.rank = rank;
+    if (entry.createdAt) group.createdAt = entry.createdAt;
+    if (['input', 'think', 'dream'].includes(entry.kind)) {
+      group.kind = entry.kind;
+      group.trigger = entry;
+    } else if (['thought', 'activity', 'rejected'].includes(entry.kind)) {
+      group.thoughts.push({ ...entry, rank });
+    } else if (terminalKinds.has(entry.kind)) {
+      group.terminal = entry;
+    } else if (['capability_created', 'script_executed', 'capability_failed'].includes(entry.kind)) {
+      group.outcomes.push({ ...entry, rank });
+    }
+  }
+  return [...groups.values()].sort((a, b) => a.rank - b.rank).map(group => {
+    const committed = group.thoughts.filter(entry => entry.status === 'committed');
+    // When only the terminal is loaded, its decision is the only adopted content.
+    const chosen = committed.at(-1) || (group.terminal?.kind === 'committed' ? group.terminal : group.thoughts.at(-1));
+    const terminal = group.terminal?.kind;
+    return { id: group.id, episodeId: group.episodeId, kind: group.kind, createdAt: group.createdAt,
+      status: terminal || chosen?.status || 'recorded',
+      candidateStatus: chosen && chosen.status !== 'committed' ? chosen.status : null,
+      sections: [...(group.trigger?.sections || []), ...(chosen?.sections || [])], outcomes: group.outcomes,
+      history: group.thoughts.filter(entry => entry !== chosen) };
+  });
 }

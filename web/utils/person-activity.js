@@ -88,7 +88,7 @@ export function projectPersonActivity(state, gate = '') {
     if (record.kind.endsWith('_started')) {
       row.start = record.at;
       if (!model) { phase = record.phase; params = record.params; }
-      else { phase = key(accepted?.trigger === 'dream' ? 'dreaming' : accepted?.trigger === 'think' ? 'thinking' : 'preparing'); params = {}; }
+      else { phase = key('modelRequest'); params = {}; }
     } else {
       row.status = record.kind === 'call_failed' || record.failed ? 'failed' : 'completed';
       row.durationMs = row.start != null && record.at != null && record.at >= row.start ? record.at - row.start : null;

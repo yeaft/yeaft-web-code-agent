@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { projectPersonThoughts } from '../../web/stores/helpers/person-thoughts.js';
+import { projectPersonThoughts, projectPersonJournal } from '../../web/stores/helpers/person-thoughts.js';
 import { assembleContext, PersonRuntime } from '../../agent/yeaft/person/runtime.js';
 import { finalProposal } from '../agent/yeaft/person/fixtures.js';
 
@@ -423,5 +423,67 @@ describe('Person thought journal projection', () => {
     expect(projectPersonThoughts(dated).map(e => e.id)).toEqual(['trace-2', 'trace-1']);
     expect(projectPersonThoughts([{ ...first, createdAt: 'invalid' }])[0].createdAt).toBeNull();
     expect(projectPersonThoughts([output(1)])[0].callId).toBe('call-a');
+  });
+});
+
+
+describe('Episode-level Person cognition journal', () => {
+  it('groups multiple loops by trigger, selecting only the exact committed call', () => {
+    const candidate = finalProposal(); candidate.activity.summary = 'Earlier candidate, not adopted';
+    const adopted = finalProposal(); adopted.activity.summary = 'A verified new finding';
+    adopted.state.continuation = { goal: 'Verify the release', nextStep: 'Check the log', status: 'waiting', condition: 'When the build finishes', private: 'SECRET' };
+    const traces = freeze([trace('accepted', 1, { trigger: { kind: 'think', text: 'Why was it late?' } }),
+      output(2, 'a', candidate), output(3, 'b', adopted), trace('committed', 4, { callId: 'b', decision: adopted.decision })]);
+    const entries = projectPersonJournal(traces);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ id: 'episode-a', kind: 'think', status: 'committed', candidateStatus: null });
+    expect(sections(entries[0])).toContain('A verified new finding');
+    expect(sections(entries[0])).not.toContain('Earlier candidate');
+    expect(entries[0].history[0]).toMatchObject({ status: 'candidate' });
+    expect(entries[0].sections).toContainEqual({ label: 'continuation_step', text: 'Check the log' });
+    expect(JSON.stringify(entries)).not.toContain('SECRET');
+  });
+
+  it('does not adopt an earlier candidate when the committed output is on another page', () => {
+    const candidate = finalProposal(); candidate.activity.summary = 'Do not adopt this';
+    const entries = projectPersonJournal([output(1, 'a', candidate), trace('committed', 2, { callId: 'b', decision: { summary: 'Only the committed judgment is known' } })]);
+    expect(entries[0].status).toBe('committed');
+    expect(sections(entries[0])).not.toContain('Do not adopt this');
+    expect(sections(entries[0])).toContain('Only the committed judgment');
+    expect(entries[0].history[0].status).toBe('candidate');
+  });
+
+  it.each(['failed', 'cancelled', 'interrupted', 'budget_exhausted'])('keeps %s outcome distinct from unadopted public content', terminal => {
+    const entries = projectPersonJournal([output(1), trace(terminal, 2)]);
+    expect(entries[0]).toMatchObject({ status: terminal, candidateStatus: 'candidate', kind: 'episode' });
+    expect(entries[0].sections.length).toBeGreaterThan(0);
+  });
+
+  it('excludes repeated request context but retains isolated rejection and incomplete evidence', () => {
+    const traces = [trace('call_started', 1, { request: { messages: [{ role: 'user', content: JSON.stringify({ state: { summary: 'STALE_CONTEXT' } }) }] } }),
+      trace('proposal_rejected', 2, { callId: 'a' }), trace('failed', 3)];
+    const entry = projectPersonJournal(traces)[0];
+    expect(entry).toMatchObject({ status: 'failed', candidateStatus: 'rejected' });
+    expect(JSON.stringify(entry)).not.toContain('STALE_CONTEXT');
+    expect(projectPersonJournal([traces[0]])).toEqual([]);
+    const cancelled = projectPersonJournal([trace('cancelled', 2), trace('call_failed', 3, { output: { text: '{"next":{"model":"PRIVATE_MODEL"', complete: false } })])[0];
+    expect(cancelled).toMatchObject({ status: 'cancelled', candidateStatus: 'incomplete' });
+    expect(JSON.stringify(cancelled)).not.toContain('PRIVATE_MODEL');
+  });
+
+  it('keeps capability publication separate from adopted cognition even on failure', () => {
+    const traces = [trace('capability_result', 1, { callId: 'a', capability: { id: 'Capability.create' }, result: { ok: true, published: true, contract: { id: 'Script.sum', version: 1 } } }), trace('failed', 2)];
+    const entry = projectPersonJournal(traces)[0];
+    expect(entry.status).toBe('failed');
+    expect(entry.outcomes[0]).toMatchObject({ kind: 'capability_created', status: 'recorded' });
+    expect(entry.sections).toEqual([]);
+  });
+
+  it('keeps episode identity stable when older evidence is prepended and ignores duplicate records', () => {
+    const tail = [output(3), trace('committed', 4, { callId: 'call-a' })];
+    const start = trace('accepted', 1, { trigger: { kind: 'dream', text: '' } });
+    expect(projectPersonJournal(tail)[0].id).toBe(projectPersonJournal([start, ...tail, ...tail])[0].id);
+    expect(projectPersonJournal([start, ...tail])[0].kind).toBe('dream');
+    expect(projectPersonJournal([start, ...tail, ...tail])[0].history).toHaveLength(0);
   });
 });

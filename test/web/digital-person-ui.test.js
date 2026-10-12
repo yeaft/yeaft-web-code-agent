@@ -328,7 +328,9 @@ describe('Digital Person surface', () => {
     const thoughts = wrapper.get('#person-thoughts');
     expect(thoughts.text()).toContain('Maybe the delay came from the final verification step.');
     expect(thoughts.text()).toContain('A repeated guess is not new evidence.');
-    expect(thoughts.text()).toContain('<script>not HTML</script>');
+    expect(thoughts.text()).not.toContain('<script>not HTML</script>');
+    expect(thoughts.findAll('.person-thought')).toHaveLength(1);
+    expect(thoughts.find('.person-activity').exists()).toBe(false);
     expect(thoughts.find('script').exists()).toBe(false);
     expect(thoughts.find('pre').exists()).toBe(false);
     for (const text of ['PRIVATE SYSTEM PROMPT', 'HIDDEN REASONING', 'contextBytes', 'test/model', 'secretCatalogField']) expect(thoughts.text()).not.toContain(text);
@@ -490,7 +492,47 @@ describe('Digital Person surface', () => {
     expect(wrapper.findAll('button').some(b => b.text() === 'Stop')).toBe(false);
   });
 
-  it('labels continuation input as earlier candidate and hides truncated technical output', () => {
+  it('links public cognition to its exact turn without starting another model call', async () => {
+    await render();
+    await wrapper.vm.openPanel('thoughts'); await flushPromises();
+    const id = wrapper.get('.person-thought').attributes('data-episode-id');
+    wrapper.vm.state.turns.items = [personTurn(1, { id })];
+    wrapper.vm.state.turns.loaded = true;
+    await wrapper.get('.person-thought-turn').trigger('click'); await flushPromises();
+    expect(wrapper.vm.panel).toBe('turns');
+    expect(wrapper.vm.inspectedEpisodeId).toBe(id);
+    expect(wrapper.get(`[data-turn-id="${id}"]`).attributes('open')).toBeDefined();
+    expect(requests.some(request => ['send', 'think', 'dream'].includes(request.op))).toBe(false);
+  });
+
+  it('keeps long episode evidence unmounted until expanded and loads only ten fragments at a time', async () => {
+    const sample = personRecords();
+    const proposal = JSON.parse(sample.find(trace => trace.kind === 'call_output').output.text);
+    const traces = Array.from({ length: 60 }, (_, i) => ({ id: `candidate-${i}`, episodeId: 'long', callId: `call-${i}`, seq: i + 1, kind: 'call_output', output: { text: JSON.stringify(proposal) } }));
+    wrapper = mount(PersonThoughtJournal, { props: { traces }, global: { config: { globalProperties: { $t: t } } } });
+    expect(wrapper.findAll('.person-thought')).toHaveLength(1);
+    expect(wrapper.findAll('[data-thought-kind="thought"]')).toHaveLength(0);
+    const details = wrapper.get('.person-thought-evidence');
+    details.element.open = true; await details.trigger('toggle'); await Vue.nextTick();
+    expect(wrapper.findAll('[data-thought-kind="thought"]')).toHaveLength(10);
+    await details.get('button').trigger('click');
+    expect(wrapper.findAll('[data-thought-kind="thought"]')).toHaveLength(20);
+    details.element.open = false; await details.trigger('toggle'); await Vue.nextTick();
+    expect(wrapper.findAll('[data-thought-kind="thought"]')).toHaveLength(0);
+  });
+
+  it('locates an older selected turn only after it is loaded, never substitutes another turn', async () => {
+    wrapper = mount(PersonTurnUsage, { props: { episodeId: 'older', page: { items: [personTurn(2)], loaded: true, nextCursor: 1 } },
+      global: { config: { globalProperties: { $t: t } } } });
+    expect(wrapper.text()).toContain(en['person.usage.turnNotLoaded']);
+    expect(wrapper.get('.person-turn-row').attributes('open')).toBeUndefined();
+    await wrapper.setProps({ page: { items: [personTurn(2), personTurn(1, { id: 'older' })], loaded: true } });
+    await flushPromises();
+    expect(wrapper.text()).not.toContain(en['person.usage.turnNotLoaded']);
+    expect(wrapper.get('[data-turn-id="older"]').attributes('open')).toBeDefined();
+  });
+
+  it('excludes loop request context from cognition and hides truncated technical output', () => {
     const traces = personRecords();
     const request = traces.find(t => t.kind === 'call_started');
     const context = JSON.parse(request.request.messages[0].content);
@@ -499,14 +541,14 @@ describe('Digital Person surface', () => {
     request.request.messages[0].content = JSON.stringify(context);
     traces.push({ id: 'partial', episodeId: 'e', seq: 9, kind: 'call_failed', output: { text: '{"sourceRefs":["private-ref"],"next":{"model":"private-model"', complete: false } });
     wrapper = mount(PersonThoughtJournal, { props: { traces }, global: { config: { globalProperties: { $t: t } } } });
-    expect(wrapper.text()).toContain('Earlier candidate — not adopted · Current understanding');
-    expect(wrapper.text()).toContain('Recalled for this thought');
-    expect(wrapper.text()).toContain('A recalled report at this page boundary.');
+    expect(wrapper.text()).not.toContain('An earlier possible explanation.');
+    expect(wrapper.text()).not.toContain('Recalled for this thought');
+    expect(wrapper.text()).not.toContain('A recalled report at this page boundary.');
     expect(wrapper.text()).toContain(en['person.thought.structured_unavailable']);
     expect(wrapper.text()).not.toMatch(/sourceRefs|private-ref|private-model/);
   });
 
-  it.each([en, zhCN])('renders translated capability outcomes as text, independently of adopted cognition', messages => {
+  it.each([en, zhCN])('renders translated capability outcomes as text, independently of adopted cognition', async messages => {
     const html = '<img src=x onerror="alert(1)"><script>not executable</script>';
     const traces = [
       { id: 'created', episodeId: 'e', seq: 1, callId: 'a', kind: 'capability_result', capability: { id: 'Capability.create', args: { code: 'PRIVATE_CODE', tests: 'PRIVATE_TESTS' } },
@@ -520,6 +562,8 @@ describe('Digital Person surface', () => {
       { id: 'commit', episodeId: 'e', seq: 10, callId: 'a', kind: 'committed' },
     ];
     wrapper = mount(PersonThoughtJournal, { props: { traces }, global: { config: { globalProperties: { $t: key => messages[key] || key } } } });
+    const details = wrapper.get('.person-thought-evidence');
+    details.element.open = true; await details.trigger('toggle'); await Vue.nextTick();
     const publication = wrapper.get('[data-thought-kind="capability_created"]');
     expect(publication.text()).toContain(messages['person.thought.capability_created']);
     expect(publication.text()).toContain(messages['person.thought.capability_published']);
@@ -822,7 +866,7 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
   });
 
-  it('keeps completed activity only in the thought drawer, never below the reply', async () => {
+  it('keeps execution steps in Flow & usage, not the thought journal or conversation', async () => {
     await render();
     wrapper.vm.state.latestEpisode = { id: 'finished', status: 'completed', startedAt: 1000, endedAt: 3000 };
     wrapper.vm.state.activityRecords = [
@@ -835,7 +879,9 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('.person-message-text').text()).toBe('<img onerror=alert(1)>');
     await wrapper.get('.person-thoughts-button').trigger('click');
-    const activity = wrapper.get('#person-thoughts .person-activity');
+    expect(wrapper.find('#person-thoughts .person-activity').exists()).toBe(false);
+    await wrapper.vm.openPanel('turns'); await flushPromises();
+    const activity = wrapper.get('#person-turns .person-activity');
     expect(activity.get('.person-activity-status').text()).toBe(t('person.activity.completed'));
     expect(activity.attributes('open')).toBeUndefined();
     expect(activity.get('.person-activity-row-status').text()).toBe(t('person.activity.status.completed'));
@@ -1267,7 +1313,7 @@ describe('Person activity', () => {
 
   it('provides matching summary, row, status and timing keys in both languages', () => {
     const keys = Object.keys(en).filter(key => key.startsWith('person.activity.'));
-    expect(keys).toHaveLength(40);
+    expect(keys).toHaveLength(41);
     for (const key of keys) expect(zhCN[key]).toBeTruthy();
     expect(Object.keys(zhCN).filter(key => key.startsWith('person.activity.')).sort()).toEqual(keys.sort());
   });
