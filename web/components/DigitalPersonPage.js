@@ -5,6 +5,7 @@ import NavigationIcon from './NavigationIcon.js';
 import PaneResizeHandle from './PaneResizeHandle.js';
 import PersonOutputs from './PersonOutputs.js';
 import ResponsePresentation from './ResponsePresentation.js';
+import { normalizeBrowserAddress } from '../utils/browser-address.js';
 import { safeOutputUrl } from '../stores/helpers/person-outputs.js';
 import PersonKnowledgeBrowser from './PersonKnowledgeBrowser.js';
 import PersonManagement from './PersonManagement.js';
@@ -255,7 +256,7 @@ export default {
         event.preventDefault(); event.stopPropagation(); closePanel();
       }
       if (event.key !== 'Tab' || !modalPanel.value) return;
-      const controls = [...sidePanel.value.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')].filter(el => {
+      const controls = [...sidePanel.value.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], summary, iframe:not([tabindex="-1"]), [tabindex="0"]')].filter(el => {
         if (el.tabIndex < 0) return false;
         for (let parent = el.parentElement; parent && parent !== sidePanel.value; parent = parent.parentElement) {
           if (parent.style.display === 'none' || parent.hidden || parent.inert) return false;
@@ -438,6 +439,14 @@ export default {
       if (panel.value !== 'outputs') await openPanel('outputs');
       await reading;
     }
+    function openReplyBrowser(value) {
+      const url = normalizeBrowserAddress(value);
+      if (!url) return false;
+      // Digital people have no Session Workbench route: use their own output
+      // pane with the shared BrowserPanel, never an unrelated active Session.
+      void selectOutput({ id: 'link:' + url, title: url, kind: 'link', url });
+      return true;
+    }
     function previewReplyLink(event) {
       if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       const anchor = event.target.closest?.('a[href]');
@@ -451,7 +460,7 @@ export default {
     const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -516,7 +525,7 @@ export default {
                       <span v-if="part.replyKind === 'progress' || part.replyKind === 'final'" class="person-reply-kind">{{ $t(part.replyKind === 'progress' ? 'person.progressReply' : 'person.finalReply') }}</span>
                       <time :datetime="datetime(part.createdAt)">{{ time(part.createdAt) }}</time>
                     </div>
-                    <ResponsePresentation v-if="part.presentation" :presentation="part.presentation" />
+                    <ResponsePresentation v-if="part.presentation" :presentation="part.presentation" :open-link="openReplyBrowser" />
                     <div v-else class="person-message-text markdown-body" @click="previewReplyLink" v-html="renderSafeMessageMarkdown(part.text)"></div>
                   </section>
                   <div v-if="deliveredOutputs(message).length" class="person-delivered-outputs" :aria-label="$t('person.outputs')"><button v-for="output in deliveredOutputs(message)" :key="output.id" type="button" class="btn-secondary person-delivered-output" :disabled="!!gate || state.loading" @click="selectOutput(output)">{{ output.title }} · {{ $t('person.outputsPreview') }}</button></div>
@@ -584,7 +593,7 @@ export default {
               <p v-else-if="state.search.loaded && !state.search.items.length" class="person-empty">{{ $t('person.noSearchResults') }}</p>
               <article v-for="message in state.search.items" :key="message.id" class="person-search-result">
                 <header class="person-message-meta"><strong>{{ message.role === 'user' ? $t('person.you') : (state.person?.name || $t('person.title')) }}</strong><span v-if="message.role === 'assistant' && message.replyKind === 'progress'" class="person-reply-kind">{{ $t('person.progressReply') }}</span><time>{{ time(message.createdAt) }}</time></header>
-                <ResponsePresentation v-if="message.presentation" :presentation="message.presentation" />
+                <ResponsePresentation v-if="message.presentation" :presentation="message.presentation" :open-link="openReplyBrowser" />
                 <p v-else class="person-prose">{{ message.text }}</p>
               </article>
               <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>

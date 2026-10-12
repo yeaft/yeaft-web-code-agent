@@ -932,6 +932,24 @@ describe('Session presentation UI projection', () => {
     expect(store.messagesMap.c[0].content).toBe(presentation.summary);
   });
 
+  it('passes the authoritative WorkItem opener to both rich progress and result segments', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'hidden', sessionId: 'unrelated' }, answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const openLink = vi.fn(() => false);
+    const RichStub = { name: 'ResponsePresentation', props: ['presentation', 'openLink'], template: '<button class="rich-test" @click="openLink(\'https://example.test/source\')">Source</button>' };
+    for (const responseKind of ['progress', 'result']) {
+      const row = { ...persisted, type: 'assistant', status: 'completed', responseKind };
+      const turn = { id: 't', turnId: 't', messages: [row], textSegments: [], toolMsgs: [], imageMsgs: [], textContent: '' };
+      appendTurnResponseSegment(turn, row);
+      const wrapper = mount(AssistantTurn, { props: { turn, sessionActions: true }, global: { mocks: { $t: key => key }, provide: { t: key => key, 'workbench-browser-opener': openLink }, stubs: { ResponsePresentation: RichStub, ToolLine: true, AskCard: true, VpSpeakerHeader: true } } });
+      expect(wrapper.findComponent(RichStub).props('openLink')).toBe(openLink);
+      await wrapper.get('.rich-test').trigger('click');
+      wrapper.unmount();
+    }
+    expect(openLink.mock.calls).toEqual([['https://example.test/source'], ['https://example.test/source']]);
+  });
+
   it('wires the shared renderer to canonical objects and keeps copy/quote summary fallback', async () => {
     vi.stubGlobal('Vue', Vue);
     vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });
@@ -942,9 +960,10 @@ describe('Session presentation UI projection', () => {
     const row = { ...persisted, type: 'assistant', status: 'completed' };
     const turn = { id: 't', turnId: 't', messages: [row], textSegments: [], toolMsgs: [], imageMsgs: [], textContent: '' };
     appendTurnResponseSegment(turn, row);
-    const RichStub = { name: 'ResponsePresentation', props: ['presentation'], template: '<div class="rich-test">{{presentation.title}}</div>' };
+    const RichStub = { name: 'ResponsePresentation', props: ['presentation', 'openLink'], template: '<div class="rich-test">{{presentation.title}}</div>' };
     const wrapper = mount(AssistantTurn, { props: { turn, sessionActions: true }, global: { mocks: { $t: key => key }, provide: { t: key => key }, stubs: { ResponsePresentation: RichStub, ToolLine: true, AskCard: true, VpSpeakerHeader: true } } });
     expect(wrapper.findComponent(RichStub).props('presentation')).toEqual(presentation);
+    expect(wrapper.findComponent(RichStub).props('openLink')).toBeTypeOf('function');
     expect(wrapper.find('.turn-response-result .rich-test').text()).toBe('Report');
     expect(wrapper.find('.turn-response-result .turn-text').exists()).toBe(false);
     await wrapper.get('.copy-btn').trigger('click');

@@ -24,7 +24,7 @@ const presentation = {
     { type: 'table', title: 'Release evidence', columns: ['Area', 'Evidence', 'Decision'], rows: [
       ['Accessibility', 'Keyboard navigation and text alternatives verified', 'Ready'],
       ['Performance', 'Pilot latency measured on the same cohort', 'Monitor'],
-      ['External content', 'Image stays unloaded until the reader opts in', 'Reader control'],
+      ['External content', 'Images load automatically without sending a referrer', 'Automatic preview'],
     ] },
     { type: 'chart', title: 'Pilot latency by day', style: 'line', unit: 'ms · lower is better', labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], series: [
       { label: 'Baseline', values: [218, 224, 210, 219, 216] }, { label: 'Pilot', values: [185, 170, 158, 149, 142] },
@@ -112,8 +112,8 @@ for (const scenario of [
     await expect(page.locator('.response-block')).toHaveCount(11);
     await expect(page.locator('.response-map-list li')).toHaveCount(3);
     await expect(page.locator('svg')).toHaveCount(4);
-    await expect(page.locator('img')).toHaveCount(0);
-    expect(external).toEqual([]);
+    await expect(page.getByRole('button', { name: scenario.locale === 'en' ? 'Retry image' : '重试图片' })).toBeVisible();
+    expect(external).toEqual(['https://images.example.test/pilot.png']);
     expect(errors).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     // Fractional SVG sizing can round the document height by one blank bottom pixel.
@@ -134,19 +134,18 @@ for (const scenario of [
   });
 }
 
-test('image consent, no-referrer, error/retry, preview and stale URL reset', async ({ page }) => {
-  await open(page);
+test('automatic image loading, no-referrer, error/retry, preview and URL replacement', async ({ page }) => {
   let attempts = 0;
+  // Install interception before mounting: no external resource is contacted.
   await page.route('https://images.example.test/**', async route => {
     attempts++;
     expect(route.request().headers().referer).toBeUndefined();
     if (attempts === 1) return route.fulfill({ status: 404, body: 'missing' });
     await route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64') });
   });
-  expect(attempts).toBe(0);
-  await page.getByRole('button', { name: 'Load external image' }).focus();
-  await page.keyboard.press('Enter');
+  await page.goto(origin); await page.waitForFunction(() => window.__ready);
   await expect(page.getByRole('button', { name: 'Retry image' })).toBeVisible();
+  expect(attempts).toBe(1);
   await expect(page.locator('.response-image-placeholder')).toContainText('Pilot architecture reference');
   await page.getByRole('button', { name: 'Retry image' }).click();
   await expect(page.locator('.response-image img')).toBeVisible();
@@ -154,9 +153,10 @@ test('image consent, no-referrer, error/retry, preview and stale URL reset', asy
   await expect(page.getByRole('button', { name: 'Collapse image preview' })).toHaveAttribute('aria-expanded', 'true');
   expect(attempts).toBe(2);
   await page.evaluate(() => { window.__state.presentation = { ...window.__state.presentation, blocks: window.__state.presentation.blocks.map(b => b.type === 'image' ? { ...b, url: 'https://images.example.test/replaced.png' } : b) }; });
-  await expect(page.locator('img')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Load external image' })).toBeVisible();
-  expect(attempts).toBe(2);
+  await expect(page.locator('.response-image img')).toHaveAttribute('src', 'https://images.example.test/replaced.png');
+  await expect(page.locator('.response-image img')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Expand image preview' })).toHaveAttribute('aria-expanded', 'false');
+  expect(attempts).toBe(3);
 });
 
 test('malicious markup/URLs never execute or request; clipboard denied retains selectable summary', async ({ page }) => {

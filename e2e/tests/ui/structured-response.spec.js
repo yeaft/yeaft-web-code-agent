@@ -20,7 +20,7 @@ const presentation = {
     { type: 'timeline', items: [{ label: 'First', title: 'Validate', text: 'Run focused tests.' }, { label: 'Then', title: 'Review', text: 'Check complete integration.' }] },
     { type: 'diagram', title: 'Ownership', nodes: [{ id: 'browser', label: 'Browser' }, { id: 'server', label: 'Server' }, { id: 'agent', label: 'Agent' }], edges: [{ from: 'browser', to: 'server', label: 'Authenticated relay' }, { from: 'server', to: 'agent' }] },
     { type: 'map', points: [{ label: 'Shanghai', latitude: 31.2304, longitude: 121.4737, detail: 'Known coordinate fixture' }, { label: 'Hangzhou', latitude: 30.2741, longitude: 120.1551 }] },
-    { type: 'image', url: 'https://external.example.test/preview.png', alt: 'Output preview', caption: 'Explicit image loading only' },
+    { type: 'image', url: 'https://external.example.test/preview.png', alt: 'Output preview', caption: 'Automatic image loading without a referrer' },
     { type: 'link', url: 'https://example.test/report', text: 'Verification report' },
   ],
 };
@@ -75,7 +75,7 @@ test('shared rich response is readable in both themes and 320px, with keyboard d
   expect(errors).toEqual([]);
 });
 
-test('external images require consent and retry; untrusted markdown cannot execute or request images', async ({ page }) => {
+test('external images load automatically and retry; untrusted markdown cannot execute or request images', async ({ page }) => {
   let requests = 0;
   await page.route('https://external.example.test/**', async route => {
     requests++;
@@ -89,9 +89,7 @@ test('external images require consent and retry; untrusted markdown cannot execu
   await expect(page.locator('.response-markdown')).toContainText('onerror');
   await expect(page.locator('.response-markdown img')).toHaveCount(0);
   await expect(page.locator('.response-markdown a')).toHaveCount(0);
-  expect(requests).toBe(0);
-  await page.locator('.response-image .btn-secondary').click();
-  await expect(page.locator('.response-image .response-status')).toBeVisible();
+  await expect(page.locator('.response-image .btn-secondary')).toHaveText('Retry image');
   expect(requests).toBe(1);
   await page.locator('.response-image .btn-secondary').click();
   await expect(page.locator('.response-image img')).toBeVisible();
