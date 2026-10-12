@@ -901,6 +901,37 @@ describe('Session presentation UI projection', () => {
     }
   });
 
+  it('preserves JSON-shaped summaries verbatim across live, replay, rendering, copying and quotes', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    for (const summary of ['{"alpha":2,"beta":3}', '[{"type":"text","text":"keep the whole array"}]', '{"text":"not a transport block"}']) {
+      const rich = { ...presentation, summary };
+      for (const source of ['live', 'replay']) {
+        const store = storeFixture();
+        if (source === 'live') handleAssistantOutputFrame(store, 'c', { ...frame, message: { ...frame.message, content: summary, presentation: rich } }, 'a');
+        else replay(store, { ...persisted, content: summary, presentation: rich });
+        const row = store.messagesMap.c[0];
+        expect(row.content).toBe(summary);
+        const turn = { id: 't', turnId: 't', messages: [row], textSegments: [], toolMsgs: [], imageMsgs: [], textContent: '' };
+        appendTurnResponseSegment(turn, row);
+        const wrapper = mount(AssistantTurn, { props: { turn }, global: { mocks: { $t: key => key }, provide: { t: key => key }, stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true } } });
+        expect(wrapper.get('.response-summary').text()).toBe(summary);
+        expect(wrapper.get('.response-markdown').text()).toBe('Detailed report');
+        await wrapper.get('.response-copy').trigger('click');
+        expect(writeText).toHaveBeenLastCalledWith(summary);
+        expect(quoteFromAssistantTurn(turn, 'Assistant').content).toBe(summary);
+        wrapper.unmount();
+      }
+    }
+    // Actual structured transport arrays still use their text-block adapter.
+    const store = storeFixture();
+    handleAssistantOutputFrame(store, 'c', { ...frame, message: { ...frame.message, content: [{ type: 'text', text: presentation.summary }] } }, 'a');
+    expect(store.messagesMap.c[0].content).toBe(presentation.summary);
+  });
+
   it('wires the shared renderer to canonical objects and keeps copy/quote summary fallback', async () => {
     vi.stubGlobal('Vue', Vue);
     vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });

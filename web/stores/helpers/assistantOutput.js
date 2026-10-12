@@ -95,7 +95,9 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       store.finishStreamingForConversation(conversationId, { completeLifecycle: false });
       const row = store.addMessageToConversation(conversationId, {
         id: data.message.id, messageId: data.message.id, type: 'assistant',
-        content: normalizeUserVisibleContent(content),
+        // Publication summaries are already ordinary text. JSON-looking prose
+        // must not be decoded as transport blocks (copy/quote/replay need it verbatim).
+        content: typeof content === 'string' ? content : normalizeUserVisibleContent(content),
         presentation: data.message.presentation,
         presentationCallId: data.message.presentationCallId,
         responseKind: data.message.responseKind === 'result' ? 'result' : 'progress',

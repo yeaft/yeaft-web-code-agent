@@ -12346,6 +12346,33 @@ describe('native Session response publication', () => {
     expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
   });
 
+  it('finishes a published response once despite a real post-append index cache failure', async () => {
+    const f = fixture();
+    f.responses.push([call(), stop('tool_use')], [stop('end_turn')]);
+    const indexPath = join(f.dir, 'sessions', query.sessionId, 'conversation', 'index.json');
+    const events = await collect(f.engine, query, event => {
+      if (event.type === 'response_presentation') {
+        // Inject after durable delivery: terminal promotion must update JSONL
+        // without treating this recoverable derived-cache EISDIR as turn failure.
+        rmSync(indexPath); mkdirSync(indexPath);
+      }
+    });
+    expect(events.filter(event => event.type === 'response_presentation')).toHaveLength(1);
+    expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+      expect.objectContaining({ stopReason: 'end_turn', terminal: true }),
+    ]);
+    const restarted = new ConversationStore(f.dir);
+    const snapshots = restarted.loadAllBySession(query.sessionId).filter(row => row.presentation);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({ responseKind: 'result', stopReason: 'end_turn' });
+    expect(snapshots[0].incomplete).not.toBe(true);
+    expect(restarted.getSessionHistoryMetadata(query.sessionId).revision).toBeGreaterThan(0);
+    rmSync(indexPath, { recursive: true });
+    const repaired = new ConversationStore(f.dir);
+    expect(repaired.loadAllBySession(query.sessionId).filter(row => row.presentation)).toEqual(snapshots);
+    expect(JSON.parse(readFileSync(indexPath, 'utf8')).revision).toBeGreaterThan(0);
+  });
+
   it('continues after invalid input or a strict persistence failure without a publication', async () => {
     for (const mode of ['invalid', 'storage']) {
       const f = fixture();

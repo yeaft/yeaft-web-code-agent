@@ -1150,7 +1150,9 @@ class SegmentStore {
       revision: idx.revision,
       anchor: updatesAnchor ? this.#lineageAnchorForLine(JSON.stringify(updated)) : undefined,
     });
-    this.saveIndex();
+    // The rewritten transcript and its revision are committed. A cache write
+    // failure must not turn an accepted terminal update into a failed turn.
+    this.#saveRecoverableIndex();
     return updated;
   }
 
