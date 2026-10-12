@@ -1,5 +1,18 @@
 import PersonInspectorList, { newestPersonRecords } from './PersonInspectorList.js';
 
+// Shared accounting format for durable turns and the live Management snapshot.
+export const usageKnown = value => Number.isFinite(value) && value >= 0;
+export const usageNumber = value => usageKnown(value) ? value.toLocaleString() : '—';
+export const usageInput = usage => usageKnown(usage?.inputTotalTokens) ? 'inputTotalTokens' : 'inputTokens';
+export const usageExtras = usage => ['reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens'].filter(field => usageKnown(usage?.[field]) && usage[field] > 0);
+export const usageDuration = value => usageKnown(value) ? (value < 60000 ? `${(value / 1000).toFixed(1)}s` : `${Math.floor(value / 60000)}m ${Math.floor(value / 1000) % 60}s`) : '—';
+// A bounded call window is not the total episode loop count. Older complete
+// records can still use their array length; truncated records stay unknown.
+export const usageLoops = turn => {
+  const total = turn.loopCount ?? turn.loops ?? turn.callCount;
+  return usageKnown(total) ? total : turn.callsTruncated ? null : turn.calls.length;
+};
+
 /** Durable, metadata-only turn diagnostics. No prompt or hidden reasoning is shown. */
 export default {
   name: 'PersonTurnUsage',
@@ -9,15 +22,15 @@ export default {
   setup(props) {
     const entries = Vue.computed(() => newestPersonRecords(props.page.items));
     const estimate = () => 160;
-    const known = value => Number.isFinite(value) && value >= 0;
-    const number = value => known(value) ? value.toLocaleString() : '—';
+    const known = usageKnown;
+    const number = usageNumber;
     const time = value => value ? new Date(value).toLocaleString() : '';
     const statusKey = value => ['running', 'completed', 'failed', 'cancelled', 'interrupted', 'budget_exhausted', 'rejected'].includes(value) ? value : 'unknown';
     // Exact inclusive input takes precedence, but never invent cache semantics
     // for older records. Unknown primary counts remain visible, not zero.
-    const input = usage => known(usage?.inputTotalTokens) ? 'inputTotalTokens' : 'inputTokens';
-    const extras = usage => ['reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens'].filter(field => known(usage?.[field]) && usage[field] > 0);
-    return { entries, estimate, known, number, time, statusKey, input, extras };
+    const input = usageInput;
+    const extras = usageExtras;
+    return { entries, estimate, known, number, time, statusKey, input, extras, loops: usageLoops };
   },
   template: `
     <section id="person-turns" class="person-journal person-turn-usage" :aria-label="$t('person.turns')" :aria-busy="page.loading">
@@ -43,13 +56,15 @@ export default {
             <span class="person-turn-heading"><strong>{{ $t('person.usage.turn', { n: turn.seq }) }} · {{ $t('person.' + turn.kind) }}</strong><span class="person-muted">{{ $t('person.usage.status.' + statusKey(turn.status)) }}</span></span>
             <time class="person-muted">{{ time(turn.createdAt) }}</time>
             <span class="person-turn-totals">
-              <span>{{ $t('person.usage.loops', { n: turn.calls.length }) }}</span>
+              <span>{{ $t('person.usage.loops', { n: number(loops(turn)) }) }}</span>
               <span>{{ $t('person.usage.' + input(turn.usage)) }}: {{ number(turn.usage?.[input(turn.usage)]) }}</span>
               <span>{{ $t('person.usage.outputTokens') }}: {{ number(turn.usage?.outputTokens) }}</span>
               <span v-if="known(turn.usage?.totalTokens)">{{ $t('person.usage.total') }}: {{ number(turn.usage.totalTokens) }}</span>
             </span>
             <span v-if="turn.models?.length" class="person-turn-models">{{ turn.models.join(' → ') }}</span>
             <span v-if="!turn.usage?.complete" class="person-muted">{{ $t('person.usage.partial') }}</span>
+            <span v-if="turn.callsTruncated" class="person-muted">{{ $t('person.usage.callWindow', { n: number(turn.calls.length) }) }}</span>
+            <span v-if="turn.usageScope === 'latest-call-window'" class="person-muted">{{ $t('person.usage.windowScope') }}</span>
           </summary>
           <div class="person-turn-detail">
             <p v-if="turn.terminalCode" class="person-muted">{{ turn.terminalCode }}</p>

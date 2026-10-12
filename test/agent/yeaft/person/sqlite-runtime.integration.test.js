@@ -196,7 +196,7 @@ describe('Person real SQLite runtime integration', () => {
     expect(count).toBe(2);
   });
 
-  it('does not abort a working episode beyond 120s; remaining calls and cancellation stay bounded', async () => {
+  it('does not abort a working episode beyond 120s; no call quota and cancellation stays bounded', async () => {
     vi.useFakeTimers();
     const controller = new AbortController(); let started = false;
     const repository = { leaseMs: 15000, namespace: 'test', heartbeat: vi.fn().mockResolvedValue(), append: vi.fn().mockResolvedValue(), startCall: vi.fn().mockResolvedValue(), finalizeCall: vi.fn().mockResolvedValue(true), finish: vi.fn().mockResolvedValue(), createdCapabilities: vi.fn().mockResolvedValue([]),
@@ -215,7 +215,7 @@ describe('Person real SQLite runtime integration', () => {
     } finally { try { controller.abort(); await work; } finally { vi.useRealTimers(); } }
   });
 
-  it('replans a truncated proposal once within budget, retaining evidence and never replaying tools', async () => {
+  it('replans a truncated proposal once within the output allowance, retaining evidence and never replaying tools', async () => {
     let count = 0, adapterError;
     const executed = vi.spyOn(PersonCapabilities.prototype, 'execute');
     const service = create('truncated-recovery', { async *stream(params) {
@@ -223,7 +223,7 @@ describe('Person real SQLite runtime integration', () => {
         const context = JSON.parse(params.messages[0].content);
         count++;
         expect(context.budget.maxOutputTokens).toBe(params.maxTokens);
-        expect(context.budget.remainingCalls).toBe(4 - count);
+        expect(context.budget).not.toHaveProperty('remainingCalls');
         if (count === 2) {
           yield { type: 'text_delta', text: '{"next":{"capability":{"id":"FileWrite","args":{"content":"truncated-tool-payload-marker' };
           yield { type: 'usage', inputTokens: 50, outputTokens: 4096 };
@@ -298,7 +298,7 @@ describe('Person real SQLite runtime integration', () => {
     } finally { executions.mockRestore(); }
   });
 
-  it.each([1, 4])('stops after at most one truncation recovery with a %i-call budget, never accepting partial actions', async maxCalls => {
+  it.each([1, 4])('stops after at most one truncation recovery despite legacy maxCalls=%i, never accepting partial actions', async maxCalls => {
     let count = 0;
     const service = create(`truncated-bounded-${maxCalls}`, { async *stream() {
       count++;
@@ -309,7 +309,7 @@ describe('Person real SQLite runtime integration', () => {
     } }, { maxCalls });
     await call(service, 'open'); await call(service, 'think', { text: '', clientMessageId: 'truncated' });
     const snapshot = await waitIdle(service);
-    expect(count).toBe(Math.min(maxCalls, 2));
+    expect(count).toBe(2);
     expect(snapshot.latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'OUTPUT_TRUNCATED' });
     expect(snapshot.state.version).toBe(0); expect(snapshot.concepts).toHaveLength(0); expect(snapshot.messages).toHaveLength(0);
     const turn = (await call(service, 'turns')).items[0];
@@ -360,7 +360,7 @@ describe('Person real SQLite runtime integration', () => {
     expect(snapshot.state.version).toBe(1); expect(snapshot.concepts).toHaveLength(2);
     expect(snapshot.messages.map(m => m.role)).toEqual(['user', 'assistant']);
     expect(seen.map(s => [s.model, s.effort])).toEqual([['test/first', undefined], ['test/second', 'high'], ['test/first', 'low'], ['test/first', 'low']]);
-    expect(seen.map(s => s.context.budget.remainingCalls)).toEqual([16, 15, 14, 13]);
+    expect(seen.every(s => !Object.hasOwn(s.context.budget, 'remainingCalls'))).toBe(true);
     expect(seen[3].context.capabilityResult.items[0].text).toBe('I am learning to garden.');
     const traces = (await call(service, 'traces', { limit: 50 })).items;
     expect(traces.filter(t => t.kind === 'activity')).toHaveLength(4);
@@ -469,6 +469,66 @@ describe('Person real SQLite runtime integration', () => {
     expect(finalCall.manifest.renderedSourceRefs).not.toContain('concept:c00:1');
   });
 
+  it('refreshes a focused reported revision on every request through more than 128 distinct Recall reads', async () => {
+    const namespace = 'hot-concept-read-window', recalled = new Set();
+    let mode = 'report', calls = 0, providerError;
+    const service = create(namespace, adapterFor(context => {
+      try {
+        const p = finalProposal(context.state.version);
+        if (mode === 'report') {
+          const report = context.messages.find(message => message.role === 'user');
+          p.concepts = [{ id: 'hot', expectedRevision: 0, kind: 'claim', statement: 'The user reported a blue bird.',
+            epistemicState: 'reported', sourceRefs: [`message:${report.id}:${report.revision}`], associations: [] }];
+          p.state.focusConceptIds = ['hot']; p.reply = null; return p;
+        }
+        calls++;
+        const hot = context.concepts.find(concept => concept.id === 'hot');
+        expect(hot).toMatchObject({ revision: 1, epistemicState: 'reported', reportedSourceRefs: roots });
+        expect(context.sourceRefs).toContain('concept:hot:1');
+        for (const concept of context.capabilityResult?.items ?? []) {
+          recalled.add(concept.id);
+          expect(concept.reportedSourceRefs).toEqual([]);
+        }
+        p.concepts = []; p.state.focusConceptIds = ['hot']; p.reply = null;
+        const result = context.capabilityResult;
+        if (!result || result.nextCursor) {
+          p.next = { model: 'test/first', effort: null, reason: 'Read another bounded page.',
+            capability: { id: 'Recall', args: { kind: 'concepts', limit: 5,
+              cursor: result ? result.nextCursor : 'hot' } } };
+        } else {
+          expect(recalled.size).toBe(140);
+          p.concepts = [{ id: 'hot', expectedRevision: hot.revision, kind: 'claim',
+            statement: 'The earlier blue bird report remains attributed to the user, not independently verified.',
+            epistemicState: 'reported', sourceRefs: ['concept:hot:1'], associations: [] }];
+        }
+        return p;
+      } catch (error) { providerError = error; throw error; }
+    }));
+    await call(service, 'open');
+    await call(service, 'send', { text: 'I saw a blue bird.', clientMessageId: 'genuine-report' });
+    const initial = await waitIdle(service);
+    expect(initial.latestEpisode.status).toBe('completed');
+    const roots = initial.concepts[0].reportedSourceRefs;
+    expect(roots).toEqual([`message:${initial.messages.find(message => message.role === 'user').id}:1`]);
+    const r = repo(namespace);
+    for (let i = 0; i < 140; i++) {
+      const record = { id: `read-${String(i).padStart(3, '0')}`, revision: 1, kind: 'claim', epistemicState: 'uncertain',
+        statement: `distinct fixture ${i}`, reportedSourceRefs: [], sourceRefs: [], associations: [], updatedAt: new Date(1000 + i) };
+      insert(r, 'concepts', record, { id: record.id, revision: 1, updatedAt: 1000 + i, statement: record.statement });
+    }
+    mode = 'revise';
+    const { episodeId } = await call(service, 'think', { text: '', clientMessageId: 'long-recall' });
+    const snapshot = await waitIdle(service);
+    if (providerError) throw providerError;
+    expect(snapshot.latestEpisode).toMatchObject({ status: 'completed' });
+    expect(snapshot.state.version).toBe(2); expect(calls).toBe(29); expect(recalled.size).toBe(140);
+    expect(snapshot.concepts[0]).toMatchObject({ id: 'hot', revision: 2, epistemicState: 'reported',
+      sourceRefs: ['concept:hot:1'], reportedSourceRefs: roots });
+    const starts = records(r, 'traces').filter(trace => trace.episodeId === episodeId && trace.kind === 'call_started');
+    expect(starts).toHaveLength(29);
+    expect(starts.every(trace => trace.manifest.renderedSourceRefs.includes('concept:hot:1'))).toBe(true);
+  });
+
   it('does not promote self-generated imagination or assistant text into reports and preserves real report lineage', async () => {
     let mode = 'imagine';
     const service = create('reported-lineage', adapterFor(context => {
@@ -556,18 +616,22 @@ describe('Person real SQLite runtime integration', () => {
     expect(records(repo('intrinsic'), 'concept_revisions')).toHaveLength(2);
   });
 
-  it('has durable invalid-output failures, finite calls, cancellable waits, and secret-free errors', async () => {
+  it('has durable invalid-output failures, unlimited cognition, cancellable waits, and secret-free errors', async () => {
     const invalid = create('invalid', adapterFor(() => '{"arbitrary":"not a proposal"}'));
     await call(invalid, 'open'); await call(invalid, 'send', { text: 'hello', clientMessageId: 'invalid' });
     expect((await waitIdle(invalid)).state.version).toBe(0);
     const traces = (await call(invalid, 'traces')).items;
     expect(traces.find(t => t.kind === 'failed').code).toBe('INVALID_PROPOSAL');
     expect(traces.find(t => t.kind === 'call_output').output.text).toBe('{"arbitrary":"not a proposal"}');
-    const looping = create('budget', adapterFor(() => { const p = finalProposal(); p.next = { model: 'test/first', effort: null, reason: 'continue', capability: null }; return p; }), { maxCalls: 2 });
+    let loops = 0;
+    const looping = create('budget', adapterFor(() => { const p = finalProposal(); if (++loops < 40) p.next = { model: 'test/first', effort: null, reason: 'continue', capability: null }; return p; }), { maxCalls: 2 });
     await call(looping, 'open'); await call(looping, 'think', { text: '', clientMessageId: 'loop' }); await waitIdle(looping);
     const budgetTraces = (await call(looping, 'traces')).items;
-    expect(budgetTraces.filter(t => t.kind === 'call_started')).toHaveLength(2);
-    expect(budgetTraces[0].kind).toBe('budget_exhausted');
+    expect(loops).toBe(40);
+    expect(budgetTraces[0].kind).toBe('committed');
+    const diagnostic = (await call(looping, 'turns')).items[0];
+    expect(diagnostic.calls).toHaveLength(32);
+    expect(diagnostic.callsTruncated).toBe(true);
     const hanging = create('timeout', adapterFor(() => new Promise(() => {})), { timeoutMs: 150 });
     await call(hanging, 'open'); await call(hanging, 'think', { text: '', clientMessageId: 'hang' });
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -1070,6 +1134,9 @@ describe('Person durable turn metadata', () => {
       db.prepare("UPDATE persons SET record = json_set(record, '$.leaseUntil', '2000-01-01T00:00:00.000Z') WHERE namespace = ? AND ownerId = ? AND personId = ?").run(values.namespace, values.ownerId, values.personId);
       const before = db.prepare('SELECT record FROM persons WHERE namespace = ? AND ownerId = ?').get('paging', 'alice').record;
       expect((await turnRequest(service, 'turns')).items[0]).toMatchObject({ id: pending.id, status: 'running', calls: [] });
+      const executions = await turnRequest(service, 'executions');
+      expect(executions.main).toBeNull();
+      expect(executions.items[0]).toMatchObject({ id: pending.id, status: 'running', calls: [] });
       expect(db.prepare('SELECT record FROM persons WHERE namespace = ? AND ownerId = ?').get('paging', 'alice').record).toBe(before);
     } finally { db.close(); }
     expect(invoke).not.toHaveBeenCalled();

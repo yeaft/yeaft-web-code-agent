@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, readFileSync, writeFileSync, renameSync, readdirSync, existsSync, lstatSync } from 'node:fs';
+import { mkdirSync, realpathSync, readFileSync, writeFileSync, renameSync, readdirSync, opendirSync, existsSync, lstatSync } from 'node:fs';
 import { resolve, join, relative, isAbsolute, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { TaskManager } from '../tasks/manager.js';
@@ -96,8 +96,23 @@ function atomicJSON(path, value) {
   renameSync(temporary, path);
 }
 
-function jsonFiles(directory) {
+function jsonFiles(directory, { limit } = {}) {
   if (!existsSync(directory)) return [];
+  if (limit != null) {
+    // Main cognition reads a bounded latest window, not every durable result at once.
+    // Iterate directory entries without assembling an unbounded filename array.
+    const handle = opendirSync(directory), records = [];
+    const time = record => new Date(record.updatedAt ?? record.task?.updatedAt ?? record.createdAt ?? 0).getTime() || 0;
+    try {
+      for (let entry; (entry = handle.readSync());) {
+        if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+        try { records.push(JSON.parse(readFileSync(join(directory, entry.name), 'utf8'))); } catch { continue; }
+        records.sort((a, b) => time(b) - time(a));
+        if (records.length > limit) records.pop();
+      }
+    } finally { handle.closeSync(); }
+    return records;
+  }
   return readdirSync(directory).filter(name => name.endsWith('.json')).flatMap(name => {
     try { return [JSON.parse(readFileSync(join(directory, name), 'utf8'))]; } catch { return []; }
   });
@@ -562,9 +577,9 @@ class ScopedPersonTaskHost {
     this.#persistAgents();
     const recent = items => items.sort((a, b) => String(b.updatedAt ?? b.task?.updatedAt ?? '').localeCompare(String(a.updatedAt ?? a.task?.updatedAt ?? ''))).slice(0, limit);
     return { namespace: this.scope.key, sessionId: this.sessionId,
-      tasks: recent(jsonFiles(this.#manager.store.sessionDir(this.sessionId))),
-      agents: clone([...this.#agents.values()].slice(-limit)), completions: recent(jsonFiles(join(this.dataRoot, 'completions'))),
-      toolResults: recent(jsonFiles(join(this.dataRoot, 'tool-results'))).map(result => ({ ...result,
+      tasks: recent(jsonFiles(this.#manager.store.sessionDir(this.sessionId), { limit })),
+      agents: clone([...this.#agents.values()].slice(-limit)), completions: recent(jsonFiles(join(this.dataRoot, 'completions'), { limit })),
+      toolResults: recent(jsonFiles(join(this.dataRoot, 'tool-results'), { limit })).map(result => ({ ...result,
         output: result.output.slice(0, 8192), rawPath: join(this.dataRoot, 'tool-results', `${result.id}.json`) })) };
   }
 

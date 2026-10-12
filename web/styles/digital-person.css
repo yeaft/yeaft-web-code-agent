@@ -250,3 +250,16 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-inspector-list .person-debug-row pre { max-height: 60vh; overflow: auto; }
 
 .person-inspector-list { overflow-anchor: none; }
+
+/* The main execution is outside the virtual task window, always before history. */
+.person-main-execution { min-width: 0; padding: var(--work-center-space-3) 0 var(--work-center-space-4); border-bottom: 1px solid var(--border-light); overflow-wrap: anywhere; font-size: 12px; }
+.person-main-execution p { margin-block: var(--work-center-space-2); }
+.person-main-execution time { display: block; margin-top: var(--work-center-space-1); }
+.person-main-execution .person-turn-totals { font-variant-numeric: tabular-nums; }
+.person-execution-model { margin-block: var(--work-center-space-3); }
+.person-execution-model .person-turn-heading > strong { min-width: 0; }
+.person-execution-step { color: var(--text-secondary); }
+.person-execution-calls > summary { cursor: pointer; border-radius: var(--agent-setup-control-radius); }
+@media (max-width: 900px) {
+  .person-management .person-task-actions button, .person-management .person-journal-toolbar button { min-height: 44px; }
+}

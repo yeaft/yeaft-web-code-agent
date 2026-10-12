@@ -7,6 +7,7 @@ const FIELDS = Object.freeze({
   status: [], open: [], snapshot: [], receipt: ['clientMessageId', 'requestHash'],
   send: ['text', 'clientMessageId', 'attachments'], think: ['text', 'clientMessageId', 'attachments'],
   dream: ['clientMessageId'], cancel: ['episodeId'],
+  executions: [], pause: ['episodeId'], resume: ['episodeId'],
   tasks: ['cursor', 'limit'], task_log: ['taskId', 'offset', 'maxBytes'], task_cancel: ['taskId'], agent_close: ['agentId'],
   outputs: ['cursor', 'limit'], output_read: ['outputId', 'offset', 'maxBytes'],
   messages: ['cursor', 'limit'], traces: ['cursor', 'limit'], turns: ['cursor', 'limit'],
@@ -72,6 +73,15 @@ export function createPersonRelay({
       if (source != null && (typeof source !== 'object' || Array.isArray(source))) {
         await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: 'Invalid digital person payload' });
         return true;
+      }
+      if (['executions', 'pause', 'resume'].includes(op)) {
+        const value = source ?? {};
+        const invalid = Object.keys(value).some(key => !FIELDS[op].includes(key))
+          || (op !== 'executions' && (typeof value.episodeId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value.episodeId)));
+        if (invalid) {
+          await reply(client, envelope, { ok: false, errorCode: 'invalid_request', error: 'Invalid digital person execution control' });
+          return true;
+        }
       }
       if (op === 'turns' && ((source?.cursor != null && (!Number.isSafeInteger(source.cursor) || source.cursor < 1))
         || (Object.hasOwn(source ?? {}, 'limit') && (!Number.isInteger(source.limit) || source.limit < 1 || source.limit > 20)))) {

@@ -22,11 +22,9 @@ export function createPersonService(options = {}) {
   const { namespace = 'default', yeaftDir, workDir, config, adapter, allowedModels } = options;
   identifier(namespace);
   const configured = typeof yeaftDir === 'string' && Boolean(yeaftDir.trim());
-  const calls = options.maxCalls ?? LIMITS.calls;
-  // Legacy timeoutMs is intentionally ignored: an episode has no wall-clock deadline.
+  // Legacy maxCalls/timeoutMs are ignored: main cognition has no call or wall-clock quota.
   const leaseMs = options.leaseMs ?? LIMITS.leaseMs;
-  if (!Number.isInteger(calls) || calls < 1 || calls > 32 ||
-      !Number.isInteger(leaseMs) || leaseMs < 300 || leaseMs > 60000) fail('INVALID_REQUEST');
+  if (!Number.isInteger(leaseMs) || leaseMs < 300 || leaseMs > 60000) fail('INVALID_REQUEST');
   if (allowedModels != null && (!Array.isArray(allowedModels) || !allowedModels.length || allowedModels.some(m => typeof m !== 'string'))) fail('INVALID_REQUEST');
   const repository = configured ? new SqlitePersonRepository({ yeaftDir, namespace, leaseMs }) : null;
   const initialize = repository?.init.bind(repository);
@@ -44,7 +42,7 @@ export function createPersonService(options = {}) {
     ? memory.recall(ownerId, args, { signal }) : literalRecall(ownerId, args);
   // Config/adapter are loaded per explicit episode, not a permanent stale cache.
   const getProvider = (modelCandidates = [], defaultModel = null) => createPersonProvider({ yeaftDir, config, adapter, allowedModels, modelCandidates, defaultModel, effortEnabled: options.effortEnabled });
-  const runtime = new PersonRuntime({ repository, getProvider, budget: { calls }, workDir, yeaftDir, config, namespace });
+  const runtime = new PersonRuntime({ repository, getProvider, budget: { calls: null }, workDir, yeaftDir, config, namespace });
   let closed = false;
   const requests = new Set();
   async function handle({ ownerId, op, payload = {} } = {}) {
@@ -58,6 +56,7 @@ export function createPersonService(options = {}) {
       const filePublication = outputFilePublicationSupport();
       const status = { outputsSupported: true, outputsFileSupported: filePublication.supported, outputsFileReason: filePublication.reason,
         renameSupported: true, defaultModelSupported: true, configured, storage: 'sqlite', modelReady: false,
+        executionsSupported: true, pauseSupported: true, main: runtime.execution(ownerId),
         defaultModel: null, agentDefaultModel, modelCandidates: [], effectiveModelCandidates: [], effectiveDefaultModel: null };
       if (!configured) return { ...status, reason: 'Digital person storage configuration is missing.', storageReady: false };
       try { await repository.init(); }
@@ -101,7 +100,24 @@ export function createPersonService(options = {}) {
       }
       case 'outputs': return repository.outputs(ownerId, payload);
       case 'output_read': return repository.outputRead(ownerId, outputReadRequest(payload));
-      case 'snapshot': object(payload, []); return repository.snapshot(ownerId);
+      case 'snapshot': {
+        object(payload, []);
+        const snapshot = await repository.snapshot(ownerId);
+        const main = runtime.execution(ownerId);
+        return { ...snapshot, main, ...(main && snapshot.busy && snapshot.latestEpisode?.id === main.episodeId
+          ? { latestEpisode: { ...snapshot.latestEpisode, ...main, id: main.episodeId } } : {}) };
+      }
+      case 'executions': {
+        object(payload, []);
+        // No recover, task-host construction or provider work from this read.
+        const diagnostics = await repository.turns(ownerId, { limit: 5 });
+        return { main: runtime.execution(ownerId), ...diagnostics };
+      }
+      case 'pause':
+      case 'resume': {
+        object(payload, ['episodeId'], ['episodeId']); identifier(payload.episodeId);
+        return runtime.control(ownerId, payload.episodeId, op);
+      }
       case 'receipt': {
         object(payload, ['clientMessageId', 'requestHash'], ['clientMessageId']);
         identifier(payload.clientMessageId);

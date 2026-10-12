@@ -98,7 +98,7 @@ describe('Digital Person output surface', () => {
     expect(wrapper.vm.panel).toBe('thoughts');
     const nav = wrapper.get('.person-inspector-nav');
     expect(nav.text()).not.toContain(t('person.outputs'));
-    expect(nav.findAll('button').map(button => button.text())).toEqual(['overview', 'thoughts', 'turns', 'tasks', 'memory', 'skills'].map(section => t('person.' + section)));
+    expect(nav.findAll('button').map(button => button.text())).toEqual(['overview', 'thoughts', 'turns', 'management.title', 'memory', 'skills'].map(section => t('person.' + section)));
     expect(wrapper.get('.person-outputs').isVisible()).toBe(false);
     await wrapper.get('.person-search-button').trigger('click');
     expect(wrapper.find('.person-inspector-nav').exists()).toBe(false);

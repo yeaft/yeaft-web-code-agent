@@ -149,7 +149,7 @@ describe('Person async native service integration', () => {
     expect(await readFile(join(logs, sessionDirs[0], `${taskId}.log`), 'utf8')).toContain('completed');
   });
 
-  it.each(['episode', 'owner', 'close', 'failure', 'budget'])('joins background effects on %s cancellation, including effects of an already completed episode', async mode => {
+  it.each(['episode', 'owner', 'close', 'failure'])('joins background effects on %s cancellation, including effects of an already completed episode', async mode => {
     const dir = await directory(); let count = 0, taskId;
     const adapter = parentAdapter((input, p) => {
       if (++count === 1) use(p, 'catalog.view', { id: 'Bash' });
@@ -157,13 +157,12 @@ describe('Person async native service integration', () => {
       if (count === 3) {
         taskId = input.capabilityResult.output.match(/Started background task (\S+)\./)[1];
         if (mode === 'failure') throw new Error('provider failed after launch');
-        if (mode === 'budget') use(p, 'Think', {});
       }
     }, async function* () {});
-    const s = service(dir, adapter, { maxCalls: mode === 'budget' ? 3 : 16 });
+    const s = service(dir, adapter);
     await call(s, 'open'); const admission = await call(s, 'think', { text: 'launch', clientMessageId: 'stop' });
     const state = await idle(s);
-    expect(state.latestEpisode.status).toBe(mode === 'failure' ? 'failed' : mode === 'budget' ? 'budget_exhausted' : 'completed');
+    expect(state.latestEpisode.status).toBe(mode === 'failure' ? 'failed' : 'completed');
     if (mode === 'episode') await call(s, 'cancel', { episodeId: admission.episodeId });
     if (mode === 'owner') await call(s, 'cancel');
     if (mode === 'close') await s.close();
