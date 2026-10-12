@@ -28,7 +28,9 @@ test('Person publishes shared progress and final structures, persists and replay
     } });
     else if (calls === 3) proposal.next = next({ id: 'PresentResponse', args: {
       title: 'Shared structured answer', summary: 'The smaller shared implementation is recommended.', phase: 'final',
-      blocks: [{ type: 'cards', items: [{ title: 'Reuse', label: 'Recommended', text: 'Keep one shared renderer.' }] },
+      blocks: [{ type: 'cards', items: [{ title: 'Reuse', label: 'Recommended', text: 'Keep one shared renderer.',
+        image: { url: 'https://example.test/weather-icon.png', alt: 'Supplied weather icon', fit: 'contain' }, url: 'https://example.test/card-source' }] },
+        { type: 'map', points: [{ label: 'Beijing', latitude: 39.9075, longitude: 116.39723 }], embed: { provider: 'openstreetmap' } },
         { type: 'chart', style: 'bar', labels: ['A', 'B'], series: [{ label: 'Fixture checks', values: [2, 3] }] },
         { type: 'link', url: 'https://example.test/person-source', text: 'Source report' }],
     } });
@@ -51,7 +53,10 @@ test('Person publishes shared progress and final structures, persists and replay
     await expect(page.locator('#person-input')).toBeEnabled();
   };
   try {
-    await page.context().route('https://example.test/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Person source fixture</h1>' }));
+    await page.context().route('https://example.test/**', route => route.request().url().endsWith('.png')
+      ? route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64') })
+      : route.fulfill({ contentType: 'text/html', body: '<h1>Person source fixture</h1>' }));
+    await page.context().route('https://www.openstreetmap.org/export/embed.html?**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Official map embed fixture</h1>' }));
     await open();
     await page.locator('#person-input').fill('Show the verified results as rich structures.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -60,6 +65,11 @@ test('Person publishes shared progress and final structures, persists and replay
     expect(calls).toBe(4);
     await expect(page.locator('.person-messages .response-cards')).toContainText('Keep one shared renderer.');
     await expect(page.locator('.person-messages .response-chart svg')).toBeVisible();
+    await expect(page.getByAltText('Supplied weather icon')).toBeVisible();
+    await expect(page.locator('.response-map iframe')).toHaveAttribute('src', /\/export\/embed\.html\?/);
+    await page.getByRole('link', { name: 'View source', exact: true }).click();
+    await expect(page.locator('.person-side-panel .browser-frame')).toHaveAttribute('src', 'https://example.test/card-source');
+    await page.locator('.person-output-reader-close').click();
     expect(await page.locator('.person-messages').innerText()).toContain('Partial verified results');
     expect((await page.locator('.person-messages').innerText()).match(/The smaller shared implementation is recommended\./g)).toHaveLength(1);
     await page.locator('a.response-link').click();
@@ -75,6 +85,8 @@ test('Person publishes shared progress and final structures, persists and replay
     await open();
     await expect(page.locator('.person-messages .response-presentation')).toHaveCount(2);
     await expect(page.locator('.person-messages .response-summary').last()).toHaveText('The smaller shared implementation is recommended.');
+    await expect(page.getByAltText('Supplied weather icon')).toBeVisible();
+    await expect(page.locator('.response-map iframe')).toHaveAttribute('src', /marker=39\.9075%2C116\.39723/);
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await page.setViewportSize({ width: 320, height: 800 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

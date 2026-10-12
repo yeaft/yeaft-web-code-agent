@@ -41,7 +41,18 @@ export function projectPresentation(input, fallbackText = '') {
   if (input?.version !== 1 || !text(input.summary, 8000) || !list(input.blocks, 12)) return base;
   try {
     if (new TextEncoder().encode(JSON.stringify(input)).length > 49152) return base;
-    return { ...base, invalid: false, blocks: input.blocks.map(b => validBlock(b) ? { ...b, url: b.url ? safeResponseUrl(b.url) : undefined } : { type: 'unsupported' }) };
+    return { ...base, invalid: false, blocks: input.blocks.map(b => {
+      if (!validBlock(b)) return { type: 'unsupported' };
+      const result = { ...b, url: b.url ? safeResponseUrl(b.url) : undefined };
+      if (b.type === 'cards') result.items = b.items.map(item => ({ ...item,
+        image: item.image && safeResponseUrl(item.image.url) && text(item.image.alt, 240)
+          && (item.image.fit === undefined || ['cover', 'contain'].includes(item.image.fit))
+          ? { url: safeResponseUrl(item.image.url), alt: item.image.alt, fit: item.image.fit || 'cover' } : undefined,
+        url: item.url ? safeResponseUrl(item.url) : undefined,
+      }));
+      if (b.type === 'map') result.embed = safeResponseMapEmbed(b.embed) || undefined;
+      return result;
+    }) };
   } catch { return base; }
 }
 
@@ -133,4 +144,50 @@ export function responseMarkdown(source) {
     });
     return convert(globalThis.marked.lexer(source));
   } catch { return [{ tag: 'p', text: source }]; }
+}
+
+/** Defense-in-depth for persisted, replayed data; never accept an arbitrary frame URL. */
+export function safeResponseMapEmbed(embed) {
+  if (!embed || typeof embed !== 'object' || Array.isArray(embed)
+    || Object.keys(embed).some(key => !['provider', 'url'].includes(key))) return null;
+  if (embed.provider === 'openstreetmap' && embed.url === undefined) return { provider: 'openstreetmap' };
+  if (embed.provider !== 'google' || !safeResponseUrl(embed.url)) return null;
+  const url = new URL(safeResponseUrl(embed.url));
+  const params = [...url.searchParams];
+  return url.origin === 'https://www.google.com' && url.pathname === '/maps/embed' && !url.hash
+    && params.length === 1 && params[0][0] === 'pb' && /^![^\s\u0000-\u001f\u007f]+$/.test(params[0][1])
+    ? { provider: 'google', url: url.href } : null;
+}
+
+/** Generated official OSM embed: one selected marker; all coordinates stay in the list. */
+export function mapEmbedUrl(block, pointIndex = 0) {
+  const embed = safeResponseMapEmbed(block?.embed);
+  if (!embed || !validBlock(block)) return '';
+  if (embed.provider === 'google') return embed.url;
+  const point = block.points[pointIndex] || block.points[0];
+  // Never relocate a polar marker into a different, projectable region.
+  const mercatorLimit = 85.0511287798066;
+  if (Math.abs(point.latitude) > mercatorLimit) return '';
+  // Leaflet wraps longitude. Bounds may straddle ±180° so the pin stays centered.
+  const west = point.longitude - 0.025, east = point.longitude + 0.025;
+  const south = Math.max(-mercatorLimit, point.latitude - 0.015), north = Math.min(mercatorLimit, point.latitude + 0.015);
+  const params = new URLSearchParams({ bbox: [west, south, east, north].join(','), layer: 'mapnik',
+    marker: `${point.latitude},${point.longitude}` });
+  return `https://www.openstreetmap.org/export/embed.html?${params}`;
+}
+
+/** Provider pages are links, not frame targets; normal clicks stay in the owning browser. */
+export function mapProviderUrl(block, pointIndex = 0) {
+  if (!validBlock(block)) return '';
+  const point = block.points[pointIndex] || block.points[0];
+  const coords = `${point.latitude},${point.longitude}`;
+  if (block.embed?.provider === 'google') return `https://www.google.com/maps/search/?${new URLSearchParams({ api: '1', query: coords })}`;
+  return `https://www.openstreetmap.org/?${new URLSearchParams({ mlat: String(point.latitude), mlon: String(point.longitude) })}#map=15/${point.latitude}/${point.longitude}`;
+}
+
+/** Directions are calculated by Google, not by the assistant. No app geolocation permission. */
+export function mapDirectionsUrl(point) {
+  if (!point || !finite(point.latitude) || Math.abs(point.latitude) > 90
+    || !finite(point.longitude) || Math.abs(point.longitude) > 180) return '';
+  return `https://www.google.com/maps/dir/?${new URLSearchParams({ api: '1', destination: `${point.latitude},${point.longitude}` })}`;
 }
