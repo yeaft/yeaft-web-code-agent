@@ -1,5 +1,6 @@
 import { open, readFile, realpath, writeFile, readdir, stat, unlink, rename, mkdir, rm, copyFile, cp } from 'fs/promises';
 import { existsSync } from 'fs';
+import { execFile } from 'node:child_process';
 import { join, basename, dirname, extname, isAbsolute, relative, resolve } from 'path';
 import { platform } from 'os';
 import ctx from '../context.js';
@@ -308,6 +309,37 @@ export async function handleWriteFile(msg) {
   }
 }
 
+let pendingWindowsDrives = null;
+
+function listWindowsFixedDrives() {
+  if (pendingWindowsDrives) return pendingWindowsDrives;
+  // Drive types do not probe root accessibility or wait for disconnected mappings.
+  const command = "$ErrorActionPreference = 'Stop'; [System.IO.DriveInfo]::GetDrives()"
+    + ' | Where-Object { $_.DriveType -eq [System.IO.DriveType]::Fixed }'
+    + ' | ForEach-Object { $_.Name }';
+  pendingWindowsDrives = new Promise((resolve, reject) => {
+    execFile('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+      windowsHide: true,
+      timeout: 5000,
+      maxBuffer: 16 * 1024,
+      encoding: 'utf8',
+    }, (error, stdout, stderr) => {
+      if (error) reject(error);
+      else if (stderr.trim()) reject(new Error(stderr.trim()));
+      else resolve(stdout);
+    });
+  }).then(stdout => {
+    const drives = stdout.trim() ? stdout.trim().split(/\r?\n/).map(line => line.trim()) : [];
+    if (drives.some(drive => !/^[A-Za-z]:\\$/.test(drive))) {
+      throw new Error('Invalid Windows drive listing');
+    }
+    return drives.sort().map(drive => ({ name: drive.slice(0, 2), type: 'directory', size: 0 }));
+  }).finally(() => {
+    pendingWindowsDrives = null;
+  });
+  return pendingWindowsDrives;
+}
+
 export async function handleListDirectory(msg) {
   const { conversationId, requestId, _requestUserId, _requestClientId } = msg;
   const dirPath = msg.dirPath || (msg.workbenchRoute?.runtimeProvider === 'work-center' ? msg.workDir : msg.dirPath);
@@ -315,17 +347,11 @@ export async function handleListDirectory(msg) {
   const conv = ctx.conversations.get(conversationId);
   const workDir = msg.workDir || conv?.workDir || ctx.CONFIG.workDir;
 
-  // 空路径：列出驱动器（Windows）或根目录（Unix）
+  // 空路径：列出固定磁盘（Windows）或根目录（Unix）
   if (!dirPath || dirPath === '') {
     try {
       if (platform() === 'win32') {
-        const drives = [];
-        for (const letter of 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('')) {
-          const drivePath = letter + ':\\';
-          if (existsSync(drivePath)) {
-            drives.push({ name: letter + ':', type: 'directory', size: 0 });
-          }
-        }
+        const drives = await listWindowsFixedDrives();
         sendWorkbenchResult(ctx, msg, {
           type: 'directory_listing',
           conversationId,

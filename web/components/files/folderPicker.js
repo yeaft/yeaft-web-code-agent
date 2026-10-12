@@ -9,12 +9,14 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, loadR
   const folderPickerPath = Vue.ref('');
   const folderPickerEntries = Vue.ref([]);
   const folderPickerLoading = Vue.ref(false);
+  const folderPickerError = Vue.ref('');
   const folderPickerSelected = Vue.ref('');
 
   const openFolderPicker = () => {
     folderPickerOpen.value = true;
     folderPickerSelected.value = '';
     folderPickerLoading.value = true;
+    folderPickerError.value = '';
     const defaultDir = treePath.value || getEffectiveWorkDir() || '';
     folderPickerPath.value = defaultDir;
     folderPickerEntries.value = [];
@@ -30,6 +32,7 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, loadR
 
   const loadFolderPickerDir = (dirPath) => {
     folderPickerLoading.value = true;
+    folderPickerError.value = '';
     folderPickerSelected.value = '';
     store.sendWsMessage({
       type: 'list_directory',
@@ -60,7 +63,7 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, loadR
 
   const confirmFolderPicker = () => {
     let path = folderPickerPath.value;
-    if (!path) return;
+    if (!path || folderPickerLoading.value || folderPickerError.value) return;
     if (folderPickerSelected.value) {
       path = childDirectory(path, folderPickerSelected.value);
     }
@@ -72,6 +75,12 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, loadR
   // Handle directory listing for folder picker
   const handleFolderPickerListing = (msg) => {
     folderPickerLoading.value = false;
+    folderPickerError.value = msg.error || '';
+    if (folderPickerError.value) {
+      folderPickerEntries.value = [];
+      folderPickerSelected.value = '';
+      return;
+    }
     folderPickerEntries.value = (msg.entries || [])
       .filter(e => e.type === 'directory')
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -80,8 +89,8 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, loadR
 
   return {
     folderPickerOpen, folderPickerPath, folderPickerEntries,
-    folderPickerLoading, folderPickerSelected,
-    openFolderPicker, folderPickerNavigateUp,
+    folderPickerLoading, folderPickerError, folderPickerSelected,
+    openFolderPicker, loadFolderPickerDir, folderPickerNavigateUp,
     folderPickerSelectItem, folderPickerEnter, confirmFolderPicker,
     handleFolderPickerListing
   };

@@ -1787,7 +1787,7 @@
 .workdir-picker .folder-picker-list:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 .workdir-picker button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.workdir-picker .folder-picker-state {
+.folder-picker-dialog .folder-picker-state {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1799,8 +1799,8 @@
   text-align: center;
 }
 
-.workdir-picker .folder-picker-error { flex-direction: column; color: var(--error); }
-.workdir-picker .folder-picker-error-detail { max-width: 100%; overflow-wrap: anywhere; font-size: 12px; }
+.folder-picker-dialog .folder-picker-error { flex-direction: column; color: var(--error); }
+.folder-picker-dialog .folder-picker-error-detail { max-width: 100%; overflow-wrap: anywhere; font-size: 12px; }
 .workdir-picker .folder-picker-footer {
   display: block;
   flex: 0 0 auto;
