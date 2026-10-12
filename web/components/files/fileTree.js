@@ -3,12 +3,17 @@
  * Manages directory tree state, loading, expanding/collapsing, item clicks.
  */
 
-import { childDirectory, directoryBreadcrumbs, isPathWithinDirectory, parentDirectory } from '../../utils/folder-picker-path.js';
+import { browserPathKey, childDirectory, directoryBreadcrumbs, isPathWithinDirectory, parentDirectory } from '../../utils/folder-picker-path.js';
 
 export function createFileTree(store, { getEffectiveWorkDir, normalizePath, selectedPaths, lastClickedIndex, openFileInTab, clearSelection, workspaceLocked = false, onReveal = () => {} }) {
   const treePath = Vue.ref('');
   const treeRootPath = Vue.ref('');
   const treeNodes = Vue.reactive({});
+  // Identity keys fold Windows casing; node/entry paths retain spelling for IO
+  // and display. POSIX names (including backslashes) remain case-sensitive.
+  const pathKey = path => browserPathKey(normalizePath(path));
+  const samePath = (left, right) => pathKey(left) === pathKey(right);
+  const getTreeNode = path => treeNodes[pathKey(path)];
   const latestDirectoryRequestIds = new Map();
   let directoryRequestSequence = 0;
   const navigationPath = Vue.ref('');
@@ -26,35 +31,38 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   // Otherwise the existing membership fence rightly discards unseen children.
   const advanceReveal = () => {
     const reveal = pendingReveal;
-    if (!reveal || reveal.root !== treeRootPath.value) return;
+    if (!reveal || !samePath(reveal.root, treeRootPath.value)) return;
     const directories = directoryBreadcrumbs(reveal.type === 'directory'
       ? reveal.path : parentDirectory(reveal.path))
       .map(crumb => normalizePath(crumb.path))
       .filter(path => isPathWithinDirectory(path, reveal.root));
+    let directoryPath = treeRootPath.value;
     for (let index = 0; index < directories.length; index += 1) {
-      const path = directories[index];
-      if (index > 0 && !treeNodes[directories[index - 1]]?.entries.some(entry => (
-        entry.type === 'directory' && entry.path === path
-      ))) {
-        pendingReveal = null;
-        return;
+      if (index > 0) {
+        const entry = getTreeNode(directoryPath)?.entries.find(entry => (
+          entry.type === 'directory' && samePath(entry.path, directories[index])
+        ));
+        if (!entry) { pendingReveal = null; return; }
+        directoryPath = entry.path;
       }
-      const node = treeNodes[path];
+      const node = getTreeNode(directoryPath);
       if (node?.error) { pendingReveal = null; return; }
       if (node) node.expanded = true;
       if (node?.loading) return;
-      if (!node?.loaded) { loadTreeDirectory(path); return; }
+      if (!node?.loaded) { loadTreeDirectory(directoryPath); return; }
     }
-    if (reveal.type === 'file' && !treeNodes[directories.at(-1)]?.entries.some(entry => (
-      entry.type === 'file' && entry.path === reveal.path
-    ))) {
-      pendingReveal = null;
-      return;
+    let revealedPath = directoryPath;
+    if (reveal.type === 'file') {
+      const entry = getTreeNode(directoryPath)?.entries.find(entry => (
+        entry.type === 'file' && samePath(entry.path, reveal.path)
+      ));
+      if (!entry) { pendingReveal = null; return; }
+      revealedPath = entry.path;
     }
-    navigationPath.value = reveal.path;
+    navigationPath.value = revealedPath;
     pendingReveal = null;
     Vue.nextTick(() => {
-      if (reveal.id === revealSequence && navigationPath.value === reveal.path) onReveal(reveal.path);
+      if (reveal.id === revealSequence && samePath(navigationPath.value, revealedPath)) onReveal(revealedPath);
     });
   };
 
@@ -72,7 +80,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     const directories = directoryBreadcrumbs(type === 'directory' ? target : parentDirectory(target));
     // A fresh user intent may retry an earlier error once; the response never loops.
     for (const crumb of directories) {
-      const node = treeNodes[normalizePath(crumb.path)];
+      const node = getTreeNode(crumb.path);
       if (node?.error) { node.error = null; node.loaded = false; }
     }
     pendingReveal = { id: revealSequence, path: target, type, root: treeRootPath.value };
@@ -82,7 +90,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
 
   const nextDirectoryRequestId = (dirPath) => {
     const requestId = `files-tree-${++directoryRequestSequence}`;
-    latestDirectoryRequestIds.set(dirPath, requestId);
+    latestDirectoryRequestIds.set(pathKey(dirPath), requestId);
     return requestId;
   };
 
@@ -113,26 +121,26 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   const flattenedTree = Vue.computed(() => {
     const result = [];
     const walk = (dirPath, depth) => {
-      const node = treeNodes[dirPath];
+      const node = getTreeNode(dirPath);
       if (!node || !node.entries) return;
       for (const entry of node.entries) {
         result.push({ ...entry, depth });
-        if (entry.type === 'directory' && treeNodes[entry.path]?.expanded) {
+        if (entry.type === 'directory' && getTreeNode(entry.path)?.expanded) {
           walk(entry.path, depth + 1);
         }
       }
     };
-    if (treeRootPath.value && treeNodes[treeRootPath.value]?.expanded) {
+    if (treeRootPath.value && getTreeNode(treeRootPath.value)?.expanded) {
       walk(treeRootPath.value, 0);
     }
     return result;
   });
 
   const loadTreeDirectory = (dirPath) => {
-    const nDir = normalizePath(dirPath);
+    const nDir = pathKey(dirPath);
     if (!canNavigateTo(nDir)) return;
     if (!treeNodes[nDir]) {
-      treeNodes[nDir] = { entries: [], expanded: true, loaded: false, loading: true };
+      treeNodes[nDir] = { path: normalizePath(dirPath), entries: [], expanded: true, loaded: false, loading: true };
     } else {
       treeNodes[nDir].loading = true;
     }
@@ -167,7 +175,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   };
 
   const toggleDirectory = (dirPath) => {
-    const nDir = normalizePath(dirPath);
+    const nDir = pathKey(dirPath);
     const node = treeNodes[nDir];
     if (node) {
       if (node.loaded) {
@@ -177,7 +185,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
         loadTreeDirectory(dirPath);
       }
     } else {
-      treeNodes[nDir] = { entries: [], expanded: true, loaded: false, loading: false };
+      treeNodes[nDir] = { path: normalizePath(dirPath), entries: [], expanded: true, loaded: false, loading: false };
       loadTreeDirectory(dirPath);
     }
   };
@@ -224,16 +232,16 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   };
 
   const removeTreeSubtree = (dirPath) => {
-    const prefix = `${dirPath.replace(/\/$/, '')}/`;
-    if (navigationPath.value === dirPath || navigationPath.value.startsWith(prefix)) navigationPath.value = '';
+    const key = pathKey(dirPath);
+    if (isPathWithinDirectory(pathKey(navigationPath.value), key)) navigationPath.value = '';
     for (const path of Object.keys(treeNodes)) {
-      if (path === dirPath || path.startsWith(prefix)) delete treeNodes[path];
+      if (isPathWithinDirectory(path, key)) delete treeNodes[path];
     }
     for (const path of latestDirectoryRequestIds.keys()) {
-      if (path === dirPath || path.startsWith(prefix)) latestDirectoryRequestIds.delete(path);
+      if (isPathWithinDirectory(path, key)) latestDirectoryRequestIds.delete(path);
     }
     for (const node of Object.values(treeNodes)) {
-      if (node?.entries) node.entries = node.entries.filter(entry => entry.path !== dirPath);
+      if (node?.entries) node.entries = node.entries.filter(entry => !samePath(entry.path, dirPath));
     }
   };
 
@@ -242,14 +250,14 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   );
 
   const isDirectoryInCurrentTree = (dirPath) => {
-    if (dirPath === treeRootPath.value) return true;
+    if (samePath(dirPath, treeRootPath.value)) return true;
     return Object.values(treeNodes).some(node => node?.entries?.some(entry => (
-      entry.type === 'directory' && entry.path === dirPath
+      entry.type === 'directory' && samePath(entry.path, dirPath)
     )));
   };
 
   const handleDirectoryListing = (msg) => {
-    const nDirPath = normalizePath(msg.dirPath);
+    const nDirPath = pathKey(msg.dirPath);
     const latestRequestId = latestDirectoryRequestIds.get(nDirPath);
     // The Agent echoes requestId. Once this client has issued a request for a
     // path, only its latest response may mutate that node. This also fences an
@@ -267,7 +275,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     }
     if (msg.error) {
       if (isMissingDirectoryError(msg.error)) {
-        if (nDirPath === treeRootPath.value) {
+        if (samePath(nDirPath, treeRootPath.value)) {
           for (const entry of treeNodes[nDirPath]?.entries || []) {
             if (entry.type === 'directory') removeTreeSubtree(entry.path);
           }
@@ -291,22 +299,24 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
       if (a.type === b.type) return a.name.localeCompare(b.name);
       return a.type === 'directory' ? -1 : 1;
     });
+    const directoryPath = treeNodes[nDirPath]?.path
+      || (samePath(nDirPath, treeRootPath.value) ? treeRootPath.value : normalizePath(msg.dirPath));
     const enriched = entries.map(e => ({
       ...e,
-      path: normalizePath(childDirectory(nDirPath, e.name))
+      path: normalizePath(childDirectory(directoryPath, e.name))
     }));
 
     const nextDirectoryPaths = new Set(
-      enriched.filter(entry => entry.type === 'directory').map(entry => entry.path),
+      enriched.filter(entry => entry.type === 'directory').map(entry => pathKey(entry.path)),
     );
     for (const previousEntry of treeNodes[nDirPath]?.entries || []) {
-      if (previousEntry.type === 'directory' && !nextDirectoryPaths.has(previousEntry.path)) {
+      if (previousEntry.type === 'directory' && !nextDirectoryPaths.has(pathKey(previousEntry.path))) {
         removeTreeSubtree(previousEntry.path);
       }
     }
 
     if (!treeNodes[nDirPath]) {
-      treeNodes[nDirPath] = { entries: enriched, expanded: true, loaded: true, loading: false };
+      treeNodes[nDirPath] = { path: directoryPath, entries: enriched, expanded: true, loaded: true, loading: false };
     } else {
       treeNodes[nDirPath].entries = enriched;
       treeNodes[nDirPath].loaded = true;
@@ -314,7 +324,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
       treeNodes[nDirPath].error = null;
     }
 
-    if (nDirPath === treeRootPath.value) {
+    if (samePath(nDirPath, treeRootPath.value)) {
       treePath.value = msg.dirPath;
     }
     advanceReveal();
@@ -346,10 +356,10 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     // listings arrive. If a directory disappeared, its parent listing or an
     // explicit not-found response removes that subtree without affecting the
     // rest of the refresh.
-    const expandedPaths = Object.entries(treeNodes)
-      .filter(([, node]) => node?.expanded)
-      .map(([path]) => path);
-    if (!expandedPaths.includes(treeRootPath.value)) {
+    const expandedPaths = Object.values(treeNodes)
+      .filter(node => node?.expanded)
+      .map(node => node.path);
+    if (!expandedPaths.some(path => samePath(path, treeRootPath.value))) {
       expandedPaths.unshift(treeRootPath.value);
     }
     for (const path of expandedPaths) {
@@ -358,7 +368,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   };
 
   return {
-    treePath, treeRootPath, treeNodes, flattenedTree, navigationPath, revealPath, cancelReveal, canNavigateTo,
+    treePath, treeRootPath, treeNodes, getTreeNode, samePath, flattenedTree, navigationPath, revealPath, cancelReveal, canNavigateTo,
     editingTreePath, treePathInputRef, rootFolderName,
     startTreePathEdit, confirmTreePath, cancelTreePathEdit,
     loadTreeDirectory, loadRootDirectory, toggleDirectory, onTreeItemClick,

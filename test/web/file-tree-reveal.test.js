@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
-import { directoryBreadcrumbs, normalizeBrowserPath, parentDirectory } from '../../web/utils/folder-picker-path.js';
+import { browserPathKey, directoryBreadcrumbs, normalizeBrowserPath, parentDirectory } from '../../web/utils/folder-picker-path.js';
 
 let createFileTree;
 beforeAll(async () => {
@@ -158,6 +158,93 @@ describe('Files tree reveal', () => {
     tree.revealPath('file.txt');
     reply([file('file.txt')]);
     expect(tree.navigationPath.value).toBe(normalizeBrowserPath('file.txt', workDir));
+  });
+  it.each([
+    ['Q:/Work', 'q:/work/deep/nested/file.txt'],
+    ['//Server/Share/Work', '//server/share/work/deep/nested/file.txt'],
+    ['Q:/', 'q:/deep/nested/file.txt'],
+    ['//Server/Share/', '//server/share/deep/nested/file.txt'],
+  ])('matches Windows identities under %s while retaining listing spelling', async (workDir, target) => {
+    const { tree, reply, sendWsMessage, onReveal, selectedPaths } = setup({ workDir });
+    const rootRequest = sendWsMessage.mock.lastCall[0];
+    // Root and directory replies may use another spelling than the request.
+    tree.revealPath(target);
+    reply([dir('Deep')], undefined, { ...rootRequest, dirPath: workDir.toLowerCase() });
+    const deep = normalizeBrowserPath('Deep', workDir);
+    expect(sendWsMessage.mock.lastCall[0].dirPath).toBe(deep);
+    expect(sendWsMessage).toHaveBeenCalledTimes(2);
+    reply([dir('Nested')], undefined, { ...sendWsMessage.mock.lastCall[0], dirPath: deep.toUpperCase() });
+    const nested = `${deep}/Nested`;
+    expect(sendWsMessage.mock.lastCall[0].dirPath).toBe(nested);
+    reply([file('File.txt')]);
+    expect(tree.navigationPath.value).toBe(`${nested}/File.txt`);
+    expect(tree.flattenedTree.value.map(entry => entry.path)).toEqual([deep, nested, `${nested}/File.txt`]);
+    await Vue.nextTick();
+    expect(onReveal).toHaveBeenCalledWith(`${nested}/File.txt`);
+    expect(selectedPaths.size).toBe(0);
+    tree.revealPath(`${target.slice(0, target.lastIndexOf('/'))}`, 'directory');
+    expect(tree.navigationPath.value).toBe(nested);
+    tree.revealPath(workDir.toLowerCase(), 'directory');
+    expect(tree.navigationPath.value).toBe(tree.treeRootPath.value);
+    expect(sendWsMessage).toHaveBeenCalledTimes(3);
+  });
+  it.each(['Q:/Work', '//Server/Share/Work'])('fences mixed-case refresh/missing replies and removes stale subtrees under %s', async workDir => {
+    const { tree, reply, sendWsMessage } = setup({ workDir });
+    reply([dir('Deep')]);
+    tree.revealPath('deep/file.txt');
+    reply([file('File.txt')]);
+    const deep = `${workDir}/Deep`;
+    tree.refresh();
+    const stale = sendWsMessage.mock.lastCall[0];
+    tree.refresh();
+    const fresh = sendWsMessage.mock.lastCall[0];
+    reply([file('File.txt')], undefined, { ...fresh, dirPath: deep.toLowerCase() });
+    reply([], 'ENOENT: no such file', { ...stale, dirPath: deep.toUpperCase() });
+    expect(tree.getTreeNode(deep).entries.map(entry => entry.name)).toEqual(['File.txt']);
+    tree.revealPath('DEEP/FILE.TXT');
+    expect(tree.navigationPath.value).toBe(''); // still awaiting the root refresh
+    const refreshedRoot = sendWsMessage.mock.calls.map(([message]) => message)
+      .filter(message => browserPathKey(message.dirPath) === browserPathKey(workDir)).at(-1);
+    reply([dir('Deep')], undefined, { ...refreshedRoot, dirPath: workDir.toLowerCase() });
+    expect(tree.navigationPath.value).toBe(`${deep}/File.txt`);
+    tree.refresh();
+    const removedRequest = sendWsMessage.mock.lastCall[0];
+    const rootRequest = sendWsMessage.mock.calls.map(([message]) => message)
+      .filter(message => browserPathKey(message.dirPath) === browserPathKey(workDir)).at(-1);
+    reply([], undefined, { ...rootRequest, dirPath: workDir.toUpperCase() });
+    reply([file('late.txt')], undefined, { ...removedRequest, dirPath: deep.toLowerCase() });
+    await Vue.nextTick();
+    expect(tree.getTreeNode(deep)).toBeUndefined();
+    expect(tree.flattenedTree.value).toEqual([]);
+    expect(tree.navigationPath.value).toBe('');
+    expect(Object.keys(tree.treeNodes)).toEqual([browserPathKey(workDir)]);
+  });
+  it.each(['Q:/Work', '//Server/Share/Work'])('retries mixed-case errors only for fresh intent in locked %s', workDir => {
+    const { tree, reply, sendWsMessage } = setup({ workDir, workspaceLocked: true });
+    reply([dir('Deep')]);
+    tree.revealPath(`${workDir.toLowerCase()}/deep/file.txt`);
+    reply([], 'EACCES: permission denied');
+    expect(sendWsMessage).toHaveBeenCalledTimes(2);
+    tree.revealPath(`${workDir.toUpperCase()}/DEEP/FILE.TXT`);
+    expect(sendWsMessage).toHaveBeenCalledTimes(3);
+    reply([file('File.txt')]);
+    expect(tree.navigationPath.value).toBe(`${workDir}/Deep/File.txt`);
+    expect(tree.revealPath(`${workDir.toLowerCase()}-other/file.txt`)).toBe(false);
+    expect(tree.treeRootPath.value).toBe(workDir);
+  });
+  it('does not conflate POSIX case or backslashes during reveal', () => {
+    const { tree, reply, sendWsMessage } = setup({ workDir: '/Work/back\\slash' });
+    reply([dir('Deep'), dir('deep')]);
+    tree.revealPath('deep/file.txt');
+    expect(sendWsMessage.mock.lastCall[0].dirPath).toBe('/Work/back\\slash/deep');
+    reply([file('File.txt')]);
+    expect(tree.navigationPath.value).toBe('');
+    tree.revealPath('deep/File.txt');
+    expect(tree.navigationPath.value).toBe('/Work/back\\slash/deep/File.txt');
+    tree.revealPath('Deep/file.txt');
+    expect(sendWsMessage.mock.lastCall[0].dirPath).toBe('/Work/back\\slash/Deep');
+    reply([file('file.txt')]);
+    expect(tree.navigationPath.value).toBe('/Work/back\\slash/Deep/file.txt');
   });
   it('cancels a pending reveal when the root changes or the component is disposed', async () => {
     const { tree, reply, onReveal } = setup();

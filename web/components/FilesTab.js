@@ -158,7 +158,7 @@ export default {
           </button>
         </div>
         <!-- VS Code 风格 Header: 正常模式 -->
-        <div class="file-tree-header vscode-header" :class="{ 'tree-navigation-current': navigationPath === treeRootPath }" v-else>
+        <div class="file-tree-header vscode-header" :class="{ 'tree-navigation-current': sameTreePath(navigationPath, treeRootPath) }" v-else>
           <div class="vscode-folder-row">
             <span class="vscode-folder-name" :title="treeRootPath || $t('files.notLoaded')">{{ rootFolderName }}</span>
             <div class="vscode-folder-actions" v-if="treeRootPath" @click.stop>
@@ -230,7 +230,7 @@ export default {
           </template>
           <!-- 正常树模式 -->
           <template v-else>
-            <div class="file-tree-loading" v-if="treeNodes[treeRootPath]?.loading">{{ $t('files.loadingTree') }}</div>
+            <div class="file-tree-loading" v-if="getTreeNode(treeRootPath)?.loading">{{ $t('files.loadingTree') }}</div>
             <div class="file-tree-list" v-else>
               <div
                 v-for="entry in flattenedTree"
@@ -240,9 +240,9 @@ export default {
                 :class="{
                   'tree-dir': entry.type === 'directory',
                   'tree-file': entry.type === 'file',
-                  'tree-expanded': entry.type === 'directory' && treeNodes[entry.path]?.expanded,
+                  'tree-expanded': entry.type === 'directory' && getTreeNode(entry.path)?.expanded,
                   'tree-selected': selectedPaths.has(entry.path),
-                  'tree-navigation-current': navigationPath === entry.path,
+                  'tree-navigation-current': sameTreePath(navigationPath, entry.path),
                   'drag-over': dragState.dropTarget === entry.path && entry.type === 'directory'
                 }"
                 :style="{ paddingLeft: (6 + entry.depth * 10) + 'px' }"
@@ -255,11 +255,11 @@ export default {
                 @drop.prevent="onDrop($event, entry)"
               >
                 <span class="tree-arrow" v-if="entry.type === 'directory'">
-                  <svg v-if="treeNodes[entry.path]?.expanded" viewBox="0 0 16 16" width="10" height="10"><path fill="currentColor" d="M3.5 5.5L8 10l4.5-4.5z"/></svg>
+                  <svg v-if="getTreeNode(entry.path)?.expanded" viewBox="0 0 16 16" width="10" height="10"><path fill="currentColor" d="M3.5 5.5L8 10l4.5-4.5z"/></svg>
                   <svg v-else viewBox="0 0 16 16" width="10" height="10"><path fill="currentColor" d="M5.5 3.5L10 8l-4.5 4.5z"/></svg>
                 </span>
                 <span class="tree-arrow tree-arrow-spacer" v-else></span>
-                <span class="tree-icon" v-html="entry.type === 'directory' ? getFolderIcon(treeNodes[entry.path]?.expanded) : getFileIconHtml(entry.name)"></span>
+                <span class="tree-icon" v-html="entry.type === 'directory' ? getFolderIcon(getTreeNode(entry.path)?.expanded) : getFileIconHtml(entry.name)"></span>
                 <span class="tree-name">{{ entry.name }}</span>
                 <span class="tree-size" v-if="entry.type === 'file' && selectedPaths.size === 0">{{ formatSize(entry.size) }}</span>
                 <span class="tree-file-actions" v-if="selectedPaths.size === 0">
@@ -268,7 +268,7 @@ export default {
                   </button>
                 </span>
               </div>
-              <div class="tree-empty" v-if="flattenedTree.length === 0 && treeRootPath && !treeNodes[treeRootPath]?.loading">
+              <div class="tree-empty" v-if="flattenedTree.length === 0 && treeRootPath && !getTreeNode(treeRootPath)?.loading">
                 {{ $t('files.emptyDir') }}
               </div>
             </div>
@@ -792,9 +792,9 @@ export default {
       clearSelection: ops.clearSelection,
       workspaceLocked: props.workspaceLocked,
       onReveal: path => {
-        const element = path === tree.treeRootPath.value
+        const element = tree.samePath(path, tree.treeRootPath.value)
           ? rootEl.value?.querySelector('.file-tree-header')
-          : [...(rootEl.value?.querySelectorAll('[data-tree-path]') || [])].find(el => el.dataset.treePath === path);
+          : [...(rootEl.value?.querySelectorAll('[data-tree-path]') || [])].find(el => tree.samePath(el.dataset.treePath, path));
         element?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       },
     });
@@ -1064,7 +1064,7 @@ export default {
       isMobile, mobileView, mobileGoBack,
       fontSize, zoomIn, zoomOut, isTextZoomAvailable, onWheel, openActiveImagePreview,
       treePath: tree.treePath, treeRootPath: tree.treeRootPath,
-      treeNodes: tree.treeNodes, flattenedTree: tree.flattenedTree,
+      getTreeNode: tree.getTreeNode, sameTreePath: tree.samePath, flattenedTree: tree.flattenedTree,
       editingTreePath: tree.editingTreePath, treePathInputRef: tree.treePathInputRef,
       rootFolderName: tree.rootFolderName,
       startTreePathEdit: tree.startTreePathEdit,

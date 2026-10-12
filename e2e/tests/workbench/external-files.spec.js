@@ -218,7 +218,7 @@ class ExternalFilesServer {
     }
     if (url.pathname === '/') {
       response.writeHead(200, { 'Content-Type': 'text/html' });
-      response.end(html({ workDir: this.workDir, otherSessionDir: this.otherSessionDir, otherAgentDir: this.otherAgentDir }));
+      response.end(html({ workDir: this.browserWorkDir || this.workDir, otherSessionDir: this.otherSessionDir, otherAgentDir: this.otherAgentDir }));
       return;
     }
     if (url.pathname.startsWith('/preview/')) {
@@ -528,3 +528,62 @@ test('long breadcrumbs stay single-line, scrollable and keyboard-accessible in l
     }
   }
 });
+
+for (const root of ['Q:/Work', '//Server/Share/Work']) {
+  test(`Windows path casing reveals real Files tree and breadcrumbs under ${root}`, async ({ page, harness }) => {
+    // Linux cannot host Windows paths. Only Windows transport replies are
+    // modeled here; production FilesTab/fileTree and route handlers still run.
+    // The POSIX tests above continue to exercise real Agent filesystem handlers.
+    harness.browserWorkDir = root;
+    const requests = [];
+    const target = `${root.toLowerCase()}/deep/nested/file.txt`;
+    const deep = `${root}/Deep`;
+    const nested = `${deep}/Nested`;
+    const located = `${nested}/File.txt`;
+    const entries = {
+      [root.toLowerCase()]: [{ name: 'Deep', type: 'directory' }, { name: 'Other.txt', type: 'file' }],
+      [deep.toLowerCase()]: [{ name: 'Nested', type: 'directory' }],
+      [nested.toLowerCase()]: [{ name: 'File.txt', type: 'file' }],
+    };
+    await page.route('**/bridge', async route => {
+      const message = route.request().postDataJSON();
+      requests.push(message);
+      let results = [];
+      if (message.type === 'list_directory') {
+        const listing = entries[message.dirPath.toLowerCase()];
+        expect(listing).toBeDefined();
+        results = [{ ...message, type: 'directory_listing', dirPath: message.dirPath.toUpperCase(), entries: listing }];
+      } else if (message.type === 'read_file') {
+        results = [{ ...message, type: 'file_content', requestedFilePath: message.filePath,
+          content: 'Windows case identity content.\n', binary: false }];
+      } else expect(['restore_file_tabs', 'update_file_tabs']).toContain(message.type);
+      await route.fulfill({ json: results });
+    });
+    await page.goto(harness.url);
+    await openFiles(page);
+    await expect(treeEntry(page, deep)).toBeVisible();
+    await page.evaluate(path => window.harness.openFile(path), target);
+    await expectLocated(page, located);
+    await expect(page.locator('.CodeMirror')).toContainText('Windows case identity content.');
+    expect(requests.filter(message => message.type === 'list_directory').map(message => message.dirPath))
+      .toEqual([root, deep, nested]);
+    await crumb(page, `${root.toLowerCase()}/deep`).click();
+    await expectLocated(page, deep);
+    await expect(treeEntry(page, nested)).toHaveClass(/tree-expanded/);
+    await crumb(page, root.toLowerCase()).click();
+    await expect(page.locator('.file-tree-header')).toHaveClass(/tree-navigation-current/);
+    await treeEntry(page, deep).click();
+    await expect(treeEntry(page, located)).toHaveCount(0);
+    await crumb(page, target).click();
+    await expectLocated(page, located);
+    await expect(treeEntry(page, deep)).toHaveClass(/tree-expanded/);
+    await expect(page.locator('.file-ops-toolbar')).toHaveCount(0);
+    await page.evaluate(path => window.harness.openFile(path), `${root.toUpperCase()}/OTHER.TXT`);
+    await expectLocated(page, `${root}/Other.txt`);
+    await page.getByRole('tab', { name: 'file.txt', exact: true }).click();
+    await expectLocated(page, located);
+    expect(requests.filter(message => message.type === 'list_directory')).toHaveLength(3);
+    expect(requests.every(message => message.workDir === root)).toBe(true);
+    expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
+  });
+}

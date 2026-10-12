@@ -21,6 +21,11 @@ export function normalizeBrowserPath(path, workDir = '') {
   return root + parts.join('/');
 }
 
+/** Identity for normalized browser paths only; never use this key for IO or display. */
+export function browserPathKey(path) {
+  return /^[a-z]:\//i.test(path) || path.startsWith('//') ? path.toLowerCase() : path;
+}
+
 export function isPathWithinDirectory(path, directory) {
   if (!path || !directory) return false;
   const windows = /^[a-z]:\//i.test(directory) || directory.startsWith('//');
