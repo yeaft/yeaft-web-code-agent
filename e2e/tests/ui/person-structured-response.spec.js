@@ -29,7 +29,8 @@ test('Person publishes shared progress and final structures, persists and replay
     else if (calls === 3) proposal.next = next({ id: 'PresentResponse', args: {
       title: 'Shared structured answer', summary: 'The smaller shared implementation is recommended.', phase: 'final',
       blocks: [{ type: 'cards', items: [{ title: 'Reuse', label: 'Recommended', text: 'Keep one shared renderer.' }] },
-        { type: 'chart', style: 'bar', labels: ['A', 'B'], series: [{ label: 'Fixture checks', values: [2, 3] }] }],
+        { type: 'chart', style: 'bar', labels: ['A', 'B'], series: [{ label: 'Fixture checks', values: [2, 3] }] },
+        { type: 'link', url: 'https://example.test/person-source', text: 'Source report' }],
     } });
     else proposal.reply = 'The smaller shared implementation is recommended.';
     yield { type: 'text_delta', text: JSON.stringify(proposal) };
@@ -50,6 +51,7 @@ test('Person publishes shared progress and final structures, persists and replay
     await expect(page.locator('#person-input')).toBeEnabled();
   };
   try {
+    await page.context().route('https://example.test/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Person source fixture</h1>' }));
     await open();
     await page.locator('#person-input').fill('Show the verified results as rich structures.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -60,6 +62,14 @@ test('Person publishes shared progress and final structures, persists and replay
     await expect(page.locator('.person-messages .response-chart svg')).toBeVisible();
     expect(await page.locator('.person-messages').innerText()).toContain('Partial verified results');
     expect((await page.locator('.person-messages').innerText()).match(/The smaller shared implementation is recommended\./g)).toHaveLength(1);
+    await page.locator('a.response-link').click();
+    await expect(page.locator('.person-side-panel .browser-frame')).toHaveAttribute('src', 'https://example.test/person-source');
+    expect(page.context().pages()).toHaveLength(1);
+    await page.locator('.person-output-reader-close').click();
+    const popupPromise = page.waitForEvent('popup');
+    await page.locator('.response-link-row [data-response-external]').click();
+    const popup = await popupPromise; await popup.waitForLoadState();
+    expect(popup.url()).toBe('https://example.test/person-source'); await popup.close();
     await page.screenshot({ path: info.outputPath('person-rich-live.png'), fullPage: true });
     await bridge.close(); bridge = makeBridge();
     await open();

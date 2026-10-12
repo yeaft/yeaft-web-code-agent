@@ -1,10 +1,11 @@
 import NavigationIcon from './NavigationIcon.js';
+import BrowserPanel from './BrowserPanel.js';
 import { safeOutputUrl, staticOutputHtml } from '../stores/helpers/person-outputs.js';
 import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
 
 export default {
   name: 'PersonOutputs',
-  components: { NavigationIcon },
+  components: { NavigationIcon, BrowserPanel },
   props: {
     state: { type: Object, required: true },
     supported: { type: Boolean, default: false },
@@ -79,8 +80,9 @@ export default {
       tabButtons.value.find(button => button.dataset.outputId === tabs[next].item.id)?.focus();
     }
     function changeZoom(delta) { fit.value = false; zoom.value = Math.max(.25, Math.min(4, zoom.value + delta)); }
-    expose({ focusClose: () => closeButton.value?.focus() });
-    return { zoom, fit, library, libraryOpen, previewPane, closeButton, libraryButton, tabButtons, preview, externalUrl, html, markdown, downloadName, errorKey, changeZoom, saveScroll, select, closeTab, toggleLibrary, tabKeydown };
+    function focusClose() { closeButton.value?.focus(); }
+    expose({ focusClose });
+    return { zoom, fit, library, libraryOpen, previewPane, closeButton, libraryButton, tabButtons, preview, externalUrl, html, markdown, downloadName, errorKey, changeZoom, saveScroll, select, closeTab, toggleLibrary, tabKeydown, focusClose };
   },
   template: `
     <section class="person-outputs person-journal" :aria-label="$t('person.outputs')">
@@ -141,7 +143,9 @@ export default {
             </template>
             <template v-else-if="preview.kind === 'link' && externalUrl">
               <p class="person-output-safety-note">{{ $t('person.outputsFrameNotice') }}</p>
-              <iframe :src="externalUrl" sandbox="" tabindex="-1" referrerpolicy="no-referrer" :title="state.selected.title"></iframe>
+              <p class="person-output-safety-note">{{ $t('person.outputsFrameKeyboardNotice') }}</p>
+              <BrowserPanel :key="state.selected.id" :route-key="state.selected.id" :initial-url="externalUrl" />
+              <button type="button" class="btn-ghost person-output-browser-exit" @click="focusClose">{{ $t('person.outputsBackToReader') }}</button>
             </template>
             <p v-else-if="preview.kind === 'pdf'" class="person-empty" role="status">{{ $t('person.outputsPdfDownload') }}</p>
             <p v-else class="person-empty">{{ $t('person.outputsBinary') }}</p>

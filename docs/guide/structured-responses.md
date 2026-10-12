@@ -6,7 +6,28 @@ Native Yeaft Sessions and digital Persons can optionally use `PresentResponse` t
 
 Both paths use one versioned content contract and one display component. Session transcript identity and Person episode storage keep their existing ownership and lifecycle. Existing plain-text messages are unchanged; no transcript migration is required.
 
-The client controls layout and drawing. Model-generated HTML, CSS, JavaScript, and arbitrary SVG are not accepted. Charts need real data; rendering does not verify its truth. Maps are explicitly labelled **coordinate sketches**, not navigation maps, and fetch no map tiles. Images are external HTTP(S) references that the reader must explicitly load; links and images cannot contain URL credentials. The Agent and Server do not fetch those resources. Existing local artifact delivery remains separate; arbitrary local paths are not accepted by this tool.
+The client controls layout and drawing. Model-generated HTML, CSS, JavaScript, and arbitrary SVG are not accepted. Charts need real data; rendering does not verify its truth. Maps are explicitly labelled **coordinate sketches**, not navigation maps, and fetch no map tiles. Images are external HTTP(S) references that load automatically without a referrer, with manual retry on failure; links and images cannot contain URL credentials. The Agent and Server do not fetch those resources. Existing local artifact delivery remains separate; arbitrary local paths are not accepted by this tool.
+
+## One tool, ten block types
+
+A single `PresentResponse` call can combine multiple `blocks`. Separate rendering tools are not needed.
+
+| Type | Display | Limit / boundary |
+| --- | --- | --- |
+| `markdown` | Headings, prose, lists, code and links | No executable HTML or inline image loading |
+| `cards` | Grouped options or items | 8 cards |
+| `metrics` | Key values and details | 8 metrics |
+| `table` | Comparisons and data | 8 columns, 50 rows |
+| `chart` | Bar / line chart with accessible data table | 4 series, 40 labels |
+| `timeline` | Ordered events or steps | 16 items |
+| `diagram` | Nodes and relationships | 12 nodes, 24 edges |
+| `image` | Automatic image preview, retry and expansion | Existing images, not image generation |
+| `link` | Sources, reports and artifact references | Owning in-app browser by default |
+| `map` | Coordinate sketch and place list | 20 points; no navigation or tiles |
+
+Ordinary clicks open the owning Workbench browser in Sessions and Work Center. Persons reuse the same browser component in their own output sidebar, never a different Session route. Choose the adjacent `↗`, the browser's **Open in new tab** action, or a native modifier/middle click to open externally. An unavailable in-app browser shows a notice rather than silently opening a tab. Sites may refuse embedding; this does not weaken iframe isolation or introduce a remote proxy.
+
+In the compact Person reader, Tab / Shift+Tab can enter and leave embedded page controls. Escape inside a cross-origin page cannot reach the reader; use **Return to reader controls** or **Close reader** instead.
 
 ## In the loop
 

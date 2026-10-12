@@ -27,6 +27,8 @@ const blocks = [
 let wrapper;
 const render = presentation => (wrapper = mount(ResponsePresentation, { props: { presentation }, global: { mocks: { $t: key => en[key] || key } } }));
 beforeAll(() => {
+  window.happyDOM.settings.navigation.disableChildPageNavigation = true;
+  window.happyDOM.settings.navigation.disableMainFrameNavigation = true;
   const context = {};
   runInNewContext(readFileSync(`${process.cwd()}/web/vendor/marked.min.js`, 'utf8'), context);
   globalThis.marked = context.marked;
@@ -47,7 +49,7 @@ describe('response presentation contract and security', () => {
     expect(wrapper.find('.response-table-scroll').attributes('tabindex')).toBe('0');
     expect(wrapper.findAll('th').every(th => !!th.attributes('scope'))).toBe(true);
     expect(wrapper.find('a.response-link').attributes()).toMatchObject({ target: '_blank', rel: 'noopener noreferrer', referrerpolicy: 'no-referrer' });
-    expect(wrapper.find('img').exists()).toBe(false);
+    expect(wrapper.find('img').exists()).toBe(true);
   });
 
   it('fails closed for versions, oversized data, malformed shapes and unknown blocks while preserving summary', () => {
@@ -102,7 +104,7 @@ describe('response presentation contract and security', () => {
   it('renders markdown through safe tokens, never mounts raw HTML, image, SVG or event handlers', () => {
     const source = '**Hello** [bad](javascript:alert(1)) [credentials](https://user:pass@example.com) [ok](https://example.com) ![tracking](https://track.example.com/x)\n\n<img src="x" onerror="alert(1)"><svg onload="alert(1)"><script>alert(1)</script></svg>\n\n| Name | Value |\n| --- | --- |\n| Safe | 1 |';
     render(canonical([{ type: 'markdown', text: source }]));
-    expect(wrapper.findAll('a')).toHaveLength(1);
+    expect(wrapper.findAll('a')).toHaveLength(2);
     expect(wrapper.find('a').attributes('href')).toBe('https://example.com/');
     expect(wrapper.find('a').attributes('rel')).toBe('noopener noreferrer');
     expect(wrapper.findAll('img, svg, script, [onerror], [onload]')).toHaveLength(0);
@@ -111,23 +113,84 @@ describe('response presentation contract and security', () => {
     expect(responseMarkdown('```mermaid\ngraph TD; A-->B\n```')[0].tag).toBe('pre');
   });
 
-  it('requires image consent, handles errors/retries/preview, and clears consent on URL replacement', async () => {
-    const input = canonical([blocks[9]]);
-    render(input);
-    expect(wrapper.find('img').exists()).toBe(false);
-    await wrapper.find('.response-image button').trigger('click');
+  it('automatically loads images, handles errors/retries/preview, and ignores detached image events', async () => {
+    render(canonical([blocks[9]]));
+    expect(wrapper.find('img').attributes('src')).toBe(blocks[9].url);
     expect(wrapper.find('img').attributes('referrerpolicy')).toBe('no-referrer');
-    expect(wrapper.find('.response-image button').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('.response-image button').exists()).toBe(false);
     await wrapper.find('img').trigger('error');
     expect(wrapper.find('img').exists()).toBe(false);
     expect(wrapper.find('.response-image-placeholder').text()).toContain(en['richResponse.imageError']);
     await wrapper.find('.response-image button').trigger('click');
-    await wrapper.find('img').trigger('load');
+    const oldImage = wrapper.find('img');
+    await oldImage.trigger('load');
     await wrapper.find('.response-image button').trigger('click');
     expect(wrapper.find('.response-image').classes()).toContain('is-expanded');
     await wrapper.setProps({ presentation: canonical([{ ...blocks[9], url: 'https://other.example.test/new.png' }]) });
-    expect(wrapper.find('img').exists()).toBe(false);
-    expect(wrapper.find('.response-image button').text()).toBe(en['richResponse.loadImage']);
+    expect(wrapper.find('img').attributes('src')).toBe('https://other.example.test/new.png');
+    expect(wrapper.find('.response-image').classes()).not.toContain('is-expanded');
+    await oldImage.trigger('error');
+    expect(wrapper.find('img').exists()).toBe(true);
+    expect(wrapper.find('.response-image button').exists()).toBe(false);
+    await wrapper.find('img').trigger('load');
+    expect(wrapper.find('img').isVisible()).toBe(true);
+  });
+
+  it('routes markdown and delivery links to the owning browser, leaving explicit new tabs and modifiers native', async () => {
+    const openLink = vi.fn(() => true);
+    render(canonical([{ type: 'markdown', text: '[Source](https://example.test/source)' }, blocks[10]]));
+    await wrapper.setProps({ openLink });
+    for (const selector of ['.response-markdown a:not([data-response-external])', 'a.response-link']) {
+      const event = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+      wrapper.get(selector).element.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    }
+    expect(openLink.mock.calls).toEqual([['https://example.test/source'], [blocks[10].url]]);
+    for (const selector of ['.response-markdown a[data-response-external]', '.response-link-row a[data-response-external]']) {
+      const event = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+      wrapper.get(selector).element.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    for (const options of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+      const event = new MouseEvent('click', { bubbles: true, cancelable: true, ...options });
+      wrapper.get('a.response-link').element.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(openLink).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not silently open new tabs when the owning browser is missing or rejects navigation', async () => {
+    render(canonical([blocks[10]]));
+    for (const openLink of [null, vi.fn(() => false)]) {
+      await wrapper.setProps({ openLink });
+      const event = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+      wrapper.get('a.response-link').element.dispatchEvent(event);
+      await wrapper.vm.$nextTick();
+      expect(event.defaultPrevented).toBe(true);
+      expect(wrapper.find('.response-status').text()).toBe(en['richResponse.browserUnavailable']);
+    }
+  });
+
+  it('consumes ordinary control-plane links without opening the browser or a new tab', async () => {
+    const openLink = vi.fn(() => true);
+    render(canonical([{ type: 'link', url: new URL('/source', window.location.origin).href, text: 'Local source' }]));
+    await wrapper.setProps({ openLink });
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    wrapper.get('a.response-link').element.dispatchEvent(event);
+    await wrapper.vm.$nextTick();
+    expect(event.defaultPrevented).toBe(true);
+    expect(openLink).not.toHaveBeenCalled();
+    expect(wrapper.find('.response-status').text()).toBe(en['richResponse.browserUnavailable']);
+  });
+
+  it('uses an injected WorkItem browser instead of consulting a hidden Session', () => {
+    const opener = vi.fn(() => true);
+    wrapper = mount(ResponsePresentation, { props: { presentation: canonical([blocks[10]]) },
+      global: { provide: { 'workbench-browser-opener': opener }, mocks: { $t: key => en[key] || key } } });
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    wrapper.get('a.response-link').element.dispatchEvent(event);
+    expect(opener).toHaveBeenCalledWith(blocks[10].url);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it('copies only the canonical summary and provides a selected-text fallback when clipboard fails', async () => {

@@ -115,7 +115,7 @@ export default {
               <div class="turn-progress-list">
                 <div v-for="segment in block.items" :key="segment.key"
                      class="turn-response-segment turn-response-progress">
-                  <ResponsePresentation v-if="segment.presentation" :presentation="segment.presentation" :fallback-text="segment.content" />
+                  <ResponsePresentation v-if="segment.presentation" :presentation="segment.presentation" :fallback-text="segment.content" :open-link="openBrowser" />
                   <div v-else class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
                   <span v-if="segment.isStreaming" class="cursor-blink"></span>
                 </div>
@@ -136,7 +136,7 @@ export default {
             </div>
             <div v-else v-for="segment in block.items" :key="segment.key"
                  class="turn-response-segment turn-response-result">
-              <ResponsePresentation v-if="segment.presentation" :presentation="segment.presentation" :fallback-text="segment.content" />
+              <ResponsePresentation v-if="segment.presentation" :presentation="segment.presentation" :fallback-text="segment.content" :open-link="openBrowser" />
               <div v-else class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
               <span v-if="segment.isStreaming" class="cursor-blink"></span>
             </div>
@@ -914,6 +914,7 @@ export default {
       responseImageKey,
       renderSegment,
       onMarkdownClick,
+      openBrowser,
       copyContent,
       copyFullResponse,
       exportMarkdown,

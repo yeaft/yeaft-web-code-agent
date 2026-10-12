@@ -75,6 +75,10 @@
 .response-image.is-expanded img { max-height: min(80vh, 1000px); }
 .response-image figcaption { color: var(--text-secondary); font-size: 12px; padding-top: var(--response-space-sm); }
 .response-image > button { margin-top: var(--response-space-sm); }
+.response-link-row { display: flex; align-items: flex-start; gap: var(--response-space-sm); }
+.response-link-row .response-link { flex: 1; min-width: 0; }
+.response-external { color: var(--link-color); text-decoration: none; margin-left: 4px; }
+.response-link-row .response-external { flex-shrink: 0; }
 .response-link { display: flex; flex-direction: column; width: fit-content; max-width: 100%; color: var(--link-color); text-decoration: none; gap: var(--response-space-sm); }
 .response-link:hover strong { text-decoration: underline; }
 .response-link > span:not(.response-sr-only) { color: var(--text-secondary); font-size: 12px; }

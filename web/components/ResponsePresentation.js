@@ -1,3 +1,4 @@
+import { normalizeBrowserAddress } from '../utils/browser-address.js';
 import { projectPresentation, chartGeometry, diagramGeometry, mapGeometry, responseMarkdown } from '../utils/response-presentation.js';
 
 // Tags/attributes come exclusively from our token adapter, never from model-provided HTML.
@@ -10,42 +11,51 @@ const ResponseMarkdownNode = {
     :tabindex="node.className === 'response-table-scroll' ? 0 : undefined">
     <template v-if="node.children"><ResponseMarkdownNode v-for="(child, i) in node.children" :key="i" :node="child" /></template>
     <template v-else>{{ node.text }}</template>
-  </component>`,
+  </component><a v-if="node.href" class="response-external" data-response-external :href="node.href"
+    target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
+    :aria-label="$t('richResponse.newTab') + ': ' + node.href" :title="$t('richResponse.newTab')">↗</a>`,
 };
 
 const ResponseImage = {
   name: 'ResponseImage',
   props: ['block'],
-  data: () => ({ state: 'idle', expanded: false }),
-  watch: { 'block.url'() { this.state = 'idle'; this.expanded = false; } },
+  data: () => ({ state: 'loading', expanded: false, revision: 0 }),
+  watch: { 'block.url'() { this.retry(); } },
   computed: { host() { return new URL(this.block.url).host; } },
+  methods: {
+    retry() { this.revision++; this.state = 'loading'; this.expanded = false; },
+    settle(event, state) {
+      // A detached image can finish after URL replacement or retry.
+      if (event.currentTarget?.dataset.imageRevision === String(this.revision)) this.state = state;
+    },
+  },
   template: `<figure class="response-image" :class="{ 'is-expanded': expanded }">
-    <div v-if="state !== 'loaded'" class="response-image-placeholder">
+    <div v-if="state !== 'loaded'" class="response-image-placeholder" :aria-busy="state === 'loading'">
       <strong>{{ block.alt }}</strong><span>{{ host }}</span>
-      <p>{{ $t(state === 'error' ? 'richResponse.imageError' : 'richResponse.imagePrivacy') }}</p>
-      <button type="button" class="btn-secondary" :disabled="state === 'loading'" @click="state = 'loading'">
-        {{ $t(state === 'loading' ? 'richResponse.loading' : state === 'error' ? 'richResponse.retryImage' : 'richResponse.loadImage') }}
-      </button>
+      <p role="status">{{ $t(state === 'error' ? 'richResponse.imageError' : 'richResponse.loading') }}</p>
+      <button v-if="state === 'error'" type="button" class="btn-secondary" @click="retry">{{ $t('richResponse.retryImage') }}</button>
     </div>
-    <img v-if="state === 'loading' || state === 'loaded'" v-show="state === 'loaded'" :src="block.url" :alt="block.alt"
-      referrerpolicy="no-referrer" decoding="async" @load="state = 'loaded'" @error="state = 'error'" />
+    <img v-if="state === 'loading' || state === 'loaded'" :key="revision" :data-image-revision="revision"
+      v-show="state === 'loaded'" :src="block.url" :alt="block.alt"
+      referrerpolicy="no-referrer" decoding="async" @load="settle($event, 'loaded')" @error="settle($event, 'error')" />
     <figcaption v-if="block.caption">{{ block.caption }}</figcaption>
     <button v-if="state === 'loaded'" type="button" class="btn-ghost" :aria-expanded="expanded" @click="expanded = !expanded">
       {{ $t(expanded ? 'richResponse.closePreview' : 'richResponse.previewImage') }}
     </button>
-    <span v-if="state === 'error'" class="response-status" role="status">{{ $t('richResponse.imageError') }}</span>
   </figure>`,
 };
 
 /** Shared display-only v1 renderer. `presentation` is canonical JSON; no store or network ownership.
  * Summary stays selectable and copyable even when the version/blocks are unsupported.
- * External image consent is local to each mounted image and resets when its URL changes.
+ * Images load on mount without a referrer. The host owns in-app browser navigation.
  */
 export default {
   name: 'ResponsePresentation',
   components: { ResponseMarkdownNode, ResponseImage },
-  props: { presentation: { type: Object, default: null }, fallbackText: { type: String, default: '' } },
-  data: () => ({ copyState: '' }),
+  props: { presentation: { type: Object, default: null }, fallbackText: { type: String, default: '' },
+    openLink: { type: Function, default: null } },
+  inject: { browserOpener: { from: 'workbench-browser-opener', default: null } },
+  data: () => ({ copyState: '', linkState: '' }),
   computed: {
     view() {
       const projected = projectPresentation(this.presentation, this.fallbackText);
@@ -55,8 +65,23 @@ export default {
       })) };
     },
   },
-  watch: { presentation() { this.copyState = ''; } },
+  watch: { presentation() { this.copyState = ''; this.linkState = ''; } },
   methods: {
+    openBrowserLink(event) {
+      if (event.defaultPrevented || (event.button != null && event.button !== 0)
+        || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      const anchor = event.target?.closest?.('a[href]');
+      if (!anchor || !event.currentTarget?.contains?.(anchor)
+        || anchor.hasAttribute('data-response-external') || anchor.hasAttribute('download')) return;
+      // All rendered anchors have already passed the HTTP(S) projection. Consume
+      // normal clicks even when the owning browser rejects a control-plane URL.
+      // New tabs require the external action or a native modifier/middle click.
+      event.preventDefault();
+      event.stopPropagation();
+      const url = normalizeBrowserAddress(anchor.getAttribute('href'));
+      const accepted = !!url && (this.openLink || this.browserOpener)?.(url) === true;
+      this.linkState = accepted ? '' : 'richResponse.browserUnavailable';
+    },
     async copySummary() {
       const current = this.presentation;
       try {
@@ -75,7 +100,7 @@ export default {
     number(value) { return new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(value); },
     coordinates(point) { return `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}`; },
   },
-  template: `<article class="response-presentation" :aria-label="view.title || $t('richResponse.response')">
+  template: `<article @click="openBrowserLink" class="response-presentation" :aria-label="view.title || $t('richResponse.response')">
     <header class="response-header">
       <span class="response-phase" :class="{ 'is-progress': view.phase === 'progress' }">{{ $t(view.phase === 'progress' ? 'richResponse.progress' : 'richResponse.response') }}</span>
       <button type="button" class="btn-ghost response-copy" :disabled="!view.summary" @click="copySummary">{{ $t('richResponse.copySummary') }}</button>
@@ -83,6 +108,7 @@ export default {
     <h2 v-if="view.title" class="response-title">{{ view.title }}</h2>
     <p ref="summary" class="response-summary">{{ view.summary || $t('richResponse.empty') }}</p>
     <p v-if="copyState" class="response-status" role="status">{{ $t(copyState) }}</p>
+    <p v-if="linkState" class="response-status" role="status">{{ $t(linkState) }}</p>
     <p v-if="view.invalid" class="response-notice">{{ $t('richResponse.invalid') }}</p>
     <section v-for="(block, index) in view.blocks" :key="index + ':' + block.type" class="response-block" :class="'response-block-' + block.type"
       :aria-label="block.title || $t('richResponse.' + block.type)">
@@ -128,7 +154,13 @@ export default {
         </details>
       </figure>
       <ResponseImage v-else-if="block.type === 'image'" :block="block" />
-      <a v-else-if="block.type === 'link'" class="response-link" :href="block.url" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><strong>{{ block.text }} <span aria-hidden="true">↗</span></strong><span>{{ block.url }}</span><span class="response-sr-only">{{ $t('richResponse.newTab') }}</span></a>
+      <div v-else-if="block.type === 'link'" class="response-link-row">
+        <a class="response-link" :href="block.url" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
+          :title="$t('richResponse.openBrowser')"><strong>{{ block.text }}</strong><span>{{ block.url }}</span></a>
+        <a class="btn-ghost response-external" data-response-external :href="block.url" target="_blank"
+          rel="noopener noreferrer" referrerpolicy="no-referrer" :aria-label="$t('richResponse.newTab') + ': ' + block.text"
+          :title="$t('richResponse.newTab')">↗</a>
+      </div>
       <figure v-else-if="block.type === 'map'" class="response-map">
         <figcaption><strong>{{ $t('richResponse.coordinateSketch') }}</strong><span>{{ $t('richResponse.mapNotice') }}</span></figcaption>
         <svg viewBox="0 0 600 290" role="img" :aria-label="$t('richResponse.coordinateSketch')">

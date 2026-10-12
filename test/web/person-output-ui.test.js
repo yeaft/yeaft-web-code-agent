@@ -234,15 +234,24 @@ describe('Digital Person output surface', () => {
     const tabs = wrapper.findAll('[role="tab"]');
     expect(tabs[0].attributes('tabindex')).toBe('-1');
     expect(tabs[1].attributes('tabindex')).toBe('0');
-    wrapper.get('.person-output-preview').element.focus();
+    wrapper.get('.browser-external').element.focus();
     const forward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
     document.dispatchEvent(forward);
-    expect(forward.defaultPrevented).toBe(true);
+    // Native Tab must enter the sandboxed frame, not wrap at its toolbar.
+    expect(forward.defaultPrevented).toBe(false);
+    expect(wrapper.get('.browser-frame').attributes('tabindex')).not.toBe('-1');
+    const exit = wrapper.get('.person-output-browser-exit');
+    exit.element.focus();
+    const wrap = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    document.dispatchEvent(wrap);
+    expect(wrap.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(wrapper.findAll('.person-output-tab-close')[0].element);
     const backward = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
     document.dispatchEvent(backward);
     expect(backward.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(wrapper.get('.person-output-preview').element);
+    expect(document.activeElement).toBe(exit.element);
+    await exit.trigger('click');
+    expect(document.activeElement).toBe(wrapper.get('.person-output-reader-close').element);
     await wrapper.get('.person-output-tab-close').trigger('click'); await flushPromises();
     expect(wrapper.vm.state.outputs.selected.id).toBe('link:focus');
     expect(document.activeElement).toBe(wrapper.get('[role="tab"]').element);
@@ -260,6 +269,25 @@ describe('Digital Person output surface', () => {
     expect(requests.some(row => row.op === 'output_read')).toBe(false);
     expect(wrapper.get('.person-output-external').attributes('rel')).toBe('noopener noreferrer');
   });
+  it('opens rich conversation and search links in the Person browser, never a hidden Session', async () => {
+    await page();
+    chat.activeSessionRoute = { runtimeProvider: 'yeaft', agentId: 'other-agent', sessionId: 'unrelated' };
+    const dispatch = vi.fn(); window.addEventListener('workbench-open-browser', dispatch);
+    try {
+      const presentation = { version: 1, summary: 'Source', blocks: [{ type: 'link', url: 'https://example.com/source', text: 'Source' }] };
+      const message = { id: 'rich', role: 'assistant', episodeId: 'episode', text: 'Source', presentation, createdAt: 1 };
+      wrapper.vm.state.messages = [message]; await Vue.nextTick();
+      await wrapper.get('a.response-link').trigger('click'); await flushPromises();
+      expect(wrapper.get('.browser-frame').attributes('src')).toBe('https://example.com/source');
+      await wrapper.vm.closePanel();
+      await wrapper.vm.openPanel('search');
+      wrapper.vm.state.search.items = [message]; await Vue.nextTick();
+      await wrapper.get('.person-search-result a.response-link').trigger('click'); await flushPromises();
+      expect(wrapper.vm.panel).toBe('outputs');
+      expect(wrapper.get('.browser-frame').attributes('src')).toBe('https://example.com/source');
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { window.removeEventListener('workbench-open-browser', dispatch); }
+  });
   it('uses empty sandbox with static srcdoc and opaque HTML download URL', () => {
     preview('html', 'text/html');
     const frame = wrapper.get('iframe');
@@ -268,9 +296,10 @@ describe('Digital Person output surface', () => {
     expect(frame.attributes('srcdoc')).not.toContain('<script>');
     expect(wrapper.get('[download]').attributes('href')).toBe('blob:opaque');
   });
-  it('embeds links with no script/same-origin privileges, and retains dedicated external open', () => {
+  it('reuses the Workbench browser with opaque origin, no popups/top navigation, and retains dedicated external open', () => {
     preview('link', 'text/html');
-    expect(wrapper.get('iframe').attributes('sandbox')).toBe('');
+    expect(wrapper.get('iframe').attributes('sandbox')).toBe('allow-scripts allow-forms');
+    expect(wrapper.find('.browser-panel').exists()).toBe(true);
     expect(wrapper.get('iframe').attributes('referrerpolicy')).toBe('no-referrer');
     expect(wrapper.get('.person-output-external').attributes('target')).toBe('_blank');
     expect(wrapper.text()).toContain(en['person.outputsFrameNotice']);

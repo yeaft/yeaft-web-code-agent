@@ -24,6 +24,8 @@ test('native Session rich delivery stays nonterminal, deduplicates and replays w
   const input = { title: 'Verified delivery', summary: 'Reuse the shared renderer.', phase: 'final', blocks: [
     { type: 'cards', items: [{ title: 'Reuse', label: 'Recommended', text: 'One renderer for both runtimes.' }] },
     { type: 'chart', style: 'bar', labels: ['A', 'B'], series: [{ label: 'Fixture checks', values: [2, 3] }] },
+    { type: 'link', url: 'https://example.test/report', text: 'Source report' },
+    { type: 'markdown', text: '[Related source](https://example.test/related)' },
   ] };
   let calls = 0, resume;
   const boundary = new Promise(resolve => { resume = resolve; });
@@ -58,6 +60,7 @@ test('native Session rich delivery stays nonterminal, deduplicates and replays w
   };
   let running;
   try {
+    await page.context().route('https://example.test/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Embedded evidence fixture</h1>' }));
     await open();
     const hctx = { sessionId: session.id, vpId: 'rich-vp', turnId: 'rich-turn', threadId: 'main', resetQueryTimer() {},
       assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [], thinkingBlocksAccum: [] };
@@ -73,6 +76,16 @@ test('native Session rich delivery stays nonterminal, deduplicates and replays w
     await expect(page.locator('.response-cards')).toContainText('One renderer for both runtimes.');
     await expect(page.locator('.response-chart svg')).toBeVisible();
     expect(store.loadAllBySession(session.id).find(row => row.presentation).responseKind).toBe('progress');
+    await page.locator('a.response-link').click();
+    await expect(page.locator('.workbench-panel .browser-frame')).toHaveAttribute('src', 'https://example.test/report');
+    expect(page.context().pages()).toHaveLength(1);
+    await page.locator('.response-markdown a:not([data-response-external])').click();
+    await expect(page.locator('.workbench-panel .browser-frame')).toHaveAttribute('src', 'https://example.test/related');
+    await page.locator('.workbench-panel-close').click();
+    const popupPromise = page.waitForEvent('popup');
+    await page.locator('.response-link-row [data-response-external]').click();
+    const popup = await popupPromise; await popup.waitForLoadState();
+    expect(popup.url()).toBe('https://example.test/report'); await popup.close();
     resume(); await running;
     expect(calls).toBe(2);
     expect(store.loadAllBySession(session.id).filter(row => row.presentation)).toHaveLength(1);
