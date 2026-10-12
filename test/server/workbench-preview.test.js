@@ -1,11 +1,17 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import agentCtx from '../../agent/context.js';
+import { handleReadFile } from '../../agent/workbench/file-ops.js';
 
 const state = vi.hoisted(() => ({
   previewFiles: new Map(), pendingFiles: new Map(), agents: new Map(), webClients: new Map(),
   user: { id: 'user-1', role: 'pro', deletion_state: 'active' },
-  accessError: null, generation: 'generation-1', outbound: [], supportsCorrelation: true,
+  accessError: null, generation: 'generation-1', outbound: [], supportsCorrelation: true, workDir: '/workspace',
 }));
 vi.mock('../../server/context.js', () => state);
 vi.mock('../../server/config.js', () => ({ CONFIG: { jwtSecret: 'test-preview-secret', skipAuth: false } }));
@@ -20,7 +26,7 @@ vi.mock('../../server/ws-utils.js', () => ({
 }));
 vi.mock('../../server/workbench-route.js', () => ({
   currentWorkbenchWorkspaceGeneration: () => state.generation,
-  resolveWorkbenchRequest: () => ({ routeKey: 'route-1', conversationId: '_workbench:route-1', workDir: '/workspace' }),
+  resolveWorkbenchRequest: () => ({ routeKey: 'route-1', conversationId: '_workbench:route-1', workDir: state.workDir }),
   workbenchRouteKeyFromConversationId: id => id === '_workbench:route-1' ? 'route-1' : '',
   agentSupportsWorkbenchRequestCorrelation: () => state.supportsCorrelation,
   agentSupportsWorkbenchTerminalCleanupFence: () => true,
@@ -43,6 +49,27 @@ const filePath = '/workspace/picture.png';
 const bytes = Buffer.from('original preview bytes');
 let token;
 const url = () => `/api/preview/file-1?token=${encodeURIComponent(token)}`;
+
+// Encode the actual pre-purpose payload; the current mint function would add
+// false and silently turn this into a new explicit-read capability.
+function legacyToken(payload, prefix = 'wb1.') {
+  const key = createHash('sha256').update('workbench-preview:test-preview-secret').digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload)), cipher.final()]);
+  return prefix + Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url');
+}
+
+async function replyFromAgent() {
+  const previousSend = agentCtx.sendToServer;
+  agentCtx.sendToServer = msg => handleAgentFileTerminal('agent-1', {}, msg);
+  try {
+    await handleReadFile(state.outbound.at(-1));
+  } finally {
+    agentCtx.sendToServer = previousSend;
+  }
+}
+
 function reply(overrides = {}) {
   const msg = state.outbound.at(-1);
   return handleAgentFileTerminal('agent-1', {}, {
@@ -59,6 +86,7 @@ beforeEach(() => {
   state.accessError = null;
   state.supportsCorrelation = true;
   state.generation = 'generation-1';
+  state.workDir = '/workspace';
   state.agents.set('agent-1', {
     capabilities: ['workbench_session_routes', 'workbench_request_correlation', 'workbench_video_stream'],
   });
@@ -117,6 +145,18 @@ describe('streaming Workbench video URLs', () => {
     expect(state.outbound).toHaveLength(0);
   });
 
+  it('retains the workspace boundary for old video capabilities', async () => {
+    const videoToken = legacyToken({
+      ...source, fileId: 'video-1', filePath: videoPath,
+      size: videoBytes.length, mtimeMs: 1234, mimeType: 'video/mp4',
+    }, 'wbv1.');
+    const result = request(app).get(videoUrl(videoToken)).set('Range', 'bytes=0-9').then(res => res);
+    await vi.waitFor(() => expect(state.outbound).toHaveLength(1));
+    expect(state.outbound[0]).toMatchObject({ type: 'video_chunk', workspaceBoundPreview: true });
+    await replyVideoChunk();
+    expect((await result).status).toBe(206);
+  });
+
   it('serves HEAD metadata without reading video bytes from the Agent', async () => {
     const videoToken = videoSource();
     const response = await request(app).head(videoUrl(videoToken)).expect(200);
@@ -136,6 +176,7 @@ describe('streaming Workbench video URLs', () => {
       type: 'video_chunk', filePath: videoPath, start: 3, end: 1048578,
       expectedSize: videoBytes.length, expectedMtimeMs: 1234,
     });
+    expect(state.outbound[0].workspaceBoundPreview).toBeUndefined();
     await replyVideoChunk();
     await vi.waitFor(() => expect(state.outbound).toHaveLength(2));
     expect(state.outbound[1]).toMatchObject({ type: 'video_chunk', start: 1048579, end: 1048581 });
@@ -175,6 +216,89 @@ describe('streaming Workbench video URLs', () => {
 });
 
 describe('stable Workbench preview URLs', () => {
+  it('rejects a real legacy token after the cwd symlink changes canonical workspace', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-legacy-preview-'));
+    const projectA = join(root, 'A');
+    const projectB = join(root, 'B');
+    const cwd = join(root, 'current');
+    mkdirSync(projectA);
+    mkdirSync(projectB);
+    const image = join(projectA, 'image.png');
+    writeFileSync(image, bytes);
+    symlinkSync(projectA, cwd, 'junction');
+    state.workDir = cwd;
+    token = legacyToken({ ...source, fileId: 'file-1', filePath: image });
+    // The route generation uses the unchanged cwd string, not its realpath.
+    unlinkSync(cwd);
+    symlinkSync(projectB, cwd, 'junction');
+    try {
+      const result = readWorkbenchPreview('file-1', token);
+      const rejected = expect(result).rejects.toMatchObject({ status: 502, message: 'File is outside the active workspace.' });
+      expect(state.outbound.at(-1)).toMatchObject({ workspaceBoundPreview: true, workDir: cwd });
+      expect(state.outbound.at(-1).responseImagePreview).toBeUndefined();
+      await replyFromAgent();
+      await rejected;
+      expect(state.previewFiles.size).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refills legacy workspace PDFs without imposing the image-only check', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-legacy-pdf-'));
+    const pdf = join(root, 'document.pdf');
+    writeFileSync(pdf, bytes);
+    state.workDir = root;
+    token = legacyToken({ ...source, fileId: 'file-1', filePath: pdf });
+    try {
+      const result = readWorkbenchPreview('file-1', token);
+      expect(state.outbound.at(-1)).toMatchObject({ workspaceBoundPreview: true, filePath: pdf });
+      expect(state.outbound.at(-1).responseImagePreview).toBeUndefined();
+      await replyFromAgent();
+      expect(await result).toMatchObject({ buffer: bytes, mimeType: 'application/pdf' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refills new explicit external images through the real Agent handler', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-explicit-preview-'));
+    mkdirSync(join(root, 'workspace'));
+    const image = join(root, 'external.png');
+    writeFileSync(image, bytes);
+    state.workDir = join(root, 'workspace');
+    token = createWorkbenchPreview('file-1', source, image);
+    try {
+      const result = readWorkbenchPreview('file-1', token);
+      expect(state.outbound.at(-1).workspaceBoundPreview).toBeUndefined();
+      expect(state.outbound.at(-1).responseImagePreview).toBeUndefined();
+      await replyFromAgent();
+      expect(await result).toMatchObject({ buffer: bytes, mimeType: 'image/png' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves automatic response image confinement when refilling an evicted preview', async () => {
+    token = createWorkbenchPreview('file-1', { ...source, responseImagePreview: true }, filePath);
+    const result = readWorkbenchPreview('file-1', token);
+    expect(state.outbound.at(-1)).toMatchObject({ type: 'read_file', responseImagePreview: true, filePath, workDir: '/workspace' });
+    const rejected = expect(result).rejects.toMatchObject({ status: 502, message: 'Response image is outside the active workspace.' });
+    await reply({ binary: false, content: '', error: 'Response image is outside the active workspace.', errorCode: 'FILE_OUTSIDE_WORKSPACE' });
+    await rejected;
+    expect(state.previewFiles.size).toBe(0);
+  });
+
+  it('refills a manually selected external preview without treating it as an automatic image', async () => {
+    const externalPath = '/other-project/picture.png';
+    token = createWorkbenchPreview('file-1', source, externalPath);
+    const result = readWorkbenchPreview('file-1', token);
+    expect(state.outbound.at(-1)).toMatchObject({ type: 'read_file', filePath: externalPath, workDir: '/workspace' });
+    expect(state.outbound.at(-1).responseImagePreview).toBeUndefined();
+    await reply({ filePath: externalPath });
+    expect((await result).buffer).toEqual(bytes);
+  });
+
   it('serves the SAME HTTP URL after TTL eviction without a browser Session/socket', async () => {
     cachePreviewFile('file-1', { buffer: bytes, token, mimeType: 'image/png', filename: 'picture.png' });
     const first = await request(app).get(url()).expect(200);

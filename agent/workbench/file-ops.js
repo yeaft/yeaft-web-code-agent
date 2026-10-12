@@ -37,14 +37,22 @@ async function validateResponseImagePath(filePath, workDir) {
   return canonicalFile;
 }
 
-async function canonicalVideoFile(filePath, workDir) {
-  const canonicalRoot = await realpath(resolve(workDir));
-  const resolved = await realpath(resolveAndValidatePath(filePath, canonicalRoot));
-  const relativePath = relative(canonicalRoot, resolved);
-  const outside = relativePath === '..'
-    || relativePath.startsWith(`..${platform() === 'win32' ? '\\' : '/'}`)
-    || isAbsolute(relativePath);
-  if (outside) throw new Error('Video is outside the active workspace.');
+/**
+ * Explicit Files actions operate on Agent-local paths, not just the Session cwd.
+ * WorkItem routes remain confined to their Agent-resolved workspace; automatic
+ * response image reads use the separate canonicalWorkspaceReadPath check above.
+ */
+async function canonicalWorkbenchReadPath(msg, filePath, workDir) {
+  const resolved = await resolveWorkItemPath(msg, filePath, workDir);
+  // Old preview capabilities predate explicit external reads. Preserve their
+  // original workspace boundary on cache refills, without an image-only check.
+  return msg.workspaceBoundPreview === true
+    ? canonicalWorkspaceReadPath(resolved, workDir)
+    : realpath(resolved);
+}
+
+async function canonicalVideoFile(msg, filePath, workDir) {
+  const resolved = await canonicalWorkbenchReadPath(msg, filePath, workDir);
   const mimeType = VIDEO_EXTENSIONS[extname(resolved).toLowerCase()];
   if (!mimeType) throw new Error('Unsupported video format.');
   return { resolved, mimeType };
@@ -53,7 +61,7 @@ async function canonicalVideoFile(filePath, workDir) {
 export async function handleVideoMetadata(msg) {
   const { conversationId, filePath, requestId, _requestUserId, _requestClientId } = msg;
   try {
-    const { resolved, mimeType } = await canonicalVideoFile(filePath, msg.workDir || ctx.CONFIG.workDir);
+    const { resolved, mimeType } = await canonicalVideoFile(msg, filePath, msg.workDir || ctx.conversations.get(conversationId)?.workDir || ctx.CONFIG.workDir);
     const handle = await open(resolved, 'r');
     try {
       const fileStat = await handle.stat();
@@ -79,7 +87,7 @@ export async function handleVideoChunk(msg) {
   const { conversationId, filePath, requestId, _requestUserId, _requestClientId } = msg;
   let handle;
   try {
-    const { resolved, mimeType } = await canonicalVideoFile(filePath, msg.workDir || ctx.CONFIG.workDir);
+    const { resolved, mimeType } = await canonicalVideoFile(msg, filePath, msg.workDir || ctx.conversations.get(conversationId)?.workDir || ctx.CONFIG.workDir);
     handle = await open(resolved, 'r');
     const fileStat = await handle.stat();
     if (!fileStat.isFile() || !Number.isSafeInteger(fileStat.size)) throw new Error('Video path is not a supported file.');
@@ -183,7 +191,7 @@ export async function handleReadFile(msg) {
   try {
     const resolved = msg.responseImagePreview
       ? await validateResponseImagePath(filePath, workDir)
-      : await canonicalWorkspaceReadPath(filePath, workDir);
+      : await canonicalWorkbenchReadPath(msg, filePath, workDir);
     const ext = extname(resolved).toLowerCase();
     if (VIDEO_EXTENSIONS[ext]) {
       const error = new Error('Video files require the Workbench streaming protocol.');

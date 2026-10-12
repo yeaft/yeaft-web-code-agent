@@ -1,3 +1,5 @@
+import { childDirectory, parentDirectory } from '../../utils/folder-picker-path.js';
+
 /**
  * folderPicker — Folder picker dialog composable for FilesTab.
  */
@@ -41,21 +43,9 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, treeR
 
   const folderPickerNavigateUp = () => {
     if (!folderPickerPath.value) return;
-    const isWin = folderPickerPath.value.includes('\\');
-    const sep = isWin ? '\\' : '/';
-    const parts = folderPickerPath.value.replace(/[/\\]$/, '').split(/[/\\]/);
-    parts.pop();
-    if (parts.length === 0) {
-      folderPickerPath.value = '';
-      loadFolderPickerDir('');
-    } else if (isWin && parts.length === 1 && /^[A-Za-z]:$/.test(parts[0])) {
-      folderPickerPath.value = parts[0] + '\\';
-      loadFolderPickerDir(parts[0] + '\\');
-    } else {
-      const parent = parts.join(sep);
-      folderPickerPath.value = parent;
-      loadFolderPickerDir(parent);
-    }
+    const parent = parentDirectory(folderPickerPath.value);
+    folderPickerPath.value = parent;
+    loadFolderPickerDir(parent);
   };
 
   const folderPickerSelectItem = (entry) => {
@@ -63,13 +53,7 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, treeR
   };
 
   const folderPickerEnter = (entry) => {
-    let newPath;
-    if (!folderPickerPath.value) {
-      newPath = entry.name + (entry.name.endsWith('\\') ? '' : '\\');
-    } else {
-      const sep = folderPickerPath.value.includes('\\') || /^[A-Z]:/.test(entry.name) ? '\\' : '/';
-      newPath = folderPickerPath.value.replace(/[/\\]$/, '') + sep + entry.name;
-    }
+    const newPath = childDirectory(folderPickerPath.value, entry.name);
     folderPickerPath.value = newPath;
     loadFolderPickerDir(newPath);
   };
@@ -78,8 +62,7 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, treeR
     let path = folderPickerPath.value;
     if (!path) return;
     if (folderPickerSelected.value) {
-      const sep = path.includes('\\') ? '\\' : '/';
-      path = path.replace(/[/\\]$/, '') + sep + folderPickerSelected.value;
+      path = childDirectory(path, folderPickerSelected.value);
     }
     treePath.value = path;
     folderPickerOpen.value = false;
