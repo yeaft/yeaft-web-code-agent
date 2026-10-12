@@ -9,6 +9,7 @@ import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
 import { createWsHandler } from './files/wsHandler.js';
+import { directoryBreadcrumbs, normalizeBrowserPath } from '../utils/folder-picker-path.js';
 import { openImagePreview } from '../utils/imagePreview.js';
 import {
   createRouteBoundWorkbenchStore,
@@ -31,6 +32,31 @@ export function updateMediaPreviewState(file, event, errorMessage = '') {
 
 // Compatibility export for image-specific callers and tests.
 export const updateImagePreviewState = updateMediaPreviewState;
+
+/** Fence directory replies synchronously, but retry only after the current
+ * socket has completed authentication and the route protocol handshake. */
+export function watchFilesConnection(liveStore, { tree, tabs, runtimeProvider }) {
+  const ready = () => liveStore.connectionState === 'connected'
+    && liveStore.authenticated === true
+    && liveStore.workbenchRouteProtocolSupported === true
+    && (runtimeProvider !== 'work-center' || liveStore.workCenterWorkbenchProtocolSupported === true);
+  Vue.watch(ready, (isReady, wasReady) => {
+    if (!isReady) {
+      tree.interruptDirectoryLoads();
+      if (wasReady) tabs.interruptFileReads();
+    }
+  }, { flush: 'sync', immediate: true });
+  // Observe all handshake fields as a fresh tuple: even a ready → unready →
+  // ready transition in one tick must resume the synchronously fenced loads.
+  // auth_result also resets protocol flags after setting authenticated, so a
+  // synchronous retry here could send before client_hello_ack.
+  Vue.watch(() => [
+    liveStore.connectionState, liveStore.authenticated,
+    liveStore.workbenchRouteProtocolSupported, liveStore.workCenterWorkbenchProtocolSupported,
+  ], () => {
+    if (ready()) tree.resumeDirectoryLoads();
+  }, { flush: 'post' });
+}
 
 export function createFileCloseEventHandlers({ liveStore, props, tabs, isDisposed }) {
   const isCurrentEvent = event => (
@@ -157,7 +183,7 @@ export default {
           </button>
         </div>
         <!-- VS Code 风格 Header: 正常模式 -->
-        <div class="file-tree-header vscode-header" v-else>
+        <div class="file-tree-header vscode-header" :class="{ 'tree-navigation-current': sameTreePath(navigationPath, treeRootPath) }" v-else>
           <div class="vscode-folder-row">
             <span class="vscode-folder-name" :title="treeRootPath || $t('files.notLoaded')">{{ rootFolderName }}</span>
             <div class="vscode-folder-actions" v-if="treeRootPath" @click.stop>
@@ -229,17 +255,19 @@ export default {
           </template>
           <!-- 正常树模式 -->
           <template v-else>
-            <div class="file-tree-loading" v-if="treeNodes[treeRootPath]?.loading">{{ $t('files.loadingTree') }}</div>
+            <div class="file-tree-loading" v-if="getTreeNode(treeRootPath)?.loading">{{ $t('files.loadingTree') }}</div>
             <div class="file-tree-list" v-else>
               <div
                 v-for="entry in flattenedTree"
                 :key="entry.path"
+                :data-tree-path="entry.path"
                 class="tree-item"
                 :class="{
                   'tree-dir': entry.type === 'directory',
                   'tree-file': entry.type === 'file',
-                  'tree-expanded': entry.type === 'directory' && treeNodes[entry.path]?.expanded,
+                  'tree-expanded': entry.type === 'directory' && getTreeNode(entry.path)?.expanded,
                   'tree-selected': selectedPaths.has(entry.path),
+                  'tree-navigation-current': sameTreePath(navigationPath, entry.path),
                   'drag-over': dragState.dropTarget === entry.path && entry.type === 'directory'
                 }"
                 :style="{ paddingLeft: (6 + entry.depth * 10) + 'px' }"
@@ -252,11 +280,11 @@ export default {
                 @drop.prevent="onDrop($event, entry)"
               >
                 <span class="tree-arrow" v-if="entry.type === 'directory'">
-                  <svg v-if="treeNodes[entry.path]?.expanded" viewBox="0 0 16 16" width="10" height="10"><path fill="currentColor" d="M3.5 5.5L8 10l4.5-4.5z"/></svg>
+                  <svg v-if="getTreeNode(entry.path)?.expanded" viewBox="0 0 16 16" width="10" height="10"><path fill="currentColor" d="M3.5 5.5L8 10l4.5-4.5z"/></svg>
                   <svg v-else viewBox="0 0 16 16" width="10" height="10"><path fill="currentColor" d="M5.5 3.5L10 8l-4.5 4.5z"/></svg>
                 </span>
                 <span class="tree-arrow tree-arrow-spacer" v-else></span>
-                <span class="tree-icon" v-html="entry.type === 'directory' ? getFolderIcon(treeNodes[entry.path]?.expanded) : getFileIconHtml(entry.name)"></span>
+                <span class="tree-icon" v-html="entry.type === 'directory' ? getFolderIcon(getTreeNode(entry.path)?.expanded) : getFileIconHtml(entry.name)"></span>
                 <span class="tree-name">{{ entry.name }}</span>
                 <span class="tree-size" v-if="entry.type === 'file' && selectedPaths.size === 0">{{ formatSize(entry.size) }}</span>
                 <span class="tree-file-actions" v-if="selectedPaths.size === 0">
@@ -265,7 +293,7 @@ export default {
                   </button>
                 </span>
               </div>
-              <div class="tree-empty" v-if="flattenedTree.length === 0 && treeRootPath && !treeNodes[treeRootPath]?.loading">
+              <div class="tree-empty" v-if="flattenedTree.length === 0 && treeRootPath && !getTreeNode(treeRootPath)?.loading">
                 {{ $t('files.emptyDir') }}
               </div>
             </div>
@@ -289,12 +317,15 @@ export default {
           </button>
         </div>
         <div class="file-content-header" v-if="activeFile">
-          <div class="file-content-path" :title="activeFile.path">
-            <span class="file-content-folder">{{ activeFileFolder }}</span>
-            <span class="file-content-separator" aria-hidden="true">›</span>
-            <strong>{{ activeFile.name }}</strong>
+          <nav class="file-content-path" :aria-label="$t('files.path')" :title="activeFile.path">
+            <template v-for="(crumb, index) in activeFileBreadcrumbs" :key="crumb.path">
+              <span v-if="index" class="file-content-separator" aria-hidden="true">›</span>
+              <button type="button" class="file-path-crumb" :class="{ 'file-path-name': index === activeFileBreadcrumbs.length - 1 }"
+                :title="crumb.path" :aria-current="index === activeFileBreadcrumbs.length - 1 ? 'location' : undefined"
+                :disabled="!canNavigateTo(crumb.path)" @click="navigateBreadcrumb(crumb.path, index === activeFileBreadcrumbs.length - 1 ? 'file' : 'directory')">{{ crumb.label }}</button>
+            </template>
             <span v-if="activeFile.isDirty" class="file-content-dirty" :title="$t('files.unsaved')">●</span>
-          </div>
+          </nav>
           <div class="file-content-actions">
             <template v-if="isActiveTextPreview">
               <button type="button" class="file-action-btn file-action-text" :class="{ active: textPreviewMode }" :aria-pressed="textPreviewMode" @click="switchToTextPreview">{{ $t('files.preview') }}</button>
@@ -622,7 +653,7 @@ export default {
 
     // --- Shared utilities ---
     const getEffectiveWorkDir = () => store.effectiveWorkDir || '';
-    const normalizePath = (p) => p ? p.replace(/\\/g, '/') : '';
+    const normalizePath = p => normalizeBrowserPath(p, getEffectiveWorkDir());
     const getFileIconHtml = (name) => getFileIconSvg(name);
     const getFolderIcon = (isOpen) => getFolderIconSvg(isOpen);
     const formatSize = (bytes) => {
@@ -768,6 +799,11 @@ export default {
       performFind: find.performFind,
       findBarVisible: find.findBarVisible,
       findQuery: find.findQuery,
+      onReselect: path => {
+        qo.clearSearch();
+        if (isMobile.value) mobileView.value = 'editor';
+        tree?.revealPath(path);
+      },
       t
     });
     tabsRef.value = tabs;
@@ -778,7 +814,14 @@ export default {
       selectedPaths: ops.selectedPaths,
       lastClickedIndex: ops.lastClickedIndex,
       openFileInTab: (...args) => tabs.openFileInTab(...args),
-      clearSelection: ops.clearSelection
+      clearSelection: ops.clearSelection,
+      workspaceLocked: props.workspaceLocked,
+      onReveal: path => {
+        const element = tree.samePath(path, tree.treeRootPath.value)
+          ? rootEl.value?.querySelector('.file-tree-header')
+          : [...(rootEl.value?.querySelectorAll('[data-tree-path]') || [])].find(el => tree.samePath(el.dataset.treePath, path));
+        element?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      },
     });
 
     // 7. Quick Open (depends on tree, tabs)
@@ -786,10 +829,7 @@ export default {
       getEffectiveWorkDir,
       treePath: tree.treePath,
       openFileInTab: (...args) => tabs.openFileInTab(...args),
-      normalizePath,
-      treeRootPath: tree.treeRootPath,
-      treeNodes: tree.treeNodes,
-      loadTreeDirectory: tree.loadTreeDirectory
+      revealPath: tree.revealPath,
     });
 
     // 8. Bind late-bound key bindings (resolves forward ref: editor → qo)
@@ -801,8 +841,7 @@ export default {
     // 9. Folder picker (depends on tree)
     const fp = createFolderPicker(store, {
       getEffectiveWorkDir,
-      treePath: tree.treePath, treeRootPath: tree.treeRootPath,
-      treeNodes: tree.treeNodes, normalizePath, loadTreeDirectory: tree.loadTreeDirectory
+      treePath: tree.treePath, loadRootDirectory: tree.loadRootDirectory
     });
 
     // 10. WebSocket message handler (depends on all)
@@ -853,7 +892,6 @@ export default {
     Vue.watch(() => store.currentConversation, (newConv) => {
       tabs.saveTabsState(previousConversation);
       previousConversation = newConv;
-      tabs.restoreTabsState(newConv);
       const dir = getEffectiveWorkDir();
       const nDir = normalizePath(dir);
       if (dir && nDir !== tree.treeRootPath.value) {
@@ -862,11 +900,11 @@ export default {
         tree.clearTreeNodes();
         tree.loadTreeDirectory(dir);
       }
+      tabs.restoreTabsState(newConv);
+      if (tabs.activeFile.value) tree.revealPath(tabs.activeFile.value.path);
     });
 
-    Vue.watch(() => liveStore.connectionState, (state, previous) => {
-      if (previous === 'connected' && state !== 'connected') tabs.interruptFileReads();
-    }, { flush: 'sync' });
+    watchFilesConnection(liveStore, { tree, tabs, runtimeProvider: props.runtimeProvider });
 
     Vue.watch(() => store.theme, (newTheme) => {
       const file = tabs.activeFile.value;
@@ -944,11 +982,21 @@ export default {
       }
     });
 
-    const activeFileFolder = Vue.computed(() => {
-      const path = tabs.activeFile.value?.path || '';
-      const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-      return separator > 0 ? path.slice(0, separator) : getEffectiveWorkDir();
-    });
+    const activeFileBreadcrumbs = Vue.computed(() => directoryBreadcrumbs(normalizePath(tabs.activeFile.value?.path || '')));
+    const navigateBreadcrumb = (path, type) => {
+      if (!tree.canNavigateTo(path)) return;
+      treeVisible.value = true;
+      mobileView.value = 'tree';
+      qo.clearSearch();
+      tree.revealPath(path, type);
+    };
+    // One active-file projection covers tree, Quick Open, references, restore and
+    // Workbench's tab bar; file replies never choose a navigation target.
+    Vue.watch(() => tabs.activeFile.value?.path, path => {
+      qo.clearSearch();
+      if (path) tree.revealPath(path);
+      else { tree.cancelReveal(); tree.navigationPath.value = ''; }
+    }, { flush: 'sync' });
     const publishFileItems = () => {
       window.dispatchEvent(new CustomEvent('workbench-file-items-changed', {
         detail: {
@@ -1017,6 +1065,7 @@ export default {
 
     Vue.onUnmounted(() => {
       disposed = true;
+      tree.cancelReveal();
       tabs.saveTabsState(store.currentConversation);
       window.removeEventListener('workbench-message', ws.handleWorkbenchMessage);
       window.removeEventListener('workbench-open-file-in-active-view', ws.handleOpenFile);
@@ -1038,7 +1087,7 @@ export default {
       isMobile, mobileView, mobileGoBack,
       fontSize, zoomIn, zoomOut, isTextZoomAvailable, onWheel, openActiveImagePreview,
       treePath: tree.treePath, treeRootPath: tree.treeRootPath,
-      treeNodes: tree.treeNodes, flattenedTree: tree.flattenedTree,
+      getTreeNode: tree.getTreeNode, sameTreePath: tree.samePath, flattenedTree: tree.flattenedTree,
       editingTreePath: tree.editingTreePath, treePathInputRef: tree.treePathInputRef,
       rootFolderName: tree.rootFolderName,
       startTreePathEdit: tree.startTreePathEdit,
@@ -1048,7 +1097,8 @@ export default {
         url, store.activeSessionRoute, store.effectiveWorkDir || '',
       )),
       openFiles: tabs.openFiles, activeFileIndex: tabs.activeFileIndex,
-      activeFile: tabs.activeFile, activeFileFolder,
+      activeFile: tabs.activeFile, activeFileBreadcrumbs, navigateBreadcrumb,
+      navigationPath: tree.navigationPath, canNavigateTo: tree.canNavigateTo,
       fileLoading: tabs.fileLoading, fileSaving: tabs.fileSaving,
       editorContainer, officePreviewContainer: preview.officePreviewContainer,
       mdPreviewRef: preview.mdPreviewRef,

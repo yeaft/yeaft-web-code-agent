@@ -4,6 +4,7 @@ import { confirmDialog } from '../../utils/dialog.js';
  * Manages open files, active tab, switching, closing, saving, tab state persistence.
  */
 import { getFileType, isPreviewableTextFile } from './fileEditor.js';
+import { browserPathKey } from '../../utils/folder-picker-path.js';
 
 const nextFileReadRequestId = () => `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -37,7 +38,7 @@ export function createFileTabs(store, {
   clearFindMarkers, saveCurrentUndoHistory, saveAllUndoHistory,
   cleanupUndoHistory, deleteConversationHistory,
   textPreviewMode, renderOfficeLocal,
-  performFind, findBarVisible, findQuery, t
+  performFind, findBarVisible, findQuery, onReselect = () => {}, t
 }) {
   const fileTabsMap = Vue.reactive({});
   const openFiles = Vue.ref([]);
@@ -153,10 +154,12 @@ export function createFileTabs(store, {
     const agentId = route.agentId || store.currentAgent || null;
     const conversationId = route.conversationId || store.currentConversation || '_explorer';
     const workDir = route.workDir || getEffectiveWorkDir();
-    const existingIndex = openFiles.value.findIndex(f => f.path === nPath
+    // Match Windows aliases without rewriting the buffer's IO path or undo key.
+    const existingIndex = openFiles.value.findIndex(f => browserPathKey(f.path) === browserPathKey(nPath)
       && (!f.agentId || f.agentId === agentId)
       && (!f.conversationId || f.conversationId === conversationId));
     if (existingIndex >= 0) {
+      if (activeFileIndex.value === existingIndex) onReselect(nPath);
       if (activeFileIndex.value !== existingIndex) {
         clearFindMarkers();
         saveCurrentUndoHistory();
@@ -175,7 +178,7 @@ export function createFileTabs(store, {
     }
 
     saveCurrentUndoHistory();
-    const displayName = name || nPath.split(/[/\\]/).pop();
+    const displayName = name || nPath.split('/').pop();
     const fileType = getFileType(displayName);
     openFiles.value.push({
       path: nPath, name: displayName, agentId, conversationId, workDir,
@@ -196,7 +199,7 @@ export function createFileTabs(store, {
   }
 
   const switchToTab = (index) => {
-    if (index === activeFileIndex.value) return;
+    if (index === activeFileIndex.value) { onReselect(activeFile.value?.path); return; }
     clearFindMarkers();
     saveCurrentUndoHistory();
     activeFileIndex.value = index;

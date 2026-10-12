@@ -1619,6 +1619,7 @@ export default {
   'files.newFile': '新建文件',
   'files.newFolder': '新建文件夹',
   'files.openFolder': '打开文件夹',
+  'files.path': '文件路径',
   'files.showTree': '显示文件夹',
   'files.hideTree': '隐藏文件夹',
   'files.deleteSelected': '删除选中',

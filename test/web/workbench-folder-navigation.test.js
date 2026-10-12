@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
+import { createFileTree } from '../../web/components/files/fileTree.js';
 import { createFolderPicker } from '../../web/components/files/folderPicker.js';
 
 let picker;
@@ -9,11 +10,17 @@ let treeRootPath;
 beforeEach(() => {
   vi.stubGlobal('Vue', Vue);
   store = { currentAgent: 'agent-1', currentConversation: 'session-1', clientId: 'client-1', sendWsMessage: vi.fn() };
-  treePath = Vue.ref('C:/active');
-  treeRootPath = Vue.ref('C:/active');
+  const tree = createFileTree(store, {
+    getEffectiveWorkDir: () => 'C:/active', normalizePath: path => path.replace(/\\/g, '/'),
+    selectedPaths: new Set(), lastClickedIndex: Vue.ref(-1), openFileInTab: vi.fn(), clearSelection: vi.fn(),
+  });
+  treePath = tree.treePath;
+  treeRootPath = tree.treeRootPath;
+  treePath.value = 'C:/active';
+  treeRootPath.value = 'C:/active';
   picker = createFolderPicker(store, {
-    getEffectiveWorkDir: () => 'C:/active', treePath, treeRootPath, treeNodes: {},
-    normalizePath: path => path.replace(/\\/g, '/'),
+    getEffectiveWorkDir: () => 'C:/active', treePath,
+    loadRootDirectory: tree.loadRootDirectory,
   });
 });
 afterEach(() => vi.unstubAllGlobals());
