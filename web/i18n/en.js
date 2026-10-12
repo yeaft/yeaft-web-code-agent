@@ -1595,6 +1595,7 @@ export default {
   'files.newFile': 'New File',
   'files.newFolder': 'New Folder',
   'files.openFolder': 'Open Folder',
+  'files.path': 'File path',
   'files.showTree': 'Show folders',
   'files.hideTree': 'Hide folders',
   'files.deleteSelected': 'Delete selected',
