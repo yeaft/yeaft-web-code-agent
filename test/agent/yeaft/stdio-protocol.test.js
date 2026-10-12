@@ -613,6 +613,28 @@ describe('stream-json Session runtime protocol', () => {
     await runner.close();
   });
 
+  it('includes a Session publication summary in CLI aggregate results without requiring duplicate text', async () => {
+    const root = tempRoot('stdio-response-publication');
+    const sessionId = 'session_stdio_response_publication';
+    createFormalSession(root, sessionId, ['linus']);
+    const conversationStore = new ConversationStore(root);
+    const frames = [];
+    const presentation = { version: 1, title: 'Verified', summary: 'Checks passed.', phase: 'final', blocks: [{ type: 'markdown', text: 'Evidence' }] };
+    const loaded = { yeaftDir: root, config: { model: 'test-model' }, conversationStore };
+    const runner = createCliSessionRunner({ loaded, sessionId, engineFactory: () => ({
+      async *query() {
+        yield { type: 'response_presentation', message: { id: 'm001', content: presentation.summary, presentation } };
+        yield { type: 'turn_end', terminal: true, stopReason: 'end_turn' };
+      },
+    }) });
+    try {
+      const outcome = await runner.run('Show result', { onEvent: frame => frames.push(frame) });
+      expect(outcome.results).toHaveLength(1);
+      expect(outcome.results[0]).toMatchObject({ result: presentation.summary, stopReason: 'end_turn', error: null });
+      expect(frames.find(frame => frame.event.type === 'response_presentation')).toMatchObject({ sessionId, vpId: 'linus', event: { message: { presentation } } });
+    } finally { await runner.close(); }
+  });
+
   it('excludes a later VP root and its synthetic continuation from an earlier queued provider request', async () => {
     const root = tempRoot('stdio-cross-vp-causal-control');
     const sessionId = 'session_stdio_cross_vp_causal_control';

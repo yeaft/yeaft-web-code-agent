@@ -1,4 +1,5 @@
 import { handleWorkbenchBrowserLink, openWorkbenchBrowser } from '../utils/workbench-browser.js';
+import ResponsePresentation from './ResponsePresentation.js';
 import ToolLine from './ToolLine.js';
 import AskCard from './AskCard.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
@@ -19,7 +20,7 @@ import {
 
 export default {
   name: 'AssistantTurn',
-  components: { ToolLine, AskCard, VpSpeakerHeader },
+  components: { ToolLine, AskCard, VpSpeakerHeader, ResponsePresentation },
   props: {
     turn: {
       type: Object,
@@ -114,7 +115,8 @@ export default {
               <div class="turn-progress-list">
                 <div v-for="segment in block.items" :key="segment.key"
                      class="turn-response-segment turn-response-progress">
-                  <div class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
+                  <ResponsePresentation v-if="segment.presentation" :presentation="segment.presentation" />
+                  <div v-else class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
                   <span v-if="segment.isStreaming" class="cursor-blink"></span>
                 </div>
               </div>
@@ -134,7 +136,8 @@ export default {
             </div>
             <div v-else v-for="segment in block.items" :key="segment.key"
                  class="turn-response-segment turn-response-result">
-              <div class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
+              <ResponsePresentation v-if="segment.presentation" :presentation="segment.presentation" />
+              <div v-else class="turn-text markdown-body" v-html="renderSegment(segment.content)" @click="onMarkdownClick"></div>
               <span v-if="segment.isStreaming" class="cursor-blink"></span>
             </div>
           </template>

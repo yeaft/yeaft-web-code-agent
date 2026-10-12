@@ -1,3 +1,7 @@
+import presentResponse from '../../../agent/yeaft/tools/present-response.js';
+import { normalizePresentation } from '../../../agent/yeaft/response-presentation.js';
+import { hasOrphanPairs } from '../../../agent/yeaft/pair-sanitize.js';
+import { createStreamProjector } from '../../../agent/yeaft/stdio-protocol.js';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -12275,4 +12279,163 @@ describe('uploaded image model history', () => {
       }
     });
   }
+});
+
+describe('native Session response publication', () => {
+  const input = { title: 'Verified result', summary: 'All three checks passed.', phase: 'final', blocks: [{ type: 'metrics', items: [{ label: 'Checks', value: '3' }] }] };
+  const dirs = [];
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeConversationHistoryIndexes();
+    dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true }));
+  });
+  function fixture({ registry = true, readOnly = false } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-presentation-')); dirs.push(dir);
+    const store = new ConversationStore(dir);
+    const requests = [];
+    const responses = [];
+    const adapter = { async *stream(params) {
+      requests.push({ ...params, messages: structuredClone(params.messages), tools: structuredClone(params.tools) });
+      const events = responses.shift();
+      if (events instanceof Error) throw events;
+      if (!events) throw new Error('Unexpected provider request');
+      yield* events;
+    } };
+    const engine = new Engine({ adapter, trace: new NullTrace(), config: { model: 'test-model', maxOutputTokens: 1024, maxRetries: 0, _readOnly: readOnly }, conversationStore: store, yeaftDir: dir, vpId: 'vp-a', ...(registry ? { toolRegistry: createFullRegistry() } : {}) });
+    if (!registry) engine.registerTool(presentResponse);
+    return { engine, store, dir, requests, responses };
+  }
+  const query = { prompt: 'Show the verified result', sessionId: 'session-a', vpTurnId: 'turn-a', threadId: 'main' };
+  const call = (id = 'publish-a', payload = input) => ({ type: 'tool_call', id, name: 'PresentResponse', input: payload });
+  const stop = stopReason => ({ type: 'stop', stopReason });
+  async function collect(engine, params = query, callback = () => {}) { const events = []; for await (const event of engine.query(params)) { events.push(event); callback(event); } return events; }
+
+  it('validates the complete payload before touching the host and rejects unsupported/cancelled hosts', async () => {
+    const publishResponse = vi.fn(() => ({ callId: 'call' }));
+    expect(JSON.parse(await presentResponse.execute({ ...input, blocks: [{ type: 'markdown', text: '' }] }, { publishResponse }))).toHaveProperty('error');
+    expect(publishResponse).not.toHaveBeenCalled();
+    expect(JSON.parse(await presentResponse.execute(input, {}))).toHaveProperty('error');
+    expect(JSON.parse(await presentResponse.execute(input, { publishResponse, signal: AbortSignal.abort() }))).toHaveProperty('error');
+    expect(publishResponse).not.toHaveBeenCalled();
+    expect(JSON.parse(await presentResponse.execute(input, { publishResponse }))).toMatchObject({ accepted: true, callId: 'call' });
+    expect(publishResponse).toHaveBeenCalledWith(normalizePresentation(input));
+    expect(presentResponse.cacheWithinQuery).toBe(false);
+    expect(presentResponse.isConcurrencySafe()).toBe(false);
+  });
+
+  it('persists before delivery, preserves identity and model tool pairs, and needs no duplicate final summary', async () => {
+    const f = fixture();
+    f.responses.push([call(), call('publish-b', { ...input, summary: 'Second snapshot' }), stop('tool_use')], [stop('end_turn')]);
+    const events = await collect(f.engine, query, event => {
+      if (event.type === 'response_presentation') expect(new ConversationStore(f.dir).loadAllBySession('session-a').find(row => row.id === event.message.id)).toMatchObject(event.message);
+    });
+    const published = events.filter(event => event.type === 'response_presentation');
+    expect(published).toHaveLength(2);
+    expect(published[0].message).toMatchObject({ role: 'assistant', content: input.summary, sessionId: 'session-a', turnId: 'turn-a', threadId: 'main', speakerVpId: 'vp-a', presentationCallId: 'publish-a', presentation: normalizePresentation(input), responseKind: 'progress' });
+    expect(f.requests).toHaveLength(2); // PresentResponse did not requestEndTurn.
+    expect(f.requests[0].tools.some(tool => tool.name === 'PresentResponse')).toBe(true);
+    expect(hasOrphanPairs(f.requests[1].messages)).toBe(false);
+    const roles = f.requests[1].messages.slice(-5).map(row => row.role);
+    expect(roles).toEqual(['assistant', 'tool', 'tool', 'assistant', 'assistant']);
+    expect(f.requests[1].messages.filter(row => row.role === 'assistant' && row.content === input.summary)).toHaveLength(1);
+    expect(f.requests[1].messages.every(row => !row.presentation)).toBe(true);
+    const rows = new ConversationStore(f.dir).loadVisibleBySession('session-a', Infinity, 10).messages;
+    const snapshots = rows.filter(row => row.presentation);
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots.map(row => row.responseKind)).toEqual(['progress', 'result']);
+    expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
+  });
+
+  it('continues after invalid input or a strict persistence failure without a publication', async () => {
+    for (const mode of ['invalid', 'storage']) {
+      const f = fixture();
+      if (mode === 'storage') {
+        const append = f.store.append.bind(f.store);
+        vi.spyOn(f.store, 'append').mockImplementation((row, opts) => {
+          if (row.presentation) { expect(opts).toEqual({ strict: true }); throw new Error('disk unavailable'); }
+          return append(row, opts);
+        });
+      }
+      f.responses.push([call('publish-a', mode === 'invalid' ? { ...input, blocks: [{ type: 'html', text: 'bad' }] } : input), stop('tool_use')], [{ type: 'text_delta', text: 'Plain fallback' }, stop('end_turn')]);
+      const events = await collect(f.engine);
+      expect(events.filter(event => event.type === 'response_presentation')).toEqual([]);
+      expect(events.find(event => event.type === 'tool_end' && event.id === 'publish-a')).toMatchObject({ isError: true });
+      expect(f.requests[1].messages.find(row => row.role === 'tool')).toMatchObject({ isError: true });
+      expect(events.find(event => event.type === 'turn_end' && event.terminal)).toMatchObject({ type: 'turn_end', terminal: true, stopReason: 'end_turn' });
+      expect(f.store.loadAllBySession('session-a').filter(row => row.presentation)).toEqual([]);
+    }
+  });
+
+  it('fences cancellation before publication and keeps delivered snapshots as progress on failed turns', async () => {
+    const f = fixture(); const controller = new AbortController();
+    f.responses.push([call(), stop('tool_use')]);
+    const events = await collect(f.engine, { ...query, signal: controller.signal }, event => { if (event.type === 'tool_exec') controller.abort(); });
+    expect(events.filter(event => event.type === 'response_presentation')).toEqual([]);
+    expect(f.store.loadAllBySession('session-a').filter(row => row.presentation)).toEqual([]);
+    const g = fixture(); g.responses.push([call(), stop('tool_use')], [stop('error')]);
+    const failed = await collect(g.engine);
+    expect(failed.filter(event => event.type === 'response_presentation')).toHaveLength(1);
+    expect(g.store.loadAllBySession('session-a').find(row => row.presentation)).toMatchObject({ incomplete: true, stopReason: 'error', responseKind: 'progress' });
+  });
+
+  it('keeps progress intent and ordinary text semantics; excludes unsupported hosts including legacy registrations', async () => {
+    const f = fixture(); f.responses.push([call('publish-a', { ...input, phase: 'progress' }), stop('tool_use')], [stop('end_turn')]);
+    await collect(f.engine);
+    expect(f.store.loadAllBySession('session-a').find(row => row.presentation).responseKind).toBe('progress');
+    for (const extra of [{ isSubAgent: true }, { scenario: 'work-item' }, { vpPersona: { subAgent: true } }, { sessionId: null }, { scenario: 'sub_agent' }]) {
+      const g = fixture({ registry: false }); g.responses.push([{ type: 'text_delta', text: 'Normal answer' }, stop('end_turn')]);
+      await collect(g.engine, { ...query, ...extra });
+      expect((g.requests[0].tools || []).some(tool => tool.name === 'PresentResponse')).toBe(false);
+      expect(g.store.loadAll().filter(row => row.presentation)).toEqual([]);
+    }
+  });
+
+  it('keeps later-turn model history plain and fences a consumer closing after delivery', async () => {
+    const f = fixture(); f.responses.push([call(), stop('tool_use')]);
+    for await (const event of f.engine.query(query)) {
+      if (event.type === 'response_presentation') break;
+    }
+    const rows = f.store.loadAllBySession('session-a');
+    expect(rows.find(row => row.presentation)).toMatchObject({ responseKind: 'progress', incomplete: true, stopReason: 'aborted' });
+    f.responses.push([{ type: 'text_delta', text: 'Next response' }, stop('end_turn')]);
+    await collect(f.engine, { ...query, prompt: 'Follow up', vpTurnId: 'turn-b', messages: rows });
+    const history = f.requests.at(-1).messages;
+    expect(history.every(row => !row.presentation && !row.presentationCallId)).toBe(true);
+    expect(history.some(row => row.content === input.summary)).toBe(true);
+    expect(hasOrphanPairs(history)).toBe(false);
+    const g = fixture();
+    g.responses.push([call(), stop('tool_use')], [call(), stop('tool_use')], [stop('end_turn')]);
+    const repeated = await collect(g.engine);
+    expect(repeated.filter(event => event.type === 'response_presentation')).toHaveLength(1);
+    expect(g.store.loadAllBySession('session-a').filter(row => row.presentation)).toHaveLength(1);
+  });
+
+  it('rejects strict disk append failures and unadvertised host calls without publishing', async () => {
+    const f = fixture();
+    chmodSync(f.dir, 0o500);
+    try {
+      expect(() => f.store.append({ role: 'assistant', content: input.summary, presentation: normalizePresentation(input) }, { strict: true })).toThrow();
+    } finally { chmodSync(f.dir, 0o700); }
+    const g = fixture();
+    g.responses.push([call(), stop('tool_use')], [{ type: 'text_delta', text: 'Plain host fallback' }, stop('end_turn')]);
+    const events = await collect(g.engine, { ...query, scenario: 'work-item' });
+    expect(g.requests[0].tools.some(tool => tool.name === 'PresentResponse')).toBe(false);
+    expect(events.some(event => event.type === 'response_presentation')).toBe(false);
+    expect(events.find(event => event.type === 'tool_end')).toMatchObject({ isError: true });
+    expect(g.store.loadAllBySession('session-a').some(row => row.presentation)).toBe(false);
+    const readOnly = fixture({ readOnly: true });
+    readOnly.responses.push([stop('end_turn')]);
+    await collect(readOnly.engine);
+    expect(readOnly.requests[0].tools.some(tool => tool.name === 'PresentResponse')).toBe(false);
+    expect(readOnly.store.loadAllBySession('session-a')).toEqual([]);
+  });
+
+  it('projects summary plus metadata through strict JSONL without inventing a terminal boundary', () => {
+    const frames = [];
+    const projector = createStreamProjector({ sessionId: 'session-a', defaultVpId: 'vp-a', write: frame => frames.push(frame) });
+    const message = { id: 'm0003', sessionId: 'session-a', speakerVpId: 'vp-a', turnId: 'turn-a', content: input.summary, presentation: normalizePresentation(input), presentationCallId: 'publish-a' };
+    projector.project({ event: { type: 'response_presentation', message } });
+    expect(frames.at(-1)).toMatchObject({ type: 'assistant', subtype: 'response_presentation', presentation: message.presentation, message, content: [{ type: 'text', text: input.summary }] });
+    expect(frames.some(frame => frame.type === 'result')).toBe(false);
+  });
 });

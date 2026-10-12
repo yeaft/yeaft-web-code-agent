@@ -879,6 +879,8 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           _hasPersistedTurnId: hasPersistedTurnId,
           ...executionOriginMeta,
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
+          ...(m.presentation ? { presentation: m.presentation } : {}),
+          ...(m.presentationCallId ? { presentationCallId: m.presentationCallId } : {}),
           ...(m.responseKind === 'progress' || m.responseKind === 'result' ? { responseKind: m.responseKind } : {}),
           ...(Number.isInteger(m.llmCallCount) && m.llmCallCount > 0 ? { llmCallCount: m.llmCallCount } : {}),
           ...(Number.isFinite(m.inputTokens) && m.inputTokens >= 0 ? { inputTokens: m.inputTokens } : {}),

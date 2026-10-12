@@ -1396,6 +1396,8 @@ function projectPersistedToHistoryEntry(m, { includeReflections = false } = {}) 
   entry.threadId = m.threadId || m.turnId || 'main';
   if (m.turnId) entry.turnId = m.turnId;
   if (m.imageAssetAnchor) entry.imageAssetAnchor = true;
+  if (m.presentation) entry.presentation = m.presentation;
+  if (m.presentationCallId) entry.presentationCallId = m.presentationCallId;
   if (m.responseKind === 'progress' || m.responseKind === 'result') entry.responseKind = m.responseKind;
   if (Number.isInteger(m.llmCallCount) && m.llmCallCount > 0) entry.llmCallCount = m.llmCallCount;
   for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'totalMs']) {
@@ -1541,6 +1543,8 @@ function projectVisibleHistoryChunkMessages(messages = []) {
       threadId: m.threadId || m.turnId || 'main',
       ...(m.turnId ? { turnId: m.turnId } : {}),
       ...(m.imageAssetAnchor === true ? { imageAssetAnchor: true } : {}),
+      ...(m.presentation ? { presentation: m.presentation } : {}),
+      ...(m.presentationCallId ? { presentationCallId: m.presentationCallId } : {}),
       ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments, m.sessionId) } : {}),
       ...(m.quote ? { quote: m.quote } : {}),
       ...(Array.isArray(m.images) && m.images.length > 0 ? { images: m.images } : {}),
@@ -1615,6 +1619,7 @@ function emitLegacyHistoryOutputFrames(replayEntries) {
         type: 'assistant',
         message: {
           id: entry.id || null,
+          ...(entry.presentation ? { presentation: entry.presentation, presentationCallId: entry.presentationCallId, responseKind: entry.responseKind } : {}),
           content: [
             ...(entry.content ? [{ type: 'text', text: entry.content }] : []),
             ...((entry.toolCalls || []).map(toolCall => ({ type: 'tool_use', ...toolCall, history: true }))),
@@ -4156,6 +4161,14 @@ function handleEngineEvent(event, hctx) {
   }
   if ((event.type === 'text_delta' || event.type === 'thinking_delta')
       && (typeof event.text !== 'string' || event.text.length === 0)) return;
+  // Reject stale publications before touching timers, queued text or history.
+  if (event.type === 'response_presentation') {
+    const message = event.message;
+    if (hctx.signal?.aborted || !message?.id || !message.presentation
+        || message.sessionId !== hctx.sessionId || message.turnId !== hctx.turnId
+        || message.speakerVpId !== hctx.vpId || message.threadId !== (hctx.threadId || 'main')
+        || hctx.presentations?.some(row => row.id === message.id)) return;
+  }
   const terminalTurnEnd = event.type === 'turn_end' && event.terminal === true;
   const managesQueryTimer = terminalTurnEnd
     || event.type === 'aborted'
@@ -4189,6 +4202,27 @@ function handleEngineEvent(event, hctx) {
       // streaming, so subsequent deltas are cheap.
       maybeTransitionVpStatus(hctx, 'streaming');
       break;
+
+    case 'response_presentation': {
+      const message = event.message;
+      if (!hctx.presentations) hctx.presentations = [];
+      hctx.presentations.push({ ...message, _textPartsCount: (hctx.assistantTextParts || []).length });
+      hctx.presentationTextPartsCount = (hctx.assistantTextParts || []).length;
+      if (!hctx.skipPartialHistory) {
+        const prompts = hctx.includeInitialPrompt ? [hctx.prompt, ...(hctx.appendedUserPrompts || [])] : (hctx.appendedUserPrompts || []);
+        appendTurnToSessionHistory(hctx.sessionId, hctx.threadId || 'main', hctx.vpId,
+          prompts, hctx.assistantTextParts || [], hctx.toolCallsAccum || [],
+          hctx.toolResultsAccum || [], hctx.thinkingBlocksAccum || [],
+          { turnId: hctx.turnId, partial: true, presentations: hctx.presentations });
+      }
+      sendSessionOutputFrame({
+        type: 'assistant',
+        message: { id: message.id, content: message.content, presentation: message.presentation,
+          presentationCallId: message.presentationCallId, responseKind: 'progress' },
+        ts: message.time || null,
+      }, envelope);
+      break;
+    }
 
     case 'thinking_delta':
       sendSessionEvent({ type: 'thinking_delta', text: event.text }, envelope);
@@ -4308,7 +4342,7 @@ function handleEngineEvent(event, hctx) {
           hctx.toolCallsAccum || [],
           hctx.toolResultsAccum || [],
           hctx.thinkingBlocksAccum || [],
-          { turnId: hctx.turnId, partial: true },
+          { turnId: hctx.turnId, partial: true, presentations: hctx.presentations },
         );
       }
       sendSessionOutputFrame({
@@ -4376,6 +4410,22 @@ function handleEngineEvent(event, hctx) {
       // stop the user-query silence watchdog before that best-effort work.
       if (event.terminal) {
         (hctx.stopQueryTimer || hctx.pauseQueryTimer)?.();
+        const publications = hctx.presentations || [];
+        for (const row of publications) {
+          row.responseKind = 'progress';
+          row.stopReason = event.stopReason;
+          if (event.stopReason !== 'end_turn') row.incomplete = true;
+        }
+        const last = publications.at(-1);
+        if (event.stopReason === 'end_turn' && last?.presentation.phase === 'final'
+            && hctx.presentationTextPartsCount === (hctx.assistantTextParts || []).length) last.responseKind = 'result';
+        if (publications.length && !hctx.skipPartialHistory) {
+          const prompts = hctx.includeInitialPrompt ? [hctx.prompt, ...(hctx.appendedUserPrompts || [])] : (hctx.appendedUserPrompts || []);
+          appendTurnToSessionHistory(hctx.sessionId, hctx.threadId || 'main', hctx.vpId,
+            prompts, hctx.assistantTextParts || [], hctx.toolCallsAccum || [],
+            hctx.toolResultsAccum || [], hctx.thinkingBlocksAccum || [],
+            { turnId: hctx.turnId, partial: true, presentations: publications });
+        }
       }
       // A normal tool_use stop means "run tools, then call the adapter again",
       // so it must NOT end the VP's visible turn. An aborted turn is terminal
@@ -5668,6 +5718,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         pauseQueryTimer,
         touchQueryTimer: watchdog.touch,
         stopQueryTimer: watchdog.stop,
+        signal: vpAbort.signal,
         sessionId,
         vpId,
         turnId,
@@ -5810,7 +5861,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       // block after the target response.
       const visiblePrompts = inboundIsInternal ? appendedUserPrompts : [prompt, ...appendedUserPrompts];
       const appendHistoryStart = perfNowMs();
-      appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, { turnId });
+      appendTurnToSessionHistory(sessionId, threadId, vpId, visiblePrompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum, { turnId, presentations: handlerCtx.presentations });
       if (perfTraceId) {
         recordAgentPerfTrace(ctx.CONFIG, {
           traceId: perfTraceId,
@@ -5993,7 +6044,11 @@ function buildTurnHistoryEntries(threadId, vpId, prompts, assistantTextParts, to
     }
   }
 
-  const fullText = assistantTextParts.join('');
+  const presentations = opts.presentations || [];
+  const firstPublicationOffset = presentations[0]?._textPartsCount;
+  const fullText = Number.isInteger(firstPublicationOffset)
+    ? assistantTextParts.slice(0, firstPublicationOffset).join('')
+    : assistantTextParts.join('');
   if (fullText || toolCallsAccum.length > 0) {
     // Stamp speakerVpId on assistant + tool rows so the in-memory
     // baseSnapshot filter (filterSnapshotForVp) can mirror the disk
@@ -6035,6 +6090,19 @@ function buildTurnHistoryEntries(threadId, vpId, prompts, assistantTextParts, to
       };
       if (vpId) toolMsg.speakerVpId = vpId;
       entries.push(markEntry(toolMsg));
+    }
+  }
+  for (let index = 0; index < presentations.length; index += 1) {
+    const record = presentations[index];
+    const entry = projectPersistedToHistoryEntry(record);
+    if (entry) entries.push(markEntry(entry));
+    // Keep later prose after its publication in the runtime cache as well as
+    // on disk. The internal offset is never projected into public history.
+    if (Number.isInteger(record._textPartsCount)) {
+      const end = presentations[index + 1]?._textPartsCount ?? assistantTextParts.length;
+      const text = assistantTextParts.slice(record._textPartsCount, end).join('');
+      if (text) entries.push(markEntry({ role: 'assistant', content: text,
+        threadId: threadId || 'main', ...(vpId ? { speakerVpId: vpId } : {}) }));
     }
   }
   return entries;

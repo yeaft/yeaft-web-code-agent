@@ -1491,14 +1491,15 @@ export class ConversationStore {
    * Append a single message to the conversation.
    *
    * @param {object} msg — { role, content, mode?, model?, turnNumber?, toolCalls?, toolCallId?, isError? }
+   * @param {{ strict?: boolean }} [options] — reject rather than return an unpersisted fallback on permission errors
    * @returns {object} — the persisted message with id assigned
    */
-  append(msg) {
+  append(msg, { strict = false } = {}) {
     let seq;
     try {
       seq = this.#reserveSeqRange(1);
     } catch (err) {
-      if (!isPermissionError(err)) throw err;
+      if (strict || !isPermissionError(err)) throw err;
       // Live chat remains best-effort when its data root is read-only. The
       // returned row is usable by the current turn but is intentionally not
       // persisted; strict operations such as Session copy bypass this path.
@@ -1525,7 +1526,7 @@ export class ConversationStore {
     try {
       this.#segmentStoreFor(fullMsg, { create: true }).append(fullMsg);
     } catch (err) {
-      if (isPermissionError(err)) {
+      if (!strict && isPermissionError(err)) {
         if (!_permissionWarned) {
           console.warn(`[Yeaft] Cannot write message ${id}: ${err.code} — message not persisted`);
           _permissionWarned = true;

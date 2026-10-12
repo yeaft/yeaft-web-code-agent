@@ -83,6 +83,32 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
     const content = data.message?.content;
     if (!content) return;
 
+    // A publication is an independent assistant row, not a text delta and not
+    // a lifecycle boundary. Stable persisted identity makes delivery retries and
+    // history/live overlap converge without appending the summary twice.
+    if (data.message?.presentation) {
+      if (!data.message.id || !store._currentYeaftSessionId || !store._currentYeaftTurnId) return;
+      const existing = (store.messagesMap[conversationId] || []).find(row => (row.messageId || row.id) === data.message.id
+        && row.sessionId === store._currentYeaftSessionId
+        && (!frameAgentId || !row.agentId || row.agentId === frameAgentId));
+      if (existing) return;
+      store.finishStreamingForConversation(conversationId, { completeLifecycle: false });
+      const row = store.addMessageToConversation(conversationId, {
+        id: data.message.id, messageId: data.message.id, type: 'assistant',
+        content: data.message.presentation.summary,
+        presentation: data.message.presentation,
+        presentationCallId: data.message.presentationCallId,
+        responseKind: data.message.responseKind === 'result' ? 'result' : 'progress',
+        timestamp: data.ts || null, isStreaming: false,
+        status: data.message.responseKind === 'result' ? 'completed' : 'pending',
+        agentId: frameAgentId, sessionId: store._currentYeaftSessionId,
+        vpId: store._currentYeaftVpId, turnId: store._currentYeaftTurnId,
+        threadId: store._currentYeaftThreadId,
+      });
+      promoteOrInvalidateOutline(store, row, frameAgentId);
+      return;
+    }
+
     // New assistant message means all previous tools are done
     const msgs = store.messagesMap[conversationId] || [];
     for (const msg of msgs) {

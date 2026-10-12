@@ -637,6 +637,64 @@ describe('Yeaft load-history first paint', () => {
     expect(JSON.stringify(sent).length).toBeLessThan(4096);
   });
 
+  it('delivers persisted presentations with scoped identity, dedup and lightweight reconnect history', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-response-history-'));
+    try {
+      const store = new ConversationStore(dir);
+      const presentation = { version: 1, title: 'Report', summary: 'Verified summary', phase: 'final', blocks: [{ type: 'markdown', text: 'Verified detail' }] };
+      const message = store.append({ role: 'assistant', content: presentation.summary, presentation,
+        presentationCallId: 'call-rich', sessionId: 'session-rich', speakerVpId: 'vp-rich',
+        turnId: 'turn-rich', threadId: 'main', responseKind: 'progress' }, { strict: true });
+      const hctx = { resetQueryTimer: vi.fn(), sessionId: 'session-rich', vpId: 'vp-rich', turnId: 'turn-rich', threadId: 'main',
+        assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [], thinkingBlocksAccum: [] };
+      const event = { type: 'response_presentation', message };
+      for (const key of ['sessionId', 'turnId', 'speakerVpId', 'threadId']) {
+        __testHandleEngineEvent({ ...event, message: { ...message, [key]: 'wrong' } }, hctx);
+      }
+      __testHandleEngineEvent(event, { ...hctx, signal: AbortSignal.abort() });
+      expect(sent).toEqual([]);
+      expect(hctx.resetQueryTimer).not.toHaveBeenCalled();
+      __testHandleEngineEvent(event, hctx);
+      __testHandleEngineEvent(event, hctx);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ type: 'yeaft_output', sessionId: 'session-rich', vpId: 'vp-rich', turnId: 'turn-rich',
+        data: { type: 'assistant', message: { id: message.id, content: presentation.summary, presentation, presentationCallId: 'call-rich', responseKind: 'progress' } } });
+      const page = __testHooks.loadVisibleGroupHistoryPage(new ConversationStore(dir), 'session-rich', 1);
+      const projected = __testHooks.projectVisibleHistoryChunkMessages(page.messages);
+      expect(projected).toHaveLength(1);
+      expect(projected[0]).toMatchObject({ id: message.id, presentation, presentationCallId: 'call-rich', turnId: 'turn-rich', speakerVpId: 'vp-rich', responseKind: 'progress' });
+      expect(__testGroupHistory('session-rich').find(row => row.presentation)).toMatchObject({ id: message.id, content: presentation.summary, presentation });
+      __testHandleEngineEvent({ type: 'text_delta', text: 'Later explanation' }, hctx);
+      __testHandleEngineEvent({ type: 'turn_end', terminal: true, stopReason: 'end_turn' }, hctx);
+      const cache = __testGroupHistory('session-rich');
+      expect(cache.findIndex(row => row.presentation)).toBeLessThan(cache.findIndex(row => row.content === 'Later explanation'));
+      expect(cache.find(row => row.presentation).responseKind).toBe('progress');
+      __testHandleEngineEvent({ type: 'turn_end', terminal: true, stopReason: 'error' }, hctx);
+      expect(hctx.presentations[0]).toMatchObject({ responseKind: 'progress', incomplete: true, stopReason: 'error' });
+      expect(__testGroupHistory('session-rich').find(row => row.presentation)).toMatchObject({ responseKind: 'progress', incomplete: true, stopReason: 'error' });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('keeps interleaved prose and multiple publications ordered, finalizing only the last delivery at the terminal boundary', () => {
+    const hctx = { resetQueryTimer: vi.fn(), sessionId: 'session-interleaved', vpId: 'vp-rich', turnId: 'turn-interleaved', threadId: 'main',
+      assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [], thinkingBlocksAccum: [] };
+    const publish = (id, phase) => __testHandleEngineEvent({ type: 'response_presentation', message: {
+      id, role: 'assistant', sessionId: hctx.sessionId, speakerVpId: hctx.vpId, turnId: hctx.turnId, threadId: 'main',
+      content: id, responseKind: 'progress', presentationCallId: `call-${id}`,
+      presentation: { version: 1, title: id, summary: id, phase, blocks: [{ type: 'markdown', text: id }] },
+    } }, hctx);
+    __testHandleEngineEvent({ type: 'text_delta', text: 'Before' }, hctx);
+    publish('snapshot-one', 'progress');
+    __testHandleEngineEvent({ type: 'text_delta', text: 'Between' }, hctx);
+    publish('snapshot-two', 'final');
+    expect(__testGroupHistory(hctx.sessionId).filter(row => row.role === 'assistant').map(row => row.content))
+      .toEqual(['Before', 'snapshot-one', 'Between', 'snapshot-two']);
+    expect(hctx.presentations.map(row => row.responseKind)).toEqual(['progress', 'progress']);
+    __testHandleEngineEvent({ type: 'turn_end', terminal: true, stopReason: 'end_turn' }, hctx);
+    expect(__testGroupHistory(hctx.sessionId).filter(row => row.presentation).map(row => row.responseKind))
+      .toEqual(['progress', 'result']);
+  });
+
   it('preserves TodoWrite through the real store page and history wire projection', () => {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-todo-history-'));
     try {

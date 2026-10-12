@@ -277,6 +277,7 @@ export function createCliSessionRunner({
     try {
       for await (const event of engine.query(queryOptions)) {
         if (event.type === 'text_delta') resultText += event.text || '';
+        else if (event.type === 'response_presentation') resultText += event.message?.content || '';
         else if (event.type === 'error' && !failed) {
           failed = event.error instanceof Error
             ? event.error
