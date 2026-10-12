@@ -208,6 +208,30 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     finishHistory() { historyReply(); historyReply = null; }, historyPending() { return !!historyReply; }, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
 }
 
+for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
+  test(`Digital Person cognition links the exact historical execution ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
+    const target = personTurn(1, { id: 'episode-1' });
+    const mock = await mockPersonSocket(page, {
+      turnItems: Array.from({ length: 30 }, (_, index) => personTurn(index + 2)), olderTurns: [target],
+    });
+    await openPersonUsage(page, serverUrl, scenario);
+    const zh = scenario.locale === 'zh-CN';
+    await page.locator('.person-inspector-nav').getByRole('button', { name: zh ? '思考记录' : 'Thought journal', exact: true }).click();
+    const cognition = page.locator('.person-thought[data-episode-id="episode-1"]');
+    await expect(cognition).toHaveCount(1);
+    await cognition.getByRole('button', { name: zh ? '查看执行详情' : 'View execution details', exact: true }).click();
+    const execution = page.locator('#person-turns');
+    await expect(execution).toContainText(zh ? '所选活动不在当前页' : 'The selected activity is not on this page');
+    await expect(execution.locator('.person-turn-row[open]')).toHaveCount(0);
+    await execution.getByRole('button', { name: zh ? '更早的 turn' : 'Older turns', exact: true }).click();
+    const selected = execution.locator('[data-turn-id="episode-1"]');
+    await expect(selected).toBeVisible();
+    await expect(selected).toHaveAttribute('open', '');
+    await expect(selected.locator('summary').first()).toBeFocused();
+    expect(mock.requests.filter(request => ['send', 'think', 'dream'].includes(request.op))).toHaveLength(0);
+  });
+}
+
 async function openPersonUsage(page, serverUrl, scenario) {
   // Keep automatic 1.5s polling from consuming a deliberately held manual read.
   await page.clock.install();
@@ -545,7 +569,10 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     }
     await expect(thoughts).toContainText('Maybe the delay came from the final verification step.');
     await expect(thoughts).toContainText('A repeated guess is not new evidence.');
-    await expect(thoughts).toContainText('<script>not HTML</script>');
+    await expect(thoughts).not.toContainText('<script>not HTML</script>');
+    await expect(thoughts.locator('.person-activity')).toHaveCount(0);
+    await expect(thoughts.locator('[data-episode-id="episode-1"]')).toHaveCount(1);
+    await thoughts.locator('.person-thought-evidence > summary').click();
     const publication = thoughts.locator('[data-thought-kind="capability_created"]');
     await expect(publication).toContainText('Script.sum');
     await expect(publication).toContainText(zh ? '能力已保存，不依赖思考结论是否被采纳' : 'Capability saved independently of thought adoption');
@@ -827,13 +854,16 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(page.locator('#person-conversation .person-activity')).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`person-conversation-loading-${scenario.width}-${scenario.theme}.png`) });
     await page.locator('.person-thoughts-button').click();
-    const activity = page.locator('#person-thoughts .person-activity');
+    await expect(page.locator('#person-thoughts .person-activity')).toHaveCount(0);
+    await page.locator('.person-inspector-nav').getByRole('button', { name: zh ? '运行与用量' : 'Flow & usage', exact: true }).click();
+    const activity = page.locator('#person-turns .person-activity');
     await expect(activity).toContainText(zh ? '正在查找相关记忆' : 'Looking up relevant memories');
     await expect(activity).not.toHaveAttribute('open', '');
     const details = activity.locator('summary');
     await details.focus(); await page.keyboard.press('Enter');
     await expect(activity).toHaveAttribute('open', '');
     // Paged journal remains readable while the live activity tail keeps polling.
+    await page.locator('.person-inspector-nav').getByRole('button', { name: zh ? '思考记录' : 'Thought journal', exact: true }).click();
     await page.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' }).click();
     await page.locator('.person-panel-header .header-action-btn').click();
     add('capability_result', { callId: 'a', capability: { id: 'Recall' }, result: { items: ['PRIVATE_MEMORY'] } });
@@ -842,6 +872,7 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     await expect(loading).toHaveText('');
     await expect(page.locator('#person-conversation .person-activity')).toHaveCount(0);
     await page.locator('.person-thoughts-button').click();
+    await page.locator('.person-inspector-nav').getByRole('button', { name: zh ? '运行与用量' : 'Flow & usage', exact: true }).click();
     await expect(activity).toContainText(zh ? '正在查看思考方法' : 'Reading a thinking method');
     expect(mock.historyPending()).toBe(true);
     mock.finishHistory();
@@ -863,7 +894,8 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     add('capability_failed', { callId: 'c', capabilityId: `Script.${'a'.repeat(48)}`, result: { message: 'PRIVATE_DIAGNOSTICS' } });
     add('call_started', { callId: 'd' });
     mock.activity(records);
-    await expect(activity).toContainText(zh ? '正在思考' : 'Thinking');
+    await expect(activity).toContainText(zh ? '正在调用模型' : 'Calling the model');
+    await expect(activity).toContainText(zh ? '模型调用' : 'Model call');
     add('call_output', { callId: 'd' });
     add('committed');
     mock.activity(records, 'completed');

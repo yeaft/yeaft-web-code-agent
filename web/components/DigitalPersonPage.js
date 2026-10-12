@@ -16,7 +16,6 @@ import { useComposerAttachments } from '../utils/composer-attachments.js';
 import { PERSON_FILE_ACCEPT, validatePersonFiles, uploadPersonFiles } from '../stores/helpers/person-attachments.js';
 import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
-import PersonActivity from './PersonActivity.js';
 import PersonResponseLoading from './PersonResponseLoading.js';
 import { createPersonConversationProjector } from '../utils/person-conversation.js';
 import { projectPersonActivity, projectPersonFeedback } from '../utils/person-activity.js';
@@ -26,7 +25,7 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
-  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity, PersonResponseLoading },
+  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonResponseLoading },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -54,6 +53,7 @@ export default {
     const sidePanel = Vue.ref(null);
     const outputReader = Vue.ref(null);
     const thoughtButton = Vue.ref(null);
+    const inspectedEpisodeId = Vue.ref(null);
     const searchButton = Vue.ref(null);
     const searchInput = Vue.ref(null);
     const searchQuery = Vue.ref('');
@@ -114,6 +114,7 @@ export default {
     const gate = Vue.computed(() => digitalPersonGate(chat, agentId.value));
     const scope = () => JSON.stringify([auth.userId, auth.authGeneration, auth.isAuthenticated]);
     const attachmentScope = () => JSON.stringify([scope(), agentId.value]);
+    Vue.watch(transcriptIdentity, () => { inspectedEpisodeId.value = null; }, { flush: 'sync' });
     const attachmentQueue = useComposerAttachments({
       scope: attachmentScope,
       enabled: () => canCompose.value,
@@ -221,12 +222,18 @@ export default {
         ? (document.activeElement?.matches('.person-delivered-output') ? document.activeElement : outputButton.value)
         : next === 'search' ? searchButton.value : thoughtButton.value;
       if (next === 'outputs') outputVisited.value = true;
+      if (next !== 'turns') inspectedEpisodeId.value = null;
       panel.value = next;
       await Vue.nextTick();
       if (next === 'outputs') outputReader.value?.focusClose();
       else (next === 'search' ? searchInput.value : closePanelButton.value)?.focus();
     }
+    function inspectTurn(episodeId) {
+      inspectedEpisodeId.value = episodeId;
+      return openPanel('turns');
+    }
     function closePanel() {
+      inspectedEpisodeId.value = null;
       const restoreFocus = modalPanel.value || sidePanel.value?.contains(document.activeElement);
       panel.value = null;
       expandedPanel.value = false;
@@ -460,7 +467,7 @@ export default {
     const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -599,7 +606,7 @@ export default {
               <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>
             </div>
           </section>
-          <PersonTurnUsage v-else-if="panel === 'turns'" :page="state.turns" :identity-key="transcriptIdentity" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTurns()" @more="controller.readTurns(true)" />
+          <PersonTurnUsage v-else-if="panel === 'turns'" :activity="activity" :episode-id="inspectedEpisodeId" :page="state.turns" :identity-key="transcriptIdentity" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTurns()" @more="controller.readTurns(true)" />
           <PersonManagement v-else-if="panel === 'tasks'" :execution="state.executions" :page="state.tasks" :identity-key="transcriptIdentity" :log="state.taskLog" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTasks(); controller.readExecutions()" @more="controller.readTasks(true)" @log="controller.readTaskLog" @stop="controller.stopTask" @pause="id => controller.controlExecution('pause', id)" @resume="id => controller.controlExecution('resume', id)" @cancel="id => controller.controlExecution('cancel', id)" />
           <PersonKnowledgeBrowser v-else-if="panel === 'memory' || panel === 'skills'" :key="panel" :section="panel" :identity-key="transcriptIdentity + panel" :page="state[panel]" :disabled="!!gate || state.loading || !state.person" @refresh="controller.inspect(panel)" @more="controller.inspect(panel, true)" />
           <div v-if="panel === 'thoughts' || panel === 'debug'" class="person-journal-toolbar">
@@ -607,9 +614,7 @@ export default {
             <button v-if="panel === 'thoughts'" type="button" class="btn-ghost person-debug-link" @click="openPanel('debug')">{{ $t('person.debug') }}</button>
             <button v-else type="button" class="btn-ghost" @click="openPanel('thoughts')">{{ $t('person.back') }}</button>
           </div>
-          <PersonThoughtJournal v-if="panel === 'thoughts'" :traces="state.traces" :identity-key="transcriptIdentity" :page-token="state.traceCursor" :error="!!state.error" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)">
-            <template #activity><PersonActivity :key="activity.episodeId || 'pending'" :activity="activity" /></template>
-          </PersonThoughtJournal>
+          <PersonThoughtJournal v-if="panel === 'thoughts'" :traces="state.traces" :identity-key="transcriptIdentity" :page-token="state.traceCursor" :error="!!state.error" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" @turn="inspectTurn" />
           <PersonDebugLog v-if="panel === 'debug'" :traces="state.traces" :identity-key="transcriptIdentity" :page-token="state.traceCursor" :error="!!state.error" :state="state.state" :loading="state.tracesLoading" :stale="state.tracesStale" :more="state.traceCursor != null" :disabled="!!gate || !state.person || state.loading" @refresh="controller.page('traces')" @more="controller.page('traces', true)" />
         </aside>
       </div>

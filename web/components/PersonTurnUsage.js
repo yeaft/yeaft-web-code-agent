@@ -1,3 +1,4 @@
+import PersonActivity from './PersonActivity.js';
 import PersonInspectorList, { newestPersonRecords } from './PersonInspectorList.js';
 
 // Shared accounting format for durable turns and the live Management snapshot.
@@ -16,11 +17,17 @@ export const usageLoops = turn => {
 /** Durable, metadata-only turn diagnostics. No prompt or hidden reasoning is shown. */
 export default {
   name: 'PersonTurnUsage',
-  components: { PersonInspectorList },
-  props: { page: Object, disabled: Boolean, identityKey: { default: '' } },
+  components: { PersonInspectorList, PersonActivity },
+  props: { activity: Object, episodeId: String, page: Object, disabled: Boolean, identityKey: { default: '' } },
   emits: ['refresh', 'more'],
   setup(props) {
     const entries = Vue.computed(() => newestPersonRecords(props.page.items));
+    const list = Vue.ref(null);
+    Vue.watch([() => props.episodeId, () => entries.value.some(turn => turn.id === props.episodeId)], async ([id, present], previous = []) => {
+      if (!id || !present || (id === previous[0] && previous[1])) return;
+      await Vue.nextTick();
+      if (props.episodeId === id) list.value?.focusRow(entries.value.findIndex(turn => turn.id === id));
+    }, { immediate: true });
     const estimate = () => 160;
     const known = usageKnown;
     const number = usageNumber;
@@ -30,7 +37,7 @@ export default {
     // for older records. Unknown primary counts remain visible, not zero.
     const input = usageInput;
     const extras = usageExtras;
-    return { entries, estimate, known, number, time, statusKey, input, extras, loops: usageLoops };
+    return { list, entries, estimate, known, number, time, statusKey, input, extras, loops: usageLoops };
   },
   template: `
     <section id="person-turns" class="person-journal person-turn-usage" :aria-label="$t('person.turns')" :aria-busy="page.loading">
@@ -38,9 +45,11 @@ export default {
         <span class="person-muted">{{ $t('person.usage.scope') }}</span>
         <button type="button" class="btn-ghost" :disabled="disabled || page.loading" @click="$emit('refresh')">{{ $t('common.refresh') }}</button>
       </div>
-      <PersonInspectorList :items="entries" :label="$t('person.turns')" :reset-key="identityKey || page" :page-token="page.nextCursor" :estimate-height="estimate"
+      <PersonInspectorList ref="list" :items="entries" :label="$t('person.turns')" :reset-key="identityKey || page" :page-token="page.nextCursor" :estimate-height="estimate"
         :more="page.nextCursor != null" :more-label="$t('person.usage.older')" :loading="page.loading" :disabled="disabled" :stale="page.stale" :error="!!page.error" @more="$emit('more')">
         <template #before>
+        <PersonActivity v-if="activity" :key="activity.episodeId || 'pending'" :activity="activity" />
+        <p v-if="episodeId && !page.loading && !page.items.some(turn => turn.id === episodeId)" class="person-muted" role="status">{{ $t('person.usage.turnNotLoaded') }}</p>
         <p v-if="page.error" class="person-settings-error" role="alert">{{ $t('person.requestFailed') }} {{ page.error.message }}</p>
         <p v-if="page.stale" class="person-muted" role="status">{{ $t('person.usage.stale') }}</p>
         <p v-if="page.loading && !page.loaded" class="person-muted" role="status">{{ $t('person.loading') }}</p>
@@ -51,7 +60,7 @@ export default {
         </details>
         </template>
         <template #default="{ item: turn }">
-        <details class="person-turn-row" :data-turn-id="turn.id">
+        <details class="person-turn-row" :data-turn-id="turn.id" :open="turn.id === episodeId">
           <summary>
             <span class="person-turn-heading"><strong>{{ $t('person.usage.turn', { n: turn.seq }) }} · {{ $t('person.' + turn.kind) }}</strong><span class="person-muted">{{ $t('person.usage.status.' + statusKey(turn.status)) }}</span></span>
             <time class="person-muted">{{ time(turn.createdAt) }}</time>

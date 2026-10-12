@@ -200,7 +200,7 @@ export default {
     Vue.watch(() => props.loading, loading => { intent = false; if (!loading) inFlight = false; });
     Vue.watch(transcript, value => value?.setBottomFollowEnabled(false));
     Vue.onBeforeUnmount(() => { navigation += 1; if (frame != null) cancelAnimationFrame(frame); });
-    return { scroller, transcript, generation, virtual, requestMore, onScroll, forwardIntent, startTouch, onKeydown, rowRef, rememberDetails };
+    return { scroller, transcript, generation, virtual, requestMore, onScroll, forwardIntent, startTouch, onKeydown, rowRef, rememberDetails, focusRow };
   },
   template: `
     <div ref="scroller" class="person-journal-scroll person-inspector-list" tabindex="0" role="region" :aria-label="label" :aria-busy="loading"

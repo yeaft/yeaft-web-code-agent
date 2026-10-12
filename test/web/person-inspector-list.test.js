@@ -237,7 +237,7 @@ describe('Latest-first Person inspector projections', () => {
   it('reverses the completed thought projection without breaking proposal/commit correlation', () => {
     wrapper = mount(PersonThoughtJournal, { props: { traces: personRecords() }, global });
     const kinds = wrapper.findAll('.person-thought').map(row => row.attributes('data-thought-kind'));
-    expect(kinds[0]).toBe('committed');
+    expect(kinds).toEqual(['think']);
     expect(wrapper.text()).toContain('Looking for a pattern in recent releases.');
     expect(wrapper.text()).not.toContain('PRIVATE SYSTEM PROMPT');
   });
