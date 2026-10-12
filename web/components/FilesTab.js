@@ -33,6 +33,31 @@ export function updateMediaPreviewState(file, event, errorMessage = '') {
 // Compatibility export for image-specific callers and tests.
 export const updateImagePreviewState = updateMediaPreviewState;
 
+/** Fence directory replies synchronously, but retry only after the current
+ * socket has completed authentication and the route protocol handshake. */
+export function watchFilesConnection(liveStore, { tree, tabs, runtimeProvider }) {
+  const ready = () => liveStore.connectionState === 'connected'
+    && liveStore.authenticated === true
+    && liveStore.workbenchRouteProtocolSupported === true
+    && (runtimeProvider !== 'work-center' || liveStore.workCenterWorkbenchProtocolSupported === true);
+  Vue.watch(ready, (isReady, wasReady) => {
+    if (!isReady) {
+      tree.interruptDirectoryLoads();
+      if (wasReady) tabs.interruptFileReads();
+    }
+  }, { flush: 'sync', immediate: true });
+  // Observe all handshake fields as a fresh tuple: even a ready → unready →
+  // ready transition in one tick must resume the synchronously fenced loads.
+  // auth_result also resets protocol flags after setting authenticated, so a
+  // synchronous retry here could send before client_hello_ack.
+  Vue.watch(() => [
+    liveStore.connectionState, liveStore.authenticated,
+    liveStore.workbenchRouteProtocolSupported, liveStore.workCenterWorkbenchProtocolSupported,
+  ], () => {
+    if (ready()) tree.resumeDirectoryLoads();
+  }, { flush: 'post' });
+}
+
 export function createFileCloseEventHandlers({ liveStore, props, tabs, isDisposed }) {
   const isCurrentEvent = event => (
     event.detail?.routeKey === props.routeKey
@@ -879,14 +904,7 @@ export default {
       if (tabs.activeFile.value) tree.revealPath(tabs.activeFile.value.path);
     });
 
-    Vue.watch(() => liveStore.connectionState, (state, previous) => {
-      if (previous === 'connected' && state !== 'connected') {
-        tabs.interruptFileReads();
-        tree.interruptDirectoryLoads();
-      } else if (state === 'connected' && previous !== 'connected') {
-        tree.resumeDirectoryLoads();
-      }
-    }, { flush: 'sync' });
+    watchFilesConnection(liveStore, { tree, tabs, runtimeProvider: props.runtimeProvider });
 
     Vue.watch(() => store.theme, (newTheme) => {
       const file = tabs.activeFile.value;

@@ -3,9 +3,11 @@ import * as Vue from 'vue';
 import { browserPathKey, directoryBreadcrumbs, normalizeBrowserPath, parentDirectory } from '../../web/utils/folder-picker-path.js';
 
 let createFileTree;
+let watchFilesConnection;
 beforeAll(async () => {
   globalThis.Vue = Vue;
   ({ createFileTree } = await import('../../web/components/files/fileTree.js'));
+  ({ watchFilesConnection } = await import('../../web/components/FilesTab.js'));
 });
 function setup({ workDir = '/workspace', workspaceLocked = false, send = true } = {}) {
   const selectedPaths = Vue.reactive(new Set(['/workspace/selected.txt']));
@@ -25,6 +27,93 @@ function setup({ workDir = '/workspace', workspaceLocked = false, send = true } 
 }
 const dir = name => ({ name, type: 'directory' });
 const file = name => ({ name, type: 'file' });
+
+function connectionHarness(runtimeProvider = 'yeaft', initial = {}) {
+  const state = Vue.reactive({ connectionState: 'connected', authenticated: true,
+    workbenchRouteProtocolSupported: true, workCenterWorkbenchProtocolSupported: true, ...initial });
+  const h = setup();
+  const tabs = { interruptFileReads: vi.fn() };
+  const scope = Vue.effectScope();
+  scope.run(() => watchFilesConnection(state, { tree: h.tree, tabs, runtimeProvider }));
+  return { ...h, state, tabs, scope };
+}
+
+describe('Files directory transport handshake', () => {
+  it('fences immediately and waits for authentication plus hello acknowledgement to retry', async () => {
+    const h = connectionHarness();
+    try {
+      h.tree.revealPath('/workspace/file.txt');
+      const oldRequest = h.sendWsMessage.mock.lastCall[0];
+      h.state.connectionState = 'disconnected';
+      h.reply([file('old.txt')], undefined, oldRequest);
+      expect(h.tree.flattenedTree.value).toEqual([]);
+      expect(h.tree.treeNodes['/workspace'].loading).toBe(false);
+      expect(h.tabs.interruptFileReads).toHaveBeenCalledTimes(1);
+      h.state.authenticated = false;
+      h.state.workbenchRouteProtocolSupported = null;
+      h.state.connectionState = 'connected';
+      await Vue.nextTick();
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(1);
+      h.tree.revealPath('/workspace/file.txt');
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(1);
+      h.state.authenticated = true;
+      h.state.workbenchRouteProtocolSupported = false;
+      await Vue.nextTick();
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(1);
+      h.state.workbenchRouteProtocolSupported = true;
+      await Vue.nextTick();
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(2);
+      expect(h.sendWsMessage.mock.lastCall[0].requestId).not.toBe(oldRequest.requestId);
+      h.reply([file('file.txt')]);
+      expect(h.tree.navigationPath.value).toBe('/workspace/file.txt');
+      h.reply([file('old.txt')], undefined, oldRequest);
+      expect(h.tree.navigationPath.value).toBe('/workspace/file.txt');
+      expect(h.tree.flattenedTree.value.map(entry => entry.name)).toEqual(['file.txt']);
+    } finally { h.scope.stop(); }
+  });
+
+  it('batches auth_result mutations instead of retrying on transient ready state', async () => {
+    const h = connectionHarness();
+    try {
+      h.state.connectionState = 'connecting';
+      // A socket replacement may retain authenticated until auth_result. The
+      // latter sets authenticated before it resets the old protocol capability.
+      h.state.connectionState = 'connected';
+      h.state.workbenchRouteProtocolSupported = false;
+      await Vue.nextTick();
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(1);
+      h.state.workbenchRouteProtocolSupported = true;
+      await Vue.nextTick();
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(2);
+    } finally { h.scope.stop(); }
+  });
+
+  it('resumes after a same-tick disconnect/reconnect even if final readiness is unchanged', async () => {
+    const h = connectionHarness();
+    try {
+      h.state.connectionState = 'disconnected';
+      h.state.connectionState = 'connected';
+      await Vue.nextTick();
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(2);
+      expect(h.tree.treeNodes['/workspace'].loading).toBe(true);
+    } finally { h.scope.stop(); }
+  });
+
+  it('queues initial loads and requires the Work Center handshake for locked workspaces', async () => {
+    const h = connectionHarness('work-center', { authenticated: false,
+      workbenchRouteProtocolSupported: null, workCenterWorkbenchProtocolSupported: null });
+    try {
+      h.tree.revealPath('/workspace/file.txt');
+      h.state.authenticated = true;
+      h.state.workbenchRouteProtocolSupported = true;
+      await Vue.nextTick();
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(1);
+      h.state.workCenterWorkbenchProtocolSupported = true;
+      await Vue.nextTick();
+      expect(h.sendWsMessage).toHaveBeenCalledTimes(2);
+    } finally { h.scope.stop(); }
+  });
+});
 
 describe('Files navigation paths', () => {
   it.each([
