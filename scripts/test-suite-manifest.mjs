@@ -150,6 +150,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/web/safe-message-markdown.test.js',
   'test/web/history-sender-filter.test.js',
   'test/web/file-tree-refresh.test.js',
+  'test/web/file-tree-reveal.test.js',
   'test/web/files-response-correlation.test.js',
   'test/web/file-tabs-read-recovery.test.js',
   'test/web/html-file-preview.test.js',

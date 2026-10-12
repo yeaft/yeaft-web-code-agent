@@ -7,6 +7,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { useTestServer } from '../../fixtures/test-server.js';
 import { handleListDirectory, handleReadFile, handleWriteFile } from '../../../agent/workbench/file-ops.js';
+import { handleFileSearch } from '../../../agent/workbench/file-search.js';
 import agentContext from '../../../agent/context.js';
 
 // Component + Agent integration, not an authenticated Server/owner-relay test.
@@ -76,12 +77,12 @@ function mountHarness(config) {
   const sent = [];
   const received = [];
   const bridgeErrors = [];
-  let pending = Promise.resolve();
+  const pending = new Set();
   store.sendWsMessage = message => {
     sent.push(structuredClone(message));
-    // Preserve request ordering over the test-only HTTP transport. Responses
-    // (including outside-workspace errors) are delivered verbatim to FilesTab.
-    pending = pending.then(async () => {
+    // Agent dispatch is serialized, but replies may be delayed/reordered by a
+    // test route without blocking independent requests from the real component.
+    const request = (async () => {
       const response = await fetch('/bridge', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(message),
       });
@@ -90,7 +91,9 @@ function mountHarness(config) {
         received.push(result);
         window.dispatchEvent(new CustomEvent('workbench-message', { detail: result }));
       }
-    }).catch(error => { bridgeErrors.push(String(error)); });
+    })().catch(error => { bridgeErrors.push(String(error)); });
+    pending.add(request);
+    request.finally(() => pending.delete(request));
     return true;
   };
   const t = (key, values = {}) => (translations[key] || key)
@@ -108,13 +111,19 @@ function mountHarness(config) {
       store.yeaftActiveSessionFilter = sessionId;
       await nextTick();
     },
-    async idle() { await pending; await nextTick(); },
+    async idle() { while (pending.size) await Promise.all([...pending]); await nextTick(); },
+    async openFile(path) {
+      window.dispatchEvent(new CustomEvent('workbench-open-file-in-active-view', { detail: {
+        filePath: path, workbenchRouteKey: 'yeaft:agent-b:session-y', hideTree: true,
+      } }));
+      await nextTick();
+    },
   };
 }
 
 function html(config) {
   return `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="/web/styles/variables.css"><link rel="stylesheet" href="/web/styles/workbench.css"><link rel="stylesheet" href="/web/styles/files.css"><link rel="stylesheet" href="/web/styles/chat-messages.css"><link rel="stylesheet" href="/web/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/web/styles/variables.css"><link rel="stylesheet" href="/web/styles/workbench.css"><link rel="stylesheet" href="/web/styles/files.css"><link rel="stylesheet" href="/web/styles/terminal.css"><link rel="stylesheet" href="/web/styles/chat-messages.css"><link rel="stylesheet" href="/web/vendor/codemirror.min.css">
 <script src="/web/vendor/vue.global.prod.js"></script><script src="/web/vendor/vue-demi.iife.js"></script><script src="/web/vendor/pinia.iife.prod.js"></script><script src="/web/vendor/codemirror.min.js"></script>
 </head><body><div id="app"></div><script type="module">
 import { useChatStore } from '/web/stores/chat.js';
@@ -142,6 +151,10 @@ class ExternalFilesServer {
     }
     this.textPath = join(this.externalDir, 'external.txt');
     this.imagePath = join(this.externalDir, 'external.bmp');
+    this.deepDir = join(this.workDir, 'first-long-directory', 'second-long-directory', 'third-long-directory');
+    this.deepPath = join(this.deepDir, 'deep-file.txt');
+    await mkdir(this.deepDir, { recursive: true });
+    await writeFile(this.deepPath, 'Deep file content.\n');
     this.image = bitmap(32, 24);
     await writeFile(this.textPath, ORIGINAL_TEXT);
     await writeFile(this.imagePath, this.image);
@@ -163,9 +176,10 @@ class ExternalFilesServer {
   async dispatch(message) {
     this.requests.push(message);
     // Tab persistence belongs to Server, not these Agent file handlers. It is
-    // outside this regression: no restore/success response is manufactured.
+    // synthesized only for the tab-restore test; file/directory replies are real.
+    if (message.type === 'restore_file_tabs' && this.restoreFiles) return [{ ...message, type: 'file_tabs_restored', openFiles: this.restoreFiles.map(path => ({ path })), activeIndex: this.restoreIndex || 0 }];
     if (['restore_file_tabs', 'update_file_tabs'].includes(message.type)) return [];
-    const handler = { list_directory: handleListDirectory, read_file: handleReadFile, write_file: handleWriteFile }[message.type];
+    const handler = { list_directory: handleListDirectory, read_file: handleReadFile, write_file: handleWriteFile, file_search: handleFileSearch }[message.type];
     if (!handler) throw new Error(`Unexpected bridge request: ${message.type}`);
     const results = [];
     const previous = { sendToServer: agentContext.sendToServer, CONFIG: agentContext.CONFIG };
@@ -368,4 +382,149 @@ test('ordinary Session Files previews real external image bytes from the Agent',
   expect(sha256(await preview.body())).toBe(sha256(harness.image));
   await expect(page.locator('.file-load-error')).toHaveCount(0);
   await expectOriginalOwner(page, harness);
+});
+
+function treeEntry(page, path) { return page.locator(`[data-tree-path=${JSON.stringify(path)}]`); }
+function crumb(page, path) { return page.locator('.file-path-crumb').and(page.locator(`[title=${JSON.stringify(path)}]`)); }
+async function expectLocated(page, path) {
+  await expect(treeEntry(page, path)).toHaveClass(/tree-navigation-current/);
+}
+
+test('deep response reference, breadcrumbs, external rebasing and Workbench tab switches preserve edits and undo', async ({ page, harness }) => {
+  await page.goto(harness.url);
+  await openFiles(page);
+  await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+  await expectRealRead(page, harness, harness.deepPath);
+  await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
+  // Reference entry keeps the tree collapsed; it still reveals every ancestor.
+  await expect(page.locator('.files-tab')).toHaveClass(/tree-collapsed/);
+  await expectLocated(page, harness.deepPath);
+  const first = join(harness.workDir, 'first-long-directory');
+  const second = join(first, 'second-long-directory');
+  expect(harness.requests.filter(message => message.type === 'list_directory').map(message => message.dirPath))
+    .toEqual([harness.workDir, first, second, harness.deepDir]);
+  await page.locator('.CodeMirror').click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.insertText('unsaved local edit');
+  await expect(page.locator('.file-content-dirty')).toBeVisible();
+  await crumb(page, first).click();
+  await expect(page.locator('.files-tab')).not.toHaveClass(/tree-collapsed/);
+  await expectLocated(page, first);
+  await expect(page.locator('.file-ops-toolbar')).toHaveCount(0);
+  await expect(page.locator('.CodeMirror')).toContainText('unsaved local edit');
+  await crumb(page, harness.workDir).click();
+  await expect(page.locator('.file-tree-header')).toHaveClass(/tree-navigation-current/);
+  // A normal tree click collapses a folder. Filename navigation reopens it.
+  await treeEntry(page, first).click();
+  await expect(treeEntry(page, harness.deepPath)).toHaveCount(0);
+  await crumb(page, harness.deepPath).click();
+  await expectLocated(page, harness.deepPath);
+  // Bulk selections and path navigation are independent; a breadcrumb clears
+  // existing destructive selections rather than selecting its folder for delete.
+  await treeEntry(page, first).click({ modifiers: ['Control'] });
+  await expect(page.locator('.file-ops-toolbar')).toBeVisible();
+  await crumb(page, second).click();
+  await expectLocated(page, second);
+  await expect(page.locator('.file-ops-toolbar')).toHaveCount(0);
+  await page.evaluate(path => window.harness.openFile(path), harness.textPath);
+  await expectRealRead(page, harness, harness.textPath);
+  await expectLocated(page, harness.textPath);
+  await expect(page.locator('.vscode-folder-name')).toHaveAttribute('title', harness.externalDir);
+  await page.locator('.workbench-item-tab').filter({ hasText: 'deep-file.txt' }).click();
+  await expectLocated(page, harness.deepPath);
+  await expect(page.locator('.vscode-folder-name')).toHaveAttribute('title', harness.deepDir);
+  await expect(page.locator('.CodeMirror')).toContainText('unsaved local edit');
+  await expect(page.locator('.file-content-dirty')).toBeVisible();
+  await page.locator('.CodeMirror').click();
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('.CodeMirror')).not.toContainText('unsaved local edit');
+  expect(await readFile(harness.deepPath, 'utf8')).toBe('Deep file content.\n');
+  expect(harness.requests.filter(message => message.type === 'read_file' && message.filePath === harness.deepPath)).toHaveLength(1);
+  await expectOriginalOwner(page, harness);
+});
+
+test('Quick Open and restored active tabs locate deep files through the real tree', async ({ page, harness }) => {
+  await page.goto(harness.url);
+  await openFiles(page);
+  await page.keyboard.press('Control+p');
+  await page.locator('.quick-open-input').fill('deep-file');
+  await expect(page.locator('.quick-open-item').filter({ hasText: 'deep-file.txt' })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expectLocated(page, harness.deepPath);
+  await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
+  harness.restoreFiles = [harness.textPath, harness.deepPath];
+  harness.restoreIndex = 1;
+  await page.reload();
+  await openFiles(page);
+  await expectLocated(page, harness.deepPath);
+  await expect(page.locator('.workbench-item-tab').filter({ hasText: 'external.txt' })).toBeVisible();
+  await page.locator('.workbench-item-tab').filter({ hasText: 'external.txt' }).click();
+  await expectLocated(page, harness.textPath);
+  await expectOriginalOwner(page, harness);
+});
+
+test('late real directory/file responses cannot steal the current tab selection or resurrect an old root', async ({ page, harness }) => {
+  const held = [];
+  let captured;
+  const capture = new Promise(ok => { captured = ok; });
+  await page.route('**/bridge', async route => {
+    const request = route.request().postDataJSON();
+    if ((request.type === 'list_directory' && request.dirPath === join(harness.workDir, 'first-long-directory'))
+      || (request.type === 'read_file' && request.filePath === harness.deepPath)) {
+      const response = await route.fetch();
+      held.push(() => route.fulfill({ response }));
+      if (held.length === 2) captured();
+    } else await route.continue();
+  });
+  await page.goto(harness.url);
+  await openFiles(page);
+  await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+  await capture;
+  await page.evaluate(path => window.harness.openFile(path), harness.textPath);
+  await expectLocated(page, harness.textPath);
+  for (const release of held.reverse()) await release();
+  await page.evaluate(() => window.harness.idle());
+  await expectLocated(page, harness.textPath);
+  await expect(page.locator('.vscode-folder-name')).toHaveAttribute('title', harness.externalDir);
+  await expect(page.locator('.file-path-name')).toHaveText('external.txt');
+  await expect(page.locator('.CodeMirror')).toContainText('Original disk content.');
+  await expect(treeEntry(page, join(harness.workDir, 'first-long-directory'))).toHaveCount(0);
+  expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
+});
+
+test('long breadcrumbs stay single-line, scrollable and keyboard-accessible in light/dark and 320px layouts', async ({ page, harness }) => {
+  await page.goto(harness.url);
+  await openFiles(page);
+  await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+  await expectRealRead(page, harness, harness.deepPath);
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => {
+      document.documentElement.dataset.theme = theme;
+      window.harness.store.theme = theme;
+    }, theme);
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 720 });
+      if (width === 320) await page.locator('.workbench-item-tab').filter({ hasText: 'deep-file.txt' }).click();
+      const nav = page.locator('.file-content-path');
+      await expect(nav).toBeVisible();
+      const geometry = await nav.evaluate(element => ({
+        width: element.clientWidth, scroll: element.scrollWidth,
+        rows: new Set([...element.querySelectorAll('button')].map(button => Math.round(button.getBoundingClientRect().top))).size,
+        right: element.getBoundingClientRect().right, viewport: window.innerWidth,
+      }));
+      expect(geometry.width).toBeGreaterThan(0);
+      expect(geometry.rows).toBe(1);
+      expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
+      if (width === 320) expect(geometry.scroll).toBeGreaterThan(geometry.width);
+      const folder = crumb(page, harness.deepDir);
+      await folder.focus();
+      await expect(folder).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expectLocated(page, harness.deepDir);
+      await expect(treeEntry(page, harness.deepDir)).toBeVisible();
+      await expect(page.locator('.file-ops-toolbar')).toHaveCount(0);
+      // Return to the editor on mobile without changing the active file.
+      if (width === 320) await treeEntry(page, harness.deepPath).click();
+    }
+  }
 });

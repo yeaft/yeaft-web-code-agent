@@ -37,7 +37,7 @@ export function createFileTabs(store, {
   clearFindMarkers, saveCurrentUndoHistory, saveAllUndoHistory,
   cleanupUndoHistory, deleteConversationHistory,
   textPreviewMode, renderOfficeLocal,
-  performFind, findBarVisible, findQuery, t
+  performFind, findBarVisible, findQuery, onReselect = () => {}, t
 }) {
   const fileTabsMap = Vue.reactive({});
   const openFiles = Vue.ref([]);
@@ -157,6 +157,7 @@ export function createFileTabs(store, {
       && (!f.agentId || f.agentId === agentId)
       && (!f.conversationId || f.conversationId === conversationId));
     if (existingIndex >= 0) {
+      if (activeFileIndex.value === existingIndex) onReselect(nPath);
       if (activeFileIndex.value !== existingIndex) {
         clearFindMarkers();
         saveCurrentUndoHistory();
@@ -175,7 +176,7 @@ export function createFileTabs(store, {
     }
 
     saveCurrentUndoHistory();
-    const displayName = name || nPath.split(/[/\\]/).pop();
+    const displayName = name || nPath.split('/').pop();
     const fileType = getFileType(displayName);
     openFiles.value.push({
       path: nPath, name: displayName, agentId, conversationId, workDir,
@@ -196,7 +197,7 @@ export function createFileTabs(store, {
   }
 
   const switchToTab = (index) => {
-    if (index === activeFileIndex.value) return;
+    if (index === activeFileIndex.value) { onReselect(activeFile.value?.path); return; }
     clearFindMarkers();
     saveCurrentUndoHistory();
     activeFileIndex.value = index;

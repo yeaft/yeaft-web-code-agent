@@ -1623,7 +1623,8 @@ describe('message file preview', () => {
     expect(filesCss).toMatch(/\.file-col-content\s*\{[^}]*order:\s*1;/s);
     expect(filesCss).toMatch(/\.file-tree-splitter\s*\{[^}]*order:\s*2;[^}]*border-right:\s*1px solid var\(--border-color\);/s);
     expect(filesTab).toContain('class="file-content-header"');
-    expect(filesTab).toContain('class="file-content-folder"');
+    expect(filesTab).toContain('class="file-path-crumb"');
+    expect(filesTab).toContain('navigateBreadcrumb(crumb.path,');
     expect(filesTab).toContain('class="file-content-actions"');
     expect(filesTab).toContain('v-if="activeFile?.loading" class="file-load-state"');
     expect(filesTab).toContain('v-else-if="activeFile?.loadError" class="file-load-state file-load-error"');

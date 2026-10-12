@@ -43,6 +43,8 @@ Files provides a VS Code-style file tree, editor, and preview surface.
 
 In ordinary Sessions, manually selected files can be outside the Session working directory; browsing, editing, and previews use the Agent account’s filesystem permissions and do not change the Session working directory. WorkItem Files remain confined to the WorkItem workspace. Automatic response file/image references still require paths inside the Session workspace.
 
+Opening or switching files expands their parent folders and highlights the active file. Click any segment of the editor path to show and locate that folder (or the filename to locate the file). In ordinary Sessions, an external file can move the tree root to its parent without changing the Session working directory or discarding edits; WorkItem navigation stays inside its workspace.
+
 ### Editor and previews
 
 - edit multiple files with syntax highlighting

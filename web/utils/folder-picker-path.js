@@ -1,4 +1,33 @@
 /** Browser-side navigation only; the Agent resolves and validates actual paths. */
+
+/** Resolve lexical paths without interpreting a POSIX filename's backslashes. */
+export function normalizeBrowserPath(path, workDir = '') {
+  if (!path) return '';
+  let crumbs = directoryBreadcrumbs(path);
+  if (!crumbs.length) {
+    const base = normalizeBrowserPath(workDir);
+    if (!base) return path;
+    path = childDirectory(base, path);
+    crumbs = directoryBreadcrumbs(path);
+  }
+  const windows = /^[a-z]:[/\\]/i.test(path) || /^(?:\\\\|\/\/)/.test(path);
+  const root = windows ? crumbs[0].path.replace(/\\/g, '/') : crumbs[0].path;
+  const parts = [];
+  for (const { label } of crumbs.slice(1)) {
+    if (label === '.') continue;
+    if (label === '..') parts.pop();
+    else parts.push(label);
+  }
+  return root + parts.join('/');
+}
+
+export function isPathWithinDirectory(path, directory) {
+  if (!path || !directory) return false;
+  const windows = /^[a-z]:\//i.test(directory) || directory.startsWith('//');
+  if (windows) { path = path.toLowerCase(); directory = directory.toLowerCase(); }
+  return path === directory || path.startsWith(directory.replace(/\/$/, '') + '/');
+}
+
 export function directoryBreadcrumbs(path) {
   if (!path) return [];
   const drive = path.match(/^[a-z]:[/\\]/i);

@@ -858,22 +858,36 @@
 
 .file-content-path {
   min-width: 0;
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
-  overflow: hidden;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: thin;
   color: var(--text-secondary);
   font-size: 12px;
   white-space: nowrap;
 }
 
-.file-content-path > * {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.file-path-crumb {
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  padding: 5px 4px;
+  font: inherit;
+  cursor: pointer;
 }
 
-.file-content-folder {
-  color: var(--text-muted);
+.file-path-crumb:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text-primary); }
+.file-path-crumb:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+.file-path-crumb:disabled { cursor: default; opacity: 0.5; }
+.file-path-crumb.file-path-name { color: var(--text-primary); font-weight: 600; }
+
+.files-tab .tree-navigation-current {
+  background: var(--sidebar-hover);
+  box-shadow: inset 2px 0 var(--accent-blue);
 }
 
 .file-content-separator,
