@@ -4,7 +4,7 @@ import { childDirectory, parentDirectory } from '../../utils/folder-picker-path.
  * folderPicker — Folder picker dialog composable for FilesTab.
  */
 
-export function createFolderPicker(store, { getEffectiveWorkDir, treePath, treeRootPath, treeNodes, normalizePath, loadTreeDirectory }) {
+export function createFolderPicker(store, { getEffectiveWorkDir, treePath, loadRootDirectory }) {
   const folderPickerOpen = Vue.ref(false);
   const folderPickerPath = Vue.ref('');
   const folderPickerEntries = Vue.ref([]);
@@ -66,18 +66,7 @@ export function createFolderPicker(store, { getEffectiveWorkDir, treePath, treeR
     }
     treePath.value = path;
     folderPickerOpen.value = false;
-    const nPath = normalizePath(path);
-    treeRootPath.value = nPath;
-    Object.keys(treeNodes).forEach(k => delete treeNodes[k]);
-    treeNodes[nPath] = { entries: [], expanded: true, loaded: false, loading: true };
-    store.sendWsMessage({
-      type: 'list_directory',
-      conversationId: store.currentConversation || '_explorer',
-      agentId: store.currentAgent,
-      dirPath: path,
-      workDir: getEffectiveWorkDir(),
-      _clientId: store.clientId
-    });
+    loadRootDirectory();
   };
 
   // Handle directory listing for folder picker

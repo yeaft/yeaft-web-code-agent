@@ -51,7 +51,7 @@ export function callUsage(raw, completed) {
   return { ...usage, reportedCalls: Number(reported), missingCalls: Number(!reported), complete: completed && usage.totalTokens !== null };
 }
 
-function sumUsage(calls, terminal) {
+export function sumUsage(calls, terminal) {
   const fields = [...TOKEN_FIELDS, 'inputTotalTokens', 'totalTokens'];
   const usage = Object.fromEntries(fields.map(key => {
     const known = calls.map(call => call.usage[key]).filter(value => value !== null);
@@ -84,7 +84,11 @@ export function turnView(episode, events) {
     if (!call) continue;
     if (event.kind === 'call_output' || event.kind === 'call_failed') {
       call.status = event.kind === 'call_output' ? 'completed' : ['CANCELLED', 'INTERRUPTED'].includes(event.code) ? event.code.toLowerCase() : 'failed';
-      call.endedAt = event.createdAt; call.code = string(event.code);
+      call.endedAt = event.createdAt;
+      // Legacy call lifecycle timestamps include queue/pause time. Do not label
+      // them as provider duration when no actual dispatch measurement was stored.
+      call.elapsedMs = token(event.requestElapsedMs);
+      call.code = string(event.code);
       call.effective.effort = event.effortObserved === true ? string(event.effectiveEffort) : null;
       call.usage = callUsage(event.usage, event.kind === 'call_output');
     } else if (event.kind === 'proposal_rejected') {
@@ -97,7 +101,7 @@ export function turnView(episode, events) {
     }
   }
   const items = [...calls.values()].sort((a, b) => a.index - b.index);
-  return { id: episode.id, seq: episode.seq, kind: episode.kind, status: episode.status, createdAt: episode.createdAt,
+  return { id: episode.id, seq: episode.seq, kind: episode.kind, status: episode.status, controlStatus: episode.status === 'running' ? string(episode.controlStatus) : null, createdAt: episode.createdAt,
     endedAt: episode.endedAt, terminalCode: episode.terminalCode, budget: { calls: token(episode.calls), timeoutMs: token(episode.timeoutMs) },
     models: [...new Set(items.map(call => call.dispatched.model).filter(Boolean))], usage: sumUsage(items, episode.status !== 'running'), calls: items };
 }

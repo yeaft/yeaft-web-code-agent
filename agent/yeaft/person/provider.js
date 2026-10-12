@@ -150,6 +150,7 @@ export async function collectOutput(adapter, params, onEffort) {
       else if (event.type === 'tool_call') fail('INVALID_PROPOSAL');
       else if (event.type === 'usage') {
         usage = addUsage(usage, event, params.usageCacheIncluded);
+        params.onUsage?.(usage);
       }
       // Hidden thinking, signatures, opaque provider state and raw HTTP exchanges are deliberately not archived.
     }

@@ -103,6 +103,39 @@ describe('digital person authenticated relay', () => {
     expect(forward).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['executions', {}], ['pause', { episodeId: 'episode-one' }], ['resume', { episodeId: 'episode-one' }],
+  ])('relays %s execution control only to the authenticated owner and original requester', async (op, payload) => {
+    await relay.request(client, message({ op, payload, ownerId: 'victim' }));
+    const outbound = forward.mock.lastCall[1];
+    expect(outbound).toMatchObject({ ownerId: 'owner-a', op, payload });
+    await relay.response('agent-b', { type: 'person_response', requestId: outbound.requestId, ok: true, data: { active: 'foreign' } });
+    expect(send).not.toHaveBeenCalled();
+    await relay.response('agent-a', { type: 'person_response', requestId: outbound.requestId, ok: true, data: { active: null } });
+    expect(send.mock.lastCall).toEqual([client, { type: 'person_response', agentId: 'agent-a', requestId: 'browser-1', op, ok: true, data: { active: null } }]);
+  });
+
+  it.each([
+    ['executions', { ownerId: 'victim' }], ['executions', { limit: 100 }],
+    ['pause', {}], ['resume', {}], ['pause', { episodeId: '../foreign' }],
+    ['resume', { episodeId: 'episode-one', ownerId: 'victim' }],
+    ['pause', { episodeId: 'episode-one', maxCalls: 4 }], ['resume', { episodeId: null }],
+  ])('rejects malformed %s execution controls before forwarding', async (op, payload) => {
+    await relay.request(client, message({ op, payload }));
+    expect(forward).not.toHaveBeenCalled();
+    expect(send.mock.lastCall[1]).toMatchObject({ op, ok: false, errorCode: 'invalid_request' });
+  });
+
+  it.each(['executions', 'pause', 'resume'])('requires authentication and Agent access for %s execution control', async op => {
+    client.authenticated = false;
+    await relay.request(client, message({ op, payload: { episodeId: 'episode-one' } }));
+    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Authentication required' });
+    client.authenticated = true; accessError.mockReturnValue('Agent access denied');
+    await relay.request(client, message({ op, payload: { episodeId: 'episode-one' } }));
+    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Agent access denied' });
+    expect(forward).not.toHaveBeenCalled();
+  });
+
   it('passes the exact cancellation episode and ignores a forged owner', async () => {
     await relay.request(client, message({ op: 'cancel', payload: { episodeId: 'old-episode', ownerId: 'victim' } }));
     expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op: 'cancel', payload: { episodeId: 'old-episode' } });

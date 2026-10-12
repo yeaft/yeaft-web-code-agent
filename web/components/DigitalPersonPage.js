@@ -7,7 +7,7 @@ import PersonOutputs from './PersonOutputs.js';
 import ResponsePresentation from './ResponsePresentation.js';
 import { safeOutputUrl } from '../stores/helpers/person-outputs.js';
 import PersonKnowledgeBrowser from './PersonKnowledgeBrowser.js';
-import PersonTaskBrowser from './PersonTaskBrowser.js';
+import PersonManagement from './PersonManagement.js';
 import PersonTurnUsage from './PersonTurnUsage.js';
 import ModernSelect from './ModernSelect.js';
 import PersonSettingsModal from './PersonSettingsModal.js';
@@ -25,7 +25,7 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
-  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonTaskBrowser, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity, PersonResponseLoading },
+  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity, PersonResponseLoading },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -145,12 +145,14 @@ export default {
       window.addEventListener('resize', resize);
       document.addEventListener('keydown', panelKeydown);
       document.addEventListener('focusin', keepPanelFocus);
+      document.addEventListener('visibilitychange', controller.visibilityChanged);
     });
     Vue.onBeforeUnmount(() => {
       draftGeneration++; controller.dispose();
       window.removeEventListener('resize', resize);
       document.removeEventListener('keydown', panelKeydown);
       document.removeEventListener('focusin', keepPanelFocus);
+      document.removeEventListener('visibilitychange', controller.visibilityChanged);
     });
     Vue.onUpdated(keepPanelFocus);
     const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
@@ -208,7 +210,7 @@ export default {
         if (state.outputsSupported && !state.outputs.loaded && !state.outputs.loading) controller.readOutputs();
         controller.resumeOutput();
       }
-      controller.showTasks(section === 'tasks' && !gate.value && !state.loading && !!state.person);
+      controller.showManagement(section === 'tasks' && !gate.value && !state.loading && !!state.person);
       controller.showTurns(section === 'turns' && !gate.value && !state.loading && !!state.person);
       if (['memory', 'skills'].includes(section) && !gate.value && !state.loading && state.person
         && !state[section].loaded && !state[section].loading) controller.inspect(section);
@@ -561,7 +563,7 @@ export default {
             <button type="button" class="btn-ghost" :disabled="!!gate || state.loading || state.tracesLoading" @click="controller.refresh()">{{ $t('common.refresh') }}</button>
           </div>
           <nav v-if="!['search', 'outputs'].includes(panel)" class="person-inspector-nav" :aria-label="$t('person.inside')">
-            <button v-for="section in ['overview', 'thoughts', 'turns', 'tasks', 'memory', 'skills']" :key="section" type="button" class="btn-ghost" :class="{ active: panel === section }" :aria-current="panel === section ? 'page' : undefined" @click="openPanel(section)">{{ $t('person.' + section) }}</button>
+            <button v-for="section in ['overview', 'thoughts', 'turns', 'tasks', 'memory', 'skills']" :key="section" type="button" class="btn-ghost" :class="{ active: panel === section }" :aria-current="panel === section ? 'page' : undefined" @click="openPanel(section)">{{ $t(section === 'tasks' ? 'person.management.title' : 'person.' + section) }}</button>
           </nav>
           <PersonOutputs ref="outputReader" v-if="outputVisited" v-show="panel === 'outputs'" :state="state.outputs" :supported="state.outputsSupported" :file-supported="state.outputsFileSupported" :disabled="!!gate || state.loading" :gate="gate || (state.loading ? 'loading' : '')" :expanded="expandedPanel" :compact="compactPanel" @close="closePanel()" @expand="expandedPanel = !expandedPanel" @close-tab="controller.closeOutputTab" @select="selectOutput" @refresh="controller.readOutputs()" @more="controller.readOutputs(true)" @retry="controller.selectOutput(state.outputs.selected)" />
           <section v-if="panel === 'overview'" class="person-journal-scroll person-overview" tabindex="0" :aria-label="$t('person.overview')">
@@ -589,7 +591,7 @@ export default {
             </div>
           </section>
           <PersonTurnUsage v-else-if="panel === 'turns'" :page="state.turns" :identity-key="transcriptIdentity" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTurns()" @more="controller.readTurns(true)" />
-          <PersonTaskBrowser v-else-if="panel === 'tasks'" :page="state.tasks" :identity-key="transcriptIdentity" :log="state.taskLog" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTasks()" @more="controller.readTasks(true)" @log="controller.readTaskLog" @stop="controller.stopTask" />
+          <PersonManagement v-else-if="panel === 'tasks'" :execution="state.executions" :page="state.tasks" :identity-key="transcriptIdentity" :log="state.taskLog" :disabled="!!gate || state.loading || !state.person" @refresh="controller.readTasks(); controller.readExecutions()" @more="controller.readTasks(true)" @log="controller.readTaskLog" @stop="controller.stopTask" @pause="id => controller.controlExecution('pause', id)" @resume="id => controller.controlExecution('resume', id)" @cancel="id => controller.controlExecution('cancel', id)" />
           <PersonKnowledgeBrowser v-else-if="panel === 'memory' || panel === 'skills'" :key="panel" :section="panel" :identity-key="transcriptIdentity + panel" :page="state[panel]" :disabled="!!gate || state.loading || !state.person" @refresh="controller.inspect(panel)" @more="controller.inspect(panel, true)" />
           <div v-if="panel === 'thoughts' || panel === 'debug'" class="person-journal-toolbar">
             <span class="person-muted">{{ $t('person.thoughts') }}</span>

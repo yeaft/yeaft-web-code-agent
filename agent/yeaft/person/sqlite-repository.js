@@ -89,6 +89,7 @@ export class SqlitePersonRepository {
   async recover(ownerId) { return this.request('recover', [ownerId]); }
   async admit(ownerId, input) { return this.request('admit', [ownerId, input]); }
   async receipt(ownerId, clientMessageId, requestHash) { return this.request('receipt', [ownerId, clientMessageId, requestHash]); }
+  async executionControl(episode, control) { return this.request('executionControl', [episode, control]); }
   async heartbeat(episode) { return this.request('heartbeat', [episode]); }
   async append(episode, kind, data) { return this.request('append', [episode, kind, data]); }
   async startCall(episode, data) { return this.request('startCall', [episode, data]); }

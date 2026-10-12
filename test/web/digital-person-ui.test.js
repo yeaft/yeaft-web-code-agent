@@ -43,7 +43,7 @@ beforeEach(() => {
         inspect: { items: request.payload.section === 'memory' ? [{ id: 'idea', kind: 'interest', statement: '<script>Keep uncertainty</script>', epistemicState: 'reported', revision: 2, sourceRefs: ['message:1'] }] : [{ id: 'Script.sum', domain: 'script', version: 1, description: 'Sum', code: 'return input' }], nextCursor: null },
         search: { items: [{ id: 'archive', role: 'user', text: '<img src=x> archived message', createdAt: 1 }], nextCursor: null },
         tasks: { tasks: [{ id: 'background', title: '<script>build</script>', status: 'running' }], agents: [{ id: 'child', taskId: 'child-log', name: 'Research', status: 'completed' }] },
-        turns: { items: [personTurn()], nextCursor: null },
+        turns: { items: [personTurn()], nextCursor: null }, executions: { main: null, items: [] },
         task_log: { text: '<img onerror=alert(1)> shell output', nextOffset: 35 }, task_cancel: {}, agent_close: {},
       };
       queueMicrotask(() => acceptPersonResponse(chat, { ...request, type: 'person_response', ok: true, data: data[request.op] }));
@@ -376,6 +376,21 @@ describe('Digital Person surface', () => {
     expect(wrapper.emitted('more')).toHaveLength(1);
   });
 
+  it.each([en, zhCN])('labels capped historical call windows and uses the real episode loop count', async messages => {
+    const turn = personTurn(2, { loops: 60, callsTruncated: true, callWindowLimit: 32, usageScope: 'latest-call-window' });
+    const translate = (key, params = {}) => (messages[key] || key).replace(/\{(\w+)\}/g, (m, name) => params[name] ?? m);
+    wrapper = mount(PersonTurnUsage, { props: { page: { items: [turn], loaded: true } },
+      global: { config: { globalProperties: { $t: translate } } } });
+    const summary = wrapper.get('.person-turn-row > summary');
+    expect(summary.text()).toContain(translate('person.usage.loops', { n: 60 }));
+    expect(summary.text()).toContain(translate('person.usage.callWindow', { n: turn.calls.length }));
+    expect(summary.text()).toContain(messages['person.usage.windowScope']);
+    await wrapper.setProps({ page: { items: [{ ...turn, loops: undefined }], loaded: true } });
+    expect(wrapper.get('.person-turn-row > summary').text()).toContain(translate('person.usage.loops', { n: '—' }));
+    await wrapper.setProps({ page: { items: [{ ...turn, loops: undefined, callCount: 60 }], loaded: true } });
+    expect(wrapper.get('.person-turn-row > summary').text()).toContain(translate('person.usage.loops', { n: 60 }));
+  });
+
   it.each([en, zhCN])('keeps usage dense, distinguishing model tokens, request bytes and actual recall sources', messages => {
     wrapper = mount(PersonTurnUsage, { props: { page: { items: [personTurn()], loaded: true } },
       global: { config: { globalProperties: { $t: (key, params = {}) => (messages[key] || key).replace(/\{(\w+)\}/g, (m, name) => params[name] ?? m) } } } });
@@ -423,7 +438,7 @@ describe('Digital Person surface', () => {
   it('shows cross-episode task management in the kernel without starting cognition, keeping logs inert and draft intact', async () => {
     await render(); await wrapper.get('#person-input').setValue('Keep this draft');
     await wrapper.get('.person-thoughts-button').trigger('click');
-    await wrapper.findAll('.person-inspector-nav button').find(b => b.text() === 'Tasks').trigger('click');
+    await wrapper.findAll('.person-inspector-nav button').find(b => b.text() === 'Management').trigger('click');
     await flushPromises();
     const pane = wrapper.get('.person-task-browser');
     expect(pane.text()).toContain('<script>build</script>');
