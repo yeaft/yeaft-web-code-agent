@@ -185,7 +185,7 @@ describe('digital Person strict contracts', () => {
       const result = await capabilities.execute({ id: 'catalog.search', args: { cursor, limit: 1 } });
       ids.push(...result.items.map(i => i.id)); cursor = result.nextCursor;
     } while (cursor);
-    expect(ids).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort((a, b) => a.localeCompare(b, 'en')));
+    expect(ids).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'PresentResponse', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort((a, b) => a.localeCompare(b, 'en')));
     expect(await capabilities.execute({ id: 'catalog.view', args: { id: 'Skill.associate' } })).toMatchObject({ access: 'read-only', version: 1 });
     expect(await capabilities.execute({ id: 'Skill.associate', args: {} })).toMatchObject({ access: 'method-only' });
     await expect(capabilities.execute({ id: 'Bash', args: { command: 'touch /tmp/not-allowed' } })).rejects.toMatchObject({ code: 'UNSUPPORTED' });

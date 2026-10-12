@@ -4,10 +4,13 @@ import { createdCapabilityRecord, validateCreatedDefinition } from './created-ca
 import { runPersonScript, scriptInput, testPersonScript } from './script-executor.js';
 import { chronologicalCursor, createdSkillView, inspectionCursor, inspectionPage, inspectionTime } from './inspection.js';
 import { publishOutput } from './outputs.js';
+import { PRESENTATION_SCHEMA, PRESENT_RESPONSE_DESCRIPTION } from '../response-presentation.js';
+import { publishPresentation } from './presentation.js';
 
 // Intrinsic cognition, bounded pure scripts and supported native host tools.
 // No shell/filesystem/network/VP authority is exposed to generated code.
 const entries = [
+  { id: 'PresentResponse', version: 1, domain: 'delivery', description: 'Publish a structured user-visible answer with a searchable plain-text summary.', keywords: '展示 回答 图表 表格 卡片 时间线 present response chart table cards timeline rich', useWhen: 'Rich structure improves an answer; ordinary reply remains valid for simple text.', avoidWhen: 'Do not expose secrets, fabricate evidence or repeat an already published summary.', instructions: `${PRESENT_RESPONSE_DESCRIPTION} Invoke via next.capability; set reply:null for this delivery. Publication never commits state/concepts or ends the episode, even with phase=final; reserve a later next:null for the cognitive commit.`, args: PRESENTATION_SCHEMA, access: 'publish-owner-message' },
   { id: 'Think', version: 1, domain: 'cognition', description: 'Intrinsic deliberate reflection, reorganization, association and reconsideration.', keywords: '思考 整理 反思 think reflection', useWhen: 'Think with the evidence already present, or rest when nothing warrants further work.', avoidWhen: 'Do not invent evidence or call a tool merely to appear thoughtful.', instructions: 'Advance an unresolved question: test, integrate a result or distill an insight. Record the change, not a status recap. Follow the progress/continuation rules; quiet rest is valid. This method makes no model call or external action.', args: {} },
   { id: 'Output.publish', version: 1, domain: 'delivery', description: 'Deliver a meaningful artifact as an immutable file snapshot or external link to your owner.', keywords: '产物 交付 输出 文件 下载 链接 publish output artifact deliver file download link', useWhen: 'Deliver an actual completed or useful partial artifact, including artifacts produced by your children.', avoidWhen: 'Do not publish secrets, unauthorized files or guessed paths; do not claim publication rolled back on cancellation.', instructions: 'args: {file_path?:string,url?:string,title?:string}. Exactly one file_path or url. file_path is relative to canonical workDir or an absolute path strictly inside it; no symlinks/directories. Max 10 MiB per file, 100 MiB and 200 outputs total per Person. Files are durable byte snapshots with conservative MIME, including Markdown/images/PDF/HTML/text/code/JSON/binary downloads. URL must be HTTP(S), no credentials; it is metadata only and never fetched. title <=240 UTF-8 bytes; default filename or link host, truncated on UTF-8 boundaries if necessary. File publication is Linux-only with accessible procfs and no-follow directory descriptors; unavailable platforms fail closed with OUTPUT_PLATFORM. Links and existing snapshot reads remain available. Returns public {id,title,kind,mimeType,size,episodeId,createdAt,url?}, no raw path. Successful publications survive later cancellation/failure. Parent verifies and publishes child artifacts within its own workDir; do not grant children this capability.', args: { file_path: 'optional local artifact path within workDir', url: 'optional credential-free HTTP(S) URL', title: 'optional title <=240 UTF-8 bytes' }, access: 'publish-owner-output' },
   { id: 'Recall', version: 1, domain: 'memory', description: 'Recall a bounded page of your own long-term messages or concepts.', keywords: '回忆 记忆 召回 历史 查找 搜索 memory recall history search', useWhen: 'Missing prior words, experiences or concepts could change your present understanding.', avoidWhen: 'Current evidence is sufficient; a similar memory cannot grant permission or establish truth.', instructions: 'args: {kind:"messages"|"concepts",query?:string,cursor?:string|null,limit?:1..5}. SQLite uses local hybrid keyword/semantic recall when available; inspect retrieval mode, coverage and degradation. Legacy storage may use literal matching. Results are not exhaustive or authorization. Preserve nextCursor for the same query; local ranking cursors expire after 5 minutes or restart.', args: { kind: 'messages|concepts', query: 'optional memory search text', cursor: 'optional opaque cursor', limit: '1..5' } },
@@ -20,7 +23,11 @@ const manifests = [...entries.map(entry => {
   return { ...contract, revision: digest(contract) };
 }), ...NATIVE_TOOL_MANIFESTS];
 const foundationIds = new Set(['Think', 'Recall', 'Capability.create']);
-export const CAPABILITY_LIMITS = Object.freeze({ familiar: 2, familiarMaxAgeMs: 30 * 24 * 60 * 60 * 1000, activeBytes: 8192, searchContractBytes: 4096 });
+export const CAPABILITY_LIMITS = Object.freeze({ familiar: 2, familiarMaxAgeMs: 30 * 24 * 60 * 60 * 1000, activeBytes: 8192, presentationBytes: 12288, searchContractBytes: 4096 });
+// The complete shared rich schema is demand-loaded. Keep ordinary/script
+// budgets unchanged while allowing this larger, bounded contract alongside foundation.
+export const capabilityContextBudget = items => items.some(item => item.id === 'PresentResponse')
+  ? CAPABILITY_LIMITS.presentationBytes : CAPABILITY_LIMITS.activeBytes;
 export const CAPABILITY_MAP = Object.freeze({
   domains: [...new Set(manifests.map(m => m.domain)), 'script'], total: manifests.length,
   nativeTools: NATIVE_TOOL_IDS,
@@ -111,7 +118,7 @@ export class PersonCapabilities {
     this.byId = new Map([...manifests.filter(m => !isNativeTool(m.id) || allowed.has(m.id)), ...created.map(scriptManifest)].map(m => [m.id, m]));
     this.prepared = new Map(foundationCapabilities().map(m => [m.id, m]));
     for (const item of familiarCapabilities(experience, triggerKind, now, this.byId)) {
-      if (bytes([...this.prepared.values(), item]) <= CAPABILITY_LIMITS.activeBytes) this.prepared.set(item.id, item);
+      if (bytes([...this.prepared.values(), item]) <= capabilityContextBudget([...this.prepared.values(), item])) this.prepared.set(item.id, item);
     }
     this.active = new Map(this.prepared);
   }
@@ -132,7 +139,8 @@ export class PersonCapabilities {
   }
   canPrepareAll(requested) {
     const optional = requested.filter(m => !foundationIds.has(m.id)).map(m => available(m, 'discovered', 'explicitly-requested'));
-    return bytes([...foundationCapabilities(), ...optional]) <= CAPABILITY_LIMITS.activeBytes;
+    const items = [...foundationCapabilities(), ...optional];
+    return bytes(items) <= capabilityContextBudget(items);
   }
   prepare(manifest) { this.prepareAll([manifest]); }
   prepareAll(requested) {
@@ -142,7 +150,7 @@ export class PersonCapabilities {
     const next = [...items, ...this.prepared.values()].filter((m, i, all) => all.findIndex(n => n.id === m.id) === i);
     const kept = next.filter(m => foundationIds.has(m.id));
     for (const candidate of next.filter(m => !foundationIds.has(m.id))) {
-      if (bytes([...kept, candidate]) <= CAPABILITY_LIMITS.activeBytes) kept.push(candidate);
+      if (bytes([...kept, candidate]) <= capabilityContextBudget([...kept, candidate])) kept.push(candidate);
     }
     if (requested.some(m => !kept.some(n => n.id === m.id))) fail('CONTEXT_LIMIT');
     this.prepared = new Map(kept.map(m => [m.id, m]));
@@ -186,6 +194,7 @@ export class PersonCapabilities {
       return this.toolHost.execute(id, args, { signal, callId, episodeId: this.episode?.id });
     }
     if (id === 'Output.publish') return publishOutput(this.repository, this.episode, this.workDir, args, { signal, callId });
+    if (id === 'PresentResponse') return publishPresentation(this.repository, this.episode, args, { signal, callId });
     if (id === 'Capability.create') {
       if (!this.episode || !callId) fail('UNSUPPORTED');
       const definition = validateCreatedDefinition(args);

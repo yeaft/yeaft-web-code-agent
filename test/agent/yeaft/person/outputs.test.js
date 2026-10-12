@@ -4,10 +4,15 @@ import { mkdtemp, mkdir, writeFile, rm, symlink, truncate } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
+import { PersonCapabilities, foundationCapabilities, capabilityContextBudget } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { DatabaseSync } from 'node:sqlite';
 import { config, finalProposal } from './fixtures.js';
+import { PRESENTATION_SCHEMA, normalizePresentation } from '../../../../agent/yeaft/response-presentation.js';
+import { personPresentation, presentationView } from '../../../../agent/yeaft/person/presentation.js';
+import { messageView } from '../../../../agent/yeaft/person/inspection.js';
+import { bytes } from '../../../../agent/yeaft/person/contracts.js';
+import { projectPersonConversation } from '../../../../web/utils/person-conversation.js';
 import { outputFilePublicationSupport, snapshotOutput } from '../../../../agent/yeaft/person/outputs.js';
 
 let root, workDir, repositories, r, episode;
@@ -247,5 +252,166 @@ describe('Person durable output delivery', () => {
       await expect(request('output_read', { outputId: first.id })).rejects.toMatchObject({ code: 'OUTPUT_NOT_FILE' });
       await expect(request('Output.publish', { file_path: '/etc/passwd' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     } finally { await service.close(); }
+  });
+});
+
+describe('Person presentation publication', () => {
+  const args = { summary: 'Verified comparison: Alpha 2, Beta 3.', blocks: [
+    { type: 'chart', style: 'bar', labels: ['Alpha', 'Beta'], series: [{ label: 'Count', values: [2, 3] }] },
+    { type: 'table', columns: ['Name', 'Count'], rows: [['Alpha', '2'], ['Beta', '3']] },
+  ] };
+  let root, repositories, r, episode;
+  const repo = (namespace = 'default') => {
+    const repository = new SqlitePersonRepository({ yeaftDir: root, namespace, leaseMs: 60000 });
+    repositories.push(repository); return repository;
+  };
+  async function prepare(input = args, current = episode, repository = r) {
+    const cap = new PersonCapabilities(repository, current.ownerId, { episode: current });
+    await cap.execute({ id: 'catalog.view', args: { id: 'PresentResponse' } });
+    const callId = randomUUID(), capability = { id: 'PresentResponse', args: input };
+    await repository.startCall(current, { callId, requested: { model: 'test/first', effort: null } });
+    await repository.finalizeCall(current, { callId, output: { text: '{}' } });
+    await repository.startCapability(current, { callId, capability });
+    return { callId, capability, publish: options => cap.execute(capability, { callId, ...options }),
+      finish: result => repository.finalizeCapability(current, { callId, capability, result }) };
+  }
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'person-presentation-')); repositories = []; r = repo();
+    await r.open('alice');
+    episode = (await r.admit('alice', { kind: 'send', text: 'Compare the verified counts', clientMessageId: randomUUID(), workerId: 'worker', budget: { calls: 16 } })).episode;
+  });
+  afterEach(async () => { await Promise.all(repositories.map(repository => repository.close())); await rm(root, { recursive: true, force: true }); });
+
+  describe('Person structured response contract and fenced publication', () => {
+    it('demand-loads the shared full schema without adding a native tool or automatic thinking', async () => {
+      const cap = new PersonCapabilities(r, 'alice', { episode });
+      expect(foundationCapabilities().map(item => item.id)).not.toContain('PresentResponse');
+      expect(cap.catalog().domains).toContain('delivery');
+      expect(cap.catalog().nativeTools).not.toContain('PresentResponse');
+      await expect(cap.execute({ id: 'PresentResponse', args })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+      const search = await cap.execute({ id: 'catalog.search', args: { query: 'PresentResponse' } });
+      expect(search.items.map(item => item.id)).toContain('PresentResponse');
+      const loaded = await cap.execute({ id: 'catalog.view', args: { id: 'PresentResponse' } });
+      expect(loaded.args).toEqual(PRESENTATION_SCHEMA);
+      expect(loaded.instructions).toContain('never commits state/concepts or ends the episode');
+      expect(bytes(cap.context())).toBeLessThanOrEqual(capabilityContextBudget(cap.context()));
+      expect((await r.snapshot('alice')).state.version).toBe(0);
+    });
+
+    it('rejects invalid or executable payloads atomically at execution and repository boundaries', async () => {
+      const bad = [{}, { ...args, version: 1 }, { ...args, phase: 'completed' }, { ...args, summary: '' },
+        { ...args, blocks: [] }, { ...args, blocks: [{ type: 'html', text: '<script>bad</script>' }] },
+        { ...args, blocks: [{ type: 'image', url: 'javascript:alert(1)', alt: 'Unsafe' }] },
+        { ...args, blocks: [{ type: 'link', url: 'https://user:secret@example.com', text: 'Unsafe' }] },
+        { ...args, blocks: [{ type: 'table', columns: ['Name'], rows: [['a', 'b']] }] },
+        { ...args, blocks: [{ type: 'chart', style: 'bar', labels: ['a'], series: [{ label: 'Count', values: [1, 2] }] }] },
+        { ...args, blocks: [{ type: 'map', points: [{ label: 'Invalid', latitude: 91, longitude: 0 }] }] },
+        { ...args, blocks: [{ type: 'diagram', nodes: [{ id: 'a', label: 'A' }], edges: [{ from: 'a', to: 'missing' }] }] },
+        { ...args, blocks: Array.from({ length: 5 }, () => ({ type: 'markdown', text: 'x'.repeat(12000) })) }];
+      for (const input of bad) {
+        expect(() => personPresentation(input)).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+        const started = await prepare(input);
+        await expect(started.publish()).resolves.toMatchObject({ ok: false, code: 'INVALID_REQUEST', published: false });
+        await expect(r.savePresentation(episode, { callId: started.callId, args: input })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+        await started.finish({ ok: false, code: 'INVALID_REQUEST' });
+      }
+      expect((await r.snapshot('alice')).messages.map(m => m.role)).toEqual(['user']);
+    });
+
+    it('publishes canonical JSON and searchable summary live, without a cognitive commit or terminal success', async () => {
+      const started = await prepare(); const result = await started.publish();
+      expect(result).toMatchObject({ ok: true, published: true, phase: 'final', summary: args.summary });
+      const snapshot = await r.snapshot('alice'), message = snapshot.messages.at(-1);
+      expect(message).toMatchObject({ role: 'assistant', callId: started.callId, episodeId: episode.id,
+        replyKind: 'presentation', text: args.summary, presentation: normalizePresentation(args) });
+      expect(message).not.toHaveProperty('publicationHash'); expect(message).not.toHaveProperty('ownerId');
+      expect(snapshot).toMatchObject({ busy: true, state: { version: 0 }, latestEpisode: { status: 'running' } });
+      expect((await r.list('alice', 'messages')).items[0]).toEqual(message);
+      expect((await r.recall('alice', { kind: 'messages', query: 'verified comparison' })).items).toEqual([message]);
+      expect((await r.search('alice', { query: 'verified comparison' })).items).toEqual([message]);
+      const changes = await r.searchChanges('alice');
+      expect(changes.items.at(-1).record).toEqual(message);
+      expect(await r.resolveMemories('alice', 'messages', [{ id: message.id, revision: 1 }])).toEqual([message]);
+      expect((await r.context(episode)).messages.at(-1)).toEqual(message);
+      const blocks = projectPersonConversation([...snapshot.messages, { id: 'plain', role: 'assistant', episodeId: episode.id, text: 'A distinct later reply.' }]);
+      expect(blocks.at(-1).parts.map(m => m.id)).toEqual([message.id, 'plain']);
+      await started.finish(result);
+    });
+
+    it('deduplicates retries and repeated deliveries but rejects changed invocation hashes', async () => {
+      const started = await prepare(), first = await started.publish();
+      expect(await started.publish()).toEqual(first);
+      await started.finish(first);
+      expect(await started.publish()).toEqual(first); // Lost receipt after finalize, same live episode.
+      const repeated = await prepare(), second = await repeated.publish();
+      expect(second.messageId).toBe(first.messageId);
+      await repeated.finish(second);
+      expect(await repeated.publish()).toEqual(second); // A duplicate invocation also has its own receipt.
+      await expect(r.savePresentation(episode, { callId: repeated.callId, args: { ...args, summary: 'Different' } })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      expect((await r.snapshot('alice')).messages.filter(m => m.role === 'assistant')).toHaveLength(1);
+      await r.cancel('alice');
+      await expect(started.publish()).rejects.toMatchObject({ code: 'STALE' });
+    });
+
+    it('requires completed call proof and an exact open capability, never fabricated append authority', async () => {
+      await expect(r.savePresentation(episode, { callId: 'invented', args })).rejects.toMatchObject({ code: 'STALE' });
+      await expect(r.append(episode, 'presentation_published', { callId: 'invented' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      await expect(r.startCapability(episode, { callId: 'invented', capability: { id: 'PresentResponse', args } })).rejects.toMatchObject({ code: 'STALE' });
+      const started = await prepare();
+      await expect(r.savePresentation(episode, { callId: 'other', args })).rejects.toMatchObject({ code: 'STALE' });
+      await expect(r.savePresentation(episode, { callId: started.callId, args: { ...args, phase: 'progress' } })).rejects.toMatchObject({ code: 'STALE' });
+      await expect(r.publishProgress(episode, { callId: started.callId, reply: args.summary })).rejects.toMatchObject({ code: 'STALE' });
+      await started.finish();
+      await expect(started.publish()).rejects.toMatchObject({ code: 'STALE' });
+    });
+
+    it('aborts before publication, rejects cancelled leases, and retains accepted communication after cancellation', async () => {
+      const started = await prepare(), controller = new AbortController(); controller.abort();
+      await expect(started.publish({ signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+      expect((await r.snapshot('alice')).messages).toHaveLength(1);
+      const result = await started.publish(); await started.finish(result);
+      const late = await prepare({ ...args, summary: 'Too late' });
+      await r.cancel('alice'); await expect(late.publish()).rejects.toMatchObject({ code: 'STALE' });
+      expect((await r.snapshot('alice')).messages.at(-1).text).toBe(args.summary);
+      expect((await r.snapshot('alice')).state.version).toBe(0);
+    });
+
+    it('isolates owners, namespaces and forged identity and survives repository restart', async () => {
+      const started = await prepare(), result = await started.publish(); await started.finish(result);
+      await r.close(); r = repo();
+      expect((await r.snapshot('alice')).messages.at(-1).presentation).toEqual(normalizePresentation(args));
+      expect((await r.savePresentation(episode, { callId: started.callId, args })).id).toBe(result.messageId);
+      await r.open('bob'); const foreign = repo('other'); await foreign.open('alice');
+      expect((await r.snapshot('bob')).messages).toEqual([]); expect((await foreign.snapshot('alice')).messages).toEqual([]);
+      for (const forged of [{ ...episode, ownerId: 'bob' }, { ...episode, personId: 'foreign' }, { ...episode, namespace: 'other' }, { ...episode, workerId: 'other-worker' }]) {
+        await expect(r.savePresentation(forged, { callId: started.callId, args })).rejects.toMatchObject({ code: 'STALE' });
+      }
+      await expect(foreign.savePresentation(episode, { callId: started.callId, args })).rejects.toMatchObject({ code: 'STALE' });
+    });
+
+    it('fences expired leases and never turns final delivery intent into successful completion', async () => {
+      const started = await prepare(); await r.close();
+      const db = new DatabaseSync(r.dbPath);
+      try {
+        const record = JSON.parse(db.prepare('SELECT record FROM persons').get().record);
+        record.leaseUntil = new Date(0).toISOString();
+        db.prepare('UPDATE persons SET record = ?').run(JSON.stringify(record));
+      } finally { db.close(); }
+      r = repo();
+      await expect(r.savePresentation(episode, { callId: started.callId, args })).rejects.toMatchObject({ code: 'STALE' });
+      expect(await r.snapshot('alice')).toMatchObject({ busy: false, state: { version: 0 }, latestEpisode: { status: 'interrupted' } });
+    });
+
+    it('projects only valid canonical assistant JSON, preserving legacy text and invalid-record fallback', () => {
+      const plain = { id: 'legacy', role: 'assistant', text: 'Plain answer' };
+      expect(messageView(plain)).toEqual(plain);
+      const canonical = normalizePresentation(args);
+      expect(presentationView(canonical)).toEqual(canonical);
+      expect(messageView({ ...plain, presentation: canonical })).toMatchObject({ presentation: canonical });
+      for (const invalid of [null, 'not JSON', args, { ...canonical, version: 2 }, { ...canonical, blocks: [] }]) {
+        expect(messageView({ ...plain, presentation: invalid })).toEqual(plain);
+      }
+      expect(messageView({ ...plain, role: 'user', presentation: canonical })).not.toHaveProperty('presentation');
+    });
   });
 });

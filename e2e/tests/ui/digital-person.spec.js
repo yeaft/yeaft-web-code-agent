@@ -1088,6 +1088,49 @@ async function userScrollResponse(page, width) {
   await page.waitForTimeout(400);
 }
 
+for (const scenario of [{ width: 320, theme: 'dark' }, { width: 1280, theme: 'light' }]) {
+  test(`Digital Person rich communication retains replay and in-flight meaning ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
+    const presentation = { version: 1, title: 'Verified counts', summary: 'Alpha has 2; Beta has 3.', phase: 'final',
+      blocks: [{ type: 'table', columns: ['Name', 'Count'], rows: [['Alpha', '2'], ['Beta', '3']] },
+        { type: 'link', text: 'Evidence', url: 'https://example.com/evidence' }] };
+    const mock = await mockPersonSocket(page, { conversationFlow: true, historyAvailable: false, initialMessages: [
+      { id: 'rich-user', role: 'user', episodeId: 'rich-episode', text: 'Compare counts.', createdAt: 1 },
+      { id: 'rich-answer', role: 'assistant', episodeId: 'rich-episode', replyKind: 'presentation', text: presentation.summary, presentation, createdAt: 2 },
+      { id: 'rich-plain', role: 'assistant', episodeId: 'rich-episode', replyKind: 'final', text: 'Distinct plain conclusion.', createdAt: 3 },
+    ] });
+    await openResponseConversation(page, serverUrl, scenario);
+    const article = page.locator('.person-reply');
+    await expect(article).toHaveCount(1);
+    await expect(article.locator('.response-summary')).toHaveCount(1);
+    await expect(article.locator('.response-summary')).toHaveText(presentation.summary);
+    await expect(article.locator('section.person-reply-part')).toHaveCount(2);
+    await expect(article.locator('table')).toContainText('Alpha');
+    await expect(article.locator('.person-message-text')).toHaveText('Distinct plain conclusion.');
+    await expect(page.locator('.person-response-loading')).toHaveCount(0);
+    const link = article.getByRole('link', { name: 'Evidence' }); await link.focus();
+    const handle = await link.elementHandle();
+    await page.getByRole('button', { name: 'Refresh', exact: true }).evaluate(button => button.click());
+    await expect.poll(() => mock.requests.filter(request => request.op === 'snapshot').length).toBeGreaterThan(1);
+    expect(await page.evaluate(old => document.activeElement === old, handle)).toBe(true);
+    await page.reload();
+    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
+    if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
+    await page.locator('.sidebar-person-trigger:visible').click();
+    await expect(article.locator('.response-summary')).toHaveCount(1);
+    await page.locator('#person-input').fill('A new comparison.');
+    await page.locator('#person-input').press('Enter');
+    await expect.poll(() => mock.requests.filter(request => request.op === 'send').length).toBe(1);
+    mock.reply('live-rich', presentation.summary, 'person-a', undefined, { replyKind: 'presentation', presentation });
+    await expect(page.locator('[data-message-id="live-rich"] .response-summary')).toHaveText(presentation.summary);
+    await expect(page.locator('.person-response-loading')).toBeVisible();
+    await expect(page.locator('[data-message-id="live-rich"] .person-reply-kind')).toHaveCount(0);
+    await page.locator('.person-composer').getByRole('button', { name: 'Stop execution', exact: true }).click();
+    await expect(page.locator('.person-response-loading')).toHaveCount(0);
+    await expect(page.locator('[data-message-id="live-rich"] .response-summary')).toHaveText(presentation.summary);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}
+
 for (const scenario of responseScenarios) {
   test(`Digital Person groups only contiguous replies with an episode ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
     test.setTimeout(60000);

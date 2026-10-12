@@ -2,8 +2,9 @@ import { createPersonToolHost, createPersonNativeRegistry, isNativeTool, project
 import { PersonTaskHost } from './task-host.js';
 import { randomUUID } from 'node:crypto';
 import { utf8PrefixWithinBytes } from '../utf8.js';
-import { CAPABILITY_MAP, CAPABILITY_LIMITS, foundationCapabilities, PersonCapabilities, catalogRevision as capabilityCatalogRevision } from './capabilities.js';
+import { CAPABILITY_MAP, capabilityContextBudget, foundationCapabilities, PersonCapabilities, catalogRevision as capabilityCatalogRevision } from './capabilities.js';
 import { attachmentMetadata } from './attachments.js';
+import { personPresentation } from './presentation.js';
 import { abortable, collectOutput } from './provider.js';
 import { bytes, digest, fail, FEEDBACK, FEEDBACK_INSTRUCTIONS, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
 
@@ -74,7 +75,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   const omittedCapabilities = [];
   for (const contract of activeCapabilities) {
     context.capabilities.active.push(contract);
-    if (bytes(context.capabilities.active) > CAPABILITY_LIMITS.activeBytes || !fits()) {
+    if (bytes(context.capabilities.active) > capabilityContextBudget(context.capabilities.active) || !fits()) {
       context.capabilities.active.pop();
       if (contract.availability.layer === 'foundation') fail('CONTEXT_LIMIT');
       omittedCapabilities.push({ id: contract.id, reason: 'context-budget', inspect: 'catalog.view' });
@@ -377,7 +378,13 @@ export class PersonRuntime {
           await this.repository.commit(episode, proposal, selection, callId, new Map(proposal.concepts.map(c => [c.id, c.epistemicState === 'reported' ? reportedLineage(c, readSources) : []])));
           return;
         }
-        if (proposal.reply) {
+        let richSummary = null;
+        if (proposal.next.capability?.id === 'PresentResponse') {
+          // Suppress only a valid planned delivery; invalid rich input must not
+          // consume an otherwise valid ordinary progress reply.
+          try { richSummary = personPresentation(proposal.next.capability.args).summary; } catch {}
+        }
+        if (proposal.reply && (richSummary === null || proposal.reply.trim() !== richSummary.trim())) {
           signal.throwIfAborted();
           const published = await this.repository.publishProgress(episode, { callId, reply: proposal.reply });
           if (published) { lastReply = published.text; lastReplyAt = new Date(published.createdAt).getTime(); }
@@ -421,9 +428,13 @@ export class PersonRuntime {
             signal.throwIfAborted();
             // Native host and script execution join their actual work before close.
             const executionPromise = capabilities.execute(invocation, { signal, callId });
-            capabilityResult = isNativeTool(invocation.id) || invocation.id === 'Output.publish' || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
+            capabilityResult = isNativeTool(invocation.id) || invocation.id === 'Output.publish' || invocation.id === 'PresentResponse' || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
               ? await executionPromise : await abortable(executionPromise, signal);
             if (!finalized && !await finalize(capabilityResult)) fail('STALE');
+            if (invocation.id === 'PresentResponse' && capabilityResult?.published) {
+              lastReply = capabilityResult.summary;
+              lastReplyAt = new Date(capabilityResult.createdAt).getTime();
+            }
             signal.throwIfAborted();
             if (capabilityResult?.terminal) fail('TOOL_EFFECT_UNCONFIRMED');
             // Discovery/method contracts are already available in capabilities;

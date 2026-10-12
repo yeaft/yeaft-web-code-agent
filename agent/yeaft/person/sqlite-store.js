@@ -10,6 +10,7 @@ import { attachmentMetadata, attachmentRequestHash, validateFiles } from './atta
 import { capabilityExperienceView, recordCapabilityExperience } from './capability-experience.js';
 import { chronologicalCursor, conceptView, inspectionCursor, inspectionPage, inspectRequest, messageView, personName, searchRequest, settingsView, stateView } from './inspection.js';
 import { TOKEN_FIELDS, turnsPage, turnView } from './turn-diagnostics.js';
+import { personPresentation } from './presentation.js';
 import { inspectCapabilities } from './capabilities.js';
 import { OUTPUT_LIMITS, outputArgs, outputMime, outputReadRequest, outputsPage, outputUrl, outputView } from './outputs.js';
 
@@ -65,7 +66,7 @@ const objectOutput = (record, data) => {
   }
 };
 const READS = new Set(['outputs', 'outputRead', 'checkOutputPublication', 'receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
-const WRITES = new Set(['saveOutput', 'open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
+const WRITES = new Set(['savePresentation', 'saveOutput', 'open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
 const sequence = value => {
@@ -283,7 +284,7 @@ export class SqlitePersonStore {
   }
   append(episode, kind, data) {
     // Call proof/publication events are emitted only by their transactional methods.
-    if (['call_started', 'call_output', 'call_failed', 'capability_created', 'capability_finalized', 'output_published'].includes(kind)) fail('INVALID_REQUEST');
+    if (['call_started', 'call_output', 'call_failed', 'capability_created', 'capability_finalized', 'output_published', 'presentation_published'].includes(kind)) fail('INVALID_REQUEST');
     const p = this.own(episode);
     const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running') fail('STALE');
@@ -389,6 +390,48 @@ export class SqlitePersonStore {
       state: stateView(state), messages: this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12').reverse().map(messageView),
       concepts: [...new Map([...focused, ...recent].map(c => [c.id, conceptView(c)])).values()] };
   }
+  /** Atomic capability publication: exact started invocation + live lease, never
+   * publishProgress's no-open-capability path. JSON carries the canonical payload;
+   * text remains the searchable/model/legacy fallback. phase is delivery intent. */
+  savePresentation(episode, { callId, args }) {
+    identifier(callId);
+    const presentation = personPresentation(args);
+    const p = this.own(episode), scope = this.episodeScope(episode);
+    const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    const invocationHash = digest({ id: 'PresentResponse', args });
+    const prior = this.rows('messages', scope, " AND json_extract(record, '$.episodeId') = ? AND json_type(record, '$.presentation') = 'object'", [episode.id]);
+    const receipt = this.one('traces', scope,
+      " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'presentation_published' AND json_extract(record, '$.callId') = ?", [episode.id, callId]);
+    if (receipt) {
+      if (receipt.invocationHash !== invocationHash) fail('INVALID_REQUEST');
+      const message = prior.find(m => m.id === receipt.messageId);
+      if (!message) fail('STORAGE_UNAVAILABLE');
+      return messageView(message);
+    }
+    const proof = this.one('traces', scope,
+      " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, callId]);
+    if (!record || record.status !== 'running' || record.openCall || !proof || record.openCapability?.callId !== callId ||
+        record.openCapability.invocationHash !== invocationHash) fail('STALE');
+    // Repeating an identical delivery in this episode adds no new visible answer.
+    const repeated = prior.find(m => digest(m.presentation) === digest(presentation));
+    if (repeated) {
+      this.trace(episode.ownerId, episode.id, 'presentation_published', { callId, invocationHash, messageId: repeated.id, phase: presentation.phase, duplicate: true });
+      return messageView(repeated);
+    }
+    p.messageSeq++; p.writeSerial++; this.put('persons', p);
+    const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id,
+      callId, publicationHash: invocationHash, replyKind: 'presentation', role: 'assistant',
+      text: presentation.summary, presentation, createdAt: this.now });
+    this.put('messages', message, true); this.journal(scope, 'messages', message);
+    record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
+    this.trace(episode.ownerId, episode.id, 'presentation_published', { callId, invocationHash, messageId: message.id, phase: presentation.phase });
+    return messageView(message);
+  }
+  repeatsPresentation(scope, episodeId, reply) {
+    return typeof reply === 'string' && this.rows('messages', scope,
+      " AND json_extract(record, '$.episodeId') = ? AND json_type(record, '$.presentation') = 'object'", [episodeId])
+      .some(message => message.text.trim() === reply.trim());
+  }
   /** Publish only a validated, complete call's reply. This is communication, not
    * a state/Concept commit. Fencing, dedupe and the memory journal share one transaction. */
   publishProgress(episode, { callId, reply }) {
@@ -406,7 +449,7 @@ export class SqlitePersonStore {
     if (!accepted || !proposal.next || proposal.reply !== reply) fail('INVALID_REQUEST');
     // Provider latency counts too: a call started before 30s can finish after it.
     if (this.now.getTime() - new Date(record.lastReplyAt ?? record.createdAt).getTime() < FEEDBACK.minMs ||
-        prior.some(m => m.text.trim() === reply.trim())) return null;
+        prior.some(m => m.text.trim() === reply.trim()) || this.repeatsPresentation(scope, episode.id, reply)) return null;
     p.messageSeq++; p.writeSerial++; this.put('persons', p);
     const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id,
       callId, replyKind: 'progress', role: 'assistant', text: reply, createdAt: this.now });
@@ -418,7 +461,8 @@ export class SqlitePersonStore {
   commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     const p = this.own(episode), scope = this.episodeScope(episode);
     if (proposal.baseStateVersion !== episode.baseStateVersion) fail('STALE');
-    p.stateVersion++; p.writeSerial++; if (proposal.reply) p.messageSeq++;
+    const publishReply = proposal.reply && !this.repeatsPresentation(scope, episode.id, proposal.reply);
+    p.stateVersion++; p.writeSerial++; if (publishReply) p.messageSeq++;
     p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0);
     this.put('persons', p);
     const revisions = [];
@@ -441,7 +485,7 @@ export class SqlitePersonStore {
     this.put('states', state);
     this.put('state_commits', this.doc(scope, { id: randomUUID(), version: p.stateVersion, parentVersion: episode.baseStateVersion,
       episodeId: episode.id, callId, conceptRevisions: revisions, state: stateView(state), createdAt: this.now }), true);
-    if (proposal.reply) {
+    if (publishReply) {
       const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id, callId, replyKind: 'final', role: 'assistant', text: proposal.reply, createdAt: this.now });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
     }

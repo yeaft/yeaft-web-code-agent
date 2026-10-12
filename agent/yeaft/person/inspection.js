@@ -1,4 +1,5 @@
 import { bytes, fail, identifier, object, page, text } from './contracts.js';
+import { presentationView } from './presentation.js';
 
 /** Timestamp + binary ID keysets survive insertion, deletion of the boundary
  * record and same-millisecond writes. Builtins have no invented chronology.
@@ -47,6 +48,10 @@ const pick = (value, keys) => value == null ? null : Object.fromEntries(keys.fil
 export const settingsView = value => pick(value, ['autonomyEnabled', 'modelCandidates', 'defaultModel']);
 export function messageView(value) {
   const result = pick(value, ['id', 'schemaVersion', 'revision', 'seq', 'episodeId', 'clientMessageId', 'callId', 'replyKind', 'role', 'text', 'createdAt']);
+  if (result && value.role === 'assistant') {
+    const presentation = presentationView(value.presentation);
+    if (presentation) result.presentation = presentation;
+  }
   if (result && Array.isArray(value.attachments)) result.attachments = value.attachments.slice(0, 4)
     .map(file => pick(file, ['id', 'name', 'mimeType', 'size', 'sha256', 'kind']));
   return result;

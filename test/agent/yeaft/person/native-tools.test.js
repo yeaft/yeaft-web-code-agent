@@ -239,7 +239,7 @@ describe('Person supported native host tools', () => {
       const page = inspectCapabilities([], { cursor, limit: 50 });
       items.push(...page.items); cursor = page.nextCursor;
     } while (cursor);
-    expect(items.map(m => m.id)).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort());
+    expect(items.map(m => m.id)).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'PresentResponse', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort());
     const file = items.find(m => m.id === 'FileWrite');
     expect(file.source).toEqual(file.contract.source);
     expect(file.source.revision).toBe(digest(await readFile(new URL('../../../../agent/yeaft/tools/file-write.js', import.meta.url), 'utf8')));
