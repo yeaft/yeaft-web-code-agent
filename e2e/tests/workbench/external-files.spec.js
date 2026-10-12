@@ -1,5 +1,6 @@
 import { test as base, expect } from '@playwright/test';
 import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -62,7 +63,7 @@ function mountHarness(config) {
   });
   const capabilities = ['file_editor', 'workbench_session_routes'];
   Object.assign(store, {
-    authenticated: true, connectionState: 'connected', currentView: 'yeaft',
+    authenticated: !config.webSocket, connectionState: config.webSocket ? 'disconnected' : 'connected', currentView: 'yeaft',
     // Intentionally disagree with the selected Session owner.
     currentAgent: 'agent-a', currentAgentInfo: { id: 'agent-a', workDir: config.otherAgentDir, capabilities },
     agents: [
@@ -71,14 +72,22 @@ function mountHarness(config) {
     ],
     yeaftActiveSessionFilter: 'session-y', yeaftConversationId: 'unrelated-page-conversation',
     yeaftConversationIdsByAgent: { 'agent-b': 'yeaft-agent-b', 'agent-a': 'yeaft-agent-a' },
-    workbenchRouteProtocolSupported: true, workbenchExpanded: true,
+    workbenchRouteProtocolSupported: config.webSocket ? null : true, workbenchExpanded: true,
     currentWorkDir: config.otherAgentDir, theme: 'light',
   });
   const sent = [];
   const received = [];
+  const frames = [];
   const bridgeErrors = [];
   const pending = new Set();
-  store.sendWsMessage = message => {
+  if (config.webSocket) {
+    // Observe production message dispatch without replacing send/parse/handlers.
+    window.addEventListener('workbench-message', event => received.push(event.detail));
+    store.$onAction(({ name, args }) => {
+      if (name === 'sendWsMessage') sent.push(structuredClone(args[0]));
+      if (name === 'handleMessage') frames.push(structuredClone(args[0]));
+    });
+  } else store.sendWsMessage = message => {
     sent.push(structuredClone(message));
     // Agent dispatch is serialized, but replies may be delayed/reordered by a
     // test route without blocking independent requests from the real component.
@@ -98,13 +107,34 @@ function mountHarness(config) {
   };
   const t = (key, values = {}) => (translations[key] || key)
     .replace(/\{(\w+)\}/g, (_, name) => values[name] ?? `{${name}}`);
-  const app = createApp({ components: { WorkbenchPanel }, template: '<WorkbenchPanel/>' });
+  // Panel deliberately unmounts unavailable capabilities when connect() resets
+  // protocol flags. Keep the real FilesTab mounted in socket mode to exercise
+  // its interruption/resume contract rather than Panel's capability gate.
+  const route = { runtimeProvider: 'yeaft', agentId: 'agent-b', sessionId: 'session-y' };
+  const routeKey = workbenchRouteKey(route);
+  const app = createApp(config.webSocket && !config.panel ? {
+    components: { FilesTab },
+    setup: () => ({ mounted: Vue.ref(false), routeProps: Vue.reactive({
+      ...route, routeKey, conversationId: `_workbench:${routeKey}`, workDir: config.workDir,
+      workspaceGeneration: workbenchWorkspaceGeneration(routeKey, config.workDir),
+    }) }),
+    template: '<FilesTab v-if="mounted" v-bind="routeProps"/>',
+  } : { components: { WorkbenchPanel }, template: '<WorkbenchPanel/>' });
   app.use(pinia);
   app.provide('t', t);
   app.config.globalProperties.$t = t;
-  app.mount('#app');
+  const root = app.mount('#app');
   window.harness = {
-    store, sessions, sent, received, bridgeErrors,
+    async mountFiles(owner = route) {
+      const key = workbenchRouteKey(owner);
+      Object.assign(root.routeProps, owner, {
+        routeKey: key, conversationId: `_workbench:${key}`,
+        workspaceGeneration: workbenchWorkspaceGeneration(key, config.workDir),
+      });
+      root.mounted = true;
+      await nextTick();
+    },
+    store, sessions, sent, received, frames, bridgeErrors,
     async selectSession(agentId, sessionId) {
       sessions.activeSessionKey = `${agentId}\u001f${sessionId}`;
       sessions.activeSessionId = sessionId;
@@ -112,13 +142,14 @@ function mountHarness(config) {
       await nextTick();
     },
     async idle() { while (pending.size) await Promise.all([...pending]); await nextTick(); },
-    async openFile(path) {
+    async openFile(path, ownerKey = 'yeaft:agent-b:session-y') {
       window.dispatchEvent(new CustomEvent('workbench-open-file-in-active-view', { detail: {
-        filePath: path, workbenchRouteKey: 'yeaft:agent-b:session-y', hideTree: true,
+        filePath: path, workbenchRouteKey: ownerKey, hideTree: true,
       } }));
       await nextTick();
     },
   };
+  if (config.webSocket) store.connect();
 }
 
 function html(config) {
@@ -129,6 +160,8 @@ function html(config) {
 import { useChatStore } from '/web/stores/chat.js';
 import { useSessionsStore } from '/web/stores/sessions.js';
 import WorkbenchPanel from '/web/components/WorkbenchPanel.js';
+import FilesTab from '/web/components/FilesTab.js';
+import { workbenchRouteKey, workbenchWorkspaceGeneration } from '/web/utils/workbench-route.js';
 import translations from '/web/i18n/en.js';
 (${mountHarness.toString()})(${JSON.stringify(config)});
 </script></body></html>`;
@@ -139,6 +172,13 @@ class ExternalFilesServer {
   results = [];
   previews = new Map();
   pending = Promise.resolve();
+  sockets = [];
+  socketFrames = [];
+  socketErrors = [];
+  heldListings = [];
+  holdDirectories = new Set();
+
+  constructor({ webSocket = false } = {}) { this.webSocket = webSocket; this.panel = false; }
 
   async start() {
     this.directory = await mkdtemp(join(tmpdir(), 'yeaft-external-files-e2e-'));
@@ -167,10 +207,52 @@ class ExternalFilesServer {
         response.end(String(error));
       });
     });
+    if (this.webSocket) {
+      this.wss = new WebSocketServer({ server: this.server });
+      this.wss.on('connection', (socket, request) => {
+        this.sockets.push(socket);
+        if (new URL(request.url, 'http://localhost').searchParams.get('type') !== 'web') {
+          this.socketErrors.push('Expected production web socket URL');
+        }
+        socket.on('error', error => this.socketErrors.push(String(error)));
+        socket.on('message', data => {
+          const message = JSON.parse(data.toString());
+          this.socketFrames.push({ connection: this.sockets.indexOf(socket), message });
+          const result = this.pending.then(async () => {
+            if (message.type === 'client_hello') return; // Handshake stages are controlled by the test.
+            if (message.type === 'get_agents') {
+              // Do not replace the selected Session or use Server inventory to
+              // synthesize directory/file responses. Complete only the handshake side request.
+              this.sendFrame({ type: 'yeaft_session_hydrate_complete', requestId: message.requestId, ok: false, error: 'harness_no_inventory' }, socket);
+              return;
+            }
+            if (message.type === 'ping') { this.sendFrame({ type: 'pong', requestId: message.requestId }, socket); return; }
+            const results = await this.dispatch(message);
+            if (message.type === 'list_directory' && this.holdDirectories.delete(message.dirPath)) {
+              this.heldListings.push({ message, results });
+            } else for (const response of results) this.sendFrame(response, socket);
+          });
+          this.pending = result.catch(error => this.socketErrors.push(String(error)));
+        });
+      });
+    }
     await new Promise((ok, fail) => {
       this.server.once('error', fail); this.server.listen(0, '127.0.0.1', ok);
     });
     this.url = `http://127.0.0.1:${this.server.address().port}`;
+  }
+
+  sendFrame(message, socket = this.sockets.at(-1)) {
+    if (socket?.readyState === 1) socket.send(JSON.stringify(message));
+    else throw new Error(`Cannot send ${message.type}: loopback socket is not open`);
+  }
+
+  authenticate() {
+    this.sendFrame({ type: 'auth_result', success: true, acceptPlaintext: true, yeaftSessionInventoryComplete: true });
+  }
+
+  acknowledgeHello(workCenterWorkbenchProtocol = 1) {
+    this.sendFrame({ type: 'client_hello_ack', workbenchRouteProtocol: 1, workCenterWorkbenchProtocol });
   }
 
   async dispatch(message) {
@@ -218,7 +300,7 @@ class ExternalFilesServer {
     }
     if (url.pathname === '/') {
       response.writeHead(200, { 'Content-Type': 'text/html' });
-      response.end(html({ workDir: this.browserWorkDir || this.workDir, otherSessionDir: this.otherSessionDir, otherAgentDir: this.otherAgentDir }));
+      response.end(html({ workDir: this.browserWorkDir || this.workDir, otherSessionDir: this.otherSessionDir, otherAgentDir: this.otherAgentDir, webSocket: this.webSocket, panel: this.panel }));
       return;
     }
     if (url.pathname.startsWith('/preview/')) {
@@ -231,13 +313,20 @@ class ExternalFilesServer {
     const file = resolve(ROOT, `.${url.pathname}`);
     if (!file.startsWith(join(ROOT, 'web') + sep)) { response.writeHead(404).end(); return; }
     try {
-      const body = await readFile(file);
+      // Optional read-only candidate used for red/green validation from an
+      // independent test worktree; no production source is copied or modified.
+      const body = await readFile(url.pathname === '/web/components/FilesTab.js'
+        && process.env.E2E_FILES_TAB_SOURCE ? process.env.E2E_FILES_TAB_SOURCE : file);
       response.writeHead(200, { 'Content-Type': extname(file) === '.css' ? 'text/css' : 'text/javascript' });
       response.end(body);
     } catch { response.writeHead(404).end(); }
   }
 
   async stop() {
+    if (this.wss) {
+      for (const socket of this.wss.clients) socket.terminate();
+      await new Promise(ok => this.wss.close(ok));
+    }
     if (this.server) {
       this.server.closeIdleConnections();
       await new Promise(ok => this.server.close(ok));
@@ -248,6 +337,7 @@ class ExternalFilesServer {
 }
 
 const test = base.extend({ harness: async ({}, use) => useTestServer(new ExternalFilesServer(), use) });
+const socketTest = test.extend({ harness: async ({}, use) => useTestServer(new ExternalFilesServer({ webSocket: true }), use) });
 
 async function openFiles(page) {
   // Panel restores route-local expansion on mount/switch, just as the app does.
@@ -556,6 +646,220 @@ for (const intent of ['breadcrumb', 'bulk']) {
     expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
   });
 }
+
+// A loopback frame barrier drains production onmessage + Vue's batched watchers,
+// then the serialized Agent dispatcher. Negative assertions need not sleep for
+// a reconnect timeout or mistake "not sent yet" for "never retried".
+let socketBarrier = 0;
+async function flushSocket(page, harness) {
+  const requestId = `harness-barrier-${++socketBarrier}`;
+  harness.sendFrame({ type: 'pong', requestId });
+  await expect.poll(() => page.evaluate(id => window.harness.frames.some(frame => frame.requestId === id), requestId)).toBe(true);
+  await page.evaluate(async id => {
+    await Vue.nextTick();
+    // A round trip queues behind every retry emitted by the previous frame.
+    window.harness.store.sendWsMessage({ type: 'ping', requestId: `${id}-drained` });
+  }, requestId);
+  await expect.poll(() => page.evaluate(id => window.harness.frames.some(frame => frame.requestId === `${id}-drained`), requestId)).toBe(true);
+  await harness.pending;
+}
+
+async function handshakeSocket(page, harness) {
+  await page.goto(harness.url);
+  await expect.poll(() => harness.socketFrames.filter(frame => frame.message.type === 'client_hello').length).toBe(1);
+  expect(harness.socketFrames[0].message).toMatchObject({ type: 'client_hello', workbenchRouteProtocol: 1 });
+  harness.authenticate();
+  await flushSocket(page, harness);
+  harness.acknowledgeHello();
+  await flushSocket(page, harness);
+}
+
+async function openSocketFiles(page, harness, owner = OWNER) {
+  await handshakeSocket(page, harness);
+  await page.evaluate(route => window.harness.mountFiles(route), owner);
+  await expect(page.locator('.files-tab')).toBeVisible();
+}
+
+async function reconnectSocket(page, harness) {
+  const connections = harness.sockets.length;
+  harness.sockets.at(-1).close(1012, 'Disposable harness reconnect');
+  await expect.poll(() => page.evaluate(() => window.harness.store.authenticated)).toBe(false);
+  // Let the production onclose/scheduleReconnect/connect/onopen path run.
+  await expect.poll(() => harness.socketFrames.some(frame => frame.connection === connections && frame.message.type === 'client_hello')).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.harness.store.connectionState)).toBe('connected');
+  await flushSocket(page, harness);
+}
+
+async function expectNoDirectoryRetry(page, harness, before) {
+  await flushSocket(page, harness);
+  expect(harness.requests.filter(message => message.type === 'list_directory')).toHaveLength(before);
+  expect(await page.evaluate(() => window.harness.sent.filter(message => message.type === 'list_directory').length)).toBe(before);
+}
+
+for (const intent of ['root', 'reveal', 'breadcrumb', 'bulk']) {
+  socketTest(`real WebSocket handshake gates lost ${intent} directory retries until auth and hello ack`, async ({ page, harness }) => {
+    const first = join(harness.workDir, 'first-long-directory');
+    const lostPath = intent === 'root' ? harness.workDir : first;
+    const stalePath = join(lostPath, 'stale-before-reconnect.txt');
+    const freshPath = join(lostPath, 'fresh-after-reconnect.txt');
+    await writeFile(stalePath, 'Only the withheld Agent listing contains this file.\n');
+    harness.holdDirectories.add(lostPath);
+    await openSocketFiles(page, harness);
+    if (intent !== 'root') await expect(treeEntry(page, first)).toBeVisible();
+    await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+    await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
+    await expect.poll(() => harness.heldListings.length).toBe(1);
+    const held = harness.heldListings[0];
+    expect(held.results[0].error).toBeFalsy(); // Captured from the real Agent handler.
+    const before = harness.requests.filter(message => message.type === 'list_directory').length;
+    await reconnectSocket(page, harness);
+    expect(await page.evaluate(() => ({
+      authenticated: window.harness.store.authenticated,
+      protocol: window.harness.store.workbenchRouteProtocolSupported,
+    }))).toEqual({ authenticated: false, protocol: null });
+    await expectNoDirectoryRetry(page, harness, before);
+    if (intent === 'breadcrumb' || intent === 'bulk') {
+      // A user may change navigation while the replacement socket is open but
+      // unauthenticated. This must not lose the interrupted load or new intent.
+      await crumb(page, harness.workDir).click();
+      if (intent === 'bulk') await treeEntry(page, join(harness.workDir, 'workspace.txt')).click({ modifiers: ['Control'] });
+      await expectNoDirectoryRetry(page, harness, before);
+    }
+    harness.authenticate();
+    await flushSocket(page, harness);
+    expect(await page.evaluate(() => ({
+      authenticated: window.harness.store.authenticated,
+      protocol: window.harness.store.workbenchRouteProtocolSupported,
+    }))).toEqual({ authenticated: true, protocol: false });
+    await expectNoDirectoryRetry(page, harness, before);
+    // Replay an old correlation ID through the NEW socket/real message handler.
+    // Remove the captured entry from disk first: a newly accepted listing must
+    // contain only the fresh file, so accepting the stale response is observable.
+    await rm(stalePath);
+    await writeFile(freshPath, 'Fresh directory listing.\n');
+    for (const result of held.results) harness.sendFrame(result);
+    await flushSocket(page, harness);
+    expect(await page.evaluate(id => window.harness.received.some(result => result.requestId === id), held.message.requestId)).toBe(true);
+    await expect(treeEntry(page, stalePath)).toHaveCount(0);
+    await expectNoDirectoryRetry(page, harness, before);
+    harness.acknowledgeHello();
+    await expect.poll(() => directoryRequests(harness, lostPath).length).toBe(2);
+    const [original, retry] = directoryRequests(harness, lostPath);
+    expect(retry.requestId).not.toBe(original.requestId);
+    expect(retry.workbenchWorkspaceGeneration).toBe(original.workbenchWorkspaceGeneration);
+    expect(retry).toMatchObject({ workbenchRoute: OWNER, workbenchRouteKey: ROUTE, agentId: OWNER.agentId });
+    if (intent === 'root' || intent === 'reveal') await expectLocated(page, harness.deepPath);
+    await expect(treeEntry(page, freshPath)).toHaveCount(1);
+    // Deliver stale bytes again AFTER retry acceptance; they cannot replace the
+    // fresh listing, resume an obsolete reveal or clear newer bulk selection.
+    for (const result of held.results) harness.sendFrame(result);
+    await flushSocket(page, harness);
+    await expect(treeEntry(page, freshPath)).toHaveCount(1);
+    await expect(treeEntry(page, stalePath)).toHaveCount(0);
+    if (intent === 'breadcrumb') await expect(page.locator('.file-tree-header')).toHaveClass(/tree-navigation-current/);
+    if (intent === 'bulk') {
+      await expect(page.locator('.tree-navigation-current')).toHaveCount(0);
+      await expect(treeEntry(page, join(harness.workDir, 'workspace.txt'))).toHaveClass(/selected/);
+    }
+    await expect(page.locator('.file-ops-toolbar')).toHaveCount(intent === 'bulk' ? 1 : 0);
+    await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
+    await expectOriginalOwner(page, harness);
+    expect(harness.socketErrors).toEqual([]);
+    expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
+  });
+}
+
+socketTest('real WebSocket WorkbenchPanel gates Files capability across the handshake and reconnect', async ({ page, harness }) => {
+  harness.panel = true;
+  await page.goto(harness.url);
+  await expect.poll(() => harness.socketFrames.some(frame => frame.message.type === 'client_hello')).toBe(true);
+  await expect(page.locator('[data-workbench-capability="files"]')).toHaveClass(/unavailable/);
+  harness.authenticate();
+  await flushSocket(page, harness);
+  await expect(page.locator('[data-workbench-capability="files"]')).toHaveClass(/unavailable/);
+  expect(directoryRequests(harness, harness.workDir)).toHaveLength(0);
+  harness.acknowledgeHello();
+  await flushSocket(page, harness);
+  await openFiles(page);
+  await expect(treeEntry(page, join(harness.workDir, 'workspace.txt'))).toBeVisible();
+  await reconnectSocket(page, harness);
+  // Panel intentionally unmounts unavailable tool capabilities; unlike the
+  // direct FilesTab cases this validates its real remount, not retained intent.
+  await expect(page.locator('.files-tab')).toHaveCount(0);
+  const before = harness.requests.filter(message => message.type === 'list_directory').length;
+  await expectNoDirectoryRetry(page, harness, before);
+  harness.authenticate();
+  await expectNoDirectoryRetry(page, harness, before);
+  await expect(page.locator('.files-tab')).toHaveCount(0);
+  harness.acknowledgeHello();
+  await expect(page.locator('.files-tab')).toBeVisible();
+  await expect(treeEntry(page, join(harness.workDir, 'workspace.txt'))).toBeVisible();
+  // A new component resets its local counter; request-ID renewal is asserted
+  // for interrupted loads in the continuously mounted FilesTab tests above.
+  expect(directoryRequests(harness, harness.workDir)).toHaveLength(2);
+  await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+  await expectLocated(page, harness.deepPath);
+  await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
+  await expectOriginalOwner(page, harness);
+  expect(harness.socketErrors).toEqual([]);
+});
+
+socketTest('real WebSocket WorkItem retries also wait for the Work Center hello ack', async ({ page, harness }) => {
+  const owner = { runtimeProvider: 'work-center', agentId: 'agent-b', workItemId: 'work-item-test' };
+  const first = join(harness.workDir, 'first-long-directory');
+  harness.holdDirectories.add(first);
+  await openSocketFiles(page, harness, owner);
+  await expect(treeEntry(page, first)).toBeVisible();
+  await page.evaluate(path => window.harness.openFile(path, 'work-center:agent-b:work-item-test'), harness.deepPath);
+  await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
+  await expect.poll(() => harness.heldListings.length).toBe(1);
+  const before = harness.requests.filter(message => message.type === 'list_directory').length;
+  await reconnectSocket(page, harness);
+  await expectNoDirectoryRetry(page, harness, before);
+  harness.authenticate();
+  await expectNoDirectoryRetry(page, harness, before);
+  harness.acknowledgeHello(0);
+  await flushSocket(page, harness);
+  expect(await page.evaluate(() => ({
+    route: window.harness.store.workbenchRouteProtocolSupported,
+    workCenter: window.harness.store.workCenterWorkbenchProtocolSupported,
+  }))).toEqual({ route: true, workCenter: false });
+  await expectNoDirectoryRetry(page, harness, before);
+  harness.acknowledgeHello();
+  await expectLocated(page, harness.deepPath);
+  const [original, retry] = directoryRequests(harness, first);
+  expect(directoryRequests(harness, first)).toHaveLength(2);
+  expect(retry.requestId).not.toBe(original.requestId);
+  expect(retry).toMatchObject({ workbenchRoute: owner, workbenchRouteKey: 'work-center:agent-b:work-item-test' });
+  expect(harness.socketErrors).toEqual([]);
+});
+
+socketTest('real auth_result batches a prior hello ack reset without transient directory retry', async ({ page, harness }) => {
+  const first = join(harness.workDir, 'first-long-directory');
+  harness.holdDirectories.add(first);
+  await openSocketFiles(page, harness);
+  await expect(treeEntry(page, first)).toBeVisible();
+  await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+  await expect.poll(() => harness.heldListings.length).toBe(1);
+  const before = harness.requests.filter(message => message.type === 'list_directory').length;
+  await reconnectSocket(page, harness);
+  // Legal wire reordering: ack can arrive before auth_result. The subsequent
+  // auth handler sets authenticated=true before resetting protocol=false.
+  harness.acknowledgeHello();
+  await flushSocket(page, harness);
+  expect(await page.evaluate(() => window.harness.store.workbenchRouteProtocolSupported)).toBe(true);
+  await expectNoDirectoryRetry(page, harness, before);
+  harness.authenticate();
+  await flushSocket(page, harness);
+  expect(await page.evaluate(() => window.harness.store.workbenchRouteProtocolSupported)).toBe(false);
+  await expectNoDirectoryRetry(page, harness, before);
+  harness.acknowledgeHello();
+  await expectLocated(page, harness.deepPath);
+  const requests = directoryRequests(harness, first);
+  expect(requests).toHaveLength(2);
+  expect(requests[1].requestId).not.toBe(requests[0].requestId);
+  expect(harness.socketErrors).toEqual([]);
+});
 
 test('deep response reference, breadcrumbs, external rebasing and Workbench tab switches preserve edits and undo', async ({ page, harness }) => {
   await page.goto(harness.url);
