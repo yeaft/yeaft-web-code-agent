@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { useTestServer } from '../../fixtures/test-server.js';
-import { handleListDirectory, handleReadFile, handleWriteFile } from '../../../agent/workbench/file-ops.js';
+import { handleCreateFile, handleListDirectory, handleReadFile, handleWriteFile } from '../../../agent/workbench/file-ops.js';
 import { handleFileSearch } from '../../../agent/workbench/file-search.js';
 import agentContext from '../../../agent/context.js';
 
@@ -179,7 +179,7 @@ class ExternalFilesServer {
     // synthesized only for the tab-restore test; file/directory replies are real.
     if (message.type === 'restore_file_tabs' && this.restoreFiles) return [{ ...message, type: 'file_tabs_restored', openFiles: this.restoreFiles.map(path => ({ path })), activeIndex: this.restoreIndex || 0 }];
     if (['restore_file_tabs', 'update_file_tabs'].includes(message.type)) return [];
-    const handler = { list_directory: handleListDirectory, read_file: handleReadFile, write_file: handleWriteFile, file_search: handleFileSearch }[message.type];
+    const handler = { create_file: handleCreateFile, list_directory: handleListDirectory, read_file: handleReadFile, write_file: handleWriteFile, file_search: handleFileSearch }[message.type];
     if (!handler) throw new Error(`Unexpected bridge request: ${message.type}`);
     const results = [];
     const previous = { sendToServer: agentContext.sendToServer, CONFIG: agentContext.CONFIG };
@@ -388,6 +388,173 @@ function treeEntry(page, path) { return page.locator(`[data-tree-path=${JSON.str
 function crumb(page, path) { return page.locator('.file-path-crumb').and(page.locator(`[title=${JSON.stringify(path)}]`)); }
 async function expectLocated(page, path) {
   await expect(treeEntry(page, path)).toHaveClass(/tree-navigation-current/);
+}
+
+async function createAgentFile(page, harness, path) {
+  // Simulate Agent-side creation after the browser cached a directory listing.
+  // Do not deliver file_op_result to FilesTab (that UI action refreshes the tree).
+  for (const data of [
+    { type: 'create_file', filePath: path },
+    { type: 'write_file', filePath: path, content: 'Created after the cached listing.\n' },
+  ]) {
+    const response = await page.request.post(`${harness.url}/bridge`, { data: {
+      ...data, workDir: harness.workDir, agentId: OWNER.agentId,
+      conversationId: `_workbench:${ROUTE}`, workbenchRoute: OWNER, workbenchRouteKey: ROUTE,
+    } });
+    expect(response.ok()).toBe(true);
+    const results = await response.json();
+    expect(results).toHaveLength(1);
+    expect(results[0].success, JSON.stringify(results[0])).toBe(true);
+  }
+}
+
+const directoryRequests = (harness, path) => harness.requests.filter(message => (
+  message.type === 'list_directory' && message.dirPath === path
+));
+
+async function connect(page, state) {
+  await page.evaluate(state => { window.harness.store.connectionState = state; }, state);
+}
+
+test('Agent-created directories and files after listing locate through references, reselect and breadcrumb retry', async ({ page, harness }) => {
+  await page.goto(harness.url);
+  await openFiles(page);
+  await expect(treeEntry(page, join(harness.workDir, 'workspace.txt'))).toBeVisible();
+  await page.evaluate(() => window.harness.idle());
+  const generated = join(harness.workDir, 'generated');
+  const first = join(generated, 'new.txt');
+  await createAgentFile(page, harness, first);
+  await page.evaluate(() => window.harness.openFile('generated/new.txt'));
+  await expectRealRead(page, harness, first);
+  await expectLocated(page, first);
+  expect(directoryRequests(harness, harness.workDir)).toHaveLength(2);
+  expect(directoryRequests(harness, generated)).toHaveLength(1);
+
+  const second = join(generated, 'another.txt');
+  await createAgentFile(page, harness, second);
+  await page.evaluate(path => window.harness.openFile(path), second);
+  await expectRealRead(page, harness, second);
+  await expectLocated(page, second);
+  expect(directoryRequests(harness, generated)).toHaveLength(2);
+
+  // An accepted missing listing must stop, not fabricate a node or keep polling.
+  await crumb(page, generated).click();
+  await rm(second);
+  await page.locator('.vscode-action-btn[title="Refresh"]').click();
+  await page.evaluate(() => window.harness.idle());
+  const beforeRetry = directoryRequests(harness, generated).length;
+  await crumb(page, second).click();
+  await page.evaluate(() => window.harness.idle());
+  expect(directoryRequests(harness, generated)).toHaveLength(beforeRetry + 1);
+  await expect(treeEntry(page, second)).toHaveCount(0);
+  await createAgentFile(page, harness, second);
+  await page.locator('.workbench-item-tab').filter({ hasText: 'another.txt' }).click();
+  await expectLocated(page, second);
+  expect(directoryRequests(harness, generated)).toHaveLength(beforeRetry + 2);
+  await rm(second);
+  await page.locator('.vscode-action-btn[title="Refresh"]').click();
+  await page.evaluate(() => window.harness.idle());
+  await createAgentFile(page, harness, second);
+  await crumb(page, second).click();
+  await expectLocated(page, second);
+  await expectOriginalOwner(page, harness);
+  expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
+});
+
+test('ENOENT-removed directories recover only from a new intent and real accepted Agent listings', async ({ page, harness }) => {
+  await page.goto(harness.url);
+  await openFiles(page);
+  const first = join(harness.workDir, 'first-long-directory');
+  await expect(treeEntry(page, first)).toBeVisible();
+  await rm(first, { recursive: true });
+  await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+  await page.evaluate(() => window.harness.idle());
+  expect(harness.results.find(result => result.type === 'directory_listing' && result.dirPath === first).error).toMatch(/ENOENT/);
+  await expect(treeEntry(page, first)).toHaveCount(0);
+  expect(directoryRequests(harness, first)).toHaveLength(1);
+  await createAgentFile(page, harness, harness.deepPath);
+  // The cached file tab has a read error, but breadcrumb navigation is independent.
+  await crumb(page, harness.deepPath).click();
+  await expectLocated(page, harness.deepPath);
+  expect(directoryRequests(harness, harness.workDir)).toHaveLength(2);
+  expect(directoryRequests(harness, first)).toHaveLength(2);
+  // Tree navigation is independent of the read-error tab's recovery lifecycle.
+  expect(await readFile(harness.deepPath, 'utf8')).toBe('Created after the cached listing.\n');
+  await expectOriginalOwner(page, harness);
+  expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
+});
+
+test('FilesTab connection watcher retries lost root and ancestor responses with new request IDs', async ({ page, harness }) => {
+  const held = [];
+  const holdOnce = new Set([harness.workDir, join(harness.workDir, 'first-long-directory')]);
+  await page.route('**/bridge', async route => {
+    const message = route.request().postDataJSON();
+    if (message.type === 'list_directory' && holdOnce.delete(message.dirPath)) {
+      const response = await route.fetch();
+      held.push({ message, release: () => route.fulfill({ response }) });
+    } else await route.continue();
+  });
+  await page.goto(harness.url);
+  await openFiles(page);
+  await expect.poll(() => held.length).toBe(1);
+  await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+  await connect(page, 'disconnected');
+  await held[0].release();
+  await connect(page, 'connected');
+  await expect.poll(() => held.length).toBe(2);
+  await connect(page, 'disconnected');
+  await connect(page, 'connected');
+  await expectLocated(page, harness.deepPath);
+  await held[1].release();
+  await page.evaluate(() => window.harness.idle());
+  await expectLocated(page, harness.deepPath);
+  for (const path of [harness.workDir, join(harness.workDir, 'first-long-directory')]) {
+    const requests = directoryRequests(harness, path);
+    expect(requests).toHaveLength(2);
+    expect(requests[0].requestId).not.toBe(requests[1].requestId);
+    expect(requests[0].workbenchWorkspaceGeneration).toBe(requests[1].workbenchWorkspaceGeneration);
+    expect(requests[1].workbenchRouteKey).toBe(ROUTE);
+  }
+  expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
+});
+
+for (const intent of ['breadcrumb', 'bulk']) {
+  test(`reconnect and late real directory response preserve a newer ${intent} intent`, async ({ page, harness }) => {
+    const first = join(harness.workDir, 'first-long-directory');
+    let release;
+    let hold = true;
+    await page.route('**/bridge', async route => {
+      const message = route.request().postDataJSON();
+      if (hold && message.type === 'list_directory' && message.dirPath === first) {
+        hold = false;
+        const response = await route.fetch();
+        release = () => route.fulfill({ response });
+      } else await route.continue();
+    });
+    await page.goto(harness.url);
+    await openFiles(page);
+    await expect(treeEntry(page, first)).toBeVisible();
+    await page.evaluate(path => window.harness.openFile(path), harness.deepPath);
+    await expect.poll(() => Boolean(release)).toBe(true);
+    await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
+    await connect(page, 'disconnected');
+    if (intent === 'breadcrumb') await crumb(page, harness.workDir).click();
+    else {
+      await crumb(page, harness.workDir).click();
+      await treeEntry(page, join(harness.workDir, 'workspace.txt')).click({ modifiers: ['Control'] });
+    }
+    await connect(page, 'connected');
+    await expect.poll(() => directoryRequests(harness, first).length).toBe(2);
+    await release();
+    await page.evaluate(() => window.harness.idle());
+    if (intent === 'breadcrumb') await expect(page.locator('.file-tree-header')).toHaveClass(/tree-navigation-current/);
+    else await expect(page.locator('.tree-navigation-current')).toHaveCount(0);
+    await expect(treeEntry(page, harness.deepPath)).toHaveCount(0);
+    await expect(page.locator('.CodeMirror')).toContainText('Deep file content.');
+    await expect(page.locator('.file-ops-toolbar')).toHaveCount(intent === 'bulk' ? 1 : 0);
+    if (intent === 'bulk') await expect(treeEntry(page, join(harness.workDir, 'workspace.txt'))).toHaveClass(/selected/);
+    expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
+  });
 }
 
 test('deep response reference, breadcrumbs, external rebasing and Workbench tab switches preserve edits and undo', async ({ page, harness }) => {

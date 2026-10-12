@@ -16,6 +16,8 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   const getTreeNode = path => treeNodes[pathKey(path)];
   const latestDirectoryRequestIds = new Map();
   let directoryRequestSequence = 0;
+  let directoryTransportInterrupted = false;
+  const interruptedDirectories = new Set();
   const navigationPath = Vue.ref('');
   let revealSequence = 0;
   let pendingReveal = null;
@@ -31,7 +33,15 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   // Otherwise the existing membership fence rightly discards unseen children.
   const advanceReveal = () => {
     const reveal = pendingReveal;
-    if (!reveal || !samePath(reveal.root, treeRootPath.value)) return;
+    if (!reveal || directoryTransportInterrupted || !samePath(reveal.root, treeRootPath.value)) return;
+    // A cached listing is not proof that a referenced new file/directory is
+    // missing. Refresh its parent once per intent, then trust the accepted reply.
+    const refreshMissingMembership = (parentPath) => {
+      const key = pathKey(parentPath);
+      if (reveal.refreshedParents.has(key)) { pendingReveal = null; return; }
+      reveal.refreshedParents.add(key);
+      loadTreeDirectory(parentPath);
+    };
     const directories = directoryBreadcrumbs(reveal.type === 'directory'
       ? reveal.path : parentDirectory(reveal.path))
       .map(crumb => normalizePath(crumb.path))
@@ -42,21 +52,32 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
         const entry = getTreeNode(directoryPath)?.entries.find(entry => (
           entry.type === 'directory' && samePath(entry.path, directories[index])
         ));
-        if (!entry) { pendingReveal = null; return; }
+        if (!entry) { refreshMissingMembership(directoryPath); return; }
         directoryPath = entry.path;
       }
       const node = getTreeNode(directoryPath);
       if (node?.error) { pendingReveal = null; return; }
       if (node) node.expanded = true;
-      if (node?.loading) return;
-      if (!node?.loaded) { loadTreeDirectory(directoryPath); return; }
+      if (node?.loading) {
+        // A request sent before this intent may already have snapshotted stale
+        // membership. Wait for it, but preserve this intent's one refresh.
+        if (!reveal.existingRequests.has(latestDirectoryRequestIds.get(pathKey(directoryPath)))) {
+          reveal.refreshedParents.add(pathKey(directoryPath));
+        }
+        return;
+      }
+      if (!node?.loaded) {
+        reveal.refreshedParents.add(pathKey(directoryPath));
+        loadTreeDirectory(directoryPath);
+        return;
+      }
     }
     let revealedPath = directoryPath;
     if (reveal.type === 'file') {
       const entry = getTreeNode(directoryPath)?.entries.find(entry => (
         entry.type === 'file' && samePath(entry.path, reveal.path)
       ));
-      if (!entry) { pendingReveal = null; return; }
+      if (!entry) { refreshMissingMembership(directoryPath); return; }
       revealedPath = entry.path;
     }
     navigationPath.value = revealedPath;
@@ -71,6 +92,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     navigationPath.value = '';
     const target = normalizePath(path);
     if (!target || !canNavigateTo(target)) return false;
+    const existingRequests = new Set(latestDirectoryRequestIds.values());
     clearSelection();
     if (!isPathWithinDirectory(target, treeRootPath.value)) {
       treePath.value = type === 'directory' ? target : parentDirectory(target);
@@ -83,7 +105,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
       const node = getTreeNode(crumb.path);
       if (node?.error) { node.error = null; node.loaded = false; }
     }
-    pendingReveal = { id: revealSequence, path: target, type, root: treeRootPath.value };
+    pendingReveal = { id: revealSequence, path: target, type, root: treeRootPath.value, existingRequests, refreshedParents: new Set() };
     advanceReveal();
     return true;
   };
@@ -145,6 +167,13 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
       treeNodes[nDir].loading = true;
     }
     treeNodes[nDir].error = null;
+    if (directoryTransportInterrupted) {
+      treeNodes[nDir].loading = false;
+      treeNodes[nDir].loaded = false;
+      interruptedDirectories.add(nDir);
+      return;
+    }
+    interruptedDirectories.delete(nDir);
     const sent = store.sendWsMessage({
       type: 'list_directory',
       conversationId: store.currentConversation || '_explorer',
@@ -162,6 +191,33 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     }
   };
 
+  const interruptDirectoryLoads = () => {
+    directoryTransportInterrupted = true;
+    for (const key of latestDirectoryRequestIds.keys()) {
+      const node = treeNodes[key];
+      if (!node) continue;
+      node.loading = false;
+      node.loaded = false;
+      node.error = null;
+      interruptedDirectories.add(key);
+    }
+    // Lost responses must never satisfy a retry (even before reconnect).
+    latestDirectoryRequestIds.clear();
+  };
+
+  const resumeDirectoryLoads = () => {
+    directoryTransportInterrupted = false;
+    const paths = [...interruptedDirectories];
+    interruptedDirectories.clear();
+    for (const key of paths) {
+      const node = treeNodes[key];
+      if (node && isDirectoryInCurrentTree(key)) loadTreeDirectory(node.path);
+    }
+    // Resume only the still-current intent; never re-reveal the active tab over
+    // a newer breadcrumb, ordinary navigation or bulk selection.
+    advanceReveal();
+  };
+
   const loadRootDirectory = () => {
     const dir = treePath.value.trim();
     if (!dir || !canNavigateTo(dir)) return;
@@ -171,6 +227,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     treeRootPath.value = normalizePath(dir);
     Object.keys(treeNodes).forEach(k => delete treeNodes[k]);
     latestDirectoryRequestIds.clear();
+    interruptedDirectories.clear();
     loadTreeDirectory(dir);
   };
 
@@ -240,6 +297,9 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     for (const path of latestDirectoryRequestIds.keys()) {
       if (isPathWithinDirectory(path, key)) latestDirectoryRequestIds.delete(path);
     }
+    for (const path of interruptedDirectories) {
+      if (isPathWithinDirectory(path, key)) interruptedDirectories.delete(path);
+    }
     for (const node of Object.values(treeNodes)) {
       if (node?.entries) node.entries = node.entries.filter(entry => !samePath(entry.path, dirPath));
     }
@@ -257,6 +317,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
   };
 
   const handleDirectoryListing = (msg) => {
+    if (directoryTransportInterrupted) return;
     const nDirPath = pathKey(msg.dirPath);
     const latestRequestId = latestDirectoryRequestIds.get(nDirPath);
     // The Agent echoes requestId. Once this client has issued a request for a
@@ -292,6 +353,9 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
         treeNodes[nDirPath].loading = false;
       }
       if (treeNodes[nDirPath]) treeNodes[nDirPath].error = msg.error;
+      // An accepted error is authoritative for this intent, including ENOENT
+      // which removed membership. Only a fresh intent may retry its parent.
+      if (pendingReveal && isPathWithinDirectory(pendingReveal.path, nDirPath)) pendingReveal = null;
       advanceReveal();
       return;
     }
@@ -335,6 +399,7 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     navigationPath.value = '';
     Object.keys(treeNodes).forEach(k => delete treeNodes[k]);
     latestDirectoryRequestIds.clear();
+    interruptedDirectories.clear();
   };
 
   const initFileBrowser = () => {
@@ -372,6 +437,6 @@ export function createFileTree(store, { getEffectiveWorkDir, normalizePath, sele
     editingTreePath, treePathInputRef, rootFolderName,
     startTreePathEdit, confirmTreePath, cancelTreePathEdit,
     loadTreeDirectory, loadRootDirectory, toggleDirectory, onTreeItemClick,
-    handleDirectoryListing, clearTreeNodes, initFileBrowser, refresh
+    handleDirectoryListing, interruptDirectoryLoads, resumeDirectoryLoads, clearTreeNodes, initFileBrowser, refresh
   };
 }

@@ -880,7 +880,12 @@ export default {
     });
 
     Vue.watch(() => liveStore.connectionState, (state, previous) => {
-      if (previous === 'connected' && state !== 'connected') tabs.interruptFileReads();
+      if (previous === 'connected' && state !== 'connected') {
+        tabs.interruptFileReads();
+        tree.interruptDirectoryLoads();
+      } else if (state === 'connected' && previous !== 'connected') {
+        tree.resumeDirectoryLoads();
+      }
     }, { flush: 'sync' });
 
     Vue.watch(() => store.theme, (newTheme) => {
