@@ -1,5 +1,5 @@
 import { normalizeBrowserAddress } from '../utils/browser-address.js';
-import { projectPresentation, chartGeometry, diagramGeometry, mapGeometry, mapEmbedUrl, responseMarkdown } from '../utils/response-presentation.js';
+import { projectPresentation, chartGeometry, diagramGeometry, mapGeometry, responseMarkdown } from '../utils/response-presentation.js';
 import ResponseImage from './ResponseImage.js';
 import ResponseMapEmbed from './ResponseMapEmbed.js';
 
@@ -71,7 +71,6 @@ export default {
         this.copyState = 'richResponse.copyFallback';
       }
     },
-    mapEmbedUrl,
     number(value) { return new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(value); },
     coordinates(point) { return `${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}`; },
   },
@@ -141,7 +140,7 @@ export default {
           :title="$t('richResponse.newTab')">↗</a>
       </div>
       <figure v-else-if="block.type === 'map'" class="response-map">
-        <ResponseMapEmbed v-if="mapEmbedUrl(block)" :block="block" />
+        <ResponseMapEmbed v-if="block.embed" :block="block" />
         <template v-else>
         <figcaption><strong>{{ $t('richResponse.coordinateSketch') }}</strong><span>{{ $t('richResponse.mapNotice') }}</span></figcaption>
         <svg viewBox="0 0 600 290" role="img" :aria-label="$t('richResponse.coordinateSketch')">

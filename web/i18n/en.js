@@ -49,6 +49,7 @@ export default {
   "richResponse.mapTimeout": "The map is taking too long to load. Coordinates remain available.",
   "richResponse.mapError": "The map could not be loaded. Coordinates remain available.",
   "richResponse.coordinatesOnlyNotice": "The external map is hidden. All coordinates and details remain available.",
+  "richResponse.mapUnsupportedRegion": "This latitude is outside the street map's supported projection. No unrelated map is shown; the exact coordinates and location details remain available.",
   "richResponse.retryMap": "Retry map",
   "richResponse.coordinatesOnly": "Show coordinates only",
   "richResponse.openGoogleMaps": "Open in Google Maps",

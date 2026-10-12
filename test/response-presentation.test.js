@@ -283,6 +283,29 @@ describe('response presentation contract and security', () => {
     }
   });
 
+  it('keeps high-latitude and dateline markers in view and refuses unrelated polar maps', () => {
+    for (const latitude of [85.05, -85.05, 85.0511287798066, -85.0511287798066]) {
+      for (const longitude of [180, -180, 179.999, -179.999]) {
+        const block = { type: 'map', points: [{ label: 'Boundary', latitude, longitude }], embed: { provider: 'openstreetmap' } };
+        const url = new URL(mapEmbedUrl(block));
+        const [west, south, east, north] = url.searchParams.get('bbox').split(',').map(Number);
+        expect(west).toBeLessThan(longitude); expect(east).toBeGreaterThan(longitude);
+        expect(south).toBeLessThanOrEqual(latitude); expect(north).toBeGreaterThanOrEqual(latitude);
+        expect(east).toBeGreaterThan(west); expect(north).toBeGreaterThan(south);
+        expect(url.searchParams.get('marker')).toBe(`${latitude},${longitude}`);
+      }
+    }
+    for (const latitude of [-90, 90, 85.06, -85.06]) {
+      const block = { type: 'map', points: [{ label: 'Polar point', latitude, longitude: 0 }], embed: { provider: 'openstreetmap' } };
+      expect(mapEmbedUrl(block)).toBe('');
+      render(canonical([block]));
+      expect(wrapper.find('iframe').exists()).toBe(false);
+      expect(wrapper.find('.response-map').text()).toContain("outside the street map's supported projection");
+      expect(wrapper.find('.response-map-list').text()).toContain(latitude.toFixed(4));
+      wrapper.unmount(); wrapper = null;
+    }
+  });
+
   it('has matching bilingual local strings and progress does not claim task success', () => {
     const keys = Object.keys(en).filter(key => key.startsWith('richResponse.'));
     expect(keys.every(key => typeof zh[key] === 'string')).toBe(true);

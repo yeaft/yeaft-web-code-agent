@@ -49,6 +49,7 @@ export default {
   "richResponse.mapTimeout": "地图加载时间过长，仍可查看坐标。",
   "richResponse.mapError": "地图加载失败，仍可查看坐标。",
   "richResponse.coordinatesOnlyNotice": "已隐藏外部地图，所有坐标与地点详情仍然可读。",
+  "richResponse.mapUnsupportedRegion": "该纬度超出街道地图支持的投影范围。不会展示其他位置的地图，仍可查看准确坐标和地点详情。",
   "richResponse.retryMap": "重试地图",
   "richResponse.coordinatesOnly": "仅显示坐标",
   "richResponse.openGoogleMaps": "在 Google 地图中打开",

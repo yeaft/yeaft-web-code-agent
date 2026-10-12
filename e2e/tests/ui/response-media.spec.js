@@ -209,3 +209,31 @@ test('verified Google share embed, not a homepage, API key, arbitrary iframe or 
   await expect(page.locator('.response-presentation iframe, .response-presentation script')).toHaveCount(0);
   expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
 });
+
+test('OSM boundary points remain in viewport and polar selection stays readable without a misleading frame', async ({ page }) => {
+  await open(page);
+  const boundaryPoints = [
+    { label: 'North edge', latitude: 85.05, longitude: 180 },
+    { label: 'South edge', latitude: -85.05, longitude: -180 },
+    { label: 'North pole', latitude: 90, longitude: 0 },
+    { label: 'South pole', latitude: -90, longitude: 0 },
+  ];
+  await page.evaluate(points => { window.__state.presentation.blocks = [{ type: 'map', points, embed: { provider: 'openstreetmap' } }]; }, boundaryPoints);
+  for (const index of [0, 1]) {
+    await page.getByRole('combobox').selectOption(String(index));
+    const url = new URL(await page.locator('.response-map iframe').getAttribute('src'));
+    const [west, south, east, north] = url.searchParams.get('bbox').split(',').map(Number);
+    const point = boundaryPoints[index];
+    expect(west).toBeLessThan(point.longitude); expect(east).toBeGreaterThan(point.longitude);
+    expect(south).toBeLessThan(point.latitude); expect(north).toBeGreaterThan(point.latitude);
+  }
+  for (const index of [2, 3]) {
+    await page.getByRole('combobox').selectOption(String(index));
+    await expect(page.locator('.response-map iframe')).toHaveCount(0);
+    await expect(page.locator('.response-map')).toContainText("outside the street map's supported projection");
+    await expect(page.locator('.response-map-list li')).toHaveCount(4);
+    await expect(page.getByRole('button', { name: 'Retry map' })).toHaveCount(0);
+  }
+  await page.getByRole('combobox').selectOption('0');
+  await expect(page.locator('.response-map iframe')).toHaveCount(1);
+});

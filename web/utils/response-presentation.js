@@ -165,10 +165,12 @@ export function mapEmbedUrl(block, pointIndex = 0) {
   if (!embed || !validBlock(block)) return '';
   if (embed.provider === 'google') return embed.url;
   const point = block.points[pointIndex] || block.points[0];
-  // OSM tiles use Web Mercator: show a supported region, but never alter the actual marker.
-  const latitude = Math.max(-85, Math.min(85, point.latitude));
-  const west = Math.max(-180, point.longitude - 0.025), east = Math.min(180, point.longitude + 0.025);
-  const south = Math.max(-85.0511, latitude - 0.015), north = Math.min(85.0511, latitude + 0.015);
+  // Never relocate a polar marker into a different, projectable region.
+  const mercatorLimit = 85.0511287798066;
+  if (Math.abs(point.latitude) > mercatorLimit) return '';
+  // Leaflet wraps longitude. Bounds may straddle ±180° so the pin stays centered.
+  const west = point.longitude - 0.025, east = point.longitude + 0.025;
+  const south = Math.max(-mercatorLimit, point.latitude - 0.015), north = Math.min(mercatorLimit, point.latitude + 0.015);
   const params = new URLSearchParams({ bbox: [west, south, east, north].join(','), layer: 'mapnik',
     marker: `${point.latitude},${point.longitude}` });
   return `https://www.openstreetmap.org/export/embed.html?${params}`;

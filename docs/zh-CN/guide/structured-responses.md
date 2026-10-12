@@ -41,7 +41,7 @@
 
 卡片可设置 `image: { "url": "https://…", "alt": "…", "fit": "contain" }`，以及来源／操作 `url`。URL 只接受无凭据的 HTTP(S)。已有 logo／图标使用 `fit: "contain"`，摄影使用 `"cover"`（默认）。图片自动加载且不发送 referrer，预留展示空间、保留可访问描述，失败可重试。天气、NBA 等信息仅在实际提供有效图片引用时显示图片；组件不会编造数据或图标。
 
-地图可设置 `embed: { "provider": "openstreetmap" }`。客户端生成官方 `https://www.openstreetmap.org/export/embed.html` URL，使用有边界的 `bbox`、`layer=mapnik` 和 `marker=纬度,经度`。多地点时通过「地图地点」选择一个嵌入标记，完整编号坐标／详情列表始终保留。不要提供任意 OSM 嵌入地址。
+地图可设置 `embed: { "provider": "openstreetmap" }`。客户端生成官方 `https://www.openstreetmap.org/export/embed.html` URL，使用有边界的 `bbox`、`layer=mapnik` 和 `marker=纬度,经度`。多地点时通过「地图地点」选择一个嵌入标记，完整编号坐标／详情列表始终保留。不要提供任意 OSM 嵌入地址。经度跨越 ±180° 时地图保持选中位置居中；纬度超出 Web Mercator 支持范围（约 ±85.05113°）时明确提示，仅保留坐标和详情，不替换为其他位置的地图。
 
 也可设置 `embed: { "provider": "google", "url": "https://www.google.com/maps/embed?pb=…" }`，但必须是已验证的官方**分享嵌入 URL**。从 Google 地图的分享／嵌入功能复制 iframe 的 URL，而不是 HTML。通用首页、未知域名、任意 HTML、URL 凭据、API key 及 `/maps/embed/v1/…` API 均不支持。**Google Maps Embed API 需要另行获得授权的密钥配置，本功能不支持该 API。** 分享视图可能与列表坐标不同，因此保留全部地点详情，不声称能在该视图中选择任意地点标记。
 

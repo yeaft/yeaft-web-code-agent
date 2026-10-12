@@ -7,6 +7,7 @@ export default {
   data: () => ({ selectedIndex: 0, state: 'loading', coordinatesOnly: false, revision: 0, loadTimer: null }),
   computed: {
     source() { return mapEmbedUrl(this.block, this.selectedIndex); },
+    unsupportedRegion() { return this.block.embed.provider === 'openstreetmap' && !this.source; },
     selectedPoint() { return this.block.points[this.selectedIndex] || this.block.points[0]; },
     providerUrl() { return mapProviderUrl(this.block, this.selectedIndex); },
     provider() { return this.block.embed.provider === 'google' ? 'Google Maps' : 'OpenStreetMap'; },
@@ -21,7 +22,7 @@ export default {
     retry() {
       clearTimeout(this.loadTimer);
       this.revision++;
-      this.state = 'loading';
+      this.state = this.unsupportedRegion ? 'unsupported' : 'loading';
       this.coordinatesOnly = false;
       const revision = this.revision;
       if (this.source) this.loadTimer = setTimeout(() => {
@@ -55,11 +56,12 @@ export default {
       :title="provider + ' · ' + (block.title || selectedPoint.label)" tabindex="0"
       sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"
       @load="settle($event, 'loaded')" @error="settle($event, 'error')"></iframe>
-    <p v-if="!coordinatesOnly && state !== 'loaded'" class="response-status" role="status" :aria-busy="state === 'loading'">{{ $t(statusKey) }}</p>
+    <p v-if="unsupportedRegion" class="response-status" role="status">{{ $t('richResponse.mapUnsupportedRegion') }}</p>
+    <p v-if="!unsupportedRegion && !coordinatesOnly && state !== 'loaded'" class="response-status" role="status" :aria-busy="state === 'loading'">{{ $t(statusKey) }}</p>
     <p v-if="coordinatesOnly" class="response-status" role="status">{{ $t('richResponse.coordinatesOnlyNotice') }}</p>
     <div class="response-map-actions">
-      <button type="button" class="btn-secondary" @click="retry">{{ $t('richResponse.retryMap') }}</button>
-      <button v-if="!coordinatesOnly" type="button" class="btn-ghost" @click="showCoordinates">{{ $t('richResponse.coordinatesOnly') }}</button>
+      <button v-if="!unsupportedRegion" type="button" class="btn-secondary" @click="retry">{{ $t('richResponse.retryMap') }}</button>
+      <button v-if="!unsupportedRegion && !coordinatesOnly" type="button" class="btn-ghost" @click="showCoordinates">{{ $t('richResponse.coordinatesOnly') }}</button>
       <span v-if="providerUrl" class="response-map-provider">
         <a :href="providerUrl" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ $t(block.embed.provider === 'google' ? 'richResponse.openGoogleMaps' : 'richResponse.openOpenStreetMap') }}</a><a class="response-external" data-response-external :href="providerUrl" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" :aria-label="$t('richResponse.newTab') + ': ' + provider" :title="$t('richResponse.newTab')">↗</a>
       </span>
