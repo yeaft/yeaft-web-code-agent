@@ -1095,6 +1095,7 @@ export class Engine {
     }
     const defs = [];
     for (const [, tool] of this.#tools) {
+      if (activeToolNames && !activeToolNames.has(tool.name)) continue;
       defs.push({
         name: tool.name,
         description: tool.description,
@@ -1645,6 +1646,8 @@ export class Engine {
     if (message.responseKind === 'progress' || message.responseKind === 'result') {
       record.responseKind = message.responseKind;
     }
+    if (message.presentation) record.presentation = message.presentation;
+    if (message.presentationCallId) record.presentationCallId = message.presentationCallId;
     if (Array.isArray(message.foldedMessageIds) && message.foldedMessageIds.length > 0) {
       record.foldedMessageIds = [...message.foldedMessageIds];
     }
@@ -1671,7 +1674,7 @@ export class Engine {
     const hasToolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
     const hasThinking = Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0;
     if (!hasContent && !hasToolCalls && !hasThinking && !message.providerState && message.role !== 'tool') return null;
-    return this.#conversationStore.append(this.#conversationRecord(message, context));
+    return this.#conversationStore.append(this.#conversationRecord(message, context), { strict: context.strict === true });
   }
 
   #persistFoldedRange(foldedMessages, reflection, context = {}) {
@@ -1885,8 +1888,10 @@ export class Engine {
     let terminalEmitted = false;
     let terminalStopReason = 'error';
     let lastTurnNumber = 0;
+    const publications = [];
     try {
       for await (const event of this.#queryLifecycle(params)) {
+        if (event?.type === 'response_presentation') publications.push(event.message);
         if (Number.isFinite(event?.turnNumber)) lastTurnNumber = event.turnNumber;
         if (event?.type === 'turn_end' && event.terminal === true) {
           terminalEmitted = true;
@@ -1916,6 +1921,16 @@ export class Engine {
         console.warn('[Engine] post-turn maintenance failed:', err?.message || err);
       }
     } finally {
+      // A delivery intent is not a successful terminal state. Persist failures
+      // (including consumers closing the generator) for reconnect/history replay.
+      if (!terminalEmitted || terminalStopReason !== 'end_turn') {
+        for (const message of publications) {
+          try { this.#conversationStore?.update?.(message, {
+            responseKind: 'progress', incomplete: true,
+            stopReason: terminalEmitted ? terminalStopReason : 'aborted',
+          }); } catch (error) { console.warn('[Engine] publication status update failed:', error?.message || error); }
+        }
+      }
       if (queryTraceId && typeof this.#trace?.finalizeQuery === 'function') {
         this.#trace.finalizeQuery(queryTraceId, {
           sessionId: params.sessionId || null,
@@ -2375,12 +2390,15 @@ export class Engine {
       && typeof this.#taskManager.listActiveTasks === 'function'
       ? this.#taskManager.listActiveTasks(runtimeSessionId)
       : [];
-    const registeredToolNames = this.#toolRegistry
+    const canPublishResponse = Boolean(runtimeSessionId) && this.#canPersistConversation()
+      && !isSubAgent && scenario === 'chat' && !vpPersona?.subAgent;
+    const registeredToolNames = (this.#toolRegistry
       ? this.#toolRegistry.getToolNames({
           collabToolPolicy: effectiveCollabToolPolicy,
           plugins: this.#config?.plugins,
         })
-      : Array.from(this.#tools.keys());
+      : Array.from(this.#tools.keys()))
+      .filter(name => name !== 'PresentResponse' || canPublishResponse);
     const registeredToolNameSet = new Set(registeredToolNames);
     const resolveCurrentActiveToolNames = () => this.#toolRegistry
       ? resolveActiveToolNames({
@@ -2398,7 +2416,7 @@ export class Engine {
           imageGenerationConfigured: typeof this.#config?.imageApiUrl === 'string'
             && this.#config.imageApiUrl.trim().length > 0,
         })
-      : null;
+      : new Set(registeredToolNames);
     const discoveredToolNames = new Set();
     const discoveryTraversals = new Map();
     const currentDiscoverableTools = () => this.#toolRegistry
@@ -2615,6 +2633,7 @@ export class Engine {
     let displayImageAnchorMessage = null;
     let lastPersistedAssistantMessage = null;
     let lastPersistedAssistantTextMessage = null;
+    const publishedResponses = new Map();
     let lastSuccessfulModel = null;
     let lastSuccessfulEffort = null;
     // `refreshConfig()` may publish a new Session model while a stream or a
@@ -2982,6 +3001,13 @@ export class Engine {
         let wireMessages = stripMetaForWire(pendingContinuationForRequest
           ? [...requestHistory, pendingContinuationForRequest]
           : requestHistory);
+        // Publication metadata belongs to transcript/UI, including history
+        // supplied on later turns. Only its plain summary enters model input.
+        wireMessages = wireMessages.map(message => {
+          if (!message.presentation && !message.presentationCallId) return message;
+          const { presentation, presentationCallId, ...modelMessage } = message;
+          return modelMessage;
+        });
 
         if (scenario !== 'work-item' && this.#yeaftDir && (this.#config?.archive?.toolResults !== false)) {
           try {
@@ -4089,6 +4115,7 @@ export class Engine {
         }
         if (stopReason === 'end_turn'
             && lastPersistedAssistantTextMessage
+            && (!lastPersistedAssistantTextMessage.presentation || lastPersistedAssistantTextMessage.presentation.phase === 'final')
             && typeof this.#conversationStore?.update === 'function') {
           const resultMessage = this.#conversationStore.update(lastPersistedAssistantTextMessage, {
             responseKind: 'result',
@@ -4181,6 +4208,7 @@ export class Engine {
       /** @type {{ kind?: string, message?: string, sourceToolCallId?: string, sourceToolName?: string } | null} */
       let toolBatchBarrier = null;
       let currentToolCallForAsyncTask = null;
+      const pendingPresentations = new Map();
       // task-707: requestEndTurn is a per-batch closure that lets a tool
       // signal "end this turn after the current batch — no adapter retry".
       // We re-create the closure each iteration because endTurnRequested
@@ -4335,6 +4363,13 @@ export class Engine {
         return {
           ...toolCtx,
           fileReadObservations,
+          publishResponse: canPublishResponse ? presentation => {
+            if (signal?.aborted || this.#currentQueryTurnId !== queryTurnId) {
+              throw new Error('Response publication was cancelled.');
+            }
+            if (!publishedResponses.has(toolCall.id)) pendingPresentations.set(toolCall.id, presentation);
+            return { callId: toolCall.id, sessionId: runtimeSessionId, turnId: queryTurnId, vpId: requestIdentity.vpId };
+          } : null,
           currentToolCall: () => ({ ...stableToolCall }),
           askUser: typeof askUser === 'function'
             ? input => askUser(input, { ...stableToolCall })
@@ -4651,7 +4686,10 @@ export class Engine {
               output = stripDisplayImageData(output, displayImages);
             }
             isError = toolErrorOutput === 'json-error-envelope' && isToolErrorOutput(output);
-            yield { type: 'tool_end', id: tc.id, name: tc.name, output, displayImages, isError, threadId: this.currentThreadId };
+            // Publication acknowledgement waits for its strict durable write below.
+            if (!pendingPresentations.has(tc.id)) {
+              yield { type: 'tool_end', id: tc.id, name: tc.name, output, displayImages, isError, threadId: this.currentThreadId };
+            }
             if (displayImages.some(image => image.deliveryQueued === true)
                 && lastPersistedAssistantMessage
                 && typeof this.#conversationStore?.update === 'function') {
@@ -4835,6 +4873,45 @@ export class Engine {
           queryToolCount += 1;
         }
         if (fatalToolError) throw fatalToolError;
+      }
+
+      // Complete the result batch before adding assistant publications so both
+      // persisted history and provider requests retain contiguous tool pairs.
+      for (const [callId, presentation] of pendingPresentations) {
+        if (signal?.aborted || this.#currentQueryTurnId !== queryTurnId) break;
+        if (publishedResponses.has(callId)) continue;
+        const toolMessage = conversationMessages.findLast(row => row.role === 'tool' && row.toolCallId === callId);
+        const message = {
+          role: 'assistant', content: presentation.summary, presentation,
+          presentationCallId: callId, responseKind: 'progress',
+          speakerVpId: requestIdentity.vpId,
+        };
+        let record;
+        try {
+          record = this.#persistConversationMessage(message, {
+            sessionId: runtimeSessionId, turnId: queryTurnId, model: currentModel, executionOrigin, strict: true,
+          });
+          if (!record?.id) throw new Error('Response publication could not be persisted.');
+        } catch (error) {
+          // A storage error is a recoverable tool failure, not a delivery or a
+          // successful final answer. Let the model correct it or use plain text.
+          const output = JSON.stringify({ error: `Response publication failed: ${error.message}` });
+          if (toolMessage) Object.assign(toolMessage, { content: output, isError: true });
+          const toolRecord = this.#persistedToolMessages.get(callId);
+          try { this.#conversationStore?.update?.(toolRecord, { content: output, isError: true }); } catch { /* original storage failure */ }
+          yield { type: 'tool_end', id: callId, name: 'PresentResponse', output, isError: true, threadId: runtimeThreadId };
+          continue;
+        }
+        publishedResponses.set(callId, record);
+        lastPersistedAssistantTextMessage = record;
+        // Metadata is transcript/UI-only. Providers receive the summary as a
+        // regular assistant string, never a generic unknown content block.
+        conversationMessages.push({ role: 'assistant', content: message.content, _persistedMessageId: record.id });
+        fullResponseText += presentation.summary;
+        // Do not yield an acknowledgement between the cancellation fence/write
+        // and the publication: a consumer can abort at every yielded event.
+        yield { type: 'response_presentation', message: record, threadId: runtimeThreadId };
+        yield { type: 'tool_end', id: callId, name: 'PresentResponse', output: toolMessage?.content || '', isError: false, threadId: runtimeThreadId };
       }
 
       // Preload rules for observed read paths before the next provider input.

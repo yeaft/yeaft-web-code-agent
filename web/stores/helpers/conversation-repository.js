@@ -13,6 +13,9 @@ function rowIdentity(row) {
 
 function sameAssistantTurn(existing, incoming) {
   if (existing?.type !== 'assistant' || incoming?.type !== 'assistant') return false;
+  // Rich snapshots have exact durable identities; summary-prefix similarity
+  // must not absorb a distinct publication into a streamed prose row.
+  if (existing.presentation || incoming.presentation) return false;
   if (rowSessionId(existing) !== rowSessionId(incoming)) return false;
   if (existing.isHistory === true && !existing.isStreaming) return false;
   if (incoming._hasPersistedTurnId !== true) return false;
@@ -223,10 +226,9 @@ export class ConversationRepository {
     if (!conversationId || !text) return null;
     const projection = this.rows(conversationId);
     const row = projection.findLast(candidate => candidate?.type === 'assistant'
-      && !isDurableYeaftHistoryRow(candidate)
       && (sessionId === undefined || rowSessionId(candidate) === sessionId)
       && (!turnId || candidate.turnId === turnId));
-    if (!row) return null;
+    if (!row || row.presentation || isDurableYeaftHistoryRow(row)) return null;
     if (!row.content) row.content = text;
     else if (text.startsWith(row.content)) row.content = text;
     else if (!row.content.endsWith(text)) row.content += text;

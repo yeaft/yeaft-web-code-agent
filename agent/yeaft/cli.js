@@ -721,6 +721,9 @@ async function runREPL(config, args) {
             if (event.type === 'text_delta') {
               responseText += event.text || '';
               process.stdout.write(`\n[${vpId}] ${event.text || ''}`);
+            } else if (event.type === 'response_presentation') {
+              responseText += event.message?.content || '';
+              process.stdout.write(`\n[${vpId}] ${event.message?.content || ''}`);
             } else if (event.type === 'tool_start') {
               process.stderr.write(`\n[${vpId}] ${event.name}...\n`);
             } else if (event.type === 'error') {
@@ -1251,6 +1254,7 @@ async function runOnce(config, args) {
         modelEffort: args.modelEffort || session.config.modelEffort || null,
         onEvent: ({ vpId, event }) => {
           if (event.type === 'text_delta') process.stdout.write(`\n[${vpId}] ${event.text || ''}`);
+          else if (event.type === 'response_presentation') process.stdout.write(`\n[${vpId}] ${event.message?.content || ''}`);
           else if (event.type === 'tool_start') process.stderr.write(`\n[${vpId}] ${event.name}...\n`);
           else if (event.type === 'error') process.stderr.write(`\n[${vpId}] Error: ${event.error?.message || event.error}\n`);
         },

@@ -36,7 +36,9 @@ export function markTurnResponseKinds(rows, event = {}) {
   if (event.reason === 'end_turn') {
     for (let index = ownedRows.length - 1; index >= 0; index -= 1) {
       if (responseText(ownedRows[index].content).trim()) {
-        ownedRows[index].responseKind = 'result';
+        if (!ownedRows[index].presentation || ownedRows[index].presentation.phase === 'final') {
+          ownedRows[index].responseKind = 'result';
+        }
         break;
       }
     }
@@ -56,6 +58,7 @@ export function appendTurnResponseSegment(turn, message) {
     kind: message.responseKind === 'result' ? 'result' : 'progress',
     explicitKind: message.responseKind === 'progress' || message.responseKind === 'result',
     isStreaming: message.isStreaming === true,
+    ...(message.presentation ? { presentation: message.presentation } : {}),
   });
   turn.textContent = turn.textSegments.map(segment => segment.content).join('\n\n');
 }
@@ -170,6 +173,7 @@ export function finalizeTurnResponseSegments(turn) {
   const hasExplicitKinds = segments.some(segment => segment.explicitKind);
   const legacySingleSegment = segments.length === 1 && !hasExplicitKinds;
   if (endedNormally || legacySingleSegment || (turn.isHistory && !hasExplicitKinds)) {
-    segments[segments.length - 1].kind = 'result';
+    const last = segments[segments.length - 1];
+    if (!last.presentation || last.presentation.phase === 'final') last.kind = 'result';
   }
 }

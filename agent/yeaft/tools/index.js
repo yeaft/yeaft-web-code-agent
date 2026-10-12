@@ -25,6 +25,7 @@ import exitWorktree from './exit-worktree.js';
 
 // --- P0 Core tools ---
 import askUser from './ask-user.js';
+import presentResponse from './present-response.js';
 import webSearch from './web-search.js';
 import webFetch from './web-fetch.js';
 import historySearch from './history-search.js';
@@ -92,6 +93,7 @@ export const allTools = [
 
   // P0 Core
   askUser,
+  presentResponse,
   webSearch,
   webFetch,
   historySearch,

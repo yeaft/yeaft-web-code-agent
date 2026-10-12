@@ -4,6 +4,7 @@ import MessageComposer from './MessageComposer.js';
 import NavigationIcon from './NavigationIcon.js';
 import PaneResizeHandle from './PaneResizeHandle.js';
 import PersonOutputs from './PersonOutputs.js';
+import ResponsePresentation from './ResponsePresentation.js';
 import { safeOutputUrl } from '../stores/helpers/person-outputs.js';
 import PersonKnowledgeBrowser from './PersonKnowledgeBrowser.js';
 import PersonManagement from './PersonManagement.js';
@@ -24,7 +25,7 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
-  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity, PersonResponseLoading },
+  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonThoughtJournal, PersonDebugLog, PersonActivity, PersonResponseLoading },
   setup() {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -515,7 +516,8 @@ export default {
                       <span v-if="part.replyKind === 'progress' || part.replyKind === 'final'" class="person-reply-kind">{{ $t(part.replyKind === 'progress' ? 'person.progressReply' : 'person.finalReply') }}</span>
                       <time :datetime="datetime(part.createdAt)">{{ time(part.createdAt) }}</time>
                     </div>
-                    <div class="person-message-text markdown-body" @click="previewReplyLink" v-html="renderSafeMessageMarkdown(part.text)"></div>
+                    <ResponsePresentation v-if="part.presentation" :presentation="part.presentation" />
+                    <div v-else class="person-message-text markdown-body" @click="previewReplyLink" v-html="renderSafeMessageMarkdown(part.text)"></div>
                   </section>
                   <div v-if="deliveredOutputs(message).length" class="person-delivered-outputs" :aria-label="$t('person.outputs')"><button v-for="output in deliveredOutputs(message)" :key="output.id" type="button" class="btn-secondary person-delivered-output" :disabled="!!gate || state.loading" @click="selectOutput(output)">{{ output.title }} · {{ $t('person.outputsPreview') }}</button></div>
                   <PersonResponseLoading v-if="loadingReplyKey === message.key" :feedback="feedback" />
@@ -582,7 +584,8 @@ export default {
               <p v-else-if="state.search.loaded && !state.search.items.length" class="person-empty">{{ $t('person.noSearchResults') }}</p>
               <article v-for="message in state.search.items" :key="message.id" class="person-search-result">
                 <header class="person-message-meta"><strong>{{ message.role === 'user' ? $t('person.you') : (state.person?.name || $t('person.title')) }}</strong><span v-if="message.role === 'assistant' && message.replyKind === 'progress'" class="person-reply-kind">{{ $t('person.progressReply') }}</span><time>{{ time(message.createdAt) }}</time></header>
-                <p class="person-prose">{{ message.text }}</p>
+                <ResponsePresentation v-if="message.presentation" :presentation="message.presentation" />
+                <p v-else class="person-prose">{{ message.text }}</p>
               </article>
               <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>
             </div>

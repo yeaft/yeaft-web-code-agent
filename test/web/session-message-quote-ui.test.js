@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
+import { addMessageToConversation, finishStreamingForConversation, appendToAssistantMessageForConversation } from '../../web/stores/helpers/messages.js';
+import { quoteFromAssistantTurn } from '../../web/utils/session-message-quote.js';
 import { mount } from '@vue/test-utils';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import {
   appendTurnResponseSegment,
@@ -785,4 +787,169 @@ describe('Session message quote UI wiring', () => {
     expect(cancelResizeFrame).toHaveBeenCalledWith(pendingFrameId);
   });
 
+});
+
+
+describe('Session presentation UI projection', () => {
+  let handleAssistantOutputFrame;
+  let handleYeaftHistoryChunk;
+  beforeEach(() => {
+    globalThis.Vue = Vue;
+    globalThis.Pinia = { defineStore: () => () => ({}) };
+  });
+  beforeAll(async () => {
+    globalThis.Vue = Vue;
+    globalThis.Pinia = { defineStore: () => () => ({}) };
+    ({ handleAssistantOutputFrame } = await import('../../web/stores/helpers/assistantOutput.js'));
+    ({ handleYeaftHistoryChunk } = await import('../../web/stores/helpers/handlers/conversationHandler.js'));
+  });
+  const presentation = { version: 1, title: 'Report', summary: 'Three checks passed.', phase: 'final', blocks: [{ type: 'markdown', text: 'Detailed report' }] };
+  function storeFixture() {
+    const store = { messagesMap: { c: [] }, conversations: [], executionStatusMap: {}, processingConversations: {},
+      yeaftConversationId: 'c', yeaftConversationIdsByAgent: { a: 'c' }, currentAgent: 'a',
+      _currentYeaftAgentId: 'a', _currentYeaftSessionId: 's', _currentYeaftTurnId: 't', _currentYeaftVpId: 'v', _currentYeaftThreadId: 'main',
+      yeaftSessionHistoryState: {}, yeaftActiveSessionFilter: 's',
+      invalidateYeaftHistoryOutline: vi.fn(), promoteYeaftHistoryOutlineRow: vi.fn(() => true),
+      addMessageToConversation(...args) { return addMessageToConversation(this, ...args); },
+      finishStreamingForConversation(...args) { return finishStreamingForConversation(this, ...args); },
+      appendToAssistantMessageForConversation(...args) { return appendToAssistantMessageForConversation(this, ...args); },
+    };
+    return store;
+  }
+  const frame = { type: 'assistant', message: { id: 'm0003', content: presentation.summary, presentation, presentationCallId: 'call', responseKind: 'progress' }, ts: '2026-10-12T00:00:00Z' };
+  const persisted = { id: 'm0003', role: 'assistant', content: presentation.summary, presentation, presentationCallId: 'call', sessionId: 's', speakerVpId: 'v', turnId: 't', threadId: 'main', responseKind: 'result', stopReason: 'end_turn', time: frame.ts };
+  function replay(store, row = persisted) { handleYeaftHistoryChunk(store, { type: 'yeaft_history_chunk', mode: 'recent', sessionId: 's', agentId: 'a', conversationId: 'c', messages: [row] }); }
+  afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ''; });
+
+  it('dedups live/reconnect/history without terminating the turn or joining subsequent text', () => {
+    const store = storeFixture();
+    handleAssistantOutputFrame(store, 'c', frame, 'a');
+    expect(store.messagesMap.c).toHaveLength(1);
+    expect(store.messagesMap.c[0]).toMatchObject({ presentation, content: presentation.summary, status: 'pending', responseKind: 'progress', agentId: 'a', sessionId: 's', turnId: 't', vpId: 'v' });
+    handleAssistantOutputFrame(store, 'c', frame, 'a');
+    expect(store.messagesMap.c).toHaveLength(1);
+    store.appendToAssistantMessageForConversation('c', 'Continued work');
+    expect(store.messagesMap.c).toHaveLength(2);
+    expect(store.messagesMap.c[0].content).toBe(presentation.summary);
+    replay(store);
+    expect(store.messagesMap.c.filter(row => row.presentation)).toHaveLength(1);
+    expect(store.messagesMap.c.find(row => row.presentation).responseKind).toBe('result');
+    handleAssistantOutputFrame(store, 'c', frame, 'a');
+    expect(store.messagesMap.c.find(row => row.presentation).responseKind).toBe('result');
+    const historyFirst = storeFixture(); replay(historyFirst); handleAssistantOutputFrame(historyFirst, 'c', frame, 'a');
+    expect(historyFirst.messagesMap.c).toHaveLength(1);
+    expect(historyFirst.messagesMap.c[0]).toMatchObject({ presentation, presentationCallId: 'call', content: presentation.summary, responseKind: 'result' });
+  });
+
+  it('does not confuse prefix-identical prose with a distinct publication and separates same IDs across Sessions', () => {
+    const store = storeFixture();
+    store.addMessageToConversation('c', { type: 'assistant', content: 'Three', isStreaming: true, status: 'pending' });
+    replay(store);
+    expect(store.messagesMap.c).toHaveLength(2);
+    handleAssistantOutputFrame(store, 'c', frame, 'a');
+    expect(store.messagesMap.c).toHaveLength(2);
+    store._currentYeaftSessionId = 's-other'; store._currentYeaftTurnId = 't-other';
+    handleAssistantOutputFrame(store, 'c', frame, 'a');
+    expect(store.messagesMap.c.filter(row => row.presentation)).toHaveLength(2);
+    expect(new Set(store.messagesMap.c.filter(row => row.presentation).map(row => row.stableKey)).size).toBe(2);
+    const streamed = storeFixture();
+    streamed.addMessageToConversation('c', { type: 'assistant', content: 'Before publication', isStreaming: true, status: 'pending', timestamp: Date.parse(frame.ts) - 1000 });
+    handleAssistantOutputFrame(streamed, 'c', frame, 'a');
+    streamed.appendToAssistantMessageForConversation('c', 'After publication');
+    expect(streamed.messagesMap.c).toHaveLength(3);
+    expect(streamed.messagesMap.c[0].content).toBe('Before publication');
+    expect(streamed.messagesMap.c[2].content).toBe('After publication');
+  });
+
+  it('retains canonical metadata in segments and respects only the authoritative successful terminal boundary', () => {
+    const rows = [{ ...persisted, type: 'assistant', responseKind: 'progress', status: 'pending' }];
+    const turn = { messages: rows, textSegments: [] }; appendTurnResponseSegment(turn, rows[0]); finalizeTurnResponseSegments(turn);
+    expect(turn.textSegments[0]).toMatchObject({ presentation, kind: 'progress' });
+    rows[0].status = 'completed'; markTurnResponseKinds(rows, { turnId: 't', sessionId: 's', vpId: 'v', reason: 'end_turn' });
+    expect(rows[0].responseKind).toBe('result');
+    markTurnResponseKinds(rows, { turnId: 't', reason: 'errored' });
+    expect(rows[0].responseKind).toBe('progress');
+    rows[0].presentation = { ...presentation, phase: 'progress' };
+    markTurnResponseKinds(rows, { turnId: 't', reason: 'end_turn' });
+    expect(rows[0].responseKind).toBe('progress');
+    expect(quoteFromAssistantTurn(turn, 'Assistant').content).toBe(presentation.summary);
+  });
+
+  it('keeps live and replay text visible, copyable and quotable despite malformed presentation summaries', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    for (const summary of [undefined, null, 42, '', '   ']) {
+      const malformed = { version: 1, summary, blocks: [] };
+      for (const source of ['live', 'replay']) {
+        const store = storeFixture();
+        if (source === 'live') handleAssistantOutputFrame(store, 'c', { ...frame, message: { ...frame.message, content: 'Readable answer', presentation: malformed } }, 'a');
+        else replay(store, { ...persisted, content: 'Readable answer', presentation: malformed });
+        const row = store.messagesMap.c[0];
+        expect(row.content).toBe('Readable answer');
+        const turn = { id: 't', turnId: 't', messages: [row], textSegments: [], toolMsgs: [], imageMsgs: [], textContent: '' };
+        appendTurnResponseSegment(turn, row);
+        const wrapper = mount(AssistantTurn, { props: { turn }, global: { mocks: { $t: key => key }, provide: { t: key => key }, stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true } } });
+        expect(wrapper.get('.response-summary').text()).toBe('Readable answer');
+        await wrapper.get('.response-copy').trigger('click');
+        expect(writeText).toHaveBeenLastCalledWith('Readable answer');
+        expect(quoteFromAssistantTurn(turn, 'Assistant').content).toBe('Readable answer');
+        wrapper.unmount();
+      }
+    }
+  });
+
+  it('preserves JSON-shaped summaries verbatim across live, replay, rendering, copying and quotes', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    for (const summary of ['{"alpha":2,"beta":3}', '[{"type":"text","text":"keep the whole array"}]', '{"text":"not a transport block"}']) {
+      const rich = { ...presentation, summary };
+      for (const source of ['live', 'replay']) {
+        const store = storeFixture();
+        if (source === 'live') handleAssistantOutputFrame(store, 'c', { ...frame, message: { ...frame.message, content: summary, presentation: rich } }, 'a');
+        else replay(store, { ...persisted, content: summary, presentation: rich });
+        const row = store.messagesMap.c[0];
+        expect(row.content).toBe(summary);
+        const turn = { id: 't', turnId: 't', messages: [row], textSegments: [], toolMsgs: [], imageMsgs: [], textContent: '' };
+        appendTurnResponseSegment(turn, row);
+        const wrapper = mount(AssistantTurn, { props: { turn }, global: { mocks: { $t: key => key }, provide: { t: key => key }, stubs: { ToolLine: true, AskCard: true, VpSpeakerHeader: true } } });
+        expect(wrapper.get('.response-summary').text()).toBe(summary);
+        expect(wrapper.get('.response-markdown').text()).toBe('Detailed report');
+        await wrapper.get('.response-copy').trigger('click');
+        expect(writeText).toHaveBeenLastCalledWith(summary);
+        expect(quoteFromAssistantTurn(turn, 'Assistant').content).toBe(summary);
+        wrapper.unmount();
+      }
+    }
+    // Actual structured transport arrays still use their text-block adapter.
+    const store = storeFixture();
+    handleAssistantOutputFrame(store, 'c', { ...frame, message: { ...frame.message, content: [{ type: 'text', text: presentation.summary }] } }, 'a');
+    expect(store.messagesMap.c[0].content).toBe(presentation.summary);
+  });
+
+  it('wires the shared renderer to canonical objects and keeps copy/quote summary fallback', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => ({ answerUserQuestion: vi.fn(), cancelVpTurn: vi.fn() }) });
+    vi.stubGlobal('marked', { setOptions() {}, parse: text => `<p>${text}</p>` });
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { default: AssistantTurn } = await import('../../web/components/AssistantTurn.js');
+    const row = { ...persisted, type: 'assistant', status: 'completed' };
+    const turn = { id: 't', turnId: 't', messages: [row], textSegments: [], toolMsgs: [], imageMsgs: [], textContent: '' };
+    appendTurnResponseSegment(turn, row);
+    const RichStub = { name: 'ResponsePresentation', props: ['presentation'], template: '<div class="rich-test">{{presentation.title}}</div>' };
+    const wrapper = mount(AssistantTurn, { props: { turn, sessionActions: true }, global: { mocks: { $t: key => key }, provide: { t: key => key }, stubs: { ResponsePresentation: RichStub, ToolLine: true, AskCard: true, VpSpeakerHeader: true } } });
+    expect(wrapper.findComponent(RichStub).props('presentation')).toEqual(presentation);
+    expect(wrapper.find('.turn-response-result .rich-test').text()).toBe('Report');
+    expect(wrapper.find('.turn-response-result .turn-text').exists()).toBe(false);
+    await wrapper.get('.copy-btn').trigger('click');
+    expect(writeText).toHaveBeenCalledWith(presentation.summary);
+    expect(quoteFromAssistantTurn(turn, 'Assistant').content).toBe(presentation.summary);
+    wrapper.unmount();
+  });
 });

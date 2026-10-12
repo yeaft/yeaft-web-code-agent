@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { config, finalProposal } from './fixtures.js';
+import { projectPersonConversation } from '../../../../web/utils/person-conversation.js';
 
 const services = [], directories = [];
 const call = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
@@ -162,5 +163,126 @@ describe('Person capability lifecycle', () => {
     const traces = (await call(next, 'traces', { limit: 50 })).items;
     const episodeId = (await call(next, 'snapshot')).latestEpisode.id;
     expect(traces.filter(t => t.episodeId === episodeId && t.kind === 'capability_started')).toEqual([]);
+  });
+});
+
+describe('Person presentation runtime', () => {
+  const rich = { title: 'Verified counts', summary: 'Alpha has 2; Beta has 3.', phase: 'final', blocks: [
+    { type: 'metrics', items: [{ label: 'Alpha', value: '2' }, { label: 'Beta', value: '3' }] },
+  ] };
+  const services = [], directories = [];
+  const call = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
+  function use(proposal, id, args = {}) { proposal.next = { model: 'test/first', effort: null, reason: 'Deliver verified findings and then integrate.', capability: { id, args } }; }
+  async function create(fn) {
+    const directory = await mkdtemp(join(tmpdir(), 'person-rich-runtime-')); directories.push(directory);
+    const seen = [], adapter = { async *stream(params) {
+      const input = JSON.parse(params.messages[0].content), proposal = finalProposal(input.state.version);
+      proposal.concepts = []; proposal.state.focusConceptIds = []; proposal.reply = null;
+      seen.push(input);
+      await fn(input, proposal, seen.length, params.signal);
+      yield { type: 'text_delta', text: JSON.stringify(proposal) };
+      yield { type: 'stop', stopReason: 'end_turn' };
+    } };
+    const service = createPersonService({ yeaftDir: directory, config, adapter, embedding: { enabled: false } });
+    services.push(service); await call(service, 'open'); return { service, seen, directory };
+  }
+  async function idle(service) {
+    for (let i = 0; i < 200; i++) {
+      const snapshot = await call(service, 'snapshot');
+      if (!snapshot.busy) return snapshot;
+      await new Promise(resolve => setTimeout(resolve, 15));
+    }
+    throw new Error('Episode did not finish');
+  }
+  afterEach(async () => {
+    await Promise.all(services.splice(0).map(service => service.close()));
+    await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
+  });
+
+  describe('Person rich communication through real provider, runtime and projection', () => {
+    it('publishes once, commits only on later next:null and keeps a distinct plain reply in the same episode', async () => {
+      const { service, seen } = await create((input, proposal, index) => {
+        if (index === 1) use(proposal, 'catalog.view', { id: 'PresentResponse' });
+        else if (index === 2) {
+          expect(input.capabilities.active.find(item => item.id === 'PresentResponse').args.properties.blocks).toBeTruthy();
+          use(proposal, 'PresentResponse', rich); proposal.reply = rich.summary;
+          proposal.state.summary = 'Candidate only, not committed during delivery.';
+        } else if (index === 3) {
+          expect(input.capabilityResult).toMatchObject({ published: true, phase: 'final' });
+          expect(input.state.version).toBe(0);
+          expect(input.feedback.lastReply).toBe(rich.summary);
+          use(proposal, 'PresentResponse', rich); // Repeated model delivery is also idempotent.
+        } else proposal.reply = 'A separate plain conclusion.';
+      });
+      await call(service, 'send', { text: 'Compare Alpha and Beta', clientMessageId: 'rich-plain' });
+      const snapshot = await idle(service);
+      expect(snapshot).toMatchObject({ state: { version: 1 }, latestEpisode: { status: 'completed' } });
+      expect(snapshot.messages.filter(m => m.role === 'assistant').map(m => m.text)).toEqual([rich.summary, 'A separate plain conclusion.']);
+      const blocks = projectPersonConversation(snapshot.messages);
+      expect(blocks.at(-1).parts).toHaveLength(2);
+      expect(blocks.at(-1).parts[0].presentation.title).toBe(rich.title);
+      expect(blocks.at(-1).parts[1]).not.toHaveProperty('presentation');
+      expect(seen).toHaveLength(4);
+    });
+
+    it('suppresses a repeated terminal plain summary without suppressing the cognitive commit', async () => {
+      const { service } = await create((input, proposal, index) => {
+        if (index === 1) use(proposal, 'catalog.view', { id: 'PresentResponse' });
+        else if (index === 2) use(proposal, 'PresentResponse', rich);
+        else proposal.reply = rich.summary;
+      });
+      await call(service, 'send', { text: 'Compare counts', clientMessageId: 'summary-once' });
+      const snapshot = await idle(service);
+      expect(snapshot.state.version).toBe(1);
+      expect(snapshot.messages.filter(m => m.role === 'assistant')).toHaveLength(1);
+      expect((await call(service, 'traces', { limit: 50 })).items.filter(t => t.kind === 'committed')).toHaveLength(1);
+    });
+
+    it.each(['cancel', 'failure'])('retains final-intent rich communication without committing cognition on later %s', async outcome => {
+      let ready; const waiting = new Promise(resolve => { ready = resolve; });
+      const { service, directory } = await create(async (input, proposal, index, signal) => {
+        if (index === 1) use(proposal, 'catalog.view', { id: 'PresentResponse' });
+        else if (index === 2) use(proposal, 'PresentResponse', rich);
+        else {
+          ready();
+          if (outcome === 'failure') throw new Error('provider failure after communication');
+          await new Promise(resolve => { if (signal.aborted) resolve(); else signal.addEventListener('abort', resolve, { once: true }); });
+        }
+      });
+      const command = await call(service, 'send', { text: 'Compare counts', clientMessageId: `partial-${outcome}` });
+      await waiting;
+      if (outcome === 'cancel') {
+        expect(await call(service, 'snapshot')).toMatchObject({ busy: true, state: { version: 0 }, latestEpisode: { status: 'running' } });
+        await call(service, 'cancel', { episodeId: command.episodeId });
+      }
+      const snapshot = await idle(service);
+      expect(snapshot.latestEpisode.status).toBe(outcome === 'cancel' ? 'cancelled' : 'failed');
+      expect(snapshot.state.version).toBe(0);
+      expect(snapshot.messages.at(-1)).toMatchObject({ text: rich.summary, presentation: { phase: 'final' } });
+      await service.close();
+      const reopened = createPersonService({ yeaftDir: directory, embedding: { enabled: false } }); services.push(reopened);
+      expect((await call(reopened, 'snapshot')).messages).toEqual(snapshot.messages);
+      expect((await call(reopened, 'messages')).items[0].presentation.title).toBe(rich.title);
+      expect((await call(reopened, 'search', { query: 'Alpha' })).items.some(m => m.presentation?.title === rich.title)).toBe(true);
+      await call(reopened, 'open', {}, 'bob');
+      expect((await call(reopened, 'snapshot', {}, 'bob')).messages).toEqual([]);
+    });
+
+    it('invalid rich arguments publish nothing and allow the ordinary plain reply path', async () => {
+      const { service } = await create((input, proposal, index) => {
+        if (index === 1) use(proposal, 'catalog.view', { id: 'PresentResponse' });
+        else if (index === 2) use(proposal, 'PresentResponse', { ...rich, blocks: [{ type: 'script', text: 'alert(1)' }] });
+        else {
+          expect(input.capabilityResult).toMatchObject({ ok: false, code: 'INVALID_REQUEST' });
+          proposal.reply = 'Alpha has 2; Beta has 3. Plain answer.';
+        }
+      });
+      await call(service, 'send', { text: 'Compare counts', clientMessageId: 'invalid-rich' });
+      const snapshot = await idle(service);
+      expect(snapshot.latestEpisode.status).toBe('completed');
+      expect(snapshot.messages.at(-1)).toMatchObject({ replyKind: 'final', text: 'Alpha has 2; Beta has 3. Plain answer.' });
+      expect(snapshot.messages.at(-1)).not.toHaveProperty('presentation');
+      expect((await call(service, 'traces', { limit: 50 })).items.filter(t => t.kind === 'presentation_published')).toHaveLength(0);
+    });
   });
 });

@@ -183,6 +183,44 @@ describe('Digital Person surface', () => {
     expect(wrapper.findAll('.person-reply')).toHaveLength(2);
   });
 
+  it.each([en, zhCN])('renders rich communication once, retaining grouped replay, focus and ordinary text while final intent is still running', async messages => {
+    await render(messages);
+    const presentation = { version: 1, title: 'Comparison', summary: 'Alpha has 2; Beta has 3.', phase: 'final',
+      blocks: [{ type: 'table', columns: ['Name', 'Count'], rows: [['Alpha', '2'], ['Beta', '3']] },
+        { type: 'link', text: 'Verified evidence', url: 'https://example.com/evidence' }] };
+    const rich = { id: 'rich', role: 'assistant', episodeId: 'turn', replyKind: 'presentation', text: presentation.summary, presentation, createdAt: 31000 };
+    const state = wrapper.vm.state;
+    Object.assign(state, { messages: [{ id: 'question', role: 'user', text: 'Compare', episodeId: 'turn', createdAt: 1 }, rich],
+      busy: true, episodeId: 'turn', latestEpisode: { id: 'turn', status: 'running' } });
+    await Vue.nextTick();
+    const article = wrapper.get('.person-reply'), section = article.get('.person-reply-part').element;
+    expect(article.findAll('.response-summary')).toHaveLength(1);
+    expect(article.get('.response-summary').text()).toBe(presentation.summary);
+    expect(article.find('.person-message-text').exists()).toBe(false);
+    expect(article.find('.person-reply-kind').exists()).toBe(false);
+    expect(article.find('.person-response-loading').exists()).toBe(true);
+    expect(article.get('table').text()).toContain('Alpha');
+    const link = article.get('.response-block-link a').element; link.focus();
+    state.messages.push({ ...rich, id: 'plain', replyKind: 'final', text: 'A distinct plain conclusion.', presentation: undefined });
+    await Vue.nextTick();
+    expect(wrapper.findAll('.person-reply')).toHaveLength(1);
+    expect(article.findAll('.person-reply-part')).toHaveLength(2);
+    expect(article.get('.person-message-text').text()).toBe('A distinct plain conclusion.');
+    state.messages = state.messages.map(row => ({ ...row }));
+    await Vue.nextTick();
+    expect(wrapper.get('.person-reply-part').element).toBe(section);
+    expect(document.activeElement).toBe(link);
+    Object.assign(state, { busy: false, episodeId: null, latestEpisode: { id: 'turn', status: 'failed' } });
+    await Vue.nextTick();
+    expect(article.find('.person-response-loading').exists()).toBe(false);
+    expect(article.findAll('.response-summary')).toHaveLength(1);
+    await wrapper.vm.openPanel('search'); await flushPromises();
+    Object.assign(state.search, { loaded: true, items: [rich] });
+    await Vue.nextTick();
+    expect(wrapper.get('.person-search-result .response-summary').text()).toBe(presentation.summary);
+    expect(wrapper.find('.person-search-result .person-prose').exists()).toBe(false);
+  });
+
   it.each(['cancelled', 'failed', 'interrupted', 'budget_exhausted'])('keeps grouped progress on %s without labelling it final', async status => {
     await render();
     Object.assign(wrapper.vm.state, { messages: [1, 2].map(index => ({ id: `p${index}`, role: 'assistant', episodeId: 'turn', replyKind: 'progress', text: `Finding ${index}`, createdAt: index })),

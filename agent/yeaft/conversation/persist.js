@@ -377,6 +377,7 @@ function maybeWarnHistoryTruncated(sessionId, storeDir, recentTurnsLimit) {
  */
 let _permissionWarned = false;
 let _historyIndexMutationWarned = false;
+const _segmentIndexWarned = new Set();
 
 /** Rough token estimation: ~4 chars per token. */
 export function estimateTokens(text) {
@@ -885,13 +886,26 @@ class SegmentStore {
       || normalizedSource.streamId !== this.lineage.streamId
       || !Number.isFinite(Number(normalizedSource?.revision))
       || Number(normalizedSource.revision) !== this.lineage.revision;
-    if ((!existsSync(this.indexPath) || indexWasStale || needsMetadataUpgrade) && this.hasData()) this.saveIndex();
+    if ((!existsSync(this.indexPath) || indexWasStale || needsMetadataUpgrade) && this.hasData()) this.#saveRecoverableIndex();
     return this.index;
   }
 
   saveIndex() {
     this.ensure();
     writeFileSync(this.indexPath, `${JSON.stringify(this.index || emptySegmentIndex(), null, 2)}\n`, { encoding: 'utf8', mode: 0o644 });
+  }
+
+  #saveRecoverableIndex() {
+    try {
+      this.saveIndex();
+    } catch (error) {
+      // JSONL owns the transcript; lineage already owns its identity/fence.
+      // Even a fresh read can rebuild this cache while its target is unwritable.
+      if (!_segmentIndexWarned.has(this.rootDir)) {
+        console.warn(`[Yeaft] Cannot save conversation index ${this.indexPath}: ${error?.message || error} — recoverable from transcript`);
+        _segmentIndexWarned.add(this.rootDir);
+      }
+    }
   }
 
   metadata() {
@@ -918,6 +932,18 @@ class SegmentStore {
       segment = null;
     }
     const line = `${JSON.stringify(msg)}\n`;
+    const invalidatesEarlierRows = msg._reflection
+      || (Array.isArray(msg.foldedMessageIds) && msg.foldedMessageIds.length > 0);
+    // Prepare durable identity and the mutation fence BEFORE the commit point.
+    // A failed JSONL write can conservatively advance revision, but a committed
+    // fold must never be replayed with an older revision after index recovery.
+    this.#persistCurrentLineage({
+      revision: (Number(idx.revision) || 0) + (invalidatesEarlierRows ? 1 : 0),
+      anchor: establishesAnchor ? this.#lineageAnchorForLine(line) : undefined,
+    });
+    // A complete successful JSONL append is the transcript commit point. Never
+    // report a derived index failure as an uncommitted strict append afterward:
+    // callers would retry/publicize the same response under a second message id.
     appendFileSync(activePath, line, { encoding: 'utf8', mode: 0o644 });
 
     const seq = parseSeqFromId(msg.id);
@@ -933,25 +959,13 @@ class SegmentStore {
     idx.totalMessages = (idx.totalMessages || 0) + 1;
     idx.lastMessageId = msg.id || null;
     idx.nextSeq = Math.max(Number(idx.nextSeq) || 1, seq + 1);
-    const invalidatesEarlierRows = msg._reflection
-      || (Array.isArray(msg.foldedMessageIds) && msg.foldedMessageIds.length > 0);
-    // Ordinary appends are recoverable through afterSeq. Only an append that
-    // invalidates older visible rows (fold reflection/tombstones) advances the
-    // mutation revision and forces the browser to rebuild its snapshot.
-    if (invalidatesEarlierRows) {
-      idx.revision = (Number(idx.revision) || 0) + 1;
-    }
     if (msg._reflection && Array.isArray(msg.foldedMessageIds)) {
       idx.foldedMessageIds = Array.from(new Set([
         ...(Array.isArray(idx.foldedMessageIds) ? idx.foldedMessageIds : []),
         ...msg.foldedMessageIds.filter(id => typeof id === 'string' && id),
       ]));
     }
-    this.#persistCurrentLineage({
-      revision: idx.revision,
-      anchor: establishesAnchor ? this.#lineageAnchorForLine(line) : undefined,
-    });
-    this.saveIndex();
+    this.#saveRecoverableIndex();
   }
 
   /**
@@ -1136,7 +1150,9 @@ class SegmentStore {
       revision: idx.revision,
       anchor: updatesAnchor ? this.#lineageAnchorForLine(JSON.stringify(updated)) : undefined,
     });
-    this.saveIndex();
+    // The rewritten transcript and its revision are committed. A cache write
+    // failure must not turn an accepted terminal update into a failed turn.
+    this.#saveRecoverableIndex();
     return updated;
   }
 
@@ -1490,15 +1506,20 @@ export class ConversationStore {
   /**
    * Append a single message to the conversation.
    *
+   * Full JSONL append is the commit point; a derived index failure afterward
+   * returns the committed id and is recoverable on read. Identity/revision
+   * preparation and transcript write failures still reject in strict mode.
+   *
    * @param {object} msg — { role, content, mode?, model?, turnNumber?, toolCalls?, toolCallId?, isError? }
+   * @param {{ strict?: boolean }} [options] — reject rather than return an unpersisted fallback on pre-commit permission errors
    * @returns {object} — the persisted message with id assigned
    */
-  append(msg) {
+  append(msg, { strict = false } = {}) {
     let seq;
     try {
       seq = this.#reserveSeqRange(1);
     } catch (err) {
-      if (!isPermissionError(err)) throw err;
+      if (strict || !isPermissionError(err)) throw err;
       // Live chat remains best-effort when its data root is read-only. The
       // returned row is usable by the current turn but is intentionally not
       // persisted; strict operations such as Session copy bypass this path.
@@ -1525,7 +1546,7 @@ export class ConversationStore {
     try {
       this.#segmentStoreFor(fullMsg, { create: true }).append(fullMsg);
     } catch (err) {
-      if (isPermissionError(err)) {
+      if (!strict && isPermissionError(err)) {
         if (!_permissionWarned) {
           console.warn(`[Yeaft] Cannot write message ${id}: ${err.code} — message not persisted`);
           _permissionWarned = true;

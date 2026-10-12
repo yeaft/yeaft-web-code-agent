@@ -40,6 +40,7 @@ export default defineConfig({
             text: 'Native Yeaft',
             items: [
               { text: 'Sessions and Projects', link: '/guide/user/yeaft-session' },
+              { text: 'Structured responses', link: '/guide/structured-responses' },
               { text: 'Work Center', link: '/guide/user/work-center' },
               { text: 'Provider and model config', link: '/guide/yeaft-config' },
               { text: 'Settings', link: '/guide/user/settings' },
@@ -110,6 +111,7 @@ export default defineConfig({
             text: '原生 Yeaft',
             items: [
               { text: 'Session 与 Project', link: '/zh-CN/guide/user/yeaft-session' },
+              { text: '结构化回复', link: '/zh-CN/guide/structured-responses' },
               { text: 'Work Center', link: '/zh-CN/guide/user/work-center' },
               { text: 'Provider 与 model 配置', link: '/zh-CN/guide/yeaft-config' },
               { text: '设置', link: '/zh-CN/guide/user/settings' },

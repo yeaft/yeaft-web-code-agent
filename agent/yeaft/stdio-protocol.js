@@ -319,6 +319,12 @@ export function createStreamProjector({
         state.resultText += event.text || '';
         write({ ...base, type: 'assistant', subtype: 'text_delta', delta: { type: 'text_delta', text: event.text || '' } });
         break;
+      case 'response_presentation':
+        state.resultText += event.message?.content || '';
+        write({ ...base, type: 'assistant', subtype: 'response_presentation',
+          message: event.message, content: [{ type: 'text', text: event.message?.content || '' }],
+          presentation: event.message?.presentation });
+        break;
       case 'thinking_delta':
         write({ ...base, type: 'assistant', subtype: 'thinking_delta', delta: { type: 'thinking_delta', thinking: event.text || '' } });
         break;

@@ -10,6 +10,7 @@ export const ALWAYS_VISIBLE_TOOL_NAMES = Object.freeze([
   'EnterWorktree',
   'ExitWorktree',
   'AskUser',
+  'PresentResponse',
   'DiscoverTools',
   'WebSearch',
   'WebFetch',
