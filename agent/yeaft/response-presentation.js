@@ -63,7 +63,9 @@ export function normalizePresentation(input) {
     }
     if (b.type === 'image' || b.type === 'link') b.url = safePresentationUrl(b.url);
   }
-  return { version: 1, title: value.title || '', summary: value.summary, phase: value.phase || 'final', blocks: value.blocks };
+  const canonical = { version: 1, title: value.title || '', summary: value.summary, phase: value.phase || 'final', blocks: value.blocks };
+  if (new TextEncoder().encode(JSON.stringify(canonical)).length > 49152) throw new Error('response: exceeds 48 KiB');
+  return canonical;
 }
 
 /** External URLs are metadata only. Never fetch server-side or accept credentials. */
