@@ -89,6 +89,14 @@ test('native Session rich delivery stays nonterminal, deduplicates and replays w
     await expect(page.locator('.assistant-turn', { hasText: 'An ordinary text answer still works.' })).toBeVisible();
     await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
     await page.setViewportSize({ width: 320, height: 800 });
+    await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
+    // Wait for the responsive sidebar transition before judging the real layout.
+    await expect.poll(() => page.locator('.yeaft-sidebar').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+    await expect.poll(() => page.locator('.response-presentation').evaluate(el => {
+      const { left, right, width } = el.getBoundingClientRect();
+      return left >= 0 && right <= innerWidth && width >= 250;
+    })).toBe(true);
+    await page.locator('.response-summary').scrollIntoViewIfNeeded();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath('session-rich-replay-mobile.png'), fullPage: true });
     expect(calls).toBe(2);
