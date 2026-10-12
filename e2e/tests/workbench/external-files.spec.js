@@ -578,9 +578,27 @@ for (const root of ['Q:/Work', '//Server/Share/Work']) {
     await expectLocated(page, located);
     await expect(treeEntry(page, deep)).toHaveClass(/tree-expanded/);
     await expect(page.locator('.file-ops-toolbar')).toHaveCount(0);
+    // A reference and a listing may spell the same Windows file differently.
+    // Clicking the listing must keep the original dirty buffer and undo history.
+    await page.locator('.CodeMirror').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('unsaved Windows edit');
+    await expect(page.locator('.file-content-dirty')).toBeVisible();
+    await treeEntry(page, located).click();
+    await expect(page.locator('.workbench-item-tab')).toHaveCount(1);
+    await expect(page.locator('.CodeMirror')).toContainText('unsaved Windows edit');
+    expect(requests.filter(message => message.type === 'read_file')).toHaveLength(1);
     await page.evaluate(path => window.harness.openFile(path), `${root.toUpperCase()}/OTHER.TXT`);
     await expectLocated(page, `${root}/Other.txt`);
-    await page.getByRole('tab', { name: 'file.txt', exact: true }).click();
+    await page.getByRole('button', { name: 'Show folders', exact: true }).click();
+    await treeEntry(page, located).click();
+    await expect(page.locator('.workbench-item-tab')).toHaveCount(2);
+    await expect(page.locator('.CodeMirror')).toContainText('unsaved Windows edit');
+    await expect(page.locator('.file-content-dirty')).toBeVisible();
+    expect(requests.filter(message => message.type === 'read_file')).toHaveLength(2);
+    await page.locator('.CodeMirror').click();
+    await page.keyboard.press('Control+z');
+    await expect(page.locator('.CodeMirror')).not.toContainText('unsaved Windows edit');
     await expectLocated(page, located);
     expect(requests.filter(message => message.type === 'list_directory')).toHaveLength(3);
     expect(requests.every(message => message.workDir === root)).toBe(true);

@@ -4,6 +4,7 @@ import { confirmDialog } from '../../utils/dialog.js';
  * Manages open files, active tab, switching, closing, saving, tab state persistence.
  */
 import { getFileType, isPreviewableTextFile } from './fileEditor.js';
+import { browserPathKey } from '../../utils/folder-picker-path.js';
 
 const nextFileReadRequestId = () => `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -153,7 +154,8 @@ export function createFileTabs(store, {
     const agentId = route.agentId || store.currentAgent || null;
     const conversationId = route.conversationId || store.currentConversation || '_explorer';
     const workDir = route.workDir || getEffectiveWorkDir();
-    const existingIndex = openFiles.value.findIndex(f => f.path === nPath
+    // Match Windows aliases without rewriting the buffer's IO path or undo key.
+    const existingIndex = openFiles.value.findIndex(f => browserPathKey(f.path) === browserPathKey(nPath)
       && (!f.agentId || f.agentId === agentId)
       && (!f.conversationId || f.conversationId === conversationId));
     if (existingIndex >= 0) {

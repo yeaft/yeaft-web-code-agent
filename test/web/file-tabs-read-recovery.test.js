@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
+import { normalizeBrowserPath } from '../../web/utils/folder-picker-path.js';
 
 let createFileTabs;
 
@@ -19,7 +20,7 @@ function harness(sendWsMessage = vi.fn(() => true)) {
   const onReselect = vi.fn();
   const tabs = createFileTabs(store, {
     onReselect,
-    normalizePath: path => path.replace(/\\/g, '/'),
+    normalizePath: path => normalizeBrowserPath(path, '/workspace'),
     getEffectiveWorkDir: () => '/workspace',
     editorContainer: Vue.ref(null),
     createEditor: vi.fn(),
@@ -46,6 +47,47 @@ const route = {
 };
 
 describe('file tab read recovery', () => {
+  it.each([
+    ['q:/work/deep/file.txt', 'Q:/Work/Deep/File.txt'],
+    ['//server/share/work/deep/file.txt', '//Server/Share/Work/Deep/File.txt'],
+  ])('reuses the dirty Windows buffer and its undo key when opening listing spelling %s', (reference, listing) => {
+    const { tabs, sendWsMessage } = harness();
+    tabs.openFileInTab(reference);
+    const original = tabs.activeFile.value;
+    original.content = 'unsaved edit';
+    original.originalContent = 'disk content';
+    original.isDirty = true;
+    original.loading = false;
+    const undoOwnerPath = original.path;
+    tabs.openFileInTab('/workspace/other.txt');
+    tabs.openFileInTab(listing, 'File.txt');
+    expect(tabs.openFiles.value).toHaveLength(2);
+    expect(tabs.activeFile.value).toBe(original);
+    expect(original).toMatchObject({ path: undoOwnerPath, content: 'unsaved edit', originalContent: 'disk content', isDirty: true });
+    expect(sendWsMessage.mock.calls.filter(([msg]) => msg.type === 'read_file').map(([msg]) => msg.filePath))
+      .toEqual([reference, '/workspace/other.txt']);
+    tabs.saveTabsState('conversation-a');
+    tabs.restoreTabsState('conversation-a');
+    tabs.openFileInTab(listing);
+    expect(tabs.openFiles.value).toHaveLength(2);
+    expect(tabs.activeFile.value).toMatchObject({ path: undoOwnerPath, content: 'unsaved edit', isDirty: true });
+  });
+  it('keeps Windows identities scoped to Agent and conversation', () => {
+    const { tabs } = harness();
+    tabs.openFileInTab('q:/work/file.txt');
+    tabs.openFileInTab('Q:/Work/File.txt', '', { agentId: 'agent-b' });
+    tabs.openFileInTab('Q:/Work/File.txt', '', { conversationId: 'conversation-b' });
+    expect(tabs.openFiles.value).toHaveLength(3);
+  });
+  it('keeps distinct POSIX case and literal backslashes as separate file identities', () => {
+    const { tabs } = harness();
+    for (const path of ['/workspace/File.txt', '/workspace/file.txt', '/workspace/back\\slash.txt', '/workspace/back/slash.txt']) {
+      tabs.openFileInTab(path);
+    }
+    expect(tabs.openFiles.value.map(file => file.path)).toEqual([
+      '/workspace/File.txt', '/workspace/file.txt', '/workspace/back\\slash.txt', '/workspace/back/slash.txt',
+    ]);
+  });
   it('reselects an active tab for tree navigation without touching edits or requesting content', () => {
     const { tabs, sendWsMessage, onReselect } = harness();
     tabs.openFileInTab('/workspace/file.txt');
