@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ToolRegistry, isToolErrorOutput, toolErrorEffect, ToolExecutionTimeoutError, normalizeToolOutput, truncateToolResultIfNeeded } from '../tools/registry.js';
+import { ToolRegistry, isToolErrorOutput, toolErrorEffect, ToolExecutionTimeoutError, normalizeToolOutput } from '../tools/registry.js';
 import { createSkillManager } from '../skills.js';
 import { loadConfig } from '../config.js';
 import { getRuntimePlatformInfo } from '../runtime-platform.js';
-import { utf8PrefixWithinBytes } from '../utf8.js';
+import { utf8End, utf8Start } from './execution-evidence.js';
 import { bytes, digest, fail } from './contracts.js';
 import fileRead from '../tools/file-read.js';
 import fileWrite from '../tools/file-write.js';
@@ -81,18 +81,38 @@ export const allowedNativeToolIds = config => NATIVE_TOOL_IDS.filter(id => regis
 /** Small model projection only. The full raw result is persisted separately.
  * JSON escaping counts against the Person byte budget, unlike Session text. */
 export function projectNativeResult(result, maxBytes = 8192) {
-  const projected = { ...result, output: truncateToolResultIfNeeded(result.output, { toolName: result.id }) };
+  const raw = Buffer.from(typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? null), 'utf8');
+  // Host results carry their original IDs explicitly. Legacy results have these
+  // IDs in tool:episode:call:... provenance; task projections are not call traces.
+  const sourceIds = result.sourceRef?.startsWith('tool:') ? result.sourceRef.split(':') : [];
+  const callId = result.callId ?? sourceIds[2], episodeId = result.episodeId ?? sourceIds[1];
+  const recovery = { prepare: { id: 'catalog.view', args: { id: 'Execution.read' } },
+    read: { id: 'Execution.read', args: { ...(callId ? { callId } : {}), ...(episodeId ? { episodeId } : {}), offset: 0, maxBytes: 4096 } },
+    ...(!callId ? { notice: 'Supply the original capability callId; task logs use ReadTaskLog.' } : {}) };
+  let projected = { ...result, output: raw.toString('utf8'), rawBytes: raw.length, recovery };
   if (bytes(projected) <= maxBytes) return projected;
-  const original = projected.output;
+  // Keep semantic failure/provenance fields even if ancillary metadata itself
+  // is oversized. Its full original value remains in the durable trace.
+  if (bytes({ ...projected, output: '' }) > maxBytes - 400) {
+    projected = { ...Object.fromEntries(['id', 'kind', 'callId', 'episodeId', 'ok', 'code', 'errorEffect', 'terminal', 'outputAvailability', 'sourceRef', 'sha256', 'replaySafe'].filter(key => Object.hasOwn(result, key)).map(key => [key, result[key]])),
+      output: raw.toString('utf8'), rawBytes: raw.length, recovery, metadataTruncated: true };
+    if (bytes(projected) <= maxBytes) return projected;
+  }
   projected.truncated = true;
-  projected.notice = 'Model-context preview only; remaining raw output is retained in the Person capability trace. Use narrower reads/searches to inspect omitted content.';
-  let low = 0, high = Buffer.byteLength(original, 'utf8');
+  projected.notice = 'Head/tail preview only. hiddenRange is omitted raw UTF-8 bytes; recover with Execution.read, not reexecution.';
+  const preview = kept => {
+    const headEnd = utf8End(raw, Math.ceil(kept / 2)), tailStart = utf8Start(raw, raw.length - Math.floor(kept / 2));
+    projected.hiddenRange = { start: headEnd, end: tailStart };
+    projected.output = raw.subarray(0, headEnd).toString('utf8') + `\n[omitted UTF-8 bytes ${headEnd}..${tailStart} of ${raw.length}]\n` + raw.subarray(tailStart).toString('utf8');
+    return bytes(projected);
+  };
+  if (preview(0) > maxBytes) fail('CONTEXT_LIMIT');
+  let low = 0, high = raw.length;
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    projected.output = utf8PrefixWithinBytes(original, mid).text;
-    if (bytes(projected) <= maxBytes) low = mid; else high = mid - 1;
+    if (preview(mid) <= maxBytes) low = mid; else high = mid - 1;
   }
-  projected.output = utf8PrefixWithinBytes(original, low).text;
+  preview(low);
   return projected;
 }
 
@@ -111,12 +131,12 @@ export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config
       const tool = registry.get(id);
       if (!tool) fail('UNSUPPORTED');
       const executionConfig = currentConfig();
-      if (!registry.isAllowed(id, { plugins: executionConfig?.plugins })) return { ok: false, code: 'TOOL_DISABLED', id, errorEffect: 'none', output: 'This native tool is disabled by the Agent plugin configuration.', replaySafe: true };
+      if (!registry.isAllowed(id, { plugins: executionConfig?.plugins })) return { ok: false, code: 'TOOL_DISABLED', id, callId, episodeId, errorEffect: 'none', output: 'This native tool is disabled by the Agent plugin configuration.', replaySafe: true };
       if (id === 'Skill' || id === 'SpawnAgent') skillManager ??= createSkillManager(yeaftDir, cwd);
       const scoped = await getContext?.({ signal, callId, episodeId, cwd, yeaftDir, runtimePlatform, skillManager });
       signal?.throwIfAborted();
       if (!scoped?.nativeRegistry && (['orchestration', 'tasks'].includes(NATIVE_TOOL_MANIFESTS.find(m => m.id === id)?.domain) || (id === 'Bash' && args.background === true))) {
-        return { ok: false, code: 'UNSUPPORTED', id, errorEffect: 'none', output: 'Async tools require a configured private Person task host.' };
+        return { ok: false, code: 'UNSUPPORTED', id, callId, episodeId, errorEffect: 'none', output: 'Async tools require a configured private Person task host.' };
       }
       // Configuration remains instance-owned, refreshed for each invocation.
       const ctx = { ...scoped, cwd, yeaftDir, runtimePlatform, signal, skillManager,
@@ -150,7 +170,7 @@ export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config
       if (failed && !error) { try { failure = JSON.parse(output); } catch {} }
       if (error && !joined) output = String(error.message || error);
       const sourceRef = `tool:${episodeId}:${callId}:${id}:${digest(output)}`;
-      const result = { ok: !failed, id, ...(error ? {
+      const result = { ok: !failed, id, callId, episodeId, ...(error ? {
         code: error instanceof ToolExecutionTimeoutError ? 'TOOL_TIMEOUT' : error.fatalToolTimeout ? 'TOOL_EFFECT_UNCONFIRMED' : 'TOOL_FAILED',
         terminal: error instanceof ToolExecutionTimeoutError || error.fatalToolTimeout === true,
         errorEffect: readOnly ? 'none' : 'unknown', outputAvailability: joined ? 'captured' : 'unavailable',

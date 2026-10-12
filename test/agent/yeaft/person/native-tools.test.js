@@ -217,6 +217,18 @@ describe('Person supported native host tools', () => {
       seen.push(input);
       if (seen.length === 1) use(p, 'catalog.view', { id: 'FileRead' });
       if (seen.length === 2) use(p, 'FileRead', { file_path: 'large.txt' });
+      if (seen.length === 3) {
+        const { id, args } = input.capabilityResult.recovery.prepare;
+        use(p, id, args);
+      }
+      if (seen.length === 4) {
+        const { id, args } = seen[2].capabilityResult.recovery.read;
+        use(p, id, args);
+      }
+      if (seen.length === 5) {
+        const { id, args } = seen[2].capabilityResult.recovery.read;
+        use(p, id, { ...args, offset: input.capabilityResult.nextOffset });
+      }
     });
     await call(s, 'open'); await call(s, 'think', { text: 'Read large file', clientMessageId: 'large' });
     expect((await idle(s)).latestEpisode.status).toBe('completed');
@@ -230,6 +242,13 @@ describe('Person supported native host tools', () => {
     expect(projected.sha256).toBe(digest(raw.output));
     expect(projected.sourceRef).toBe(raw.sourceRef);
     expect(projectNativeResult(raw).output).not.toContain('\ufffd');
+    const pages = [seen[4].capabilityResult, seen[5].capabilityResult];
+    expect(pages[0]).toMatchObject({ id: 'Execution.read', callId: raw.callId, ok: true, offset: 0, eof: false, sha256: raw.sha256 });
+    expect(pages[1].offset).toBe(pages[0].nextOffset);
+    expect(pages.map(page => page.output).join('')).toBe(Buffer.from(raw.output).subarray(0, pages[1].nextOffset).toString('utf8'));
+    const traces = (await call(s, 'traces', { limit: 50 })).items;
+    expect(traces.filter(t => t.kind === 'capability_started' && t.capability.id === 'FileRead')).toHaveLength(1);
+    expect(traces.filter(t => t.kind === 'capability_started' && t.capability.id === 'Execution.read')).toHaveLength(2);
   });
 
   it('inspection exposes real native schema/module revisions without loading skills, configuration or executing tools', async () => {
@@ -239,7 +258,7 @@ describe('Person supported native host tools', () => {
       const page = inspectCapabilities([], { cursor, limit: 50 });
       items.push(...page.items); cursor = page.nextCursor;
     } while (cursor);
-    expect(items.map(m => m.id)).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Output.publish', 'PresentResponse', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort());
+    expect(items.map(m => m.id)).toEqual([...NATIVE_TOOL_IDS, 'Capability.create', 'Execution.read', 'Output.publish', 'PresentResponse', 'Recall', 'Skill.associate', 'Skill.reconsider', 'Think'].sort());
     const file = items.find(m => m.id === 'FileWrite');
     expect(file.source).toEqual(file.contract.source);
     expect(file.source.revision).toBe(digest(await readFile(new URL('../../../../agent/yeaft/tools/file-write.js', import.meta.url), 'utf8')));

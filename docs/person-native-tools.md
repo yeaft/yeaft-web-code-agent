@@ -52,8 +52,10 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 
 - **思考看增量，不复述状态**：从未解决问题、已接受的接续点或真实工具／子线程结果出发，选择验证、授权内执行、整合交付或提炼可复用方法／判断／问题。活动摘要记录变化，decision 说明价值和继续／停止理由；有可行下一步且调用预算允许时在本轮继续，不只承诺以后处理。
 - **遐想保留探索性**：把有前景的联系发展为假设、可区分的验证问题、场景或洞见，不将想象冒充证据或行动授权。没有值得推进的方向可以安静休息（`reply:null`），不强制工具调用、制造概念或把闲聊任务化。
+- **轮内工作记录**：可选 `work` 保存当前目标、最多 6 条带已读来源的发现、具体下一步与阻塞点。通过校验后保留在本轮运行现场，省略沿用、`null` 清除；目录查询和纯认知步骤不会将它重置。模型看到的 `state` 仍是本轮开始时的已提交状态，不是执行进度。工作记录不是隐藏推理、行动授权或执行成功的证明，不新增来源，也不在最终提交中写入认知 state；取消、失败和重启不恢复这份运行现场。上下文满时可以省略，manifest 明确标记是否注入。
+- **重复观察**：保留最近 8 次实际执行的能力、参数摘要哈希和完整捕获输出哈希；同请求／同输出重复时提醒复核已有证据，选择有依据的下一步、不同检查或明确阻塞，而不是再次承诺。不同参数可能重复返回同一内容，相同输出也可能是合理验证，因此它不裁决语义空转、不强制写文件、不自动停止、不重新引入调用额度。
 - **跨轮接续点**：最终提交可保存 `state.continuation`，包含 `goal / nextStep / status / condition`；状态为 `ready / waiting / blocked`，每个文本字段最多 1000 UTF-8 字节。下次显式触发读取此状态，旧提案省略字段时保留、显式 `null` 清除；取消、失败、预算终止不提交候选接续点。它只保存一个主要未完成方向，不是任务数据库、授权书或自动调度指令；新指令、禁止和取消优先。
-- **轮内执行证据**：除当前完整预算副本 `capabilityResult` 外，后续调用还可读 `episodeProgress`，保留本轮较早的工具／Recall／脚本结果预览、成功或失败及错误副作用语义。单条最多 4 KiB、合计最多 8 KiB，按当前模型窗口进一步省略，优先保留较新结果；不重复当前结果和工具目录合同。完整结果仍在 capability trace；省略不表示原始数据丢失，也不能为取回输出重做已完成副作用。原生结果可通过 task evidence 中的 `rawPath` 或对应 Task／读取工具分段取回，Recall 可重新读取权威记忆；`Script.*` 的历史大结果目前没有按 `callId` 直接读取 trace 的模型接口，不保证可取回所有被省略内容，不能把预览当成完整证据。调试 manifest 记录实际注入与省略数量。
+- **轮内执行证据**：除当前完整预算副本 `capabilityResult` 外，后续调用还可读 `episodeProgress`，保留本轮较早的工具／Recall／脚本结果预览、成功或失败及错误副作用语义。单条最多 4 KiB、合计最多 8 KiB，按当前模型窗口进一步省略，优先保留较新结果；不重复当前结果和工具目录合同。完整结果仍在 capability trace；省略不表示原始数据丢失，也不能为取回输出重做已完成副作用。持久 capability 结果（含 `Script.*`）可通过 `Execution.read` 按原始 `callId` 分页回读；任务／子线程日志使用对应 Task 工具，Recall 也可重新读取权威记忆。不能把预览当成完整证据，也不能将回读历史当作当前授权。调试 manifest 记录实际注入与省略数量。
 
 这不是自动常驻思考：后台结果仍需本轮显式等待／读取，或下一次 `send / think / dream` 收集。完成事件去重消费、持久唤回队列、授权及累计预算、取消与重启恢复尚未实现，不能仅靠 prompt 打开。状态接续和证据上下文提供推进条件，不能保证模型每次都会形成高质量新认识；脚本化 provider 回归验证执行链和持久化，不替代真实模型质量评估。
 
@@ -65,9 +67,17 @@ Digital Person 默认具备一组真实的原生工具，不再只有认知方�
 
 阶段消息带 `replyKind: progress`、`episodeId` 与 `callId`，按当前执行权和调用证据去重入库，并进入自己的 message journal；它们不提交 Concept 或认知 state version。最终 `next:null` 仍走原子提交，回复标为 `final`。取消、失败或重启保留已经发布的阶段回复，旧 worker 不可继续发布。只适用于 Digital Person，不改变普通 Session。界面在同一轮下区分阶段回复和最终回复，等待状态不刷屏，也不因后续反馈重复置顶。
 
+## 持久执行证据回读
+
+`Execution.read` 是按需加载的 Person catalog 能力，不占基础认知合同预算。通过 `catalog.view {id:"Execution.read"}` 准备，再以 `{callId,offset:0,maxBytes:4096}` 回读已持久化的原始 capability trace；原生结果预览的 `recovery` 同时提供这两个调用。它不调用模型、不重跑工具、不发布新的权威副本。后台任务／子线程日志仍使用 `ReadTaskLog`／任务工具，不冒充 capability call trace。
+
+`offset`／`nextOffset` 是原始 output 的 UTF-8 字节位置；`maxBytes` 为 4..4096，分页边界不会切断字符，非字符边界的 offset 明确拒绝。JSON 转义也计入总计 8192 字节响应预算，因此实际页可能更短；按返回的 `nextOffset` 继续直到 `eof:true`。没有 output 的内部能力以 `JSON.stringify(result)` 回读。返回真实 `ok / code / errorEffect / sourceRef / rawBytes / sha256` 及原调用参数；过大的参数只提供有截断标记的有界预览。
+
+默认读取当前 live episode。可选 `episodeId` 必须是同 namespace、owner、Person 的已存在 episode；scope 始终由运行时决定，不接受 owner 或数据库路径参数。读取受当前 episode lease/epoch/worker/control 等 fence 约束，取消或失权后不可继续。历史或 after-terminal 结果明确标记为 evidence-only，不恢复执行权限，也不证明外部副作用已经撤销。
+
 ## 结果、错误、取消
 
-- 原生工具输出（包含原生工具自身捕获/分页上限）作为 raw result 保存在 Person capability trace。模型只接收另一份最多 8 KiB 的 JSON/UTF-8 预算副本；保留原始 byte count、SHA-256、sourceRef 和明确截断提示。需要剩余内容时使用更窄的读取或查找。
+- 原生工具输出（包含原生工具自身捕获/分页上限）作为 raw result 保存在 Person capability trace。模型只接收另一份最多 8 KiB 的 JSON/UTF-8 预算副本；保留原始 byte count、SHA-256、sourceRef 和可调用的 `Execution.read` 恢复信息。截断为头尾预览，`hiddenRange` 精确标记省略的原始 UTF-8 字节区间；它不是完整返回。需要被省略内容时分页回读原始 trace，不重跑副作用。
 - 成功外部结果有 `tool:<episode>:<call>:<tool>:<sha256>` 引用和实际实现来源；这表示本次工具观察，不表示客观事实或用户报告。外部引用可以用于 hypothesis/uncertain 等记录，不能单独为 `reported` 提供 user-reported lineage。
 - 原生 JSON 错误结果记录为 `capability_failed`，不算成功经验。写入错误的 effects 默认为 unknown；不承诺回滚或自动安全重试。
 - 取消、服务关闭和工具超时会等待实际执行 promise 结束；支持 signal 的工具收到取消。已经交给文件系统的写入可能完成。工具不响应取消时，join 可能延长停止等待；不能在副作用还运行时声明停止成功。
