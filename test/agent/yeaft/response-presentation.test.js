@@ -25,6 +25,47 @@ describe('shared response presentation contract', () => {
     expect(normalizePresentation(payload([{ type: 'markdown', text: 'Partial evidence' }], { phase: 'progress' })).phase).toBe('progress');
   });
 
+  it('keeps one tool and ten types while adding optional card imagery and official map embeds', () => {
+    const card = { type: 'cards', items: [{ title: 'Team', text: 'Verified game information',
+      image: { url: 'https://example.com/队标.png', alt: 'Official team logo', fit: 'contain' }, url: 'https://example.com' }] };
+    const point = { label: 'Beijing', latitude: 39.9075, longitude: 116.39723 };
+    const osm = { type: 'map', points: [point], embed: { provider: 'openstreetmap' } };
+    const google = { ...osm, embed: { provider: 'google', url: 'https://www.google.com/maps/embed?pb=!1m18!2m3!1d1000' } };
+    const result = normalizePresentation(payload([card, osm, google]));
+    expect(result.version).toBe(1);
+    expect(result.blocks[0].items[0].image.url).toContain('%E9%98%9F');
+    expect(result.blocks[0].items[0].url).toBe('https://example.com/');
+    expect(result.blocks[1]).toEqual(osm);
+    expect(result.blocks[2]).toEqual(google);
+    expect(normalizePresentation(payload(result.blocks))).toEqual(result);
+    expect(PRESENTATION_SCHEMA.properties.blocks.items.anyOf).toHaveLength(10);
+    card.items[0].image.alt = 'Changed';
+    expect(result.blocks[0].items[0].image.alt).toBe('Official team logo');
+  });
+
+  it('rejects invalid optional media and arbitrary frames before publication', () => {
+    const card = image => ({ type: 'cards', items: [{ title: 'Safe title', text: 'Safe text', image }] });
+    const point = { label: 'Location', latitude: 0, longitude: 0 };
+    const map = embed => ({ type: 'map', points: [point], embed });
+    const bad = [
+      card({ url: 'javascript:alert(1)', alt: 'Bad' }), card({ url: 'https://user:password@example.com/x', alt: 'Bad' }),
+      card({ url: 'https://example.com/x' }), card({ url: 'https://example.com/x', alt: 'x', fit: 'stretch' }),
+      { type: 'cards', items: [{ title: 'A', text: 'B', url: '/owner-secret' }] },
+      map({ provider: 'other', url: 'https://example.com' }),
+      map({ provider: 'openstreetmap', url: 'https://www.openstreetmap.org/export/embed.html' }),
+      ...['https://www.google.com/maps', 'https://www.google.com/maps/embed/v1/directions?key=secret',
+        'http://www.google.com/maps/embed?pb=!1m18', 'https://www.google.com:444/maps/embed?pb=!1m18',
+        'https://www.google.com.evil.test/maps/embed?pb=!1m18', 'https://evil.test/maps/embed?pb=!1m18',
+        'https://www.google.com/maps/embed?pb=!1m18&key=secret', 'https://www.google.com/maps/embed?pb=!1m18&pb=!1m18',
+        'https://www.google.com/maps/embed?pb=', 'https://www.google.com/maps/embed?pb=madeup',
+        'https://www.google.com/maps/embed?pb=!1m18#fragment', 'https://www.google.com/maps/embed?pb=!1m18%0A',
+        'https://user:secret@www.google.com/maps/embed?pb=!1m18',
+      ].map(url => map({ provider: 'google', url })),
+      map({ provider: 'google' }), map({ provider: 'google', url: 'https://www.google.com/maps/embed?pb=!1m18', html: '<iframe>' }),
+    ];
+    for (const block of bad) expect(() => normalizePresentation(payload([{ type: 'markdown', text: 'First block' }, block]))).toThrow();
+  });
+
   it('rejects malformed geometry, fabricated structure, oversized content and identity injection atomically', () => {
     const bad = [
       payload([{ type: 'html', text: '<script>run()</script>' }]),

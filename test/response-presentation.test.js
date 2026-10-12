@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { mount } from '@vue/test-utils';
 import ResponsePresentation from '../web/components/ResponsePresentation.js';
-import { projectPresentation, safeResponseUrl, chartGeometry, diagramGeometry, mapGeometry, responseMarkdown } from '../web/utils/response-presentation.js';
+import { projectPresentation, safeResponseUrl, chartGeometry, diagramGeometry, mapGeometry, responseMarkdown, safeResponseMapEmbed, mapEmbedUrl, mapProviderUrl, mapDirectionsUrl } from '../web/utils/response-presentation.js';
 import { normalizePresentation } from '../agent/yeaft/response-presentation.js';
 import en from '../web/i18n/en.js';
 import zh from '../web/i18n/zh-CN.js';
@@ -228,6 +228,59 @@ describe('response presentation contract and security', () => {
     expect(normal.points[1].x).toBeGreaterThan(normal.points[0].x);
     expect(normal.points[1].y).toBeLessThan(normal.points[0].y);
     expect(diagramGeometry({ ...diagram, edges: [{ from: 'client', to: 'client' }] }).edges[0].arrow).not.toMatch(/NaN|Infinity/);
+  });
+
+  it('projects card images and optional embeds safely while preserving readable text for corrupt additions', () => {
+    const cards = { type: 'cards', items: [{ title: 'Weather', text: 'Dated forecast', image: { url: 'https://example.com/天气.png', alt: 'Cloudy', fit: 'contain' }, url: 'https://example.com/source' }] };
+    const projected = projectPresentation(canonical([cards, { ...map, embed: { provider: 'openstreetmap' } }]));
+    expect(projected.blocks[0].items[0].image).toMatchObject({ fit: 'contain', alt: 'Cloudy' });
+    expect(projected.blocks[0].items[0].image.url).toContain('%E5%A4%A9');
+    expect(projected.blocks[1].embed).toEqual({ provider: 'openstreetmap' });
+    const corrupted = projectPresentation({ version: 1, summary: 'Still readable', blocks: [
+      { ...cards, items: [{ ...cards.items[0], image: { url: 'javascript:alert(1)', alt: 'Bad' }, url: 'https://user:pass@example.com' }] },
+      { ...map, embed: { provider: 'google', url: 'https://evil.test/iframe' } },
+    ] });
+    expect(corrupted.blocks[0].items[0].text).toBe('Dated forecast');
+    expect(corrupted.blocks[0].items[0].image).toBeUndefined();
+    expect(corrupted.blocks[0].items[0].url).toBe('');
+    expect(corrupted.blocks[1].type).toBe('map');
+    expect(corrupted.blocks[1].embed).toBeUndefined();
+    render({ version: 1, summary: 'Still readable', blocks: [
+      { ...cards, items: [{ title: 'Safe text', text: 'Readable', image: { url: 'data:image/svg+xml,x', alt: 'Bad' } }] },
+      { ...map, embed: { provider: 'google', url: 'https://evil.test/iframe' } },
+    ] });
+    expect(wrapper.find('iframe, img').exists()).toBe(false);
+    expect(wrapper.find('.response-cards').text()).toContain('Readable');
+    expect(wrapper.find('.response-map-list').exists()).toBe(true);
+  });
+
+  it('constructs dedicated map and directions URLs and never turns arbitrary domains into frames', () => {
+    const osm = { ...map, embed: { provider: 'openstreetmap' } };
+    const url = new URL(mapEmbedUrl(osm));
+    expect(url.origin + url.pathname).toBe('https://www.openstreetmap.org/export/embed.html');
+    expect(url.searchParams.get('marker')).toBe('37.7749,-122.4194');
+    expect(url.searchParams.get('layer')).toBe('mapnik');
+    const bounds = url.searchParams.get('bbox').split(',').map(Number);
+    expect(bounds.every(Number.isFinite)).toBe(true);
+    expect(bounds[0]).toBeLessThan(-122.4194); expect(bounds[2]).toBeGreaterThan(-122.4194);
+    expect(new URL(mapEmbedUrl(osm, 1)).searchParams.get('marker')).toBe('37.8044,-122.2712');
+    expect(mapEmbedUrl(osm, -99)).toBe(mapEmbedUrl(osm));
+    expect(mapEmbedUrl(map)).toBe('');
+    expect(mapEmbedUrl({ ...osm, points: [] })).toBe('');
+    const googleUrl = 'https://www.google.com/maps/embed?pb=!1m18!2m3!1d1000';
+    expect(mapEmbedUrl({ ...map, embed: { provider: 'google', url: googleUrl } })).toBe(googleUrl);
+    expect(mapProviderUrl(osm)).toContain('https://www.openstreetmap.org/');
+    expect(new URL(mapProviderUrl({ ...map, embed: { provider: 'google', url: googleUrl } })).searchParams.get('query')).toBe('37.7749,-122.4194');
+    expect(new URL(mapDirectionsUrl(map.points[1])).searchParams.get('destination')).toBe('37.8044,-122.2712');
+    expect(mapDirectionsUrl({ latitude: 91, longitude: 0 })).toBe('');
+    for (const embed of [null, [], { provider: 'google' }, { provider: 'other' }, { provider: 'openstreetmap', url: 'https://evil.test/' },
+      { provider: 'google', url: 'https://www.google.com/maps/embed?pb=!1m18&key=secret' },
+      { provider: 'google', url: 'https://www.google.com.evil.test/maps/embed?pb=!1m18' },
+      { provider: 'google', url: 'https://www.google.com/maps/embed?pb=!1m18', sandbox: 'allow-top-navigation' },
+    ]) {
+      expect(safeResponseMapEmbed(embed)).toBe(null);
+      expect(mapEmbedUrl({ ...map, embed })).toBe('');
+    }
   });
 
   it('has matching bilingual local strings and progress does not claim task success', () => {

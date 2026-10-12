@@ -22,7 +22,9 @@ test('native Session rich delivery stays nonterminal, deduplicates and replays w
   const session = { id: 'rich-session', name: 'Structured Session', roster: ['rich-vp'], defaultVpId: 'rich-vp', workDir: dir };
   const store = new ConversationStore(dir);
   const input = { title: 'Verified delivery', summary: 'Reuse the shared renderer.', phase: 'final', blocks: [
-    { type: 'cards', items: [{ title: 'Reuse', label: 'Recommended', text: 'One renderer for both runtimes.' }] },
+    { type: 'cards', items: [{ title: 'Reuse', label: 'Recommended', text: 'One renderer for both runtimes.',
+      image: { url: 'https://example.test/team-logo.png', alt: 'Supplied team logo', fit: 'contain' }, url: 'https://example.test/card-source' }] },
+    { type: 'map', title: 'Verified location', points: [{ label: 'Beijing', latitude: 39.9075, longitude: 116.39723 }], embed: { provider: 'openstreetmap' } },
     { type: 'chart', style: 'bar', labels: ['A', 'B'], series: [{ label: 'Fixture checks', values: [2, 3] }] },
     { type: 'link', url: 'https://example.test/report', text: 'Source report' },
     { type: 'markdown', text: '[Related source](https://example.test/related)' },
@@ -60,7 +62,10 @@ test('native Session rich delivery stays nonterminal, deduplicates and replays w
   };
   let running;
   try {
-    await page.context().route('https://example.test/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Embedded evidence fixture</h1>' }));
+    await page.context().route('https://example.test/**', route => route.request().url().endsWith('.png')
+      ? route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64') })
+      : route.fulfill({ contentType: 'text/html', body: '<h1>Embedded evidence fixture</h1>' }));
+    await page.context().route('https://www.openstreetmap.org/export/embed.html?**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Official map embed fixture</h1>' }));
     await open();
     const hctx = { sessionId: session.id, vpId: 'rich-vp', turnId: 'rich-turn', threadId: 'main', resetQueryTimer() {},
       assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [], thinkingBlocksAccum: [] };
@@ -75,7 +80,15 @@ test('native Session rich delivery stays nonterminal, deduplicates and replays w
     await expect(page.locator('.assistant-turn .response-presentation')).toHaveCount(1);
     await expect(page.locator('.response-cards')).toContainText('One renderer for both runtimes.');
     await expect(page.locator('.response-chart svg')).toBeVisible();
+    await expect(page.getByAltText('Supplied team logo')).toBeVisible();
+    await expect(page.locator('.response-map iframe')).toHaveAttribute('src', /\/export\/embed\.html\?/);
+    const storedMedia = store.loadAllBySession(session.id).find(row => row.presentation).presentation.blocks;
+    expect(storedMedia[0].items[0].image.fit).toBe('contain');
+    expect(storedMedia[1].embed.provider).toBe('openstreetmap');
     expect(store.loadAllBySession(session.id).find(row => row.presentation).responseKind).toBe('progress');
+    await page.getByRole('link', { name: 'View source', exact: true }).click();
+    await expect(page.locator('.workbench-panel .browser-frame')).toHaveAttribute('src', 'https://example.test/card-source');
+    await page.locator('.workbench-panel-close').click();
     await page.locator('a.response-link').click();
     await expect(page.locator('.workbench-panel .browser-frame')).toHaveAttribute('src', 'https://example.test/report');
     expect(page.context().pages()).toHaveLength(1);
@@ -99,6 +112,8 @@ test('native Session rich delivery stays nonterminal, deduplicates and replays w
     await open();
     await expect(page.locator('.assistant-turn .response-presentation')).toHaveCount(1);
     await expect(page.locator('.response-summary')).toHaveText(input.summary);
+    await expect(page.getByAltText('Supplied team logo')).toBeVisible();
+    await expect(page.locator('.response-map iframe')).toHaveAttribute('src', /marker=39\.9075%2C116\.39723/);
     await expect(page.locator('.assistant-turn', { hasText: 'An ordinary text answer still works.' })).toBeVisible();
     await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
     await page.setViewportSize({ width: 320, height: 800 });
