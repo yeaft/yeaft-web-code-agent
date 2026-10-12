@@ -428,7 +428,7 @@ describe('digital Person strict contracts', () => {
     const context = assembleContext({ snapshot, episode: { id: 'e', kind: 'think', text: '' }, provider, selection: provider.defaultSelection, remainingCalls: 1 });
     expect(context.manifest.omitted.length).toBeGreaterThan(0);
     expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
-    expect(context.manifest.contextSources).toEqual({ recentMessages: JSON.parse(context.messages[0].content).messages.length, recentConcepts: 0,
+    expect(context.manifest.contextSources).toEqual({ episodeExecutions: 0, omittedEpisodeExecutions: 0, recentMessages: JSON.parse(context.messages[0].content).messages.length, recentConcepts: 0,
       omittedMessages: context.manifest.omitted.length, omittedConcepts: 0, recall: { kind: null, count: 0 } });
     expect(snapshot.messages.every(m => m.text.length === 2500)).toBe(true);
   });
@@ -476,7 +476,7 @@ describe('digital Person strict contracts', () => {
     const context = assembleContext({ ...input, capabilityResult });
     const rendered = JSON.parse(context.messages[0].content);
     expect(rendered.capabilityResult).toEqual(capabilityResult);
-    expect(context.manifest.contextSources).toEqual({ recentMessages: kind === 'messages' ? 1 : 2, recentConcepts: kind === 'concepts' ? 0 : 1,
+    expect(context.manifest.contextSources).toEqual({ episodeExecutions: 0, omittedEpisodeExecutions: 0, recentMessages: kind === 'messages' ? 1 : 2, recentConcepts: kind === 'concepts' ? 0 : 1,
       omittedMessages: 0, omittedConcepts: 0, recall: { kind, count: 1 } });
     expect(JSON.stringify(context.manifest.contextSources)).not.toMatch(/private|message:|concept:|sourceRef|items/);
     expect(assembleContext({ ...input, capabilityResult: { ...capabilityResult, items: [] } }).manifest.contextSources.recall).toEqual({ kind, count: 0 });

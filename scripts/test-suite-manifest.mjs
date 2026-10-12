@@ -56,6 +56,7 @@ export const CORE_TEST_FILES = Object.freeze([
   'test/agent/yeaft/person/async-service.test.js',
   'test/agent/yeaft/person/native-tool-policy.test.js',
   'test/agent/yeaft/person/capability-runtime.test.js',
+  'test/agent/yeaft/person/cognitive-progress.test.js',
   'test/agent/yeaft/person/script-executor.test.js',
   'test/agent/yeaft/person/created-capability-runtime.test.js',
   'test/agent/yeaft/person/capability-experience.test.js',

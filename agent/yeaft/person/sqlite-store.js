@@ -433,7 +433,9 @@ export class SqlitePersonStore {
     }
     const focus = this.focused(scope, proposal.state.focusConceptIds);
     if (new Set(proposal.state.focusConceptIds).size !== proposal.state.focusConceptIds.length || focus.length !== proposal.state.focusConceptIds.length) fail('STALE');
-    const state = this.doc(scope, { ...proposal.state, version: p.stateVersion, conceptRefs: focus.map(c => ({ id: c.id, revision: c.revision })),
+    const priorState = this.one('states', scope);
+    const continuation = Object.hasOwn(proposal.state, 'continuation') ? proposal.state.continuation : priorState?.continuation;
+    const state = this.doc(scope, { ...proposal.state, ...(continuation !== undefined ? { continuation } : {}), version: p.stateVersion, conceptRefs: focus.map(c => ({ id: c.id, revision: c.revision })),
       decision: proposal.decision, lastSelection: { model: selection.model, effort: selection.effort }, updatedAt: this.now, episodeId: episode.id });
     if (this.one('states', scope)?.version !== episode.baseStateVersion) fail('STALE');
     this.put('states', state);
