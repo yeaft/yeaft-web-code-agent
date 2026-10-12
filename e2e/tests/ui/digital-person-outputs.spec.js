@@ -223,10 +223,10 @@ test('Link output still opens externally when its embedded preview is refused', 
     await refused;
     const panel = page.locator('#person-side-panel');
     await expect(panel.locator('iframe').contentFrame().getByRole('heading', { name: 'Isolated external destination' })).toHaveCount(0);
-    await expect(panel).toContainText('Some sites block embedding; use Open externally.');
+    await expect(panel).toContainText('Some sites block embedding; choose Open in new tab if needed.');
     await expect(panel.locator('iframe')).toHaveAttribute('src', url);
     await expect.poll(() => externalRequests.length).toBe(1);
-    const link = panel.getByRole('link', { name: 'Open externally', exact: true });
+    const link = panel.getByRole('link', { name: 'Open in new tab', exact: true });
     await expect(link).toHaveAttribute('href', url);
     await expect(link).toHaveAttribute('rel', /noopener/);
     const pending = page.waitForEvent('popup');
@@ -238,6 +238,54 @@ test('Link output still opens externally when its embedded preview is refused', 
     await popup.close();
     await expect(panel).toBeVisible();
     expect(runtime.inputs).toHaveLength(3);
+  } finally { await runtime.close(); }
+});
+
+test('Person browser at 320px permits keyboard frame entry and exit while containing reader focus', async ({ page, context, serverUrl, mockAgent }) => {
+  const runtime = await outputRuntime(mockAgent, serverUrl);
+  const url = 'https://keyboard-preview.invalid/report';
+  await context.route(url, route => route.fulfill({ contentType: 'text/html', body: '<h1>Keyboard page</h1><input aria-label="Page field"><button>Page action</button>' }));
+  try {
+    runtime.link(url, 'Keyboard website');
+    await openPerson(page, serverUrl, mockAgent);
+    await page.setViewportSize({ width: 320, height: 740 });
+    await publish(page, 'Keyboard website');
+    const opener = page.locator('.person-outputs-button');
+    await opener.focus();
+    await openOutputs(page);
+    await selectOutput(page, 'Keyboard website');
+    const panel = page.locator('#person-side-panel');
+    await expect(panel).toHaveAttribute('aria-modal', 'true');
+    const iframe = panel.locator('.browser-frame');
+    await expect(iframe).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+    const frame = iframe.contentFrame();
+    const field = frame.getByRole('textbox', { name: 'Page field' });
+    const action = frame.getByRole('button', { name: 'Page action' });
+    await expect(field).toBeVisible();
+    await panel.locator('.browser-external').focus();
+    await page.keyboard.press('Tab');
+    await expect(field).toBeFocused();
+    await page.keyboard.press('Escape'); // Cross-origin keys do not bubble into the parent.
+    await expect(panel).toBeVisible();
+    await page.keyboard.press('Shift+Tab');
+    await expect(panel.locator('.browser-external')).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(field).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(action).toBeFocused();
+    await page.keyboard.press('Tab');
+    const exit = panel.getByRole('button', { name: 'Return to reader controls', exact: true });
+    await expect(exit).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(panel.locator('.person-output-tab-select[tabindex="0"]')).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(exit).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(panel.locator('.person-output-reader-close')).toBeFocused();
+    await expectNoOverflow(page);
+    await page.keyboard.press('Escape');
+    await expect(panel).toHaveCount(0);
+    await expect(opener).toBeFocused();
   } finally { await runtime.close(); }
 });
 
