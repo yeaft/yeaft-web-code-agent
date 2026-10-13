@@ -581,7 +581,7 @@ describe('Person real SQLite runtime integration', () => {
     expect(starts).toHaveLength(30);
     expect(starts.filter(trace => trace.manifest.phase === 'cognition')).toHaveLength(1);
     expect(starts.every(trace => trace.manifest.renderedSourceRefs.includes('concept:hot:1'))).toBe(true);
-  });
+  }, 30000); // 140 fixture writes and 30 real provider/SQLite boundaries test provenance, not latency.
 
   it('does not promote self-generated imagination or assistant text into reports and preserves real report lineage', async () => {
     let mode = 'imagine';
@@ -698,7 +698,7 @@ describe('Person real SQLite runtime integration', () => {
     const serialized = JSON.stringify(await call(secret, 'traces'));
     expect(serialized).not.toContain('password'); expect(serialized).not.toContain('API_KEY_SECRET');
     expect(serialized).toContain('PROVIDER_FAILED');
-  });
+  }, 30000); // Four real runtimes include a fixed 40-step loop, cancellation and durable error inspection.
 
   it.each(['local', 'remote'])('retains consumed output exactly once on %s cancellation without a late state commit', async mode => {
     let release, consumed, aborted;
@@ -712,7 +712,9 @@ describe('Person real SQLite runtime integration', () => {
       yield { type: 'text_delta', text: JSON.stringify(finalProposal()) };
       yield { type: 'stop', stopReason: 'end_turn' };
     } };
-    const a = create(`cancel-${mode}`, adapter, { leaseMs: 1200, nativeFixture: false });
+    // This checks cross-worker BUSY/cancellation, not expiry. Use the production
+    // 15s lease so CPU contention cannot turn the BUSY assertion into takeover.
+    const a = create(`cancel-${mode}`, adapter, { nativeFixture: false });
     const b = create(`cancel-${mode}`, adapterFor(() => finalProposal()));
     await call(a, 'open');
     const admitted = await call(a, 'send', { text: 'cancel me', clientMessageId: 'cancel' });

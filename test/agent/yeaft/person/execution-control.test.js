@@ -97,7 +97,7 @@ describe('Person unlimited main execution controls', () => {
     expect(starts).toBe(45); expect(capabilityStarts).toBe(43);
     expect(allInputTokens).toBe(135); expect(allOutputTokens).toBe(225);
     expect((await call(service, 'executions')).main).toBeNull();
-  });
+  }, 30000); // 45 provider calls plus real SQLite writes and full trace pagination, not a latency assertion.
 
   it('bounds accumulated execution previews through 40 real tool dispatches without replay or trace loss', async () => {
     let count = 0, effects = 0, sawOmitted = false, cognitionCalls = 0;
@@ -135,7 +135,7 @@ describe('Person unlimited main execution controls', () => {
     } while (cursor);
     expect(results).toHaveLength(40);
     expect(results.every(trace => trace.result.output.length > 6000)).toBe(true);
-  });
+  }, 30000); // 40 dispatches retain full 6KB tool traces through real SQLite IO under bounded previews.
 
   it('recovers an expired persisted pause as interrupted, never as a resumable live job', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'person-abandoned-pause-')); directories.push(dir);

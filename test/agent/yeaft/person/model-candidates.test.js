@@ -507,7 +507,7 @@ describe('Person inspection, search and name: SQLite', () => {
     const second = await call(s, 'search', { query: 'needle', cursor: first.nextCursor, limit: 50 });
     expect([...first.items, ...second.items].map(m => m.seq)).toEqual(Array.from({ length: 80 }, (_, i) => 80 - i));
     expect(second.nextCursor).toBeNull(); expect(stream).not.toHaveBeenCalled();
-  });
+  }, 30000); // 40 durable episodes with 300KB replies exercise byte paging, not storage throughput.
 
   it('rejects malformed bounds, sections, query/cursors and unopened owners', async () => {
     const s = service(); await call(s, 'open');

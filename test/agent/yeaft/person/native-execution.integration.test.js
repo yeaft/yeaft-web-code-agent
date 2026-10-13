@@ -117,8 +117,8 @@ describe('Person continuous execution with real SQLite authority', () => {
 
   it('dedupes progress, the identical execution final and cognitive reply while preserving delivery identity', async () => {
     const summary = 'Verified the actual fixture.';
-    let run;
-    run = await setup((params, index) => {
+    let run, providerError;
+    const script = (params, index) => {
       if (index === 0) {
         // Exercise the existing cadence without adding a 30-second wall wait.
         const db = new DatabaseSync(join(run.dir, 'person', 'person.db'));
@@ -130,9 +130,15 @@ describe('Person continuous execution with real SQLite authority', () => {
       const instruction = JSON.parse(params.messages.findLast(m => m.role === 'user' && m.content.includes('final-cognition')).content);
       expect(instruction.executionDelivery).toMatchObject({ alreadyPublished: true, messageId: expect.any(String) });
       const p = final(params); p.reply = summary; return text(JSON.stringify(p));
+    };
+    run = await setup((params, index) => {
+      // Surface script assertions instead of only the runtime's sanitized failure.
+      try { return script(params, index); } catch (error) { providerError = error; throw error; }
     });
     await writeFile(join(run.dir, 'fixture'), 'actual evidence');
-    await run.start(); expect((await run.idle()).latestEpisode.status).toBe('completed');
+    await run.start(); const snapshot = await run.idle();
+    if (providerError) throw providerError;
+    expect(snapshot.latestEpisode.status, JSON.stringify(snapshot.latestEpisode)).toBe('completed');
     const messages = (await call(run.service, 'messages')).items.filter(m => m.role === 'assistant');
     expect(messages.filter(m => m.text === summary)).toHaveLength(1);
     expect(messages[0].replyKind).toBe('progress');
