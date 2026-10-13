@@ -73,7 +73,10 @@ export function executionEvidencePage(trace, started, request, liveEpisodeId) {
     errorEffect: result?.errorEffect ?? null, sourceRef: result?.sourceRef ?? `trace:${trace.episodeId}:${request.callId}:${trace.id}`,
     rawBytes: raw.length, sha256, outputFormat, offset: request.offset, output: '', returnedBytes: 0,
     nextOffset: request.offset, eof: request.offset === raw.length, historical: trace.episodeId !== liveEpisodeId,
-    authority: 'evidence-only', ...(trace.afterTerminal ? { afterTerminal: true, accepted: false, terminalCode: trace.terminalCode } : {}) };
+    authority: 'evidence-only', recovery: { read: { id: 'Execution.read', args: {
+      ...(request.sourceRef !== undefined ? { sourceRef: request.sourceRef } : { callId: request.callId }),
+      episodeId: trace.episodeId, offset: request.offset, maxBytes: request.maxBytes } } },
+    ...(trace.afterTerminal ? { afterTerminal: true, accepted: false, terminalCode: trace.terminalCode } : {}) };
   let end = utf8End(raw, Math.min(raw.length, request.offset + request.maxBytes));
   for (;;) {
     page.output = raw.subarray(request.offset, end).toString('utf8');

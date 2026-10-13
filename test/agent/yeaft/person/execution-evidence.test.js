@@ -11,6 +11,20 @@ import { runPersonScript } from '../../../../agent/yeaft/person/script-executor.
 import { bytes, digest, PersonError } from '../../../../agent/yeaft/person/contracts.js';
 import { PersonTaskHost } from '../../../../agent/yeaft/person/task-host.js';
 import { projectTaskEvidence } from '../../../../agent/yeaft/person/runtime.js';
+import { ExecutionTranscript } from '../../../../agent/yeaft/person/execution-protocol.js';
+
+function projectRead(page, liveEpisodeId) {
+  const transcript = new ExecutionTranscript([]), traceCallId = randomUUID();
+  const group = transcript.response({ text: '', toolCalls: [{ id: 'read-use', name: 'Execution__read', input: page.recovery.read.args }] });
+  const projection = transcript.result(group, 'read-use', traceCallId, { id: 'Execution.read', args: page.recovery.read.args }, page, liveEpisodeId);
+  expect(projection.executionTraceCallId).toBe(traceCallId);
+  expect(projection.executionEpisodeId).toBe(liveEpisodeId);
+  expect(projection.recovery).toEqual(page.recovery);
+  expect(group.receipts[0].recovery.input).toEqual(page.recovery.read.args);
+  expect(projection).toMatchObject({ rawBytes: page.rawBytes, sha256: page.sha256,
+    nextOffset: page.nextOffset, eof: page.eof, outputSpan: { start: page.offset, end: page.nextOffset, totalBytes: page.rawBytes } });
+  return projection;
+}
 
 const admission = () => ({ kind: 'think', text: 'Inspect existing evidence.', clientMessageId: randomUUID(), workerId: 'worker', budget: { calls: 16 } });
 async function persist(repository, episode, invocation, result, { code, terminalCode } = {}) {
@@ -52,8 +66,17 @@ describe('Person Execution.read durable scoped evidence', () => {
     const before = sql.prepare('SELECT count(*) AS n FROM traces').get().n;
     const personBefore = await reopened.getPerson('alice');
     let offset = 0, restored = '', pages = 0;
+    const first = projectRead(await read(cap, { callId, maxBytes: 4096 }), episode.id);
+    const shortened = projectNativeResult(first, 2048);
+    expect(shortened.truncated).toBe(true);
+    expect(shortened.recovery).toEqual(first.recovery);
+    expect(shortened.hiddenRange.start).toBeGreaterThanOrEqual(first.offset);
+    expect(shortened.hiddenRange.end).toBeLessThanOrEqual(first.nextOffset);
+    let descriptor = { ...shortened.recovery.read.args, maxBytes: 997 };
     for (;;) {
-      const page = await read(cap, { callId, offset, maxBytes: 997 });
+      const page = await read(cap, descriptor);
+      const projection = projectRead(page, episode.id);
+      expect(projection.truncated).not.toBe(true);
       expect(page).toMatchObject({ ok: true, code: null, errorEffect: null, sourceRef: result.sourceRef,
         rawBytes: bytes(output), sha256: digest(output), historical: false, authority: 'evidence-only',
         args: { file_path: 'artifact', content: 'do not replay' }, argsTruncated: false });
@@ -63,6 +86,7 @@ describe('Person Execution.read durable scoped evidence', () => {
       restored += page.output; pages++;
       if (page.eof) { expect(page.nextOffset).toBe(bytes(output)); break; }
       expect(page.nextOffset).toBeGreaterThan(offset); offset = page.nextOffset;
+      descriptor = { ...projection.recovery.read.args, offset: projection.nextOffset };
     }
     expect(pages).toBeGreaterThan(50); expect(restored).toBe(output);
     expect(await read(cap, { callId, offset: bytes(output) })).toMatchObject({ output: '', returnedBytes: 0, eof: true, replaySafe: false });
@@ -92,7 +116,13 @@ describe('Person Execution.read durable scoped evidence', () => {
     await expect(repository.executionRead({ ...live, personId: bob.personId }, { callId: priorId, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
     await expect(foreign.executionRead(live, { callId: priorId, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
     await expect(repository.executionRead(prior, { callId: priorId })).rejects.toMatchObject({ code: 'STALE' });
-    await repository.cancel('alice', live.id);
+    const executionRead = repository.executionRead.bind(repository);
+    const cancelOnMiss = vi.spyOn(repository, 'executionRead').mockImplementation(async (...args) => {
+      try { return await executionRead(...args); }
+      catch (error) { await repository.cancel('alice', live.id); throw error; }
+    });
+    await expect(read(cap, { callId: 'missing', episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
+    cancelOnMiss.mockRestore();
     await expect(read(cap, { callId: priorId, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
   });
 
@@ -109,10 +139,16 @@ describe('Person Execution.read durable scoped evidence', () => {
     const archivePath = archive.rawPath, original = JSON.parse(await readFile(archivePath, 'utf8'));
     expect(original.sourceRef).toBe(archive.sourceRef);
     const preview = projectTaskEvidence(host.snapshot('alice'));
-    expect(preview.items.find(item => item.sourceRef === archive.sourceRef)).toMatchObject({
+    const archivePreview = preview.items.find(item => item.sourceRef === archive.sourceRef);
+    expect(archivePreview).toMatchObject({
       episodeId: prior.id, tool: 'FileRead', childId: null, ok: true, truncated: true,
       recovery: { read: { id: 'Execution.read', args: { sourceRef: archive.sourceRef, episodeId: prior.id, offset: 0, maxBytes: 4096 } } },
+      outputSpan: { start: 0, end: bytes(archive.output), totalBytes: bytes(original.output) },
+      omittedSuffix: { start: bytes(archive.output), end: bytes(original.output) },
     });
+    expect(archivePreview.notice).toContain('PREFIX');
+    expect(archivePreview.hiddenRange.end).toBeLessThanOrEqual(archivePreview.outputSpan.end);
+    expect(archivePreview.output).not.toContain('TAIL');
     await repository.finish(prior, 'failed', 'INTERRUPTED');
     await host.close(); await repository.close();
     repository = repo();
@@ -123,14 +159,24 @@ describe('Person Execution.read durable scoped evidence', () => {
       const descriptor = { sourceRef: archive.sourceRef, episodeId: prior.id };
       await expect(repository.executionRead(live, { callId: archive.id, episodeId: prior.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
       expect(archive.output).not.toContain('\ufffd');
-      let offset = 0, restored = '';
+      let offset = 0, restored = '', nextRead = { ...archivePreview.recovery.read.args, maxBytes: 127 };
+      const largePage = projectRead(await read(cap, { ...descriptor, maxBytes: 4096 }), live.id);
+      const shortened = projectNativeResult(largePage, 2048);
+      expect(shortened.truncated).toBe(true);
+      expect(shortened.recovery).toEqual(largePage.recovery);
+      expect(shortened.recovery.read.args).not.toHaveProperty('callId');
+      expect(shortened.notice).toContain('PAGE');
       do {
-        const page = await read(cap, { ...descriptor, offset, maxBytes: 127 });
+        const page = await read(cap, nextRead);
+        const projection = projectRead(page, live.id);
+        expect(projection.recovery.read.args).not.toHaveProperty('callId');
+        expect(projection.truncated).not.toBe(true);
         expect(page).toMatchObject({ tool: 'FileRead', childId: null, aborted: false, historical: true, sourceRef: archive.sourceRef, authority: 'evidence-only' });
         expect(page).not.toHaveProperty('callId');
         expect(page.output).not.toContain('\ufffd'); expect(bytes(page)).toBeLessThanOrEqual(8192);
-        restored += page.output; offset = page.nextOffset;
-        if (page.eof) break;
+        restored += projection.output; offset = projection.nextOffset;
+        nextRead = { ...projection.recovery.read.args, offset };
+        if (projection.eof) break;
       } while (true);
       expect(restored).toBe(original.output);
       expect(await read(cap, { callId: archive.id })).toMatchObject({ ok: false, code: 'NOT_FOUND' });
@@ -186,7 +232,14 @@ describe('Person Execution.read durable scoped evidence', () => {
       await expect(read(cap, descriptor)).rejects.toMatchObject({ code: 'TASK_SCOPE_DENIED' });
       await rm(archivePath); await writeFile(archivePath, '{broken');
       await expect(read(cap, descriptor)).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
-      await repository.cancel('alice', live.id);
+      await writeFile(archivePath, JSON.stringify(original));
+      let postReadChecks = 0;
+      const postReadFence = vi.spyOn(repository, 'checkExecutionRead').mockImplementation(async (...args) => {
+        if (++postReadChecks === 2) await repository.cancel('alice', live.id);
+        return check(...args);
+      });
+      await expect(host.readToolResult(live, descriptor, { repository })).rejects.toMatchObject({ code: 'STALE' });
+      postReadFence.mockRestore();
       await expect(read(cap, { sourceRef: missing, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
     } finally { await host.close(); }
   });

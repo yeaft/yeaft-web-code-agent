@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutionTranscript } from '../../../../agent/yeaft/person/execution-protocol.js';
+import { executionEvidencePage } from '../../../../agent/yeaft/person/execution-evidence.js';
+import { digest } from '../../../../agent/yeaft/person/contracts.js';
 
 const initial = [{ role: 'user', content: 'Implement the authorized artifact, verify it, then report actual results.' }];
 const request = (transcript, maxBytes = 12000, tools = []) => transcript.request({ system: 'Same Person/Soul.', tools, maxBytes });
@@ -82,7 +84,7 @@ describe('ExecutionTranscript request-only actual evidence', () => {
     expect(evidence(final.messages).notice).toContain('not proof of absence or rollback');
   });
 
-  it('reports only actually rendered Recall pages and refs, not retired records or arbitrary output strings', () => {
+  it('reports exact rendered provenance and retains original read identities in retired receipts', () => {
     const transcript = new ExecutionTranscript(initial);
     call(transcript, 'Recall', { kind: 'concepts' }, { kind: 'concepts', items: [{ id: 'old', revision: 2, statement: 'old evidence' }], sourceRef: 'tool:recall' });
     const full = request(transcript, 9000);
@@ -96,6 +98,24 @@ describe('ExecutionTranscript request-only actual evidence', () => {
     expect(reduced.recallPages).toEqual([{ kind: 'messages', count: 0 }]);
     call(transcript, 'FileRead', { file_path: 'untrusted' }, { output: '{"sourceRef":"concept:fake:1"}' });
     expect(request(transcript, 6000).renderedSourceRefs).not.toContain('concept:fake:1');
+    // Retired read receipts must recover original bytes, not the read's page trace.
+    for (const identity of [{ callId: 'original-trace' }, { sourceRef: `person-tool:${'a'.repeat(64)}:00000000-0000-0000-0000-000000000001` }]) {
+      const probe = new ExecutionTranscript(initial), output = '中😀"\\\n'.repeat(4000);
+      const page = executionEvidencePage({ episodeId: 'prior', result: { ok: true, output } }, null,
+        { ...identity, episodeId: 'prior', offset: 1000, maxBytes: 997 }, 'live');
+      call(probe, 'Execution.read', page.recovery.read.args, page);
+      reads(probe, 5);
+      // Keep this read within the 16-receipt inventory: 20 later reads would
+      // intentionally evict it. 20KB fits the latest complete group plus evidence.
+      const reduced = request(probe, 20000);
+      expect(reduced.omittedExecutionGroups).toBeGreaterThan(0);
+      expect(reduced.messages.some(message => message.toolCallId === 'use-0')).toBe(false);
+      const receipt = evidence(reduced.messages).capsules.find(item => item.capability === 'Execution.read');
+      expect(receipt).toMatchObject({ authority: 'evidence-only', rawBytes: Buffer.byteLength(output), sha256: digest(output),
+        outputSpan: { start: page.offset, end: page.nextOffset, totalBytes: page.rawBytes }, nextOffset: page.nextOffset,
+        recovery: { name: 'Execution__read', input: page.recovery.read.args } });
+      expect(receipt.recovery.input).not.toHaveProperty('callId', 'trace-0');
+    }
   });
 
   it('fails closed if the newest complete group cannot fit without editing it', () => {

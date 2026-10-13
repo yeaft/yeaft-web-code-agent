@@ -36,6 +36,13 @@ const boundedValue = (value, maxBytes) => bytes(JSON.stringify(value)) <= maxByt
 
 function evidenceCapsule(toolUseId, callId, invocation, result, raw, episodeId) {
   const args = invocation.args ?? {}, argsBytes = bytes(args);
+  const evidencePage = result?.id === 'Execution.read' && result.authority === 'evidence-only';
+  const start = evidencePage ? result.offset : 0;
+  const outputExcerpt = limit => {
+    const value = excerpt(raw, limit);
+    if (value.hiddenRange) value.hiddenRange = { start: start + value.hiddenRange.start, end: start + value.hiddenRange.end };
+    return value;
+  };
   const capsule = { kind: 'execution-evidence', toolUseId, callId, capability: invocation.id,
     invocation: { id: invocation.id, ...(argsBytes <= 768 ? { args: structuredClone(args), argsTruncated: false }
       : { args: null, argsTruncated: true, argsPreview: excerpt(JSON.stringify(args), 768),
@@ -46,8 +53,12 @@ function evidenceCapsule(toolUseId, callId, invocation, result, raw, episodeId) 
     ...Object.fromEntries(['code', 'errorEffect', 'terminal', 'replaySafe', 'sourceRef', 'source', 'episodeId', 'outputAvailability', 'afterTerminal', 'accepted']
       .filter(key => result && Object.hasOwn(result, key)).map(key => [key, boundedValue(result[key], 384)])),
     rawBytes: boundedValue(result?.rawBytes ?? bytes(raw), 128), sha256: boundedValue(result?.sha256 ?? digest(raw), 128),
-    output: excerpt(raw, 1280),
-    recovery: { name: 'Execution__read', input: { callId, ...(episodeId ? { episodeId } : {}), offset: 0, maxBytes: 4096 } } };
+    output: outputExcerpt(1280),
+    ...(evidencePage ? { authority: 'evidence-only', outputSpan: { start, end: start + bytes(raw), totalBytes: result.rawBytes },
+      nextOffset: result.nextOffset, eof: result.eof,
+      notice: 'Preview of this evidence page only. Reread omitted page bytes before advancing nextOffset; recovery retains the original evidence identity.' } : {}),
+    recovery: { name: 'Execution__read', input: evidencePage ? structuredClone(result.recovery.read.args)
+      : { callId, ...(episodeId ? { episodeId } : {}), offset: 0, maxBytes: 4096 } } };
   // Publication IDs are observed data only. A phase=final publication does not
   // establish episode/task completion, and failure never implies rollback.
   const publication = Object.fromEntries(['id', 'messageId', 'outputId', 'publicationId', 'published', 'kind', 'title', 'url', 'summary']
@@ -56,7 +67,7 @@ function evidenceCapsule(toolUseId, callId, invocation, result, raw, episodeId) 
   // Unusual ancillary metadata may be large even after per-field bounds.
   if (bytes(capsule) > CAPSULE_BYTES) {
     if (capsule.source) capsule.source = boundedValue(capsule.source, 384);
-    capsule.output = excerpt(raw, 768);
+    capsule.output = outputExcerpt(768);
     capsule.metadataTruncated = true;
   }
   if (bytes(capsule) > CAPSULE_BYTES) {
@@ -68,7 +79,7 @@ function evidenceCapsule(toolUseId, callId, invocation, result, raw, episodeId) 
         .filter(([key]) => ['id', 'messageId', 'outputId', 'publicationId', 'published'].includes(key)));
       capsule.publicationMetadataTruncated = true;
     }
-    capsule.output = excerpt(raw, 384);
+    capsule.output = outputExcerpt(384);
     if (capsule.invocation.argsPreview) capsule.invocation.argsPreview = excerpt(JSON.stringify(args), 384);
   }
   if (bytes(capsule) > CAPSULE_BYTES) {
@@ -199,7 +210,7 @@ export class ExecutionTranscript {
     };
     const notice = capsules => ({
       notice: 'Earlier actual execution groups omitted only in this request copy. Capsules are bounded verbatim evidence previews, not summaries, permission or proof of task completion. Missing evidence is not proof of absence or rollback. Originals remain in fenced traces; never repeat effects to recover output.' +
-        (tools?.length ? ' Use Execution__read with the original trace callId for omitted details.' : ' Tools are disabled: recovery references cannot be read in this request. Distill only supplied observations/public findings and preserve uncertainty.'),
+        (tools?.length ? ' Use Execution__read with the supplied exact recovery descriptor for omitted details.' : ' Tools are disabled: recovery references cannot be read in this request. Distill only supplied observations/public findings and preserve uncertainty.'),
       omittedExecutionGroups: retired, evidenceCalls, publicFindings,
       omittedEvidenceCapsules: evidenceCalls + publicFindings - capsules.length, capsules,
     });
