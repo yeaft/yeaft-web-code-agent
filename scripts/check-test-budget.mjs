@@ -50,6 +50,19 @@ export function checkCaseBudget({ unit, browser }, limit = TEST_CASE_LIMIT) {
   return { unit, browser, total, limit, exceeded: total > limit };
 }
 
+/** Close collection resources without blocking an isolated collector forever. */
+export async function closeUnitCollector(context, timeoutMs = 5000) {
+  let timer;
+  try {
+    return await Promise.race([
+      context.close().then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Vitest CLI list drops skip/todo. The public collection API retains them. */
 export async function collectUnitCases({ rootDir = process.cwd(), configFile = 'vitest.focus.config.js' } = {}) {
   const { createVitest } = await import('vitest/node');
@@ -71,7 +84,9 @@ export async function collectUnitCases({ rootDir = process.cwd(), configFile = '
     if (result.testModules.length !== specifications.length || !count) throw new Error('Unit collection incomplete');
     return count;
   } finally {
-    await context.close();
+    if (!await closeUnitCollector(context)) {
+      console.warn('Unit collection teardown timed out; exiting isolated collector after validated collection.');
+    }
   }
 }
 
@@ -119,7 +134,7 @@ function main() {
 if (isMainModule(import.meta.url)) {
   if (process.argv[2] === '--collect-unit') {
     try {
-      writeFileSync(process.argv[3], JSON.stringify(await collectUnitCases()));
+      writeFileSync(process.argv[3], JSON.stringify(await collectUnitCases({ configFile: process.argv[4] || 'vitest.focus.config.js' })));
       // Some collected modules open DB workers at import time. No test body ran;
       // exit the isolated process instead of waiting on those unrelated handles.
       process.exit(0);

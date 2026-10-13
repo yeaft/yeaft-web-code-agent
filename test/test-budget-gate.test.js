@@ -3,6 +3,9 @@ import { pathToFileURL } from 'node:url';
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { readFile } from 'node:fs/promises';
 import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile } from '../scripts/test-suite-manifest.mjs';
 import {
   checkCaseBudget,
@@ -43,6 +46,27 @@ describe('test budget gate', () => {
       expect(await collectUnitCases({ rootDir: root, configFile: 'vitest.config.mjs' })).toBe(6);
       await writeFile(join(root, 'probe.test.js'), 'throw new Error("fixture collection failed");');
       await expect(collectUnitCases({ rootDir: root, configFile: 'vitest.config.mjs' })).rejects.toThrow('fixture collection failed');
+
+      // A real Vitest close hook that never settles must not block the isolated
+      // CLI. Collection errors still fail and must never publish a count.
+      await writeFile(join(root, 'vitest.config.mjs'), `export default {
+        plugins: [{ name: 'blocked-close', configureVitest({ vitest }) {
+          vitest.onClose(() => new Promise(() => {}));
+        } }],
+        test: { include: ['probe.test.js'], pool: 'forks', fileParallelism: false }
+      };`);
+      const cli = join(process.cwd(), 'scripts/check-test-budget.mjs');
+      const output = join(root, 'count.json');
+      const run = promisify(execFile);
+      await writeFile(join(root, 'probe.test.js'), `import { it } from 'vitest';
+        it.skip('must count', () => { throw new Error('must not run'); });`);
+      const success = await run(process.execPath, [cli, '--collect-unit', output, 'vitest.config.mjs'], { cwd: root, timeout: 20000 });
+      expect(success.stderr).toContain('teardown timed out');
+      expect(JSON.parse(await readFile(output, 'utf8'))).toBe(1);
+      await rm(output);
+      await writeFile(join(root, 'probe.test.js'), 'throw new Error("blocked-close collection failure");');
+      await expect(run(process.execPath, [cli, '--collect-unit', output, 'vitest.config.mjs'], { cwd: root, timeout: 20000 })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('blocked-close collection failure') });
+      await expect(readFile(output, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally { await rm(root, { recursive: true, force: true }); }
   }, 30000);
 
