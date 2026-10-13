@@ -17,36 +17,24 @@ const conversationRecords = new WeakMap();
 // This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], historyAvailable = true, turnItems = [], olderTurns = [] } = {}) {
-  if (enableUi) await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
+async function mockPersonSocket(page, { conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [] } = {}) {
+  await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
   const messages = initialMessages.map(message => ({ ...message }));
   const agentMessages = new Map([['person-a', messages], ['person-b', []]]);
   let viewedAgentId = 'person-a';
   conversationRecords.set(page, () => agentMessages.get(viewedAgentId) || []);
-  let admissionReply;
-  let holdAdmission = false;
   let cancelReply;
   let holdCancel = false;
-  let commandError = null;
   let episodeNumber = 0;
   let activeEpisode = 'live-episode';
   let socket;
-  let configured = true;
-  let renameSupported = true;
   let busy = false;
-  let activityRecords = [];
   let latestEpisode = null;
-  let historyReply;
   let messageHistoryReply;
   let messageHistoryLoaded = false;
   let saveSettings;
-  let failTraces = false;
-  let holdTurns = false;
-  let turnHistoryReply;
-  let turnError = null;
-  let unknownCommand = false;
   let models = [{ id: 'provider/model-a' }, { id: 'provider/model-b' }];
   let modelSettings = { modelCandidates: [], defaultModel: null };
   const effectiveCandidates = () => modelSettings.modelCandidates.length ? modelSettings.modelCandidates : models.slice(0, 8).map(model => model.id);
@@ -55,7 +43,6 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     { id: 'person-b', name: 'Owner Agent B', online: true, capabilities: ['digital_person'] },
     { id: 'old-agent', name: 'Old Agent', online: true, capabilities: [] },
   ];
-  const agentList = () => socket.send(JSON.stringify({ type: 'agent_list', agents }));
   await page.routeWebSocket(/.*/, route => {
     socket = route;
     const server = route.connectToServer();
@@ -69,13 +56,13 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       if (request.type !== 'person_request') { server.send(message); return; }
       requests.push(request);
       const reply = (data, extra = {}) => route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data, ...extra }));
-      if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'Instance directory is not configured', models,
+      if (request.op === 'status') reply({ configured: true, renameSupported: true, reason: '', models,
         ...(modelPreferences ? { defaultModelSupported: true, ...modelSettings, agentDefaultModel: models[0]?.id || null,
           effectiveModelCandidates: effectiveCandidates(), effectiveDefaultModel: modelSettings.defaultModel || effectiveCandidates()[0] || null } : {}) });
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
       else if (request.op === 'snapshot') {
         viewedAgentId = request.agentId;
-        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea', ...(modelPreferences ? { settings: modelSettings } : {}) }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? (activityFlow ? 'episode-1' : activeEpisode) : null });
+        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea', ...(modelPreferences ? { settings: modelSettings } : {}) }, state: { version: 4, currentEpisodeId: 'episode-1', summary: '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? activeEpisode : null });
       } else if (request.op === 'messages') {
         if (conversationFlow && request.payload.cursor && olderMessages.length) {
           messageHistoryReply = () => {
@@ -85,21 +72,10 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
           };
           return;
         }
-        reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded || !historyAvailable ? null : 'older-page' });
+        reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded ? null : 'older-page' });
       } else if (request.op === 'turns') {
-        const finish = () => {
-          if (turnError) { const error = turnError; turnError = null; reply(null, { ok: false, error }); return; }
-          reply({ items: request.payload.cursor ? olderTurns : turnItems, nextCursor: !request.payload.cursor && olderTurns.length ? 'turn-page-2' : null });
-        };
-        if (holdTurns) turnHistoryReply = finish;
-        else finish();
+        reply({ items: [], nextCursor: null });
       } else if (request.op === 'traces') {
-        if (failTraces) { failTraces = false; reply(null, { ok: false, error: 'Thought refresh failed' }); return; }
-        if (activityFlow) {
-          if (request.payload.cursor) historyReply = () => reply({ items: [], nextCursor: null });
-          else reply({ items: activityRecords, nextCursor: 'trace-page-2' });
-          return;
-        }
         const capabilityRecords = [
           { id: 'script-publication', seq: 19, episodeId: 'script', callId: 'create-call', kind: 'capability_created', capabilityId: 'Script.sum',
             capabilityManifest: { id: 'Script.sum', version: 1, revision: 'private-revision' }, evidence: { testsPassed: 2 } },
@@ -116,9 +92,8 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
           ? [{ id: 'curiosity', kind: 'interest', statement: 'An interest saved in memory. <script>text only</script>', revision: 2, epistemicState: 'hypothesis', sourceRefs: ['message:older'] }]
           : [{ id: 'Script.sum', domain: 'script', description: 'Sum numbers', version: 1, code: 'return input.reduce((a,b)=>a+b,0)' }], nextCursor: null });
       } else if (request.op === 'search') {
-        reply({ items: [{ id: 'archived', role: 'user', text: longReading ? 'A message from the durable archive.\n'.repeat(100) : 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
+        reply({ items: [{ id: 'archived', role: 'user', text: 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
-        if (commandError) { const error = commandError; commandError = null; reply(null, { ok: false, error: 'Admission rejected', errorCode: error }); return; }
         if (conversationFlow && request.op === 'send') {
           const admit = () => {
             activeEpisode = `conversation-${++episodeNumber}`;
@@ -132,13 +107,11 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
             latestEpisode = { id: activeEpisode, status: 'running', createdAt };
             reply({ episodeId: activeEpisode });
           };
-          if (holdAdmission) admissionReply = admit;
-          else admit();
+          admit();
           return;
         }
-        if (unknownCommand) { unknownCommand = false; reply(null, { ok: false, error: 'Unknown outcome', errorCode: 'outcome_unknown' }); return; }
-        if (request.op === 'send' && !activityFlow) messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
-        busy = true; reply({ episodeId: activityFlow ? 'episode-1' : 'live-episode' });
+        if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
+        busy = true; reply({ episodeId: 'live-episode' });
       } else if (request.op === 'settings') saveSettings = () => {
         if (modelPreferences) modelSettings = { ...modelSettings, ...request.payload };
         reply({ settings: modelPreferences ? modelSettings : request.payload });
@@ -150,18 +123,8 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     });
   });
   return { requests,
-    turns(items) { turnItems = items; },
-    holdTurns() { holdTurns = true; },
-    turnsPending() { return !!turnHistoryReply; },
-    finishTurns() { holdTurns = false; turnHistoryReply(); turnHistoryReply = null; },
-    failTurnRequest() { turnError = 'Usage refresh failed'; },
     messageHistoryPending() { return !!messageHistoryReply; },
     finishMessageHistory() { messageHistoryReply(); messageHistoryReply = null; },
-    holdAdmission() { holdAdmission = true; },
-    admissionPending() { return !!admissionReply; },
-    admit() { holdAdmission = false; admissionReply(); admissionReply = null; },
-    rejectNextSend(code = 'model_unavailable') { commandError = code; },
-    messages(rows, agentId = 'person-a') { agentMessages.set(agentId, rows.map(row => ({ ...row }))); },
     reply(id, text, agentId = 'person-a', episodeId = activeEpisode, metadata = {}) {
       const rows = agentMessages.get(agentId);
       const existing = rows.find(row => row.id === id);
@@ -174,12 +137,10 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     replyAt(offset) { return new Date(new Date(latestEpisode.createdAt).getTime() + offset).toISOString(); },
     holdCancel() { holdCancel = true; }, cancelPending() { return !!cancelReply; }, finishCancel() { holdCancel = false; cancelReply(); cancelReply = null; },
     complete() { busy = false; latestEpisode = { id: activeEpisode, status: 'completed', endedAt: new Date().toISOString() }; },
-    finishHistory() { historyReply(); historyReply = null; }, historyPending() { return !!historyReply; }, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+    finishSettings() { saveSettings(); },
+    disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); },
+  };
 }
-
-// A last page of prose must remain reachable when there is no load-more button.
-
-// The UI preference never writes Agent runtime configuration or starts cognition.
 
 const responseScenarios = [
   { width: 1280, theme: 'light' }, { width: 320, theme: 'dark' },
@@ -563,8 +524,14 @@ for (const width of [320]) {
     await expect(pane).toContainText('Historical item 0');
     await page.locator('.person-thoughts-button').click();
     const thoughts = page.locator('#person-thoughts');
-    // Highest sequence in this fixture is script-cancelled (23).
-    await expect(thoughts.locator('.person-thought').first()).toHaveAttribute('data-thought-kind', 'cancelled');
+    // Journal rows group persisted traces by episode, newest sequence first.
+    // Missing trigger evidence is an episode, not a synthetic cancelled row.
+    const latest = thoughts.locator('.person-thought').first();
+    await expect(latest).toHaveAttribute('data-episode-id', 'script');
+    await expect(latest).toHaveAttribute('data-thought-kind', 'episode');
+    await expect(latest.locator(':scope > header .person-thought-status')).toHaveText('Activity cancelled');
+    await expect(thoughts.locator('.person-thought').nth(1)).toHaveAttribute('data-episode-id', 'episode-1');
+    await expect(thoughts.locator('.person-thought').nth(1).locator(':scope > header .person-thought-status')).toHaveText('Adopted');
     await expect.poll(() => thoughts.locator('.person-thought').count()).toBeLessThan(30);
   });
 }

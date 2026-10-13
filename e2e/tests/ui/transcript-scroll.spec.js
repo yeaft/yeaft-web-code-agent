@@ -80,6 +80,11 @@ async function openTranscript(page, mockAgent, { olderHistory = false } = {}) {
     const store = window.Pinia.useChatStore();
     store.openCatalogSession(store.sessionCatalog.find(row => row.routeRef.agentId === agentId && row.routeRef.sessionId === sessionId));
   }, { agentId: mockAgent.agentId, sessionId: SESSION });
+  await expect.poll(() => page.evaluate(({ agentId, sessionId }) => {
+    const store = window.Pinia.useChatStore();
+    const state = store.yeaftSessionHistoryState[`${agentId}\u001f${sessionId}`];
+    return state?.loaded === true && state.loading === false;
+  }, { agentId: mockAgent.agentId, sessionId: SESSION }), { timeout: 15000 }).toBe(true);
   await expect(page.locator('.chat-container')).toContainText('Answer 49');
   return requests;
 }
@@ -129,22 +134,6 @@ async function sampleFrames(page, options = {}) {
           container.querySelector('.virtual-transcript-item:last-child').appendChild(content);
         }
         content.style.height = `${resize.height}px`;
-      }
-      const upperResize = options.upperResizes?.find(change => change.frame === frame);
-      if (upperResize) {
-        let status = container.querySelector('[data-test-upper-status]');
-        if (upperResize.height === 0) status?.remove();
-        else {
-          if (!status) {
-            status = document.createElement('div');
-            status.dataset.testUpperStatus = 'true';
-            status.setAttribute('role', 'status');
-            status.textContent = 'Test transcript status';
-            const transcript = container.querySelector('.virtual-transcript');
-            transcript.parentElement.insertBefore(status, transcript);
-          }
-          status.style.cssText = `height: ${upperResize.height}px; flex: none; padding: 0; margin: 0; border: 0;`;
-        }
       }
       if (options.prepend && frame === 12) window.Pinia.useChatStore().loadMoreYeaftHistory(5);
       if (options.streaming && frame <= 60 && frame % 5 === 0) {

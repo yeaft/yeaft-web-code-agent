@@ -2,6 +2,7 @@ import { expect } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
@@ -18,6 +19,9 @@ test('Person SQLite three capability layers persist through relay and restart', 
   const requests = [];
   const requestedModels = [];
   const adapter = { async *stream(params) {
+    // Real providers await I/O. Give relay, polling and worker callbacks a turn
+    // too, instead of chaining every scripted inference in one microtask drain.
+    await setImmediate();
     calls++;
     const input = JSON.parse(params.messages[0].content);
     requests.push(input);
@@ -111,7 +115,10 @@ test('Person SQLite three capability layers persist through relay and restart', 
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(calls).toBe(10);
     await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
-    await expect(page.locator('#person-thoughts')).toContainText('Script.sum');
+    const learnedThought = page.locator('#person-thoughts .person-thought').first();
+    await expect(learnedThought).toContainText('Learned a reusable sum; result 12.');
+    await learnedThought.locator('.person-thought-evidence > summary').click();
+    await expect(learnedThought).toContainText('Script.sum');
     await bridge.close(); bridge = makeBridge();
     await page.reload();
     await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);

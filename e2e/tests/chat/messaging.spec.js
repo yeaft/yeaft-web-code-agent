@@ -36,6 +36,9 @@ test.describe('Messaging', () => {
     await expect(chatPage.locator('.message.user').last())
       .toContainText('Tell me a story', { timeout: 5000 });
 
+    // Confirm the server forwarded the send, not just the optimistic UI row.
+    await expect.poll(() => mockAgent.messages('send_message').some(message => message.conversationId === convId)).toBe(true);
+
     // Simulate streaming: first chunk
     mockAgent.simulateClaudeOutput(convId, 'Once upon a time');
 
@@ -50,9 +53,9 @@ test.describe('Messaging', () => {
     // Simulate streaming: second chunk
     mockAgent.simulateClaudeOutput(convId, ' there was a developer');
 
-    // Should see both chunks together
+    // Should see both chunks together.
     await expect(chatPage.locator('.assistant-turn').last())
-      .toContainText('Once upon a time', { timeout: 5000 });
+      .toContainText('Once upon a time there was a developer', { timeout: 5000 });
 
     // Complete the turn
     mockAgent.simulateTurnComplete(convId);

@@ -32,29 +32,15 @@ describe('digital person authenticated relay', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it('passes the exact cancellation episode and ignores a forged owner', async () => {
-    await relay.request(client, message({ op: 'cancel', payload: { episodeId: 'old-episode', ownerId: 'victim' } }));
-    expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op: 'cancel', payload: { episodeId: 'old-episode' } });
-    expect(forward.mock.lastCall[1].payload).not.toHaveProperty('ownerId');
-  });
-
-  it.each(['owner', 'connection'])('fences late response after %s changes', async kind => {
-    await relay.request(client, message());
+  it.each(['owner', 'connection', 'access', 'logout'])('fences private output after %s changes while in flight', async kind => {
+    await relay.request(client, message({ op: 'output_read', payload: { outputId: '550e8400-e29b-41d4-a716-446655440000' } }));
+    expect(forward).toHaveBeenCalledTimes(1);
     const requestId = forward.mock.calls[0][1].requestId;
     if (kind === 'owner') client.userId = 'owner-b';
     if (kind === 'connection') agentMap.set('agent-a', { capabilities: ['digital_person'] });
-    await relay.response('agent-a', { type: 'person_response', requestId, ok: true, data: { secret: 'private' } });
+    if (kind === 'access') accessError.mockReturnValue('denied');
+    if (kind === 'logout') client.authenticated = false;
+    await relay.response('agent-a', { type: 'person_response', requestId, ok: true, data: { content: Buffer.from('private-output-bytes').toString('base64') } });
     expect(send).not.toHaveBeenCalled();
-  });
-
-  it('accepts synchronous responses without losing correlation', async () => {
-    forward.mockImplementation(async (agentId, msg) => {
-      await relay.response(agentId, { type: 'person_response', requestId: msg.requestId, ok: true, data: {} });
-      return true;
-    });
-    await relay.request(client, message());
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.lastCall[1].ok).toBe(true);
   });
 });

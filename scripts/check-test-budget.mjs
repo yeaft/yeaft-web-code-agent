@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, relative, resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import process from 'node:process';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, normalizeTestPath } from './test-suite-manifest.mjs';
 
 // Reviewed baseline across Vitest AND Playwright, including skipped/each cases.
@@ -50,18 +50,42 @@ export function checkCaseBudget({ unit, browser }, limit = TEST_CASE_LIMIT) {
   return { unit, browser, total, limit, exceeded: total > limit };
 }
 
-/** Collect every committed case, not just the default Vitest manifest. No tests execute. */
+/** Vitest CLI list drops skip/todo. The public collection API retains them. */
+export async function collectUnitCases({ rootDir = process.cwd(), configFile = 'vitest.focus.config.js' } = {}) {
+  const { createVitest } = await import('vitest/node');
+  const context = await createVitest('test', {
+    root: rootDir, config: resolve(rootDir, configFile), watch: false, reporters: [],
+  });
+  try {
+    await context.init();
+    const specifications = await context.globTestSpecifications();
+    const result = await context.collectTests(specifications);
+    const errors = [...result.unhandledErrors];
+    let count = 0;
+    for (const module of result.testModules) {
+      errors.push(...module.errors());
+      for (const suite of module.children.allSuites()) errors.push(...suite.errors());
+      for (const test of module.children.allTests()) count++;
+    }
+    if (errors.length) throw new Error(`Unit collection failed: ${errors.map(error => error?.message || String(error)).join('; ')}`);
+    if (result.testModules.length !== specifications.length || !count) throw new Error('Unit collection incomplete');
+    return count;
+  } finally {
+    await context.close();
+  }
+}
+
+/** Bound the isolated collector so import side effects cannot hang the gate. */
 export function collectTestCaseCounts({ rootDir = process.cwd() } = {}) {
   const require = createRequire(import.meta.url);
-  const vitestCli = resolve(dirname(require.resolve('vitest/package.json')), 'vitest.mjs');
   const playwrightCli = require.resolve('@playwright/test/cli');
   const outputDir = mkdtempSync(resolve(tmpdir(), 'yeaft-test-budget-'));
   const outputFile = resolve(outputDir, 'tests.json');
   try {
-    execFileSync(process.execPath, [vitestCli, 'list', '--config=vitest.focus.config.js', `--root=${rootDir}`, `--json=${outputFile}`], {
+    execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--collect-unit', outputFile], {
       cwd: rootDir, stdio: 'pipe', timeout: 180000,
     });
-    const unit = JSON.parse(readFileSync(outputFile, 'utf8')).length;
+    const unit = JSON.parse(readFileSync(outputFile, 'utf8'));
     const browserReport = execFileSync(process.execPath, [playwrightCli, 'test', '--config=e2e/playwright.config.js', '--list', '--reporter=json'], {
       cwd: rootDir, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 60000,
     });
@@ -92,4 +116,16 @@ function main() {
   }
 }
 
-if (isMainModule(import.meta.url)) main();
+if (isMainModule(import.meta.url)) {
+  if (process.argv[2] === '--collect-unit') {
+    try {
+      writeFileSync(process.argv[3], JSON.stringify(await collectUnitCases()));
+      // Some collected modules open DB workers at import time. No test body ran;
+      // exit the isolated process instead of waiting on those unrelated handles.
+      process.exit(0);
+    } catch (error) {
+      console.error(error.message);
+      process.exit(1);
+    }
+  } else main();
+}

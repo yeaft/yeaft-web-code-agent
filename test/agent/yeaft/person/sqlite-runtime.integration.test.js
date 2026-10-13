@@ -213,7 +213,9 @@ describe('Person real SQLite runtime integration', () => {
       yield { type: 'text_delta', text: JSON.stringify(finalProposal()) };
       yield { type: 'stop', stopReason: 'end_turn' };
     } };
-    const a = create('cancel-remote', adapter, { leaseMs: 1200 });
+    // This tests cancellation finalization, not lease expiry. Leave enough
+    // authority time for a loaded CI host to persist the captured prefix.
+    const a = create('cancel-remote', adapter, { leaseMs: 10000 });
     const b = create('cancel-remote', adapterFor(() => finalProposal()));
     await call(a, 'open');
     const admitted = await call(a, 'send', { text: 'cancel me', clientMessageId: 'cancel' });

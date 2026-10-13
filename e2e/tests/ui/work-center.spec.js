@@ -157,30 +157,6 @@ const WAITING_ITEM_DETAIL = {
   }],
 };
 
-const ACTION_OVERFLOW_DETAIL = structuredClone(OPEN_ITEM_DETAIL);
-ACTION_OVERFLOW_DETAIL.actions[0].status = 'waiting';
-ACTION_OVERFLOW_DETAIL.actions[0].canonicalResult = { waitingReason: `waiting-${'w'.repeat(1200)}` };
-ACTION_OVERFLOW_DETAIL.actions[0].messages = [
-  {
-    id: 'action-overflow-message',
-    role: 'assistant',
-    status: 'completed',
-    speaker: { id: `speaker-${'s'.repeat(1200)}` },
-    text: 'Action overflow probe',
-    attachments: [{ id: 'action-overflow-attachment', name: `attachment-${'a'.repeat(1800)}.txt`, size: 12 }],
-    createdAt: Date.now() - 1,
-    updatedAt: Date.now() - 1,
-  },
-  {
-    id: 'action-overflow-user',
-    role: 'user',
-    status: 'completed',
-    text: 'Keep the correction small.',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  },
-];
-
 function closedWorkItem(status) {
   const suffix = status === 'done' ? 'done' : 'cancelled';
   return {

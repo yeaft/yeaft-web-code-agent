@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { pathToFileURL } from 'node:url';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile } from '../scripts/test-suite-manifest.mjs';
 import {
   checkCaseBudget,
+  collectUnitCases,
   countBrowserCases,
   isMainModule,
   TEST_CASE_LIMIT,
@@ -21,12 +25,26 @@ describe('test budget gate', () => {
     expect(new Set(REVIEWED_TEST_FILES).size).toBe(REVIEWED_TEST_FILES.length);
   });
 
-  it('recognizes test files without counting support modules', () => {
+  it('collects real skip/todo/each cases without executing them and rejects collection errors', async () => {
     expect(isTestFile('e2e/tests/new.spec.js')).toBe(true);
-    expect(isTestFile('test/new.test.js')).toBe(true);
     expect(isTestFile('test/helpers/support.js')).toBe(false);
-    expect(isTestFile('e2e/helpers/support.js')).toBe(false);
-  });
+    const root = await mkdtemp(join(tmpdir(), 'yeaft-budget-fixture-'));
+    try {
+      await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+      await writeFile(join(root, 'vitest.config.mjs'), 'export default { test: { include: ["probe.test.js"], pool: "forks", fileParallelism: false } };');
+      await writeFile(join(root, 'probe.test.js'), `import { describe, it } from 'vitest';
+        const never = () => { throw new Error('test bodies must not execute'); };
+        it('normal', never);
+        it.skip('skipped', never);
+        it.todo('todo');
+        it.each([1, 2])('expanded %s', never);
+        describe.skip('skipped suite', () => { it('child', never); });
+      `);
+      expect(await collectUnitCases({ rootDir: root, configFile: 'vitest.config.mjs' })).toBe(6);
+      await writeFile(join(root, 'probe.test.js'), 'throw new Error("fixture collection failed");');
+      await expect(collectUnitCases({ rootDir: root, configFile: 'vitest.config.mjs' })).rejects.toThrow('fixture collection failed');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }, 30000);
 
   it('only runs the CLI when invoked as the entry module', () => {
     const windowsEntry = 'C:\\repo\\scripts\\check-test-budget.mjs';

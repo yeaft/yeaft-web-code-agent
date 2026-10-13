@@ -9,7 +9,7 @@ const URL_B = `${ORIGIN}/response-b`;
 
 // Actual application + owner relay + deterministic Agent history. Destinations
 // are real cross-origin documents fulfilled in Chromium, not component harnesses.
-test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: 'false' } });
+test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.SERVE_DIST || 'false' } });
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {

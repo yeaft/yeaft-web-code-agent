@@ -108,12 +108,13 @@ test.describe('Conversation Management', () => {
 
     // Switch back to first conversation by clicking the session item with our title
     const firstConvItem = chatPage.locator('.session-item', { hasText: 'Message in first conversation' });
-    const itemExists = await firstConvItem.count();
-    if (itemExists > 0) {
-      await firstConvItem.first().click();
+    await expect(firstConvItem).toHaveCount(1);
+    await expect(firstConvItem).toBeVisible();
+    await firstConvItem.click();
 
-      await expect(chatPage.locator('.message.user').first())
-        .toContainText('Message in first conversation', { timeout: 5000 });
-    }
+    await expect(chatPage.locator('.message.user').first())
+      .toContainText('Message in first conversation', { timeout: 5000 });
+    await expect(chatPage.locator('.assistant-turn').last())
+      .toContainText('Reply to first conversation', { timeout: 5000 });
   });
 });

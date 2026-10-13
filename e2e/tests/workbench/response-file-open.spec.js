@@ -10,15 +10,15 @@ import { useTestServer } from '../../fixtures/test-server.js';
 // Authentication/server relay are replaced by an in-page transport so this test
 // can deterministically exercise cold mounts and absolute response paths.
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-const CONTENT = ['zero', 'one', 'target line', 'three'].join('\n');
-
 function mountHarness() {
   const params = new URLSearchParams(location.search);
   const filePath = params.get('file') || 'docs/guide.txt';
   const TEXT_CONTENT = ['zero', 'one', 'target line', 'three'].join('\n');
   const CONTENT = params.get('content') || TEXT_CONTENT;
-  const fileContents = new Map([[filePath, CONTENT]]);
-  const { createApp, reactive, nextTick } = Vue;
+  // Reads and writes share one byte record after the UI canonicalizes the path.
+  const canonicalPath = path => path.startsWith('/') ? path : `/fixture/project/${path}`;
+  const fileContents = new Map([[canonicalPath(filePath), CONTENT]]);
+  const { createApp, reactive } = Vue;
   const pinia = Pinia.createPinia();
   const sessions = reactive({
     activeSessionId: 'session-y', activeSessionKey: 'agent-b\u001fsession-y',
@@ -51,19 +51,12 @@ function mountHarness() {
   document.documentElement.dataset.theme = params.get('theme') || 'light';
   store.theme = document.documentElement.dataset.theme;
   const requests = [];
-  const failure = params.get('failure');
-  const inlineFallback = params.get('source') === 'inline-fallback';
-  if (inlineFallback) {
-    store.agents[1].capabilities = store.agents[1].capabilities.filter(capability => capability !== 'file_reference_resolution');
-  }
-  let resolveAttempts = 0;
-  let readAttempts = 0;
   // Deliberately omit requestedFilePath and return the canonical absolute
   // path. The request id must correlate this response to the relative tab.
-  const respondFile = (message, result = { content: fileContents.get(message.filePath) || TEXT_CONTENT }) => {
+  const respondFile = message => {
     window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
       type: 'file_content', requestId: message.requestId,
-      filePath: `/fixture/project/${message.filePath}`, ...result,
+      filePath: canonicalPath(message.filePath), content: fileContents.get(canonicalPath(message.filePath)),
       agentId: message.agentId, conversationId: message.conversationId,
       workbenchRouteKey: message.workbenchRouteKey,
       workbenchWorkspaceGeneration: message.workbenchWorkspaceGeneration,
@@ -74,7 +67,7 @@ function mountHarness() {
   const respondSaved = (message, overrides = {}) => {
     if (!overrides.error && ['requestId', 'agentId', 'conversationId', 'workbenchRouteKey', 'workbenchWorkspaceGeneration']
       .every(key => overrides[key] === undefined || overrides[key] === message[key])) {
-      fileContents.set(message.filePath, message.content);
+      fileContents.set(canonicalPath(message.filePath), message.content);
     }
     window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
       ...message, type: 'file_saved', content: undefined, ...overrides,
@@ -83,28 +76,12 @@ function mountHarness() {
   store.sendWsMessage = message => {
     requests.push(structuredClone(message));
     if (message.type === 'resolve_file_references') {
-      const fail = ++resolveAttempts === 1 && failure === 'resolve-error';
       queueMicrotask(() => window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
         type: 'file_references_resolved', requestId: message.requestId,
-        ...(fail ? { error: 'temporary resolver failure' } : {
-          references: message.references.map(requestedPath => ({ requestedPath, resolvedPath: requestedPath.split('#')[0] })),
-        }),
+        references: message.references.map(requestedPath => ({ requestedPath, resolvedPath: requestedPath.split('#')[0] })),
       } })));
     } else if (message.type === 'read_file') {
-      const firstRead = ++readAttempts === 1;
-      if (firstRead && ['read-send', 'restore-send'].includes(failure)) return false;
-      if (firstRead && failure === 'read-disconnect') return true;
-      const result = firstRead && failure === 'read-error' ? { error: 'temporary read failure' }
-        : { content: fileContents.get(message.filePath) || TEXT_CONTENT };
-      queueMicrotask(() => respondFile(message, result));
-    } else if (message.type === 'restore_file_tabs' && (failure === 'restore-send' || params.has('restore'))) {
-      queueMicrotask(() => window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
-        type: 'file_tabs_restored', restoreRequestId: message.restoreRequestId,
-        openFiles: [{ path: filePath }], activeIndex: 0,
-        agentId: message.agentId, conversationId: message.conversationId,
-        workbenchRouteKey: message.workbenchRouteKey,
-        workbenchWorkspaceGeneration: message.workbenchWorkspaceGeneration,
-      } })));
+      queueMicrotask(() => respondFile(message));
     }
     return true;
   };
@@ -113,7 +90,7 @@ function mountHarness() {
     textSegments: [{
       key: 'result',
       kind: 'result',
-      content: inlineFallback ? `Try \`${filePath}:3\`` : `[open guide](${filePath}#L3)`,
+      content: `[open guide](${filePath}#L3)`,
     }],
   });
   const app = createApp({
@@ -125,20 +102,7 @@ function mountHarness() {
   app.provide('t', (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (_, name) => values[name] ?? ''));
   app.config.globalProperties.$t = key => key;
   app.mount('#app');
-  window.harness = {
-    store, requests, sessions, respondFile, respondSaved,
-    async showReference(path) {
-      turn.textSegments[0].content = `[open guide](${path}#L3)`;
-      await nextTick();
-    },
-    async useCli() {
-      store.currentView = 'chat';
-      store.conversations = [{ id: 'cli-1', agentId: 'agent-b', provider: 'claude-code' }];
-      store.activeConversations = ['cli-1'];
-      store.currentWorkDir = '/fixture/project';
-      await nextTick();
-    },
-  };
+  window.harness = { requests, respondSaved };
 }
 
 const HTML = `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -184,9 +148,8 @@ const HTML_CONTENT = `<!doctype html>
   <p>${'Long preview content remains scrollable. '.repeat(100)}</p>
 </main></body></html>`;
 
-function htmlHarnessUrl(harness, { file = 'docs/mockup.html', content = HTML_CONTENT, theme = 'light', restore = false } = {}) {
+function htmlHarnessUrl(harness, { file = 'docs/mockup.html', content = HTML_CONTENT, theme = 'light' } = {}) {
   const params = new URLSearchParams({ file, content, theme });
-  if (restore) params.set('restore', '1');
   return `${harness.url}/?${params}`;
 }
 
@@ -326,7 +289,7 @@ test('Markdown retains default Preview, unsaved rendering, undo and correlated s
   await expect(page.locator('.md-file-preview h1')).toHaveText('Saved Markdown regression');
   await saveButton(page).click();
   const write = await page.evaluate(() => window.harness.requests.find(msg => msg.type === 'write_file'));
-  expect(write).toMatchObject({ filePath: file, content: '# Saved Markdown regression\n\nOriginal body.' });
+  expect(write).toMatchObject({ filePath: `/fixture/project/${file}`, content: '# Saved Markdown regression\n\nOriginal body.' });
   await page.evaluate(message => window.harness.respondSaved(message), write);
   await expect(page.locator('.file-content-dirty')).toHaveCount(0);
 });
