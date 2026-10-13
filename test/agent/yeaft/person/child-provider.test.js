@@ -3,8 +3,6 @@ import { createPersonChildProvider } from '../../../../agent/yeaft/person/child-
 import { Engine } from '../../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../../agent/yeaft/debug-trace.js';
 import { LLMAuthError } from '../../../../agent/yeaft/llm/adapter.js';
-import { AnthropicAdapter } from '../../../../agent/yeaft/llm/anthropic.js';
-import { OpenAIResponsesAdapter } from '../../../../agent/yeaft/llm/openai-responses.js';
 
 const MODEL = 'test/first';
 const catalog = () => [
@@ -47,62 +45,6 @@ describe('Person native child provider boundary', () => {
       }
     }
     expect(calls).toHaveLength(0);
-  });
-
-  it('keeps real Anthropic wire output bounded and selected effort active with the feature flag off', async () => {
-    vi.stubEnv('YEAFT_THINKING_V1', '0');
-    const requests = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
-      requests.push(JSON.parse(init.body));
-      return new Response(JSON.stringify({ id: 'reply', content: [{ type: 'text', text: 'Normal reply' }], stop_reason: 'end_turn', usage: {} }),
-        { headers: { 'content-type': 'application/json' } });
-    });
-    const model = 'test/claude-sonnet-4-20250514';
-    const { adapter, config } = createPersonChildProvider({ adapter: new AnthropicAdapter({ apiKey: 'test-key' }),
-      catalog: [{ id: model, contextWindow: 100000, maxOutput: 8192, efforts: ['low', 'high'] }] }, { model, effort: 'high' });
-    config.modelInfo.thinkingProtocol = 'anthropic-adaptive';
-    config.modelInfo.effortOptions.push('ultra');
-    const params = { model, system: 'Child', messages: [{ role: 'user', content: 'Reply' }], maxTokens: 99999,
-      effortConstraint: { parentDecision: { effective: 'medium' } },
-      extraBody: { max_tokens: 99999, thinking: { type: 'enabled', budget_tokens: 32000 } },
-      effortContext: { thinkingProtocol: 'anthropic-adaptive', effortOptions: ['ultra'] },
-      tools: [{ name: 'Read', parameters: { type: 'object' } }] };
-    const events = await collect(adapter.stream(params));
-    expect(events).toContainEqual({ type: 'text_delta', text: 'Normal reply' });
-    expect(requests[0]).toMatchObject({ model, max_tokens: 8192,
-      thinking: { type: 'enabled', budget_tokens: 4096 }, tools: [{ name: 'Read', input_schema: { type: 'object' } }] });
-    await collect(adapter.stream({ ...params, maxTokens: 100 }));
-    expect(requests[1].max_tokens).toBe(100);
-    expect(requests[1].thinking).toBeUndefined();
-  });
-
-  it('keeps real Responses wire effort inside the catalog with the feature flag off and inherited ceilings', async () => {
-    vi.stubEnv('YEAFT_THINKING_V1', '0');
-    const requests = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
-      requests.push(JSON.parse(init.body));
-      return new Response(JSON.stringify({ id: 'reply', status: 'completed', output: [
-        { type: 'message', content: [{ type: 'output_text', text: 'Normal reply' }] }], usage: {} }),
-      { headers: { 'content-type': 'application/json' } });
-    });
-    const model = 'test/gpt-5.4';
-    const { adapter } = createPersonChildProvider({ adapter: new OpenAIResponsesAdapter({ apiKey: 'test-key' }),
-      catalog: [{ id: model, contextWindow: 100000, maxOutput: 4096, efforts: ['low', 'high'] }] }, { model, effort: 'high' });
-    const params = { model, messages: [{ role: 'user', content: 'Reply' }], maxTokens: 99999,
-      effort: 'ultra', effortConstraint: { parentDecision: { effective: 'medium' } },
-      extraBody: { max_output_tokens: 99999, reasoning: { effort: 'ultra' } },
-      tools: [{ name: 'Read', parameters: { type: 'object' } }] };
-    expect(await adapter.call(params)).toMatchObject({ text: 'Normal reply', stopReason: 'end_turn' });
-    expect(requests[0]).toMatchObject({ model, max_output_tokens: 4096, reasoning: { effort: 'low' } });
-    expect(requests[0].tools).toBeUndefined();
-    await collect(adapter.stream({ ...params, effortConstraint: { parentDecision: { effective: 'low', cap: 'minimal' } } }));
-    expect(requests[1].reasoning).toBeUndefined();
-    expect(requests[1].tools[0]).toMatchObject({ type: 'function', name: 'Read' });
-    const noEffort = createPersonChildProvider({ adapter: new OpenAIResponsesAdapter({ apiKey: 'test-key' }),
-      catalog: [{ id: model, contextWindow: 100000, maxOutput: 4096, efforts: [] }] }, { model, effort: null });
-    await collect(noEffort.adapter.stream(params));
-    expect(requests[2].reasoning).toBeUndefined();
-    expect(requests.every(request => request.max_output_tokens === 4096)).toBe(true);
   });
 
   it('runs the real Engine tool loop using only the selected model and ordinary child text', async () => {

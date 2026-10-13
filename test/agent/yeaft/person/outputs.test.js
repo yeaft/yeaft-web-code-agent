@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 
 import { normalizePresentation } from '../../../../agent/yeaft/response-presentation.js';
 
@@ -115,6 +115,7 @@ describe('Person durable output delivery', () => {
       await expect(request('Output.publish', { file_path: '/etc/passwd' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     } finally { await service.close(); }
   });
+
 });
 
 describe('Person presentation publication', () => {
@@ -179,5 +180,6 @@ describe('Person presentation publication', () => {
       await r.cancel('alice');
       await expect(started.publish()).rejects.toMatchObject({ code: 'STALE' });
     });
+
   });
 });

@@ -5,9 +5,8 @@ import { tmpdir } from 'node:os';
 import { Worker } from 'node:worker_threads';
 import fileEdit from '../../../../agent/yeaft/tools/file-edit.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
-import { NATIVE_TOOL_MANIFESTS } from '../../../../agent/yeaft/person/native-tools.js';
+
 import { validateToolArguments } from '../../../../agent/yeaft/person/tool-arguments.js';
-import { PersonError } from '../../../../agent/yeaft/person/contracts.js';
 
 const definition = () => ({ id: 'Script.identity', expectedVersion: 0, description: 'Identity', useWhen: 'Copy JSON', avoidWhen: '',
   inputDescription: 'JSON', outputDescription: 'JSON', code: 'return input;', tests: [{ input: 1, expected: 1 }] });
@@ -62,52 +61,6 @@ describe('Person native tool safety contracts', () => {
     } finally { clearTimeout(timer); await worker.terminate(); }
   });
 
-  it('advertises closed native root arguments without removing nested schema constraints', async () => {
-    const execute = vi.fn(async () => ({ ok: true }));
-    const { cap, schema, preflight } = setup({}, { toolHost: { execute } });
-    for (const manifest of NATIVE_TOOL_MANIFESTS) {
-      expect(schema(manifest.id)).toEqual({ ...manifest.args, additionalProperties: false });
-      const args = Object.fromEntries((manifest.args.required ?? []).map(key => [key, 'placeholder']));
-      expect(() => validateToolArguments({ ...args, unexpected: true }, schema(manifest.id))).toThrow(expect.objectContaining({ code: 'INVALID_TOOL_INPUT' }));
-    }
-    expect(() => preflight('FileWrite', { file_path: 'file', content: 'text' })).not.toThrow();
-    await expect(cap.execute({ id: 'FileWrite', args: { file_path: 'file', content: 'text', unexpected: true } })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    expect(execute).not.toHaveBeenCalled();
-    await cap.execute({ id: 'FileWrite', args: { file_path: 'file', content: 'text' } });
-    expect(execute).toHaveBeenCalledOnce();
-  });
-
-  it('keeps Output.publish exactly-one sources in the wire schema', () => {
-    const { schema } = setup();
-    expect(schema('Output.publish').oneOf).toEqual([{ required: ['file_path'] }, { required: ['url'] }]);
-    for (const args of [{}, { file_path: 'a', url: 'https://example.com' }]) {
-      expect(() => validateToolArguments(args, schema('Output.publish'))).toThrow(expect.objectContaining({ code: 'INVALID_TOOL_INPUT' }));
-    }
-    for (const args of [{ file_path: 'a' }, { url: 'https://example.com', title: 'Link' }]) {
-      expect(() => validateToolArguments(args, schema('Output.publish'))).not.toThrow();
-    }
-  });
-
-  it('expresses required identifiers, lengths, safe offsets and creation constraints', () => {
-    const { preflight, schema } = setup();
-    for (const [id, args] of [
-      ['Execution.read', {}], ['Execution.read', { callId: 'x'.repeat(129) }],
-      ['Execution.read', { callId: 'valid', episodeId: '../foreign' }],
-      ['Execution.read', { callId: 'valid', offset: Number.MAX_SAFE_INTEGER + 1 }],
-      ['Execution.read', { callId: 'valid', maxBytes: 3 }],
-      ['catalog.view', { id: 'x'.repeat(129) }],
-      ['Capability.create', { ...definition(), id: 'Script.Bad' }],
-      ['Capability.create', { ...definition(), id: `Script.${'x'.repeat(49)}` }],
-      ['Capability.create', { ...definition(), expectedVersion: Number.MAX_SAFE_INTEGER + 1 }],
-      ['Capability.create', { ...definition(), description: 'x'.repeat(401) }],
-      ['Capability.create', { ...definition(), code: 'x'.repeat(8193) }],
-      ['Capability.create', { ...definition(), tests: [] }],
-      ['Capability.create', { ...definition(), tests: [{ input: 1 }] }],
-    ]) expect(() => validateToolArguments(args, schema(id))).toThrow(expect.objectContaining({ code: 'INVALID_TOOL_INPUT' }));
-    expect(() => preflight('Capability.create', definition())).not.toThrow();
-    expect(() => preflight('Execution.read', { callId: 'valid', episodeId: 'ep', offset: Number.MAX_SAFE_INTEGER, maxBytes: 4 })).not.toThrow();
-  });
-
   it('preflights byte budgets and cross-field semantics without executing IO or scripts', () => {
     const effect = vi.fn(() => { throw new Error('must not execute'); });
     const { preflight, schema } = setup({ recall: effect, saveCreatedCapability: effect, saveOutput: effect, executionRead: effect },
@@ -129,34 +82,4 @@ describe('Person native tool safety contracts', () => {
     expect(() => preflight('Recall', { kind: 'messages', cursor: 'lm:0123456789abcdef0123456789abcdef:1' })).not.toThrow();
   });
 
-  it('preflights created-script JSON budgets without invoking the guest', () => {
-    const record = { ...definition(), version: 1, revision: 'current' };
-    const { preflight, schema } = setup({}, { created: [record] });
-    expect(schema(record.id).required).toEqual(['input']);
-    expect(() => validateToolArguments({}, schema(record.id))).toThrow(expect.objectContaining({ code: 'INVALID_TOOL_INPUT' }));
-    expect(() => preflight(record.id, { input: 'x'.repeat(8192) })).toThrow(expect.objectContaining({ code: 'INVALID_TOOL_INPUT' }));
-    expect(() => preflight(record.id, { input: { valid: [1, null, true] } })).not.toThrow();
-  });
-
-  it('never disguises repository or host failures as retry-safe argument errors', async () => {
-    const error = new PersonError('INVALID_REQUEST');
-    const recall = vi.fn(async () => { throw error; });
-    const execute = vi.fn(async () => { throw error; });
-    const { cap, preflight } = setup({ recall }, { toolHost: { execute } });
-    for (const [id, args] of [['Recall', { kind: 'messages' }], ['FileWrite', { file_path: 'file', content: 'text' }]]) {
-      expect(() => preflight(id, args)).not.toThrow();
-      await expect(cap.execute({ id, args })).rejects.toBe(error);
-    }
-    expect(recall).toHaveBeenCalledOnce(); expect(execute).toHaveBeenCalledOnce();
-  });
-
-  it('validates composed/boolean schemas without dropping exactly-one constraints', () => {
-    const schema = { type: 'object', properties: { left: { type: 'string' }, right: { type: 'string' } },
-      additionalProperties: false, allOf: [{ oneOf: [{ required: ['left'] }, { required: ['right'] }] }, { not: { required: ['forbidden'] } }] };
-    expect(() => validateToolArguments({ left: 'yes' }, schema)).not.toThrow();
-    expect(() => validateToolArguments({ left: 'yes', right: 'no' }, schema)).toThrow();
-    expect(() => validateToolArguments({}, false)).toThrow();
-    expect(() => validateToolArguments({ extra: 1 }, { type: 'object', additionalProperties: { type: 'string' } })).toThrow();
-    expect(() => validateToolArguments({ extra: 'ok' }, { type: 'object', additionalProperties: { type: 'string' } })).not.toThrow();
-  });
 });

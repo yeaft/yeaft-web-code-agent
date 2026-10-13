@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 
 import { config, finalProposal } from './fixtures.js';
 

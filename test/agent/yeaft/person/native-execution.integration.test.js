@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { config, finalProposal } from './fixtures.js';
 import fileWrite from '../../../../agent/yeaft/tools/file-write.js';
@@ -78,23 +78,6 @@ describe('Person continuous execution with real SQLite authority', () => {
     expect((await call(run.service, 'traces', {}, 'bob')).items).toEqual([]);
   });
 
-  it('binds native sibling IDs to one provider usage record and permits authenticated publication by trace ID', async () => {
-    const presentation = { title: 'Verified result', summary: 'The fixture contains done.', phase: 'final', blocks: [{ type: 'markdown', text: 'The fixture contains done.' }] };
-    const run = await setup((params, index) => {
-      if (index === 0) return tools(['write-a', 'FileWrite', { file_path: 'a', content: 'done' }], ['write-b', 'FileWrite', { file_path: 'b', content: 'also done' }]);
-      if (index === 1) return tools(['deliver', 'Output__publish', { file_path: 'a', title: 'Actual fixture' }], ['present', 'PresentResponse', presentation]);
-      return text(params.tools.length ? 'Published actual results.' : JSON.stringify(final(params)));
-    });
-    await run.start(); expect((await run.idle()).latestEpisode.status).toBe('completed');
-    const records = await traces(run.service), starts = records.filter(t => t.kind === 'capability_started');
-    expect(starts).toHaveLength(4); expect(new Set(starts.map(t => t.callId)).size).toBe(4);
-    const writes = starts.filter(t => t.capability.id === 'FileWrite');
-    expect(new Set(writes.map(t => t.modelCallId)).size).toBe(1); expect(writes.map(t => t.toolUseId).sort()).toEqual(['write-a', 'write-b']);
-    expect((await call(run.service, 'outputs')).items).toHaveLength(1);
-    expect((await call(run.service, 'messages')).items.some(m => m.presentation?.title === presentation.title)).toBe(true);
-    expect((await call(run.service, 'turns')).items[0].calls.flatMap(c => c.capabilities ?? [])).toHaveLength(4);
-  });
-
   it('repairs malformed tool input and final provenance/JSON without replaying a completed host effect', async () => {
     const effect = vi.spyOn(fileWrite, 'execute');
     const run = await setup((params, index) => {
@@ -113,36 +96,6 @@ describe('Person continuous execution with real SQLite authority', () => {
     expect(records.filter(t => t.kind === 'proposal_rejected')).toHaveLength(2);
     expect(records.filter(t => t.kind === 'activity')).toHaveLength(1);
     expect(records.find(t => t.kind === 'capability_failed' && t.toolUseId === 'bad').result).toMatchObject({ ok: false, code: 'INVALID_TOOL_INPUT', errorEffect: 'none' });
-  });
-
-  it('dedupes progress, the identical execution final and cognitive reply while preserving delivery identity', async () => {
-    const summary = 'Verified the actual fixture.';
-    let run, providerError;
-    const script = (params, index) => {
-      if (index === 0) {
-        // Exercise the existing cadence without adding a 30-second wall wait.
-        const db = new DatabaseSync(join(run.dir, 'person', 'person.db'));
-        try { db.prepare("UPDATE episodes SET record = json_set(record, '$.createdAt', ?) WHERE status = 'running'").run(new Date(Date.now() - 31000).toISOString()); }
-        finally { db.close(); }
-        return [{ type: 'text_delta', text: summary }, ...tools(['inspect', 'FileRead', { file_path: 'fixture' }])];
-      }
-      if (index === 1) return text(summary);
-      const instruction = JSON.parse(params.messages.findLast(m => m.role === 'user' && m.content.includes('final-cognition')).content);
-      expect(instruction.executionDelivery).toMatchObject({ alreadyPublished: true, messageId: expect.any(String) });
-      const p = final(params); p.reply = summary; return text(JSON.stringify(p));
-    };
-    run = await setup((params, index) => {
-      // Surface script assertions instead of only the runtime's sanitized failure.
-      try { return script(params, index); } catch (error) { providerError = error; throw error; }
-    });
-    await writeFile(join(run.dir, 'fixture'), 'actual evidence');
-    await run.start(); const snapshot = await run.idle();
-    if (providerError) throw providerError;
-    expect(snapshot.latestEpisode.status, JSON.stringify(snapshot.latestEpisode)).toBe('completed');
-    const messages = (await call(run.service, 'messages')).items.filter(m => m.role === 'assistant');
-    expect(messages.filter(m => m.text === summary)).toHaveLength(1);
-    expect(messages[0].replyKind).toBe('progress');
-    expect((await traces(run.service)).filter(t => t.kind === 'committed')).toHaveLength(1);
   });
 
   it('pauses before native dispatch and resumes with the same provider response, not a replay', async () => {

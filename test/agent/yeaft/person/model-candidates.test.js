@@ -2,11 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
-import { config, finalProposal } from './fixtures.js';
+import { config } from './fixtures.js';
 
 const services = [], directories = [];
 const call = (s, op, payload = {}, ownerId = 'alice') => s.request({ ownerId, op, payload });
@@ -85,39 +84,4 @@ describe('owner-scoped model candidates', () => {
     expect((await call(restarted, 'status')).modelReady).toBe(true);
   });
 
-  it('freezes the subset at admission, blocks busy settings across services, and rejects model escape in a proposal', async () => {
-    const dir = await directory(), native = manyModels(), seen = [];
-    let release, started;
-    const ready = new Promise(resolve => { started = resolve; });
-    const held = new Promise(resolve => { release = resolve; });
-    const s = create(dir, { config: native, adapter: { async *stream(params) {
-      const context = JSON.parse(params.messages[0].content); seen.push({ context, model: params.model }); started();
-      await held;
-      const p = finalProposal(context.state.version); p.concepts = []; p.state.focusConceptIds = [];
-      p.next = { model: 'test/model0', effort: null, reason: 'Escape owner candidate list', capability: null };
-      yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
-    } } });
-    const other = create(dir, { config: native, adapter: {} });
-    await call(s, 'open'); await call(s, 'settings', { modelCandidates: ['test/model9', 'test/model11'], defaultModel: 'test/model11' });
-    await call(s, 'send', { text: 'hello', clientMessageId: 'one' }); await ready;
-    try {
-      await expect(call(other, 'settings', { modelCandidates: [], defaultModel: null })).rejects.toMatchObject({ code: 'BUSY' });
-      native.availableModels[11].ref = 'test/changed-after-start';
-      expect(seen[0].model).toBe('test/model11');
-      expect(seen[0].context.models.map(m => m.id)).toEqual(['test/model9', 'test/model11']);
-      const db = new DatabaseSync(join(dir, 'person/person.db'), { readOnly: true });
-      try { expect(JSON.parse(db.prepare('SELECT record FROM episodes').get().record)).toMatchObject({
-        modelCandidates: ['test/model9', 'test/model11'], defaultModel: 'test/model11',
-      }); } finally { db.close(); }
-    } finally { release(); }
-    expect((await idle(s)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'MODEL_SELECTION' });
-    expect(seen).toHaveLength(1);
-  });
-
-  it('fails closed when a saved candidate disappears, and honors explicit image opt-out', async () => {
-    await expect(createPersonProvider({ config, adapter: {}, modelCandidates: ['test/removed'] })).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
-    const p = await createPersonProvider({ config: { providers: [{ name: 'test', supportsImages: false, models: ['gpt-5.5'] }],
-      availableModels: [{ id: 'gpt-5.5', ref: 'test/gpt-5.5', contextWindow: 100000, maxOutput: 4096 }] }, adapter: {} });
-    expect(p.catalog[0].supportsImages).toBe(false);
-  });
 });

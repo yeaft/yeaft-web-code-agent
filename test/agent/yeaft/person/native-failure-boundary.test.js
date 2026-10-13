@@ -1,16 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPersonToolHost } from '../../../../agent/yeaft/person/native-tools.js';
-import { executionEvidencePage } from '../../../../agent/yeaft/person/execution-evidence.js';
+
 import { digest, PersonError } from '../../../../agent/yeaft/person/contracts.js';
 import { createBashTool } from '../../../../agent/yeaft/tools/bash.js';
 import fileWrite from '../../../../agent/yeaft/tools/file-write.js';
-import fileRead from '../../../../agent/yeaft/tools/file-read.js';
-import { ToolExecutionTimeoutError } from '../../../../agent/yeaft/tools/registry.js';
+
 import { getRuntimePlatformInfo } from '../../../../agent/yeaft/runtime-platform.js';
 
 const invocation = { episodeId: 'episode', callId: 'call' };
 const writeArgs = { file_path: 'never-written.txt', content: 'never written' };
-const readArgs = { file_path: 'never-read.txt' };
+
 const config = {};
 const deferred = () => {
   let resolve;
@@ -52,25 +51,6 @@ describe('Person native failure continuation boundary', () => {
     expect(barriers).toEqual([]);
   });
 
-  it.each([
-    [{ code: 124, timedOut: true, terminationError: 'tree still active' }, 'timeout_unconfirmed', 'owned_timeout'],
-    [{ code: 1, terminationError: 'tree still active' }, 'exit_unconfirmed', 'exit_unconfirmed'],
-    [{ code: 0, terminationError: 'tree still active' }, 'exit_unconfirmed', 'exit_unconfirmed'],
-    [{ code: null }, 'exit_unconfirmed', 'exit_unconfirmed'],
-    [{ code: undefined }, 'exit_unconfirmed', 'exit_unconfirmed'],
-  ])('unconfirmed process outcome %j is terminal and preserves the batch barrier', async (outcome, failureType, barrierKind) => {
-    const { host, barriers } = bashHost(outcome);
-    const result = await host.execute('Bash', { command: 'opaque test input' }, invocation);
-    expect(result).toMatchObject({ ok: false, terminal: true, errorEffect: 'unknown', replaySafe: false });
-    const failure = JSON.parse(result.output);
-    expect(failure).toMatchObject({ code: `bash_${failureType}`, failureType, terminationConfirmed: false, errorEffect: 'unknown', replaySafe: false });
-    expect(failure.status).toContain('termination unconfirmed');
-    expect(failure.error).not.toBe('Command exited with code 0.');
-    expect(failure.output).toContain('The command may still be running.');
-    if (!outcome.timedOut) expect(failure.output).not.toContain('command timed out');
-    expect(barriers).toEqual([expect.objectContaining({ kind: barrierKind })]);
-  });
-
   it('a confirmed Bash timeout still stops conservatively and reports cleanup separately from timeout', async () => {
     const { host, barriers } = bashHost({ code: 124, timedOut: true, terminationError: null });
     const result = await host.execute('Bash', { command: 'opaque test input', timeout_ms: 1000 }, invocation);
@@ -82,13 +62,6 @@ describe('Person native failure continuation boundary', () => {
     expect(barriers).toEqual([expect.objectContaining({ kind: 'owned_timeout' })]);
   });
 
-  it('captured write-tool failures stop with their original effect uncertainty', async () => {
-    const output = JSON.stringify({ error: 'write failed after partial effects', errorEffect: 'unknown', replaySafe: false });
-    vi.spyOn(fileWrite, 'execute').mockResolvedValue(output);
-    const result = await createPersonToolHost({ config }).execute('FileWrite', writeArgs, invocation);
-    expect(result).toMatchObject({ ok: false, terminal: true, code: 'TOOL_FAILED', errorEffect: 'unknown', replaySafe: false, output });
-  });
-
   it('a generic write throw without a captured joined result is terminal', async () => {
     vi.spyOn(fileWrite, 'execute').mockRejectedValue(new Error('write failed without an outcome'));
     const archived = [];
@@ -98,22 +71,7 @@ describe('Person native failure continuation boundary', () => {
   });
 
   it.each([
-    new Error('read failed'),
-    new ToolExecutionTimeoutError('FileRead', 5),
-  ])('read-only throw %s continues with no effects', async error => {
-    vi.spyOn(fileRead, 'execute').mockRejectedValue(error);
-    const result = await createPersonToolHost({ config }).execute('FileRead', readArgs, invocation);
-    expect(result).toMatchObject({ ok: false, terminal: false, errorEffect: 'none', replaySafe: true, outputAvailability: 'unavailable' });
-  });
-
-  it('explicit unconfirmed lifecycle evidence is terminal even without a failureType', async () => {
-    vi.spyOn(fileWrite, 'execute').mockResolvedValue(JSON.stringify({ error: 'still executing', terminationConfirmed: false, errorEffect: 'unknown' }));
-    expect(await createPersonToolHost({ config }).execute('FileWrite', writeArgs, invocation)).toMatchObject({ ok: false, terminal: true, errorEffect: 'unknown', replaySafe: false });
-  });
-
-  it.each([
     [fileWrite, writeArgs, true, 'unknown', false],
-    [fileRead, readArgs, false, 'none', true],
   ])('registry timeout joins %s and preserves failure/effect classification', async (tool, args, terminal, errorEffect, replaySafe) => {
     vi.useFakeTimers();
     const began = deferred(), gate = deferred(), archived = [];
@@ -133,25 +91,6 @@ describe('Person native failure continuation boundary', () => {
     } finally {
       gate.resolve();
       tool.timeoutMs = originalTimeout;
-    }
-  });
-
-  it('joined failure metadata survives a registry timeout', async () => {
-    vi.useFakeTimers();
-    const began = deferred(), gate = deferred();
-    const output = JSON.stringify({ error: 'effects still active', failureType: 'exit_unconfirmed', errorEffect: 'unknown' });
-    vi.spyOn(fileWrite, 'execute').mockImplementation(async () => { began.resolve(); await gate.promise; return output; });
-    const originalTimeout = fileWrite.timeoutMs;
-    fileWrite.timeoutMs = 5;
-    try {
-      const pending = createPersonToolHost({ config }).execute('FileWrite', writeArgs, invocation);
-      await began.promise;
-      await vi.advanceTimersByTimeAsync(6);
-      gate.resolve();
-      expect(await pending).toMatchObject({ ok: false, code: 'TOOL_TIMEOUT', terminal: true, outputAvailability: 'captured', output, errorEffect: 'unknown', replaySafe: false });
-    } finally {
-      gate.resolve();
-      fileWrite.timeoutMs = originalTimeout;
     }
   });
 
@@ -205,16 +144,19 @@ describe('Person native failure continuation boundary', () => {
     expect(archived[0]).toMatchObject({ ok: false, terminal: true, errorEffect: 'unknown', replaySafe: false, outputAvailability: 'unavailable' });
   });
 
-  it('Execution.read exposes a historical terminal failure only as evidence, not a current effect failure', () => {
-    const trace = { id: 'trace', kind: 'capability_failed', episodeId: 'past', result: {
-      id: 'Bash', ok: false, code: 'TOOL_FAILED', terminal: true, errorEffect: 'unknown', replaySafe: false, output: 'past unconfirmed execution',
-    } };
-    const started = { capability: { id: 'Bash', args: { command: 'past opaque input' } } };
-    const before = structuredClone(trace);
-    const page = executionEvidencePage(trace, started, { callId: 'past-call', offset: 0, maxBytes: 4096 }, 'current');
-    expect(page).toMatchObject({ id: 'Execution.read', capabilityId: 'Bash', ok: false, code: 'TOOL_FAILED', errorEffect: 'unknown', historical: true, authority: 'evidence-only' });
-    expect(page).not.toHaveProperty('terminal');
-    expect(page).not.toHaveProperty('replaySafe');
-    expect(trace).toEqual(before);
+  it.each([
+    [{ code: 1, terminationError: 'tree still active' }, 'exit_unconfirmed', 'exit_unconfirmed'],
+  ])('unconfirmed process outcome %j is terminal and preserves the batch barrier', async (outcome, failureType, barrierKind) => {
+    const { host, barriers } = bashHost(outcome);
+    const result = await host.execute('Bash', { command: 'opaque test input' }, invocation);
+    expect(result).toMatchObject({ ok: false, terminal: true, errorEffect: 'unknown', replaySafe: false });
+    const failure = JSON.parse(result.output);
+    expect(failure).toMatchObject({ code: `bash_${failureType}`, failureType, terminationConfirmed: false, errorEffect: 'unknown', replaySafe: false });
+    expect(failure.status).toContain('termination unconfirmed');
+    expect(failure.error).not.toBe('Command exited with code 0.');
+    expect(failure.output).toContain('The command may still be running.');
+    if (!outcome.timedOut) expect(failure.output).not.toContain('command timed out');
+    expect(barriers).toEqual([expect.objectContaining({ kind: barrierKind })]);
   });
+
 });

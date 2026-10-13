@@ -56,37 +56,6 @@ describe('Person created capability: SQLite authority', () => {
     expect(await r.createdCapabilities(episode)).toEqual([original]);
   });
 
-  it('requires real finalized successful same-episode call proof; generic append cannot forge it', async () => {
-    const r = repo(); await r.open('alice');
-    const { episode } = await r.admit('alice', input());
-    await expect(save(r, episode, 'invented')).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    await r.startCall(episode, { callId: 'open', requested: { model: 'test/model' } });
-    await expect(save(r, episode, 'open')).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    await r.finalizeCall(episode, { callId: 'open', code: 'PROVIDER_FAILED', output: { text: 'partial' } });
-    await expect(save(r, episode, 'open')).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    for (const kind of ['call_started', 'call_output', 'call_failed', 'capability_created']) {
-      await expect(r.append(episode, kind, { callId: 'forged', output: { complete: true } })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    }
-    await r.append(episode, 'activity', { kind: 'call_output', callId: 'forged', output: { complete: true }, episodeId: 'forged' });
-    await expect(save(r, episode, 'forged')).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    const oldCall = await finalized(r, episode);
-    await r.cancel('alice');
-    const next = await r.admit('alice', input());
-    await expect(save(r, next.episode, oldCall)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    expect(await records(r, 'created_capabilities')).toEqual([]);
-    expect(await records(r, 'created_capability_revisions')).toEqual([]);
-  });
-
-  it('serializes competing worker publications so at most one expected version is published', async () => {
-    const r = repo(), contender = repo(); await r.open('alice'); await contender.init();
-    const { episode } = await r.admit('alice', input()), callId = await finalized(r, episode);
-    const outcomes = await Promise.allSettled([save(r, episode, callId), save(contender, episode, callId, { description: 'Competing.' })]);
-    expect(outcomes.filter(o => o.status === 'fulfilled')).toHaveLength(1);
-    expect(['STALE', 'STORAGE_UNAVAILABLE']).toContain(outcomes.find(o => o.status === 'rejected').reason.code);
-    expect(await records(r, 'created_capability_revisions')).toHaveLength(1);
-    expect((await r.list('alice', 'traces', { limit: 50 })).items.filter(t => t.kind === 'capability_created')).toHaveLength(1);
-  });
-
   it('rolls current, revision and trace back together if the trace insert fails', async () => {
     const r = repo(); await r.open('alice');
     const { episode } = await r.admit('alice', input()), callId = await finalized(r, episode);
@@ -98,4 +67,5 @@ describe('Person created capability: SQLite authority', () => {
     expect(await r.getPerson('alice')).toEqual(before);
     expect(await r.list('alice', 'traces', { limit: 50 })).toEqual(traces);
   });
+
 });

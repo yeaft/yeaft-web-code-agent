@@ -18,10 +18,15 @@ describe('digital Person strict contracts', () => {
       const proposal = finalProposal(); mutate(proposal);
       expect(() => validateProposal(proposal, validation)).toThrow();
     }
-    const proposal = finalProposal();
-    proposal.next = { model: 'external/unconfigured', effort: null, reason: 'switch', capability: null };
-    expect(() => validateProposal(proposal, validation)).toThrow(/catalog/);
-    proposal.next.model = 'test/first'; proposal.next.effort = 'ultra';
-    expect(() => validateProposal(proposal, validation)).toThrow(/catalog/);
+    // Final cognition has no continuation/tool dispatch authority. Routing is
+    // validated before execution, not by accepting a proposal's model selector.
+    for (const next of [
+      { model: 'external/unconfigured', effort: null, reason: 'switch', capability: null },
+      { model: 'test/first', effort: 'low', reason: 'continue', capability: null },
+      { model: 'test/first', effort: null, reason: 'write', capability: { id: 'FileWrite', args: { file_path: 'x', content: 'x' } } },
+    ]) {
+      expect(() => validateProposal({ ...finalProposal(), next }, validation))
+        .toThrow(expect.objectContaining({ code: 'INVALID_PROPOSAL' }));
+    }
   });
 });

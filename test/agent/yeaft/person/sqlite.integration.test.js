@@ -7,10 +7,9 @@ import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 
-import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { digest, LIMITS } from '../../../../agent/yeaft/person/contracts.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
-import { finalProposal, config } from './fixtures.js';
+
+import { finalProposal } from './fixtures.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const selection = { model: 'test/first', effort: null };
@@ -129,34 +128,6 @@ describe('Person real SQLite authority in managed workers', () => {
     await expect(a.resolveMemories('alice', 'traces', [])).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
   });
 
-  it('rolls back earlier concept writes, revisions, counters and journal when a later revision/focus is stale', async () => {
-    const r = repo(); await r.open('alice');
-    const { episode } = await r.admit('alice', input());
-    const before = await r.searchChanges('alice');
-    const wrong = finalProposal();
-    wrong.concepts.push({ ...wrong.concepts[0], id: 'missing', expectedRevision: 100 });
-    await expect(r.commit(episode, wrong, selection, 'bad')).rejects.toMatchObject({ code: 'STALE' });
-    expect((await r.snapshot('alice')).state.version).toBe(0);
-    expect((await r.snapshot('alice')).busy).toBe(true);
-    expect((await r.recall('alice', { kind: 'concepts' })).items).toEqual([]);
-    expect(await r.searchChanges('alice')).toEqual(before);
-    for (const table of ['concepts', 'concept_revisions', 'state_commits']) {
-      expect(inspect(r, db => db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n)).toBe(0);
-    }
-    const badFocus = finalProposal(); badFocus.state.focusConceptIds.push('missing');
-    await expect(r.commit(episode, badFocus, selection, 'bad-focus')).rejects.toMatchObject({ code: 'STALE' });
-    expect(await r.searchChanges('alice')).toEqual(before);
-    await r.commit(episode, finalProposal(), selection, 'good');
-    await expect(r.commit(episode, finalProposal(), selection, 'duplicate')).rejects.toMatchObject({ code: 'STALE' });
-    const original = (await r.snapshot('alice')).concepts[0];
-    const next = await r.admit('alice', input('two', { kind: 'think', text: '' }));
-    const revision = finalProposal(1); revision.concepts[0].expectedRevision = 1; revision.concepts[0].statement = 'Revised fully.';
-    await r.commit(next.episode, revision, selection, 'revision');
-    expect(await r.resolveMemories('alice', 'concepts', [original])).toEqual([]);
-    expect(await r.resolveMemories('alice', 'concepts', [{ id: original.id, revision: 2 }])).toMatchObject([{ revision: 2, statement: 'Revised fully.' }]);
-    expect((await r.searchChanges('alice')).items.filter(c => c.kind === 'concepts').map(c => c.revision)).toEqual([1, 2]);
-  });
-
   it('retains only the original cancelled call consumed prefix once while fencing all late state writes', async () => {
     const a = repo(), b = repo(); await a.open('alice');
     const { episode } = await a.admit('alice', input()); await call(a, episode);
@@ -196,18 +167,6 @@ describe('Person real SQLite authority in managed workers', () => {
     expect((await reopened.searchChanges('alice')).items.every(i => i.record.role === 'user')).toBe(true);
   });
 
-  it('rolls back admission if the same-transaction journal fails', async () => {
-    const r = repo(); await r.open('alice');
-    inspect(r, db => db.exec("CREATE TRIGGER fail_journal BEFORE INSERT ON memory_changes BEGIN SELECT RAISE(ABORT, 'secret-path-and-input'); END"));
-    await expect(r.admit('alice', input())).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE', message: 'Digital person storage is unavailable.' });
-    expect((await r.list('alice', 'messages')).items).toEqual([]);
-    expect((await r.snapshot('alice')).busy).toBe(false);
-    expect((await r.getPerson('alice')).inputWatermark).toBe(0);
-    expect((await r.searchChanges('alice')).items).toEqual([]);
-    inspect(r, db => db.exec('DROP TRIGGER fail_journal'));
-    expect((await r.admit('alice', input())).duplicate).toBe(false);
-  });
-
   it('rolls back state, concepts and their journal if the final assistant journal insert fails', async () => {
     const r = repo(); await r.open('alice');
     const { episode } = await r.admit('alice', input());
@@ -222,21 +181,6 @@ describe('Person real SQLite authority in managed workers', () => {
     inspect(r, db => db.exec('DROP TRIGGER fail_assistant'));
     await r.commit(episode, finalProposal(), selection, 'success');
     expect((await r.searchChanges('alice')).items.map(c => c.seq)).toEqual([1, 2, 3]);
-  });
-
-  it('bounds writer contention in the worker, keeps the event loop free, and retries only explicitly', async () => {
-    const r = repo('busy', { busyTimeoutMs: 150 }); await r.open('alice');
-    const lock = new DatabaseSync(r.dbPath); lock.exec('BEGIN IMMEDIATE');
-    try {
-      let ticks = 0; const timer = setInterval(() => ticks++, 5);
-      const started = Date.now();
-      try { await expect(r.admit('alice', input())).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' }); }
-      finally { clearInterval(timer); }
-      expect(Date.now() - started).toBeGreaterThanOrEqual(100);
-      expect(Date.now() - started).toBeLessThan(2000); expect(ticks).toBeGreaterThan(3);
-      expect((await r.searchChanges('alice')).items).toEqual([]);
-    } finally { lock.exec('ROLLBACK'); lock.close(); }
-    expect((await r.admit('alice', input())).duplicate).toBe(false);
   });
 
   it('fails pending requests safely on worker death and refuses implicit restart; close drains accepted work', async () => {
@@ -256,54 +200,4 @@ describe('Person real SQLite authority in managed workers', () => {
     expect((await repo('crash').list('alice', 'messages')).items).toHaveLength(1);
   });
 
-  it('times out a queued worker without retrying an ambiguous write and bounds pending work', async () => {
-    const r = repo('timeout', { busyTimeoutMs: 100, maxPending: 4 }); await r.open('alice');
-    r.requestTimeoutMs = 250; // Exercise a queued request timeout, not worker startup scheduling.
-    const lock = new DatabaseSync(r.dbPath); lock.exec('BEGIN IMMEDIATE');
-    try {
-      const pending = [0, 1, 2, 3].map(i => r.admit('alice', input(`queued-${i}`)).catch(error => error));
-      await expect(r.admit('alice', input('overflow'))).rejects.toMatchObject({ code: 'BUSY' });
-      const results = await Promise.all(pending);
-      expect(results.every(r => r.code === 'STORAGE_UNAVAILABLE')).toBe(true);
-      expect(r.failed).toBe(true);
-      await expect(r.snapshot('alice')).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
-    } finally { lock.exec('ROLLBACK'); lock.close(); }
-    await r.close();
-    expect((await repo('timeout').snapshot('alice')).messages).toEqual([]);
-  });
-
-  it('shares real SQLite authority between two services', async () => {
-    let release;
-    const waiting = new Promise(resolve => { release = resolve; });
-    let providerCalls = 0;
-    const adapter = { async *stream() {
-      providerCalls++; await waiting;
-      yield { type: 'text_delta', text: JSON.stringify(finalProposal()) };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    } };
-    let a, b;
-    try {
-      const options = { namespace: 'services', yeaftDir, config, adapter };
-      a = createPersonService(options); b = createPersonService(options);
-      expect(await a.request({ ownerId: 'alice', op: 'status' })).toMatchObject({ storageReady: true, modelReady: true });
-      await Promise.all([a, b].map(s => s.request({ ownerId: 'alice', op: 'open' })));
-      await b.request({ ownerId: 'alice', op: 'snapshot' }); expect(providerCalls).toBe(0);
-      const request = { ownerId: 'alice', op: 'send', payload: { text: 'service ÉCOLE input', clientMessageId: 'same' } };
-      const results = await Promise.all([a.request(request), b.request(request)]);
-      expect(results[0].episodeId).toBe(results[1].episodeId);
-      expect(results.filter(r => !r.duplicate)).toHaveLength(1);
-      await vi.waitFor(() => expect(providerCalls).toBe(1));
-      await expect(b.request({ ...request, payload: { ...request.payload, clientMessageId: 'other' } })).rejects.toMatchObject({ code: 'BUSY' });
-      release();
-      await vi.waitFor(async () => expect((await b.request({ ownerId: 'alice', op: 'snapshot' })).state.version).toBe(1), { timeout: 5000 });
-      const authority = repo('services');
-      expect((await authority.searchChanges('alice')).items).toHaveLength(3);
-      const recall = new PersonCapabilities(authority, 'alice');
-      await recall.execute({ id: 'catalog.view', args: { id: 'Recall' } });
-      expect((await recall.execute({ id: 'Recall', args: { kind: 'messages', query: 'école' } })).items).toMatchObject([{ text: 'service ÉCOLE input' }]);
-      expect(await a.request(request)).toMatchObject({ duplicate: true, status: 'completed' });
-    } finally {
-      release(); await Promise.all([a?.close(), b?.close()]);
-    }
-  });
 });

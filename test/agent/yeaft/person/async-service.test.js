@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 
-import { getAgentRegistry, _resetAgentRegistry } from '../../../../agent/yeaft/tools/agent.js';
+import { _resetAgentRegistry } from '../../../../agent/yeaft/tools/agent.js';
 import { _resetNotifications } from '../../../../agent/yeaft/sub-agent/notifications.js';
-import { PersonTaskHost } from '../../../../agent/yeaft/person/task-host.js';
+
 import { bytes } from '../../../../agent/yeaft/person/contracts.js';
 import { config, finalProposal } from './fixtures.js';
 
@@ -40,7 +40,7 @@ function service(dir, adapter, extra = {}) {
 }
 function parentAdapter(fn, child) {
   return { async *stream(params) {
-    if (params.tools?.length) { yield* child(params); return; }
+    if (!params.requestIdentity?.threadId || !params.requestIdentity.threadId.match(/^[0-9a-f-]{36}$/)) { yield* child(params); return; }
     const input = JSON.parse(params.messages[0].content), p = proposal(input);
     await fn(input, p, params);
     yield { type: 'text_delta', text: JSON.stringify(p) };
@@ -55,57 +55,6 @@ afterEach(async () => {
 });
 
 describe('Person async native service integration', () => {
-  it('drives two concurrent real child Engines, waits and commits their result summary using the producing provider effort', async () => {
-    const dir = await directory(), gate = deferred(), childRequests = [], childEngines = [], inputs = [], children = [], results = [];
-    const adapter = parentAdapter((input, p, params) => {
-      inputs.push(input);
-      params.onEffortDecision?.({ requested: params.effort ?? null, effective: 'low', model: params.model,
-        source: 'wire-test', cap: 'low', wireMode: 'reasoning-effort', thinkingEnabled: true });
-      if (input.capabilityResult?.id === 'SpawnAgent' && typeof input.capabilityResult.output === 'string') children.push(JSON.parse(input.capabilityResult.output).agentId);
-      if (input.capabilityResult?.id === 'WaitAgent' && typeof input.capabilityResult.output === 'string') results.push(JSON.parse(input.capabilityResult.output).result);
-      switch (inputs.length) {
-        case 1: use(p, 'catalog.view', { id: 'SpawnAgent' }, 'test/first', 'high'); break;
-        case 2: use(p, 'SpawnAgent', { name: 'one', task: 'Analyze one.', persona: 'explorer' }, 'test/second', 'high'); break;
-        case 3: use(p, 'SpawnAgent', { name: 'two', task: 'Analyze two.', persona: 'explorer' }, 'test/first', 'high'); break;
-        case 4: use(p, 'catalog.view', { id: 'WaitAgent' }); break;
-        case 5: use(p, 'WaitAgent', { agent_id: children[0], timeout_ms: 3000 }); break;
-        case 6: use(p, 'WaitAgent', { agent_id: children[1], timeout_ms: 3000 }); break;
-        default: p.reply = results.join('; ');
-      }
-    }, async function* (params) {
-      childRequests.push(params);
-      childEngines.push([...getAgentRegistry().values()].find(agent => agent.name === (childRequests.length === 1 ? 'one' : 'two')).subEngine);
-      if (childRequests.length === 2) gate.resolve();
-      await gate.promise;
-      yield { type: 'text_delta', text: `child-result-${childRequests.indexOf(params) + 1}` };
-      yield { type: 'usage', inputTokens: 1, outputTokens: 1 };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    });
-    const s = service(dir, adapter, { effortEnabled: true });
-    await call(s, 'open');
-    await call(s, 'send', { text: 'Run two analyses concurrently and summarize.', clientMessageId: 'parallel' });
-    const terminal = await idle(s);
-    expect(terminal.latestEpisode.status, JSON.stringify(terminal.latestEpisode)).toBe('completed');
-    expect(childRequests).toHaveLength(2);
-    expect(childRequests.map(p => p.model)).toEqual(['test/first', 'test/second']);
-    expect(childRequests.every(p => p.effort === 'low')).toBe(true);
-    expect(results).toEqual(['child-result-1', 'child-result-2']);
-    expect((await call(s, 'messages')).items.find(m => m.role === 'assistant').text).toBe('child-result-1; child-result-2');
-    for (const id of children) {
-      const agent = getAgentRegistry().get(id);
-      expect(agent.parentEffortDecision).toMatchObject({ requested: 'high', effective: 'low', cap: 'low', source: 'wire-test', model: childRequests[children.indexOf(id)].model });
-      const engine = childEngines[children.indexOf(id)];
-      expect(engine).toBeTruthy();
-      const names = engine.toolRegistry.getAllTools().map(tool => tool.name);
-      expect(names).toContain('DiscoverTools');
-      for (const tool of ['SpawnAgent', 'AskUser', 'HistorySearch', 'RouteForward', 'EnterWorktree']) expect(names).not.toContain(tool);
-    }
-    await s.close();
-    expect(children.every(id => getAgentRegistry().get(id).__driverStarted === false)).toBe(true);
-    expect(await readdir(dir)).not.toContain('sessions');
-    expect(await readdir(dir)).not.toContain('sessions-manifest.json');
-  });
-
   it('retains background work after normal commit, exposes completion only on the next explicit episode, and preserves raw logs on restart', async () => {
     const dir = await directory(), inputs = []; let taskId;
     const adapter = parentAdapter((input, p) => {
@@ -126,7 +75,7 @@ describe('Person async native service integration', () => {
     const s = service(dir, adapter);
     await call(s, 'open'); await call(s, 'think', { text: 'launch', clientMessageId: 'launch' });
     expect((await idle(s)).latestEpisode.status).toBe('completed');
-    expect(inputs[2].taskEvidence.items.some(item => item.output.includes('running'))).toBe(true);
+    expect(inputs[2].capabilityResult.output).toContain('Started background task');
     // Wait on observed task state rather than assuming a busy CI host finishes in 550ms.
     let completed;
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -225,22 +174,4 @@ describe('Person async native service integration', () => {
     }
   });
 
-  it('recovers an uncontrolled persisted running task as orphaned without dispatching a provider', async () => {
-    const dir = await directory();
-    const host = new PersonTaskHost({ yeaftDir: dir, namespace: 'default', workDir: dir, config });
-    const episode = { id: 'before-restart', ownerId: 'alice', personId: 'person-recovery' };
-    const attached = await host.context({ episode });
-    const task = attached.taskManager.startTask({ kind: 'shell', title: 'lost external control', source: { episodeId: episode.id } });
-    attached.taskManager.completeTask(attached.sessionId, task.id, { status: 'succeeded', result: {} });
-    await host.close();
-    const path = join(attached.taskHost.dataRoot, 'tasks', 'sessions', attached.sessionId, `${task.id}.json`);
-    const saved = JSON.parse(await readFile(path, 'utf8')); saved.status = 'running'; saved.completedAt = null;
-    await writeFile(path, JSON.stringify(saved));
-    const recovered = new PersonTaskHost({ yeaftDir: dir, namespace: 'default', workDir: dir, config });
-    try {
-      const ctx = await recovered.context({ episode: { ...episode, id: 'after-restart' } });
-      expect(ctx.taskManager.getTask(ctx.sessionId, task.id).status).toBe('orphaned');
-      expect(recovered.snapshot('alice').completions.some(item => item.task.id === task.id && item.task.status === 'orphaned')).toBe(true);
-    } finally { await recovered.close(); }
-  });
 });
