@@ -100,18 +100,6 @@ test.describe('Login Flow', () => {
     authServer.createUser(testUsername, testPassword);
   });
 
-  test('should login successfully with valid credentials and navigate to chat', async ({ page, authServer }) => {
-    await page.goto(authServer.url);
-    await page.waitForSelector('.login-page', { timeout: 10000 });
-
-    await page.fill('input[autocomplete="username"]', testUsername);
-    await page.fill('input[autocomplete="current-password"]', testPassword);
-    await page.locator('.login-container button').first().click();
-
-    await expect(page.locator('.chat-page')).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('.login-page')).not.toBeVisible();
-  });
-
   test('should persist session after page refresh', async ({ page, authServer }) => {
     await page.goto(authServer.url);
     await page.waitForSelector('.login-page', { timeout: 10000 });

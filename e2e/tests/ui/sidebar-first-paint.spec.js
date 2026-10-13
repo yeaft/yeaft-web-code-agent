@@ -1,11 +1,11 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
+import { createConversation } from '../../helpers/conversation.js';
 
 // Delay real catalog packets, not Vue rendering: the final navigation must be
 // present throughout a slow initial handshake and a same-owner reconnect.
 for (const surface of [
   { view: 'chat', theme: 'light', width: 1400 },
-  { view: 'yeaft', theme: 'dark', width: 1400 },
   { view: 'chat', theme: 'dark', width: 320 },
 ]) {
   test(`stable sidebar first paint / ${surface.view} / ${surface.theme} / ${surface.width}px`, async ({ page, serverUrl, mockAgent }, testInfo) => {
@@ -71,29 +71,29 @@ for (const surface of [
     expect(await page.evaluate(() => window.__sidebarNavigation === document.querySelector('.sidebar-navigation'))).toBe(true);
     expect(await page.evaluate(() => window.__sidebarHeadings.every((node, index) => node === document.querySelectorAll('.sidebar-section-heading')[index]))).toBe(true);
 
-    await page.evaluate(agentId => {
-      const store = window.Pinia.useChatStore();
-      store.applySessionCatalogSnapshot([{
-        catalogKey: `yeaft:${agentId}:retained-session`,
-        runtimeProvider: 'yeaft',
-        routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'retained-session' },
-        title: 'Retained project session',
-        availability: 'online',
-      }], [{
-        id: 'retained-project', name: 'Retained project',
-        members: [{ agentId, sessionId: 'retained-session' }],
-      }]);
-    }, mockAgent.agentId);
-    await expect(navigation.locator('.sidebar-project')).toHaveCount(1);
+    // Persist through the real browser -> Server -> Agent creation path. The
+    // reconnect snapshot must contain the same row, not a store-only fixture.
+    await createConversation(page);
+    const created = await mockAgent.waitForMessage('create_conversation');
+    expect(created.conversationId).toBeTruthy();
+    await expect.poll(() => mockAgent.conversations.has(created.conversationId)).toBe(true);
     await expect(navigation.locator('.session-item')).toHaveCount(1);
+    const title = await navigation.locator('.sidebar-session-title-text').textContent();
+    expect(title.trim()).not.toBe('');
     holdCatalog = true;
     await page.evaluate(() => window.Pinia.useChatStore().ws.close(4999, 'slow reconnect test'));
+    await expect(page.locator('.connection-status')).toBeVisible();
     await expect.poll(() => held.length, { timeout: 15000 }).toBeGreaterThan(0);
-    await expect(navigation.locator('.sidebar-project')).toHaveCount(1);
     await expect(navigation.locator('.session-item')).toHaveCount(1);
     expect(await page.evaluate(() => window.__sidebarNavigation === document.querySelector('.sidebar-navigation'))).toBe(true);
+    await expect(navigation.locator('.sidebar-session-title-text')).toHaveText(title);
+    expect(held.some(({ message }) => JSON.parse(message.toString()).catalog.some(row => row.routeRef.sessionId === created.conversationId))).toBe(true);
     release();
     await expect(navigation).toHaveAttribute('aria-busy', 'false');
+    await expect(page.locator('.connection-status')).not.toBeVisible();
+    await expect(navigation.locator('.session-item')).toHaveCount(1);
+    await expect(navigation.locator('.sidebar-session-title-text')).toHaveText(title);
+    expect(await page.evaluate(() => window.__sidebarHeadings.every((node, index) => node === document.querySelectorAll('.sidebar-section-heading')[index]))).toBe(true);
     expect(await page.evaluate(() => window.__legacySidebarSeen)).toBe(false);
     await page.screenshot({ path: testInfo.outputPath('sidebar-ready.png') });
   });

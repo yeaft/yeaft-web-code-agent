@@ -2,6 +2,7 @@ import { expect } from '@playwright/test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
 import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { MockAgent } from '../../fixtures/mock-agent.js';
@@ -22,6 +23,7 @@ async function outputRuntime(mockAgent, serverUrl) {
   let deferredRead = null;
   let holdReads = false;
   const adapter = { async *stream(params) {
+    await setImmediate(); // Model I/O yields to the relay and native workers.
     const input = personInput(params);
     inputs.push(input);
     const args = publications.get(input.trigger.text);

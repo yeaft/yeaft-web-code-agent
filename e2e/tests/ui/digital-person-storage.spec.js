@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
+import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
 import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures.js';
@@ -11,7 +12,7 @@ import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures
 // Real browser -> isolated Server -> Agent bridge -> local SQLite. Only inference is scripted.
 // No live Agent, native config or paid provider is used; all storage is isolated.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
-test('Person SQLite three capability layers persist through relay and restart', async ({ page, serverUrl, mockAgent }) => {
+test('Person SQLite native tool and script evidence persist through relay and restart', async ({ page, serverUrl, mockAgent }) => {
   test.setTimeout(90000);
   const yeaftDir = await mkdtemp(join(tmpdir(), 'person-e2e-'));
   const reply = 'Remembered in SQLite.';
@@ -19,37 +20,43 @@ test('Person SQLite three capability layers persist through relay and restart', 
   const requests = [];
   const requestedModels = [];
   const adapter = { async *stream(params) {
-    // Real providers await I/O. Give relay, polling and worker callbacks a turn
-    // too, instead of chaining every scripted inference in one microtask drain.
+    // Give relay, snapshot polling and native worker callbacks the same I/O
+    // boundary a real provider supplies instead of draining only microtasks.
     await setImmediate();
     calls++;
-    const input = JSON.parse(params.messages[0].content);
+    const input = personInput(params);
     requests.push(input);
     requestedModels.push(params.model);
+    const results = personToolResults(params);
+    const learn = input.trigger.text === 'Learn a reusable sum script.';
+    const reuse = input.trigger.text === 'Reuse the sum script.';
+    if (!personCognition(params)) {
+      let event;
+      if (learn && !results.length) event = personToolCall('create-sum', 'Capability.create', { id: 'Script.sum', expectedVersion: 0,
+        description: 'Sum numeric arrays', useWhen: 'Need a sum', avoidWhen: 'Not arbitrary precision', inputDescription: 'Number array', outputDescription: 'Total',
+        code: 'return input.reduce((a,b)=>a+b,0);', tests: [{ input: [1, 2], expected: 3 }, { input: [], expected: 0 }] });
+      else if (learn && results.length === 1) event = personToolCall('run-sum', 'Script.sum', { input: [5, 7] });
+      else if (reuse && !results.length) {
+        expect(params.tools.some(t => t.name === 'Script__sum')).toBe(true);
+        event = personToolCall('reuse-sum', 'Script.sum', { input: [8, 9] });
+      } else if (!results.length) event = personToolCall('recall', 'Recall', { kind: 'messages' });
+      if (event) yield event;
+      else yield { type: 'text_delta', text: 'Scoped execution complete.' };
+      yield personStop(!!event);
+      return;
+    }
     const proposal = finalProposal(input.state.version);
     proposal.concepts[0].expectedRevision = input.concepts.find(c => c.id === 'curiosity')?.revision || 0;
     proposal.activity.sourceRefs = input.sourceRefs;
     proposal.concepts[0].sourceRefs = input.sourceRefs;
     proposal.reply = input.trigger.kind === 'send' ? reply : null;
-    const use = (id, args = {}) => { proposal.next = { model: params.model, effort: null, reason: 'Choose a prepared cognitive ability.', capability: { id, args } }; };
-    if (input.trigger.text === 'Learn a reusable sum script.') {
-      if (!input.capabilityResult) use('Capability.create', { id: 'Script.sum', expectedVersion: 0,
-        description: 'Sum numeric arrays', useWhen: 'Need a sum', avoidWhen: 'Not arbitrary precision', inputDescription: 'Number array', outputDescription: 'Total',
-        code: 'return input.reduce((a,b)=>a+b,0);', tests: [{ input: [1, 2], expected: 3 }, { input: [], expected: 0 }] });
-      else if (input.capabilityResult.published) use('Script.sum', { input: [5, 7] });
-      else { expect(input.capabilityResult.output).toBe(12); proposal.reply = 'Learned a reusable sum; result 12.'; }
-    } else if (input.trigger.text === 'Reuse the sum script.') {
-      if (!input.capabilityResult) {
-        expect(input.capabilities.active.find(c => c.id === 'Script.sum').availability.layer).toBe('familiar');
-        use('Script.sum', { input: [8, 9] });
-      } else { expect(input.capabilityResult.output).toBe(17); proposal.reply = 'Reused the saved sum; result 17.'; }
-    } else if (!input.capabilityResult) {
-      if (input.trigger.kind === 'send') use('Recall', { kind: 'messages' });
-      if (input.trigger.kind === 'think') use('catalog.search', { query: '重新审视' });
-      if (input.trigger.kind === 'dream') use('Skill.reconsider');
-    } else if (input.capabilityResult.contracts) use('Skill.reconsider');
+    if (learn || reuse) {
+      const result = JSON.parse(results.at(-1).output);
+      expect(result.output).toBe(learn ? 12 : 17);
+      proposal.reply = learn ? 'Learned a reusable sum; result 12.' : 'Reused the saved sum; result 17.';
+    }
     yield { type: 'text_delta', text: JSON.stringify(proposal) };
-    yield { type: 'stop', stopReason: 'end_turn' };
+    yield personStop(false);
   } };
   const context = { agentId: mockAgent.agentId, CONFIG: { serverUrl, yeaftDir } };
   const makeBridge = () => createPersonBridge({ context, env: {}, send: msg => mockAgent.send(msg),
@@ -83,7 +90,7 @@ test('Person SQLite three capability layers persist through relay and restart', 
     await expect(page.locator('.person-messages')).toContainText(reply);
     await expect(page.locator('#person-input')).toBeEnabled();
     await page.getByRole('button', { name: 'Think', exact: true }).click();
-    await expect.poll(() => calls).toBe(5);
+    await expect.poll(() => calls).toBe(6);
     await expect(page.locator('#person-input')).toBeEnabled();
     await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
     await expect(page.locator('#person-thoughts')).toContainText('Reconsider the available experience.');
@@ -98,14 +105,13 @@ test('Person SQLite three capability layers persist through relay and restart', 
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('.person-messages')).toContainText(reply);
     await expect(page.locator('.person-status, .person-status-dot, .person-connection-notice')).toHaveCount(0);
-    expect(calls).toBe(5);
+    expect(calls).toBe(6);
     await expect(page.locator('.person-identity h1')).toHaveText('知微');
-    expect(requests[0].capabilities.active.find(c => c.id === 'Recall').availability.layer).toBe('foundation');
-    expect(requests[3].capabilities.active.find(c => c.id === 'Skill.reconsider').availability.layer).toBe('discovered');
+    expect(requests[0].capabilities.active).toEqual([]); // Native schemas are always available.
     await page.getByRole('button', { name: 'Dream', exact: true }).click();
-    await expect.poll(() => calls).toBe(7);
+    await expect.poll(() => calls).toBe(9);
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(requests[5].capabilities.active.find(c => c.id === 'Skill.reconsider').availability.layer).toBe('familiar');
+    expect(requests[6].capabilities.active).toEqual([]);
     await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
     await page.locator('#person-input').fill('Learn a reusable sum script.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -113,7 +119,7 @@ test('Person SQLite three capability layers persist through relay and restart', 
     // Wait for the terminal reply, not the shorter single-UI-operation timeout.
     await expect(page.locator('.person-messages')).toContainText('Learned a reusable sum; result 12.', { timeout: 15000 });
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(calls).toBe(10);
+    expect(calls).toBe(13);
     await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
     const learnedThought = page.locator('#person-thoughts .person-thought').first();
     await expect(learnedThought).toContainText('Learned a reusable sum; result 12.');
@@ -124,13 +130,13 @@ test('Person SQLite three capability layers persist through relay and restart', 
     await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(calls).toBe(10);
+    expect(calls).toBe(13);
     await page.locator('#person-input').fill('Reuse the sum script.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     // Reuse also launches a fresh bounded WASM worker before the terminal reply.
     await expect(page.locator('.person-messages')).toContainText('Reused the saved sum; result 17.', { timeout: 15000 });
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(calls).toBe(12);
+    expect(calls).toBe(16);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Name', { exact: true }).fill('Mira');
@@ -141,18 +147,18 @@ test('Person SQLite three capability layers persist through relay and restart', 
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.locator('.person-identity h1')).toHaveText('Mira');
-    expect(calls).toBe(12); // Reading/saving candidates never starts cognition.
+    expect(calls).toBe(16); // Reading/saving candidates never starts cognition.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     rename = page.getByRole('dialog');
     await rename.getByLabel('Name', { exact: true }).fill('知微 Mira');
     await rename.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(rename).toHaveCount(0);
     await expect(page.locator('.person-identity h1')).toHaveText('知微 Mira');
-    expect(calls).toBe(12);
+    expect(calls).toBe(16);
     await page.locator('input[type="file"]').setInputFiles({ name: 'reference.txt', mimeType: 'text/plain', buffer: Buffer.from('Private uploaded context marker.') });
     await expect(page.locator('.attachments-preview')).toContainText('reference.txt');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect.poll(() => calls).toBe(14);
+    await expect.poll(() => calls).toBe(19);
     await expect(page.locator('#person-input')).toBeEnabled();
     const attachmentCalls = requests.slice(-2);
     expect(requestedModels.slice(-2)).toEqual(['test/second', 'test/second']);
@@ -192,18 +198,18 @@ test('Person SQLite three capability layers persist through relay and restart', 
     await savedScript.locator(':scope > summary').click();
     await savedScript.getByText('Contract & definition', { exact: true }).click();
     await expect(savedScript.locator('pre')).toContainText('return input.reduce');
-    expect(calls).toBe(14); // Browsing persisted data never invokes inference or scripts.
+    expect(calls).toBe(19); // Browsing persisted data never invokes inference or scripts.
     await page.locator('.person-panel-header .header-action-btn').click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const reopened = page.getByRole('dialog');
     await expect(reopened.getByLabel('test/first', { exact: true })).toBeChecked();
     await expect(reopened.getByLabel('test/second', { exact: true })).toBeChecked();
     await expect(reopened.getByLabel('Default starting model', { exact: true })).toHaveValue('test/second');
-    expect(calls).toBe(14);
+    expect(calls).toBe(19);
     await reopened.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.locator('#person-input').fill('Use the saved starting model after restart.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect.poll(() => calls).toBe(16);
+    await expect.poll(() => calls).toBe(22);
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(requestedModels.slice(-2)).toEqual(['test/second', 'test/second']);
   } finally {

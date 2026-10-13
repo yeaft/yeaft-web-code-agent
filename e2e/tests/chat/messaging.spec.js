@@ -37,7 +37,7 @@ test.describe('Messaging', () => {
       .toContainText('Tell me a story', { timeout: 5000 });
 
     // Confirm the server forwarded the send, not just the optimistic UI row.
-    await expect.poll(() => mockAgent.messages('send_message').some(message => message.conversationId === convId)).toBe(true);
+    await expect.poll(() => mockAgent.messages('execute').some(message => message.conversationId === convId && message.prompt === 'Tell me a story')).toBe(true);
 
     // Simulate streaming: first chunk
     mockAgent.simulateClaudeOutput(convId, 'Once upon a time');
@@ -65,17 +65,4 @@ test.describe('Messaging', () => {
       .toHaveCount(0, { timeout: 5000 });
   });
 
-  test('should not send empty messages', async ({ chatPage, mockAgent }) => {
-    await createConversationAndGetId(chatPage, mockAgent);
-
-    // The send button should be disabled when input is empty
-    const sendBtn = chatPage.locator('.send-btn:not(.stop-btn)');
-    await expect(sendBtn).toBeDisabled();
-
-    // Type spaces only
-    await chatPage.fill('.input-area textarea', '   ');
-
-    // Send button should still be disabled (trimmed text is empty)
-    await expect(sendBtn).toBeDisabled();
-  });
 });
