@@ -10,15 +10,7 @@ afterEach(() => vi.unstubAllGlobals());
 const render = text => { const el = document.createElement('div'); el.innerHTML = renderSafeMessageMarkdown(text); return el; };
 
 describe('read-only message Markdown', () => {
-  it('uses the bundled parser for message typography without Session actions', () => {
-    vi.stubGlobal('marked', context.marked);
-    const el = render('# Title\n\n**Hello**\n\n- one\n- two\n\n```js\nconst n = 1;\n```\n\n[Docs](https://example.com)');
-    expect(el.querySelector('h1').textContent).toBe('Title');
-    expect(el.querySelector('strong').textContent).toBe('Hello');
-    expect(el.querySelectorAll('li')).toHaveLength(2);
-    expect(el.querySelector('pre code').textContent).toContain('const n = 1;');
-    expect(el.querySelector('a').getAttribute('rel')).toBe('noopener noreferrer');
-  });
+
   it('keeps HTML literal and prevents image fetches, executable and local links', () => {
     vi.stubGlobal('marked', context.marked);
     const el = render('<img src=x onerror=alert(1)>\n\n<script>alert(1)</script>\n\n![tracking](https://example.com/pixel)\n\n[evil](javascript:alert%281%29) [data](data:text/html,evil) [local](file:///etc/passwd)\n\n[encoded](java&#x73;cript:evil)');

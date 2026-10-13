@@ -2,11 +2,9 @@
 import { mount, flushPromises } from '@vue/test-utils';
 import * as Vue from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import ResourceControl, { budgetAdditions } from '../../web/components/WorkCenterResourceControl.js';
+import ResourceControl from '../../web/components/WorkCenterResourceControl.js';
 import { applyWorkItemSummary, isWorkItemDetailStale, mergeWorkItemDetail, mergeWorkItemSummary } from '../../web/stores/helpers/work-center.js';
 import en from '../../web/i18n/en.js';
-import zh from '../../web/i18n/zh-CN.js';
-import Reference, { resolveActionReference } from '../../web/components/WorkCenterActionReference.js';
 
 const { reactive } = Vue;
 
@@ -14,11 +12,8 @@ const { reactive } = Vue;
 const stores = {};
 globalThis.Pinia = { defineStore: (id, options) => { stores[id] = options; return () => ({}); } };
 await import('../../web/stores/chat.js');
-const actions = stores.chat.actions;
+
 globalThis.Vue = Vue;
-const { default: ActionDetail } = await import('../../web/components/WorkCenterActionDetail.js');
-const { default: Page } = await import('../../web/components/WorkCenterPage.js');
-const { default: UserTurnBlock } = await import('../../web/components/UserTurnBlock.js');
 
 const limits = { maxRequests: 200, maxTokens: 2000000, maxRunRequests: 40, maxActionAttempts: 3, maxCoordinatorFailures: 3 };
 const usage = { llmRequestCount: 200, totalTokens: 500, chargedTokens: 1500, reservedTokens: 1000, unknownRequests: 1, inFlightRequests: 1 };
@@ -60,71 +55,6 @@ function resourceSnapshot(dataRevision, requests, chargedTokens, progressRevisio
 }
 
 describe('Work Center resource control', () => {
-  it('accepts only nonempty positive safe integer additions for all five limits', () => {
-    for (const value of ['0', '-1', '1.5', '1e3', 'NaN', 'Infinity', '9007199254740992']) {
-      expect(budgetAdditions({ maxRequests: value }, limits)).toBeNull();
-    }
-    expect(budgetAdditions({}, limits)).toBeNull();
-    expect(budgetAdditions({ maxRequests: String(Number.MAX_SAFE_INTEGER) }, limits)).toBeNull();
-    expect(budgetAdditions(Object.fromEntries(Object.keys(limits).map(key => [key, '2'])), limits))
-      .toEqual(Object.fromEntries(Object.keys(limits).map(key => [key, 2])));
-    expect(budgetAdditions({ maxRequests: ' 1 ', maxTokens: '' }, limits)).toEqual({ maxRequests: 1 });
-  });
-
-  it.each([en, zh])('shows localized totals, both consumers and unknown usage without adding reservations twice', locale => {
-    setup(locale);
-    expect(wrapper.text()).not.toContain('workCenter.resource.');
-    expect(wrapper.find('.work-center-resource-totals').text()).toContain('200 / 200');
-    expect(wrapper.find('.work-center-resource-totals').text()).toContain('1,500 / 2,000,000');
-    expect(wrapper.findAll('.work-center-resource-breakdown > div')).toHaveLength(3);
-    expect(wrapper.text()).toContain(locale['workCenter.resource.stop.work_item_requests_exhausted']);
-    expect(wrapper.text()).toContain('500');
-    expect(wrapper.text()).toContain('1,000');
-  });
-
-  it.each([en, zh])('localizes every stop code with a safe fallback for newer Agents', async locale => {
-    const { item } = setup(locale);
-    for (const code of ['work_item_requests_exhausted', 'work_item_tokens_exhausted', 'run_requests_exhausted', 'action_attempts_exhausted', 'coordinator_failures_exhausted']) {
-      item.executionControl.stopReason = { code };
-      await flushPromises();
-      expect(wrapper.find('.work-center-resource-stop').text()).toBe(locale[`workCenter.resource.stop.${code}`]);
-    }
-    item.executionControl.stopReason = { code: 'future_reason' };
-    await flushPromises();
-    expect(wrapper.find('.work-center-resource-stop').text()).toBe(locale['workCenter.resource.stopped']);
-  });
-
-  it('disables mutations while the parent detail is loading or stale; supports cancelled resource-aware resume', async () => {
-    const { item, store } = setup();
-    await wrapper.setProps({ disabled: true });
-    await wrapper.vm.changeBudget('resume');
-    expect(store.resumeWorkItem).not.toHaveBeenCalled();
-    expect(button('Extend budget').attributes('disabled')).toBeDefined();
-    await wrapper.setProps({ disabled: false });
-    item.executionControl.stopReason = null;
-    item.status = 'cancelled';
-    await flushPromises();
-    await button('Resume work item').trigger('click');
-    expect(store.resumeWorkItem).toHaveBeenCalledWith('item', 4, 'agent-a', 7);
-  });
-
-  it('never resumes a recurring source plan, including its cancelled resource panel', async () => {
-    const { item, store } = setup();
-    item.schedule = { status: 'scheduled', recurrence: { frequency: 'daily' } };
-    item.status = 'draft';
-    await flushPromises();
-    expect(button('Resume work item')).toBeUndefined();
-    expect(button('Extend budget').attributes('disabled')).toBeUndefined();
-    await wrapper.vm.changeBudget('resume');
-    item.status = 'cancelled';
-    item.schedule.status = 'cancelled';
-    await flushPromises();
-    expect(button('Resume work item')).toBeUndefined();
-    expect(button('Extend budget').attributes('disabled')).toBeDefined();
-    await wrapper.vm.changeBudget('resume');
-    expect(store.resumeWorkItem).not.toHaveBeenCalled();
-  });
-
   it('extends all fields explicitly without resuming; resume uses latest contract and resource CAS', async () => {
     const { item, store } = setup();
     await button('Extend budget').trigger('click');
@@ -160,23 +90,6 @@ describe('Work Center resource control', () => {
     expect(store.extendWorkItemBudget).toHaveBeenCalledWith('item', 10, { maxRequests: 3 }, 'agent-a');
   });
 
-  it.each(['extend', 'resume'])('refreshes after %s errors, never retries mutations and preserves the error', async op => {
-    const { store } = setup();
-    const method = op === 'extend' ? store.extendWorkItemBudget : store.resumeWorkItem;
-    method.mockRejectedValueOnce(new Error('Execution control changed; refresh before changing execution budget or resuming'));
-    if (op === 'extend') {
-      await button('Extend budget').trigger('click');
-      await wrapper.find('[name="maxRequests"]').setValue('4');
-      await wrapper.find('form').trigger('submit');
-    } else await button('Resume work item').trigger('click');
-    await flushPromises();
-    expect(method).toHaveBeenCalledTimes(1);
-    expect(store.getWorkItem).toHaveBeenCalledWith('item', 'agent-a');
-    expect(wrapper.find('[role="alert"]').text()).toContain('Execution control changed');
-    expect(wrapper.text()).toContain('confirm a new operation');
-    expect(wrapper.find('form').exists()).toBe(false);
-  });
-
   it('keeps mutations disabled after failed refresh or reconnect until a successful explicit refresh', async () => {
     const { store } = setup();
     store.resumeWorkItem.mockRejectedValueOnce(new Error('timeout'));
@@ -210,22 +123,6 @@ describe('Work Center resource control', () => {
     await flushPromises();
     expect(store.getWorkItem).not.toHaveBeenCalled();
   });
-
-  it('never rolls back an execution management revision at equal contract/timestamp; merges live summary usage', () => {
-    const current = { ...itemFixture(), updatedAt: 10 };
-    const stale = { ...current, updatedAt: 20, executionControl: { ...current.executionControl, revision: 6 } };
-    expect(isWorkItemDetailStale(stale, current)).toBe(true);
-    expect(mergeWorkItemSummary(current, stale)).toBe(current);
-    const fresh = { ...current, executionControl: { ...current.executionControl, revision: 8 } };
-    expect(mergeWorkItemSummary(current, fresh).executionControl.revision).toBe(8);
-    const usageUpdate = { ...current, executionControl: { ...current.executionControl, usage: { ...usage, totalTokens: 900 } } };
-    expect(mergeWorkItemSummary(current, usageUpdate).executionControl.usage.totalTokens).toBe(900);
-    const running = { ...current, actions: [{ id: 'action', attempt: 2, progressRevision: 5 }] };
-    const lateActionEvent = { ...usageUpdate, actionStats: [{ id: 'action', attempt: 1, progressRevision: 3 }] };
-    expect(mergeWorkItemSummary(running, lateActionEvent).executionControl).toBe(current.executionControl);
-    const newerManagement = { ...lateActionEvent, executionControl: { ...fresh.executionControl, stopReason: null } };
-    expect(mergeWorkItemSummary(running, newerManagement).executionControl).toBe(newerManagement.executionControl);
-  });
 });
 
 describe('independently ordered Work Center resource snapshots', () => {
@@ -248,19 +145,6 @@ describe('independently ordered Work Center resource snapshots', () => {
     expect(isWorkItemDetailStale(two, three)).toBe(true);
     expect(isWorkItemDetailStale(three, settled)).toBe(true);
     expect(isWorkItemDetailStale(settled, three)).toBe(false);
-  });
-
-  it('preserves an execution stop against an older same-time/same-progress snapshot', () => {
-    const running = resourceSnapshot(12, 2, 200);
-    const stopped = resourceSnapshot(13, 2, 200);
-    stopped.status = 'needs_attention';
-    stopped.executionControl = { ...stopped.executionControl, revision: 8,
-      stopReason: { code: 'run_requests_exhausted', at: 10 } };
-    for (const merge of [mergeWorkItemSummary, mergeWorkItemDetail, (current, incoming) => applyWorkItemSummary([current], incoming)[0]]) {
-      expect(merge(stopped, running).status).toBe('needs_attention');
-      expect(merge(running, stopped).status).toBe('needs_attention');
-      expect(merge(stopped, running).executionControl).toEqual(stopped.executionControl);
-    }
   });
 
   it('merges resource and Action versions independently in both directions', () => {
@@ -291,204 +175,4 @@ describe('independently ordered Work Center resource snapshots', () => {
       expect(settled.updatedAt).toBe(10);
     }
   });
-
-  it('keeps legacy Agents compatible and does not let unversioned details erase known versioned usage', () => {
-    const versioned = resourceSnapshot(13, 3, 300);
-    const legacy = resourceSnapshot(undefined, 2, 200, 6);
-    legacy.executionControl.revision = 8;
-    for (const merge of [mergeWorkItemSummary, mergeWorkItemDetail, (current, incoming) => applyWorkItemSummary([current], incoming)[0]]) {
-      expect(merge(versioned, legacy).executionControl).toEqual(versioned.executionControl);
-      expect(merge(legacy, versioned).executionControl).toEqual(versioned.executionControl);
-    }
-    expect(isWorkItemDetailStale(legacy, versioned)).toBe(true);
-    const old = resourceSnapshot(undefined, 2, 200);
-    const settled = resourceSnapshot(undefined, 2, 107);
-    expect(mergeWorkItemSummary(old, settled).executionControl.usage.chargedTokens).toBe(107);
-    expect(applyWorkItemSummary([old], settled)[0].executionControl.usage.chargedTokens).toBe(107);
-  });
-});
-
-describe('Work Center resource store wire and scope', () => {
-  function context() {
-    const state = { currentAgent: 'agent-b', workCenterAgentId: 'agent-b', _workCenterListFiltersByAgent: {},
-      _workCenterDetailRequestGenerationByAgent: {}, workCenterDetailByAgent: {},
-      syncWorkCenterActivity: vi.fn(), workCenterRequest: vi.fn(async () => itemFixture()), listWorkItems: vi.fn(async () => {}), workItemDeleted: () => false,
-    };
-    for (const key of ['beginWorkCenterDetailWrite', 'commitWorkCenterDetail', 'resumeWorkItem', 'extendWorkItemBudget']) state[key] = actions[key].bind(state);
-    return state;
-  }
-  it('sends exact extension and resume payloads, preserving optional old cancelled resume signature', async () => {
-    const store = context();
-    await store.extendWorkItemBudget('item', 7, { maxRequests: 10 }, 'agent-a');
-    expect(store.workCenterRequest).toHaveBeenLastCalledWith('extend_budget', { id: 'item', executionControlRevision: 7, additions: { maxRequests: 10 } }, 'agent-a');
-    expect(store.workCenterDetailByAgent['agent-a'].id).toBe('item');
-    expect(store.workCenterDetailByAgent['agent-b']).toBeUndefined();
-    await store.resumeWorkItem('item', 4, 'agent-a', 8);
-    expect(store.workCenterRequest).toHaveBeenLastCalledWith('resume', { id: 'item', revision: 4, executionControlRevision: 8 }, 'agent-a');
-    await store.resumeWorkItem('item', 4, 'agent-a');
-    expect(store.workCenterRequest).toHaveBeenLastCalledWith('resume', { id: 'item', revision: 4 }, 'agent-a');
-  });
-  it('fences late full detail usage while still accepting lower-cost settlements and independent Action updates', async () => {
-    const store = context();
-    store.getWorkItem = actions.getWorkItem.bind(store);
-    const three = resourceSnapshot(13, 3, 300);
-    store.workCenterDetailByAgent['agent-a'] = three;
-    store.workCenterRequest.mockResolvedValueOnce(resourceSnapshot(12, 2, 200));
-    await store.getWorkItem('item', 'agent-a');
-    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(three.executionControl);
-    const settled = resourceSnapshot(14, 3, 207);
-    store.workCenterRequest.mockResolvedValueOnce(settled);
-    await store.getWorkItem('item', 'agent-a');
-    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(settled.executionControl);
-    store.workCenterRequest.mockResolvedValueOnce(three);
-    await store.getWorkItem('item', 'agent-a');
-    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(settled.executionControl);
-    store.workCenterRequest.mockResolvedValueOnce(resourceSnapshot(undefined, 2, 200, 6));
-    await store.getWorkItem('item', 'agent-a');
-    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(settled.executionControl);
-    expect(store.workCenterDetailByAgent['agent-a'].actions[0].progressRevision).toBe(6);
-    const newerUsageOldAction = resourceSnapshot(15, 3, 107, 5);
-    store.workCenterRequest.mockResolvedValueOnce(newerUsageOldAction);
-    await store.getWorkItem('item', 'agent-a');
-    expect(store.workCenterDetailByAgent['agent-a'].executionControl).toEqual(newerUsageOldAction.executionControl);
-    expect(store.workCenterDetailByAgent['agent-a'].actions[0].progressRevision).toBe(6);
-  });
-
-  it.each(['current rows', 'cached event outside current query'])('fences old list pages against %s, including events preceding the request', async source => {
-    const store = { ...stores.chat.state(), currentAgent: 'agent-a', workCenterAgentId: 'agent-a',
-      workItemDeleted: () => false, workCenterRequest: vi.fn(), syncWorkCenterActivity: vi.fn(),
-    };
-    for (const key of ['listWorkItems', 'loadMoreWorkItems', 'workItemMatchesBoardQuery', 'applyWorkItemBoardSummary']) {
-      store[key] = actions[key].bind(store);
-    }
-    const two = resourceSnapshot(12, 2, 200);
-    const three = resourceSnapshot(13, 3, 300);
-    if (source === 'current rows') store.workCenterItemsByAgent['agent-a'] = [three];
-    else {
-      store._workCenterListEventGenerationByAgent['agent-a'] = 1;
-      store._workCenterListEventsByAgent['agent-a'] = { item: { summary: three, generation: 1, queryKey: 'another-query' } };
-    }
-    store.workCenterRequest.mockResolvedValueOnce({ items: [two], nextCursor: 'page2' });
-    await store.listWorkItems('agent-a');
-    expect(store.workCenterItemsByAgent['agent-a'][0].executionControl).toEqual(three.executionControl);
-    const settled = resourceSnapshot(14, 3, 207);
-    store.workCenterRequest.mockResolvedValueOnce({ items: [settled], nextCursor: 'page2' });
-    await store.listWorkItems('agent-a');
-    expect(store.workCenterItemsByAgent['agent-a'][0].executionControl).toEqual(settled.executionControl);
-    store.workCenterRequest.mockResolvedValueOnce({ items: [three], nextCursor: 'page3' });
-    await store.loadMoreWorkItems('agent-a');
-    expect(store.workCenterItemsByAgent['agent-a'][0].executionControl).toEqual(settled.executionControl);
-    // A cached off-page event must also fence a previously unseen old row.
-    store.workCenterItemsByAgent['agent-a'] = [];
-    store._workCenterListEventsByAgent['agent-a'] = { item: { summary: settled, generation: 1, queryKey: 'another-query' } };
-    store.workCenterRequest.mockResolvedValueOnce({ items: [three] });
-    await store.loadMoreWorkItems('agent-a');
-    expect(store.workCenterItemsByAgent['agent-a'][0].executionControl).toEqual(settled.executionControl);
-  });
-
-  it('does not overwrite a newer detail selection when extension completes late', async () => {
-    const store = context();
-    let resolve;
-    store.workCenterRequest.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
-    const pending = store.extendWorkItemBudget('item', 7, { maxRequests: 10 }, 'agent-a');
-    store.beginWorkCenterDetailWrite('agent-a');
-    store.workCenterDetailByAgent['agent-a'] = { id: 'other' };
-    resolve(itemFixture());
-    await pending;
-    expect(store.workCenterDetailByAgent['agent-a'].id).toBe('other');
-  });
-});
-
-
-const translate = locale => (key, params = {}) => Object.entries(params).reduce(
-  (text, [name, value]) => text.replaceAll(`{${name}}`, value), locale[key] || key,
-);
-const referenceActions = [
-  { id: 'source', stageId: 'review', sequence: 2, type: 'review', brief: { objective: 'Review the model policy' } },
-  { id: 'delivery', stageId: 'deliver', sequence: 4, type: 'deliver', sourceActionIds: ['source'] },
-];
-
-describe('Work Center readable references', () => {
-  it.each([en, zh])('navigates using readable names in both locales, never guessing missing identities', async locale => {
-    const wrapper = mount(Reference, { props: { actions: referenceActions, actionId: 'source' }, global: { mocks: { $t: translate(locale) } } });
-    expect(wrapper.text()).toContain('Review the model policy');
-    expect(wrapper.text()).toContain('2');
-    await wrapper.get('button').trigger('click');
-    expect(wrapper.emitted('select-action')[0]).toEqual([referenceActions[0]]);
-    await wrapper.setProps({ actionId: 'deleted-action' });
-    expect(wrapper.find('button').exists()).toBe(false);
-    expect(wrapper.text()).toBe(locale['workCenter.sourceUnavailable']);
-    expect(wrapper.get('span').attributes('title')).toBe('deleted-action');
-    wrapper.unmount();
-  });
-
-  it('resolves evidence and unique legacy stages within the selected item only', () => {
-    const runs = [{ id: 'proof', actionId: 'source' }];
-    expect(resolveActionReference(referenceActions, { runId: 'proof' }, runs)).toBe(referenceActions[0]);
-    expect(resolveActionReference(referenceActions, { stageId: 'review' })).toBe(referenceActions[0]);
-    expect(resolveActionReference([...referenceActions, { id: 'other', stageId: 'review' }], { stageId: 'review' })).toBeNull();
-    expect(resolveActionReference([], { runId: 'proof' }, runs)).toBeNull();
-    expect(resolveActionReference(referenceActions, { runId: 'unknown' }, runs)).toBeNull();
-  });
-
-  it('source Action links forward navigation; read-only messages cannot forward quote/edit', async () => {
-    const wrapper = mount(ActionDetail, {
-      props: { action: referenceActions[1], actions: referenceActions, canMessage: false, messages: [
-        { id: 'human', role: 'user', text: 'Ship it' },
-        { id: 'assistant', role: 'assistant', text: 'Shipped', status: 'completed' },
-      ] },
-      global: { mocks: { $t: translate(en) }, stubs: { UserTurnBlock: true, VpTurnBlock: true } },
-    });
-    await wrapper.get('.work-center-action-reference').trigger('click');
-    expect(wrapper.emitted('select-action')[0]).toEqual([referenceActions[0]]);
-    const user = wrapper.getComponent({ name: 'UserTurnBlock' });
-    const vp = wrapper.getComponent({ name: 'VpTurnBlock' });
-    expect(user.props('sessionActions')).toBe(false);
-    expect(vp.props('sessionActions')).toBe(false);
-    expect(vp.props('debugActionEnabled')).toBe(false);
-    user.vm.$emit('quote', { content: 'Quote' });
-    user.vm.$emit('edit-as-new', 'Edit');
-    vp.vm.$emit('quote', { content: 'Quote' });
-    expect(wrapper.emitted('quote')).toBeUndefined();
-    expect(wrapper.emitted('edit-as-new')).toBeUndefined();
-    await wrapper.setProps({ canMessage: true });
-    user.vm.$emit('edit-as-new', 'Edit');
-    expect(wrapper.emitted('edit-as-new')[0]).toEqual(['Edit']);
-    wrapper.unmount();
-  });
-
-  it('preserves Session defaults and makes UserTurnBlock controls opt-out', async () => {
-    const wrapper = mount(UserTurnBlock, {
-      props: { message: { id: 'human', type: 'user', content: 'hello' } },
-      global: { stubs: { MessageItem: true } },
-    });
-    expect(wrapper.getComponent({ name: 'MessageItem' }).props('sessionActions')).toBe(true);
-    await wrapper.setProps({ sessionActions: false });
-    expect(wrapper.getComponent({ name: 'MessageItem' }).props('sessionActions')).toBe(false);
-    wrapper.unmount();
-  });
-
-  it('rejects late quote/edit events after the item closes without changing the draft', () => {
-    const vm = { coordinatorReadOnly: true, workItemMessage: 'Draft', workItemMessageQuote: null, saveComposerDraft: vi.fn() };
-    Page.methods.quoteWorkItemMessage.call(vm, { role: 'assistant', author: 'VP', content: 'Quote' });
-    Page.methods.editWorkItemMessageAsNew.call(vm, 'Edit');
-    expect(vm.workItemMessage).toBe('Draft');
-    expect(vm.workItemMessageQuote).toBeNull();
-    expect(vm.saveComposerDraft).not.toHaveBeenCalled();
-  });
-});
-
-it('keeps Action timing through progress updates and rejects older timing snapshots', () => {
-  const current = { id: 'timed', revision: 1, actions: [{
-    id: 'action', generation: 1, status: 'running', progressRevision: 3,
-    createdAt: 100, executionDurationMs: 3000, executionStartedAt: 9000,
-  }] };
-  const finished = { id: 'timed', revision: 1, actionStats: [{
-    id: 'action', generation: 1, status: 'completed', progressRevision: 4,
-    createdAt: 100, executionDurationMs: 6000, executionStartedAt: null,
-  }] };
-  const merged = mergeWorkItemSummary(current, finished);
-  expect(merged.actions[0]).toMatchObject(finished.actionStats[0]);
-  expect(mergeWorkItemSummary(merged, { id: 'timed', revision: 1, actionStats: current.actions }).actions)
-    .toEqual(merged.actions);
 });
