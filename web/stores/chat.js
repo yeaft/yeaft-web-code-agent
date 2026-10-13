@@ -47,6 +47,11 @@ import {
   yeaftCatalogKey,
 } from './helpers/session-catalog.js';
 import {
+  sidebarCatalogAuthIsCurrent,
+  sidebarSessionCatalogRows,
+  sidebarSessionCatalogIsLoading,
+} from './helpers/sidebar-session-catalog.js';
+import {
   applyWorkItemSummary,
   isWorkItemDetailResponseStale,
   mergeWorkItemDetail,
@@ -756,6 +761,10 @@ export const useChatStore = defineStore('chat', {
     hiddenSessionCatalog: [],
     sessionProjects: [],
     sessionCatalogLoaded: false,
+    sessionCatalogProtocolSupported: null,
+    sidebarCatalogOwnerId: null,
+    sidebarCatalogAuthGeneration: null,
+    sidebarLegacySessionCatalog: [],
     sessionCatalogMutationRequests: {},
     projectMutationRequests: {},
     activeCatalogKey: null,
@@ -1202,6 +1211,14 @@ export const useChatStore = defineStore('chat', {
   }),
 
   getters: {
+    sidebarSessionCatalog(state) {
+      if (!sidebarCatalogAuthIsCurrent(state, useAuthStore())) return [];
+      return sidebarSessionCatalogRows(state, getSessionsStore()?.sessionList || []);
+    },
+    sidebarSessionCatalogLoading(state) {
+      return !sidebarCatalogAuthIsCurrent(state, useAuthStore())
+        || sidebarSessionCatalogIsLoading(state, getSessionsStore()?.sessionList || []);
+    },
     // ★ Multi-column: compatibility shim — reads activeConversations[0]
     currentConversation: (state) => state.activeConversations[0] || null,
     // The single source-of-truth selector for "which conversation is the
@@ -5877,7 +5894,7 @@ export const useChatStore = defineStore('chat', {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
           const rows = event.sessions || [];
           if (event.projectsAuthoritative === true && Array.isArray(event.projects)) {
-            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
+            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           } else if (Array.isArray(event.projects) && msg.agentId) {
             this.applyLegacyProjectSnapshot(event.projects, msg.agentId);
           }
@@ -5946,7 +5963,7 @@ export const useChatStore = defineStore('chat', {
           // this tab's request even if it echoes the same request id.
           if (event.op === 'copy' && pending?.agentId && pending.agentId !== msg.agentId) break;
           if (event.op === 'copy' && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
-            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
+            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
           if (gs) gs.applyCrudResult(event, msg.agentId || null, {
             // The initiating copy action owns navigation so it can render a
@@ -7111,7 +7128,7 @@ export const useChatStore = defineStore('chat', {
       this.activeRightPanel = value;
     },
 
-    applySessionCatalogSnapshot(rows, projects = null, hiddenRows = null) {
+    applySessionCatalogSnapshot(rows, projects = null, hiddenRows = null, { authoritative = true } = {}) {
       const normalizeCatalogRows = (source) => {
         const seen = new Set();
         return (Array.isArray(source) ? source : []).filter(row => {
@@ -7147,7 +7164,11 @@ export const useChatStore = defineStore('chat', {
             : row
         ));
       }
-      this.sessionCatalogLoaded = true;
+      if (authoritative) {
+        this.sessionCatalogProtocolSupported = true;
+        this.sessionCatalogLoaded = true;
+        this.sidebarLegacySessionCatalog = [];
+      }
     },
     mutateProject(op, payload = {}, agentId = null) {
       const targetAgentId = agentId || payload.agentId || this.currentAgent || null;
@@ -7191,7 +7212,7 @@ export const useChatStore = defineStore('chat', {
           legacyAgentId: agentId,
           members: (project.sessionIds || []).map(sessionId => ({ agentId, sessionId })),
         }));
-      this.applySessionCatalogSnapshot(this.sessionCatalog, [...otherProjects, ...legacyProjects]);
+      this.applySessionCatalogSnapshot(this.sessionCatalog, [...otherProjects, ...legacyProjects], null, { authoritative: false });
     },
     finishLegacyProjectMutation(event, agentId) {
       if (!event?.requestId) return false;
@@ -7226,15 +7247,31 @@ export const useChatStore = defineStore('chat', {
           }
         }
         if (Array.isArray(event.projects)) {
-          this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
+          this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
         }
       }
       pending.resolve(event);
       return true;
     },
+    catalogSessionActionSupported(row, action) {
+      if (this.sessionCatalogProtocolSupported !== false) return true;
+      if (action === 'remove' || action === 'delete' || action === 'restore') return false;
+      return action !== 'reorder' || row?.runtimeProvider === 'yeaft';
+    },
     toggleCatalogSessionPin(row) {
       if (!row?.catalogKey || !row?.routeRef
         || Object.keys(this.sessionCatalogMutationRequests).length > 0) return false;
+      if (this.sessionCatalogProtocolSupported === false) {
+        if (this.sidebarSessionCatalogLoading) return false;
+        const { runtimeProvider, agentId, sessionId } = row.routeRef;
+        this.togglePin(sessionId, {
+          pinned: row.pinned,
+          ...(runtimeProvider === 'yeaft' ? {
+            sessionKind: 'yeaft', agentId, sessionName: row.title, workDir: row.workDir,
+          } : {}),
+        });
+        return true;
+      }
       const requestId = `session_ui_${crypto.randomUUID()}`;
       const previousCatalog = beginCatalogMutation(this, requestId);
       const nextPinned = !row.pinned;
@@ -7255,6 +7292,7 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
     hideCatalogSession(row) {
+      if (!this.catalogSessionActionSupported(row, 'remove')) return false;
       if (!row?.catalogKey || !row?.routeRef
         || Object.keys(this.sessionCatalogMutationRequests).length > 0) return false;
       const requestId = `session_hide_${crypto.randomUUID()}`;
@@ -7283,6 +7321,7 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
     restoreCatalogSession(row) {
+      if (!this.catalogSessionActionSupported(row, 'restore')) return false;
       if (!row?.catalogKey || !row?.routeRef
         || Object.keys(this.sessionCatalogMutationRequests).length > 0) return false;
       const requestId = `session_restore_${crypto.randomUUID()}`;
@@ -7376,6 +7415,16 @@ export const useChatStore = defineStore('chat', {
     reorderCatalogSessions(rows) {
       if (!Array.isArray(rows) || rows.length === 0
         || Object.keys(this.sessionCatalogMutationRequests).length > 0) return false;
+      if (this.sessionCatalogProtocolSupported === false) {
+        if (this.sidebarSessionCatalogLoading) return false;
+        const sessions = getSessionsStore();
+        const keys = rows.filter(row => row?.runtimeProvider === 'yeaft')
+          .map(row => `${row.routeRef.agentId}\u001f${row.routeRef.sessionId}`);
+        const ordered = sessions?.reorderSessionsGlobally?.(keys) || [];
+        if (ordered.length === 0) return false;
+        this.sessionCrudRequest('reorder', { sessions: ordered });
+        return true;
+      }
       const requestId = `session_order_${crypto.randomUUID()}`;
       const previousCatalog = beginCatalogMutation(this, requestId);
       this.sessionCatalog = rows.map((row, index) => ({ ...row, sortRank: index }));
@@ -7775,6 +7824,10 @@ export const useChatStore = defineStore('chat', {
     setSessionPinned(sessionId, pinned, meta = {}) {
       if (!sessionId) return;
       const agentId = meta && meta.agentId ? meta.agentId : null;
+      if (this.sessionCatalogProtocolSupported === false && !agentId) {
+        const conversation = this.conversations.find(row => row.id === sessionId);
+        if (conversation) conversation.pinned = !!pinned;
+      }
       const isPinned = agentId
         ? !!(getSessionsStore()?.sessionById?.(sessionId, agentId)?.pinned)
         : this.pinnedSessions.includes(sessionId);

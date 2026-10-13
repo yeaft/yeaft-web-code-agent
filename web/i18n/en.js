@@ -628,6 +628,7 @@ export default {
   'sidebar.sessions.pinned': 'Pinned',
   'sidebar.sessions.processing': 'Reply in progress',
   'sidebar.sessions.hidden': 'Hidden sessions',
+  'sidebar.sessions.upgradeForAction': 'Upgrade the Server to use this action.',
   'sidebar.sessions.remove': 'Remove from sidebar',
   'sidebar.sessions.agent': 'Agent',
   'sidebar.sessions.provider': 'Provider',

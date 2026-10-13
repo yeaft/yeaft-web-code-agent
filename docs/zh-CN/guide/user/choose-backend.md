@@ -48,6 +48,8 @@ Yeaft 在同一个浏览器中提供三条执行路径。一台已连接 Agent �
 
 侧栏 catalog 可以展示多台 Agent 的 conversation。Runtime identity 始终包含 Agent；两台 Agent 上相同 Session ID 并不是同一个 Session。
 
+侧栏从首屏就使用统一的「项目／最近会话」布局。目录未就绪时显示加载状态，而不是暂时切换到旧列表；同一账号重连时保留已有分组与列表，等待新快照期间不可创建、选择或修改会话。切换账号或重新认证会清除旧账号的目录。旧 Server 的已接受会话清单也会适配到统一布局；无法确认目录是否完整时保持加载状态，不显示误导性的空列表。
+
 ## 常见选择
 
 - 精确 Claude Code workflow 或 Claude-specific skills → **Claude Code**。

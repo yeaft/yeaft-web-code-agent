@@ -143,6 +143,7 @@ export function handleWebConnection(ws, url, req = {}) {
       role,
       acceptPlaintext: true,
       yeaftSessionInventoryComplete: true,
+      sessionCatalogProtocol: 1,
       workbenchRouteProtocol: WORKBENCH_ROUTE_PROTOCOL,
       workCenterWorkbenchProtocol: WORK_CENTER_WORKBENCH_PROTOCOL,
       browserRuntimeProtocol: BROWSER_RUNTIME_PROTOCOL,
