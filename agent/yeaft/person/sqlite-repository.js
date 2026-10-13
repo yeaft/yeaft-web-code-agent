@@ -100,6 +100,7 @@ export class SqlitePersonRepository {
    * scalar invocations keep their original shared callId. */
   async startCapability(episode, data) { return this.request('startCapability', [episode, data]); }
   async finalizeCapability(episode, data) { return this.request('finalizeCapability', [episode, data]); }
+  async checkExecutionRead(episode, episodeId) { return this.request('checkExecutionRead', [episode, episodeId]); }
   async executionRead(episode, args, { signal } = {}) {
     signal?.throwIfAborted();
     const result = await this.request('executionRead', [episode, executionReadRequest(args)]);

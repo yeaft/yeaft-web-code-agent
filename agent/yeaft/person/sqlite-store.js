@@ -92,7 +92,7 @@ const objectOutput = (record, data) => {
     if (!mimes.includes(record.mimeType) || !(data instanceof Uint8Array) || data.length !== record.size) fail('INVALID_REQUEST');
   }
 };
-const READS = new Set(['executionRead', 'outputs', 'outputRead', 'checkOutputPublication', 'receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
+const READS = new Set(['checkExecutionRead', 'executionRead', 'outputs', 'outputRead', 'checkOutputPublication', 'receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
 const WRITES = new Set(['executionControl', 'savePresentation', 'saveOutput', 'open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
@@ -425,14 +425,18 @@ export class SqlitePersonStore {
   }
   /** Exact scoped read in one read transaction; historical evidence grants no lease,
    * publication, capability activation or current behavioral authority. */
+  checkExecutionRead(episode, episodeId = episode.id) {
+    this.own(episode);
+    const scope = this.episodeScope(episode), live = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    if (!live || live.status !== 'running' || live.epoch !== episode.epoch || live.workerId !== episode.workerId) fail('STALE');
+    if (!this.one('episodes', scope, ' AND id = ?', [episodeId])) fail('NOT_FOUND');
+    return true;
+  }
   executionRead(episode, args) {
     const request = executionReadRequest(args);
-    this.own(episode);
-    const scope = this.episodeScope(episode);
-    const live = this.one('episodes', scope, ' AND id = ?', [episode.id]);
-    if (!live || live.status !== 'running' || live.epoch !== episode.epoch || live.workerId !== episode.workerId) fail('STALE');
-    const episodeId = request.episodeId ?? episode.id;
-    if (!this.one('episodes', scope, ' AND id = ?', [episodeId])) fail('NOT_FOUND');
+    this.checkExecutionRead(episode, request.episodeId);
+    const scope = this.episodeScope(episode), episodeId = request.episodeId ?? episode.id;
+    if (request.sourceRef !== undefined) fail('INVALID_REQUEST');
     const trace = this.one('traces', scope,
       " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.callId') = ? AND (json_extract(record, '$.kind') IN ('capability_result', 'capability_failed') OR (json_extract(record, '$.kind') = 'capability_finalized' AND json_extract(record, '$.outcome') IN ('capability_result', 'capability_failed'))) ORDER BY seq DESC", [episodeId, request.callId]);
     if (!trace) fail('NOT_FOUND');

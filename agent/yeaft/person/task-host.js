@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { TaskManager } from '../tasks/manager.js';
 import { TASK_RESULT_DELIVERY, isTerminalTaskStatus } from '../tasks/store.js';
 import { createFullRegistry } from '../tools/index.js';
-import { ToolRegistry, normalizeToolOutput } from '../tools/registry.js';
+import { ToolRegistry, normalizeToolOutput, isToolErrorOutput, toolErrorEffect } from '../tools/registry.js';
 import { SubAgentToolRegistry } from '../sub-agent/execution-control.js';
 import { agentBelongsToScope, getAgentRegistry } from '../tools/agent.js';
 import closeAgent from '../tools/close-agent.js';
@@ -15,6 +15,7 @@ import { NullTrace } from '../debug-trace.js';
 import { loadConfig } from '../config.js';
 import { digest, fail, PERSON_TASK_LIMITS, personTaskRequest, taskInspectionCursor } from './contracts.js';
 import { inspectionPage, inspectionTime } from './inspection.js';
+import { executionEvidencePage, executionReadRequest, personToolReference, utf8End } from './execution-evidence.js';
 
 // Deliberately not the full Session registry: no transcript search, routing,
 // interactive UI, MCP, Work Center, or nested orchestration authority.
@@ -402,9 +403,43 @@ class ScopedPersonTaskHost {
   #archiveToolResult(job, output, error) {
     const text = error ? String(error.message || error) : normalizeToolOutput(output);
     const result = { id: job.id, tool: job.tool, episodeId: job.episodeId, childId: job.childId,
-      updatedAt: new Date().toISOString(), ok: !error, aborted: job.controller.signal.aborted,
+      updatedAt: new Date().toISOString(), ok: !error && !isToolErrorOutput(text), aborted: job.controller.signal.aborted,
+      ...(error ? { code: 'TOOL_FAILED', errorEffect: 'unknown' } : isToolErrorOutput(text) ? { code: 'TOOL_FAILED', errorEffect: toolErrorEffect(text) } : {}),
       output: text, sourceRef: `person-tool:${this.scope.key}:${job.id}` };
     atomicJSON(join(this.dataRoot, 'tool-results', `${job.id}.json`), result);
+  }
+
+  /** Exact owned archive only. Repository authorization is required before IO
+   * and again before returning bytes; neither model paths nor scopes authorize it. */
+  async readToolResult(episode, args, { repository, signal } = {}) {
+    signal?.throwIfAborted();
+    this.#assertOpen(episode?.id);
+    if (!episode?.id || episode.ownerId !== this.scope.ownerId || episode.personId !== this.scope.personId ||
+        episode.namespace !== this.scope.namespace) throw denied();
+    const request = executionReadRequest(args);
+    const { scope, id } = personToolReference(request.sourceRef);
+    if (scope !== this.scope.key) throw denied();
+    if (!repository?.checkExecutionRead) fail('UNSUPPORTED');
+    await repository.checkExecutionRead(episode, request.episodeId);
+    signal?.throwIfAborted();
+    const path = privatePath(this.yeaftDir, join(this.dataRoot, 'tool-results', `${id}.json`));
+    let result;
+    try {
+      if (!lstatSync(path).isFile()) throw denied();
+      result = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') fail('NOT_FOUND');
+      if (error.code === 'TASK_SCOPE_DENIED') throw error;
+      fail('STORAGE_UNAVAILABLE');
+    }
+    if (!result || typeof result !== 'object' || Array.isArray(result)) fail('STORAGE_UNAVAILABLE');
+    if (result.id !== id || result.sourceRef !== request.sourceRef || result.episodeId !== (request.episodeId ?? episode.id)) throw denied();
+    if (typeof result.output !== 'string' || typeof result.tool !== 'string' || typeof result.ok !== 'boolean') fail('STORAGE_UNAVAILABLE');
+    const page = executionEvidencePage({ episodeId: result.episodeId, result, capabilityId: result.tool }, null, request, episode.id);
+    await repository.checkExecutionRead(episode, request.episodeId);
+    signal?.throwIfAborted();
+    this.#assertOpen(episode.id);
+    return page;
   }
 
   #instrumentChild(agent, deps) {
@@ -579,8 +614,11 @@ class ScopedPersonTaskHost {
     return { namespace: this.scope.key, sessionId: this.sessionId,
       tasks: recent(jsonFiles(this.#manager.store.sessionDir(this.sessionId), { limit })),
       agents: clone([...this.#agents.values()].slice(-limit)), completions: recent(jsonFiles(join(this.dataRoot, 'completions'), { limit })),
-      toolResults: recent(jsonFiles(join(this.dataRoot, 'tool-results'), { limit })).map(result => ({ ...result,
-        output: result.output.slice(0, 8192), rawPath: join(this.dataRoot, 'tool-results', `${result.id}.json`) })) };
+      toolResults: recent(jsonFiles(join(this.dataRoot, 'tool-results'), { limit })).map(result => {
+        const raw = Buffer.from(result.output, 'utf8'), end = utf8End(raw, Math.min(raw.length, 8192));
+        return { ...result, rawBytes: raw.length, sha256: digest(result.output), output: raw.subarray(0, end).toString('utf8'),
+          ...(end < raw.length ? { outputTruncated: true, outputNextOffset: end } : {}), rawPath: join(this.dataRoot, 'tool-results', `${result.id}.json`) };
+      }) };
   }
 
   /** Explicit cancellation stops and joins this Person's effects; normal episode
@@ -673,6 +711,19 @@ export class PersonTaskHost {
   }
 
   snapshot(ownerId) { return this.#host(ownerId).snapshot(ownerId); }
+
+  async readToolResult(episode, args, options) {
+    if (!episode?.id || episode.namespace !== this.#options.namespace) throw denied();
+    return this.#host(episode.ownerId, episode.personId).readToolResult(episode, args, options);
+  }
+
+  toolResultRef(episode, callId) {
+    if (!episode?.id || episode.namespace !== this.#options.namespace) throw denied();
+    const host = this.#host(episode.ownerId, episode.personId);
+    const ref = `person-tool:${host.scope.key}:${callId}`;
+    personToolReference(ref);
+    return ref;
+  }
 
   request(input = {}) {
     if (typeof input.ownerId !== 'string' || !input.ownerId || typeof input.personId !== 'string' || !input.personId

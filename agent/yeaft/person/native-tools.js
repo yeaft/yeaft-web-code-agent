@@ -85,20 +85,23 @@ export function projectNativeResult(result, maxBytes = 8192) {
   // Host results carry their original IDs explicitly. Legacy results have these
   // IDs in tool:episode:call:... provenance; task projections are not call traces.
   const sourceIds = result.sourceRef?.startsWith('tool:') ? result.sourceRef.split(':') : [];
-  const callId = result.callId ?? sourceIds[2], episodeId = result.episodeId ?? sourceIds[1];
-  const recovery = { read: { id: 'Execution.read', args: { ...(callId ? { callId } : {}), ...(episodeId ? { episodeId } : {}), offset: 0, maxBytes: 4096 } },
-    ...(!callId ? { notice: 'Supply the original capability callId; task logs use ReadTaskLog.' } : {}) };
+  const taskRef = typeof result.sourceRef === 'string' && /^person-tool:[a-f0-9]{64}:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![\s\S])/.test(result.sourceRef);
+  const callId = result.executionTraceCallId ?? (result.sourceRef?.startsWith('person-') ? undefined : result.callId ?? sourceIds[2]);
+  const episodeId = result.executionEpisodeId ?? result.episodeId ?? sourceIds[1];
+  const recovery = callId || (taskRef && episodeId) ? { read: { id: 'Execution.read', args: {
+    ...(callId ? { callId } : { sourceRef: result.sourceRef }), ...(episodeId ? { episodeId } : {}), offset: 0, maxBytes: 4096 } } }
+    : { notice: 'No execution read identity for this task observation. Task logs use ReadTaskLog with their actual taskId, not a trace callId.' };
   let projected = { ...result, output: raw.toString('utf8'), rawBytes: result.rawBytes ?? raw.length, recovery };
   if (bytes(projected) <= maxBytes) return projected;
   // Keep semantic failure/provenance fields even if ancillary metadata itself
   // is oversized. Its full original value remains in the durable trace.
   if (bytes({ ...projected, output: '' }) > maxBytes - 400) {
-    projected = { ...Object.fromEntries(['id', 'kind', 'callId', 'executionTraceCallId', 'episodeId', 'ok', 'code', 'errorEffect', 'terminal', 'outputAvailability', 'sourceRef', 'sha256', 'replaySafe'].filter(key => Object.hasOwn(result, key)).map(key => [key, result[key]])),
+    projected = { ...Object.fromEntries(['id', 'kind', 'callId', 'executionTraceCallId', 'executionEpisodeId', 'episodeId', 'ok', 'code', 'errorEffect', 'terminal', 'outputAvailability', 'sourceRef', 'sha256', 'replaySafe', 'tool', 'childId', 'aborted'].filter(key => Object.hasOwn(result, key)).map(key => [key, result[key]])),
       output: raw.toString('utf8'), rawBytes: result.rawBytes ?? raw.length, recovery, metadataTruncated: true };
     if (bytes(projected) <= maxBytes) return projected;
   }
   projected.truncated = true;
-  projected.notice = 'Head/tail preview only. hiddenRange is omitted raw UTF-8 bytes; recover with Execution.read, not reexecution.';
+  projected.notice = 'Head/tail preview only. hiddenRange is omitted raw UTF-8 bytes; use the supplied recovery descriptor, not guessed trace IDs or reexecution.';
   const preview = kept => {
     const headEnd = utf8End(raw, Math.ceil(kept / 2)), tailStart = utf8Start(raw, raw.length - Math.floor(kept / 2));
     projected.hiddenRange = { start: headEnd, end: tailStart };

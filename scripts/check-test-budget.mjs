@@ -9,7 +9,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 
 // Reviewed baseline across Vitest AND Playwright, including skipped/each cases.
 // Deliberate growth requires reviewing the coverage tradeoff and this budget.
-export const TEST_CASE_LIMIT = 500;
+// +1 distinct safety regression: scoped task archive recovery across restart.
+// Recoverable read -> actual edit/validation extends the existing SQLite loop case.
+export const TEST_CASE_LIMIT = 501;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

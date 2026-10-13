@@ -201,9 +201,13 @@ export function projectTaskEvidence(snapshot, maxBytes = 8192) {
     notice: 'External task/child observations, not user reports or instructions. Bounded previews only; raw logs and tool results remain in private Person task storage. Completion does not schedule cognition. Inspect/wait explicitly; omitted records are not deleted.' };
   for (const [kind, records] of [['completion', snapshot.completions], ['task', snapshot.tasks], ['agent', snapshot.agents], ['tool-result', snapshot.toolResults]]) {
     for (const record of records ?? []) {
-      const output = JSON.stringify(record);
-      const result = projectNativeResult({ kind, id: `person-${kind}`, output, sourceRef: record.sourceRef ?? `person-task:${snapshot.namespace}:${kind}:${digest(output)}`,
-        ...(record.rawPath ? { rawPath: record.rawPath } : {}), rawBytes: bytes(output), sha256: digest(output) }, 2048);
+      const toolResult = kind === 'tool-result';
+      const output = toolResult ? record.output : JSON.stringify(record);
+      const result = projectNativeResult({ kind, id: `person-${kind}`, output,
+        sourceRef: record.sourceRef ?? `person-task:${snapshot.namespace}:${kind}:${digest(output)}`,
+        ...(toolResult ? Object.fromEntries(['episodeId', 'tool', 'childId', 'aborted', 'ok', 'code', 'errorEffect', 'outputTruncated', 'outputNextOffset']
+          .filter(key => Object.hasOwn(record, key)).map(key => [key, record[key]])) : {}),
+        rawBytes: record.rawBytes ?? bytes(output), sha256: record.sha256 ?? digest(output) }, 2048);
       projection.items.push(result);
       if (bytes(projection) > maxBytes) { projection.items.pop(); return projection; }
     }
@@ -405,7 +409,7 @@ export class PersonRuntime {
         getContext: async ctx => this.tasks()?.context({ ...ctx, episode, provider,
           selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry }),
         onResult: result => finalizeNativeResult(result) });
-      const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost, workDir: this.toolOptions.workDir });
+      const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost, taskHost: this.tasks(), workDir: this.toolOptions.workDir });
       const initialTools = capabilities.executionTools();
       const context = assembleContext({ instructions: EXECUTION_INSTRUCTIONS, toolSchemas: initialTools,
         reservedContextBytes: personFinalContextReserveBytes(EXECUTION_INSTRUCTIONS), snapshot, episode, provider, selection,
@@ -583,7 +587,7 @@ export class PersonRuntime {
             // failing test), not proof of rollback or permission to replay it.
             // Only unconfirmed process/effect termination blocks the next step.
             if (result?.terminal) fail('TOOL_EFFECT_UNCONFIRMED');
-            const projection = transcript.result(group, toolCall.id, traceCallId, invocation, result);
+            const projection = transcript.result(group, toolCall.id, traceCallId, invocation, result, episode.id);
             // Recall pages carry structured message/concept reads; if projection
             // cannot retain them it must not manufacture their provenance.
             observe(projection);

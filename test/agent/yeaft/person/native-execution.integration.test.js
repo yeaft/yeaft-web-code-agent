@@ -45,35 +45,50 @@ afterEach(async () => {
 });
 
 describe('Person continuous execution with real SQLite authority', () => {
-  it('reads/edits/tests in order, recovers the original tool trace and commits once after all tools', async () => {
-    let originalCallId;
+  it('continues after missing/invalid evidence reads, edits/tests in order and commits once without replay', async () => {
+    let originalCallId, requests = 0;
     const run = await setup((params, index) => {
-      if (index < 5) expect(params.tools.map(t => t.name)).toEqual(expect.arrayContaining(['Bash', 'FileRead', 'FileEdit', 'Execution__read']));
-      if (index === 0) return tools(['read', 'FileRead', { file_path: 'fixture' }]);
-      if (index === 1) return tools(['edit', 'FileEdit', { file_path: 'fixture', old_string: 'before', new_string: 'after' }]);
-      if (index === 2) return tools(['test', 'Bash', { command: 'test "$(cat fixture)" = after && printf VERIFIED' }]);
+      requests++;
+      if (index < 7) expect(params.tools.map(t => t.name)).toEqual(expect.arrayContaining(['Bash', 'FileRead', 'FileEdit', 'Execution__read']));
+      if (index === 0) return tools(['missing', 'Execution__read', { callId: 'missing' }]);
+      if (index === 1) {
+        expect(JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'missing').content))
+          .toMatchObject({ ok: false, code: 'NOT_FOUND', errorEffect: 'none', replaySafe: true });
+        return tools(['read', 'FileRead', { file_path: 'fixture' }]);
+      }
+      if (index === 2) {
+        const recovery = JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'read').content).recovery.read.args;
+        return tools(['offset', 'Execution__read', { ...recovery, offset: 1000000 }]);
+      }
       if (index === 3) {
+        expect(JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'offset').content))
+          .toMatchObject({ ok: false, code: 'INVALID_REQUEST', errorEffect: 'none', replaySafe: true });
+        return tools(['edit', 'FileEdit', { file_path: 'fixture', old_string: 'before', new_string: 'after' }]);
+      }
+      if (index === 4) return tools(['test', 'Bash', { command: 'test "$(cat fixture)" = after && printf VERIFIED' }]);
+      if (index === 5) {
         originalCallId = JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'test').content).callId;
         return tools(['recover', 'Execution__read', { callId: originalCallId, maxBytes: 4096 }]);
       }
-      if (index === 4) {
+      if (index === 6) {
         const page = JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'recover').content);
         expect(page).toMatchObject({ callId: originalCallId, output: 'VERIFIED', eof: true, authority: 'evidence-only' });
         expect(page.executionTraceCallId).not.toBe(originalCallId);
-        return text('Read, edited and verified the actual file.');
+        return text('Read, edited and verified the actual file despite an evidence miss.');
       }
       expect(params.tools).toEqual([]); return text(JSON.stringify(final(params)));
     });
     await writeFile(join(run.dir, 'fixture'), 'before'); await run.start();
-    expect((await run.idle()).latestEpisode.status).toBe('completed');
+    expect((await run.idle()).latestEpisode.status).toBe('completed'); expect(requests).toBe(8);
     expect(await readFile(join(run.dir, 'fixture'), 'utf8')).toBe('after');
     const records = await traces(run.service);
-    expect(records.filter(t => t.kind === 'capability_started').reverse().map(t => t.capability.id)).toEqual(['FileRead', 'FileEdit', 'Bash', 'Execution.read']);
+    expect(records.filter(t => t.kind === 'capability_started').reverse().map(t => t.capability.id)).toEqual(['Execution.read', 'FileRead', 'Execution.read', 'FileEdit', 'Bash', 'Execution.read']);
+    expect(records.filter(t => t.kind === 'capability_failed').map(t => t.result.code).sort()).toEqual(['INVALID_REQUEST', 'NOT_FOUND']);
     expect(records.filter(t => t.kind === 'activity')).toHaveLength(1);
     expect(records.filter(t => t.kind === 'call_output' && t.output.protocol === 'cognition')).toHaveLength(1);
     expect(records.filter(t => t.kind === 'call_output').every(t => t.output.usage.inputTokens === 13)).toBe(true);
     const turn = (await call(run.service, 'turns')).items[0];
-    expect(turn.loopCount).toBe(6); expect(turn.calls.flatMap(c => c.capabilities ?? [])).toHaveLength(4);
+    expect(turn.loopCount).toBe(8); expect(turn.calls.flatMap(c => c.capabilities ?? [])).toHaveLength(6);
     await call(run.service, 'open', {}, 'bob');
     expect((await call(run.service, 'traces', {}, 'bob')).items).toEqual([]);
   });

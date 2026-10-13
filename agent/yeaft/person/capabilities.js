@@ -1,5 +1,5 @@
 import { NATIVE_TOOL_MANIFESTS, NATIVE_TOOL_IDS, isNativeTool } from './native-tools.js';
-import { bytes, digest, fail, identifier, object, page, text } from './contracts.js';
+import { bytes, digest, fail, identifier, object, page, text, PersonError } from './contracts.js';
 import { createdCapabilityRecord, validateCreatedDefinition } from './created-capability-contract.js';
 import { runPersonScript, scriptInput, testPersonScript } from './script-executor.js';
 import { chronologicalCursor, createdSkillView, inspectionCursor, inspectionPage, inspectionTime } from './inspection.js';
@@ -12,7 +12,7 @@ import { validateCapabilityArguments } from './tool-arguments.js';
 // Intrinsic cognition, bounded pure scripts and supported native host tools.
 // No shell/filesystem/network/VP authority is exposed to generated code.
 const entries = [
-  { id: 'Execution.read', version: 1, domain: 'evidence', description: 'Read an existing execution trace by its original callId without rerunning the operation.', keywords: '执行 证据 输出 恢复 回读 execution evidence output recover trace read', useWhen: 'Recover omitted output or inspect actual prior success/failure before considering another operation.', avoidWhen: 'Historical evidence never grants current permission or proves effects rolled back.', instructions: 'args: {callId:string,episodeId?:string,offset?:integer>=0,maxBytes?:4..4096}. Default episode is the live current episode; optional episodeId must already exist for the same Person/owner/namespace. No owner/path arguments. offset/nextOffset are raw UTF-8 output byte positions; use returned nextOffset, mid-codepoint offsets are rejected. Pages may be smaller for UTF-8 boundaries or JSON escaping; response <=8192 bytes. Returns original args (bounded preview with argsTruncated/argsRawBytes), ok/code/errorEffect/sourceRef/rawBytes/sha256/output/returnedBytes/nextOffset/eof and historical/authority:evidence-only. Non-string output is JSON; absent output uses JSON.stringify(result). Read-only: no model call, tool reexecution, copy publication or current behavior authorization.', args: { callId: 'original call ID', episodeId: 'optional existing owned episode ID', offset: 'raw UTF-8 byte position, default 0', maxBytes: '4..4096, default 4096' } },
+  { id: 'Execution.read', version: 1, domain: 'evidence', description: 'Read an existing execution trace by callId or private task tool result by sourceRef without rerunning the operation.', keywords: '执行 证据 输出 恢复 回读 execution evidence output recover trace read', useWhen: 'Recover omitted output or inspect actual prior success/failure before considering another operation.', avoidWhen: 'Historical evidence never grants current permission or proves effects rolled back.', instructions: 'args: {callId?:string,sourceRef?:string,episodeId?:string,offset?:integer>=0,maxBytes?:4..4096}. Exactly one callId (SQLite capability trace) or sourceRef (complete person-tool:<scopehash>:<jobid> archive ref); never derive a trace callId from a task ref. Use the supplied recovery descriptor unchanged. Default episode is the live current episode; optional episodeId must already exist for the same Person/owner/namespace. No owner/path arguments. offset/nextOffset are raw UTF-8 output byte positions; use returned nextOffset, mid-codepoint offsets are rejected. Pages may be smaller for UTF-8 boundaries or JSON escaping; response <=8192 bytes. Returns original args (bounded preview with argsTruncated/argsRawBytes), ok/code/errorEffect/sourceRef/rawBytes/sha256/output/returnedBytes/nextOffset/eof and historical/authority:evidence-only. Non-string output is JSON; absent output uses JSON.stringify(result). NOT_FOUND/INVALID_REQUEST after live authority validation return ok:false/errorEffect:none/replaySafe:true with safe correction guidance; cancellation, STALE, storage and scope failures remain terminal. Read-only: no model call, tool reexecution, copy publication or current behavior authorization.', args: { callId: 'original SQLite capability trace call ID', sourceRef: 'complete person-tool archive reference, mutually exclusive with callId', episodeId: 'optional existing owned episode ID', offset: 'raw UTF-8 byte position, default 0', maxBytes: '4..4096, default 4096' } },
   { id: 'PresentResponse', version: 1, domain: 'delivery', description: 'Publish a structured user-visible answer with a searchable plain-text summary.', keywords: '展示 回答 图表 表格 卡片 时间线 present response chart table cards timeline rich', useWhen: 'Rich structure improves an answer; ordinary reply remains valid for simple text.', avoidWhen: 'Do not expose secrets, fabricate evidence or repeat an already published summary.', instructions: `${PRESENT_RESPONSE_DESCRIPTION} Invoke as a native tool call. Publication never commits state/concepts or ends the episode, even with phase=final; the final cognitive distillation follows execution.`, args: PRESENTATION_SCHEMA, access: 'publish-owner-message' },
   { id: 'Think', version: 1, domain: 'cognition', description: 'Intrinsic deliberate reflection, reorganization, association and reconsideration.', keywords: '思考 整理 反思 think reflection', useWhen: 'Think with the evidence already present, or rest when nothing warrants further work.', avoidWhen: 'Do not invent evidence or call a tool merely to appear thoughtful.', instructions: 'Advance an unresolved question: test, integrate a result or distill an insight. Record the change, not a status recap. Follow the progress/continuation rules; quiet rest is valid. This method makes no model call or external action.', args: {} },
   { id: 'Output.publish', version: 1, domain: 'delivery', description: 'Deliver a meaningful artifact as an immutable file snapshot or external link to your owner.', keywords: '产物 交付 输出 文件 下载 链接 publish output artifact deliver file download link', useWhen: 'Deliver an actual completed or useful partial artifact, including artifacts produced by your children.', avoidWhen: 'Do not publish secrets, unauthorized files or guessed paths; do not claim publication rolled back on cancellation.', instructions: 'args: {file_path?:string,url?:string,title?:string}. Exactly one file_path or url. file_path is relative to canonical workDir or an absolute path strictly inside it; no symlinks/directories. Max 10 MiB per file, 100 MiB and 200 outputs total per Person. Files are durable byte snapshots with conservative MIME, including Markdown/images/PDF/HTML/text/code/JSON/binary downloads. URL must be HTTP(S), no credentials; it is metadata only and never fetched. title <=240 UTF-8 bytes; default filename or link host, truncated on UTF-8 boundaries if necessary. File publication is Linux-only with accessible procfs and no-follow directory descriptors; unavailable platforms fail closed with OUTPUT_PLATFORM. Links and existing snapshot reads remain available. Returns public {id,title,kind,mimeType,size,episodeId,createdAt,url?}, no raw path. Successful publications survive later cancellation/failure. Parent verifies and publishes child artifacts within its own workDir; do not grant children this capability.', args: { file_path: 'optional local artifact path within workDir', url: 'optional credential-free HTTP(S) URL', title: 'optional title <=240 UTF-8 bytes' }, access: 'publish-owner-output' },
@@ -126,7 +126,7 @@ const boundedText = (maxLength, empty = false) => ({ ...string, maxLength, ...(e
 const nullable = schema => ({ anyOf: [schema, { type: 'null' }] });
 const builtinSchema = id => {
   const schemas = {
-    'Execution.read': [{ callId: idString, episodeId: idString, offset: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, maxBytes: { type: 'integer', minimum: 4, maximum: 4096 } }, ['callId']],
+    'Execution.read': [{ callId: idString, sourceRef: { type: 'string', pattern: '^person-tool:[a-f0-9]{64}:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![\\s\\S])' }, episodeId: idString, offset: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, maxBytes: { type: 'integer', minimum: 4, maximum: 4096 } }, []],
     Recall: [{ kind: { type: 'string', enum: ['messages', 'concepts'] }, query: boundedText(200, true), cursor: nullable(idString), limit: { type: 'integer', minimum: 1, maximum: 5 } }, ['kind']],
     'Output.publish': [{ file_path: boundedText(4096), url: boundedText(4096), title: boundedText(240) }, []],
     'catalog.search': [{ query: boundedText(200, true), cursor: nullable(idString), limit: { type: 'integer', minimum: 1, maximum: 5 } }, []],
@@ -135,12 +135,12 @@ const builtinSchema = id => {
   };
   const [properties, required] = schemas[id] ?? [{ input: {} }, ['input']];
   return { type: 'object', properties, required, additionalProperties: false,
-    ...(id === 'Output.publish' ? { oneOf: [{ required: ['file_path'] }, { required: ['url'] }] } : {}) };
+    ...(id === 'Output.publish' ? { oneOf: [{ required: ['file_path'] }, { required: ['url'] }] } : id === 'Execution.read' ? { oneOf: [{ required: ['callId'] }, { required: ['sourceRef'] }] } : {}) };
 };
 
 export class PersonCapabilities {
-  constructor(repository, ownerId, { experience = [], triggerKind = 'think', now = Date.now(), created = [], episode, toolHost, workDir } = {}) {
-    this.repository = repository; this.ownerId = ownerId; this.episode = episode; this.toolHost = toolHost; this.workDir = workDir;
+  constructor(repository, ownerId, { experience = [], triggerKind = 'think', now = Date.now(), created = [], episode, toolHost, taskHost, workDir } = {}) {
+    this.repository = repository; this.ownerId = ownerId; this.episode = episode; this.toolHost = toolHost; this.taskHost = taskHost; this.workDir = workDir;
     this.scripts = new Map(created.map(record => [record.id, record]));
     this.nativeToolIds = toolHost?.allowedToolIds?.() ?? NATIVE_TOOL_IDS;
     const allowed = new Set(this.nativeToolIds);
@@ -252,11 +252,43 @@ export class PersonCapabilities {
       return this.toolHost.execute(id, args, { signal, callId, episodeId: this.episode?.id });
     }
     if (id === 'Execution.read') {
-      const request = executionReadRequest(args);
-      if (!this.episode || this.episode.ownerId !== this.ownerId || !this.repository.executionRead) fail('UNSUPPORTED');
-      const result = await this.repository.executionRead(this.episode, request, { signal });
+      if (!this.episode || this.episode.ownerId !== this.ownerId || !this.repository.executionRead || !this.repository.checkExecutionRead) fail('UNSUPPORTED');
+      // Validate the current lease BEFORE converting any read-specific errors.
+      await this.repository.checkExecutionRead(this.episode);
       signal?.throwIfAborted();
-      return result;
+      try {
+        const request = executionReadRequest(args);
+        await this.repository.checkExecutionRead(this.episode, request.episodeId);
+        signal?.throwIfAborted();
+        let result;
+        if (request.sourceRef !== undefined) {
+          if (!this.taskHost) fail('UNSUPPORTED');
+          result = await this.taskHost.readToolResult(this.episode, request, { repository: this.repository, signal });
+        } else {
+          try { result = await this.repository.executionRead(this.episode, request, { signal }); }
+          catch (error) {
+            // Compatibility for old previews: exact UUID archive ID + explicitly
+            // owned episode only, after trace miss. No scanning/loose ID matching.
+            if (!(error instanceof PersonError) || error.code !== 'NOT_FOUND' || !request.episodeId || !this.taskHost ||
+                !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(request.callId)) throw error;
+            const { callId: archiveId, ...page } = request;
+            result = await this.taskHost.readToolResult(this.episode, { ...page, sourceRef: this.taskHost.toolResultRef(this.episode, archiveId) }, { repository: this.repository, signal });
+          }
+        }
+        signal?.throwIfAborted();
+        return result;
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (!(error instanceof PersonError) || !['NOT_FOUND', 'INVALID_REQUEST'].includes(error.code)) throw error;
+        // A concurrent cancellation/stale lease overrides the recoverable miss.
+        await this.repository.checkExecutionRead(this.episode);
+        signal?.throwIfAborted();
+        return { id, ok: false, code: error.code, errorEffect: 'none', replaySafe: true,
+          output: (error.code === 'NOT_FOUND'
+            ? 'Evidence not found in the owned episode. Use the exact supplied recovery descriptor: trace callId or complete person-tool sourceRef plus episodeId. Do not guess IDs, paths or rerun the operation.'
+            : 'Invalid evidence read or UTF-8 byte offset. Use the exact recovery descriptor and returned nextOffset (or offset:0); maxBytes must be 4..4096. No operation was rerun.') +
+            ' errorEffect:none and replaySafe:true describe only this read invocation, not the original operation or its effects.' };
+      }
     }
     if (id === 'Output.publish') return publishOutput(this.repository, this.episode, this.workDir, args, { signal, callId });
     if (id === 'PresentResponse') return publishPresentation(this.repository, this.episode, args, { signal, callId });

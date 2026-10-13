@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, symlink, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
-import { createPersonNativeRegistry, NATIVE_TOOL_IDS } from '../../../../agent/yeaft/person/native-tools.js';
+import { createPersonNativeRegistry, NATIVE_TOOL_IDS, projectNativeResult } from '../../../../agent/yeaft/person/native-tools.js';
 import { runPersonScript } from '../../../../agent/yeaft/person/script-executor.js';
-import { bytes, digest } from '../../../../agent/yeaft/person/contracts.js';
+import { bytes, digest, PersonError } from '../../../../agent/yeaft/person/contracts.js';
+import { PersonTaskHost } from '../../../../agent/yeaft/person/task-host.js';
+import { projectTaskEvidence } from '../../../../agent/yeaft/person/runtime.js';
 
 const admission = () => ({ kind: 'think', text: 'Inspect existing evidence.', clientMessageId: randomUUID(), workerId: 'worker', budget: { calls: 16 } });
 async function persist(repository, episode, invocation, result, { code, terminalCode } = {}) {
@@ -19,8 +21,8 @@ async function persist(repository, episode, invocation, result, { code, terminal
   await repository.finalizeCapability(episode, { callId, capability: invocation, result, code, terminalCode });
   return callId;
 }
-async function prepare(repository, episode) {
-  const cap = new PersonCapabilities(repository, episode.ownerId, { episode });
+async function prepare(repository, episode, taskHost) {
+  const cap = new PersonCapabilities(repository, episode.ownerId, { episode, taskHost });
   await cap.execute({ id: 'catalog.view', args: { id: 'Execution.read' } });
   cap.activate(cap.context());
   return cap;
@@ -63,7 +65,11 @@ describe('Person Execution.read durable scoped evidence', () => {
       expect(page.nextOffset).toBeGreaterThan(offset); offset = page.nextOffset;
     }
     expect(pages).toBeGreaterThan(50); expect(restored).toBe(output);
-    expect(await read(cap, { callId, offset: bytes(output) })).toMatchObject({ output: '', returnedBytes: 0, eof: true });
+    expect(await read(cap, { callId, offset: bytes(output) })).toMatchObject({ output: '', returnedBytes: 0, eof: true, replaySafe: false });
+    const invalid = await read(cap, { callId, offset: bytes(output) + 1 });
+    expect(invalid).toMatchObject({ ok: false, code: 'INVALID_REQUEST', errorEffect: 'none', replaySafe: true });
+    expect(invalid.output).toContain('only this read invocation, not the original operation');
+    expect(await read(cap, { callId, maxBytes: 4 })).toMatchObject({ ok: true, errorEffect: null, replaySafe: false, capabilityId: 'FileWrite' });
     expect(sql.prepare('SELECT count(*) AS n FROM traces').get().n).toBe(before); sql.close();
     expect(await reopened.getPerson('alice')).toEqual(personBefore); expect(tool).not.toHaveBeenCalled();
   });
@@ -81,7 +87,7 @@ describe('Person Execution.read durable scoped evidence', () => {
     const cap = await prepare(repository, live);
     expect(await read(cap, { callId: priorId, episodeId: prior.id })).toMatchObject({ output: 'historical effect', historical: true, authority: 'evidence-only' });
     for (const args of [{ callId: priorId }, { callId: bobId, episodeId: bob.id }, { callId: otherId, episodeId: other.id }, { callId: priorId, episodeId: 'nonexistent' }, { callId: 'missing', episodeId: prior.id }]) {
-      await expect(read(cap, args)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(await read(cap, args)).toMatchObject({ ok: false, code: 'NOT_FOUND', errorEffect: 'none', replaySafe: true });
     }
     await expect(repository.executionRead({ ...live, personId: bob.personId }, { callId: priorId, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
     await expect(foreign.executionRead(live, { callId: priorId, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
@@ -89,23 +95,127 @@ describe('Person Execution.read durable scoped evidence', () => {
     await repository.cancel('alice', live.id);
     await expect(read(cap, { callId: priorId, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
   });
+
+  it('recovers historical task-host archives by exact sourceRef across restart, with Unicode pages and fail-closed authority', async () => {
+    let repository = repo(); await repository.open('alice');
+    const prior = (await repository.admit('alice', admission())).episode;
+    let host = new PersonTaskHost({ yeaftDir: root, namespace: 'default' });
+    const context = await host.context({ episode: prior, cwd: root });
+    const output = 'HEAD中😀"\\\n'.repeat(1600) + 'TAIL';
+    // Real task-host archive writer, not guessed fixtures or a SQLite trace ID.
+    await writeFile(join(root, 'fixture.txt'), output);
+    await context.nativeRegistry.execute('FileRead', { file_path: 'fixture.txt' }, context);
+    const archive = host.snapshot('alice').toolResults.find(result => result.tool === 'FileRead');
+    const archivePath = archive.rawPath, original = JSON.parse(await readFile(archivePath, 'utf8'));
+    expect(original.sourceRef).toBe(archive.sourceRef);
+    const preview = projectTaskEvidence(host.snapshot('alice'));
+    expect(preview.items.find(item => item.sourceRef === archive.sourceRef)).toMatchObject({
+      episodeId: prior.id, tool: 'FileRead', childId: null, ok: true, truncated: true,
+      recovery: { read: { id: 'Execution.read', args: { sourceRef: archive.sourceRef, episodeId: prior.id, offset: 0, maxBytes: 4096 } } },
+    });
+    await repository.finish(prior, 'failed', 'INTERRUPTED');
+    await host.close(); await repository.close();
+    repository = repo();
+    const live = (await repository.admit('alice', admission())).episode;
+    host = new PersonTaskHost({ yeaftDir: root, namespace: 'default' });
+    const cap = await prepare(repository, live, host);
+    try {
+      const descriptor = { sourceRef: archive.sourceRef, episodeId: prior.id };
+      await expect(repository.executionRead(live, { callId: archive.id, episodeId: prior.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(archive.output).not.toContain('\ufffd');
+      let offset = 0, restored = '';
+      do {
+        const page = await read(cap, { ...descriptor, offset, maxBytes: 127 });
+        expect(page).toMatchObject({ tool: 'FileRead', childId: null, aborted: false, historical: true, sourceRef: archive.sourceRef, authority: 'evidence-only' });
+        expect(page).not.toHaveProperty('callId');
+        expect(page.output).not.toContain('\ufffd'); expect(bytes(page)).toBeLessThanOrEqual(8192);
+        restored += page.output; offset = page.nextOffset;
+        if (page.eof) break;
+      } while (true);
+      expect(restored).toBe(original.output);
+      expect(await read(cap, { callId: archive.id })).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+      expect(await read(cap, { callId: randomUUID(), episodeId: prior.id })).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+      await expect(read(cap, { ...descriptor, episodeId: live.id })).rejects.toMatchObject({ code: 'TASK_SCOPE_DENIED' });
+      const compatible = await read(cap, { callId: archive.id, episodeId: prior.id });
+      expect(compatible.sourceRef).toBe(archive.sourceRef); expect(original.output.startsWith(compatible.output)).toBe(true);
+      const unicodeOffset = Buffer.from(original.output).indexOf(Buffer.from('中')) + 1;
+      for (const badOffset of [unicodeOffset, bytes(original.output) + 1]) {
+        expect(await read(cap, { ...descriptor, offset: badOffset })).toMatchObject({ ok: false, code: 'INVALID_REQUEST', errorEffect: 'none', replaySafe: true });
+      }
+      for (const sourceRef of ['person-tool:../../secret', archive.sourceRef + ':extra', archive.sourceRef + '\n']) {
+        expect(await read(cap, { sourceRef, episodeId: prior.id })).toMatchObject({ ok: false, code: 'INVALID_REQUEST' });
+      }
+      for (const args of [{ ...descriptor, callId: archive.id }, {}]) {
+        expect(await read(cap, args)).toMatchObject({ ok: false, code: 'INVALID_REQUEST' });
+      }
+      const cancelled = new AbortController(); cancelled.abort();
+      await expect(read(cap, descriptor, { signal: cancelled.signal })).rejects.toBe(cancelled.signal.reason);
+      const during = new AbortController(), check = repository.checkExecutionRead.bind(repository);
+      let checks = 0;
+      const fence = vi.spyOn(repository, 'checkExecutionRead').mockImplementation(async (...args) => {
+        const result = await check(...args);
+        if (++checks === 2) during.abort();
+        return result;
+      });
+      await expect(host.readToolResult(live, descriptor, { repository, signal: during.signal })).rejects.toMatchObject({ name: 'AbortError' });
+      fence.mockRestore();
+      const missing = host.toolResultRef(live, randomUUID());
+      expect(await read(cap, { sourceRef: missing, episodeId: prior.id })).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+      const wrongScope = archive.sourceRef.replace(/:[a-f0-9]{64}:/, ':' + '0'.repeat(64) + ':');
+      await expect(read(cap, { ...descriptor, sourceRef: wrongScope })).rejects.toMatchObject({ code: 'TASK_SCOPE_DENIED' });
+      for (const forged of [{ ...live, ownerId: 'bob' }, { ...live, personId: 'wrong' }, { ...live, namespace: 'other' }]) {
+        await expect(host.readToolResult(forged, descriptor, { repository })).rejects.toMatchObject({ code: 'TASK_SCOPE_DENIED' });
+      }
+      await repository.open('bob'); const bob = (await repository.admit('bob', admission())).episode;
+      expect(await read(cap, { ...descriptor, episodeId: bob.id })).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+      const scope = 'a'.repeat(64), episodeId = randomUUID(), jobId = randomUUID();
+      const sourceRef = `person-tool:${scope}:${jobId}`, rawOutput = '中😀\n'.repeat(4000);
+      const preview = projectTaskEvidence({ namespace: scope, toolResults: [{ id: jobId, episodeId, tool: 'FileRead', childId: 'child', ok: false, code: 'TOOL_FAILED', errorEffect: 'none', sourceRef, output: rawOutput }] });
+      expect(preview.items[0]).toMatchObject({ episodeId, tool: 'FileRead', childId: 'child', ok: false,
+        recovery: { read: { id: 'Execution.read', args: { sourceRef, episodeId, offset: 0, maxBytes: 4096 } } }, truncated: true });
+      expect(preview.items[0].recovery.read.args).not.toHaveProperty('callId');
+      const task = projectNativeResult({ kind: 'task', callId: jobId, sourceRef: `person-task:${scope}:${jobId}`, output: rawOutput }, 1024);
+      expect(task.recovery).not.toHaveProperty('read');
+      const trace = projectNativeResult({ ...preview.items[0], executionTraceCallId: 'actual-trace', executionEpisodeId: 'live', output: rawOutput }, 2048);
+      expect(trace.recovery.read.args).toEqual({ callId: 'actual-trace', episodeId: 'live', offset: 0, maxBytes: 4096 });
+      const saved = original.output;
+      // Preserve archived error/child provenance; reading never executes it.
+      await writeFile(archivePath, JSON.stringify({ ...original, childId: 'child', ok: false, code: 'TOOL_FAILED', errorEffect: 'unknown', aborted: true }));
+      expect(await read(cap, descriptor)).toMatchObject({ ok: false, tool: 'FileRead', childId: 'child', code: 'TOOL_FAILED', errorEffect: 'unknown', aborted: true });
+      await rm(archivePath); await writeFile(join(root, 'secret'), saved); await symlink(join(root, 'secret'), archivePath);
+      await expect(read(cap, descriptor)).rejects.toMatchObject({ code: 'TASK_SCOPE_DENIED' });
+      await rm(archivePath); await writeFile(archivePath, '{broken');
+      await expect(read(cap, descriptor)).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+      await repository.cancel('alice', live.id);
+      await expect(read(cap, { sourceRef: missing, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
+    } finally { await host.close(); }
+  });
+
 });
 
 describe('Person Execution.read discovery and native projection', () => {
   it('never starts a canceled read or returns a result after cancellation, and never exposes this authority to Script/child tools', async () => {
     const executionRead = vi.fn(), tool = vi.fn();
-    const cap = new PersonCapabilities({ executionRead }, 'alice', { episode: { id: 'episode', ownerId: 'alice' }, toolHost: { execute: tool } });
+    const cap = new PersonCapabilities({ executionRead, checkExecutionRead: async () => true }, 'alice', { episode: { id: 'episode', ownerId: 'alice' }, toolHost: { execute: tool } });
     await cap.execute({ id: 'catalog.view', args: { id: 'Execution.read' } });
     const controller = new AbortController(); controller.abort();
     await expect(read(cap, { callId: 'original' }, { signal: controller.signal })).rejects.toBe(controller.signal.reason);
     expect(executionRead).not.toHaveBeenCalled(); expect(tool).not.toHaveBeenCalled();
-    const during = new AbortController(); executionRead.mockImplementation(async () => { during.abort(); return { output: 'late' }; });
-    await expect(read(cap, { callId: 'original' }, { signal: during.signal })).rejects.toBe(during.signal.reason);
+    const during = new AbortController(), reason = new Error('cancelled during read');
+    executionRead.mockImplementation(async () => { during.abort(reason); return { output: 'late' }; });
+    await expect(read(cap, { callId: 'original' }, { signal: during.signal })).rejects.toBe(reason);
     const child = createPersonNativeRegistry();
     expect(child.has('Execution.read')).toBe(false); expect(NATIVE_TOOL_IDS).not.toContain('Execution.read');
     await expect(child.execute('Execution.read', { callId: 'original' }, {})).rejects.toThrow();
     expect(await runPersonScript('return [typeof Execution, typeof repository, typeof require, typeof tools];', {})).toMatchObject({ ok: true, output: ['undefined', 'undefined', 'undefined', 'undefined'] });
     expect(await runPersonScript('return Execution.read(input);', { callId: 'original' })).toMatchObject({ ok: false });
     expect(executionRead).toHaveBeenCalledTimes(1); expect(tool).not.toHaveBeenCalled();
+    for (const code of ['STALE', 'STORAGE_UNAVAILABLE']) {
+      executionRead.mockRejectedValue(new PersonError(code));
+      await expect(read(cap, { callId: 'original' })).rejects.toMatchObject({ code });
+    }
+    executionRead.mockRejectedValue(Object.assign(new Error('unknown IO effect'), { code: 'INVALID_REQUEST' }));
+    await expect(read(cap, { callId: 'original' })).rejects.toThrow('unknown IO effect');
+
   });
 });
