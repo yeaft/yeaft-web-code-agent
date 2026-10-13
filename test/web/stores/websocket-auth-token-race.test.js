@@ -4,6 +4,7 @@ const originalLocation = globalThis.location;
 const originalWebSocket = globalThis.WebSocket;
 const originalPinia = globalThis.Pinia;
 const originalLocalStorage = globalThis.localStorage;
+const originalWindow = globalThis.window;
 
 function installMemoryLocalStorage() {
   const values = new Map();
@@ -25,6 +26,9 @@ async function loadWebsocketHelpers(authStore) {
       for (const [name, action] of Object.entries(options.actions || {})) {
         store[name] = action.bind(store);
       }
+      for (const [name, getter] of Object.entries(options.getters || {})) {
+        Object.defineProperty(store, name, { get: () => getter.call(store, store) });
+      }
       stores.set(id, store);
       return store;
     },
@@ -35,6 +39,7 @@ async function loadWebsocketHelpers(authStore) {
   return {
     ...await import('../../../web/stores/helpers/websocket.js'),
     ...await import('../../../web/stores/chat.js'),
+    ...await import('../../../web/stores/helpers/messageHandler.js'),
   };
 }
 
@@ -104,6 +109,9 @@ afterEach(() => {
   globalThis.location = originalLocation;
   globalThis.WebSocket = originalWebSocket;
   globalThis.Pinia = originalPinia;
+  if (originalWindow === undefined) delete globalThis.window;
+  else globalThis.window = originalWindow;
+  vi.useRealTimers();
   if (originalLocalStorage === undefined) delete globalThis.localStorage;
   else globalThis.localStorage = originalLocalStorage;
 });
@@ -322,5 +330,223 @@ describe('websocket auth token races', () => {
     }));
     expect(authStore.handleAuthFailure).toHaveBeenCalledWith(undefined, 'old-token', 1);
     expect(authStore.token).toBe(null);
+  });
+});
+
+async function lifecycleFixture() {
+  vi.useFakeTimers();
+  installMemoryLocalStorage();
+  const sockets = installFakeWebSocket();
+  globalThis.location = { protocol: 'https:', host: 'example.test' };
+  const sessions = { sessionList: [], applySnapshot: vi.fn(), beginInventoryCommit: vi.fn() };
+  globalThis.window = { Pinia: { useSessionsStore: () => sessions }, dispatchEvent: vi.fn() };
+  const auth = { ...createRaceAuthStore(), userId: 'owner-a' };
+  auth.$subscribe = vi.fn(callback => { auth.notify = callback; return vi.fn(); });
+  const helpers = await loadWebsocketHelpers(auth);
+  const store = helpers.useChatStore();
+  store.startHeartbeat = vi.fn();
+  store.stopHeartbeat = vi.fn();
+  store.scheduleReconnect = vi.fn();
+  store.parseWsMessage = data => JSON.parse(data);
+  store.requestYeaftSessionInventory = vi.fn();
+  store.checkPendingRecovery = vi.fn();
+  const deliver = (msg, socket = sockets.at(-1)) => socket.onmessage({ data: JSON.stringify(msg) });
+  const open = (capability = 1, inventoryComplete = true) => {
+    helpers.connect(store);
+    sockets.at(-1).readyState = globalThis.WebSocket.OPEN;
+    sockets.at(-1).onopen();
+    deliver({ type: 'auth_result', success: true,
+      ...(capability === null ? {} : { sessionCatalogProtocol: capability }),
+      yeaftSessionInventoryComplete: inventoryComplete,
+    });
+  };
+  return { auth, store, sockets, sessions, deliver, open, helpers };
+}
+
+const catalogRow = {
+  catalogKey: 'yeaft:agent-a:session-a', runtimeProvider: 'yeaft', title: 'Session A',
+  routeRef: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'session-a' },
+};
+
+describe('sidebar Session catalog lifecycle', () => {
+  it('keeps cold paint loading until an authoritative modern snapshot, including empty', async () => {
+    const { store, open, deliver, sessions } = await lifecycleFixture();
+    store.conversations = [{ id: 'legacy-chat', agentId: 'agent-a' }];
+    sessions.sessionList = [{ id: 'legacy-session', agentId: 'agent-a' }];
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    open();
+    store._hasHandledAgentList = true;
+    store._hasHandledYeaftSessionHydrate = true;
+    store.applyLegacyProjectSnapshot([{ id: 'p', sessionIds: ['legacy-session'] }], 'agent-a');
+    expect(store.sessionCatalogLoaded).toBe(false);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    deliver({ type: 'session_catalog_snapshot', catalog: [], projects: [], projectsAuthoritative: true });
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
+  });
+
+  it('retains same-auth catalog, projects, hidden rows and active key after rolling back a pending mutation', async () => {
+    const { auth, store, sockets, open, deliver } = await lifecycleFixture();
+    open();
+    const projects = [{ id: 'project-a', members: [] }];
+    const hidden = [{ ...catalogRow, catalogKey: 'yeaft:agent-a:hidden', hidden: true }];
+    deliver({ type: 'session_catalog_snapshot', catalog: [catalogRow], hiddenCatalog: hidden,
+      projects, projectsAuthoritative: true });
+    store.activeCatalogKey = catalogRow.catalogKey;
+    store.sessionCatalogMutationRequests.pending = {
+      previousCatalog: [{ ...catalogRow }], previousHiddenCatalog: hidden,
+    };
+    store.sessionCatalog = [];
+    store.hiddenSessionCatalog = [...hidden, { ...catalogRow, hidden: true }];
+    const resolve = vi.fn();
+    store.projectMutationRequests.pending = { resolve };
+    const staleMessage = sockets[0].onmessage;
+    auth.token = 'renewed-same-auth-token';
+    open();
+    expect(store.sessionCatalogMutationRequests).toEqual({});
+    expect(resolve).toHaveBeenCalledWith({ ok: false, requestId: 'pending', error: { code: 'connection_changed' } });
+    expect(store.sidebarSessionCatalog).toEqual([catalogRow]);
+    expect(store.sessionProjects).toEqual(projects);
+    expect(store.hiddenSessionCatalog).toEqual(hidden);
+    expect(store.activeCatalogKey).toBe(catalogRow.catalogKey);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    staleMessage({ data: JSON.stringify({ type: 'session_catalog_snapshot', catalog: [] }) });
+    expect(store.sidebarSessionCatalog).toEqual([catalogRow]);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    deliver({ type: 'session_catalog_snapshot', catalog: [], hiddenCatalog: [], projects: [], projectsAuthoritative: true });
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
+  });
+
+  it.each(['owner', 'generation'])('clears private retained data on %s changes even with a renewed token', async change => {
+    const { auth, store, open, deliver } = await lifecycleFixture();
+    open();
+    deliver({ type: 'session_catalog_snapshot', catalog: [catalogRow], hiddenCatalog: [catalogRow],
+      projects: [{ id: 'private-p' }], projectsAuthoritative: true });
+    store.activeCatalogKey = catalogRow.catalogKey;
+    auth.token = 'renewed-token';
+    if (change === 'owner') auth.userId = 'owner-b';
+    else auth.authGeneration += 1;
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    auth.notify();
+    expect(store.sessionCatalog).toEqual([]);
+    expect(store.hiddenSessionCatalog).toEqual([]);
+    expect(store.sessionProjects).toEqual([]);
+    expect(store.activeCatalogKey).toBeNull();
+    // The still-open previous identity cannot repopulate the catalog.
+    deliver({ type: 'session_catalog_snapshot', catalog: [catalogRow] });
+    expect(store.sessionCatalog).toEqual([]);
+    open();
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+  });
+
+  it('does not downgrade a pre-capability modern Server before its snapshot', async () => {
+    const { store, open, deliver } = await lifecycleFixture();
+    open(null);
+    store._hasHandledAgentList = true;
+    expect(store.sessionCatalogProtocolSupported).toBeNull();
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    deliver({ type: 'session_catalog_snapshot', catalog: [] });
+    store.yeaftSessionHydrateRequestId = 'inventory';
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
+    expect(store.sessionCatalogProtocolSupported).toBe(true);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
+  });
+
+  it('adapts old-Server inventories into unified Agent-scoped rows at their accepted boundary', async () => {
+    const { store, sessions, open, deliver } = await lifecycleFixture();
+    open(null);
+    store.conversations = [{ id: 'chat-a', agentId: 'agent-a', provider: 'copilot', title: 'Chat A' }];
+    sessions.sessionList = [{ id: 'same', agentId: 'agent-a', name: 'A' }, { id: 'same', agentId: 'agent-b', name: 'B' }];
+    store._hasHandledAgentList = true;
+    store.yeaftSessionHydrateRequestId = 'inventory';
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
+    expect(store.sessionCatalogProtocolSupported).toBe(false);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
+    expect(store.sidebarSessionCatalog.map(row => row.catalogKey)).toEqual(['chat:chat-a', 'yeaft:agent-a:same', 'yeaft:agent-b:same']);
+    expect(store.sidebarSessionCatalog[0]).toMatchObject({ runtimeProvider: 'copilot', title: 'Chat A',
+      routeRef: { runtimeProvider: 'copilot', agentId: 'agent-a', sessionId: 'chat-a' } });
+    open(null);
+    expect(store.sidebarSessionCatalog).toHaveLength(3);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    // A second reconnect while the replacement inventory is still pending
+    // must not drop the retained legacy projection either.
+    open(null);
+    expect(store.sidebarSessionCatalog).toHaveLength(3);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    // Upgrading to a catalog-capable Server also retains the accepted prior
+    // rows until its authority arrives, without considering them ready.
+    open();
+    expect(store.sidebarSessionCatalog).toHaveLength(3);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    deliver({ type: 'session_catalog_snapshot', catalog: [] });
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
+  });
+
+  it('does not expose false empty for a failed or unknown inventory', async () => {
+    const { store, open, deliver } = await lifecycleFixture();
+    open(null);
+    store._hasHandledAgentList = true;
+    store.yeaftSessionHydrateRequestId = 'inventory';
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: false, error: 'failed' });
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    store.yeaftSessionHydrateRequestId = 'inventory-2';
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory-2', ok: true });
+    expect(store.sessionCatalogProtocolSupported).toBe(false);
+    // With omitted capability, empty legacy inventory cannot prove the Server's
+    // catalog projection didn't fail. Only explicit authority may show empty.
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+  });
+
+  it('treats failed or malformed catalog frames as supported but not authoritative', async () => {
+    const { store, open, deliver } = await lifecycleFixture();
+    open(null);
+    store._hasHandledAgentList = true;
+    store.conversations = [{ id: 'legacy-chat', agentId: 'agent-a' }];
+    deliver({ type: 'session_catalog_snapshot', ok: false, catalog: [] });
+    deliver({ type: 'session_catalog_snapshot' });
+    store.yeaftSessionHydrateRequestId = 'inventory';
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
+    expect(store.sessionCatalogProtocolSupported).toBe(true);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    expect(store.sidebarSessionCatalog).toEqual([]);
+  });
+
+  it('keeps accepted rows read-only immediately on network close', async () => {
+    const { store, sockets, open, deliver } = await lifecycleFixture();
+    open();
+    deliver({ type: 'session_catalog_snapshot', catalog: [catalogRow] });
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
+    sockets[0].onclose({ code: 1006, reason: 'network lost' });
+    expect(store.sidebarSessionCatalog).toEqual([catalogRow]);
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+  });
+
+  it('allows explicitly unsupported Servers to prove an empty legacy inventory', async () => {
+    const { store, open, deliver } = await lifecycleFixture();
+    open(0);
+    store._hasHandledAgentList = true;
+    store.yeaftSessionHydrateRequestId = 'inventory';
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
+  });
+
+  it('uses the existing accepted legacy inventory boundary without adding a catalog timeout', async () => {
+    const { store, open, deliver } = await lifecycleFixture();
+    open(null, false);
+    store._hasHandledAgentList = true;
+    store.conversations = [{ id: 'chat-a', agentId: 'agent-a' }];
+    store.yeaftSessionHydrateRequestId = 'old-inventory';
+    deliver({ type: 'yeaft_session_hydrate', agentId: 'agent-a', sessions: [] });
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(store.sessionCatalogProtocolSupported).toBe(false);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
   });
 });

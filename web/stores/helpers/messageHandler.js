@@ -11,6 +11,7 @@ import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
 import { clearSessionLoading } from './session.js';
 import { applyDebugRawRequestDelta } from '../../components/yeaft-debug-helpers.js';
 import { parseYeaftSessionIdentity } from './yeaft-session-identity.js';
+import { legacySidebarCatalogReady } from './sidebar-session-catalog.js';
 import { handleAgentList, handleAgentSelected } from './handlers/agentHandler.js';
 import {
   handleConversationCreated,
@@ -221,6 +222,7 @@ function scheduleLegacyYeaftSessionInventoryComplete(store) {
     store._legacyYeaftSessionHydrateTimer = null;
     commitBufferedYeaftSessionInventory(store);
     store._hasHandledYeaftSessionHydrate = true;
+    settleOmittedSessionCatalogCapability(store);
     store.yeaftSessionHydrateRequestId = null;
     store.yeaftSessionHydrateError = null;
     // A quiet window is only a heuristic boundary. Keep this socket available
@@ -228,6 +230,15 @@ function scheduleLegacyYeaftSessionInventoryComplete(store) {
     // late slices from this completed request cannot be distinguished from the next.
     store._yeaftSessionInventorySocketQuarantined = true;
   }, LEGACY_YEAFT_SESSION_INVENTORY_QUIET_MS);
+}
+
+// Pre-capability Servers with catalog support always send the snapshot between
+// agent_list and inventory completion. Omission alone is not a downgrade: wait
+// for that existing boundary, so they cannot flash legacy rows on first paint.
+function settleOmittedSessionCatalogCapability(store) {
+  if (store.sessionCatalogProtocolSupported == null && legacySidebarCatalogReady(store)) {
+    store.sessionCatalogProtocolSupported = false;
+  }
 }
 
 function cloneDebugValue(value) {
@@ -349,6 +360,11 @@ export function handleMessage(store, msg) {
         if (msg.acceptPlaintext === true) {
           store.serverEncryptionRequired = false;
         }
+        if (msg.sessionCatalogProtocol === 1) store.sessionCatalogProtocolSupported = true;
+        else if (msg.sessionCatalogProtocol === 0 || msg.sessionCatalogProtocol === false) {
+          store.sessionCatalogProtocolSupported = false;
+          store.sessionCatalogLegacyConfirmed = true;
+        }
         store.yeaftSessionInventoryCompleteSupported = msg.yeaftSessionInventoryComplete === true;
         // auth_result advertises Server support; the route protocol is usable
         // only after Server confirms it processed our client_hello.
@@ -388,6 +404,7 @@ export function handleMessage(store, msg) {
 
     case 'agent_list':
       handleAgentList(store, msg);
+      settleOmittedSessionCatalogCapability(store);
       // Work Center projects live scheduler changes through work_center_event.
       // Routine inventory frames also carry latency/status updates, so refreshing
       // here turns every broadcast into a visible loading → empty/content cycle.
@@ -422,13 +439,22 @@ export function handleMessage(store, msg) {
       store.yeaftSessionHydrateError = msg.ok === false
         ? (msg.error || 'session_inventory_failed')
         : null;
+      settleOmittedSessionCatalogCapability(store);
       break;
 
     case 'session_catalog_snapshot':
+      // The frame itself proves support, even when its inventory failed. Never
+      // downgrade that failure into an apparently authoritative legacy empty.
+      store.sessionCatalogProtocolSupported = true;
+      if (msg.ok === false || !Array.isArray(msg.catalog)) {
+        store.sessionCatalogLoaded = false;
+        break;
+      }
       store.applySessionCatalogSnapshot(
         msg.catalog,
         msg.projectsAuthoritative === true ? msg.projects : null,
         msg.hiddenCatalog,
+        { authoritative: true },
       );
       break;
 

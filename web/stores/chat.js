@@ -47,6 +47,11 @@ import {
   yeaftCatalogKey,
 } from './helpers/session-catalog.js';
 import {
+  sidebarCatalogAuthIsCurrent,
+  sidebarSessionCatalogRows,
+  sidebarSessionCatalogIsLoading,
+} from './helpers/sidebar-session-catalog.js';
+import {
   applyWorkItemSummary,
   isWorkItemDetailResponseStale,
   mergeWorkItemDetail,
@@ -756,6 +761,11 @@ export const useChatStore = defineStore('chat', {
     hiddenSessionCatalog: [],
     sessionProjects: [],
     sessionCatalogLoaded: false,
+    sessionCatalogProtocolSupported: null,
+    sessionCatalogLegacyConfirmed: false,
+    sidebarCatalogOwnerId: null,
+    sidebarCatalogAuthGeneration: null,
+    sidebarLegacySessionCatalog: [],
     sessionCatalogMutationRequests: {},
     projectMutationRequests: {},
     activeCatalogKey: null,
@@ -1202,6 +1212,14 @@ export const useChatStore = defineStore('chat', {
   }),
 
   getters: {
+    sidebarSessionCatalog(state) {
+      if (!sidebarCatalogAuthIsCurrent(state, useAuthStore())) return [];
+      return sidebarSessionCatalogRows(state, getSessionsStore()?.sessionList || []);
+    },
+    sidebarSessionCatalogLoading(state) {
+      return !sidebarCatalogAuthIsCurrent(state, useAuthStore())
+        || sidebarSessionCatalogIsLoading(state, getSessionsStore()?.sessionList || []);
+    },
     // ★ Multi-column: compatibility shim — reads activeConversations[0]
     currentConversation: (state) => state.activeConversations[0] || null,
     // The single source-of-truth selector for "which conversation is the
@@ -5877,7 +5895,7 @@ export const useChatStore = defineStore('chat', {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
           const rows = event.sessions || [];
           if (event.projectsAuthoritative === true && Array.isArray(event.projects)) {
-            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
+            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           } else if (Array.isArray(event.projects) && msg.agentId) {
             this.applyLegacyProjectSnapshot(event.projects, msg.agentId);
           }
@@ -5946,7 +5964,7 @@ export const useChatStore = defineStore('chat', {
           // this tab's request even if it echoes the same request id.
           if (event.op === 'copy' && pending?.agentId && pending.agentId !== msg.agentId) break;
           if (event.op === 'copy' && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
-            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
+            this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
           if (gs) gs.applyCrudResult(event, msg.agentId || null, {
             // The initiating copy action owns navigation so it can render a
@@ -7111,7 +7129,7 @@ export const useChatStore = defineStore('chat', {
       this.activeRightPanel = value;
     },
 
-    applySessionCatalogSnapshot(rows, projects = null, hiddenRows = null) {
+    applySessionCatalogSnapshot(rows, projects = null, hiddenRows = null, { authoritative = true } = {}) {
       const normalizeCatalogRows = (source) => {
         const seen = new Set();
         return (Array.isArray(source) ? source : []).filter(row => {
@@ -7147,7 +7165,11 @@ export const useChatStore = defineStore('chat', {
             : row
         ));
       }
-      this.sessionCatalogLoaded = true;
+      if (authoritative) {
+        this.sessionCatalogProtocolSupported = true;
+        this.sessionCatalogLoaded = true;
+        this.sidebarLegacySessionCatalog = [];
+      }
     },
     mutateProject(op, payload = {}, agentId = null) {
       const targetAgentId = agentId || payload.agentId || this.currentAgent || null;
@@ -7191,7 +7213,7 @@ export const useChatStore = defineStore('chat', {
           legacyAgentId: agentId,
           members: (project.sessionIds || []).map(sessionId => ({ agentId, sessionId })),
         }));
-      this.applySessionCatalogSnapshot(this.sessionCatalog, [...otherProjects, ...legacyProjects]);
+      this.applySessionCatalogSnapshot(this.sessionCatalog, [...otherProjects, ...legacyProjects], null, { authoritative: false });
     },
     finishLegacyProjectMutation(event, agentId) {
       if (!event?.requestId) return false;
@@ -7226,7 +7248,7 @@ export const useChatStore = defineStore('chat', {
           }
         }
         if (Array.isArray(event.projects)) {
-          this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects);
+          this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
         }
       }
       pending.resolve(event);

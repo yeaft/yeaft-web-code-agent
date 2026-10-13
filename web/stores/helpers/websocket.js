@@ -3,6 +3,21 @@
 import { useAuthStore } from '../auth.js';
 import { encrypt, decrypt, isEncrypted } from '../../utils/encryption.js';
 import { clearSessionLoading } from './session.js';
+import {
+  sidebarCatalogAuthIsCurrent,
+  sidebarSessionCatalogRows,
+} from './sidebar-session-catalog.js';
+
+function clearSidebarSessionCatalog(store) {
+  store.sessionCatalog = [];
+  store.hiddenSessionCatalog = [];
+  store.sessionProjects = [];
+  store.activeCatalogKey = null;
+  store.sidebarLegacySessionCatalog = [];
+  store.sessionCatalogLoaded = false;
+  store.sessionCatalogProtocolSupported = null;
+  store.sessionCatalogLegacyConfirmed = false;
+}
 
 // Pending ensureConnected resolvers — settled by onopen/timeout
 let _connectResolvers = [];
@@ -140,11 +155,34 @@ export function connect(store) {
 
   const authToken = authStore.getActiveToken?.() || authStore.token || null;
   const authGeneration = authStore.authGeneration;
+  const authOwnerId = authStore.userId || null;
 
   if (store.ws && store.ws.readyState === WebSocket.CONNECTING
-      && store._wsAuthToken === authToken && store._wsAuthGeneration === authGeneration) {
+      && store._wsAuthToken === authToken && store._wsAuthGeneration === authGeneration
+      && store.sidebarCatalogOwnerId === authOwnerId) {
     console.log('[WS] Already connecting, skip');
     return;
+  }
+
+  // Retention belongs to the authentication identity, not its renewable token.
+  const retainCatalog = sidebarCatalogAuthIsCurrent(store, authStore);
+  if (retainCatalog && store.sessionCatalogProtocolSupported === false) {
+    store.sidebarLegacySessionCatalog = sidebarSessionCatalogRows(
+      store,
+      typeof window !== 'undefined'
+        ? (window.Pinia?.useSessionsStore?.() || window.__useSessionsStore?.())?.sessionList || []
+        : [],
+    ).map(row => ({ ...row }));
+  } else if (!retainCatalog || store.sessionCatalogProtocolSupported === true) {
+    store.sidebarLegacySessionCatalog = [];
+  }
+  if (!store._sidebarCatalogAuthUnsubscribe && authStore.$subscribe) {
+    store._sidebarCatalogAuthUnsubscribe = authStore.$subscribe(() => {
+      if (!sidebarCatalogAuthIsCurrent(store, authStore)) {
+        clearSidebarSessionCatalog(store);
+        store.sessionCatalogMutationRequests = {};
+      }
+    }, { detached: true, flush: 'sync' });
   }
 
   // Agent and Session inventories belong to the socket that delivered them.
@@ -198,7 +236,7 @@ export function connect(store) {
     });
   }
   store.projectMutationRequests = {};
-  store.sessionProjects = [];
+  if (!retainCatalog) store.sessionProjects = [];
   for (const [catalogKey, request] of Object.entries(store.chatHistoryRequests || {})) {
     if (!request?.loading) continue;
     store.chatHistoryRequests[catalogKey] = {
@@ -216,13 +254,15 @@ export function connect(store) {
     }
     store.sessionCatalogMutationRequests = {};
   }
-  // Catalog support is a capability of the current Server connection. Reset
-  // before every handshake so reconnecting to an older Server immediately
-  // restores the legacy sidebar instead of showing a stale prior snapshot.
+  // Roll back optimistic writes before retaining the read-only prior snapshot.
   store.sessionCatalogLoaded = false;
-  store.sessionCatalog = [];
-  store.hiddenSessionCatalog = [];
-  store.activeCatalogKey = null;
+  store.sessionCatalogProtocolSupported = null;
+  store.sessionCatalogLegacyConfirmed = false;
+  if (!retainCatalog) {
+    clearSidebarSessionCatalog(store);
+  }
+  store.sidebarCatalogOwnerId = authOwnerId;
+  store.sidebarCatalogAuthGeneration = authGeneration;
   console.log(`[WS] Connecting... (attempt ${store.reconnectAttempts + 1})`);
 
   store._wsAuthToken = authToken;
@@ -253,6 +293,7 @@ export function connect(store) {
       socket.send(JSON.stringify({
         type: 'client_hello',
         plaintextOk: true,
+        sessionCatalogProtocol: 1,
         workbenchRouteProtocol: 1,
         workCenterWorkbenchProtocol: 1,
         browserRuntimeProtocol: 1,
@@ -267,6 +308,12 @@ export function connect(store) {
   socket.onmessage = (event) => {
     if (socket !== store.ws) return;
     const msg = store.parseWsMessage(event.data);
+    if (msg && (authGeneration !== authStore.authGeneration
+        || authOwnerId !== (authStore.userId || null))
+        && !(msg.type === 'auth_result' && msg.success === false)) {
+      clearSidebarSessionCatalog(store);
+      return;
+    }
     if (msg) {
       if (msg.type === 'file_content') console.log('[WS.onmessage] Received file_content, path:', msg.filePath, 'contentLen:', msg.content?.length);
       store.handleMessage({ ...msg, _wsAuthToken: authToken, _wsAuthGeneration: authGeneration });
@@ -282,6 +329,16 @@ export function connect(store) {
     }
     console.log('[WS] Disconnected:', event.code, event.reason);
     store.authenticated = false;
+    if (store.sessionCatalogProtocolSupported === false) {
+      store.sidebarLegacySessionCatalog = sidebarSessionCatalogRows(
+        store,
+        typeof window !== 'undefined'
+          ? (window.Pinia?.useSessionsStore?.() || window.__useSessionsStore?.())?.sessionList || []
+          : [],
+      ).map(row => ({ ...row }));
+    }
+    store.sessionCatalogLoaded = false;
+    if (!sidebarCatalogAuthIsCurrent(store, authStore)) clearSidebarSessionCatalog(store);
     clearTimeout(store._legacyYeaftSessionHydrateTimer);
     store._legacyYeaftSessionHydrateTimer = null;
     store._hasHandledAgentList = false;
