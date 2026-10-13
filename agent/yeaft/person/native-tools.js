@@ -85,24 +85,40 @@ export function projectNativeResult(result, maxBytes = 8192) {
   // Host results carry their original IDs explicitly. Legacy results have these
   // IDs in tool:episode:call:... provenance; task projections are not call traces.
   const sourceIds = result.sourceRef?.startsWith('tool:') ? result.sourceRef.split(':') : [];
-  const callId = result.callId ?? sourceIds[2], episodeId = result.episodeId ?? sourceIds[1];
-  const recovery = { read: { id: 'Execution.read', args: { ...(callId ? { callId } : {}), ...(episodeId ? { episodeId } : {}), offset: 0, maxBytes: 4096 } },
-    ...(!callId ? { notice: 'Supply the original capability callId; task logs use ReadTaskLog.' } : {}) };
-  let projected = { ...result, output: raw.toString('utf8'), rawBytes: result.rawBytes ?? raw.length, recovery };
+  const taskRef = typeof result.sourceRef === 'string' && /^person-tool:[a-f0-9]{64}:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![\s\S])/.test(result.sourceRef);
+  const callId = result.executionTraceCallId ?? (result.sourceRef?.startsWith('person-') ? undefined : result.callId ?? sourceIds[2]);
+  const episodeId = result.executionEpisodeId ?? result.episodeId ?? sourceIds[1];
+  // Evidence pages describe the ORIGINAL bytes, not this read invocation's page
+  // trace. Keep the latter's identity separately; nextOffset must never change stores.
+  const evidencePage = result.id === 'Execution.read' && result.authority === 'evidence-only';
+  const recovery = evidencePage ? structuredClone(result.recovery)
+    : callId || (taskRef && episodeId) ? { read: { id: 'Execution.read', args: {
+      ...(callId ? { callId } : { sourceRef: result.sourceRef }), ...(episodeId ? { episodeId } : {}), offset: 0, maxBytes: 4096 } } }
+      : { notice: 'No execution read identity for this task observation. Task logs use ReadTaskLog with their actual taskId, not a trace callId.' };
+  const baseOffset = evidencePage ? result.offset : 0;
+  const outputSpan = { start: baseOffset, end: baseOffset + raw.length, totalBytes: result.rawBytes ?? raw.length };
+  const omittedSuffix = result.outputTruncated ? { start: outputSpan.end, end: outputSpan.totalBytes } : null;
+  let projected = { ...result, output: raw.toString('utf8'), rawBytes: result.rawBytes ?? raw.length, recovery, outputSpan,
+    ...(omittedSuffix ? { omittedSuffix, notice: 'Prefix preview only, not the complete archive tail. omittedSuffix is outside this prefix; use the supplied recovery descriptor.' } : {}) };
   if (bytes(projected) <= maxBytes) return projected;
   // Keep semantic failure/provenance fields even if ancillary metadata itself
   // is oversized. Its full original value remains in the durable trace.
   if (bytes({ ...projected, output: '' }) > maxBytes - 400) {
-    projected = { ...Object.fromEntries(['id', 'kind', 'callId', 'executionTraceCallId', 'episodeId', 'ok', 'code', 'errorEffect', 'terminal', 'outputAvailability', 'sourceRef', 'sha256', 'replaySafe'].filter(key => Object.hasOwn(result, key)).map(key => [key, result[key]])),
-      output: raw.toString('utf8'), rawBytes: result.rawBytes ?? raw.length, recovery, metadataTruncated: true };
+    projected = { ...Object.fromEntries(['id', 'kind', 'callId', 'executionTraceCallId', 'executionEpisodeId', 'episodeId', 'ok', 'code', 'errorEffect', 'terminal', 'outputAvailability', 'sourceRef', 'sha256', 'replaySafe', 'tool', 'childId', 'aborted', 'authority', 'historical', 'offset', 'nextOffset', 'returnedBytes', 'eof', 'outputTruncated', 'outputNextOffset'].filter(key => Object.hasOwn(result, key)).map(key => [key, result[key]])),
+      output: raw.toString('utf8'), rawBytes: result.rawBytes ?? raw.length, recovery, outputSpan,
+      ...(omittedSuffix ? { omittedSuffix } : {}), metadataTruncated: true };
     if (bytes(projected) <= maxBytes) return projected;
   }
   projected.truncated = true;
-  projected.notice = 'Head/tail preview only. hiddenRange is omitted raw UTF-8 bytes; recover with Execution.read, not reexecution.';
+  projected.notice = omittedSuffix
+    ? 'Head/tail of a PREFIX preview, not the archive tail. omittedSuffix is outside this prefix; hiddenRange is inside outputSpan. Use the supplied recovery descriptor, not reexecution.'
+    : evidencePage
+      ? 'Head/tail of this evidence PAGE only. hiddenRange uses original byte positions inside outputSpan. Reread this page before advancing nextOffset; use the supplied recovery descriptor.'
+      : 'Head/tail preview only. hiddenRange is omitted raw UTF-8 bytes; use the supplied recovery descriptor, not guessed trace IDs or reexecution.';
   const preview = kept => {
     const headEnd = utf8End(raw, Math.ceil(kept / 2)), tailStart = utf8Start(raw, raw.length - Math.floor(kept / 2));
-    projected.hiddenRange = { start: headEnd, end: tailStart };
-    projected.output = raw.subarray(0, headEnd).toString('utf8') + `\n[omitted UTF-8 bytes ${headEnd}..${tailStart} of ${raw.length}]\n` + raw.subarray(tailStart).toString('utf8');
+    projected.hiddenRange = { start: baseOffset + headEnd, end: baseOffset + tailStart };
+    projected.output = raw.subarray(0, headEnd).toString('utf8') + `\n[omitted UTF-8 bytes ${baseOffset + headEnd}..${baseOffset + tailStart} of ${outputSpan.totalBytes}]\n` + raw.subarray(tailStart).toString('utf8');
     return bytes(projected);
   };
   if (preview(0) > maxBytes) fail('CONTEXT_LIMIT');

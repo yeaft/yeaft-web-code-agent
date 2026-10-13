@@ -49,7 +49,9 @@
 
 - **想不等于一次检索。** 模型可对 context 中已有经历进行整理、联想、反例检查并提出新的 Concept；不足时直接调用 Recall，把长期记忆的一页带入 native 对话；完整公开进展和工具结果可追溯，最终整理才生成认知自判。
 - **当前能力是认知方法、受限纯脚本与真实宿主工具。** `Think` 是内在方法，无需另一个模型；Recall 的 schema 直接提供。SQLite 上的 Recall 对本 Person 消息／Concept 作本地关键词与语义混合召回；索引不可用时显式降级。命中保留 chunk→父记录来源并回读权威当前 revision。目录和方法说明仍可查看，但不是 native 调用的准备阶段。
-- **已实现 native tool 对话，但不是全部 Session 能力。** 每个执行请求提供当前启用的完整 schema，不再用结构化 `next.capability` 模拟工具。已接入 Skill 库、后台命令与独立子 Agent，不包括 Session 交互工具、MCP 或固定 VP 模板委派。多工具分别归档，不混为父模型的一个结果，也不重复累计模型 usage。原始结果保存，模型副本有界，省略留 evidence receipts；回读用 `Execution.read` 原 trace callId，不重做副作用。
+- **已实现 native tool 对话，但不是全部 Session 能力。** 每个执行请求提供当前启用的完整 schema，不再用结构化 `next.capability` 模拟工具。已接入 Skill 库、后台命令与独立子 Agent，不包括 Session 交互工具、MCP 或固定 VP 模板委派。多工具分别归档，不混为父模型的一个结果，也不重复累计模型 usage。原始结果保存，模型副本有界，省略留 evidence receipts，不重做副作用。
+- **证据回读使用真实身份。** `Execution.read {callId,episodeId}` 读取 SQLite trace；私有工具归档使用完整 `{sourceRef:"person-tool:<scopehash>:<jobid>",episodeId}`。截断预览及被省略的执行组保留 recovery 描述符及 tool／child／失败来源；分页 recovery 始终指向原始证据，不切换到回读操作自己的 trace。`offset`／`nextOffset`／`hiddenRange` 使用原始 UTF-8 字节坐标，`outputSpan` 标明当前页或前缀范围；归档前缀的 `omittedSuffix` 不冒充完整输出尾部，页内再次截断须先补读再推进。普通任务日志仍用 ReadTaskLog。精确旧 job callId + 已归属 episode 仅在 trace 缺失时兼容，不扫描文件、不放宽 namespace。回读前后校验 live lease，目标 episode 必须同 owner／Person／namespace，归档拒绝符号链接。
+- **读失败不等于原效果回滚。** 明确授权检查后的 NOT_FOUND／INVALID_REQUEST（如 UTF-8 非边界偏移）成为可纠正工具反馈，无额外认知或重执行；errorEffect:none／replaySafe:true 只描述本次读调用，完整证据保留原操作效果。取消、STALE、存储、归属及未知效果错误仍终止；此规则不扩展到 Output.publish／Recall。
 - **数据库区分“想到过”与“现在接受”。** 消息、活动与调用记录构成长期经历；经过提交的 state/Concept 才是当前接受的认识。失败、取消或中断不提交候选；旧预算耗尽记录仅作为历史保留。数据库故障时没有文件兜底，未成功归档的内容不能保证重建；下一次访问恢复过期活动为 interrupted。
 
 源码入口：`web/stores/helpers/digital-person.js` → `server/handlers/client-person.js` → `agent/yeaft/person/bridge.js` → `agent/yeaft/person/service.js`；认知循环、能力与模型适配分别见该目录的 `runtime.js`、`capabilities.js`、`provider.js`；存储入口为 `sqlite-repository.js`（worker facade），SQLite 权威实现为 `sqlite-store.js`。消息式思考记录的白名单投影见 `web/stores/helpers/person-thoughts.js`。
