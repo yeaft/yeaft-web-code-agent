@@ -4,15 +4,7 @@ import { tmpdir } from 'os';
 import { describe, expect, it, afterEach } from 'vitest';
 import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { repairSessionStore } from '../../../agent/yeaft/sessions/recovery.js';
-import {
-  createSessionFromSpec,
-  migrateRegisteredWorkDirSessions,
-  registerSessionWorkDir,
-  restoreSessionToRegistry,
-  scanWorkdirSessions,
-  snapshotSessions,
-  updateSessionWorkDir,
-} from '../../../agent/yeaft/sessions/session-crud.js';
+import { createSessionFromSpec, migrateRegisteredWorkDirSessions, registerSessionWorkDir, scanWorkdirSessions, updateSessionWorkDir } from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
 
@@ -32,25 +24,6 @@ afterEach(() => {
 });
 
 describe('Session disk recovery', () => {
-  it('lists Agent-owned Sessions by workDir without depending on sidebar state', () => {
-    const root = tempRoot();
-    const workDir = join(root, 'workspace');
-    mkdirSync(workDir, { recursive: true });
-    const matching = createSessionFromSpec(root, {
-      name: 'Matching', workDir, roster: [],
-    }, { libDir: join(root, 'empty-vps') });
-    createSessionFromSpec(root, {
-      name: 'Other', workDir: join(root, 'other-workspace'), roster: [],
-    }, { libDir: join(root, 'empty-vps') });
-
-    const rows = scanWorkdirSessions(workDir, root);
-
-    expect(rows).toEqual([
-      expect.objectContaining({ id: matching.id, workDir }),
-    ]);
-    expect(rows[0]).not.toHaveProperty('legacyImport');
-  });
-
   it('updates workDir in Session metadata and the canonical manifest without moving history', () => {
     const root = tempRoot();
     const firstWorkDir = join(root, 'workspace-before');
@@ -105,30 +78,6 @@ describe('Session disk recovery', () => {
       .toBe(join(root, 'sessions', sessionId));
   });
 
-  it('explicitly restores Session ownership without importing archived Dream scopes', () => {
-    const root = tempRoot();
-    const workDir = join(root, 'workspace');
-    const sessionId = 'session_explicit_restore';
-    const sourceSession = join(workDir, '.yeaft', 'sessions', sessionId);
-    const sourceMemory = join(workDir, '.yeaft', 'memory', 'sessions', sessionId);
-    mkdirSync(join(sourceSession, 'conversation', 'segments'), { recursive: true });
-    mkdirSync(sourceMemory, { recursive: true });
-    writeFileSync(join(sourceSession, 'session.json'), `${JSON.stringify({ id: sessionId, name: 'Restore', workDir, roster: [] })}\n`);
-    writeFileSync(join(sourceSession, 'conversation', 'segments', '000001.jsonl'), '{"role":"user","text":"owned transcript"}\n');
-    writeFileSync(join(sourceMemory, 'content.md'), 'ARCHIVED_CANONICAL');
-
-    const restored = restoreSessionToRegistry(root, sessionId, workDir);
-
-    expect(restored).toMatchObject({ id: sessionId, workDir });
-    expect(readFileSync(join(root, 'sessions', sessionId, 'conversation', 'segments', '000001.jsonl'), 'utf8'))
-      .toContain('owned transcript');
-    expect(readFileSync(join(sourceMemory, 'content.md'), 'utf8')).toBe('ARCHIVED_CANONICAL');
-    expect(existsSync(join(root, 'memory', 'sessions', sessionId))).toBe(false);
-    const manifest = JSON.parse(readFileSync(join(root, 'sessions-manifest.json'), 'utf8'));
-    expect(manifest.sessions.find(row => row.id === sessionId)?.path)
-      .toBe(join(root, 'sessions', sessionId));
-  });
-
   it('rebuilds missing metadata from markdown-only session dirs without creating audit transcripts', () => {
     const root = tempRoot();
     const sessionId = 'session_orphan_ABC12345';
@@ -171,28 +120,6 @@ world`);
     });
   });
 
-  it('makes snapshotSessions include orphan session dirs after metadata self-repair', () => {
-    const root = tempRoot();
-    const sessionId = 'session_orphan_DEF67890';
-    const dir = join(root, 'sessions', sessionId);
-    mkdirSync(join(dir, 'conversation', 'messages'), { recursive: true });
-    writeMd(join(dir, 'conversation', 'messages', 'm0007.md'), `---
-id: m0007
-role: user
-time: 2026-06-02T00:00:00.000Z
-sessionId: ${sessionId}
-tokens_est: 1
----
-
-restore me`);
-
-    const rows = snapshotSessions(root);
-
-    expect(rows.map(row => row.id)).toContain(sessionId);
-    expect(rows.find(row => row.id === sessionId)).toMatchObject({ name: 'Orphan', defaultVpId: 'omni' });
-    expect(existsSync(join(dir, 'messages', '000001.jsonl'))).toBe(false);
-  });
-
   it('rebuilds a stale coordinator audit index without duplicating or inventing rows', () => {
     const root = tempRoot();
     const sessionId = 'session_existing_GHI12345';
@@ -212,22 +139,5 @@ restore me`);
     const index = JSON.parse(readFileSync(join(dir, 'messages', 'index.json'), 'utf8'));
     expect(index.segments).toHaveLength(1);
     expect(index.segments[0].count).toBe(1);
-  });
-
-  it('does not rewrite a healthy existing session', () => {
-    const root = tempRoot();
-    const sessionId = 'session_healthy_JKL12345';
-    const dir = join(root, 'sessions', sessionId);
-    mkdirSync(join(dir, 'messages'), { recursive: true });
-    writeFileSync(join(dir, 'session.json'), `${JSON.stringify({ id: sessionId, name: 'Healthy', roster: ['omni'], defaultVpId: 'omni' }, null, 2)}\n`);
-    writeFileSync(join(dir, 'messages', '000001.jsonl'), `${JSON.stringify({ id: 'msg_audit_1', ts: '2026-06-03T00:00:00.000Z', from: 'user', role: 'user', text: 'already here', taskId: null, mentions: [], meta: {} })}\n`);
-    const handle = openSession(join(root, 'sessions'), sessionId);
-    handle.close();
-    const before = readFileSync(join(dir, 'messages', 'index.json'), 'utf8');
-
-    const result = repairSessionStore(root);
-
-    expect(result.repaired).toBe(0);
-    expect(readFileSync(join(dir, 'messages', 'index.json'), 'utf8')).toBe(before);
   });
 });

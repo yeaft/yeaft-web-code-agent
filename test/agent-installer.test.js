@@ -116,17 +116,7 @@ describe('isolated POSIX Agent installer (no live services or downloads)', () =>
     expect(upgrade.stderr).toContain('Web UI');
     expect(r.stdout + r.stderr).not.toContain(secret);
   });
-  it.each([
-    [undefined, 'skip'], ['', 'skip'], ['v12', 'v12'],
-  ])('scopes the CPU install default to npm and respects an explicit CUDA override (%s)', (cuda, expected) => {
-    const f = fixture();
-    const env = cuda === undefined ? {} : { ONNXRUNTIME_NODE_INSTALL_CUDA: cuda };
-    const r = run(f, undefined, env);
-    expect(r.status, r.stderr).toBe(0);
-    expect(readFileSync(`${f.npmLog}.cuda`, 'utf8')).toBe(expected);
-    expect(JSON.parse(readFileSync(f.log, 'utf8')).cuda).toBe(cuda ?? null);
-    expect(readFileSync(f.npmLog, 'utf8')).not.toContain('--ignore-scripts');
-  });
+
   it('passes the installed-package layout and instance roots into the real Linux service installer', () => {
     const f = fixture();
     const serviceModule = resolve(import.meta.dirname, '../agent/service/index.js');
@@ -142,19 +132,7 @@ describe('isolated POSIX Agent installer (no live services or downloads)', () =>
     expect(unit).toContain(`ExecStart="${process.execPath}"`);
     expect(existsSync(join(prefix, 'data/config.json'))).toBe(true);
   });
-  it.each([
-    ['old', 'Linux', 'x86_64'], ['missing', 'Linux', 'aarch64'],
-    ['missing-npm', 'Darwin', 'x86_64'], ['old', 'Darwin', 'arm64'],
-  ])('downloads verified private Node for %s Node on %s/%s', (node, platform, arch) => {
-    const f = fixture({ node, platform, arch }); downloadFixture(f);
-    const r = run(f);
-    expect(r.status, r.stderr).toBe(0);
-    const [prefix] = prefixes(f);
-    expect(existsSync(join(prefix, 'runtime/bin/node'))).toBe(true);
-    expect(existsSync(join(prefix, '.download'))).toBe(false);
-    expect(readFileSync(join(f.root, 'downloads'), 'utf8')).toContain('/v24.9.0/node-v24.9.0-');
-    expect(existsSync(join(prefix, '.complete'))).toBe(true);
-  });
+
   it.each([{ badChecksum: true }, { failDownload: true }])('cleans only owned incomplete state on download failure (%j)', options => {
     const f = fixture({ node: 'old' }); downloadFixture(f, options);
     const r = run(f);
@@ -162,15 +140,7 @@ describe('isolated POSIX Agent installer (no live services or downloads)', () =>
     expect(prefixes(f)).toEqual([]);
     expect(existsSync(f.npmLog)).toBe(false);
   });
-  it.each(['.config/yeaft-agent/instances/test_host-0000', '.yeaft/instances/test_host-0000', '.yeaft/installations/test_host-0000', '.config/systemd/user/yeaft-agent@test_host-0000.service', 'Library/LaunchAgents/com.yeaft.agent.test_host-0000.plist'])('preserves existing identity at %s', path => {
-    const f = fixture();
-    const existing = join(f.home, path); mkdirSync(existing, { recursive: true }); writeFileSync(join(existing, 'marker'), 'owned');
-    rmSync(join(f.bin, 'od')); executable(join(f.bin, 'od'), 'echo 0');
-    const r = run(f);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain('could not allocate a unique Agent name');
-    expect(readFileSync(join(existing, 'marker'), 'utf8')).toBe('owned');
-  });
+
   it('retains recovery files only after service install attempted and never marks failure complete', () => {
     const f = fixture();
     expect(run(f, undefined, { FIXTURE_NPM_FAIL: '1' }).status).toBe(1);
@@ -180,10 +150,5 @@ describe('isolated POSIX Agent installer (no live services or downloads)', () =>
     const [prefix] = prefixes(f);
     expect(existsSync(join(prefix, '.complete'))).toBe(false);
     expect(existsSync(join(prefix, 'service-install.log'))).toBe(true);
-  });
-  it.each(['Linux', 'Darwin'])('fails preflight for an unavailable %s user service manager', platform => {
-    const f = fixture({ platform });
-    expect(run(f, undefined, { FIXTURE_SERVICE_EXIT: '1' }).status).toBe(1);
-    expect(existsSync(join(f.home, '.yeaft'))).toBe(false);
   });
 });

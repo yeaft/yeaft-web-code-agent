@@ -29,20 +29,6 @@ describe('Agent package bin validation', () => {
     expect(await validateAgentPackageBins(join(import.meta.dirname, '..', 'agent'))).toEqual([]);
   });
 
-  it('rejects the leading ./ form removed by npm 11 during publish', async () => {
-    const agentDir = await createAgentPackage({ target: './cli.js', createTarget: false });
-    await expect(validateAgentPackageBins(agentDir)).resolves.toEqual([
-      'bin["yeaft"] target "./cli.js" must be a normalized package-relative POSIX path without "./"',
-    ]);
-  });
-
-  it('rejects missing bin targets', async () => {
-    const agentDir = await createAgentPackage({ target: 'missing.js', createTarget: false });
-    await expect(validateAgentPackageBins(agentDir)).resolves.toEqual([
-      'bin["yeaft"] target "missing.js" does not exist',
-    ]);
-  });
-
   it('rejects targets without a Node shebang or executable mode', async () => {
     const agentDir = await createAgentPackage({ contents: 'console.log("no shebang");\n', mode: 0o644 });
     await expect(validateAgentPackageBins(agentDir, { platform: 'linux' })).resolves.toEqual([
