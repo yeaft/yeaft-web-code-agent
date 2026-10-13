@@ -4,9 +4,13 @@ import { applyAnthropicThinking } from '../llm/anthropic.js';
 import { inferProtocolFromModelId, normalizeModelEntry } from '../llm/router.js';
 import { normalizeKnownProviderForRuntime } from '../llm/known-providers.js';
 import { normalizeEffort, resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
+import { bindProviderState, providerStateBytes, MAX_PROVIDER_STATE_BYTES } from '../llm/provider-state.js';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 import { bytes, digest, fail, LIMITS, PersonError } from './contracts.js';
 import { addUsage } from './turn-diagnostics.js';
+import { defaultPersonMinimumRequestBytes, PERSON_ENVELOPE_TOKENS_RESERVED } from './request-budget.js';
+
+export const NATIVE_CONTEXT_UNAVAILABLE_REASON = 'The model context window cannot fit the native tool schemas, execution instructions and final-cognition reserve. Choose a model with a larger context window.';
 
 export const MODEL_LIMITS = Object.freeze({ candidates: 8, available: 100 });
 export function validateModelCandidates(refs) {
@@ -27,14 +31,26 @@ export function resolveAgentDefaultModel(config) {
 }
 
 /** Shared validation for settings, status and runtime; never broaden an explicit subset. */
-export function selectPersonModels({ availableModels, modelCandidates = [], defaultModel = null }) {
+export function selectPersonModels({ availableModels, unavailableModels = [], modelCandidates = [], defaultModel = null }) {
   validateModelCandidates(modelCandidates);
   validateDefaultModel(defaultModel);
-  if (modelCandidates.some(ref => !availableModels.some(model => model.id === ref))) fail('MODEL_SELECTION');
+  if (modelCandidates.some(ref => !availableModels.some(model => model.id === ref))) {
+    const error = new PersonError('MODEL_SELECTION');
+    if (modelCandidates.some(ref => unavailableModels.some(model => model.id === ref))) error.message = NATIVE_CONTEXT_UNAVAILABLE_REASON;
+    throw error;
+  }
   const catalog = modelCandidates.length ? availableModels.filter(model => modelCandidates.includes(model.id))
     : availableModels.slice(0, MODEL_LIMITS.candidates);
-  if (defaultModel !== null && !catalog.some(model => model.id === defaultModel)) fail('MODEL_SELECTION');
-  if (!catalog.length) fail('MODEL_UNAVAILABLE');
+  if (defaultModel !== null && !catalog.some(model => model.id === defaultModel)) {
+    const error = new PersonError('MODEL_SELECTION');
+    if (unavailableModels.some(model => model.id === defaultModel)) error.message = NATIVE_CONTEXT_UNAVAILABLE_REASON;
+    throw error;
+  }
+  if (!catalog.length) {
+    const error = new PersonError('MODEL_UNAVAILABLE');
+    if (unavailableModels.length) error.message = NATIVE_CONTEXT_UNAVAILABLE_REASON;
+    throw error;
+  }
   return { catalog, defaultSelection: { model: defaultModel ?? catalog[0].id, effort: null } };
 }
 
@@ -62,16 +78,18 @@ function imageInputBudget(modelId, protocol) {
 }
 
 /** Only configured native API models; no Session initialization or implicit credential fallback. */
-export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1', modelCandidates = [], defaultModel = null }) {
+export async function createPersonProvider({ yeaftDir, config: suppliedConfig, adapter: suppliedAdapter, allowedModels, effortEnabled = process.env.YEAFT_THINKING_V1 === '1', modelCandidates = [], defaultModel = null, minimumRequestBytes }) {
   const config = structuredClone(suppliedConfig || loadConfig({ dir: yeaftDir }));
   if (!config.providers?.length && !suppliedAdapter) fail('MODEL_UNAVAILABLE');
+  minimumRequestBytes ??= await defaultPersonMinimumRequestBytes(config);
+  if (!Number.isSafeInteger(minimumRequestBytes) || minimumRequestBytes < 1) fail('INVALID_REQUEST');
   const models = config.availableModels || [];
   const agentDefaultModel = resolveAgentDefaultModel(config);
   validateModelCandidates(modelCandidates);
   validateDefaultModel(defaultModel);
   const available = models.filter(m => !allowedModels || allowedModels.includes(m.ref || m.id));
   const routingProviders = (config.providers || []).map(normalizeKnownProviderForRuntime);
-  const safeModels = available.map(m => {
+  const resolvedModels = available.map(m => {
     // Use the same model/config resolution as the native Engine, without a Person-only token ceiling.
     const maxOutput = Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m }));
     const effortContext = { ...m, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
@@ -96,16 +114,21 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     const imageBudget = !routedProvider || explicitImages === false ? null : imageInputBudget(m.id, protocol);
     return { id: m.ref || m.id, efforts, maxOutput, usageCacheIncluded: protocol === 'anthropic' ? false : undefined, supportsImages: imageBudget !== null, imageBudget,
       contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };
-  }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && m.contextWindow > m.maxOutput + 1024 && m.maxOutput >= 256);
+  }).filter(m => typeof m.id === 'string' && m.id.length <= 256 && Number.isSafeInteger(m.contextWindow) &&
+    Number.isSafeInteger(m.maxOutput) && m.contextWindow > m.maxOutput + PERSON_ENVELOPE_TOKENS_RESERVED && m.maxOutput >= 256);
+  const fitsNativeRequest = model => model.contextWindow - model.maxOutput - PERSON_ENVELOPE_TOKENS_RESERVED > minimumRequestBytes;
+  const unavailableModels = resolvedModels.filter(model => !fitsNativeRequest(model))
+    .slice(0, MODEL_LIMITS.available).map(model => ({ id: model.id, reason: NATIVE_CONTEXT_UNAVAILABLE_REASON }));
+  const safeModels = resolvedModels.filter(fitsNativeRequest);
   safeModels.sort((a, b) => Number(b.id === agentDefaultModel) - Number(a.id === agentDefaultModel));
   const seen = new Set();
   const uniqueModels = safeModels.filter(model => !seen.has(model.id) && seen.add(model.id));
   const availableModels = uniqueModels.slice(0, MODEL_LIMITS.available);
   // A UI catalog must not be the bounded episode choice set: model 9+ remains selectable.
   // Explicit lists are validated, never silently truncated or broadened on stale config.
-  const { catalog, defaultSelection } = selectPersonModels({ availableModels, modelCandidates, defaultModel });
+  const { catalog, defaultSelection } = selectPersonModels({ availableModels, unavailableModels, modelCandidates, defaultModel });
   const adapter = suppliedAdapter || await createLLMAdapter(config);
-  return { adapter, catalog, availableModels, availableModelsTruncated: uniqueModels.length > MODEL_LIMITS.available,
+  return { adapter, catalog, availableModels, unavailableModels, availableModelsTruncated: uniqueModels.length > MODEL_LIMITS.available,
     catalogRevision: digest(catalog), defaultSelection, agentDefaultModel, effortEnabled };
 }
 
@@ -123,14 +146,17 @@ export function abortable(promise, signal) {
   });
 }
 
-/** Consume only public text and usage. Bound accumulation before accepting any proposal. */
-export async function collectOutput(adapter, params, onEffort) {
-  const iterator = adapter.stream({ ...params, tools: [], onEffortDecision: decision => onEffort({
+/** Drain a complete native response before any tool dispatch. Archive public
+ * text/calls/usage only; fenced opaque continuation remains episode-local RAM. */
+export async function collectOutput(adapter, params, onEffort = () => {}) {
+  const iterator = adapter.stream({ ...params, tools: params.tools ?? [], onEffortDecision: decision => onEffort({
     effective: typeof decision.effective === 'string' ? decision.effective : null,
     wireMode: typeof decision.wireMode === 'string' ? decision.wireMode : null,
     thinkingEnabled: decision.thinkingEnabled === true,
   }) })[Symbol.asyncIterator]();
   let output = '', size = 0, stopReason = null, usage = null;
+  const toolCalls = [], toolIds = new Set();
+  let providerState = null;
   try {
     while (true) {
       const item = await abortable(iterator.next(), params.signal);
@@ -145,22 +171,43 @@ export async function collectOutput(adapter, params, onEffort) {
           fail('OUTPUT_LIMIT');
         }
         output += event.text;
+      } else if (event.type === 'provider_state') {
+        if (providerStateBytes(event.providerState) > MAX_PROVIDER_STATE_BYTES) fail('CONTEXT_LIMIT');
+        providerState = event.providerState;
       } else if (event.type === 'stop') stopReason = event.stopReason;
-      else if (event.type === 'error') fail('PROVIDER_FAILED');
-      else if (event.type === 'tool_call') fail('INVALID_PROPOSAL');
+      else if (event.type === 'error') { if (event.error?.toolInputRejected === true) fail('INVALID_TOOL_INPUT'); fail('PROVIDER_FAILED'); }
+      else if (event.type === 'tool_call') {
+        if (!params.tools?.length || typeof event.id !== 'string' || !event.id || event.id.length > 256 || toolIds.has(event.id) || typeof event.name !== 'string' || event.name.length > 128) fail('INVALID_PROPOSAL');
+        // Unknown tools are rejected before the whole completed batch reaches
+        // dispatch, not fabricated as recoverable traces with no archive.
+        // Validation below waits for final usage/stop before rejecting the batch.
+        toolIds.add(event.id);
+        const malformed = event.malformed === true || Boolean(event.inputError) || !event.input || typeof event.input !== 'object' || Array.isArray(event.input);
+        const call = { id: event.id, name: event.name, input: malformed ? {} : event.input, ...(malformed ? { malformed: true } : {}) };
+        size += bytes(call);
+        if (size > LIMITS.outputBytes) fail('OUTPUT_LIMIT');
+        toolCalls.push(call);
+      }
       else if (event.type === 'usage') {
         usage = addUsage(usage, event, params.usageCacheIncluded);
         params.onUsage?.(usage);
       }
       // Hidden thinking, signatures, opaque provider state and raw HTTP exchanges are deliberately not archived.
     }
+    if (toolCalls.some(call => call.malformed || !params.tools.some(tool => tool.name === call.name))) fail('INVALID_TOOL_INPUT');
     if (stopReason === 'max_tokens') fail('OUTPUT_TRUNCATED');
-    if (stopReason !== 'end_turn') fail('INVALID_PROPOSAL');
-    return { text: output, bytes: size, usage, stopReason };
+    if (!['end_turn', 'tool_use'].includes(stopReason) || (stopReason === 'tool_use') !== Boolean(toolCalls.length)) fail('INVALID_PROPOSAL');
+    const result = { text: output, bytes: size, usage, stopReason, ...(toolCalls.length ? { toolCalls } : {}) };
+    const state = bindProviderState(providerState, { content: output, toolCalls });
+    // Wire continuation only; non-enumerable so repository payloads/public output
+    // can never archive hidden reasoning or provider signatures.
+    if (state) Object.defineProperty(result, 'continuationState', { value: state });
+    return result;
   } catch (error) {
-    const safe = error instanceof PersonError ? error : new PersonError('PROVIDER_FAILED');
+    const safe = error instanceof PersonError ? error : new PersonError(error?.toolInputRejected === true ? 'INVALID_TOOL_INPUT' : 'PROVIDER_FAILED');
     // This prefix is explicitly incomplete/rejected, never a full accepted record.
-    safe.partialOutput = { text: output, retainedBytes: bytes(output), observedBytes: size, complete: false, accepted: false, usage, stopReason };
+    safe.partialOutput = { text: output, retainedBytes: bytes(output) + toolCalls.reduce((total, call) => total + bytes(call), 0),
+      observedBytes: size, complete: false, accepted: false, usage, stopReason, ...(toolCalls.length ? { toolCalls } : {}) };
     throw safe;
   } finally {
     // Do not let a provider ignoring AbortSignal indefinitely block cancellation/close.

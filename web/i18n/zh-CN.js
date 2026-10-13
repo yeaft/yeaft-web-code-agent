@@ -628,6 +628,7 @@ export default {
   'sidebar.sessions.pinned': '已置顶',
   'sidebar.sessions.processing': '正在回复',
   'sidebar.sessions.hidden': '已隐藏的会话',
+  'sidebar.sessions.upgradeForAction': '升级 Server 后可使用此操作。',
   'sidebar.sessions.remove': '从侧栏移除',
   'sidebar.sessions.agent': 'Agent',
   'sidebar.sessions.provider': 'Provider',

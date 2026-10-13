@@ -7,7 +7,7 @@ vi.mock('../../../../agent/yeaft/person/provider.js', async importOriginal => ({
   ...await importOriginal(), createPersonProvider: vi.fn(() => { throw new Error('Provider must not initialize for task APIs'); }),
 }));
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { createPersonTaskHost } from '../../../../agent/yeaft/person/task-host.js';
 
 import { getAgentRegistry, _resetAgentRegistry } from '../../../../agent/yeaft/tools/agent.js';

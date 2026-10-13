@@ -1,4 +1,17 @@
+import { isDeepStrictEqual } from 'node:util';
 import { bytes, digest, fail, identifier, object } from './contracts.js';
+
+/** Native wire names encode dots as double underscores (PersonCapabilities).
+ * A provider ID is scoped to its request, never a global execution identity.
+ * Malformed calls may be journaled for a no-effect error, but not published. */
+export function nativeInvocationMatches(output, started, { executable = false } = {}) {
+  if (output?.protocol !== 'native-tools' || !Array.isArray(output.toolCalls) ||
+      !Number.isSafeInteger(started.toolIndex) || started.toolIndex < 0) return false;
+  const call = output.toolCalls[started.toolIndex];
+  return Boolean(call && call.id === started.toolUseId &&
+    typeof started.capability?.id === 'string' && call.name === started.capability.id.replaceAll('.', '__') &&
+    (!executable || call.malformed !== true) && isDeepStrictEqual(call.input, started.capability.args));
+}
 
 export const EXECUTION_READ_LIMITS = Object.freeze({ pageBytes: 4096, responseBytes: 8192, argsBytes: 1024 });
 
@@ -44,6 +57,7 @@ export function executionEvidencePage(trace, started, request, liveEpisodeId) {
   const invocation = started?.capability ?? trace.capability;
   const failed = trace.kind === 'capability_failed' || trace.outcome === 'capability_failed' || result?.ok === false;
   const page = { id: 'Execution.read', episodeId: trace.episodeId, callId: request.callId,
+    ...(started?.modelCallId !== undefined ? { modelCallId: started.modelCallId, toolUseId: started.toolUseId, toolIndex: started.toolIndex } : {}),
     capabilityId: invocation?.id ?? trace.capabilityId ?? trace.capabilityManifest?.id ?? result?.id ?? null,
     ...invocationArgs(invocation?.args), ok: !failed, code: trace.code ?? result?.code ?? null,
     errorEffect: result?.errorEffect ?? null, sourceRef: result?.sourceRef ?? `trace:${trace.episodeId}:${request.callId}:${trace.id}`,

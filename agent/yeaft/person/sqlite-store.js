@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isMainThread } from 'node:worker_threads';
+import { isDeepStrictEqual } from 'node:util';
 import { admissionReceipt, bytes, digest, fail, FEEDBACK, identifier, LIMITS, PersonError, text } from './contracts.js';
 import { CREATED_CAPABILITY_LIMITS, createdCapabilityRecord, validateCreatedCapability } from './created-capability-contract.js';
 import { SCHEMA, TABLES } from './sqlite-schema.js';
@@ -12,7 +13,7 @@ import { chronologicalCursor, conceptView, inspectionCursor, inspectionPage, ins
 import { TOKEN_FIELDS, turnsPage, turnView } from './turn-diagnostics.js';
 import { personPresentation } from './presentation.js';
 import { inspectCapabilities } from './capabilities.js';
-import { executionEvidencePage, executionReadRequest } from './execution-evidence.js';
+import { executionEvidencePage, executionReadRequest, nativeInvocationMatches } from './execution-evidence.js';
 import { OUTPUT_LIMITS, outputArgs, outputMime, outputReadRequest, outputsPage, outputUrl, outputView } from './outputs.js';
 
 const SCOPE = 'namespace = ? AND ownerId = ? AND personId = ?';
@@ -42,7 +43,30 @@ const unavailableOutput = () => ({ text: '', retainedBytes: 0, observedBytes: nu
 const publicOutput = (output, failed) => {
   if (!output) return unavailableOutput();
   if (typeof output.text !== 'string' || bytes(output.text) > LIMITS.outputBytes) fail('OUTPUT_LIMIT');
-  const retainedBytes = bytes(output.text), observedBytes = output.observedBytes ?? output.bytes ?? retainedBytes;
+  if (output.protocol !== undefined && !['native-tools', 'cognition'].includes(output.protocol)) fail('INVALID_REQUEST');
+  // A native batch cannot be relabeled as an unmarked legacy scalar proof.
+  if (output.toolCalls?.length && output.protocol !== 'native-tools') fail('INVALID_REQUEST');
+  const toolCalls = [];
+  let retainedBytes = bytes(output.text), toolCallsTruncated = false;
+  if (output.toolCalls !== undefined) {
+    if (!Array.isArray(output.toolCalls)) fail('INVALID_REQUEST');
+    const ids = new Set();
+    for (const item of output.toolCalls) {
+      if (!item || typeof item.id !== 'string' || !item.id || bytes(item.id) > 1024 ||
+          typeof item.name !== 'string' || !item.name || bytes(item.name) > 512 || ids.has(item.id) ||
+          !item.input || typeof item.input !== 'object' || Array.isArray(item.input)) fail('INVALID_REQUEST');
+      ids.add(item.id);
+      const input = JSON.parse(JSON.stringify(item.input));
+      if (!isDeepStrictEqual(input, item.input)) fail('INVALID_REQUEST');
+      const call = { id: item.id, name: item.name, input, ...(item.malformed === true ? { malformed: true } : {}) };
+      if (retainedBytes + bytes(call) > LIMITS.outputBytes) {
+        if (!failed) fail('OUTPUT_LIMIT');
+        toolCallsTruncated = true; break;
+      }
+      retainedBytes += bytes(call); toolCalls.push(call);
+    }
+  }
+  const observedBytes = output.observedBytes ?? output.bytes ?? retainedBytes;
   if (!Number.isSafeInteger(observedBytes) || observedBytes < retainedBytes) fail('INVALID_REQUEST');
   const usage = output.usage ? {} : null;
   if (usage) for (const key of ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens']) {
@@ -52,8 +76,10 @@ const publicOutput = (output, failed) => {
   if (usage && output.usage.accountingIncomplete === true) usage.accountingIncomplete = true;
   if (usage && typeof output.usage.cacheTokensAreIncludedInInput === 'boolean') usage.cacheTokensAreIncludedInInput = output.usage.cacheTokensAreIncludedInInput;
   const stopReason = typeof output.stopReason === 'string' && bytes(output.stopReason) <= 128 ? output.stopReason : null;
-  return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason }
-    : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason };
+  const publicFields = { ...(output.protocol === 'native-tools' || output.protocol === 'cognition' ? { protocol: output.protocol } : {}),
+    ...(output.toolCalls !== undefined ? { toolCalls } : {}), ...(toolCallsTruncated ? { toolCallsTruncated: true } : {}) };
+  return failed ? { text: output.text, retainedBytes, observedBytes, complete: false, accepted: false, availability: 'captured', usage, stopReason, ...publicFields }
+    : { text: output.text, bytes: retainedBytes, complete: true, usage, stopReason, ...publicFields };
 };
 const objectOutput = (record, data) => {
   if (!record || !['file', 'link'].includes(record.kind)) fail('INVALID_REQUEST');
@@ -304,9 +330,11 @@ export class SqlitePersonStore {
     return this.trace(episode.ownerId, episode.id, kind, data);
   }
   startCall(episode, data) {
+    identifier(data.callId);
     const p = this.own(episode), scope = this.episodeScope(episode);
     const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
-    if (!record || record.status !== 'running' || record.openCall || record.openCapability) fail('STALE');
+    if (!record || record.status !== 'running' || record.openCall || record.openCapability ||
+        this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.kind') IN ('call_started', 'capability_started')", [episode.id, data.callId])) fail('STALE');
     p.writeSerial++; this.put('persons', p);
     record.openCall = { callId: data.callId, requested: data.requested, effective: data.effective, ...(data.manifest ? { manifest: data.manifest } : {}) };
     this.put('episodes', record);
@@ -318,7 +346,8 @@ export class SqlitePersonStore {
     const live = record.status === 'running' && Boolean(this.fenced(episode));
     const draining = record.status === 'cancelled' && record.callFinalizeUntil > this.now;
     if (!live && !draining) return false;
-    const failed = Boolean(code || !live || !output), terminalCode = !live ? 'CANCELLED' : code || 'INTERRUPTED';
+    const failed = Boolean(code || !live || !output || output.complete === false || output.accepted === false || output.toolCallsTruncated === true),
+      terminalCode = !live ? 'CANCELLED' : code || 'INTERRUPTED';
     const call = record.openCall;
     const safeEffective = { model: call.requested.model, effort: typeof effective?.effort === 'string' && effective.effort.length <= 128 ? effective.effort : null,
       effortObserved: effective?.effortObserved === true };
@@ -332,17 +361,42 @@ export class SqlitePersonStore {
     });
     return live;
   }
+  callProof(scope, episodeId, callId) {
+    return this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episodeId, callId]);
+  }
+  /** Recheck the original transactional slot and its request proof at publication.
+   * Legacy scalar APIs remain supported only for legacy complete call outputs. */
+  capabilityProof(scope, episodeId, started) {
+    if (!started || started.invocationHash !== digest(started.capability)) return null;
+    const proof = this.callProof(scope, episodeId, started.modelCallId ?? started.callId);
+    if (!proof) return null;
+    const original = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'capability_started' AND json_extract(record, '$.callId') = ? ORDER BY seq ASC", [episodeId, started.callId]);
+    if (!original || !isDeepStrictEqual(original.capability, started.capability) ||
+        ['modelCallId', 'toolUseId', 'toolIndex'].some(key => original[key] !== started[key])) return null;
+    if (proof.output.protocol === 'native-tools') return nativeInvocationMatches(proof.output, started, { executable: true }) ? proof : null;
+    return started.modelCallId === undefined && started.toolUseId === undefined && started.toolIndex === undefined && !proof.output.protocol ? proof : null;
+  }
   startCapability(episode, data) {
+    identifier(data.callId);
+    if (data.modelCallId !== undefined) identifier(data.modelCallId);
+    if (!data.capability || typeof data.capability.id !== 'string' || !data.capability.args || typeof data.capability.args !== 'object') fail('INVALID_REQUEST');
     const p = this.own(episode), scope = this.episodeScope(episode);
     const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
-    const proof = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, data.callId]);
+    const proof = this.callProof(scope, episode.id, data.modelCallId ?? data.callId);
     if (!record || record.status !== 'running' || record.openCall || record.openCapability || !proof) fail('STALE');
-    const prior = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'capability_started' AND json_extract(record, '$.callId') = ?", [episode.id, data.callId]);
-    if (prior) fail('STALE');
-    record.openCapability = { ...data, invocationHash: digest(data.capability) };
+    const native = proof.output.protocol === 'native-tools';
+    if (native ? !data.modelCallId || data.callId === data.modelCallId || !nativeInvocationMatches(proof.output, data)
+      : proof.output.protocol || data.modelCallId !== undefined || data.toolUseId !== undefined || data.toolIndex !== undefined) fail('STALE');
+    const prior = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'capability_started' AND (json_extract(record, '$.callId') = ? OR (? = 1 AND json_extract(record, '$.modelCallId') = ? AND (json_extract(record, '$.toolUseId') = ? OR json_extract(record, '$.toolIndex') = ?)))",
+      [episode.id, data.callId, Number(native), data.modelCallId ?? null, data.toolUseId ?? null, data.toolIndex ?? null]);
+    if (prior || (native && this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_started' AND json_extract(record, '$.callId') = ?", [episode.id, data.callId]))) fail('STALE');
+    const started = { callId: data.callId, capability: data.capability,
+      ...(native ? { modelCallId: data.modelCallId, toolUseId: data.toolUseId, toolIndex: data.toolIndex } : {}),
+      ...(data.capabilityManifest ? { capabilityManifest: data.capabilityManifest } : {}), ...(data.access ? { access: data.access } : {}) };
+    record.openCapability = { ...started, invocationHash: digest(started.capability) };
     this.put('episodes', record);
     p.writeSerial++; this.put('persons', p);
-    return this.trace(episode.ownerId, episode.id, 'capability_started', data);
+    return this.trace(episode.ownerId, episode.id, 'capability_started', started);
   }
   /** Original started invocation only; consuming this slot never restores cognitive authority. */
   finalizeCapability(episode, { callId, capability, result, code = null, terminalCode = null }) {
@@ -356,7 +410,7 @@ export class SqlitePersonStore {
     const started = record.openCapability;
     const failed = Boolean(code || result?.ok === false);
     const outcome = failed ? 'capability_failed' : 'capability_result';
-    const data = { callId, ...(started.capabilityManifest ? { capabilityManifest: started.capabilityManifest } : {}),
+    const data = { callId, ...(started.modelCallId !== undefined ? { modelCallId: started.modelCallId, toolUseId: started.toolUseId, toolIndex: started.toolIndex } : {}), ...(started.capabilityManifest ? { capabilityManifest: started.capabilityManifest } : {}),
       ...(failed ? { capabilityId: started.capability.id, code: code || result.code } : { capability: started.capability }),
       ...(result !== undefined ? { result } : {}) };
     delete record.openCapability; this.put('episodes', record);
@@ -395,8 +449,10 @@ export class SqlitePersonStore {
     this.own(episode);
     const scope = this.episodeScope(episode), active = this.one('episodes', scope, ' AND id = ?', [episode.id]);
     if (!active || active.status !== 'running' || active.epoch !== episode.epoch || active.workerId !== episode.workerId) fail('STALE');
-    const proof = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, callId]);
-    if (!proof || active.openCall?.callId === callId) fail('INVALID_REQUEST');
+    const started = active.openCapability;
+    const proof = started?.callId === callId ? this.capabilityProof(scope, episode.id, started) : this.callProof(scope, episode.id, callId);
+    if (!proof || active.openCall || (started ? started.callId !== callId || started.capability.id !== 'Capability.create' ||
+        !isDeepStrictEqual(started.capability.args, definition) : proof.output.protocol)) fail('INVALID_REQUEST');
     const current = this.one('created_capabilities', scope, ' AND id = ?', [definition.id]);
     if ((current?.version ?? 0) !== definition.expectedVersion) fail('STALE');
     if (definition.expectedVersion >= CREATED_CAPABILITY_LIMITS.versions || (!current &&
@@ -437,8 +493,7 @@ export class SqlitePersonStore {
       if (!message) fail('STORAGE_UNAVAILABLE');
       return messageView(message);
     }
-    const proof = this.one('traces', scope,
-      " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, callId]);
+    const proof = this.capabilityProof(scope, episode.id, record?.openCapability);
     if (!record || record.status !== 'running' || record.openCall || !proof || record.openCapability?.callId !== callId ||
         record.openCapability.invocationHash !== invocationHash) fail('STALE');
     // Repeating an identical delivery in this episode adds no new visible answer.
@@ -463,25 +518,35 @@ export class SqlitePersonStore {
   }
   /** Publish only a validated, complete call's reply. This is communication, not
    * a state/Concept commit. Fencing, dedupe and the memory journal share one transaction. */
-  publishProgress(episode, { callId, reply }) {
+  publishProgress(episode, { callId, reply, final = false }) {
     const p = this.own(episode), scope = this.episodeScope(episode);
     identifier(callId); text(reply, LIMITS.outputBytes);
+    if (typeof final !== 'boolean') fail('INVALID_REQUEST');
     const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running' || record.openCall || record.openCapability) fail('STALE');
-    const prior = this.rows('messages', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') = 'progress'", [episode.id]);
+    const prior = this.rows('messages', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') IN ('progress', 'execution-final')", [episode.id]);
     const duplicate = prior.find(m => m.callId === callId);
     if (duplicate) { if (duplicate.text !== reply) fail('INVALID_REQUEST'); return messageView(duplicate); }
     const proof = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, callId]);
-    const accepted = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'activity' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.disposition') = 'candidate'", [episode.id, callId]);
-    let proposal;
-    try { proposal = JSON.parse(proof?.output?.text); } catch { fail('INVALID_REQUEST'); }
-    if (!accepted || !proposal.next || proposal.reply !== reply) fail('INVALID_REQUEST');
+    if (proof?.output?.protocol === 'native-tools') {
+      if (proof.output.text !== reply || (final && (proof.output.stopReason !== 'end_turn' || proof.output.toolCalls?.length))) fail('INVALID_REQUEST');
+    } else {
+      if (final) fail('INVALID_REQUEST');
+      const accepted = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'activity' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.disposition') = 'candidate'", [episode.id, callId]);
+      let proposal;
+      try { proposal = JSON.parse(proof?.output?.text); } catch { fail('INVALID_REQUEST'); }
+      if (!accepted || !proposal.next || proposal.reply !== reply) fail('INVALID_REQUEST');
+    }
+    // A final duplicate is already delivered. Preserve its identity so final
+    // cognition does not interpret dedupe as a missing public result.
+    const sameReply = prior.find(m => m.text.trim() === reply.trim());
+    if (final && sameReply) return messageView(sameReply);
     // Provider latency counts too: a call started before 30s can finish after it.
-    if (this.now.getTime() - new Date(record.lastReplyAt ?? record.createdAt).getTime() < FEEDBACK.minMs ||
-        prior.some(m => m.text.trim() === reply.trim()) || this.repeatsPresentation(scope, episode.id, reply)) return null;
+    if ((!final && this.now.getTime() - new Date(record.lastReplyAt ?? record.createdAt).getTime() < FEEDBACK.minMs) ||
+        sameReply || this.repeatsPresentation(scope, episode.id, reply)) return null;
     p.messageSeq++; p.writeSerial++; this.put('persons', p);
     const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id,
-      callId, replyKind: 'progress', role: 'assistant', text: reply, createdAt: this.now });
+      callId, replyKind: final ? 'execution-final' : 'progress', role: 'assistant', text: reply, createdAt: this.now });
     this.put('messages', message, true); this.journal(scope, 'messages', message);
     record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'progress_reply', { callId, messageId: message.id });
@@ -490,7 +555,10 @@ export class SqlitePersonStore {
   commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     const p = this.own(episode), scope = this.episodeScope(episode);
     if (proposal.baseStateVersion !== episode.baseStateVersion) fail('STALE');
-    const publishReply = proposal.reply && !this.repeatsPresentation(scope, episode.id, proposal.reply);
+    const repeatsExecutionReply = proposal.reply && this.rows('messages', scope,
+      " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') IN ('progress', 'execution-final')", [episode.id])
+      .some(message => message.text.trim() === proposal.reply.trim());
+    const publishReply = proposal.reply && !repeatsExecutionReply && !this.repeatsPresentation(scope, episode.id, proposal.reply);
     p.stateVersion++; p.writeSerial++; if (publishReply) p.messageSeq++;
     p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0);
     this.put('persons', p);
@@ -593,7 +661,8 @@ export class SqlitePersonStore {
     const episodes = this.sql(`SELECT ${project({ id: 'id', seq: 'inputWatermark', kind: 'kind', status: 'status', createdAt: 'createdAt', endedAt: 'endedAt', terminalCode: 'terminalCode', controlStatus: 'executionControl.status', calls: 'budget.calls', timeoutMs: 'budget.timeoutMs' })} AS metadata
       FROM episodes WHERE ${SCOPE} AND (? IS NULL OR inputWatermark < ?) ORDER BY inputWatermark DESC LIMIT ?`)
       .all(...scopeValues(scope), cursor, cursor, limit + 1).map(row => JSON.parse(row.metadata));
-    const fields = { kind: 'kind', callId: 'callId', callIndex: 'callIndex', createdAt: 'createdAt',
+    const fields = { kind: 'kind', callId: 'callId', modelCallId: 'modelCallId', toolUseId: 'toolUseId', toolIndex: 'toolIndex',
+      protocol: 'output.protocol', callIndex: 'callIndex', createdAt: 'createdAt',
       requestedModel: 'requested.model', requestedEffort: 'requested.effort', effectiveEffort: 'effective.effort', effortObserved: 'effective.effortObserved',
       selectionOrigin: 'selectionOrigin', reason: 'reason', code: 'code', terminalCode: 'terminalCode', outcome: 'outcome',
       contextBytes: 'manifest.contextBytes', contextBudgetBytes: 'manifest.contextBudgetBytes', outputTokensReserved: 'manifest.outputTokensReserved' };
@@ -618,16 +687,21 @@ export class SqlitePersonStore {
         AND json_extract(record, '$.kind') = 'call_started' ORDER BY seq DESC LIMIT 33`)
         .all(...scopeValues(scope), episode.id);
       const oldest = starts[Math.min(starts.length, 32) - 1]?.seq ?? 0;
-      const events = this.sql(`SELECT ${metadata} AS metadata FROM traces WHERE ${SCOPE} AND seq >= ?
-        AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') IN
-        ('call_started', 'call_output', 'call_failed', 'proposal_rejected', 'capability_started', 'capability_result', 'capability_failed', 'capability_finalized') ORDER BY seq DESC LIMIT 257`)
-        .all(...scopeValues(scope), oldest, episode.id).map(row => {
-          const event = JSON.parse(row.metadata); event.effortObserved = event.effortObserved === 1; return event;
-        });
-      return { ...turnView(episode, events.slice(0, 256).reverse()),
+      // Tool fan-out must not evict the parent model lifecycle/usage. Both
+      // projections remain bounded, and a shortened detail window is explicit.
+      const eventWindow = kinds => this.sql(`SELECT seq, ${metadata} AS metadata FROM traces WHERE ${SCOPE} AND seq >= ?
+        AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') IN (${kinds}) ORDER BY seq DESC LIMIT 257`)
+        .all(...scopeValues(scope), oldest, episode.id);
+      const modelEvents = eventWindow("'call_started', 'call_output', 'call_failed', 'proposal_rejected'");
+      const toolEvents = eventWindow("'capability_started', 'capability_result', 'capability_failed', 'capability_finalized'");
+      const events = [...modelEvents.slice(0, 256), ...toolEvents.slice(0, 256)].sort((a, b) => a.seq - b.seq).map(row => {
+        const event = JSON.parse(row.metadata); event.effortObserved = event.effortObserved === 1; return event;
+      });
+      const callsTruncated = starts.length > 32 || modelEvents.length > 256;
+      return { ...turnView(episode, events),
         loopCount: starts[0]?.callIndex != null ? starts[0].callIndex + 1 : starts.length > 32 ? null : starts.length,
-        callsTruncated: starts.length > 32 || events.length > 256, callWindowLimit: 32,
-        usageScope: starts.length > 32 || events.length > 256 ? 'latest-call-window' : 'episode' };
+        callsTruncated, callWindowLimit: 32, detailsTruncated: toolEvents.length > 256 || modelEvents.length > 256, detailWindowLimit: 256,
+        usageScope: callsTruncated ? 'latest-call-window' : 'episode' };
     });
     return { items, nextCursor: episodes.length > limit ? items.at(-1).seq : null };
   }
@@ -655,8 +729,9 @@ export class SqlitePersonStore {
   checkOutputPublication(episode, { callId, args }) {
     outputArgs(args); this.own(episode);
     const scope = this.episodeScope(episode), active = this.one('episodes', scope, ' AND id = ?', [episode.id]);
-    if (!active || active.status !== 'running' || active.openCapability?.callId !== callId ||
-        active.openCapability.invocationHash !== digest({ id: 'Output.publish', args })) fail('STALE');
+    if (!active || active.status !== 'running' || active.openCall || active.openCapability?.callId !== callId ||
+        active.openCapability.invocationHash !== digest({ id: 'Output.publish', args }) ||
+        !this.capabilityProof(scope, episode.id, active.openCapability)) fail('STALE');
     return true;
   }
   saveOutput(episode, { callId, args, record, data }) {

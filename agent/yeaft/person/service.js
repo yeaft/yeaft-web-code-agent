@@ -2,6 +2,9 @@ import { SqlitePersonRepository } from './sqlite-repository.js';
 import { LocalPersonMemory } from './local-memory.js';
 import { ensurePersonStorage } from './sqlite-storage.js';
 import { PersonRuntime } from './runtime.js';
+import { PersonCapabilities } from './capabilities.js';
+import { EXECUTION_INSTRUCTIONS } from './execution-protocol.js';
+import { personMinimumRequestBytes } from './request-budget.js';
 import { allowedNativeToolIds } from './native-tools.js';
 import { loadConfig } from '../config.js';
 import { validateFiles } from './attachments.js';
@@ -41,7 +44,13 @@ export function createPersonService(options = {}) {
   if (memory) repository.recall = (ownerId, args = {}, { signal } = {}) => args.query?.trim()
     ? memory.recall(ownerId, args, { signal }) : literalRecall(ownerId, args);
   // Config/adapter are loaded per explicit episode, not a permanent stale cache.
-  const getProvider = (modelCandidates = [], defaultModel = null) => createPersonProvider({ yeaftDir, config, adapter, allowedModels, modelCandidates, defaultModel, effortEnabled: options.effortEnabled });
+  const getProvider = (modelCandidates = [], defaultModel = null) => {
+    const nativeConfig = config ?? loadConfig({ dir: yeaftDir });
+    const capabilities = new PersonCapabilities(null, null, { toolHost: { allowedToolIds: () => allowedNativeToolIds(nativeConfig) } });
+    const minimumRequestBytes = personMinimumRequestBytes(capabilities.executionTools(), EXECUTION_INSTRUCTIONS);
+    return createPersonProvider({ yeaftDir, config: nativeConfig, adapter, allowedModels, modelCandidates, defaultModel,
+      effortEnabled: options.effortEnabled, minimumRequestBytes });
+  };
   const runtime = new PersonRuntime({ repository, getProvider, budget: { calls: null }, workDir, yeaftDir, config, namespace });
   let closed = false;
   const requests = new Set();
@@ -68,18 +77,19 @@ export function createPersonService(options = {}) {
       } catch (error) { if (error.code !== 'NOT_OPEN') throw error; }
       try {
         const provider = await getProvider();
+        let modelReason = null;
         try {
-          const selected = selectPersonModels({ availableModels: provider.availableModels,
+          const selected = selectPersonModels({ availableModels: provider.availableModels, unavailableModels: provider.unavailableModels,
             modelCandidates: status.modelCandidates, defaultModel: status.defaultModel });
           status.modelReady = true;
           status.effectiveModelCandidates = selected.catalog.map(model => model.id);
           status.effectiveDefaultModel = selected.defaultSelection.model;
-        } catch { /* Stale settings remain visible, but do not grant fallback candidates. */ }
+        } catch (error) { modelReason = safeError(error, 'MODEL_SELECTION').message; /* No fallback candidates for stale settings. */ }
         return { ...status, agentDefaultModel: provider.agentDefaultModel,
-          reason: status.modelReady ? null : 'Saved model settings are unavailable; choose models or reset to Agent defaults.',
+          reason: status.modelReady ? null : `${modelReason} Choose models or reset to Agent defaults.`,
           storageReady: true, models: provider.availableModels, availableModels: provider.availableModels,
           availableModelsTruncated: provider.availableModelsTruncated, autonomySupported: false };
-      } catch { return { ...status, reason: 'No permitted native model is configured for digital person.', storageReady: true, models: [], availableModels: [] }; }
+      } catch (error) { return { ...status, reason: safeError(error, 'MODEL_UNAVAILABLE').message, storageReady: true, models: [], availableModels: [] }; }
     }
     if (!configured) fail('NOT_CONFIGURED');
     switch (op) {
@@ -188,7 +198,8 @@ export function createPersonService(options = {}) {
           // An automatic reset must also work when no model is currently available.
           if (merged.modelCandidates.length || merged.defaultModel !== null) {
             const provider = await getProvider();
-            selectPersonModels({ availableModels: provider.availableModels, modelCandidates: merged.modelCandidates, defaultModel: merged.defaultModel });
+            selectPersonModels({ availableModels: provider.availableModels, unavailableModels: provider.unavailableModels,
+              modelCandidates: merged.modelCandidates, defaultModel: merged.defaultModel });
           }
           // Fence the merge base across concurrent services; retry from fresh settings.
           expectedControlVersion = prior.controlVersion;

@@ -16,6 +16,7 @@ import {
   classifyPolicyError,
   LLMContextError,
   LLMServerError,
+  LLMToolInputError,
   LLMAbortError,
   readStreamChunkWithIdleTimeout,
   resolveStreamIdleTimeoutMs,
@@ -75,7 +76,7 @@ function hasNonEmptyText(value) {
 
 function requireToolInputObject(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    throw new LLMServerError('Anthropic returned invalid or incomplete tool input', 0);
+    throw new LLMToolInputError('Anthropic returned invalid or incomplete tool input');
   }
   return input;
 }
@@ -334,12 +335,18 @@ export class AnthropicAdapter extends LLMAdapter {
         cacheReadTokens: result.usage?.cache_read_input_tokens || 0, cacheWriteTokens: result.usage?.cache_creation_input_tokens || 0,
         ...reasoningUsage(result.usage, 'anthropic') };
       if (signal?.aborted) throw new LLMAbortError();
-      for (const block of result.content || []) {
-        if (block.type !== 'tool_use') continue;
-        requireToolInputObject(block.input);
-        if (result.stop_reason === 'max_tokens') {
-          throw new LLMServerError('Anthropic tool response was truncated at max_tokens', 0);
+      try {
+        for (const block of result.content || []) {
+          if (block.type !== 'tool_use') continue;
+          requireToolInputObject(block.input);
+          if (result.stop_reason === 'max_tokens') {
+            throw new LLMToolInputError('Anthropic tool response was truncated at max_tokens');
+          }
         }
+      } catch (error) {
+        if (!(error instanceof LLMToolInputError)) throw error;
+        yield { type: 'error', error, retryable: false };
+        return;
       }
       const state = createProviderState({ context, identity: requestIdentity, items: result.content, responseId: result.id });
       for (const block of result.content || []) {
@@ -389,10 +396,12 @@ export class AnthropicAdapter extends LLMAdapter {
     let sawMessageStart = false;
     let cumulativeOutputTokens = 0;
     let toolInputError = null;
+    let malformedStream = false;
     const hasToolBlocks = () => toolInputError !== null || [...blockByIndex.values()].some(block => block.kind === 'tool_use')
       || [...completedBlocks.values()].some(block => block.type === 'tool_use');
     const requireClosedBlocks = () => {
       if (blockByIndex.size > 0) {
+        if (hasToolBlocks()) throw new LLMToolInputError('Anthropic stream ended with an incomplete tool batch');
         throw new LLMServerError('Anthropic stream ended with an incomplete content block', 0);
       }
     };
@@ -420,7 +429,7 @@ export class AnthropicAdapter extends LLMAdapter {
           if (data === '[DONE]') {
             // Legacy text-only gateways may use [DONE]. Tools require the
             // native message_stop boundary; never seal a partial batch here.
-            if (hasToolBlocks()) throw new LLMServerError('Anthropic stream ended before stop event', 0);
+            if (hasToolBlocks()) throw new LLMToolInputError('Anthropic tool stream ended before stop event');
             requireClosedBlocks();
             sawStop = true;
             continue;
@@ -430,9 +439,9 @@ export class AnthropicAdapter extends LLMAdapter {
           try {
             event = JSON.parse(data);
           } catch {
-            // A lost input delta can otherwise turn the start placeholder {}
-            // into executable arguments. Do not silently skip malformed SSE.
-            throw new LLMServerError('Anthropic returned a malformed stream event', 0);
+            // Keep draining for usage, but reject any tools in this response.
+            malformedStream = true;
+            continue;
           }
 
           const type = event?.type;
@@ -492,7 +501,9 @@ export class AnthropicAdapter extends LLMAdapter {
                 st.signature += delta.signature || '';
               }
             } else if (delta?.type === 'input_json_delta') {
-              if (st?.kind === 'tool_use' && typeof delta.partial_json === 'string' && delta.partial_json.length > 0) {
+              if (st?.kind !== 'tool_use' || typeof delta.partial_json !== 'string') {
+                toolInputError = new LLMToolInputError('Anthropic returned invalid or incomplete tool input');
+              } else if (delta.partial_json.length > 0) {
                 st.input += delta.partial_json;
                 // No content and no throttling: the last delta defines idle time.
                 yield { type: 'provider_activity' };
@@ -511,7 +522,7 @@ export class AnthropicAdapter extends LLMAdapter {
               } catch {
                 // Reject the entire batch, but drain to the message boundary so
                 // the provider's final usage is not lost on truncated JSON.
-                toolInputError = new LLMServerError('Anthropic returned invalid or incomplete tool input', 0);
+                toolInputError = new LLMToolInputError('Anthropic returned invalid or incomplete tool input');
               }
               // Publish tools only after message_stop validates the entire
               // response, including parallel siblings and max_tokens truncation.
@@ -567,7 +578,7 @@ export class AnthropicAdapter extends LLMAdapter {
             if (signal?.aborted) throw new LLMAbortError();
             const stopReason = event.delta?.stop_reason;
             if (stopReason === 'max_tokens' && hasToolBlocks()) {
-              toolInputError = new LLMServerError('Anthropic tool response was truncated at max_tokens', 0);
+              toolInputError = new LLMToolInputError('Anthropic tool response was truncated at max_tokens');
             }
             if (stopReason && !toolInputError) {
               // Only message_stop seals native state. EOF after message_delta
@@ -575,6 +586,10 @@ export class AnthropicAdapter extends LLMAdapter {
               yield { type: 'stop', stopReason: this.#mapStopReason(stopReason) };
             }
           } else if (type === 'message_stop') {
+            if (malformedStream) {
+              if (hasToolBlocks()) throw new LLMToolInputError('Anthropic returned a malformed tool stream');
+              throw new LLMServerError('Anthropic returned a malformed stream event', 0);
+            }
             if (toolInputError) throw toolInputError;
             requireClosedBlocks();
             sawStop = true;
@@ -611,22 +626,35 @@ export class AnthropicAdapter extends LLMAdapter {
             } else yield { type: 'usage', reportedTokenFields: [], usageIncomplete: true };
           } else if (type === 'error') {
             stateFailed = true;
+            const rejected = toolInputError || (malformedStream && hasToolBlocks()
+              ? new LLMToolInputError('Anthropic returned a malformed tool stream') : null);
             yield {
               type: 'error',
-              error: new Error(event.error?.message || 'Unknown streaming error'),
-              retryable: event.error?.type === 'overloaded_error',
+              error: rejected || new Error(event.error?.message || 'Unknown streaming error'),
+              retryable: !rejected && event.error?.type === 'overloaded_error',
             };
+            return;
           }
         }
       }
       if (signal?.aborted) throw new LLMAbortError();
       if (toolInputError) throw toolInputError;
+      if (malformedStream) {
+        if (hasToolBlocks()) throw new LLMToolInputError('Anthropic returned a malformed tool stream');
+        throw new LLMServerError('Anthropic returned a malformed stream event', 0);
+      }
       if (!sawStop && (sawMessageStart || hasToolBlocks())) {
+        if (hasToolBlocks()) throw new LLMToolInputError('Anthropic tool stream ended before stop event');
         throw new LLMServerError('Anthropic stream ended before stop event', 0);
       }
       requireClosedBlocks();
     } catch (err) {
-      throw classifyFetchError(err, { providerLabel: 'Anthropic', signal });
+      // Once malformed input is known, a later drain failure cannot make the
+      // same rejected request eligible for transport retry. Abort still wins.
+      if (err instanceof LLMToolInputError) yield { type: 'error', error: err, retryable: false };
+      else if (!signal?.aborted && (toolInputError || (malformedStream && hasToolBlocks()))) {
+        yield { type: 'error', error: toolInputError || new LLMToolInputError('Anthropic returned a malformed tool stream'), retryable: false };
+      } else throw classifyFetchError(err, { providerLabel: 'Anthropic', signal });
     } finally {
       // Close malformed/aborted streams and transports that stay open after
       // message_stop. Cancellation must not delay the caller or mask its error.
@@ -708,6 +736,11 @@ export class AnthropicAdapter extends LLMAdapter {
     }
 
     const result = await response.json();
+    for (const block of result.content || []) {
+      if (block.type !== 'tool_use') continue;
+      requireToolInputObject(block.input);
+      if (result.stop_reason === 'max_tokens') throw new LLMToolInputError('Anthropic tool response was truncated at max_tokens');
+    }
     const text = result.content
       ?.filter(b => b.type === 'text')
       .map(b => b.text)

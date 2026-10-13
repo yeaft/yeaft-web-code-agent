@@ -77,14 +77,15 @@ export function turnView(episode, events) {
         contextBytes: token(event.contextBytes), contextBudgetBytes: token(event.contextBudgetBytes), contextWindowTokens: token(event.contextWindowTokens),
         outputTokensReserved: token(event.outputTokensReserved), imageTokensReserved: token(event.imageTokensReserved), envelopeTokensReserved: token(event.envelopeTokensReserved),
         contextSources: contextSources(event),
-        usage: callUsage(null, false) });
+        usage: callUsage(null, false), capabilities: [] });
       continue;
     }
-    const call = calls.get(event.callId);
+    const call = calls.get(event.modelCallId ?? event.callId);
     if (!call) continue;
     if (event.kind === 'call_output' || event.kind === 'call_failed') {
       call.status = event.kind === 'call_output' ? 'completed' : ['CANCELLED', 'INTERRUPTED'].includes(event.code) ? event.code.toLowerCase() : 'failed';
       call.endedAt = event.createdAt;
+      if (['native-tools', 'cognition'].includes(event.protocol)) call.protocol = event.protocol;
       // Legacy call lifecycle timestamps include queue/pause time. Do not label
       // them as provider duration when no actual dispatch measurement was stored.
       call.elapsedMs = token(event.requestElapsedMs);
@@ -93,11 +94,26 @@ export function turnView(episode, events) {
       call.usage = callUsage(event.usage, event.kind === 'call_output');
     } else if (event.kind === 'proposal_rejected') {
       call.status = 'rejected'; call.code = string(event.code);
-    } else if (event.kind === 'capability_started') {
-      call.capability = { id: string(event.capabilityId), status: 'running', code: null };
-    } else if (['capability_result', 'capability_failed', 'capability_finalized'].includes(event.kind)) {
-      call.capability = { id: string(event.capabilityId) ?? call.capability?.id ?? null,
-        status: (event.outcome ?? event.kind) === 'capability_failed' ? 'failed' : 'completed', code: string(event.code) ?? string(event.terminalCode) };
+    } else if (['capability_started', 'capability_result', 'capability_failed', 'capability_finalized'].includes(event.kind)) {
+      let capability = call.capabilities.find(item => item.callId === event.callId);
+      if (!capability) {
+        capability = { callId: event.callId, ...(event.modelCallId ? { modelCallId: event.modelCallId,
+          toolUseId: string(event.toolUseId), toolIndex: token(event.toolIndex) } : {}), id: string(event.capabilityId),
+          status: 'running', code: null, createdAt: event.kind === 'capability_started' ? event.createdAt : null, endedAt: null };
+        call.capabilities.push(capability);
+      }
+      if (event.kind !== 'capability_started') {
+        capability.id = string(event.capabilityId) ?? capability.id;
+        capability.status = (event.outcome ?? event.kind) === 'capability_failed' ? 'failed' : 'completed';
+        capability.code = string(event.code) ?? string(event.terminalCode);
+        capability.endedAt = event.createdAt;
+        if (event.kind === 'capability_finalized') Object.assign(capability, { afterTerminal: true, accepted: false,
+          terminalCode: string(event.terminalCode) });
+      }
+      // Compatibility for scalar readers. Native one-to-many consumers use the
+      // complete array; never silently select one member of a multi-tool call.
+      if (call.capabilities.length === 1) call.capability = { id: capability.id, status: capability.status, code: capability.code };
+      else delete call.capability;
     }
   }
   const items = [...calls.values()].sort((a, b) => a.index - b.index);

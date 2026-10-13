@@ -95,6 +95,9 @@ export class SqlitePersonRepository {
   async append(episode, kind, data) { return this.request('append', [episode, kind, data]); }
   async startCall(episode, data) { return this.request('startCall', [episode, data]); }
   async finalizeCall(episode, data) { return this.request('finalizeCall', [episode, data]); }
+  /** Native tools have an independent trace callId, with modelCallId/toolUseId/
+   * toolIndex bound by storage to the complete public provider batch. Legacy
+   * scalar invocations keep their original shared callId. */
   async startCapability(episode, data) { return this.request('startCapability', [episode, data]); }
   async finalizeCapability(episode, data) { return this.request('finalizeCapability', [episode, data]); }
   async executionRead(episode, args, { signal } = {}) {
