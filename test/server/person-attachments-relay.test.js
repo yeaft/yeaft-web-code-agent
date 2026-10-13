@@ -60,7 +60,8 @@ describe('Person uploaded reference relay', () => {
       calls++;
       const context = JSON.parse(params.messages[0].content), proposal = finalProposal(context.state.version);
       proposal.concepts = []; proposal.state.focusConceptIds = [];
-      yield { type: 'text_delta', text: JSON.stringify(proposal) }; yield { type: 'stop', stopReason: 'end_turn' };
+      yield { type: 'text_delta', text: params.tools.length ? proposal.reply : JSON.stringify(proposal) };
+      yield { type: 'stop', stopReason: 'end_turn' };
     } } });
     const state = personState(), envelopes = [];
     const chat = { authenticated: true, connectionState: 'connected', digitalPersonUiEnabledByAgent: { agent: true }, agents: [{ id: 'agent', online: true, capabilities: ['digital_person'] }],
@@ -97,7 +98,8 @@ describe('Person uploaded reference relay', () => {
       const messages = await service.request({ ownerId: 'alice', op: 'messages', payload: {} });
       expect(messages.items.filter(m => m.role === 'user')).toHaveLength(1);
       expect(messages.items.find(m => m.role === 'user').attachments[0].name).toBe('notes.md');
-      expect(calls).toBe(1); expect(uploads.has('upload')).toBe(true);
+      expect(calls).toBe(2); // One execution end_turn plus one final cognition, no replay.
+      expect(uploads.has('upload')).toBe(true);
     } finally { controller.dispose(); await service.close(); await rm(dir, { recursive: true, force: true }); }
   });
 });
