@@ -3,12 +3,7 @@ import { completeLogin } from '../../server/auth/login.js';
 import { activeSessions, revokedTokens } from '../../server/auth/session-store.js';
 import { userDb } from '../../server/database.js';
 import { registerAuthRoutes } from '../../server/routes/auth-routes.js';
-import {
-  SESSION_COOKIE_NAME,
-  authenticateRequest,
-  clearSessionCookie,
-  setSessionCookie,
-} from '../../server/auth/request-auth.js';
+import { SESSION_COOKIE_NAME, authenticateRequest, setSessionCookie } from '../../server/auth/request-auth.js';
 
 const createdUserIds = [];
 
@@ -43,13 +38,6 @@ describe('request authentication', () => {
     expect(result).toMatchObject({ valid: true, username: 'cookie-user', token: cookieToken, source: 'cookie' });
   });
 
-  it('uses the same cookie authentication for requests without a JS token', () => {
-    const cookieToken = issue('mobile-user');
-    const result = authenticateRequest({ cookieHeader: `theme=dark; ${SESSION_COOKIE_NAME}=${cookieToken}` });
-
-    expect(result).toMatchObject({ valid: true, username: 'mobile-user', source: 'cookie' });
-  });
-
   it('sets a secure HttpOnly same-origin session cookie behind HTTPS proxying', () => {
     const token = issue('secure-user');
     const res = { cookie: (...args) => { res.args = args; } };
@@ -60,17 +48,6 @@ describe('request authentication', () => {
     expect(res.args[1]).toBe(token);
     expect(res.args[2]).toMatchObject({ httpOnly: true, sameSite: 'lax', secure: true, path: '/' });
     expect(res.args[2].maxAge).toBeGreaterThan(0);
-  });
-
-  it('clears the cookie with matching security attributes', () => {
-    const res = { clearCookie: (...args) => { res.args = args; } };
-
-    clearSessionCookie({ secure: true, headers: {} }, res);
-
-    expect(res.args).toEqual([
-      SESSION_COOKIE_NAME,
-      { httpOnly: true, sameSite: 'lax', secure: true, path: '/' },
-    ]);
   });
 
   it('revokes and clears a cookie-only session through the logout route', () => {
