@@ -40,4 +40,32 @@ test('legacy empty inventory keeps the final sidebar and permits first Session c
   await expect(row.locator('.session-pin-icon')).toHaveCount(0);
   await expect(row.locator('.session-remove-icon').locator('..')).toBeDisabled();
   expect(await page.evaluate(() => Object.keys(window.Pinia.useChatStore().sessionCatalogMutationRequests))).toEqual([]);
+
+  const firstId = await page.evaluate(() => {
+    const store = window.Pinia.useChatStore();
+    const conversation = store.conversations.find(item => item.type === 'chat');
+    conversation.createdAt = Date.now() - 60000;
+    store.customConversationTitles[conversation.id] = 'First Chat';
+    return conversation.id;
+  });
+  await navigation.locator('.sidebar-primary-action').click();
+  await expect(modal).toBeVisible();
+  await modal.locator('.resume-control-row').nth(1).locator('.modern-select-trigger').click();
+  await page.locator('.yeaft-session-create-select-menu .modern-select-option', { hasText: 'Claude Code' }).click();
+  await modal.locator('.resume-modal-footer .modern-btn').click();
+  await expect(modal).not.toBeVisible();
+  await expect(navigation.locator('.session-item')).toHaveCount(2);
+  const titles = navigation.locator('.sidebar-session-title-text');
+  await expect(titles.nth(1)).toHaveText('First Chat');
+  await page.evaluate(() => {
+    const store = window.Pinia.useChatStore();
+    const conversation = store.conversations.find(item => item.type === 'chat' && !store.customConversationTitles[item.id]);
+    store.customConversationTitles[conversation.id] = 'Second Chat';
+  });
+  await expect(titles).toHaveText(['Second Chat', 'First Chat']);
+  await page.evaluate(id => {
+    const store = window.Pinia.useChatStore();
+    store.conversations.find(item => item.id === id).lastMessageAt = Date.now() + 1000;
+  }, firstId);
+  await expect(titles).toHaveText(['First Chat', 'Second Chat']);
 });

@@ -1,4 +1,5 @@
 import { chatCatalogKey, yeaftCatalogKey } from './session-catalog.js';
+import { sortSessionsByActivity } from './session-order.js';
 
 export function sidebarCatalogAuthIsCurrent(store, auth) {
   return store.sidebarCatalogAuthGeneration === auth.authGeneration
@@ -21,7 +22,9 @@ export function adaptLegacySidebarSessionCatalog(store, sessions = []) {
     }
   }
   const rows = [];
-  for (const conversation of store.conversations || []) {
+  // Legacy Chat has no persisted manual rank; preserve its activity ordering.
+  // Native Sessions below already arrive in the sessions store's chosen order.
+  for (const conversation of sortSessionsByActivity(store.conversations)) {
     if (!conversation?.id || !conversation.agentId || conversation.type === 'yeaft'
         || conversation.id.startsWith('yeaft-')) continue;
     const runtimeProvider = conversation.provider || 'claude-code';

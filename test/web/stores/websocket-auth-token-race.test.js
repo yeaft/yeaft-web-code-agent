@@ -550,6 +550,30 @@ describe('sidebar Session catalog lifecycle', () => {
     expect(store.sidebarSessionCatalogLoading).toBe(false);
   });
 
+  it('keeps legacy Chats newest-first while preserving native manual order', async () => {
+    const { store, sessions, open, deliver } = await lifecycleFixture();
+    open(null);
+    store.conversations = [
+      { id: 'old-chat', agentId: 'agent-a', createdAt: '2026-10-12T10:00:00Z' },
+      { id: 'new-chat', agentId: 'agent-a', createdAt: '2026-10-13T10:00:00Z' },
+    ];
+    sessions.sessionList = [
+      { id: 'native-first', agentId: 'agent-a', sortOrder: 0, updatedAt: '2026-10-12T10:00:00Z' },
+      { id: 'native-second', agentId: 'agent-a', sortOrder: 1, updatedAt: '2026-10-13T10:00:00Z' },
+    ];
+    store._hasHandledAgentList = true;
+    store.yeaftSessionHydrateRequestId = 'inventory';
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
+    const keys = () => store.sidebarSessionCatalog.map(row => row.catalogKey);
+    expect(keys()).toEqual(['chat:new-chat', 'chat:old-chat', 'yeaft:agent-a:native-first', 'yeaft:agent-a:native-second']);
+    store.conversations[0].lastMessageAt = '2026-10-13T11:00:00Z';
+    expect(keys()).toEqual(['chat:old-chat', 'chat:new-chat', 'yeaft:agent-a:native-first', 'yeaft:agent-a:native-second']);
+    store.conversations.push({ id: 'created-chat', agentId: 'agent-a', createdAt: '2026-10-13T12:00:00Z' });
+    expect(keys().slice(0, 3)).toEqual(['chat:created-chat', 'chat:old-chat', 'chat:new-chat']);
+    expect(store.sidebarSessionCatalog.map(row => row.sortRank)).toEqual([0, 1, 2, 3, 4]);
+    expect(store.conversations.map(row => row.id)).toEqual(['old-chat', 'new-chat', 'created-chat']);
+  });
+
   it('routes legacy pin/unpin and Yeaft reorder without orphaned catalog mutations', async () => {
     const { store, sessions, open, deliver } = await lifecycleFixture();
     open(null);
