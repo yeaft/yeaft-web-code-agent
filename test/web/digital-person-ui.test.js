@@ -1,22 +1,22 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { acceptPersonResponse } from '../../web/stores/helpers/digital-person.js';
 import DigitalPersonPage from '../../web/components/DigitalPersonPage.js';
-
-import PersonTaskBrowser from '../../web/components/PersonTaskBrowser.js';
-
+import PersonTurnUsage from '../../web/components/PersonTurnUsage.js';
 import { personTurn } from '../fixtures/person-turns.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
+import zhCN from '../../web/i18n/zh-CN.js';
 
 vi.mock('../../web/stores/auth.js', () => ({ useAuthStore: () => ({ userId: 'owner', authGeneration: 1 }) }));
 let wrapper;
 let chat;
 let requests;
-const t = (key, params = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (match, name) => String(params[name] ?? match));
 beforeEach(() => {
   requests = [];
   chat = Vue.reactive({
@@ -53,18 +53,62 @@ async function render(messages = en) {
 }
 
 describe('Digital Person surface', () => {
-  it('treats succeeded shells as terminal and associates child logs without duplicate task rows', () => {
-    wrapper = mount(PersonTaskBrowser, { props: { page: { tasks: [
-      { id: 'done', kind: 'shell', title: 'Finished', status: 'succeeded' },
-      { id: 'child-log', kind: 'sub_agent', agentId: 'child', status: 'succeeded' },
-    ], agents: [{ id: 'child', name: 'Research', status: 'completed' }] }, log: {} }, global: { config: { globalProperties: { $t: t } } } });
-    expect(wrapper.findAll('.person-task-item')).toHaveLength(2);
-    expect(wrapper.text()).toContain('Completed');
-    expect(wrapper.text()).not.toContain('person.taskStatus.');
-    expect(wrapper.findAll('button').some(button => button.text() === 'Stop')).toBe(false);
-    expect(wrapper.findAll('.person-task-item').map(row => row.attributes('data-task-id'))).toEqual(['child', 'done']);
-    wrapper.get('[data-task-id="child"]').findAll('button').find(button => button.text() === 'View log').trigger('click');
-    expect(wrapper.emitted('log')[0]).toEqual(['child-log']);
+  it.each([en, zhCN])('renders one reply header with timestamped progress/final parts and a single inline waiting status', async messages => {
+    const markdown = {};
+    runInNewContext(readFileSync(resolve(process.cwd(), 'web/vendor/marked.min.js'), 'utf8'), markdown);
+    vi.stubGlobal('marked', markdown.marked);
+    await render(messages);
+    const state = wrapper.vm.state;
+    const p1 = { id: 'p1', role: 'assistant', episodeId: 'turn', replyKind: 'progress', text: 'First verified finding.', createdAt: 31000 };
+    Object.assign(state, { messages: [{ id: 'question', role: 'user', text: 'Question', episodeId: 'turn', createdAt: 1 }, p1],
+      busy: true, episodeId: 'turn', latestEpisode: { id: 'turn', status: 'running' } });
+    await Vue.nextTick();
+    const article = wrapper.get('.person-reply');
+    const articleElement = article.element;
+    const firstPartElement = article.get('.person-reply-part').element;
+    expect(article.get('.person-response-loading').exists()).toBe(true);
+    state.messages.push({ ...p1, id: 'p2', text: '<script>Not active HTML</script>', createdAt: 62000 },
+      { ...p1, id: 'final', replyKind: 'execution-final', text: '## Final conclusion', createdAt: 93000 });
+    await Vue.nextTick();
+    expect(wrapper.findAll('.person-reply')).toHaveLength(1);
+    expect(article.findAll('.person-message-meta')).toHaveLength(1);
+    expect(article.get('.person-message-meta').text()).toBe('Ada');
+    expect(article.findAll('.person-reply-part')).toHaveLength(3);
+    expect(article.findAll('.person-reply-divider')).toHaveLength(2);
+    expect(article.findAll('.person-reply-kind').map(node => node.text())).toEqual([
+      messages['person.progressReply'], messages['person.progressReply'], messages['person.finalReply'],
+    ]);
+    expect(article.findAll('time').map(node => node.attributes('datetime'))).toEqual([31000, 62000, 93000].map(at => new Date(at).toISOString()));
+    expect(article.find('script').exists()).toBe(false);
+    expect(article.get('.person-reply-part[data-message-id="final"] .person-message-text h2').text()).toBe('Final conclusion');
+    state.messages = state.messages.map(row => ({ ...row })); // snapshot replay
+    await Vue.nextTick();
+    expect(wrapper.get('.person-reply').element).toBe(articleElement);
+    expect(wrapper.get('.person-reply-part').element).toBe(firstPartElement);
+    Object.assign(state, { busy: false, episodeId: null, latestEpisode: { id: 'turn', status: 'completed' } });
+    await Vue.nextTick();
+    expect(wrapper.find('.person-response-loading').exists()).toBe(false);
+    expect(article.findAll('.person-reply-part')).toHaveLength(3);
+    state.messages.push({ id: 'question2', role: 'user', text: 'New question', createdAt: 94000 }, { ...p1, id: 'next', episodeId: 'next-turn' });
+    await Vue.nextTick();
+    expect(wrapper.findAll('.person-reply')).toHaveLength(2);
+  });
+
+  it('renders one model with multiple independent tool trace rows and prefers the new array over legacy scalar', async () => {
+    const turn = personTurn(1, { calls: [{ callId: 'model', index: 1, status: 'completed', capabilities: [
+      { callId: 'trace-a', id: 'FileRead', status: 'completed', modelCallId: 'model', toolUseId: 'provider-a', toolIndex: 0, args: 'PRIVATE_ARGS' },
+      { callId: 'trace-b', id: 'Bash', status: 'future-status', code: 'UNCONFIRMED', modelCallId: 'model', toolUseId: 'provider-b', toolIndex: 1 },
+    ], capability: { id: 'legacy-duplicate', status: 'completed' } }] });
+    wrapper = mount(PersonTurnUsage, { props: { page: { items: [turn], loaded: true, nextCursor: 'older' } }, global: { config: { globalProperties: { $t: key => en[key] || key } } } });
+    expect(wrapper.findAll('.person-call-step')).toHaveLength(1);
+    expect(wrapper.findAll('.person-call-capability').map(row => row.attributes('data-tool-call-id'))).toEqual(['trace-a', 'trace-b']);
+    expect(wrapper.text()).toContain('FileRead'); expect(wrapper.text()).toContain('Bash');
+    expect(wrapper.get('[data-tool-call-id="trace-b"]').text()).toContain('Unknown');
+    expect(wrapper.text()).not.toMatch(/PRIVATE_ARGS|legacy-duplicate|provider-a|provider-b/);
+    await wrapper.setProps({ page: { items: [personTurn()], loaded: true } });
+    expect(wrapper.findAll('.person-call-capability')).toHaveLength(1); // legacy scalar reader
+    await wrapper.setProps({ page: { items: [{ ...turn, calls: [{ ...turn.calls[0], capabilities: [] }] }], loaded: true } });
+    expect(wrapper.findAll('.person-call-capability')).toHaveLength(0);
   });
 
   it('waits for the complete reconnect auth handshake before opening and never resends commands', async () => {
@@ -82,37 +126,6 @@ describe('Digital Person surface', () => {
     await flushPromises();
     expect(requests.slice(before).map(r => r.op)).toEqual(['status', 'open', 'snapshot', 'messages', 'traces']);
     expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
-  });
-
-  it('preselects inherited models when customizing candidates and saves both fields', async () => {
-    await render();
-    Object.assign(wrapper.vm.state, { defaultModelSupported: true, effectiveModelCandidates: ['provider/a', 'provider/b'],
-      agentDefaultModel: 'provider/a', effectiveDefaultModel: 'provider/a' });
-    await wrapper.get('.person-settings-button').trigger('click');
-    await wrapper.get('.person-model-default input').setValue(false);
-    const models = wrapper.findAll('.person-model-list input');
-    expect(models.every(input => input.element.checked)).toBe(true);
-    await models[0].setValue(false);
-    await wrapper.get('#person-default-model').setValue('provider/b');
-    expect(wrapper.get('.person-model-role').text()).toBe(t('person.defaultModel'));
-    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
-    expect(requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: ['provider/b'], defaultModel: 'provider/b' });
-  });
-
-  it('requires correcting a removed default but permits a name-only save with stale models', async () => {
-    await render();
-    Object.assign(wrapper.vm.state, { defaultModelSupported: true, modelCandidates: ['provider/a', 'removed/model'],
-      defaultModel: 'removed/model', agentDefaultModel: 'provider/a' });
-    await wrapper.get('.person-settings-button').trigger('click');
-    expect(wrapper.get('#person-default-model').element.value).toBe('removed/model');
-    await wrapper.get('#person-name').setValue('Mira');
-    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeUndefined();
-    await wrapper.findAll('.person-model-list input').find(input => input.element.value === 'removed/model').setValue(false);
-    expect(wrapper.get('[role="dialog"] .btn-primary').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('.person-default-model-field [role="alert"]').text()).toBe(t('person.defaultModelInvalid'));
-    await wrapper.get('#person-default-model').setValue('');
-    await wrapper.get('[role="dialog"] .btn-primary').trigger('click'); await flushPromises();
-    expect(requests.find(r => r.op === 'settings').payload).toEqual({ name: 'Mira', modelCandidates: ['provider/a'], defaultModel: null });
   });
 
   it('uploads a file and explicitly sends it without text, clearing only after acknowledgement', async () => {

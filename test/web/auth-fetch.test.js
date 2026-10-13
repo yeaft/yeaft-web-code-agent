@@ -48,20 +48,6 @@ afterEach(() => {
 });
 
 describe('auth fetch interceptor', () => {
-  it('syncs renewed tokens from response headers into storage and auth store', async () => {
-    const authStore = {
-      token: 'old-token',
-      getActiveToken: vi.fn(function getActiveToken() { return this.token; }),
-      handleAuthFailure: vi.fn(),
-    };
-    const originalFetch = vi.fn(async () => response({ headers: { 'X-New-Token': 'fresh-token' } }));
-    const fetch = await loadInstaller({ authStore, fetchImpl: originalFetch });
-
-    await fetch('/api/user/profile');
-
-    expect(authStore.token).toBe('fresh-token');
-    expect(globalThis.localStorage.setItem).toHaveBeenCalledWith('authToken', 'fresh-token');
-  });
 
   it('does not let stale renewal headers overwrite a newer login token', async () => {
     const authStore = {

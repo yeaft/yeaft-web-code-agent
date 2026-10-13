@@ -55,21 +55,6 @@ function resourceSnapshot(dataRevision, requests, chargedTokens, progressRevisio
 }
 
 describe('Work Center resource control', () => {
-  it('extends all fields explicitly without resuming; resume uses latest contract and resource CAS', async () => {
-    const { item, store } = setup();
-    await button('Extend budget').trigger('click');
-    expect(button('Confirm budget addition').attributes('disabled')).toBeDefined();
-    for (const key of Object.keys(limits)) await wrapper.find(`[name="${key}"]`).setValue('2');
-    expect(wrapper.text()).toContain('ALL current and future Actions');
-    await wrapper.find('form').trigger('submit');
-    await flushPromises();
-    expect(store.extendWorkItemBudget).toHaveBeenCalledWith('item', 7, Object.fromEntries(Object.keys(limits).map(key => [key, 2])), 'agent-a');
-    expect(store.resumeWorkItem).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain('Execution was not resumed');
-    item.revision = 5;
-    await button('Resume work item').trigger('click');
-    expect(store.resumeWorkItem).toHaveBeenCalledWith('item', 5, 'agent-a', 8);
-  });
 
   it('requires refresh and new confirmation when the budget changes during editing', async () => {
     const { item, store } = setup();

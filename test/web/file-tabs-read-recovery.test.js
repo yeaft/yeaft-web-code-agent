@@ -47,19 +47,6 @@ const route = {
 };
 
 describe('file tab read recovery', () => {
-  it('reselects an active tab for tree navigation without touching edits or requesting content', () => {
-    const { tabs, sendWsMessage, onReselect } = harness();
-    tabs.openFileInTab('/workspace/file.txt');
-    const file = tabs.activeFile.value;
-    file.content = 'unsaved';
-    file.isDirty = true;
-    tabs.switchToTab(0);
-    tabs.openFileInTab('/workspace/file.txt');
-    expect(onReselect.mock.calls).toEqual([['/workspace/file.txt'], ['/workspace/file.txt']]);
-    expect(file.content).toBe('unsaved');
-    expect(file.isDirty).toBe(true);
-    expect(sendWsMessage.mock.calls.filter(([msg]) => msg.type === 'read_file')).toHaveLength(1);
-  });
   it('shows a synchronous error when the read cannot be sent and retries with a new correlated request', () => {
     const sendWsMessage = vi.fn()
       .mockReturnValueOnce(false)

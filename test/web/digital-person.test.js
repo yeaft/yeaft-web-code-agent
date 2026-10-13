@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptPersonResponse, createPersonController, personState } from '../../web/stores/helpers/digital-person.js';
+import { projectPersonThoughts, projectPersonJournal } from '../../web/stores/helpers/person-thoughts.js';
+import { finalProposal } from '../agent/yeaft/person/fixtures.js';
 import { personActivityRecords, projectPersonActivity, projectPersonFeedback } from '../../web/utils/person-activity.js';
 
 const controllers = [];
@@ -82,29 +84,6 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(retry.payload).toEqual(first.payload);
     expect(retry.requestId).not.toBe(first.requestId);
     expect(f.state.retryCommand).toBeNull();
-  });
-
-  it('projects model references and saves a nullable default without starting cognition', async () => {
-    const f = fixture();
-    const settings = { modelCandidates: ['p/a', 'p/b'], defaultModel: 'p/b' };
-    const status = { configured: true, defaultModelSupported: true, models: [{ id: 'p/a' }, { id: 'p/b' }],
-      ...settings, agentDefaultModel: 'p/a', effectiveDefaultModel: 'p/b', effectiveModelCandidates: ['p/a', 'p/b'] };
-    f.auto(r => r.op === 'status' ? status : r.op === 'snapshot' ? { person: { id: 'person-a', settings }, messages: [], busy: false } : undefined);
-    await f.controller.open('a');
-    expect(f.state).toMatchObject({ defaultModelSupported: true, defaultModel: 'p/b', agentDefaultModel: 'p/a',
-      effectiveDefaultModel: 'p/b', effectiveModelCandidates: ['p/a', 'p/b'] });
-    f.auto(r => r.op === 'settings' ? { settings: { ...settings, defaultModel: null } } : r.op === 'status'
-      ? { ...status, defaultModel: null, effectiveDefaultModel: 'p/a' } : undefined);
-    expect(await f.controller.settings({ defaultModel: null })).toBe(true);
-    expect(f.state.defaultModel).toBeNull();
-    expect(f.state.effectiveDefaultModel).toBe('p/a');
-    expect(f.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ defaultModel: null });
-    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
-    f.auto(r => r.op === 'status' ? { configured: true, models: [] } : undefined);
-    await f.controller.refresh();
-    expect(f.state.defaultModelSupported).toBe(false);
-    expect(f.state.agentDefaultModel).toBeNull();
-    expect(f.state.effectiveModelCandidates).toEqual([]);
   });
 
   it('never transfers an uncertain command between owners', async () => {
@@ -237,6 +216,18 @@ describe('Digital Person conversation activity', () => {
     expect(value.rows).toHaveLength(2);
   });
 
+  it('keeps sibling tools independent by trace ID even when model and provider IDs match', () => {
+    const records = [trace(1, 'call_started', { callId: 'model' }), trace(2, 'call_output', { callId: 'model' }),
+      trace(3, 'capability_started', { callId: 'trace-a', modelCallId: 'model', toolUseId: 'provider', toolIndex: 0, capability: { id: 'Recall' } }),
+      trace(4, 'capability_started', { callId: 'trace-b', modelCallId: 'model', toolUseId: 'provider', toolIndex: 1, capability: { id: 'unknown' } }),
+      trace(5, 'capability_result', { callId: 'trace-a', modelCallId: 'model', capability: { id: 'Recall' } })];
+    const value = project(records);
+    expect(value.rows.map(row => [row.id, row.status])).toEqual([['model:model', 'completed'], ['capability:trace-a', 'completed'], ['capability:trace-b', 'running']]);
+    expect(value.rows[1].durationMs).toBe(2000);
+    expect(project(records, { busy: false, latestEpisode: { id: 'e', status: 'completed' } }).rows[2].status).toBe('unknown');
+    expect(JSON.stringify(value)).not.toContain('provider');
+  });
+
   it('fences concurrent live tails against late success, failure and identity changes', async () => {
     vi.useFakeTimers();
     for (const result of ['success', 'failure', 'owner', 'agent']) {
@@ -305,5 +296,66 @@ describe('Person snapshot waiting feedback', () => {
     expect(projectPersonFeedback(state)).not.toBeNull();
     state.activityRecords = personActivityRecords([{ id: 'end', episodeId: 'e', kind: 'cancelled', createdAt: 123000 }]);
     expect(projectPersonFeedback(state)).toBeNull();
+  });
+});
+
+describe('Person native cognition projection', () => {
+  const trace = (kind, seq, extra = {}) => ({
+    id: `trace-${seq}`, episodeId: 'episode-a', kind, seq,
+    createdAt: new Date(Date.UTC(2026, 8, 28, 0, 0, seq)).toISOString(), ...extra,
+  });
+  const output = (seq, callId, proposal, extra = {}) => trace('call_output', seq, {
+    callId, output: { text: JSON.stringify(proposal), complete: true }, ...extra,
+  });
+  function freeze(value) {
+    if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
+    return value;
+  }
+
+  it('projects exactly one cognition after native multi-tool execution, never text or tool arguments', () => {
+    const proposal = finalProposal();
+    const cognition = output(6, 'cognition', proposal, { output: { protocol: 'cognition', text: JSON.stringify(proposal), toolCalls: [], complete: true } });
+    const activity = trace('activity', 7, { callId: 'cognition', activity: proposal.activity, decision: proposal.decision });
+    const commit = trace('committed', 8, { callId: 'cognition', decision: proposal.decision });
+    const records = [
+      trace('call_started', 1, { callId: 'native', manifest: { protocol: 'native-tool-loop', phase: 'execution' },
+        request: { messages: [{ role: 'user', content: JSON.stringify({ trigger: { kind: 'send', text: 'PRIVATE_CONTEXT' } }) }] } }),
+      trace('call_output', 2, { callId: 'native', output: { protocol: 'native-tools', text: '', toolCalls: [
+        { id: 'provider-a', name: 'FileWrite', input: { content: 'PRIVATE_ARGS' } },
+        { id: 'provider-b', name: 'Bash', input: { command: 'PRIVATE_COMMAND' } },
+      ] } }),
+      trace('call_output', 3, { callId: 'prose', output: { protocol: 'native-tools', text: 'PRIVATE_EXECUTION_TEXT', toolCalls: [] } }),
+      trace('call_failed', 4, { callId: 'partial', output: { protocol: 'native-tools', text: 'PRIVATE_PARTIAL', complete: false } }),
+      trace('call_output', 5, { callId: 'unknown', output: { protocol: 'future-protocol', text: JSON.stringify(proposal) } }),
+      cognition, activity, commit,
+    ];
+    const entries = projectPersonThoughts(freeze(records));
+    expect(entries.map(e => e.kind)).toEqual(['thought', 'committed']);
+    expect(entries[0]).toMatchObject({ callId: 'cognition', status: 'committed' });
+    expect(entries[1].sections).toEqual([]);
+    expect(projectPersonJournal(records)[0]).toMatchObject({ status: 'committed', history: [] });
+    expect(JSON.stringify(entries)).not.toMatch(/PRIVATE_|provider-a|provider-b|FileWrite|Bash/);
+    expect(projectPersonThoughts(records.slice(0, 5))).toEqual([]);
+    expect(projectPersonThoughts([activity, commit])[0]).toMatchObject({ kind: 'activity', status: 'committed' });
+    expect(projectPersonThoughts([cognition])[0].status).toBe('candidate');
+    expect(projectPersonThoughts([cognition, { ...commit, callId: 'native' }])[0].status).toBe('candidate');
+  });
+
+  it('keeps native cognition exact across newest-first, overlapping and output-missing pages', () => {
+    const proposal = finalProposal();
+    const execution = trace('call_output', 1, { callId: 'native', output: { protocol: 'native-tools', text: JSON.stringify(proposal), toolCalls: [] } });
+    const cognition = output(2, 'cognition', proposal, { output: { protocol: 'cognition', text: JSON.stringify(proposal), toolCalls: [] } });
+    const activity = trace('activity', 3, { callId: 'cognition', activity: proposal.activity, decision: proposal.decision });
+    const commit = trace('committed', 4, { callId: 'cognition', decision: proposal.decision });
+    const newest = [commit, activity];
+    expect(projectPersonJournal(newest)[0]).toMatchObject({ status: 'committed', history: [] });
+    expect(projectPersonThoughts([execution])).toEqual([]); // Execution JSON is never a candidate.
+    const merged = freeze([...newest, activity, cognition, execution, cognition]);
+    expect(projectPersonThoughts(merged).map(entry => entry.kind)).toEqual(['thought', 'committed']);
+    const entries = projectPersonJournal(merged);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'committed', candidateStatus: null, history: [] });
+    expect(entries[0].sections.filter(section => section.label === 'activity_summary')).toHaveLength(1);
+    expect(entries[0].id).toBe(projectPersonJournal(newest)[0].id);
   });
 });

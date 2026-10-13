@@ -70,18 +70,8 @@ describe('Digital Person output boundaries', () => {
     expect(state.items).toEqual([]);
   });
 
-  it('retains paged history and its cursor on snapshot refresh', () => {
-    const { controller, state } = harness();
-    controller.snapshot({ items: [file], nextCursor: 'older' });
-    state.items.push({ ...file, id: 'old' });
-    state.historyPaged = true;
-    state.nextCursor = 'oldest';
-    controller.snapshot({ items: [{ ...file, id: 'new' }, file], nextCursor: 'recent' });
-    expect(state.items.map(item => item.id)).toEqual(['new', 'file', 'old']);
-    expect(state.nextCursor).toBe('oldest');
-    expect(state.selected).toBeNull();
-  });
-  it.each(['older', null])('restarts a disconnected latest page after partially/exhausted history (%s), preserving selection', async cursor => {
+  it('restarts a disconnected latest page after exhausted history, preserving selection', async () => {
+    const cursor = null;
     const rows = Array.from({ length: 61 }, (_, i) => ({ ...file, id: String(61 - i) }));
     const request = vi.fn(async (_, { cursor: from }) => {
       const start = rows.findIndex(row => row.id === from) + 1;

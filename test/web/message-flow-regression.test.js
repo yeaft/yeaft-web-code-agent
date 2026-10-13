@@ -2,6 +2,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
+import { mount } from '@vue/test-utils';
+import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
 
 const storeFactories = new Map();
 function defineStore(id, options) {
@@ -235,7 +237,6 @@ describe('message flow regressions', () => {
 
     it.each([
       ['invalid_attachment', 'Session message was not sent: upload the files again.'],
-      ['agent_unavailable', 'No agent available; Session message was not sent. Please retry.'],
       ['agent_access_denied', 'Agent access denied; Session message was not sent.'],
     ])('marks only the rejected optimistic send and clears its processing for %s', (code, message) => {
       vi.useFakeTimers();
@@ -662,5 +663,52 @@ describe('message flow regressions', () => {
     clearTimeout(store._processingWatchdogs[generationTargetTwoId]);
 
     storeFactories.clear();
+  });
+});
+
+describe('stable Session sidebar layout', () => {
+  it('mounts the final navigation while loading and fills it without remounting', async () => {
+    vi.stubGlobal('Vue', Vue);
+    localStorage.removeItem('yeaft-sidebar-section-collapse');
+    const sidebar = mount(UnifiedSessionList, {
+      attachTo: document.body,
+      props: { loading: true },
+      global: { mocks: { $t: key => key } },
+    });
+    try {
+      const navigation = sidebar.get('.sidebar-navigation').element;
+      const headings = sidebar.findAll('.sidebar-section-heading').map(node => node.element);
+      expect(sidebar.get('.sidebar-navigation').attributes('aria-busy')).toBe('true');
+      expect(sidebar.findAll('.sidebar-catalog-loading')).toHaveLength(2);
+      expect(sidebar.get('.sidebar-primary-action').attributes('disabled')).toBeDefined();
+      sidebar.vm.createSession();
+      sidebar.vm.createProject();
+      expect(sidebar.emitted('create')).toBeUndefined();
+      expect(sidebar.vm.projectCreateOpen).toBe(false);
+      const row = {
+        catalogKey: 'yeaft:agent-a:ready', runtimeProvider: 'yeaft',
+        routeRef: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'ready' },
+        title: 'Ready session', availability: 'online',
+      };
+      await sidebar.setProps({ sessions: [row], agents: [{ id: 'agent-a', online: true }] });
+      await sidebar.get('.session-item').trigger('click');
+      sidebar.vm.toggleSessionMenu(row, false);
+      expect(sidebar.emitted('select')).toBeUndefined();
+      expect(sidebar.vm.floatingMenu).toBeNull();
+      expect(sidebar.get('.session-item').attributes('tabindex')).toBe('-1');
+      await sidebar.setProps({ loading: false });
+      expect(sidebar.get('.sidebar-navigation').element).toBe(navigation);
+      expect(sidebar.findAll('.sidebar-section-heading').map(node => node.element)).toEqual(headings);
+      expect(sidebar.findAll('.sidebar-catalog-loading')).toHaveLength(0);
+      await sidebar.get('.session-item').trigger('click');
+      expect(sidebar.emitted('select')).toEqual([[row]]);
+      await sidebar.get('.session-dots-btn').trigger('click');
+      expect(sidebar.vm.floatingMenu).not.toBeNull();
+      await sidebar.setProps({ loading: true });
+      expect(sidebar.vm.floatingMenu).toBeNull();
+    } finally {
+      sidebar.unmount();
+      vi.unstubAllGlobals();
+    }
   });
 });

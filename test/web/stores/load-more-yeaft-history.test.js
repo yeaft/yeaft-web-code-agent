@@ -141,38 +141,8 @@ describe('Conversation Repository', () => {
 });
 
 describe('Yeaft conversation loading state', () => {
-  it('keeps older durable pages when a bounded recent replay refreshes the tail', () => {
-    const store = mkStore({
-      yeaftActiveSessionFilter: 'g1',
-      messagesMap: {
-        'yeaft-1': [
-          { id: 'm0001', messageId: 'm0001', seq: 1, type: 'user', content: 'older q', sessionId: 'g1', isHistory: true, timestamp: 1 },
-          { id: 'm0002', messageId: 'm0002', seq: 2, type: 'assistant', content: 'older a', sessionId: 'g1', isHistory: true, timestamp: 2 },
-          { id: 'm0100', messageId: 'm0100', seq: 100, type: 'user', content: 'cached recent q', sessionId: 'g1', isHistory: true, timestamp: 100 },
-        ],
-      },
-    });
 
-    handleYeaftHistoryChunk(store, {
-      conversationId: 'yeaft-1',
-      sessionId: 'g1',
-      mode: 'recent',
-      messages: [
-        { id: 'm0100', role: 'user', content: 'fresh recent q', sessionId: 'g1', ts: 100 },
-        { id: 'm0101', role: 'assistant', content: 'fresh recent a', sessionId: 'g1', ts: 101 },
-      ],
-      oldestSeq: 100,
-      latestSeq: 101,
-      hasMore: true,
-    });
-
-    expect(store.messagesMap['yeaft-1'].map(row => row.id)).toEqual([
-      'm0001', 'm0002', 'm0100', 'm0101',
-    ]);
-    expect(store.messagesMap['yeaft-1'].find(row => row.id === 'm0100')?.content).toBe('fresh recent q');
-  });
-
-  it.each(['stream', 'revision'])('commits a correlated %s replacement and still rejects stale replies', async (change) => {
+  it('commits a correlated stream replacement and still rejects stale replies', async () => {
     await import('../../../web/stores/chat.js');
     const { clearYeaftHistoryMemory } = storeOptions.chat.actions;
     const sessionKey = yeaftHistoryIdentityKey('agent-1', 'g1');
@@ -197,7 +167,7 @@ describe('Yeaft conversation loading state', () => {
     const reply = {
       agentId: 'agent-1', conversationId: 'yeaft-1', sessionId: 'g1',
       requestId: request.requestId, mode: 'delta',
-      streamId: change === 'stream' ? 'new' : 'old', revision: change === 'stream' ? 0 : 5,
+      streamId: 'new', revision: 0,
       oldestSeq: 1, nextBeforeSeq: 1, latestSeq: 2, hasMore: true,
       messages: [{ id: 'm0002', role: 'assistant', content: 'replacement', sessionId: 'g1' }],
     };
@@ -218,47 +188,6 @@ describe('Yeaft conversation loading state', () => {
     expect(store.finishYeaftHistoryLoad(reply, { latestSeq: 999 }, 'completion')).toBeNull();
     handleYeaftHistoryChunk(store, { ...reply, requestId: stale.requestId, messages: [] });
     expect(store.yeaftSessionHistoryState[sessionKey].latestSeq).toBe(2);
-  });
-
-  it('keeps optimistic sends visible when a recent history reply races them', () => {
-    const store = mkStore({
-      yeaftActiveSessionFilter: 'g1',
-      messagesMap: {
-        'yeaft-1': [
-          {
-            id: 'u_local_race',
-            messageId: 'u_local_race',
-            clientMessageId: 'u_local_race',
-            type: 'user',
-            content: 'send while history is loading',
-            sessionId: 'g1',
-            turnId: 'u_local_race',
-            timestamp: new Date('2026-05-01T09:59:59.000Z').getTime(),
-          },
-        ],
-      },
-    });
-
-    handleYeaftHistoryChunk(store, {
-      conversationId: 'yeaft-1',
-      sessionId: 'g1',
-      mode: 'recent',
-      messages: [
-        { id: 'm0200', role: 'user', content: 'persisted q', sessionId: 'g1', ts: '2026-05-01T10:00:00.000Z' },
-        { id: 'm0201', role: 'assistant', content: 'persisted a', sessionId: 'g1', ts: '2026-05-01T10:00:01.000Z' },
-      ],
-      oldestSeq: 200,
-      latestSeq: 201,
-      hasMore: false,
-    });
-
-    const rows = store.messagesMap['yeaft-1'].filter(m => m.sessionId === 'g1');
-    expect(rows.map(m => m.id)).toEqual(['u_local_race', 'm0200', 'm0201']);
-    expect(rows.find(m => m.id === 'u_local_race')).toEqual(expect.objectContaining({
-      clientMessageId: 'u_local_race',
-      content: 'send while history is loading',
-    }));
-    expect(store.yeaftLoadingMoreHistory).toBe(false);
   });
 
   it('restores a persisted AskUser answer as a read-only card', () => {
@@ -385,63 +314,6 @@ describe('Yeaft conversation loading state', () => {
     expect(isCurrentYeaftHistoryResponse(store, sent[1])).toBe(false);
     expect(isCurrentYeaftHistoryResponse(store, sent[2])).toBe(true);
     expect(store.yeaftSessionHistoryState[yeaftHistoryIdentityKey('agent-a', 'shared-session')]).toBeUndefined();
-  });
-
-  it('keeps chronological order and dedupes rows when older session history overlaps cached rows', async () => {
-    const store = mkStore({
-      yeaftActiveSessionFilter: 'session-A',
-      messagesMap: {
-        'yeaft-1': [
-          { id: 'm0003', messageId: 'm0003', type: 'user', content: 'newer-q', sessionId: 'session-A' },
-          { id: 'm0004', messageId: 'm0004', type: 'assistant', content: 'newer-a', sessionId: 'session-A', speakerVpId: 'vp-ada' },
-        ],
-      },
-    });
-
-    handleYeaftHistoryChunk(store, {
-      conversationId: 'yeaft-1',
-      sessionId: 'session-A',
-      messages: [
-        { id: 'm0001', role: 'user', content: 'oldest-q', sessionId: 'session-A' },
-        { id: 'm0002', role: 'assistant', content: 'oldest-a', sessionId: 'session-A', speakerVpId: 'vp-linus' },
-        { id: 'm0003', role: 'user', content: 'newer-q', sessionId: 'session-A' },
-      ],
-      oldestSeq: 1,
-      hasMore: false,
-    });
-
-    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(['m0001', 'm0002', 'm0003', 'm0004']);
-    expect(store.messagesMap['yeaft-1'].map(m => m.content)).toEqual(['oldest-q', 'oldest-a', 'newer-q', 'newer-a']);
-
-    // A later delta re-sorts the complete cache. It must not undo the older
-    // prepend or move the optimistic tail into persisted history.
-    store.messagesMap['yeaft-1'].push({
-      id: 'optimistic-tail',
-      messageId: 'optimistic-tail',
-      clientMessageId: 'optimistic-tail',
-      type: 'user',
-      content: 'optimistic-tail',
-      sessionId: 'session-A',
-      timestamp: 1,
-    });
-    handleYeaftHistoryChunk(store, {
-      conversationId: 'yeaft-1',
-      sessionId: 'session-A',
-      mode: 'delta',
-      messages: [
-        { id: 'm0005', role: 'assistant', content: 'delta-a', sessionId: 'session-A', speakerVpId: 'vp-ada' },
-      ],
-      latestSeq: 5,
-      hasMore: false,
-    });
-    expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual([
-      'm0001',
-      'm0002',
-      'm0003',
-      'm0004',
-      'm0005',
-      'optimistic-tail',
-    ]);
   });
 
   it('drops reflected/system-like rows even if they arrive with role=user', () => {

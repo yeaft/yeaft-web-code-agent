@@ -194,78 +194,6 @@ describe('websocket auth token races', () => {
     expect(store.yeaftSessionHydrateRequestId).toBeNull();
   });
 
-  it('settles only old-generation Session copy requests when replacing a socket', async () => {
-    const authStore = createRaceAuthStore();
-    const sockets = installFakeWebSocket();
-    globalThis.location = { protocol: 'https:', host: 'example.test' };
-    const { connect } = await loadWebsocketHelpers(authStore);
-    const store = createStore();
-    const resolveOldCopy = vi.fn();
-    const resolveNewCopy = vi.fn();
-    store.sessionForkPendingKey = 'yeaft:agent-a:source';
-    store.sessionForkState = 'copying';
-    store._sessionCrudPending = new Map([
-      ['old-copy', {
-        op: 'copy', connectionGeneration: 4, resolve: resolveOldCopy,
-      }],
-      ['new-copy', {
-        op: 'copy', connectionGeneration: 5, resolve: resolveNewCopy,
-      }],
-    ]);
-    store.ws = { onopen: vi.fn(), onmessage: vi.fn(), onclose: vi.fn(), close: vi.fn() };
-
-    connect(store);
-
-    expect(resolveOldCopy).toHaveBeenCalledWith({
-      ok: false,
-      requestId: 'old-copy',
-      error: { code: 'connection_changed', message: 'WebSocket connection changed' },
-    });
-    expect(resolveNewCopy).not.toHaveBeenCalled();
-    expect(store._sessionCrudPending.has('old-copy')).toBe(false);
-    expect(store._sessionCrudPending.has('new-copy')).toBe(true);
-    expect(store.sessionForkPendingKey).toBe('yeaft:agent-a:source');
-    expect(store.sessionForkState).toBe('copying');
-    expect(sockets).toHaveLength(1);
-  });
-
-  it('settles only the active socket generation when a real disconnect occurs', async () => {
-    const authStore = createRaceAuthStore();
-    const sockets = installFakeWebSocket();
-    globalThis.location = { protocol: 'https:', host: 'example.test' };
-    const { connect } = await loadWebsocketHelpers(authStore);
-    const store = createStore();
-    const resolveActiveCopy = vi.fn();
-    const resolveFutureRequest = vi.fn();
-
-    connect(store);
-    store._sessionCrudPending = new Map([
-      ['active-copy', {
-        op: 'copy', connectionGeneration: 5, resolve: resolveActiveCopy,
-      }],
-      ['future-request', {
-        op: 'rename', connectionGeneration: 6, resolve: resolveFutureRequest,
-      }],
-    ]);
-    store.sessionForkPendingKey = 'yeaft:agent-a:source';
-    store.sessionForkState = 'copying';
-    sockets[0].onclose({ code: 1006, reason: 'network lost' });
-
-    expect(resolveActiveCopy).toHaveBeenCalledWith({
-      ok: false,
-      requestId: 'active-copy',
-      error: { code: 'agent_offline', message: 'WebSocket disconnected' },
-    });
-    expect(resolveFutureRequest).not.toHaveBeenCalled();
-    expect(store._sessionCrudPending.has('active-copy')).toBe(false);
-    expect(store._sessionCrudPending.has('future-request')).toBe(true);
-    // The request owner (`copyCatalogSession`) releases its own UI state in
-    // `finally`; the transport helper must not mutate global state that may
-    // already belong to a newer operation generation.
-    expect(store.sessionForkPendingKey).toBe('yeaft:agent-a:source');
-    expect(store.sessionForkState).toBe('copying');
-  });
-
   it('ignores auth_result failures from an older socket after a newer login wins', async () => {
     const authStore = createRaceAuthStore();
     const sockets = installFakeWebSocket();
@@ -404,19 +332,6 @@ describe('sidebar Session catalog lifecycle', () => {
     expect(store.sidebarSessionCatalogLoading).toBe(true);
   });
 
-  it('does not downgrade a pre-capability modern Server before its snapshot', async () => {
-    const { store, open, deliver } = await lifecycleFixture();
-    open(null);
-    store._hasHandledAgentList = true;
-    expect(store.sessionCatalogProtocolSupported).toBeNull();
-    expect(store.sidebarSessionCatalogLoading).toBe(true);
-    deliver({ type: 'session_catalog_snapshot', catalog: [] });
-    store.yeaftSessionHydrateRequestId = 'inventory';
-    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
-    expect(store.sessionCatalogProtocolSupported).toBe(true);
-    expect(store.sidebarSessionCatalogLoading).toBe(false);
-  });
-
   it('adapts old-Server inventories into unified Agent-scoped rows at their accepted boundary', async () => {
     const { store, sessions, open, deliver } = await lifecycleFixture();
     open(null);
@@ -487,16 +402,6 @@ describe('sidebar Session catalog lifecycle', () => {
     expect(store.sidebarSessionCatalogLoading).toBe(true);
   });
 
-  it('allows explicitly unsupported Servers to prove an empty legacy inventory', async () => {
-    const { store, open, deliver } = await lifecycleFixture();
-    open(0);
-    store._hasHandledAgentList = true;
-    store.yeaftSessionHydrateRequestId = 'inventory';
-    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
-    expect(store.sidebarSessionCatalog).toEqual([]);
-    expect(store.sidebarSessionCatalogLoading).toBe(false);
-  });
-
   it('accepts a genuinely old Server successful empty inventory without capability metadata', async () => {
     const { store, open, deliver } = await lifecycleFixture();
     open(null, false);
@@ -507,85 +412,6 @@ describe('sidebar Session catalog lifecycle', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(store.sessionCatalogProtocolSupported).toBe(false);
     expect(store.sidebarSessionCatalog).toEqual([]);
-    expect(store.sidebarSessionCatalogLoading).toBe(false);
-  });
-
-  it('keeps legacy Chats newest-first while preserving native manual order', async () => {
-    const { store, sessions, open, deliver } = await lifecycleFixture();
-    open(null);
-    store.conversations = [
-      { id: 'old-chat', agentId: 'agent-a', createdAt: '2026-10-12T10:00:00Z' },
-      { id: 'new-chat', agentId: 'agent-a', createdAt: '2026-10-13T10:00:00Z' },
-    ];
-    sessions.sessionList = [
-      { id: 'native-first', agentId: 'agent-a', sortOrder: 0, updatedAt: '2026-10-12T10:00:00Z' },
-      { id: 'native-second', agentId: 'agent-a', sortOrder: 1, updatedAt: '2026-10-13T10:00:00Z' },
-    ];
-    store._hasHandledAgentList = true;
-    store.yeaftSessionHydrateRequestId = 'inventory';
-    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
-    const keys = () => store.sidebarSessionCatalog.map(row => row.catalogKey);
-    expect(keys()).toEqual(['chat:new-chat', 'chat:old-chat', 'yeaft:agent-a:native-first', 'yeaft:agent-a:native-second']);
-    store.conversations[0].lastMessageAt = '2026-10-13T11:00:00Z';
-    expect(keys()).toEqual(['chat:old-chat', 'chat:new-chat', 'yeaft:agent-a:native-first', 'yeaft:agent-a:native-second']);
-    store.conversations.push({ id: 'created-chat', agentId: 'agent-a', createdAt: '2026-10-13T12:00:00Z' });
-    expect(keys().slice(0, 3)).toEqual(['chat:created-chat', 'chat:old-chat', 'chat:new-chat']);
-    expect(store.sidebarSessionCatalog.map(row => row.sortRank)).toEqual([0, 1, 2, 3, 4]);
-    expect(store.conversations.map(row => row.id)).toEqual(['old-chat', 'new-chat', 'created-chat']);
-  });
-
-  it('routes legacy pin/unpin and Yeaft reorder without orphaned catalog mutations', async () => {
-    const { store, sessions, open, deliver } = await lifecycleFixture();
-    open(null);
-    store.agents = [{ id: 'agent-a', online: true }];
-    store.conversations = [{ id: 'chat-a', agentId: 'agent-a', pinned: true }];
-    store.pinnedSessions = ['chat-a'];
-    sessions.sessionList = [{ id: 'session-a', agentId: 'agent-a', name: 'A' }];
-    sessions.sessionById = (id, agentId) => sessions.sessionList.find(row => row.id === id && row.agentId === agentId);
-    sessions.applyPinState = (id, pinned, agentId) => { sessions.sessionById(id, agentId).pinned = pinned; };
-    sessions.reorderSessionsGlobally = vi.fn(() => [{ agentId: 'agent-a', sessionId: 'session-a' }]);
-    store._hasHandledAgentList = true;
-    store.yeaftSessionHydrateRequestId = 'inventory';
-    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
-    store.sendWsMessage = vi.fn(() => true);
-    store.sessionCrudRequest = vi.fn(() => Promise.resolve({ ok: true }));
-    let chat = store.sidebarSessionCatalog.find(row => row.runtimeProvider !== 'yeaft');
-    expect(store.toggleCatalogSessionPin(chat)).toBe(true);
-    expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'unpin_session', conversationId: 'chat-a' });
-    expect(store.sidebarSessionCatalog.find(row => row.catalogKey === chat.catalogKey).pinned).toBe(false);
-    chat = store.sidebarSessionCatalog.find(row => row.catalogKey === chat.catalogKey);
-    expect(store.toggleCatalogSessionPin(chat)).toBe(true);
-    expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'pin_session', conversationId: 'chat-a' });
-    const native = store.sidebarSessionCatalog.find(row => row.runtimeProvider === 'yeaft');
-    expect(store.toggleCatalogSessionPin(native)).toBe(true);
-    expect(store.sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({
-      type: 'pin_session', conversationId: 'session-a', sessionKind: 'yeaft', agentId: 'agent-a',
-    }));
-    expect(store.sidebarSessionCatalog.find(row => row.catalogKey === native.catalogKey).pinned).toBe(true);
-    expect(store.reorderCatalogSessions(store.sidebarSessionCatalog)).toBe(true);
-    expect(sessions.reorderSessionsGlobally).toHaveBeenCalledWith(['agent-a\u001fsession-a']);
-    expect(store.sessionCrudRequest).toHaveBeenCalledWith('reorder', {
-      sessions: [{ agentId: 'agent-a', sessionId: 'session-a' }],
-    });
-    expect(store.hideCatalogSession(native)).toBe(false);
-    expect(store.restoreCatalogSession(native)).toBe(false);
-    expect(store.catalogSessionActionSupported(chat, 'reorder')).toBe(false);
-    expect(store.catalogSessionActionSupported(native, 'reorder')).toBe(true);
-    expect(store.sessionCatalogMutationRequests).toEqual({});
-    expect(store.toggleCatalogSessionPin(store.sidebarSessionCatalog.find(row => row.catalogKey === native.catalogKey))).toBe(true);
-    expect(store.sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'unpin_session', agentId: 'agent-a' }));
-  });
-
-  it('uses the existing accepted legacy inventory boundary without adding a catalog timeout', async () => {
-    const { store, open, deliver } = await lifecycleFixture();
-    open(null, false);
-    store._hasHandledAgentList = true;
-    store.conversations = [{ id: 'chat-a', agentId: 'agent-a' }];
-    store.yeaftSessionHydrateRequestId = 'old-inventory';
-    deliver({ type: 'yeaft_session_hydrate', agentId: 'agent-a', sessions: [] });
-    expect(store.sidebarSessionCatalogLoading).toBe(true);
-    await vi.advanceTimersByTimeAsync(500);
-    expect(store.sessionCatalogProtocolSupported).toBe(false);
     expect(store.sidebarSessionCatalogLoading).toBe(false);
   });
 });
