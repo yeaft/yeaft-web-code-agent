@@ -1,4 +1,13 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+
+const testDbDir = mkdtempSync(join(tmpdir(), 'yeaft-fork-handler-'));
+vi.stubEnv('SERVER_DATA_DIR', undefined);
+vi.stubEnv('TEST_DB_PATH', undefined);
+vi.stubEnv('TEST_DB_DIR', testDbDir);
 
 const sendToWebClient = vi.fn(async (client, msg) => { client.sent.push(msg); });
 const forwardToAgent = vi.fn(async () => true);
@@ -20,25 +29,28 @@ vi.mock('../../server/ws-utils.js', async (importOriginal) => ({
   verifyAgentOwnership: vi.fn(() => true),
 }));
 
-vi.mock('../../server/database.js', () => ({
-  sessionDb: { getActiveByUser: vi.fn(() => []), get: vi.fn(() => null) },
-  messageDb: {},
-  userDb: {},
-  yeaftProjectDb: { contextForSession: vi.fn(() => null) },
-  yeaftSessionDb: { getByUser },
-  sessionUiMetadataDb: {},
-}));
+vi.mock('../../server/database.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, yeaftSessionDb: { ...actual.yeaftSessionDb, getByUser } };
+});
 
 vi.mock('../../server/handlers/session-pin-router.js', () => ({
   routeSessionPin: vi.fn(() => false),
 }));
 
+const { yeaftProjectDb: projects, yeaftSessionDb: sessions, userDb, closeDb, default: db } = await import('../../server/database.js');
 const { CONFIG } = await import('../../server/config.js');
 const { agents, pendingFiles, pendingYeaftDebugRequests, webClients } = await import('../../server/context.js');
 const { handleAgentOutput } = await import('../../server/handlers/agent-output.js');
 const { handleClientConversation } = await import('../../server/handlers/client-conversation.js');
 const originalSkipAuth = CONFIG.skipAuth;
 const allow = async () => true;
+
+afterAll(() => {
+  closeDb();
+  rmSync(testDbDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
+});
 
 afterEach(() => {
   CONFIG.skipAuth = originalSkipAuth;
@@ -114,39 +126,102 @@ describe('Yeaft Session online Agent filtering', () => {
     expect(client.sent).toEqual([]);
   });
 
-  it('registers a fork and inherits its Project atomically using real SQLite, without crossing owner/Agent scopes', async () => {
-    const { yeaftProjectDb: projects, yeaftSessionDb: sessions, userDb } = await vi.importActual('../../server/database.js');
-    const { transaction } = await import('../../server/db/connection.js');
+  it('persists fork Project inheritance before replying, rolls back failures and fences owner/Agent scopes and replays', async () => {
+    CONFIG.skipAuth = false;
     const owner = userDb.getOrCreate('fork-db-owner');
     const other = userDb.getOrCreate('fork-db-other');
-    const register = (ownerId, agentId, sourceId, targetId, fail = false) => transaction(() => {
-      sessions.upsertFromSnapshot(ownerId, agentId, { id: targetId, name: 'Fork' });
-      projects.inheritSessionProject(ownerId, agentId, sourceId, targetId);
-      if (fail) throw new Error('forced rollback');
-    })();
+    const ownerTab = { authenticated: true, userId: owner.id, sent: [] };
+    const otherTab = { authenticated: true, userId: other.id, sent: [] };
+    webClients.set('owner-tab', ownerTab);
+    webClients.set('other-tab', otherTab);
+    const agent = { ownerId: owner.id, conversations: new Map() };
+    const otherAgent = { ownerId: other.id, conversations: new Map() };
+    const forkResult = (sourceSessionId = 'source', targetId = 'target') => ({
+      type: 'session_crud_result', op: 'copy', ok: true, requestId: `fork-${targetId}`,
+      sourceSessionId, sessionId: targetId, session: { id: targetId, name: 'Fork' },
+    });
+    // A second connection sees only committed SQLite state, including at send time.
+    const observer = new DatabaseSync(join(testDbDir, 'webchat.db'), { readOnly: true });
+    const persistedSession = observer.prepare(`
+      SELECT s.id, p.id AS projectId, p.instruction AS projectInstruction
+      FROM yeaft_sessions s
+      LEFT JOIN yeaft_project_sessions m
+        ON m.user_id = s.user_id AND m.agent_id = s.agent_id AND m.session_id = s.id
+      LEFT JOIN yeaft_projects p ON p.user_id = m.user_id AND p.id = m.project_id
+      WHERE s.user_id = ? AND s.agent_id = ? AND s.id = ?
+    `);
     try {
       const project = projects.create(owner.id, 'Fork Project');
       projects.updateInstruction(owner.id, project.id, 'Keep instruction');
       projects.moveSession(owner.id, { agentId: 'agent-a', sessionId: 'source', projectId: project.id });
-      register(owner.id, 'agent-a', 'source', 'target');
-      expect(sessions.getForAgent(owner.id, 'agent-a', 'target')).toBeTruthy();
-      expect(projects.contextForSession(owner.id, 'agent-a', 'target')).toMatchObject({
-        projectId: project.id, projectInstruction: 'Keep instruction',
+      sendToWebClient.mockImplementationOnce(async (client, reply) => {
+        expect(client).toBe(ownerTab);
+        expect(reply).toMatchObject({ ...forkResult(), agentId: 'agent-a', projectsAuthoritative: true });
+        expect(persistedSession.get(owner.id, 'agent-a', 'target')).toEqual({
+          id: 'target', projectId: project.id, projectInstruction: 'Keep instruction',
+        });
+        expect(reply.projects).toContainEqual(expect.objectContaining({
+          id: project.id, instruction: 'Keep instruction', sessionIds: ['source', 'target'],
+        }));
+        client.sent.push(reply);
       });
-      register(owner.id, 'agent-b', 'source', 'target');
-      register(other.id, 'agent-a', 'source', 'target');
-      register(owner.id, 'agent-a', 'standalone', 'standalone-target');
-      expect(projects.contextForSession(owner.id, 'agent-b', 'target')).toBeNull();
-      expect(projects.contextForSession(other.id, 'agent-a', 'target')).toBeNull();
-      expect(projects.contextForSession(owner.id, 'agent-a', 'standalone-target')).toBeNull();
-      expect(() => register(owner.id, 'agent-a', 'source', 'partial', true)).toThrow('forced rollback');
-      expect(sessions.getForAgent(owner.id, 'agent-a', 'partial')).toBeUndefined();
-      expect(projects.contextForSession(owner.id, 'agent-a', 'partial')).toBeNull();
-    } finally {
-      for (const user of [owner, other]) {
-        for (const session of sessions.getByUser(user.id)) sessions.deleteForAgent(user.id, session.agentId, session.id);
-        userDb.deleteUser(user.id);
+      await handleAgentOutput('agent-a', agent, forkResult());
+      expect(ownerTab.sent).toHaveLength(1);
+      expect(otherTab.sent).toEqual([]);
+      expect(sessions.getForAgent(owner.id, 'agent-a', 'target')).toMatchObject({ name: 'Fork' });
+
+      // Identical Session ids must neither inherit foreign membership nor hit its replay fence.
+      await handleAgentOutput('agent-b', agent, forkResult());
+      await handleAgentOutput('agent-a', otherAgent, forkResult());
+      await handleAgentOutput('agent-a', agent, forkResult('standalone', 'standalone-target'));
+      for (const [userId, agentId, sessionId] of [
+        [owner.id, 'agent-b', 'target'], [other.id, 'agent-a', 'target'],
+        [owner.id, 'agent-a', 'standalone-target'],
+      ]) {
+        expect(persistedSession.get(userId, agentId, sessionId)).toEqual({
+          id: sessionId, projectId: null, projectInstruction: null,
+        });
+        expect(projects.contextForSession(userId, agentId, sessionId)).toBeNull();
       }
+      expect(ownerTab.sent).toHaveLength(3);
+      expect(otherTab.sent).toEqual([expect.objectContaining({
+        ...forkResult(), agentId: 'agent-a', projects: [], projectsAuthoritative: true,
+      })]);
+
+      const movedProject = projects.create(owner.id, 'User destination');
+      projects.moveSession(owner.id, { agentId: 'agent-a', sessionId: 'target', projectId: movedProject.id });
+      await handleAgentOutput('agent-a', agent, forkResult());
+      await handleAgentOutput('agent-a', agent, {
+        type: 'yeaft_output', conversationId: 'yeaft-agent-a', event: forkResult(),
+      });
+      expect(ownerTab.sent.at(-1)).toMatchObject({ type: 'yeaft_output', event: { ok: true } });
+      expect(persistedSession.get(owner.id, 'agent-a', 'target').projectId).toBe(movedProject.id);
+
+      // Fail inside the real inheritance INSERT, after the handler registered the target.
+      db.exec(`CREATE TRIGGER fail_fork_inheritance AFTER INSERT ON yeaft_project_sessions
+        WHEN NEW.session_id = 'partial'
+        BEGIN SELECT RAISE(ABORT, 'forced inheritance failure'); END`);
+      sendToWebClient.mockImplementationOnce(async (client, reply) => {
+        expect(client).toBe(ownerTab);
+        expect(reply).toMatchObject({
+          ...forkResult('source', 'partial'), ok: false, agentId: 'agent-a',
+          error: { code: 'project_inheritance_failed', message: expect.any(String) },
+        });
+        expect(persistedSession.get(owner.id, 'agent-a', 'partial')).toBeUndefined();
+        expect(projects.contextForSession(owner.id, 'agent-a', 'partial')).toBeNull();
+        client.sent.push(reply);
+      });
+      await handleAgentOutput('agent-a', agent, forkResult('source', 'partial'));
+      expect(ownerTab.sent).toHaveLength(6);
+      expect(ownerTab.sent.at(-1)).toMatchObject({ ok: false, error: { code: 'project_inheritance_failed' } });
+      expect(sessions.getForAgent(owner.id, 'agent-a', 'partial')).toBeUndefined();
+      expect(projects.contextForSession(owner.id, 'agent-a', 'source').projectId).toBe(project.id);
+      expect(persistedSession.get(owner.id, 'agent-a', 'target').projectId).toBe(movedProject.id);
+      expect(otherTab.sent).toHaveLength(1);
+    } finally {
+      db.exec('DROP TRIGGER IF EXISTS fail_fork_inheritance');
+      observer.close();
+      sendToWebClient.mockImplementation(async (client, msg) => { client.sent.push(msg); });
     }
   });
   it('hydrates owner inventory as separate Agent slices and excludes disconnected Agents', async () => {
