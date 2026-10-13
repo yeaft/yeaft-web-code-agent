@@ -51,7 +51,9 @@ for (const surface of [
 
     await page.goto(serverUrl);
     await expect.poll(() => held.length).toBeGreaterThan(0);
+    if (surface.width <= 600) await page.locator('.header-sidebar-toggle').click();
     const navigation = page.locator('.sidebar-navigation');
+    await expect(navigation).toBeVisible();
     await expect(navigation).toHaveAttribute('aria-busy', 'true');
     await expect(navigation.locator('.sidebar-section-toggle')).toHaveCount(2);
     await expect(navigation.locator('.sidebar-primary-action')).toBeDisabled();

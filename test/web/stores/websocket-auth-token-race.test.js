@@ -498,9 +498,9 @@ describe('sidebar Session catalog lifecycle', () => {
     store.yeaftSessionHydrateRequestId = 'inventory-2';
     deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory-2', ok: true });
     expect(store.sessionCatalogProtocolSupported).toBe(false);
-    // With omitted capability, empty legacy inventory cannot prove the Server's
-    // catalog projection didn't fail. Only explicit authority may show empty.
-    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    // A later successful inventory resolves the failed request, including empty.
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
   });
 
   it('treats failed or malformed catalog frames as supported but not authoritative', async () => {
@@ -535,6 +535,61 @@ describe('sidebar Session catalog lifecycle', () => {
     deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
     expect(store.sidebarSessionCatalog).toEqual([]);
     expect(store.sidebarSessionCatalogLoading).toBe(false);
+  });
+
+  it('accepts a genuinely old Server successful empty inventory without capability metadata', async () => {
+    const { store, open, deliver } = await lifecycleFixture();
+    open(null, false);
+    store._hasHandledAgentList = true;
+    store.yeaftSessionHydrateRequestId = 'legacy-empty';
+    deliver({ type: 'yeaft_session_hydrate', agentId: 'agent-a', sessions: [] });
+    expect(store.sidebarSessionCatalogLoading).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(store.sessionCatalogProtocolSupported).toBe(false);
+    expect(store.sidebarSessionCatalog).toEqual([]);
+    expect(store.sidebarSessionCatalogLoading).toBe(false);
+  });
+
+  it('routes legacy pin/unpin and Yeaft reorder without orphaned catalog mutations', async () => {
+    const { store, sessions, open, deliver } = await lifecycleFixture();
+    open(null);
+    store.agents = [{ id: 'agent-a', online: true }];
+    store.conversations = [{ id: 'chat-a', agentId: 'agent-a', pinned: true }];
+    store.pinnedSessions = ['chat-a'];
+    sessions.sessionList = [{ id: 'session-a', agentId: 'agent-a', name: 'A' }];
+    sessions.sessionById = (id, agentId) => sessions.sessionList.find(row => row.id === id && row.agentId === agentId);
+    sessions.applyPinState = (id, pinned, agentId) => { sessions.sessionById(id, agentId).pinned = pinned; };
+    sessions.reorderSessionsGlobally = vi.fn(() => [{ agentId: 'agent-a', sessionId: 'session-a' }]);
+    store._hasHandledAgentList = true;
+    store.yeaftSessionHydrateRequestId = 'inventory';
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'inventory', ok: true });
+    store.sendWsMessage = vi.fn(() => true);
+    store.sessionCrudRequest = vi.fn(() => Promise.resolve({ ok: true }));
+    let chat = store.sidebarSessionCatalog.find(row => row.runtimeProvider !== 'yeaft');
+    expect(store.toggleCatalogSessionPin(chat)).toBe(true);
+    expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'unpin_session', conversationId: 'chat-a' });
+    expect(store.sidebarSessionCatalog.find(row => row.catalogKey === chat.catalogKey).pinned).toBe(false);
+    chat = store.sidebarSessionCatalog.find(row => row.catalogKey === chat.catalogKey);
+    expect(store.toggleCatalogSessionPin(chat)).toBe(true);
+    expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'pin_session', conversationId: 'chat-a' });
+    const native = store.sidebarSessionCatalog.find(row => row.runtimeProvider === 'yeaft');
+    expect(store.toggleCatalogSessionPin(native)).toBe(true);
+    expect(store.sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: 'pin_session', conversationId: 'session-a', sessionKind: 'yeaft', agentId: 'agent-a',
+    }));
+    expect(store.sidebarSessionCatalog.find(row => row.catalogKey === native.catalogKey).pinned).toBe(true);
+    expect(store.reorderCatalogSessions(store.sidebarSessionCatalog)).toBe(true);
+    expect(sessions.reorderSessionsGlobally).toHaveBeenCalledWith(['agent-a\u001fsession-a']);
+    expect(store.sessionCrudRequest).toHaveBeenCalledWith('reorder', {
+      sessions: [{ agentId: 'agent-a', sessionId: 'session-a' }],
+    });
+    expect(store.hideCatalogSession(native)).toBe(false);
+    expect(store.restoreCatalogSession(native)).toBe(false);
+    expect(store.catalogSessionActionSupported(chat, 'reorder')).toBe(false);
+    expect(store.catalogSessionActionSupported(native, 'reorder')).toBe(true);
+    expect(store.sessionCatalogMutationRequests).toEqual({});
+    expect(store.toggleCatalogSessionPin(store.sidebarSessionCatalog.find(row => row.catalogKey === native.catalogKey))).toBe(true);
+    expect(store.sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'unpin_session', agentId: 'agent-a' }));
   });
 
   it('uses the existing accepted legacy inventory boundary without adding a catalog timeout', async () => {

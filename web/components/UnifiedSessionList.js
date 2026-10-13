@@ -166,6 +166,7 @@ export default {
   },
   data() {
     return {
+      actionGeneration: 0,
       collapsedProjects: {},
       collapsedSections: readCollapsedSections(),
       openMenuKey: null,
@@ -208,6 +209,7 @@ export default {
   watch: {
     loading(value) {
       if (!value) return;
+      this.actionGeneration += 1;
       this.closeMenus();
       this.finishAllDrag();
     },
@@ -395,6 +397,10 @@ export default {
       if (!row?.routeRef?.agentId || row.availability !== 'online') return false;
       return this.isAgentOnline(row.routeRef.agentId);
     },
+    canRunAction(row, action) {
+      return this.canEditRow(row)
+        && this.resolvedProjectStore?.catalogSessionActionSupported?.(row, action) !== false;
+    },
     canMoveRowToProject(row, project = null) {
       if (!this.canEditRow(row)) return false;
       if (!project) return true;
@@ -495,15 +501,21 @@ export default {
     },
     async runAction(action, row) {
       this.closeMenus();
-      if (!this.canEditRow(row)) return;
+      const normalizedAction = action === 'delete' ? 'remove' : action;
+      if (!this.canRunAction(row, normalizedAction)) return;
       if (action === 'copy' && this.forkUnavailableReason(row)) return;
       if (action === 'rename') {
+        const generation = this.actionGeneration;
         const title = await promptDialog(this.$t('yeaft.session.renamePrompt', { name: row.title }), row.title);
-        if (!title?.trim() || title.trim() === row.title) return;
-        this.$emit('action', { action, row, title: title.trim() });
+        const currentRow = this.sessions.find(item => item.catalogKey === row.catalogKey);
+        if (!title?.trim() || title.trim() === row.title
+            || generation !== this.actionGeneration || !this.canRunAction(currentRow, action)
+            || currentRow.routeRef.runtimeProvider !== row.routeRef.runtimeProvider
+            || currentRow.routeRef.agentId !== row.routeRef.agentId
+            || currentRow.routeRef.sessionId !== row.routeRef.sessionId) return;
+        this.$emit('action', { action, row: currentRow, title: title.trim() });
         return;
       }
-      const normalizedAction = action === 'delete' ? 'remove' : action;
       this.$emit('action', { action: normalizedAction, row });
     },
     dispatchSessionAction(payload) {
@@ -703,14 +715,14 @@ export default {
       this.dragTargetProjectPosition = null;
     },
     canDragRow(row, project = null) {
-      if (this.dragOperationPending || !this.canEditRow(row)) return false;
+      if (this.dragOperationPending || !this.canRunAction(row, 'reorder')) return false;
       if (!project) return true;
       if (row?.runtimeProvider !== 'yeaft') return false;
       const sameProject = projectIdentityKey(this.projectForRow(row)) === projectIdentityKey(project);
       return sameProject || this.canMoveRowToProject(row, project);
     },
     canDropRow(row, project = null) {
-      if (!row || this.dragOperationPending || !this.canEditRow(row)) return false;
+      if (!row || this.dragOperationPending || !this.canRunAction(row, 'reorder')) return false;
       if (!project) return row.runtimeProvider === 'yeaft' || !this.projectForRow(row);
       if (row.runtimeProvider !== 'yeaft') return false;
       const sameProject = projectIdentityKey(this.projectForRow(row)) === projectIdentityKey(project);
@@ -737,6 +749,7 @@ export default {
     dragOverRow(row, project, event) {
       const moved = this.draggedRow;
       if (!this.canDropRow(moved, project)
+          || !this.canRunAction(row, 'reorder')
           || moved.catalogKey === row?.catalogKey
           || !!moved.pinned !== !!row?.pinned) return;
       event?.preventDefault?.();
@@ -761,7 +774,7 @@ export default {
         ? this.dragTargetPosition
         : this.dragPositionForEvent(event);
       this.finishDrag();
-      if (!this.canDropRow(moved, project) || !position) return false;
+      if (!this.canDropRow(moved, project) || !this.canRunAction(row, 'reorder') || !position) return false;
       return this.applySessionDrop(moved, project, row, position);
     },
     dragOverProjectHeader(project, event) {
@@ -987,7 +1000,7 @@ export default {
                   <button type="button" class="session-quick-action" @click.stop="runAction('pin', row)" :title="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')" :aria-label="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
                   </button>
-                  <button type="button" class="session-quick-action" @click.stop="runAction('delete', row)" :title="$t('sidebar.sessions.remove')" :aria-label="$t('sidebar.sessions.remove')">
+                  <button type="button" class="session-quick-action" :disabled="!canRunAction(row, 'remove')" @click.stop="runAction('delete', row)" :title="canRunAction(row, 'remove') ? $t('sidebar.sessions.remove') : $t('sidebar.sessions.upgradeForAction')" :aria-label="$t('sidebar.sessions.remove')">
                     <svg class="session-remove-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
                   </button>
                   <button type="button" class="session-dots-btn" :disabled="loading" :class="{ 'menu-open': openMenuKey === row.catalogKey }" @click.stop="toggleSessionMenu(row, true, $event)" :aria-label="$t('sidebar.sessions.menu')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg></button>
@@ -1042,7 +1055,7 @@ export default {
               <button type="button" class="session-quick-action" @click.stop="runAction('pin', row)" :title="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')" :aria-label="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
               </button>
-              <button type="button" class="session-quick-action" @click.stop="runAction('delete', row)" :title="$t('sidebar.sessions.remove')" :aria-label="$t('sidebar.sessions.remove')">
+              <button type="button" class="session-quick-action" :disabled="!canRunAction(row, 'remove')" @click.stop="runAction('delete', row)" :title="canRunAction(row, 'remove') ? $t('sidebar.sessions.remove') : $t('sidebar.sessions.upgradeForAction')" :aria-label="$t('sidebar.sessions.remove')">
                 <svg class="session-remove-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
               </button>
               <button type="button" class="session-dots-btn" :disabled="loading" :class="{ 'menu-open': openMenuKey === row.catalogKey }" @click.stop="toggleSessionMenu(row, false, $event)" :aria-label="$t('sidebar.sessions.menu')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg></button>

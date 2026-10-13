@@ -762,7 +762,6 @@ export const useChatStore = defineStore('chat', {
     sessionProjects: [],
     sessionCatalogLoaded: false,
     sessionCatalogProtocolSupported: null,
-    sessionCatalogLegacyConfirmed: false,
     sidebarCatalogOwnerId: null,
     sidebarCatalogAuthGeneration: null,
     sidebarLegacySessionCatalog: [],
@@ -7254,9 +7253,25 @@ export const useChatStore = defineStore('chat', {
       pending.resolve(event);
       return true;
     },
+    catalogSessionActionSupported(row, action) {
+      if (this.sessionCatalogProtocolSupported !== false) return true;
+      if (action === 'remove' || action === 'delete' || action === 'restore') return false;
+      return action !== 'reorder' || row?.runtimeProvider === 'yeaft';
+    },
     toggleCatalogSessionPin(row) {
       if (!row?.catalogKey || !row?.routeRef
         || Object.keys(this.sessionCatalogMutationRequests).length > 0) return false;
+      if (this.sessionCatalogProtocolSupported === false) {
+        if (this.sidebarSessionCatalogLoading) return false;
+        const { runtimeProvider, agentId, sessionId } = row.routeRef;
+        this.togglePin(sessionId, {
+          pinned: row.pinned,
+          ...(runtimeProvider === 'yeaft' ? {
+            sessionKind: 'yeaft', agentId, sessionName: row.title, workDir: row.workDir,
+          } : {}),
+        });
+        return true;
+      }
       const requestId = `session_ui_${crypto.randomUUID()}`;
       const previousCatalog = beginCatalogMutation(this, requestId);
       const nextPinned = !row.pinned;
@@ -7277,6 +7292,7 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
     hideCatalogSession(row) {
+      if (!this.catalogSessionActionSupported(row, 'remove')) return false;
       if (!row?.catalogKey || !row?.routeRef
         || Object.keys(this.sessionCatalogMutationRequests).length > 0) return false;
       const requestId = `session_hide_${crypto.randomUUID()}`;
@@ -7305,6 +7321,7 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
     restoreCatalogSession(row) {
+      if (!this.catalogSessionActionSupported(row, 'restore')) return false;
       if (!row?.catalogKey || !row?.routeRef
         || Object.keys(this.sessionCatalogMutationRequests).length > 0) return false;
       const requestId = `session_restore_${crypto.randomUUID()}`;
@@ -7398,6 +7415,16 @@ export const useChatStore = defineStore('chat', {
     reorderCatalogSessions(rows) {
       if (!Array.isArray(rows) || rows.length === 0
         || Object.keys(this.sessionCatalogMutationRequests).length > 0) return false;
+      if (this.sessionCatalogProtocolSupported === false) {
+        if (this.sidebarSessionCatalogLoading) return false;
+        const sessions = getSessionsStore();
+        const keys = rows.filter(row => row?.runtimeProvider === 'yeaft')
+          .map(row => `${row.routeRef.agentId}\u001f${row.routeRef.sessionId}`);
+        const ordered = sessions?.reorderSessionsGlobally?.(keys) || [];
+        if (ordered.length === 0) return false;
+        this.sessionCrudRequest('reorder', { sessions: ordered });
+        return true;
+      }
       const requestId = `session_order_${crypto.randomUUID()}`;
       const previousCatalog = beginCatalogMutation(this, requestId);
       this.sessionCatalog = rows.map((row, index) => ({ ...row, sortRank: index }));
@@ -7797,6 +7824,10 @@ export const useChatStore = defineStore('chat', {
     setSessionPinned(sessionId, pinned, meta = {}) {
       if (!sessionId) return;
       const agentId = meta && meta.agentId ? meta.agentId : null;
+      if (this.sessionCatalogProtocolSupported === false && !agentId) {
+        const conversation = this.conversations.find(row => row.id === sessionId);
+        if (conversation) conversation.pinned = !!pinned;
+      }
       const isPinned = agentId
         ? !!(getSessionsStore()?.sessionById?.(sessionId, agentId)?.pinned)
         : this.pinnedSessions.includes(sessionId);

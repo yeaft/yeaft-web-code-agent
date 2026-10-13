@@ -363,7 +363,6 @@ export function handleMessage(store, msg) {
         if (msg.sessionCatalogProtocol === 1) store.sessionCatalogProtocolSupported = true;
         else if (msg.sessionCatalogProtocol === 0 || msg.sessionCatalogProtocol === false) {
           store.sessionCatalogProtocolSupported = false;
-          store.sessionCatalogLegacyConfirmed = true;
         }
         store.yeaftSessionInventoryCompleteSupported = msg.yeaftSessionInventoryComplete === true;
         // auth_result advertises Server support; the route protocol is usable

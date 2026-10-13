@@ -16,7 +16,6 @@ function clearSidebarSessionCatalog(store) {
   store.sidebarLegacySessionCatalog = [];
   store.sessionCatalogLoaded = false;
   store.sessionCatalogProtocolSupported = null;
-  store.sessionCatalogLegacyConfirmed = false;
 }
 
 // Pending ensureConnected resolvers — settled by onopen/timeout
@@ -257,7 +256,6 @@ export function connect(store) {
   // Roll back optimistic writes before retaining the read-only prior snapshot.
   store.sessionCatalogLoaded = false;
   store.sessionCatalogProtocolSupported = null;
-  store.sessionCatalogLegacyConfirmed = false;
   if (!retainCatalog) {
     clearSidebarSessionCatalog(store);
   }

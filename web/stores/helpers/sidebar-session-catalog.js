@@ -54,12 +54,13 @@ export function adaptLegacySidebarSessionCatalog(store, sessions = []) {
     if (row.hidden || seen.has(row.catalogKey)) return false;
     seen.add(row.catalogKey);
     return true;
-  }).map(row => ({
+  }).map((row, index) => ({
     ...row,
     agentName: row.agentName || agents.get(row.routeRef.agentId)?.name || '',
     availability: agents.get(row.routeRef.agentId)?.online ? 'online' : 'offline',
     workDir: row.workDir || '',
     hidden: false,
+    sortRank: index,
     metadataUpdatedAt: row.metadataUpdatedAt || row.updatedAt || row.createdAt || null,
   }));
 }
@@ -78,11 +79,9 @@ export function sidebarSessionCatalogRows(store, sessions = []) {
 export function sidebarSessionCatalogIsLoading(store, sessions = []) {
   if (store.connectionState !== 'connected') return true;
   if (store.sessionCatalogProtocolSupported === false) {
-    // A Server omitting capability metadata cannot prove an empty catalog: it
-    // could also be a pre-capability Server whose catalog projection failed.
-    return !legacySidebarCatalogReady(store)
-      || (!store.sessionCatalogLegacyConfirmed
-        && adaptLegacySidebarSessionCatalog(store, sessions).length === 0);
+    // The successful accepted inventory boundary also proves a legitimate empty.
+    // Failed catalog frames advertise support and cannot reach this branch.
+    return !legacySidebarCatalogReady(store);
   }
   return store.sessionCatalogProtocolSupported !== true || !store.sessionCatalogLoaded;
 }
