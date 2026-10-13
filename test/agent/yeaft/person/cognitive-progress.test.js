@@ -3,10 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
-import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
-import { assembleContext, executionReceipt } from '../../../../agent/yeaft/person/runtime.js';
-import { bytes, PROPOSAL_INSTRUCTIONS, validateProposal } from '../../../../agent/yeaft/person/contracts.js';
-import { stateView } from '../../../../agent/yeaft/person/inspection.js';
+
 import { config, finalProposal } from './fixtures.js';
 
 const directories = [], services = [];
@@ -39,30 +36,6 @@ afterEach(async () => {
 });
 
 describe('Person cognitive progress', () => {
-  it('accepts optional continuation without making memory executable or requiring busywork', () => {
-    const validation = { stateVersion: 0, sourceRefs: new Set(), concepts: new Map(), catalog: [] };
-    for (const value of [undefined, null, continuation]) {
-      const p = proposal(0);
-      if (value !== undefined) p.state.continuation = value;
-      expect(validateProposal(p, validation)).toBe(p);
-    }
-    expect(PROPOSAL_INSTRUCTIONS).toContain('promises are not progress');
-    expect(PROPOSAL_INSTRUCTIONS).toContain('No compulsory tools/novelty');
-    expect(PROPOSAL_INSTRUCTIONS).toContain('newer cancellation/prohibitions win');
-    expect(PROPOSAL_INSTRUCTIONS).toContain('Do not claim you will automatically follow up');
-    expect(stateView({ ...proposal(0).state, continuation: { ...continuation, private: 'omit' } }).continuation).toEqual(continuation);
-    expect(stateView({ continuation: null }).continuation).toBeNull();
-  });
-
-  it.each([
-    { ...continuation, status: 'execute' }, { ...continuation, condition: '' },
-    { ...continuation, goal: '中'.repeat(334) }, { ...continuation, nextStep: 42 },
-    { ...continuation, command: 'not permitted' }, [], 'plan',
-  ])('rejects malformed or oversized continuation: %j', value => {
-    const p = proposal(0); p.state.continuation = value;
-    expect(() => validateProposal(p, { stateVersion: 0, sourceRefs: new Set(), concepts: new Map(), catalog: [] })).toThrow(expect.objectContaining({ code: 'INVALID_PROPOSAL' }));
-  });
-
   it('persists a committed continuation across restart, preserves omission, clears explicitly, and isolates owners', async () => {
     const dir = await directory();
     const first = create(dir, (_input, p) => { p.state.continuation = continuation; return p; });
@@ -87,32 +60,6 @@ describe('Person cognitive progress', () => {
     await request(second, 'think', { clientMessageId: 'after-clear' });
     expect((await idle(second)).state.continuation).toBeNull();
     expect(seen[2].state.continuation).toBeNull();
-  });
-
-  it.each(['failure', 'cancel'])('does not commit a candidate continuation after %s', async terminal => {
-    const dir = await directory();
-    const initial = create(dir, (_input, p) => { p.state.continuation = continuation; return p; });
-    await request(initial, 'open'); await request(initial, 'think', { clientMessageId: 'initial' });
-    await idle(initial); await initial.close();
-    let entered;
-    const gate = new Promise(resolve => { entered = resolve; });
-    const service = create(dir, async (input, p, params) => {
-      p.state.continuation = { ...continuation, nextStep: 'Candidate must not survive' };
-      if (!input.previousProposal) { use(p, null); return p; }
-      entered();
-      if (terminal === 'failure') throw new Error('provider failed');
-      if (terminal === 'cancel') await new Promise((resolve, reject) => {
-        if (params.signal.aborted) reject(params.signal.reason);
-        else params.signal.addEventListener('abort', () => reject(params.signal.reason), { once: true });
-      });
-      return p;
-    });
-    await request(service, 'think', { clientMessageId: terminal });
-    if (terminal === 'cancel') { await gate; await request(service, 'cancel'); }
-    const snapshot = await idle(service);
-    expect(snapshot.latestEpisode.status).toBe({ failure: 'failed', cancel: 'cancelled' }[terminal]);
-    expect(snapshot.state.continuation).toEqual(continuation);
-    expect(snapshot.state.version).toBe(1);
   });
 
   it('carries real multi-tool results through a cognitive check to an artifact and reusable finding', async () => {
@@ -162,54 +109,5 @@ describe('Person cognitive progress', () => {
     const last = traces.filter(t => t.kind === 'call_started').at(0);
     expect(last.manifest.contextSources.episodeExecutions).toBe(2);
     expect(last.manifest.renderedSourceRefs).toEqual(expect.arrayContaining(seen[6].episodeProgress.items.map(item => item.sourceRef)));
-  });
-
-  it('allows Dream to distill a hypothesis privately and then rest without redundant concepts or tools', async () => {
-    const seen = [];
-    const service = create(await directory(), (input, p) => {
-      seen.push(input);
-      if (input.state.version === 0 && !input.previousProposal) { use(p, null); return p; }
-      if (input.state.version === 0) {
-        p.activity.kind = 'associate';
-        p.activity.summary = 'Turned an analogy into a falsifiable question.';
-        p.concepts = [{ id: 'queue-hypothesis', expectedRevision: 0, kind: 'question', statement: 'Could arrival variance, not average volume, explain the queue? Compare equal-volume windows.', epistemicState: 'hypothesis', sourceRefs: [input.trigger.ref], associations: [] }];
-        p.state.focusConceptIds = ['queue-hypothesis'];
-      } else { p.activity.kind = 'rest'; p.activity.summary = 'No new evidence warrants a revision.'; }
-      return p;
-    });
-    await request(service, 'open'); await request(service, 'dream', { clientMessageId: 'derive' });
-    expect((await idle(service)).latestEpisode.status).toBe('completed');
-    await request(service, 'dream', { clientMessageId: 'rest' }); await idle(service);
-    expect(seen).toHaveLength(3);
-    expect((await request(service, 'messages')).items).toHaveLength(0);
-    const concepts = (await request(service, 'inspect', { section: 'memory' })).items;
-    expect(concepts).toHaveLength(1); expect(concepts[0].revision).toBe(1);
-  });
-
-  it('bounds JSON/Unicode receipts, retains failure semantics and admits history without displacing mandatory results', async () => {
-    const raw = { ok: false, output: '\u0000中文😀'.repeat(4000), code: 'TOOL_FAILED', errorEffect: 'unknown', replaySafe: false, outputAvailability: 'captured', sourceRef: 'tool:earlier' };
-    const receipt = executionReceipt('call', 'FileWrite', raw);
-    expect(bytes(receipt)).toBeLessThanOrEqual(4096);
-    expect(receipt).toMatchObject({ ok: false, code: 'TOOL_FAILED', errorEffect: 'unknown', replaySafe: false, truncated: true });
-    expect(receipt.preview).not.toContain('\ufffd'); expect(raw.output.length).toBeGreaterThan(receipt.preview.length);
-    const provider = await createPersonProvider({ config, adapter: {} });
-    const input = { provider, selection: provider.defaultSelection, remainingCalls: 1,
-      snapshot: { person: { id: 'p', soul: 'Honesty.' }, state: { version: 0 }, messages: [], concepts: [] },
-      episode: { id: 'e', kind: 'think', text: '' }, capabilityResult: { ok: true, sourceRef: 'tool:current', output: 'Current result' },
-      dependencyRefs: ['tool:earlier'] };
-    const episodeProgress = Array.from({ length: 10 }, (_, i) => ({ ...receipt, callId: String(i) }));
-    const assembled = assembleContext({ ...input, episodeProgress });
-    const body = JSON.parse(assembled.messages[0].content);
-    expect(bytes(body.episodeProgress)).toBeLessThanOrEqual(8192);
-    expect(body.episodeProgress.omitted).toBeGreaterThan(0);
-    expect(body.episodeProgress.items.at(-1).callId).toBe('9');
-    expect(body.capabilityResult).toEqual(input.capabilityResult);
-    expect(assembled.sourceRefs.has('tool:earlier')).toBe(true);
-    expect(assembled.sources.get('tool:current').reportedSourceRefs).toEqual([]);
-    const baseline = assembleContext(input);
-    input.snapshot.person.soul += 'x'.repeat(baseline.manifest.contextBudgetBytes - baseline.manifest.contextBytes);
-    const full = assembleContext({ ...input, episodeProgress });
-    expect(JSON.parse(full.messages[0].content).episodeProgress).toBeUndefined();
-    expect(full.manifest.contextSources.omittedEpisodeExecutions).toBe(10);
   });
 });

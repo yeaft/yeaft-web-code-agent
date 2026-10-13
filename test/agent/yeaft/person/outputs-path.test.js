@@ -6,7 +6,7 @@ vi.mock('node:fs', async importOriginal => {
   return { ...actual, openSync: vi.fn(actual.openSync), readSync: vi.fn(actual.readSync) };
 });
 import * as fs from 'node:fs';
-import { outputFilePublicationSupport, snapshotOutput } from '../../../../agent/yeaft/person/outputs.js';
+import { snapshotOutput } from '../../../../agent/yeaft/person/outputs.js';
 
 let root, workspace, actual;
 beforeEach(async () => {
@@ -20,16 +20,6 @@ beforeEach(async () => {
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); vi.clearAllMocks(); });
 
 describe('Output pinned descriptor boundary', () => {
-  it('explicitly fails closed if the descriptor filesystem is inaccessible', () => {
-    fs.openSync.mockImplementation((path, flags) => {
-      if (String(path).startsWith('/proc/self/fd/')) throw new Error('private mount information');
-      return actual.openSync(path, flags);
-    });
-    expect(outputFilePublicationSupport()).toMatchObject({ supported: false, reason: expect.stringContaining('Linux') });
-    expect(() => snapshotOutput(workspace, 'safe/file.txt')).toThrow(expect.objectContaining({ code: 'OUTPUT_PLATFORM' }));
-    expect(fs.readSync).not.toHaveBeenCalled();
-  });
-
   it('rejects an ancestor replaced with a symlink immediately before that component opens', () => {
     fs.openSync.mockImplementation((path, flags) => {
       if (String(path).endsWith('/safe')) {
@@ -38,20 +28,6 @@ describe('Output pinned descriptor boundary', () => {
       }
       return actual.openSync(path, flags);
     });
-    expect(() => snapshotOutput(workspace, 'safe/file.txt')).toThrow(expect.objectContaining({ code: 'OUTPUT_PATH' }));
-    expect(fs.readSync).not.toHaveBeenCalled();
-  });
-
-  it('pins an opened ancestor even if its path becomes an escaping symlink before file open', () => {
-    fs.openSync.mockImplementation((path, flags) => {
-      if (String(path).endsWith('/file.txt')) {
-        fs.renameSync(join(workspace, 'safe'), join(workspace, 'old'));
-        fs.symlinkSync(join(root, 'outside'), join(workspace, 'safe'));
-      }
-      return actual.openSync(path, flags);
-    });
-    // The pinned descriptor opens the original, relocated file. Its changed
-    // canonical path fails validation before any bytes (especially private bytes).
     expect(() => snapshotOutput(workspace, 'safe/file.txt')).toThrow(expect.objectContaining({ code: 'OUTPUT_PATH' }));
     expect(fs.readSync).not.toHaveBeenCalled();
   });

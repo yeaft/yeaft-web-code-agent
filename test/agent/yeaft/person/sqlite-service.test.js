@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, readdir, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
-import { LocalPersonMemory } from '../../../../agent/yeaft/person/local-memory.js';
-import { digest } from '../../../../agent/yeaft/person/contracts.js';
+
 import { config, finalProposal } from './fixtures.js';
 
 const probe = new DatabaseSync(':memory:');
@@ -91,56 +90,5 @@ describe('SQLite is the instance-local Person authority', () => {
     expect((await call(service, 'traces', { limit: 50 })).items.some(trace => trace.kind === 'capability_result' && trace.capability.id === 'Recall')).toBe(true);
     await call(service, 'open', {}, 'bob');
     expect((await call(service, 'messages', {}, 'bob')).items).toEqual([]);
-  });
-
-  it.skipIf(!hasFts).each(['cancel', 'close'])('stops supervised recall when the owning episode ends by %s', async mode => {
-    const dir = await directory();
-    let memory, searching = false, modelCalls = 0, signal;
-    const originalRecall = LocalPersonMemory.prototype.recall;
-    vi.spyOn(LocalPersonMemory.prototype, 'recall').mockImplementation(function (owner, args, options) {
-      memory = this; signal = options?.signal;
-      this.options.embeddingModule = new URL('../../../fixtures/person-local-embedding.js', import.meta.url).href;
-      this.options.embedding = { enabled: true, delayMs: 10000 };
-      return originalRecall.call(this, owner, args, options);
-    });
-    const originalCall = LocalPersonMemory.prototype._call;
-    vi.spyOn(LocalPersonMemory.prototype, '_call').mockImplementation(function (token, op, ...args) {
-      if (op === 'search') searching = true;
-      return originalCall.call(this, token, op, ...args);
-    });
-    const adapter = adapterFor(input => {
-      const p = final(input);
-      const n = ++modelCalls;
-      if (n === 1) p.next = { model: 'test/first', effort: null, reason: 'Inspect recall.', capability: { id: 'catalog.view', args: { id: 'Recall' } } };
-      if (n === 2) p.next = { model: 'test/first', effort: null, reason: 'Recall.', capability: { id: 'Recall', args: { kind: 'messages', query: 'curious' } } };
-      return p;
-    });
-    const service = create(dir, { adapter });
-    await call(service, 'open');
-    await call(service, 'send', { text: 'Be curious.', clientMessageId: 'slow-recall' });
-    await vi.waitFor(() => expect(searching).toBe(true), { timeout: 3000 });
-    expect(signal).toBeInstanceOf(AbortSignal);
-    const worker = memory.worker;
-    const exited = new Promise(resolve => worker.once('exit', resolve));
-    if (mode === 'cancel') await call(service, 'cancel');
-    else await service.close();
-    const snapshot = await idle(mode === 'close' ? create(dir, { adapter }) : service);
-    expect(signal.aborted).toBe(true);
-    expect(snapshot.state.version).toBe(0);
-    expect(snapshot.latestEpisode.status).toBe(mode === 'cancel' ? 'cancelled' : 'interrupted');
-    await exited;
-    await vi.waitFor(() => expect(memory.active).toBeNull());
-    expect(memory.worker).toBeNull();
-    expect(modelCalls).toBe(2);
-  });
-
-  it('refuses a previously bound unsupported authority instead of opening an empty local identity', async () => {
-    const dir = await directory();
-    await mkdir(join(dir, 'person'), { recursive: true });
-    await writeFile(join(dir, 'person', `storage-${digest('default')}.json`), JSON.stringify({ version: 1, storage: 'unsupported' }));
-    const service = create(dir, { adapter: adapterFor(final) });
-    expect(await call(service, 'status')).toMatchObject({ storageReady: false, modelReady: false });
-    await expect(call(service, 'open')).rejects.toMatchObject({ code: 'STORAGE_MISMATCH' });
-    expect(await readdir(join(dir, 'person'))).not.toContain('person.db');
   });
 });

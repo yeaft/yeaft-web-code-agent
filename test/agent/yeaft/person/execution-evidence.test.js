@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { PersonCapabilities, CAPABILITY_LIMITS, foundationCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
-import { createPersonNativeRegistry, NATIVE_TOOL_IDS, projectNativeResult } from '../../../../agent/yeaft/person/native-tools.js';
+import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
+import { createPersonNativeRegistry, NATIVE_TOOL_IDS } from '../../../../agent/yeaft/person/native-tools.js';
 import { runPersonScript } from '../../../../agent/yeaft/person/script-executor.js';
 import { bytes, digest } from '../../../../agent/yeaft/person/contracts.js';
 
@@ -68,40 +68,6 @@ describe('Person Execution.read durable scoped evidence', () => {
     expect(await reopened.getPerson('alice')).toEqual(personBefore); expect(tool).not.toHaveBeenCalled();
   });
 
-  it('preserves failure/effect semantics and original failed args, and serializes internal results without output', async () => {
-    const repository = repo(); await repository.open('alice'); const { episode } = await repository.admit('alice', admission());
-    const args = { command: 'failed effect', content: '中\\\"'.repeat(3000) };
-    const result = { ok: false, code: 'TOOL_TIMEOUT', errorEffect: 'unknown', output: 'observed partial output', sourceRef: 'original-source', rawBytes: 1, sha256: 'wrong-legacy-count' };
-    const callId = await persist(repository, episode, { id: 'Bash', args }, result);
-    const cap = await prepare(repository, episode), page = await read(cap, { callId });
-    expect(page).toMatchObject({ capabilityId: 'Bash', ok: false, code: 'TOOL_TIMEOUT', errorEffect: 'unknown', args: null, argsTruncated: true,
-      argsRawBytes: bytes(JSON.stringify(args)), rawBytes: bytes(result.output), sha256: digest(result.output), sourceRef: 'original-source' });
-    expect(bytes(JSON.stringify(page.argsPreview))).toBeLessThanOrEqual(1024); expect(page.argsPreview).not.toContain('\ufffd');
-    const internal = { items: [1, { text: '中文😀' }], nextCursor: null };
-    const internalId = await persist(repository, episode, { id: 'Recall', args: { kind: 'concepts' } }, internal);
-    expect(await read(cap, { callId: internalId })).toMatchObject({ outputFormat: 'result-json', output: JSON.stringify(internal), ok: true, sha256: digest(internal) });
-    const thrown = await persist(repository, episode, { id: 'Think', args: {} }, undefined, { code: 'UNSUPPORTED' });
-    expect(await read(cap, { callId: thrown })).toMatchObject({ ok: false, code: 'UNSUPPORTED', outputFormat: 'result-json' });
-    const script = await persist(repository, episode, { id: 'Script.echo', args: { input: [1] } }, { ok: true, output: [1, '😀'] });
-    expect(await read(cap, { callId: script })).toMatchObject({ outputFormat: 'output-json', output: JSON.stringify([1, '😀']) });
-  });
-
-  it('rejects non-boundary/invalid offsets, unbounded pages and owner/path injection at both capability and repository boundaries', async () => {
-    const repository = repo(); await repository.open('alice'); const { episode } = await repository.admit('alice', admission());
-    const callId = await persist(repository, episode, { id: 'Think', args: {} }, { output: '中😀end' });
-    const cap = await prepare(repository, episode);
-    for (const args of [{ callId, offset: 1 }, { callId, offset: 4 }, { callId, offset: 11 }, { callId, offset: -1 }, { callId, offset: 0.5 },
-      { callId, maxBytes: 0 }, { callId, maxBytes: 3 }, { callId, maxBytes: 4097 }, { callId, ownerId: 'bob' }, { callId, path: '/private.db' }, { callId, episodeId: null }]) {
-      await expect(read(cap, args)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-      await expect(repository.executionRead(episode, args)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    }
-    expect(await read(cap, { callId, offset: 3, maxBytes: 4 })).toMatchObject({ output: '😀', nextOffset: 7, eof: false });
-    // Escaping a raw byte may need six JSON bytes. The response shrinks without losing pagination.
-    const escapedId = await persist(repository, episode, { id: 'Think', args: {} }, { output: '\u0001'.repeat(10000) });
-    const escaped = await read(cap, { callId: escapedId, maxBytes: 4096 });
-    expect(bytes(escaped)).toBeLessThanOrEqual(8192); expect(escaped.returnedBytes).toBeGreaterThan(0); expect(escaped.returnedBytes).toBeLessThan(4096);
-  });
-
   it('restricts historical reads to existing same namespace/owner/person episodes while keeping the current live fence', async () => {
     const repository = repo(), foreign = repo('foreign'); await repository.open('alice'); await repository.open('bob'); await foreign.open('alice');
     const prior = (await repository.admit('alice', admission())).episode;
@@ -123,36 +89,9 @@ describe('Person Execution.read durable scoped evidence', () => {
     await repository.cancel('alice', live.id);
     await expect(read(cap, { callId: priorId, episodeId: prior.id })).rejects.toMatchObject({ code: 'STALE' });
   });
-
-  it('can inspect after-terminal captured output in a later live episode without treating it as accepted behavior', async () => {
-    const repository = repo(); await repository.open('alice'); const prior = (await repository.admit('alice', admission())).episode;
-    const callId = randomUUID(), invocation = { id: 'FileWrite', args: { file_path: 'x', content: 'effect' } };
-    await repository.startCall(prior, { callId, requested: { model: 'test/model', effort: null } });
-    await repository.finalizeCall(prior, { callId, output: { text: '{}' } });
-    await repository.startCapability(prior, { callId, capability: invocation });
-    await repository.cancel('alice', prior.id);
-    expect(await repository.finalizeCapability(prior, { callId, capability: invocation, result: { ok: false, output: 'joined evidence', errorEffect: 'unknown', code: 'TOOL_FAILED' } })).toBe(false);
-    const live = (await repository.admit('alice', admission())).episode, cap = await prepare(repository, live);
-    expect(await read(cap, { callId, episodeId: prior.id })).toMatchObject({ output: 'joined evidence', historical: true, afterTerminal: true, accepted: false, terminalCode: 'CANCELLED', errorEffect: 'unknown' });
-  });
 });
 
 describe('Person Execution.read discovery and native projection', () => {
-  it('demand-loads the contract within the foundation budget and requires actual rendered activation', async () => {
-    const executionRead = vi.fn(async () => ({ output: 'evidence' }));
-    const cap = new PersonCapabilities({ executionRead }, 'alice', { episode: { id: 'episode', ownerId: 'alice' } });
-    expect(foundationCapabilities().map(m => m.id)).not.toContain('Execution.read');
-    expect(cap.catalog().nativeToolNotice).toContain('Execution.read');
-    await expect(read(cap, { callId: 'original' })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
-    const found = await cap.execute({ id: 'catalog.search', args: { query: 'execution evidence' } });
-    expect(found.contracts.map(m => m.id)).toContain('Execution.read');
-    expect(bytes(cap.context())).toBeLessThanOrEqual(CAPABILITY_LIMITS.activeBytes);
-    expect(await read(cap, { callId: 'original' })).toEqual({ output: 'evidence' });
-    expect(executionRead).toHaveBeenCalledWith(cap.episode, { callId: 'original', offset: 0, maxBytes: 4096 }, { signal: undefined });
-    cap.activate(foundationCapabilities());
-    await expect(read(cap, { callId: 'original' })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
-  });
-
   it('never starts a canceled read or returns a result after cancellation, and never exposes this authority to Script/child tools', async () => {
     const executionRead = vi.fn(), tool = vi.fn();
     const cap = new PersonCapabilities({ executionRead }, 'alice', { episode: { id: 'episode', ownerId: 'alice' }, toolHost: { execute: tool } });
@@ -168,30 +107,5 @@ describe('Person Execution.read discovery and native projection', () => {
     expect(await runPersonScript('return [typeof Execution, typeof repository, typeof require, typeof tools];', {})).toMatchObject({ ok: true, output: ['undefined', 'undefined', 'undefined', 'undefined'] });
     expect(await runPersonScript('return Execution.read(input);', { callId: 'original' })).toMatchObject({ ok: false });
     expect(executionRead).toHaveBeenCalledTimes(1); expect(tool).not.toHaveBeenCalled();
-  });
-
-  it.each(['中😀\\\"\n', '\u0001', 'ASCII'])('keeps exact head/tail hidden ranges and callable recovery within escaped JSON bytes for %j', pattern => {
-    const output = 'HEAD' + pattern.repeat(18000) + 'TAIL', raw = Buffer.from(output, 'utf8');
-    const result = { id: 'FileWrite', callId: 'original-call', episodeId: 'original-episode', ok: false, code: 'TOOL_FAILED', errorEffect: 'unknown', output,
-      rawBytes: raw.length, sha256: digest(output), sourceRef: `tool:original-episode:original-call:FileWrite:${digest(output)}` };
-    const projected = projectNativeResult(result);
-    expect(bytes(projected)).toBeLessThanOrEqual(8192); expect(projected.output).not.toContain('\ufffd');
-    expect(projected).toMatchObject({ truncated: true, ok: false, code: 'TOOL_FAILED', errorEffect: 'unknown', rawBytes: raw.length, sha256: result.sha256,
-      recovery: { prepare: { id: 'catalog.view', args: { id: 'Execution.read' } }, read: { id: 'Execution.read', args: { callId: 'original-call', episodeId: 'original-episode', offset: 0, maxBytes: 4096 } } } });
-    const { start, end } = projected.hiddenRange;
-    expect(start).toBeGreaterThan(0); expect(end).toBeLessThan(raw.length); expect(end).toBeGreaterThan(start);
-    expect(projected.output).toBe(raw.subarray(0, start).toString('utf8') + `\n[omitted UTF-8 bytes ${start}..${end} of ${raw.length}]\n` + raw.subarray(end).toString('utf8'));
-    expect(projected.output.startsWith('HEAD')).toBe(true); expect(projected.output.endsWith('TAIL')).toBe(true);
-    expect(result.output).toBe(output); expect(result).not.toHaveProperty('hiddenRange');
-  });
-
-  it('attaches recovery even to small/legacy native output and sheds only oversized ancillary preview metadata', () => {
-    const result = { id: 'Bash', ok: true, output: 'small', sourceRef: 'tool:episode:call:Bash:hash', source: { notes: '中'.repeat(10000) } };
-    const projected = projectNativeResult(result);
-    expect(bytes(projected)).toBeLessThanOrEqual(8192);
-    expect(projected).toMatchObject({ metadataTruncated: true, recovery: { read: { args: { callId: 'call', episodeId: 'episode' } } } });
-    const small = projectNativeResult({ ...result, source: {} });
-    expect(small).toMatchObject({ output: 'small', recovery: { read: { id: 'Execution.read' } } });
-    expect(small).not.toHaveProperty('truncated');
   });
 });

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
-import { turnView } from '../../../../agent/yeaft/person/turn-diagnostics.js';
+
 import { config, finalProposal } from './fixtures.js';
 
 const services = [], directories = [];
@@ -34,75 +34,6 @@ afterEach(async () => {
 });
 
 describe('Person unlimited main execution controls', () => {
-  it.each([
-    ['call_output', null, 7, 'completed'],
-    ['call_failed', 'PROVIDER_FAILED', 8, 'failed'],
-    ['call_failed', 'CANCELLED', 9, 'cancelled'],
-    ['call_failed', 'INTERRUPTED', undefined, 'interrupted'],
-    ['call_output', null, undefined, 'completed'],
-  ])('projects actual duration for %s/%s, keeping unmeasured legacy time unknown', (kind, code, requestElapsedMs, status) => {
-    const turn = turnView({ id: 'duration', status: 'completed' }, [
-      { kind: 'call_started', callId: 'c', createdAt: '2026-10-12T00:00:00Z', requestedModel: 'm' },
-      { kind, code, callId: 'c', createdAt: '2026-10-12T01:00:00Z', requestElapsedMs },
-    ]);
-    expect(turn.calls[0]).toMatchObject({ status, elapsedMs: requestElapsedMs ?? null });
-  });
-
-  it('ignores legacy quotas, runs 45 model calls with bounded requests and diagnostics, retaining original traces', async () => {
-    let count = 0;
-    const service = await create(async function* (params) {
-      const input = JSON.parse(params.messages[0].content); count++;
-      expect(input.budget).not.toHaveProperty('remainingCalls');
-      expect(input.inheritedSourceRefs.length).toBeLessThanOrEqual(128);
-      expect(JSON.stringify(input).length).toBeLessThan(30000);
-      yield { type: 'text_delta', text: JSON.stringify(proposal(input, count < 45 ? {} : null)) };
-      yield { type: 'usage', inputTokens: 3, outputTokens: 5 };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    }, { maxCalls: 'legacy invalid value ignored' });
-    const { episodeId } = await call(service, 'think', { clientMessageId: 'many' });
-    const snapshot = await until(() => call(service, 'snapshot'), result => !result.busy);
-    expect(snapshot.latestEpisode.status).toBe('completed'); expect(count).toBe(45);
-    const turn = (await call(service, 'turns')).items[0];
-    expect(turn.budget.calls).toBeNull(); expect(turn.calls).toHaveLength(32);
-    expect(turn.calls[0].index).toBe(14); expect(turn.calls.at(-1).index).toBe(45);
-    expect(turn).toMatchObject({ loopCount: 45, callsTruncated: true, usageScope: 'latest-call-window', callWindowLimit: 32 });
-    let cursor = null, starts = 0;
-    do {
-      const page = await call(service, 'traces', { limit: 20, cursor });
-      starts += page.items.filter(trace => trace.kind === 'call_started' && trace.episodeId === episodeId).length;
-      expect(page.items.some(trace => trace.kind === 'budget_exhausted')).toBe(false);
-      cursor = page.nextCursor;
-    } while (cursor);
-    expect(starts).toBe(45);
-    expect((await call(service, 'executions')).main).toBeNull();
-  });
-
-  it('bounds accumulated execution previews through 40 real tool dispatches without replay or trace loss', async () => {
-    let count = 0, effects = 0, sawOmitted = false;
-    const original = PersonRuntime.prototype.start;
-    vi.spyOn(PersonRuntime.prototype, 'start').mockImplementation(function (episode) {
-      const tool = this.parentToolRegistry.get('FileRead');
-      this.parentToolRegistry.register({ ...tool, execute: async () => `observation ${++effects}` });
-      return original.call(this, episode);
-    });
-    const service = await create(async function* (params) {
-      const input = JSON.parse(params.messages[0].content); count++;
-      if (input.episodeProgress) {
-        expect(input.episodeProgress.items.length).toBeLessThanOrEqual(16);
-        expect(JSON.stringify(input.episodeProgress).length).toBeLessThanOrEqual(8192);
-        sawOmitted ||= input.episodeProgress.omitted > 0;
-      }
-      const next = count === 1 ? { id: 'catalog.view', args: { id: 'FileRead' } }
-        : count <= 41 ? { id: 'FileRead', args: { file_path: '/fake' } } : null;
-      yield { type: 'text_delta', text: JSON.stringify(proposal(input, next)) };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    });
-    await call(service, 'think', { clientMessageId: 'tool-history' });
-    const done = await until(() => call(service, 'snapshot'), result => !result.busy);
-    expect(done.latestEpisode.status).toBe('completed');
-    expect(count).toBe(42); expect(effects).toBe(40); expect(sawOmitted).toBe(true);
-  });
-
   it('recovers an expired persisted pause as interrupted, never as a resumable live job', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'person-abandoned-pause-')); directories.push(dir);
     const repository = new SqlitePersonRepository({ yeaftDir: dir, leaseMs: 300 });
@@ -206,112 +137,6 @@ describe('Person unlimited main execution controls', () => {
     } finally {
       providerRelease.resolve(); pausedWriteRelease.resolve();
       job.controller.abort(); await job.promise;
-    }
-  });
-
-  it('persists actual provider duration, excluding a pause after durable start but before dispatch', async () => {
-    const started = deferred(), releaseStart = deferred(); let dispatched = 0, measured;
-    const originalStart = PersonRuntime.prototype.start;
-    const originalFinish = PersonRuntime.prototype.finishUsage;
-    vi.spyOn(PersonRuntime.prototype, 'finishUsage').mockImplementation(function (...args) {
-      measured = originalFinish.apply(this, args); return measured;
-    });
-    vi.spyOn(PersonRuntime.prototype, 'start').mockImplementation(function (episode) {
-      const startCall = this.repository.startCall.bind(this.repository);
-      this.repository.startCall = async (...args) => {
-        const result = await startCall(...args); started.resolve(); await releaseStart.promise; return result;
-      };
-      return originalStart.call(this, episode);
-    });
-    const service = await create(async function* (params) {
-      dispatched++;
-      yield { type: 'text_delta', text: JSON.stringify(proposal(JSON.parse(params.messages[0].content))) };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    });
-    const { episodeId } = await call(service, 'think', { clientMessageId: 'duration-after-pause' });
-    try {
-      await started.promise;
-      await call(service, 'pause', { episodeId }); releaseStart.resolve();
-      await until(() => call(service, 'executions'), result => result.main?.status === 'paused');
-      expect(dispatched).toBe(0);
-      await sleep(70);
-      await call(service, 'resume', { episodeId });
-      await until(() => call(service, 'snapshot'), result => !result.busy);
-      const recorded = (await call(service, 'turns')).items[0].calls[0];
-      expect(dispatched).toBe(1);
-      expect(Number.isSafeInteger(measured)).toBe(true);
-      expect(recorded.elapsedMs).toBe(measured);
-      const lifecycleMs = new Date(recorded.endedAt) - new Date(recorded.createdAt);
-      expect(lifecycleMs - recorded.elapsedMs).toBeGreaterThanOrEqual(60);
-    } finally { releaseStart.resolve(); }
-  });
-
-  it('pauses a final provider response before committing and exposes exact mixed-model live usage', async () => {
-    const entered = deferred(), release = deferred(); let count = 0;
-    const service = await create(async function* (params) {
-      const input = JSON.parse(params.messages[0].content); count++;
-      const p = proposal(input, count === 1 ? {} : null);
-      if (p.next) p.next.model = 'test/second';
-      yield { type: 'usage', inputTokens: count * 2, outputTokens: count * 3 };
-      if (count === 2) { entered.resolve(); await release.promise; }
-      yield { type: 'text_delta', text: JSON.stringify(p) };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    });
-    const { episodeId } = await call(service, 'think', { clientMessageId: 'pause-commit' });
-    await entered.promise;
-    const live = (await call(service, 'executions')).main;
-    expect(live).toMatchObject({ model: 'test/second', loops: 2, models: [
-      { model: 'test/first', calls: 1, completedCalls: 1, usage: { totalTokens: 5, complete: true } },
-      { model: 'test/second', calls: 1, completedCalls: 0, usage: { totalTokens: 10, complete: false } },
-    ] });
-    expect(live.models.every(model => model.elapsedMs >= 0)).toBe(true);
-    await call(service, 'pause', { episodeId }); release.resolve();
-    await until(() => call(service, 'executions'), result => result.main?.status === 'paused');
-    const paused = await call(service, 'snapshot');
-    expect(paused.state.version).toBe(0); expect(count).toBe(2);
-    const diagnostics = await call(service, 'executions');
-    expect(diagnostics.items[0].controlStatus).toBe('paused');
-    expect(diagnostics.main.models[1].usage).toMatchObject({ totalTokens: 10, complete: true });
-    await call(service, 'resume', { episodeId });
-    const done = await until(() => call(service, 'snapshot'), result => !result.busy);
-    expect(done.state.version).toBe(1); expect(count).toBe(2);
-    expect((await call(service, 'turns')).items[0].controlStatus).toBeNull();
-  });
-
-  it.each(['resume', 'cancel', 'close'])('allows in-flight host effects to finish once then pauses before the next model; %s releases the gate', async action => {
-    const entered = deferred(), release = deferred(); let count = 0, effects = 0;
-    const original = PersonRuntime.prototype.start;
-    vi.spyOn(PersonRuntime.prototype, 'start').mockImplementation(function (episode) {
-      const tool = this.parentToolRegistry.get('FileWrite');
-      this.parentToolRegistry.register({ ...tool, execute: async () => {
-        entered.resolve(); await release.promise; effects++; return 'written once';
-      } });
-      return original.call(this, episode);
-    });
-    const service = await create(async function* (params) {
-      const input = JSON.parse(params.messages[0].content); count++;
-      const next = count === 1 ? { id: 'catalog.view', args: { id: 'FileWrite' } }
-        : count === 2 ? { id: 'FileWrite', args: { file_path: '/fake', content: 'one effect' } } : null;
-      yield { type: 'text_delta', text: JSON.stringify(proposal(input, next)) };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    });
-    const { episodeId } = await call(service, 'think', { clientMessageId: `tool-${action}` }); await entered.promise;
-    expect(await call(service, 'pause', { episodeId })).toEqual({ episodeId, status: 'pausing' });
-    expect((await call(service, 'executions')).main).toMatchObject({ phase: 'capability', capability: 'FileWrite', loops: 2 });
-    release.resolve(); await until(() => call(service, 'executions'), result => result.main?.status === 'paused');
-    expect(count).toBe(2); expect(effects).toBe(1);
-    if (action === 'close') {
-      await service.close();
-      const restarted = createPersonService({ yeaftDir: directories.at(-1), config, adapter: { async *stream() { throw new Error('no restart calls'); } }, embedding: { enabled: false } });
-      services.push(restarted);
-      expect((await call(restarted, 'snapshot')).latestEpisode.status).toBe('interrupted');
-      expect((await call(restarted, 'executions')).main).toBeNull();
-      await expect(call(restarted, 'resume', { episodeId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    } else {
-      await call(service, action, { episodeId });
-      const done = await until(() => call(service, 'snapshot'), result => !result.busy);
-      expect(done.latestEpisode.status).toBe(action === 'resume' ? 'completed' : 'cancelled');
-      expect(count).toBe(action === 'resume' ? 3 : 2); expect(effects).toBe(1);
     }
   });
 

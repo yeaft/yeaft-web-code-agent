@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
-import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
+
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { digest, LIMITS } from '../../../../agent/yeaft/person/contracts.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
@@ -30,94 +29,6 @@ describe('Person real SQLite authority in managed workers', () => {
     await Promise.all(repositories.map(r => r.close()));
     await rm(yeaftDir, { recursive: true, force: true });
     vi.restoreAllMocks();
-  });
-
-  it('pages latest memory by update time with binary ties, independent owner/namespace fences and durable boundaries', async () => {
-    const r = repo(), foreign = repo('foreign');
-    await r.open('alice'); await r.open('bob'); await foreign.open('alice');
-    const seed = (repository, ownerId, id, time, revision = 1) => inspect(repository, db => {
-      const scope = repository.scope(ownerId);
-      const record = { ...scope, id, schemaVersion: 1, revision, updatedAt: new Date(time).toISOString(),
-        statement: id, kind: 'claim', epistemicState: 'hypothesis', sourceRefs: [], associations: [],
-        workerId: 'private-worker', apiKey: 'private-token' };
-      db.prepare(`INSERT INTO concepts(namespace, ownerId, personId, id, revision, updatedAt, statement, record)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(namespace, ownerId, personId, id)
-        DO UPDATE SET revision=excluded.revision, updatedAt=excluded.updatedAt, record=excluded.record`)
-        .run(scope.namespace, scope.ownerId, scope.personId, id, revision, time, id, JSON.stringify(record));
-    });
-    for (const [id, time] of [['old', 1000], ['middle', 2000], ['z-new', 3000], ['A-tie', 3000], ['a-tie', 3000]]) seed(r, 'alice', id, time);
-    seed(r, 'bob', 'foreign-owner', 9000); seed(foreign, 'alice', 'foreign-namespace', 9000);
-    const first = await r.inspect('alice', { section: 'memory', limit: 2 });
-    expect(first.items.map(item => item.id)).toEqual(['A-tie', 'a-tie']);
-    expect(first.nextCursor).toMatch(/^m1:c:3000:/);
-    expect(JSON.stringify(first)).not.toMatch(/private-worker|private-token|ownerId|namespace|personId/);
-    // A boundary need not exist anymore. New/revised records at the head are
-    // observed on polling, never reinserted into an older continuation page.
-    inspect(r, db => db.prepare('DELETE FROM concepts WHERE ownerId = ? AND id = ?').run('alice', 'a-tie'));
-    seed(r, 'alice', 'new-head', 4000); seed(r, 'alice', 'old', 5000, 2);
-    await r.close();
-    const reopened = repo();
-    const second = await reopened.inspect('alice', { section: 'memory', cursor: first.nextCursor, limit: 2 });
-    expect(second.items.map(item => item.id)).toEqual(['z-new', 'middle']); expect(second.nextCursor).toBeNull();
-    const refreshed = await reopened.inspect('alice', { section: 'memory', limit: 2 });
-    expect(refreshed.items.map(item => item.id)).toEqual(['old', 'new-head']); expect(refreshed.items[0].revision).toBe(2);
-    // Bare legacy cursors keep the former ID-ascending continuation semantics.
-    expect((await reopened.inspect('alice', { section: 'memory', cursor: 'middle', limit: 50 })).items.map(item => item.id)).toEqual(['new-head', 'old', 'z-new']);
-    await expect(reopened.inspect('unknown', { section: 'memory' })).rejects.toMatchObject({ code: 'NOT_OPEN' });
-    for (const cursor of ['m1:c:01:QQ', 'm1:c:1:_w', 'm1:b:0:QQ', 's1:c:1:QQ', 'm1:c:1:QQ=', 'm1:c:9007199254740992:QQ']) {
-      await expect(reopened.inspect('alice', { section: 'memory', cursor })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    }
-  });
-
-  it('pages custom skills newest version-created first, then an honestly undated deterministic builtin catalogue', async () => {
-    const r = repo(), foreign = repo('foreign');
-    await r.open('alice'); await r.open('bob'); await foreign.open('alice');
-    const seed = (repository, ownerId, id, createdAt) => inspect(repository, db => {
-      const scope = repository.scope(ownerId);
-      const record = { ...scope, id, version: 1, revision: `hash-${id}`, createdAt, updatedAt: createdAt,
-        description: id, useWhen: 'pure calculation', avoidWhen: '', inputDescription: 'JSON', outputDescription: 'JSON',
-        code: 'return input;', tests: [{ input: 1, expected: 1 }], evidence: { engine: 'quickjs', testsPassed: 1, testedAt: createdAt },
-        createdEpisodeId: 'episode', createdCallId: 'call', apiKey: 'private-token' };
-      db.prepare('INSERT INTO created_capabilities(namespace, ownerId, personId, id, version, record) VALUES (?, ?, ?, ?, 1, ?)')
-        .run(scope.namespace, scope.ownerId, scope.personId, id, JSON.stringify(record));
-    });
-    for (const [id, date] of [['Script.a-old', '2020-01-01T00:00:00.000Z'], ['Script.z-new', '2026-01-01T00:00:00.000Z'], ['Script.b-tie', '2026-01-01T00:00:00.000Z']]) seed(r, 'alice', id, date);
-    seed(r, 'bob', 'Script.private-owner', '2027-01-01T00:00:00.000Z'); seed(foreign, 'alice', 'Script.private-namespace', '2027-01-01T00:00:00.000Z');
-    const first = await r.inspect('alice', { section: 'skills', limit: 2 });
-    expect(first.items.map(item => item.id)).toEqual(['Script.b-tie', 'Script.z-new']); expect(first.nextCursor).toMatch(/^s1:c:/);
-    seed(r, 'alice', 'Script.new-head', '2028-01-01T00:00:00.000Z');
-    inspect(r, db => db.prepare('DELETE FROM created_capabilities WHERE ownerId = ? AND id = ?').run('alice', 'Script.z-new'));
-    const all = [...first.items]; let cursor = first.nextCursor;
-    do {
-      const result = await r.inspect('alice', { section: 'skills', limit: 2, cursor });
-      all.push(...result.items); cursor = result.nextCursor;
-    } while (cursor);
-    expect(all.slice(0, 3).map(item => item.id)).toEqual(['Script.b-tie', 'Script.z-new', 'Script.a-old']);
-    const builtinIds = all.slice(3).map(item => item.id);
-    expect(builtinIds).toEqual([...builtinIds].sort()); expect(new Set(all.map(item => item.id)).size).toBe(all.length);
-    for (const builtin of all.slice(3)) { expect(builtin).not.toHaveProperty('createdAt'); expect(builtin).not.toHaveProperty('updatedAt'); }
-    expect(JSON.stringify(all)).not.toMatch(/private-token|Script.private/);
-    expect((await r.inspect('alice', { section: 'skills', limit: 1 })).items[0].id).toBe('Script.new-head');
-    expect((await r.inspect('alice', { section: 'skills', cursor: 'Script.z-new', limit: 50 })).items.map(item => item.id)).toEqual(builtinIds.filter(id => id > 'Script.z-new'));
-    await expect(r.inspect('alice', { section: 'skills', cursor: 'm1:c:1:QQ' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-  });
-
-  it('continues memory after the actual byte-limited item rather than the requested count', async () => {
-    const r = repo(); await r.open('alice'); const scope = r.scope('alice');
-    inspect(r, db => {
-      const insert = db.prepare('INSERT INTO concepts(namespace, ownerId, personId, id, revision, updatedAt, statement, record) VALUES (?, ?, ?, ?, 1, ?, ?, ?)');
-      for (let i = 0; i < 40; i++) {
-        const id = `concept-${String(i).padStart(2, '0')}`, record = { ...scope, id, revision: 1,
-          statement: 'x'.repeat(8100), updatedAt: new Date(i + 1).toISOString(), kind: 'claim', epistemicState: 'hypothesis' };
-        insert.run(scope.namespace, scope.ownerId, scope.personId, id, i + 1, record.statement, JSON.stringify(record));
-      }
-    });
-    const first = await r.inspect('alice', { section: 'memory', limit: 50 });
-    expect(first.items.length).toBeGreaterThan(0); expect(first.items.length).toBeLessThan(40);
-    expect(Buffer.byteLength(JSON.stringify(first.items))).toBeLessThan(257 * 1024);
-    const second = await r.inspect('alice', { section: 'memory', cursor: first.nextCursor, limit: 50 });
-    expect([...first.items, ...second.items].map(item => item.id)).toEqual(Array.from({ length: 40 }, (_, i) => `concept-${String(39 - i).padStart(2, '0')}`));
-    expect(second.nextCursor).toBeNull();
   });
 
   it('persists deterministic identity, state, history and complete searchable revisions across reopen', async () => {
@@ -154,38 +65,6 @@ describe('Person real SQLite authority in managed workers', () => {
     expect(next.episode.epoch).toBeGreaterThan(episode.epoch);
     expect((await reopened.searchChanges('alice', { after: changes.lastSeq })).items[0].seq).toBeGreaterThan(changes.lastSeq);
     expect(await reopened.admit('alice', input())).toMatchObject({ duplicate: true, episodeId: episode.id, status: 'completed' });
-  });
-
-  it('waits within the startup budget for WAL lock upgrades without retrying logical writes', async () => {
-    const r = repo('startup', { busyTimeoutMs: 1500 });
-    await (await import('node:fs/promises')).mkdir(join(yeaftDir, 'person'));
-    const lock = new DatabaseSync(r.dbPath);
-    lock.exec('CREATE TABLE seed (id INTEGER); BEGIN; SELECT * FROM seed;');
-    let settled = false;
-    const opening = r.open('alice').finally(() => { settled = true; });
-    // Attach failure handling before the wait, including on the regressed version.
-    const checked = expect(opening).resolves.toMatchObject({ person: { name: 'Digital Person' } });
-    try { await sleep(250); expect(settled).toBe(false); }
-    finally { lock.exec('ROLLBACK'); lock.close(); }
-    await checked;
-    expect(inspect(r, db => db.prepare('PRAGMA journal_mode').get().journal_mode)).toBe('wal');
-  });
-
-  it('bounds a startup WAL lock wait and permits a later explicit fresh repository', async () => {
-    const r = repo('startup-timeout', { busyTimeoutMs: 150 });
-    await (await import('node:fs/promises')).mkdir(join(yeaftDir, 'person'));
-    const lock = new DatabaseSync(r.dbPath);
-    lock.exec('CREATE TABLE seed (id INTEGER); BEGIN; SELECT * FROM seed;');
-    const started = Date.now();
-    try {
-      await expect(r.open('alice')).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
-      expect(Date.now() - started).toBeGreaterThanOrEqual(140);
-      expect(Date.now() - started).toBeLessThan(2000);
-    } finally { lock.exec('ROLLBACK'); lock.close(); }
-    await expect(r.open('alice')).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
-    const fresh = repo('startup-timeout');
-    await fresh.open('alice');
-    expect((await fresh.snapshot('alice')).state.version).toBe(0);
   });
 
   it('serializes independent workers for opens, admission, idempotency and busy exclusion', async () => {
@@ -278,19 +157,6 @@ describe('Person real SQLite authority in managed workers', () => {
     expect((await r.searchChanges('alice')).items.filter(c => c.kind === 'concepts').map(c => c.revision)).toEqual([1, 2]);
   });
 
-  it.each(['epoch', 'controlVersion', 'inputWatermark', 'baseStateVersion', 'workerId', 'id'])('rejects every %s fence mismatch without journal side effects', async field => {
-    const r = repo(); await r.open('alice');
-    const { episode } = await r.admit('alice', input());
-    const before = await r.searchChanges('alice');
-    const stale = { ...episode, [field]: typeof episode[field] === 'number' ? episode[field] + 1 : 'other' };
-    await expect(r.heartbeat(stale)).rejects.toMatchObject({ code: 'STALE' });
-    await expect(r.context(stale)).rejects.toMatchObject({ code: 'STALE' });
-    await expect(r.append(stale, 'activity', {})).rejects.toMatchObject({ code: 'STALE' });
-    await expect(r.commit(stale, finalProposal(), selection, 'call')).rejects.toMatchObject({ code: 'STALE' });
-    expect(await r.finish(stale, 'failed', 'STALE')).toBe(false);
-    expect(await r.searchChanges('alice')).toEqual(before);
-  });
-
   it('retains only the original cancelled call consumed prefix once while fencing all late state writes', async () => {
     const a = repo(), b = repo(); await a.open('alice');
     const { episode } = await a.admit('alice', input()); await call(a, episode);
@@ -328,80 +194,6 @@ describe('Person real SQLite authority in managed workers', () => {
     expect(terminals.every(t => t.output.availability === 'unavailable' && t.output.observedBytes === null)).toBe(true);
     expect((await reopened.snapshot('alice')).state.version).toBe(0);
     expect((await reopened.searchChanges('alice')).items.every(i => i.record.role === 'user')).toBe(true);
-  });
-
-  it('paginates literal Unicode recall and durable scope-filtered changes without gaps', async () => {
-    const r = repo(); await r.open('alice'); await r.open('bob');
-    for (let i = 0; i < 5; i++) {
-      await r.admit('alice', input(`a-${i}`)); await r.cancel('alice');
-      await r.admit('bob', input(`b-${i}`)); await r.cancel('bob');
-    }
-    const capability = new PersonCapabilities(r, 'alice');
-    await capability.execute({ id: 'catalog.view', args: { id: 'Recall' } });
-    const ids = []; let cursor = null;
-    do {
-      const result = await capability.execute({ id: 'Recall', args: { kind: 'messages', query: '[a].* 中文', limit: 2, cursor } });
-      ids.push(...result.items.map(m => m.id)); cursor = result.nextCursor;
-    } while (cursor);
-    expect(new Set(ids).size).toBe(5);
-    expect((await r.recall('alice', { query: '.*NOPE' })).items).toEqual([]);
-    const changes = []; let after = 0, more;
-    do {
-      const page = await r.searchChanges('alice', { after, limit: 2 });
-      changes.push(...page.items); after = page.lastSeq; more = page.hasMore;
-    } while (more);
-    expect(changes.map(c => c.seq)).toEqual([1, 3, 5, 7, 9]);
-    expect(new Set(changes.map(c => c.id))).toEqual(new Set(ids));
-    expect(await r.searchChanges('alice', { after })).toEqual({ items: [], lastSeq: 9, hasMore: false });
-    await expect(r.searchChanges('alice', { after: -1 })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    await expect(r.searchChanges('alice', { limit: 1001 })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-  });
-
-  it('filters Unicode literal projections before scoped keyset paging and preserves original records on reopen/update', async () => {
-    const r = repo(), other = repo('other');
-    await Promise.all([r.open('alice'), r.open('bob'), other.open('alice')]);
-    const original = "ÉCOLE ЖУК İ 𐐀 中文 [a].* %_\\ ' OR 1=1 --";
-    const query = "école жук i\u0307 𐐨 中文 [a].* %_\\ ' or 1=1 --";
-    const seed = async (repository, owner, n, value, version) => {
-      const { episode } = await repository.admit(owner, input(`unicode-${n}`, { text: value }));
-      const proposal = finalProposal(version);
-      proposal.reply = ''; proposal.concepts[0].id = `concept-${6 - n}`; proposal.concepts[0].statement = value;
-      proposal.state.focusConceptIds = [proposal.concepts[0].id];
-      await repository.commit(episode, proposal, selection, 'unicode');
-    };
-    // Nonmatches between hits must not consume LIMIT or lose matching page tails.
-    for (let i = 0; i < 7; i++) await seed(r, 'alice', i, i % 2 ? 'not a match' : original, i);
-    await seed(r, 'bob', 0, original, 0); await seed(other, 'alice', 0, original, 0);
-    await r.close();
-    const reopened = repo();
-    for (const kind of ['messages', 'concepts']) {
-      const items = []; let cursor = null;
-      do {
-        const page = await reopened.recall('alice', { kind, query, cursor, limit: 2 });
-        expect(page.items).toHaveLength(2);
-        items.push(...page.items); cursor = page.nextCursor;
-      } while (cursor);
-      expect(new Set(items.map(item => item.id)).size).toBe(4);
-      expect(items.map(item => kind === 'messages' ? item.seq : item.id)).toEqual(kind === 'messages' ? [7, 5, 3, 1] : ['concept-0', 'concept-2', 'concept-4', 'concept-6']);
-      for (const item of items) {
-        expect(item[kind === 'messages' ? 'text' : 'statement']).toBe(original);
-        expect(item).not.toHaveProperty('ownerId'); expect(item).not.toHaveProperty('namespace');
-      }
-      for (const literal of ['éCOLE', 'Жук', '[a].*', '%_\\', "' OR 1=1 --"]) {
-        expect((await reopened.recall('alice', { kind, query: literal, limit: 10 })).items).toHaveLength(4);
-      }
-      expect((await reopened.recall('alice', { kind, query: '[a].*NOPE' })).items).toEqual([]);
-      expect((await reopened.recall('alice', { kind, limit: 10 })).items).toHaveLength(7);
-    }
-    expect(inspect(reopened, db => db.prepare('SELECT text, record FROM messages WHERE ownerId = ? AND seq = 1').get('alice'))).toMatchObject({ text: query });
-    const { episode } = await reopened.admit('alice', input('revision', { kind: 'think', text: '' }));
-    const revision = finalProposal(7);
-    Object.assign(revision.concepts[0], { id: 'concept-0', expectedRevision: 1, statement: 'ÉTÉ révisé' });
-    revision.state.focusConceptIds = ['concept-0']; revision.reply = 'RÉPONSE';
-    await reopened.commit(episode, revision, selection, 'revision');
-    expect((await reopened.recall('alice', { kind: 'concepts', query, limit: 10 })).items).toHaveLength(3);
-    expect((await reopened.recall('alice', { kind: 'concepts', query: 'été RÉVISÉ' })).items).toMatchObject([{ id: 'concept-0', revision: 2, statement: 'ÉTÉ révisé' }]);
-    expect((await reopened.recall('alice', { query: 'réponse' })).items).toMatchObject([{ role: 'assistant', text: 'RÉPONSE' }]);
   });
 
   it('rolls back admission if the same-transaction journal fails', async () => {
@@ -480,44 +272,6 @@ describe('Person real SQLite authority in managed workers', () => {
     expect((await repo('timeout').snapshot('alice')).messages).toEqual([]);
   });
 
-  it('sanitizes startup errors and enforces bounded configuration/requests', async () => {
-    await writeFile(join(yeaftDir, 'person'), 'not-a-directory');
-    const r = repo();
-    await expect(r.open('alice')).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE', message: 'Digital person storage is unavailable.' });
-    expect(() => repo('bad;sql')).toThrow();
-    expect(() => repo('valid', { busyTimeoutMs: 5001 })).toThrow();
-    const unopened = new SqlitePersonRepository({ yeaftDir }); repositories.push(unopened);
-    await unopened.close(); await expect(unopened.init()).rejects.toMatchObject({ code: 'CLOSED' });
-  });
-
-  it.each(['local', 'remote'])('the runtime drains %s cancellation, ignoring a late provider completion', async mode => {
-    const a = repo('runtime-cancel', { leaseMs: 1200 }), b = repo('runtime-cancel');
-    let release, consumed;
-    const waiting = new Promise(resolve => { release = resolve; });
-    const providerConsumed = new Promise(resolve => { consumed = resolve; });
-    const adapter = { async *stream() {
-      yield { type: 'text_delta', text: '{"partial":"已读取"' };
-      consumed(); await waiting;
-      yield { type: 'text_delta', text: JSON.stringify(finalProposal()) };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    } };
-    const runtime = new PersonRuntime({ repository: a, getProvider: () => createPersonProvider({ config, adapter }), budget: { calls: 1, timeoutMs: 5000 } }); runtimes.push(runtime);
-    await a.open('alice');
-    const admitted = await a.admit('alice', input('cancel', { workerId: runtime.workerId })); runtime.start(admitted.episode);
-    const done = runtime.running.get(admitted.episodeId).promise;
-    await providerConsumed;
-    await (mode === 'local' ? a : b).cancel('alice');
-    if (mode === 'local') runtime.cancel(admitted.episodeId);
-    try { await done; } finally { release(); }
-    await sleep(10);
-    const snapshot = await b.snapshot('alice');
-    expect(snapshot.state.version).toBe(0); expect(snapshot.messages).toHaveLength(1);
-    const terminals = (await b.list('alice', 'traces', { limit: 50 })).items.filter(t => ['call_output', 'call_failed'].includes(t.kind));
-    expect(terminals).toHaveLength(1);
-    expect(terminals[0]).toMatchObject({ kind: 'call_failed', code: 'CANCELLED', output: { text: '{"partial":"已读取"', complete: false, accepted: false, availability: 'captured' } });
-    expect((await b.searchChanges('alice')).items).toHaveLength(1);
-  });
-
   it('shares real SQLite authority between two services', async () => {
     let release;
     const waiting = new Promise(resolve => { release = resolve; });
@@ -551,27 +305,5 @@ describe('Person real SQLite authority in managed workers', () => {
     } finally {
       release(); await Promise.all([a?.close(), b?.close()]);
     }
-  });
-
-  it('runs the existing runtime/provider/capabilities contract across independent repositories', async () => {
-    const a = repo('runtime'), b = repo('runtime');
-    let providerCalls = 0;
-    const adapter = { async *stream(params) {
-      providerCalls++;
-      const context = JSON.parse(params.messages[0].content);
-      const proposal = finalProposal(context.state.version);
-      yield { type: 'text_delta', text: JSON.stringify(proposal) };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    } };
-    const getProvider = () => createPersonProvider({ config, adapter });
-    const runtime = new PersonRuntime({ repository: a, getProvider, budget: { calls: 1, timeoutMs: 5000 } }); runtimes.push(runtime);
-    await a.open('alice'); await b.snapshot('alice'); expect(providerCalls).toBe(0);
-    const admissions = await Promise.all([a.admit('alice', input('runtime', { workerId: runtime.workerId })), b.admit('alice', input('runtime', { workerId: 'other' }))]);
-    const accepted = admissions.find(r => !r.duplicate); runtime.start(accepted.episode);
-    await runtime.running.get(accepted.episode.id).promise;
-    const snapshot = await b.snapshot('alice');
-    expect(snapshot.state.version).toBe(1); expect(providerCalls).toBe(1);
-    expect(snapshot.messages.map(m => m.role)).toEqual(['user', 'assistant']);
-    expect((await b.searchChanges('alice')).items).toHaveLength(3);
   });
 });

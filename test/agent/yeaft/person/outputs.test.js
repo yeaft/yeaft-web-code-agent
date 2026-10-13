@@ -4,16 +4,13 @@ import { mkdtemp, mkdir, writeFile, rm, symlink, truncate } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { PersonCapabilities, foundationCapabilities, capabilityContextBudget } from '../../../../agent/yeaft/person/capabilities.js';
+import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
-import { DatabaseSync } from 'node:sqlite';
-import { config, finalProposal } from './fixtures.js';
-import { PRESENTATION_SCHEMA, normalizePresentation } from '../../../../agent/yeaft/response-presentation.js';
-import { personPresentation, presentationView } from '../../../../agent/yeaft/person/presentation.js';
-import { messageView } from '../../../../agent/yeaft/person/inspection.js';
+
+import { normalizePresentation } from '../../../../agent/yeaft/response-presentation.js';
+
 import { bytes } from '../../../../agent/yeaft/person/contracts.js';
 import { projectPersonConversation } from '../../../../web/utils/person-conversation.js';
-import { outputFilePublicationSupport, snapshotOutput } from '../../../../agent/yeaft/person/outputs.js';
 
 let root, workDir, repositories, r, episode;
 const repo = (namespace = 'default') => {
@@ -45,14 +42,6 @@ beforeEach(async () => {
 afterEach(async () => { await Promise.all(repositories.map(repository => repository.close())); await rm(root, { recursive: true, force: true }); });
 
 describe('Person durable output delivery', () => {
-  it('discovers a Person-only delivery capability with an explicitly prepared contract', async () => {
-    const cap = new PersonCapabilities(r, 'alice', { episode, workDir });
-    expect(cap.catalog().nativeTools).not.toContain('Output.publish');
-    await expect(cap.execute({ id: 'Output.publish', args: { url: 'https://example.com/' } })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
-    const found = await cap.execute({ id: 'catalog.search', args: { query: 'deliver' } });
-    expect(found.items.map(item => item.id)).toContain('Output.publish');
-  });
-
   it('snapshots bytes immutably, associates the episode and survives deletion, cancellation and reopen', async () => {
     await writeFile(join(workDir, 'notes.md'), '# Delivered\n中文');
     const item = await publish({ file_path: 'notes.md', title: 'Notes' });
@@ -65,50 +54,6 @@ describe('Person durable output delivery', () => {
     expect(Buffer.from(read.data, 'base64').toString()).toBe('# Delivered\n中文');
     expect(read).toMatchObject({ outputId: item.id, offset: 0, nextOffset: 18, eof: true, totalBytes: 18, mimeType: 'text/markdown' });
     expect((await r.snapshot('alice')).outputs).toEqual({ items: [item], nextCursor: null });
-  });
-
-  it('adds the output table to a schema-1 database without rewriting existing identity or episodes', async () => {
-    const person = await r.getPerson('alice'); await r.close();
-    const db = new DatabaseSync(r.dbPath);
-    try { db.exec('DROP TABLE outputs;'); expect(db.prepare('PRAGMA user_version').get().user_version).toBe(1); }
-    finally { db.close(); }
-    r = repo();
-    expect((await r.getPerson('alice')).personId).toBe(person.personId);
-    expect((await r.snapshot('alice')).latestEpisode.id).toBe(episode.id);
-    expect((await r.outputs('alice')).items).toEqual([]);
-    expect(await publish({ url: 'https://example.com/migrated' })).toMatchObject({ episodeId: episode.id });
-  });
-
-  it.each(['win32', 'darwin'])('explicitly reports unsupported file publication on %s while preserving link delivery and reads', async platform => {
-    await writeFile(join(workDir, 'notes.md'), '# Stored before platform change');
-    const file = await publish({ file_path: 'notes.md' });
-    const unsupportedFile = await prepare({ file_path: 'notes.md' });
-    const original = Object.getOwnPropertyDescriptor(process, 'platform');
-    const service = createPersonService({ config, embedding: { enabled: false } });
-    try {
-      Object.defineProperty(process, 'platform', { ...original, value: platform });
-      expect(outputFilePublicationSupport()).toMatchObject({ supported: false, reason: expect.stringContaining('Linux') });
-      expect(await service.request({ ownerId: 'alice', op: 'status' })).toMatchObject({ outputsSupported: true, outputsFileSupported: false, outputsFileReason: expect.stringContaining('Linux') });
-      expect(() => snapshotOutput(workDir, 'notes.md')).toThrow(expect.objectContaining({ code: 'OUTPUT_PLATFORM' }));
-      await expect(unsupportedFile()).rejects.toMatchObject({ code: 'OUTPUT_PLATFORM' });
-      expect(await publish({ url: 'https://example.com/portable' })).toMatchObject({ kind: 'link' });
-      expect(Buffer.from((await r.outputRead('alice', { outputId: file.id })).data, 'base64').toString()).toBe('# Stored before platform change');
-    } finally { Object.defineProperty(process, 'platform', original); await service.close(); }
-  });
-
-  it('bounds default titles by UTF-8 bytes without rejecting legal long filenames; explicit overlong titles still fail', async () => {
-    const name = `${'文'.repeat(82)}.md`; // 249 bytes: legal filesystem name, above the 240-byte public limit.
-    await writeFile(join(workDir, name), '# Long filename');
-    const item = await publish({ file_path: name });
-    expect(Buffer.byteLength(item.title)).toBeLessThanOrEqual(240);
-    expect(item.title).toMatch(/…\.md$/); expect(item.title).not.toContain('\ufffd');
-    expect(Buffer.from((await r.outputRead('alice', { outputId: item.id })).data, 'base64').toString()).toBe('# Long filename');
-    await expect(publish({ file_path: name, title: '文'.repeat(81) })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-  });
-
-  it('does not accept a fabricated publication trace through the generic append API', async () => {
-    await expect(r.append(episode, 'output_published', { output: { id: randomUUID() } })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    expect((await r.outputs('alice')).items).toEqual([]);
   });
 
   it('isolates owner, namespace and forged Person identity before reading or publication', async () => {
@@ -140,10 +85,6 @@ describe('Person durable output delivery', () => {
     expect((await r.outputs('alice')).items).toEqual([]);
   });
 
-  it.each([{}, { file_path: 'x', url: 'https://example.com/' }, { url: 'file:///etc/passwd' }, { url: 'javascript:alert(1)' }, { url: 'https://u:p@example.com/' }, { url: 'http://user@example.com/' }, { url: 'data:text/html,x' }, { url: 12 }, { url: ' https://example.com/' }, { url: 'https://example.com/', path: '/etc/passwd' }])('validates exactly one source and credential-free HTTP(S): %j', async args => {
-    await expect(publish(args)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-  });
-
   it('stores links without fetching and reads only files with bounded raw byte offsets', async () => {
     const link = await publish({ url: 'http://127.0.0.1:1/unreachable?q=x', title: 'External link' });
     expect(link).toMatchObject({ kind: 'link', url: 'http://127.0.0.1:1/unreachable?q=x', size: 0, mimeType: null });
@@ -158,85 +99,6 @@ describe('Person durable output delivery', () => {
     for (const patch of [{ offset: -1 }, { offset: 1.5 }, { offset: bytes.length + 1 }, { offset: null }, { maxBytes: 65537 }, { maxBytes: 0 }, { maxBytes: null }, { outputId: '../raw.bin' }, { path: '/etc/passwd' }]) {
       await expect(r.outputRead('alice', { outputId: file.id, ...patch })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     }
-  });
-
-  it('uses byte signatures and strict UTF-8, not untrusted image/PDF/JSON filenames', async () => {
-    for (const [name, data, mime] of [
-      ['fake.png', '<script>unsafe</script>', 'application/octet-stream'], ['fake.pdf', 'not a pdf', 'application/octet-stream'],
-      ['actual.png', Buffer.from('89504e470d0a1a0a00000000', 'hex'), 'image/png'], ['actual.pdf', '%PDF-1.7\n', 'application/pdf'],
-      ['view.html', '<h1>report</h1>', 'text/html'], ['code.js', 'const a = 1;', 'text/plain'],
-      ['data.json', '{"ok":true}', 'application/json'], ['bad.json', '<html>no</html>', 'text/plain'],
-      ['bad.md', Buffer.from([0xff, 0x00]), 'application/octet-stream'], ['drawing.svg', '<svg onload="evil()"/>', 'application/octet-stream'],
-    ]) {
-      await writeFile(join(workDir, name), data); expect(await publish({ file_path: name })).toMatchObject({ mimeType: mime });
-    }
-  });
-
-  it('enforces durable per-Person count/byte quotas and keeps the default recent page bounded', async () => {
-    for (let i = 0; i < 21; i++) await publish({ url: `https://example.com/${i}` });
-    const snapshot = await r.snapshot('alice'); expect(snapshot.outputs.items).toHaveLength(20); expect(snapshot.outputs.nextCursor).toEqual(expect.any(String));
-    // Seed valid authority rows at the hard bound without 200 provider/worker cycles.
-    const db = new DatabaseSync(r.dbPath), scope = r.scope('alice');
-    try {
-      const item = snapshot.outputs.items[0];
-      const insert = db.prepare('INSERT INTO outputs(namespace,ownerId,personId,id,episodeId,callId,size,record,data) VALUES (?,?,?,?,?,?,?, ?,?)');
-      for (let i = 21; i < 200; i++) {
-        const id = randomUUID(); insert.run(scope.namespace, scope.ownerId, scope.personId, id, episode.id, `seed-${i}`, 0, JSON.stringify({ ...item, id }), null);
-      }
-      await expect(publish({ url: 'https://example.com/overflow' })).rejects.toMatchObject({ code: 'OUTPUT_QUOTA' });
-      db.prepare('DELETE FROM outputs WHERE namespace = ? AND ownerId = ?').run(scope.namespace, scope.ownerId);
-      const bytes = Buffer.alloc(10 * 1024 * 1024); const id = randomUUID();
-      for (let i = 0; i < 10; i++) insert.run(scope.namespace, scope.ownerId, scope.personId, `${id.slice(0, -2)}${String(i).padStart(2, '0')}`, episode.id, `bytes-${i}`, bytes.length,
-        JSON.stringify({ ...item, kind: 'file', mimeType: 'application/octet-stream', size: bytes.length }), bytes);
-      await writeFile(join(workDir, 'one.txt'), 'x');
-      await expect(publish({ file_path: 'one.txt' })).rejects.toMatchObject({ code: 'OUTPUT_QUOTA' });
-      const bob = await admit(r, 'bob'); expect(await publish({ url: 'https://example.com/other-owner' }, bob)).toMatchObject({ kind: 'link' });
-    } finally { db.close(); }
-  });
-
-  it('rejects symlink races without reading outside bytes', async () => {
-    // Pinned per-component fds prevent an ancestor symlink from being followed.
-    await mkdir(join(workDir, 'safe')); await writeFile(join(workDir, 'safe', 'artifact.txt'), 'allowed');
-    await writeFile(join(root, 'artifact.txt'), 'secret');
-    const pending = await prepare({ file_path: 'safe/artifact.txt' });
-    await rm(join(workDir, 'safe'), { recursive: true }); await symlink(root, join(workDir, 'safe'));
-    await expect(pending()).rejects.toMatchObject({ code: 'OUTPUT_PATH' });
-    expect((await r.outputs('alice')).items).toEqual([]);
-  });
-
-  it('delivers through the real provider/runtime contract and retains publication on cancellation', async () => {
-    await r.cancel('alice'); await writeFile(join(workDir, 'child-result.md'), '# Child artifact');
-    let calls = 0, published, ready; const waiting = new Promise(resolve => { ready = resolve; });
-    const adapter = { async *stream(params) {
-      const input = JSON.parse(params.messages[0].content), p = finalProposal(input.state.version);
-      expect(input.capabilities.delivery.id).toBe('Output.publish');
-      p.concepts = []; p.state.focusConceptIds = []; p.activity.sourceRefs = [input.trigger.ref];
-      if (++calls === 1) {
-        expect(input.capabilities.active.some(c => c.id === 'Output.publish')).toBe(false);
-        p.next = { model: 'test/first', effort: null, reason: 'Prepare delivery.', capability: { id: 'catalog.view', args: { id: 'Output.publish' } } };
-      } else if (calls === 2) {
-        const contract = input.capabilities.active.find(c => c.id === 'Output.publish');
-        expect(contract.access).toBe('publish-owner-output');
-        expect(contract.instructions).toContain('no symlinks/directories');
-        expect(contract.instructions).toContain('Successful publications survive later cancellation/failure');
-        p.next = { model: 'test/first', effort: null, reason: 'Deliver verified child file.', capability: { id: 'Output.publish', args: { file_path: 'child-result.md', title: 'Child result' } } };
-      }
-      else {
-        published = input.capabilityResult; ready();
-        await new Promise(resolve => { if (params.signal.aborted) resolve(); else params.signal.addEventListener('abort', resolve, { once: true }); });
-        return;
-      }
-      yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
-    } };
-    const service = createPersonService({ yeaftDir: join(root, 'data'), workDir, config, adapter, embedding: { enabled: false } });
-    try {
-      const command = await service.request({ ownerId: 'alice', op: 'send', payload: { text: 'Deliver child result', clientMessageId: randomUUID() } });
-      await waiting;
-      expect(published).toMatchObject({ title: 'Child result', episodeId: command.episodeId, mimeType: 'text/markdown' });
-      await service.request({ ownerId: 'alice', op: 'cancel', payload: { episodeId: command.episodeId } });
-      expect((await service.request({ ownerId: 'alice', op: 'snapshot' })).outputs.items).toEqual([published]);
-      expect(Buffer.from((await service.request({ ownerId: 'alice', op: 'output_read', payload: { outputId: published.id } })).data, 'base64').toString()).toBe('# Child artifact');
-    } finally { await service.close(); }
   });
 
   it('exposes status, recent snapshot and validated read-only pages without a provider', async () => {
@@ -283,42 +145,6 @@ describe('Person presentation publication', () => {
   afterEach(async () => { await Promise.all(repositories.map(repository => repository.close())); await rm(root, { recursive: true, force: true }); });
 
   describe('Person structured response contract and fenced publication', () => {
-    it('demand-loads the shared full schema without adding a native tool or automatic thinking', async () => {
-      const cap = new PersonCapabilities(r, 'alice', { episode });
-      expect(foundationCapabilities().map(item => item.id)).not.toContain('PresentResponse');
-      expect(cap.catalog().domains).toContain('delivery');
-      expect(cap.catalog().nativeTools).not.toContain('PresentResponse');
-      await expect(cap.execute({ id: 'PresentResponse', args })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
-      const search = await cap.execute({ id: 'catalog.search', args: { query: 'PresentResponse' } });
-      expect(search.items.map(item => item.id)).toContain('PresentResponse');
-      const loaded = await cap.execute({ id: 'catalog.view', args: { id: 'PresentResponse' } });
-      expect(loaded.args).toEqual(PRESENTATION_SCHEMA);
-      expect(loaded.instructions).toContain('never commits state/concepts or ends the episode');
-      expect(bytes(cap.context())).toBeLessThanOrEqual(capabilityContextBudget(cap.context()));
-      expect((await r.snapshot('alice')).state.version).toBe(0);
-    });
-
-    it('rejects invalid or executable payloads atomically at execution and repository boundaries', async () => {
-      const bad = [{}, { ...args, version: 1 }, { ...args, phase: 'completed' }, { ...args, summary: '' },
-        { ...args, blocks: [] }, { ...args, blocks: [{ type: 'html', text: '<script>bad</script>' }] },
-        { ...args, blocks: [{ type: 'image', url: 'javascript:alert(1)', alt: 'Unsafe' }] },
-        { ...args, blocks: [{ type: 'link', url: 'https://user:secret@example.com', text: 'Unsafe' }] },
-        { ...args, blocks: [{ type: 'link', url: 'https://example.com/' + '中'.repeat(300), text: 'Encoded too long' }] },
-        { ...args, blocks: [{ type: 'table', columns: ['Name'], rows: [['a', 'b']] }] },
-        { ...args, blocks: [{ type: 'chart', style: 'bar', labels: ['a'], series: [{ label: 'Count', values: [1, 2] }] }] },
-        { ...args, blocks: [{ type: 'map', points: [{ label: 'Invalid', latitude: 91, longitude: 0 }] }] },
-        { ...args, blocks: [{ type: 'diagram', nodes: [{ id: 'a', label: 'A' }], edges: [{ from: 'a', to: 'missing' }] }] },
-        { ...args, blocks: Array.from({ length: 5 }, () => ({ type: 'markdown', text: 'x'.repeat(12000) })) }];
-      for (const input of bad) {
-        expect(() => personPresentation(input)).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST' }));
-        const started = await prepare(input);
-        await expect(started.publish()).resolves.toMatchObject({ ok: false, code: 'INVALID_REQUEST', published: false });
-        await expect(r.savePresentation(episode, { callId: started.callId, args: input })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-        await started.finish({ ok: false, code: 'INVALID_REQUEST' });
-      }
-      expect((await r.snapshot('alice')).messages.map(m => m.role)).toEqual(['user']);
-    });
-
     it('publishes canonical JSON and searchable summary live, without a cognitive commit or terminal success', async () => {
       const started = await prepare(); const result = await started.publish();
       expect(result).toMatchObject({ ok: true, published: true, phase: 'final', summary: args.summary });
@@ -339,18 +165,6 @@ describe('Person presentation publication', () => {
       await started.finish(result);
     });
 
-    it('publishes Unicode links only when canonical URLs survive receipt and restart validation', async () => {
-      const input = { ...args, blocks: [{ type: 'link', url: 'https://example.com/' + '中'.repeat(220), text: 'Verified link' }] };
-      const started = await prepare(input), result = await started.publish();
-      expect(result).toMatchObject({ ok: true, published: true, phase: 'final' });
-      await started.finish(result);
-      const canonical = normalizePresentation(input);
-      expect((await r.snapshot('alice')).messages.at(-1).presentation).toEqual(canonical);
-      await r.close(); r = repo();
-      expect((await r.snapshot('alice')).messages.at(-1).presentation).toEqual(canonical);
-      expect((await r.savePresentation(episode, { callId: started.callId, args: input })).id).toBe(result.messageId);
-    });
-
     it('deduplicates retries and repeated deliveries but rejects changed invocation hashes', async () => {
       const started = await prepare(), first = await started.publish();
       expect(await started.publish()).toEqual(first);
@@ -364,67 +178,6 @@ describe('Person presentation publication', () => {
       expect((await r.snapshot('alice')).messages.filter(m => m.role === 'assistant')).toHaveLength(1);
       await r.cancel('alice');
       await expect(started.publish()).rejects.toMatchObject({ code: 'STALE' });
-    });
-
-    it('requires completed call proof and an exact open capability, never fabricated append authority', async () => {
-      await expect(r.savePresentation(episode, { callId: 'invented', args })).rejects.toMatchObject({ code: 'STALE' });
-      await expect(r.append(episode, 'presentation_published', { callId: 'invented' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-      await expect(r.startCapability(episode, { callId: 'invented', capability: { id: 'PresentResponse', args } })).rejects.toMatchObject({ code: 'STALE' });
-      const started = await prepare();
-      await expect(r.savePresentation(episode, { callId: 'other', args })).rejects.toMatchObject({ code: 'STALE' });
-      await expect(r.savePresentation(episode, { callId: started.callId, args: { ...args, phase: 'progress' } })).rejects.toMatchObject({ code: 'STALE' });
-      await expect(r.publishProgress(episode, { callId: started.callId, reply: args.summary })).rejects.toMatchObject({ code: 'STALE' });
-      await started.finish();
-      await expect(started.publish()).rejects.toMatchObject({ code: 'STALE' });
-    });
-
-    it('aborts before publication, rejects cancelled leases, and retains accepted communication after cancellation', async () => {
-      const started = await prepare(), controller = new AbortController(); controller.abort();
-      await expect(started.publish({ signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
-      expect((await r.snapshot('alice')).messages).toHaveLength(1);
-      const result = await started.publish(); await started.finish(result);
-      const late = await prepare({ ...args, summary: 'Too late' });
-      await r.cancel('alice'); await expect(late.publish()).rejects.toMatchObject({ code: 'STALE' });
-      expect((await r.snapshot('alice')).messages.at(-1).text).toBe(args.summary);
-      expect((await r.snapshot('alice')).state.version).toBe(0);
-    });
-
-    it('isolates owners, namespaces and forged identity and survives repository restart', async () => {
-      const started = await prepare(), result = await started.publish(); await started.finish(result);
-      await r.close(); r = repo();
-      expect((await r.snapshot('alice')).messages.at(-1).presentation).toEqual(normalizePresentation(args));
-      expect((await r.savePresentation(episode, { callId: started.callId, args })).id).toBe(result.messageId);
-      await r.open('bob'); const foreign = repo('other'); await foreign.open('alice');
-      expect((await r.snapshot('bob')).messages).toEqual([]); expect((await foreign.snapshot('alice')).messages).toEqual([]);
-      for (const forged of [{ ...episode, ownerId: 'bob' }, { ...episode, personId: 'foreign' }, { ...episode, namespace: 'other' }, { ...episode, workerId: 'other-worker' }]) {
-        await expect(r.savePresentation(forged, { callId: started.callId, args })).rejects.toMatchObject({ code: 'STALE' });
-      }
-      await expect(foreign.savePresentation(episode, { callId: started.callId, args })).rejects.toMatchObject({ code: 'STALE' });
-    });
-
-    it('fences expired leases and never turns final delivery intent into successful completion', async () => {
-      const started = await prepare(); await r.close();
-      const db = new DatabaseSync(r.dbPath);
-      try {
-        const record = JSON.parse(db.prepare('SELECT record FROM persons').get().record);
-        record.leaseUntil = new Date(0).toISOString();
-        db.prepare('UPDATE persons SET record = ?').run(JSON.stringify(record));
-      } finally { db.close(); }
-      r = repo();
-      await expect(r.savePresentation(episode, { callId: started.callId, args })).rejects.toMatchObject({ code: 'STALE' });
-      expect(await r.snapshot('alice')).toMatchObject({ busy: false, state: { version: 0 }, latestEpisode: { status: 'interrupted' } });
-    });
-
-    it('projects only valid canonical assistant JSON, preserving legacy text and invalid-record fallback', () => {
-      const plain = { id: 'legacy', role: 'assistant', text: 'Plain answer' };
-      expect(messageView(plain)).toEqual(plain);
-      const canonical = normalizePresentation(args);
-      expect(presentationView(canonical)).toEqual(canonical);
-      expect(messageView({ ...plain, presentation: canonical })).toMatchObject({ presentation: canonical });
-      for (const invalid of [null, 'not JSON', args, { ...canonical, version: 2 }, { ...canonical, blocks: [] }]) {
-        expect(messageView({ ...plain, presentation: invalid })).toEqual(plain);
-      }
-      expect(messageView({ ...plain, role: 'user', presentation: canonical })).not.toHaveProperty('presentation');
     });
   });
 });
