@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from '../../fixtures/test-server.js';
+import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
 import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures.js';
@@ -16,27 +17,37 @@ test('Person publishes shared progress and final structures, persists and replay
   let calls = 0;
   const adapter = { async *stream(params) {
     calls++;
-    const input = JSON.parse(params.messages[0].content);
+    const input = personInput(params);
+    const results = personToolResults(params);
+    if (!personCognition(params)) {
+      expect(params.tools.some(tool => tool.name === 'PresentResponse')).toBe(true);
+      if (!results.length) {
+        yield personToolCall('progress-response', 'PresentResponse', {
+          summary: 'Partial verified results; checks continue.', phase: 'progress',
+          blocks: [{ type: 'metrics', items: [{ label: 'Verified', value: '2' }] }],
+        });
+        yield personToolCall('final-response', 'PresentResponse', {
+          title: 'Shared structured answer', summary: 'The smaller shared implementation is recommended.', phase: 'final',
+          blocks: [{ type: 'cards', items: [{ title: 'Reuse', label: 'Recommended', text: 'Keep one shared renderer.',
+            image: { url: 'https://example.test/weather-icon.png', alt: 'Supplied weather icon', fit: 'contain' }, url: 'https://example.test/card-source' }] },
+            { type: 'map', points: [{ label: 'Beijing', latitude: 39.9075, longitude: 116.39723 }], embed: { provider: 'openstreetmap' } },
+            { type: 'chart', style: 'bar', labels: ['A', 'B'], series: [{ label: 'Fixture checks', values: [2, 3] }] },
+            { type: 'link', url: 'https://example.test/person-source', text: 'Source report' }],
+        });
+        yield personStop(true);
+      } else {
+        expect(results.map(result => result.toolUseId)).toEqual(['progress-response', 'final-response']);
+        yield { type: 'text_delta', text: 'Presentation execution complete.' };
+        yield personStop(false);
+      }
+      return;
+    }
     const proposal = finalProposal(input.state.version);
-    proposal.concepts = []; proposal.state.focusConceptIds = []; proposal.reply = null;
+    proposal.concepts = []; proposal.state.focusConceptIds = [];
     proposal.activity.sourceRefs = [input.trigger.ref];
-    const next = capability => ({ model: 'test/first', effort: 'low', reason: 'Present verified fixture results.', capability });
-    if (calls === 1) proposal.next = next({ id: 'catalog.view', args: { id: 'PresentResponse' } });
-    else if (calls === 2) proposal.next = next({ id: 'PresentResponse', args: {
-      summary: 'Partial verified results; checks continue.', phase: 'progress',
-      blocks: [{ type: 'metrics', items: [{ label: 'Verified', value: '2' }] }],
-    } });
-    else if (calls === 3) proposal.next = next({ id: 'PresentResponse', args: {
-      title: 'Shared structured answer', summary: 'The smaller shared implementation is recommended.', phase: 'final',
-      blocks: [{ type: 'cards', items: [{ title: 'Reuse', label: 'Recommended', text: 'Keep one shared renderer.',
-        image: { url: 'https://example.test/weather-icon.png', alt: 'Supplied weather icon', fit: 'contain' }, url: 'https://example.test/card-source' }] },
-        { type: 'map', points: [{ label: 'Beijing', latitude: 39.9075, longitude: 116.39723 }], embed: { provider: 'openstreetmap' } },
-        { type: 'chart', style: 'bar', labels: ['A', 'B'], series: [{ label: 'Fixture checks', values: [2, 3] }] },
-        { type: 'link', url: 'https://example.test/person-source', text: 'Source report' }],
-    } });
-    else proposal.reply = 'The smaller shared implementation is recommended.';
+    proposal.reply = 'The smaller shared implementation is recommended.';
     yield { type: 'text_delta', text: JSON.stringify(proposal) };
-    yield { type: 'stop', stopReason: 'end_turn' };
+    yield personStop(false);
   } };
   const makeBridge = () => createPersonBridge({ context: { agentId: mockAgent.agentId, CONFIG: { serverUrl, yeaftDir: dir, workDir: dir } },
     send: frame => mockAgent.send(frame), createService: options => createPersonService({ ...options, config, adapter, effortEnabled: true, embedding: { enabled: false } }) });
@@ -62,7 +73,7 @@ test('Person publishes shared progress and final structures, persists and replay
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.locator('.person-messages .response-presentation')).toHaveCount(2);
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(calls).toBe(4);
+    expect(calls).toBe(3);
     await expect(page.locator('.person-messages .response-cards')).toContainText('Keep one shared renderer.');
     await expect(page.locator('.person-messages .response-chart svg')).toBeVisible();
     await expect(page.getByAltText('Supplied weather icon')).toBeVisible();
@@ -91,7 +102,7 @@ test('Person publishes shared progress and final structures, persists and replay
     await page.setViewportSize({ width: 320, height: 800 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath('person-rich-replay-mobile.png'), fullPage: true });
-    expect(calls).toBe(4); expect(mockAgent.conversations.size).toBe(0);
+    expect(calls).toBe(3); expect(mockAgent.conversations.size).toBe(0);
   } finally {
     mockAgent._messageHandlers.splice(mockAgent._messageHandlers.indexOf(listener), 1);
     await bridge.close(); await rm(dir, { recursive: true, force: true });

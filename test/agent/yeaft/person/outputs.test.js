@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { PersonCapabilities, foundationCapabilities, capabilityContextBudget } from '../../../../agent/yeaft/person/capabilities.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { DatabaseSync } from 'node:sqlite';
+import { nativeFixtureAdapter } from './fixture-adapter.js';
 import { config, finalProposal } from './fixtures.js';
 import { PRESENTATION_SCHEMA, normalizePresentation } from '../../../../agent/yeaft/response-presentation.js';
 import { personPresentation, presentationView } from '../../../../agent/yeaft/person/presentation.js';
@@ -208,30 +209,26 @@ describe('Person durable output delivery', () => {
     await r.cancel('alice'); await writeFile(join(workDir, 'child-result.md'), '# Child artifact');
     let calls = 0, published, ready; const waiting = new Promise(resolve => { ready = resolve; });
     const adapter = { async *stream(params) {
-      const input = JSON.parse(params.messages[0].content), p = finalProposal(input.state.version);
-      expect(input.capabilities.delivery.id).toBe('Output.publish');
-      p.concepts = []; p.state.focusConceptIds = []; p.activity.sourceRefs = [input.trigger.ref];
-      if (++calls === 1) {
-        expect(input.capabilities.active.some(c => c.id === 'Output.publish')).toBe(false);
-        p.next = { model: 'test/first', effort: null, reason: 'Prepare delivery.', capability: { id: 'catalog.view', args: { id: 'Output.publish' } } };
-      } else if (calls === 2) {
-        const contract = input.capabilities.active.find(c => c.id === 'Output.publish');
-        expect(contract.access).toBe('publish-owner-output');
-        expect(contract.instructions).toContain('no symlinks/directories');
-        expect(contract.instructions).toContain('Successful publications survive later cancellation/failure');
-        p.next = { model: 'test/first', effort: null, reason: 'Deliver verified child file.', capability: { id: 'Output.publish', args: { file_path: 'child-result.md', title: 'Child result' } } };
-      }
-      else {
-        published = input.capabilityResult; ready();
+      try {
+        if (++calls === 1) {
+          const contract = params.tools.find(c => c.name === 'Output__publish');
+          expect(contract).toBeDefined();
+          expect(contract.parameters.oneOf).toEqual([{ required: ['file_path'] }, { required: ['url'] }]);
+          expect(contract.description).toContain('no symlinks/directories');
+          expect(contract.description).toContain('Successful publications survive later cancellation/failure');
+          yield { type: 'tool_call', id: 'deliver-child', name: 'Output__publish', input: { file_path: 'child-result.md', title: 'Child result' } };
+          yield { type: 'stop', stopReason: 'tool_use' }; return;
+        }
+        const result = JSON.parse(params.messages.findLast(message => message.role === 'tool').content);
+        published = JSON.parse(result.output); ready();
         await new Promise(resolve => { if (params.signal.aborted) resolve(); else params.signal.addEventListener('abort', resolve, { once: true }); });
-        return;
-      }
-      yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
+      } catch (error) { ready(error); throw error; }
     } };
-    const service = createPersonService({ yeaftDir: join(root, 'data'), workDir, config, adapter, embedding: { enabled: false } });
+    const service = createPersonService({ yeaftDir: join(root, 'data'), workDir, config, adapter, nativeFixture: false, embedding: { enabled: false } });
     try {
       const command = await service.request({ ownerId: 'alice', op: 'send', payload: { text: 'Deliver child result', clientMessageId: randomUUID() } });
-      await waiting;
+      const adapterError = await waiting;
+      if (adapterError) throw adapterError;
       expect(published).toMatchObject({ title: 'Child result', episodeId: command.episodeId, mimeType: 'text/markdown' });
       await service.request({ ownerId: 'alice', op: 'cancel', payload: { episodeId: command.episodeId } });
       expect((await service.request({ ownerId: 'alice', op: 'snapshot' })).outputs.items).toEqual([published]);

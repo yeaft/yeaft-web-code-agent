@@ -28,42 +28,83 @@ function freeze(value) {
 }
 
 describe('Person thought journal projection', () => {
+  it('projects exactly one cognition after native multi-tool execution, never text or tool arguments', () => {
+    const proposal = finalProposal();
+    const cognition = output(6, 'cognition', proposal, { output: { protocol: 'cognition', text: JSON.stringify(proposal), toolCalls: [], complete: true } });
+    const activity = trace('activity', 7, { callId: 'cognition', activity: proposal.activity, decision: proposal.decision });
+    const commit = trace('committed', 8, { callId: 'cognition', decision: proposal.decision });
+    const records = [
+      trace('call_started', 1, { callId: 'native', manifest: { protocol: 'native-tool-loop', phase: 'execution' },
+        request: { messages: [{ role: 'user', content: JSON.stringify({ trigger: { kind: 'send', text: 'PRIVATE_CONTEXT' } }) }] } }),
+      trace('call_output', 2, { callId: 'native', output: { protocol: 'native-tools', text: '', toolCalls: [
+        { id: 'provider-a', name: 'FileWrite', input: { content: 'PRIVATE_ARGS' } },
+        { id: 'provider-b', name: 'Bash', input: { command: 'PRIVATE_COMMAND' } },
+      ] } }),
+      trace('call_output', 3, { callId: 'prose', output: { protocol: 'native-tools', text: 'PRIVATE_EXECUTION_TEXT', toolCalls: [] } }),
+      trace('call_failed', 4, { callId: 'partial', output: { protocol: 'native-tools', text: 'PRIVATE_PARTIAL', complete: false } }),
+      trace('call_output', 5, { callId: 'unknown', output: { protocol: 'future-protocol', text: JSON.stringify(proposal) } }),
+      cognition, activity, commit,
+    ];
+    const entries = projectPersonThoughts(freeze(records));
+    expect(entries.map(e => e.kind)).toEqual(['thought', 'committed']);
+    expect(entries[0]).toMatchObject({ callId: 'cognition', status: 'committed' });
+    expect(entries[1].sections).toEqual([]);
+    expect(projectPersonJournal(records)[0]).toMatchObject({ status: 'committed', history: [] });
+    expect(JSON.stringify(entries)).not.toMatch(/PRIVATE_|provider-a|provider-b|FileWrite|Bash/);
+    expect(projectPersonThoughts(records.slice(0, 5))).toEqual([]);
+    expect(projectPersonThoughts([activity, commit])[0]).toMatchObject({ kind: 'activity', status: 'committed' });
+    expect(projectPersonThoughts([cognition])[0].status).toBe('candidate');
+    expect(projectPersonThoughts([cognition, { ...commit, callId: 'native' }])[0].status).toBe('candidate');
+  });
+
+  it('keeps native cognition exact across newest-first, overlapping and output-missing pages', () => {
+    const proposal = finalProposal();
+    const execution = trace('call_output', 1, { callId: 'native', output: { protocol: 'native-tools', text: JSON.stringify(proposal), toolCalls: [] } });
+    const cognition = output(2, 'cognition', proposal, { output: { protocol: 'cognition', text: JSON.stringify(proposal), toolCalls: [] } });
+    const activity = trace('activity', 3, { callId: 'cognition', activity: proposal.activity, decision: proposal.decision });
+    const commit = trace('committed', 4, { callId: 'cognition', decision: proposal.decision });
+    const newest = [commit, activity];
+    expect(projectPersonJournal(newest)[0]).toMatchObject({ status: 'committed', history: [] });
+    expect(projectPersonThoughts([execution])).toEqual([]); // Execution JSON is never a candidate.
+    const merged = freeze([...newest, activity, cognition, execution, cognition]);
+    expect(projectPersonThoughts(merged).map(entry => entry.kind)).toEqual(['thought', 'committed']);
+    const entries = projectPersonJournal(merged);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'committed', candidateStatus: null, history: [] });
+    expect(entries[0].sections.filter(section => section.label === 'activity_summary')).toHaveLength(1);
+    expect(entries[0].id).toBe(projectPersonJournal(newest)[0].id);
+  });
+
   it('projects actual runtime request/output/activity/commit traces using the real proposal fixture', async () => {
     const proposal = finalProposal();
     const traces = [];
     const episode = { id: 'episode-a', kind: 'send', text: 'I am learning to garden.', baseStateVersion: 0, budget: { calls: 1, timeoutMs: 1000 } };
+    let phase;
     const append = (_episode, kind, data) => { traces.push(trace(kind, traces.length + 1, data)); };
     // The runtime creates the actual trace payloads; only the storage envelope is in-memory.
     const repository = {
       leaseMs: 15000, heartbeat: async () => {}, context: async () => snapshot(), createdCapabilities: async () => [], append,
-      startCall: async (e, data) => append(e, 'call_started', data),
-      finalizeCall: async (e, data) => { append(e, 'call_output', { ...data, output: { ...data.output, complete: true } }); return true; },
+      startCall: async (e, data) => { phase = data.manifest.phase; append(e, 'call_started', data); },
+      finalizeCall: async (e, data) => { append(e, 'call_output', { ...data, output: { ...data.output, protocol: phase === 'cognition' ? 'cognition' : 'native-tools', complete: true } }); return true; },
       commit: async (e, p, selection, callId) => append(e, 'committed', { callId, decision: p.decision, stateVersion: 1 }),
       finish: async (e, kind, code) => append(e, kind, { code }),
     };
     append(episode, 'accepted', { trigger: { kind: episode.kind, text: episode.text } });
     const runtime = new PersonRuntime({ repository, getProvider: async () => ({ ...provider, adapter: {
-      async *stream() {
+      async *stream(params) {
         yield { type: 'thinking_delta', text: 'hidden-provider-reasoning' };
-        yield { type: 'text_delta', text: JSON.stringify(proposal) };
+        yield { type: 'text_delta', text: params.tools.length ? 'Execution finished.' : JSON.stringify(proposal) };
         yield { type: 'stop', stopReason: 'end_turn' };
       },
     } }) });
     await runtime.run(episode, new AbortController());
-    expect(traces.map(t => t.kind)).toEqual(['accepted', 'call_started', 'call_output', 'activity', 'committed']);
+    expect(traces.map(t => t.kind)).toEqual(['accepted', 'call_started', 'call_output', 'call_started', 'call_output', 'activity', 'committed']);
     const input = freeze([...traces].reverse());
     const entries = projectPersonThoughts(input);
-    expect(entries.map(e => e.kind)).toEqual(['input', 'context', 'thought', 'committed']);
-    expect(entries.map(e => e.status)).toEqual(['recorded', 'recorded', 'committed', 'committed']);
+    expect(entries.map(e => e.kind)).toEqual(['input', 'thought', 'committed']);
+    expect(entries.map(e => e.status)).toEqual(['recorded', 'committed', 'committed']);
     expect(entries[0].sections).toEqual([{ label: 'input', text: episode.text }]);
     expect(entries[1].sections).toEqual([
-      { label: 'input', text: episode.text },
-      { label: 'state_summary', text: 'Considering earlier experience.' },
-      { label: 'appraisal', text: 'Interested.' },
-      { label: 'user_message', text: 'I am learning to garden.' },
-      { label: 'concept_hypothesis', text: 'Gardening may encourage patience.' },
-    ]);
-    expect(entries[2].sections).toEqual([
       { label: 'activity_summary', text: proposal.activity.summary },
       { label: 'decision_summary', text: proposal.decision.summary },
       { label: 'self_check', text: proposal.decision.selfCheck },
@@ -73,7 +114,7 @@ describe('Person thought journal projection', () => {
       { label: 'appraisal', text: proposal.state.appraisal },
       { label: 'reply', text: proposal.reply },
     ]);
-    expect(entries[3].sections).toEqual([]); // Decision already appears with the output.
+    expect(entries[2].sections).toEqual([]); // Decision already appears with the output.
     expect(JSON.stringify(entries)).not.toMatch(/hidden-provider-reasoning|system-secret|catalog-secret|person-secret|message-secret|concept-secret/);
     expect(input[0].kind).toBe('committed'); // Sorting did not mutate source order.
   });

@@ -5,10 +5,11 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createPersonToolHost, NATIVE_TOOL_IDS, NATIVE_TOOL_MANIFESTS, projectNativeResult } from '../../../../agent/yeaft/person/native-tools.js';
 import { PersonCapabilities, inspectCapabilities, CAPABILITY_LIMITS } from '../../../../agent/yeaft/person/capabilities.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { digest, bytes, validateProposal, PersonError } from '../../../../agent/yeaft/person/contracts.js';
 import { assembleContext, PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
+import { nativeFixtureAdapter } from './fixture-adapter.js';
 import { config, finalProposal } from './fixtures.js';
 import { randomUUID } from 'node:crypto';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
@@ -134,7 +135,17 @@ describe('Person supported native host tools', () => {
     const second = create(dir, workDir, input => { rendered = input; });
     await call(second, 'think', { text: 'Consider prior experience', clientMessageId: 'familiar' });
     expect((await idle(second)).latestEpisode.status).toBe('completed');
-    const familiar = rendered.capabilities.active.find(m => m.id === 'FileRead');
+    // Native schemas are directly available, not duplicated in the old
+    // prepared-contract slot. Familiarity is still derived from durable use.
+    expect(rendered.nativeTools.some(tool => tool.name === 'FileRead')).toBe(true);
+    const repository = new SqlitePersonRepository({ yeaftDir: dir });
+    let experience;
+    try {
+      const admission = await repository.admit('alice', { kind: 'think', text: '', clientMessageId: 'inspect-familiarity', workerId: randomUUID(), budget: {} });
+      experience = (await repository.context(admission.episode)).capabilityExperience;
+      await repository.finish(admission.episode, 'cancelled', 'CANCELLED');
+    } finally { await repository.close(); }
+    const familiar = new PersonCapabilities({}, 'alice', { experience }).context().find(m => m.id === 'FileRead');
     const manifest = NATIVE_TOOL_MANIFESTS.find(m => m.id === 'FileRead');
     expect(familiar).toMatchObject({ version: manifest.version, revision: manifest.revision, source: manifest.source,
       availability: { layer: 'familiar', experience: { observedSuccesses: 1, usefulness: 'not-evaluated' } } });
@@ -218,7 +229,7 @@ describe('Person supported native host tools', () => {
       if (seen.length === 1) use(p, 'catalog.view', { id: 'FileRead' });
       if (seen.length === 2) use(p, 'FileRead', { file_path: 'large.txt' });
       if (seen.length === 3) {
-        const { id, args } = input.capabilityResult.recovery.prepare;
+        const { id, args } = { id: 'catalog.view', args: { id: 'Execution.read' } };
         use(p, id, args);
       }
       if (seen.length === 4) {
@@ -278,8 +289,9 @@ describe('Person supported native host tools', () => {
       if (seen.length === 2) use(p, 'FileWrite', { file_path: 'parent/child', content: 'x' });
     });
     await call(s, 'open'); await call(s, 'think', { text: 'Write example', clientMessageId: 'failure' });
-    expect((await idle(s)).latestEpisode.status).toBe('completed');
-    expect(seen[2].capabilityResult).toMatchObject({ ok: false, code: 'TOOL_FAILED', errorEffect: 'unknown' });
+    expect((await idle(s)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'TOOL_EFFECT_UNCONFIRMED' });
+    const failedResult = (await call(s, 'traces', { limit: 50 })).items.find(t => t.kind === 'capability_failed').result;
+    expect(failedResult).toMatchObject({ ok: false, code: 'TOOL_FAILED', errorEffect: 'unknown' });
     const traces = (await call(s, 'traces', { limit: 50 })).items;
     expect(traces.find(t => t.kind === 'capability_failed')).toMatchObject({ capabilityId: 'FileWrite', code: 'TOOL_FAILED', capabilityManifest: { id: 'FileWrite', version: 1 } });
     expect(traces.filter(t => t.kind === 'capability_result' && t.capability.id === 'FileWrite')).toEqual([]);
@@ -467,7 +479,7 @@ describe('Person supported native host tools', () => {
         p.next = { ...selection, reason: 'Write the real file', capability: invocation };
         yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
       } };
-      const provider = await createPersonProvider({ config, adapter });
+      const provider = await createPersonProvider({ config, adapter: nativeFixtureAdapter(adapter) });
       const runtime = new PersonRuntime({ repository: r, getProvider: async () => provider, workDir: dir, yeaftDir: dir, config }); runtimes.push(runtime);
       await r.open('alice');
       const { episode } = await r.admit('alice', input(runtime.workerId));

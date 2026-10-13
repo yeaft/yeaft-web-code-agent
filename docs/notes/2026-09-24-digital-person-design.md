@@ -1,25 +1,25 @@
 # 数字人设计：Soul、自主认知、记忆与桌面身体
 
 - 日期：2026-09-24
-- 状态：**完整设计 + 显式认知实验首版，SQLite 唯一存储、本地混合召回、三层能力准备与自创纯脚本**；下方“本轮实现边界”区分手动路径、本轮切片与未实现能力，其他章节仍是目标契约。合并不授权读取用户资料、部署数据库或修改在线运行数据。
+- 状态：**完整设计 + 已实现显式触发的连续 native tool 对话，SQLite 唯一存储、本地混合召回与自创纯脚本**；下方“本轮实现边界”和“当前代码工作流”描述现状，“三层能力”保留为旧认知实验机制，其余目标章节不代表已经实现。合并不授权读取用户资料、部署数据库或修改在线运行数据。
 - 目标：定义一个以持续身份为主体、能自主关注和思考、具有记忆与行动边界的数字人，而不是给 Session 或任务系统加一个桌面角色。
 - 技术方向：JavaScript 认知运行时 + SQLite 唯一认知权威 + 本地派生检索 + Rust 原生桌面身体 + npm 分发入口。
-- 本轮修订：2026-10-09；在三层能力之上接入测试后发布的私有纯脚本能力，不新增选择模型；认知权威统一为实例本地 SQLite，不再提供存储后端选择。自主触发、完整治理和跨设备能力仍是目标。
-- 源码考察基线：手动认知调用链此前按 `d0a00d3a` 核对；早期架构考察为 `df7481a9`。三层能力改动基于 `0dbe95b3`；当前行为以存储、能力与运行时源码为准。
+- 本轮修订：2026-10-13；主执行改为同 Person／Soul／episode 的 native 连续工具对话，每请求提供完整可用 schemas，结束后禁用 tools 做一次最终认知整理。保留 SQLite 权威、私有纯脚本和有界证据回读，不新增选择模型。自主触发、完整治理和跨设备能力仍是目标。
+- 源码考察基线：手动认知调用链此前按 `d0a00d3a` 核对；早期架构考察为 `df7481a9`。旧三层能力改动基于 `0dbe95b3`；这些是历史考察基线，当前 native 行为以存储、能力与运行时源码为准。
 - 决策级别：文中“必须”是拟议的验收契约；“建议默认值”需要原型验证；“待决定”不是已确定产品行为。
 
-### 本轮实现边界：显式认知首版
+### 本轮实现边界：显式触发与 native 连续执行
 
-- **认知运行时**：`agent/yeaft/person/` 独立于 Session、WorkItem 和旧 Dream。显式 Send／Think／Dream 可产生召回、整理、联想、自判和一次原子认知提交；Think 是主体自身能力，不是外部 VP 的代称。仅由实例 `<yeaftDir>/person/person.db` 的 SQLite 保存身份/Soul、原生消息、认知活动、当前状态、版本化 Concept、提交与 Trace。
+- **认知运行时**：`agent/yeaft/person/` 独立于 Session、WorkItem 和旧 Dream。显式 Send／Think／Dream 在同一个 Person、Soul 和 episode 中连续使用原生工具，执行 `end_turn` 后禁用 tools，生成一次最终认知 JSON（`next:null`），校验后原子提交；Think 是主体自身能力，不是外部 VP 的代称。仅由实例 `<yeaftDir>/person/person.db` 的 SQLite 保存身份/Soul、原生消息、认知活动、当前状态、版本化 Concept、提交与 Trace。
 - **本轮存储／召回切片**：SQLite 权威采用 WAL、busy timeout 和 `BEGIN IMMEDIATE` 短事务；消息、Concept/revision、episode、Trace、state/commit 与对应 `memory_changes` 变更日志原子落库，不把模型调用放进事务。独立 `recall.db` 保存可重建 FTS5／向量索引，在 Agent 管理的 worker 中追平；按 owner + namespace 隔离候选，回读权威的当前 revision 后才进入 context。索引不是第二套真源，也不是把每个场景拆成一个数据库；Agent 退出停止 worker，已提交记忆保留。具体边界见 11.1、11.5–11.6。
-- **界面**：左侧数字人入口；复用 Web 聊天输入组件，独立输入／消息，无 Session 列表；选择 Agent、取消、失败提示与重连刷新。**思考记录**是独立的消息式时间线，展示触发输入、上下文中的记忆、明确生成的想法、判断、自判及输出，并区分候选、已采纳、未采纳与不完整记录；原始请求、事件 JSON 与状态版本另放在**调试日志**投影。两种视图复用同一授权与分页数据源，保留存储/wire 的 `traces` 名称，不迁移历史数据。当前按认证 owner + Server/Agent 命名空间拥有一个 Person，不代表跨设备漫游已完成。
+- **界面**：左侧数字人入口；复用 Web 聊天输入组件，独立输入／消息，无 Session 列表；选择 Agent、取消、失败提示与重连刷新。**思考记录**是独立的消息式时间线，展示触发、完整公开进展和最终认知产物，区分候选、已采纳、修正拒绝与不完整记录；不要求每个工具 loop 生成 activity/proposal，也不投影 provider 隐式思考；原始请求、事件 JSON 与状态版本另放在**调试日志**投影。两种视图复用同一授权与分页数据源，保留存储/wire 的 `traces` 名称，不迁移历史数据。当前按认证 owner + Server/Agent 命名空间拥有一个 Person，不代表跨设备漫游已完成。
 - **单一交流工作区与配置**：数字人页不提供“更多”、插件或工作中心跳转，只保留返回 Session。对话、思考记录和调试投影留在同一工作区；模型候选使用页内配置弹窗。用户可选择 1–8 个已配置、被实例允许的 qualified model ref，或沿用默认范围；候选只属于当前认证用户在该 Agent 上的 Person，不修改 Agent 全局配置、不暴露凭据、不启动思考。运行中或命令结果未知时禁止配置修改，失效候选需显式修正。
 - **对话优先的布局**：默认始终显示对话与共享 Composer，不使用对话／思考 Tab。顶部左侧为返回与 Agent 选择，数字人名字独立居中；名字可在页内配置修改，不改变 Person 身份或历史。正常待机不显示绿色状态点或“等待你发起”提示；加载、断线和不可用时仍提供必要提示。此页不提供主题切换按钮，继续沿用全局主题。右上角简洁的线性眼睛图标打开统一的数字人内核右侧栏，各分区使用一致的纯文字导航；窄屏为可关闭的覆盖栏，支持焦点约束、Escape 和返回触发按钮。Agent 下拉复用 `ModernSelect`，浮层、圆角、行高和字体与 Session 侧栏共享样式，配置弹窗使用同一按钮／输入 token。输入框下不常驻操作教程或附件政策，错误与实际上传失败仍明确显示；隐藏说明不改变附件校验或执行边界。
 - **内核只读查看与搜索**：右栏可选择概览（Soul 与当前认识）、思考记录、记忆、技能与能力；调试日志仍从思考记录进入。记忆树按持久 Concept 的实际类型分组，展开可看认识状态、版本、来源和关联；能力按实际 domain 分组，包含内置合同与自建脚本的代码／测试／来源。它不是另一套 Session memory／磁盘 Skill 浏览器，也不把投影分组称作已实现的领域知识图谱。数据按页拉取并可继续加载；查看不运行脚本、不触发 LLM 或 embedding 下载。独立搜索图标对当前 owner + Agent 的持久历史消息作字面检索并分页展示，结果不替换对话窗口、不清空草稿；不宣称语义搜索或附件全文搜索。改名、查看与搜索经过原有认证中继，切换身份、Agent 或查询后旧响应不能覆盖新视图。
 - **共享 Composer**：数字人与 Session 复用 `MessageComposer` 的附件卡片、回形针入口及上传状态管理，支持图片缩略图、名称／大小、失败重试和移除；选择、粘贴、拖入走同一附件生命周期。Enter 发送、Shift+Enter 换行，输入法确认不触发发送；上传未完成或失败时不能发送。数字人不注入 Session 的模型／effort／快捷模型选择，候选模型继续在页内配置；保留 Think／Dream 动作。共享交互不改变各运行时可接受的附件类型与大小。
 - **文件输入**：支持选择、粘贴、拖入 UTF-8 文本／代码／JSON／CSV 和 PNG/JPEG/WebP/GIF 图片，允许无正文发送或带附件 Think；Dream 不消费输入中的附件。最多 4 个、单个 5 MiB、合计 10 MiB；正文最多 8 KiB，正文与文本附件合计最多 24 KiB，超限明确拒绝而不静默截断。Server 只接受认证 owner 的上传引用，Agent 校验后随消息／活动持久保存；附件原文是非指令的用户参考，图片使用原生内容块并要求候选模型支持图像。公共历史只返回名称、类型、大小和摘要，不返回 base64／内部路径；历史元数据不表示当前模型重新读取了文件。PDF／Office 暂不支持，选择不支持的附件时明确提示，不把“上传”冒充“已阅读”。
 - **当前触发策略：仅手动**。只有用户发送消息、点击“思考”或“遐想”才开始一轮；Think 可指定主题或留空，Dream 不要求主题。打开页面、刷新、重连、Agent 重启、空闲计时及上一轮结束都不启动下一轮。一次操作内可持续进行模型调用、召回与自判，不设主认知调用次数额度或整轮时限，无需逐步点击；完成、取消或失败后等待下一次显式操作。刷新只同步已有活动与记录，不派发模型计算；未知结果仅由用户以原命令 ID 显式重试，取消不回滚已经提交的认识。UI 待机不常驻状态点或说明；对话中只用无文字的轻量加载动效表示响应中，完成、取消或断线后移除，保留停止入口。活动阶段、完成状态、工具与耗时在右侧内核的管理及运行与用量查看，不占用聊天区域；当前不提供自动模式开关，后端拒绝 `autonomyEnabled: true`。这是当前产品策略，不是由旧 Dream 限制产生的临时缺陷；以后完善后再单独交付自主触发，不因升级静默开启。自动化免去逐轮点击，不取消停止入口或行为/数据授权边界。
-- **能力与模型边界**：四个内置认知方法与 `Capability.create` 元能力；Think / Recall / Capability.create 为基础层，真实使用经验形成有界熟悉层，陌生能力按需 search/view。自创 `Script.*` 仅在隔离 QuickJS 中计算 JSON，不取得宿主或外部权限。搜索可直接准备有界完整合同，不必再查看一遍；不增加 Laya、Jev 或其他选择模型。默认目录另接入 14 项 Session 原生工具：FileRead／FileWrite／FileEdit／Glob／Grep／ListDir／DiskUsage／ApplyPatch／GitRead／Bash／WebSearch／WebFetch／Skill／NotebookEdit，复用原生 schema 与执行器，通过已有目录按需准备完整合同。Skill 读取现有 bundled／instance／project 库；自建 Script 仍不获得这些权限。执行 cwd 来自 Agent 配置，绝对路径与 Shell 权限沿用宿主能力，不是沙箱；可用性不代表部署、删除、重启或读取无关私密数据的授权。另接入人物私有后台 Bash、独立子线程和任务管理；不注册 Session 专属交互、VP 路由或 MCP。工具原始结果独立归档，模型副本有明确截断标记；外部结果可作来源但不能伪装成用户报告。取消等待本机执行收尾，不能承诺回滚或停止 Shell 已派发的外部效果。每次 episode 不设主认知调用次数额度，也不设整轮时间截止；忽略旧服务 maxCalls 选项，新活动记录 calls:null，约 30～60 秒按实际进展反馈；后续模型可自主选自最多八个已配置原生模型，effort 仅在 `YEAFT_THINKING_V1=1`、模型元数据支持且实际请求不突破本轮输出预留时可选。输出预留沿用原生模型能力及实例配置，不额外设数字人 4K 上限；上下文与单次输出仍必须满足实际模型能力。不是万级能力装配的最终实现。
+- **能力与模型边界**：执行中的每次 provider 请求携带当前启用的完整 tools schemas，直接调用 Recall、Capability.create、已发布 `Script.*`、Execution.read、输出发布及原生宿主工具，不再以 `next.capability` 派发，也无需先 search/view。目录仍用于查清单、查看／修订定义，旧三层准备不限制 native 调用。自创脚本仅在隔离 QuickJS 中计算 JSON，不取得宿主权限。原生工具复用 `agent/yeaft/tools/` 的 schema 与执行器，包括文件、Git、Shell、网络、Skill、Person 私有任务和子 Agent；不注册 Session 专属交互、VP 路由或 MCP。执行 cwd 来自 Agent 配置，绝对路径与 Shell 沿用宿主权限，不是沙箱或删除／部署／重启授权。一次模型输出可有多个工具，各有独立 trace `callId`，绑定父 `modelCallId`、`toolUseId`、`toolIndex`；原始成果归档，模型只接收有界副本和 evidence receipts，通过 `Execution.read` 回读而不重放副作用。无工具 `end_turn` 后请求一次 tools 禁用的最终 JSON，格式／sourceRefs 校验失败最多 2 次额外修正，仍失败则不提交认识，已执行成果保留。主执行忽略旧 maxCalls／整轮 timeout 选项，不设累计调用或整轮时限；约 30～60 秒按完整公开文本与真实等待状态反馈。模型候选最多 8 个，首请求使用有效的已接受选择或默认；实际模型窗口、effort 能力和原生单次输出预留仍校验，不额外统一限制为 4K 输出。完整 schemas 与基础上下文可能装不进 32K 等小窗口，必须安全拒绝，不能宣称全部窗口适用；这不是万级能力动态装配的最终实现。
 - **本地 embedding**：默认固定版本的 multilingual-e5-small q8 ONNX，经 `@huggingface/transformers` 在 CPU 上推理，缓存于 `<yeaftDir>/person/models`。仅首次显式非空 Recall 才可按需下载；启动、页面打开、空查询和普通写入不下载。`YEAFT_PERSON_EMBEDDING=off` 禁用；`YEAFT_PERSON_EMBEDDING_DOWNLOAD=0` 禁止下载，已有缓存可用。关键词 FTS5 + 余弦向量 + RRF 支持中英文，向量是有界精确扫描而非 ANN／百万条规模承诺；缺模型或索引时返回明确降级元数据，Trace 不做向量索引。推理／检索在本机，模型文件下载会连接 Hugging Face；认知 LLM 仍可能把获准 context 发给远端 provider。
 - **未实现**：自主空闲唤醒、后台完成自动唤回、事件 Connector、并行认知多视角、固定 VP 模板委派、基于语义效果反馈的场景熟练度学习、数据删除/撤权控制台、Rust 身体、外部数据库导入和跨设备迁移。手动 Dream 不等于完整自主 Dream；本地召回不等于完整知识图谱治理。不要用本实验处理依赖未实现撤权/删除治理的敏感数据。
 - **配置**：服务只使用实例 `yeaftDir` 下的 SQLite，不接受存储后端选择或外部数据库配置。旧外部数据库数据不会被自动导入、迁移或删除；本地空库不代表迁移完成。原生认知模型来自实例 `config.json`。建议隔离实例、最小权限与备份；已有服务配置变更须明确授权后重启，不由本功能自动执行。
@@ -27,9 +27,9 @@
 
 ## 当前代码工作流：一张图看懂
 
-以下描述**手动认知路径与本轮 SQLite／本地召回切片**，不是后文的完整目标架构；SQLite 与本地召回的最终验收边界见上文。阅读图中的 1–9 即可理解一轮如何运行；[打开大图](/images/digital-person-manual-flow.svg)。
+以下描述**已实现的显式触发 native 连续对话与 SQLite／本地召回路径**，不是后文的完整目标架构；SQLite 与本地召回的最终验收边界见上文。阅读图中的 1–9 即可理解一轮如何运行；[打开大图](/images/digital-person-manual-flow.svg)。
 
-![数字人手动认知工作流：人工触发，经鉴权、认知库准入、上下文组装、模型调用与提案校验，可继续思考或原子提交；页面只读同步消息、思考记录与独立调试日志。](/images/digital-person-manual-flow.svg)
+![数字人当前工作流：人工触发，同 Person、Soul 和 episode 连续使用 native tools；end_turn 后禁用 tools 做最终认知 JSON，校验通过才原子提交，原始工具成果与公开进展保留。](/images/digital-person-manual-flow.svg)
 
 ### 每一步实际做什么
 
@@ -38,25 +38,25 @@
 | 1. 人决定开始 | 发送消息、点击 Think 或 Dream，生成稳定命令 ID | Think 可有主题或留空；Dream 不带主题。打开、空闲、重连都不会开始计算 |
 | 2. 鉴权与中继 | Browser → Server → 指定 Agent；Server 提供认证 owner，校验 Agent 访问权及请求关联 | Server 不执行推理；不创建隐藏 Session、WorkItem 或 Coordinator |
 | 3. 准入与持久化 | 认知库去重、忙检查，创建 episode（一轮活动）、租约与版本保护；仅 Send 写用户消息 | 同一命令重试不重复启动；未知结果只能人工以原 ID 重试。过期活动标记中断，不自动续跑 |
-| 4. 激活短期记忆 | Soul、当前状态、触发、模型/能力目录摘要，以及有界历史消息和 Concept 进入 context | 初始候选窗口为最近 12 条消息、最多 12 个关注 Concept + 12 个近期 Concept，再按预算省略整条记录；不是把数据库全部塞进去 |
-| 5. 认知调用 | 第一次采用有效的上次已接受选择，否则采用配置默认模型；后续调用采用数字人指定的模型/effort | 调用前校验可用性和预算、记录输入与选择；无主认知调用次数额度及整轮时间截止；约 30～60 秒给阶段回复或真实等待状态，支持的模型最多 8 个 |
-| 6. 保存与校验 | 保存公开输出，解析结构化 proposal，检查格式、实际读取过的来源、Concept 修订、想象标记及后续模型选择 | 代码只能验证来源关系，不能证明语义真实；无效提案失败结束，当前没有自动修复重试回路 |
-| 7. 继续想 | `next` 指定下一模型、effort、原因和可选能力；能力结果与上一提案进入下一次 context | 中间提案只是候选，不覆盖当前认识；已激活能力可直接用，搜索可附完整合同；准备流程不是必经阶段，每次请求仍受实际模型 context／输出能力约束，不设置主 loop 次数额度 |
+| 4. 激活短期记忆 | Soul、已接受状态、触发、有界消息／Concept 进入 context，每次执行请求附完整可用 tools schemas | 初始候选为最近 12 条消息、最多 12 个关注 + 12 个近期 Concept，再按预算省略整条；请求装不下则拒绝，小窗口不保证可用 |
+| 5. 连续 native 对话 | 同一 Person／Soul／episode 的模型直接发 native tool calls；每个逻辑请求有独立模型 callId，完整接收响应后派发工具 | 首请求使用有效的已接受选择或默认；无主调用次数额度及整轮截止，每请求仍校验窗口和输出；无需每 loop 认知 JSON |
+| 6. 执行与归档 | 多工具各有独立 trace callId，绑定 modelCallId／toolUseId／toolIndex；归档原始结果，以真实 tool role 返回 | 校验参数和当前权限；错误不证明回滚。完整公开文本可绑定父模型证据发布 progress，模型 usage 只累计一次 |
+| 7. 延续或最终整理 | 有工具则延续原对话；无工具 end_turn 后禁用 tools，请求一次最终认知 JSON（next:null） | 只缩减请求副本，旧结果留 evidence receipts 并可 Execution.read；坏 final JSON／sourceRefs 最多 2 次额外修正，不回放副作用 |
 | 8. 接受当前认识 | `next: null` 后，在一个权威库短事务中提交 Concept/revision、state、commit、episode 终态、可选回复与 Trace；SQLite 同事务写对应 `memory_changes` | 必须仍拥有当前租约及正确状态/控制版本；取消、失联 worker 或旧版本不能提交。取消不回滚已完成的提交 |
 | 9. 展示与等待 | 页面运行中轮询 snapshot/记录，终态同步后停止；消息、思考记录、调试日志分别投影 | 思考记录展示应用层实际产物，不是 provider 隐藏推理。已分页历史保留并提示需刷新；终态前发出的旧读取不能冒充最新同步 |
 
 ### “想”、能力和记忆如何连接
 
-- **想不等于一次检索。** 模型可对 context 中已有经历进行整理、联想、反例检查并提出新的 Concept；不足时选择 Recall，把长期记忆的一页带入下一次短期 context。每次调用的公开想法、自判与结果都可追溯。
-- **当前能力是认知方法、受限纯脚本与真实宿主工具。** `Think` 是内在方法，无需工具调用；`Recall` 基础合同直接可用；两项 Skill 可从使用经验准备，或通过 `catalog.search`（含有界完整合同）／`catalog.view` 按需加载。SQLite 上的 Recall 对本 Person 的消息/Concept 作本地关键词与语义混合召回；索引不可用时按元数据显式降级，不能把字面匹配称为语义命中。命中保留 chunk→父记录来源并回读权威当前 revision；另外两项返回方法说明，不调用外部执行者。
-- **还不是完整动态 tool set。** 当前 provider 请求不携带原生工具 schema，而是模型在结构化 `next.capability` 中提出能力调用，由 runtime 执行。已接入原生 Skill 库、后台命令与独立子 Agent，但并非 Session 的全部交互工具、MCP 或固定 VP 模板执行；并行子任务不等于多个认知视角共同提交。
+- **想不等于一次检索。** 模型可对 context 中已有经历进行整理、联想、反例检查并提出新的 Concept；不足时直接调用 Recall，把长期记忆的一页带入 native 对话；完整公开进展和工具结果可追溯，最终整理才生成认知自判。
+- **当前能力是认知方法、受限纯脚本与真实宿主工具。** `Think` 是内在方法，无需另一个模型；Recall 的 schema 直接提供。SQLite 上的 Recall 对本 Person 消息／Concept 作本地关键词与语义混合召回；索引不可用时显式降级。命中保留 chunk→父记录来源并回读权威当前 revision。目录和方法说明仍可查看，但不是 native 调用的准备阶段。
+- **已实现 native tool 对话，但不是全部 Session 能力。** 每个执行请求提供当前启用的完整 schema，不再用结构化 `next.capability` 模拟工具。已接入 Skill 库、后台命令与独立子 Agent，不包括 Session 交互工具、MCP 或固定 VP 模板委派。多工具分别归档，不混为父模型的一个结果，也不重复累计模型 usage。原始结果保存，模型副本有界，省略留 evidence receipts；回读用 `Execution.read` 原 trace callId，不重做副作用。
 - **数据库区分“想到过”与“现在接受”。** 消息、活动与调用记录构成长期经历；经过提交的 state/Concept 才是当前接受的认识。失败、取消或中断不提交候选；旧预算耗尽记录仅作为历史保留。数据库故障时没有文件兜底，未成功归档的内容不能保证重建；下一次访问恢复过期活动为 interrupted。
 
 源码入口：`web/stores/helpers/digital-person.js` → `server/handlers/client-person.js` → `agent/yeaft/person/bridge.js` → `agent/yeaft/person/service.js`；认知循环、能力与模型适配分别见该目录的 `runtime.js`、`capabilities.js`、`provider.js`；存储入口为 `sqlite-repository.js`（worker facade），SQLite 权威实现为 `sqlite-store.js`。消息式思考记录的白名单投影见 `web/stores/helpers/person-thoughts.js`。
 
 ## 不限主执行次数与统一管理 {#execution-management}
 
-数字人的主 Send／Think／Dream 执行不设置累计调用次数、token 或整轮时长额度。收到明确输入后可在同一 episode 内持续调用不同模型、使用工具和收集子任务结果，由数字人选择 `next:null` 结束；模型错误、租约失效、用户取消或 Agent 关闭仍会终止。移除 quota 不意味着替数字人自动生成无限工作，也不增加自动唤醒或越权能力。
+数字人的主 Send／Think／Dream 执行不设置累计调用次数、token 或整轮时长额度。收到明确输入后可在同一 episode 内持续使用工具和收集子任务结果；无工具 `end_turn` 结束执行后，禁用 tools 的最终认知 `next:null` 校验通过才提交；模型错误、租约失效、用户取消或 Agent 关闭仍会终止。移除 quota 不意味着替数字人自动生成无限工作，也不增加自动唤醒或越权能力。
 
 内核的**管理**页将当前主执行与既有后台 Shell／独立子线程放在同一入口，主执行固定在历史之前。显示执行状态、总历时、loop 数、当前模型／能力阶段、各模型请求耗时与已报告的 token；模型请求耗时从实际派发起计，不包含派发前的暂停，未记录该测量的旧调用显示未知。缺失及正在进行的用量明确标为未完整确认，不当成零。主执行明细仅是公开元数据，不公开 provider 隐藏推理。独立子线程保持自己的状态、已报告用量与日志，不混算到主线程。
 
@@ -69,17 +69,17 @@
 
 不限额度可能持续产生模型费用和磁盘记录；管理页的实时用量是监测而非硬费用上限。无需更改实例配置，也不会自动升级或重启在线实例。
 
-## 三层能力：随手可用、用过熟悉、缺少再找 {#capability-layers}
+## 旧认知实验的三层能力：随手可用、用过熟悉、缺少再找 {#capability-layers}
 
-三层描述**能力如何进入短期工作记忆**，不是三个独立大脑，也不是固定工作流。Send / Think / Dream 使用同一个机制。当前认知模型结合需要与证据选择是否使用；代码只准备合同、检查版本/范围并执行，不引入额外选择模型，也不自动执行预加载的能力。
+**本节保留旧 proposal 认知实验的合同准备与经验机制，不是当前 native 主执行的必经流程。** 当前执行每请求直接提供完整可用 tools schemas；已经提供的 schema 可直接调用，无需 search/view，不受下文旧 8192 字节激活合同额度约束。三层描述旧机制中能力如何进入工作记忆，不是三个大脑，也不引入选择模型；经验和目录仍可作为方法／版本证据，不等于授权。
 
-| 层 | 当前实现 | 不代表什么 |
+| 层 | 旧认知实验机制 | 不代表什么 |
 | --- | --- | --- |
 | 基础 | 每次认知调用提供 Think、Recall、Capability.create 的完整参数、使用场景、不适用场景、访问边界与版本 | 不强制 Recall，不让 Think 变成额外模型调用 |
 | 熟悉 | 本 Person 的真实执行观察，从当前目录重新取得合同；最多预加载 2 项非基础能力，同触发种类优先，其次近期使用 | 不读取缓存中的指令，不持久授予权限，不把频繁使用等同于有效 |
 | 发现 | 中英关键词/领域字面检索与完整分页；搜索结果最多附 4096 UTF-8 字节合同，可直接准备下一次使用；知道 ID 可以直接 view | 当前能力目录没有语义向量检索，不宣称支持万级能力或自然语言任意改写 |
 
-**一次召回与结束**从“搜索 → 查看 → 召回 → 最终提案”四次认知调用，缩短为“直接 Recall → 最终提案”两次。陌生方法可走“搜索并准备 → 使用 → 最终提案”三次；下一轮从熟悉层准备后可以两次完成。无需能力的思考仍可一次结束。这里计数是逻辑模型调用，不是对实际 token 费用或延迟的比例承诺。
+**旧路径的一次召回与结束**从“搜索 → 查看 → 召回 → 最终提案”四次认知调用，缩短为“直接 Recall → 最终提案”两次。陌生方法可走“搜索并准备 → 使用 → 最终提案”三次；下一轮从熟悉层准备后可以两次完成。无需能力的思考仍可一次结束。这里计数是逻辑模型调用，不是对实际 token 费用或延迟的比例承诺。
 
 熟悉层的“程序性经验”与已接受的认知结论分开：
 
@@ -89,7 +89,7 @@
 - 合同版本/内容摘要不一致、最近一次技术失败、未来时间或超过 30 天未使用时，不自动预加载；原始 Trace 不删除，能力仍可重新发现或查看。
 - “场景”当前只指 Send / Think / Dream 的粗粒度使用偏好，不是语义分类器。技术成功不等于有帮助，熟悉层显式标明 `usefulness: not-evaluated`；由下一次认知调用在 `decision.selfCheck` 判断结果是否有用，可忽略习惯、继续找、保留疑问或休息。尚未实现语义奖励、强化学习或自动写入习惯评价。
 
-所有激活合同合计最多 8192 UTF-8 字节，仍受模型实际 context 预算约束；非基础合同可整份省略，不能只剩一个 ID 却继续授权执行。Runtime 每次 dispatch 根据**实际渲染的完整合同**重建激活集；版本不符、未加载、非法参数或超出已激活合同范围的调用均拒绝。`call_started.manifest.activeCapabilities` 记录层级、版本、准备原因与有界经验，`omittedCapabilities` 说明省略；`capability_result/failed` 记录实际合同引用。内置合同来自代码目录，自创合同从本人物权威库中的固定版本重建；不从历史消息或经验中恢复可执行指令。生成的元数据、代码和结果均为不可信内容，不能改变运行时权限。
+**旧 proposal 路径**的所有激活合同合计最多 8192 UTF-8 字节，仍受模型实际 context 预算约束；非基础合同可整份省略，不能只剩一个 ID 却继续授权执行。Runtime 每次 dispatch 根据**实际渲染的完整合同**重建激活集；版本不符、未加载、非法参数或超出已激活合同范围的调用均拒绝。`call_started.manifest.activeCapabilities` 记录层级、版本、准备原因与有界经验，`omittedCapabilities` 说明省略；`capability_result/failed` 记录实际合同引用。内置合同来自代码目录，自创合同从本人物权威库中的固定版本重建；不从历史消息或经验中恢复可执行指令。生成的元数据、代码和结果均为不可信内容，不能改变运行时权限。
 
 更像人的地方是：**基础能力无需反复学习；用过的方法更容易想到；新需要允许继续探索；习惯可被失败打断，也可被主动忽略。** 这只是可验证的工作记忆/程序性经验机制，不是人类认知或主观意识的证明。
 
@@ -99,10 +99,10 @@
 
 ```text
 发现缺少可复用方法 → 编写 code + tests → 新建受限 VM，逐例实际执行
-  ├─ 失败：返回固定错误码／首个不匹配结果 → 可在本轮剩余预算内修正
-  └─ 全部通过：带租约 fence 的事务发布固定版本 → 准备新合同
+  ├─ 失败：返回固定错误码／首个不匹配结果 → 可在本轮继续修正，仍受资源边界限制
+  └─ 全部通过：带租约 fence 的事务发布固定版本 → 下次请求提供新 schema
        → 以 Script.<slug> + {input:...} 调用 → 脚本执行器返回 JSON
-       → 认知模型判断是否有用；执行经验进入熟悉层
+       → 同一 Person 判断是否有用；记录实际执行经验
 ```
 
 - **边界**：输入／输出是 JSON，函数体同步执行。QuickJS/WASM 位于独立 worker；不提供 Node、Shell、文件、网络、凭据、包安装、宿主工具、VP 或调度。不是用 `node:vm` 假装隔离；也不宣称能够安全运行任意原生程序。生成代码仅在 guest 内执行，不插入宿主脚本。模型仍可以编写错误的方法，隔离只限制权限和资源。
@@ -110,8 +110,8 @@
 - **执行资源**：单例全进程最多 4 个并发脚本 worker；guest 内存 16 MiB、栈 256 KiB、执行中断约 200ms，父 worker 3s 墙钟上限覆盖初始化与序列化。每个测试和实际调用使用全新 VM，无共享可变状态；不是纯函数正确性或绝对确定性的保证（例如代码仍可使用 guest 时间／随机数）。取消会终止并等待对应 worker。
 - **验证与学习**：发布必须通过运行时实际执行的全部测试，模型不能提供 `evidence` 来宣称通过。测试只证明给定样例，尤其自写测试可能遗漏边界；技术成功与语义有用分开。测试失败不发布，可以返回诊断继续修复；旧可用版本不被失败尝试覆盖。
 - **存储与修订**：实例 SQLite 的 `person.db` 保存当前定义、不可变版本、测试及真实执行证据，按 owner + namespace + person 隔离；不写代码仓库，不创建 Shell 文件。`expectedVersion` 防覆盖，来源保留 episode/call。`catalog.view` 可读完整定义以修改和保留测试；当前没有独立能力编辑器、删除或任意版本执行 API。
-- **三层接入**：创建元能力常驻基础层；新能力发布后准备在下一次调用中使用。重启后可在发现层查到；实际使用成功且版本仍有效时可按已有预算进入熟悉层。一次失败会抑制自动熟悉准备，但不会删除定义，仍可重新发现并修订。缓存不是权限。
-- **事务与取消**：发布是一次明确、独立的工具副作用，定义、版本、发布 Trace 在同一 fence 事务中成功或回滚。它不等待最后的认知提交：发布后即使模型失败、预算耗尽或后来取消，已经成功发布的版本仍保留；取消／失去租约先发生则不能发布。过程展示以 `capability_created` 的持久事件为依据，不根据模型自述认定已学会。
+- **当前接入**：Capability.create 直接随执行 schema 提供，新脚本发布后以 native schema 进入下一请求；重启后从权威库读取定义。旧三层经验仍用于追溯使用／版本，不要求先准备才能执行。一次失败不删除定义，仍可查看并修订；缓存不是权限。
+- **事务与取消**：发布是一次明确、独立的工具副作用，定义、版本、发布 Trace 在同一 fence 事务中成功或回滚。它不等待最后的认知提交：发布后即使模型失败、资源边界终止或后来取消，已经成功发布的版本仍保留；取消／失去租约先发生则不能发布。过程展示以 `capability_created` 的持久事件为依据，不根据模型自述认定已学会。
 - **隐私与完整性**：定义／测试本身属于个人持久数据，不应嵌入不必要的敏感原文；模型调用读取定义时仍遵循原 provider 出站边界。原始调试日志有完整定义与调用参数，思考记录仅投影能力 ID、版本、测试数量和执行状态，不展示原始输出。外部读写脚本的创建、授权、审批与审计不在首版范围内。
 - **日志编码**：SQLite Trace 保存应用层显式输入／输出；读取时仅恢复明确的存储元数据日期，不改写输入／输出里同名的日期字符串。Trace 保留既有身份隔离和分页投影，不包含 provider 隐藏思维链。
 
@@ -126,29 +126,30 @@
 
 | 名称 | 边界与归属 | 当前关系 |
 | --- | --- | --- |
-| Person / 数字人 | 持续的身份、Soul、认知状态与经历 | 跨越所有 Turn；不是一个永远运行的 API 请求 |
-| Person Turn / cognitive episode | 一次人工 Send、Think、Dream 被准入，到 completed / cancelled / failed / interrupted / budget_exhausted | 使用已有 `episodeId`，不新增平行 Turn 存储；一个 Turn 可以没有回复，但仍有终态 |
-| Person Loop / 认知循环步 | 组装本次 context → 调用模型 → 保存/校验提案 → 继续或提交 | `PersonRuntime.run()` 的一次 `for` 迭代；若继续，可先执行一个已允许的认知／纯计算／能力创建操作，再进入下一步 |
-| Model call / 逻辑模型调用 | 给定 context、模型、effort、工具快照的一次 adapter 流请求 | Person 使用 `callId / callIndex`；当前每个成功派发的 Loop 恰有一次逻辑调用，派发前失败可为零次 |
-| Engine Turn / engine call | 调用一次 `Engine.query()` 到终态 `turn_end { terminal: true }` | 现有 Session / VP 执行机制；**不是 Person 当前内部循环**；未来可作为外部能力的执行后端 |
-| Engine Loop / 执行循环步 | `Engine.query()` 内的一次循环推进，通常为模型输出、工具执行及结果回填 | 一个 Engine Turn 可以多 Loop；技术重试/续传、流式 chunk、并行工具都不能按条数当成新 Turn |
+| Person / 数字人 | 持续身份、Soul、认知状态与经历 | 跨越所有 episode；切换计算阶段不换人，不是常驻 API 请求 |
+| Person Turn / cognitive episode | 一次显式 Send／Think／Dream 准入到 completed／cancelled／failed／interrupted | 原有 episodeId；旧 budget_exhausted 仅作历史兼容，不再是主调用额度终态 |
+| Person Loop | 一次模型请求及其可能的工具执行／回填，或最终认知／修正请求 | 执行阶段不生成每步 proposal，不逐步提交 state |
+| Model call | 一次 adapter 流请求，有 callId／callIndex 和 phase | 逻辑调用不保证等于一次 HTTP attempt；一次输出可有多个工具，usage 只归父请求一次 |
+| Tool invocation | 一次独立工具执行与持久结果 | 独立 trace callId，绑定父 modelCallId、供应商 toolUseId、从 0 开始的 toolIndex |
+| Engine Turn | 一次 Engine.query() 到 terminal turn_end | Session／子 Agent 使用；Person 主循环不调用 Engine.query() |
 
-**逻辑模型调用不保证等于一次 HTTP 请求。** Adapter/provider 层可能发生重试或协议协商；`callId` 不能冒充逐 HTTP attempt ID。当前 Person 没有应用层 proposal 修复/续跑回路；provider 最终失败会结束本次活动。模型内部 reasoning 的 token、流式 chunk、一次工具调用也都不是新的 Loop。
-
-当前真实调用关系如下（方括号内是负责方）：
+模型 reasoning token、流式 chunk 和一次工具调用不是新 Person Turn。Provider 重试不等于可重放工具；已完成的副作用必须以证据回读，不能因最终 JSON 错误而重跑。
 
 ```text
-人工操作 → 认知库准入 → PersonRuntime.run(episode)           [运行时]
-  └─ Person Loop 0..N-1
-       ├─ assembleContext + startCall(callId, callIndex)        [运行时]
-       ├─ collectOutput → adapter.stream → 结构化 proposal      [模型承载 Person 思考]
-       ├─ finalizeCall + validateProposal                     [运行时]
-       ├─ next 非空：选择下一模型/effort/可选能力                [proposal 中的 Person 决定]
-       │    └─ 验证并执行能力 → 结果带入下一 Loop                [运行时]
-       └─ next 为空：尝试原子 commit → completed               [运行时]
+人工操作 → 认知库准入 → PersonRuntime.run(同一 Person / Soul / episode)
+  ├─ execution：每请求完整 tools schemas + 原对话的请求副本
+  │    ├─ 完整收集并归档公开 text / native tool calls / usage
+  │    ├─ 多工具独立 trace callId + modelCallId / toolUseId / toolIndex
+  │    ├─ 校验／执行／归档原始结果 → 真实 tool role → 下一请求
+  │    └─ 无工具 end_turn：执行结束，不直接提交认识
+  └─ cognition：tools=[]，请求一次最终认知 JSON（next:null）
+       ├─ 坏 JSON / sourceRefs：最多 2 次额外修正，tools 仍禁用
+       └─ 校验通过 → fence 内原子 commit → completed
 ```
 
-生产入口 **不设主认知调用次数额度，也不设整轮时间截止**。`next` 非空时可以持续推进，`next:null` 表示完成或阻塞并尝试提交；管理页可以在安全边界暂停同一执行、继续或停止。约 30～60 秒按实际进展提供阶段回复；长请求尚未返回时仅更新真实等待状态，不额外调用模型。单次 provider 停流保护、工具超时和用户取消仍保留。历史 `budget_exhausted` 仍可展示，新主执行不因调用次数结束。最终输出应携带需要保留的全部 Concept 修改，而不是假定前几轮已提交；成功活动只有一次认知状态提交。召回和过程记录可以先入库，不等于已采纳认识。
+生产入口 **不设主累计调用次数、token 或整轮墙钟额度**；仍保留实际模型窗口／单次输出、provider 停流、工具超时、脚本／存储资源保护、lease、权限、暂停和取消。请求只缩减副本：先将较早工具正文替换为 receipts，必要时省略完整旧 assistant/tool 组；原始 trace 保留，receipt 提供 `Execution.read`，不创造新的认识或授权。连完整 schemas 与必要上下文都装不下（例如部分 32K 配置）则 `CONTEXT_LIMIT` 安全拒绝，不宣称所有窗口适用。
+
+约 30～60 秒提供有依据的阶段反馈或真实等待状态。native progress 绑定已完整归档的公开 text 和父模型 callId，不需要每 loop activity；不发 provider 碎片，不增加汇报模型请求。最终 JSON 的全部 Concept／state 修改只有校验通过后一次提交；最多 2 次额外修正仍失败则停止，既有工具成果、公开进展与已发布产物保留，不回放副作用。来源校验不证明语义真实，脚本化测试不证明真实模型能解决所有问题。
 
 数字人页面将相邻、具有相同非空 `episodeId` 的 assistant 记录聚合为同一块回复：名字只显示一次，阶段回复与最终回复各保留自己的时间和标签，后续段落以轻量短分割线区分；等待状态只显示在当前块的尾部。追加内容不重置本轮置顶目标、不抢用户主动滚动位置；失败或取消仍保留已发布的阶段内容，不将其标成最终结论。底层消息、分页 cursor 和去重规则不变，重连和历史分页从原始记录重建展示；用户／系统消息、不同 episode 以及缺少 episode 身份的旧记录均不跨界合并。该投影仅用于数字人页面，普通 Session 的消息展示保持不变。
 
@@ -158,18 +159,18 @@
 
 | 层次 | 负责什么 | 不负责什么 |
 | --- | --- | --- |
-| 数字人决策（由模型计算） | 要关注什么、怎样理解、继续想还是结束、下一模型/effort/能力、是否采纳结果 | 不能自己授予权限、绕过预算或宣称候选已提交 |
-| 运行时（确定性代码） | 准入、加载、限额、来源/版本校验、能力派发、取消和事务提交 | 不替人物决定观点正确、感受合理或外部结果值得采纳 |
+| 数字人决策（由模型计算） | 同一 Soul 下理解问题、使用工具、依据结果继续／停止，并在最终 JSON 中决定采纳哪些认识 | 不能授予权限、绕过资源边界或宣称候选已提交 |
+| 运行时（确定性代码） | 准入、schema 和请求副本、资源／来源／版本校验、工具派发、暂停／取消和事务提交 | 不替人物决定观点正确、感受合理或外部结果值得采纳 |
 | 模型/provider | 按本次角色、输入和合同产生显式输出 | 不直接拥有 Person 数据库，不因返回 `end_turn` 就完成认知活动 |
 | 工具/外部 VP | 在委派范围内读取、计算或执行，返回结果与证据 | 不能把自己的 Loop/终态当成人物的最终判断，不能直接覆盖其认知状态 |
 
-**当前每次 Person 模型调用都包含人物判断，不存在“先让普通模型随便跑，最后数字人再醒来”的阶段。** 同一个 proposal 中已经包含 `activity`、`decision.selfCheck`、候选 state/Concept、回复与 `next`。模型说“证据不足，继续召回”就是数字人在决定；runtime 实施召回后，下一次模型调用再作新的判断。步骤 7 是执行步骤 5 已生成的 `next` 分支，不是另一次未计费的“决策模型”调用。
+**执行和最终整理始终是同一个 Person 的模型计算，不是“普通模型先跑，最后数字人才醒来”。** 执行阶段用相同 Soul 直接判断与调用工具，公开文本无需包成 activity／decision proposal；最终 tools 禁用时才要求 activity、decision.selfCheck、Concept、state、reply 和 `next:null` 的认知 JSON。最终整理不能补做操作，修正仅改认知产物。
 
-当前自判是同一次模型输出的显式检查，不是独立 critic 的保证。运行时通过 schema/来源/版本校验，也不等于语义审查通过；多视角综合与独立 critic 仍是目标能力。
+最终自判是显式输出，不是独立 critic 的保证；schema／来源／版本校验也不等于语义审查通过。多视角综合与独立 critic 仍是目标能力。
 
 ### 未来委派时：什么时候交出去，什么时候回来
 
-以下是**尚未接入的执行合同**，不是当前流程多出来的一层 Coordinator：
+以下是**尚未接入的固定 VP 模板／完整委派合同**，不是当前流程的一层 Coordinator。当前已经支持 Person 私有 SpawnAgent 的独立原生 Engine 子线程，它继承实际父模型与工具权限、返回证据，但不等于这里的完整治理设计：
 
 ```text
 Person Turn
@@ -201,24 +202,24 @@ Person Turn
 
 四种“结束”不能互换：
 
-1. Provider `stopReason: end_turn`：当前模型流正常结束；Person 还要解析、校验、选分支。
+1. Provider `stopReason: end_turn`：执行阶段无工具时转入 tools 禁用的最终认知，不直接提交；最终阶段仍须解析／校验 JSON，必要时有限修正。
 2. Engine 内部 `turn_end`：未带 `terminal: true` 的事件不是 Engine Turn 结束。
 3. Engine `turn_end { terminal: true }`：本次 query 生命周期结束；不等于委派成功，更不等于 Person 已验收。
-4. Person episode 终态：本轮结束。成功提交才改变已接受状态；失败/预算耗尽不采纳候选，且不会自动开启下一 Person Turn。已经成功提交后再取消，不回滚状态。
+4. Person episode 终态：本轮结束。成功提交才改变已接受状态；失败／取消不采纳候选（旧预算耗尽记录仍保留），且不会自动开启下一 Person Turn。已经成功提交后再取消，不回滚状态。
 
-思考记录按 **Person Turn → 决策/执行活动 → 显式输入输出 → 采纳结果** 理解；技术调试另看 request/attempt。当前可用 `episodeId + callId + callIndex` 关联 `call_started / call_output / activity / capability_result / committed` 等事件，缺失的输出明确标注，不补造想法。
+思考记录按 **Person Turn → 决策/执行活动 → 显式输入输出 → 采纳结果** 理解；技术调试另看 request/attempt。模型事件用 `episodeId + callId + callIndex` 关联；工具事件用独立 trace `callId` 并绑定 `modelCallId / toolUseId / toolIndex`。最终 activity／committed 与最终模型 callId 关联，不要求每个执行 loop 有 activity，缺失输出不补造想法。
 
 未来并行视角/VP adapter 需要增加持久化的调用角色与父子关联，例如 `actorRole`（person-decision / person-perspective / delegated-executor）、父 `callId`、`delegationId / engineTurnId / loopIndex`；这些是拟议字段，不是现有 wire。字段由 runtime 绑定，而非任由模型自报。Person Loop 当前可由 `callIndex` 定位，不为了展示另建一个与现有记录竞争的 loop 真源。
 
 验收时至少检查：
 
-- 同一次人工触发，多个 `callId` 始终属于一个 episode；`next` 改变选择只影响下一次调用。
-- Provider 正常结束但 `next` 非空不会提前结束 Person；Engine 内部事件不能释放父级活动/冒充采纳。
+- 同一次人工触发的执行、最终整理和修正始终属于同 Person／Soul／episode；多个工具 trace callId 与父 modelCallId 一一关联，usage 不随工具数重复。
+- 原生 tool_use 返回真实 tool role 继续；执行 end_turn 只转最终整理，tools=[] 且 next 必须为 null。坏 final JSON／sourceRefs 最多 2 次额外修正不回放副作用；Engine 内部事件不能冒充采纳。
 - 最终提案提交才改变 stateVersion；候选、自判、执行成功都不能替代 commit。
 - 已观察到 Cancel/租约过期后，不再派发隐形额外调用；主执行暂停期间不派发新调用，继续同一 episode 不重放已完成的操作；刷新、重连及未来 VP 迟到回报也不自动启动新 Turn。并发取消可能与在途派发相遇，因此仍需提交 fence；已派发的外部计算不保证立即停止。
 - 未来委派中，合同内局部执行不要求人物逐步确认；合同变化必须交回，且必须通过人物验收才可成为其认知更新。
 
-当前源码依据：`person/service.js#createPersonService()`、`person/runtime.js#PersonRuntime.run()`、`person/provider.js#collectOutput()`、`person/contracts.js#PROPOSAL_INSTRUCTIONS`、`person/sqlite-store.js#commit()`；Engine 的 query 终态与执行 loop 另见 `engine.js` 的 `query()` / `#runQuery()`。本文澄清边界，不改现有运行时或新增自动调度。
+当前源码依据：`person/service.js#createPersonService()`、`person/runtime.js#PersonRuntime.run()`、`person/provider.js#collectOutput()`、`person/execution-protocol.js#ExecutionTranscript`、`person/contracts.js#PROPOSAL_INSTRUCTIONS`、`person/sqlite-store.js#commit()`；Engine 的 query 终态与执行 loop 另见 `engine.js` 的 `query()` / `#runQuery()`。本文澄清边界，不改现有运行时或新增自动调度。
 
 ## 阅读地图
 
@@ -243,7 +244,7 @@ Person Turn
 
 最小实现闭环：**唤醒 → 从 DB 组装短期 context → 人物选择认知需求/模型/能力 → 按需装配 → 调用或委派 → 结果持久化 → 人物综合、自判并提交 → 继续、表达或休息**。不要求每次走遍所有步骤，简单情况一次调用即可。
 
-本文只维护这一份设计，不再另建概念平行文档。以下章节是实现与验收细则，五项需求以上表为阅读入口。
+本文只维护这一份设计，不再另建概念平行文档。**下文第 1–26 节及附录是完整目标设计／拟议验收细则，不能作为全部已实现的声明**；现状以顶部实现边界与当前工作流为准，五项需求以上表为目标阅读入口。
 
 ## 1. 决策摘要
 

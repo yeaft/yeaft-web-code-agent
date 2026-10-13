@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { assembleContext, PersonRuntime, projectTaskEvidence } from '../../../../agent/yeaft/person/runtime.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
@@ -41,7 +41,7 @@ function service(dir, adapter, extra = {}) {
 }
 function parentAdapter(fn, child) {
   return { async *stream(params) {
-    if (params.tools?.length) { yield* child(params); return; }
+    if (!params.requestIdentity?.threadId || !params.requestIdentity.threadId.match(/^[0-9a-f-]{36}$/)) { yield* child(params); return; }
     const input = JSON.parse(params.messages[0].content), p = proposal(input);
     await fn(input, p, params);
     yield { type: 'text_delta', text: JSON.stringify(p) };
@@ -88,13 +88,13 @@ describe('Person async native service integration', () => {
     const terminal = await idle(s);
     expect(terminal.latestEpisode.status, JSON.stringify(terminal.latestEpisode)).toBe('completed');
     expect(childRequests).toHaveLength(2);
-    expect(childRequests.map(p => p.model)).toEqual(['test/first', 'test/second']);
+    expect(childRequests.map(p => p.model)).toEqual(['test/first', 'test/first']);
     expect(childRequests.every(p => p.effort === 'low')).toBe(true);
     expect(results).toEqual(['child-result-1', 'child-result-2']);
     expect((await call(s, 'messages')).items.find(m => m.role === 'assistant').text).toBe('child-result-1; child-result-2');
     for (const id of children) {
       const agent = getAgentRegistry().get(id);
-      expect(agent.parentEffortDecision).toMatchObject({ requested: 'high', effective: 'low', cap: 'low', source: 'wire-test', model: childRequests[children.indexOf(id)].model });
+      expect(agent.parentEffortDecision).toMatchObject({ requested: null, effective: 'low', cap: 'low', source: 'wire-test', model: childRequests[children.indexOf(id)].model });
       const engine = childEngines[children.indexOf(id)];
       expect(engine).toBeTruthy();
       const names = engine.toolRegistry.getAllTools().map(tool => tool.name);
@@ -127,7 +127,7 @@ describe('Person async native service integration', () => {
     const s = service(dir, adapter);
     await call(s, 'open'); await call(s, 'think', { text: 'launch', clientMessageId: 'launch' });
     expect((await idle(s)).latestEpisode.status).toBe('completed');
-    expect(inputs[2].taskEvidence.items.some(item => item.output.includes('running'))).toBe(true);
+    expect(inputs[2].capabilityResult.output).toContain('Started background task');
     await pause(550);
     expect(inputs).toHaveLength(3); // Completion must not reenter the provider.
     await call(s, 'think', { text: 'inspect', clientMessageId: 'inspect' });

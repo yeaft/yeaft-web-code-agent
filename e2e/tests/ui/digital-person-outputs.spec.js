@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from '../../fixtures/test-server.js';
+import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { MockAgent } from '../../fixtures/mock-agent.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
@@ -21,28 +22,29 @@ async function outputRuntime(mockAgent, serverUrl) {
   let deferredRead = null;
   let holdReads = false;
   const adapter = { async *stream(params) {
-    const input = JSON.parse(params.messages[0].content);
+    const input = personInput(params);
     inputs.push(input);
+    const args = publications.get(input.trigger.text);
+    if (!args) throw new Error(`Unexpected scripted trigger: ${input.trigger.text}`);
+    if (!personCognition(params)) {
+      expect(params.tools.some(t => t.name === 'Output__publish')).toBe(true);
+      if (!personToolResults(params).length) {
+        yield personToolCall('publish-output', 'Output.publish', args);
+        yield personStop(true);
+      } else {
+        expect(personToolResults(params)[0].ok).not.toBe(false);
+        yield { type: 'text_delta', text: 'Publication complete.' };
+        yield personStop(false);
+      }
+      return;
+    }
     const proposal = finalProposal(input.state.version);
     proposal.concepts[0].expectedRevision = input.concepts.find(c => c.id === 'curiosity')?.revision || 0;
     proposal.activity.sourceRefs = input.sourceRefs;
     proposal.concepts[0].sourceRefs = input.sourceRefs;
-    const args = publications.get(input.trigger.text);
-    if (!args) throw new Error(`Unexpected scripted trigger: ${input.trigger.text}`);
-    const use = (id, capabilityArgs) => {
-      proposal.next = { model: params.model, effort: null, reason: 'Publish the prepared deliverable.', capability: { id, args: capabilityArgs } };
-    };
-    if (!input.previousProposal) use('catalog.view', { id: 'Output.publish' });
-    else if (input.previousProposal.next?.capability?.id === 'catalog.view') {
-      expect(input.capabilities.active.some(c => c.id === 'Output.publish')).toBe(true);
-      use('Output.publish', args);
-    } else {
-      expect(input.previousProposal.next?.capability?.id).toBe('Output.publish');
-      expect(input.capabilityResult).toBeTruthy();
-      proposal.reply = `Published ${args.title}.`;
-    }
+    proposal.reply = `Published ${args.title}.`;
     yield { type: 'text_delta', text: JSON.stringify(proposal) };
-    yield { type: 'stop', stopReason: 'end_turn' };
+    yield personStop(false);
   } };
   const context = { agentId: mockAgent.agentId, CONFIG: { serverUrl, yeaftDir: join(root, 'data'), workDir: root } };
   const send = async message => {
@@ -174,7 +176,7 @@ test('Output.publish markdown travels through relay and survives source deletion
     await expect.poll(() => runtime.requests.filter(r => r.op === 'outputs').length).toBe(1);
     expect(runtime.requests.find(r => r.op === 'outputs').payload).toEqual({ limit: 20 });
     expect(runtime.inputs).toHaveLength(3);
-    expect(runtime.inputs[0].capabilities.active.some(c => c.id === 'Output.publish')).toBe(false);
+    expect(runtime.inputs[0].capabilities.active).toEqual([]); // native schemas, not prepared proposals
     expect(runtime.requests.every(r => !Object.hasOwn(r.payload, 'ownerId'))).toBe(true);
     const status = runtime.responses.find(r => r.op === 'status' && r.ok);
     expect(status.data.outputsSupported).toBe(true);

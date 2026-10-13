@@ -836,6 +836,18 @@ describe('Digital Person conversation activity', () => {
     expect(value.rows).toHaveLength(2);
   });
 
+  it('keeps sibling tools independent by trace ID even when model and provider IDs match', () => {
+    const records = [trace(1, 'call_started', { callId: 'model' }), trace(2, 'call_output', { callId: 'model' }),
+      trace(3, 'capability_started', { callId: 'trace-a', modelCallId: 'model', toolUseId: 'provider', toolIndex: 0, capability: { id: 'Recall' } }),
+      trace(4, 'capability_started', { callId: 'trace-b', modelCallId: 'model', toolUseId: 'provider', toolIndex: 1, capability: { id: 'unknown' } }),
+      trace(5, 'capability_result', { callId: 'trace-a', modelCallId: 'model', capability: { id: 'Recall' } })];
+    const value = project(records);
+    expect(value.rows.map(row => [row.id, row.status])).toEqual([['model:model', 'completed'], ['capability:trace-a', 'completed'], ['capability:trace-b', 'running']]);
+    expect(value.rows[1].durationMs).toBe(2000);
+    expect(project(records, { busy: false, latestEpisode: { id: 'e', status: 'completed' } }).rows[2].status).toBe('unknown');
+    expect(JSON.stringify(value)).not.toContain('provider');
+  });
+
   it.each([
     ['catalog.search', 'searchingSkills'], ['catalog.view', 'readingSkill'],
     ['Skill.reconsider', 'readingMethod'], ['Skill.associate', 'readingMethod'],

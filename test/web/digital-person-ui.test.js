@@ -157,7 +157,7 @@ describe('Digital Person surface', () => {
     const firstPartElement = article.get('.person-reply-part').element;
     expect(article.get('.person-response-loading').exists()).toBe(true);
     state.messages.push({ ...p1, id: 'p2', text: '<script>Not active HTML</script>', createdAt: 62000 },
-      { ...p1, id: 'final', replyKind: 'final', text: '## Final conclusion', createdAt: 93000 });
+      { ...p1, id: 'final', replyKind: 'execution-final', text: '## Final conclusion', createdAt: 93000 });
     await Vue.nextTick();
     expect(wrapper.findAll('.person-reply')).toHaveLength(1);
     expect(article.findAll('.person-message-meta')).toHaveLength(1);
@@ -376,6 +376,23 @@ describe('Digital Person surface', () => {
     expect(wrapper.text()).not.toMatch(/person\.usage\./);
     wrapper.findAll('button').find(b => b.text() === messages['person.usage.older']).trigger('click');
     expect(wrapper.emitted('more')).toHaveLength(1);
+  });
+
+  it('renders one model with multiple independent tool trace rows and prefers the new array over legacy scalar', async () => {
+    const turn = personTurn(1, { calls: [{ callId: 'model', index: 1, status: 'completed', capabilities: [
+      { callId: 'trace-a', id: 'FileRead', status: 'completed', modelCallId: 'model', toolUseId: 'provider-a', toolIndex: 0, args: 'PRIVATE_ARGS' },
+      { callId: 'trace-b', id: 'Bash', status: 'future-status', code: 'UNCONFIRMED', modelCallId: 'model', toolUseId: 'provider-b', toolIndex: 1 },
+    ], capability: { id: 'legacy-duplicate', status: 'completed' } }] });
+    wrapper = mount(PersonTurnUsage, { props: { page: { items: [turn], loaded: true, nextCursor: 'older' } }, global: { config: { globalProperties: { $t: t } } } });
+    expect(wrapper.findAll('.person-call-step')).toHaveLength(1);
+    expect(wrapper.findAll('.person-call-capability').map(row => row.attributes('data-tool-call-id'))).toEqual(['trace-a', 'trace-b']);
+    expect(wrapper.text()).toContain('FileRead'); expect(wrapper.text()).toContain('Bash');
+    expect(wrapper.get('[data-tool-call-id="trace-b"]').text()).toContain('Unknown');
+    expect(wrapper.text()).not.toMatch(/PRIVATE_ARGS|legacy-duplicate|provider-a|provider-b/);
+    await wrapper.setProps({ page: { items: [personTurn()], loaded: true } });
+    expect(wrapper.findAll('.person-call-capability')).toHaveLength(1); // legacy scalar reader
+    await wrapper.setProps({ page: { items: [{ ...turn, calls: [{ ...turn.calls[0], capabilities: [] }] }], loaded: true } });
+    expect(wrapper.findAll('.person-call-capability')).toHaveLength(0);
   });
 
   it.each([en, zhCN])('labels capped historical call windows and uses the real episode loop count', async messages => {

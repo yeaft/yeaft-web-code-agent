@@ -37,7 +37,10 @@ export default {
     // for older records. Unknown primary counts remain visible, not zero.
     const input = usageInput;
     const extras = usageExtras;
-    return { list, entries, estimate, known, number, time, statusKey, input, extras, loops: usageLoops };
+    // An explicit array (including an empty one) is authoritative. Older turns
+    // attached a single capability directly to the model call.
+    const capabilities = call => Array.isArray(call.capabilities) ? call.capabilities : call.capability ? [call.capability] : [];
+    return { list, entries, estimate, known, number, time, statusKey, input, extras, capabilities, loops: usageLoops };
   },
   template: `
     <section id="person-turns" class="person-journal person-turn-usage" :aria-label="$t('person.turns')" :aria-busy="page.loading">
@@ -97,7 +100,7 @@ export default {
                   </template>
                 </dl>
                 <p v-if="call.contextSources && (call.contextSources.omittedMessages > 0 || call.contextSources.omittedConcepts > 0)" class="person-muted">{{ $t('person.usage.omitted', { messages: number(call.contextSources.omittedMessages), concepts: number(call.contextSources.omittedConcepts) }) }}</p>
-                <p v-if="call.capability" class="person-call-capability"><span>{{ call.capability.id }}</span><span class="person-muted">{{ $t('person.usage.status.' + statusKey(call.capability.status)) }}<template v-if="call.capability.code"> · {{ call.capability.code }}</template></span></p>
+                <p v-for="(tool, index) in capabilities(call)" :key="tool.callId || index" class="person-call-capability" :data-tool-call-id="tool.callId"><span>{{ tool.id }}</span><span class="person-muted">{{ $t('person.usage.status.' + statusKey(tool.status)) }}<template v-if="tool.code"> · {{ tool.code }}</template></span></p>
                 <p v-if="call.code" class="person-muted">{{ call.code }}<template v-if="call.code === 'OUTPUT_TRUNCATED'"> · {{ $t('person.outputTruncatedDetail') }}</template></p>
                 <details class="person-call-diagnostics">
                   <summary>{{ $t('person.usage.diagnostics') }}</summary>

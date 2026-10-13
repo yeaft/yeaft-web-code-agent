@@ -5,14 +5,19 @@ import { join } from 'node:path';
 import { ExecutionProgress } from '../../../../agent/yeaft/person/execution-progress.js';
 import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
 import { bytes, validateProposal } from '../../../../agent/yeaft/person/contracts.js';
-import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonProvider, NATIVE_CONTEXT_UNAVAILABLE_REASON } from '../../../../agent/yeaft/person/provider.js';
+import { defaultPersonMinimumRequestBytes } from '../../../../agent/yeaft/person/request-budget.js';
+import { createPersonService } from './fixture-adapter.js';
 import { config, finalProposal } from './fixtures.js';
 
 const dirs = [], services = [];
 const notes = { goal: 'Fix the fixture', findings: [{ summary: 'The fixture uses wall time.', sourceRefs: ['tool:read'] }], nextStep: 'Use trading time.', blocker: '' };
 const request = (service, op, payload = {}) => service.request({ ownerId: 'alice', op, payload });
-const use = (p, id, args = {}) => { p.next = { model: 'test/first', effort: null, reason: 'Use verified evidence.', capability: id ? { id, args } : null }; };
+function* tool(index, name, input) {
+  yield { type: 'tool_call', id: `tool-${index}`, name, input };
+  yield { type: 'stop', stopReason: 'tool_use' };
+}
+const toolResults = params => params.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content));
 function proposal(version = 0) { const p = finalProposal(version); p.concepts = []; p.state.focusConceptIds = []; p.reply = null; return p; }
 async function idle(service) {
   for (let i = 0; i < 300; i++) {
@@ -77,85 +82,135 @@ describe('Person execution continuity', () => {
     expect(full.manifest.contextBytes).toBe(full.manifest.contextBudgetBytes);
   });
 
-  it('continues a tight-window real loop after a valid large work proposal without mandatory duplication', async () => {
+  it('rejects 32K full-schema readiness and runs a smaller admissible window with one large final cognition', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'person-work-budget-')); dirs.push(dir);
     const smallConfig = { ...config, availableModels: config.availableModels.map(model => ({ ...model, contextWindow: 32768 })) };
     let step = 0, archivedWork;
     const adapter = { async *stream(params) {
-      const input = JSON.parse(params.messages[0].content), p = proposal(input.state.version); step++;
-      if (step === 1) {
-        p.activity.summary = 'a'.repeat(1500); p.decision.summary = 'd'.repeat(1000);
-        p.decision.selfCheck = 's'.repeat(1000); p.state.summary = 's'.repeat(3500);
-        p.work = { ...notes, findings: Array.from({ length: 6 }, () => ({ summary: '中'.repeat(200), sourceRefs: [input.trigger.ref] })) };
-        archivedWork = p.work; use(p, null);
+      const input = JSON.parse(params.messages[0].content); step++;
+      expect(input.previousProposal).toBeNull(); expect(input.episodeWork).toBeUndefined();
+      if (params.tools.length) {
+        if (step === 1) { yield* tool(step, 'FileRead', { file_path: join(dir, 'evidence.txt') }); return; }
+        expect(toolResults(params).at(-1).output).toContain('The fixture uses wall time.');
+        yield { type: 'text_delta', text: 'Verified the distinct fixture check.' };
       } else {
-        expect(input.previousProposal).not.toHaveProperty('work');
-        expect(input.episodeWork).toBeUndefined(); // Fits only when the optional work slot can be omitted.
-        p.state.summary = 'Finished the distinct check.';
+        expect(step).toBe(3);
+        const result = toolResults(params).at(-1), p = proposal(input.state.version);
+        expect(result.output).toContain('The fixture uses wall time.');
+        expect(params.messages.some(message => message.role === 'assistant' && message.content === 'Verified the distinct fixture check.')).toBe(true);
+        p.activity.summary = 'a'.repeat(1500); p.decision.summary = 'd'.repeat(1000);
+        p.decision.selfCheck = 's'.repeat(1000); p.state.summary = 'Finished the distinct check.';
+        p.work = { ...notes, findings: Array.from({ length: 6 }, () => ({ summary: '中'.repeat(200), sourceRefs: [result.sourceRef] })) };
+        archivedWork = p.work;
+        yield { type: 'text_delta', text: JSON.stringify(p) };
       }
-      yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
+      yield { type: 'stop', stopReason: 'end_turn' };
     } };
-    const service = createPersonService({ yeaftDir: dir, workDir: dir, config: smallConfig, adapter, embedding: { enabled: false } }); services.push(service);
-    await request(service, 'open'); await request(service, 'think', { text: 'x'.repeat(7000), clientMessageId: 'tight-window' });
+    const unavailable = createPersonService({ yeaftDir: dir, workDir: dir, config: smallConfig, nativeFixture: false, adapter, embedding: { enabled: false } }); services.push(unavailable);
+    await request(unavailable, 'open');
+    expect(await request(unavailable, 'status')).toMatchObject({ modelReady: false, reason: NATIVE_CONTEXT_UNAVAILABLE_REASON });
+    await request(unavailable, 'think', { clientMessageId: 'too-small' });
+    expect((await idle(unavailable)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'MODEL_UNAVAILABLE' });
+    expect(step).toBe(0);
+    await unavailable.close();
+    // 80K is genuinely smaller than the normal 100K fixture, but can fit the
+    // actual full schemas plus output/envelope and final-cognition reserves.
+    const usableConfig = { ...smallConfig, availableModels: smallConfig.availableModels.map(model => ({ ...model, contextWindow: 81920 })) };
+    const minimum = await defaultPersonMinimumRequestBytes(usableConfig);
+    expect(32768 - 4096 - 1024).toBeLessThan(minimum);
+    expect(81920 - 4096 - 1024).toBeGreaterThan(minimum);
+    await writeFile(join(dir, 'evidence.txt'), 'The fixture uses wall time.');
+    const service = createPersonService({ yeaftDir: dir, workDir: dir, config: usableConfig, nativeFixture: false, adapter, embedding: { enabled: false } }); services.push(service);
+    await request(service, 'think', { text: 'x'.repeat(7000), clientMessageId: 'tight-window' });
     const snapshot = await idle(service);
-    expect(snapshot.latestEpisode).toMatchObject({ status: 'completed' }); expect(step).toBe(2);
+    expect(snapshot.latestEpisode).toMatchObject({ status: 'completed' }); expect(step).toBe(3);
+    expect(snapshot.state).not.toHaveProperty('work');
     const traces = (await request(service, 'traces', { limit: 50 })).items;
-    const archived = traces.find(t => t.kind === 'call_output' && t.output?.text?.includes('"work"'));
-    expect(JSON.parse(archived.output.text).work).toEqual(archivedWork);
+    const archived = traces.filter(t => t.kind === 'call_output' && t.output?.protocol === 'cognition');
+    expect(archived).toHaveLength(1);
+    expect(JSON.parse(archived[0].output.text).work).toEqual(archivedWork);
     expect(archivedWork.findings).toHaveLength(6);
   });
 
-  it('keeps findings across cognition/catalog steps, performs a real edit/check, then clears notes for the next episode', async () => {
+  it('keeps real read/edit/check evidence in the continuous transcript and resets execution state for the next episode', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'person-execution-progress-')); dirs.push(dir);
     const path = join(dir, 'clock.js');
     const initial = `//${'x'.repeat(12000)}\nconst clock = "wall";\n//${'y'.repeat(12000)}\n`;
     await writeFile(path, initial);
-    const seen = []; let step = 0, saved, recovery;
+    const finding = 'The clock is wall time; edit this assignment.';
+    let step = 0, cognitionCalls = 0, nextCalls = 0, saved, recovery;
     const adapter = { async *stream(params) {
-      const input = JSON.parse(params.messages[0].content), p = proposal(input.state.version); seen.push(input);
+      const input = JSON.parse(params.messages[0].content), results = toolResults(params);
+      expect(input.previousProposal).toBeNull();
+      expect(input.episodeWork).toBeUndefined(); expect(input.executionPattern).toBeUndefined();
       if (input.state.version === 0) {
         step++;
-        if (step === 1) use(p, 'catalog.view', { id: 'FileRead' });
-        if (step === 2) use(p, 'FileRead', { file_path: path });
+        if (step === 1) { yield* tool(step, 'FileRead', { file_path: path }); return; }
+        if (step === 2) {
+          const read = results.at(-1);
+          expect(read.truncated).toBe(true); expect(read.output).not.toContain('"wall"');
+          recovery = read.recovery.read;
+          yield* tool(step, 'Execution__read', { ...recovery.args, offset: 12000 }); return;
+        }
         if (step === 3) {
-          expect(input.capabilityResult.truncated).toBe(true);
-          expect(input.capabilityResult.output).not.toContain('"wall"');
-          recovery = input.capabilityResult.recovery.read;
-          use(p, 'catalog.view', { id: 'Execution.read' });
+          const recovered = results.at(-1);
+          expect(recovered.output).toContain('"wall"');
+          expect(recovered.callId).toBe(recovery.args.callId);
+          saved = { ...notes, findings: [{ summary: finding, sourceRefs: [recovered.sourceRef] }] };
+          yield { type: 'text_delta', text: finding };
+          yield* tool(step, 'FileEdit', { file_path: path, old_string: '"wall"', new_string: '"trading"' }); return;
         }
-        if (step === 4) use(p, recovery.id, { ...recovery.args, offset: 12000 });
-        if (step === 5) {
-          expect(input.capabilityResult.output).toContain('"wall"');
-          saved = { ...notes, findings: [{ summary: 'The clock is wall time; edit this assignment.', sourceRefs: [input.capabilityResult.sourceRef] }] };
-          p.work = saved; use(p, null);
+        // No intermediate cognitive state/notes are needed to retain the actual
+        // observations, public finding and exact completed edit in this transcript.
+        expect(results.find(result => result.id === 'Execution.read').output).toContain('"wall"');
+        expect(params.messages.some(message => message.role === 'assistant' && message.content === finding)).toBe(true);
+        if (step === 4) {
+          expect(results.at(-1).ok).toBe(true);
+          yield* tool(step, 'FileRead', { file_path: path, offset: 1, limit: 1 }); return;
         }
-        if (step === 6) { expect(input.previousProposal).not.toHaveProperty('work'); expect(input.episodeWork).toEqual(saved); use(p, 'catalog.view', { id: 'FileEdit' }); }
-        if (step === 7) {
-          expect(input.previousProposal).not.toHaveProperty('work'); expect(input.episodeWork).toEqual(saved);
-          use(p, 'FileEdit', { file_path: path, old_string: '"wall"', new_string: '"trading"' });
+        expect(results.at(-1).output).toContain('"trading"');
+        expect(results).toHaveLength(4);
+        if (params.tools.length) {
+          expect(step).toBe(5);
+          yield { type: 'text_delta', text: 'Verified the real edit.' };
+        } else {
+          expect(step).toBe(6); cognitionCalls++;
+          const p = proposal(input.state.version); p.state.summary = 'Verified the real edit.'; p.work = saved;
+          yield { type: 'text_delta', text: JSON.stringify(p) };
         }
-        if (step === 8) {
-          expect(input.capabilityResult.ok).toBe(true); expect(input.episodeWork).toEqual(saved);
-          // The FileEdit contract can evict FileRead; reload instead of bypassing eligibility.
-          use(p, 'catalog.view', { id: 'FileRead' });
+      } else {
+        nextCalls++;
+        expect(input.state.version).toBe(1); expect(input.state.summary).toBe('Verified the real edit.');
+        expect(input.state).not.toHaveProperty('work');
+        expect(results).toEqual([]);
+        const assistants = params.messages.filter(message => message.role === 'assistant');
+        expect(assistants.every(message => !message.toolCalls?.length && message.content === '')).toBe(true);
+        if (params.tools.length) expect(assistants).toEqual([]);
+        if (!params.tools.length) {
+          cognitionCalls++;
+          yield { type: 'text_delta', text: JSON.stringify(proposal(input.state.version)) };
         }
-        if (step === 9) use(p, 'FileRead', { file_path: path, offset: 1, limit: 1 });
-        if (step === 10) {
-          expect(input.capabilityResult.output).toContain('"trading"'); p.work = null; use(p, null);
-        }
-        if (step === 11) { expect(input.episodeWork).toBeUndefined(); p.state.summary = 'Verified the real edit.'; }
-      } else { expect(input.episodeWork).toBeUndefined(); expect(input.executionPattern).toBeUndefined(); }
-      yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
+      }
+      yield { type: 'stop', stopReason: 'end_turn' };
     } };
-    const service = createPersonService({ yeaftDir: dir, workDir: dir, config, adapter, embedding: { enabled: false } }); services.push(service);
+    const service = createPersonService({ yeaftDir: dir, workDir: dir, config, nativeFixture: false, adapter, embedding: { enabled: false } }); services.push(service);
     await request(service, 'open'); await request(service, 'think', { text: 'Change wall to trading time in the fixture.', clientMessageId: 'edit' });
     const snapshot = await idle(service);
-    expect(snapshot.latestEpisode, `step=${step}; code=${snapshot.latestEpisode.terminalCode}`).toMatchObject({ status: 'completed' }); expect(snapshot.state).not.toHaveProperty('work');
+    expect(snapshot.latestEpisode, `step=${step}; code=${snapshot.latestEpisode.terminalCode}`).toMatchObject({ status: 'completed' });
+    expect(snapshot.state.version).toBe(1); expect(snapshot.state).not.toHaveProperty('work');
+    expect(step).toBe(6); expect(cognitionCalls).toBe(1);
     expect(await readFile(path, 'utf8')).toBe(initial.replace('"wall"', '"trading"'));
-    expect(seen[7].executionPattern.recent.map(item => item.capability)).toEqual(['FileRead', 'Execution.read', 'FileEdit']);
     const traces = (await request(service, 'traces', { limit: 50 })).items;
     const reads = traces.filter(t => t.kind === 'capability_started' && t.capability.id === 'FileRead');
     expect(reads).toHaveLength(2); expect(reads[0].capability.args).toMatchObject({ offset: 1, limit: 1 });
-    await request(service, 'think', { clientMessageId: 'next' }); expect((await idle(service)).latestEpisode.status).toBe('completed');
+    const raw = traces.find(t => t.kind === 'capability_result' && t.callId === recovery.args.callId);
+    expect(raw.result.output).toContain('"wall"'); expect(raw.result.output.length).toBeGreaterThan(24000);
+    expect(traces.filter(t => t.kind === 'capability_started' && t.capability.id === 'FileEdit')).toHaveLength(1);
+    const cognition = traces.filter(t => t.kind === 'call_output' && t.output.protocol === 'cognition');
+    expect(cognition).toHaveLength(1); expect(JSON.parse(cognition[0].output.text).work).toEqual(saved);
+    await request(service, 'think', { clientMessageId: 'next' });
+    const next = await idle(service);
+    expect(next.latestEpisode.status).toBe('completed'); expect(next.state.version).toBe(2);
+    expect(nextCalls).toBe(2); expect(cognitionCalls).toBe(2);
   });
 });

@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { digest, LIMITS } from '../../../../agent/yeaft/person/contracts.js';
 import { LocalPersonMemory } from '../../../../agent/yeaft/person/local-memory.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { config, finalProposal } from './fixtures.js';
 
@@ -171,16 +171,19 @@ describe('owner-scoped model candidates', () => {
     });
   });
 
-  it('freezes the subset at admission, blocks busy settings across services, and rejects model escape in a proposal', async () => {
+  it('freezes the actual subset at admission and blocks busy settings across services when Agent models change', async () => {
     const dir = await directory(), native = manyModels(), seen = [];
     let release, started;
     const ready = new Promise(resolve => { started = resolve; });
     const held = new Promise(resolve => { release = resolve; });
-    const s = create(dir, { config: native, adapter: { async *stream(params) {
-      const context = JSON.parse(params.messages[0].content); seen.push({ context, model: params.model }); started();
-      await held;
-      const p = finalProposal(context.state.version); p.concepts = []; p.state.focusConceptIds = [];
-      p.next = { model: 'test/model0', effort: null, reason: 'Escape owner candidate list', capability: null };
+    const s = create(dir, { config: native, nativeFixture: false, adapter: { async *stream(params) {
+      const context = JSON.parse(params.messages[0].content); seen.push({ context, model: params.model, tools: params.tools });
+      if (params.tools.length) {
+        started(); await held;
+        yield { type: 'stop', stopReason: 'end_turn' };
+        return;
+      }
+      const p = finalProposal(context.state.version); p.concepts = []; p.state.focusConceptIds = []; p.reply = null;
       yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
     } } });
     const other = create(dir, { config: native, adapter: {} });
@@ -196,8 +199,37 @@ describe('owner-scoped model candidates', () => {
         modelCandidates: ['test/model9', 'test/model11'], defaultModel: 'test/model11',
       }); } finally { db.close(); }
     } finally { release(); }
-    expect((await idle(s)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'MODEL_SELECTION' });
-    expect(seen).toHaveLength(1);
+    const done = await idle(s);
+    expect(done.latestEpisode.status).toBe('completed'); expect(done.state.version).toBe(1);
+    expect(seen).toHaveLength(2); expect(seen[1].tools).toEqual([]);
+    expect(seen.every(request => request.model === 'test/model11')).toBe(true);
+    expect(seen[1].context.models.map(model => model.id)).toEqual(['test/model9', 'test/model11']);
+  });
+
+  it('rejects illegal next in tools-free final cognition without committing or escaping the explicit model subset', async () => {
+    const native = manyModels(), seen = [], s = create(await directory(), { config: native, nativeFixture: false, adapter: { async *stream(params) {
+      const context = JSON.parse(params.messages[0].content); seen.push({ model: params.model, tools: params.tools });
+      if (!params.tools.length) {
+        const p = finalProposal(context.state.version); p.concepts = []; p.state.focusConceptIds = [];
+        p.state.summary = 'This illegal proposal must not commit.';
+        p.next = { model: 'test/model0', effort: null, reason: 'Escape owner candidate list', capability: null };
+        yield { type: 'text_delta', text: JSON.stringify(p) };
+      }
+      yield { type: 'stop', stopReason: 'end_turn' };
+    } } });
+    await call(s, 'open'); await call(s, 'settings', { modelCandidates: ['test/model9', 'test/model11'], defaultModel: 'test/model11' });
+    const before = await call(s, 'snapshot');
+    await call(s, 'think', { clientMessageId: 'illegal-final-next' });
+    const done = await idle(s);
+    expect(done.latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'INVALID_PROPOSAL' });
+    expect(done.state).toEqual(before.state); expect(done.concepts).toEqual(before.concepts);
+    expect(seen).toHaveLength(4); // One execution completion, three bounded cognition attempts.
+    expect(seen.every(request => request.model === 'test/model11')).toBe(true);
+    expect(seen.slice(1).every(request => request.tools.length === 0)).toBe(true);
+    const traces = (await call(s, 'traces', { limit: 50 })).items;
+    expect(traces.filter(trace => trace.kind === 'proposal_rejected')).toHaveLength(3);
+    expect(traces.some(trace => trace.kind === 'capability_started' || trace.kind === 'committed')).toBe(false);
+    expect((await call(s, 'status')).effectiveModelCandidates).toEqual(['test/model9', 'test/model11']);
   });
 
   it('reports stale owner selections as not ready while preserving the recovery catalog, and bounds the selectable catalog explicitly', async () => {
@@ -475,7 +507,7 @@ describe('Person inspection, search and name: SQLite', () => {
     const second = await call(s, 'search', { query: 'needle', cursor: first.nextCursor, limit: 50 });
     expect([...first.items, ...second.items].map(m => m.seq)).toEqual(Array.from({ length: 80 }, (_, i) => 80 - i));
     expect(second.nextCursor).toBeNull(); expect(stream).not.toHaveBeenCalled();
-  });
+  }, 30000); // 40 durable episodes with 300KB replies exercise byte paging, not storage throughput.
 
   it('rejects malformed bounds, sections, query/cursors and unopened owners', async () => {
     const s = service(); await call(s, 'open');

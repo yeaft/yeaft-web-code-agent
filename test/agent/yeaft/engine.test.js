@@ -7571,7 +7571,7 @@ describe('Engine', () => {
       }));
     });
 
-    it('never executes or persists partial Anthropic tool batches and safely retries a complete batch once', async () => {
+    it('never executes, persists or retries rejected Anthropic tool batches and executes a complete batch in order', async () => {
       const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-anthropic-tool-boundary-'));
       const originalFetch = global.fetch;
@@ -7599,7 +7599,8 @@ describe('Engine', () => {
           ['max-tokens', [...firstTool, stop('max_tokens'), messageStop]],
           ['idle', partial],
           ['abort', partial],
-          ['recover', [...partial, blockStop(1), stop('tool_use'), messageStop]],
+          ['complete', complete],
+          ['no-retry', [...partial, blockStop(1), stop('tool_use'), messageStop]],
         ]) {
           execute.mockClear();
           const sessionId = `session-stream-${name}`;
@@ -7608,7 +7609,8 @@ describe('Engine', () => {
           const cancel = vi.fn();
           global.fetch = vi.fn(async () => {
             requests += 1;
-            if (name === 'recover' && requests > 1) return sse(requests === 2 ? complete : [stop('end_turn'), messageStop]);
+            if (name === 'complete' && requests > 1) return sse([stop('end_turn'), messageStop]);
+            if (name === 'no-retry' && requests > 1) return sse(complete);
             if (name === 'idle' || name === 'abort') return new Response(new ReadableStream({ start(controller) {
               controller.enqueue(encode(events));
             }, cancel }));
@@ -7618,7 +7620,7 @@ describe('Engine', () => {
           const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', streamIdleTimeoutMs: 10 }), trace,
             toolRegistry: registry, conversationStore, yeaftDir,
             config: { model: 'claude-opus-4.8', modelEffort: 'high', projectDocMaxBytes: 0, maxOutputTokens: 1024,
-              llmRetry: { maxRetries: name === 'recover' ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+              llmRetry: { maxRetries: name === 'no-retry' ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
           const output = [];
           for await (const event of engine.query({ prompt: 'echo values', sessionId, signal: ctrl.signal, onProviderRequestStart: policy => policies.push(policy) })) {
             output.push(event);
@@ -7626,10 +7628,10 @@ describe('Engine', () => {
           }
           expect(policies[0]).toEqual({ effort: 'high', streamIdleTimeoutMs: 10 });
           const persisted = conversationStore.loadRecentBySession(sessionId, 50);
-          if (name === 'recover') {
-            expect(requests).toBe(3);
+          if (name === 'complete') {
+            expect(requests).toBe(2); // one tool batch and one tool-result continuation
             expect(execute.mock.calls.map(([input]) => input)).toEqual([{ value: 1 }, { value: 2 }]);
-            expect(output.filter(e => e.type === 'llm_retry')).toHaveLength(1);
+            expect(output.filter(e => e.type === 'llm_retry')).toHaveLength(0);
             expect(output.filter(e => e.type === 'tool_call')).toHaveLength(2);
             expect(persisted.flatMap(row => row.toolCalls || [])).toHaveLength(2);
             expect(persisted.filter(row => row.role === 'tool')).toHaveLength(2);
@@ -7640,6 +7642,7 @@ describe('Engine', () => {
             expect(persisted.flatMap(row => row.toolCalls || [])).toEqual([]);
             expect(persisted.filter(row => row.role === 'tool')).toEqual([]);
             expect(output.some(e => e.type === (name === 'abort' ? 'aborted' : 'error'))).toBe(true);
+            expect(output.filter(e => e.type === 'llm_retry')).toHaveLength(0);
           }
           if (name === 'idle' || name === 'abort') expect(cancel).toHaveBeenCalledTimes(1);
         }
@@ -7650,7 +7653,7 @@ describe('Engine', () => {
       }
     });
 
-    it('accounts for every rejected Anthropic tool response across retries without executing or persisting tools', async () => {
+    it('accounts for rejected Anthropic tool responses once without retrying, executing or persisting tools', async () => {
       const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-anthropic-retry-usage-'));
       const originalFetch = global.fetch;
@@ -7683,17 +7686,17 @@ describe('Engine', () => {
             const sessionId = `retry-usage-${format}-${invalid}`;
             const events = [];
             for await (const event of engine.query({ prompt: 'echo', sessionId, onProviderRequestStart })) events.push(event);
-            expect(global.fetch).toHaveBeenCalledTimes(4);
-            expect(onRequest).toHaveBeenCalledTimes(4);
-            expect(onProviderRequestStart.mock.calls.map(([policy]) => policy)).toEqual(Array(4).fill({ effort: 'xhigh', streamIdleTimeoutMs: 270_000 }));
-            expect(accounting.mock.calls.map(([tokens]) => tokens)).toEqual(Array(4).fill({
+            expect(global.fetch).toHaveBeenCalledTimes(1);
+            expect(onRequest).toHaveBeenCalledTimes(1);
+            expect(onProviderRequestStart.mock.calls.map(([policy]) => policy)).toEqual([{ effort: 'xhigh', streamIdleTimeoutMs: 270_000 }]);
+            expect(accounting.mock.calls.map(([tokens]) => tokens)).toEqual([{
               inputTokens: 10, outputTokens: 65536, cacheReadTokens: 7, cacheWriteTokens: 3, totalTokens: 65556,
-            }));
-            expect(events.filter(e => e.type === 'usage').reduce((sum, e) => sum + e.outputTokens, 0)).toBe(262144);
-            expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(3);
+            }]);
+            expect(events.filter(e => e.type === 'usage').reduce((sum, e) => sum + e.outputTokens, 0)).toBe(65536);
+            expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(0);
             expect(events.filter(e => e.type === 'error')).toHaveLength(1);
             expect(events).toContainEqual(expect.objectContaining({ type: 'turn_end', terminal: true, stopReason: 'error' }));
-            expect(events).toContainEqual(expect.objectContaining({ type: 'turn_close', outputTokens: 262144, totalTokens: 262224 }));
+            expect(events).toContainEqual(expect.objectContaining({ type: 'turn_close', outputTokens: 65536, totalTokens: 65556 }));
             expect(execute).not.toHaveBeenCalled();
             expect(events.filter(e => e.type === 'tool_call' || e.type === 'tool_start')).toEqual([]);
             const persisted = conversationStore.loadRecentBySession(sessionId, 50);

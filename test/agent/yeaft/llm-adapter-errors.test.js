@@ -13,6 +13,7 @@ import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-response
 import {
   LLMRateLimitError,
   LLMServerError,
+  LLMToolInputError,
   LLMAuthError,
   LLMPolicyError,
   LLMContextError,
@@ -546,10 +547,12 @@ describe('Anthropic tool input completion boundary', () => {
       for (const tail of failures) {
         const seen = [];
         vi.stubGlobal('fetch', vi.fn(async () => response([...validFirst, ...tail], compact)));
-        let caught;
-        try { for await (const e of adapter().stream(request)) seen.push(e); } catch (error) { caught = error; }
-        expect(caught).toBeInstanceOf(LLMServerError);
-        expect(caught.message).not.toContain('PRIVATE');
+        for await (const e of adapter().stream(request)) seen.push(e);
+        const failures = seen.filter(e => e.type === 'error');
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatchObject({ retryable: false, error: { toolInputRejected: true, retryable: false } });
+        expect(failures[0].error).toBeInstanceOf(LLMToolInputError);
+        expect(failures[0].error.message).not.toContain('PRIVATE');
         expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
       }
     }
@@ -593,7 +596,8 @@ describe('Anthropic tool input completion boundary', () => {
         ];
         vi.stubGlobal('fetch', vi.fn(async () => response(events, compact)));
         const seen = [];
-        await expect((async () => { for await (const e of adapter().stream(request)) seen.push(e); })()).rejects.toBeInstanceOf(LLMServerError);
+        for await (const e of adapter().stream(request)) seen.push(e);
+        expect(seen.find(e => e.type === 'error')).toMatchObject({ retryable: false, error: { toolInputRejected: true } });
         const usage = seen.filter(e => e.type === 'usage');
         expect(usage.map(e => e.outputTokens)).toEqual([1, 6, 65529]);
         expect(usage[0]).toMatchObject({ inputTokens: 10, cacheReadTokens: 7, cacheWriteTokens: 3 });
@@ -607,8 +611,10 @@ describe('Anthropic tool input completion boundary', () => {
       const usage = { input_tokens: 10, output_tokens: 65536, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 };
       vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ content: [start(0).content_block, start(1, input).content_block], stop_reason, usage })));
       const seen = [];
-      await expect((async () => { for await (const e of adapter().stream(request)) seen.push(e); })()).rejects.toBeInstanceOf(LLMServerError);
-      expect(seen).toEqual([{ type: 'usage', inputTokens: 10, outputTokens: 65536, cacheReadTokens: 7, cacheWriteTokens: 3,
+      for await (const e of adapter().stream(request)) seen.push(e);
+      expect(seen.find(e => e.type === 'error')).toMatchObject({ retryable: false, error: { toolInputRejected: true } });
+      expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
+      expect(seen.filter(e => e.type === 'usage')).toEqual([{ type: 'usage', inputTokens: 10, outputTokens: 65536, cacheReadTokens: 7, cacheWriteTokens: 3,
         reportedTokenFields: ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'], usageIncomplete: false }]);
     }
   });
@@ -651,7 +657,9 @@ describe('provider stream activity', () => {
       ] : [
         { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call', name: 'Tool' } },
       ];
-      events.push(...metadata, ...['', null, undefined, 42].map(delta), ...chunks.map(delta));
+      // Empty string deltas are valid no-ops; non-string argument fragments
+      // reject the batch (covered by provider-tool-input-safety.test.js).
+      events.push(...metadata, delta(''), ...chunks.map(delta));
       // Both Responses reasoning variants stay hidden. Anthropic keeps its
       // existing visible thinking_delta projection, but never emits empties.
       if (anthropic) {

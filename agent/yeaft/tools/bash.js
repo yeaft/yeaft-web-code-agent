@@ -238,42 +238,45 @@ Guidelines:
       if (result.stderr) parts.push(`STDERR:\n${result.stderr}`);
       if (result.truncated) parts.push('[Captured output truncated; command exit/timeout status is reported separately. Use a background task for a durable log.]');
       if (result.timedOut) parts.push(`\n(Command timed out after ${timeout}ms)`);
-      if (result.terminationError) {
+      // runProcess resolves after close/owned cleanup, or reports an explicit
+      // terminationError. A missing exit code is not confirmed exit evidence.
+      const terminationConfirmed = !result.terminationError && Number.isInteger(result.exitCode);
+      if (!terminationConfirmed) {
         parts.push([
-          `WARNING: ${result.terminationError}`,
-          'The command timed out, but process-tree termination could not be confirmed. The command may still be running.',
-          'Decide whether to inspect or stop it, retry, or use background=true.',
+          `WARNING: ${result.terminationError || 'No confirmed process exit code was captured.'}`,
+          'Process-tree termination could not be confirmed. The command may still be running.',
+          'Inspect or stop it before retrying or launching another command; use background=true only after resolving its lifecycle.',
         ].join('\n'));
       }
-      if (result.timedOut) {
+      if (result.timedOut || !terminationConfirmed) {
         ctx?.requestToolBatchBarrier?.({
-          kind: 'owned_timeout',
+          kind: result.timedOut ? 'owned_timeout' : 'exit_unconfirmed',
           message: [
-            result.terminationError
-              ? 'The foreground Bash command timed out and process-tree termination could not be confirmed.'
-              : 'The foreground Bash command timed out.',
+            result.timedOut ? 'The foreground Bash command timed out.' : 'The foreground Bash command did not report a confirmed exit.',
+            ...(!terminationConfirmed ? ['Process-tree termination could not be confirmed.'] : []),
             'Return this result to the model before executing another tool call from the same batch.',
           ].join(' '),
         });
       }
 
       const output = parts.join('\n');
-      if (result.exitCode !== 0 || result.timedOut || result.terminationError) {
+      if (result.exitCode !== 0 || result.timedOut || !terminationConfirmed) {
         const failureType = result.timedOut
-          ? (result.terminationError ? 'timeout_unconfirmed' : 'timeout_confirmed')
-          : result.terminationError || result.exitCode === null ? 'exit_unconfirmed' : 'exit_nonzero';
+          ? (terminationConfirmed ? 'timeout_confirmed' : 'timeout_unconfirmed')
+          : terminationConfirmed ? 'exit_nonzero' : 'exit_unconfirmed';
+        const exitCode = Number.isInteger(result.exitCode) ? result.exitCode : null;
         return JSON.stringify({
           error: result.timedOut
-            ? `Command timed out after ${timeout}ms${result.terminationError ? '; process-tree termination was not confirmed' : ''}.`
-            : `Command exited with code ${result.exitCode}.`,
+            ? `Command timed out after ${timeout}ms${terminationConfirmed ? '' : '; process-tree termination was not confirmed'}.`
+            : terminationConfirmed ? `Command exited with code ${exitCode}.` : 'Command termination was not confirmed; the command may still be running.',
           code: `bash_${failureType}`,
           errorEffect: 'unknown',
           failureType,
-          exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
-          status: `Exit code: ${result.exitCode}`,
+          exitCode,
+          status: `Exit code: ${exitCode}${result.timedOut ? '; timed out' : ''}; termination ${terminationConfirmed ? 'confirmed' : 'unconfirmed'}`,
           workingDirectory: `Working directory: ${cwd}`,
           timedOut: result.timedOut === true,
-          terminationConfirmed: result.timedOut ? !result.terminationError : null,
+          terminationConfirmed,
           terminationError: result.terminationError || null,
           cwd,
           output: output || '(no output)',

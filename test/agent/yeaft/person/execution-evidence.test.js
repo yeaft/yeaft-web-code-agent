@@ -177,7 +177,7 @@ describe('Person Execution.read discovery and native projection', () => {
     const projected = projectNativeResult(result);
     expect(bytes(projected)).toBeLessThanOrEqual(8192); expect(projected.output).not.toContain('\ufffd');
     expect(projected).toMatchObject({ truncated: true, ok: false, code: 'TOOL_FAILED', errorEffect: 'unknown', rawBytes: raw.length, sha256: result.sha256,
-      recovery: { prepare: { id: 'catalog.view', args: { id: 'Execution.read' } }, read: { id: 'Execution.read', args: { callId: 'original-call', episodeId: 'original-episode', offset: 0, maxBytes: 4096 } } } });
+      recovery: {  read: { id: 'Execution.read', args: { callId: 'original-call', episodeId: 'original-episode', offset: 0, maxBytes: 4096 } } } });
     const { start, end } = projected.hiddenRange;
     expect(start).toBeGreaterThan(0); expect(end).toBeLessThan(raw.length); expect(end).toBeGreaterThan(start);
     expect(projected.output).toBe(raw.subarray(0, start).toString('utf8') + `\n[omitted UTF-8 bytes ${start}..${end} of ${raw.length}]\n` + raw.subarray(end).toString('utf8'));
