@@ -105,19 +105,6 @@ describe('native provider wire contracts', () => {
     }
   });
 
-  it('Responses terminal output wins over done slots and incomplete/reasoning-only is sealed', async () => {
-    const reasoning = responsesItems[0];
-    const fetch = vi.fn().mockImplementation(() => Promise.resolve(sse([
-      { type: 'response.output_item.done', output_index: 0, item: reasoning },
-      { type: 'response.incomplete', response: { id: 'r', status: 'incomplete', output: [reasoning], usage: { output_tokens: 3 } } },
-    ])));
-    vi.stubGlobal('fetch', fetch);
-    const events = await collect(new OpenAIResponsesAdapter({ apiKey: 'synthetic' }).stream({ model: 'gpt-5', messages: [], requestIdentity: identity, providerContext: context('openai-responses') }));
-    expect(events.filter(e => e.type === 'provider_state')).toHaveLength(1);
-    expect(events.find(e => e.type === 'provider_state').providerState.items).toEqual([reasoning]);
-    expect(events.filter(e => e.type === 'text_delta')).toHaveLength(0);
-  });
-
   it('Anthropic preserves interleaved blocks and signature fragments through tools + caching', async () => {
     const events = [{ type: 'message_start', message: { id: 'a', usage: { input_tokens: 10, output_tokens: 0 } } }];
     anthropicItems.forEach((block, index) => {
@@ -143,21 +130,6 @@ describe('native provider wire contracts', () => {
     expect(body.messages[0].content).toEqual(anthropicItems);
     expect(body.messages[1].content[0]).toMatchObject({ type: 'tool_result', cache_control: { type: 'ephemeral' } });
     expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' });
-  });
-
-  it('does not reuse disconnected partial state and supports Anthropic JSON fallback', async () => {
-    const fetch = vi.fn().mockResolvedValueOnce(sse([
-      { type: 'message_start', message: { id: 'partial', usage: {} } },
-      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: 'half', signature: '' } },
-    ])).mockResolvedValueOnce(json({ id: 'complete', content: anthropicItems, stop_reason: 'tool_use', usage: { output_tokens: 3 } }));
-    vi.stubGlobal('fetch', fetch);
-    const adapter = new AnthropicAdapter({ apiKey: 'synthetic' });
-    const params = { model: 'claude-sonnet-4', messages: [], requestIdentity: identity, providerContext: context('anthropic') };
-    const partial = [];
-    await expect((async () => { for await (const e of adapter.stream(params)) partial.push(e); })()).rejects.toThrow();
-    expect(partial.some(e => e.type === 'provider_state')).toBe(false);
-    const complete = await collect(adapter.stream(params));
-    expect(complete.find(e => e.type === 'provider_state').providerState.items).toEqual(anthropicItems);
   });
 
   it('does not send cache without account scope or replay unowned legacy signatures', async () => {

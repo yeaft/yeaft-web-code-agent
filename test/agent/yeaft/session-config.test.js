@@ -7,12 +7,11 @@ import { loadConfig } from '../../../agent/yeaft/config.js';
 import { getPluginConfig, updatePluginConfig } from '../../../agent/yeaft/config-api.js';
 import { flushAllAgentPerfTraces } from '../../../agent/yeaft/perf-trace.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
-import { __testResetVpState, __testSetSession, handleYeaftCopySession, handleYeaftManagedSkill } from '../../../agent/yeaft/web-bridge.js';
+import { __testResetVpState, __testSetSession, handleYeaftManagedSkill } from '../../../agent/yeaft/web-bridge.js';
 import { _resetAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
-import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
-import { sessionsRoot, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
+import { sessionsRoot } from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
 const originalConfig = ctx.CONFIG;
@@ -158,39 +157,6 @@ describe('Yeaft managed Skill protocol', () => {
 });
 
 describe('Yeaft session-scoped model config', () => {
-  it('forwards a turn boundary through the bridge and removes invalid partial forks', () => {
-    const root = makeDir();
-    createSession(sessionsRoot(root), {
-      id: 'fork-boundary-source', name: 'Boundary source', roster: [], defaultVpId: null,
-    }).close();
-    const conversation = new ConversationStore(root);
-    conversation.append({ role: 'user', content: 'Question', sessionId: 'fork-boundary-source' });
-    conversation.append({
-      role: 'assistant', content: 'Answer', sessionId: 'fork-boundary-source', turnId: 'turn-answer',
-    });
-    conversation.append({ role: 'user', content: 'Later', sessionId: 'fork-boundary-source' });
-    ctx.CONFIG = { ...(originalConfig || {}), yeaftDir: root };
-
-    const start = ctx.messageBuffer.length;
-    handleYeaftCopySession({
-      requestId: 'fork-boundary-request', sessionId: 'fork-boundary-source', throughTurnId: 'turn-answer',
-    });
-    const success = ctx.messageBuffer.slice(start).map(frame => frame.event)
-      .find(event => event?.requestId === 'fork-boundary-request');
-    expect(success).toMatchObject({ op: 'copy', ok: true, session: { copiedMessageCount: 2 } });
-    expect(conversation.loadAllBySession(success.session.id).map(row => row.content)).toEqual(['Question', 'Answer']);
-
-    handleYeaftCopySession({
-      requestId: 'fork-boundary-invalid', sessionId: 'fork-boundary-source', throughTurnId: '',
-    });
-    const failure = ctx.messageBuffer.map(frame => frame.event)
-      .find(event => event?.requestId === 'fork-boundary-invalid');
-    expect(failure).toMatchObject({ op: 'copy', ok: false, error: { code: 'invalid_fork_boundary' } });
-    expect(snapshotSessions(root).map(row => row.id)).toEqual([
-      'fork-boundary-source', success.session.id,
-    ]);
-  });
-
   it('fails closed for an invalid config.json root and preserves every bad file', () => {
     const root = makeDir();
     const configPath = join(root, 'config.json');

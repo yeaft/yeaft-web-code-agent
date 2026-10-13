@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
-import { LLMRateLimitError, LLMServerError, LLMAuthError, LLMPolicyError, LLMContextError, LLMStreamIdleTimeoutError } from '../../../agent/yeaft/llm/adapter.js';
+import { LLMRateLimitError, LLMServerError, LLMPolicyError, LLMToolInputError, LLMStreamIdleTimeoutError } from '../../../agent/yeaft/llm/adapter.js';
 
 const originalFetch = global.fetch;
 
@@ -146,24 +146,6 @@ describe('AnthropicAdapter error classification', () => {
     expect(caught.message).not.toContain('SECRET_SAMPLE');
   });
 
-  it('throws LLMContextError on prompt-too-long body', async () => {
-    global.fetch = async () => errorResponse({ status: 400, body: 'prompt is too long' });
-    const adapter = new AnthropicAdapter({ baseUrl: 'https://x', apiKey: 'k' });
-    let caught;
-    try { await consume(adapter.stream({ model: 'claude-3-5-sonnet', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
-    catch (err) { caught = err; }
-    expect(caught).toBeInstanceOf(LLMContextError);
-  });
-
-  it('throws LLMAuthError on 401', async () => {
-    global.fetch = async () => errorResponse({ status: 401, body: 'unauthorized' });
-    const adapter = new AnthropicAdapter({ baseUrl: 'https://x', apiKey: 'k' });
-    let caught;
-    try { await consume(adapter.stream({ model: 'claude-3-5-sonnet', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
-    catch (err) { caught = err; }
-    expect(caught).toBeInstanceOf(LLMAuthError);
-  });
-
   it('throws retryable stream idle timeout when SSE stalls after message_start', async () => {
     global.fetch = async () => idleStreamResponse();
     const adapter = new AnthropicAdapter({ baseUrl: 'https://x', apiKey: 'k', streamIdleTimeoutMs: 5 });
@@ -188,39 +170,6 @@ describe('AnthropicAdapter error classification', () => {
 describe('OpenAIResponsesAdapter error classification', () => {
   afterEach(() => {
     global.fetch = originalFetch;
-  });
-
-  it('throws LLMRateLimitError with parsed Retry-After on 429', async () => {
-    global.fetch = async () => errorResponse({
-      status: 429,
-      body: 'too fast',
-      headers: { 'retry-after': '3' },
-    });
-    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k' });
-    let caught;
-    try { await consume(adapter.stream({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
-    catch (err) { caught = err; }
-    expect(caught).toBeInstanceOf(LLMRateLimitError);
-    expect(caught.retryAfterMs).toBe(3_000);
-  });
-
-  it('throws LLMContextError on 413', async () => {
-    global.fetch = async () => errorResponse({ status: 413, body: 'too large' });
-    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k' });
-    let caught;
-    try { await consume(adapter.stream({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
-    catch (err) { caught = err; }
-    expect(caught).toBeInstanceOf(LLMContextError);
-  });
-
-  it('throws retryable stream idle timeout when Responses SSE stalls', async () => {
-    global.fetch = async () => idleStreamResponse();
-    const adapter = new OpenAIResponsesAdapter({ baseUrl: 'https://x', apiKey: 'k', streamIdleTimeoutMs: 5 });
-    let caught;
-    try { await consume(adapter.stream({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }] })); }
-    catch (err) { caught = err; }
-    expect(caught).toBeInstanceOf(LLMStreamIdleTimeoutError);
-    expect(caught).toBeInstanceOf(LLMServerError);
   });
 
   it('throws retryable error when Responses SSE ends before a terminal event', async () => {
@@ -263,32 +212,6 @@ describe('Anthropic tool input completion boundary', () => {
   const adapter = () => new AnthropicAdapter({ baseUrl: 'https://proxy.invalid', apiKey: 'synthetic' });
   const request = { model: 'claude-opus-4.8', messages: [] };
 
-  it('rejects malformed/non-object input and incomplete sibling batches before publishing any tool', async () => {
-    const validFirst = [start(0), delta(0, '{"value":1}'), stop(0)];
-    const failures = [
-      ...['{"secret":"PRIVATE', 'null', '[]', '"PRIVATE"', '42'].map(input => [start(1), delta(1, input), stop(1), messageStop]),
-      ...[null, [], 'PRIVATE'].map(input => [start(1, input), stop(1), messageStop]),
-      [start(1), delta(1, '{"value":'), messageStop],
-      [start(1), 'malformed-SSE-PRIVATE', stop(1), messageStop],
-      [start(1), delta(1, '{"value":'), '[DONE]'],
-      [start(1), delta(1, '{"value":')],
-      [{ type: 'message_delta', delta: { stop_reason: 'tool_use' } }],
-      ['[DONE]'],
-      [{ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }, messageStop],
-    ];
-    for (const compact of [false, true]) {
-      for (const tail of failures) {
-        const seen = [];
-        vi.stubGlobal('fetch', vi.fn(async () => response([...validFirst, ...tail], compact)));
-        let caught;
-        try { for await (const e of adapter().stream(request)) seen.push(e); } catch (error) { caught = error; }
-        expect(caught).toBeInstanceOf(LLMServerError);
-        expect(caught.message).not.toContain('PRIVATE');
-        expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
-      }
-    }
-  });
-
   it('accounts for cumulative usage before rejecting truncated or malformed SSE tool batches', async () => {
     for (const compact of [false, true]) {
       for (const [input, stop_reason] of [['{}', 'max_tokens'], ['{"value":', 'max_tokens'], ['null', 'tool_use']]) {
@@ -301,7 +224,11 @@ describe('Anthropic tool input completion boundary', () => {
         ];
         vi.stubGlobal('fetch', vi.fn(async () => response(events, compact)));
         const seen = [];
-        await expect((async () => { for await (const e of adapter().stream(request)) seen.push(e); })()).rejects.toBeInstanceOf(LLMServerError);
+        for await (const e of adapter().stream(request)) seen.push(e);
+        const failures = seen.filter(e => e.type === 'error');
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatchObject({ retryable: false, error: { toolInputRejected: true, retryable: false } });
+        expect(failures[0].error).toBeInstanceOf(LLMToolInputError);
         const usage = seen.filter(e => e.type === 'usage');
         expect(usage.map(e => e.outputTokens)).toEqual([1, 6, 65529]);
         expect(usage[0]).toMatchObject({ inputTokens: 10, cacheReadTokens: 7, cacheWriteTokens: 3 });

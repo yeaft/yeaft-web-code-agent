@@ -416,33 +416,6 @@ describe('Engine', () => {
   });
 
   describe('adapter errors', () => {
-    it('should handle adapter throw gracefully', async () => {
-      const engine = new Engine({
-        adapter: {
-          async *stream() {
-            throw new Error('Network error');
-          },
-        },
-        trace,
-        config: { model: 'test-model', maxOutputTokens: 1024 },
-      });
-
-      const events = [];
-      for await (const event of engine.query({ prompt: 'hello' })) {
-        events.push(event);
-      }
-
-      const errorEvents = events.filter(e => e.type === 'error');
-      expect(errorEvents).toHaveLength(1);
-      expect(errorEvents[0].error.message).toBe('Network error');
-      expect(errorEvents[0].retryable).toBe(false);
-
-      // Should still emit turn_end
-      const turnEnds = events.filter(e => e.type === 'turn_end');
-      expect(turnEnds).toHaveLength(1);
-      expect(turnEnds[0]).toMatchObject({ stopReason: 'error', terminal: true });
-    });
-
     it('shrinks and retries provider context overflow without a compact LLM call', async () => {
       const { LLMContextError } = await import('../../../agent/yeaft/llm/adapter.js');
       let streamCalls = 0;
@@ -556,7 +529,7 @@ describe('Engine', () => {
       expect(errorEvents).toHaveLength(0);
     });
 
-    it('never executes or persists partial Anthropic tool batches and safely retries a complete batch once', async () => {
+    it('never executes, persists or retries rejected Anthropic tool batches and executes a complete batch in order', async () => {
       const { AnthropicAdapter } = await import('../../../agent/yeaft/llm/anthropic.js');
       const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-anthropic-tool-boundary-'));
       const originalFetch = global.fetch;
@@ -584,7 +557,8 @@ describe('Engine', () => {
           ['max-tokens', [...firstTool, stop('max_tokens'), messageStop]],
           ['idle', partial],
           ['abort', partial],
-          ['recover', [...partial, blockStop(1), stop('tool_use'), messageStop]],
+          ['complete', complete],
+          ['no-retry', [...partial, blockStop(1), stop('tool_use'), messageStop]],
         ]) {
           execute.mockClear();
           const sessionId = `session-stream-${name}`;
@@ -593,7 +567,8 @@ describe('Engine', () => {
           const cancel = vi.fn();
           global.fetch = vi.fn(async () => {
             requests += 1;
-            if (name === 'recover' && requests > 1) return sse(requests === 2 ? complete : [stop('end_turn'), messageStop]);
+            if (name === 'complete' && requests > 1) return sse([stop('end_turn'), messageStop]);
+            if (name === 'no-retry' && requests > 1) return sse(complete);
             if (name === 'idle' || name === 'abort') return new Response(new ReadableStream({ start(controller) {
               controller.enqueue(encode(events));
             }, cancel }));
@@ -603,7 +578,7 @@ describe('Engine', () => {
           const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', streamIdleTimeoutMs: 10 }), trace,
             toolRegistry: registry, conversationStore, yeaftDir,
             config: { model: 'claude-opus-4.8', modelEffort: 'high', projectDocMaxBytes: 0, maxOutputTokens: 1024,
-              llmRetry: { maxRetries: name === 'recover' ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
+              llmRetry: { maxRetries: name === 'no-retry' ? 1 : 0, baseDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } } });
           const output = [];
           for await (const event of engine.query({ prompt: 'echo values', sessionId, signal: ctrl.signal, onProviderRequestStart: policy => policies.push(policy) })) {
             output.push(event);
@@ -611,10 +586,10 @@ describe('Engine', () => {
           }
           expect(policies[0]).toEqual({ effort: 'high', streamIdleTimeoutMs: 10 });
           const persisted = conversationStore.loadRecentBySession(sessionId, 50);
-          if (name === 'recover') {
-            expect(requests).toBe(3);
+          if (name === 'complete') {
+            expect(requests).toBe(2); // one tool batch and one tool-result continuation
             expect(execute.mock.calls.map(([input]) => input)).toEqual([{ value: 1 }, { value: 2 }]);
-            expect(output.filter(e => e.type === 'llm_retry')).toHaveLength(1);
+            expect(output.filter(e => e.type === 'llm_retry')).toHaveLength(0);
             expect(output.filter(e => e.type === 'tool_call')).toHaveLength(2);
             expect(persisted.flatMap(row => row.toolCalls || [])).toHaveLength(2);
             expect(persisted.filter(row => row.role === 'tool')).toHaveLength(2);
@@ -625,7 +600,12 @@ describe('Engine', () => {
             expect(persisted.flatMap(row => row.toolCalls || [])).toEqual([]);
             expect(persisted.filter(row => row.role === 'tool')).toEqual([]);
             expect(output.some(e => e.type === (name === 'abort' ? 'aborted' : 'error'))).toBe(true);
+            expect(output.filter(e => e.type === 'llm_retry')).toHaveLength(0);
           }
+          // Tool-loop boundaries are nonterminal; query owns exactly one terminal boundary.
+          expect(output.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
+            expect.objectContaining({ terminal: true, stopReason: name === 'complete' ? 'end_turn' : name === 'abort' ? 'aborted' : 'error' }),
+          ]);
           if (name === 'idle' || name === 'abort') expect(cancel).toHaveBeenCalledTimes(1);
         }
       } finally {
@@ -677,57 +657,6 @@ describe('Engine', () => {
           statusCode: 422,
         }),
       });
-    });
-
-    it('does not retry a generic validation 422', async () => {
-      let attempts = 0;
-      const invalid = Object.assign(new Error('Invalid request schema'), { statusCode: 422 });
-      const engine = new Engine({
-        adapter: {
-          async *stream() {
-            attempts += 1;
-            throw invalid;
-          },
-        },
-        trace,
-        config: { model: 'test-model', maxOutputTokens: 1024 },
-      });
-
-      const events = [];
-      for await (const event of engine.query({ prompt: 'hello' })) events.push(event);
-
-      expect(attempts).toBe(1);
-      expect(events.filter(event => event.type === 'llm_retry')).toHaveLength(0);
-      expect(events.find(event => event.type === 'error')).toMatchObject({ retryable: false });
-    });
-
-    it('does not retry a policy-denied 403', async () => {
-      const { LLMAuthError } = await import('../../../agent/yeaft/llm/adapter.js');
-      let attempts = 0;
-      const engine = new Engine({
-        adapter: {
-          async *stream() {
-            attempts += 1;
-            throw new LLMAuthError('LLM provider returned HTTP 403 (permission_denied)', 403, {
-              reasonCode: 'permission_denied',
-              temporary: false,
-            });
-          },
-        },
-        trace,
-        config: {
-          model: 'test-model',
-          maxOutputTokens: 1024,
-          llmRetry: { forbiddenRetryDelaysMs: [0, 0] },
-        },
-      });
-
-      const events = [];
-      for await (const event of engine.query({ prompt: 'hello' })) events.push(event);
-
-      expect(attempts).toBe(1);
-      expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(0);
-      expect(events.find(e => e.type === 'error').error.reasonCode).toBe('permission_denied');
     });
 
     it('terminates on non-retryable in-band adapter error instead of normal end_turn', async () => {

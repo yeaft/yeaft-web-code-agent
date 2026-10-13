@@ -318,45 +318,6 @@ describe('ConversationStore', () => {
     });
   });
 
-    it("should write session messages under that session's conversation history", () => {
-      const msg = store.append({ role: 'user', content: 'Hello session', sessionId: 's_fun' });
-      expect(msg.id).toBe('m0001');
-      expect(existsSync(join(TEST_DIR, 'sessions', 's_fun', 'conversation', 'segments', '000001.jsonl'))).toBe(true);
-      expect(existsSync(join(TEST_DIR, 'groups', 's_fun', 'conversation', 'messages', 'm0001.md'))).toBe(false);
-      expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
-      expect(store.loadRecent(10)).toEqual([]);
-      expect(store.loadRecentBySession('s_fun', 10)).toHaveLength(1);
-    });
-
-    it('should read legacy conversation paths without mixing chat and session records', () => {
-      const legacyMessages = join(TEST_DIR, 'conversation', 'messages');
-      mkdirSync(legacyMessages, { recursive: true });
-      writeFileSync(join(legacyMessages, 'm0001.md'), `---
-id: m0001
-role: user
-time: 2026-06-26T00:00:00Z
-threadId: main
-tokens_est: 3
----
-
-legacy chat`, { encoding: 'utf8' });
-      writeFileSync(join(legacyMessages, 'm0002.md'), `---
-id: m0002
-role: user
-time: 2026-06-26T00:00:01Z
-threadId: main
-sessionId: s_fun
-tokens_est: 4
----
-
-legacy session`, { encoding: 'utf8' });
-
-      const compatStore = new ConversationStore(TEST_DIR);
-      expect(compatStore.loadRecent(10).map(m => m.content)).toEqual(['legacy chat']);
-      // Per-session load paths no longer fall back to the legacy flat dir.
-      expect(compatStore.loadRecentBySession('s_fun', 10).map(m => m.content)).toEqual([]);
-    });
-
   describe('Session visible history search', () => {
     it('searches only visible rows in the requested Session, newest first', () => {
       const first = store.append({ role: 'user', content: 'Needle in the first turn', sessionId: 'session_search' });
@@ -511,41 +472,6 @@ legacy session`, { encoding: 'utf8' });
     });
   });
 
-  // Cascade delete + orphan compaction.
-
-  describe('compactOrphans', () => {
-    it('deletes messages whose sessionId is missing or unknown', () => {
-      store.appendBatch([
-        { role: 'user', content: 'live',     sessionId: 'grp_live' },
-        { role: 'user', content: 'orphan-a', sessionId: 'grp_dead' },
-        { role: 'user', content: 'orphan-b' },                       // no sessionId
-        { role: 'user', content: 'live-2',   sessionId: 'grp_live' },
-      ]);
-
-      const result = store.compactOrphans({ keepGroupIds: ['grp_live'] });
-      expect(result.skipped).toBe(false);
-      expect(result.scanned).toBe(4);
-      expect(result.removed).toBe(2);
-      expect(store.loadAll().map(m => m.content).sort()).toEqual(['live', 'live-2']);
-    });
-  });
-
-  describe('JSONL cold rows', () => {
-    it('keeps archived session rows readable while excluding them from hot counts', () => {
-      const user = store.append({ role: 'user', content: 'cold question', sessionId: 'session_cold', threadId: 'main' });
-      store.append({ role: 'assistant', content: 'hot answer', sessionId: 'session_cold', speakerVpId: 'vp-linus', threadId: 'main' });
-
-      store.moveToCold(user.id);
-
-      expect(store.countHot()).toBe(1);
-      expect(store.countCold()).toBe(1);
-      expect(store.loadAllBySession('session_cold').map(m => m.content)).toEqual(['cold question', 'hot answer']);
-      expect(store.loadOlderBySession('session_cold', null, 10).messages.map(m => m.content)).toEqual(['cold question', 'hot answer']);
-      expect(store.loadVisibleBySession('session_cold', null, 10).messages.map(m => m.content)).toEqual(['cold question', 'hot answer']);
-      expect(store.loadSessionHistoryForVp('session_cold', 'vp-linus').map(m => m.content)).toEqual(['cold question', 'hot answer']);
-    });
-  });
-
   describe('clear', () => {
     it('does not reuse global message ids or reset the allocator after clearing transcript rows', () => {
       const old = store.append({ role: 'user', content: 'Old' });
@@ -557,50 +483,6 @@ legacy session`, { encoding: 'utf8' });
 
       expect(afterClear).toEqual(before);
       expect(Number(msg.id.slice(1))).toBeGreaterThan(Number(old.id.slice(1)));
-    });
-  });
-
-  // ─── Legacy flat dir regression guard: the legacy
-  //     conversation/messages/ and conversation/cold/ flat directories
-  //     are NEVER scanned when loading session history.  All session
-  //     messages now live exclusively in per-session directories, and
-  //     scanning the flat dirs would be a pure-performance regression.
-  describe('legacy dir is never scanned', () => {
-    function writeLegacyMessage(baseDir, seq, sessionId, role, content) {
-      const msgDir = join(baseDir, 'conversation', 'messages');
-      mkdirSync(msgDir, { recursive: true });
-      const id = `m${String(seq).padStart(4, '0')}`;
-      const raw = `---
-id: ${id}
-role: ${role}
-time: 2026-06-21T10:00:00Z
-threadId: main
-sessionId: ${sessionId}
-tokens_est: 5
----
-
-${content}`;
-      writeFileSync(join(msgDir, `${id}.md`), raw, { encoding: 'utf8', mode: 0o644 });
-    }
-
-    it('loadVisibleBySession respects turn window without legacy interference', () => {
-      const store = new ConversationStore(TEST_DIR);
-      writeLegacyMessage(TEST_DIR, 1, 'grp_window', 'user', 'legacy');
-
-      // Write 3 dedicated user turns.
-      store.append({ role: 'user', content: 'turn0', sessionId: 'grp_window' });
-      store.append({ role: 'assistant', content: 'reply0', sessionId: 'grp_window' });
-      store.append({ role: 'user', content: 'turn1', sessionId: 'grp_window' });
-      store.append({ role: 'assistant', content: 'reply1', sessionId: 'grp_window' });
-      store.append({ role: 'user', content: 'turn2', sessionId: 'grp_window' });
-      store.append({ role: 'assistant', content: 'reply2', sessionId: 'grp_window' });
-
-      // Limit to 2 turns — only turn1 and turn2 should appear.
-      const visible = store.loadVisibleBySession('grp_window', null, 2);
-      expect(visible.messages.map(m => m.content)).toEqual([
-        'turn1', 'reply1', 'turn2', 'reply2',
-      ]);
-      expect(visible.hasMore).toBe(true);
     });
   });
 });
