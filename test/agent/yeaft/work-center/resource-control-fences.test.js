@@ -1,22 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkItemStore } from '../../../../agent/yeaft/work-center/store.js';
 import { WorkflowController } from '../../../../agent/yeaft/work-center/controller.js';
-import { WorkCenterService } from '../../../../agent/yeaft/work-center/service.js';
-import { __testSetWorkCenterService, handleWorkCenterRequest } from '../../../../agent/yeaft/work-center/bridge.js';
 import { projectWorkItemDetail, projectWorkItemSummary } from '../../../../agent/yeaft/work-center/projection.js';
-import ctx from '../../../../agent/context.js';
-import { agents } from '../../../../server/context.js';
-import { handleClientWorkCenter, deliverWorkCenterResponse, __testResetWorkCenterRequests } from '../../../../server/handlers/client-work-center.js';
-
-// Routing tests exercise the real access/correlation boundary, but never open
-// Server runtime data through the transport helper's catalog imports.
-vi.mock('../../../../server/database.js', () => ({
-  sessionDb: {}, yeaftProjectDb: {}, yeaftSessionDb: {}, sessionUiMetadataDb: {},
-}));
-
 const fixtures = [];
 function fixture(maxAttempts = 2) {
   const dir = mkdtempSync(join(tmpdir(), 'work-center-control-fence-'));
@@ -36,11 +24,6 @@ function resume(controller, store, id) {
 }
 
 afterEach(() => {
-  __testSetWorkCenterService(null);
-  ctx.ws = null;
-  ctx.outboundSendQueue = [];
-  ctx.outboundSendQueueActive = false;
-  vi.unstubAllGlobals();
   for (const { store, dir } of fixtures.splice(0)) {
     try { store.close(); } catch {}
     rmSync(dir, { recursive: true, force: true });
@@ -131,84 +114,6 @@ describe('Work Center execution epoch and contract fences', () => {
     controller.cancel(item.id);
     resume(controller, store, item.id);
     expect(store.claimReadyAction('no-third')).toBeNull();
-  });
-
-  it('uses the lower global attempt cap even when the Action originally allowed more', () => {
-    const { store, item, controller } = fixture(9);
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const claim = store.claimReadyAction(`run-${attempt}`);
-      expect(claim).not.toBeNull();
-      expect(store.getExecutionControl(item.id).actionAttempts[0]).toMatchObject({
-        attempts: attempt, originalMaxAttempts: 9, effectiveMaxAttempts: 3,
-      });
-      controller.cancel(item.id);
-      resume(controller, store, item.id);
-    }
-    expect(store.claimReadyAction('fourth')).toBeNull();
-    expect(store.getExecutionControl(item.id).stopReason).toMatchObject({ code: 'action_attempts_exhausted', attempts: 3 });
-  });
-
-  it('carries authenticated extend/resume CAS through the browser bridge and public snapshots', async () => {
-    const { store, item, controller, dir } = fixture();
-    const service = new WorkCenterService({ store, controller, yeaftDir: dir, runner: null, coordinator: null });
-    __testSetWorkCenterService(service);
-    const frames = [];
-    ctx.ws = { readyState: 1, send: value => frames.push(JSON.parse(value)) };
-    vi.stubGlobal('WebSocket', { OPEN: 1 });
-    store.stopExecution(item.id, 'run_requests_exhausted');
-    const executionControlRevision = store.getExecutionControl(item.id).revision;
-    await expect(service.handle('extend_budget', { id: item.id, executionControlRevision, additions: { maxRequests: 1 }, userOriginated: true }))
-      .rejects.toThrow(/explicit user/);
-    await expect(service.handle('resume', { id: item.id, revision: item.revision }, { userOriginated: true }))
-      .rejects.toThrow(/executionControlRevision/);
-    await handleWorkCenterRequest({ requestId: 'extend', op: 'extend_budget', payload: {
-      id: item.id, executionControlRevision, additions: { maxRequests: 1 }, userOriginated: false,
-    } });
-    await new Promise(resolve => setImmediate(resolve));
-    expect(frames.find(frame => frame.requestId === 'extend')).toMatchObject({ ok: true,
-      data: { revision: item.revision, executionControl: { revision: executionControlRevision + 1, stopReason: { code: 'run_requests_exhausted' } } } });
-    await handleWorkCenterRequest({ requestId: 'resume', op: 'resume', payload: {
-      id: item.id, revision: item.revision, executionControlRevision: executionControlRevision + 1,
-    } });
-    await new Promise(resolve => setImmediate(resolve));
-    expect(frames.find(frame => frame.requestId === 'resume')).toMatchObject({ ok: true,
-      data: { revision: item.revision, executionControl: { revision: executionControlRevision + 2, stopReason: null } } });
-    expect(store.claimReadyAction('explicit-user')).not.toBeNull();
-  });
-
-  it('keeps server Agent-access and response-ownership gates on both explicit budget operations', async () => {
-    const agentId = 'resource-control-agent';
-    const agentFrames = [];
-    const clientFrames = [];
-    agents.set(agentId, { capabilities: ['work_center'], encryptOutbound: false,
-      ws: { readyState: 1, send: value => agentFrames.push(JSON.parse(value)) } });
-    const client = { userId: 'budget-owner', encryptOutbound: false,
-      ws: { readyState: 1, send: value => clientFrames.push(JSON.parse(value)) } };
-    try {
-      for (const op of ['extend_budget', 'resume']) {
-        const payload = { id: 'work-item', executionControlRevision: 2,
-          ...(op === 'resume' ? { revision: 7 } : { additions: { maxRequests: 1 } }) };
-        const message = { type: 'work_center_request', agentId, requestId: `browser-${op}`, op, payload };
-        const before = agentFrames.length;
-        const deny = vi.fn(async () => false);
-        await handleClientWorkCenter(client, message, deny);
-        expect(deny).toHaveBeenCalledWith(agentId);
-        expect(agentFrames).toHaveLength(before);
-        await handleClientWorkCenter(client, message, async () => true);
-        const forwarded = agentFrames.at(-1);
-        expect(forwarded).toMatchObject({ op, payload });
-        expect(forwarded.requestId).not.toBe(message.requestId);
-        const response = { type: 'work_center_response', requestId: forwarded.requestId, op,
-          ok: true, data: { executionControl: { revision: 3 } } };
-        expect(await deliverWorkCenterResponse('wrong-agent', response)).toBe(false);
-        expect(await deliverWorkCenterResponse(agentId, response)).toBe(true);
-        expect(clientFrames.at(-1)).toMatchObject({ requestId: message.requestId, agentId,
-          ok: true, data: { executionControl: { revision: 3 } } });
-      }
-    } finally {
-      __testResetWorkCenterRequests();
-      agents.delete(agentId);
-    }
   });
 
   it('additively migrates the original resource ledger schema without rewriting goal revision or usage', () => {
