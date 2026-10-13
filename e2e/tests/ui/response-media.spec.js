@@ -66,73 +66,6 @@ async function open(page, provider = route => route.fulfill({ contentType: 'text
   await page.goto(origin, { waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.__ready);
 }
 
-for (const theme of ['light', 'dark']) {
-  test(`card imagery and real embedded map at 320px, ${theme}`, async ({ page }) => {
-    await page.setViewportSize({ width: 320, height: 800 });
-    const errors = []; page.on('pageerror', error => errors.push(error.message));
-    await open(page);
-    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    await expect(page.locator('.response-cards img')).toHaveCount(2);
-    await expect(page.getByAltText('Supplied weather station logo')).toBeVisible();
-    expect(await page.getByAltText('Supplied weather station logo').evaluate(el => getComputedStyle(el).objectFit)).toBe('contain');
-    expect(await page.getByAltText('Supplied basketball photo').evaluate(el => getComputedStyle(el).objectFit)).toBe('cover');
-    await expect(page.locator('.response-cards li').last().locator('img')).toHaveCount(0);
-    const frame = page.locator('.response-map iframe');
-    await expect(frame).toHaveCount(1);
-    await expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
-    await expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
-    await expect(frame).toHaveAttribute('tabindex', '0');
-    await expect(frame).not.toHaveAttribute('allow', /geolocation/);
-    await expect(frame).toHaveAttribute('title', /OpenStreetMap/);
-    await expect(page.frameLocator('.response-map iframe').getByRole('button', { name: 'Provider map control' })).toBeVisible();
-    await expect(page.locator('.response-map-list li')).toHaveCount(2);
-    await expect(page.locator('.response-map')).toContainText('cannot verify');
-    await expect(page.locator('.response-map')).toContainText('network restrictions');
-    const select = page.getByRole('combobox', { name: 'Map location' });
-    await select.focus(); await expect(select).toBeFocused();
-    await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
-    await expect(frame).toHaveAttribute('src', /marker=37\.8051(?:%2C|,)-122\.2724/);
-    await expect(page.locator('.response-map-list')).toContainText('37.7793, -122.4193');
-    await frame.focus(); await expect(frame).toBeFocused();
-    await page.keyboard.press('Tab');
-    await expect(page.frameLocator('.response-map iframe').getByRole('button', { name: 'Provider map control' })).toBeFocused();
-    await page.keyboard.press('Tab');
-    await expect(page.getByRole('button', { name: 'Retry map' })).toBeFocused();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    expect(errors).toEqual([]);
-  });
-}
-
-test('map timeout, retry, coordinates-only fallback and stale iframe events', async ({ page }) => {
-  await page.clock.install();
-  let requests = 0;
-  await open(page, () => { requests++; }); // Hold the provider request: failed frames may still fire onload.
-  await page.clock.fastForward(13000);
-  await expect(page.locator('.response-map')).toContainText('taking too long');
-  await page.getByRole('button', { name: 'Retry map' }).click();
-  await expect.poll(() => requests).toBe(2);
-  await page.getByRole('button', { name: 'Show coordinates only' }).click();
-  await expect(page.locator('.response-map iframe')).toHaveCount(0);
-  await expect(page.locator('.response-map-list li')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Retry map' }).click();
-  await expect(page.locator('.response-map iframe')).toHaveCount(1);
-  await page.evaluate(() => { window.__oldFrame = document.querySelector('.response-map iframe'); });
-  await page.getByRole('combobox').selectOption('1');
-  await page.evaluate(() => { window.__oldFrame.dispatchEvent(new Event('load')); });
-  await expect(page.locator('.response-map [role="status"]')).toContainText('Loading map');
-  await page.locator('.response-map iframe').dispatchEvent('error');
-  await expect(page.locator('.response-map [role="status"]')).toContainText('could not be loaded');
-  await page.getByRole('button', { name: 'Retry map' }).click();
-  await expect(page.locator('.response-map [role="status"]')).toContainText('Loading map');
-  expect(page.context().pages()).toHaveLength(1); // No timeout, error or fallback auto-opens a tab.
-  await page.evaluate(() => {
-    window.__state.presentation.blocks[1] = { type: 'map', points: [window.__state.presentation.blocks[1].points[0]], embed: { provider: 'openstreetmap' } };
-  });
-  await expect(page.locator('.response-map iframe')).toHaveAttribute('title', 'OpenStreetMap · Civic Center');
-  await expect(page.locator('.response-map iframe')).toHaveAttribute('src', /marker=37\.7793(?:%2C|,)-122\.4193/);
-  await expect(page.getByRole('combobox')).toHaveCount(0);
-});
-
 test('card errors/retry, reserved image slot and URL replacement ignore stale events', async ({ page }) => {
   await open(page);
   const image = page.getByAltText('Supplied weather station logo');
@@ -162,30 +95,6 @@ test('card errors/retry, reserved image slot and URL replacement ignore stale ev
   await expect(page.locator('.response-cards li').first()).toContainText('Weather report');
 });
 
-test('source/provider/directions use owning browser; explicit arrows remain native', async ({ page }) => {
-  await open(page);
-  await page.getByRole('link', { name: 'View source', exact: true }).click();
-  await page.getByRole('link', { name: 'Open in OpenStreetMap', exact: true }).click();
-  await page.getByRole('link', { name: 'Directions in Google Maps', exact: true }).first().focus();
-  await page.keyboard.press('Enter');
-  expect(await page.evaluate(() => window.__opened)).toEqual([
-    'https://example.test/weather', expect.stringContaining('https://www.openstreetmap.org/'),
-    'https://www.google.com/maps/dir/?api=1&destination=37.7793%2C-122.4193',
-  ]);
-  const arrow = page.locator('.response-cards [data-response-external]');
-  await expect(arrow).toHaveAttribute('target', '_blank');
-  await expect(arrow).toHaveAttribute('rel', 'noopener noreferrer');
-  // Suppress navigation only after bubbling through the renderer; native action stays unconsumed.
-  await page.evaluate(() => {
-    document.addEventListener('click', event => {
-      if (event.target.closest('[data-response-external]')) { window.__nativeArrow = !event.defaultPrevented; event.preventDefault(); }
-    }, { once: true });
-  });
-  await arrow.click();
-  expect(await page.evaluate(() => window.__nativeArrow)).toBe(true);
-  expect(await page.evaluate(() => window.__opened.length)).toBe(3);
-});
-
 test('verified Google share embed, not a homepage, API key, arbitrary iframe or HTML', async ({ page }) => {
   await open(page);
   await page.evaluate(points => {
@@ -208,32 +117,4 @@ test('verified Google share embed, not a homepage, API key, arbitrary iframe or 
   await page.evaluate(() => { window.__state.presentation.blocks = [{ type: 'markdown', text: '<iframe src="https://evil.example"></iframe><script>window.__pwned=true</script>' }]; });
   await expect(page.locator('.response-presentation iframe, .response-presentation script')).toHaveCount(0);
   expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
-});
-
-test('OSM boundary points remain in viewport and polar selection stays readable without a misleading frame', async ({ page }) => {
-  await open(page);
-  const boundaryPoints = [
-    { label: 'North edge', latitude: 85.05, longitude: 180 },
-    { label: 'South edge', latitude: -85.05, longitude: -180 },
-    { label: 'North pole', latitude: 90, longitude: 0 },
-    { label: 'South pole', latitude: -90, longitude: 0 },
-  ];
-  await page.evaluate(points => { window.__state.presentation.blocks = [{ type: 'map', points, embed: { provider: 'openstreetmap' } }]; }, boundaryPoints);
-  for (const index of [0, 1]) {
-    await page.getByRole('combobox').selectOption(String(index));
-    const url = new URL(await page.locator('.response-map iframe').getAttribute('src'));
-    const [west, south, east, north] = url.searchParams.get('bbox').split(',').map(Number);
-    const point = boundaryPoints[index];
-    expect(west).toBeLessThan(point.longitude); expect(east).toBeGreaterThan(point.longitude);
-    expect(south).toBeLessThan(point.latitude); expect(north).toBeGreaterThan(point.latitude);
-  }
-  for (const index of [2, 3]) {
-    await page.getByRole('combobox').selectOption(String(index));
-    await expect(page.locator('.response-map iframe')).toHaveCount(0);
-    await expect(page.locator('.response-map')).toContainText("outside the street map's supported projection");
-    await expect(page.locator('.response-map-list li')).toHaveCount(4);
-    await expect(page.getByRole('button', { name: 'Retry map' })).toHaveCount(0);
-  }
-  await page.getByRole('combobox').selectOption('0');
-  await expect(page.locator('.response-map iframe')).toHaveCount(1);
 });

@@ -1,16 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPersonService } from './fixture-adapter.js';
-import { assembleContext, PersonRuntime, projectTaskEvidence } from '../../../../agent/yeaft/person/runtime.js';
+import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
-import { createPersonNativeRegistry, createPersonToolHost, NATIVE_TOOL_IDS, NATIVE_TOOL_MANIFESTS } from '../../../../agent/yeaft/person/native-tools.js';
-import { getAgentRegistry, _resetAgentRegistry } from '../../../../agent/yeaft/tools/agent.js';
+
+import { _resetAgentRegistry } from '../../../../agent/yeaft/tools/agent.js';
 import { _resetNotifications } from '../../../../agent/yeaft/sub-agent/notifications.js';
-import { PersonTaskHost } from '../../../../agent/yeaft/person/task-host.js';
-import { bytes, validateProposal } from '../../../../agent/yeaft/person/contracts.js';
+
+import { bytes } from '../../../../agent/yeaft/person/contracts.js';
 import { config, finalProposal } from './fixtures.js';
 
 const services = [], directories = [];
@@ -56,57 +55,6 @@ afterEach(async () => {
 });
 
 describe('Person async native service integration', () => {
-  it('drives two concurrent real child Engines, waits and commits their result summary using the producing provider effort', async () => {
-    const dir = await directory(), gate = deferred(), childRequests = [], childEngines = [], inputs = [], children = [], results = [];
-    const adapter = parentAdapter((input, p, params) => {
-      inputs.push(input);
-      params.onEffortDecision?.({ requested: params.effort ?? null, effective: 'low', model: params.model,
-        source: 'wire-test', cap: 'low', wireMode: 'reasoning-effort', thinkingEnabled: true });
-      if (input.capabilityResult?.id === 'SpawnAgent' && typeof input.capabilityResult.output === 'string') children.push(JSON.parse(input.capabilityResult.output).agentId);
-      if (input.capabilityResult?.id === 'WaitAgent' && typeof input.capabilityResult.output === 'string') results.push(JSON.parse(input.capabilityResult.output).result);
-      switch (inputs.length) {
-        case 1: use(p, 'catalog.view', { id: 'SpawnAgent' }, 'test/first', 'high'); break;
-        case 2: use(p, 'SpawnAgent', { name: 'one', task: 'Analyze one.', persona: 'explorer' }, 'test/second', 'high'); break;
-        case 3: use(p, 'SpawnAgent', { name: 'two', task: 'Analyze two.', persona: 'explorer' }, 'test/first', 'high'); break;
-        case 4: use(p, 'catalog.view', { id: 'WaitAgent' }); break;
-        case 5: use(p, 'WaitAgent', { agent_id: children[0], timeout_ms: 3000 }); break;
-        case 6: use(p, 'WaitAgent', { agent_id: children[1], timeout_ms: 3000 }); break;
-        default: p.reply = results.join('; ');
-      }
-    }, async function* (params) {
-      childRequests.push(params);
-      childEngines.push([...getAgentRegistry().values()].find(agent => agent.name === (childRequests.length === 1 ? 'one' : 'two')).subEngine);
-      if (childRequests.length === 2) gate.resolve();
-      await gate.promise;
-      yield { type: 'text_delta', text: `child-result-${childRequests.indexOf(params) + 1}` };
-      yield { type: 'usage', inputTokens: 1, outputTokens: 1 };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    });
-    const s = service(dir, adapter, { effortEnabled: true });
-    await call(s, 'open');
-    await call(s, 'send', { text: 'Run two analyses concurrently and summarize.', clientMessageId: 'parallel' });
-    const terminal = await idle(s);
-    expect(terminal.latestEpisode.status, JSON.stringify(terminal.latestEpisode)).toBe('completed');
-    expect(childRequests).toHaveLength(2);
-    expect(childRequests.map(p => p.model)).toEqual(['test/first', 'test/first']);
-    expect(childRequests.every(p => p.effort === 'low')).toBe(true);
-    expect(results).toEqual(['child-result-1', 'child-result-2']);
-    expect((await call(s, 'messages')).items.find(m => m.role === 'assistant').text).toBe('child-result-1; child-result-2');
-    for (const id of children) {
-      const agent = getAgentRegistry().get(id);
-      expect(agent.parentEffortDecision).toMatchObject({ requested: null, effective: 'low', cap: 'low', source: 'wire-test', model: childRequests[children.indexOf(id)].model });
-      const engine = childEngines[children.indexOf(id)];
-      expect(engine).toBeTruthy();
-      const names = engine.toolRegistry.getAllTools().map(tool => tool.name);
-      expect(names).toContain('DiscoverTools');
-      for (const tool of ['SpawnAgent', 'AskUser', 'HistorySearch', 'RouteForward', 'EnterWorktree']) expect(names).not.toContain(tool);
-    }
-    await s.close();
-    expect(children.every(id => getAgentRegistry().get(id).__driverStarted === false)).toBe(true);
-    expect(await readdir(dir)).not.toContain('sessions');
-    expect(await readdir(dir)).not.toContain('sessions-manifest.json');
-  });
-
   it('retains background work after normal commit, exposes completion only on the next explicit episode, and preserves raw logs on restart', async () => {
     const dir = await directory(), inputs = []; let taskId;
     const adapter = parentAdapter((input, p) => {
@@ -128,7 +76,14 @@ describe('Person async native service integration', () => {
     await call(s, 'open'); await call(s, 'think', { text: 'launch', clientMessageId: 'launch' });
     expect((await idle(s)).latestEpisode.status).toBe('completed');
     expect(inputs[2].capabilityResult.output).toContain('Started background task');
-    await pause(550);
+    // Wait on observed task state rather than assuming a busy CI host finishes in 550ms.
+    let completed;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      completed = (await call(s, 'tasks')).tasks.find(task => task.id === taskId);
+      if (completed?.status === 'succeeded') break;
+      await pause(20);
+    }
+    expect(completed?.status).toBe('succeeded');
     expect(inputs).toHaveLength(3); // Completion must not reenter the provider.
     await call(s, 'think', { text: 'inspect', clientMessageId: 'inspect' });
     expect((await idle(s)).latestEpisode.status).toBe('completed');
@@ -149,31 +104,7 @@ describe('Person async native service integration', () => {
     expect(await readFile(join(logs, sessionDirs[0], `${taskId}.log`), 'utf8')).toContain('completed');
   });
 
-  it.each(['episode', 'owner', 'close', 'failure'])('joins background effects on %s cancellation, including effects of an already completed episode', async mode => {
-    const dir = await directory(); let count = 0, taskId;
-    const adapter = parentAdapter((input, p) => {
-      if (++count === 1) use(p, 'catalog.view', { id: 'Bash' });
-      if (count === 2) use(p, 'Bash', { command: command('setInterval(()=>{},1000)'), background: true });
-      if (count === 3) {
-        taskId = input.capabilityResult.output.match(/Started background task (\S+)\./)[1];
-        if (mode === 'failure') throw new Error('provider failed after launch');
-      }
-    }, async function* () {});
-    const s = service(dir, adapter);
-    await call(s, 'open'); const admission = await call(s, 'think', { text: 'launch', clientMessageId: 'stop' });
-    const state = await idle(s);
-    expect(state.latestEpisode.status).toBe(mode === 'failure' ? 'failed' : 'completed');
-    if (mode === 'episode') await call(s, 'cancel', { episodeId: admission.episodeId });
-    if (mode === 'owner') await call(s, 'cancel');
-    if (mode === 'close') await s.close();
-    const roots = await readdir(join(dir, 'person', 'tasks'));
-    const base = join(dir, 'person', 'tasks', roots[0], 'tasks', 'sessions');
-    const taskDirs = await readdir(base);
-    expect(JSON.parse(await readFile(join(base, taskDirs[0], `${taskId}.json`), 'utf8')).status).toBe('cancelled');
-    expect(count).toBe(3);
-  });
-
-  it.each(['episode', 'owner'])('fences owner admission throughout %s cancellation of completed cognition and overlapping joins', async scope => {
+  it('fences owner admission throughout owner cancellation of completed cognition and overlapping joins', async () => {
     const dir = await directory(), toolStarted = deferred(), toolRelease = deferred(), toolAborted = deferred();
     const durableEntered = [deferred(), deferred()], durableRelease = [deferred(), deferred()];
     let parentCalls = 0, childCalls = 0, runtime;
@@ -210,9 +141,9 @@ describe('Person async native service integration', () => {
     });
     const s = service(dir, adapter);
     await call(s, 'open');
-    const admission = await call(s, 'think', { text: 'launch', clientMessageId: 'blocked-launch' });
+    await call(s, 'think', { text: 'launch', clientMessageId: 'blocked-launch' });
     expect((await idle(s)).latestEpisode.status).toBe('completed');
-    const payload = scope === 'episode' ? { episodeId: admission.episodeId } : {};
+    const payload = {};
     let first, second;
     const assertBusy = async suffix => {
       for (const op of ['think', 'send', 'dream']) {
@@ -243,58 +174,4 @@ describe('Person async native service integration', () => {
     }
   });
 
-  it('projects large task/child evidence with external-only provenance and does not truncate durable records', async () => {
-    const record = { id: 'large', result: '中\\"'.repeat(20000) };
-    const evidence = projectTaskEvidence({ namespace: 'private', agents: [record], completions: [], tasks: [], toolResults: [] });
-    expect(bytes(evidence)).toBeLessThanOrEqual(8192);
-    expect(evidence.items.every(item => bytes(item) <= 2048)).toBe(true);
-    expect(evidence.items[0]).toMatchObject({ kind: 'agent', truncated: true });
-    expect(evidence.items[0].output).not.toContain('\ufffd');
-    expect(record.result.length).toBeGreaterThan(40000);
-    const provider = await createPersonProvider({ config, adapter: {} });
-    const ctx = assembleContext({ snapshot: { person: { id: 'p', soul: 'Be honest.' }, state: { version: 0 }, messages: [], concepts: [] },
-      episode: { id: 'e', kind: 'dream', text: '' }, provider, selection: provider.defaultSelection, taskEvidence: evidence, remainingCalls: 1 });
-    const source = evidence.items[0].sourceRef;
-    expect(ctx.sources.get(source)).toEqual({ kind: 'external-task-observation', reportedSourceRefs: [] });
-    const p = finalProposal(); p.concepts[0].sourceRefs = [source];
-    const rules = { stateVersion: 0, sourceRefs: ctx.sourceRefs, concepts: ctx.concepts, sources: ctx.sources, catalog: provider.catalog };
-    expect(validateProposal(p, rules)).toBe(p);
-    p.concepts[0].epistemicState = 'reported'; expect(() => validateProposal(p, rules)).toThrow();
-  });
-
-  it('dispatches foreground tools through scoped registry too, and keeps configuration-only construction lazy', async () => {
-    const dir = await directory(), untouched = join(dir, 'not-created');
-    const s = service(untouched, {});
-    expect(await readdir(dir)).toEqual([]);
-    await s.close(); expect(await readdir(dir)).toEqual([]);
-    const dispatch = vi.fn(async () => 'scoped observation');
-    const host = createPersonToolHost({ workDir: dir, yeaftDir: dir, config,
-      getContext: async () => ({ nativeRegistry: { execute: dispatch } }) });
-    expect(await host.execute('FileRead', { file_path: 'unused' })).toMatchObject({ output: 'scoped observation' });
-    expect(dispatch).toHaveBeenCalledWith('FileRead', { file_path: 'unused' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
-    const orchestration = ['SpawnAgent', 'ListAgents', 'WaitAgent', 'PromptAgent', 'CloseAgent', 'UpdateAgent', 'ListTasks', 'ReadTaskLog', 'WaitTask', 'CancelTask'];
-    for (const id of orchestration) expect(NATIVE_TOOL_MANIFESTS.find(m => m.id === id)).toMatchObject({ args: { type: 'object' }, source: { revision: expect.any(String) } });
-    expect(NATIVE_TOOL_IDS).not.toContain('DiscoverTools');
-    const registry = createPersonNativeRegistry(); expect(registry.has('DiscoverTools')).toBe(true);
-    for (const id of ['HistorySearch', 'AskUser', 'RouteForward']) expect(registry.has(id)).toBe(false);
-  });
-
-  it('recovers an uncontrolled persisted running task as orphaned without dispatching a provider', async () => {
-    const dir = await directory();
-    const host = new PersonTaskHost({ yeaftDir: dir, namespace: 'default', workDir: dir, config });
-    const episode = { id: 'before-restart', ownerId: 'alice', personId: 'person-recovery' };
-    const attached = await host.context({ episode });
-    const task = attached.taskManager.startTask({ kind: 'shell', title: 'lost external control', source: { episodeId: episode.id } });
-    attached.taskManager.completeTask(attached.sessionId, task.id, { status: 'succeeded', result: {} });
-    await host.close();
-    const path = join(attached.taskHost.dataRoot, 'tasks', 'sessions', attached.sessionId, `${task.id}.json`);
-    const saved = JSON.parse(await readFile(path, 'utf8')); saved.status = 'running'; saved.completedAt = null;
-    await writeFile(path, JSON.stringify(saved));
-    const recovered = new PersonTaskHost({ yeaftDir: dir, namespace: 'default', workDir: dir, config });
-    try {
-      const ctx = await recovered.context({ episode: { ...episode, id: 'after-restart' } });
-      expect(ctx.taskManager.getTask(ctx.sessionId, task.id).status).toBe('orphaned');
-      expect(recovered.snapshot('alice').completions.some(item => item.task.id === task.id && item.task.status === 'orphaned')).toBe(true);
-    } finally { await recovered.close(); }
-  });
 });

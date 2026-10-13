@@ -2,6 +2,7 @@ import { expect } from '@playwright/test';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
 import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
@@ -19,6 +20,7 @@ test('Person runs parallel independent threads and collects background shell log
   const cancelGate = new Promise(resolve => { releaseCancel = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
   const adapter = { async *stream(params) {
+    await setImmediate(); // Model I/O yields to the relay and native workers.
     let input;
     try { input = personInput(params); } catch {}
     // Native child Engine requests have natural-language input, not Person triggers.

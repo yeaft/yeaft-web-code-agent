@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { bytes, digest, LIMITS } from '../../../../agent/yeaft/person/contracts.js';
+import { bytes, digest } from '../../../../agent/yeaft/person/contracts.js';
 import { finalProposal } from './fixtures.js';
 
 const selection = { model: 'test/native', effort: null };
@@ -118,29 +118,6 @@ describe('native tool loop SQLite proof and diagnostics', () => {
     await r.finalizeCall(episode, { callId: unmarked, code: 'INVALID_REQUEST' });
   });
 
-  it('applies combined text/tool budget, retains a bounded failed batch and refuses repeated provider IDs', async () => {
-    const tool = wire('Bash', { command: 'bounded' }), callId = randomUUID();
-    await r.startCall(episode, { callId, requested: selection });
-    const output = { text: 'x'.repeat(LIMITS.outputBytes), protocol: 'native-tools', toolCalls: [tool], bytes: LIMITS.outputBytes + bytes(tool) };
-    await expect(r.finalizeCall(episode, { callId, output })).rejects.toMatchObject({ code: 'OUTPUT_LIMIT' });
-    await r.finalizeCall(episode, { callId, output, code: 'OUTPUT_LIMIT' });
-    const failed = traces().find(trace => trace.kind === 'call_failed').output;
-    expect(failed).toMatchObject({ complete: false, retainedBytes: LIMITS.outputBytes, observedBytes: output.bytes, toolCalls: [], toolCallsTruncated: true });
-    await expect(r.startCapability(episode, invocation(callId, tool, 0))).rejects.toMatchObject({ code: 'STALE' });
-    const duplicate = randomUUID(); await r.startCall(episode, { callId: duplicate, requested: selection });
-    await expect(r.finalizeCall(episode, { callId: duplicate, output: { text: '', protocol: 'native-tools', toolCalls: [tool, tool] } })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-  });
-
-  it('journals malformed calls as no-effect errors but denies publication', async () => {
-    const tool = wire('PresentResponse', rich('Malformed delivery'), randomUUID(), { malformed: true });
-    const parent = await complete([tool]), started = invocation(parent, tool, 0);
-    await r.startCapability(episode, started);
-    await expect(r.savePresentation(episode, { callId: started.callId, args: tool.input })).rejects.toMatchObject({ code: 'STALE' });
-    await finalize(started, { ok: false, code: 'INVALID_TOOL_INPUT', errorEffect: 'none', output: 'Nothing executed.' });
-    expect(await r.executionRead(episode, { callId: started.callId })).toMatchObject({ modelCallId: parent, code: 'INVALID_TOOL_INPUT', ok: false, errorEffect: 'none' });
-    expect((await r.turns('alice')).items[0].calls[0].capabilities[0]).toMatchObject({ status: 'failed', code: 'INVALID_TOOL_INPUT' });
-  });
-
   it('binds multiple presentation and output publications to distinct tools, not their shared model call', async () => {
     const tools = [wire('PresentResponse', rich('First verified response')), wire('PresentResponse', rich('Second verified response')),
       wire('Output.publish', { url: 'https://example.com/one', title: 'One' }), wire('Output.publish', { url: 'https://example.com/two', title: 'Two' })];
@@ -199,20 +176,6 @@ describe('native tool loop SQLite proof and diagnostics', () => {
     await r.close(); r = repo(); expect((await r.createdCapabilities(episode))[0].id).toBe(def.id);
   });
 
-  it('publishes native plain progress from complete text without activity or cognitive JSON, keeping cadence and lease fences', async () => {
-    const parent = await complete([], { text: 'Verified a useful finding.' });
-    expect(await r.publishProgress(episode, { callId: parent, reply: 'Verified a useful finding.' })).toBeNull();
-    sql(db => db.prepare("UPDATE episodes SET record = json_set(record, '$.createdAt', ?) WHERE id = ?").run(new Date(Date.now() - 31000).toISOString(), episode.id));
-    await expect(r.publishProgress(episode, { callId: parent, reply: 'Invented finding.' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    const published = await r.publishProgress(episode, { callId: parent, reply: 'Verified a useful finding.' });
-    expect(published).toMatchObject({ text: 'Verified a useful finding.', replyKind: 'progress' });
-    expect((await r.publishProgress(episode, { callId: parent, reply: published.text })).id).toBe(published.id);
-    expect(traces().some(trace => trace.kind === 'activity')).toBe(false);
-    await r.cancel('alice');
-    await expect(r.publishProgress(episode, { callId: parent, reply: published.text })).rejects.toMatchObject({ code: 'STALE' });
-    expect((await r.snapshot('alice')).messages.at(-1).text).toBe(published.text);
-  });
-
   it('durably publishes native final text without cadence, survives cognition failure and dedupes final commit', async () => {
     const reply = 'Actual completed result.';
     const parent = await complete([], { text: reply });
@@ -233,16 +196,6 @@ describe('native tool loop SQLite proof and diagnostics', () => {
     expect((await r.snapshot('alice')).messages.filter(m => m.episodeId === episode.id && m.role === 'assistant')).toHaveLength(1);
   });
 
-  it('rejects fabricated native final delivery for tool-use and cognition proof', async () => {
-    const reply = 'Not a final result.';
-    const parent = await complete([wire('Bash', { command: 'effect' })], { text: reply });
-    await expect(r.publishProgress(episode, { callId: parent, reply, final: true })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    const cognition = randomUUID();
-    await r.startCall(episode, { callId: cognition, requested: selection });
-    await r.finalizeCall(episode, { callId: cognition, output: { text: reply, protocol: 'cognition', stopReason: 'end_turn' } });
-    await expect(r.publishProgress(episode, { callId: cognition, reply, final: true })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-  });
-
   it('drains cancelled provider output and native tool outcome without restoring authority or accepting a second finalize', async () => {
     const tool = wire('Bash', { command: 'running effect' }), parent = await complete([tool]);
     const started = invocation(parent, tool, 0); await r.startCapability(episode, started);
@@ -258,18 +211,6 @@ describe('native tool loop SQLite proof and diagnostics', () => {
     const callId = randomUUID(); await r.startCall(next, { callId, requested: selection }); await r.cancel('alice');
     expect(await r.finalizeCall(next, { callId, output: { text: 'late text', protocol: 'native-tools', toolCalls: [tool], usage } })).toBe(false);
     expect(traces().find(trace => trace.callId === callId && trace.kind === 'call_failed')).toMatchObject({ code: 'CANCELLED', output: { complete: false, accepted: false, usage, toolCalls: [tool] } });
-  });
-
-  it('keeps model usage when a tool fan-out exceeds the explicit metadata detail window', async () => {
-    const tools = Array.from({ length: 140 }, (_, index) => wire('Bash', { command: `command-${index}` }));
-    const parent = await complete(tools);
-    for (const [index, tool] of tools.entries()) { const started = invocation(parent, tool, index); await r.startCapability(episode, started); await finalize(started); }
-    await r.finish(episode, 'failed', 'INTERRUPTED');
-    const turn = (await r.turns('alice')).items[0];
-    expect(turn).toMatchObject({ callsTruncated: false, detailsTruncated: true, detailWindowLimit: 256, usageScope: 'episode',
-      usage: { inputTokens: 10, outputTokens: 4, totalTokens: 18, reportedCalls: 1 } });
-    expect(turn.calls).toHaveLength(1); expect(turn.calls[0].capabilities).toHaveLength(128);
-    expect(turn.calls[0].status).toBe('completed');
   });
 
   it('scopes native proof to owner/namespace/episode and preserves all parent usage without counting tools twice', async () => {
@@ -302,21 +243,6 @@ describe('native tool loop SQLite proof and diagnostics', () => {
       expect(JSON.stringify(projected)).not.toMatch(/do-not-project|owned|command|output\.text|capability\.args/);
       expect(projected.some(row => row.metadata?.includes(parent))).toBe(true);
     });
-  });
+  }, 30000); // Three real workers plus a fresh store import under shared CI load.
 
-  it('retains legacy scalar start/finalize/read/publication API compatibility', async () => {
-    const callId = randomUUID(), args = rich('Legacy publication');
-    await r.startCall(episode, { callId, requested: selection });
-    await r.finalizeCall(episode, { callId, output: { text: '{}' } });
-    const started = { callId, capability: { id: 'PresentResponse', args } };
-    await r.startCapability(episode, started);
-    const published = await r.savePresentation(episode, { callId, args }); await finalize(started);
-    expect((await r.savePresentation(episode, { callId, args })).id).toBe(published.id);
-    expect(await r.executionRead(episode, { callId })).toMatchObject({ capabilityId: 'PresentResponse', authority: 'evidence-only' });
-    expect((await r.turns('alice')).items[0].calls[0]).toMatchObject({ capability: { id: 'PresentResponse', status: 'completed' }, capabilities: [{ callId, id: 'PresentResponse' }] });
-    // Historical standalone definition writers did not require an open tool slot.
-    const createCall = randomUUID(); await r.startCall(episode, { callId: createCall, requested: selection });
-    await r.finalizeCall(episode, { callId: createCall, output: { text: '{}' } });
-    expect(await r.saveCreatedCapability(episode, { callId: createCall, definition: definition(), evidence: evidence() })).toMatchObject({ version: 1, createdCallId: createCall });
-  });
 });

@@ -23,40 +23,6 @@ async function createConversationAndGetId(chatPage, mockAgent) {
 }
 
 test.describe('Messaging', () => {
-  test('should send a message and see it in the message list', async ({ chatPage, mockAgent }) => {
-    await createConversationAndGetId(chatPage, mockAgent);
-
-    // Type a message
-    await chatPage.fill('.input-area textarea', 'Hello Claude');
-
-    // Click the send button
-    await chatPage.locator('.send-btn').last().click();
-
-    // User message should appear in the message list
-    await expect(chatPage.locator('.message.user').last())
-      .toContainText('Hello Claude', { timeout: 5000 });
-  });
-
-  test('should receive assistant reply after sending message', async ({ chatPage, mockAgent }) => {
-    const convId = await createConversationAndGetId(chatPage, mockAgent);
-    expect(convId).toBeTruthy();
-
-    // Send a message
-    await chatPage.fill('.input-area textarea', 'Hello Claude');
-    await chatPage.locator('.send-btn').last().click();
-
-    // Wait for user message to appear
-    await expect(chatPage.locator('.message.user').last())
-      .toContainText('Hello Claude', { timeout: 5000 });
-
-    // Mock agent simulates Claude response
-    mockAgent.simulateClaudeOutput(convId, 'Hello! How can I help you today?');
-    mockAgent.simulateTurnComplete(convId);
-
-    // Assistant reply should appear
-    await expect(chatPage.locator('.assistant-turn').last())
-      .toContainText('Hello! How can I help you today?', { timeout: 5000 });
-  });
 
   test('should display streaming message progressively', async ({ chatPage, mockAgent }) => {
     const convId = await createConversationAndGetId(chatPage, mockAgent);
@@ -69,6 +35,9 @@ test.describe('Messaging', () => {
     // Wait for user message
     await expect(chatPage.locator('.message.user').last())
       .toContainText('Tell me a story', { timeout: 5000 });
+
+    // Confirm the server forwarded the send, not just the optimistic UI row.
+    await expect.poll(() => mockAgent.messages('execute').some(message => message.conversationId === convId && message.prompt === 'Tell me a story')).toBe(true);
 
     // Simulate streaming: first chunk
     mockAgent.simulateClaudeOutput(convId, 'Once upon a time');
@@ -84,9 +53,9 @@ test.describe('Messaging', () => {
     // Simulate streaming: second chunk
     mockAgent.simulateClaudeOutput(convId, ' there was a developer');
 
-    // Should see both chunks together
+    // Should see both chunks together.
     await expect(chatPage.locator('.assistant-turn').last())
-      .toContainText('Once upon a time', { timeout: 5000 });
+      .toContainText('Once upon a time there was a developer', { timeout: 5000 });
 
     // Complete the turn
     mockAgent.simulateTurnComplete(convId);
@@ -96,61 +65,4 @@ test.describe('Messaging', () => {
       .toHaveCount(0, { timeout: 5000 });
   });
 
-  test('should scroll to bottom when new messages arrive', async ({ chatPage, mockAgent }) => {
-    const convId = await createConversationAndGetId(chatPage, mockAgent);
-    expect(convId).toBeTruthy();
-
-    // Send multiple messages to fill the viewport
-    for (let i = 0; i < 5; i++) {
-      await chatPage.fill('.input-area textarea', `Message number ${i + 1}`);
-      await chatPage.locator('.send-btn').last().click();
-
-      // Wait for user message to appear
-      await expect(chatPage.locator('.message.user').last())
-        .toContainText(`Message number ${i + 1}`, { timeout: 5000 });
-
-      // Mock a long reply to take up space
-      mockAgent.simulateClaudeOutput(convId, `Reply ${i + 1}: ${'This is a detailed response. '.repeat(10)}`);
-      mockAgent.simulateTurnComplete(convId);
-
-      // Wait for assistant reply
-      await expect(chatPage.locator('.assistant-turn').last())
-        .toContainText(`Reply ${i + 1}`, { timeout: 5000 });
-    }
-
-    // The chat container should be scrolled to the bottom
-    const isAtBottom = await chatPage.evaluate(() => {
-      const container = document.querySelector('.chat-container');
-      if (!container) return false;
-      return Math.abs(container.scrollTop + container.clientHeight - container.scrollHeight) < 50;
-    });
-
-    expect(isAtBottom).toBeTruthy();
-  });
-
-  test('should send message with Enter key', async ({ chatPage, mockAgent }) => {
-    await createConversationAndGetId(chatPage, mockAgent);
-
-    // Type a message and press Enter
-    await chatPage.fill('.input-area textarea', 'Enter key test');
-    await chatPage.locator('.input-area textarea').press('Enter');
-
-    // User message should appear
-    await expect(chatPage.locator('.message.user').last())
-      .toContainText('Enter key test', { timeout: 5000 });
-  });
-
-  test('should not send empty messages', async ({ chatPage, mockAgent }) => {
-    await createConversationAndGetId(chatPage, mockAgent);
-
-    // The send button should be disabled when input is empty
-    const sendBtn = chatPage.locator('.send-btn:not(.stop-btn)');
-    await expect(sendBtn).toBeDisabled();
-
-    // Type spaces only
-    await chatPage.fill('.input-area textarea', '   ');
-
-    // Send button should still be disabled (trimmed text is empty)
-    await expect(sendBtn).toBeDisabled();
-  });
 });

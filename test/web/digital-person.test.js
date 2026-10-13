@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptPersonResponse, createPersonController, digitalPersonGate, personState } from '../../web/stores/helpers/digital-person.js';
+import { acceptPersonResponse, createPersonController, personState } from '../../web/stores/helpers/digital-person.js';
+import { projectPersonThoughts, projectPersonJournal } from '../../web/stores/helpers/person-thoughts.js';
+import { finalProposal } from '../agent/yeaft/person/fixtures.js';
 import { personActivityRecords, projectPersonActivity, projectPersonFeedback } from '../../web/utils/person-activity.js';
 
 const controllers = [];
@@ -35,75 +37,6 @@ function fixture(options = {}) {
 }
 
 describe('Digital Person owner / Agent request boundary', () => {
-  it('opens via status, open and paginated reads without Session operations', async () => {
-    const f = fixture(); f.auto(); await f.controller.open('a');
-    expect(f.state.person.id).toBe('person-a');
-    expect(f.requests.map(r => r.op)).toEqual(['status', 'open', 'snapshot', 'messages', 'traces']);
-    expect(f.requests.every(r => r.type === 'person_request' && r.agentId === 'a' && !r.sessionId && !r.ownerId)).toBe(true);
-    expect(f.requests.find(r => r.op === 'traces').payload).toEqual({ cursor: null, limit: 50 });
-  });
-
-  it('stays manual through idle time, refresh, reconnect and re-entry', async () => {
-    vi.useFakeTimers(); const f = fixture(); f.auto();
-    const commands = () => f.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op));
-    await f.controller.open('a');
-    await vi.advanceTimersByTimeAsync(3600000);
-    await f.controller.refresh();
-    await f.controller.page('traces');
-    await f.controller.page('messages');
-    f.chat.connectionState = 'reconnecting'; await f.controller.open('a');
-    f.chat.connectionState = 'connected'; await f.controller.open('a');
-    await f.controller.open('b'); await f.controller.open('a');
-    expect(commands()).toEqual([]);
-    for (const op of ['think', 'dream']) {
-      expect(await f.controller.command(op)).toBe(true);
-      // The status poll observes completion, but must not start another episode.
-      await vi.advanceTimersByTimeAsync(3600000);
-      expect(f.state.busy).toBe(false);
-      expect(commands().filter(r => r.op === op)).toHaveLength(1);
-    }
-    expect(commands().map(r => r.op)).toEqual(['think', 'dream']);
-  });
-
-  it('does not read or command a UI-disabled Person even through direct controller access', async () => {
-    const f = fixture(); f.auto();
-    f.chat.digitalPersonUiEnabledByAgent.a = false;
-    expect(digitalPersonGate(f.chat, 'a')).toBe('disabled');
-    await f.controller.open('a');
-    expect(await f.controller.command('send', 'hidden')).toBe(false);
-    expect(f.requests).toEqual([]);
-    expect(digitalPersonGate(f.chat, 'b')).toBe('');
-  });
-
-  it('gates unsupported, offline and disconnected Agents without requests', async () => {
-    const f = fixture();
-    f.chat.agents[0].capabilities = [];
-    expect(digitalPersonGate(f.chat, 'a')).toBe('unsupported');
-    await f.controller.open('a');
-    f.chat.agents[0].online = false;
-    expect(digitalPersonGate(f.chat, 'a')).toBe('offline');
-    f.chat.connectionState = 'reconnecting';
-    expect(digitalPersonGate(f.chat, 'a')).toBe('disconnected');
-    expect(f.requests).toHaveLength(0);
-  });
-
-  it('unconfigured runtime never opens or creates a fallback Session', async () => {
-    const f = fixture(); f.auto(r => r.op === 'status' ? { configured: false, reason: 'Instance directory is not configured' } : undefined);
-    await f.controller.open('a');
-    expect(f.state.configured).toBe(false);
-    expect(f.requests.map(r => r.op)).toEqual(['status']);
-    expect(await f.controller.command('send', 'hi')).toBe(false);
-  });
-
-  it('rejects mismatched request, Agent and operation, then accepts the right response', async () => {
-    const f = fixture(); const opening = f.controller.open('a'); const request = f.requests[0];
-    expect(f.response(request, { configured: true }, { agentId: 'b' })).toBe(false);
-    expect(f.response(request, { configured: true }, { op: 'snapshot' })).toBe(false);
-    expect(f.response(request, { configured: true }, { requestId: 'unknown' })).toBe(false);
-    f.auto(); f.response(request, { configured: true }); await opening;
-    expect(f.state.person.id).toBe('person-a');
-  });
-
   it('fences delayed responses after Agent and owner changes', async () => {
     const f = fixture(); const old = f.controller.open('a'); const request = f.requests[0];
     f.auto(); await f.controller.open('b'); await old;
@@ -114,44 +47,6 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.response(snapshot, { person: { id: 'leak' } })).toBe(false);
     f.auto(); await f.controller.open('a'); await refreshing;
     expect(f.state.person.id).toBe('person-a');
-  });
-
-  it('fences stale search pages and inspector reads across query, Agent and owner changes', async () => {
-    const f = fixture(); f.auto(); await f.controller.open('a');
-    f.auto(r => ['search', 'inspect'].includes(r.op) ? false : undefined);
-    const oldSearch = f.controller.search('old'); const old = f.requests.at(-1);
-    const newSearch = f.controller.search('new'); const newer = f.requests.at(-1);
-    f.response(newer, { items: [{ id: 'new-message', text: 'new' }], nextCursor: 'next' }); await newSearch;
-    f.response(old, { items: [{ id: 'old-message' }], nextCursor: null }); await oldSearch;
-    expect(f.state.search.items.map(r => r.id)).toEqual(['new-message']);
-    const more = f.controller.search('new', true); const moreRequest = f.requests.at(-1);
-    await f.controller.search('');
-    f.response(moreRequest, { items: [{ id: 'late-page' }], nextCursor: null }); await more;
-    expect(f.state.search.items).toEqual([]);
-    const reading = f.controller.inspect('memory'); const read = f.requests.at(-1);
-    await f.controller.open('b'); await reading;
-    expect(f.response(read, { items: [{ id: 'private-a' }] })).toBe(false);
-    expect(f.state.memory.items).toEqual([]);
-    const skills = f.controller.inspect('skills'); const skillRead = f.requests.at(-1);
-    f.owner('another-owner');
-    expect(f.response(skillRead, { items: [{ id: 'private-skill' }] })).toBe(false);
-    await f.controller.open('b'); await skills;
-    expect(f.state.skills.items).toEqual([]);
-  });
-
-  it('inspects Person-wide tasks while cognition is idle or model unavailable, polling only in the drawer', async () => {
-    vi.useFakeTimers(); const f = fixture();
-    f.auto(r => r.op === 'status' ? { configured: true, storageReady: true, modelReady: false } : r.op === 'tasks' ? { tasks: [{ id: 'old-episode-task', status: 'running' }], agents: [] } : undefined);
-    await f.controller.open('a');
-    expect(f.state.busy).toBe(false);
-    f.controller.showTasks(true); await vi.advanceTimersByTimeAsync(0);
-    expect(f.state.tasks.tasks[0].id).toBe('old-episode-task');
-    await vi.advanceTimersByTimeAsync(110);
-    expect(f.requests.filter(r => r.op === 'tasks')).toHaveLength(3);
-    f.controller.showTasks(false);
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.requests.filter(r => r.op === 'tasks')).toHaveLength(3);
-    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
   });
 
   it('fences task lists and logs across Agent switches, disconnect and disposal', async () => {
@@ -170,123 +65,6 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.requests).toHaveLength(count);
     f.controller.dispose(); await vi.advanceTimersByTimeAsync(1000);
     expect(f.requests).toHaveLength(count);
-  });
-
-  it('refreshes the actual task state after stop and ignores an older in-flight list', async () => {
-    const f = fixture(); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'tasks' || r.op === 'task_cancel' ? false : undefined);
-    const reading = f.controller.readTasks(); const old = f.requests.at(-1);
-    const stopping = f.controller.stopTask('shell', 't'); const stop = f.requests.at(-1);
-    expect(stop.payload).toEqual({ taskId: 't' }); expect(f.state.tasks.pending).toBe('t');
-    f.response(stop, { ok: true }); await Promise.resolve(); await Promise.resolve();
-    const fresh = f.requests.at(-1); expect(fresh.op).toBe('tasks');
-    f.response(fresh, { tasks: [{ id: 't', status: 'cancelled' }], agents: [] }); await stopping;
-    f.response(old, { tasks: [{ id: 't', status: 'running' }], agents: [] }); await reading;
-    expect(f.state.tasks.tasks[0].status).toBe('cancelled'); expect(f.state.tasks.pending).toBeNull();
-  });
-
-  it('pages newest tasks without erasing history during polling and fences delayed continuation on stop', async () => {
-    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30, status: 'running' }], agents: [], nextCursor: 'older' } : undefined);
-    await f.controller.readTasks();
-    expect(f.requests.at(-1).payload).toEqual({ cursor: null, limit: 20 });
-    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'old', createdAt: 10, status: 'completed' }], agents: [], nextCursor: null } : undefined);
-    await f.controller.readTasks(true);
-    expect(f.requests.at(-1).payload.cursor).toBe('older');
-    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new', 'old']);
-    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30, status: 'completed' }], agents: [], nextCursor: 'older' } : undefined);
-    await f.controller.readTasks();
-    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new', 'old']);
-    expect(f.state.tasks.tasks[0].status).toBe('completed');
-    expect(f.state.tasks.nextCursor).toBeNull();
-    const before = f.requests.length; await f.controller.readTasks(true);
-    expect(f.requests).toHaveLength(before);
-  });
-
-  it.each(['tasks', 'agents'])('recovers the %s cursor when an empty drawer receives 21 settled records on poll', async kind => {
-    vi.useFakeTimers(); const f = fixture();
-    const rows = Array.from({ length: 21 }, (_, i) => ({ id: 'settled-' + i, createdAt: 100 - i, status: 'completed' }));
-    let latest = [];
-    f.auto(r => r.op === 'tasks' ? { tasks: [], agents: [], [kind]: r.payload.cursor ? rows.slice(20) : latest,
-      nextCursor: !r.payload.cursor && latest.length ? 'older' : null } : undefined);
-    await f.controller.open('a'); f.controller.showTasks(true); await vi.advanceTimersByTimeAsync(0);
-    latest = rows.slice(0, 20); await vi.advanceTimersByTimeAsync(50);
-    expect(f.state.tasks.nextCursor).toBe('older');
-    expect(f.requests.filter(r => r.op === 'tasks')).toHaveLength(2);
-    await f.controller.readTasks(true);
-    expect(f.requests.at(-1).payload.cursor).toBe('older');
-    expect(f.state.tasks[kind]).toHaveLength(21);
-  });
-
-  it.each(['tasks', 'agents'])('rewinds a burst gap in %s without discarding loaded history or eagerly draining pages', async kind => {
-    const f = fixture();
-    const rows = Array.from({ length: 61 }, (_, i) => ({ id: 'record-' + i, createdAt: 100 - i, status: 'completed' }));
-    let burst = false;
-    f.auto(r => {
-      if (r.op !== 'tasks') return;
-      const start = r.payload.cursor == null ? (burst ? 0 : 40) : Number(r.payload.cursor);
-      return { tasks: [], agents: [], [kind]: rows.slice(start, start + 20), nextCursor: start + 20 < rows.length ? String(start + 20) : null };
-    });
-    await f.controller.open('a'); await f.controller.readTasks(); await f.controller.readTasks(true);
-    expect(f.state.tasks[kind]).toHaveLength(21);
-    burst = true; const before = f.requests.length; await f.controller.readTasks();
-    expect(f.requests.length).toBe(before + 1);
-    expect(f.state.tasks.nextCursor).toBe('20');
-    expect(f.state.tasks[kind].some(row => row.id === 'record-60')).toBe(true);
-    await f.controller.readTasks(true);
-    expect(f.state.tasks[kind]).toHaveLength(61);
-  });
-
-  it('orders task and agent history by creation and binary IDs, never updates or locale ties', async () => {
-    const f = fixture(); const rows = [{ id: 'a', createdAt: 30 }, { id: 'Z', createdAt: 30 }, { id: 'old', createdAt: 1, updatedAt: 100 }];
-    f.auto(r => r.op === 'tasks' ? { tasks: rows, agents: rows, nextCursor: null } : undefined);
-    await f.controller.open('a'); await f.controller.readTasks();
-    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['Z', 'a', 'old']);
-    expect(f.state.tasks.agents.map(row => row.id)).toEqual(['Z', 'a', 'old']);
-  });
-
-  it.each(['shell', 'agent'])('retains read-only logs but gates stale %s mutation until a successful refresh', async kind => {
-    const f = fixture();
-    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 't', status: 'running' }], agents: [{ id: 't', executionPending: true }] }
-      : r.op === 'task_log' ? { text: 'Retained log', nextOffset: 12 } : undefined);
-    await f.controller.open('a'); await f.controller.readTasks();
-    f.auto(r => r.op === 'tasks' ? false : r.op === 'task_log' ? { text: 'Retained log', nextOffset: 12 } : undefined);
-    const reading = f.controller.readTasks(); f.response(f.requests.at(-1), null, { ok: false, error: { code: 'FAILED', message: 'Unavailable' } }); await reading;
-    expect(f.state.tasks.stale).toBe(true);
-    const before = f.requests.length;
-    expect(await f.controller.stopTask(kind, 't')).toBe(false);
-    expect(f.requests).toHaveLength(before);
-    await f.controller.readTaskLog('t'); expect(f.state.taskLog.text).toBe('Retained log');
-    f.auto(r => r.op === 'tasks' ? { tasks: [], agents: [] } : {});
-    await f.controller.readTasks(); expect(f.state.tasks.stale).toBe(false);
-    expect(await f.controller.stopTask(kind, 't')).toBe(true);
-  });
-
-  it('replaces the active cleanup snapshot without consuming the history cursor', async () => {
-    const f = fixture(); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30 }], agents: [], nextCursor: 'older',
-      active: { tasks: [{ id: 'old-active', status: 'running' }], agents: [{ id: 'cleaning', executionPending: true }], truncated: false } } : undefined);
-    await f.controller.readTasks();
-    expect(f.state.tasks.active.tasks[0].id).toBe('old-active');
-    expect(f.state.tasks.active.agents[0].executionPending).toBe(true);
-    expect(f.state.tasks.tasks.map(row => row.id)).toEqual(['new']);
-    f.auto(r => r.op === 'tasks' ? { tasks: [{ id: 'new', createdAt: 30 }], agents: [], nextCursor: 'changed', active: { tasks: [], agents: [], truncated: false } } : undefined);
-    await f.controller.readTasks();
-    expect(f.state.tasks.active.tasks).toEqual([]);
-    expect(f.state.tasks.active.agents).toEqual([]);
-    expect(f.state.tasks.nextCursor).toBe('older');
-  });
-
-  it('keeps task stop errors and reads log pages as bounded plain text', async () => {
-    const f = fixture(); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'task_log' ? { text: 'x'.repeat(40000), nextOffset: r.payload.offset + 40000 } : r.op === 'agent_close' ? false : undefined);
-    await f.controller.readTaskLog('child-log'); await f.controller.readTaskLog('child-log', true);
-    expect(f.state.taskLog.text).toHaveLength(65536); expect(f.state.taskLog.nextOffset).toBe(80000);
-    const stopping = f.controller.stopTask('agent', 'child'); const request = f.requests.at(-1);
-    expect(request.payload).toEqual({ agentId: 'child' });
-    f.response(request, null, { ok: false, error: { code: 'NOT_FOUND', message: 'No live handle' } });
-    expect(await stopping).toBe(false); expect(f.state.tasks.error.message).toBe('No live handle');
-    expect(f.state.tasks.stale).toBe(true);
   });
 
   it('keeps uncertain command ID across re-entry and retries only on explicit action', async () => {
@@ -308,269 +86,12 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.retryCommand).toBeNull();
   });
 
-  it('uses the returned Person identity on rename without model configuration or cognition', async () => {
-    const f = fixture(); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'settings' ? { settings: { modelCandidates: ['p/m'] }, person: { id: 'person-a', name: 'Mira', settings: { modelCandidates: ['p/m'] } } }
-      : r.op === 'status' ? { configured: true, storageReady: true, modelReady: false, models: [] } : undefined);
-    expect(await f.controller.settings({ name: 'Mira' })).toBe(true);
-    expect(f.state.person.name).toBe('Mira');
-    expect(f.state.modelCandidates).toEqual(['p/m']);
-    expect(f.state.modelReady).toBe(false);
-    expect(f.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ name: 'Mira' });
-    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
-  });
-
-  it('projects model references and saves a nullable default without starting cognition', async () => {
-    const f = fixture();
-    const settings = { modelCandidates: ['p/a', 'p/b'], defaultModel: 'p/b' };
-    const status = { configured: true, defaultModelSupported: true, models: [{ id: 'p/a' }, { id: 'p/b' }],
-      ...settings, agentDefaultModel: 'p/a', effectiveDefaultModel: 'p/b', effectiveModelCandidates: ['p/a', 'p/b'] };
-    f.auto(r => r.op === 'status' ? status : r.op === 'snapshot' ? { person: { id: 'person-a', settings }, messages: [], busy: false } : undefined);
-    await f.controller.open('a');
-    expect(f.state).toMatchObject({ defaultModelSupported: true, defaultModel: 'p/b', agentDefaultModel: 'p/a',
-      effectiveDefaultModel: 'p/b', effectiveModelCandidates: ['p/a', 'p/b'] });
-    f.auto(r => r.op === 'settings' ? { settings: { ...settings, defaultModel: null } } : r.op === 'status'
-      ? { ...status, defaultModel: null, effectiveDefaultModel: 'p/a' } : undefined);
-    expect(await f.controller.settings({ defaultModel: null })).toBe(true);
-    expect(f.state.defaultModel).toBeNull();
-    expect(f.state.effectiveDefaultModel).toBe('p/a');
-    expect(f.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ defaultModel: null });
-    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
-    f.auto(r => r.op === 'status' ? { configured: true, models: [] } : undefined);
-    await f.controller.refresh();
-    expect(f.state.defaultModelSupported).toBe(false);
-    expect(f.state.agentDefaultModel).toBeNull();
-    expect(f.state.effectiveModelCandidates).toEqual([]);
-  });
-
-  it('keeps file references in uncertain retry and isolates model settings from cognition', async () => {
-    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'send' ? false : r.op === 'settings' ? { settings: r.payload } : undefined);
-    const pending = f.controller.command('send', '', false, [{ fileId: 'file-1', name: 'not-authoritative.txt' }]);
-    await vi.advanceTimersByTimeAsync(101); expect(await pending).toBe(false);
-    expect(f.state.retryCommand.payload.attachments).toEqual([{ fileId: 'file-1' }]);
-    const first = f.requests.find(r => r.op === 'send');
-    expect(await f.controller.settings(['p/m'])).toBe(true);
-    expect(f.state.retryCommand.payload.clientMessageId).toBe(first.payload.clientMessageId);
-    f.auto(); expect(await f.controller.command('send', '', true)).toBe(true);
-    expect(f.requests.at(-1).payload).toEqual(first.payload);
-    await vi.advanceTimersByTimeAsync(51);
-    f.auto(r => r.op === 'settings' ? { settings: r.payload } : undefined);
-    expect(await f.controller.settings(['p/m'])).toBe(true);
-    expect(f.state.modelCandidates).toEqual(['p/m']);
-    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(2);
-  });
-
-  it('reconciles an admitted file request without uploading or executing it again', async () => {
-    vi.useFakeTimers();
-    const reupload = vi.fn(); const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'send' ? false : undefined);
-    const pending = f.controller.command('send', '', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
-    const original = f.requests.at(-1);
-    await vi.advanceTimersByTimeAsync(101); await pending;
-    f.auto(r => r.op === 'receipt' ? { found: true, episodeId: 'episode-1', status: 'completed', kind: 'send', text: '' } : undefined);
-    expect(await f.controller.command('send', '', true)).toBe(true);
-    expect(f.requests.find(r => r.op === 'receipt').payload.clientMessageId).toBe(original.payload.clientMessageId);
-    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
-    expect(reupload).not.toHaveBeenCalled();
-    expect(f.state.retryCommand).toBeNull();
-  });
-
-  it.each([true, false])('reconciles unknown attachments while model unavailable (receipt found=%s)', async found => {
-    vi.useFakeTimers();
-    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
-    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'send' ? false : undefined);
-    const pending = f.controller.command('send', 'original', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
-    const originalId = f.requests.at(-1).payload.clientMessageId;
-    await vi.advanceTimersByTimeAsync(101); await pending;
-    f.state.modelReady = false;
-    f.auto(r => r.op === 'receipt' ? { found, episodeId: 'episode-1', status: 'completed', kind: 'send', text: 'original' }
-      : r.op === 'settings' ? { settings: r.payload } : r.op === 'status' ? { configured: true, modelReady: true } : undefined);
-    expect(await f.controller.command('send', '', true)).toBe(found);
-    expect(f.requests.find(r => r.op === 'receipt').payload.clientMessageId).toBe(originalId);
-    expect(reupload).not.toHaveBeenCalled();
-    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
-    if (found) expect(f.state.retryCommand).toBeNull();
-    else {
-      expect(f.state.retryCommand.payload.clientMessageId).toBe(originalId);
-      expect(await f.controller.settings(['p/replacement'])).toBe(true);
-      f.auto(r => r.op === 'receipt' ? { found: false } : undefined);
-      expect(await f.controller.command('send', '', true)).toBe(true);
-      expect(reupload).toHaveBeenCalledOnce();
-      expect(f.requests.filter(r => r.op === 'send').at(-1).payload.clientMessageId).toBe(originalId);
-    }
-  });
-
-  it('reuploads original files after missing receipt, preserving command identity and text', async () => {
-    vi.useFakeTimers();
-    const file = { name: 'x.txt' };
-    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
-    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'think' ? false : undefined);
-    const pending = f.controller.command('think', 'original', false, [{ fileId: 'expired', file }]);
-    const original = f.requests.at(-1);
-    await vi.advanceTimersByTimeAsync(101); await pending;
-    await f.controller.open('b'); await f.controller.open('a');
-    f.auto(r => r.op === 'receipt' ? { found: false } : undefined);
-    expect(await f.controller.command('think', 'changed', true)).toBe(true);
-    expect(reupload).toHaveBeenCalledWith([file]);
-    expect(f.requests.at(-1).payload).toEqual({ ...original.payload, attachments: [{ fileId: 'renewed' }] });
-  });
-
-  it('renews a stale draft once, and fences renewal after owner changes', async () => {
-    let finish;
-    const reupload = vi.fn(() => new Promise(resolve => { finish = resolve; }));
-    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
-    f.auto(r => {
-      if (r.op !== 'send') return;
-      f.response(r, null, { ok: false, errorCode: 'attachment_expired' }); return false;
-    });
-    const pending = f.controller.command('send', 'original', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
-    await Promise.resolve(); await Promise.resolve();
-    expect(reupload).toHaveBeenCalledOnce();
-    f.owner('owner-b'); f.auto(); await f.controller.open('a');
-    finish([{ fileId: 'private-renewed' }]); expect(await pending).toBe(false);
-    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
-    expect(f.state.retryCommand).toBeNull();
-  });
-
-  it('reconciles an admitted Dream whose payload has no text field', async () => {
-    vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'dream' ? false : undefined);
-    const pending = f.controller.command('dream');
-    await vi.advanceTimersByTimeAsync(101); await pending;
-    f.auto(r => r.op === 'receipt' ? { found: true, episodeId: 'episode-1', status: 'completed', kind: 'dream', text: '' } : undefined);
-    expect(await f.controller.command('dream', '', true)).toBe(true);
-    expect(f.requests.filter(r => r.op === 'dream')).toHaveLength(1);
-    expect(f.state.retryCommand).toBeNull();
-  });
-
-  it('refreshes history after receipt miss races with a completed duplicate admission', async () => {
-    vi.useFakeTimers();
-    const reupload = vi.fn(async () => [{ fileId: 'renewed' }]);
-    const f = fixture({ reupload }); f.auto(); await f.controller.open('a');
-    f.auto(r => r.op === 'send' ? false : undefined);
-    const pending = f.controller.command('send', '', false, [{ fileId: 'expired', file: { name: 'x.txt' } }]);
-    const originalId = f.requests.at(-1).payload.clientMessageId;
-    await vi.advanceTimersByTimeAsync(101); await pending;
-    const final = { id: 'final', role: 'assistant', text: 'already completed' };
-    f.auto(r => r.op === 'send' ? { duplicate: true, status: 'completed', episodeId: 'episode-1' }
-      : r.op === 'messages' ? { items: [final], nextCursor: null } : undefined);
-    expect(await f.controller.command('send', '', true)).toBe(true);
-    expect(f.requests.filter(r => r.op === 'send').at(-1).payload.clientMessageId).toBe(originalId);
-    expect(f.state.messages).toEqual([final]);
-    expect(f.state.busy).toBe(false);
-    expect(f.state.retryCommand).toBeNull();
-    const count = f.requests.length;
-    await vi.advanceTimersByTimeAsync(500);
-    expect(f.requests).toHaveLength(count);
-  });
-
-  it('refreshes model catalog and readiness without starting or reopening a Person', async () => {
-    const f = fixture();
-    let status = { configured: true, modelReady: true, availableModels: [{ ref: 'p/old' }], modelCandidates: ['p/old'] };
-    f.auto(r => r.op === 'status' ? status : undefined); await f.controller.open('a');
-    status = { configured: true, modelReady: false, reason: 'model_unavailable', availableModels: [{ ref: 'p/new' }], modelCandidates: ['p/old'] };
-    await f.controller.refresh();
-    expect(f.state.models).toEqual([{ ref: 'p/new' }]);
-    expect(f.state.modelReady).toBe(false);
-    status = { configured: true, modelReady: true, availableModels: [{ ref: 'p/replacement' }], modelCandidates: [] };
-    await f.controller.refresh();
-    expect(f.state.models).toEqual([{ ref: 'p/replacement' }]);
-    expect(f.state.modelCandidates).toEqual([]);
-    expect(f.state.modelReady).toBe(true);
-    expect(f.requests.filter(r => r.op === 'open')).toHaveLength(1);
-    expect(f.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op))).toHaveLength(0);
-  });
-
-  it('fences delayed catalog refresh across Agent and owner changes', async () => {
-    for (const boundary of ['agent', 'owner']) {
-      const f = fixture(); f.auto(); await f.controller.open('a');
-      f.auto(r => r.op === 'status' ? false : undefined);
-      const refreshing = f.controller.refresh(); const delayed = f.requests.at(-1);
-      if (boundary === 'owner') f.owner('owner-b');
-      f.auto(r => r.op === 'status' ? { configured: true, availableModels: [{ ref: 'p/current' }] } : undefined);
-      await f.controller.open(boundary === 'agent' ? 'b' : 'a'); await refreshing;
-      expect(f.response(delayed, { configured: true, availableModels: [{ ref: 'p/private' }] })).toBe(false);
-      expect(f.state.models).toEqual([{ ref: 'p/current' }]);
-    }
-  });
-
   it('never transfers an uncertain command between owners', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'think' ? false : undefined);
     const pending = f.controller.command('think');
     f.owner('other'); f.auto(); await f.controller.open('a'); await pending;
     expect(f.state.retryCommand).toBeNull();
-  });
-
-  it('polls busy snapshots, preserves all paged Trace and stops after completion', async () => {
-    vi.useFakeTimers(); const f = fixture(); let busy = false;
-    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, state: { version: 2 }, messages: [], busy }
-      : r.op === 'traces' ? { items: [{ id: r.payload.cursor || 'latest', kind: 'think', createdAt: 1 }], nextCursor: r.payload.cursor ? null : 'older' } : undefined);
-    await f.controller.open('a'); await f.controller.page('traces', true);
-    expect(f.state.traces.map(t => t.id)).toEqual(['latest', 'older']);
-    busy = true; await f.controller.command('think');
-    await vi.advanceTimersByTimeAsync(51);
-    expect(f.state.busy).toBe(true); expect(f.state.tracesStale).toBe(true);
-    expect(f.state.traces).toHaveLength(2);
-    busy = false; await vi.advanceTimersByTimeAsync(51);
-    expect(f.state.busy).toBe(false);
-    const count = f.requests.length; await vi.advanceTimersByTimeAsync(200);
-    expect(f.requests).toHaveLength(count);
-  });
-
-  it('synchronizes terminal traces behind late reads without silently losing paged history', async () => {
-    vi.useFakeTimers();
-    for (const more of [false, true]) for (const kind of ['committed', 'cancelled', 'failed']) {
-      const f = fixture();
-      const latest = { id: 'latest', seq: 2, kind: 'call_started' };
-      const older = { id: 'older', seq: 1, kind: 'committed' };
-      const terminal = { id: 'terminal', seq: 3, kind };
-      f.auto(r => r.op === 'traces' ? { items: [latest], nextCursor: 'older' } : undefined);
-      await f.controller.open('a'); await f.controller.command('think');
-      f.auto(r => r.op === 'traces' ? false : undefined);
-      const reading = f.controller.page('traces', more);
-      const delayed = f.requests.at(-1);
-      // Both polling and the cancel acknowledgement refresh terminal state
-      // while a pre-terminal trace read is still in flight.
-      const cancelling = kind === 'cancelled' ? f.controller.cancel() : null;
-      await vi.advanceTimersByTimeAsync(kind === 'cancelled' ? 0 : 51);
-      expect(f.state.busy).toBe(false);
-      expect(f.state.tracesStale).toBe(true);
-      f.response(delayed, { items: more ? [older] : [latest], nextCursor: more ? null : 'older' });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(f.state.tracesStale).toBe(true);
-      if (more) {
-        // Live activity still reads the latest tail, without replacing the
-        // diagnostic window the user explicitly paged into.
-        const followup = f.requests.at(-1);
-        expect(followup).toMatchObject({ op: 'traces', payload: { cursor: null, limit: 50 } });
-        f.response(followup, { items: [latest, terminal], nextCursor: 'older' });
-        await reading;
-        expect(f.state.traces.map(t => t.id)).toEqual(['older', 'latest']);
-        expect(f.state.traceCursor).toBeNull();
-        expect(f.requests.filter(r => r.op === 'traces')).toHaveLength(3);
-        // Only an explicit latest refresh may replace the paged window.
-        f.auto(r => r.op === 'traces' ? { items: [latest, terminal], nextCursor: 'older' } : undefined);
-        await f.controller.page('traces');
-      } else {
-        const followup = f.requests.at(-1);
-        expect(followup).toMatchObject({ op: 'traces', payload: { cursor: null, limit: 50 } });
-        expect(followup.requestId).not.toBe(delayed.requestId);
-        f.response(followup, { items: [latest, terminal], nextCursor: 'older' });
-        await reading;
-      }
-      await cancelling;
-      expect(f.state.traces.at(-1)).toEqual(terminal);
-      expect(f.state.tracesStale).toBe(false);
-      const count = f.requests.length;
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(f.requests).toHaveLength(count);
-      expect(f.requests.filter(r => !['status', 'open', 'snapshot', 'messages', 'traces'].includes(r.op)).map(r => r.op)).toEqual(kind === 'cancelled' ? ['think', 'cancel'] : ['think']);
-      f.controller.dispose();
-    }
   });
 
   it('keeps failed or timed-out terminal reads stale without unbounded retries', async () => {
@@ -615,39 +136,6 @@ describe('Digital Person owner / Agent request boundary', () => {
     }
   });
 
-  it('fences queued and in-flight terminal trace reads across Agent and owner changes', async () => {
-    vi.useFakeTimers();
-    for (const boundary of ['agent', 'owner']) for (const followupStarted of [false, true]) {
-      const f = fixture(); f.auto(); await f.controller.open('a');
-      await f.controller.command('think');
-      f.auto(r => r.op === 'traces' ? false : undefined);
-      const reading = f.controller.page('traces');
-      const delayed = f.requests.at(-1);
-      await vi.advanceTimersByTimeAsync(51);
-      expect(f.state.tracesStale).toBe(true);
-      if (followupStarted) {
-        f.response(delayed, { items: [{ id: 'old' }], nextCursor: null });
-        await vi.advanceTimersByTimeAsync(0);
-      }
-      const pending = f.requests.at(-1);
-      if (boundary === 'owner') {
-        f.owner('owner-b');
-        expect(f.response(pending, { items: [{ id: 'leak' }] })).toBe(false);
-      }
-      const count = f.requests.length;
-      f.auto(); await f.controller.open(boundary === 'agent' ? 'b' : 'a'); await reading;
-      expect(f.response(pending, { items: [{ id: 'leak' }] })).toBe(false);
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(f.requests.slice(count).map(r => r.op)).toEqual(['status', 'open', 'snapshot', 'messages', 'traces']);
-      expect(f.state.person.id).toBe(boundary === 'agent' ? 'person-b' : 'person-a');
-      expect(f.state.traces).toEqual([]);
-      expect(f.state.tracesStale).toBe(false);
-      expect(f.state.tracesLoading).toBe(false);
-      expect(f.state.error).toBeNull();
-      f.controller.dispose();
-    }
-  });
-
   it('does not let an older idle snapshot undo an acknowledged command', async () => {
     vi.useFakeTimers(); const f = fixture(); f.auto(); await f.controller.open('a');
     let delayedSnapshot;
@@ -687,73 +175,6 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.busy).toBe(false);
   });
 
-  it('rebuilds a complete message pagination chain after remote activity exceeds the snapshot window', async () => {
-    const f = fixture(); let records = [];
-    f.auto(r => {
-      if (r.op === 'snapshot') return { person: { id: 'p' }, state: {}, busy: false, messages: records.slice(-20), nextMessagesCursor: records.length > 20 ? String(records.at(-20).seq) : null };
-      if (r.op === 'messages') {
-        const end = r.payload.cursor ? Number(r.payload.cursor) - 1 : records.length;
-        const items = records.slice(Math.max(0, end - 50), end);
-        return { items, nextCursor: end > 50 ? String(items[0].seq) : null };
-      }
-    });
-    await f.controller.open('a');
-    records = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1, createdAt: 1, text: 'remote' }));
-    await f.controller.refresh();
-    expect(f.state.messages).toHaveLength(50);
-    expect(f.state.messageCursor).toBe('31');
-    await f.controller.page('messages', true);
-    expect(f.state.messages.map(m => m.seq)).toEqual(Array.from({ length: 80 }, (_, i) => i + 1));
-    expect(f.state.messageCursor).toBeNull();
-  });
-
-  it.each(['offline', 'requestFailed', 'busy'])('retains an unknown command after a rejected %s retry', async code => {
-    const f = fixture(); f.auto(); await f.controller.open('a');
-    let rejection = 'outcome_unknown';
-    f.auto(r => {
-      if (r.op !== 'send') return;
-      f.response(r, null, { ok: false, errorCode: rejection, error: 'safe failure' });
-      return false;
-    });
-    expect(await f.controller.command('send', 'accepted maybe')).toBe(false);
-    const original = f.state.retryCommand.payload.clientMessageId;
-    rejection = code;
-    expect(await f.controller.command('send', '', true)).toBe(false);
-    expect(f.state.retryCommand.payload.clientMessageId).toBe(original);
-    expect(await f.controller.command('send', 'new ID forbidden')).toBe(false);
-    f.auto();
-    expect(await f.controller.command('send', '', true)).toBe(true);
-    expect(f.requests.filter(r => r.op === 'send').map(r => r.payload.clientMessageId)).toEqual([original, original, original]);
-    expect(f.state.retryCommand).toBeNull();
-  });
-
-  it('does not let a delayed latest page erase the final polled reply', async () => {
-    vi.useFakeTimers(); const f = fixture();
-    let records = Array.from({ length: 50 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
-    let busy = true, delayed = null, hold = false;
-    f.auto(r => {
-      if (r.op === 'snapshot') return { person: { id: 'p' }, messages: records.slice(-20), nextMessagesCursor: '31', busy, episodeId: busy ? 'e1' : null };
-      if (r.op === 'messages') {
-        if (hold) { delayed = r; return false; }
-        return { items: records, nextCursor: null };
-      }
-    });
-    await f.controller.open('a');
-    hold = true;
-    const refresh = f.controller.refresh();
-    await vi.advanceTimersByTimeAsync(0); // Wait for status, snapshot and latest-page dispatch.
-    expect(delayed).toBeTruthy();
-    const oldRows = records;
-    records = [...records, { id: 'm51', seq: 51 }]; busy = false;
-    await vi.advanceTimersByTimeAsync(51);
-    expect(f.state.messages.at(-1).seq).toBe(51);
-    expect(f.state.busy).toBe(false);
-    f.response(delayed, { items: oldRows, nextCursor: null }); await refresh;
-    expect(f.state.messages.at(-1).seq).toBe(51);
-    expect(f.state.messages).toHaveLength(51);
-    expect(f.state.messageCursor).toBeNull();
-  });
-
   it('merges a slow older page during live output instead of starving scroll pagination', async () => {
     vi.useFakeTimers(); const f = fixture();
     let rows = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
@@ -772,47 +193,6 @@ describe('Digital Person owner / Agent request boundary', () => {
     f.response(delayed, { items: rows.slice(0, 30), nextCursor: null }); await older;
     expect(f.state.messages.map(row => row.seq)).toEqual(rows.map(row => row.seq));
     expect(f.state.messageCursor).toBeNull();
-  });
-
-  it('fences an older page when a newer snapshot resets a gap window', async () => {
-    vi.useFakeTimers(); const f = fixture();
-    let records = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
-    let hold = false, delayed;
-    f.auto(r => {
-      if (r.op === 'snapshot') return { person: { id: 'p' }, messages: records.slice(-20), nextMessagesCursor: String(records.at(-20).seq), busy: true };
-      if (r.op === 'messages') {
-        if (hold) { delayed = r; return false; }
-        const end = r.payload.cursor ? Number(r.payload.cursor) - 1 : records.length;
-        const items = records.slice(Math.max(0, end - 50), end);
-        return { items, nextCursor: end > 50 ? String(items[0].seq) : null };
-      }
-    });
-    await f.controller.open('a'); hold = true;
-    const older = f.controller.page('messages', true);
-    records = Array.from({ length: 160 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
-    await vi.advanceTimersByTimeAsync(51);
-    expect(f.state.messageCursor).toBe('141');
-    f.response(delayed, { items: records.slice(0, 30), nextCursor: null }); await older;
-    expect(f.state.messages).toHaveLength(20);
-    expect(f.state.messageCursor).toBe('141');
-    hold = false;
-    while (f.state.messageCursor) await f.controller.page('messages', true);
-    expect(f.state.messages.map(m => m.seq)).toEqual(records.map(m => m.seq));
-  });
-
-  it('sorts same-time and clock-rollback records by authoritative sequence', async () => {
-    const f = fixture(); f.auto(); await f.controller.open('a');
-    const records = [{ id: 'z-first', seq: 1, createdAt: 100 }, { id: 'a-second', seq: 2, createdAt: 99 }];
-    f.auto(r => r.op === 'messages' || r.op === 'traces' ? { items: [...records].reverse(), nextCursor: null } : undefined);
-    await f.controller.refresh();
-    expect(f.state.messages.map(m => m.seq)).toEqual([1, 2]);
-    expect(f.state.traces.map(m => m.seq)).toEqual([1, 2]);
-  });
-
-  it('fails a dropped transport promptly instead of waiting for timeout', async () => {
-    const f = fixture(); f.chat.sendWsMessage = () => false;
-    await f.controller.open('a');
-    expect(f.state.loading).toBe(false); expect(f.state.error.code).toBe('disconnected');
   });
 });
 
@@ -848,148 +228,6 @@ describe('Digital Person conversation activity', () => {
     expect(JSON.stringify(value)).not.toContain('provider');
   });
 
-  it.each([
-    ['catalog.search', 'searchingSkills'], ['catalog.view', 'readingSkill'],
-    ['Skill.reconsider', 'readingMethod'], ['Skill.associate', 'readingMethod'],
-    ['Capability.create', 'validatingCapability'], ['Script.sum', 'runningScript'],
-    ['<img src=x>', 'usingCapability'], ['__proto__', 'usingCapability'],
-  ])('uses a truthful fixed label for %s', (id, label) => {
-    const value = project([trace(1, 'capability_started', { capability: { id } })]);
-    expect(value.label).toBe(`person.activity.${label}`);
-    expect(value.params).toEqual(id === 'Script.sum' ? { name: id } : {});
-    expect(JSON.stringify(value)).not.toContain('<img');
-  });
-
-  it('does not call an invocation outcome or model output an episode success', () => {
-    const events = [trace(1, 'capability_started', { callId: 'c', capability: { id: 'Recall' } }),
-      trace(2, 'capability_result', { callId: 'c', capability: { id: 'Recall' } })];
-    expect(project(events)).toMatchObject({ loading: true, label: 'person.activity.preparing', rows: [expect.objectContaining({ status: 'completed' })] });
-    events.push(trace(3, 'call_started', { callId: 'd' }), trace(4, 'call_output', { callId: 'd' }));
-    expect(project(events)).toMatchObject({ loading: true, label: 'person.activity.processingResponse' });
-  });
-
-  it.each([true, false])('shows joined tool outcome after cancellation without reviving episode success (failed=%s)', failed => {
-    const events = [trace(1, 'capability_started', { callId: 'c', capability: { id: 'FileWrite', args: 'PRIVATE_ARGS' } }),
-      trace(2, 'cancelled'), trace(3, 'capability_finalized', { callId: 'c', capability: { id: 'FileWrite' },
-        outcome: failed ? 'capability_failed' : 'capability_result', afterTerminal: true, accepted: false,
-        result: { ok: !failed, output: 'PRIVATE_OUTPUT' } })];
-    const value = project(events, { busy: false, latestEpisode: { id: 'e', status: 'cancelled', endedAt: 2000 } });
-    expect(value).toMatchObject({ loading: false, label: 'person.activity.cancelled', endedAt: 2000,
-      rows: [expect.objectContaining({ status: failed ? 'failed' : 'completed', durationMs: 2000 })] });
-    expect(JSON.stringify(personActivityRecords(events))).not.toMatch(/PRIVATE_|"(?:args|output|result)":/);
-  });
-
-  it.each(['completed', 'cancelled', 'failed', 'interrupted', 'budget_exhausted'])('fences late events with confirmed %s, including no assistant reply', status => {
-    const value = project([trace(1, 'call_started', { callId: 'c' }), trace(2, 'call_failed', { callId: 'c' })], {
-      busy: false, episodeId: null, latestEpisode: { id: 'e', status, endedAt: 3000 },
-    });
-    expect(value.loading).toBe(false);
-    expect(value.label).toBe(`person.activity.${status === 'budget_exhausted' ? 'budgetExhausted' : status}`);
-    expect(value.endedAt).toBe(3000);
-    expect(value.rows.every(r => r.status !== 'running')).toBe(true);
-  });
-
-  it('stops pretending to know current work on stale reads or disconnection', () => {
-    const records = [trace(1, 'capability_started', { capability: { id: 'Recall' } })];
-    for (const state of [{ activityStale: true }, { progressStale: true }]) {
-      expect(project(records, state)).toMatchObject({ label: 'person.activity.stale', loading: false, rows: [expect.objectContaining({ status: 'unknown' })] });
-    }
-    expect(project(records, {}, 'disconnected')).toMatchObject({ label: 'person.activity.disconnected', loading: false });
-    expect(project(records, {}, 'offline').loading).toBe(false);
-    expect(project(records, {}, 'disabled').visible).toBe(false);
-    expect(project(records, { commandPending: true })).toMatchObject({ label: 'person.activity.confirming', rows: [] });
-    expect(project(records, { busy: false, retryCommand: {} }).label).toBe('person.activity.uncertain');
-    expect(project(records, { cancelPending: true }).label).toBe('person.activity.stopping');
-  });
-
-  it('does not reuse the last success for a new command with unknown admission', () => {
-    const value = project([trace(1, 'committed')], {
-      busy: false, episodeId: null, latestEpisode: { id: 'e', status: 'completed', endedAt: 2000 }, retryCommand: {},
-    });
-    expect(value).toMatchObject({ visible: true, loading: false, label: 'person.activity.uncertain', rows: [], startedAt: null, endedAt: null });
-  });
-
-  it('keeps the tail bounded and missing starts explicitly incomplete', () => {
-    const records = Array.from({ length: 80 }, (_, i) => trace(i + 1, 'capability_result', { callId: `c${i}`, capability: { id: 'Recall' } }));
-    const value = project(records);
-    expect(personActivityRecords(records)).toHaveLength(50);
-    expect(value.rows).toHaveLength(30);
-    expect(value.limited).toBe(true);
-    expect(value.startedAt).toBeNull();
-    expect(value.rows.every(r => r.durationMs === null)).toBe(true);
-  });
-
-  it('keeps live progress current after history pagination and preserves scope on disconnect only', async () => {
-    vi.useFakeTimers(); const f = fixture(); let records = [trace(1, 'accepted', { trigger: { kind: 'send' } })];
-    let busy = true;
-    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, messages: [], busy, episodeId: busy ? 'e' : null, latestEpisode: { id: 'e', status: busy ? 'running' : 'completed' } }
-      : r.op === 'traces' ? { items: r.payload.cursor ? [trace(0, 'accepted', { episodeId: 'old' })] : records, nextCursor: r.payload.cursor ? null : 'older' } : undefined);
-    await f.controller.open('a'); await f.controller.page('traces', true);
-    const historical = [...f.state.traces];
-    records = [...records, trace(2, 'capability_started', { callId: 'c', capability: { id: 'Recall', args: 'PRIVATE' } })];
-    await vi.advanceTimersByTimeAsync(51);
-    expect(projectPersonActivity(f.state).label).toBe('person.activity.recalling');
-    expect(f.state.traces).toEqual(historical);
-    expect(f.state.tracesStale).toBe(true);
-    expect(f.state.activityStale).toBe(false);
-    f.chat.connectionState = 'reconnecting'; await f.controller.open('a');
-    expect(projectPersonActivity(f.state, 'disconnected')).toMatchObject({ visible: true, loading: false, label: 'person.activity.disconnected' });
-    expect(f.state.traces).toEqual([]);
-    expect(JSON.stringify(f.state.activityRecords)).not.toContain('PRIVATE');
-    f.owner('other'); await f.controller.open('a');
-    expect(f.state.activityRecords).toEqual([]);
-    expect(f.state.busy).toBe(false);
-    f.chat.connectionState = 'connected'; busy = false; await f.controller.open('a');
-    expect(projectPersonActivity(f.state)).toMatchObject({ loading: false, label: 'person.activity.completed' });
-  });
-
-  it('refreshes live progress while a slow history page is still pending', async () => {
-    vi.useFakeTimers(); const f = fixture({ timeoutMs: 1000 }); let history;
-    let records = [trace(1, 'capability_started', { callId: 'c', capability: { id: 'Recall' } })];
-    f.auto(r => {
-      if (r.op === 'snapshot') return { person: { id: 'p' }, busy: true, episodeId: 'e' };
-      if (r.op === 'traces' && r.payload.cursor) { history = r; return false; }
-      if (r.op === 'traces') return { items: records, nextCursor: 'older' };
-    });
-    await f.controller.open('a');
-    const historical = [...f.state.traces];
-    const reading = f.controller.page('traces', true);
-    records = [...records, trace(2, 'capability_result', { callId: 'c', capability: { id: 'Recall' } }),
-      trace(3, 'capability_started', { callId: 'd', capability: { id: 'Script.sum' } })];
-    await vi.advanceTimersByTimeAsync(51);
-    expect(f.state.tracesLoading).toBe(true);
-    expect(f.state.traces).toEqual(historical);
-    expect(projectPersonActivity(f.state)).toMatchObject({ label: 'person.activity.runningScript', loading: true });
-    f.response(history, { items: [trace(0, 'committed', { episodeId: 'old' })], nextCursor: null });
-    await reading;
-    expect(f.state.traces).toHaveLength(2);
-    expect(f.state.activityRecords).toHaveLength(3);
-    expect(projectPersonActivity(f.state).label).toBe('person.activity.runningScript');
-  });
-
-  it('marks an explicit snapshot failure stale, recovers, and ignores an older failed snapshot', async () => {
-    vi.useFakeTimers(); const f = fixture(); let fail = false; let delayed;
-    const snapshot = { person: { id: 'p' }, busy: true, episodeId: 'e' };
-    f.auto(r => {
-      if (r.op === 'snapshot' && fail) { f.response(r, null, { ok: false, errorCode: 'requestFailed' }); return false; }
-      if (r.op === 'snapshot') return snapshot;
-      if (r.op === 'traces') return { items: [trace(1, 'call_started', { callId: 'c' })] };
-    });
-    await f.controller.open('a'); fail = true; await f.controller.refresh();
-    expect(projectPersonActivity(f.state)).toMatchObject({ label: 'person.activity.stale', loading: false });
-    fail = false; await f.controller.refresh();
-    expect(f.state.progressStale).toBe(false);
-    f.auto(r => r.op === 'snapshot' ? (delayed = r, false) : undefined);
-    await vi.advanceTimersByTimeAsync(51);
-    const old = delayed;
-    const refreshing = f.controller.refresh(); await vi.advanceTimersByTimeAsync(0);
-    f.response(delayed, snapshot); await refreshing;
-    f.response(old, null, { ok: false, errorCode: 'requestFailed' });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.state.progressStale).toBe(false);
-    expect(f.state.error).toBeNull();
-  });
-
   it('fences concurrent live tails against late success, failure and identity changes', async () => {
     vi.useFakeTimers();
     for (const result of ['success', 'failure', 'owner', 'agent']) {
@@ -1017,80 +255,10 @@ describe('Digital Person conversation activity', () => {
       f.controller.dispose();
     }
   });
-
-  it('marks progress stale after a failed tail/snapshot and recovers automatically without cognition', async () => {
-    vi.useFakeTimers(); const f = fixture(); let fail = '';
-    f.auto(r => {
-      if (r.op === fail) { f.response(r, null, { ok: false, error: 'Unavailable' }); return false; }
-      if (r.op === 'snapshot') return { person: { id: 'p' }, busy: true, episodeId: 'e' };
-      if (r.op === 'traces') return { items: [trace(1, 'capability_started', { capability: { id: 'Recall' } })], nextCursor: null };
-    });
-    await f.controller.open('a');
-    for (const op of ['traces', 'snapshot']) {
-      fail = op; await vi.advanceTimersByTimeAsync(51);
-      expect(projectPersonActivity(f.state)).toMatchObject({ loading: false, label: 'person.activity.stale' });
-      fail = ''; await vi.advanceTimersByTimeAsync(51);
-      expect(projectPersonActivity(f.state)).toMatchObject({ loading: true, label: 'person.activity.recalling' });
-    }
-    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
-  });
 });
-
 
 describe('Digital Person durable turn usage reads', () => {
   const row = seq => ({ id: `turn-${seq}`, seq, calls: [] });
-  it('reads only while visible, preserves history and polls idle turns without inference', async () => {
-    vi.useFakeTimers(); const f = fixture();
-    let latest = [row(3), row(2)];
-    f.auto(r => r.op === 'turns' ? { items: r.payload.cursor ? [row(1)] : latest, nextCursor: r.payload.cursor ? null : 2 } : undefined);
-    await f.controller.open('a');
-    expect(f.requests.some(r => r.op === 'turns')).toBe(false);
-    f.controller.showTurns(true); await vi.advanceTimersByTimeAsync(0);
-    await f.controller.readTurns(true);
-    expect(f.state.turns.items.map(r => r.seq)).toEqual([3, 2, 1]);
-    latest = [row(4), row(3)]; await vi.advanceTimersByTimeAsync(51);
-    expect(f.state.turns.items.map(r => r.seq)).toEqual([4, 3, 2, 1]);
-    expect(f.state.turns.nextCursor).toBeNull();
-    f.controller.showTurns(false); const count = f.requests.length;
-    await vi.advanceTimersByTimeAsync(151);
-    expect(f.requests.length).toBe(count);
-    expect(f.requests.some(r => ['send', 'think', 'dream'].includes(r.op))).toBe(false);
-  });
-
-  it('does not let automatic refresh supersede a slow older-page read', async () => {
-    vi.useFakeTimers(); const f = fixture({ timeoutMs: 1000 });
-    f.auto(r => r.op === 'turns' ? { items: [row(3), row(2)], nextCursor: 2 } : undefined);
-    await f.controller.open('a'); f.controller.showTurns(true); await vi.advanceTimersByTimeAsync(0);
-    f.auto(r => r.op === 'turns' ? false : undefined);
-    const pending = f.controller.readTurns(true), request = f.requests.at(-1);
-    const count = f.requests.filter(r => r.op === 'turns').length;
-    await vi.advanceTimersByTimeAsync(201);
-    expect(f.requests.filter(r => r.op === 'turns')).toHaveLength(count);
-    f.response(request, { items: [row(1)], nextCursor: null }); await pending;
-    expect(f.state.turns.items.map(r => r.seq)).toEqual([3, 2, 1]);
-    f.chat.connectionState = 'reconnecting'; await vi.advanceTimersByTimeAsync(101);
-    expect(f.requests.filter(r => r.op === 'turns')).toHaveLength(count);
-  });
-
-  it('restarts the cursor chain if more than a page of remote turns was missed', async () => {
-    const f = fixture(); let latest = [row(2), row(1)];
-    f.auto(r => r.op === 'turns' ? { items: latest, nextCursor: latest.at(-1).seq } : undefined);
-    await f.controller.open('a'); await f.controller.readTurns();
-    latest = [row(30), row(29)]; await f.controller.readTurns();
-    expect(f.state.turns.items.map(r => r.seq)).toEqual([30, 29]);
-    expect(f.state.turns.nextCursor).toBe(29);
-  });
-
-  it('adopts the cursor when an already loaded empty list gains more than a page of turns', async () => {
-    const f = fixture(); let records = [];
-    f.auto(r => r.op === 'turns' ? { items: r.payload.cursor ? records.slice(20) : records.slice(0, 20), nextCursor: !r.payload.cursor && records.length > 20 ? records[19].seq : null } : undefined);
-    await f.controller.open('a'); await f.controller.readTurns();
-    expect(f.state.turns.loaded).toBe(true); expect(f.state.turns.items).toEqual([]);
-    records = Array.from({ length: 21 }, (_, i) => row(21 - i));
-    await f.controller.readTurns(); expect(f.state.turns.nextCursor).toBe(2);
-    await f.controller.readTurns(true); expect(f.state.turns.items).toHaveLength(21);
-    expect(f.state.turns.items.at(-1).seq).toBe(1); expect(f.state.turns.nextCursor).toBeNull();
-  });
 
   it('fences delayed turn reads on newer refresh, Agent/owner switches, and keeps failures local', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
@@ -1114,33 +282,10 @@ describe('Digital Person durable turn usage reads', () => {
   });
 });
 
-
 describe('Person snapshot waiting feedback', () => {
   const waiting = (extra = {}) => ({ ...personState(), busy: true, episodeId: 'e', latestEpisode: {
     id: 'e', status: 'running', createdAt: 1000, feedback: { at: 61000, phase: 'model', capabilityId: 'PRIVATE_CAPABILITY' },
   }, ...extra });
-
-  it('requires an authoritative running snapshot and valid timestamped phase, without a local clock', () => {
-    expect(projectPersonFeedback(waiting())).toEqual({ at: new Date(61000).toISOString(), label: 'person.feedback.model' });
-    for (const extra of [{ busy: false }, { episodeId: 'other' }, { latestEpisode: null }, { retryCommand: {} },
-      { latestEpisode: { id: 'e', status: 'running' } }, { feedbackSuppressedEpisodeId: 'e' }]) {
-      expect(projectPersonFeedback(waiting(extra))).toBeNull();
-    }
-    for (const phase of ['model', 'capability', 'preparing']) {
-      const state = waiting(); state.latestEpisode.feedback.phase = phase;
-      expect(projectPersonFeedback(state).label).toBe(`person.feedback.${phase}`);
-    }
-    for (const feedback of [undefined, {}, { at: 'invalid', phase: 'model' }, { at: 500, phase: 'model' }, { at: 61000, phase: 'PRIVATE_DECISION' }]) {
-      const state = waiting(); state.latestEpisode.feedback = feedback;
-      expect(projectPersonFeedback(state)).toBeNull();
-    }
-    for (const gate of ['offline', 'disconnected', 'disabled', 'unsupported', 'noAgent']) expect(projectPersonFeedback(waiting(), gate)).toBeNull();
-  });
-
-  it.each(['accepted', 'completed', 'committed', 'failed', 'cancelled', 'interrupted', 'budget_exhausted'])('hides feedback for %s even if busy is behind', status => {
-    const state = waiting(); state.latestEpisode.status = status;
-    expect(projectPersonFeedback(state)).toBeNull();
-  });
 
   it('uses the newest substantive reply as a fence, not raw traces or unrelated history', () => {
     const state = waiting({ messages: [{ id: 'other', role: 'assistant', text: 'Other episode', episodeId: 'older', createdAt: 70000 }] });
@@ -1152,27 +297,65 @@ describe('Person snapshot waiting feedback', () => {
     state.activityRecords = personActivityRecords([{ id: 'end', episodeId: 'e', kind: 'cancelled', createdAt: 123000 }]);
     expect(projectPersonFeedback(state)).toBeNull();
   });
+});
 
-  it.each(['cancel', 'completed'])('does not resurrect %s feedback on an older reconnect snapshot, but new episodes can show it', async transition => {
-    vi.useFakeTimers();
-    const f = fixture(); let snapshot = { person: { id: 'p' }, messages: [], busy: true, episodeId: 'e', latestEpisode: waiting().latestEpisode };
-    f.auto(request => request.op === 'snapshot' ? snapshot : undefined);
-    await f.controller.open('a');
-    expect(projectPersonFeedback(f.state)).not.toBeNull();
-    if (transition === 'cancel') await f.controller.cancel();
-    else {
-      snapshot = { ...snapshot, busy: false, episodeId: null, latestEpisode: { ...snapshot.latestEpisode, status: 'completed' } };
-      await f.controller.refresh();
-    }
-    expect(projectPersonFeedback(f.state)).toBeNull();
-    f.chat.connectionState = 'reconnecting'; await f.controller.open('a');
-    f.chat.connectionState = 'connected';
-    snapshot = { ...snapshot, busy: true, episodeId: 'e', latestEpisode: waiting().latestEpisode };
-    await f.controller.open('a');
-    expect(projectPersonFeedback(f.state)).toBeNull();
-    snapshot = { ...snapshot, episodeId: 'new', latestEpisode: { ...waiting().latestEpisode, id: 'new' } };
-    await f.controller.refresh();
-    expect(projectPersonFeedback(f.state)).not.toBeNull();
-    expect(f.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toEqual([]);
+describe('Person native cognition projection', () => {
+  const trace = (kind, seq, extra = {}) => ({
+    id: `trace-${seq}`, episodeId: 'episode-a', kind, seq,
+    createdAt: new Date(Date.UTC(2026, 8, 28, 0, 0, seq)).toISOString(), ...extra,
+  });
+  const output = (seq, callId, proposal, extra = {}) => trace('call_output', seq, {
+    callId, output: { text: JSON.stringify(proposal), complete: true }, ...extra,
+  });
+  function freeze(value) {
+    if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
+    return value;
+  }
+
+  it('projects exactly one cognition after native multi-tool execution, never text or tool arguments', () => {
+    const proposal = finalProposal();
+    const cognition = output(6, 'cognition', proposal, { output: { protocol: 'cognition', text: JSON.stringify(proposal), toolCalls: [], complete: true } });
+    const activity = trace('activity', 7, { callId: 'cognition', activity: proposal.activity, decision: proposal.decision });
+    const commit = trace('committed', 8, { callId: 'cognition', decision: proposal.decision });
+    const records = [
+      trace('call_started', 1, { callId: 'native', manifest: { protocol: 'native-tool-loop', phase: 'execution' },
+        request: { messages: [{ role: 'user', content: JSON.stringify({ trigger: { kind: 'send', text: 'PRIVATE_CONTEXT' } }) }] } }),
+      trace('call_output', 2, { callId: 'native', output: { protocol: 'native-tools', text: '', toolCalls: [
+        { id: 'provider-a', name: 'FileWrite', input: { content: 'PRIVATE_ARGS' } },
+        { id: 'provider-b', name: 'Bash', input: { command: 'PRIVATE_COMMAND' } },
+      ] } }),
+      trace('call_output', 3, { callId: 'prose', output: { protocol: 'native-tools', text: 'PRIVATE_EXECUTION_TEXT', toolCalls: [] } }),
+      trace('call_failed', 4, { callId: 'partial', output: { protocol: 'native-tools', text: 'PRIVATE_PARTIAL', complete: false } }),
+      trace('call_output', 5, { callId: 'unknown', output: { protocol: 'future-protocol', text: JSON.stringify(proposal) } }),
+      cognition, activity, commit,
+    ];
+    const entries = projectPersonThoughts(freeze(records));
+    expect(entries.map(e => e.kind)).toEqual(['thought', 'committed']);
+    expect(entries[0]).toMatchObject({ callId: 'cognition', status: 'committed' });
+    expect(entries[1].sections).toEqual([]);
+    expect(projectPersonJournal(records)[0]).toMatchObject({ status: 'committed', history: [] });
+    expect(JSON.stringify(entries)).not.toMatch(/PRIVATE_|provider-a|provider-b|FileWrite|Bash/);
+    expect(projectPersonThoughts(records.slice(0, 5))).toEqual([]);
+    expect(projectPersonThoughts([activity, commit])[0]).toMatchObject({ kind: 'activity', status: 'committed' });
+    expect(projectPersonThoughts([cognition])[0].status).toBe('candidate');
+    expect(projectPersonThoughts([cognition, { ...commit, callId: 'native' }])[0].status).toBe('candidate');
+  });
+
+  it('keeps native cognition exact across newest-first, overlapping and output-missing pages', () => {
+    const proposal = finalProposal();
+    const execution = trace('call_output', 1, { callId: 'native', output: { protocol: 'native-tools', text: JSON.stringify(proposal), toolCalls: [] } });
+    const cognition = output(2, 'cognition', proposal, { output: { protocol: 'cognition', text: JSON.stringify(proposal), toolCalls: [] } });
+    const activity = trace('activity', 3, { callId: 'cognition', activity: proposal.activity, decision: proposal.decision });
+    const commit = trace('committed', 4, { callId: 'cognition', decision: proposal.decision });
+    const newest = [commit, activity];
+    expect(projectPersonJournal(newest)[0]).toMatchObject({ status: 'committed', history: [] });
+    expect(projectPersonThoughts([execution])).toEqual([]); // Execution JSON is never a candidate.
+    const merged = freeze([...newest, activity, cognition, execution, cognition]);
+    expect(projectPersonThoughts(merged).map(entry => entry.kind)).toEqual(['thought', 'committed']);
+    const entries = projectPersonJournal(merged);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'committed', candidateStatus: null, history: [] });
+    expect(entries[0].sections.filter(section => section.label === 'activity_summary')).toHaveLength(1);
+    expect(entries[0].id).toBe(projectPersonJournal(newest)[0].id);
   });
 });

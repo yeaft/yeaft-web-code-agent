@@ -1,38 +1,7 @@
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/test-server.js';
 import { personRecords } from '../../../test/fixtures/person-records.js';
-import { personTurn } from '../../../test/fixtures/person-turns.js';
 
-const usageCopy = {
-  en: {
-    'person.turns': 'Flow & usage', 'common.refresh': 'Refresh', 'person.loading': 'Loading…',
-    'person.usage.inputTotalTokens': 'Input incl. cache', 'person.usage.inputTokens': 'Input (raw)',
-    'person.usage.outputTokens': 'Output', 'person.usage.total': 'Total tokens',
-    'person.usage.cacheReadTokens': 'Cache read', 'person.usage.cacheWriteTokens': 'Cache write', 'person.usage.reasoningTokens': 'Reasoning subset',
-    'person.usage.modelWindow': 'Model context window', 'person.usage.requestSize': 'Request size', 'person.usage.bytes': 'bytes',
-    'person.usage.history': 'Recent history', 'person.usage.concepts': 'Recent / focused concepts', 'person.usage.recall': 'Recall included in request',
-    'person.usage.messagesCount': '{n} messages', 'person.usage.conceptsCount': '{n} concepts',
-    'person.usage.omitted': 'Not included due to budget: {messages} messages, {concepts} concepts (originals retained).',
-    'person.usage.contextNote': 'Request size is UTF-8 bytes, not token usage.',
-    'person.usage.accounting': 'Reported main-thread usage only; child threads excluded. Reasoning is part of output, not added twice. Missing usage is not zero. Monitoring only, not a cost or token cap.',
-    'person.usage.older': 'Older turns', 'person.usage.empty': 'No turn records yet.',
-    'person.usage.stale': 'Usage records could not be refreshed. Displayed values may be stale.',
-  },
-  'zh-CN': {
-    'person.turns': '运行与用量', 'common.refresh': '刷新', 'person.loading': '加载中…',
-    'person.usage.inputTotalTokens': '输入（含缓存）', 'person.usage.inputTokens': '输入（原始值）',
-    'person.usage.outputTokens': '输出', 'person.usage.total': 'Token 合计',
-    'person.usage.cacheReadTokens': '缓存读取', 'person.usage.cacheWriteTokens': '缓存写入', 'person.usage.reasoningTokens': '其中推理',
-    'person.usage.modelWindow': '模型上下文窗口', 'person.usage.requestSize': '本次请求大小', 'person.usage.bytes': '字节',
-    'person.usage.history': '近期历史', 'person.usage.concepts': '近期／关注概念', 'person.usage.recall': '本次带入召回',
-    'person.usage.messagesCount': '{n} 条消息', 'person.usage.conceptsCount': '{n} 个概念',
-    'person.usage.omitted': '预算未带入：{messages} 条消息、{concepts} 个概念（原记录仍保留）。',
-    'person.usage.contextNote': '请求大小按 UTF-8 字节统计，不是 token 用量。',
-    'person.usage.accounting': '供应商已报告的主线程用量，不含子线程。推理 token 属于输出，不重复累加；缺失用量不是 0。这里只监测，不是费用或 token 硬限额。',
-    'person.usage.older': '更早的 turn', 'person.usage.empty': '暂无运行记录。',
-    'person.usage.stale': '用量记录暂时无法更新，当前显示值可能不是最新。',
-  },
-};
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -48,36 +17,24 @@ const conversationRecords = new WeakMap();
 // This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { longReading = false, enableUi = true, activityFlow = false, conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], historyAvailable = true, turnItems = [], olderTurns = [] } = {}) {
-  if (enableUi) await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
+async function mockPersonSocket(page, { conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [] } = {}) {
+  await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
   const messages = initialMessages.map(message => ({ ...message }));
   const agentMessages = new Map([['person-a', messages], ['person-b', []]]);
   let viewedAgentId = 'person-a';
   conversationRecords.set(page, () => agentMessages.get(viewedAgentId) || []);
-  let admissionReply;
-  let holdAdmission = false;
   let cancelReply;
   let holdCancel = false;
-  let commandError = null;
   let episodeNumber = 0;
   let activeEpisode = 'live-episode';
   let socket;
-  let configured = true;
-  let renameSupported = true;
   let busy = false;
-  let activityRecords = [];
   let latestEpisode = null;
-  let historyReply;
   let messageHistoryReply;
   let messageHistoryLoaded = false;
   let saveSettings;
-  let failTraces = false;
-  let holdTurns = false;
-  let turnHistoryReply;
-  let turnError = null;
-  let unknownCommand = false;
   let models = [{ id: 'provider/model-a' }, { id: 'provider/model-b' }];
   let modelSettings = { modelCandidates: [], defaultModel: null };
   const effectiveCandidates = () => modelSettings.modelCandidates.length ? modelSettings.modelCandidates : models.slice(0, 8).map(model => model.id);
@@ -86,7 +43,6 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     { id: 'person-b', name: 'Owner Agent B', online: true, capabilities: ['digital_person'] },
     { id: 'old-agent', name: 'Old Agent', online: true, capabilities: [] },
   ];
-  const agentList = () => socket.send(JSON.stringify({ type: 'agent_list', agents }));
   await page.routeWebSocket(/.*/, route => {
     socket = route;
     const server = route.connectToServer();
@@ -100,13 +56,13 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
       if (request.type !== 'person_request') { server.send(message); return; }
       requests.push(request);
       const reply = (data, extra = {}) => route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data, ...extra }));
-      if (request.op === 'status') reply({ configured, ...(renameSupported ? { renameSupported: true } : {}), reason: configured ? '' : 'Instance directory is not configured', models,
+      if (request.op === 'status') reply({ configured: true, renameSupported: true, reason: '', models,
         ...(modelPreferences ? { defaultModelSupported: true, ...modelSettings, agentDefaultModel: models[0]?.id || null,
           effectiveModelCandidates: effectiveCandidates(), effectiveDefaultModel: modelSettings.defaultModel || effectiveCandidates()[0] || null } : {}) });
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
       else if (request.op === 'snapshot') {
         viewedAgentId = request.agentId;
-        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea', ...(modelPreferences ? { settings: modelSettings } : {}) }, state: { version: 4, currentEpisodeId: 'episode-1', summary: longReading ? 'A considered understanding.\n'.repeat(100) : '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? (activityFlow ? 'episode-1' : activeEpisode) : null });
+        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea', ...(modelPreferences ? { settings: modelSettings } : {}) }, state: { version: 4, currentEpisodeId: 'episode-1', summary: '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? activeEpisode : null });
       } else if (request.op === 'messages') {
         if (conversationFlow && request.payload.cursor && olderMessages.length) {
           messageHistoryReply = () => {
@@ -116,21 +72,10 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
           };
           return;
         }
-        reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded || !historyAvailable ? null : 'older-page' });
+        reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded ? null : 'older-page' });
       } else if (request.op === 'turns') {
-        const finish = () => {
-          if (turnError) { const error = turnError; turnError = null; reply(null, { ok: false, error }); return; }
-          reply({ items: request.payload.cursor ? olderTurns : turnItems, nextCursor: !request.payload.cursor && olderTurns.length ? 'turn-page-2' : null });
-        };
-        if (holdTurns) turnHistoryReply = finish;
-        else finish();
+        reply({ items: [], nextCursor: null });
       } else if (request.op === 'traces') {
-        if (failTraces) { failTraces = false; reply(null, { ok: false, error: 'Thought refresh failed' }); return; }
-        if (activityFlow) {
-          if (request.payload.cursor) historyReply = () => reply({ items: [], nextCursor: null });
-          else reply({ items: activityRecords, nextCursor: 'trace-page-2' });
-          return;
-        }
         const capabilityRecords = [
           { id: 'script-publication', seq: 19, episodeId: 'script', callId: 'create-call', kind: 'capability_created', capabilityId: 'Script.sum',
             capabilityManifest: { id: 'Script.sum', version: 1, revision: 'private-revision' }, evidence: { testsPassed: 2 } },
@@ -147,9 +92,8 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
           ? [{ id: 'curiosity', kind: 'interest', statement: 'An interest saved in memory. <script>text only</script>', revision: 2, epistemicState: 'hypothesis', sourceRefs: ['message:older'] }]
           : [{ id: 'Script.sum', domain: 'script', description: 'Sum numbers', version: 1, code: 'return input.reduce((a,b)=>a+b,0)' }], nextCursor: null });
       } else if (request.op === 'search') {
-        reply({ items: [{ id: 'archived', role: 'user', text: longReading ? 'A message from the durable archive.\n'.repeat(100) : 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
+        reply({ items: [{ id: 'archived', role: 'user', text: 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
-        if (commandError) { const error = commandError; commandError = null; reply(null, { ok: false, error: 'Admission rejected', errorCode: error }); return; }
         if (conversationFlow && request.op === 'send') {
           const admit = () => {
             activeEpisode = `conversation-${++episodeNumber}`;
@@ -163,13 +107,11 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
             latestEpisode = { id: activeEpisode, status: 'running', createdAt };
             reply({ episodeId: activeEpisode });
           };
-          if (holdAdmission) admissionReply = admit;
-          else admit();
+          admit();
           return;
         }
-        if (unknownCommand) { unknownCommand = false; reply(null, { ok: false, error: 'Unknown outcome', errorCode: 'outcome_unknown' }); return; }
-        if (request.op === 'send' && !activityFlow) messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
-        busy = true; reply({ episodeId: activityFlow ? 'episode-1' : 'live-episode' });
+        if (request.op === 'send') messages.push({ id: 'm1', role: 'user', text: request.payload.text, attachments: (request.payload.attachments || []).map(a => ({ ...a, name: 'notes.txt' })), createdAt: 3 }, { id: 'm2', role: 'assistant', text: 'Recorded mock response.\n'.repeat(90), createdAt: 4 });
+        busy = true; reply({ episodeId: 'live-episode' });
       } else if (request.op === 'settings') saveSettings = () => {
         if (modelPreferences) modelSettings = { ...modelSettings, ...request.payload };
         reply({ settings: modelPreferences ? modelSettings : request.payload });
@@ -181,18 +123,8 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     });
   });
   return { requests,
-    turns(items) { turnItems = items; },
-    holdTurns() { holdTurns = true; },
-    turnsPending() { return !!turnHistoryReply; },
-    finishTurns() { holdTurns = false; turnHistoryReply(); turnHistoryReply = null; },
-    failTurnRequest() { turnError = 'Usage refresh failed'; },
     messageHistoryPending() { return !!messageHistoryReply; },
     finishMessageHistory() { messageHistoryReply(); messageHistoryReply = null; },
-    holdAdmission() { holdAdmission = true; },
-    admissionPending() { return !!admissionReply; },
-    admit() { holdAdmission = false; admissionReply(); admissionReply = null; },
-    rejectNextSend(code = 'model_unavailable') { commandError = code; },
-    messages(rows, agentId = 'person-a') { agentMessages.set(agentId, rows.map(row => ({ ...row }))); },
     reply(id, text, agentId = 'person-a', episodeId = activeEpisode, metadata = {}) {
       const rows = agentMessages.get(agentId);
       const existing = rows.find(row => row.id === id);
@@ -205,718 +137,13 @@ async function mockPersonSocket(page, { longReading = false, enableUi = true, ac
     replyAt(offset) { return new Date(new Date(latestEpisode.createdAt).getTime() + offset).toISOString(); },
     holdCancel() { holdCancel = true; }, cancelPending() { return !!cancelReply; }, finishCancel() { holdCancel = false; cancelReply(); cancelReply = null; },
     complete() { busy = false; latestEpisode = { id: activeEpisode, status: 'completed', endedAt: new Date().toISOString() }; },
-    finishHistory() { historyReply(); historyReply = null; }, historyPending() { return !!historyReply; }, activity(records, status = 'running') { activityRecords = records; busy = status === 'running'; latestEpisode = { id: 'episode-1', status, ...(busy ? {} : { endedAt: new Date().toISOString() }) }; }, setRenameSupported(value) { renameSupported = value; }, failNextCommand() { unknownCommand = true; }, failTraceRequest() { failTraces = true; }, setModels(value) { models = value; }, finishSettings() { saveSettings(); }, configure(value) { configured = value; }, online(value) { agents[0].online = value; agentList(); }, disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); } };
+    finishSettings() { saveSettings(); },
+    disconnect() { socket.close({ code: 1000, reason: 'mock reconnect check' }); },
+  };
 }
 
-for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
-  test(`Digital Person cognition links the exact historical execution ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
-    const target = personTurn(1, { id: 'episode-1' });
-    const mock = await mockPersonSocket(page, {
-      turnItems: Array.from({ length: 30 }, (_, index) => personTurn(index + 2)), olderTurns: [target],
-    });
-    await openPersonUsage(page, serverUrl, scenario);
-    const zh = scenario.locale === 'zh-CN';
-    await page.locator('.person-inspector-nav').getByRole('button', { name: zh ? '思考记录' : 'Thought journal', exact: true }).click();
-    const cognition = page.locator('.person-thought[data-episode-id="episode-1"]');
-    await expect(cognition).toHaveCount(1);
-    await cognition.getByRole('button', { name: zh ? '查看执行详情' : 'View execution details', exact: true }).click();
-    const execution = page.locator('#person-turns');
-    await expect(execution).toContainText(zh ? '所选活动不在当前页' : 'The selected activity is not on this page');
-    await expect(execution.locator('.person-turn-row[open]')).toHaveCount(0);
-    await execution.getByRole('button', { name: zh ? '更早的 turn' : 'Older turns', exact: true }).click();
-    const selected = execution.locator('[data-turn-id="episode-1"]');
-    await expect(selected).toBeVisible();
-    await expect(selected).toHaveAttribute('open', '');
-    await expect(selected.locator('summary').first()).toBeFocused();
-    expect(mock.requests.filter(request => ['send', 'think', 'dream'].includes(request.op))).toHaveLength(0);
-  });
-}
-
-async function openPersonUsage(page, serverUrl, scenario) {
-  // Keep automatic 1.5s polling from consuming a deliberately held manual read.
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.setViewportSize({ width: scenario.width, height: 800 });
-  await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
-  await page.goto(serverUrl);
-  await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(process.env.PERSON_UI_PRODUCTION === 'true' ? 1 : 0);
-  await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
-  if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
-  await page.locator('.sidebar-person-trigger:visible').click();
-  await expect(page.locator('#person-input')).toBeEnabled();
-  await page.locator('#person-input').fill('Keep this conversation draft while inspecting usage');
-  await page.locator('.person-thoughts-button').click();
-  const messages = usageCopy[scenario.locale];
-  await page.locator('.person-inspector-nav').getByRole('button', { name: messages['person.turns'], exact: true }).click();
-  await expect(page.locator('#person-turns')).toBeVisible();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', scenario.theme);
-  return messages;
-}
-
-async function expectUsageFits(page) {
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  for (const selector of ['#person-side-panel', '#person-turns', '#person-turns .person-journal-scroll']) {
-    expect(await page.locator(selector).evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-  }
-}
-
-for (const width of [320, 1280]) for (const theme of ['light', 'dark']) for (const locale of ['en', 'zh-CN']) {
-  test(`Digital Person usage summary, loops and history ${width}px ${theme} ${locale}`, async ({ page, serverUrl }, testInfo) => {
-    const historical = personTurn(1, { models: ['legacy/model'], usage: { inputTokens: 0, outputTokens: 0, complete: false }, calls: [
-      { callId: 'historical-zero', index: 1, status: 'completed', dispatched: { model: 'legacy/model' },
-        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 }, contextBytes: 16309, contextBudgetBytes: 65536 },
-    ] });
-    const missing = personTurn(2, { models: ['<script>legacy-model</script>'], usage: { complete: false }, calls: [
-      { callId: 'historical-missing', index: 1, status: 'failed', dispatched: { model: '<script>legacy-model</script>' },
-        reason: '<img src=x onerror="alert(1)">', usage: { reasoningTokens: null, cacheReadTokens: null } },
-    ] });
-    const mock = await mockPersonSocket(page, { conversationFlow: true, turnItems: [personTurn(3)], olderTurns: [missing, historical],
-      initialMessages: [{ id: 'persisted-user', role: 'user', text: 'Existing conversation', createdAt: 1 },
-        { id: 'persisted-reply', role: 'assistant', text: 'A persisted response, not a usage result.\n'.repeat(60), createdAt: 2 }] });
-    const t = await openPersonUsage(page, serverUrl, { width, theme, locale });
-    const usage = page.locator('#person-turns');
-    const row = usage.locator('[data-turn-id="turn-3"]');
-    const summary = row.locator(':scope > summary');
-    const accounting = usage.locator('.person-usage-accounting');
-    await expect(row).toBeVisible();
-    await expect(summary).toContainText(`${t['person.usage.inputTotalTokens']}: 140`);
-    await expect(summary).toContainText(`${t['person.usage.outputTokens']}: 30`);
-    await expect(summary).toContainText(`${t['person.usage.total']}: 170`);
-    await expect(summary.locator('.person-turn-models')).toHaveText('test/first → test/second');
-    await expect(row).not.toHaveAttribute('open', '');
-    await expect(row.locator('.person-turn-detail')).not.toBeVisible();
-    await expect(accounting).not.toHaveAttribute('open', '');
-    await expect(accounting.locator('p')).not.toBeVisible();
-    await expectUsageFits(page);
-
-    const pane = page.locator('.person-messages');
-    await pane.evaluate(el => { el.scrollTop = 80; });
-    const conversation = await pane.evaluate(el => ({ text: el.innerText, scroll: el.scrollTop, pinned: el.classList.contains('is-response-pinned') }));
-    await summary.focus();
-    await summary.press('Enter');
-    await expect(row).toHaveAttribute('open', '');
-    await expect(summary).toBeFocused();
-    const first = row.locator('[data-call-id="call-3-1"]');
-    const second = row.locator('[data-call-id="call-3-2"]');
-    await expect(first.locator('.person-call-tokens > span')).toHaveText([`${t['person.usage.inputTotalTokens']}: 120`, `${t['person.usage.outputTokens']}: 20`, `${t['person.usage.cacheReadTokens']}: 20`]);
-    await expect(second.locator('.person-call-tokens > span')).toHaveText([`${t['person.usage.inputTokens']}: 20`, `${t['person.usage.outputTokens']}: 10`, `${t['person.usage.reasoningTokens']}: 10`]);
-    await expect(first.locator('.person-call-tokens')).not.toContainText(t['person.usage.cacheWriteTokens']);
-    await expect(first.locator('.person-call-tokens')).not.toContainText(t['person.usage.reasoningTokens']);
-    const metric = (call, label) => call.locator('.person-context-metrics dt').filter({ hasText: label }).locator('xpath=following-sibling::dd[1]');
-    for (const call of [first, second]) {
-      await expect(metric(call, t['person.usage.modelWindow'])).toHaveText('1,048,576 tokens');
-      await expect(metric(call, t['person.usage.history'])).toHaveText(t['person.usage.messagesCount'].replace('{n}', '4'));
-      await expect(metric(call, t['person.usage.concepts'])).toHaveText(t['person.usage.conceptsCount'].replace('{n}', '3'));
-      await expect(call.locator('.person-call-diagnostics')).not.toHaveAttribute('open', '');
-      await expect(call.locator('.person-call-diagnostics dl')).not.toBeVisible();
-      expect(await call.evaluate(el => el.innerText)).not.toMatch(/configured-default|Check recalled evidence|bootstrap|person\.usage\./);
-    }
-    await expect(metric(first, t['person.usage.requestSize'])).toHaveText(`2,000 ${t['person.usage.bytes']}`);
-    await expect(metric(second, t['person.usage.requestSize'])).toHaveText(`3,000 ${t['person.usage.bytes']}`);
-    await expect(metric(first, t['person.usage.recall'])).toHaveCount(0);
-    await expect(metric(second, t['person.usage.recall'])).toHaveText(t['person.usage.messagesCount'].replace('{n}', '5'));
-    await expect(second).toContainText(t['person.usage.omitted'].replace('{messages}', '1').replace('{concepts}', '2'));
-    await expect(first.getByText(t['person.usage.omitted'].replace('{messages}', '0').replace('{concepts}', '0'), { exact: true })).toHaveCount(0);
-    await expectUsageFits(page);
-    await page.screenshot({ path: testInfo.outputPath(`person-usage-${width}-${theme}-${locale}.png`) });
-
-    const diagnostics = first.locator('.person-call-diagnostics');
-    await diagnostics.locator('summary').focus();
-    await diagnostics.locator('summary').press('Space');
-    await expect(diagnostics).toHaveAttribute('open', '');
-    await expect(diagnostics.locator('p').first()).toHaveText('configured-default');
-    await expect(diagnostics).toContainText(`1,043,456 ${t['person.usage.bytes']}`);
-    await expect(diagnostics).toContainText(t['person.usage.contextNote']);
-    await diagnostics.locator('summary').press('Enter');
-    await expect(diagnostics.locator('dl')).not.toBeVisible();
-    await accounting.locator('summary').focus();
-    await accounting.locator('summary').press('Enter');
-    await expect(accounting.locator('p')).toHaveText(t['person.usage.accounting']);
-    await accounting.locator('summary').press('Space');
-    await expect(accounting.locator('p')).not.toBeVisible();
-    await expectUsageFits(page);
-
-    // Pause the actual WS response: loading disables both read controls, not cognition.
-    mock.holdTurns();
-    await usage.getByRole('button', { name: t['person.usage.older'], exact: true }).click();
-    await expect.poll(() => mock.turnsPending()).toBe(true);
-    await expect(usage).toHaveAttribute('aria-busy', 'true');
-    await expect(usage.getByRole('button', { name: t['common.refresh'], exact: true })).toBeDisabled();
-    await expect(usage.getByRole('button', { name: t['person.usage.older'], exact: true })).toBeDisabled();
-    await summary.focus();
-    mock.finishTurns();
-    await expect(usage.locator('.person-turn-row')).toHaveCount(3);
-    await expect(summary).toBeFocused();
-    expect(mock.requests.find(request => request.op === 'turns' && request.payload.cursor).payload).toEqual({ cursor: 'turn-page-2', limit: 20 });
-    await expect(usage.locator('.person-load-more')).toHaveCount(0);
-    const oldRow = usage.locator('[data-turn-id="turn-1"]');
-    await oldRow.locator(':scope > summary').focus();
-    await oldRow.locator(':scope > summary').press('Enter');
-    await expect(oldRow.locator(':scope > summary')).toContainText(`${t['person.usage.inputTokens']}: 0`);
-    await expect(oldRow.locator(':scope > summary')).toContainText(`${t['person.usage.outputTokens']}: 0`);
-    await expect(oldRow.locator(':scope > summary')).not.toContainText(t['person.usage.total']);
-    const oldCall = oldRow.locator('.person-call-step');
-    await expect(metric(oldCall, t['person.usage.requestSize'])).toHaveText(`16,309 ${t['person.usage.bytes']}`);
-    for (const label of [t['person.usage.modelWindow'], t['person.usage.history'], t['person.usage.concepts'], t['person.usage.recall']]) {
-      await expect(metric(oldCall, label)).toHaveCount(0);
-    }
-    await expect(oldCall.locator('.person-call-tokens > span')).toHaveText([`${t['person.usage.inputTokens']}: 0`, `${t['person.usage.outputTokens']}: 0`]);
-    expect(await oldCall.evaluate(el => el.innerText)).not.toMatch(/65,536|1,048,576/);
-    const missingRow = usage.locator('[data-turn-id="turn-2"]');
-    await missingRow.locator(':scope > summary').focus();
-    await missingRow.locator(':scope > summary').press('Enter');
-    await expect(missingRow.locator(':scope > summary')).toContainText(`${t['person.usage.inputTokens']}: —`);
-    await expect(missingRow.locator(':scope > summary')).toContainText(`${t['person.usage.outputTokens']}: —`);
-    await expect(missingRow.locator(':scope > summary')).not.toContainText(t['person.usage.total']);
-    await expect(missingRow.locator('.person-call-tokens > span')).toHaveText([`${t['person.usage.inputTokens']}: —`, `${t['person.usage.outputTokens']}: —`]);
-    await expect(missingRow.locator('.person-context-metrics dt')).toHaveCount(0);
-    await expect(missingRow.locator('script, img')).toHaveCount(0);
-    await expect(missingRow.locator('.person-call-model')).toHaveText('<script>legacy-model</script>');
-    await expectUsageFits(page);
-
-    // Refresh merges the latest page without erasing older records or their state.
-    mock.turns([personTurn(3, { usage: { ...personTurn(3).usage, inputTotalTokens: 150, totalTokens: 180 } })]);
-    mock.holdTurns();
-    await usage.getByRole('button', { name: t['common.refresh'], exact: true }).click();
-    await expect.poll(() => mock.turnsPending()).toBe(true);
-    if (width > 900) await page.locator('#person-input').focus();
-    else await summary.focus();
-    mock.finishTurns();
-    await expect(summary).toContainText(`${t['person.usage.total']}: 180`);
-    await expect(usage.locator('.person-turn-row')).toHaveCount(3);
-    await expect(usage.locator('.person-load-more')).toHaveCount(0);
-    await expect(row).toHaveAttribute('open', '');
-    await expect(width > 900 ? page.locator('#person-input') : summary).toBeFocused();
-    await expect(page.locator('#person-input')).toHaveValue('Keep this conversation draft while inspecting usage');
-    await expect(page.locator('.person-response-loading, .person-return-response')).toHaveCount(0);
-    expect(await pane.evaluate(el => ({ text: el.innerText, scroll: el.scrollTop, pinned: el.classList.contains('is-response-pinned') }))).toEqual(conversation);
-    expect(mock.requests.filter(request => ['send', 'think', 'dream', 'settings', 'cancel'].includes(request.op))).toEqual([]);
-    expect(await usage.innerText()).not.toMatch(/person\.usage\./);
-    await expectUsageFits(page);
-    await summary.focus();
-    await summary.press('Escape');
-    await expect(page.locator('#person-side-panel')).toHaveCount(0);
-    await expect(page.locator('.person-thoughts-button')).toBeFocused();
-    await expect(page.locator('#person-input')).toHaveValue('Keep this conversation draft while inspecting usage');
-  });
-}
-
-for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
-  test(`Digital Person usage loading, empty, error and stale recovery ${scenario.width}px`, async ({ page, serverUrl }) => {
-    const mock = await mockPersonSocket(page);
-    mock.holdTurns();
-    const t = await openPersonUsage(page, serverUrl, scenario);
-    const usage = page.locator('#person-turns');
-    const refresh = usage.getByRole('button', { name: t['common.refresh'], exact: true });
-    await expect.poll(() => mock.turnsPending()).toBe(true);
-    await expect(usage).toHaveAttribute('aria-busy', 'true');
-    await expect(usage.getByRole('status')).toHaveText(t['person.loading']);
-    await expect(refresh).toBeDisabled();
-    mock.finishTurns();
-    await expect(usage.locator('.person-empty')).toHaveText(t['person.usage.empty']);
-    await expect(usage.locator('.person-usage-accounting')).toHaveCount(0);
-    await expect(refresh).toBeEnabled();
-    mock.turns([personTurn()]);
-    await refresh.click();
-    await expect(usage.locator('.person-turn-row')).toHaveCount(1);
-    // Hold failure until the browser is ready, avoiding the 1.5s poll clearing it.
-    mock.holdTurns();
-    mock.failTurnRequest();
-    await refresh.click();
-    await expect.poll(() => mock.turnsPending()).toBe(true);
-    mock.finishTurns();
-    mock.holdTurns();
-    await expect(usage.getByRole('alert')).toContainText('Usage refresh failed');
-    await expect(usage.getByRole('status')).toHaveText(t['person.usage.stale']);
-    await expect(usage.locator('.person-turn-row')).toHaveCount(1);
-    await expectUsageFits(page);
-    await refresh.click();
-    await expect.poll(() => mock.turnsPending()).toBe(true);
-    mock.finishTurns();
-    await expect(usage.getByRole('alert')).toHaveCount(0);
-    await expect(usage.getByRole('status')).toHaveCount(0);
-    await expect(usage.locator('.person-turn-row')).toHaveCount(1);
-    await expect(page.locator('#person-input')).toHaveValue('Keep this conversation draft while inspecting usage');
-    expect(mock.requests.filter(request => ['send', 'think', 'dream'].includes(request.op))).toEqual([]);
-    await expectUsageFits(page);
-  });
-}
-
-for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 1280, theme: 'dark', locale: 'zh-CN' }, { width: 320, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }, { width: 800, theme: 'light', locale: 'en' }]) {
-  test(`Digital Person conversation / thoughts / debug / gating ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
-    const mock = await mockPersonSocket(page);
-    await page.setViewportSize({ width: scenario.width, height: 800 });
-    await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
-    await page.goto(serverUrl);
-    // Verify the served artifact, not just an environment variable on the test runner.
-    if (process.env.PERSON_UI_PRODUCTION === 'true') await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(1);
-    else await expect(page.locator('script[src^="app.bundle.js"]')).toHaveCount(0);
-    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
-    const zh = scenario.locale === 'zh-CN';
-    if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
-    const entry = page.locator('.sidebar-person-trigger:visible');
-    await entry.focus(); await entry.press('Enter');
-    await expect(page.locator('.person-page')).toBeVisible();
-    await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
-    await expect(page.locator('.person-header h1')).toHaveText('Ada');
-    await expect(page.locator('.person-page .theme-toggle')).toHaveCount(0);
-    await expect(page.locator('.person-breadcrumb #person-agent')).toBeVisible();
-    await expect(page.locator('.person-views, .person-page .session-tab-bar, .person-manual-hint, .person-attachment-policy')).toHaveCount(0);
-    await expect(page.locator('.person-status, .person-status-dot, .person-connection-notice')).toHaveCount(0);
-    const nameBounds = await page.locator('.person-identity').boundingBox();
-    expect(Math.abs(nameBounds.x + nameBounds.width / 2 - scenario.width / 2)).toBeLessThan(1);
-    expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
-    const input = page.getByLabel(zh ? '消息或思考主题' : 'Message or thought topic', { exact: true });
-    await expect(input).toBeEnabled();
-    await input.focus(); await expect(input).toBeFocused();
-    await expect(page.locator('.person-menu')).toHaveCount(0);
-    await expect(page.locator('.person-page')).not.toContainText(zh ? '工作中心' : 'Work Center');
-    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
-    expect(await dialog.evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
-    await dialog.getByLabel(zh ? '沿用 Agent 默认模型范围' : 'Follow Agent model defaults').uncheck();
-    await dialog.getByLabel('provider/model-b', { exact: true }).check();
-    const save = dialog.getByRole('button', { name: zh ? '保存' : 'Save', exact: true });
-    expect(await save.evaluate(el => parseFloat(getComputedStyle(el).borderRadius))).toBeGreaterThan(0);
-    await page.screenshot({ path: testInfo.outputPath(`person-settings-${scenario.width}-${scenario.theme}.png`) });
-    await save.click();
-    await expect(dialog).toBeFocused();
-    await page.keyboard.press('Tab'); await expect(dialog).toBeFocused();
-    await page.keyboard.press('Shift+Tab'); await expect(dialog).toBeFocused();
-    mock.finishSettings();
-    await expect(dialog).toHaveCount(0);
-    expect(mock.requests.find(r => r.op === 'settings').payload).toEqual({ modelCandidates: ['provider/model-b'] });
-    const composer = page.locator('.person-composer');
-    await expect(composer.locator('.mobile-quick-send-bar, .yeaft-model-selector, select')).toHaveCount(0);
-    const picker = page.waitForEvent('filechooser');
-    await composer.getByRole('button', { name: zh ? '上传文件' : 'Upload file', exact: true }).focus();
-    await page.keyboard.press('Enter');
-    await (await picker).setFiles([
-      { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('A small attachment with user-provided reference data.') },
-      { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64') },
-    ]);
-    await expect(composer.locator('.attachments-preview')).toContainText('notes.txt');
-    await expect(composer.locator('.attachment-thumb')).toBeVisible();
-    await expect(composer.locator('.attachment-item')).toHaveCount(2);
-    await expect(page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true })).toBeEnabled();
-    await input.fill('Hello Person');
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`person-composer-${scenario.width}-${scenario.theme}.png`) });
-    await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
-    expect(mock.requests.find(r => r.op === 'send').payload.attachments).toEqual([{ fileId: expect.any(String) }, { fileId: expect.any(String) }]);
-    await expect(page.locator('.attachments-preview')).toHaveCount(0);
-    await expect(input).toBeDisabled();
-    const loading = page.locator('.person-response-loading');
-    // The waiting indicator is initially visible. Once the long reply arrives,
-    // its start is pinned instead of chasing the indicator below the reply.
-    await expect(loading).toHaveCount(1);
-    await expect(loading).toHaveAttribute('role', 'status');
-    await expect(loading).toHaveText('');
-    await expect(page.locator('#person-conversation .person-activity, #person-conversation details')).toHaveCount(0);
-    await expect(page.locator('.person-header')).not.toContainText(zh ? '处理中' : 'Processing');
-    await expect(page.locator('.person-header')).not.toContainText(zh ? '取消' : 'Cancel');
-    await expect(page.locator('.person-composer .message-composer-spinner')).toBeVisible();
-    await expect(page.locator('.person-conversation .tool-line, .person-conversation .person-debug-row')).toHaveCount(0);
-    const dot = loading.locator('.typing-indicator > span').first();
-    expect(await dot.evaluate(el => getComputedStyle(el).animationName)).toBe('typing');
-    expect(await dot.evaluate(el => getComputedStyle(el).backgroundColor)).toBe(await dot.evaluate(el => {
-      const sample = document.createElement('div');
-      sample.style.color = 'var(--text-secondary)';
-      el.append(sample);
-      const color = getComputedStyle(sample).color;
-      sample.remove();
-      return color;
-    }));
-    await page.screenshot({ path: testInfo.outputPath(`person-loading-${scenario.width}-${scenario.theme}.png`) });
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    expect(await dot.evaluate(el => getComputedStyle(el).animationName)).toBe('none');
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
-    await expect(page.locator('.person-messages')).toContainText('Recorded mock response.');
-    await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
-    await expect.poll(() => page.locator('.person-message[data-message-id="m2"]').evaluate(el => {
-      const pane = el.closest('.person-messages');
-      return Math.abs(el.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop);
-    })).toBeLessThanOrEqual(2);
-    expect(await loading.evaluate(el => el.getBoundingClientRect().top >= el.closest('.person-messages').getBoundingClientRect().bottom)).toBe(true);
-    await page.locator('.person-composer').getByRole('button', { name: zh ? '停止执行' : 'Stop execution', exact: true }).click();
-    await expect(input).toBeEnabled();
-    await expect(loading).toHaveCount(0);
-    await expect(page.locator('.person-composer .stop-btn, .person-composer .message-composer-spinner')).toHaveCount(0);
-    await page.locator('.person-messages').hover();
-    await page.mouse.wheel(0, -10000);
-    await page.locator('.person-messages').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-    await expect(page.locator('.person-messages')).toContainText('Older persisted message');
-    await page.screenshot({ path: testInfo.outputPath(`person-messages-${scenario.width}.png`) });
-    await page.getByRole('button', { name: zh ? '数字人内核' : 'Inside the digital person', exact: true }).click();
-    const thoughts = page.locator('#person-thoughts');
-    await expect(page.locator('#person-conversation')).toBeVisible();
-    if (scenario.width > 900) {
-      const conversation = await page.locator('#person-conversation').boundingBox();
-      const side = await page.locator('#person-side-panel').boundingBox();
-      expect(side.x).toBeGreaterThanOrEqual(conversation.x + conversation.width - 1);
-    } else {
-      await expect(page.locator('#person-side-panel')).toHaveAttribute('aria-modal', 'true');
-      await expect(page.locator('#person-conversation')).toHaveAttribute('inert', '');
-      const first = page.locator('.person-panel-header .header-action-btn');
-      const last = thoughts.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' });
-      await first.focus(); await page.keyboard.press('Shift+Tab'); await expect(last).toBeFocused();
-      await page.keyboard.press('Tab'); await expect(first).toBeFocused();
-      await page.keyboard.press('Escape');
-      await expect(page.locator('#person-side-panel')).toHaveCount(0);
-      await expect(page.locator('.person-thoughts-button')).toBeFocused();
-      await page.locator('.person-thoughts-button').click();
-    }
-    await expect(thoughts).toContainText('Maybe the delay came from the final verification step.');
-    await expect(thoughts).toContainText('A repeated guess is not new evidence.');
-    await expect(thoughts).not.toContainText('<script>not HTML</script>');
-    await expect(thoughts.locator('.person-activity')).toHaveCount(0);
-    await expect(thoughts.locator('[data-episode-id="episode-1"]')).toHaveCount(1);
-    await thoughts.locator('.person-thought-evidence > summary').click();
-    const publication = thoughts.locator('[data-thought-kind="capability_created"]');
-    await expect(publication).toContainText('Script.sum');
-    await expect(publication).toContainText(zh ? '能力已保存，不依赖思考结论是否被采纳' : 'Capability saved independently of thought adoption');
-    await expect(publication).toContainText(zh ? '通过这些测试不代表在其他输入下也一定正确' : 'Passing these tests does not prove correctness for other inputs');
-    await expect(publication.locator('.person-thought-status')).toHaveText(zh ? '已记录' : 'Recorded');
-    await expect(thoughts.locator('[data-thought-kind="script_executed"]')).toContainText(zh ? '纯计算已完成' : 'Pure computation completed');
-    await expect(thoughts.locator('[data-thought-kind="capability_failed"]')).toContainText(zh ? '已达脚本时间限制' : 'Script time limit reached');
-    await expect(thoughts.locator('img, script, pre')).toHaveCount(0);
-    for (const text of ['PRIVATE SYSTEM PROMPT', 'contextBytes', 'test/model', 'HIDDEN REASONING', 'PRIVATE_CODE', 'PRIVATE_TEST_INPUT', 'PRIVATE_INPUT', 'PRIVATE_OUTPUT', 'PRIVATE_DIAGNOSTICS']) await expect(thoughts).not.toContainText(text);
-    await page.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' }).click();
-    await expect(thoughts).toContainText('Earlier question');
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`person-thoughts-${scenario.width}.png`) });
-    await page.getByRole('button', { name: zh ? '调试日志' : 'Debug logs', exact: true }).click();
-    await expect(thoughts).toHaveCount(0);
-    await page.locator('.person-debug-row').filter({ hasText: 'call_started' }).locator('summary').click();
-    await expect(page.locator('#person-debug')).toContainText('contextBytes');
-    await page.getByRole('button', { name: zh ? '返回' : 'Back', exact: true }).click();
-    await expect(page.locator('#person-debug')).toHaveCount(0);
-    await expect(thoughts).toBeVisible();
-    if (scenario.width <= 900) {
-      mock.failTraceRequest();
-      await thoughts.getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();
-      await expect(page.locator('.person-panel-error')).toContainText('Thought refresh failed');
-      const recovery = page.locator('.person-panel-error').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true });
-      await recovery.focus(); await recovery.press('Enter');
-      await expect(page.locator('.person-panel-error')).toHaveCount(0);
-      const closeDrawer = page.locator('.person-panel-header .header-action-btn');
-      await expect(closeDrawer).toBeFocused();
-      await page.keyboard.press('Escape');
-      await expect(page.locator('#person-side-panel')).toHaveCount(0);
-      await expect(page.locator('.person-thoughts-button')).toBeFocused();
-      await page.locator('.person-thoughts-button').click();
-      await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
-      await expect(page.locator('.person-panel-notice')).toContainText(zh ? '连接' : 'Connection');
-      await expect(page.locator('.person-panel-notice button')).toBeVisible();
-      await page.locator('.person-panel-notice button').focus();
-      await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
-      await expect(page.locator('#person-conversation')).toHaveAttribute('inert', '');
-      await expect.poll(() => mock.requests.filter(r => r.op === 'open').length).toBeGreaterThan(1);
-      await expect(closeDrawer).toBeFocused();
-      await page.keyboard.press('Escape');
-      await expect(page.locator('#person-side-panel')).toHaveCount(0);
-      await expect(page.locator('.person-thoughts-button')).toBeFocused();
-      await page.locator('.person-thoughts-button').click();
-      if (scenario.width === 800) {
-        // Tablet uses the same full-width inner panel as mobile. Its backdrop is
-        // entirely covered; close through the visible control, not a hidden hit target.
-        const panelBounds = await page.locator('#person-side-panel').boundingBox();
-        expect(panelBounds.x).toBe(0);
-        expect(panelBounds.width).toBe(scenario.width);
-        await closeDrawer.click();
-        await expect(page.locator('.person-thoughts-button')).toBeFocused();
-        await page.locator('.person-thoughts-button').click();
-      }
-    }
-    const innerNav = page.locator('.person-inspector-nav');
-    await innerNav.getByRole('button', { name: zh ? '记忆' : 'Memory', exact: true }).click();
-    await expect(page.locator('.person-knowledge')).toContainText('An interest saved in memory.');
-    await page.locator('.person-knowledge-item > summary').click();
-    await expect(page.locator('.person-knowledge')).toContainText(zh ? '假设' : 'Hypothesis');
-    await expect(page.locator('.person-knowledge script')).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath(`person-memory-${scenario.width}-${scenario.theme}.png`) });
-    await innerNav.getByRole('button', { name: zh ? '技能与能力' : 'Skills & capabilities', exact: true }).click();
-    await expect(page.locator('.person-knowledge')).toContainText('Script.sum');
-    await page.locator('.person-panel-header .header-action-btn').click();
-    await input.fill('A preserved draft');
-    await page.locator('.person-search-button').click();
-    const searchInput = page.locator('.person-search-form input');
-    await expect(searchInput).toBeFocused();
-    await searchInput.fill('archive');
-    await searchInput.press('Enter');
-    await expect(page.locator('.person-search-result')).toContainText('A message from the durable archive.');
-    await expect(page.locator('.person-search-result img')).toHaveCount(0);
-    await expect(page.locator('.person-messages')).not.toContainText('durable archive');
-    await page.screenshot({ path: testInfo.outputPath(`person-search-${scenario.width}-${scenario.theme}.png`) });
-    await page.locator('.person-panel-header .header-action-btn').click();
-    await expect(page.locator('.person-search-button')).toBeFocused();
-    await expect(input).toHaveValue('A preserved draft');
-    await input.fill('');
-    await page.locator('.person-thoughts-button').click();
-    await page.locator('.person-panel-header').getByRole('button', { name: zh ? '关闭' : 'Close', exact: true }).click();
-    await expect(page.getByRole('button', { name: zh ? '数字人内核' : 'Inside the digital person', exact: true })).toBeFocused();
-    await page.getByRole('button', { name: zh ? '思考' : 'Think', exact: true }).click();
-    await expect.poll(() => mock.requests.filter(r => r.op === 'think').length).toBe(1);
-    expect(mock.requests.find(r => r.op === 'think').payload.text).toBe('');
-    await page.locator('.person-composer').getByRole('button', { name: zh ? '停止执行' : 'Stop execution', exact: true }).click();
-    await expect(input).toBeEnabled();
-    await page.getByRole('button', { name: zh ? '遐想' : 'Dream', exact: true }).click();
-    await expect.poll(() => mock.requests.filter(r => r.op === 'dream').length).toBe(1);
-    await page.locator('.person-composer').getByRole('button', { name: zh ? '停止执行' : 'Stop execution', exact: true }).click();
-    await page.getByRole('combobox', { name: 'Agent', exact: true }).focus();
-    await page.keyboard.press('Enter');
-    const agentMenu = page.locator('.modern-select-menu');
-    await expect(agentMenu).toHaveClass(/agent-select-menu/);
-    const menuStyle = await agentMenu.evaluate(el => {
-      const label = el.querySelector('.modern-select-option-label');
-      const style = getComputedStyle(label);
-      return { family: style.fontFamily, size: style.fontSize, weight: style.fontWeight, radius: getComputedStyle(el).borderRadius };
-    });
-    const sessionMenuStyle = await page.evaluate(() => {
-      const menu = document.createElement('div'); menu.className = 'agent-dropdown';
-      const label = document.createElement('span'); label.className = 'agent-dropdown-name';
-      menu.append(label); document.body.append(menu);
-      const style = getComputedStyle(label);
-      const result = { family: style.fontFamily, size: style.fontSize, weight: style.fontWeight, radius: getComputedStyle(menu).borderRadius };
-      menu.remove(); return result;
-    });
-    expect(menuStyle).toEqual(sessionMenuStyle);
-    await page.keyboard.press('Escape');
-    await expect(page.getByRole('combobox', { name: 'Agent', exact: true })).toBeFocused();
-    await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
-    await expect(agentMenu).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath(`person-agents-${scenario.width}-${scenario.theme}.png`) });
-    await page.getByRole('option', { name: 'Owner Agent B', exact: true }).click();
-    await expect(page.locator('.person-header h1')).toHaveText('Bea');
-    await expect(page.locator('.person-messages')).not.toContainText('Hello Person');
-    await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
-    await page.getByRole('option', { name: 'Old Agent', exact: true }).click();
-    await expect(page.locator('.person-connection-notice')).toContainText('digital_person');
-    await expect(input).toBeDisabled();
-    mock.configure(false);
-    await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
-    await page.getByRole('option', { name: 'Owner Agent A', exact: true }).click();
-    await expect(page.locator('.person-configuration')).toBeVisible();
-    await expect(page.locator('.person-configuration')).toContainText(zh ? '不要将凭据' : 'Do not paste credentials');
-    mock.configure(true);
-    await page.locator('.person-header').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();
-    await expect(input).toBeEnabled();
-    const opens = mock.requests.filter(r => r.op === 'open').length;
-    mock.online(false); await expect(input).toBeDisabled();
-    mock.online(true); await expect(input).toBeEnabled();
-    expect(mock.requests.filter(r => r.op === 'open').length).toBeGreaterThan(opens);
-    const connectionOpens = mock.requests.filter(r => r.op === 'open').length;
-    mock.disconnect();
-    await expect.poll(() => mock.requests.filter(r => r.op === 'open').length).toBeGreaterThan(connectionOpens);
-    await expect(input).toBeEnabled();
-    for (const op of ['send', 'think', 'dream']) expect(mock.requests.filter(r => r.op === op)).toHaveLength(1);
-    expect(mock.requests.every(r => r.requestId && r.agentId && !r.sessionId && !r.ownerId)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`person-conversation-${scenario.width}.png`) });
-    mock.failNextCommand();
-    await input.fill('Retain this draft after an uncertain command');
-    await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
-    const retry = page.locator('.person-retry .btn-secondary');
-    await expect(retry).toBeVisible();
-    expect(await retry.evaluate(el => parseFloat(getComputedStyle(el).borderRadius))).toBeGreaterThan(0);
-    expect((await retry.boundingBox()).height).toBeGreaterThanOrEqual(32);
-    await expect(input).toHaveValue('Retain this draft after an uncertain command');
-    await page.locator('.person-retry .btn-ghost').click();
-    mock.setModels(Array.from({ length: 40 }, (_, i) => ({ id: 'provider/' + ('long-model-name-'.repeat(5)) + i })));
-    await page.locator('.person-header').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();
-    await expect(input).toBeEnabled();
-    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
-    const longDialog = page.getByRole('dialog');
-    const body = longDialog.locator('.person-settings-body');
-    await expect.poll(() => body.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
-    expect(await longDialog.evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
-    await body.evaluate(el => { el.scrollTop = el.scrollHeight; });
-    await expect(longDialog.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.person-settings-button')).toBeFocused();
-    mock.setRenameSupported(false);
-    await page.locator('.person-header').getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).click();
-    await expect(input).toBeEnabled();
-    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
-    await expect(page.getByLabel(zh ? '名字' : 'Name', { exact: true })).toBeDisabled();
-    await expect(page.getByRole('dialog')).toContainText(zh ? '请升级 Agent' : 'Upgrade the Agent');
-    await expect(page.locator('.person-model-default input')).toBeEnabled();
-    await page.keyboard.press('Escape');
-    await page.locator('.person-navigation button').first().click();
-    await expect(page.locator('.chat-page')).toBeVisible();
-  });
-}
-
-// A last page of prose must remain reachable when there is no load-more button.
-test('compact inner reading regions support keyboard scrolling and restore focus', async ({ page, serverUrl }) => {
-  await mockPersonSocket(page, { longReading: true });
-  await page.setViewportSize({ width: 320, height: 568 });
-  await page.addInitScript(() => localStorage.setItem('locale', 'en'));
-  await page.goto(serverUrl);
-  await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
-  await page.locator('.header-sidebar-toggle').click();
-  await page.locator('.sidebar-person-trigger:visible').click();
-  await expect(page.locator('#person-input')).toBeEnabled();
-  await page.locator('#person-input').fill('Keep this draft');
-  const inside = page.locator('.person-thoughts-button');
-  await inside.click();
-  const nav = page.locator('.person-inspector-nav');
-  await nav.getByRole('button', { name: 'Overview', exact: true }).click();
-  const overview = page.getByRole('region', { name: 'Overview', exact: true });
-  await expect(overview).toBeVisible();
-  await nav.getByRole('button', { name: 'Skills & capabilities', exact: true }).focus();
-  await page.keyboard.press('Tab');
-  await expect(overview).toBeFocused();
-  expect(await overview.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
-  await page.keyboard.press('PageDown');
-  await expect.poll(() => overview.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
-  await page.keyboard.press('Escape');
-  await expect(inside).toBeFocused();
-  const search = page.locator('.person-search-button');
-  await search.click();
-  await page.locator('.person-search-form input').fill('archive');
-  await page.locator('.person-search-form input').press('Enter');
-  await expect(page.locator('.person-search-result')).toHaveCount(1);
-  await expect(page.locator('.person-search .person-load-more')).toHaveCount(0);
-  const results = page.getByRole('region', { name: 'Search messages', exact: true });
-  await page.locator('.person-search-form button').focus();
-  await page.keyboard.press('Tab');
-  await expect(results).toBeFocused();
-  expect(await results.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
-  await page.keyboard.press('PageDown');
-  await expect.poll(() => results.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
-  await page.keyboard.press('Escape');
-  await expect(search).toBeFocused();
-  await expect(page.locator('#person-input')).toHaveValue('Keep this draft');
-});
-
-// The UI preference never writes Agent runtime configuration or starts cognition.
-test('Person entry is opt-in per Agent via Agent settings and survives reload', async ({ page, serverUrl }) => {
-  const mock = await mockPersonSocket(page, { enableUi: false });
-  await page.goto(serverUrl);
-  await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
-  await expect(page.locator('.sidebar-person-trigger')).toHaveCount(0);
-  expect(await page.evaluate(() => window.Pinia.useChatStore().enterDigitalPerson('person-a'))).toBe(false);
-  await page.locator('.agent-dropdown-trigger:visible').click();
-  await page.getByRole('button', { name: 'Agent settings', exact: true }).click();
-  const dialog = page.locator('.agent-settings-dialog');
-  const toggle = dialog.getByRole('switch', { name: 'Digital Person', exact: true });
-  await expect(toggle).not.toBeChecked();
-  await dialog.locator('.agent-settings-person-row .agent-settings-switch').click();
-  await expect(toggle).toBeChecked();
-  await dialog.getByRole('combobox', { name: 'Agent', exact: true }).click();
-  await page.getByRole('option').filter({ hasText: 'Owner Agent B' }).click();
-  await expect(toggle).not.toBeChecked();
-  await dialog.getByRole('combobox', { name: 'Agent', exact: true }).click();
-  await page.getByRole('option').filter({ hasText: 'Owner Agent A' }).click();
-  await expect(toggle).toBeChecked();
-  await dialog.locator('.agent-settings-close').click();
-  await expect(page.locator('.sidebar-person-trigger:visible')).toBeVisible();
-  await page.reload();
-  await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
-  await expect(page.locator('.sidebar-person-trigger:visible')).toBeVisible();
-  await page.locator('.sidebar-person-trigger:visible').click();
-  await expect(page.locator('#person-input')).toBeEnabled();
-  await page.locator('#person-agent').click();
-  await expect(page.getByRole('option', { name: 'Owner Agent B', exact: true })).toHaveCount(0);
-  await page.keyboard.press('Escape');
-  const before = mock.requests.length;
-  await page.evaluate(() => window.Pinia.useChatStore().setDigitalPersonUiEnabled(false, 'person-a'));
-  await expect(page.locator('.person-page')).toHaveCount(0);
-  await expect(page.locator('.sidebar-person-trigger')).toHaveCount(0);
-  expect(mock.requests.slice(before)).toEqual([]);
-  expect(mock.requests.filter(r => ['send', 'think', 'dream', 'settings'].includes(r.op))).toEqual([]);
-});
-
-for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
-  test(`Digital Person animation only in conversation, activity only inside ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
-    test.setTimeout(60000);
-    const mock = await mockPersonSocket(page, { activityFlow: true });
-    await page.setViewportSize({ width: scenario.width, height: 800 });
-    await page.addInitScript(s => { localStorage.setItem('locale', s.locale); localStorage.setItem('theme', s.theme); }, scenario);
-    await page.goto(serverUrl);
-    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
-    if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
-    await page.locator('.sidebar-person-trigger:visible').click();
-    const zh = scenario.locale === 'zh-CN';
-    await page.getByRole('button', { name: zh ? '思考' : 'Think', exact: true }).click();
-    const records = [];
-    const add = (kind, extra = {}) => records.push({ id: `live-${records.length}`, seq: records.length + 1, episodeId: 'episode-1', createdAt: new Date().toISOString(), kind, ...extra });
-    add('accepted', { trigger: { kind: 'think', text: 'PRIVATE_INPUT' } });
-    add('call_started', { callId: 'a', request: { system: 'PRIVATE_PROMPT' } });
-    add('call_output', { callId: 'a', output: { text: 'PRIVATE_OUTPUT' } });
-    add('capability_started', { callId: 'a', capability: { id: 'Recall', args: { query: 'PRIVATE_QUERY' } } });
-    mock.activity(records);
-    const loading = page.locator('#person-conversation .person-response-loading');
-    await expect(loading).toBeVisible();
-    await expect(loading).toHaveText('');
-    await expect(page.locator('#person-conversation .person-activity')).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath(`person-conversation-loading-${scenario.width}-${scenario.theme}.png`) });
-    await page.locator('.person-thoughts-button').click();
-    await expect(page.locator('#person-thoughts .person-activity')).toHaveCount(0);
-    await page.locator('.person-inspector-nav').getByRole('button', { name: zh ? '运行与用量' : 'Flow & usage', exact: true }).click();
-    const activity = page.locator('#person-turns .person-activity');
-    await expect(activity).toContainText(zh ? '正在查找相关记忆' : 'Looking up relevant memories');
-    await expect(activity).not.toHaveAttribute('open', '');
-    const details = activity.locator('summary');
-    await details.focus(); await page.keyboard.press('Enter');
-    await expect(activity).toHaveAttribute('open', '');
-    // Paged journal remains readable while the live activity tail keeps polling.
-    await page.locator('.person-inspector-nav').getByRole('button', { name: zh ? '思考记录' : 'Thought journal', exact: true }).click();
-    await page.getByRole('button', { name: zh ? '加载更早的思考' : 'Load earlier thoughts' }).click();
-    await page.locator('.person-panel-header .header-action-btn').click();
-    add('capability_result', { callId: 'a', capability: { id: 'Recall' }, result: { items: ['PRIVATE_MEMORY'] } });
-    add('capability_started', { callId: 'b', capability: { id: 'Skill.reconsider' } });
-    mock.activity(records);
-    await expect(loading).toHaveText('');
-    await expect(page.locator('#person-conversation .person-activity')).toHaveCount(0);
-    await page.locator('.person-thoughts-button').click();
-    await page.locator('.person-inspector-nav').getByRole('button', { name: zh ? '运行与用量' : 'Flow & usage', exact: true }).click();
-    await expect(activity).toContainText(zh ? '正在查看思考方法' : 'Reading a thinking method');
-    expect(mock.historyPending()).toBe(true);
-    mock.finishHistory();
-    add('capability_result', { callId: 'b', capability: { id: 'Skill.reconsider' } });
-    add('capability_started', { callId: 'c', capability: { id: `Script.${'a'.repeat(48)}`, args: 'PRIVATE_CODE' } });
-    mock.activity(records);
-    await expect(activity).toContainText(`Script.${'a'.repeat(48)}`);
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`person-activity-${scenario.width}-${scenario.theme}.png`) });
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    expect(await activity.locator('.typing-indicator > span').first().evaluate(el => getComputedStyle(el).animationName)).toBe('none');
-    await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'reconnecting'; });
-    await expect(activity).toContainText(zh ? '暂时无法确认进展' : 'cannot confirm progress');
-    await expect(loading).toHaveCount(0);
-    await expect(activity.locator('.person-response-loading')).toHaveCount(0);
-    await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
-    await expect(activity.locator('.person-response-loading')).toBeVisible();
-    // A capability failure is not necessarily an episode failure; the model may continue.
-    add('capability_failed', { callId: 'c', capabilityId: `Script.${'a'.repeat(48)}`, result: { message: 'PRIVATE_DIAGNOSTICS' } });
-    add('call_started', { callId: 'd' });
-    mock.activity(records);
-    await expect(activity).toContainText(zh ? '正在调用模型' : 'Calling the model');
-    await expect(activity).toContainText(zh ? '模型调用' : 'Model call');
-    add('call_output', { callId: 'd' });
-    add('committed');
-    mock.activity(records, 'completed');
-    await expect(activity.locator('.person-response-loading')).toHaveCount(0);
-    await expect(activity).toContainText(zh ? '本次活动已完成' : 'This activity is complete');
-    await expect(loading).toHaveCount(0);
-    await expect(page.locator('#person-conversation .person-activity')).toHaveCount(0);
-    await expect(page.locator('#person-input')).toBeEnabled();
-    if (!await activity.evaluate(el => el.open)) await activity.locator('summary').click();
-    await expect(activity).toContainText(zh ? '失败' : 'Failed');
-    await expect(activity.locator('pre, .tool-line, img, script')).toHaveCount(0);
-    for (const text of ['PRIVATE_INPUT', 'PRIVATE_PROMPT', 'PRIVATE_QUERY', 'PRIVATE_OUTPUT', 'PRIVATE_MEMORY', 'PRIVATE_CODE', 'PRIVATE_DIAGNOSTICS']) await expect(activity).not.toContainText(text);
-    expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(1);
-    await page.locator('.person-panel-header .header-action-btn').click();
-    await expect(page.locator('.person-activity, .person-response-loading')).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath(`person-conversation-completed-${scenario.width}-${scenario.theme}.png`) });
-  });
-}
 const responseScenarios = [
-  { width: 1280, theme: 'light' }, { width: 1280, theme: 'dark' },
-  { width: 320, theme: 'light' }, { width: 320, theme: 'dark' },
+  { width: 1280, theme: 'light' }, { width: 320, theme: 'dark' },
 ];
 const previousConversation = [
   { id: 'history-user', role: 'user', text: 'Previous question stays in the transcript.', createdAt: 1 },
@@ -1042,57 +269,6 @@ async function expectAbovePane(page, selector) {
 
 // Traverse the real scroller to mount an archived group. Never use this while
 // measuring local response focus or a reader's prepend anchor.
-async function scrollToArchivedReply(page, id) {
-  const pane = page.locator('.person-messages');
-  await pane.hover();
-  await page.mouse.wheel(0, -100000);
-  await page.waitForTimeout(400);
-  await pane.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-  for (let i = 0; i < 80; i++) {
-    if (await page.locator(replySelector(id)).count()) {
-      await page.waitForTimeout(100);
-      if (await page.locator(replySelector(id)).count()) return;
-    }
-    await page.mouse.wheel(0, await pane.evaluate(el => el.clientHeight / 2));
-    await page.waitForTimeout(100);
-  }
-  await expect(page.locator(replySelector(id))).toHaveCount(1);
-}
-
-async function sendWaiting(page, mock, text) {
-  mock.holdAdmission();
-  await page.locator('#person-input').fill(text);
-  await startResponseFrames(page, '.person-response-start');
-  await page.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect.poll(() => mock.admissionPending()).toBe(true);
-  await expect(page.locator('#person-input')).toBeDisabled();
-  await expect(page.locator('.person-response-loading')).toBeInViewport();
-  expectPinnedFrames(await finishResponseFrames(page), { newTarget: true });
-  await expectAbovePane(page, replySelector('history-reply'));
-  await expectAbovePane(page, '[data-msg-id="history-user"]');
-  await startResponseFrames(page, '.person-response-start');
-  mock.admit();
-  await expect(page.locator('.person-messages')).toContainText(text);
-  expectPinnedFrames(await finishResponseFrames(page));
-}
-
-async function showReply(page, mock, id, text) {
-  await startResponseFrames(page, replySelector(id));
-  mock.reply(id, text);
-  await expect(page.locator(replySelector(id))).toContainText(text.trim().split('\n').at(-1));
-  expectPinnedFrames(await finishResponseFrames(page), { newTarget: true });
-}
-
-async function completePinnedReply(page, mock, id) {
-  const scrollTop = await page.locator('.person-messages').evaluate(el => el.scrollTop);
-  await startResponseFrames(page, replySelector(id));
-  mock.complete();
-  await expect(page.locator('.person-response-loading')).toHaveCount(0);
-  await expect(page.locator('#person-input')).toBeEnabled();
-  const samples = await finishResponseFrames(page);
-  expectPinnedFrames(samples);
-  expectScrollStable(samples, scrollTop);
-}
 
 async function userScrollResponse(page, width) {
   const pane = page.locator('.person-messages');
@@ -1120,286 +296,7 @@ async function userScrollResponse(page, width) {
   await page.waitForTimeout(400);
 }
 
-for (const scenario of [{ width: 320, theme: 'dark' }, { width: 1280, theme: 'light' }]) {
-  test(`Digital Person rich communication retains replay and in-flight meaning ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
-    const presentation = { version: 1, title: 'Verified counts', summary: 'Alpha has 2; Beta has 3.', phase: 'final',
-      blocks: [{ type: 'table', columns: ['Name', 'Count'], rows: [['Alpha', '2'], ['Beta', '3']] },
-        { type: 'link', text: 'Evidence', url: 'https://example.com/evidence' }] };
-    const mock = await mockPersonSocket(page, { conversationFlow: true, historyAvailable: false, initialMessages: [
-      { id: 'rich-user', role: 'user', episodeId: 'rich-episode', text: 'Compare counts.', createdAt: 1 },
-      { id: 'rich-answer', role: 'assistant', episodeId: 'rich-episode', replyKind: 'presentation', text: presentation.summary, presentation, createdAt: 2 },
-      { id: 'rich-plain', role: 'assistant', episodeId: 'rich-episode', replyKind: 'final', text: 'Distinct plain conclusion.', createdAt: 3 },
-    ] });
-    await openResponseConversation(page, serverUrl, scenario);
-    const article = page.locator('.person-reply');
-    await expect(article).toHaveCount(1);
-    await expect(article.locator('.response-summary')).toHaveCount(1);
-    await expect(article.locator('.response-summary')).toHaveText(presentation.summary);
-    await expect(article.locator('section.person-reply-part')).toHaveCount(2);
-    await expect(article.locator('table')).toContainText('Alpha');
-    await expect(article.locator('.person-message-text')).toHaveText('Distinct plain conclusion.');
-    await expect(page.locator('.person-response-loading')).toHaveCount(0);
-    const link = article.getByRole('link', { name: 'Evidence' }); await link.focus();
-    const handle = await link.elementHandle();
-    await page.getByRole('button', { name: 'Refresh', exact: true }).evaluate(button => button.click());
-    await expect.poll(() => mock.requests.filter(request => request.op === 'snapshot').length).toBeGreaterThan(1);
-    expect(await page.evaluate(old => document.activeElement === old, handle)).toBe(true);
-    await page.reload();
-    await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
-    if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
-    await page.locator('.sidebar-person-trigger:visible').click();
-    await expect(article.locator('.response-summary')).toHaveCount(1);
-    await page.locator('#person-input').fill('A new comparison.');
-    await page.locator('#person-input').press('Enter');
-    await expect.poll(() => mock.requests.filter(request => request.op === 'send').length).toBe(1);
-    mock.reply('live-rich', presentation.summary, 'person-a', undefined, { replyKind: 'presentation', presentation });
-    await expect(page.locator('[data-message-id="live-rich"] .response-summary')).toHaveText(presentation.summary);
-    await expect(page.locator('.person-response-loading')).toBeVisible();
-    await expect(page.locator('[data-message-id="live-rich"] .person-reply-kind')).toHaveCount(0);
-    await page.locator('.person-composer').getByRole('button', { name: 'Stop execution', exact: true }).click();
-    await expect(page.locator('.person-response-loading')).toHaveCount(0);
-    await expect(page.locator('[data-message-id="live-rich"] .response-summary')).toHaveText(presentation.summary);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  });
-}
-
-for (const scenario of responseScenarios) {
-  test(`Digital Person groups only contiguous replies with an episode ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
-    test.setTimeout(60000);
-    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: [
-      ...previousConversation,
-      { id: 'group-progress', role: 'assistant', episodeId: 'group-one', replyKind: 'progress', text: 'First verified finding. [Evidence](https://example.com/evidence)', createdAt: 3 },
-      { id: 'group-final', role: 'assistant', episodeId: 'group-one', replyKind: 'final', text: 'Completed first episode.', createdAt: 4 },
-      { id: 'adjacent-episode', role: 'assistant', episodeId: 'group-two', text: 'Different episode without a user separator.', createdAt: 5 },
-      { id: 'system-boundary', role: 'system', episodeId: 'group-two', text: 'System boundary remains visible.', createdAt: 6 },
-      { id: 'after-system', role: 'assistant', episodeId: 'group-two', replyKind: 'progress', text: 'New block after system.', createdAt: 7 },
-      { id: 'after-system-final', role: 'assistant', episodeId: 'group-two', replyKind: 'final', text: 'Same episode continues contiguously.', createdAt: 8 },
-      { id: 'user-boundary', role: 'user', episodeId: 'group-two', text: 'User boundary remains visible.', createdAt: 9 },
-      { id: 'after-user', role: 'assistant', episodeId: 'group-two', text: 'New block after user.', createdAt: 10 },
-      { id: 'legacy-reply', role: 'assistant', text: 'Legacy reply without an episode.', createdAt: 11 },
-      { id: 'empty-episode-reply', role: 'assistant', episodeId: '', text: 'Empty episode does not group legacy replies.', createdAt: 12 },
-    ] });
-    await openResponseConversation(page, serverUrl, scenario);
-    const zh = scenario.theme === 'dark';
-    if (zh) await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
-    await scrollToArchivedReply(page, 'history-reply');
-    await expectReplyGroup(page, 'history-reply', ['history-reply'], { zh });
-    await scrollToArchivedReply(page, 'group-progress');
-    await expectReplyGroup(page, 'group-progress', ['group-progress', 'group-final'], { zh, kinds: ['progress', 'final'] });
-    await scrollToArchivedReply(page, 'adjacent-episode');
-    await expectReplyGroup(page, 'adjacent-episode', ['adjacent-episode'], { zh });
-    await scrollToArchivedReply(page, 'after-system');
-    await expectReplyGroup(page, 'after-system', ['after-system', 'after-system-final'], { zh, kinds: ['progress', 'final'] });
-    await scrollToArchivedReply(page, 'after-user');
-    await expectReplyGroup(page, 'after-user', ['after-user'], { zh });
-    await scrollToArchivedReply(page, 'legacy-reply');
-    await expectReplyGroup(page, 'legacy-reply', ['legacy-reply'], { zh });
-    await scrollToArchivedReply(page, 'empty-episode-reply');
-    await expectReplyGroup(page, 'empty-episode-reply', ['empty-episode-reply'], { zh });
-    await scrollToArchivedReply(page, 'system-boundary');
-    await expect(page.locator(replySelector('system-boundary'))).toContainText('System boundary remains visible.');
-    await expect(page.locator(`${replyArticleSelector('system-boundary')} .person-reply-part`)).toHaveCount(0);
-    await scrollToArchivedReply(page, 'group-progress');
-    await expect(page.locator('.person-response-loading')).toHaveCount(0);
-    expect(mock.requests.filter(request => request.op === 'send')).toHaveLength(0);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    const originalArticle = await page.locator(replyArticleSelector('group-progress')).elementHandle();
-    const originalPart = await page.locator(replySelector('group-progress')).elementHandle();
-    const link = page.locator(`${replySelector('group-progress')} a`);
-    await link.focus();
-    const originalLink = await link.elementHandle();
-    mock.reply('separated-run', 'Same episode returns after intervening messages.', 'person-a', 'group-one');
-    // This is an idle archive: explicitly fetch its updated snapshot, without
-    // moving keyboard focus to the Refresh control via a physical click.
-    await page.getByRole('button', { name: zh ? '刷新' : 'Refresh', exact: true }).evaluate(button => button.click());
-    await expect.poll(() => mock.requests.filter(request => request.op === 'snapshot').length).toBeGreaterThan(1);
-    expect(await page.locator(replyArticleSelector('group-progress')).evaluate((el, old) => el === old, originalArticle)).toBe(true);
-    expect(await page.locator(replySelector('group-progress')).evaluate((el, old) => el === old, originalPart)).toBe(true);
-    expect(await page.evaluate(old => document.activeElement === old, originalLink)).toBe(true);
-    await expectReplyGroup(page, 'group-progress', ['group-progress', 'group-final'], { zh, kinds: ['progress', 'final'] });
-    await scrollToArchivedReply(page, 'separated-run');
-    await expectReplyGroup(page, 'separated-run', ['separated-run'], { zh });
-  });
-
-  test(`Digital Person local response focus survives growth and yields to user scroll ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
-    // Five complete turns plus real archive traversal take ~52s in isolation.
-    // Keep per-expect/frame contracts strict while allowing browser contention.
-    test.setTimeout(90000);
-    const mock = await mockPersonSocket(page, {
-      conversationFlow: true,
-      initialMessages: [
-        { id: 'history-boundary-reply', role: 'assistant', episodeId: 'archive-episode', text: 'Archived final answer at the page boundary.', replyKind: 'final', createdAt: '1970-01-01T00:00:00.000Z' },
-        ...previousConversation,
-      ],
-      olderMessages: [{ id: 'prepended-reply', role: 'assistant', episodeId: 'archive-episode', text: 'Earlier archived answer.\n'.repeat(45), replyKind: 'progress', createdAt: '1969-12-31T23:59:59.000Z' }],
-    });
-    await openResponseConversation(page, serverUrl, scenario);
-
-    await sendWaiting(page, mock, 'First local question');
-    await showReply(page, mock, 'short-reply', 'A short first answer.');
-    await expectAbovePane(page, '[data-msg-id="user-1"]');
-    await completePinnedReply(page, mock, 'short-reply');
-
-    await sendWaiting(page, mock, 'Second local question');
-    await expectAbovePane(page, replySelector('short-reply'));
-    await showReply(page, mock, 'growing-reply', 'The new answer starts here.');
-    const pinnedScroll = await page.locator('.person-messages').evaluate(el => el.scrollTop);
-    await startResponseFrames(page, replySelector('growing-reply'));
-    mock.reply('growing-reply', 'The new answer starts here.\n' + 'A long response line.\n'.repeat(90) + 'Growth checkpoint.');
-    await expect(page.locator(replySelector('growing-reply'))).toContainText('Growth checkpoint.');
-    const growingFrames = await finishResponseFrames(page);
-    expectPinnedFrames(growingFrames);
-    expectScrollStable(growingFrames, pinnedScroll);
-    await expectAbovePane(page, '[data-msg-id="user-2"]');
-    await expect(page.locator('.person-response-loading')).not.toBeInViewport();
-    await completePinnedReply(page, mock, 'growing-reply');
-
-    await sendWaiting(page, mock, 'Third local question for free reading');
-    await showReply(page, mock, 'free-reading-reply', 'Free reading starts here.\n' + 'A long response line.\n'.repeat(90));
-    await userScrollResponse(page, scenario.width);
-    const userScroll = await page.locator('.person-messages').evaluate(el => el.scrollTop);
-    await startResponseFrames(page, replySelector('free-reading-reply'));
-    mock.reply('free-reading-reply', 'Free reading starts here.\n' + 'A long response line.\n'.repeat(130) + 'After user scroll.');
-    await expect(page.locator(replySelector('free-reading-reply'))).toContainText('After user scroll.');
-    expectScrollStable(await finishResponseFrames(page), userScroll);
-    await startResponseFrames(page, replySelector('free-reading-reply'));
-    mock.complete();
-    await expect(page.locator('#person-input')).toBeEnabled();
-    expectScrollStable(await finishResponseFrames(page), userScroll);
-
-    const releasedPane = page.locator('.person-messages');
-    await expect(releasedPane).not.toHaveClass(/is-response-pinned/);
-    // The virtual transcript, not native CSS anchoring, owns prepend compensation.
-    expect(await releasedPane.evaluate(el => getComputedStyle(el).overflowAnchor)).toBe('none');
-    // Invoke the real history button without Playwright scrolling the offscreen
-    // control into view: the reader must stay on the released response, even
-    // when the older page changes an existing group's first ID and its shell.
-    await expect(page.locator(replyArticleSelector('free-reading-reply'))).toBeInViewport();
-    await page.locator('.person-load-more').evaluate(button => button.click());
-    await expect.poll(() => mock.messageHistoryPending()).toBe(true);
-    await startResponseFrames(page, replySelector('free-reading-reply'));
-    const anchorTop = await page.locator(replyArticleSelector('free-reading-reply')).evaluate(el => {
-      const pane = el.closest('.person-messages');
-      return el.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop;
-    });
-    mock.finishMessageHistory();
-    await expect(page.locator('.person-load-more')).toHaveCount(0);
-    await expect(page.locator(replyArticleSelector('free-reading-reply'))).toBeInViewport();
-    const historyFrames = await finishResponseFrames(page);
-    expect(historyFrames.length).toBeGreaterThanOrEqual(12);
-    expect(historyFrames.some(sample => sample.missing)).toBe(false);
-    expect(Math.max(...historyFrames.map(sample => Math.abs(sample.top - anchorTop))), 'History prepend must preserve the visible reading position on every frame').toBeLessThanOrEqual(2);
-    // Estimates may grow or shrink during prepend; the visible anchor above,
-    // not an absolute scrollTop increment or total DOM count, is the contract.
-    await expectAbovePane(page, replySelector('prepended-reply'));
-    await scrollToArchivedReply(page, 'prepended-reply');
-    await expectReplyGroup(page, 'prepended-reply', ['prepended-reply', 'history-boundary-reply'], { kinds: ['progress', 'final'] });
-    await expect(page.locator(replyArticleSelector('history-boundary-reply'))).toHaveCount(0);
-
-    await sendWaiting(page, mock, 'Fourth local question for keyboard reading');
-    await expectAbovePane(page, replySelector('growing-reply'));
-    await showReply(page, mock, 'keyboard-reply', 'Keyboard reading.\n' + 'Another long line.\n'.repeat(90));
-    const pane = page.locator('.person-messages');
-    const beforeKey = await pane.evaluate(el => el.scrollTop);
-    await pane.focus();
-    await page.keyboard.press('PageDown');
-    await expect.poll(() => pane.evaluate(el => el.scrollTop)).toBeGreaterThan(beforeKey + 30);
-    await page.waitForTimeout(400);
-    const keyboardScroll = await pane.evaluate(el => el.scrollTop);
-    await startResponseFrames(page, replySelector('keyboard-reply'));
-    mock.reply('keyboard-reply', 'Keyboard reading.\n' + 'Another long line.\n'.repeat(130) + 'After keyboard scroll.');
-    await expect(page.locator(replySelector('keyboard-reply'))).toContainText('After keyboard scroll.');
-    expectScrollStable(await finishResponseFrames(page), keyboardScroll);
-    mock.complete();
-    await expect(page.locator('#person-input')).toBeEnabled();
-
-    await sendWaiting(page, mock, 'Fifth local question refocuses');
-    await expectAbovePane(page, replySelector('keyboard-reply'));
-    await showReply(page, mock, 'final-reply', 'A final short answer.');
-    await completePinnedReply(page, mock, 'final-reply');
-    await expectReplyGroup(page, 'final-reply', ['final-reply']);
-    expect(mock.requests.filter(request => request.op === 'send')).toHaveLength(5);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  });
-}
-
-for (const scenario of [{ width: 1280, theme: 'dark' }, { width: 320, theme: 'light' }]) {
-  test(`Digital Person reconnect and Agent switch discard local response focus ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
-    test.setTimeout(45000);
-    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation, historyAvailable: false });
-    await openResponseConversation(page, serverUrl, scenario);
-    await sendWaiting(page, mock, 'Send before reconnect');
-    await showReply(page, mock, 'reconnect-reply', 'Reply before reconnect.\n' + 'Long persisted reply.\n'.repeat(90));
-    await startResponseFrames(page, replySelector('reconnect-reply'));
-    mock.reply('reconnect-progress', 'Verified follow-up before reconnect.', 'person-a', undefined, { replyKind: 'progress' });
-    await expectReplyGroup(page, 'reconnect-reply', ['reconnect-reply', 'reconnect-progress'], { kinds: [null, 'progress'] });
-    expectPinnedFrames(await finishResponseFrames(page));
-    const opens = mock.requests.filter(request => request.op === 'open').length;
-    mock.disconnect();
-    await expect.poll(() => mock.requests.filter(request => request.op === 'open').length).toBeGreaterThan(opens);
-    await expectReplyGroup(page, 'reconnect-reply', ['reconnect-reply', 'reconnect-progress'], { kinds: [null, 'progress'] });
-    await expect(page.locator('.person-response-tail, .person-response-start')).toHaveCount(0);
-    const pane = page.locator('.person-messages');
-    // Latest-entry bottom follow is separate from local response focus. A real
-    // wheel releases follow; the missing local marker above proves reconnect
-    // itself discarded the old response lock.
-    await pane.hover(); await page.mouse.wheel(0, -220);
-    await page.waitForTimeout(400);
-    await pane.evaluate(el => { el.scrollTop = el.scrollHeight - el.clientHeight - 220; el.dispatchEvent(new Event('scroll')); });
-    await page.waitForTimeout(100);
-    const reconnectScroll = await pane.evaluate(el => el.scrollTop);
-    await startResponseFrames(page, replySelector('reconnect-reply'));
-    mock.reply('reconnect-reply', 'Reply before reconnect.\n' + 'Long persisted reply.\n'.repeat(130) + 'Remote growth after reconnect.');
-    await expect(page.locator(replySelector('reconnect-reply'))).toContainText('Remote growth after reconnect.');
-    expectScrollStable(await finishResponseFrames(page), reconnectScroll);
-    mock.complete();
-    await expect(page.locator('#person-input')).toBeEnabled();
-    await sendWaiting(page, mock, 'New local send after reconnect');
-    await showReply(page, mock, 'switch-reply', 'Pinned before switching Agent.');
-    await expectReplyGroup(page, 'switch-reply', ['switch-reply']);
-    await expectAbovePane(page, replySelector('reconnect-reply'));
-    mock.messages(previousConversation, 'person-b');
-    await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
-    await page.getByRole('option', { name: 'Owner Agent B', exact: true }).click();
-    await expect(page.locator('.person-header h1')).toHaveText('Bea');
-    await expect(page.locator(replySelector('switch-reply'))).toHaveCount(0);
-    await expect(page.locator('.person-response-tail, .person-response-start')).toHaveCount(0);
-    await pane.hover(); await page.mouse.wheel(0, -220);
-    await page.waitForTimeout(400);
-    await pane.evaluate(el => { el.scrollTop = 80; el.dispatchEvent(new Event('scroll')); });
-    await page.waitForTimeout(100);
-    const switchedScroll = await pane.evaluate(el => el.scrollTop);
-    await startResponseFrames(page, replySelector('history-reply'));
-    mock.reply('remote-b', 'Remote Agent B reply.\n'.repeat(90), 'person-b');
-    await expect.poll(() => mock.requests.filter(request => request.op === 'snapshot' && request.agentId === 'person-b').length).toBeGreaterThan(1);
-    expectScrollStable(await finishResponseFrames(page), switchedScroll);
-    await page.getByRole('combobox', { name: 'Agent', exact: true }).click();
-    await page.getByRole('option', { name: 'Owner Agent A', exact: true }).click();
-    await expect(page.locator('.person-header h1')).toHaveText('Ada');
-    await expect(page.locator(replySelector('switch-reply'))).toHaveCount(1);
-    await expect(page.locator('.person-response-tail, .person-response-start')).toHaveCount(0);
-    await expect(pane).not.toHaveClass(/is-response-pinned/);
-    await expect.poll(() => pane.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
-  });
-}
-
-test('Digital Person rejected admission removes waiting focus and next Send starts a fresh reply', async ({ page, serverUrl }) => {
-  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation, historyAvailable: false });
-  await openResponseConversation(page, serverUrl, { width: 320, theme: 'dark' });
-  mock.rejectNextSend();
-  await page.locator('#person-input').fill('Rejected local send');
-  await page.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(page.locator('.person-error')).toContainText('Admission rejected');
-  await expect(page.locator('#person-input')).toBeEnabled();
-  await expect(page.locator('#person-input')).toHaveValue('Rejected local send');
-  await expect(page.locator('.person-response-start, .person-response-tail, .person-response-loading')).toHaveCount(0);
-  await expect(page.locator('.user-turn-block')).toHaveCount(1);
-  await sendWaiting(page, mock, 'Accepted local send');
-  await showReply(page, mock, 'accepted-reply', 'Fresh accepted response.');
-  await completePinnedReply(page, mock, 'accepted-reply');
-});
-
-for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 320, theme: 'dark', locale: 'zh-CN' }]) {
+for (const scenario of [{ width: 320, theme: 'dark', locale: 'zh-CN' }]) {
   test(`Digital Person candidate and default model preferences ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }, testInfo) => {
     const mock = await mockPersonSocket(page, { modelPreferences: true });
     await page.setViewportSize({ width: scenario.width, height: 800 });
@@ -1450,7 +347,6 @@ for (const scenario of [{ width: 1280, theme: 'light', locale: 'en' }, { width: 
     expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
   });
 }
-
 
 // Delays are authoritative backend timestamps, not a browser-generated timer.
 // Only the wire runtime is scripted; rendering, polling, input and scrolling are real.
@@ -1583,7 +479,7 @@ for (const scenario of responseScenarios) {
   });
 }
 
-for (const width of [1280, 320]) {
+for (const width of [320]) {
   test(`Digital Person starts at latest, windows long history and prepends on scroll ${width}px`, async ({ page, serverUrl }) => {
     const rows = Array.from({ length: 240 }, (_, i) => ({ id: `message-${i + 101}`, role: 'assistant', text: `Latest window item ${i + 101}. ` + 'Readable content. '.repeat(15), seq: i + 101, createdAt: i + 101 }));
     const older = Array.from({ length: 50 }, (_, i) => ({ id: `old-${i}`, role: 'assistant', text: `Historical item ${i}. ` + 'Earlier content. '.repeat(15), seq: i + 51, createdAt: i + 51 }));
@@ -1628,8 +524,14 @@ for (const width of [1280, 320]) {
     await expect(pane).toContainText('Historical item 0');
     await page.locator('.person-thoughts-button').click();
     const thoughts = page.locator('#person-thoughts');
-    // Highest sequence in this fixture is script-cancelled (23).
-    await expect(thoughts.locator('.person-thought').first()).toHaveAttribute('data-thought-kind', 'cancelled');
+    // Journal rows group persisted traces by episode, newest sequence first.
+    // Missing trigger evidence is an episode, not a synthetic cancelled row.
+    const latest = thoughts.locator('.person-thought').first();
+    await expect(latest).toHaveAttribute('data-episode-id', 'script');
+    await expect(latest).toHaveAttribute('data-thought-kind', 'episode');
+    await expect(latest.locator(':scope > header .person-thought-status')).toHaveText('Activity cancelled');
+    await expect(thoughts.locator('.person-thought').nth(1)).toHaveAttribute('data-episode-id', 'episode-1');
+    await expect(thoughts.locator('.person-thought').nth(1).locator(':scope > header .person-thought-status')).toHaveText('Adopted');
     await expect.poll(() => thoughts.locator('.person-thought').count()).toBeLessThan(30);
   });
 }

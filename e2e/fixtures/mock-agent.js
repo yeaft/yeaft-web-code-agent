@@ -10,9 +10,6 @@ export class MockAgent {
     this.agentId = null;
     this.conversations = new Map();
     this.browserSessions = new Map();
-    this.browserRuntimeInstallFailure = null;
-    this.browserRuntimeInstallPaused = false;
-    this.pendingBrowserRuntimeInstall = null;
     this.browserRuntimeReady = false;
     this._messageHandlers = [];
     this._receivedMessages = [];
@@ -90,38 +87,20 @@ export class MockAgent {
             type: 'browser_runtime_status_result',
             requestId: msg.requestId,
             supported: true,
-            state: this.pendingBrowserRuntimeInstall ? 'installing'
-              : this.browserRuntimeReady ? 'ready' : 'not_installed',
+            state: this.browserRuntimeReady ? 'ready' : 'not_installed',
             installed: this.browserRuntimeReady,
             enabled: this.browserRuntimeReady,
             ready: this.browserRuntimeReady,
             buildId: '151.0.7922.71',
             platform: 'linux',
             downloadBytes: 193_285_407,
-            downloadedBytes: this.pendingBrowserRuntimeInstall ? 96_642_704 : 0,
+            downloadedBytes: 0,
             totalBytes: 193_285_407,
             safeError: null,
           });
         }
         if (msg.type === 'browser_runtime_install') {
-          if (this.browserRuntimeInstallFailure) {
-            this.send({
-              type: 'browser_runtime_error',
-              requestId: msg.requestId,
-              code: 'browser_install_failed',
-              safeError: this.browserRuntimeInstallFailure,
-            });
-          } else if (this.browserRuntimeInstallPaused) {
-            this.pendingBrowserRuntimeInstall = msg;
-            this.send({
-              type: 'browser_runtime_install_progress',
-              requestId: msg.requestId,
-              downloadedBytes: 96_642_704,
-              totalBytes: 193_285_407,
-            });
-          } else {
-            this.completeBrowserRuntimeInstall(msg);
-          }
+          this.completeBrowserRuntimeInstall(msg);
         }
         if (msg.type === 'browser_session_list') {
           this.send({
@@ -220,18 +199,7 @@ export class MockAgent {
     return this._messageHistory.filter(message => !type || message.type === type);
   }
 
-  failBrowserRuntimeInstall(safeError) {
-    this.browserRuntimeInstallFailure = safeError;
-  }
-
-  pauseBrowserRuntimeInstall() {
-    this.browserRuntimeInstallPaused = true;
-  }
-
-  completeBrowserRuntimeInstall(message = this.pendingBrowserRuntimeInstall) {
-    if (!message) throw new Error('No pending Browser Runtime install');
-    this.pendingBrowserRuntimeInstall = null;
-    this.browserRuntimeInstallPaused = false;
+  completeBrowserRuntimeInstall(message) {
     this.browserRuntimeReady = true;
     this.send({
       type: 'browser_runtime_install_progress',
@@ -305,10 +273,6 @@ export class MockAgent {
       conversationId,
       result: { type: 'result', result: 'Done' }
     });
-  }
-
-  reportPorts(ports) {
-    this.send({ type: 'proxy_ports_update', ports });
   }
 
   send(msg) {

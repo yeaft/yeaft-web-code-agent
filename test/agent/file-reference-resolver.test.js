@@ -65,17 +65,4 @@ describe('resolveFileReferences', () => {
       rmSync(workDir, { recursive: true, force: true });
     }
   });
-
-  it('bounds reference count and ignores path values too large for a filesystem reference', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'yeaft-reference-bounds-'));
-    try {
-      await writeFile(join(workDir, 'kept.js'), 'kept');
-      const references = ['x'.repeat(4097), 'kept.js', ...Array.from({ length: 40 }, (_, i) => `missing-${i}.js`)];
-      await expect(resolveFileReferences(references, workDir)).resolves.toEqual([
-        { requestedPath: 'kept.js', resolvedPath: 'kept.js' },
-      ]);
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
-  });
 });

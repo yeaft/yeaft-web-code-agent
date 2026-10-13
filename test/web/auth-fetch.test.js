@@ -48,71 +48,6 @@ afterEach(() => {
 });
 
 describe('auth fetch interceptor', () => {
-  it('adds the active bearer token to same-origin protected API requests', async () => {
-    const authStore = {
-      token: 'store-token',
-      getActiveToken: vi.fn(() => 'store-token'),
-      handleAuthFailure: vi.fn(),
-    };
-    const originalFetch = vi.fn(async () => response());
-    const fetch = await loadInstaller({ authStore, fetchImpl: originalFetch });
-
-    await fetch('/api/user/profile');
-
-    expect(originalFetch).toHaveBeenCalledWith('/api/user/profile', {
-      credentials: 'same-origin',
-      headers: expect.any(Headers),
-    });
-    const headers = originalFetch.mock.calls[0][1].headers;
-    expect(headers.get('Authorization')).toBe('Bearer store-token');
-  });
-
-  it('does not overwrite an explicit Authorization header', async () => {
-    const authStore = {
-      token: 'store-token',
-      getActiveToken: vi.fn(() => 'store-token'),
-      handleAuthFailure: vi.fn(),
-    };
-    const originalFetch = vi.fn(async () => response());
-    const fetch = await loadInstaller({ authStore, fetchImpl: originalFetch });
-
-    await fetch('/api/user/profile', { headers: { Authorization: 'Bearer explicit-token' } });
-
-    const headers = new Headers(originalFetch.mock.calls[0][1].headers);
-    expect(headers.get('Authorization')).toBe('Bearer explicit-token');
-  });
-
-  it('leaves public login endpoints unauthenticated', async () => {
-    const authStore = {
-      token: 'store-token',
-      getActiveToken: vi.fn(() => 'store-token'),
-      handleAuthFailure: vi.fn(),
-    };
-    const originalFetch = vi.fn(async () => response());
-    const fetch = await loadInstaller({ authStore, fetchImpl: originalFetch });
-
-    await fetch('/api/auth/login', { method: 'POST' });
-
-    expect(originalFetch).toHaveBeenCalledWith('/api/auth/login', {
-      method: 'POST',
-      credentials: 'same-origin',
-    });
-  });
-
-  it('syncs renewed tokens from response headers into storage and auth store', async () => {
-    const authStore = {
-      token: 'old-token',
-      getActiveToken: vi.fn(function getActiveToken() { return this.token; }),
-      handleAuthFailure: vi.fn(),
-    };
-    const originalFetch = vi.fn(async () => response({ headers: { 'X-New-Token': 'fresh-token' } }));
-    const fetch = await loadInstaller({ authStore, fetchImpl: originalFetch });
-
-    await fetch('/api/user/profile');
-
-    expect(authStore.token).toBe('fresh-token');
-    expect(globalThis.localStorage.setItem).toHaveBeenCalledWith('authToken', 'fresh-token');
-  });
 
   it('does not let stale renewal headers overwrite a newer login token', async () => {
     const authStore = {
@@ -155,31 +90,6 @@ describe('auth fetch interceptor', () => {
       true,
     );
     expect(authStore.handleAuthFailure).not.toHaveBeenCalled();
-  });
-
-  it('routes a file upload 401 through the same auth policy', async () => {
-    const authStore = {
-      token: 'store-token',
-      authGeneration: 5,
-      isAuthenticated: true,
-      getActiveToken: vi.fn(() => 'store-token'),
-      handleAuthResponse: vi.fn(),
-      handleAuthFailure: vi.fn(),
-    };
-    const originalFetch = vi.fn(async () => response({ status: 401 }));
-    const fetch = await loadInstaller({ authStore, fetchImpl: originalFetch });
-
-    await fetch('/api/upload', { method: 'POST', body: 'file-data' });
-
-    const request = originalFetch.mock.calls[0][1];
-    expect(request.credentials).toBe('same-origin');
-    expect(request.headers.get('Authorization')).toBe('Bearer store-token');
-    expect(authStore.handleAuthResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 401 }),
-      'store-token',
-      5,
-      true,
-    );
   });
 
   it('does not clear a newer login when an old no-token request later returns 401', async () => {

@@ -1,6 +1,6 @@
 # Sandbox Agent 差距矩阵
 
-本文以 `docs/notes/2026-07-17-sandbox-agent-design.md` 第 19、20、21 节为验收基线。关闭状态只表示已有代码或可重复证据入口；真实 Host 项在 qualification 报告落档前一律保持未关闭，且 `SANDBOX_ENABLED` 必须保持默认 `false`。
+本文记录当时以 `docs/notes/2026-07-17-sandbox-agent-design.md` 第 19、20、21 节为基线的历史验收证据。2026-10-13 测试精简后，下表所列的部分专项测试已不再保留，旧 Docker 开发验收脚本及 `test:sandbox:docker` 命令也不在当前仓库中；不能把历史通过记录当作当前版本已复验。当前仍保留 `test/server/sandbox-routes.test.js` 的权限与删除 fence 验证，其他边界修改时需重新补测。真实 Host 项在 qualification 报告落档前一律保持未关闭，且 `SANDBOX_ENABLED` 必须保持默认 `false`。
 
 ## 第 19 节验收组
 

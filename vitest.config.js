@@ -16,8 +16,8 @@ export default defineConfig({
     hookTimeout: 10000,
     pool: 'forks',
     fileParallelism: false,
-    // Keep the default suite intentionally bounded. New regression coverage
-    // must replace or consolidate an existing case before joining this list.
+    // All retained Vitest files run by default. Prefer replacing redundant
+    // coverage; new critical regressions may justify a reviewed budget increase.
     include: [...CORE_TEST_FILES],
     // Dot-dir worktrees may appear at different depths depending on who
     // created them. Use globstar forms so both full and focused runs exclude

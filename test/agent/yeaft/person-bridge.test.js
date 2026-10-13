@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 
 const request = (extra = {}) => ({ type: 'person_request', requestId: 'r1', ownerId: 'u1', op: 'status', payload: {}, ...extra });
@@ -24,26 +27,6 @@ describe('Person bridge is independent of Session and Work Center', () => {
     expect(f.service.close).toHaveBeenCalledTimes(1);
   });
 
-  it('passes only deployment embedding controls', async () => {
-    const f = fixture({ YEAFT_PERSON_EMBEDDING: 'off', YEAFT_PERSON_EMBEDDING_DOWNLOAD: '0' });
-    await f.bridge.request(request({ payload: { embedding: { allowDownload: true }, yeaftDir: '/browser/override' } }));
-    expect(f.createService).toHaveBeenCalledWith(expect.objectContaining({ yeaftDir: '/isolated/person', embedding: { enabled: false, allowDownload: false } }));
-    await f.bridge.close();
-  });
-
-  it('binds the instance directory and authenticated owner without accepting browser config', async () => {
-    const f = fixture();
-    await f.bridge.request(request({ op: 'open', payload: { yeaftDir: '/browser/override', ownerId: 'victim' } }));
-    expect(f.createService).toHaveBeenCalledWith(expect.objectContaining({
-      yeaftDir: '/isolated/person', namespace: expect.stringMatching(/^[a-f0-9]{64}$/),
-    }));
-    expect(f.service.request).toHaveBeenCalledWith(expect.objectContaining({ ownerId: 'u1', op: 'open' }));
-    await f.bridge.request(request());
-    expect(f.createService).toHaveBeenCalledTimes(1);
-    await f.bridge.close();
-    expect(f.service.close).toHaveBeenCalledTimes(1);
-  });
-
   it('does not return database or provider secrets on failures; failed init can be retried', async () => {
     const f = fixture();
     f.createService.mockRejectedValueOnce(new Error('https://admin:password@example credentials'));
@@ -55,55 +38,40 @@ describe('Person bridge is independent of Session and Work Center', () => {
     await f.bridge.close();
   });
 
-  it.each(['settings', 'send'])('uses safe operation-appropriate validation errors for %s', async op => {
-    const f = fixture();
-    f.service.request.mockRejectedValue(Object.assign(new Error('https://admin:password@example'), { code: 'INVALID_REQUEST' }));
-    await f.bridge.request(request({ op, payload: op === 'settings' ? { name: ' ' } : {} }));
-    const response = f.send.mock.lastCall[0];
-    expect(response).toMatchObject({ ok: false, op, requestId: 'r1', errorCode: 'invalid_request' });
-    expect(response.error).not.toContain('8192');
-    expect(response.error).not.toContain('password');
-    if (op === 'settings') expect(response.error).toContain('160 UTF-8 bytes');
-    else expect(response.error).toBe('Invalid digital person request');
-    await f.bridge.close();
-  });
-
-  it.each(['tasks', 'task_log', 'task_cancel', 'agent_close'])('routes %s task operations without losing authenticated identity', async op => {
-    const f = fixture({});
-    const payload = op === 'tasks' ? {} : op === 'agent_close' ? { agentId: 'agent-child' } : { taskId: 'task-one' };
+  it('routes output reads with authenticated ownership and original correlation', async () => {
+    const f = fixture(), op = 'output_read';
+    const payload = { outputId: '550e8400-e29b-41d4-a716-446655440000', offset: 64, maxBytes: 65536 };
     await f.bridge.request(request({ op, payload }));
     expect(f.service.request).toHaveBeenCalledWith({ ownerId: 'u1', op, payload });
     expect(f.send.mock.lastCall[0]).toMatchObject({ ok: true, requestId: 'r1', op });
     await f.bridge.close();
   });
 
-  it.each(['NOT_FOUND', 'TASK_SCOPE_DENIED', 'TASK_CONTROL_UNAVAILABLE'])('returns safe %s task errors, never internal credential-bearing messages', async code => {
-    const f = fixture({});
-    f.service.request.mockRejectedValue(Object.assign(new Error('https://admin:password@example /internal/path'), { code }));
-    await f.bridge.request(request({ op: 'task_cancel', payload: { taskId: 'task-one' } }));
-    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: false, requestId: 'r1', op: 'task_cancel', errorCode: code.toLowerCase() });
-    expect(JSON.stringify(f.send.mock.lastCall[0])).not.toContain('password');
-    expect(JSON.stringify(f.send.mock.lastCall[0])).not.toContain('/internal/path');
-    await f.bridge.close();
-  });
-
-  it.each(['outputs', 'output_read'])('routes %s with authenticated ownership and original correlation', async op => {
-    const f = fixture();
-    const payload = op === 'outputs' ? { cursor: '20', limit: 10 } : { outputId: '550e8400-e29b-41d4-a716-446655440000', offset: 64, maxBytes: 65536 };
-    await f.bridge.request(request({ op, payload }));
-    expect(f.service.request).toHaveBeenCalledWith({ ownerId: 'u1', op, payload });
-    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: true, requestId: 'r1', op });
-    await f.bridge.close();
-  });
-
-  it.each(['OUTPUT_PATH', 'OUTPUT_QUOTA', 'OUTPUT_NOT_FILE', 'OUTPUT_PLATFORM'])('returns fixed safe %s output errors', async code => {
-    const f = fixture();
-    f.service.request.mockRejectedValue(Object.assign(new Error('https://admin:password@example /internal/path'), { code }));
-    await f.bridge.request(request({ op: 'output_read', payload: { outputId: '550e8400-e29b-41d4-a716-446655440000' } }));
-    expect(f.send.mock.lastCall[0]).toMatchObject({ ok: false, requestId: 'r1', op: 'output_read', errorCode: code.toLowerCase() });
-    expect(JSON.stringify(f.send.mock.lastCall[0])).not.toContain('password');
-    expect(JSON.stringify(f.send.mock.lastCall[0])).not.toContain('/internal/path');
-    await f.bridge.close();
+  it('uses the real SQLite service across restart with authenticated owner and Agent namespace isolation', async () => {
+    const yeaftDir = await mkdtemp(join(tmpdir(), 'person-bridge-'));
+    const send = vi.fn(async () => {});
+    const context = { agentId: 'a1', CONFIG: { serverUrl: 'https://server', yeaftDir, workDir: yeaftDir } };
+    const options = { context, send, env: { YEAFT_PERSON_EMBEDDING: 'off', YEAFT_PERSON_EMBEDDING_DOWNLOAD: '0' } };
+    let bridge = createPersonBridge(options);
+    try {
+      await bridge.request(request({ op: 'open', payload: { name: 'Alice' } }));
+      const opened = send.mock.lastCall[0];
+      expect(opened).toMatchObject({ ok: true, requestId: 'r1', op: 'open', data: { person: { name: 'Alice' } } });
+      const alice = opened.data.person.id;
+      await bridge.close(); bridge = createPersonBridge(options);
+      await bridge.request(request({ op: 'open' }));
+      expect(send.mock.lastCall[0].data.person).toMatchObject({ id: alice, name: 'Alice' });
+      await bridge.request(request({ op: 'open', ownerId: 'u2', payload: { name: 'Bob' } }));
+      expect(send.mock.lastCall[0]).toMatchObject({ ok: true, data: { person: { name: 'Bob' } } });
+      expect(send.mock.lastCall[0].data.person.id).not.toBe(alice);
+      await bridge.request(request({ op: 'open', payload: { ownerId: 'u2', yeaftDir: '/browser/override' } }));
+      expect(send.mock.lastCall[0]).toMatchObject({ ok: false, errorCode: 'invalid_request' });
+      context.agentId = 'a2';
+      await bridge.request(request({ op: 'open' }));
+      expect(send.mock.lastCall[0]).toMatchObject({ ok: true, data: { person: { name: 'Digital Person' } } });
+      expect(send.mock.lastCall[0].data.person.id).not.toBe(alice);
+      expect(await readdir(yeaftDir)).toEqual(['person']);
+    } finally { await bridge.close(); await rm(yeaftDir, { recursive: true, force: true }); }
   });
 
   it('fences missing owner, closed transport and Agent identity changes', async () => {

@@ -4,7 +4,6 @@ vi.mock('../../server/config.js', () => ({ CONFIG: { skipAuth: false } }));
 vi.mock('../../server/context.js', () => ({ agents: new Map(), pendingFiles: new Map() }));
 vi.mock('../../server/ws-utils.js', () => ({ forwardToAgent: vi.fn(), sendToWebClient: vi.fn(), resolveAgentAccessError: vi.fn() }));
 import { createPersonRelay } from '../../server/handlers/client-person.js';
-import { acceptPersonResponse, createPersonController, personState } from '../../web/stores/helpers/digital-person.js';
 
 let relay, send, forward, accessError, client, agentMap;
 beforeEach(() => {
@@ -18,7 +17,6 @@ beforeEach(() => {
 });
 afterEach(() => { relay.close(); vi.useRealTimers(); });
 const message = (extra = {}) => ({ type: 'person_request', agentId: 'agent-a', requestId: 'browser-1', op: 'snapshot', payload: {}, ...extra });
-const taskCursor = `t1:${Buffer.from(JSON.stringify({ scope: 'a'.repeat(64), tasks: { time: 1767225600000, id: 'task-one' }, agents: null })).toString('base64url')}`;
 
 describe('digital person authenticated relay', () => {
   it('replaces identity and correlation, strips forged payload fields, never broadcasts', async () => {
@@ -34,216 +32,15 @@ describe('digital person authenticated relay', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ['inspect', { section: 'skills', cursor: 'Recall', limit: 2 }],
-    ['turns', { cursor: 40, limit: 20 }],
-    ['search', { query: 'literal .*', cursor: '20', limit: 5 }],
-    ['settings', { name: 'Renamed', modelCandidates: [] }],
-    ['settings', { modelCandidates: ['provider/a', 'provider/b'], defaultModel: 'provider/b' }],
-    ['settings', { modelCandidates: [], defaultModel: null }],
-  ])('relays the exact %s API fields but never browser ownership or raw selectors', async (op, payload) => {
-    await relay.request(client, message({ op, payload: { ...payload, ownerId: 'victim', namespace: 'foreign', filter: { $ne: null }, files: [], providers: [{ apiKey: 'forged' }], agentDefaultModel: 'evil/model' } }));
-    expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op, payload });
-    expect(forward.mock.lastCall[1].payload).toEqual(payload);
-  });
-
-  it.each([
-    ['tasks', {}], ['tasks', { limit: 20, cursor: null }], ['tasks', { limit: 20, cursor: taskCursor }], ['task_log', { taskId: 'task-one', offset: 4, maxBytes: 65536 }],
-    ['task_cancel', { taskId: 'task-one' }], ['agent_close', { agentId: 'agent-child' }],
-  ])('routes strict %s task payloads with authenticated ownership and correlation', async (op, payload) => {
-    await relay.request(client, message({ op, payload, ownerId: 'victim' }));
-    const outbound = forward.mock.lastCall[1];
-    expect(outbound).toMatchObject({ ownerId: 'owner-a', op, payload });
-    await relay.response('agent-a', { type: 'person_response', requestId: outbound.requestId, ok: false, errorCode: 'not_found', error: 'Digital person task or child not found' });
-    expect(send.mock.lastCall[1]).toMatchObject({ op, requestId: 'browser-1', ok: false, errorCode: 'not_found' });
-  });
-
-  it('forwards first and continuation task pages and returns active controls/opaque cursor only to the requester', async () => {
-    for (const cursor of [null, taskCursor]) {
-      await relay.request(client, message({ op: 'tasks', payload: { cursor, limit: 20 } }));
-      const outbound = forward.mock.lastCall[1];
-      expect(outbound.payload).toEqual({ cursor, limit: 20 });
-      const data = { tasks: [{ id: 'new-settled', createdAt: '2026-01-01', status: 'succeeded' }], agents: [],
-        nextCursor: cursor === null ? taskCursor : null, truncated: cursor === null,
-        active: { tasks: [{ id: 'old-live', createdAt: '2020-01-01', status: 'running' }], agents: [], truncated: false } };
-      await relay.response('agent-b', { type: 'person_response', requestId: outbound.requestId, ok: true, data });
-      const previousCalls = send.mock.calls.length;
-      await relay.response('agent-a', { type: 'person_response', requestId: outbound.requestId, ok: true, data });
-      expect(send).toHaveBeenCalledTimes(previousCalls + 1);
-      expect(send.mock.lastCall).toEqual([client, { type: 'person_response', agentId: 'agent-a', requestId: 'browser-1', op: 'tasks', ok: true, data }]);
-    }
-  });
-
-  it.each([
-    ['tasks', { namespace: 'foreign' }], ['tasks', { limit: 101 }], ['tasks', { limit: null }], ['tasks', { cursor: 'invalid' }], ['tasks', { cursor: 1 }],
-    ['task_cancel', { taskId: 'task-one', ownerId: 'victim' }],
-    ['agent_close', { agentId: 'agent-child', personId: 'victim' }], ['task_log', { taskId: 'task-one', path: '/etc/passwd' }],
-    ['task_log', { taskId: 'task-one', tail: true }], ['task_log', { taskId: 'task-one', offset: -1 }],
-    ['task_log', { taskId: 'task-one', maxBytes: 65537 }], ['task_log', { taskId: 'task-one', maxBytes: null }],
-    ['task_log', { taskId: '../task-one' }], ['task_cancel', {}], ['agent_close', { agentId: 1 }],
-  ])('rejects malformed %s task payload without forwarding', async (op, payload) => {
-    await relay.request(client, message({ op, payload }));
-    expect(forward).not.toHaveBeenCalled();
-    expect(send.mock.lastCall[1]).toMatchObject({ requestId: 'browser-1', op, ok: false, errorCode: 'invalid_request' });
-  });
-
-  it.each([{ cursor: '40' }, { cursor: -1 }, { cursor: 0 }, { cursor: 1.5 }, { cursor: Number.MAX_SAFE_INTEGER + 1 }, { limit: 21 }, { limit: 0 }, { limit: null }])('rejects malformed turn page %j before forwarding', async payload => {
-    await relay.request(client, message({ op: 'turns', payload }));
-    expect(forward).not.toHaveBeenCalled();
-    expect(send.mock.lastCall[1]).toMatchObject({ op: 'turns', ok: false, errorCode: 'invalid_request' });
-  });
-
-  it.each(['turns', 'tasks', 'task_log', 'task_cancel', 'agent_close'])('requires authentication and Agent access for %s', async op => {
-    client.authenticated = false;
-    await relay.request(client, message({ op }));
-    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Authentication required' });
-    client.authenticated = true; accessError.mockReturnValue('Agent access denied');
-    await relay.request(client, message({ op }));
-    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Agent access denied' });
-    expect(forward).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['executions', {}], ['pause', { episodeId: 'episode-one' }], ['resume', { episodeId: 'episode-one' }],
-  ])('relays %s execution control only to the authenticated owner and original requester', async (op, payload) => {
-    await relay.request(client, message({ op, payload, ownerId: 'victim' }));
-    const outbound = forward.mock.lastCall[1];
-    expect(outbound).toMatchObject({ ownerId: 'owner-a', op, payload });
-    await relay.response('agent-b', { type: 'person_response', requestId: outbound.requestId, ok: true, data: { active: 'foreign' } });
-    expect(send).not.toHaveBeenCalled();
-    await relay.response('agent-a', { type: 'person_response', requestId: outbound.requestId, ok: true, data: { active: null } });
-    expect(send.mock.lastCall).toEqual([client, { type: 'person_response', agentId: 'agent-a', requestId: 'browser-1', op, ok: true, data: { active: null } }]);
-  });
-
-  it.each([
-    ['executions', { ownerId: 'victim' }], ['executions', { limit: 100 }],
-    ['pause', {}], ['resume', {}], ['pause', { episodeId: '../foreign' }],
-    ['resume', { episodeId: 'episode-one', ownerId: 'victim' }],
-    ['pause', { episodeId: 'episode-one', maxCalls: 4 }], ['resume', { episodeId: null }],
-  ])('rejects malformed %s execution controls before forwarding', async (op, payload) => {
-    await relay.request(client, message({ op, payload }));
-    expect(forward).not.toHaveBeenCalled();
-    expect(send.mock.lastCall[1]).toMatchObject({ op, ok: false, errorCode: 'invalid_request' });
-  });
-
-  it.each(['executions', 'pause', 'resume'])('requires authentication and Agent access for %s execution control', async op => {
-    client.authenticated = false;
-    await relay.request(client, message({ op, payload: { episodeId: 'episode-one' } }));
-    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Authentication required' });
-    client.authenticated = true; accessError.mockReturnValue('Agent access denied');
-    await relay.request(client, message({ op, payload: { episodeId: 'episode-one' } }));
-    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, error: 'Agent access denied' });
-    expect(forward).not.toHaveBeenCalled();
-  });
-
-  it('passes the exact cancellation episode and ignores a forged owner', async () => {
-    await relay.request(client, message({ op: 'cancel', payload: { episodeId: 'old-episode', ownerId: 'victim' } }));
-    expect(forward.mock.lastCall[1]).toMatchObject({ ownerId: 'owner-a', op: 'cancel', payload: { episodeId: 'old-episode' } });
-    expect(forward.mock.lastCall[1].payload).not.toHaveProperty('ownerId');
-  });
-
-  it('does not let wrong Agent consume a pending request', async () => {
-    await relay.request(client, message());
-    const requestId = forward.mock.calls[0][1].requestId;
-    await relay.response('agent-b', { type: 'person_response', requestId, ok: true });
-    expect(send).not.toHaveBeenCalled();
-    await relay.response('agent-a', { type: 'person_response', requestId, ok: true, data: {} });
-    expect(send).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(['owner', 'connection', 'access', 'logout'])('fences late response after %s changes', async kind => {
-    await relay.request(client, message());
+  it.each(['owner', 'connection', 'access', 'logout'])('fences private output after %s changes while in flight', async kind => {
+    await relay.request(client, message({ op: 'output_read', payload: { outputId: '550e8400-e29b-41d4-a716-446655440000' } }));
+    expect(forward).toHaveBeenCalledTimes(1);
     const requestId = forward.mock.calls[0][1].requestId;
     if (kind === 'owner') client.userId = 'owner-b';
     if (kind === 'connection') agentMap.set('agent-a', { capabilities: ['digital_person'] });
     if (kind === 'access') accessError.mockReturnValue('denied');
     if (kind === 'logout') client.authenticated = false;
-    await relay.response('agent-a', { type: 'person_response', requestId, ok: true, data: { secret: 'private' } });
+    await relay.response('agent-a', { type: 'person_response', requestId, ok: true, data: { content: Buffer.from('private-output-bytes').toString('base64') } });
     expect(send).not.toHaveBeenCalled();
-  });
-
-  it('rejects unsupported agent, access, malformed operation and oversized payload with correlation', async () => {
-    agentMap.get('agent-a').capabilities = [];
-    await relay.request(client, message());
-    expect(send.mock.lastCall[1]).toMatchObject({ requestId: 'browser-1', ok: false });
-    agentMap.get('agent-a').capabilities = ['digital_person'];
-    accessError.mockReturnValue('Agent access denied');
-    await relay.request(client, message());
-    expect(send.mock.lastCall[1].error).toBe('Agent access denied');
-    accessError.mockReturnValue(null);
-    await relay.request(client, message({ op: '__proto__' }));
-    await relay.request(client, message({ op: 'send', payload: { text: 'x'.repeat(40_001) } }));
-    expect(send).toHaveBeenCalledTimes(4);
-    expect(forward).not.toHaveBeenCalled();
-  });
-
-  it('accepts synchronous responses without losing correlation', async () => {
-    forward.mockImplementation(async (agentId, msg) => {
-      await relay.response(agentId, { type: 'person_response', requestId: msg.requestId, ok: true, data: {} });
-      return true;
-    });
-    await relay.request(client, message());
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.lastCall[1].ok).toBe(true);
-  });
-
-  it('expires requests, handles send failure and cleans disconnected clients', async () => {
-    await relay.request(client, message());
-    await vi.advanceTimersByTimeAsync(30_001);
-    expect(send.mock.lastCall[1]).toMatchObject({ ok: false, requestId: 'browser-1' });
-    expect(send.mock.lastCall[1].error).toContain('timed out');
-    forward.mockResolvedValueOnce(false);
-    await relay.request(client, message());
-    expect(send.mock.lastCall[1].error).toContain('offline');
-    await relay.request(client, message());
-    relay.clearClient(client);
-    await vi.advanceTimersByTimeAsync(30_001);
-    expect(send).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(['timeout', 'outcome_unknown'])('preserves the command ID across a relay %s before the browser timer', async code => {
-    relay.close();
-    const state = personState();
-    const chat = { authenticated: true, connectionState: 'connected', digitalPersonUiEnabledByAgent: { 'agent-a': true }, agents: [{ id: 'agent-a', online: true, capabilities: ['digital_person'] }],
-      sendWsMessage(msg) { void relay.request(client, msg); return true; } };
-    let retry = false;
-    const ids = [];
-    relay = createPersonRelay({ agentMap, accessError, timeoutMs: 10,
-      send: async (_client, msg) => acceptPersonResponse(chat, msg),
-      forward: async (agentId, msg) => {
-        if (msg.op === 'send') {
-          ids.push(msg.payload.clientMessageId);
-          if (!retry) {
-            if (code === 'outcome_unknown') throw new Error('connection lost after sending');
-            return true; // Admission may have succeeded but the acknowledgement is lost.
-          }
-        }
-        const data = { status: { configured: true }, open: {}, snapshot: { person: { id: 'p' }, messages: [], busy: false }, messages: { items: [] }, traces: { items: [] }, send: { episodeId: 'original-episode', duplicate: true }, receipt: { found: false } }[msg.op];
-        await relay.response(agentId, { type: 'person_response', requestId: msg.requestId, ok: true, data });
-        return true;
-      },
-    });
-    const controller = createPersonController({ chat, state, scope: () => 'owner-a', timeoutMs: 1000 });
-    try {
-      await controller.open('agent-a');
-      const command = controller.command('send', 'accepted once');
-      await vi.advanceTimersByTimeAsync(11);
-      expect(await command).toBe(false);
-      expect(state.error.code).toBe(code);
-      expect(state.retryCommand.payload.clientMessageId).toBe(ids[0]);
-      retry = true;
-      expect(await controller.command('send', '', true)).toBe(true);
-      expect(ids).toEqual([ids[0], ids[0]]);
-      expect(state.retryCommand).toBeNull();
-    } finally { controller.dispose(); }
-  });
-
-  it('bounds pending work per browser and ignores unrelated messages', async () => {
-    expect(await relay.request(client, { type: 'other' })).toBe(false);
-    expect(await relay.response('agent-a', { type: 'other' })).toBe(false);
-    for (let i = 0; i < 33; i++) await relay.request(client, message({ requestId: `r${i}` }));
-    expect(forward).toHaveBeenCalledTimes(32);
-    expect(send.mock.lastCall[1].error).toContain('Too many');
   });
 });

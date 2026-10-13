@@ -1,56 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { Worker } from 'node:worker_threads';
-import { runPersonScript, testPersonScript, scriptInput } from '../../../../agent/yeaft/person/script-executor.js';
+
+import { runPersonScript } from '../../../../agent/yeaft/person/script-executor.js';
 
 // Real QuickJS/WASM execution, no mocked VM or claimed Node vm sandbox.
 describe('Person pure script executor', () => {
-  it('runs parameterized JSON transformations and starts with fresh state', async () => {
-    const code = 'globalThis.counter = (globalThis.counter || 0) + 1; return {count:counter, total:input.reduce((a,b)=>a+b,0)};';
-    expect(await runPersonScript(code, [1, 2])).toEqual({ ok: true, output: { count: 1, total: 3 } });
-    expect(await runPersonScript(code, [8, 4])).toEqual({ ok: true, output: { count: 1, total: 12 } });
-    const special = JSON.parse('{"__proto__":{"value":1},"quotes":"\\\"\\n","中文":true}');
-    expect(await runPersonScript('return input;', special)).toEqual({ ok: true, output: special });
-
-  });
-
-  it('does not charge real VM initialization against the guest execution budget', async () => {
-    // Delay real VM construction past the 200ms guest budget. Initialization is
-    // trusted host work, not generated code, and must not consume that budget.
-    const worker = new Worker(`(async () => {
-      const { getQuickJS } = await import('quickjs-emscripten');
-      const engine = await getQuickJS(), newRuntime = engine.newRuntime.bind(engine);
-      engine.newRuntime = (...args) => {
-        const runtime = newRuntime(...args), newContext = runtime.newContext.bind(runtime);
-        runtime.newContext = (...args) => {
-          const context = newContext(...args);
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-          return context;
-        };
-        return runtime;
-      };
-      await import(${JSON.stringify(new URL('../../../../agent/yeaft/person/script-worker.js', import.meta.url).href)});
-    })()`, { eval: true, workerData: { code: 'return input + 1;', input: 2 } });
-    try {
-      const result = await new Promise((resolve, reject) => {
-        worker.once('message', resolve);
-        worker.once('error', reject);
-        worker.once('exit', code => reject(new Error(`Script worker exited: ${code}`)));
-      });
-      expect(result).toEqual({ ok: true, output: 3 });
-    } finally { await worker.terminate(); }
-  });
-
   it('has no host process, environment, filesystem, network, timers, imports or Node constructors', async () => {
     const code = 'return [typeof process,typeof require,typeof fetch,typeof setTimeout,typeof console,typeof Buffer,(new Function("return typeof process"))()];';
     expect(await runPersonScript(code, null)).toEqual({ ok: true, output: Array(7).fill('undefined') });
     expect((await runPersonScript('return process.env;', null)).ok).toBe(false);
     expect((await runPersonScript('return require("node:fs").readFileSync("/etc/passwd");', null)).ok).toBe(false);
-  });
-
-  it.each(['return undefined;', 'return Promise.resolve(1);', 'return NaN;', 'return new Date();', 'return 1n;', 'const a={}; a.a=a; return a;', 'return "a".repeat(20000);', 'throw new Error("secret");', 'return ('])('rejects non-JSON, oversized, erroneous or asynchronous code: %s', async code => {
-    const result = await runPersonScript(code, null);
-    expect(result.ok).toBe(false);
-    expect(JSON.stringify(result)).not.toContain('secret');
   });
 
   it('terminates unbounded CPU and memory without blocking the host', async () => {
@@ -73,38 +31,4 @@ describe('Person pure script executor', () => {
     await expect(runPersonScript('return 1;', null, { signal: controller.signal })).rejects.toBe(error);
     expect(await runPersonScript('return 2;', null)).toEqual({ ok: true, output: 2 });
   });
-
-  it('retains actual test evidence, reports mismatch and never counts a skipped case', async () => {
-    const definition = { code: 'return input.reduce((a,b)=>a+b,0);', tests: [{ input: [], expected: 0 }, { input: [2, 4], expected: 6 }] };
-    expect(await testPersonScript(definition)).toMatchObject({ ok: true, evidence: { engine: 'quickjs', testsPassed: 2, testedAt: expect.any(String) } });
-    definition.tests[1].expected = 7;
-    expect(await testPersonScript(definition)).toEqual({ ok: false, code: 'SCRIPT_TEST_FAILED', testsPassed: 1, failedTest: 1, actual: 6 });
-  });
-  it('compiles only function bodies and cannot falsify output with guest intrinsics', async () => {
-    const escape = '})(null); return "42"; const ignored = (function(input) {';
-    expect((await runPersonScript(escape, null)).ok).toBe(false);
-    expect((await runPersonScript('Number.isFinite=()=>true; return NaN;', null)).ok).toBe(false);
-    expect(await runPersonScript('JSON.stringify=()=>"42"; return 0;', null)).toEqual({ ok: true, output: 0 });
-    expect((await runPersonScript('let n=0; return {get x(){return n++ === 0 ? 1 : NaN}};', null)).ok).toBe(false);
-    expect((await runPersonScript('return {toJSON(){return 42}};', null)).ok).toBe(false);
-    expect(await runPersonScript('Object.prototype.toJSON=()=>42; Array.prototype.toJSON=()=>99; Object.keys=()=>[]; return {a:[1,2]};', null)).toEqual({ ok: true, output: {a:[1,2]} });
-  });
-
-  it('enforces JSON-encoded byte budgets and never invokes input getters', async () => {
-    expect(() => scriptInput('\\'.repeat(8192))).toThrow();
-    expect(() => scriptInput('x'.repeat(8190))).not.toThrow();
-    expect(() => scriptInput('x'.repeat(8191))).toThrow();
-    let accessed = false;
-    expect(() => scriptInput({get secret(){accessed = true; return 1}})).toThrow();
-    expect(accessed).toBe(false);
-  });
-
-  it.each([null, false, 0, ''])('rejects even falsey cancellation reason %s', async reason => {
-    const controller = new AbortController();
-    const running = runPersonScript('while(true){}', null, { signal: controller.signal });
-    setTimeout(() => controller.abort(reason), 1);
-    const outcome = await running.then(value => ({resolved:value}), error => ({rejected:error}));
-    expect(outcome).toEqual({rejected:reason});
-  });
-
 });

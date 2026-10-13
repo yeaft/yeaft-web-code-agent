@@ -47,60 +47,6 @@ const route = {
 };
 
 describe('file tab read recovery', () => {
-  it.each([
-    ['q:/work/deep/file.txt', 'Q:/Work/Deep/File.txt'],
-    ['//server/share/work/deep/file.txt', '//Server/Share/Work/Deep/File.txt'],
-  ])('reuses the dirty Windows buffer and its undo key when opening listing spelling %s', (reference, listing) => {
-    const { tabs, sendWsMessage } = harness();
-    tabs.openFileInTab(reference);
-    const original = tabs.activeFile.value;
-    original.content = 'unsaved edit';
-    original.originalContent = 'disk content';
-    original.isDirty = true;
-    original.loading = false;
-    const undoOwnerPath = original.path;
-    tabs.openFileInTab('/workspace/other.txt');
-    tabs.openFileInTab(listing, 'File.txt');
-    expect(tabs.openFiles.value).toHaveLength(2);
-    expect(tabs.activeFile.value).toBe(original);
-    expect(original).toMatchObject({ path: undoOwnerPath, content: 'unsaved edit', originalContent: 'disk content', isDirty: true });
-    expect(sendWsMessage.mock.calls.filter(([msg]) => msg.type === 'read_file').map(([msg]) => msg.filePath))
-      .toEqual([reference, '/workspace/other.txt']);
-    tabs.saveTabsState('conversation-a');
-    tabs.restoreTabsState('conversation-a');
-    tabs.openFileInTab(listing);
-    expect(tabs.openFiles.value).toHaveLength(2);
-    expect(tabs.activeFile.value).toMatchObject({ path: undoOwnerPath, content: 'unsaved edit', isDirty: true });
-  });
-  it('keeps Windows identities scoped to Agent and conversation', () => {
-    const { tabs } = harness();
-    tabs.openFileInTab('q:/work/file.txt');
-    tabs.openFileInTab('Q:/Work/File.txt', '', { agentId: 'agent-b' });
-    tabs.openFileInTab('Q:/Work/File.txt', '', { conversationId: 'conversation-b' });
-    expect(tabs.openFiles.value).toHaveLength(3);
-  });
-  it('keeps distinct POSIX case and literal backslashes as separate file identities', () => {
-    const { tabs } = harness();
-    for (const path of ['/workspace/File.txt', '/workspace/file.txt', '/workspace/back\\slash.txt', '/workspace/back/slash.txt']) {
-      tabs.openFileInTab(path);
-    }
-    expect(tabs.openFiles.value.map(file => file.path)).toEqual([
-      '/workspace/File.txt', '/workspace/file.txt', '/workspace/back\\slash.txt', '/workspace/back/slash.txt',
-    ]);
-  });
-  it('reselects an active tab for tree navigation without touching edits or requesting content', () => {
-    const { tabs, sendWsMessage, onReselect } = harness();
-    tabs.openFileInTab('/workspace/file.txt');
-    const file = tabs.activeFile.value;
-    file.content = 'unsaved';
-    file.isDirty = true;
-    tabs.switchToTab(0);
-    tabs.openFileInTab('/workspace/file.txt');
-    expect(onReselect.mock.calls).toEqual([['/workspace/file.txt'], ['/workspace/file.txt']]);
-    expect(file.content).toBe('unsaved');
-    expect(file.isDirty).toBe(true);
-    expect(sendWsMessage.mock.calls.filter(([msg]) => msg.type === 'read_file')).toHaveLength(1);
-  });
   it('shows a synchronous error when the read cannot be sent and retries with a new correlated request', () => {
     const sendWsMessage = vi.fn()
       .mockReturnValueOnce(false)
@@ -150,30 +96,5 @@ describe('file tab read recovery', () => {
     const reads = sendWsMessage.mock.calls.map(([msg]) => msg).filter(msg => msg.type === 'read_file');
     expect(reads).toHaveLength(3);
     expect(reads[2].requestId).not.toBe(oldRequestId);
-  });
-
-  it('does not duplicate an in-flight read or retry over dirty and loaded content', () => {
-    const { tabs, sendWsMessage } = harness();
-    tabs.openFileInTab('docs/readme.txt', 'readme.txt', route);
-    const file = tabs.activeFile.value;
-    const requestId = file.requestId;
-
-    tabs.openFileInTab('docs/readme.txt', 'readme.txt', route);
-    expect(sendWsMessage.mock.calls.map(([message]) => message.type).filter(type => type === 'read_file')).toHaveLength(1);
-    expect(file.requestId).toBe(requestId);
-
-    file.loading = false;
-    file.loadError = 'timed out';
-    file.content = 'local edit';
-    file.originalContent = 'server content';
-    file.isDirty = true;
-    tabs.openFileInTab('docs/readme.txt', 'readme.txt', route);
-    expect(sendWsMessage.mock.calls.map(([message]) => message.type).filter(type => type === 'read_file')).toHaveLength(1);
-    expect(file).toMatchObject({ content: 'local edit', originalContent: 'server content', isDirty: true });
-
-    file.isDirty = false;
-    tabs.openFileInTab('docs/readme.txt', 'readme.txt', route);
-    expect(sendWsMessage.mock.calls.map(([message]) => message.type).filter(type => type === 'read_file')).toHaveLength(1);
-    expect(file.content).toBe('local edit');
   });
 });

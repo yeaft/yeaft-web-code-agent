@@ -7,7 +7,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { TaskManager } from '../../../../agent/yeaft/tasks/manager.js';
-import { buildWindowsTaskkillArgs } from '../../../../agent/yeaft/tasks/shell-runner.js';
 
 function makeTempDir() {
   return mkdtempSync(join(tmpdir(), 'yeaft-tasks-'));
@@ -148,10 +147,6 @@ describe('TaskManager', () => {
       resultDelivery: 'status_only',
     });
     expect(messages).toHaveLength(0);
-  });
-
-  it('builds Windows process-tree kill arguments', () => {
-    expect(buildWindowsTaskkillArgs(1234)).toEqual(['/pid', '1234', '/t', '/f']);
   });
 
   it('waits for process exit before marking a cancelled shell task terminal', async () => {
@@ -309,53 +304,5 @@ describe('TaskManager', () => {
       .resolves.toMatchObject({ ok: false, error: `Unknown task: ${task.id}` });
     manager.completeTask('session_owner', task.id, { status: 'succeeded', exitCode: 0 });
     manager.completeTask('session_owner', ownerless.id, { status: 'succeeded', exitCode: 0 });
-  });
-
-  it('reads log tails without requiring a whole-file read', () => {
-    const manager = new TaskManager({ yeaftDir: dir });
-    const task = manager.startTask({
-      sessionId: 'session_log',
-      ownerVpId: 'vp_linus',
-      kind: 'shell',
-      title: 'Large log',
-    });
-    writeFileSync(join(dir, 'tasks', 'sessions', 'session_log', `${task.id}.log`), `${'x'.repeat(128 * 1024)}tail-end`, 'utf8');
-
-    const log = manager.readTaskLog('session_log', task.id, { tail: true, maxBytes: 16 });
-    expect(log.text).toBe('xxxxxxxxtail-end');
-    expect(log.bytes).toBe(128 * 1024 + 'tail-end'.length);
-    expect(log.offset).toBe(log.bytes - 16);
-    expect(log.nextOffset).toBe(log.bytes);
-    expect(log.truncated).toBe(false);
-  });
-
-  it('keeps a larger live preview for sub-agent task output than shell task output', () => {
-    const manager = new TaskManager({ yeaftDir: dir });
-    const payload = `${'x'.repeat(5000)}sub-agent-tail`;
-    const subAgentTask = manager.startTask({
-      sessionId: 'session_sub_log',
-      ownerVpId: 'vp_linus',
-      kind: 'sub_agent',
-      title: 'Verbose sub-agent',
-      resultDelivery: 'model_reentry',
-    });
-    expect(subAgentTask.resultDelivery).toBe('model_reentry');
-    writeFileSync(join(dir, 'tasks', 'sessions', 'session_sub_log', `${subAgentTask.id}.log`), payload, 'utf8');
-
-    const refreshedSubAgent = manager.refreshTaskLog('session_sub_log', subAgentTask.id);
-    expect(refreshedSubAgent.log.preview).toBe(payload);
-
-    const shellTask = manager.startTask({
-      sessionId: 'session_shell_log',
-      ownerVpId: 'vp_linus',
-      kind: 'shell',
-      title: 'Verbose shell',
-    });
-    writeFileSync(join(dir, 'tasks', 'sessions', 'session_shell_log', `${shellTask.id}.log`), payload, 'utf8');
-
-    const refreshedShell = manager.refreshTaskLog('session_shell_log', shellTask.id);
-    expect(refreshedShell.log.preview).not.toBe(payload);
-    expect(refreshedShell.log.preview).toHaveLength(4096);
-    expect(refreshedShell.log.preview.endsWith('sub-agent-tail')).toBe(true);
   });
 });

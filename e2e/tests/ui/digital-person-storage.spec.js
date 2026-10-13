@@ -2,6 +2,7 @@ import { expect } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
 import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
@@ -19,6 +20,9 @@ test('Person SQLite native tool and script evidence persist through relay and re
   const requests = [];
   const requestedModels = [];
   const adapter = { async *stream(params) {
+    // Give relay, snapshot polling and native worker callbacks the same I/O
+    // boundary a real provider supplies instead of draining only microtasks.
+    await setImmediate();
     calls++;
     const input = personInput(params);
     requests.push(input);
@@ -117,9 +121,10 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(calls).toBe(13);
     await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
-    await expect(page.locator('#person-thoughts')).toContainText('Learned a reusable sum; result 12.');
-    await page.locator('.person-thought-evidence > summary').click();
-    await expect(page.locator('.person-thought-evidence')).toContainText('Script.sum');
+    const learnedThought = page.locator('#person-thoughts .person-thought').first();
+    await expect(learnedThought).toContainText('Learned a reusable sum; result 12.');
+    await learnedThought.locator('.person-thought-evidence > summary').click();
+    await expect(learnedThought).toContainText('Script.sum');
     await bridge.close(); bridge = makeBridge();
     await page.reload();
     await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);

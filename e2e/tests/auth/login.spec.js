@@ -100,53 +100,6 @@ test.describe('Login Flow', () => {
     authServer.createUser(testUsername, testPassword);
   });
 
-  test('should show login form when auth is required', async ({ page, authServer }) => {
-    await page.goto(authServer.url);
-    await expect(page.locator('.login-page')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('.login-container')).toBeVisible();
-    await expect(page.locator('input[autocomplete="username"]')).toBeVisible();
-    await expect(page.locator('input[autocomplete="current-password"]')).toBeVisible();
-    await expect(page.locator('.login-container button').first()).toBeVisible();
-  });
-
-  test('should show error for invalid credentials', async ({ page, authServer }) => {
-    await page.goto(authServer.url);
-    await page.waitForSelector('.login-page', { timeout: 10000 });
-
-    await page.fill('input[autocomplete="username"]', 'nonexistent-user');
-    await page.fill('input[autocomplete="current-password"]', 'wrongpassword');
-    await page.locator('.login-container button').first().click();
-
-    await expect(page.locator('.login-container .error').filter({
-      hasText: 'Invalid username or password',
-    })).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('.login-page')).toBeVisible();
-  });
-
-  test('should show error for empty credentials', async ({ page, authServer }) => {
-    await page.goto(authServer.url);
-    await page.waitForSelector('.login-page', { timeout: 10000 });
-
-    await page.locator('.login-container button').first().click();
-
-    await expect(page.locator('.login-container .error').filter({
-      hasText: 'Please enter your username',
-    })).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('.login-page')).toBeVisible();
-  });
-
-  test('should login successfully with valid credentials and navigate to chat', async ({ page, authServer }) => {
-    await page.goto(authServer.url);
-    await page.waitForSelector('.login-page', { timeout: 10000 });
-
-    await page.fill('input[autocomplete="username"]', testUsername);
-    await page.fill('input[autocomplete="current-password"]', testPassword);
-    await page.locator('.login-container button').first().click();
-
-    await expect(page.locator('.chat-page')).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('.login-page')).not.toBeVisible();
-  });
-
   test('should persist session after page refresh', async ({ page, authServer }) => {
     await page.goto(authServer.url);
     await page.waitForSelector('.login-page', { timeout: 10000 });

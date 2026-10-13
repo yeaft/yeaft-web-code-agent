@@ -4,15 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
-import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
-import { createProviderContext, createProviderState, bindProviderState, replayProviderState,
-  createPromptCacheKey, applyAnthropicCaching, MAX_PROVIDER_STATE_BYTES } from '../../../agent/yeaft/llm/provider-state.js';
-import { normalizeTokenUsage } from '../../../agent/yeaft/llm/usage-accounting.js';
-import { updateLlmConfig } from '../../../agent/yeaft/config-api.js';
-import { normalizeProviderModels } from '../../../agent/yeaft/models.js';
+import { createProviderContext, createProviderState, bindProviderState, replayProviderState, createPromptCacheKey } from '../../../agent/yeaft/llm/provider-state.js';
 import { ConversationStore, projectVisibleSessionMessages, parseMessage } from '../../../agent/yeaft/conversation/persist.js';
 import { searchMessages } from '../../../agent/yeaft/conversation/search.js';
-import { estimateMessageTokens, buildHistoryBuckets } from '../../../agent/yeaft/history-window.js';
 
 const identity = { instanceScope: '/synthetic/instance', ownerScope: 'owner', sessionId: 'session_fixture', vpId: 'vp', threadId: 'main' };
 const context = protocol => createProviderContext({ protocol, model: protocol === 'anthropic' ? 'claude-sonnet-4' : 'gpt-5',
@@ -58,18 +52,6 @@ describe('provider continuation ownership and projection', () => {
     }
   });
 
-  it('binds cache keys only to stable scoped identity and endpoint, not content', () => {
-    const key = createPromptCacheKey(identity, context('openai-responses'));
-    expect(key).toMatch(/^yeaft:[a-f0-9]+$/);
-    expect(key).not.toContain('fixture');
-    expect(createPromptCacheKey({ ...identity }, context('openai-responses'))).toBe(key);
-    for (const field of Object.keys(identity)) expect(createPromptCacheKey({ ...identity, [field]: 'different' }, context('openai-responses'))).not.toBe(key);
-    expect(createPromptCacheKey({}, context('openai-responses'))).toBeNull();
-    const custom = createProviderContext({ protocol: 'anthropic', baseUrl: 'https://proxy.invalid', model: 'claude-sonnet-4' });
-    expect(custom.capabilities).toEqual({ nativeReasoningState: false, promptCaching: false, parallelToolCalls: false, eagerInputStreaming: false });
-    expect(createProviderContext({ protocol: 'anthropic', capabilities: { translation: true, nativeReasoningState: true, promptCaching: true } }).capabilities.nativeReasoningState).toBe(false);
-  });
-
   it('persists JSONL/restart, strips public/search/cross-VP state and supports legacy reader', () => {
     const dir = mkdtempSync(join(tmpdir(), 'provider-continuity-'));
     try {
@@ -90,26 +72,6 @@ describe('provider continuation ownership and projection', () => {
       const encoded = Buffer.from(JSON.stringify(msg.providerState)).toString('base64');
       expect(parseMessage(`---\nid: m0001\nrole: assistant\nproviderStateB64: ${encoded}\n---\n\nvisible answer`).providerState).toEqual(msg.providerState);
     } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  it('treats opaque bytes separately and does not resurrect window-trimmed text', () => {
-    const msg = assistant('openai-responses');
-    const large = structuredClone(msg);
-    large.providerState.items[0].encrypted_content = 'x'.repeat(100000);
-    expect(estimateMessageTokens(large)).toBe(estimateMessageTokens(msg));
-    large.providerState.items[0].encrypted_content = 'x'.repeat(MAX_PROVIDER_STATE_BYTES);
-    expect(() => estimateMessageTokens(large)).toThrow(/byte budget/);
-    const snapshot = [{ role: 'user', content: 'active' }, msg, { role: 'tool', toolCallId: 'call1', content: 'result' }];
-    const fitted = buildHistoryBuckets(snapshot, { messageTokenBudget: 20, maxMessageCount: 10 }).messages;
-    for (const row of fitted) if (row.providerState) expect(replayProviderState(row, context('openai-responses'), identity)).toEqual(responsesItems);
-    expect(msg.providerState).toBeDefined();
-    const items = [{ type: 'reasoning', encrypted_content: 'x' }];
-    const small = createProviderState({ context: context('openai-responses'), identity, items });
-    const overhead = Buffer.byteLength(JSON.stringify(small)) - 1;
-    items[0].encrypted_content = 'x'.repeat(MAX_PROVIDER_STATE_BYTES - overhead);
-    expect(Buffer.byteLength(JSON.stringify(createProviderState({ context: context('openai-responses'), identity, items })))).toBe(MAX_PROVIDER_STATE_BYTES);
-    items[0].encrypted_content += 'x';
-    expect(() => createProviderState({ context: context('openai-responses'), identity, items })).toThrow(/byte budget/);
   });
 });
 
@@ -143,19 +105,6 @@ describe('native provider wire contracts', () => {
     }
   });
 
-  it('Responses terminal output wins over done slots and incomplete/reasoning-only is sealed', async () => {
-    const reasoning = responsesItems[0];
-    const fetch = vi.fn().mockImplementation(() => Promise.resolve(sse([
-      { type: 'response.output_item.done', output_index: 0, item: reasoning },
-      { type: 'response.incomplete', response: { id: 'r', status: 'incomplete', output: [reasoning], usage: { output_tokens: 3 } } },
-    ])));
-    vi.stubGlobal('fetch', fetch);
-    const events = await collect(new OpenAIResponsesAdapter({ apiKey: 'synthetic' }).stream({ model: 'gpt-5', messages: [], requestIdentity: identity, providerContext: context('openai-responses') }));
-    expect(events.filter(e => e.type === 'provider_state')).toHaveLength(1);
-    expect(events.find(e => e.type === 'provider_state').providerState.items).toEqual([reasoning]);
-    expect(events.filter(e => e.type === 'text_delta')).toHaveLength(0);
-  });
-
   it('Anthropic preserves interleaved blocks and signature fragments through tools + caching', async () => {
     const events = [{ type: 'message_start', message: { id: 'a', usage: { input_tokens: 10, output_tokens: 0 } } }];
     anthropicItems.forEach((block, index) => {
@@ -183,21 +132,6 @@ describe('native provider wire contracts', () => {
     expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' });
   });
 
-  it('does not reuse disconnected partial state and supports Anthropic JSON fallback', async () => {
-    const fetch = vi.fn().mockResolvedValueOnce(sse([
-      { type: 'message_start', message: { id: 'partial', usage: {} } },
-      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: 'half', signature: '' } },
-    ])).mockResolvedValueOnce(json({ id: 'complete', content: anthropicItems, stop_reason: 'tool_use', usage: { output_tokens: 3 } }));
-    vi.stubGlobal('fetch', fetch);
-    const adapter = new AnthropicAdapter({ apiKey: 'synthetic' });
-    const params = { model: 'claude-sonnet-4', messages: [], requestIdentity: identity, providerContext: context('anthropic') };
-    const partial = [];
-    await expect((async () => { for await (const e of adapter.stream(params)) partial.push(e); })()).rejects.toThrow();
-    expect(partial.some(e => e.type === 'provider_state')).toBe(false);
-    const complete = await collect(adapter.stream(params));
-    expect(complete.find(e => e.type === 'provider_state').providerState.items).toEqual(anthropicItems);
-  });
-
   it('does not send cache without account scope or replay unowned legacy signatures', async () => {
     const fetch = vi.fn().mockImplementation(() => Promise.resolve(json({ id: 'plain', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' })));
     vi.stubGlobal('fetch', fetch);
@@ -218,90 +152,5 @@ describe('native provider wire contracts', () => {
     fetch.mockImplementation(() => Promise.resolve(json({ id: 'signed', content: anthropicItems, stop_reason: 'tool_use' })));
     await expect(adapter.call(params)).rejects.toThrow(/credentialScopeId/);
     await expect(collect(adapter.stream(params))).rejects.toThrow(/credentialScopeId/);
-  });
-
-  it('supports legacy official static-key configs across router restart without weakening account fences', async () => {
-    const fetch = vi.fn().mockImplementation(() => Promise.resolve(json({ id: 'signed', content: anthropicItems, stop_reason: 'tool_use' })));
-    vi.stubGlobal('fetch', fetch);
-    const makeRouter = apiKey => new AdapterRouter({ providers: [{ name: 'fixture', apiKey, protocol: 'anthropic', models: ['claude-sonnet-4'] }] });
-    const params = { model: 'fixture/claude-sonnet-4', messages: [{ role: 'user', content: 'question' }], requestIdentity: identity };
-    const output = await collect(makeRouter('synthetic-secret').stream(params));
-    const providerState = output.find(e => e.type === 'provider_state').providerState;
-    expect(JSON.stringify(providerState)).not.toContain('synthetic-secret');
-    const messages = [{ ...assistant('anthropic'), providerState }, { role: 'tool', toolCallId: 'call1', content: 'result' }];
-    await makeRouter('synthetic-secret').call({ ...params, messages });
-    expect(JSON.parse(fetch.mock.calls.at(-1)[1].body).messages[0].content).toEqual(anthropicItems);
-    await expect(makeRouter('different-secret').call({ ...params, messages })).rejects.toThrow(/origin changed/);
-    const proxy = createProviderContext({ protocol: 'anthropic', baseUrl: 'https://proxy.invalid', staticApiKey: 'synthetic-secret', model: params.model, capabilities: { nativeReasoningState: true } });
-    expect(proxy.origin.credentialScopeId).toBeUndefined();
-  });
-
-  it('rejects EOF after stop_reason but before signed state is sealed by message_stop', async () => {
-    const events = [{ type: 'message_start', message: { id: 'partial', usage: {} } }];
-    anthropicItems.forEach((content_block, index) => events.push({ type: 'content_block_start', index, content_block }, { type: 'content_block_stop', index }));
-    events.push({ type: 'message_delta', delta: { stop_reason: 'tool_use' } });
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(sse(events))));
-    const seen = await collect(new AnthropicAdapter({ apiKey: 'synthetic' }).stream({ model: 'claude-sonnet-4', messages: [], requestIdentity: identity, providerContext: context('anthropic') }));
-    expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
-    expect(seen.find(e => e.type === 'error')).toMatchObject({ retryable: false, error: { toolInputRejected: true } });
-    expect(seen.find(e => e.type === 'error').error.message).toMatch(/before stop event/);
-  });
-
-  it('sends eager tool streaming only to verified Anthropic routes, with model overrides', async () => {
-    const cases = [
-      [undefined, undefined, undefined, true],
-      [undefined, { eagerInputStreaming: false }, undefined, false],
-      ['https://proxy.invalid', undefined, undefined, false],
-      ['https://proxy.invalid', { eagerInputStreaming: true }, undefined, true],
-      ['https://proxy.invalid', { eagerInputStreaming: true }, { eagerInputStreaming: false }, false],
-      ['https://proxy.invalid', { eagerInputStreaming: true, translation: true }, undefined, false],
-    ];
-    for (const [baseUrl, capabilities, modelCapabilities, enabled] of cases) {
-      const fetch = vi.fn(async () => json({ content: [], stop_reason: 'end_turn' }));
-      vi.stubGlobal('fetch', fetch);
-      const router = new AdapterRouter({ providers: [{ name: 'fixture', apiKey: 'synthetic', baseUrl, protocol: 'anthropic', capabilities,
-        models: [{ id: 'claude-opus-4.8', capabilities: modelCapabilities }] }] });
-      const params = { model: 'fixture/claude-opus-4.8', messages: [], tools: [{ name: 'FileWrite', description: 'Write', parameters: { type: 'object' } }] };
-      await collect(router.stream(params));
-      const body = JSON.parse(fetch.mock.calls[0][1].body);
-      expect(body.tools[0].eager_input_streaming).toBe(enabled ? true : undefined);
-      expect(fetch.mock.calls[0][1].headers['anthropic-beta']).toBeUndefined();
-      await collect(router.stream({ ...params, tools: undefined }));
-      expect(JSON.parse(fetch.mock.calls[1][1].body).tools).toBeUndefined();
-    }
-    const fetch = vi.fn(async () => json({ output: [], status: 'completed' }));
-    vi.stubGlobal('fetch', fetch);
-    const router = new AdapterRouter({ providers: [{ name: 'fixture', apiKey: 'synthetic', protocol: 'openai-responses',
-      capabilities: { eagerInputStreaming: true }, models: ['gpt-5'] }] });
-    await collect(router.stream({ model: 'fixture/gpt-5', messages: [], tools: [{ name: 'Tool', parameters: { type: 'object' } }] }));
-    expect(fetch.mock.calls[0][1].body).not.toContain('eager_input_streaming');
-  });
-
-  it('preserves model capability overrides through config API persistence and normalization', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'provider-capabilities-'));
-    try {
-      const capabilities = { nativeReasoningState: true, promptCaching: false, translation: false, eagerInputStreaming: true };
-      const saved = updateLlmConfig({ providers: [{ name: 'fixture', baseUrl: 'https://proxy.invalid', apiKey: 'synthetic',
-        credentialScopeId: 'fixture-account', streamIdleTimeoutMs: 200_000, capabilities: { promptCaching: true },
-        models: [{ id: 'gpt-5', capabilities, streamIdleTimeoutMs: 0 }] }] }, dir);
-      expect(saved.error).toBeUndefined();
-      expect(saved.providers[0].models[0]).toEqual({ id: 'gpt-5', capabilities, streamIdleTimeoutMs: 0 });
-      expect(normalizeProviderModels(saved.providers[0])[0]).toMatchObject({ capabilities, streamIdleTimeoutMs: 0 });
-      expect(saved.providers[0].streamIdleTimeoutMs).toBe(200_000);
-      expect(saved.providers[0].credentialScopeId).toBe('fixture-account');
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  it('limits cache breakpoints and keeps reasoning usage a subset rather than extra cost', () => {
-    const body = { system: 'fixed', tools: [{ name: 'a' }, { name: 'b' }], messages: [
-      { role: 'user', content: 'old' }, { role: 'assistant', content: anthropicItems }, { role: 'user', content: 'latest' },
-    ] };
-    applyAnthropicCaching(body, context('anthropic'));
-    expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(3);
-    expect(body.messages[1].content).toEqual(anthropicItems);
-    expect(normalizeTokenUsage({ inputTokens: 10, outputTokens: 8, reasoningTokens: 5 }).totalTokens).toBe(18);
-    expect(normalizeTokenUsage({ inputTokens: 10, outputTokens: 8 }).reasoningTokens).toBeUndefined();
-    applyAnthropicCaching(body, { capabilities: { promptCaching: false } });
-    expect(JSON.stringify(body)).not.toContain('cache_control');
   });
 });

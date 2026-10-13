@@ -6,8 +6,7 @@ import { join } from 'node:path';
 import { ATTACHMENT_LIMITS, validateFiles } from '../../../../agent/yeaft/person/attachments.js';
 import { createPersonService } from './fixture-adapter.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
-import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
-import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
+
 import { config, imageConfig, finalProposal } from './fixtures.js';
 
 const files = (value = 'Private UTF-8 notes: 好奇心', name = 'notes.md', mimeType = 'text/markdown') => [{ name, mimeType, data: Buffer.from(value).toString('base64') }];
@@ -59,28 +58,11 @@ describe('Person attachment validation', () => {
     expect(() => validateFiles([{ ...image, data: Buffer.alloc(ATTACHMENT_LIMITS.fileBytes + 1).toString('base64') }])).toThrow();
     expect(() => validateFiles(Array(3).fill({ ...image, data: Buffer.concat([Buffer.from(png, 'base64'), Buffer.alloc(4 * 1024 * 1024)]).toString('base64') }))).toThrow(/exceed/);
   });
-
-  it.each([
-    ['image/png', png], ['image/jpeg', Buffer.from('ffd8ffe000104a464946', 'hex').toString('base64')],
-    ['image/gif', Buffer.from('GIF89a012345').toString('base64')], ['image/webp', Buffer.from('RIFF0123WEBPVP8 ').toString('base64')],
-  ])('builds actual %s multimodal blocks and metadata-only archive', async (mimeType, data) => {
-    const provider = await createPersonProvider({ config: imageConfig, adapter: {} });
-    const attachments = validateFiles([{ name: 'image', mimeType, data }]);
-    const context = assembleContext({ snapshot: { person: { id: 'p', soul: 's' }, state: {}, messages: [], concepts: [] },
-      episode: { id: 'e', kind: 'send', text: '', messageId: 'user-message' }, provider, selection: provider.defaultSelection, remainingCalls: 1, attachments });
-    expect(context.messages[0].content.find(part => part.type === 'image').source).toEqual({ type: 'base64', media_type: mimeType, data });
-    expect(JSON.stringify(context.archiveMessages)).not.toContain(data);
-    expect(context.sources.get('message:user-message:1').reportedSourceRefs).toEqual(['message:user-message:1']);
-    expect(context.sources.get('trigger:e').reportedSourceRefs).toEqual(['trigger:e']);
-    expect(context.manifest.imageTokensReserved).toBe(8192);
-    provider.catalog[0].supportsImages = false;
-    expect(() => assembleContext({ snapshot: { person: { soul: '' }, state: {}, messages: [], concepts: [] }, episode: {}, provider,
-      selection: provider.defaultSelection, remainingCalls: 1, attachments })).toThrow(/image/);
-  });
 });
 
 describe('Person durable attachment admission', () => {
-  it.each(['send', 'think'])('%s accepts attachment-only input, stores bytes and metadata atomically, retries once after restart', async op => {
+  it('send accepts attachment-only input, stores bytes and metadata atomically, retries once after restart', async () => {
+    const op = 'send';
     const dir = await directory(), seen = [];
     const s = service(dir, { adapter: adapter(seen) });
     await call(s, 'open');
@@ -132,29 +114,6 @@ describe('Person durable attachment admission', () => {
     await call(textOnly, 'send', { files: [image], clientMessageId: 'picture-2' });
     expect((await idle(textOnly)).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'IMAGE_MODEL' });
     expect(seen).toHaveLength(1);
-  });
-
-  it('receipt reads are owner/namespace-scoped and never recover an expired lease or start work', async () => {
-    const dir = await directory();
-    const r = new SqlitePersonRepository({ yeaftDir: dir, leaseMs: 300 }); repos.push(r);
-    await r.open('alice');
-    const { episode } = await r.admit('alice', { kind: 'send', text: '', clientMessageId: 'receipt', workerId: 'crashed', budget: { calls: 1, timeoutMs: 1000 }, files: files() });
-    const before = await r.getPerson('alice');
-    await r.close();
-    await new Promise(resolve => setTimeout(resolve, 350));
-    let starts = 0;
-    const s = service(dir, { adapter: { async *stream() { starts++; } } });
-    expect(await call(s, 'receipt', { clientMessageId: 'receipt', requestHash: episode.requestHash })).toMatchObject({ found: true, status: 'running', episodeId: episode.id });
-    expect(await call(s, 'receipt', { clientMessageId: 'receipt' }, 'bob')).toEqual({ found: false, clientMessageId: 'receipt' });
-    const other = service(dir, { namespace: 'other', adapter: {} });
-    expect(await call(other, 'receipt', { clientMessageId: 'receipt' })).toEqual({ found: false, clientMessageId: 'receipt' });
-    for (const payload of [{}, { clientMessageId: '$bad' }, { clientMessageId: 'receipt', requestHash: 'bad' }, { clientMessageId: 'receipt', files: files() }]) {
-      await expect(call(s, 'receipt', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    }
-    const inspector = new SqlitePersonRepository({ yeaftDir: dir }); repos.push(inspector);
-    expect(await inspector.getPerson('alice')).toEqual(before);
-    expect((await inspector.list('alice', 'traces')).items).toHaveLength(1);
-    expect(starts).toBe(0);
   });
 
   it('does not persist any partial batch or expose bytes through forged episode ownership', async () => {

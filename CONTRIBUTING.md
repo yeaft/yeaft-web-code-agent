@@ -31,7 +31,7 @@ npm test
 npm run test:e2e
 ```
 
-Vitest and Playwright cover server, agent, frontend, Yeaft engine, provider routing, and integration scenarios.
+Vitest and Playwright cover server, agent, frontend, Yeaft engine, provider routing, and integration scenarios. The curated baseline is 450 Vitest + 50 browser logical cases. `npm run test:budget` collects both full test trees (including skipped and parameterized cases) and rejects missing/unreviewed files or an exceeded budget. Add independent critical regressions by replacing redundant coverage or reviewing a small increase; do not hide tests or combine unrelated scenarios just to reduce the count. See [the curation policy](docs/notes/2026-10-13-test-suite-curation.md).
 
 ## Building Frontend
 

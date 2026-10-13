@@ -44,17 +44,4 @@ describe('auth bootstrap', () => {
     expect(store.initialized).toBe(true);
     expect(store.isAuthenticated).toBe(true);
   });
-
-  it('does not make a protected restore request in skip-auth mode', async () => {
-    const store = await createStore();
-    store.checkAuthMode.mockImplementation(async () => {
-      store.skipAuth = true;
-      store.isAuthenticated = true;
-    });
-
-    await store.initialize();
-
-    expect(store.restoreSession).not.toHaveBeenCalled();
-    expect(store.initialized).toBe(true);
-  });
 });

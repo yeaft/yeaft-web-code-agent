@@ -254,7 +254,7 @@ npm run build            # production Web assets
 npm run docs:build       # bilingual VitePress site
 ```
 
-At this revision, the core manifest contains 49 Vitest files / 499 listed tests, and the E2E tree contains 11 Playwright spec files. These counts are descriptive, not a compatibility promise.
+The reviewed baseline is 500 logical test cases: 450 Vitest unit/integration cases and 50 Playwright browser cases. `npm run test:budget` collects both complete test trees, including parameterized and skipped cases; repeated browser-project executions count once. No retired cases are kept in a hidden suite. Add focused coverage for new behavior, replacing redundant cases or explicitly reviewing a small budget increase. See [the curation policy](docs/notes/2026-10-13-test-suite-curation.md) for priorities and tradeoffs.
 
 The repository uses ES modules, Node.js 22.5+, plain JavaScript with JSDoc, Vue 3 + Pinia, Express + `ws`, SQLite, esbuild, Vitest, Playwright, and VitePress.
 

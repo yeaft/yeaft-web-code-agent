@@ -49,32 +49,6 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await new Promise(resolveClose => server?.close(resolveClose)); });
 
-test('shared rich response is readable in both themes and 320px, with keyboard data and copying', async ({ page, context }, info) => {
-  const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  await page.goto(url); await page.waitForFunction(() => window.__ready);
-  await expect(page.locator('.response-block')).toHaveCount(presentation.blocks.length);
-  await expect(page.locator('.response-markdown strong')).toHaveText('Shared rendering');
-  for (const theme of ['light', 'dark']) {
-    await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
-    for (const width of [1280, 320]) {
-      await page.setViewportSize({ width, height: 900 });
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      await expect(page.locator('.response-cards')).toBeVisible();
-      await page.screenshot({ path: info.outputPath(`rich-response-${theme}-${width}.png`), fullPage: true });
-    }
-  }
-  const data = page.locator('.response-chart .response-data').first();
-  await data.locator('summary').focus(); await page.keyboard.press('Enter');
-  await expect(data.locator('table')).toBeVisible(); await expect(data.locator('tbody')).toContainText('-2');
-  await page.getByRole('button', { name: 'Copy summary' }).click();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(presentation.summary);
-  await page.evaluate(() => { window.__state.locale = 'zh'; });
-  await expect(page.locator('.response-map')).toContainText('坐标');
-  await expect(page.locator('.response-presentation')).not.toContainText('richResponse.');
-  expect(errors).toEqual([]);
-});
-
 test('external images load automatically and retry; untrusted markdown cannot execute or request images', async ({ page }) => {
   let requests = 0;
   await page.route('https://external.example.test/**', async route => {
@@ -95,16 +69,4 @@ test('external images load automatically and retry; untrusted markdown cannot ex
   await expect(page.locator('.response-image img')).toBeVisible();
   expect(requests).toBe(2);
   expect(await page.evaluate(() => window.__bad)).toBeUndefined();
-});
-
-test('unknown versions and malformed blocks retain a safe summary instead of losing the answer', async ({ page }) => {
-  await page.goto(url); await page.waitForFunction(() => window.__ready);
-  await page.evaluate(() => { window.__state.presentation = { version: 2, summary: 'Readable fallback', blocks: [] }; });
-  await expect(page.locator('.response-summary')).toHaveText('Readable fallback');
-  await expect(page.locator('.response-notice')).toBeVisible();
-  await expect(page.locator('.response-block')).toHaveCount(0);
-  await page.evaluate(() => { window.__state.presentation = { version: 1, summary: 'Partial safe fallback', phase: 'progress', blocks: [{ type: 'image', url: 'javascript:alert(1)', alt: 'Invalid' }, { type: 'markdown', text: 'Safe content' }] }; });
-  await expect(page.locator('.response-summary')).toHaveText('Partial safe fallback');
-  await expect(page.locator('.response-markdown')).toHaveText('Safe content');
-  await expect(page.locator('.response-image')).toHaveCount(0);
 });

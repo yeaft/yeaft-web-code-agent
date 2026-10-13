@@ -167,7 +167,7 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 | `npm run build` | 生产前端 bundle。 |
 | `npm run docs:build` | VitePress 文档构建。 |
 
-`vitest.config.js` 的核心文件由 `scripts/test-suite-manifest.mjs` 管理；任意 `test/**/*` 使用 `vitest.focus.config.js`。裸 `npx vitest run` 不代替项目门禁。
+`scripts/test-suite-manifest.mjs` 列出全部保留的 Vitest 和 Playwright 文件；`npm run test:budget` 收集两个完整目录的运行时逻辑用例，计入参数展开与 skip，不因默认清单或 project 重复执行改变计数。精简基线合计 500（Vitest 450 + Playwright 50）；新功能先替换冗余覆盖，确有关键风险时可通过审查小幅上调预算，不将无关场景塞入一个测试绕过数量。`vitest.config.js` 运行全部保留的 Vitest 文件；聚焦开发使用 `vitest.focus.config.js`。裸 `npx vitest run` 不代替项目门禁。
 
 代码改动的基线是相关 focused tests + `npm test`；Agent / Server 增加 syntax / release guard，前端增加 build，真实浏览器路径增加对应 E2E。提交前包含 `git diff --check`，验证记录对应实际执行命令与结果。
 
