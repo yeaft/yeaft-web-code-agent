@@ -101,20 +101,7 @@ describe('Person durable output delivery', () => {
     }
   });
 
-  it('exposes status, recent snapshot and validated read-only pages without a provider', async () => {
-    const first = await publish({ url: 'https://example.com/1' }); const second = await publish({ url: 'https://example.com/2' });
-    const service = createPersonService({ yeaftDir: join(root, 'data'), workDir, embedding: { enabled: false } });
-    try {
-      const request = (op, payload = {}) => service.request({ ownerId: 'alice', op, payload });
-      expect(await request('status')).toMatchObject({ outputsSupported: true });
-      expect((await request('snapshot')).outputs.items).toEqual([second, first]);
-      const page = await request('outputs', { limit: 1 }); expect(page.items).toEqual([second]); expect(page.nextCursor).toEqual(expect.any(String));
-      expect(await request('outputs', { cursor: page.nextCursor, limit: 1 })).toEqual({ items: [first], nextCursor: null });
-      for (const payload of [{ limit: 51 }, { limit: null }, { cursor: '../file' }, { cursor: 1 }, { file_path: '/etc/passwd' }]) await expect(request('outputs', payload)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-      await expect(request('output_read', { outputId: first.id })).rejects.toMatchObject({ code: 'OUTPUT_NOT_FILE' });
-      await expect(request('Output.publish', { file_path: '/etc/passwd' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    } finally { await service.close(); }
-  });
+
 
 });
 

@@ -36,20 +36,21 @@ function transaction(fn) {
   try { const result = fn(); db.exec('COMMIT'); return result; }
   catch (error) { db.exec('ROLLBACK'); throw error; }
 }
-function open() {
+async function open() {
   if (db) return;
   mkdirSync(path.join(yeaftDir, 'person'), { recursive: true, mode: 0o700 });
-  db = new DatabaseSync(path.join(yeaftDir, 'person', 'recall.db'));
-  try {
-    // Some supported early Node 22 builds omit FTS5. Keep authority usable and
-    // report an explicit literal-only fallback; never start a model on this path.
-    db.exec('CREATE VIRTUAL TABLE temp.person_fts_probe USING fts5(terms); DROP TABLE temp.person_fts_probe;');
-  } catch (error) {
-    db.close(); db = null;
-    if (/no such module: fts5/i.test(error.message)) error.code = 'FTS_UNAVAILABLE';
-    throw error;
-  }
-  db.exec(`PRAGMA busy_timeout=2000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+  // Concurrent cold controllers may race on the WAL/schema transition. Retry
+  // only initialization, never a journal apply or an external effect. A failed
+  // connection must not be mistaken for a fully initialized projection.
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    db = new DatabaseSync(path.join(yeaftDir, 'person', 'recall.db'));
+    try {
+      db.exec('PRAGMA busy_timeout=2000;');
+      // Some supported early Node 22 builds omit FTS5. Keep authority usable and
+      // report an explicit literal-only fallback; never start a model on this path.
+      db.exec('CREATE VIRTUAL TABLE temp.person_fts_probe USING fts5(terms); DROP TABLE temp.person_fts_probe;');
+      db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
     CREATE TABLE IF NOT EXISTS spaces(namespace TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS checkpoints(namespace TEXT NOT NULL, owner TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(namespace,owner));
     CREATE TABLE IF NOT EXISTS chunks(
@@ -63,6 +64,15 @@ function open() {
       INSERT INTO chunk_fts(rowid,terms) VALUES (new.rowid,new.terms); END;
     CREATE TRIGGER IF NOT EXISTS chunks_delete AFTER DELETE ON chunks BEGIN
       INSERT INTO chunk_fts(chunk_fts,rowid,terms) VALUES ('delete',old.rowid,old.terms); END;`);
+      return;
+    } catch (error) {
+      db.close(); db = null;
+      if (/no such module: fts5/i.test(error.message)) error.code = 'FTS_UNAVAILABLE';
+      const busy = error.errcode === 5 || error.errcode === 6;
+      if (!busy || Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
 }
 function ensureSpace() {
   transaction(() => {
@@ -202,7 +212,7 @@ async function search(owner, kind, query) {
 async function dispatch({ op, owner, ...args }) {
   if (op === 'close') { await embedder?.close?.(); db?.close(); db = null; return null; }
   if (typeof owner !== 'string' || !owner.length) throw new Error('invalid_owner');
-  open();
+  await open();
   if (op === 'checkpoint') { ensureSpace(); return checkpoint(owner); }
   assertSpace();
   if (op === 'apply') return apply(owner, args.items, args.lastSeq);
