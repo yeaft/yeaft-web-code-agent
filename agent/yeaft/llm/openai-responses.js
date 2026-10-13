@@ -34,6 +34,7 @@ import {
   classifyPolicyError,
   LLMContextError,
   LLMServerError,
+  LLMToolInputError,
   LLMAbortError,
   classifyFetchError,
   retryAfterFromResponse,
@@ -72,6 +73,44 @@ function thinkingV1Enabled() {
  */
 function effortForResponses(effort) {
   return mapEffortToOpenAIReasoning(effort);
+}
+
+// Never turn malformed/missing wire arguments into an executable empty object.
+function parseToolInput(argumentsJson) {
+  let input;
+  try {
+    if (typeof argumentsJson !== 'string') throw new Error();
+    input = JSON.parse(argumentsJson);
+  } catch {
+    throw new LLMToolInputError('OpenAI returned invalid or incomplete tool input');
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new LLMToolInputError('OpenAI returned non-object tool input');
+  }
+  return input;
+}
+
+// Match the bounded UnifiedToolCall identity accepted by the provider collector.
+// The Responses item.id is not a call_id and must never substitute for one.
+function validateToolCallId(id) {
+  if (typeof id !== 'string' || !id.trim() || id.length > 256) {
+    throw new LLMToolInputError('OpenAI returned invalid tool call identity');
+  }
+  return id;
+}
+
+function projectToolCalls(items, incomplete = false) {
+  const calls = [];
+  const ids = new Set();
+  for (const item of items) {
+    if (item?.type !== 'function_call') continue;
+    const id = validateToolCallId(item.call_id);
+    if (ids.has(id)) throw new LLMToolInputError('OpenAI returned duplicate tool call identity');
+    ids.add(id);
+    if (incomplete || item.status === 'incomplete') throw new LLMToolInputError('OpenAI tool response was truncated');
+    calls.push({ type: 'tool_call', id, name: item.name || '', input: parseToolInput(item.arguments) });
+  }
+  return calls;
 }
 
 export class OpenAIResponsesAdapter extends LLMAdapter {
@@ -355,15 +394,26 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     if (response.headers?.get('content-type')?.includes('application/json')) {
       const result = await response.json();
       const items = Array.isArray(result.output) ? result.output : [];
+      if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
+      let calls;
+      try {
+        calls = projectToolCalls(items, result.status === 'incomplete');
+      } catch (error) {
+        if (!(error instanceof LLMToolInputError)) throw error;
+        const usage = result.usage || {};
+        yield { type: 'usage', reportedTokenFields: reportedUsageFields(result.usage, 'openai-responses'), usageIncomplete: !hasUsageCounts(result.usage),
+          inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0,
+          cacheReadTokens: usage.input_tokens_details?.cached_tokens || 0, cacheWriteTokens: 0,
+          cacheTokensAreIncludedInInput: true, ...reasoningUsage(usage, 'openai-responses') };
+        yield { type: 'error', error, retryable: false };
+        return;
+      }
       for (const item of items) {
-        if (item.type === 'message') {
+        if (item?.type === 'message') {
           for (const part of item.content || []) if (part.type === 'output_text') yield { type: 'text_delta', text: part.text };
-        } else if (item.type === 'function_call') {
-          let input = {};
-          try { input = JSON.parse(item.arguments); } catch { /* legacy projection */ }
-          yield { type: 'tool_call', id: item.call_id, name: item.name, input };
         }
       }
+      for (const call of calls) yield call;
       if (['completed', 'incomplete'].includes(result.status)) {
         const state = createProviderState({ context, identity: requestIdentity, items, responseId: result.id });
         if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
@@ -389,10 +439,27 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     /** Accumulate tool call arguments by output_index.
      *  Value: { callId, name, arguments } */
     const toolCallAccum = new Map();
-    /** call_ids already emitted as tool_call events (to avoid duplicating on completed fallback). */
-    const emittedToolCallIds = new Set();
+    // Hold calls by raw output slot, never by call_id: sibling IDs must be
+    // validated before any merge can overwrite or skip an executable call.
+    const completedToolCalls = new Map();
+    const toolSlotIds = new Map();
+    const toolIdSlots = new Map();
+    const registerToolSlot = (index, id) => {
+      validateToolCallId(id);
+      if (!Number.isSafeInteger(index) || index < 0
+        || (toolSlotIds.has(index) && toolSlotIds.get(index) !== id)
+        || (toolIdSlots.has(id) && toolIdSlots.get(id) !== index)) {
+        throw new LLMToolInputError('OpenAI returned inconsistent tool call identity');
+      }
+      toolSlotIds.set(index, id);
+      toolIdSlots.set(id, index);
+    };
+    let toolInputError = null;
+    let malformedStream = false;
     let sawToolCall = false;
     const completedItems = new Map();
+    const hasToolItems = () => toolCallAccum.size > 0 || completedToolCalls.size > 0
+      || [...completedItems.values()].some(item => item?.type === 'function_call');
     let emittedText = false;
 
     // Keep raw SSE chunks only until the engine receives the bounded exchange
@@ -404,7 +471,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     let sawTerminalEvent = false;
 
     try {
-      while (true) {
+      while (!sawTerminalEvent) {
         const { done, value } = await readStreamChunkWithIdleTimeout(reader, {
           signal,
           idleMs,
@@ -425,28 +492,49 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           if (!data) continue;
           if (data === '[DONE]') continue;
 
+          if (signal?.aborted) throw new LLMAbortError();
+          if (sawTerminalEvent) continue;
           let event;
           try {
             event = JSON.parse(data);
           } catch {
+            // Drain to the native boundary for usage, but never publish tools
+            // after losing a possible argument delta. Text-only failures retain
+            // the ordinary provider-error contract.
+            malformedStream = true;
             continue;
           }
 
-          const type = event.type;
+          const type = event?.type;
 
-          if (signal?.aborted) throw new LLMAbortError();
-          if (sawTerminalEvent) continue;
           if (type === 'response.output_item.done') {
-            if (Number.isInteger(event.output_index) && event.item) completedItems.set(event.output_index, event.item);
+            const item = event.item;
+            const idx = event.output_index;
+            if (item?.type === 'function_call') {
+              try {
+                registerToolSlot(idx, item.call_id);
+                const [call] = projectToolCalls([item]);
+                completedToolCalls.set(idx, call);
+                toolCallAccum.delete(idx);
+              } catch (error) {
+                toolInputError = error;
+              }
+            }
+            if (Number.isSafeInteger(idx) && idx >= 0 && item) completedItems.set(idx, item);
           } else if (type === 'response.output_item.added') {
             const item = event.item;
             const idx = event.output_index;
             if (item?.type === 'function_call') {
-              toolCallAccum.set(idx, {
-                callId: item.call_id || item.id || '',
-                name: item.name || '',
-                arguments: '',
-              });
+              try {
+                registerToolSlot(idx, item.call_id);
+                toolCallAccum.set(idx, {
+                  callId: item.call_id,
+                  name: item.name || '',
+                  arguments: '',
+                });
+              } catch (error) {
+                toolInputError = error;
+              }
             }
           } else if (type === 'response.output_text.delta') {
             if (typeof event.delta === 'string' && event.delta.length > 0) {
@@ -456,7 +544,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           } else if (type === 'response.function_call_arguments.delta') {
             const idx = event.output_index;
             const accum = toolCallAccum.get(idx);
-            if (accum && typeof event.delta === 'string' && event.delta.length > 0) {
+            if (!accum || typeof event.delta !== 'string') {
+              toolInputError = new LLMToolInputError('OpenAI returned invalid or incomplete tool input');
+            } else if (event.delta.length > 0) {
               accum.arguments += event.delta;
               yield { type: 'provider_activity' };
             }
@@ -468,61 +558,56 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           } else if (type === 'response.function_call_arguments.done') {
             const idx = event.output_index;
             const accum = toolCallAccum.get(idx);
-            if (accum) {
-              // Prefer the .done event's authoritative arguments string if present
-              const argsStr = typeof event.arguments === 'string' ? event.arguments : accum.arguments;
-              let parsed = {};
-              try {
-                parsed = argsStr ? JSON.parse(argsStr) : {};
-              } catch {
-                parsed = {};
-              }
-              if (accum.callId && !emittedToolCallIds.has(accum.callId)) {
-                emittedToolCallIds.add(accum.callId);
-                sawToolCall = true;
-                yield {
-                  type: 'tool_call',
-                  id: accum.callId,
-                  name: accum.name,
-                  input: parsed,
-                };
-              }
-              toolCallAccum.delete(idx);
+            // Validate even an untracked done slot: a valid terminal projection
+            // must not hide a malformed sibling whose added event was omitted.
+            const argsStr = event.arguments === undefined ? accum?.arguments : event.arguments;
+            try {
+              const input = parseToolInput(argsStr);
+              registerToolSlot(idx, accum?.callId);
+              completedToolCalls.set(idx, { type: 'tool_call', id: accum.callId, name: accum.name, input });
+            } catch (error) {
+              // Drain through final usage before rejecting every sibling.
+              toolInputError = error;
             }
+            toolCallAccum.delete(idx);
           } else if (type === 'response.completed' || type === 'response.incomplete') {
             sawTerminalEvent = true;
             const respObj = event.response || {};
 
             // Fallback: flush any function_call items in the final output that we
             // didn't see a .done event for (defensive against partial streams).
-            const outputArr = Array.isArray(respObj.output) ? respObj.output : [...completedItems].sort(([a], [b]) => a - b).map(([, item]) => item);
+            const outputSlots = Array.isArray(respObj.output)
+              ? [...respObj.output.entries()] : [...completedItems].sort(([a], [b]) => a - b);
+            const outputArr = outputSlots.map(([, item]) => item);
             if (!emittedText) {
               for (const item of outputArr) if (item?.type === 'message') {
                 for (const part of item.content || []) if (part?.type === 'output_text') yield { type: 'text_delta', text: part.text };
               }
             }
-            for (const item of outputArr) {
-              if (item?.type !== 'function_call') continue;
-              const cid = item.call_id || item.id || '';
-              if (!cid || emittedToolCallIds.has(cid)) continue;
-              let parsed = {};
-              try {
-                parsed = item.arguments ? JSON.parse(item.arguments) : {};
-              } catch {
-                parsed = {};
+            try {
+              // Validate all completed slots, even if a gateway omits a sibling
+              // from its final output projection.
+              projectToolCalls([...completedItems.values()]);
+              const calls = projectToolCalls(outputArr, type === 'response.incomplete' || respObj.status === 'incomplete');
+              // Register every raw terminal slot before merging. A repeated
+              // representation of the same slot is allowed; sibling reuse and
+              // identity changes are not. Keep fallback output_index values.
+              const toolSlots = outputSlots.filter(([, item]) => item?.type === 'function_call');
+              for (const [idx, item] of toolSlots) registerToolSlot(idx, item.call_id);
+              for (let i = 0; i < calls.length; i++) {
+                const [idx] = toolSlots[i];
+                completedToolCalls.set(idx, calls[i]);
+                // Terminal output can finish this slot missing arguments.done.
+                toolCallAccum.delete(idx);
               }
-              emittedToolCallIds.add(cid);
-              sawToolCall = true;
-              yield {
-                type: 'tool_call',
-                id: cid,
-                name: item.name || '',
-                input: parsed,
-              };
+              if (toolCallAccum.size > 0) throw new LLMToolInputError('OpenAI stream ended with incomplete tool arguments');
+              if ((type === 'response.incomplete' || respObj.status === 'incomplete') && completedToolCalls.size > 0) {
+                throw new LLMToolInputError('OpenAI tool response was truncated');
+              }
+            } catch (error) {
+              if (!(error instanceof LLMToolInputError)) throw error;
+              toolInputError = error;
             }
-
-            const state = createProviderState({ context, identity: requestIdentity, items: outputArr, responseId: respObj.id });
-            if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
 
             // Usage
             const usage = respObj.usage || {};
@@ -538,6 +623,22 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               ...reasoningUsage(usage, 'openai-responses'),
             };
 
+            if (malformedStream) {
+              if (toolInputError || hasToolItems()) {
+                toolInputError = new LLMToolInputError('OpenAI returned a malformed tool stream');
+              } else throw new LLMServerError('OpenAI returned a malformed stream event', 0);
+            }
+            if (toolInputError) {
+              yield { type: 'error', error: toolInputError, retryable: false };
+              return;
+            }
+            const state = createProviderState({ context, identity: requestIdentity, items: outputArr, responseId: respObj.id });
+            // Completion events may arrive out of order; dispatch in model output order.
+            for (const [, call] of [...completedToolCalls].sort(([a], [b]) => a - b)) {
+              sawToolCall = true;
+              yield call;
+            }
+            if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
             yield {
               type: 'stop',
               stopReason: this.#mapStopReason(respObj, sawToolCall),
@@ -552,17 +653,33 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             const message = errObj.message || event.message || `${type}: ${code}`;
             const failure = new Error(message);
             failure.code = code;
-            yield { type: 'error', error: failure, retryable: false };
+            const rejected = toolInputError || (malformedStream && hasToolItems()
+              ? new LLMToolInputError('OpenAI returned a malformed tool stream') : null);
+            yield { type: 'error', error: rejected || failure, retryable: false };
+            return;
           }
           // Other semantic events (output_item.done, content_part.added, etc.) are ignored.
         }
       }
+      if (toolInputError) throw toolInputError;
+      if (malformedStream && !sawTerminalEvent && !hasToolItems()) {
+        throw new LLMServerError('OpenAI returned a malformed stream event', 0);
+      }
       if (!sawTerminalEvent) {
+        if (hasToolItems()) {
+          throw new LLMToolInputError('OpenAI tool stream ended before terminal event');
+        }
         throw new LLMServerError('OpenAI stream ended before terminal event', 0);
       }
     } catch (err) {
-      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
+      // A transport failure while draining an already rejected batch must not
+      // turn argument correction into an automatic request replay.
+      if (err instanceof LLMToolInputError) yield { type: 'error', error: err, retryable: false };
+      else if (!signal?.aborted && (toolInputError || (malformedStream && hasToolItems()))) {
+        yield { type: 'error', error: toolInputError || new LLMToolInputError('OpenAI returned a malformed tool stream'), retryable: false };
+      } else throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
     } finally {
+      try { Promise.resolve(reader.cancel()).catch(() => {}); } catch { /* best-effort */ }
       try { reader.releaseLock(); } catch { /* noop */ }
       // Emit raw exchange after stream completes (or errors). Body is the
       // verbatim SSE — never truncated. Parity with anthropic.js.
@@ -648,6 +765,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
 
     const result = await response.json();
+    projectToolCalls(Array.isArray(result.output) ? result.output : [], result.status === 'incomplete');
 
     // Prefer the `output_text` convenience field; fall back to output[].content[].text
     let text = '';

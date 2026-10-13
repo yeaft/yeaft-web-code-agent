@@ -1997,7 +1997,8 @@ describe('provider inactivity watchdog', () => {
       for (const Adapter of [AnthropicAdapter, OpenAIResponsesAdapter]) {
         const { ctrl, onTimeout, watchdog, hctx } = makeHandler(windowMs);
         let source;
-        const body = new ReadableStream({ start(controller) { source = controller; } });
+        const cancel = vi.fn();
+        const body = new ReadableStream({ start(controller) { source = controller; }, cancel });
         const push = event => source.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
         vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, headers: new Headers(), body })));
         const output = [];
@@ -2046,7 +2047,7 @@ describe('provider inactivity watchdog', () => {
         expect(ctrl.signal.aborted).toBe(true);
         push(delta('late'));
         expect(await pump).toMatchObject({ name: 'LLMAbortError' });
-        if (!anthropic) source.close(); // Anthropic now cancels the reader on abort.
+        expect(cancel).toHaveBeenCalledTimes(1); // Both providers cancel their reader on abort.
         watchdog.touch(); watchdog.reset();
         expect(vi.getTimerCount()).toBe(0);
       }

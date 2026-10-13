@@ -167,6 +167,10 @@ function completeShape(value) {
     && (value.next === null || (isRecord(value.next) && hasText(value.next.reason)));
 }
 
+// New execution steps are not cognition, even if their text looks like JSON.
+// Unknown explicit protocols fail closed; absent protocol remains the legacy reader.
+const cognitionOutput = trace => trace.output?.protocol == null || trace.output.protocol === 'cognition';
+
 function outputProjection(trace) {
   const output = isRecord(trace.output) ? trace.output : {};
   const { parsed, value } = parse(output.text);
@@ -242,7 +246,7 @@ export function projectPersonThoughts(traces) {
       const outcome = outcomes.get(key) || new Set();
       outcome.add(trace.kind); outcomes.set(key, outcome);
     }
-    if (['call_output', 'call_failed'].includes(trace.kind)) {
+    if (['call_output', 'call_failed'].includes(trace.kind) && cognitionOutput(trace)) {
       const projection = outputProjection(trace);
       // This map deduplicates only rendered content, not the presence of raw output.
       if (key) outputs.set(key, [...(outputs.get(key) || []), ...projection.sections]);
@@ -274,9 +278,11 @@ export function projectPersonThoughts(traces) {
       addText(sections, kind, trace.trigger.text);
       add(trace, kind, 'recorded', sections);
     } else if (trace.kind === 'call_started') {
+      if (trace.manifest?.protocol === 'native-tool-loop') continue;
       const sections = contextSections(trace);
       if (sections.length) add(trace, 'context', 'recorded', sections);
     } else if (trace.kind === 'call_output' || trace.kind === 'call_failed') {
+      if (!cognitionOutput(trace)) continue;
       const { sections, incomplete } = outputProjection(trace);
       add(trace, 'thought', statusFor(trace, incomplete), sections);
     } else if (trace.kind === 'activity') {

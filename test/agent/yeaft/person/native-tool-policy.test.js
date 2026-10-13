@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPersonToolHost, NATIVE_TOOL_IDS } from '../../../../agent/yeaft/person/native-tools.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { config } from './fixtures.js';
 
 const dirs = [], services = [];

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { DatabaseSync } from 'node:sqlite';
 import { collectOutput, createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
@@ -97,9 +97,12 @@ describe('Person real SQLite runtime integration', () => {
     const messages = await call(s, 'messages');
     expect(messages.items[0].text).toBe(reply);
     expect((await call(s, 'search', { query: '文' })).items[0].text).toBe(reply);
-    const output = (await call(s, 'traces')).items.find(trace => trace.kind === 'call_output');
+    const outputs = (await call(s, 'traces')).items.filter(trace => trace.kind === 'call_output');
+    expect(outputs).toHaveLength(2);
+    const output = outputs.find(trace => trace.output.protocol === 'cognition');
     expect(JSON.parse(output.output.text).reply).toBe(reply);
     expect(output.output.bytes).toBeGreaterThan(65536);
+    expect(outputs.find(trace => trace.output.protocol === 'native-tools').output).toMatchObject({ text: reply, complete: true, stopReason: 'end_turn', bytes: Buffer.byteLength(reply) });
     await s.close();
     const reopened = create(namespace, adapterFor(() => { throw new Error('Reads must not infer'); }), { config: largeConfig });
     expect((await call(reopened, 'messages')).items[0].text).toBe(reply);
@@ -173,27 +176,66 @@ describe('Person real SQLite runtime integration', () => {
     await expect(r.heartbeat(episode)).rejects.toMatchObject({ code: 'STALE' });
   });
 
-  it.each([100000, 32768])('runtime delivers progress then final output through real SQLite with a %i model window', async contextWindow => {
+  it.each([100000, 32768])('delivers native progress/final output only when full schemas fit a %i model window', async contextWindow => {
     const namespace = `progress-runtime-${contextWindow}`, progress = candidate();
     if (contextWindow === 32768) progress.reply = 'x'.repeat(8192);
+    const nativeConfig = { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow })) };
     let count = 0, resolveStarted, releaseFirst, resolveSecond, releaseSecond;
     const firstStarted = new Promise(r => { resolveStarted = r; });
     const secondStarted = new Promise(r => { resolveSecond = r; });
     const firstWait = new Promise(r => { releaseFirst = r; });
     const secondWait = new Promise(r => { releaseSecond = r; });
-    const s = create(namespace, adapterFor(async context => {
-      if (++count === 1) { resolveStarted(); await firstWait; return progress; }
-      expect(context.feedback).toMatchObject({ minIntervalMs: 30000, maxIntervalMs: 60000, lastReply: progress.reply.slice(0, 512) });
-      expect(context.previousProposal.reply).toBe(progress.reply);
-      resolveSecond(); await secondWait; const p = finalProposal(); p.reply = 'Final conclusion.'; return p;
-    }), { config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow })) } });
-    await call(s, 'open'); const admitted = await call(s, 'send', { text: 'Investigate.', clientMessageId: 'one' });
+    const s = create(namespace, { async *stream(params) {
+      count++;
+      const context = JSON.parse(params.messages[0].content);
+      if (count === 1) {
+        expect(params.tools.length).toBeGreaterThan(0);
+        expect(context.previousProposal).toBeNull();
+        resolveStarted(); await firstWait;
+        yield { type: 'text_delta', text: progress.reply };
+        yield { type: 'tool_call', id: 'progress-read', name: 'catalog__search', input: { query: 'remaining evidence' } };
+        yield { type: 'stop', stopReason: 'tool_use' }; return;
+      }
+      if (count === 2) {
+        expect(params.tools.length).toBeGreaterThan(0);
+        expect(params.messages.find(m => m.role === 'assistant').content).toBe(progress.reply);
+        expect(params.messages.find(m => m.role === 'tool').toolCallId).toBe('progress-read');
+        expect(context.previousProposal).toBeNull(); // No cognition between native tools.
+        resolveSecond(); await secondWait;
+        yield { type: 'text_delta', text: 'Final conclusion.' };
+      } else {
+        expect(params.tools).toEqual([]);
+        const instruction = JSON.parse(params.messages.at(-1).content);
+        expect(instruction).toMatchObject({ phase: 'final-cognition', executionDelivery: { alreadyPublished: true } });
+        const p = finalProposal(); p.reply = null;
+        yield { type: 'text_delta', text: JSON.stringify(p) };
+      }
+      yield { type: 'stop', stopReason: 'end_turn' };
+    } }, { config: nativeConfig, nativeFixture: false });
+    await call(s, 'open');
+    if (contextWindow === 32768) {
+      expect(await call(s, 'status')).toMatchObject({ modelReady: false, storageReady: true, availableModels: [], effectiveModelCandidates: [] });
+      await call(s, 'send', { text: 'Investigate.', clientMessageId: 'one' });
+      const snapshot = await waitIdle(s);
+      expect(snapshot.latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'MODEL_UNAVAILABLE' });
+      expect(snapshot.state.version).toBe(0); expect(snapshot.concepts).toHaveLength(0);
+      expect(snapshot.messages.map(m => m.role)).toEqual(['user']);
+      expect(count).toBe(0);
+      expect((await call(s, 'turns')).items[0].calls).toEqual([]);
+      return;
+    }
+    expect(await call(s, 'status')).toMatchObject({ modelReady: true });
+    const admitted = await call(s, 'send', { text: 'Investigate.', clientMessageId: 'one' });
     await firstStarted; ageEpisode(repo(namespace), { id: admitted.episodeId }); releaseFirst(); await secondStarted;
-    expect(await call(s, 'snapshot')).toMatchObject({ busy: true, state: { version: 0 }, messages: [expect.any(Object), expect.objectContaining({ replyKind: 'progress' })] });
+    expect(await call(s, 'snapshot')).toMatchObject({ busy: true, state: { version: 0 }, messages: [expect.any(Object), expect.objectContaining({ replyKind: 'progress', text: progress.reply })] });
     releaseSecond(); const snapshot = await waitIdle(s);
     expect(snapshot.state.version).toBe(1);
-    expect(snapshot.messages.map(m => m.replyKind)).toEqual([undefined, 'progress', 'final']);
-    expect(count).toBe(2);
+    expect(snapshot.messages.map(m => m.replyKind)).toEqual([undefined, 'progress', 'execution-final']);
+    expect(snapshot.messages.at(-1).text).toBe('Final conclusion.');
+    expect(count).toBe(3);
+    const traces = (await call(s, 'traces', { limit: 50 })).items;
+    expect(traces.filter(t => t.kind === 'activity')).toHaveLength(1);
+    expect(traces.filter(t => t.kind === 'call_started').reverse().map(t => t.manifest.phase)).toEqual(['execution', 'execution', 'cognition']);
   });
 
   it('does not abort a working episode beyond 120s; no call quota and cancellation stays bounded', async () => {
@@ -215,7 +257,7 @@ describe('Person real SQLite runtime integration', () => {
     } finally { try { controller.abort(); await work; } finally { vi.useRealTimers(); } }
   });
 
-  it('replans a truncated proposal once within the output allowance, retaining evidence and never replaying tools', async () => {
+  it('recovers truncated native output within the allowance, retaining evidence and never replaying tools', async () => {
     let count = 0, adapterError;
     const executed = vi.spyOn(PersonCapabilities.prototype, 'execute');
     const service = create('truncated-recovery', { async *stream(params) {
@@ -234,7 +276,8 @@ describe('Person real SQLite runtime integration', () => {
         else {
           expect(context.outputRecovery).toMatchObject({ code: 'OUTPUT_TRUNCATED', rejectedBeforeExecution: true });
           expect(context.capabilityResult.id).toBe('FileWrite');
-          expect(context.previousProposal.next.capability.id).toBe('catalog.view');
+          expect(context.previousProposal).not.toHaveProperty('next');
+          expect(params.messages.find(m => m.role === 'assistant').toolCalls[0]).toMatchObject({ name: 'catalog__view', input: { id: 'FileWrite' } });
           expect(JSON.stringify(context)).not.toContain('truncated-tool-payload-marker');
         }
         yield { type: 'text_delta', text: JSON.stringify(p) };
@@ -249,10 +292,12 @@ describe('Person real SQLite runtime integration', () => {
       expect(snapshot.latestEpisode.status).toBe('completed'); expect(snapshot.state.version).toBe(1);
       expect(executed.mock.calls.map(([invocation]) => invocation.id)).toEqual(['catalog.view']);
       const turn = (await call(service, 'turns')).items[0];
-      expect(turn.calls).toHaveLength(3);
+      expect(turn.calls).toHaveLength(4);
+      expect(turn.calls[3].protocol).toBe('cognition');
       expect(turn.calls[1]).toMatchObject({ status: 'failed', code: 'OUTPUT_TRUNCATED', usage: { outputTokens: 4096 } });
-      expect(turn.calls[2].selectionOrigin).toBe('output-recovery');
-      expect(turn.usage).toMatchObject({ outputTokens: 4136, inputTokens: 70 });
+      expect(turn.calls[2].selectionOrigin).toBe('bootstrap');
+      expect(turn.calls.every(c => c.requested.model === 'test/first')).toBe(true);
+      expect(turn.usage).toMatchObject({ outputTokens: 4156, inputTokens: 80 });
       const traces = (await call(service, 'traces', { limit: 50 })).items;
       expect(traces.filter(t => t.kind === 'call_failed')).toHaveLength(1);
       expect(traces.filter(t => t.kind === 'capability_started')).toHaveLength(1);
@@ -280,7 +325,8 @@ describe('Person real SQLite runtime integration', () => {
           expect(context.outputRecovery.rejectedBeforeExecution).toBe(true);
           expect(context.capabilityResult).toMatchObject({ id: 'FileWrite', ok: true, sourceRef: expect.stringMatching(/^tool:/) });
           expect(context.sourceRefs).toContain(context.capabilityResult.sourceRef);
-          expect(context.previousProposal.next.capability.id).toBe('FileWrite');
+          expect(context.previousProposal).not.toHaveProperty('next');
+          expect(params.messages.flatMap(m => m.toolCalls ?? []).filter(t => t.name === 'FileWrite')).toHaveLength(1);
           expect(JSON.stringify(context)).not.toContain('rejected-fragment-marker');
           expect(await readFile(file, 'utf8')).toBe('written-once');
         }
@@ -294,11 +340,11 @@ describe('Person real SQLite runtime integration', () => {
       if (adapterError) throw adapterError;
       expect(snapshot.latestEpisode.status).toBe('completed');
       expect(executions.mock.calls.map(([invocation]) => invocation.id)).toEqual(['catalog.view', 'FileWrite']);
-      expect((await call(service, 'turns')).items[0].calls.map(c => c.status)).toEqual(['completed', 'completed', 'failed', 'completed']);
+      expect((await call(service, 'turns')).items[0].calls.map(c => c.status)).toEqual(['completed', 'completed', 'failed', 'completed', 'completed']);
     } finally { executions.mockRestore(); }
   });
 
-  it.each([1, 4])('stops after at most one truncation recovery despite legacy maxCalls=%i, never accepting partial actions', async maxCalls => {
+  it.each([1, 4])('bounds truncation corrections despite legacy maxCalls=%i, never accepting partial actions', async maxCalls => {
     let count = 0;
     const service = create(`truncated-bounded-${maxCalls}`, { async *stream() {
       count++;
@@ -309,11 +355,14 @@ describe('Person real SQLite runtime integration', () => {
     } }, { maxCalls });
     await call(service, 'open'); await call(service, 'think', { text: '', clientMessageId: 'truncated' });
     const snapshot = await waitIdle(service);
-    expect(count).toBe(2);
+    expect(count).toBe(3); // Initial call plus the native loop's two bounded corrections.
     expect(snapshot.latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'OUTPUT_TRUNCATED' });
     expect(snapshot.state.version).toBe(0); expect(snapshot.concepts).toHaveLength(0); expect(snapshot.messages).toHaveLength(0);
     const turn = (await call(service, 'turns')).items[0];
     expect(turn.usage.outputTokens).toBe(7 * count); expect(turn.calls).toHaveLength(count);
+    const traces = (await call(service, 'traces', { limit: 50 })).items;
+    expect(traces.filter(t => t.kind === 'call_failed')).toHaveLength(count);
+    expect(traces.some(t => ['capability_started', 'activity', 'committed'].includes(t.kind))).toBe(false);
   });
 
   it('can cancel a recovery without a late commit or additional retry', async () => {
@@ -330,7 +379,7 @@ describe('Person real SQLite runtime integration', () => {
     expect(snapshot.latestEpisode.status).toBe('cancelled'); expect(snapshot.state.version).toBe(0); expect(count).toBe(2);
   });
 
-  it('admits real messages asynchronously, chooses models per call, recalls, commits concepts and survives restart', async () => {
+  it('admits real messages asynchronously, keeps the selected model fixed, recalls, commits concepts and survives restart', async () => {
     const seen = [];
     const adapter = adapterFor(async (context, params) => {
       seen.push({ context, model: params.model, effort: params.effort });
@@ -359,11 +408,12 @@ describe('Person real SQLite runtime integration', () => {
     const snapshot = await waitIdle(service);
     expect(snapshot.state.version).toBe(1); expect(snapshot.concepts).toHaveLength(2);
     expect(snapshot.messages.map(m => m.role)).toEqual(['user', 'assistant']);
-    expect(seen.map(s => [s.model, s.effort])).toEqual([['test/first', undefined], ['test/second', 'high'], ['test/first', 'low'], ['test/first', 'low']]);
+    expect(seen.map(s => [s.model, s.effort])).toEqual(Array.from({ length: 4 }, () => ['test/first', undefined]));
     expect(seen.every(s => !Object.hasOwn(s.context.budget, 'remainingCalls'))).toBe(true);
     expect(seen[3].context.capabilityResult.items[0].text).toBe('I am learning to garden.');
     const traces = (await call(service, 'traces', { limit: 50 })).items;
-    expect(traces.filter(t => t.kind === 'activity')).toHaveLength(4);
+    expect(traces.filter(t => t.kind === 'activity')).toHaveLength(1);
+    expect(traces.filter(t => t.kind === 'call_started')).toHaveLength(5);
     expect(traces.filter(t => t.kind === 'capability_result').reverse().map(t => t.capability.id)).toEqual(['catalog.search', 'catalog.view', 'Recall']);
     expect(traces[0].kind).toBe('committed');
     expect(traces.find(t => t.kind === 'call_started').request.tools).toEqual([]);
@@ -431,7 +481,7 @@ describe('Person real SQLite runtime integration', () => {
     expect(await restarted.receipt('alice', 'one')).toMatchObject({ status: 'interrupted' });
   });
 
-  it('retains previously read concept revisions and reported provenance across Recall pages without pretending to render them again', async () => {
+  it('retains read revisions and reported provenance across native Recall pages without reinjecting bootstrap concepts', async () => {
     const seen = [];
     const service = create('concept-read-set', adapterFor(context => {
       seen.push(context);
@@ -465,8 +515,11 @@ describe('Person real SQLite runtime integration', () => {
     expect(seen[3].capabilityResult.items.map(c => c.id)).toEqual(['c02', 'c03']);
     expect(seen[3].previousProposal.concepts[0].id).toBe('c00');
     const finalCall = (await call(service, 'traces', { limit: 50 })).items.find(t => t.kind === 'call_started');
+    expect(finalCall.manifest.sourceRefs).toContain('concept:c00:1');
+    const renderedPages = finalCall.request.messages.filter(m => m.role === 'tool').map(m => JSON.parse(m.content)).filter(r => r.kind === 'concepts');
+    expect(renderedPages.map(page => page.items.map(c => c.id))).toEqual([['c00', 'c01'], ['c02', 'c03']]);
+    expect(finalCall.manifest.renderedSourceRefs).toContain('concept:c00:1');
     expect(finalCall.manifest.inputDependencyRefs).toContain('concept:c00:1');
-    expect(finalCall.manifest.renderedSourceRefs).not.toContain('concept:c00:1');
   });
 
   it('refreshes a focused reported revision on every request through more than 128 distinct Recall reads', async () => {
@@ -525,7 +578,8 @@ describe('Person real SQLite runtime integration', () => {
     expect(snapshot.concepts[0]).toMatchObject({ id: 'hot', revision: 2, epistemicState: 'reported',
       sourceRefs: ['concept:hot:1'], reportedSourceRefs: roots });
     const starts = records(r, 'traces').filter(trace => trace.episodeId === episodeId && trace.kind === 'call_started');
-    expect(starts).toHaveLength(29);
+    expect(starts).toHaveLength(30);
+    expect(starts.filter(trace => trace.manifest.phase === 'cognition')).toHaveLength(1);
     expect(starts.every(trace => trace.manifest.renderedSourceRefs.includes('concept:hot:1'))).toBe(true);
   });
 
@@ -658,7 +712,7 @@ describe('Person real SQLite runtime integration', () => {
       yield { type: 'text_delta', text: JSON.stringify(finalProposal()) };
       yield { type: 'stop', stopReason: 'end_turn' };
     } };
-    const a = create(`cancel-${mode}`, adapter, { leaseMs: 1200 });
+    const a = create(`cancel-${mode}`, adapter, { leaseMs: 1200, nativeFixture: false });
     const b = create(`cancel-${mode}`, adapterFor(() => finalProposal()));
     await call(a, 'open');
     const admitted = await call(a, 'send', { text: 'cancel me', clientMessageId: 'cancel' });
@@ -819,14 +873,22 @@ describe('Person real SQLite runtime integration', () => {
       const wire = JSON.parse(body); requests.push({ path: req.url, body: wire });
       const content = wire.messages[0].content;
       const context = JSON.parse(typeof content === 'string' ? content : content[0].text);
-      const result = JSON.stringify(finalProposal(context.state.version));
+      const cognition = !wire.tools?.length;
+      const proposal = finalProposal(context.state.version); proposal.reply = null;
+      const result = cognition ? JSON.stringify(proposal) : 'Native catalog inspected.';
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       const event = (name, data) => res.write(`event: ${name}\ndata: ${JSON.stringify({ type: name, ...data })}\n\n`);
-      event('message_start', { message: { id: 'local-test', type: 'message', role: 'assistant', model: 'person-test-model', content: [], usage: { input_tokens: 20, output_tokens: 0 } } });
-      event('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
-      event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: result } });
+      event('message_start', { message: { id: `local-test-${requests.length}`, type: 'message', role: 'assistant', model: 'person-test-model', content: [], usage: { input_tokens: 20, output_tokens: 0 } } });
+      if (requests.length === 1) {
+        // Exercise the real Anthropic tool_use parser, not the legacy fixture conversion.
+        event('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'native-search', name: 'catalog__search', input: {} } });
+        event('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query: 'memory', limit: 1 }) } });
+      } else {
+        event('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
+        event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: result } });
+      }
       event('content_block_stop', { index: 0 });
-      event('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 50 } });
+      event('message_delta', { delta: { stop_reason: requests.length === 1 ? 'tool_use' : 'end_turn' }, usage: { output_tokens: 50 } });
       event('message_stop', {}); res.end();
     });
     let service;
@@ -844,8 +906,16 @@ describe('Person real SQLite runtime integration', () => {
       await call(service, 'send', { text: 'Native roundtrip.', clientMessageId: 'native' });
       const snapshot = await waitIdle(service);
       expect(snapshot.state.version).toBe(1);
-      expect(requests).toHaveLength(1); expect(requests[0].path).toBe('/v1/messages');
-      expect(requests[0].body.model).toBe('person-test-model');
+      expect(requests).toHaveLength(3);
+      expect(requests.every(request => request.path === '/v1/messages' && request.body.model === 'person-test-model')).toBe(true);
+      expect(requests.slice(0, 2).every(request => request.body.tools.some(tool => tool.name === 'catalog__search'))).toBe(true);
+      expect(requests[1].body.messages.flatMap(message => message.content).find(block => block.type === 'tool_use'))
+        .toMatchObject({ id: 'native-search', name: 'catalog__search', input: { query: 'memory', limit: 1 } });
+      expect(requests[1].body.messages.flatMap(message => message.content).find(block => block.type === 'tool_result'))
+        .toMatchObject({ tool_use_id: 'native-search' });
+      expect(requests[2].body.tools ?? []).toEqual([]);
+      expect(snapshot.messages.map(message => message.text)).toEqual(['Native roundtrip.', 'Native catalog inspected.']);
+      expect((await call(service, 'turns')).items[0].calls.map(modelCall => modelCall.protocol)).toEqual(['native-tools', 'native-tools', 'cognition']);
       expect((await readdir(yeaftDir)).sort()).toEqual(['config.json', 'person']);
       const storedFiles = await readdir(join(yeaftDir, 'person'));
       expect(storedFiles).toContain('person.db');
@@ -1150,10 +1220,10 @@ describe('Person durable turn metadata', () => {
   });
 
   it.each(['messages', 'concepts'])('records only actual rendered %s Recall results in the next call diagnostics', async kind => {
-    const inputs = [];
+    const inputs = [], requests = [];
     const adapter = { async *stream(params) {
       const input = JSON.parse(params.messages[0].content), proposal = finalProposal(input.state.version);
-      inputs.push(input); proposal.concepts = []; proposal.state.focusConceptIds = [];
+      requests.push(params); inputs.push(input); proposal.concepts = []; proposal.state.focusConceptIds = [];
       // An activity named recall is not evidence of an executed result.
       proposal.activity.kind = 'recall';
       if (inputs.length === 1) proposal.next = { model: 'test/second', effort: null, reason: 'Read actual memory.', capability: { id: 'Recall', args: { kind, limit: 2 } } };
@@ -1166,14 +1236,19 @@ describe('Person durable turn metadata', () => {
     expect(inputs[0].capabilityResult).toBeNull();
     const actual = inputs[1].capabilityResult;
     expect(actual.kind).toBe(kind);
+    const rendered = JSON.parse(requests[1].messages.find(message => message.role === 'tool').content);
+    expect(rendered).toEqual(actual);
+    expect(rendered.items.length).toBe(kind === 'messages' ? 1 : 0);
+    expect(turn.calls).toHaveLength(3);
+    expect(turn.calls.map(modelCall => modelCall.protocol)).toEqual(['native-tools', 'native-tools', 'cognition']);
     expect(turn.calls[0].contextSources.recall).toEqual({ kind: null, count: 0 });
-    expect(turn.calls[1].contextSources.recall).toEqual({ kind, count: actual.items.length });
+    expect(turn.calls[1].contextSources.recall).toEqual({ kind, count: rendered.items.length });
     expect(turn.calls[1].contextSources).toMatchObject({ recentMessages: inputs[1].messages.length, recentConcepts: inputs[1].concepts.length });
     expect(actual.items.length).toBe(kind === 'messages' ? 1 : 0);
     expect(JSON.stringify(turn)).not.toMatch(/private recall|message:|concept:|sourceRef/);
   });
 
-  it('records usage and model changes through a real multi-loop runtime', async () => {
+  it('records usage and fixed selection through native execution and one final cognition request', async () => {
     let calls = 0;
     const adapter = { async *stream(params) {
       const context = JSON.parse(params.messages[0].content), proposal = finalProposal(context.state.version);
@@ -1188,10 +1263,12 @@ describe('Person durable turn metadata', () => {
     const { service } = await turnSetup('runtime', adapter);
     await turnRequest(service, 'send', { text: 'hello', clientMessageId: 'runtime' });
     const turn = await turnIdle(service);
-    expect(turn).toMatchObject({ status: 'completed', models: ['test/first', 'test/second'], usage: { inputTokens: 40, outputTokens: 20, totalTokens: 60, complete: true } });
-    expect(turn.calls.map(call => call.index)).toEqual([1, 2]);
+    expect(turn).toMatchObject({ status: 'completed', models: ['test/first'], usage: { inputTokens: 60, outputTokens: 30, totalTokens: 90, complete: true } });
+    expect(turn.calls.map(call => call.index)).toEqual([1, 2, 3]);
     expect(turn.calls[0].capability).toEqual({ id: 'catalog.view', status: 'completed', code: null });
-    expect(turn.calls[1]).toMatchObject({ selectionOrigin: 'person', requested: { effort: 'high' }, effective: { model: null, effort: 'low' } });
+    expect(turn.calls[1]).toMatchObject({ selectionOrigin: 'bootstrap', requested: { model: 'test/first', effort: null }, effective: { model: null, effort: 'low' } });
+    expect(turn.calls[2]).toMatchObject({ protocol: 'cognition', selectionOrigin: 'bootstrap', requested: { model: 'test/first', effort: null } });
+    expect(turn.calls.map(call => call.protocol)).toEqual(['native-tools', 'native-tools', 'cognition']);
     expect(calls).toBe(2);
   });
 });

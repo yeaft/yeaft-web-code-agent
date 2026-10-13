@@ -529,7 +529,7 @@ export default {
                   <header class="person-message-meta"><strong>{{ state.person?.name || $t('person.title') }}</strong></header>
                   <section v-for="(part, index) in message.parts" :key="part.id" class="person-reply-part" :data-message-id="part.id">
                     <div class="person-reply-part-meta" :class="{ 'person-reply-divider': index > 0 }">
-                      <span v-if="part.replyKind === 'progress' || part.replyKind === 'final'" class="person-reply-kind">{{ $t(part.replyKind === 'progress' ? 'person.progressReply' : 'person.finalReply') }}</span>
+                      <span v-if="['progress', 'final', 'execution-final'].includes(part.replyKind)" class="person-reply-kind">{{ $t(part.replyKind === 'progress' ? 'person.progressReply' : 'person.finalReply') }}</span>
                       <time :datetime="datetime(part.createdAt)">{{ time(part.createdAt) }}</time>
                     </div>
                     <ResponsePresentation v-if="part.presentation" :presentation="part.presentation" :open-link="openReplyBrowser" />

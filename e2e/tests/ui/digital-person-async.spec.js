@@ -1,8 +1,9 @@
 import { expect } from '@playwright/test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from '../../fixtures/test-server.js';
+import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
 import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures.js';
@@ -13,66 +14,69 @@ test('Person runs parallel independent threads and collects background shell log
   test.setTimeout(90000);
   const dir = await mkdtemp(join(tmpdir(), 'person-async-e2e-'));
   const children = [], childRequests = [], results = [];
-  let parentCalls = 0, parallelCalls = 0, backgroundCalls = 0, inspectCalls = 0, pauseCalls = 0, taskId, release, releaseMain;
+  let parentCalls = 0, parallelCalls = 0, backgroundCalls = 0, inspectCalls = 0, pauseCalls = 0, cancelCalls = 0, taskId, release, releaseMain, releaseCancel;
   const mainGate = new Promise(resolve => { releaseMain = resolve; });
+  const cancelGate = new Promise(resolve => { releaseCancel = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
   const adapter = { async *stream(params) {
-    if (params.tools?.length) {
+    let input;
+    try { input = personInput(params); } catch {}
+    // Native child Engine requests have natural-language input, not Person triggers.
+    if (!input?.trigger) {
       childRequests.push(params);
       if (childRequests.length === 2) release();
       await gate;
       yield { type: 'text_delta', text: `Independent result ${childRequests.indexOf(params) + 1}` };
-      yield { type: 'stop', stopReason: 'end_turn' };
+      yield personStop(false);
       return;
     }
     parentCalls++;
-    const input = JSON.parse(params.messages[0].content);
-    const p = finalProposal(input.state.version);
-    p.concepts = []; p.state.focusConceptIds = [];
-    p.activity.sourceRefs = [input.trigger.ref];
-    const use = (id, args) => { p.next = { model: params.model, effort: null, reason: 'Execute scoped task.', capability: { id, args } }; };
-    if (input.trigger.text === 'Parallel work') {
-      parallelCalls++;
-      if (input.capabilityResult?.id === 'SpawnAgent' && typeof input.capabilityResult.output === 'string') children.push(JSON.parse(input.capabilityResult.output).agentId);
-      if (input.capabilityResult?.id === 'WaitAgent' && typeof input.capabilityResult.output === 'string') results.push(JSON.parse(input.capabilityResult.output).result);
-      switch (parallelCalls) {
-        case 1: use('catalog.view', { id: 'SpawnAgent' }); break;
-        case 2: use('SpawnAgent', { name: 'one', mission: 'Independent analysis one', persona: 'explorer' }); break;
-        case 3: use('SpawnAgent', { name: 'two', mission: 'Independent analysis two', persona: 'explorer' }); break;
-        case 4: use('catalog.view', { id: 'WaitAgent' }); break;
-        case 5: use('WaitAgent', { agent_id: children[0], timeout_ms: 5000 }); break;
-        case 6: use('WaitAgent', { agent_id: children[1], timeout_ms: 5000 }); break;
-        default: p.reply = results.join('; ');
+    const resultsSoFar = personToolResults(params);
+    const use = (id, args, providerId = id) => personToolCall(providerId, id, args);
+    const text = input.trigger.text;
+    if (text === 'Pause main') pauseCalls++;
+    if (text === 'Cancel main') { cancelCalls++; await cancelGate; }
+    if (!personCognition(params)) {
+      const batch = [];
+      if (text === 'Parallel work') {
+        parallelCalls++;
+        for (const r of resultsSoFar.filter(r => r.id === 'SpawnAgent')) {
+          const id = JSON.parse(r.output).agentId;
+          if (!children.includes(id)) children.push(id);
+        }
+        if (!resultsSoFar.length) batch.push(use('SpawnAgent', { name: 'one', mission: 'Independent analysis one', persona: 'explorer' }, 'spawn-one'),
+          use('SpawnAgent', { name: 'two', mission: 'Independent analysis two', persona: 'explorer' }, 'spawn-two'));
+        else if (resultsSoFar.length === 2) batch.push(use('WaitAgent', { agent_id: children[0], timeout_ms: 5000 }, 'wait-one'), use('WaitAgent', { agent_id: children[1], timeout_ms: 5000 }, 'wait-two'));
+        else results.splice(0, results.length, ...resultsSoFar.filter(r => r.id === 'WaitAgent').map(r => JSON.parse(r.output).result));
+      } else if (text === 'Background work' || text === 'Long background') {
+        backgroundCalls++;
+        if (!resultsSoFar.length) batch.push(use('Bash', {
+          command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(text === 'Long background' ? "console.log('long task ready');setInterval(()=>{},1000)" : "setTimeout(()=>console.log('durable shell result'),250)")}`, background: true,
+        }));
+        else if (text === 'Background work') taskId = resultsSoFar[0].output.match(/Started background task (\S+)\./)[1];
+      } else if (text === 'Pause main') {
+        if (pauseCalls === 1) { await mainGate; batch.push(use('Recall', { kind: 'messages' })); }
+      } else if (text === 'Cancel main') {
+        batch.push(use('FileWrite', { file_path: join(dir, 'must-not-write'), content: 'cancelled' }));
+      } else {
+        inspectCalls++;
+        if (!resultsSoFar.length) batch.push(use('WaitTask', { taskId, timeout_ms: 5000 }));
+        else if (resultsSoFar.length === 1) batch.push(use('ReadTaskLog', { taskId, offset: 0 }));
       }
-    } else if (input.trigger.text === 'Background work') {
-      backgroundCalls++;
-      if (backgroundCalls === 1) use('catalog.view', { id: 'Bash' });
-      else if (backgroundCalls === 2) use('Bash', {
-        command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setTimeout(()=>console.log('durable shell result'),250)")}`, background: true,
-      });
-      else { taskId = input.capabilityResult.output.match(/Started background task (\S+)\./)[1]; p.reply = 'Started in background.'; }
-    } else if (input.trigger.text === 'Pause main') {
-      pauseCalls++;
-      if (pauseCalls === 1) { await mainGate; use('catalog.view', { id: 'Recall' }); }
-      else p.reply = 'Resumed the same main execution.';
-    } else if (input.trigger.text === 'Long background') {
-      if (!input.capabilityResult) use('catalog.view', { id: 'Bash' });
-      else if (input.capabilityResult.args) use('Bash', {
-        command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("console.log('long task ready');setInterval(()=>{},1000)")}`, background: true,
-      });
-      else p.reply = 'Long task started.';
-    } else {
-      inspectCalls++;
-      switch (inspectCalls) {
-        case 1: use('catalog.view', { id: 'WaitTask' }); break;
-        case 2: use('WaitTask', { taskId, timeout_ms: 5000 }); break;
-        case 3: use('catalog.view', { id: 'ReadTaskLog' }); break;
-        case 4: use('ReadTaskLog', { taskId, offset: 0 }); break;
-        default: p.reply = JSON.parse(input.capabilityResult.output).text;
-      }
+      for (const event of batch) yield event;
+      if (!batch.length) yield { type: 'text_delta', text: 'Execution complete.' };
+      yield personStop(batch.length > 0);
+      return;
     }
+    const p = finalProposal(input.state.version);
+    p.concepts = []; p.state.focusConceptIds = []; p.activity.sourceRefs = [input.trigger.ref];
+    if (text === 'Parallel work') p.reply = results.join('; ');
+    else if (text === 'Background work') p.reply = 'Started in background.';
+    else if (text === 'Long background') p.reply = 'Long task started.';
+    else if (text === 'Pause main') p.reply = 'Resumed the same main execution.';
+    else p.reply = JSON.parse(resultsSoFar.at(-1).output).text;
     yield { type: 'text_delta', text: JSON.stringify(p) };
-    yield { type: 'stop', stopReason: 'end_turn' };
+    yield personStop(false);
   } };
   const bridge = createPersonBridge({ context: { agentId: mockAgent.agentId, CONFIG: { serverUrl, yeaftDir: dir, workDir: dir } },
     send: msg => mockAgent.send(msg),
@@ -147,7 +151,19 @@ test('Person runs parallel independent threads and collects background shell log
     await main.getByRole('button', { name: 'Resume', exact: true }).click();
     await expect(page.locator('.person-messages')).toContainText('Resumed the same main execution.');
     await expect(main).toContainText('No live main execution.');
-    expect(pauseCalls).toBe(2);
+    expect(pauseCalls).toBe(3);
+    await page.locator('.person-panel-header .header-action-btn').click();
+    await send('Cancel main');
+    await expect.poll(() => cancelCalls).toBe(1);
+    await page.locator('.person-thoughts-button').click();
+    await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();
+    await main.locator('[data-execution-control="cancel"]').click();
+    await expect(main).toContainText('Cancel this main execution?');
+    await main.locator('[data-execution-control="confirm-cancel"]').click();
+    releaseCancel();
+    await expect(main).toContainText('No live main execution.');
+    expect(cancelCalls).toBe(1);
+    await expect(access(join(dir, 'must-not-write'))).rejects.toMatchObject({ code: 'ENOENT' });
     beforeInspection = parentCalls;
     await page.locator('.person-panel-header .header-action-btn').click();
     await page.locator('#person-input').fill('Keep this draft');
@@ -167,7 +183,7 @@ test('Person runs parallel independent threads and collects background shell log
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   } finally {
     mockAgent._messageHandlers.splice(mockAgent._messageHandlers.indexOf(listener), 1);
-    release(); releaseMain();
+    release(); releaseMain(); releaseCancel();
     await bridge.close();
     await rm(dir, { recursive: true, force: true });
   }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { config, finalProposal } from './fixtures.js';
 import { projectPersonConversation } from '../../../../web/utils/person-conversation.js';
 
@@ -35,11 +35,11 @@ afterEach(async () => {
 });
 
 describe('Person capability lifecycle', () => {
-  it.each(['send', 'think', 'dream'])('%s can recall directly and finish in exactly two cognitive calls', async kind => {
+  it.each(['send', 'think', 'dream'])('%s can recall directly and finish with two execution calls and one cognitive call', async kind => {
     const seen = [];
     const service = create(await directory(), (input, p) => {
       seen.push(input);
-      expect(input.capabilities.active.find(m => m.id === 'Recall')).toMatchObject({ availability: { layer: 'foundation' } });
+      expect(input.nativeTools.find(m => m.name === 'Recall').parameters.required).toEqual(['kind']);
       if (!input.capabilityResult) use(p, 'Recall', { kind: 'messages' });
     });
     await call(service, 'open');
@@ -48,7 +48,7 @@ describe('Person capability lifecycle', () => {
     expect(seen).toHaveLength(2);
     const traces = (await call(service, 'traces', { limit: 50 })).items;
     expect(traces.filter(t => t.kind === 'capability_started').map(t => t.capability.id)).toEqual(['Recall']);
-    expect(traces.filter(t => t.kind === 'call_started')).toHaveLength(2);
+    expect(traces.filter(t => t.kind === 'call_started')).toHaveLength(3);
     expect(traces.find(t => t.kind === 'capability_result').capabilityManifest).toMatchObject({ id: 'Recall', version: 1, revision: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 
@@ -57,27 +57,28 @@ describe('Person capability lifecycle', () => {
     const first = create(dir, (input, p) => {
       initial.push(input);
       if (!input.capabilityResult) use(p, 'catalog.search', { query: '联想' });
-      else if (input.capabilityResult.contracts) use(p, 'Skill.associate');
+      else if (input.capabilityResult.contracts) use(p, 'Recall', { kind: 'concepts' });
     });
     await call(first, 'open');
     await call(first, 'dream', { clientMessageId: 'discover' });
     expect((await idle(first)).latestEpisode.status).toBe('completed');
     expect(initial).toHaveLength(3);
-    expect(initial[1].capabilities.active.find(c => c.id === 'Skill.associate').availability.layer).toBe('discovered');
+    expect(initial[1].nativeTools.some(c => c.name === 'Recall')).toBe(true);
     await first.close();
 
     const restored = [];
     const second = create(dir, (input, p) => {
       restored.push(input);
-      if (!input.capabilityResult) use(p, 'Skill.associate', input.trigger.text === 'fail' ? { forbidden: true } : {});
+      if (!input.capabilityResult) use(p, 'Recall', input.trigger.text === 'fail' ? { forbidden: true } : { kind: 'concepts' });
     });
     await call(second, 'open');
     await call(second, 'dream', { clientMessageId: 'reuse' });
     expect((await idle(second)).latestEpisode.status).toBe('completed');
     expect(restored).toHaveLength(2);
-    expect(restored[0].capabilities.active.find(c => c.id === 'Skill.associate')).toMatchObject({ availability: { layer: 'familiar', experience: { usefulness: 'not-evaluated', observedSuccesses: 1 } } });
+    expect((await call(second, 'traces', { limit: 50 })).items.some(t => t.kind === 'capability_result' && t.capability.id === 'Recall')).toBe(true);
     await call(second, 'think', { text: 'fail', clientMessageId: 'fail-use' });
-    expect((await idle(second)).latestEpisode.status).toBe('failed');
+    expect((await idle(second)).latestEpisode.status).toBe('completed');
+    expect((await call(second, 'traces', { limit: 50 })).items.some(t => t.result?.code === 'INVALID_TOOL_INPUT')).toBe(true);
     await second.close();
 
     const afterFailure = [];
@@ -85,18 +86,18 @@ describe('Person capability lifecycle', () => {
     await call(third, 'open');
     await call(third, 'dream', { clientMessageId: 'check-demoted' });
     expect((await idle(third)).latestEpisode.status).toBe('completed');
-    expect(afterFailure[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
+    expect(afterFailure[0].nativeTools.map(c => c.name)).toEqual(expect.arrayContaining(['Recall', 'Capability__create']));
     await call(third, 'open', {}, 'bob');
     await call(third, 'dream', { clientMessageId: 'bob' }, 'bob');
     await idle(third, 'bob');
-    expect(afterFailure[1].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
+    expect(afterFailure[1].nativeTools.map(c => c.name)).toEqual(expect.arrayContaining(['Recall', 'Capability__create']));
   });
 
   it('allows ignoring a familiar method and resting after a technically successful but unhelpful recall', async () => {
     const dir = await directory();
     const train = create(dir, (input, p) => {
       if (!input.capabilityResult) use(p, 'catalog.search', { query: '联想' });
-      else if (input.capabilityResult.contracts) use(p, 'Skill.associate');
+      else if (input.capabilityResult.contracts) use(p, 'Recall', { kind: 'concepts' });
     });
     await call(train, 'open');
     await call(train, 'dream', { clientMessageId: 'learn-method' });
@@ -106,7 +107,7 @@ describe('Person capability lifecycle', () => {
     const seen = [];
     const service = create(dir, (input, p) => {
       seen.push(input);
-      expect(input.capabilities.active.find(m => m.id === 'Skill.associate').availability.layer).toBe('familiar');
+      expect(input.nativeTools.some(m => m.name === 'Recall')).toBe(true);
       if (!input.capabilityResult) use(p, 'Recall', { kind: 'concepts', query: 'missing-experience' });
       else {
         expect(input.capabilityResult.items).toEqual([]);
@@ -123,7 +124,7 @@ describe('Person capability lifecycle', () => {
     expect(traces.filter(t => t.kind === 'capability_started').map(t => t.capability.id)).toEqual(['Recall']);
     expect(traces.find(t => t.kind === 'capability_result')).toBeDefined();
     expect(traces.find(t => t.kind === 'activity' && t.activity.kind === 'rest').decision.selfCheck).toContain('no evidence');
-    expect(seen[1].capabilities.active.find(m => m.id === 'Skill.associate').availability.experience).toMatchObject({ observedSuccesses: 1, usefulness: 'not-evaluated' });
+    expect(traces.filter(t => t.kind === 'capability_result' && t.capability.id === 'Recall')).toHaveLength(1);
   });
 
   it('records a rejected unprepared invocation without manufacturing experience', async () => {
@@ -133,15 +134,15 @@ describe('Person capability lifecycle', () => {
     await call(service, 'think', { text: '', clientMessageId: 'unprepared' });
     expect((await idle(service)).latestEpisode.status).toBe('failed');
     const traces = (await call(service, 'traces', { limit: 50 })).items;
-    const failure = traces.find(t => t.kind === 'capability_failed');
-    expect(failure).toMatchObject({ capabilityId: 'Skill.reconsider', code: 'UNSUPPORTED' });
+    const failure = traces.find(t => t.kind === 'call_failed');
+    expect(failure).toMatchObject({ code: 'INVALID_TOOL_INPUT' });
     expect(failure).not.toHaveProperty('capabilityManifest');
     await service.close();
     const seen = [];
     const next = create(dir, input => seen.push(input));
     await call(next, 'think', { text: '', clientMessageId: 'after-rejection' });
     expect((await idle(next)).latestEpisode.status).toBe('completed');
-    expect(seen[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
+    expect(seen[0].nativeTools.map(c => c.name)).toEqual(expect.arrayContaining(['Recall', 'Capability__create']));
   });
 
   it('does not turn inspection into experience or require any prepared ability to be used', async () => {
@@ -159,7 +160,7 @@ describe('Person capability lifecycle', () => {
     await call(next, 'think', { text: '', clientMessageId: 'simply-rest' });
     expect((await idle(next)).latestEpisode.status).toBe('completed');
     expect(seen).toHaveLength(1);
-    expect(seen[0].capabilities.active.map(c => c.id)).toEqual(['Think', 'Recall', 'Capability.create']);
+    expect(seen[0].nativeTools.map(c => c.name)).toEqual(expect.arrayContaining(['Recall', 'Capability__create']));
     const traces = (await call(next, 'traces', { limit: 50 })).items;
     const episodeId = (await call(next, 'snapshot')).latestEpisode.id;
     expect(traces.filter(t => t.episodeId === episodeId && t.kind === 'capability_started')).toEqual([]);
@@ -204,13 +205,13 @@ describe('Person presentation runtime', () => {
       const { service, seen } = await create((input, proposal, index) => {
         if (index === 1) use(proposal, 'catalog.view', { id: 'PresentResponse' });
         else if (index === 2) {
-          expect(input.capabilities.active.find(item => item.id === 'PresentResponse').args.properties.blocks).toBeTruthy();
+          expect(input.nativeTools.find(item => item.name === 'PresentResponse').parameters.properties.blocks).toBeTruthy();
           use(proposal, 'PresentResponse', rich); proposal.reply = rich.summary;
           proposal.state.summary = 'Candidate only, not committed during delivery.';
         } else if (index === 3) {
           expect(input.capabilityResult).toMatchObject({ published: true, phase: 'final' });
           expect(input.state.version).toBe(0);
-          expect(input.feedback.lastReply).toBe(rich.summary);
+          expect(input.capabilityResult).toMatchObject({ published: true });
           use(proposal, 'PresentResponse', rich); // Repeated model delivery is also idempotent.
         } else proposal.reply = 'A separate plain conclusion.';
       });
@@ -273,14 +274,14 @@ describe('Person presentation runtime', () => {
         if (index === 1) use(proposal, 'catalog.view', { id: 'PresentResponse' });
         else if (index === 2) use(proposal, 'PresentResponse', { ...rich, blocks: [{ type: 'script', text: 'alert(1)' }] });
         else {
-          expect(input.capabilityResult).toMatchObject({ ok: false, code: 'INVALID_REQUEST' });
+          expect(input.capabilityResult).toMatchObject({ ok: false, code: 'INVALID_TOOL_INPUT' });
           proposal.reply = 'Alpha has 2; Beta has 3. Plain answer.';
         }
       });
       await call(service, 'send', { text: 'Compare counts', clientMessageId: 'invalid-rich' });
       const snapshot = await idle(service);
       expect(snapshot.latestEpisode.status).toBe('completed');
-      expect(snapshot.messages.at(-1)).toMatchObject({ replyKind: 'final', text: 'Alpha has 2; Beta has 3. Plain answer.' });
+      expect(snapshot.messages.at(-1)).toMatchObject({ replyKind: 'execution-final', text: 'Alpha has 2; Beta has 3. Plain answer.' });
       expect(snapshot.messages.at(-1)).not.toHaveProperty('presentation');
       expect((await call(service, 'traces', { limit: 50 })).items.filter(t => t.kind === 'presentation_published')).toHaveLength(0);
     });

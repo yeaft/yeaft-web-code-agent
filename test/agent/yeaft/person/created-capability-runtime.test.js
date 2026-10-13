@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { config, finalProposal } from './fixtures.js';
 
 const services = [], directories = [];
@@ -44,11 +44,11 @@ describe('Person creates, tests, persists and reuses abilities', () => {
     const first = create(dir, (input, p) => {
       seen.push(input);
       if (!input.capabilityResult) {
-        expect(input.capabilities.active.find(c => c.id === 'Capability.create').availability.layer).toBe('foundation');
+        expect(input.nativeTools.some(c => c.name === 'Capability__create')).toBe(true);
         use(p, 'Capability.create', definition());
       } else if (input.capabilityResult.published) {
         expect(input.capabilityResult.evidence).toMatchObject({ engine: 'quickjs', testsPassed: 2 });
-        expect(input.capabilities.active.find(c => c.id === 'Script.sum')).toMatchObject({ access: 'pure-computation', version: 1 });
+        expect(input.nativeTools.find(c => c.name === 'Script__sum').parameters.required).toEqual(['input']);
         use(p, 'Script.sum', { input: [10, 30, -2] });
       } else {
         expect(input.capabilityResult).toMatchObject({ ok: true, output: 38, version: 1 });
@@ -67,11 +67,11 @@ describe('Person creates, tests, persists and reuses abilities', () => {
     const second = create(dir, (input, p) => {
       restored.push(input);
       if (input.trigger.text === 'other-person') {
-        expect(input.capabilities.active.some(c => c.id === 'Script.sum')).toBe(false);
+        expect(input.nativeTools.some(c => c.name === 'Script__sum')).toBe(false);
         if (!input.capabilityResult) use(p, 'catalog.search', { query: 'Script.sum' });
         else expect(input.capabilityResult.items).toEqual([]);
       } else if (!input.capabilityResult) {
-        expect(input.capabilities.active.find(c => c.id === 'Script.sum').availability.layer).toBe('familiar');
+        expect(input.nativeTools.some(c => c.name === 'Script__sum')).toBe(true);
         use(p, 'Script.sum', { input: [9, 6] });
       } else expect(input.capabilityResult.output).toBe(15);
     });
@@ -90,7 +90,7 @@ describe('Person creates, tests, persists and reuses abilities', () => {
       if (calls === 1) use(p, 'Capability.create', { ...definition(), code: 'return 0;' });
       else if (calls === 2) {
         expect(input.capabilityResult).toMatchObject({ ok: false, code: 'SCRIPT_TEST_FAILED', failedTest: 0, actual: 0 });
-        expect(input.capabilities.active.some(c => c.id === 'Script.sum')).toBe(false);
+        expect(input.nativeTools.some(c => c.name === 'Script__sum')).toBe(false);
         use(p, 'Capability.create', definition());
       } else expect(input.capabilityResult).toMatchObject({ ok: true, published: true, contract: { version: 1 } });
     });
@@ -184,7 +184,7 @@ describe('Person creates, tests, persists and reuses abilities', () => {
     await first.close();
     const second = create(dir, (input, p) => {
       if (!input.capabilityResult) {
-        expect(input.capabilities.active.some(c => c.id === 'Script.sum')).toBe(false);
+        expect(input.nativeTools.some(c => c.name === 'Script__sum')).toBe(true);
         use(p, 'catalog.search', { query: '求和' });
       } else if (input.capabilityResult.contracts) {
         expect(input.capabilityResult.contracts[0].id).toBe('Script.sum');
@@ -196,7 +196,9 @@ describe('Person creates, tests, persists and reuses abilities', () => {
     await second.close();
     const third = create(dir, (input, p) => {
       if (!input.capabilityResult) {
-        expect(input.capabilities.active.some(c => c.id === 'Script.sum')).toBe(false);
+        // Direct schemas include durable scripts after unsuccessful use too;
+        // familiarity is not an execution admission gate.
+        expect(input.nativeTools.some(c => c.name === 'Script__sum')).toBe(true);
         use(p, 'Capability.create', definition());
       } else if (input.capabilityResult.code === 'SCRIPT_VERSION') use(p, 'Capability.create', { ...definition(), expectedVersion: 1 });
       else expect(input.capabilityResult.contract.version).toBe(2);

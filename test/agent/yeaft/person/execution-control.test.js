@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { turnView } from '../../../../agent/yeaft/person/turn-diagnostics.js';
@@ -16,15 +16,22 @@ async function until(read, check) {
   for (let i = 0; i < 300; i++) { const result = await read(); if (check(result)) return result; await sleep(10); }
   throw new Error('Execution did not reach expected boundary');
 }
-function proposal(input, next = null) {
-  const p = finalProposal(input.state.version); p.concepts = []; p.state.focusConceptIds = []; p.reply = null;
-  p.next = next ? { model: 'test/first', effort: null, reason: 'Continue authorized work.', capability: next.id ? next : null } : null;
-  return p;
+function* tool(index, name, input = {}) {
+  yield { type: 'tool_call', id: `tool-${index}`, name, input };
+  yield { type: 'stop', stopReason: 'tool_use' };
+}
+function* finish(params) {
+  if (!params.tools.length) {
+    const input = JSON.parse(params.messages[0].content), p = finalProposal(input.state.version);
+    p.concepts = []; p.state.focusConceptIds = []; p.reply = null;
+    yield { type: 'text_delta', text: JSON.stringify(p) };
+  }
+  yield { type: 'stop', stopReason: 'end_turn' };
 }
 async function create(stream, more = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'person-control-')); directories.push(dir);
   const service = createPersonService({ yeaftDir: dir, workDir: dir, config, adapter: { stream }, leaseMs: 1500,
-    embedding: { enabled: false }, ...more }); services.push(service);
+    embedding: { enabled: false }, nativeFixture: false, ...more }); services.push(service);
   await call(service, 'open'); return service;
 }
 afterEach(async () => {
@@ -49,58 +56,85 @@ describe('Person unlimited main execution controls', () => {
   });
 
   it('ignores legacy quotas, runs 45 model calls with bounded requests and diagnostics, retaining original traces', async () => {
-    let count = 0;
+    let count = 0, cognitionCalls = 0;
     const service = await create(async function* (params) {
       const input = JSON.parse(params.messages[0].content); count++;
+      if (!params.tools.length) cognitionCalls++;
+      expect(input.previousProposal).toBeNull(); expect(input.episodeWork).toBeUndefined();
       expect(input.budget).not.toHaveProperty('remainingCalls');
       expect(input.inheritedSourceRefs.length).toBeLessThanOrEqual(128);
       expect(JSON.stringify(input).length).toBeLessThan(30000);
-      yield { type: 'text_delta', text: JSON.stringify(proposal(input, count < 45 ? {} : null)) };
+      expect(Buffer.byteLength(JSON.stringify(params.messages)) + Buffer.byteLength(JSON.stringify(params.tools)) + Buffer.byteLength(JSON.stringify(params.system)))
+        .toBeLessThanOrEqual(config.availableModels[0].contextWindow - 4096 - 1024);
       yield { type: 'usage', inputTokens: 3, outputTokens: 5 };
-      yield { type: 'stop', stopReason: 'end_turn' };
+      // 43 tool-producing calls + native end_turn + one final cognition = 45
+      // provider dispatches; no legacy quota can limit those dispatches.
+      if (count <= 43) yield* tool(count, 'catalog__search', { query: 'authorized work' });
+      else yield* finish(params);
     }, { maxCalls: 'legacy invalid value ignored' });
     const { episodeId } = await call(service, 'think', { clientMessageId: 'many' });
     const snapshot = await until(() => call(service, 'snapshot'), result => !result.busy);
-    expect(snapshot.latestEpisode.status).toBe('completed'); expect(count).toBe(45);
+    expect(snapshot.latestEpisode.status).toBe('completed'); expect(count).toBe(45); expect(cognitionCalls).toBe(1);
+    expect(snapshot.state.version).toBe(1);
     const turn = (await call(service, 'turns')).items[0];
     expect(turn.budget.calls).toBeNull(); expect(turn.calls).toHaveLength(32);
     expect(turn.calls[0].index).toBe(14); expect(turn.calls.at(-1).index).toBe(45);
     expect(turn).toMatchObject({ loopCount: 45, callsTruncated: true, usageScope: 'latest-call-window', callWindowLimit: 32 });
-    let cursor = null, starts = 0;
+    expect(turn.usage).toMatchObject({ inputTokens: 96, outputTokens: 160, totalTokens: 256, reportedCalls: 32, complete: true });
+    expect(turn.calls.filter(item => item.protocol === 'cognition')).toHaveLength(1);
+    let cursor = null, starts = 0, capabilityStarts = 0, allInputTokens = 0, allOutputTokens = 0;
     do {
       const page = await call(service, 'traces', { limit: 20, cursor });
-      starts += page.items.filter(trace => trace.kind === 'call_started' && trace.episodeId === episodeId).length;
+      const episodeTraces = page.items.filter(trace => trace.episodeId === episodeId);
+      starts += episodeTraces.filter(trace => trace.kind === 'call_started').length;
+      capabilityStarts += episodeTraces.filter(trace => trace.kind === 'capability_started').length;
+      for (const trace of episodeTraces.filter(trace => trace.kind === 'call_output')) {
+        allInputTokens += trace.output.usage.inputTokens; allOutputTokens += trace.output.usage.outputTokens;
+      }
       expect(page.items.some(trace => trace.kind === 'budget_exhausted')).toBe(false);
       cursor = page.nextCursor;
     } while (cursor);
-    expect(starts).toBe(45);
+    expect(starts).toBe(45); expect(capabilityStarts).toBe(43);
+    expect(allInputTokens).toBe(135); expect(allOutputTokens).toBe(225);
     expect((await call(service, 'executions')).main).toBeNull();
   });
 
   it('bounds accumulated execution previews through 40 real tool dispatches without replay or trace loss', async () => {
-    let count = 0, effects = 0, sawOmitted = false;
+    let count = 0, effects = 0, sawOmitted = false, cognitionCalls = 0;
     const original = PersonRuntime.prototype.start;
     vi.spyOn(PersonRuntime.prototype, 'start').mockImplementation(function (episode) {
       const tool = this.parentToolRegistry.get('FileRead');
-      this.parentToolRegistry.register({ ...tool, execute: async () => `observation ${++effects}` });
+      this.parentToolRegistry.register({ ...tool, execute: async () => `observation ${++effects}\n${'x'.repeat(6000)}` });
       return original.call(this, episode);
     });
     const service = await create(async function* (params) {
-      const input = JSON.parse(params.messages[0].content); count++;
-      if (input.episodeProgress) {
-        expect(input.episodeProgress.items.length).toBeLessThanOrEqual(16);
-        expect(JSON.stringify(input.episodeProgress).length).toBeLessThanOrEqual(8192);
-        sawOmitted ||= input.episodeProgress.omitted > 0;
+      count++;
+      for (const message of params.messages.filter(message => message.role === 'user')) {
+        const notice = JSON.parse(message.content);
+        if (notice.omittedExecutionGroups) {
+          sawOmitted = true;
+          expect(notice.capsules.length).toBeLessThanOrEqual(16);
+          expect(Buffer.byteLength(JSON.stringify(notice.capsules))).toBeLessThanOrEqual(16384);
+          expect(notice.notice).toContain('never repeat effects');
+        }
       }
-      const next = count === 1 ? { id: 'catalog.view', args: { id: 'FileRead' } }
-        : count <= 41 ? { id: 'FileRead', args: { file_path: '/fake' } } : null;
-      yield { type: 'text_delta', text: JSON.stringify(proposal(input, next)) };
-      yield { type: 'stop', stopReason: 'end_turn' };
+      expect(params.messages[0].content).not.toContain('episodeProgress');
+      if (!params.tools.length) cognitionCalls++;
+      if (count <= 40) yield* tool(count, 'FileRead', { file_path: '/fake' });
+      else yield* finish(params);
     });
     await call(service, 'think', { clientMessageId: 'tool-history' });
     const done = await until(() => call(service, 'snapshot'), result => !result.busy);
     expect(done.latestEpisode.status).toBe('completed');
-    expect(count).toBe(42); expect(effects).toBe(40); expect(sawOmitted).toBe(true);
+    expect(count).toBe(42); expect(effects).toBe(40); expect(sawOmitted).toBe(true); expect(cognitionCalls).toBe(1);
+    let cursor = null; const results = [];
+    do {
+      const page = await call(service, 'traces', { limit: 50, cursor });
+      results.push(...page.items.filter(trace => trace.kind === 'capability_result' && trace.capability.id === 'FileRead'));
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(results).toHaveLength(40);
+    expect(results.every(trace => trace.result.output.length > 6000)).toBe(true);
   });
 
   it('recovers an expired persisted pause as interrupted, never as a resumable live job', async () => {
@@ -136,15 +170,12 @@ describe('Person unlimited main execution controls', () => {
       return original.call(this, episode);
     });
     const service = await create(async function* (params) {
-      const input = JSON.parse(params.messages[0].content); count++;
+      count++;
       if (count === 1) {
         yield { type: 'usage', inputTokens: 7, outputTokens: 11 };
         entered.resolve(); await release.promise;
-      }
-      const next = count === 1 ? { id: 'catalog.view', args: { id: 'FileRead' } }
-        : count === 2 ? { id: 'FileRead', args: { file_path: '/unused-by-fake' } } : null;
-      yield { type: 'text_delta', text: JSON.stringify(proposal(input, next)) };
-      yield { type: 'stop', stopReason: 'end_turn' };
+        yield* tool(count, 'FileRead', { file_path: '/unused-by-fake' });
+      } else yield* finish(params);
     });
     const { episodeId } = await call(service, 'think', { clientMessageId: 'pause-provider' }); await entered.promise;
     const live = await call(service, 'executions');
@@ -210,11 +241,11 @@ describe('Person unlimited main execution controls', () => {
   });
 
   it('persists actual provider duration, excluding a pause after durable start but before dispatch', async () => {
-    const started = deferred(), releaseStart = deferred(); let dispatched = 0, measured;
+    const started = deferred(), releaseStart = deferred(); let dispatched = 0; const measured = [];
     const originalStart = PersonRuntime.prototype.start;
     const originalFinish = PersonRuntime.prototype.finishUsage;
     vi.spyOn(PersonRuntime.prototype, 'finishUsage').mockImplementation(function (...args) {
-      measured = originalFinish.apply(this, args); return measured;
+      const duration = originalFinish.apply(this, args); measured.push(duration); return duration;
     });
     vi.spyOn(PersonRuntime.prototype, 'start').mockImplementation(function (episode) {
       const startCall = this.repository.startCall.bind(this.repository);
@@ -225,8 +256,7 @@ describe('Person unlimited main execution controls', () => {
     });
     const service = await create(async function* (params) {
       dispatched++;
-      yield { type: 'text_delta', text: JSON.stringify(proposal(JSON.parse(params.messages[0].content))) };
-      yield { type: 'stop', stopReason: 'end_turn' };
+      yield* finish(params);
     });
     const { episodeId } = await call(service, 'think', { clientMessageId: 'duration-after-pause' });
     try {
@@ -238,43 +268,40 @@ describe('Person unlimited main execution controls', () => {
       await call(service, 'resume', { episodeId });
       await until(() => call(service, 'snapshot'), result => !result.busy);
       const recorded = (await call(service, 'turns')).items[0].calls[0];
-      expect(dispatched).toBe(1);
-      expect(Number.isSafeInteger(measured)).toBe(true);
-      expect(recorded.elapsedMs).toBe(measured);
+      expect(dispatched).toBe(2);
+      expect(measured.every(Number.isSafeInteger)).toBe(true);
+      expect(recorded.elapsedMs).toBe(measured[0]);
       const lifecycleMs = new Date(recorded.endedAt) - new Date(recorded.createdAt);
       expect(lifecycleMs - recorded.elapsedMs).toBeGreaterThanOrEqual(60);
     } finally { releaseStart.resolve(); }
   });
 
-  it('pauses a final provider response before committing and exposes exact mixed-model live usage', async () => {
+  it('pauses the tools-free final cognition before committing and exposes exact continuous live usage', async () => {
     const entered = deferred(), release = deferred(); let count = 0;
     const service = await create(async function* (params) {
-      const input = JSON.parse(params.messages[0].content); count++;
-      const p = proposal(input, count === 1 ? {} : null);
-      if (p.next) p.next.model = 'test/second';
+      count++;
       yield { type: 'usage', inputTokens: count * 2, outputTokens: count * 3 };
-      if (count === 2) { entered.resolve(); await release.promise; }
-      yield { type: 'text_delta', text: JSON.stringify(p) };
-      yield { type: 'stop', stopReason: 'end_turn' };
+      if (!params.tools.length) { entered.resolve(); await release.promise; }
+      if (count === 1) yield* tool(count, 'catalog__search', { query: 'authorized work' });
+      else yield* finish(params);
     });
     const { episodeId } = await call(service, 'think', { clientMessageId: 'pause-commit' });
     await entered.promise;
     const live = (await call(service, 'executions')).main;
-    expect(live).toMatchObject({ model: 'test/second', loops: 2, models: [
-      { model: 'test/first', calls: 1, completedCalls: 1, usage: { totalTokens: 5, complete: true } },
-      { model: 'test/second', calls: 1, completedCalls: 0, usage: { totalTokens: 10, complete: false } },
+    expect(live).toMatchObject({ model: 'test/first', loops: 3, models: [
+      { model: 'test/first', calls: 3, completedCalls: 2, usage: { inputTokens: 12, outputTokens: 18, totalTokens: 30, complete: false } },
     ] });
     expect(live.models.every(model => model.elapsedMs >= 0)).toBe(true);
     await call(service, 'pause', { episodeId }); release.resolve();
     await until(() => call(service, 'executions'), result => result.main?.status === 'paused');
     const paused = await call(service, 'snapshot');
-    expect(paused.state.version).toBe(0); expect(count).toBe(2);
+    expect(paused.state.version).toBe(0); expect(count).toBe(3);
     const diagnostics = await call(service, 'executions');
     expect(diagnostics.items[0].controlStatus).toBe('paused');
-    expect(diagnostics.main.models[1].usage).toMatchObject({ totalTokens: 10, complete: true });
+    expect(diagnostics.main.models[0].usage).toMatchObject({ totalTokens: 30, complete: true });
     await call(service, 'resume', { episodeId });
     const done = await until(() => call(service, 'snapshot'), result => !result.busy);
-    expect(done.state.version).toBe(1); expect(count).toBe(2);
+    expect(done.state.version).toBe(1); expect(count).toBe(3);
     expect((await call(service, 'turns')).items[0].controlStatus).toBeNull();
   });
 
@@ -289,17 +316,15 @@ describe('Person unlimited main execution controls', () => {
       return original.call(this, episode);
     });
     const service = await create(async function* (params) {
-      const input = JSON.parse(params.messages[0].content); count++;
-      const next = count === 1 ? { id: 'catalog.view', args: { id: 'FileWrite' } }
-        : count === 2 ? { id: 'FileWrite', args: { file_path: '/fake', content: 'one effect' } } : null;
-      yield { type: 'text_delta', text: JSON.stringify(proposal(input, next)) };
-      yield { type: 'stop', stopReason: 'end_turn' };
+      count++;
+      if (count === 1) yield* tool(count, 'FileWrite', { file_path: '/fake', content: 'one effect' });
+      else yield* finish(params);
     });
     const { episodeId } = await call(service, 'think', { clientMessageId: `tool-${action}` }); await entered.promise;
     expect(await call(service, 'pause', { episodeId })).toEqual({ episodeId, status: 'pausing' });
-    expect((await call(service, 'executions')).main).toMatchObject({ phase: 'capability', capability: 'FileWrite', loops: 2 });
+    expect((await call(service, 'executions')).main).toMatchObject({ phase: 'capability', capability: 'FileWrite', loops: 1 });
     release.resolve(); await until(() => call(service, 'executions'), result => result.main?.status === 'paused');
-    expect(count).toBe(2); expect(effects).toBe(1);
+    expect(count).toBe(1); expect(effects).toBe(1);
     if (action === 'close') {
       await service.close();
       const restarted = createPersonService({ yeaftDir: directories.at(-1), config, adapter: { async *stream() { throw new Error('no restart calls'); } }, embedding: { enabled: false } });
@@ -311,7 +336,7 @@ describe('Person unlimited main execution controls', () => {
       await call(service, action, { episodeId });
       const done = await until(() => call(service, 'snapshot'), result => !result.busy);
       expect(done.latestEpisode.status).toBe(action === 'resume' ? 'completed' : 'cancelled');
-      expect(count).toBe(action === 'resume' ? 3 : 2); expect(effects).toBe(1);
+      expect(count).toBe(action === 'resume' ? 3 : 1); expect(effects).toBe(1);
     }
   });
 
@@ -319,8 +344,7 @@ describe('Person unlimited main execution controls', () => {
     const entered = deferred(), release = deferred();
     const service = await create(async function* (params) {
       entered.resolve(); await release.promise;
-      yield { type: 'text_delta', text: JSON.stringify(proposal(JSON.parse(params.messages[0].content))) };
-      yield { type: 'stop', stopReason: 'end_turn' };
+      yield* finish(params);
     });
     const { episodeId } = await call(service, 'think', { clientMessageId: 'identity' }); await entered.promise;
     await call(service, 'open', {}, 'bob');

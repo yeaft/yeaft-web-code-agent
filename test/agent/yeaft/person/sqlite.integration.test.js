@@ -10,7 +10,7 @@ import { PersonRuntime } from '../../../../agent/yeaft/person/runtime.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { digest, LIMITS } from '../../../../agent/yeaft/person/contracts.js';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { finalProposal, config } from './fixtures.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -560,7 +560,7 @@ describe('Person real SQLite authority in managed workers', () => {
       providerCalls++;
       const context = JSON.parse(params.messages[0].content);
       const proposal = finalProposal(context.state.version);
-      yield { type: 'text_delta', text: JSON.stringify(proposal) };
+      yield { type: 'text_delta', text: params.tools.length ? proposal.reply : JSON.stringify(proposal) };
       yield { type: 'stop', stopReason: 'end_turn' };
     } };
     const getProvider = () => createPersonProvider({ config, adapter });
@@ -570,7 +570,10 @@ describe('Person real SQLite authority in managed workers', () => {
     const accepted = admissions.find(r => !r.duplicate); runtime.start(accepted.episode);
     await runtime.running.get(accepted.episode.id).promise;
     const snapshot = await b.snapshot('alice');
-    expect(snapshot.state.version).toBe(1); expect(providerCalls).toBe(1);
+    expect(snapshot.state.version).toBe(1); expect(providerCalls).toBe(2); // execution end_turn, then one tools-free cognition
+    const traces = (await b.list('alice', 'traces', { limit: 50 })).items;
+    expect(traces.filter(trace => trace.kind === 'activity')).toHaveLength(1);
+    expect(traces.filter(trace => trace.kind === 'committed')).toHaveLength(1);
     expect(snapshot.messages.map(m => m.role)).toEqual(['user', 'assistant']);
     expect((await b.searchChanges('alice')).items).toHaveLength(3);
   });

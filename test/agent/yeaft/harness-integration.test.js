@@ -364,7 +364,8 @@ describe('tool efficiency contracts', () => {
       code: 'bash_exit_nonzero',
       failureType: 'exit_nonzero',
       exitCode: 2,
-      status: 'Exit code: 2',
+      status: 'Exit code: 2; termination confirmed',
+      terminationConfirmed: true,
       workingDirectory: `Working directory: ${root}`,
       replaySafe: false,
     });

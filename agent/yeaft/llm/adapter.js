@@ -182,6 +182,21 @@ export class LLMServerError extends Error {
   }
 }
 
+/**
+ * Invalid/incomplete provider tool batch — recover by correcting arguments, not
+ * by replaying the same provider request. stream() publishes this as an error
+ * event with retryable:false (legacy Engine retries thrown LLMServerError by
+ * class); call() throws it. No tool_call may be published from the rejected batch.
+ */
+export class LLMToolInputError extends LLMServerError {
+  constructor(message) {
+    super(message, 0);
+    this.name = 'LLMToolInputError';
+    this.toolInputRejected = true;
+    this.retryable = false;
+  }
+}
+
 /** Streaming response went idle after the server accepted the request. Retryable. */
 export class LLMStreamIdleTimeoutError extends LLMServerError {
   constructor(message, idleMs) {

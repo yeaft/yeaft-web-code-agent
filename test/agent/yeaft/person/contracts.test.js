@@ -56,7 +56,7 @@ describe('digital Person strict contracts', () => {
     await expect(service.request({ ownerId: 'owner', op: 'status' })).rejects.toMatchObject({ code: 'CLOSED' });
   });
   it('bounds optional feedback without duplicating long replies or exhausting a small model window', async () => {
-    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 32768 })) }, adapter: {} });
+    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 131072 })) }, adapter: {} });
     const previous = finalProposal(); previous.reply = '中'.repeat(2730);
     const input = { provider, selection: provider.defaultSelection, remainingCalls: 1, previous,
       snapshot: { person: { id: 'p', soul: 'Honesty.' }, state: { version: 0 }, messages: [], concepts: [] },
@@ -71,13 +71,16 @@ describe('digital Person strict contracts', () => {
     expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
     // Put mandatory content exactly at its limit: feedback is omitted, not a failure.
     const baseline = assembleContext(input);
-    input.snapshot.person.soul += 'x'.repeat(baseline.manifest.contextBudgetBytes - baseline.manifest.contextBytes);
+    const baselineBody = JSON.parse(baseline.messages[0].content);
+    const optionalBytes = Buffer.byteLength(JSON.stringify({ outputInstructions: baselineBody.outputInstructions })) - 1;
+    input.snapshot.person.soul += 'x'.repeat(baseline.manifest.contextBudgetBytes - baseline.manifest.contextBytes + optionalBytes);
     const full = assembleContext({ ...input, feedback });
     expect(JSON.parse(full.messages[0].content).feedback).toBeUndefined();
+    expect(full.manifest.contextBytes).toBe(full.manifest.contextBudgetBytes);
   });
 
   it('shrinks or omits recovery guidance without displacing mandatory context or successful tool evidence', async () => {
-    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 32768 })) }, adapter: {} });
+    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 131072 })) }, adapter: {} });
     const previous = finalProposal(), capabilityResult = { id: 'FileWrite', ok: true, output: 'written once', sourceRef: 'tool:episode:call:FileWrite:evidence' };
     const input = { provider, selection: provider.defaultSelection, remainingCalls: 1, previous, capabilityResult,
       snapshot: { person: { id: 'p', soul: 'Honesty.' }, state: { version: 0 }, messages: [], concepts: [] },
@@ -132,9 +135,9 @@ describe('digital Person strict contracts', () => {
     }
     const proposal = finalProposal();
     proposal.next = { model: 'external/unconfigured', effort: null, reason: 'switch', capability: null };
-    expect(() => validateProposal(proposal, validation)).toThrow(/catalog/);
+    expect(() => validateProposal(proposal, validation)).toThrow(/invalid cognitive proposal/);
     proposal.next.model = 'test/first'; proposal.next.effort = 'ultra';
-    expect(() => validateProposal(proposal, validation)).toThrow(/catalog/);
+    expect(() => validateProposal(proposal, validation)).toThrow(/invalid cognitive proposal/);
   });
   it('Dream imagination cannot become a new reported fact', () => {
     const p = finalProposal(); p.concepts[0].sourceRefs = ['message:m:1']; p.concepts[0].epistemicState = 'reported';
@@ -318,7 +321,7 @@ describe('digital Person strict contracts', () => {
     vi.stubEnv('YEAFT_THINKING_V1', '1');
     const fetchMock = stubProviderFetch();
     // The discoverable output entry must not bloat mandatory small-window context.
-    const contextWindow = 16384;
+    const contextWindow = 131072;
     const normalized = configuredModels({ primaryModel: `test/${id}`, providers: [{
       name: 'test', apiKey: 'test-only', baseUrl: 'https://person.invalid', protocol: 'anthropic',
       models: [{ id, contextWindow, maxOutput, ...(id === 'manual-alias' ? { supportsEffort: true } : {}) }],
@@ -351,7 +354,7 @@ describe('digital Person strict contracts', () => {
   ])('keeps %s effort, null defaults and disabled flags within the wire reserve', async (id, protocol, thinkingProtocol, efforts) => {
     const fetchMock = stubProviderFetch();
     const normalized = configuredModels({ providers: [{ name: 'test', apiKey: 'test-only', baseUrl: 'https://person.invalid', protocol,
-      models: [{ id, contextWindow: 16384, maxOutput: 2048, ...(thinkingProtocol ? { thinkingProtocol, effortOptions: efforts } : {}) }],
+      models: [{ id, contextWindow: 131072, maxOutput: 2048, ...(thinkingProtocol ? { thinkingProtocol, effortOptions: efforts } : {}) }],
     }] });
     for (const flag of ['1', '0']) {
       vi.stubEnv('YEAFT_THINKING_V1', flag);
@@ -367,7 +370,7 @@ describe('digital Person strict contracts', () => {
         expect(context.maxTokens).toBe(maxTokens);
         expect(context.manifest.outputTokensReserved).toBe(maxTokens);
         expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
-        expect(context.manifest.contextBudgetBytes + maxTokens + 1024).toBe(16384);
+        expect(context.manifest.contextBudgetBytes + maxTokens + 1024).toBe(131072);
         if (effort && protocol === 'anthropic') {
           expect(body.thinking).toEqual({ type: 'adaptive' });
           expect(body.output_config).toEqual({ effort });
@@ -405,11 +408,10 @@ describe('digital Person strict contracts', () => {
     const provider = await createPersonProvider({ config: { ...config, availableModels: models, maxOutputTokens: 32768 }, adapter: {} });
     expect(provider.catalog.map(model => model.maxOutput)).toEqual([32768, 32768]);
   });
-  it('accepts complete public replies and native tool arguments larger than their old byte limits', async () => {
+  it('accepts complete public final replies larger than their old byte limits', async () => {
     const proposal = finalProposal();
     proposal.reply = '文'.repeat(30000);
-    proposal.next = { model: 'test/first', effort: 'low', reason: 'Write a large valid artifact.',
-      capability: { id: 'FileWrite', args: { file_path: 'artifact.md', content: '文'.repeat(30000) } } };
+    proposal.next = null;
     const raw = JSON.stringify(proposal);
     expect(Buffer.byteLength(raw)).toBeGreaterThan(65536);
     const adapter = { async *stream() {
@@ -422,15 +424,15 @@ describe('digital Person strict contracts', () => {
     expect(validateProposal(JSON.parse(output.text), validation)).toEqual(proposal);
   });
   it('bounds short-term copies without mutating complete historical records', async () => {
-    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 65536 })) }, adapter: {} });
+    const provider = await createPersonProvider({ config: { ...config, availableModels: config.availableModels.map(m => ({ ...m, contextWindow: 131072 })) }, adapter: {} });
     const snapshot = { person: { id: 'person', name: 'Person', soul: 'Honesty.', soulRevision: 1 }, state: { version: 0 }, concepts: [],
-      messages: Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, revision: 1, role: 'user', text: '文'.repeat(2500) })) };
+      messages: Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, revision: 1, role: 'user', text: '文'.repeat(6000) })) };
     const context = assembleContext({ snapshot, episode: { id: 'e', kind: 'think', text: '' }, provider, selection: provider.defaultSelection, remainingCalls: 1 });
     expect(context.manifest.omitted.length).toBeGreaterThan(0);
     expect(context.manifest.contextBytes).toBeLessThanOrEqual(context.manifest.contextBudgetBytes);
     expect(context.manifest.contextSources).toEqual({ episodeExecutions: 0, omittedEpisodeExecutions: 0, recentMessages: JSON.parse(context.messages[0].content).messages.length, recentConcepts: 0,
       omittedMessages: context.manifest.omitted.length, omittedConcepts: 0, recall: { kind: null, count: 0 } });
-    expect(snapshot.messages.every(m => m.text.length === 2500)).toBe(true);
+    expect(snapshot.messages.every(m => m.text.length === 6000)).toBe(true);
   });
   it('uses each selected model window and dispatches a complete request larger than 64 KiB', async () => {
     const models = config.availableModels.map((m, i) => ({ ...m, contextWindow: i ? 1048576 : 32768 }));

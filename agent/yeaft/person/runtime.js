@@ -4,18 +4,19 @@ import { randomUUID } from 'node:crypto';
 import { utf8PrefixWithinBytes } from '../utf8.js';
 import { CAPABILITY_MAP, capabilityContextBudget, foundationCapabilities, PersonCapabilities, catalogRevision as capabilityCatalogRevision } from './capabilities.js';
 import { attachmentMetadata } from './attachments.js';
-import { ExecutionProgress } from './execution-progress.js';
-import { personPresentation } from './presentation.js';
+import { ExecutionTranscript, EXECUTION_INSTRUCTIONS, proposalDiagnostics } from './execution-protocol.js';
+import { PERSON_ENVELOPE_TOKENS_RESERVED, personFinalContextReserveBytes } from './request-budget.js';
 import { abortable, collectOutput } from './provider.js';
+import { validateCapabilityArguments, validateToolArguments } from './tool-arguments.js';
 import { callUsage, sumUsage } from './turn-diagnostics.js';
-import { bytes, digest, fail, FEEDBACK, FEEDBACK_INSTRUCTIONS, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
+import { bytes, digest, fail, FEEDBACK_INSTRUCTIONS, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
 
 const messageRef = m => `message:${m.id}:${m.revision}`;
 const conceptRef = c => `concept:${c.id}:${c.revision}`;
-const ENVELOPE_TOKENS_RESERVED = 1024;
+const ENVELOPE_TOKENS_RESERVED = PERSON_ENVELOPE_TOKENS_RESERVED;
 
 /** Assemble bounded request copies. Omitting a record never deletes or truncates its durable original. */
-export function assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, taskEvidence, episodeProgress = [], omittedEpisodeProgress = 0, episodeWork = null, executionPattern = null, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment, feedback, outputRecovery }) {
+export function assembleContext({ instructions = PROPOSAL_INSTRUCTIONS, toolSchemas = [], reservedContextBytes = 0, snapshot, episode, provider, selection, previous, capabilityResult, taskEvidence, episodeProgress = [], omittedEpisodeProgress = 0, episodeWork = null, executionPattern = null, dependencyRefs = [], activeCapabilities = foundationCapabilities(), capabilityMap = CAPABILITY_MAP, attachments = [], environment, feedback, outputRecovery }) {
   const model = validateSelection(selection, provider.catalog);
   // UTF-8 bytes is a conservative text-token bound; reserve explicit envelope/output overhead.
   const images = attachments.filter(file => file.kind === 'image');
@@ -28,10 +29,11 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
   const imageLabelBytes = imageLabels.reduce((sum, label) => sum + bytes(label), 0);
   // This is a byte allowance derived from the selected model's token window,
   // not a token estimate or an independent fixed-size Person context limit.
-  const contextCap = model.contextWindow - model.maxOutput - ENVELOPE_TOKENS_RESERVED - imageTokensReserved;
+  const requestCap = model.contextWindow - model.maxOutput - ENVELOPE_TOKENS_RESERVED - imageTokensReserved;
+  const contextCap = requestCap - (toolSchemas.length ? bytes(toolSchemas) : 0) - reservedContextBytes;
   if (!Number.isSafeInteger(model.contextWindow) || !Number.isSafeInteger(model.maxOutput) || model.maxOutput < 1 ||
       !Number.isSafeInteger(contextCap) || contextCap < 1) fail('CONTEXT_LIMIT');
-  const system = `${snapshot.person.soul}\n\n${PROPOSAL_INSTRUCTIONS}`;
+  const system = `${snapshot.person.soul}\n\n${instructions}`;
   // Preserve the full proposal in durable traces, but do not duplicate optional
   // working notes inside the mandatory previous-proposal context. They have one
   // separately budgeted episodeWork slot below, including explicit null clearing.
@@ -96,7 +98,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     if (!fits()) delete context.outputRecovery;
   }
   context.outputInstructions = 'Fit complete JSON/tool args within budget.maxOutputTokens (reasoning included). Split big scripts or use SpawnAgent; long Shell work uses background:true and explicit result collection. For authorized edits, read relevant ranges, edit, inspect diff/checks. Missing broader validation need not block independently testable work. Recover omitted output via Execution.read or narrow reads, not reruns. Repeated evidence is not progress; diagnostics impose no quota/forced write. Optional work:null|{goal:string,findings:[{summary:string,sourceRefs:string[]}],nextStep:string,blocker:string}. Max 6 findings, summary<=600 UTF-8 bytes, 1..4 exact evidence refs each; other strings<=1000 bytes, total<=6144. Retain relevant findings, retract errors, integrate results before next action.';
-  if (!fits()) delete context.outputInstructions;
+  if (instructions === EXECUTION_INSTRUCTIONS || !fits()) delete context.outputInstructions;
   // Feedback is a request-only hint, never grounds to fail the next call.
   // Keep durable replies intact; avoid duplicating up to 8 KiB from previousProposal.
   if (feedback) {
@@ -170,7 +172,7 @@ export function assembleContext({ snapshot, episode, provider, selection, previo
     manifest: { stateVersion: snapshot.state.version, sourceRefs: [...sourceRefs], renderedSourceRefs: [...renderedRefs], inputDependencyRefs: [...sourceRefs], omitted,
       boundedRecentWindow: { messages: 12, recentConcepts: 12, focusedConcepts: 12 },
       attachments: attachments.map(attachmentMetadata), imageTokensReserved, imageBudget: images.length ? imageBudget : null,
-      contextBytes: bytes(system) + bytes(context) + imageLabelBytes, contextBudgetBytes: contextCap,
+      contextBytes: bytes(system) + bytes(context) + imageLabelBytes, contextBudgetBytes: requestCap, toolSchemaBytes: toolSchemas.length ? bytes(toolSchemas) : 0,
       contextWindowTokens: model.contextWindow, outputTokensReserved: model.maxOutput, envelopeTokensReserved: ENVELOPE_TOKENS_RESERVED,
       // Counts describe actual rendered sources, not the activity label or the
       // inherited bounded provenance read-set. Recall duplicates are counted in its page,
@@ -228,6 +230,10 @@ export function executionReceipt(callId, capability, result) {
   receipt.preview = utf8PrefixWithinBytes(raw, low).text;
   return receipt;
 }
+
+const archiveExecutionMessages = messages => messages.map(({ providerState, ...message }) => Array.isArray(message.content)
+  ? { ...message, content: message.content.map(block => block.type === 'image'
+    ? { type: 'image', archived: false, reason: 'attachment-owned-by-episode' } : block) } : message);
 
 export class PersonRuntime {
   constructor({ repository, getProvider, workDir, yeaftDir, config, namespace = repository?.namespace ?? 'default' }) {
@@ -366,8 +372,6 @@ export class PersonRuntime {
     loops: 0, model: null, capability: null, models: new Map(), currentCall: null,
     controlWrites: Promise.resolve(), pauseGate: null, releasePause: null }) {
     const { signal } = controller;
-    let lastReplyAt = new Date(episode.createdAt).getTime() || Date.now();
-    let lastReply = null;
     let heartbeatRunning = false;
     const heartbeat = setInterval(async () => {
       if (heartbeatRunning || signal.aborted) return;
@@ -402,57 +406,53 @@ export class PersonRuntime {
           selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry }),
         onResult: result => finalizeNativeResult(result) });
       const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost, workDir: this.toolOptions.workDir });
-      let previous = null, capabilityResult = null, latestExecution = null, dependencyRefs = [], episodeWork = null;
-      const executionProgress = new ExecutionProgress();
-      const episodeProgress = [];
-      let outputRecovery = null, outputRecoveryAttempted = false, omittedEpisodeProgress = 0;
-      // Retain a bounded actual read window. Older provenance must be recalled again.
-      // Candidate proposals never enter this read-set or establish new provenance.
-      const readConcepts = new Map(), readSources = new Map();
-      for (let index = 0; ; index++) {
+      const initialTools = capabilities.executionTools();
+      const context = assembleContext({ instructions: EXECUTION_INSTRUCTIONS, toolSchemas: initialTools,
+        reservedContextBytes: personFinalContextReserveBytes(EXECUTION_INSTRUCTIONS), snapshot, episode, provider, selection,
+        attachments, activeCapabilities: [], capabilityMap: capabilities.catalog(), environment: toolHost.environment,
+        taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)) });
+      const transcript = new ExecutionTranscript(context.messages);
+      const sourceRefs = new Set(context.sourceRefs), readConcepts = new Map(context.concepts), readSources = new Map(context.sources);
+      let phase = 'execution', corrections = 0, inputCorrections = 0, callIndex = 0;
+      const observe = result => {
+        if (result?.sourceRef) {
+          sourceRefs.add(result.sourceRef);
+          readSources.set(result.sourceRef, { kind: 'external-tool-observation', reportedSourceRefs: [] });
+        }
+        if (result?.kind === 'messages') for (const message of result.items) {
+          const ref = messageRef(message); sourceRefs.add(ref);
+          readSources.set(ref, { kind: 'message', role: message.role, reportedSourceRefs: message.role === 'user' ? [ref] : [] });
+        }
+        if (result?.kind === 'concepts') for (const concept of result.items) {
+          const ref = conceptRef(concept); sourceRefs.add(ref); readConcepts.set(concept.id, concept);
+          readSources.set(ref, { kind: 'concept', epistemicState: concept.epistemicState,
+            reportedSourceRefs: concept.epistemicState === 'reported' ? concept.reportedSourceRefs ?? [] : [] });
+        }
+      };
+      for (;;) {
         await this.boundary(job, 'preparing');
         const callId = randomUUID();
-        const context = assembleContext({ snapshot, episode, provider, selection, previous, capabilityResult, episodeProgress, omittedEpisodeProgress, episodeWork, executionPattern: executionProgress.context(), dependencyRefs, taskEvidence: projectTaskEvidence(this.tasks()?.snapshot(episode.ownerId)), attachments, activeCapabilities: capabilities.context(), capabilityMap: capabilities.catalog(), environment: toolHost.environment, feedback: {
-          minIntervalMs: FEEDBACK.minMs, maxIntervalMs: FEEDBACK.maxMs,
-          elapsedSinceReplyMs: Math.max(0, Date.now() - lastReplyAt),
-          due: Date.now() - lastReplyAt >= FEEDBACK.minMs, lastReply,
-        }, outputRecovery });
-        capabilities.activate(context.activeCapabilities);
-        const workRefs = episodeWork?.findings.flatMap(finding => finding.sourceRefs) ?? [];
-        dependencyRefs = [...new Set([...context.manifest.inputDependencyRefs.filter(ref => !workRefs.includes(ref)), ...workRefs.filter(ref => context.sourceRefs.has(ref))])].slice(-128);
-        for (const [id, concept] of context.concepts) { readConcepts.delete(id); readConcepts.set(id, concept); }
-        for (const [ref, source] of context.sources) { readSources.delete(ref); readSources.set(ref, source); }
-        // Refresh existing reads above, then evict only historical entries. A
-        // revision/source rendered in this request must remain valid even when
-        // its insertion order overlaps a full inherited window.
-        for (const ref of readSources.keys()) {
-          if (readSources.size <= 256) break;
-          if (!context.sources.has(ref)) readSources.delete(ref);
-        }
-        for (const id of readConcepts.keys()) {
-          if (readConcepts.size <= 128) break;
-          if (!context.concepts.has(id)) readConcepts.delete(id);
-        }
-        await this.repository.heartbeat(episode); // Revalidate distributed ownership before each dispatch.
+        const tools = phase === 'execution' ? capabilities.executionTools() : [];
+        const system = `${snapshot.person.soul}\n\n${phase === 'execution' ? EXECUTION_INSTRUCTIONS : PROPOSAL_INSTRUCTIONS}`;
+        const request = transcript.request({ system, tools, maxBytes: context.manifest.contextBudgetBytes });
+        await this.repository.heartbeat(episode);
         const requested = { model: selection.model, effort: selection.effort };
         const effective = { model: selection.model, effort: null, effortObserved: false };
         job.model = selection.model;
         await this.boundary(job, 'model', null, () => this.repository.startCall(episode, {
-          callId, callIndex: index, requested, effective, selectionOrigin: selection.origin, reason: selection.reason,
-          manifest: context.manifest, request: { system: context.system, messages: context.archiveMessages, maxTokens: context.maxTokens, tools: [] },
-          capability: previous?.next?.capability ?? null,
+          callId, callIndex: callIndex++, requested, effective, selectionOrigin: selection.origin, reason: selection.reason,
+          manifest: { ...context.manifest, protocol: 'native-tool-loop', phase, sourceRefs: [...sourceRefs],
+            inputDependencyRefs: [...sourceRefs],
+            renderedSourceRefs: [...new Set([...context.manifest.renderedSourceRefs, ...request.renderedSourceRefs])],
+            contextSources: { ...context.manifest.contextSources,
+              recall: request.recallPages.at(-1) ?? { kind: null, count: 0 }, recallPages: request.recallPages },
+            contextBytes: request.contextBytes, omittedExecutionGroups: request.omittedExecutionGroups },
+          request: { system, messages: archiveExecutionMessages(request.messages), maxTokens: context.maxTokens, tools },
         }));
         let output, observedEffortDecision;
         try {
-          signal.throwIfAborted();
-          // collectOutput deliberately exposes only public effort diagnostics.
-          // Preserve the complete wire decision privately for child inheritance
-          // (including any inherited cap), without archiving provider internals.
           const observingAdapter = { stream: params => provider.adapter.stream({ ...params,
-            onEffortDecision: decision => {
-              observedEffortDecision = { ...decision };
-              params.onEffortDecision?.(decision);
-            },
+            onEffortDecision: decision => { observedEffortDecision = { ...decision }; params.onEffortDecision?.(decision); },
           }) };
           output = await this.boundary(job, 'model', null, () => {
             job.loops++;
@@ -460,10 +460,11 @@ export class PersonRuntime {
               calls: 0, completedCalls: 0, failedCalls: 0, elapsedMs: 0, usage: null });
             job.models.get(selection.model).calls++;
             job.currentCall = { model: selection.model, startedAt: Date.now(), usage: null };
-            return collectOutput(observingAdapter, {
-              model: selection.model, effort: selection.effort ?? undefined, effortSource: 'auto',
+            return collectOutput(observingAdapter, { model: selection.model, effort: selection.effort ?? undefined, effortSource: 'auto',
               usageCacheIncluded: provider.catalog.find(model => model.id === selection.model)?.usageCacheIncluded,
-              system: context.system, messages: context.messages, maxTokens: context.maxTokens, signal,
+              system, messages: request.messages, tools, maxTokens: context.maxTokens, signal,
+              requestIdentity: { instanceScope: this.toolOptions.yeaftDir ?? this.namespace, ownerScope: episode.ownerId,
+                sessionId: `person:${snapshot.person.id}`, vpId: snapshot.person.id, threadId: episode.id },
               onUsage: usage => { if (job.currentCall) job.currentCall.usage = usage; },
             }, decision => {
               effective.effort = decision.effective; effective.effortObserved = true;
@@ -471,112 +472,124 @@ export class PersonRuntime {
             });
           });
         } catch (error) {
-          const requestElapsedMs = this.finishUsage(job, false);
-          const safe = safeError(error, 'PROVIDER_FAILED');
-          const finalized = await this.repository.finalizeCall(episode, { callId, effective, requestElapsedMs, code: safe.code, output: error.partialOutput }).catch(() => false);
-          // A truncated proposal has never passed validation or executed its tool.
-          // Attempt one fresh, smaller proposal after truncation;
-          // preserve completed tool evidence, never splice JSON or replay effects.
-          if (safe.code === 'OUTPUT_TRUNCATED' && finalized && !signal.aborted &&
-              !outputRecoveryAttempted) {
-            outputRecoveryAttempted = true;
-            outputRecovery = { code: safe.code, failedCallId: callId, rejectedBeforeExecution: true,
-              instruction: 'The truncated response was rejected; no action from it executed. Produce a fresh smaller complete proposal within budget.maxOutputTokens. Split large code into small steps or delegate; do not repeat prior successful tools. Keep the same output allowance; recovery is attempted only once.' };
-            selection = { ...selection, origin: 'output-recovery', reason: 'Replan once after output token truncation; no rejected action executed.' };
+          const requestElapsedMs = this.finishUsage(job, false), safe = safeError(error, 'PROVIDER_FAILED');
+          const partialOutput = error.partialOutput ? { ...error.partialOutput, protocol: phase === 'execution' ? 'native-tools' : 'cognition' } : undefined;
+          const finalized = await this.repository.finalizeCall(episode, { callId, effective, requestElapsedMs, code: safe.code, output: partialOutput }).catch(() => false);
+          // Collector has not dispatched anything from an incomplete response.
+          // Only typed malformed-input rejection or truncation is recoverable.
+          if (finalized && !signal.aborted && ['OUTPUT_TRUNCATED', 'INVALID_TOOL_INPUT'].includes(safe.code) && inputCorrections++ < 2) {
+            transcript.instruct(JSON.stringify({ code: safe.code, rejectedBeforeExecution: true,
+              instruction: phase === 'cognition'
+                ? 'Return smaller complete final cognitive JSON with next:null; tools remain disabled. Do not repeat prior completed operations.'
+                : 'No tools in that rejected response executed. Return smaller complete tool arguments or public result. Do not repeat prior completed operations.' }));
             continue;
           }
           throw safe;
         }
         const requestElapsedMs = this.finishUsage(job, true);
-        // A narrow once-only finalizer can retain consumed output after cancellation, never state.
-        // Complete public output remains durable even if proposal validation subsequently rejects it.
-        if (!await this.repository.finalizeCall(episode, { callId, effective, output, requestElapsedMs })) fail('STALE');
-        outputRecovery = null;
+        if (!await this.repository.finalizeCall(episode, { callId, effective,
+          output: { ...output, protocol: phase === 'execution' ? 'native-tools' : 'cognition' }, requestElapsedMs })) fail('STALE');
         await this.boundary(job, 'validating');
-        let proposal;
-        try {
-          try { proposal = JSON.parse(output.text); } catch { fail('INVALID_PROPOSAL'); }
-          validateProposal(proposal, { stateVersion: episode.baseStateVersion, sourceRefs: context.sourceRefs, concepts: readConcepts, sources: readSources, catalog: provider.catalog, dream: episode.kind === 'dream' });
-        } catch (error) {
-          const safe = safeError(error, 'INVALID_PROPOSAL');
-          await this.repository.append(episode, 'proposal_rejected', { callId, code: safe.code });
-          throw safe;
-        }
-        if (Object.hasOwn(proposal, 'work')) episodeWork = proposal.work;
-        await this.repository.append(episode, 'activity', { callId, activity: proposal.activity, decision: proposal.decision, disposition: proposal.next ? 'candidate' : 'proposed-commit' });
-        if (!proposal.next) {
-          await this.boundary(job, 'committing', null, () => this.repository.commit(episode, proposal, selection, callId, new Map(proposal.concepts.map(c => [c.id, c.epistemicState === 'reported' ? reportedLineage(c, readSources) : []]))));
+        if (phase === 'cognition') {
+          let proposal;
+          try {
+            try { proposal = JSON.parse(output.text); } catch { fail('INVALID_PROPOSAL'); }
+            validateProposal(proposal, { stateVersion: episode.baseStateVersion, sourceRefs, concepts: readConcepts,
+              sources: readSources, catalog: provider.catalog, dream: episode.kind === 'dream' });
+          } catch (error) {
+            const safe = safeError(error, 'INVALID_PROPOSAL');
+            const diagnostics = proposalDiagnostics(proposal, { sourceRefs, concepts: readConcepts });
+            await this.repository.append(episode, 'proposal_rejected', { callId, code: safe.code, diagnostics });
+            if (safe.code !== 'INVALID_PROPOSAL' || corrections++ >= 2) throw safe;
+            transcript.response(output);
+            transcript.instruct(JSON.stringify({ phase: 'cognition-correction', diagnostics,
+              instruction: 'Correct only the final public cognitive JSON. next:null; tools remain disabled and completed operations must not replay. Do not invent refs or weaken reported lineage.' }));
+            continue;
+          }
+          await this.repository.append(episode, 'activity', { callId, activity: proposal.activity, decision: proposal.decision, disposition: 'proposed-commit' });
+          await this.boundary(job, 'committing', null, () => this.repository.commit(episode, proposal, selection, callId,
+            new Map(proposal.concepts.map(c => [c.id, c.epistemicState === 'reported' ? reportedLineage(c, readSources) : []]))));
           return;
         }
-        let richSummary = null;
-        if (proposal.next.capability?.id === 'PresentResponse') {
-          // Suppress only a valid planned delivery; invalid rich input must not
-          // consume an otherwise valid ordinary progress reply.
-          try { richSummary = personPresentation(proposal.next.capability.args).summary; } catch {}
+        const group = transcript.response(output);
+        // Native public text is already drained and durably bound to this exact
+        // call. Publish useful progress at the existing cadence, without another
+        // model request or a cognitive proposal between tool steps.
+        let delivery = null;
+        if (output.text.trim() && this.repository.publishProgress) {
+          const final = !output.toolCalls?.length;
+          delivery = await this.boundary(job, 'validating', null, () => this.repository.publishProgress(episode, { callId, reply: output.text, final }));
         }
-        if (proposal.reply && (richSummary === null || proposal.reply.trim() !== richSummary.trim())) {
-          const published = await this.boundary(job, 'publishing', null, () => this.repository.publishProgress(episode, { callId, reply: proposal.reply }));
-          if (published) { lastReply = published.text; lastReplyAt = new Date(published.createdAt).getTime(); }
+        if (!output.toolCalls?.length) {
+          phase = 'cognition';
+          transcript.instruct(JSON.stringify({ phase: 'final-cognition', baseStateVersion: episode.baseStateVersion,
+            ...(delivery ? { executionDelivery: { messageId: delivery.id, alreadyPublished: true } } : {}),
+            sourceRefs: [...sourceRefs], instruction: 'Execution has ended. Distill once into the final strict cognitive JSON; next:null. Preserve actual results and unfinished blockers. The native public result is already delivered when executionDelivery is present; use reply:null unless a substantive correction or additional delivery is needed. Tool observations never establish user-reported lineage.' }));
+          continue;
         }
-        // The tool belongs to the response just received, not to next.model.
-        // Retain requested intent separately from the provider's observed wire.
-        toolSelection = { model: requested.model, effort: requested.effort };
-        toolEffortDecision = { requested: requested.effort, effective: effective.effort,
-          model: requested.model, source: 'auto', wireMode: effective.wireMode ?? 'omitted',
-          thinkingEnabled: effective.thinkingEnabled === true, ...observedEffortDecision };
-        previous = proposal;
-        selection = { model: proposal.next.model, effort: proposal.next.effort, reason: proposal.next.reason, origin: 'person' };
-        // The current result already has a complete mandatory slot. Move it to
-        // bounded history only when advancing, including a cognition-only step.
-        if (latestExecution) {
-          episodeProgress.push(latestExecution);
-          while (episodeProgress.length > 16 || bytes(episodeProgress) > 8192) { episodeProgress.shift(); omittedEpisodeProgress++; }
-        }
-        latestExecution = null;
-        capabilityResult = null;
-        if (proposal.next.capability) {
-          const invocation = proposal.next.capability;
+        // Delegation inherits the producing request's observed, representable
+        // effort rather than an obsolete proposal.next selection. The child
+        // boundary still pins the admitted model and applies its own ceiling.
+        const modelEfforts = provider.catalog.find(model => model.id === requested.model)?.efforts ?? [];
+        toolSelection = { ...requested, effort: effective.effortObserved && modelEfforts.includes(effective.effort) ? effective.effort : requested.effort };
+        toolEffortDecision = { requested: requested.effort, effective: effective.effort, model: requested.model,
+          source: 'auto', wireMode: effective.wireMode ?? 'omitted', thinkingEnabled: effective.thinkingEnabled === true, ...observedEffortDecision };
+        for (let toolIndex = 0; toolIndex < output.toolCalls.length; toolIndex++) {
+          const toolCall = output.toolCalls[toolIndex], traceCallId = randomUUID();
+          let invocation, inputError = null;
+          try {
+            invocation = capabilities.invocation(toolCall.name, toolCall.input);
+            const schema = tools.find(tool => tool.name === toolCall.name)?.parameters;
+            if (!schema) fail('UNSUPPORTED');
+            try {
+              if (!toolCall.malformed) {
+                validateToolArguments(toolCall.input, schema);
+                validateCapabilityArguments(invocation);
+              }
+            } catch (error) {
+              const safe = safeError(error, 'INVALID_TOOL_INPUT');
+              if (safe.code !== 'INVALID_TOOL_INPUT') throw error;
+              inputError = safe;
+            }
+          }
+          catch (error) {
+            // Collector already rejected unknown names before any batch effect.
+            // A catalog/authority mismatch at this boundary is not retry-safe.
+            throw safeError(error, 'UNSUPPORTED');
+          }
           const manifest = capabilities.executionManifest(invocation.id);
-          const execution = manifest ? { capabilityManifest: manifest } : {};
-          await this.boundary(job, 'capability', invocation.id, () => this.repository.startCapability(episode, { callId, capability: invocation, ...execution, access: capabilities.active.get(invocation.id)?.access ?? 'catalog-read' }));
-          capabilityResult = null;
-          let finalized = false;
-          const finalize = async (result, code) => {
-            const accepted = await this.repository.finalizeCapability(episode, { callId, capability: invocation, result, code,
+          await this.boundary(job, 'capability', invocation.id, () => this.repository.startCapability(episode, {
+            callId: traceCallId, modelCallId: callId, toolUseId: toolCall.id, toolIndex, capability: invocation,
+            capabilityManifest: manifest, access: capabilities.active.get(invocation.id)?.access,
+          }));
+          let result, finalized = false;
+          const finalize = async (value, code) => {
+            const accepted = await this.repository.finalizeCapability(episode, { callId: traceCallId, capability: invocation, result: value, code,
               terminalCode: signal.aborted ? safeError(signal.reason, 'INTERRUPTED').code : null });
-            finalized = true;
-            return accepted;
+            finalized = true; return accepted;
           };
-          finalizeNativeResult = async result => {
-            capabilityResult = result;
-            if (!await finalize(result) && !signal.aborted) fail('STALE');
-          };
+          finalizeNativeResult = async value => { result = value; if (!await finalize(value) && !signal.aborted) fail('STALE'); };
           try {
             signal.throwIfAborted();
-            capabilityResult = await this.boundary(job, 'capability', invocation.id, () => {
-              // Native host and script execution join their actual work before close.
-              const executionPromise = capabilities.execute(invocation, { signal, callId });
-              return isNativeTool(invocation.id) || invocation.id === 'Output.publish' || invocation.id === 'PresentResponse' || invocation.id === 'Capability.create' || invocation.id.startsWith('Script.')
-                ? executionPromise : abortable(executionPromise, signal);
-            });
-            if (!finalized && !await finalize(capabilityResult)) fail('STALE');
-            if (invocation.id === 'PresentResponse' && capabilityResult?.published) {
-              lastReply = capabilityResult.summary;
-              lastReplyAt = new Date(capabilityResult.createdAt).getTime();
+            if (toolCall.malformed || inputError) {
+              result = { ok: false, code: 'INVALID_TOOL_INPUT', errorEffect: 'none', replaySafe: true, output: 'Malformed or schema-invalid provider tool arguments. Nothing executed; correct only the arguments.' };
+              if (inputCorrections++ >= 2) fail('INVALID_TOOL_INPUT');
+            } else {
+              result = await this.boundary(job, 'capability', invocation.id, () => capabilities.execute(invocation, { signal, callId: traceCallId }));
             }
+            if (!finalized && !await finalize(result)) fail('STALE');
             signal.throwIfAborted();
-            if (capabilityResult?.terminal) fail('TOOL_EFFECT_UNCONFIRMED');
-            // Discovery/method contracts are already available in capabilities;
-            // keep result evidence, not another copy of those instructions.
-            if (!invocation.id.startsWith('catalog.') && capabilityResult?.access !== 'method-only') {
-              latestExecution = executionReceipt(callId, invocation.id, capabilityResult);
-              executionProgress.observe(callId, invocation, capabilityResult);
-            }
-            // Raw tool result above remains durable; only this next-call copy is budgeted.
-            if (isNativeTool(invocation.id)) capabilityResult = projectNativeResult(capabilityResult);
+            // A confirmed nonzero exit is useful failure evidence (for example a
+            // failing test), not proof of rollback or permission to replay it.
+            // Only unconfirmed process/effect termination blocks the next step.
+            if (result?.terminal) fail('TOOL_EFFECT_UNCONFIRMED');
+            const projection = transcript.result(group, toolCall.id, traceCallId, invocation, result);
+            // Recall pages carry structured message/concept reads; if projection
+            // cannot retain them it must not manufacture their provenance.
+            observe(projection);
           } catch (error) {
             const safe = safeError(error, 'UNSUPPORTED');
-            if (!finalized) await finalize(capabilityResult ?? undefined, safe.code).catch(() => {});
+            if (!finalized) await finalize(result, safe.code).catch(() => {});
             throw safe;
           } finally { finalizeNativeResult = null; }
         }

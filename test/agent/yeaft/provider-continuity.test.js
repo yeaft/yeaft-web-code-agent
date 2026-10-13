@@ -241,7 +241,10 @@ describe('native provider wire contracts', () => {
     anthropicItems.forEach((content_block, index) => events.push({ type: 'content_block_start', index, content_block }, { type: 'content_block_stop', index }));
     events.push({ type: 'message_delta', delta: { stop_reason: 'tool_use' } });
     vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(sse(events))));
-    await expect(collect(new AnthropicAdapter({ apiKey: 'synthetic' }).stream({ model: 'claude-sonnet-4', messages: [], requestIdentity: identity, providerContext: context('anthropic') }))).rejects.toThrow(/before stop event/);
+    const seen = await collect(new AnthropicAdapter({ apiKey: 'synthetic' }).stream({ model: 'claude-sonnet-4', messages: [], requestIdentity: identity, providerContext: context('anthropic') }));
+    expect(seen.some(e => e.type === 'tool_call' || e.type === 'provider_state')).toBe(false);
+    expect(seen.find(e => e.type === 'error')).toMatchObject({ retryable: false, error: { toolInputRejected: true } });
+    expect(seen.find(e => e.type === 'error').error.message).toMatch(/before stop event/);
   });
 
   it('sends eager tool streaming only to verified Anthropic routes, with model overrides', async () => {

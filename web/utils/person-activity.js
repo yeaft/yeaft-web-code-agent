@@ -76,8 +76,9 @@ export function projectPersonActivity(state, gate = '') {
   for (const record of records) {
     const model = record.kind.startsWith('call_');
     if (!model && !record.kind.startsWith('capability_')) continue;
-    // A capability belongs to the model call which requested it, not the next
-    // call. Keep their lifecycles separate even though callId is shared.
+    // New tool callId is an independent trace UUID, not modelCallId or the
+    // provider tool-use ID. Legacy scalar tools shared callId with the model;
+    // the kind prefix keeps that older lifecycle separate too.
     const identity = `${model ? 'model' : 'capability'}:${record.callId || record.id}`;
     let row = calls.get(identity);
     if (!row) {

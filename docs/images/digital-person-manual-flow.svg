@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1380" viewBox="0 0 1120 1380" role="img" aria-labelledby="title desc">
-  <title id="title">数字人当前手动认知工作流</title>
-  <desc id="desc">用户发送消息、点击思考或遐想，经 Server 鉴权和 Agent 认知库准入后，组装短期上下文并在事务外调用模型。实例 yeaftDir 下的 SQLite person.db 是唯一认知权威；旧外部数据库数据不会被迁移或删除。独立 recall.db 在 worker 中追平 memory_changes，FTS5 和本地向量混合召回后回读权威当前版本；Trace 不做向量索引。结束时短事务原子提交认识与检索变更日志。页面只读同步消息、思考记录和调试日志。Agent 退出停止计算但记忆保留，没有自动唤醒。</desc>
+  <title id="title">数字人当前 native 连续工具与最终认知工作流</title>
+  <desc id="desc">用户显式 Send、Think 或 Dream，经 Server 鉴权和 Agent 认知库准入后，在同一个 Person、Soul 和 episode 中连续使用 native tools。每个执行请求提供完整可用 schemas，无需 catalog.view。模型完整响应归档后派发多个独立工具调用，各有 trace callId 与 modelCallId、toolUseId、toolIndex；原始成果存 trace，真实 tool role 延续对话，请求副本有界并保留 evidence receipts，通过 Execution.read 回读而不重放副作用。无工具 end_turn 后禁用 tools，请求一次 next:null 的最终认知 JSON，坏 JSON 或 sourceRefs 最多两次额外修正。通过校验后 SQLite 原子提交。公开进展绑定完整文本，不要求每 loop activity，模型 usage 只累计一次。主执行无累计调用或整轮时间额度，保留资源边界；32K 等小窗口 full tools 可能装不下，安全拒绝。暂停继续同一 episode 不重放，取消保留已执行成果且不保证回滚。不开启自动后台唤回，不创建 Session 或 WorkItem。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#526078"/></marker>
     <style>
@@ -18,7 +18,7 @@
   </defs>
   <rect width="1120" height="1380" rx="16" fill="#f7f9fc"/>
   <text class="title" x="560" y="45" text-anchor="middle">数字人如何完成一轮“想”</text>
-  <text class="detail" x="560" y="77" text-anchor="middle">手动模式 · SQLite 唯一权威 + 本地召回 · 一次操作可含多个认知 Loop</text>
+  <text class="detail" x="560" y="77" text-anchor="middle">显式触发 · 同一 Person / Soul / episode · 连续工具后一次最终认知</text>
 
   <rect class="accent" x="230" y="102" width="590" height="80"/>
   <text class="label" x="525" y="134" text-anchor="middle">1. 用户显式触发</text>
@@ -35,30 +35,33 @@
   <path class="line" d="M525 416V445"/>
   <rect class="box" x="230" y="448" width="590" height="90"/>
   <text class="label" x="525" y="481" text-anchor="middle">4. 组装 context：本次调用的短期记忆</text>
-  <text class="detail" x="525" y="511" text-anchor="middle">Soul + 当前状态 + 触发 + 有界消息 / Concept + 能力结果</text>
+  <text class="detail" x="525" y="511" text-anchor="middle">Soul + 已接受状态 + 触发 + 有界消息 / Concept</text>
   <path class="line" d="M525 538V567"/>
   <rect class="accent" x="230" y="570" width="590" height="90"/>
-  <text class="label" x="525" y="603" text-anchor="middle">5. 模型承载 Person 的判断（事务外）</text>
-  <text class="detail" x="525" y="633" text-anchor="middle">产生结构化想法、判断、自判、状态提案与下一步</text>
+  <text class="label" x="525" y="603" text-anchor="middle">5. Person 连续 native 对话（事务外）</text>
+  <text class="detail" x="525" y="633" text-anchor="middle">每请求完整 tools schemas · 直接调用 · 无需 view</text>
   <path class="line" d="M525 660V689"/>
   <rect class="box" x="230" y="692" width="590" height="90"/>
-  <text class="label" x="525" y="725" text-anchor="middle">6. 保存公开输出，校验提案</text>
-  <text class="detail" x="525" y="755" text-anchor="middle">格式、读过的来源、事实 / 想象标记、版本、模型选择</text>
+  <text class="label" x="525" y="725" text-anchor="middle">6. 完整响应归档 → 校验 / 执行工具</text>
+  <text class="detail" x="525" y="755" text-anchor="middle">原始成果存 Trace · 真实 tool role 返回 · usage 一次</text>
   <path class="line" d="M525 782V811"/>
-  <rect class="box" x="230" y="814" width="590" height="70"/>
-  <text class="label" x="525" y="856" text-anchor="middle">7. Runtime 按提案 next 分支：继续 / 提交</text>
+  <rect class="accent" x="230" y="814" width="590" height="90"/>
+  <text class="label" x="525" y="847" text-anchor="middle">7. tools 禁用：一次最终认知 JSON</text>
+  <text class="small" x="525" y="878" text-anchor="middle">next:null · 坏 JSON / sourceRefs 最多 2 次额外修正</text>
 
-  <path class="line" d="M230 848H115V777"/>
-  <text class="small" x="145" y="836">继续</text>
+  <path class="line" d="M230 736H213V794H115V777"/>
+  <text class="small" x="28" y="815">tool_use：继续原对话</text>
   <rect class="accent" x="20" y="572" width="190" height="202"/>
-  <text class="label" x="115" y="606" text-anchor="middle">下一次调用</text>
-  <text class="detail" x="115" y="645" text-anchor="middle">自选模型 / effort</text>
-  <text class="detail" x="115" y="678" text-anchor="middle">可选只读能力</text>
-  <text class="small" x="115" y="714" text-anchor="middle">搜索 → 查看 → 使用</text>
-  <text class="small" x="115" y="746" text-anchor="middle">候选还不是当前认识</text>
-  <path class="line" d="M115 572V493H227"/>
-  <path class="line" d="M525 884V923"/>
-  <text class="small" x="542" y="910">结束：next = null</text>
+  <text class="label" x="115" y="606" text-anchor="middle">工具结果延续</text>
+  <text class="detail" x="115" y="645" text-anchor="middle">独立 trace callId</text>
+  <text class="detail" x="115" y="678" text-anchor="middle">有界请求副本</text>
+  <text class="small" x="115" y="714" text-anchor="middle">evidence receipts</text>
+  <text class="small" x="115" y="746" text-anchor="middle">Execution.read 回读</text>
+  <path class="line" d="M115 572V557H525V567"/>
+  <text class="small" x="542" y="805">无工具 end_turn</text>
+  <path class="line" d="M525 904V923"/>
+  <text class="small" x="65" y="865">修正仍禁用 tools</text>
+  <text class="small" x="65" y="892">绝不回放副作用</text>
 
   <rect class="storage" x="850" y="448" width="250" height="105"/>
   <text class="label" x="975" y="482" text-anchor="middle">person.db · 认知权威</text>
@@ -73,9 +76,9 @@
   <path class="line dashed" d="M850 616H835V518H823"/>
   <rect class="storage" x="850" y="692" width="250" height="126"/>
   <text class="label" x="975" y="726" text-anchor="middle">持久认知记录</text>
-  <text class="small" x="975" y="756" text-anchor="middle">每次输入、公开输出、能力</text>
-  <text class="small" x="975" y="781" text-anchor="middle">候选 / 提交 / 终态与版本</text>
-  <text class="small" x="975" y="805" text-anchor="middle">无隐藏推理 · 不做向量索引</text>
+  <text class="small" x="975" y="756" text-anchor="middle">原始工具成果 / 完整文本</text>
+  <text class="small" x="975" y="781" text-anchor="middle">父模型 / toolUseId / index</text>
+  <text class="small" x="975" y="805" text-anchor="middle">进展绑定 complete text</text>
   <path class="line dashed" d="M820 736H847"/>
 
   <rect class="storage" x="230" y="926" width="590" height="90"/>
@@ -90,15 +93,15 @@
   <path class="line" d="M525 1113V1136H913V1156"/>
   <rect class="box" x="42" y="1160" width="290" height="72"/>
   <text class="label" x="187" y="1190" text-anchor="middle">消息</text>
-  <text class="small" x="187" y="1217" text-anchor="middle">用户消息与已提交的对外回复</text>
+  <text class="small" x="187" y="1217" text-anchor="middle">用户消息、公开进展与最终回复</text>
   <rect class="accent" x="380" y="1160" width="290" height="72"/>
   <text class="label" x="525" y="1190" text-anchor="middle">思考记录</text>
-  <text class="small" x="525" y="1217" text-anchor="middle">输入、记忆、想法、自判、采纳</text>
+  <text class="small" x="525" y="1217" text-anchor="middle">最终判断、自判与采纳状态</text>
   <rect class="box" x="768" y="1160" width="290" height="72"/>
   <text class="label" x="913" y="1190" text-anchor="middle">调试日志</text>
   <text class="small" x="913" y="1217" text-anchor="middle">技术事件、请求参数、状态版本</text>
 
-  <text class="detail" x="560" y="1280" text-anchor="middle">取消 / 失败 / 租约中断：终止并记载结果，不提交候选认识</text>
-  <text class="small" x="560" y="1312" text-anchor="middle">无主调用次数额度 / 无整轮时限；管理页可暂停/继续；已提交记忆保留</text>
-  <text class="small" x="560" y="1344" text-anchor="middle">旧外部数据库不迁移、不删除；重连 / 刷新 / 空闲不启动思考</text>
+  <text class="detail" x="560" y="1280" text-anchor="middle">暂停 / 继续同一 episode 不重放；取消保留已执行成果，不保证回滚</text>
+  <text class="small" x="560" y="1312" text-anchor="middle">无主累计调用 / 整轮时限；保留资源边界；32K 小窗口 full tools 可能安全拒绝</text>
+  <text class="small" x="560" y="1344" text-anchor="middle">无后台自动唤回 / Session / WorkItem 创建；执行链验证不保证真实模型质量</text>
 </svg>

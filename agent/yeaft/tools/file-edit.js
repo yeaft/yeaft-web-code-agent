@@ -48,6 +48,7 @@ Guidelines:
       },
       old_string: {
         type: 'string',
+        minLength: 1,
         description: {
           en: 'The exact text to find and replace',
           zh: '要查找并替换的精确文本',
@@ -76,7 +77,9 @@ Guidelines:
   async execute(input, ctx) {
     const { file_path, old_string, new_string, replace_all = false } = input;
     if (!file_path) return JSON.stringify({ errorEffect: 'none', error: 'file_path is required' });
-    if (old_string === undefined) return JSON.stringify({ errorEffect: 'none', error: 'old_string is required' });
+    // Guard even callers that bypass schema validation, before any filesystem IO.
+    // An empty needle never advances the synchronous occurrence-counting loop.
+    if (typeof old_string !== 'string' || old_string.length === 0) return JSON.stringify({ errorEffect: 'none', error: 'old_string must be non-empty text' });
     if (new_string === undefined) return JSON.stringify({ errorEffect: 'none', error: 'new_string is required' });
     if (old_string === new_string) return JSON.stringify({ errorEffect: 'none', error: 'old_string and new_string are identical' });
 

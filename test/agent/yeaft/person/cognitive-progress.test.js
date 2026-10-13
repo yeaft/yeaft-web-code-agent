@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { createPersonService } from './fixture-adapter.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
 import { assembleContext, executionReceipt } from '../../../../agent/yeaft/person/runtime.js';
 import { bytes, PROPOSAL_INSTRUCTIONS, validateProposal } from '../../../../agent/yeaft/person/contracts.js';
@@ -115,53 +115,50 @@ describe('Person cognitive progress', () => {
     expect(snapshot.state.version).toBe(1);
   });
 
-  it('carries real multi-tool results through a cognitive check to an artifact and reusable finding', async () => {
-    const dir = await directory(), seen = [];
+  it('carries real multi-tool results continuously to an artifact before one reusable cognitive finding', async () => {
+    const dir = await directory(), seen = [], refs = [];
     await writeFile(join(dir, 'alpha.txt'), 'alpha: 3'); await writeFile(join(dir, 'beta.txt'), 'beta: 7');
-    const service = create(dir, (input, p) => {
-      seen.push(input);
-      const step = seen.length;
-      if (step === 1) use(p, 'catalog.view', { id: 'FileRead' });
-      if (step === 2) use(p, 'FileRead', { file_path: join(dir, 'alpha.txt') });
-      if (step === 3) {
-        expect(input.episodeProgress).toBeUndefined(); // Current result is not duplicated.
-        expect(input.capabilityResult.output).toContain('alpha: 3');
-        use(p, 'FileRead', { file_path: join(dir, 'beta.txt') });
+    const adapter = { async *stream(params) {
+      seen.push(params);
+      const results = params.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content));
+      if (seen.length === 1) {
+        yield { type: 'tool_call', id: 'alpha', name: 'FileRead', input: { file_path: join(dir, 'alpha.txt') } };
+        yield { type: 'tool_call', id: 'beta', name: 'FileRead', input: { file_path: join(dir, 'beta.txt') } };
+        yield { type: 'stop', stopReason: 'tool_use' }; return;
       }
-      if (step === 4) {
-        expect(input.episodeProgress.items).toHaveLength(1);
-        expect(input.episodeProgress.items[0].preview).toContain('alpha: 3');
-        expect(input.capabilityResult.output).toContain('beta: 7');
-        use(p, null); // A genuinely different check does not erase execution evidence.
+      expect(results[0].output).toContain('alpha: 3'); expect(results[1].output).toContain('beta: 7');
+      if (seen.length === 2) {
+        expect(params.tools.length).toBeGreaterThan(0);
+        refs.push(...results.map(result => result.sourceRef));
+        yield { type: 'tool_call', id: 'finding', name: 'FileWrite', input: { file_path: join(dir, 'finding.md'), content: 'Total: 10; compare both independent inputs before aggregating.' } };
+        yield { type: 'stop', stopReason: 'tool_use' }; return;
       }
-      if (step === 5) {
-        expect(input.capabilityResult).toBeNull();
-        expect(input.episodeProgress.items.map(item => item.capability)).toEqual(['FileRead', 'FileRead']);
-        use(p, 'catalog.view', { id: 'FileWrite' });
-      }
-      if (step === 6) {
-        const receipts = input.episodeProgress.items;
-        expect(receipts[0].preview).toContain('alpha: 3'); expect(receipts[1].preview).toContain('beta: 7');
-        use(p, 'FileWrite', { file_path: join(dir, 'finding.md'), content: 'Total: 10; compare both independent inputs before aggregating.' });
-      }
-      if (step === 7) {
-        expect(input.capabilityResult.ok).toBe(true);
-        p.concepts = [{ id: 'cross-check', expectedRevision: 0, kind: 'method', statement: 'Compare independent inputs before aggregation; retain their provenance.', epistemicState: 'hypothesis', sourceRefs: input.episodeProgress.items.map(item => item.sourceRef), associations: [] }];
+      expect(results[2].ok).toBe(true);
+      if (seen.length === 3) {
+        expect(params.tools.length).toBeGreaterThan(0);
+        yield { type: 'text_delta', text: 'Compared both inputs and saved Total: 10.' };
+      } else {
+        expect(params.tools).toEqual([]);
+        const input = JSON.parse(params.messages[0].content), p = proposal(input.state.version);
+        p.concepts = [{ id: 'cross-check', expectedRevision: 0, kind: 'method', statement: 'Compare independent inputs before aggregation; retain their provenance.', epistemicState: 'hypothesis', sourceRefs: refs, associations: [] }];
         p.state.focusConceptIds = ['cross-check']; p.state.continuation = null;
         p.activity.summary = 'Compared two results and saved a reusable validation method.';
+        yield { type: 'text_delta', text: JSON.stringify(p) };
       }
-      return p;
-    });
+      yield { type: 'stop', stopReason: 'end_turn' };
+    } };
+    const service = createPersonService({ yeaftDir: dir, workDir: dir, config, adapter, nativeFixture: false, embedding: { enabled: false } });
+    services.push(service);
     await request(service, 'open');
     await request(service, 'think', { text: 'Compare the fixture inputs and save a finding.', clientMessageId: 'integrate' });
     expect((await idle(service)).latestEpisode.status).toBe('completed');
-    expect(seen).toHaveLength(7);
+    expect(seen).toHaveLength(4);
     expect(await readFile(join(dir, 'finding.md'), 'utf8')).toContain('Total: 10');
     expect((await request(service, 'inspect', { section: 'memory' })).items[0].id).toBe('cross-check');
     const traces = (await request(service, 'traces', { limit: 50 })).items;
-    const last = traces.filter(t => t.kind === 'call_started').at(0);
-    expect(last.manifest.contextSources.episodeExecutions).toBe(2);
-    expect(last.manifest.renderedSourceRefs).toEqual(expect.arrayContaining(seen[6].episodeProgress.items.map(item => item.sourceRef)));
+    expect(traces.filter(trace => trace.kind === 'activity')).toHaveLength(1);
+    expect(traces.filter(trace => trace.kind === 'committed')).toHaveLength(1);
+    expect(traces.filter(trace => trace.kind === 'call_started').at(0).manifest.renderedSourceRefs).toEqual(expect.arrayContaining(refs));
   });
 
   it('allows Dream to distill a hypothesis privately and then rest without redundant concepts or tools', async () => {
