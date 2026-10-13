@@ -22,7 +22,6 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 import SessionCreateModal from './SessionCreateModal.js';
-import SidebarModeToggle from './SidebarModeToggle.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
 import SidebarWorkCenter from './SidebarWorkCenter.js';
 import SidebarDigitalPerson from './SidebarDigitalPerson.js';
@@ -33,7 +32,7 @@ import { buildYeaftSidebarSessionList } from '../stores/helpers/yeaft-sidebar-se
 
 export default {
   name: 'YeaftSidebar',
-  components: { NavigationIcon, SessionCreateModal, SidebarModeToggle, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList },
+  components: { NavigationIcon, SessionCreateModal, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-agent-settings', 'open-group-settings'],
   template: `
     <SessionSidebarShell class="yeaft-sidebar" :collapsed="collapsed">
@@ -50,7 +49,7 @@ export default {
         <SidebarDigitalPerson :collapsed="true" />
         <SidebarWorkCenter
           v-if="chatStore && chatStore.workCenterUiEnabled"
-          :agents="chatStore.agents"
+          :agents="chatStore?.agents"
           :active-agent-id="chatStore.workCenterAgentId"
           :collapsed="true"
           @open="onOpenWorkCenter"
@@ -81,11 +80,10 @@ export default {
             @upgrade-all-agents="upgradeAllAgents"
           />
           <div class="sidebar-header-actions">
-            <SidebarModeToggle v-if="!chatStore || !chatStore.sessionCatalogLoaded" view="yeaft" @flip="onModeFlip" />
             <SidebarDigitalPerson />
             <SidebarWorkCenter
               v-if="chatStore && chatStore.workCenterUiEnabled"
-              :agents="chatStore.agents"
+              :agents="chatStore?.agents"
               :active-agent-id="chatStore.workCenterAgentId"
               @open="onOpenWorkCenter"
             />
@@ -97,100 +95,21 @@ export default {
       </div>
 
       <UnifiedSessionList
-        v-if="chatStore && chatStore.sessionCatalogLoaded"
-        :sessions="chatStore.sessionCatalog"
+        :sessions="chatStore?.sidebarSessionCatalog || chatStore?.sessionCatalog || []"
+        :loading="chatStore ? (chatStore.sidebarSessionCatalogLoading ?? !chatStore.sessionCatalogLoaded) : false"
         :project-store="chatStore"
-        :active-route="chatStore.activeSessionRoute"
+        :active-route="chatStore?.activeSessionRoute"
         :is-session-unread="isCatalogSessionUnread"
-        :processing-conversations="chatStore.processingConversations"
-        :is-yeaft-session-processing="chatStore.isYeaftSessionProcessing"
-        :agents="chatStore.agents"
-        :work-center-open="chatStore.workCenterOpen"
-        @select="chatStore.openCatalogSession"
+        :processing-conversations="chatStore?.processingConversations"
+        :is-yeaft-session-processing="chatStore?.isYeaftSessionProcessing"
+        :agents="chatStore?.agents"
+        :work-center-open="chatStore?.workCenterOpen"
+        @select="chatStore?.openCatalogSession"
         @create="onUnifiedCreate"
         @create-in-project="onUnifiedCreateInProject"
-        @close-work-center="chatStore.leaveWorkCenter"
+        @close-work-center="chatStore?.leaveWorkCenter"
         @action="onUnifiedSessionAction"
       />
-
-      <div v-else class="us-scroll us-scroll-flush">
-        <!-- Legacy Yeaft list stays available until the catalog snapshot arrives. -->
-        <div class="session-tab-bar">
-          <div class="session-tab session-tab-solo active">
-            <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
-            <span>{{ $t('yeaft.session.title') }}</span>
-            <span class="session-tab-count" v-if="sessionList.length > 0">{{ sessionList.length }}</span>
-            <button
-              type="button"
-              class="session-tab-add-btn"
-              :title="$t('yeaft.session.new')"
-              :aria-label="$t('yeaft.session.new')"
-              @click.stop="onOpenSessionCreate"
-            >
-              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-            </button>
-          </div>
-        </div>
-
-        <div class="session-panels">
-          <div class="session-panel-list">
-            <template v-if="sessionList.length > 0">
-              <div
-                v-for="s in sessionList"
-                :key="s.kind + ':' + sessionDragKey(s.raw)"
-                class="session-item yeaft-session-draggable"
-                :class="{ active: s.active, pinned: s.pinned, processing: s.processing || isSessionProcessing(s.id, s.raw?.agentId || null), dragging: draggedSessionKey === sessionDragKey(s.raw), 'drag-over': dragOverSessionKey === sessionDragKey(s.raw) }"
-                draggable="true"
-                @dragstart="onSessionDragStart(s.raw, $event)"
-                @dragover.prevent="onSessionDragOver(s.raw, $event)"
-                @dragleave="onSessionDragLeave(s.raw, $event)"
-                @drop.prevent="onSessionDrop(s.raw, $event)"
-                @dragend="onSessionDragEnd"
-                @click="onSelectGroup(s.raw)"
-                @contextmenu.prevent="openGroupMenu(s.raw, $event)"
-              >
-                <div class="session-item-header">
-                  <span v-if="s.pinned" class="session-pin-icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
-                  <span v-if="chatStore && chatStore.isYeaftSessionUnread(s.id, s.raw.agentId)" class="unread-dot" aria-hidden="true"></span>
-                  <span v-else-if="s.processing || isSessionProcessing(s.id, s.raw?.agentId || null)" class="processing-dot" aria-hidden="true"></span>
-                  <div class="title" :title="groupDisplayName(s.raw)">
-                    <span>{{ groupDisplayName(s.raw) }}</span>
-                  </div>
-                  <span class="session-time" v-if="groupTime(s.raw)">{{ groupTime(s.raw) }}</span>
-                  <button
-                    type="button"
-                    class="session-dots-btn"
-                    :class="{ 'menu-open': groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw) }"
-                    :title="$t('yeaft.session.moreActions')"
-                    :aria-label="$t('yeaft.session.moreActions')"
-                    aria-haspopup="menu"
-                    :aria-expanded="groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw) ? 'true' : 'false'"
-                    @click.stop="openGroupMenu(s.raw, $event)"
-                  >
-                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-                  </button>
-                  <div v-if="groupMenu.open && groupMenu.groupId === sessionDragKey(s.raw)" class="session-menu" role="menu" @click.stop>
-                    <button type="button" role="menuitem" class="session-menu-item" @click="onTogglePin(s.raw)">
-                      {{ isSessionPinned(s) ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin') }}
-                    </button>
-                    <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'session')">
-                      {{ $t('yeaft.session.openSettings') }}
-                    </button>
-                    <button type="button" role="menuitem" class="session-menu-item" @click="onRemoveFromList(s.raw)">
-                      {{ $t('sidebar.sessions.remove') }}
-                    </button>
-                  </div>
-                </div>
-                <div class="session-info">
-                  <span class="session-path">{{ groupPath(s.raw) }}</span>
-                  <span class="session-agent" v-if="sessionAgentName(s.raw)">{{ sessionAgentName(s.raw) }}</span>
-                </div>
-              </div>
-            </template>
-            <div v-else class="session-empty-hint">{{ $t('yeaft.session.empty') }}</div>
-          </div>
-        </div>
-      </div>
 
       <!-- H2.f.6: merge target picker + irreversible confirm dialog removed. -->
 

@@ -1999,7 +1999,7 @@ describe('message flow regressions', () => {
     expect(variables).not.toContain('--yeaft-composer-max-width');
     expect(yeaftSidebarCss).toMatch(/\.sidebar-primary-actions\s*\{[^}]*padding:\s*6px 8px 4px/);
     expect(yeaftSidebarCss).toMatch(/\.sidebar-primary-action\s*\{[^}]*min-height:\s*34px[^}]*border:\s*0[^}]*background:\s*transparent[^}]*font:\s*inherit[^}]*font-size:\s*14px/);
-    expect(yeaftSidebarCss).toMatch(/\.sidebar-primary-action:hover,[^{]*\{[^}]*background:\s*var\(--sidebar-hover\)/);
+    expect(yeaftSidebarCss).toMatch(/\.sidebar-primary-action:hover:not\(:disabled\),[^{]*\{[^}]*background:\s*var\(--sidebar-hover\)/);
     expect(yeaftSidebarCss).toMatch(/\.sidebar-primary-action:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--accent-blue\)/);
     expect(yeaftSidebarCss).toMatch(/\.sidebar-primary-action-icon\s*\{[^}]*color:\s*var\(--text-secondary\)/);
     expect(yeaftSidebarCss).not.toMatch(/\.sidebar-primary-action-icon\s*\{[^}]*color:\s*var\(--accent/);
@@ -2829,6 +2829,33 @@ describe('message flow regressions', () => {
     expect(dialogElement('.app-dialog-input').value).toBe('Shared project');
     dialogElement('.app-dialog-confirm').click();
     await renamePromise;
+    const renameRow = sidebar.vm.sessions.find(row => sidebar.vm.canEditRow(row));
+    const actionsBeforeRename = sidebar.emitted('action')?.length || 0;
+    const staleRename = sidebar.vm.runAction('rename', renameRow);
+    await Vue.nextTick();
+    const input = dialogElement('.app-dialog-input');
+    input.value = 'Must not rename during reconnect';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await sidebar.setProps({ loading: true });
+    dialogElement('.app-dialog-confirm').click();
+    await staleRename;
+    expect(sidebar.emitted('action')?.length || 0).toBe(actionsBeforeRename);
+    await sidebar.setProps({ loading: false });
+    const refreshedRename = sidebar.vm.runAction('rename', renameRow);
+    await Vue.nextTick();
+    dialogElement('.app-dialog-input').value = 'Must not rename after reconnect either';
+    dialogElement('.app-dialog-input').dispatchEvent(new Event('input', { bubbles: true }));
+    await sidebar.setProps({ loading: true });
+    await sidebar.setProps({ loading: false });
+    dialogElement('.app-dialog-confirm').click();
+    await refreshedRename;
+    expect(sidebar.emitted('action')?.length || 0).toBe(actionsBeforeRename);
+    const legacyActions = { catalogSessionActionSupported: (_row, action) => action !== 'remove' };
+    await sidebar.setProps({ projectStore: legacyActions });
+    expect(sidebar.find('.session-remove-icon').element.closest('button').disabled).toBe(true);
+    await sidebar.vm.runAction('delete', renameRow);
+    expect(sidebar.emitted('action')?.length || 0).toBe(actionsBeforeRename);
+    await sidebar.setProps({ projectStore: null });
     const deletePromise = UnifiedSessionList.methods.deleteProject.call(sidebar.vm, { id: 'project-shared', name: 'Shared project' });
     await Vue.nextTick();
     expect(dialogElement('.app-dialog-body').textContent).toContain('sidebar.projects.deleteConfirm');
@@ -3318,15 +3345,15 @@ describe('message flow regressions', () => {
     expect(chatPageSource).toContain(':project-store="store"');
     expect(chatPageSource).toContain(':active-route="store.activeSessionRoute"');
     expect(yeaftSidebarSource).toContain(':project-store="chatStore"');
-    expect(yeaftSidebarSource).toContain(':active-route="chatStore.activeSessionRoute"');
+    expect(yeaftSidebarSource).toContain(':active-route="chatStore?.activeSessionRoute"');
     expect(chatPageSource).toContain(':processing-conversations="store.processingConversations"');
     expect(chatPageSource).not.toContain(':is-session-syncing=');
     expect(chatPageSource).not.toContain(':session-sync-refresh-token=');
     expect(chatPageSource).toContain(':agents="store.agents"');
-    expect(yeaftSidebarSource).toContain(':is-yeaft-session-processing="chatStore.isYeaftSessionProcessing"');
+    expect(yeaftSidebarSource).toContain(':is-yeaft-session-processing="chatStore?.isYeaftSessionProcessing"');
     expect(yeaftSidebarSource).not.toContain(':is-session-syncing=');
     expect(yeaftSidebarSource).not.toContain(':session-sync-refresh-token=');
-    expect(yeaftSidebarSource).toContain(':agents="chatStore.agents"');
+    expect(yeaftSidebarSource).toContain(':agents="chatStore?.agents"');
     expect(chatPageSource).not.toContain("action === 'split'");
     expect(chatPageSource).not.toContain('splitScreen.splitToPanel');
     expect(chatPageSource).not.toContain('split-to-panel-item');
@@ -8278,5 +8305,59 @@ describe('message flow regressions', () => {
     ]);
     expect(hasHiddenYeaftMessageTurns(messages, 1)).toBe(true);
     expect(sliceYeaftMessagesByRecentTurns(messages, 1)).toEqual(messages.slice(4));
+  });
+});
+
+describe('stable Session sidebar layout', () => {
+  it('mounts the final navigation while loading and fills it without remounting', async () => {
+    localStorage.removeItem('yeaft-sidebar-section-collapse');
+    const sidebar = mount(UnifiedSessionList, {
+      attachTo: document.body,
+      props: { loading: true },
+      global: { mocks: { $t: key => key } },
+    });
+    const navigation = sidebar.get('.sidebar-navigation').element;
+    const headings = sidebar.findAll('.sidebar-section-heading').map(node => node.element);
+    expect(sidebar.get('.sidebar-navigation').attributes('aria-busy')).toBe('true');
+    expect(sidebar.findAll('.sidebar-catalog-loading')).toHaveLength(2);
+    expect(sidebar.get('.sidebar-primary-action').attributes('disabled')).toBeDefined();
+    sidebar.vm.createSession();
+    sidebar.vm.createProject();
+    expect(sidebar.emitted('create')).toBeUndefined();
+    expect(sidebar.vm.projectCreateOpen).toBe(false);
+    const row = {
+      catalogKey: 'yeaft:agent-a:ready', runtimeProvider: 'yeaft',
+      routeRef: { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'ready' },
+      title: 'Ready session', availability: 'online',
+    };
+    await sidebar.setProps({ sessions: [row], agents: [{ id: 'agent-a', online: true }] });
+    await sidebar.get('.session-item').trigger('click');
+    sidebar.vm.toggleSessionMenu(row, false);
+    expect(sidebar.emitted('select')).toBeUndefined();
+    expect(sidebar.vm.floatingMenu).toBeNull();
+    expect(sidebar.get('.session-item').attributes('tabindex')).toBe('-1');
+    await sidebar.setProps({ loading: false });
+    expect(sidebar.get('.sidebar-navigation').element).toBe(navigation);
+    expect(sidebar.findAll('.sidebar-section-heading').map(node => node.element)).toEqual(headings);
+    expect(sidebar.findAll('.sidebar-catalog-loading')).toHaveLength(0);
+    await sidebar.get('.session-item').trigger('click');
+    expect(sidebar.emitted('select')).toEqual([[row]]);
+    await sidebar.get('.session-dots-btn').trigger('click');
+    expect(sidebar.vm.floatingMenu).not.toBeNull();
+    await sidebar.setProps({ loading: true });
+    expect(sidebar.vm.floatingMenu).toBeNull();
+    sidebar.unmount();
+  });
+
+  it('does not retain a data-dependent legacy layout branch in either entry page', () => {
+    for (const name of ['ChatPage', 'YeaftSidebar']) {
+      const source = readFileSync(resolve(`web/components/${name}.js`), 'utf8');
+      expect(source).toContain('<UnifiedSessionList');
+      expect(source).toContain(':loading=');
+      expect(source).not.toContain('Legacy sidebar');
+      expect(source).not.toContain('Legacy Yeaft list');
+      expect(source).not.toContain('<SidebarModeToggle');
+      expect(source).not.toMatch(/<UnifiedSessionList\s+v-if=/);
+    }
   });
 });

@@ -48,6 +48,8 @@ Use **New chat** in the unified sidebar:
 
 The sidebar catalog can show conversations from multiple Agents. Runtime identity always includes the Agent; the same Session ID on two Agents is not the same Session.
 
+The unified **Projects / Recents** layout is present from the first paint. While the catalog is pending, it shows a loading state rather than a temporary legacy list. Reconnecting with the same authentication retains the existing groups and rows, but creation, selection, and changes wait for a fresh snapshot. Changing accounts or re-authenticating clears the previous catalog. Accepted inventories from older Servers are adapted to the same layout; an unconfirmed catalog stays loading instead of showing a misleading empty list.
+
 ## Common choices
 
 - Exact Claude Code workflow or Claude-specific skills → **Claude Code**.
