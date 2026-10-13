@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { Worker } from 'node:worker_threads';
 import { prepareModelCache } from '../agent/yeaft/person/local-memory-cache.js';
 import { LocalPersonMemory } from '../agent/yeaft/person/local-memory.js';
 
@@ -133,7 +134,74 @@ describe('atomic instance-local model cache', () => {
     expect(await readdir(path.dirname(file))).toEqual(['model_quantized.onnx']);
   });
 
-  // The eight cache-only cases above run even on Node builds without FTS5.
+  it.skipIf(!hasFts)('waits for a transient initialization lock and does not expose a partial projection', async () => {
+    const { options } = await setup();
+    const directory = path.join(options.yeaftDir, 'person');
+    await mkdir(directory, { recursive: true });
+    const locker = new DatabaseSync(path.join(directory, 'recall.db'));
+    locker.exec('CREATE TABLE lock_fixture(value); BEGIN IMMEDIATE;');
+    const worker = new Worker(new URL('../agent/yeaft/person/local-memory-worker.js', import.meta.url), {
+      workerData: { yeaftDir: options.yeaftDir, namespace: 'locked-start' },
+    });
+    let locked = true;
+    try {
+      const online = once(worker, 'online');
+      const response = once(worker, 'message');
+      worker.postMessage({ id: 1, op: 'checkpoint', owner: 'owner' });
+      await online;
+      await new Promise(resolve => setTimeout(resolve, 500));
+      locker.exec('ROLLBACK'); locked = false;
+      expect((await response)[0]).toEqual({ id: 1, value: 0 });
+      // The initialization completed before dispatch: every table and trigger exists.
+      expect(locker.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name IN ('spaces','checkpoints','chunks','chunk_fts','chunks_insert','chunks_delete')").get().n).toBe(6);
+    } finally {
+      if (locked) locker.exec('ROLLBACK');
+      await worker.terminate();
+      locker.close();
+    }
+  });
+
+  it.skipIf(!hasFts)('bounds initialization contention and can initialize again after the lock is released', async () => {
+    const { options } = await setup();
+    await mkdir(path.join(options.yeaftDir, 'person'), { recursive: true });
+    const locker = new DatabaseSync(path.join(options.yeaftDir, 'person', 'recall.db'));
+    locker.exec('CREATE TABLE lock_fixture(value); BEGIN IMMEDIATE;');
+    const worker = new Worker(new URL('../agent/yeaft/person/local-memory-worker.js', import.meta.url), {
+      workerData: { yeaftDir: options.yeaftDir, namespace: 'locked-retry' },
+    });
+    let locked = true;
+    try {
+      const response = once(worker, 'message');
+      worker.postMessage({ id: 1, op: 'checkpoint', owner: 'owner' });
+      expect((await response)[0]).toEqual({ id: 1, error: { code: 'ERR_SQLITE_ERROR' } });
+      locker.exec('ROLLBACK'); locked = false;
+      const retried = once(worker, 'message');
+      worker.postMessage({ id: 2, op: 'checkpoint', owner: 'owner' });
+      expect((await retried)[0]).toEqual({ id: 2, value: 0 });
+    } finally {
+      if (locked) locker.exec('ROLLBACK');
+      await worker.terminate();
+      locker.close();
+    }
+  });
+
+  it.skipIf(!hasFts)('initializes concurrent cold projections without degrading Recall', async () => {
+    const { options } = await setup();
+    const fixture = path.join(options.yeaftDir, 'embedding.mjs');
+    await writeFile(fixture, 'export function createEmbedding(){return {async embed(texts){return texts.map(()=>[1,...Array(383).fill(0)]);}}}');
+    const controllers = Array.from({ length: 4 }, (_, index) => new LocalPersonMemory({
+      repository: repository(), yeaftDir: options.yeaftDir, namespace: `cold-${index}`,
+      embeddingModule: pathToFileURL(fixture).href,
+    }));
+    memories.push(...controllers);
+    const recalls = await Promise.all(controllers.map(memory => memory.recall('owner', { query: 'car' })));
+    for (const recall of recalls) {
+      expect(recall.retrieval, JSON.stringify(recall.retrieval)).toMatchObject({ semantic: true, degraded: false });
+      expect(recall.items[0].id).toBe('car');
+    }
+  });
+
+  // Cache-only cases run even on Node builds without FTS5.
   // This end-to-end Recall case requires the hybrid index before embedding starts.
   it.skipIf(!hasFts)('SIGKILL during a real write leaves no published model; restarted explicit Recall repairs and then works offline', async () => {
     const { options, file } = await setup();
@@ -184,7 +252,7 @@ describe('atomic instance-local model cache', () => {
     memories.push(restarted, peer);
     const recalls = await Promise.all([restarted, peer].map(memory => memory.recall('owner', { query: 'car' })));
     for (const recall of recalls) {
-      expect(recall.retrieval).toMatchObject({ semantic: true, degraded: false });
+      expect(recall.retrieval, JSON.stringify(recall.retrieval)).toMatchObject({ semantic: true, degraded: false });
       expect(recall.items[0].id).toBe('car');
     }
     expect(await readFile(file)).toEqual(bytes);
