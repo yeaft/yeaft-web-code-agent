@@ -254,7 +254,7 @@ npm run build            # production Web assets
 npm run docs:build       # 中英文 VitePress 文档站
 ```
 
-当前 revision 的核心 manifest 包含 49 个 Vitest 文件 / 499 个可列出的测试，E2E 目录包含 11 个 Playwright spec 文件。这些数字用于说明当前规模，不是兼容承诺。
+当前审定基线为 500 个逻辑用例：450 个 Vitest 单元／集成用例、50 个 Playwright 浏览器用例。`npm run test:budget` 收集两个完整测试目录，包含参数展开与跳过用例；同一浏览器用例在多个 project 中重复执行只计一次。不保留隐藏的退役测试集。新行为应补齐聚焦覆盖，替换冗余用例或明确审查小幅预算增长。保留优先级与取舍见[测试精简策略](docs/notes/2026-10-13-test-suite-curation.md)。
 
 仓库使用 ES modules、Node.js 22.5+、带 JSDoc 的纯 JavaScript、Vue 3 + Pinia、Express + `ws`、SQLite、esbuild、Vitest、Playwright 和 VitePress。
 

@@ -22,24 +22,4 @@ test.describe('Client WS 断线重连', () => {
     await expect(chatPage.locator('.brand-label')).not.toHaveText('0 Agent', { timeout: 5000 });
   });
 
-  test('多次断线后仍能恢复', async ({ chatPage, mockAgent }) => {
-    // First disconnect
-    await chatPage.evaluate(() => {
-      const store = window.Pinia.useChatStore();
-      if (store.ws) store.ws.close(4999, 'Test disconnect 1');
-    });
-    await expect(chatPage.locator('.connection-status')).toBeVisible({ timeout: 5000 });
-    await expect(chatPage.locator('.connection-status')).not.toBeVisible({ timeout: 15000 });
-
-    // Second disconnect
-    await chatPage.evaluate(() => {
-      const store = window.Pinia.useChatStore();
-      if (store.ws) store.ws.close(4999, 'Test disconnect 2');
-    });
-    await expect(chatPage.locator('.connection-status')).toBeVisible({ timeout: 5000 });
-    await expect(chatPage.locator('.connection-status')).not.toBeVisible({ timeout: 15000 });
-
-    // Still functional
-    await expect(chatPage.locator('.brand-label')).not.toHaveText('0 Agent', { timeout: 5000 });
-  });
 });

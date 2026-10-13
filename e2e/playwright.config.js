@@ -20,15 +20,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { browserName: 'chromium' },
-      testIgnore: '**/smoke/**'
-    },
-    {
-      name: 'smoke',
-      use: { browserName: 'chromium' },
-      testMatch: '**/smoke/**',
-      timeout: 60000,
-      retries: 0
+      use: { browserName: 'chromium' }
     }
   ]
 });
