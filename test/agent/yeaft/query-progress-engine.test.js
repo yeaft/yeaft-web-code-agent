@@ -76,6 +76,31 @@ describe('query progress Engine boundaries', () => {
     expect(events.filter(e => e.type === 'tool_end')).toHaveLength(3);
     expect(events.filter(e => e.type === 'tool_end' && e.suppressed)).toHaveLength(2);
     expect(JSON.stringify(requests.at(-1).messages)).toContain('side effects may already have happened');
+
+    // A command may create the missing file before a later step fails. The
+    // previously blocked read must execute to verify, but never replay the write.
+    let exists = false;
+    let readExecutions = 0;
+    let writeExecutions = 0;
+    const partial = setup(n => n <= 3 || n === 5
+      ? [call(`read-${n}`, 'ReadMissing'), stop]
+      : n === 4 || n === 6 ? [call(`create-${n}`, 'CreateThenFail'), stop]
+        : [{ type: 'text_delta', text: 'Created state verified; write not retried.' }, { type: 'stop', stopReason: 'end_turn' }]);
+    partial.engine.registerTool({ name: 'ReadMissing', isReadOnly: () => true, execute: async () => {
+      readExecutions++;
+      if (!exists) throw Error('ENOENT');
+      return 'created content';
+    } });
+    partial.engine.registerTool({ name: 'CreateThenFail', execute: async () => {
+      writeExecutions++;
+      exists = true;
+      throw Error('connection timeout after creating file');
+    } });
+    const partialEvents = await consume(partial.engine);
+    expect(readExecutions).toBe(4);
+    expect(writeExecutions).toBe(1);
+    expect(partialEvents.filter(e => e.type === 'tool_end')).toHaveLength(6);
+    expect(partial.rows.filter(r => r.role === 'tool').some(r => r.content === 'created content')).toBe(true);
   });
 
   it('preserves accepted user input arriving during the reporting stream', async () => {

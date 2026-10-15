@@ -81,6 +81,14 @@ export class QueryProgress {
     if (isError) {
       const prior = this.#failures.get(key);
       const kind = failureKind(output);
+      if (executed && !readOnly) {
+        // A partial mutation may have changed even a previously unreadable
+        // resource. Permit verification, never a replay of the mutation itself.
+        this.#results.clear();
+        for (const [failedKey, failure] of this.#failures) {
+          if (failure.readOnly) this.#failures.delete(failedKey);
+        }
+      }
       // A blocked result is synthetic; do not replace the original failure.
       if (executed) boundedSet(this.#failures, key, {
         kind, readOnly, count: prior?.kind === kind ? prior.count + 1 : 1, callId: call.id,

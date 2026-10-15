@@ -84,6 +84,15 @@ describe('query-local progress evidence', () => {
     progress.resetEvidence();
     expect(progress.blocked(partial)).toContain('NOT executed');
     expect(observe(progress, 'RemoteRead', 'now exists')).toBeNull();
+    for (let i = 0; i < 3; i++) {
+      progress.observe({ call: read, output: 'EACCES', isError: true, readOnly: true });
+    }
+    expect(progress.blocked(read)).not.toBeNull();
+    const changedThenFailed = { name: 'Bash', input: { command: 'create-file-then-fail' } };
+    progress.observe({ call: changedThenFailed, output: JSON.stringify({ error: 'later step failed', errorEffect: 'unknown', replaySafe: false }), isError: true });
+    expect(progress.blocked(read)).toBeNull();
+    expect(progress.blocked(changedThenFailed)).toContain('NOT executed');
+    expect(progress.blocked(partial)).toContain('NOT executed');
   });
 
   it('counts reuse and suppression but not execution; mixed new evidence clears recovery', () => {
