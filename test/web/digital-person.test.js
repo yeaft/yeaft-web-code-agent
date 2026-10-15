@@ -196,6 +196,117 @@ describe('Digital Person owner / Agent request boundary', () => {
   });
 });
 
+describe('Digital Person autonomous discovery', () => {
+  const snapshot = (autonomyEnabled = true, busy = false, latestEpisode = null) => ({
+    person: { id: 'p', settings: { autonomyEnabled } }, busy, episodeId: busy ? latestEpisode.id : null,
+    latestEpisode, messages: latestEpisode?.status === 'committed' ? [{ id: 'reply', seq: 1, text: 'Done' }] : [],
+  });
+
+  it('discovers autonomous admission and completion while idle without commands or model readiness', async () => {
+    vi.useFakeTimers(); const f = fixture(); let data = snapshot();
+    f.auto(r => r.op === 'snapshot' ? data : r.op === 'status' ? { configured: true, modelReady: false } : undefined);
+    await f.controller.open('a'); const start = f.requests.length;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.requests.slice(start).map(r => r.op)).toEqual(['snapshot', 'snapshot']);
+    data = snapshot(true, true, { id: 'auto', kind: 'autonomous', status: 'running' });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(f.state.busy).toBe(true); expect(f.state.episodeId).toBe('auto');
+    expect(f.requests.at(-1).op).toBe('traces');
+    data = snapshot(true, false, { id: 'auto', kind: 'autonomous', status: 'committed' });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(f.state.busy).toBe(false); expect(f.state.messages.map(row => row.text)).toEqual(['Done']);
+    expect(f.requests.at(-1).op).toBe('traces');
+    const settled = f.requests.length; await vi.advanceTimersByTimeAsync(100);
+    expect(f.requests.slice(settled).map(r => r.op)).toEqual(['snapshot', 'snapshot']);
+    data = snapshot(false); await vi.advanceTimersByTimeAsync(50);
+    const off = f.requests.length; await vi.advanceTimersByTimeAsync(500);
+    expect(f.requests).toHaveLength(off); expect(vi.getTimerCount()).toBe(0);
+    expect(f.requests.slice(start).every(r => ['snapshot', 'traces'].includes(r.op))).toBe(true);
+  });
+
+  it('deduplicates slow discovery and fences foreground, owner, Agent, offline and close lifecycles', async () => {
+    vi.useFakeTimers(); let foreground = true;
+    const f = fixture({ foreground: () => foreground }); f.auto(r => r.op === 'snapshot' ? snapshot() : undefined);
+    await f.controller.open('a');
+    f.auto(r => r.op === 'snapshot' ? false : undefined);
+    await vi.advanceTimersByTimeAsync(50); const delayed = f.requests.at(-1), count = f.requests.length;
+    f.controller.visibilityChanged(); f.controller.visibilityChanged();
+    await vi.advanceTimersByTimeAsync(40); expect(f.requests).toHaveLength(count);
+    foreground = false; f.controller.visibilityChanged();
+    f.response(delayed, snapshot(true, true, { id: 'hidden' })); await vi.advanceTimersByTimeAsync(0);
+    expect(f.state.busy).toBe(false); expect(vi.getTimerCount()).toBe(0);
+    foreground = true; f.controller.visibilityChanged(); const ownerRead = f.requests.at(-1);
+    f.owner('other-owner'); f.response(ownerRead, snapshot(true, true, { id: 'private' }));
+    f.auto(r => r.op === 'snapshot' ? snapshot() : undefined); await f.controller.open('a');
+    expect(f.state.busy).toBe(false);
+    f.auto(r => r.op === 'snapshot' ? false : undefined);
+    await vi.advanceTimersByTimeAsync(50); const agentRead = f.requests.at(-1);
+    f.auto(r => r.op === 'snapshot' ? snapshot() : undefined); await f.controller.open('b');
+    expect(f.response(agentRead, snapshot(true, true, { id: 'private-a' }))).toBe(false);
+    expect(f.state.busy).toBe(false);
+    f.chat.agents.find(row => row.id === 'b').online = false;
+    const offline = f.requests.length; await vi.advanceTimersByTimeAsync(500);
+    expect(f.requests).toHaveLength(offline); expect(vi.getTimerCount()).toBe(0);
+    f.chat.agents.find(row => row.id === 'b').online = true; await f.controller.open('b');
+    f.controller.dispose(); const closed = f.requests.length; await vi.advanceTimersByTimeAsync(500);
+    expect(f.requests).toHaveLength(closed); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('immediately reconciles autonomy toggles, fences older reads and polls busy work after off', async () => {
+    vi.useFakeTimers(); const f = fixture(); let enabled = false, busy = false;
+    f.auto(r => {
+      if (r.op === 'snapshot') return snapshot(enabled, busy, busy ? { id: 'auto', status: 'running' } : null);
+      if (r.op === 'settings') { enabled = r.payload.autonomyEnabled; busy = true; return { settings: { autonomyEnabled: enabled } }; }
+    });
+    await f.controller.open('a'); const start = f.requests.length;
+    expect(await f.controller.settings({ autonomyEnabled: true })).toBe(true);
+    expect(f.requests.slice(start).map(r => r.op)).toEqual(['settings', 'snapshot', 'status']);
+    expect(f.state.person.settings.autonomyEnabled).toBe(true); expect(f.state.busy).toBe(true);
+    f.auto(r => r.op === 'snapshot' ? false : undefined);
+    await vi.advanceTimersByTimeAsync(50); const old = f.requests.at(-1);
+    let setting;
+    f.auto(r => {
+      if (r.op === 'settings') { setting = r; return false; }
+      if (r.op === 'snapshot') return snapshot(false, true, { id: 'auto', status: 'running' });
+    });
+    const off = f.controller.settings({ autonomyEnabled: false });
+    f.response(old, snapshot(true)); await vi.advanceTimersByTimeAsync(0);
+    expect(f.state.settingsPending).toBe(true); expect(f.state.busy).toBe(true);
+    f.response(setting, { settings: { autonomyEnabled: false } }); expect(await off).toBe(true);
+    expect(f.state.person.settings.autonomyEnabled).toBe(false); expect(f.state.busy).toBe(true);
+    await vi.advanceTimersByTimeAsync(50); expect(f.requests.at(-1).op).toBe('traces');
+    f.auto(r => r.op === 'snapshot' ? snapshot(false) : undefined);
+    await vi.advanceTimersByTimeAsync(50); const settled = f.requests.length;
+    await vi.advanceTimersByTimeAsync(500); expect(f.requests).toHaveLength(settled);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps cancel authoritative over pending discovery and settings acknowledgements', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    const active = snapshot(true, true, { id: 'auto', status: 'running' });
+    f.auto(r => r.op === 'snapshot' ? active : undefined); await f.controller.open('a');
+    f.auto(r => ['snapshot', 'settings', 'cancel'].includes(r.op) ? false : undefined);
+    await vi.advanceTimersByTimeAsync(50); const old = f.requests.at(-1);
+    const setting = f.controller.settings({ autonomyEnabled: false }); const settingsRequest = f.requests.at(-1);
+    const cancelling = f.controller.cancel(); const cancelRequest = f.requests.at(-1);
+    f.response(old, snapshot(true)); await vi.advanceTimersByTimeAsync(0);
+    expect(f.state.cancelPending).toBe(true); expect(f.state.executions.pending).toBe('cancel');
+    f.response(settingsRequest, { settings: { autonomyEnabled: true } }); expect(await setting).toBe(false);
+    expect(f.state.cancelPending).toBe(true); expect(f.state.executions.pending).toBe('cancel');
+    // The acknowledged durable stop updates the switch before reconciliation;
+    // pending control ownership lasts until the post-cancel snapshot settles.
+    f.auto(r => r.op === 'snapshot' ? false : undefined);
+    f.response(cancelRequest, {}); await vi.advanceTimersByTimeAsync(0);
+    expect(f.state.person.settings.autonomyEnabled).toBe(false);
+    const reconciliation = f.requests.at(-1); expect(reconciliation.op).toBe('snapshot');
+    f.response(reconciliation, snapshot(false)); expect(await cancelling).toBe(true);
+    expect(f.state.cancelPending).toBe(false); expect(f.state.executions.pending).toBeNull();
+    expect(f.state.person.settings.autonomyEnabled).toBe(false); expect(f.state.busy).toBe(false);
+    const settled = f.requests.length; await vi.advanceTimersByTimeAsync(500);
+    expect(f.requests).toHaveLength(settled); expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe('Digital Person conversation activity', () => {
   const trace = (seq, kind, extra = {}) => ({ id: `t${seq}`, episodeId: 'e', seq, kind, createdAt: seq * 1000, ...extra });
   const project = (traces, extra = {}, gate = '') => projectPersonActivity({ ...personState(), busy: true, episodeId: 'e', activityRecords: personActivityRecords(traces), ...extra }, gate);

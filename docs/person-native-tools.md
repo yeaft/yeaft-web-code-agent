@@ -2,7 +2,7 @@
 
 Digital Person 已实现连续的 native tool 对话，不再要求每个执行 loop 都生成认知 proposal JSON。工具直接复用 `agent/yeaft/tools/` 的定义、JSON Schema、执行函数和 `ToolRegistry` dispatch；执行中的每次模型请求都提供当前可用的完整 tools schemas，模型直接调用，无需先 `catalog.view` 或通过 `next.capability` 请求。
 
-执行与最终认知整理始终属于同一个 Person、Soul 和 episode，不增加选择器模型，不创建普通 Session 或 WorkItem。模型以无工具的 `end_turn` 结束执行后，运行时禁用 tools，请求一次最终认知 JSON（`next:null`）；通过校验才原子提交。子 Agent 是独立的原生 Engine 执行者，不替换 Person 的身份或 Soul。
+执行与最终认知整理始终属于同一个 Person、Soul 和 episode，不增加选择器模型，不创建普通 Session 或 WorkItem。模型的无工具 `end_turn` 只是边界，不直接结束目标。必须先使用 `Execution.goal` 报告有效终态；未完成则继续原生执行，等待则由宿主等结果接续。只有有效收束后禁用 tools，请求一次最终认知 JSON（`next:null`）；通过校验才原子提交。子 Agent 是独立的原生 Engine 执行者，不替换 Person 的身份或 Soul。
 
 ## 当前支持
 
@@ -38,11 +38,24 @@ schemas、目录和实际执行遵守当前 Agent 的 `plugins.tools` 配置：�
 
 `Output.publish` 是 Person 专属能力，不是完整 Workbench 或 Session 文件接口。其 schema 随执行请求提供，数字人可直接显式交付工作目录内的文件或 HTTP(S) 网页。文件按实际字节保存不可变 SQLite 快照，浏览器只按已授权的不透明 ID 读取，不获得本机路径访问权限。源文件覆盖／删除和 Agent 重启后仍能查看；已经发布的输出独立于之后认知取消或失败保留。
 
-用户在回复下或顶部「输出」入口打开右侧预览，可调宽、全屏、关闭和查看更早结果，不提供 Terminal、Git 或编辑。HTML 只做禁脚本／网络的静态预览，网页受网站自身 iframe 限制且始终可外部打开。后台任务由数字人显式收集后交付，不自动扫描文件或唤回模型。契约与安全边界见[数字人的输出预览](./person-outputs.md)。
+用户在回复下或顶部「输出」入口打开右侧预览，可调宽、全屏、关闭和查看更早结果，不提供 Terminal、Git 或编辑。HTML 只做禁脚本／网络的静态预览，网页受网站自身 iframe 限制且始终可外部打开。后台任务由数字人显式收集后交付，不自动扫描文件；只有用户显式开启自主跟进时，新任务结果才可触发同一数字人的后续认知。契约与安全边界见[数字人的输出预览](./person-outputs.md)。
+
+## 自主跟进（默认关闭）
+
+内核「管理」已有页面提供 **自主跟进 / Autonomous follow-up** 开关，直接写入 `settings.autonomyEnabled`。新数字人和升级后的历史记录均默认关闭；旧记录即使残留 `autonomyEnabled:true`，没有新版显式同意标记也不调度。`status.autonomySupported:true` 只表示实现支持，不等于已授权开启。
+
+- 调度器每 5 秒检查一次持久 due time，不从 status／snapshot／消息读取路径启动模型。首次开启后约 5 秒可进行空闲认知；已有 continuation 的 `waiting`／`blocked`、未变化的 `ready` 不会反复唤醒。只有成功提交为 `exploration/resting` 且无 continuation 的自主探索，可在安静退避到期后再次探索；休息提交时重新计算到期时间，长执行后也不立即唤醒。退避按 1 分钟至 1 小时指数增长，只有新用户输入或当前同意代内的新任务结果重置；失败或未变化承诺不会因时间流逝被重放。
+- 新的成功／失败任务结果合并为有界观察：最多 8 项、仅任务 ID、状态和证据引用，不塞入日志或指令。相同任务终态去重；取消、orphaned 和历史完成文件不触发重入。准入不提前消费观察：仅在成功模型请求实际读到精确证据后，与 accepted commit 同一事务确认；失败调用／提交保留，期间新到的观察不被清空，已消费观察的迟到通知不重复唤醒。跨重启读取真实任务状态，失去控制的任务标为 orphaned，不重新执行命令或重放完成通知。
+- 自主准入复用 SQLite 的 Person 身份、owner、lease、epoch、control/input/state fence 和原生 episode，不创建 Session 或 Work Center。多个服务只能准入同一个活动执行；运行／暂停中的执行不能被调度绕过。自主执行没有额外的累计调用或整轮配额。
+- 触发种类为 `autonomous`，不是 `send`，没有伪造用户消息。system-generated scheduling metadata 显式标注 `observationOnly:true`、`authorization:false`；任务输出始终非可信。模型必须核实当前证据与用户授权，不因定时器或任务成功获得新权限。管理页区分手动与自主执行。
+- **取消**也关闭自主跟进，清空排队观察并更换同意代；旧任务、旧回调和已排队的自主准入不能在取消后复活。只有再次手动开启才允许新调度。自主开关可在活动执行期间修改，不使当前暂停 lease 失效；它不是取消按钮。显式关闭持久生效，后续 waiting／空闲提交、迟到任务完成和重启均不恢复开关。新开启前的旧任务不作为新同意代的唤醒来源。
+- 失败的认知（包括无进展失败）保留 failed 终态，不能由更早的 `ready` 接续点触发空闲重试；重新开关也不构造新进展。新用户输入或新的有效任务观察才可重新提供推进条件。latest episode 只是最近历史／失败重试 fence，不表示仍有活动任务；真实活动判断必须用任务宿主精确状态，不能使用 capped snapshot。
+- 服务关闭先停止并 join 调度，再关闭 runtime/task host；关闭后的回调不再准入。重启遇到过期活动 lease 时标记 interrupted 并关闭自主跟进，需显式重新开启，不能把失去控制当作重做动作的许可。
+- 相同的自主文本回复／结构化交付在最近 32 条记录内去重，不额外发「定时检查」用户消息。状态读不制造对话；调度频率不是持续思考或模型质量承诺。
 
 ## 长时间执行与输出截断
 
-整轮认知不设固定时长：关闭浏览器不取消 Agent 上已准入的工作，正常提交也不取消已启动的后台任务。120 秒等原生 Bash 时限是单个前台命令的保护，不是数字人的寿命；长命令使用 `background:true`，再显式读取日志／等待。单次 provider 停流保护、工具清理、资源边界、lease 和用户取消不能被“后台执行”绕过。任务完成仍不自动唤回模型。
+整轮认知不设固定时长：关闭浏览器不取消 Agent 上已准入的工作，正常提交也不取消已启动的后台任务。120 秒等原生 Bash 时限是单个前台命令的保护，不是数字人的寿命；长命令使用 `background:true`，再显式读取日志／等待。单次 provider 停流保护、工具清理、资源边界、lease 和用户取消不能被“后台执行”绕过。默认任务完成不唤回模型；显式开启自主跟进后才允许结果触发后续 episode。
 
 模型每次输出使用与 Session Engine 相同的原生额度解析：模型显式配置 → models.dev 输出能力 → 实例配置 → 原生默认值；不再统一截到 4096。上下文窗口与输出上限是两个字段，1M context 不代表可输出 1M token。请求、上下文预留及 `budget.maxOutputTokens` 使用同一实际额度；支持的 effort 也必须适配该额度。
 
@@ -52,8 +65,10 @@ schemas、目录和实际执行遵守当前 Agent 的 `plugins.tools` 配置：�
 
 ## 连续执行、最终认知与证据
 
-当前链路是显式 `send / think / dream` 准入 → 读取 Soul、已接受状态与有界记忆 → 连续 native tool 对话 → 无工具 `end_turn` → 禁用 tools 的最终认知 JSON（`next:null`）→ 原子提交。执行时返回真实 `assistant` 工具调用和 `tool` role 结果，延续同一对话；不在工具之间插入 proposal／activity／认知提交，不另请一个模型充当“人”。`Think` 是主体认知方法，不是另一个模型；一次提交也不等于所有目标已经完成。
+当前链路是显式 `send / think / dream` 准入 → 读取 Soul、已接受状态与有界记忆 → 连续 native tool 对话 → 经目标终态校验的无工具 `end_turn` → 禁用 tools 的最终认知 JSON（`next:null`）→ 原子提交。执行时返回真实 `assistant` 工具调用和 `tool` role 结果，延续同一对话；不在工具之间插入 proposal／activity／认知提交，不另请一个模型充当“人”。`Think` 是主体认知方法，不是另一个模型；一次提交也不等于所有目标已经完成。
 
+- **目标独立于模型 turn**：`Execution.goal` 仅在接受承诺／关键里程碑／结束边界使用，不是每步认知表单。未完成目标的 objective／acceptance／kind 保持稳定，换路线更新 nextStep；真实观察支撑 acceptanceChecks，引用存在不等于语义验收。宿主精确核对待处理任务／子线程及未确认副作用，不能用 capped snapshot 关闭。等待由宿主无模型轮询地接续；暂停、取消仍生效。连续空答且无实际动作记为 `GOAL_NO_PROGRESS` 失败，不冒充完成或外部阻塞，也不增加工具调用总额度。
+- **入口即生效的行为语义**：Send 优先当前请求，Think 推进未决问题或实际结果，Dream 从用户真实利益出发开放探索替代手段、挑战前提与跨领域联系，不默认期货等于赚钱。假设不是用户报告，兴趣不是授权；有价值且可逆的授权内验证应实际执行，无承诺探索可安静休息。详见 [用户理解与多样上下文](./design/person-user-understanding.md)。
 - **每个工具有独立证据身份**：一次模型输出可包含多个工具，各自生成独立 trace `callId`，并绑定父 `modelCallId`、供应商 `toolUseId` 和从 0 开始的 `toolIndex`。模型调用与工具调用不共用一个结果槽；多工具不重复累计父模型 usage。
 - **最终整理与有限修正**：正常只请求一次最终 JSON；格式、schema 或实际已读取的 `sourceRefs` 不合法时，最多再请求 **2 次额外修正**。修正仍禁用 tools，只纠正最终认知产物；不得回放已执行副作用、补造来源或把外部观察降格为用户报告。仍无效则失败，既有工具结果与公开进展保留，候选认识不提交。
 - **请求副本与原始证据分开**：原始工具结果持久存入 capability trace。模型只接收有界结果副本；较早结果可替换为 evidence receipts，完整旧 assistant/tool 组可从本次请求省略。receipt 保留工具／调用身份、成功失败、来源、原始字节数、SHA-256 和 `Execution.read` 回读入口，不是合成认知总结。不能把预览当作完整证据，也不能为取回省略输出重做副作用。
@@ -61,7 +76,7 @@ schemas、目录和实际执行遵守当前 Agent 的 `plugins.tools` 配置：�
 - **跨轮接续点**：最终提交可保存 `state.continuation`，包含 `goal / nextStep / status / condition`，状态为 `ready / waiting / blocked`，文本字段各最多 1000 UTF-8 字节。省略保留、`null` 清除；失败和取消不提交候选。它只保存一个主要方向，不是任务数据库、授权或调度指令，新指令和取消优先。
 - **暂停与取消不重放**：暂停在当前模型／工具收尾后到达安全边界，继续同一 episode，不重新准入或回放操作。取消保留已归档结果、阶段回复和已成功发布的产物，等待实际执行清理；外部副作用不保证回滚。活跃 transcript 只在当前进程内，重启标记中断，不声称能无损续跑。
 
-这不是自动常驻思考：后台结果仍需当前 episode 显式等待／读取，或下一次 `send / think / dream` 收集；不会自动创建新 episode、Session 或 WorkItem。状态接续和证据提供推进条件，不能保证模型每次形成高质量认识或解决所有问题；脚本化 provider 回归验证执行链与持久化，不替代真实模型质量评估。
+默认不是自动常驻思考：后台结果需当前 episode 显式等待／读取，或下一次 `send / think / dream` 收集。可在内核「管理」中显式开启自主跟进；仅在同一 Person 下准入后续 episode，不创建 Session 或 WorkItem。状态接续和证据提供推进条件，不能保证模型每次形成高质量认识或解决所有问题；脚本化 provider 回归验证执行链与持久化，不替代真实模型质量评估。
 
 ## 30～60 秒阶段反馈
 
@@ -93,7 +108,7 @@ schemas、目录和实际执行遵守当前 Agent 的 `plugins.tools` 配置：�
 
 - task host 按 canonical `yeaftDir`、部署 namespace、authenticated owner 和 Person 隔离，跨正常 episode 提交保持稳定。构造服务、status/open 和只读 inspection 不创建 task host，不发起子模型请求。服务始终使用实例 `yeaftDir` 下的 SQLite；异步工具的私有数据也必须有明确的实例根。
 - 私有数据位于 `<yeaftDir>/person/tasks/<scope-hash>/`，保留任务元数据、shell logs、子 Agent JSONL logs、tool-results 和 completion records，不写入普通 Session transcript 或 manifest。实例配置始终从当前 `yeaftDir` 读取。
-- 正常认知提交不会关闭后台任务或子 Agent。所有任务强制 `status_only`；完成不会唤回模型，不自动创建 Person episode。完成/运行证据在**下一次显式 send/think/dream** 的上下文中可见，或由已运行 episode 主动执行 WaitAgent/WaitTask 收集。
+- 正常认知提交不会关闭后台任务或子 Agent。所有任务的原生投递仍为 `status_only`；只有 Person 另行显式开启自主跟进后，新完成事件才可通过同一个持久准入 fence 创建 Person episode。完成/运行证据在下一次手动或自主 episode 的上下文中可见，或由已运行 episode 主动执行 WaitAgent/WaitTask 收集。
 - 下一次模型上下文的 task evidence 使用总计最多 8 KiB、单条最多 2 KiB 的 JSON/UTF-8 预算；当前模型窗口还可进一步省略条目。完整 raw logs 和原始工具归档保留在私有目录，模型可使用 Task 工具分页检查。引用仅代表外部观察，不能单独建立 `reported` 用户来源。
 - 显式取消指定 episode 时同时停止该 episode 已启动的后台效果，**即使认知已经 completed**；不指定 episode 则停止该 owner 的全部已知任务。异常或未确认的工具效果导致主执行终止时，停止 originating episode 的异步工作，不停止其他正常已提交 episode 的任务。服务 close 停止并 join 本 host 的实际工具效果和子 driver，而不是仅改变状态。
 - 重启后失去进程控制的任务标为 `orphaned`；未完成子 Agent 变为 failed 并保留 orphaned recovery evidence。保存的完成结果/日志可恢复，但不会假装仍持有进程句柄或自动重试外部动作。
@@ -106,7 +121,7 @@ schemas、目录和实际执行遵守当前 Agent 的 `plugins.tools` 配置：�
 
 管理 API 从 authenticated owner 的持久 Person identity 获取私有 task host，不初始化模型/provider，不触发 send/think/dream，也不恢复或取消无关活动。只在任务栏可见时轮询；关闭、切换 Agent/owner、断线及退出页面都会停止轮询或隔离迟到回复。模型不可用但存储仍可读时，任务管理继续可用。
 
-认知指令明确要求数字人在显式启动的 episode 中关注自己已授权的持续工作，而不只看最新消息；但这不代表任务完成会自动启动下一次认知。当前产品仍并列提供 Session、Work Center 和数字人，尚未改成以数字人为唯一顶层入口；此处没有新增自主调度、自动重试或后台模型唤回。
+认知指令明确要求数字人在显式启动的 episode 中关注自己已授权的持续工作，而不只看最新消息；默认不会因任务完成启动下一次认知。显式开启后遵守下面的自主跟进边界；这不是宿主动作的自动重试。当前产品仍并列提供 Session、Work Center 和数字人，不增加另一套任务或对话系统。
 
 ## 内核中的运行与用量
 

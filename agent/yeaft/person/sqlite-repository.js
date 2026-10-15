@@ -88,6 +88,9 @@ export class SqlitePersonRepository {
   async open(ownerId, name) { return this.request('open', [ownerId, name]); }
   async getPerson(ownerId) { return this.request('getPerson', [ownerId]); }
   async recover(ownerId) { return this.request('recover', [ownerId]); }
+  async autonomyOwners(options) { return this.request('autonomyOwners', [options]); }
+  async autonomyObserve(ownerId, event) { return this.request('autonomyObserve', [ownerId, event]); }
+  async autonomyAdmit(ownerId, input) { return this.request('autonomyAdmit', [ownerId, input]); }
   async admit(ownerId, input) { return this.request('admit', [ownerId, input]); }
   async receipt(ownerId, clientMessageId, requestHash) { return this.request('receipt', [ownerId, clientMessageId, requestHash]); }
   async executionControl(episode, control) { return this.request('executionControl', [episode, control]); }
@@ -117,7 +120,7 @@ export class SqlitePersonRepository {
   async commit(episode, proposal, selection, callId, reportedSources = new Map()) { return this.request('commit', [episode, proposal, selection, callId, reportedSources]); }
   async finish(episode, status, code) { return this.request('finish', [episode, status, code]); }
   async cancel(ownerId, episodeId) { return this.request('cancel', [ownerId, episodeId]); }
-  async settings(ownerId, settings, expectedControlVersion) { return this.request('settings', [ownerId, settings, expectedControlVersion]); }
+  async settings(ownerId, settings, expectedControlVersion, expectedAutonomyGeneration) { return this.request('settings', [ownerId, settings, expectedControlVersion, expectedAutonomyGeneration]); }
   async list(ownerId, collection, options, filter) { return this.request('list', [ownerId, collection, options, filter]); }
   async turns(ownerId, options) { return this.request('turns', [ownerId, options]); }
   async checkOutputPublication(episode, input) { return this.request('checkOutputPublication', [episode, input]); }

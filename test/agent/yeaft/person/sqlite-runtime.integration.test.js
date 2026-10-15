@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PersonCapabilities } from '../../../../agent/yeaft/person/capabilities.js';
 import { createPersonService } from './fixture-adapter.js';
-import { config, finalProposal } from './fixtures.js';
+import { config, finalProposal, goalInput } from './fixtures.js';
 
 // Real runtime lifecycle against an isolated SQLite authority, with scripted inference.
 describe('Person real SQLite runtime integration', () => {
@@ -76,7 +76,7 @@ describe('Person real SQLite runtime integration', () => {
       if (adapterError) throw adapterError;
       expect(snapshot.latestEpisode.status).toBe('completed');
       expect(executions.mock.calls.map(([invocation]) => invocation.id)).toEqual(['catalog.view', 'FileWrite']);
-      expect((await call(service, 'turns')).items[0].calls.map(c => c.status)).toEqual(['completed', 'completed', 'failed', 'completed', 'completed']);
+      expect((await call(service, 'turns')).items[0].calls.map(c => c.status)).toEqual(['completed', 'completed', 'failed', 'completed', 'completed', 'completed']);
     } finally { executions.mockRestore(); }
   });
 
@@ -98,12 +98,15 @@ describe('Person real SQLite runtime integration', () => {
         // Exercise the real Anthropic tool_use parser, not the legacy fixture conversion.
         event('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'native-search', name: 'catalog__search', input: {} } });
         event('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query: 'memory', limit: 1 }) } });
+      } else if (requests.length === 2) {
+        event('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'native-goal', name: 'Execution__goal', input: {} } });
+        event('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(goalInput([context.trigger.ref])) } });
       } else {
         event('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
         event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: result } });
       }
       event('content_block_stop', { index: 0 });
-      event('message_delta', { delta: { stop_reason: requests.length === 1 ? 'tool_use' : 'end_turn' }, usage: { output_tokens: 50 } });
+      event('message_delta', { delta: { stop_reason: requests.length <= 2 ? 'tool_use' : 'end_turn' }, usage: { output_tokens: 50 } });
       event('message_stop', {}); res.end();
     });
     let service;
@@ -121,16 +124,16 @@ describe('Person real SQLite runtime integration', () => {
       await call(service, 'send', { text: 'Native roundtrip.', clientMessageId: 'native' });
       const snapshot = await waitIdle(service);
       expect(snapshot.state.version).toBe(1);
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(4);
       expect(requests.every(request => request.path === '/v1/messages' && request.body.model === 'person-test-model')).toBe(true);
-      expect(requests.slice(0, 2).every(request => request.body.tools.some(tool => tool.name === 'catalog__search'))).toBe(true);
+      expect(requests.slice(0, 3).every(request => request.body.tools.some(tool => tool.name === 'catalog__search'))).toBe(true);
       expect(requests[1].body.messages.flatMap(message => message.content).find(block => block.type === 'tool_use'))
         .toMatchObject({ id: 'native-search', name: 'catalog__search', input: { query: 'memory', limit: 1 } });
       expect(requests[1].body.messages.flatMap(message => message.content).find(block => block.type === 'tool_result'))
         .toMatchObject({ tool_use_id: 'native-search' });
-      expect(requests[2].body.tools ?? []).toEqual([]);
+      expect(requests[3].body.tools ?? []).toEqual([]);
       expect(snapshot.messages.map(message => message.text)).toEqual(['Native roundtrip.', 'Native catalog inspected.']);
-      expect((await call(service, 'turns')).items[0].calls.map(modelCall => modelCall.protocol)).toEqual(['native-tools', 'native-tools', 'cognition']);
+      expect((await call(service, 'turns')).items[0].calls.map(modelCall => modelCall.protocol)).toEqual(['native-tools', 'native-tools', 'native-tools', 'cognition']);
       expect((await readdir(yeaftDir)).sort()).toEqual(['config.json', 'person']);
       const storedFiles = await readdir(join(yeaftDir, 'person'));
       expect(storedFiles).toContain('person.db');

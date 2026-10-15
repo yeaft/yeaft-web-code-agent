@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
-import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
+import { personInput, personCognition, personToolResults, personToolCall, personStop, personGoal } from '../../fixtures/person-provider.js';
 import { MockAgent } from '../../fixtures/mock-agent.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
@@ -18,6 +18,7 @@ async function outputRuntime(mockAgent, serverUrl) {
   const root = await mkdtemp(join(tmpdir(), 'person-outputs-e2e-'));
   const publications = new Map();
   const inputs = [];
+  const completed = [];
   const requests = [];
   const responses = [];
   let deferredRead = null;
@@ -34,12 +35,23 @@ async function outputRuntime(mockAgent, serverUrl) {
         yield personToolCall('publish-output', 'Output.publish', args);
         yield personStop(true);
       } else {
-        expect(personToolResults(params)[0].ok).not.toBe(false);
-        yield { type: 'text_delta', text: 'Publication complete.' };
-        yield personStop(false);
+        expect(personToolResults(params)).toHaveLength(1); // No replay while reporting/confirming the goal.
+        const result = personToolResults(params)[0];
+        expect(result.ok).not.toBe(false);
+        expect(result).toMatchObject({ title: args.title, kind: args.url ? 'link' : 'file' });
+        expect(result.id).toBeTruthy();
+        expect(result.episodeId).toBeTruthy();
+        const goal = personGoal(params, {
+          objective: `Deliver ${args.title}`, acceptance: 'Publish an immutable, identified output with the requested title.',
+          check: `Output.publish returned a durable output identity, episode and the requested title ${args.title}.`,
+        });
+        if (goal) yield goal;
+        else yield { type: 'text_delta', text: 'Publication complete.' };
+        yield personStop(!!goal);
       }
       return;
     }
+    completed.push(input.trigger.text);
     const proposal = finalProposal(input.state.version);
     proposal.concepts[0].expectedRevision = input.concepts.find(c => c.id === 'curiosity')?.revision || 0;
     proposal.activity.sourceRefs = input.sourceRefs;
@@ -66,7 +78,7 @@ async function outputRuntime(mockAgent, serverUrl) {
   };
   mockAgent._messageHandlers.push(listener);
   return {
-    root, inputs, requests, responses,
+    root, inputs, completed, requests, responses,
     async file(name, content, title = name) {
       const path = join(root, name);
       await writeFile(path, content);
@@ -177,7 +189,8 @@ test('Output.publish markdown travels through relay and survives source deletion
     await panel.getByRole('button', { name: 'Refresh', exact: true }).click();
     await expect.poll(() => runtime.requests.filter(r => r.op === 'outputs').length).toBe(1);
     expect(runtime.requests.find(r => r.op === 'outputs').payload).toEqual({ limit: 20 });
-    expect(runtime.inputs).toHaveLength(3);
+    expect(runtime.completed).toEqual(['Deliver Research report']);
+    const idleCalls = runtime.inputs.length;
     expect(runtime.inputs[0].capabilities.active).toEqual([]); // native schemas, not prepared proposals
     expect(runtime.requests.every(r => !Object.hasOwn(r.payload, 'ownerId'))).toBe(true);
     const status = runtime.responses.find(r => r.op === 'status' && r.ok);
@@ -201,7 +214,7 @@ test('Output.publish markdown travels through relay and survives source deletion
     await expect(freshPage.locator('#person-side-panel').getByRole('heading', { name: 'Immutable deliverable', exact: true })).toBeVisible();
     await expect(freshPage.locator('#person-side-panel')).not.toContainText('Replaced workspace content');
     await downloadOutput(freshPage, original);
-    expect(runtime.inputs).toHaveLength(3); // Reading/restarting does not invoke inference.
+    expect(runtime.inputs).toHaveLength(idleCalls); // Reading/restarting does not invoke inference.
     expect(mockAgent.conversations.size).toBe(0); // Outputs do not create a hidden Session.
   } finally {
     await restartedContext?.close();
@@ -262,6 +275,7 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
     await page.setViewportSize({ width: 1280, height: 800 });
     await openPerson(page, serverUrl, mockAgent);
     await publish(page, 'Layout report');
+    const idleCalls = runtime.inputs.length;
     await openOutputs(page);
     await selectOutput(page, 'Layout report');
     const panel = page.locator('#person-side-panel');
@@ -317,7 +331,7 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
     await page.mouse.move(grip.x + grip.width / 2 - 75, grip.y + grip.height / 2, { steps: 5 });
     await page.mouse.up();
     await expect.poll(async () => (await panel.boundingBox()).width).toBeGreaterThan(keyboardWidth + 40);
-    expect(runtime.inputs).toHaveLength(3);
+    expect(runtime.inputs).toHaveLength(idleCalls);
   } finally { await runtime.close(); }
 });
 
@@ -384,6 +398,7 @@ test('Output reader keeps only explicitly opened document tabs and stays separat
     // A fourth delivery updates the library, never the selected reader or tabs.
     await runtime.file('later.txt', 'New delivery must stay unopened.', 'Later delivery');
     await publish(page, 'Later delivery');
+    const idleCalls = runtime.inputs.length;
     await expect(secondTab).toHaveAttribute('aria-selected', 'true');
     await expect(panel.getByRole('tab')).toHaveCount(3);
     await expect(documentTab(page, 'Later delivery')).toHaveCount(0);
@@ -419,7 +434,8 @@ test('Output reader keeps only explicitly opened document tabs and stays separat
     await expect(panel.locator('.person-inspector-nav').getByRole('button', { name: 'Outputs', exact: true })).toHaveCount(0);
     await expect(panel.getByRole('tab')).toHaveCount(0);
     await expect(panel.locator('.person-outputs')).not.toBeVisible();
-    expect(runtime.inputs).toHaveLength(12); // All reader/inspector operations stay inference-free.
+    expect(runtime.completed).toEqual(['Deliver First document', 'Deliver Second document', 'Deliver Reference link', 'Deliver Later delivery']);
+    expect(runtime.inputs).toHaveLength(idleCalls); // All reader/inspector operations stay inference-free.
     expect(mockAgent.conversations.size).toBe(0);
   } finally { await runtime.close(); }
 });
@@ -436,6 +452,7 @@ test('Agent switch fences delayed output bytes and clears another Agent private 
     await openPerson(page, serverUrl, mockAgent);
     await enableAgent(page, otherAgent);
     await publish(page, 'Private Agent A report');
+    const idleCalls = runtime.inputs.length;
     await openOutputs(page);
     runtime.holdReads();
     await selectOutput(page, 'Private Agent A report');
@@ -460,7 +477,7 @@ test('Agent switch fences delayed output bytes and clears another Agent private 
     await openOutputs(page);
     await selectOutput(page, 'Private Agent A report');
     await expect(page.locator('#person-side-panel').getByRole('heading', { name: 'Private Agent A bytes', exact: true })).toBeVisible();
-    expect(runtime.inputs).toHaveLength(3);
+    expect(runtime.inputs).toHaveLength(idleCalls);
   } finally {
     runtime.releaseRead();
     await otherRuntime?.close();

@@ -7,8 +7,8 @@ import { usageKnown, usageNumber, usageInput, usageExtras, usageDuration } from 
 export default {
   name: 'PersonManagement',
   components: { PersonTaskBrowser },
-  props: { execution: Object, page: Object, log: Object, disabled: Boolean, identityKey: { default: '' } },
-  emits: ['refresh', 'more', 'log', 'stop', 'pause', 'resume', 'cancel'],
+  props: { execution: Object, page: Object, log: Object, disabled: Boolean, autonomySupported: Boolean, autonomyEnabled: Boolean, autonomyPending: Boolean, autonomyDisabled: Boolean, identityKey: { default: '' } },
+  emits: ['refresh', 'more', 'log', 'stop', 'pause', 'resume', 'cancel', 'autonomy'],
   setup(props, { emit }) {
     const confirming = Vue.ref(false);
     const controls = Vue.ref(null);
@@ -57,18 +57,29 @@ export default {
       confirming.value = false;
       Vue.nextTick(() => controls.value?.querySelector('[data-execution-control="cancel"]')?.focus());
     }
+    function changeAutonomy(event) {
+      const enabled = event.target.checked;
+      // Consent is acknowledged by persisted props, never by the DOM's optimistic toggle.
+      event.target.checked = !!props.autonomyEnabled;
+      emit('autonomy', enabled);
+    }
     const callModel = call => call.model || call.dispatched?.model || call.requested?.model || '—';
     const callStatus = call => ['running', 'completed', 'failed', 'cancelled', 'interrupted'].includes(call.status) ? call.status : 'unknown';
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { active, blocked, confirming, controls, elapsed, status, step, canCancel, control, confirm, dismiss, callModel, callStatus, time,
+    return { active, blocked, confirming, controls, elapsed, status, step, canCancel, control, confirm, dismiss, changeAutonomy, callModel, callStatus, time,
       known: usageKnown, number: usageNumber, input: usageInput, extras: usageExtras, duration: usageDuration };
   },
   template: `
     <PersonTaskBrowser class="person-management" :page="page" :log="log" :disabled="disabled" :identity-key="identityKey"
       @refresh="$emit('refresh')" @more="$emit('more')" @log="(id, more) => $emit('log', id, more)" @stop="(kind, id) => $emit('stop', kind, id)">
       <template #before>
+        <section v-if="autonomySupported" class="person-main-execution" :aria-busy="autonomyPending">
+          <label><input type="checkbox" :checked="autonomyEnabled" :disabled="disabled || autonomyDisabled || autonomyPending" @change="changeAutonomy"> {{ $t('person.autonomy.label') }}</label>
+          <p class="person-muted">{{ $t('person.autonomy.scope') }}</p>
+          <p v-if="autonomyPending" class="person-muted" role="status">{{ $t('person.management.pending') }}</p>
+        </section>
         <section class="person-main-execution" :aria-label="$t('person.management.main')" :aria-busy="execution.loading" :data-episode-id="active?.episodeId">
-          <header class="person-turn-heading"><strong>{{ $t('person.management.main') }}</strong><span v-if="active" class="person-muted" role="status">{{ $t('person.management.status.' + status) }}</span></header>
+          <header class="person-turn-heading"><strong>{{ $t('person.management.main') }}</strong><span v-if="active" class="person-muted">{{ $t(active.kind === 'autonomous' ? 'person.autonomous' : 'person.autonomy.manual') }}</span><span v-if="active" class="person-muted" role="status">{{ $t('person.management.status.' + status) }}</span></header>
           <p v-if="execution.error" class="person-settings-error" role="alert">{{ $t('person.requestFailed') }} {{ execution.error.message }}</p>
           <p v-if="execution.stale" class="person-muted" role="status">{{ $t('person.management.stale') }}</p>
           <p v-if="!active" class="person-muted">{{ $t(execution.loading && !execution.loaded ? 'person.loading' : 'person.management.empty') }}</p>

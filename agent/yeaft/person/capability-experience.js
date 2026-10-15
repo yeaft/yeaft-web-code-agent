@@ -15,7 +15,7 @@ function manifest(value) {
 function observation(value) {
   object(value, observationFields);
   identifier(value.episodeId); identifier(value.callId);
-  if (!['send', 'think', 'dream'].includes(value.triggerKind) || !['succeeded', 'failed'].includes(value.outcome)) fail('INVALID_REQUEST');
+  if (!['send', 'think', 'dream', 'autonomous'].includes(value.triggerKind) || !['succeeded', 'failed'].includes(value.outcome)) fail('INVALID_REQUEST');
   if (value.outcome === 'failed') identifier(value.code);
   else if (value.code !== null) fail('INVALID_REQUEST');
   if (typeof value.usedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.usedAt) ||

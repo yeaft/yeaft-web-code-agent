@@ -10,7 +10,7 @@ import { _resetAgentRegistry } from '../../../../agent/yeaft/tools/agent.js';
 import { _resetNotifications } from '../../../../agent/yeaft/sub-agent/notifications.js';
 
 import { bytes } from '../../../../agent/yeaft/person/contracts.js';
-import { config, finalProposal } from './fixtures.js';
+import { config, finalProposal, goalInput } from './fixtures.js';
 
 const services = [], directories = [];
 const call = (service, op, payload = {}, ownerId = 'alice') => service.request({ ownerId, op, payload });
@@ -55,14 +55,18 @@ afterEach(async () => {
 });
 
 describe('Person async native service integration', () => {
-  it('retains background work after normal commit, exposes completion only on the next explicit episode, and preserves raw logs on restart', async () => {
+  it('joins owned background work before normal commit and preserves completion evidence and raw logs across episodes and restart', async () => {
     const dir = await directory(), inputs = []; let taskId;
     const adapter = parentAdapter((input, p) => {
       inputs.push(input);
       if (input.trigger.text === 'launch') {
         if (inputs.length === 1) use(p, 'catalog.view', { id: 'Bash' });
         if (inputs.length === 2) use(p, 'Bash', { command: command("console.log('started');setTimeout(()=>console.log('completed'),300)"), background: true });
-        if (inputs.length === 3) taskId = input.capabilityResult.output.match(/Started background task (\S+)\./)[1];
+        if (inputs.length === 3) {
+          taskId = input.capabilityResult.output.match(/Started background task (\S+)\./)[1];
+          use(p, 'catalog.view', { id: 'WaitTask' });
+        }
+        if (inputs.length === 4) use(p, 'WaitTask', { taskId, timeout_ms: 3000 });
       } else {
         const n = inputs.filter(item => item.trigger.text === 'inspect').length;
         if (n === 1) use(p, 'catalog.view', { id: 'WaitTask' });
@@ -84,10 +88,10 @@ describe('Person async native service integration', () => {
       await pause(20);
     }
     expect(completed?.status).toBe('succeeded');
-    expect(inputs).toHaveLength(3); // Completion must not reenter the provider.
+    expect(inputs).toHaveLength(5); // Completion must not reenter the provider.
     await call(s, 'think', { text: 'inspect', clientMessageId: 'inspect' });
     expect((await idle(s)).latestEpisode.status).toBe('completed');
-    const evidence = inputs[3].taskEvidence;
+    const evidence = inputs[5].taskEvidence;
     expect(evidence.items.some(item => item.kind === 'completion' && item.output.includes(taskId))).toBe(true);
     expect(bytes(evidence)).toBeLessThanOrEqual(8192);
     expect((await call(s, 'messages')).items.some(m => m.text.includes('completed'))).toBe(true);
@@ -104,7 +108,7 @@ describe('Person async native service integration', () => {
     expect(await readFile(join(logs, sessionDirs[0], `${taskId}.log`), 'utf8')).toContain('completed');
   });
 
-  it('fences owner admission throughout owner cancellation of completed cognition and overlapping joins', async () => {
+  it('fences owner admission throughout cancellation of a waiting goal and overlapping joins', async () => {
     const dir = await directory(), toolStarted = deferred(), toolRelease = deferred(), toolAborted = deferred();
     const durableEntered = [deferred(), deferred()], durableRelease = [deferred(), deferred()];
     let parentCalls = 0, childCalls = 0, runtime;
@@ -129,11 +133,16 @@ describe('Person async native service integration', () => {
       durableEntered[index].resolve(); await durableRelease[index].promise;
       return originalCancel.apply(this, args);
     });
-    const adapter = parentAdapter(async (_input, p) => {
+    const adapter = parentAdapter(async (input, p) => {
       parentCalls++;
       if (parentCalls === 1) use(p, 'catalog.view', { id: 'SpawnAgent' });
       if (parentCalls === 2) use(p, 'SpawnAgent', { name: 'blocked-reader', task: 'Read the workspace.', persona: 'explorer' });
-      if (parentCalls === 3) await toolStarted.promise;
+      if (parentCalls === 3) {
+        await toolStarted.promise;
+        use(p, 'Execution.goal', goalInput([input.trigger.ref], { kind: 'work', status: 'waiting',
+          reason: 'The owned child is still reading.', nextStep: 'Collect the child result.',
+          waitFor: [JSON.parse(input.capabilityResult.output).agentId] }));
+      }
     }, async function* () {
       childCalls++;
       yield { type: 'tool_call', id: 'blocked-read', name: 'FileRead', input: { file_path: 'unused' } };
@@ -142,7 +151,6 @@ describe('Person async native service integration', () => {
     const s = service(dir, adapter);
     await call(s, 'open');
     await call(s, 'think', { text: 'launch', clientMessageId: 'blocked-launch' });
-    expect((await idle(s)).latestEpisode.status).toBe('completed');
     const payload = {};
     let first, second;
     const assertBusy = async suffix => {
@@ -153,12 +161,14 @@ describe('Person async native service integration', () => {
       expect(parentCalls).toBe(3); expect(childCalls).toBe(1);
     };
     try {
+      await vi.waitFor(async () => expect((await call(s, 'executions')).main?.phase).toBe('waiting'));
+      expect((await call(s, 'snapshot')).state.version).toBe(0);
       first = call(s, 'cancel', payload);
       await durableEntered[0].promise;
       await assertBusy('durable'); // Fence must exist before repository.cancel resolves.
       durableRelease[0].resolve();
       await toolAborted.promise;
-      await assertBusy('joining'); // Cognition already ended, but its real child effect has not.
+      await assertBusy('joining'); // The waiting goal cannot end until its real child effect has joined.
       second = call(s, 'cancel', payload);
       await durableEntered[1].promise;
       toolRelease.resolve(); await first;

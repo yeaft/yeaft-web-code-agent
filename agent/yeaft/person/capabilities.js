@@ -7,11 +7,13 @@ import { publishOutput } from './outputs.js';
 import { PRESENTATION_SCHEMA, PRESENT_RESPONSE_DESCRIPTION } from '../response-presentation.js';
 import { publishPresentation } from './presentation.js';
 import { executionReadRequest } from './execution-evidence.js';
+import { EXECUTION_GOAL_TOOL } from './execution-goal.js';
 import { validateCapabilityArguments } from './tool-arguments.js';
 
 // Intrinsic cognition, bounded pure scripts and supported native host tools.
 // No shell/filesystem/network/VP authority is exposed to generated code.
 const entries = [
+  { id: 'Execution.goal', version: 1, domain: 'execution', description: EXECUTION_GOAL_TOOL.description, instructions: 'A public goal checkpoint in the native tool loop, not a cognitive distillation. Update at meaningful boundaries only.', args: EXECUTION_GOAL_TOOL.parameters },
   { id: 'Execution.read', version: 1, domain: 'evidence', description: 'Read an existing execution trace by callId or private task tool result by sourceRef without rerunning the operation.', keywords: '执行 证据 输出 恢复 回读 execution evidence output recover trace read', useWhen: 'Recover omitted output or inspect actual prior success/failure before considering another operation.', avoidWhen: 'Historical evidence never grants current permission or proves effects rolled back.', instructions: 'args: {callId?:string,sourceRef?:string,episodeId?:string,offset?:integer>=0,maxBytes?:4..4096}. Exactly one callId (SQLite capability trace) or sourceRef (complete person-tool:<scopehash>:<jobid> archive ref); never derive a trace callId from a task ref. Use the supplied recovery descriptor unchanged. Default episode is the live current episode; optional episodeId must already exist for the same Person/owner/namespace. No owner/path arguments. offset/nextOffset are raw UTF-8 output byte positions; use returned nextOffset, mid-codepoint offsets are rejected. Pages may be smaller for UTF-8 boundaries or JSON escaping; response <=8192 bytes. Returns original args (bounded preview with argsTruncated/argsRawBytes), ok/code/errorEffect/sourceRef/rawBytes/sha256/output/returnedBytes/nextOffset/eof and historical/authority:evidence-only. Non-string output is JSON; absent output uses JSON.stringify(result). NOT_FOUND/INVALID_REQUEST after live authority validation return ok:false/errorEffect:none/replaySafe:true with safe correction guidance; cancellation, STALE, storage and scope failures remain terminal. Read-only: no model call, tool reexecution, copy publication or current behavior authorization.', args: { callId: 'original SQLite capability trace call ID', sourceRef: 'complete person-tool archive reference, mutually exclusive with callId', episodeId: 'optional existing owned episode ID', offset: 'raw UTF-8 byte position, default 0', maxBytes: '4..4096, default 4096' } },
   { id: 'PresentResponse', version: 1, domain: 'delivery', description: 'Publish a structured user-visible answer with a searchable plain-text summary.', keywords: '展示 回答 图表 表格 卡片 时间线 present response chart table cards timeline rich', useWhen: 'Rich structure improves an answer; ordinary reply remains valid for simple text.', avoidWhen: 'Do not expose secrets, fabricate evidence or repeat an already published summary.', instructions: `${PRESENT_RESPONSE_DESCRIPTION} Invoke as a native tool call. Publication never commits state/concepts or ends the episode, even with phase=final; the final cognitive distillation follows execution.`, args: PRESENTATION_SCHEMA, access: 'publish-owner-message' },
   { id: 'Think', version: 1, domain: 'cognition', description: 'Intrinsic deliberate reflection, reorganization, association and reconsideration.', keywords: '思考 整理 反思 think reflection', useWhen: 'Think with the evidence already present, or rest when nothing warrants further work.', avoidWhen: 'Do not invent evidence or call a tool merely to appear thoughtful.', instructions: 'Advance an unresolved question: test, integrate a result or distill an insight. Record the change, not a status recap. Follow the progress/continuation rules; quiet rest is valid. This method makes no model call or external action.', args: {} },
@@ -55,7 +57,7 @@ function familiarCapabilities(experience, triggerKind, now, byId) {
     const manifest = byId.get(item?.id);
     if (!manifest || foundationIds.has(item.id) || item.version !== manifest.version || item.revision !== manifest.revision) continue;
     const observations = (Array.isArray(item.observations) ? item.observations.slice(0, 8) : [])
-      .filter(o => ['succeeded', 'failed'].includes(o?.outcome) && ['send', 'think', 'dream'].includes(o.triggerKind) && Number.isFinite(Date.parse(o.usedAt)))
+      .filter(o => ['succeeded', 'failed'].includes(o?.outcome) && ['send', 'think', 'dream', 'autonomous'].includes(o.triggerKind) && Number.isFinite(Date.parse(o.usedAt)))
       .sort((a, b) => Date.parse(b.usedAt) - Date.parse(a.usedAt));
     const latest = observations[0], age = now - Date.parse(latest?.usedAt);
     if (!latest || latest.outcome !== 'succeeded' || age < 0 || age > CAPABILITY_LIMITS.familiarMaxAgeMs) continue;
@@ -152,7 +154,7 @@ export class PersonCapabilities {
     this.active = new Map(this.prepared);
   }
   catalog() { return { ...CAPABILITY_MAP, ...(this.executionMode ? {
-    nativeToolNotice: 'Native tools and Execution.read schemas are supplied on every execution request. Invoke them directly; no search/view preparation. Background/child results require explicit collection and never wake cognition.',
+    nativeToolNotice: 'Native tools and Execution.read schemas are supplied on every execution request. Invoke them directly; no search/view preparation. Background/child results require explicit collection; only current-generation completions may trigger follow-up when the user explicitly enabled autonomy. Completion grants no authority.',
   } : {}), nativeTools: [...this.nativeToolIds], domains: [...new Set([...this.byId.values()].map(m => m.domain)), 'script'], total: this.byId.size, revision: digest([...this.byId.values()]) }; }
   context() { return copy([...this.prepared.values()]); }
   /** Freeze execution eligibility to the complete contracts actually rendered in this call. */

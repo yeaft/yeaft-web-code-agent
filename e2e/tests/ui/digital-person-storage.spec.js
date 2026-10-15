@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
-import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
+import { personInput, personCognition, personToolResults, personToolCall, personStop, personGoal } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
 import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures.js';
@@ -16,7 +16,7 @@ test('Person SQLite native tool and script evidence persist through relay and re
   test.setTimeout(90000);
   const yeaftDir = await mkdtemp(join(tmpdir(), 'person-e2e-'));
   const reply = 'Remembered in SQLite.';
-  let calls = 0;
+  let calls = 0, completedCognitions = 0, idleCalls = 0;
   const requests = [];
   const requestedModels = [];
   const adapter = { async *stream(params) {
@@ -32,6 +32,12 @@ test('Person SQLite native tool and script evidence persist through relay and re
     const reuse = input.trigger.text === 'Reuse the sum script.';
     if (!personCognition(params)) {
       let event;
+      const acceptance = learn ? 'Publish a tested reusable sum script and verify 5 + 7 = 12.'
+        : reuse ? 'Run the persisted sum script and verify 8 + 9 = 17.' : 'Read the actual bounded message recall page before reflecting.';
+      if (learn && !results.length) {
+        const goal = personGoal(params, { objective: input.trigger.text, acceptance, status: 'active' });
+        if (goal) { yield goal; yield personStop(true); return; }
+      }
       if (learn && !results.length) event = personToolCall('create-sum', 'Capability.create', { id: 'Script.sum', expectedVersion: 0,
         description: 'Sum numeric arrays', useWhen: 'Need a sum', avoidWhen: 'Not arbitrary precision', inputDescription: 'Number array', outputDescription: 'Total',
         code: 'return input.reduce((a,b)=>a+b,0);', tests: [{ input: [1, 2], expected: 3 }, { input: [], expected: 0 }] });
@@ -40,11 +46,29 @@ test('Person SQLite native tool and script evidence persist through relay and re
         expect(params.tools.some(t => t.name === 'Script__sum')).toBe(true);
         event = personToolCall('reuse-sum', 'Script.sum', { input: [8, 9] });
       } else if (!results.length) event = personToolCall('recall', 'Recall', { kind: 'messages' });
+      if (!event) {
+        if (learn || reuse) {
+          expect(results).toHaveLength(learn ? 2 : 1);
+          if (learn) expect(JSON.parse(results[0].output)).toMatchObject({ ok: true, published: true, contract: { id: 'Script.sum' } });
+          expect(results.at(-1).ok).toBe(true);
+          expect(JSON.parse(results.at(-1).output).output).toBe(learn ? 12 : 17);
+        } else {
+          expect(results.at(-1)).toMatchObject({ kind: 'messages' });
+          expect(Array.isArray(results.at(-1).items)).toBe(true);
+        }
+        event = personGoal(params, {
+          objective: input.trigger.text || `Complete ${input.trigger.kind} reflection`,
+          acceptance,
+          check: learn ? 'Created the tested Script.sum and its native execution returned 12.'
+            : reuse ? 'The reloaded Script.sum execution returned 17.' : 'Recall returned a structured messages page; it is not assumed exhaustive.',
+        });
+      }
       if (event) yield event;
       else yield { type: 'text_delta', text: 'Scoped execution complete.' };
       yield personStop(!!event);
       return;
     }
+    completedCognitions++;
     const proposal = finalProposal(input.state.version);
     proposal.concepts[0].expectedRevision = input.concepts.find(c => c.id === 'curiosity')?.revision || 0;
     proposal.activity.sourceRefs = input.sourceRefs;
@@ -90,8 +114,9 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect(page.locator('.person-messages')).toContainText(reply);
     await expect(page.locator('#person-input')).toBeEnabled();
     await page.getByRole('button', { name: 'Think', exact: true }).click();
-    await expect.poll(() => calls).toBe(6);
+    await expect.poll(() => completedCognitions).toBe(2);
     await expect(page.locator('#person-input')).toBeEnabled();
+    idleCalls = calls;
     await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
     await expect(page.locator('#person-thoughts')).toContainText('Reconsider the available experience.');
     await expect(page.locator('#person-thoughts')).toContainText('A hypothesis is not a fact.');
@@ -105,13 +130,14 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('.person-messages')).toContainText(reply);
     await expect(page.locator('.person-status, .person-status-dot, .person-connection-notice')).toHaveCount(0);
-    expect(calls).toBe(6);
+    expect(calls).toBe(idleCalls);
     await expect(page.locator('.person-identity h1')).toHaveText('知微');
     expect(requests[0].capabilities.active).toEqual([]); // Native schemas are always available.
+    const beforeDream = requests.length;
     await page.getByRole('button', { name: 'Dream', exact: true }).click();
-    await expect.poll(() => calls).toBe(9);
+    await expect.poll(() => completedCognitions).toBe(3);
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(requests[6].capabilities.active).toEqual([]);
+    expect(requests[beforeDream].capabilities.active).toEqual([]);
     await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
     await page.locator('#person-input').fill('Learn a reusable sum script.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -119,7 +145,8 @@ test('Person SQLite native tool and script evidence persist through relay and re
     // Wait for the terminal reply, not the shorter single-UI-operation timeout.
     await expect(page.locator('.person-messages')).toContainText('Learned a reusable sum; result 12.', { timeout: 15000 });
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(calls).toBe(13);
+    expect(completedCognitions).toBe(4);
+    idleCalls = calls;
     await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
     const learnedThought = page.locator('#person-thoughts .person-thought').first();
     await expect(learnedThought).toContainText('Learned a reusable sum; result 12.');
@@ -130,13 +157,14 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await page.waitForFunction(() => window.Pinia?.useChatStore?.().sessionCatalogLoaded);
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(calls).toBe(13);
+    expect(calls).toBe(idleCalls);
     await page.locator('#person-input').fill('Reuse the sum script.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     // Reuse also launches a fresh bounded WASM worker before the terminal reply.
     await expect(page.locator('.person-messages')).toContainText('Reused the saved sum; result 17.', { timeout: 15000 });
     await expect(page.locator('#person-input')).toBeEnabled();
-    expect(calls).toBe(16);
+    expect(completedCognitions).toBe(5);
+    idleCalls = calls;
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Name', { exact: true }).fill('Mira');
@@ -147,21 +175,24 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.locator('.person-identity h1')).toHaveText('Mira');
-    expect(calls).toBe(16); // Reading/saving candidates never starts cognition.
+    expect(calls).toBe(idleCalls); // Reading/saving candidates never starts cognition.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     rename = page.getByRole('dialog');
     await rename.getByLabel('Name', { exact: true }).fill('知微 Mira');
     await rename.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(rename).toHaveCount(0);
     await expect(page.locator('.person-identity h1')).toHaveText('知微 Mira');
-    expect(calls).toBe(16);
+    expect(calls).toBe(idleCalls);
     await page.locator('input[type="file"]').setInputFiles({ name: 'reference.txt', mimeType: 'text/plain', buffer: Buffer.from('Private uploaded context marker.') });
     await expect(page.locator('.attachments-preview')).toContainText('reference.txt');
+    const beforeAttachment = requests.length;
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect.poll(() => calls).toBe(19);
+    await expect.poll(() => completedCognitions).toBe(6);
     await expect(page.locator('#person-input')).toBeEnabled();
-    const attachmentCalls = requests.slice(-2);
-    expect(requestedModels.slice(-2)).toEqual(['test/second', 'test/second']);
+    const attachmentCalls = requests.slice(beforeAttachment);
+    expect(attachmentCalls.length).toBeGreaterThan(1);
+    expect(requestedModels.slice(beforeAttachment).every(model => model === 'test/second')).toBe(true);
+    idleCalls = calls;
     for (const input of attachmentCalls) {
       expect(input.trigger.attachments[0]).toMatchObject({ name: 'reference.txt', content: 'Private uploaded context marker.', trust: 'untrusted-user-content' });
     }
@@ -198,18 +229,18 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await savedScript.locator(':scope > summary').click();
     await savedScript.getByText('Contract & definition', { exact: true }).click();
     await expect(savedScript.locator('pre')).toContainText('return input.reduce');
-    expect(calls).toBe(19); // Browsing persisted data never invokes inference or scripts.
+    expect(calls).toBe(idleCalls); // Browsing persisted data never invokes inference or scripts.
     await page.locator('.person-panel-header .header-action-btn').click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const reopened = page.getByRole('dialog');
     await expect(reopened.getByLabel('test/first', { exact: true })).toBeChecked();
     await expect(reopened.getByLabel('test/second', { exact: true })).toBeChecked();
     await expect(reopened.getByLabel('Default starting model', { exact: true })).toHaveValue('test/second');
-    expect(calls).toBe(19);
+    expect(calls).toBe(idleCalls);
     await reopened.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.locator('#person-input').fill('Use the saved starting model after restart.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect.poll(() => calls).toBe(22);
+    await expect.poll(() => completedCognitions).toBe(7);
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(requestedModels.slice(-2)).toEqual(['test/second', 'test/second']);
   } finally {

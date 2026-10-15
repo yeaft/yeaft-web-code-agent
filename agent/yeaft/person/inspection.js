@@ -68,6 +68,7 @@ export function stateView(value) {
   if (Object.hasOwn(value, 'decision')) result.decision = pick(value.decision, ['summary', 'uncertainties', 'selfCheck']);
   if (Object.hasOwn(value, 'lastSelection')) result.lastSelection = pick(value.lastSelection, ['model', 'effort']);
   if (Object.hasOwn(value, 'continuation')) result.continuation = pick(value.continuation, ['goal', 'nextStep', 'status', 'condition']);
+  if (Array.isArray(value.understanding)) result.understanding = value.understanding.map(item => pick(item, ['kind', 'statement', 'epistemicState', 'sourceRefs']));
   return result;
 }
 export function createdSkillView(record, contract) {
