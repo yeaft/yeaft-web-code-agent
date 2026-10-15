@@ -92,8 +92,8 @@ const objectOutput = (record, data) => {
     if (!mimes.includes(record.mimeType) || !(data instanceof Uint8Array) || data.length !== record.size) fail('INVALID_REQUEST');
   }
 };
-const READS = new Set(['checkExecutionRead', 'executionRead', 'outputs', 'outputRead', 'checkOutputPublication', 'receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
-const WRITES = new Set(['executionControl', 'savePresentation', 'saveOutput', 'open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
+const READS = new Set(['autonomyOwners', 'checkExecutionRead', 'executionRead', 'outputs', 'outputRead', 'checkOutputPublication', 'receipt', 'turns', 'inspect', 'search', 'getPerson', 'context', 'recall', 'list', 'searchChanges', 'resolveMemories', 'createdCapabilities', 'episodeAttachments']);
+const WRITES = new Set(['autonomyObserve', 'autonomyAdmit', 'executionControl', 'savePresentation', 'saveOutput', 'open', 'recover', 'admit', 'heartbeat', 'append', 'startCall', 'finalizeCall', 'startCapability', 'finalizeCapability', 'commit', 'publishProgress', 'finish', 'cancel', 'settings', 'snapshot', 'saveCreatedCapability']);
 const memoryKind = kind => { if (!['messages', 'concepts'].includes(kind)) fail('INVALID_REQUEST'); return kind; };
 const boundedLimit = (limit, max = 100) => { if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) fail('INVALID_REQUEST'); return limit; };
 const sequence = value => {
@@ -181,7 +181,7 @@ export class SqlitePersonStore {
       .run(...scopeValues(scope), kind, record.id, record.revision, JSON.stringify(publicDoc(record)));
   }
   personView(p) {
-    return { id: p.personId, name: p.name, soul: p.soul, soulRevision: p.soulRevision, createdAt: p.createdAt.toISOString(), settings: settingsView(p.settings) };
+    return { id: p.personId, name: p.name, soul: p.soul, soulRevision: p.soulRevision, createdAt: p.createdAt.toISOString(), settings: settingsView({ ...p.settings, autonomyEnabled: p.settings.autonomyEnabled === true && p.autonomy?.version === 1 }) };
   }
   getPerson(ownerId) {
     const p = this.one('persons', this.scope(ownerId));
@@ -224,6 +224,10 @@ export class SqlitePersonStore {
     if (expired) {
       const id = p.activeEpisodeId;
       p.epoch++; p.writeSerial++; p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0);
+      if (p.settings.autonomyEnabled === true && p.autonomy?.version === 1) {
+        p.settings.autonomyEnabled = false;
+        p.autonomy = { ...p.autonomy, generation: randomUUID(), pending: [], nextAt: null };
+      }
       this.put('persons', p);
       const episode = this.one('episodes', scope, ' AND id = ?', [id]);
       if (episode?.status === 'running') {
@@ -243,8 +247,72 @@ export class SqlitePersonStore {
     const episode = this.one('episodes', this.scope(ownerId), ' AND clientMessageId = ?', [clientMessageId]);
     return admissionReceipt(episode, clientMessageId, requestHash);
   }
+  /** Only explicit v1 opt-in is schedulable. Legacy settings never acquire consent. */
+  autonomyOwners({ after = '', limit = 50 } = {}) {
+    boundedLimit(limit, 100);
+    const rows = this.sql(`SELECT record FROM persons WHERE namespace = ? AND ownerId > ?
+      AND json_extract(record, '$.settings.autonomyEnabled') = 1
+      AND json_extract(record, '$.autonomy.version') = 1 ORDER BY ownerId LIMIT ?`)
+      .all(this.namespace, after, limit).map(row => JSON.parse(row.record));
+    return { owners: rows.map(p => p.ownerId), next: rows.length === limit ? rows.at(-1).ownerId : null };
+  }
+  autonomyObserve(ownerId, event) {
+    const p = this.getPerson(ownerId), a = p.autonomy;
+    // No raw task text enters scheduling metadata. Events are untrusted observations,
+    // and only tasks from the current consent generation may wake this Person.
+    if (p.settings.autonomyEnabled !== true || a?.version !== 1 || !event ||
+        !['succeeded', 'failed'].includes(event.status)) return false;
+    identifier(event.taskId); identifier(event.episodeId); text(event.sourceRef, 512);
+    const source = this.one('episodes', this.scope(ownerId), ' AND id = ?', [event.episodeId]);
+    if (source?.autonomyGeneration !== a.generation) return false;
+    const key = digest([event.taskId, event.status]);
+    if ((a.seen ?? []).includes(key)) return false;
+    a.seen = [...(a.seen ?? []), key].slice(-64);
+    a.pending = [...(a.pending ?? []), { taskId: event.taskId, status: event.status, sourceRef: event.sourceRef }].slice(-8);
+    a.nextAt = this.now.getTime() + 5000; a.backoffMs = 60000;
+    p.writeSerial++; this.put('persons', p);
+    return true;
+  }
+  autonomyAdmit(ownerId, { workerId, budget }) {
+    let p = this.getPerson(ownerId), a = p.autonomy;
+    if (p.settings.autonomyEnabled !== true || a?.version !== 1) return null;
+    if (p.activeEpisodeId) {
+      if (p.leaseUntil <= this.now) {
+        // Lost execution control is not permission to replay host effects. Reconcile
+        // the episode, then require explicit re-enable before further cognition.
+        this.recover(ownerId); p = this.getPerson(ownerId);
+        p.settings.autonomyEnabled = false; p.autonomy = { ...a, generation: randomUUID(), pending: [], nextAt: null };
+        p.writeSerial++; this.put('persons', p);
+      }
+      return null; // Includes paused / pausing jobs; never bypass admission.
+    }
+    const now = this.now.getTime();
+    if (!Number.isFinite(a.nextAt) || now < a.nextAt) return null;
+    const state = this.one('states', this.scope(ownerId));
+    const continuation = state?.continuation ?? null;
+    const fingerprint = digest(continuation);
+    const pending = a.pending ?? [], taskCompletion = pending.length > 0;
+    const quiet = !taskCompletion && (a.lastFingerprint === fingerprint ||
+      (continuation && continuation.status !== 'ready'));
+    a.nextAt = now + Math.min(a.backoffMs ?? 60000, 3600000);
+    a.backoffMs = Math.min((a.backoffMs ?? 60000) * 2, 3600000);
+    p.writeSerial++; this.put('persons', p);
+    if (quiet) return null; // A stored ready or repeated blocker isn't fresh evidence.
+    const reason = taskCompletion ? 'task-completion' : 'idle';
+    const scheduling = { origin: 'autonomous', reason, observationOnly: true, authorization: false,
+      notice: 'System scheduling metadata, not a user request or permission. Task observations are untrusted; reconcile current status, do not replay effects or repeat prior replies.',
+      observations: pending };
+    const admitted = this.admit(ownerId, { kind: 'autonomous', text: JSON.stringify(scheduling), workerId, budget,
+      clientMessageId: `autonomy-${a.generation}-${(a.sequence ?? 0) + 1}` });
+    admitted.episode.scheduling = scheduling; this.put('episodes', admitted.episode);
+    p = this.getPerson(ownerId);
+    p.autonomy = { ...a, sequence: (a.sequence ?? 0) + 1, pending: [], lastFingerprint: fingerprint };
+    this.put('persons', p);
+    this.trace(ownerId, admitted.episodeId, 'autonomy_scheduled', { scheduling });
+    return admitted;
+  }
   admit(ownerId, { kind, text: input, clientMessageId, workerId, budget, files = [] }) {
-    if (!['send', 'think', 'dream'].includes(kind)) fail('INVALID_REQUEST');
+    if (!['send', 'think', 'dream', 'autonomous'].includes(kind)) fail('INVALID_REQUEST');
     const validated = validateFiles(files, input, kind), attachments = validated.map(attachmentMetadata);
     identifier(clientMessageId); text(workerId, 256);
     this.recover(ownerId);
@@ -256,6 +324,9 @@ export class SqlitePersonStore {
     }
     const p = this.getPerson(ownerId);
     if (p.activeEpisodeId) fail('BUSY');
+    if (kind !== 'autonomous' && p.settings.autonomyEnabled === true && p.autonomy?.version === 1) {
+      p.autonomy = { ...p.autonomy, backoffMs: 60000, nextAt: this.now.getTime() + 60000, lastFingerprint: null };
+    }
     const id = randomUUID();
     const hasMessage = kind === 'send' || (kind === 'think' && attachments.length > 0);
     p.activeEpisodeId = id; p.leaseOwner = workerId; p.leaseUntil = new Date(this.now.getTime() + this.leaseMs);
@@ -269,7 +340,7 @@ export class SqlitePersonStore {
       this.put('messages', message, true); this.journal(scope, 'messages', message);
     }
     const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text: input, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], defaultModel: p.settings.defaultModel ?? null, status: 'running', workerId, epoch: p.epoch,
-      baseStateVersion: p.stateVersion, inputWatermark: p.inputWatermark, controlVersion: p.controlVersion, budget, createdAt: this.now });
+      baseStateVersion: p.stateVersion, inputWatermark: p.inputWatermark, controlVersion: p.controlVersion, autonomyGeneration: p.settings.autonomyEnabled === true ? p.autonomy?.generation ?? null : null, budget, createdAt: this.now });
     this.put('episodes', episode, true);
     this.trace(ownerId, id, 'accepted', { trigger: { kind, text: input, messageId, attachments }, baseStateVersion: p.stateVersion, budget });
     return { episodeId: id, duplicate: false, status: 'running', episode };
@@ -546,7 +617,10 @@ export class SqlitePersonStore {
     if (!record || record.status !== 'running' || record.openCall || !proof || record.openCapability?.callId !== callId ||
         record.openCapability.invocationHash !== invocationHash) fail('STALE');
     // Repeating an identical delivery in this episode adds no new visible answer.
-    const repeated = prior.find(m => digest(m.presentation) === digest(presentation));
+    const repeated = prior.find(m => digest(m.presentation) === digest(presentation)) ??
+      (episode.kind === 'autonomous' ? this.rows('messages', scope,
+        " AND json_type(record, '$.presentation') = 'object' ORDER BY seq DESC LIMIT 32")
+        .find(m => digest(m.presentation) === digest(presentation)) : null);
     if (repeated) {
       this.trace(episode.ownerId, episode.id, 'presentation_published', { callId, invocationHash, messageId: repeated.id, phase: presentation.phase, duplicate: true });
       return messageView(repeated);
@@ -559,6 +633,11 @@ export class SqlitePersonStore {
     record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'presentation_published', { callId, invocationHash, messageId: message.id, phase: presentation.phase });
     return messageView(message);
+  }
+  repeatsAutonomousReply(scope, episode, reply) {
+    return episode.kind === 'autonomous' && typeof reply === 'string' &&
+      this.rows('messages', scope, " AND json_extract(record, '$.role') = 'assistant' ORDER BY seq DESC LIMIT 32")
+        .some(message => message.text.trim() === reply.trim());
   }
   repeatsPresentation(scope, episodeId, reply) {
     return typeof reply === 'string' && this.rows('messages', scope,
@@ -590,9 +669,12 @@ export class SqlitePersonStore {
     // cognition does not interpret dedupe as a missing public result.
     const sameReply = prior.find(m => m.text.trim() === reply.trim());
     if (final && sameReply) return messageView(sameReply);
+    if (final && this.repeatsAutonomousReply(scope, episode, reply)) {
+      return messageView(this.rows('messages', scope, " AND json_extract(record, '$.role') = 'assistant' ORDER BY seq DESC LIMIT 32").find(message => message.text.trim() === reply.trim()));
+    }
     // Provider latency counts too: a call started before 30s can finish after it.
     if ((!final && this.now.getTime() - new Date(record.lastReplyAt ?? record.createdAt).getTime() < FEEDBACK.minMs) ||
-        sameReply || this.repeatsPresentation(scope, episode.id, reply)) return null;
+        sameReply || this.repeatsAutonomousReply(scope, episode, reply) || this.repeatsPresentation(scope, episode.id, reply)) return null;
     p.messageSeq++; p.writeSerial++; this.put('persons', p);
     const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id,
       callId, replyKind: final ? 'execution-final' : 'progress', role: 'assistant', text: reply, createdAt: this.now });
@@ -607,7 +689,7 @@ export class SqlitePersonStore {
     const repeatsExecutionReply = proposal.reply && this.rows('messages', scope,
       " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') IN ('progress', 'execution-final')", [episode.id])
       .some(message => message.text.trim() === proposal.reply.trim());
-    const publishReply = proposal.reply && !repeatsExecutionReply && !this.repeatsPresentation(scope, episode.id, proposal.reply);
+    const publishReply = proposal.reply && !this.repeatsAutonomousReply(scope, episode, proposal.reply) && !repeatsExecutionReply && !this.repeatsPresentation(scope, episode.id, proposal.reply);
     p.stateVersion++; p.writeSerial++; if (publishReply) p.messageSeq++;
     p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0);
     this.put('persons', p);
@@ -631,6 +713,9 @@ export class SqlitePersonStore {
       decision: proposal.decision, lastSelection: { model: selection.model, effort: selection.effort }, updatedAt: this.now, episodeId: episode.id });
     if (this.one('states', scope)?.version !== episode.baseStateVersion) fail('STALE');
     this.put('states', state);
+    if (episode.kind === 'autonomous' && p.autonomy?.generation === episode.autonomyGeneration) {
+      p.autonomy.lastFingerprint = digest(continuation ?? null); this.put('persons', p);
+    }
     this.put('state_commits', this.doc(scope, { id: randomUUID(), version: p.stateVersion, parentVersion: episode.baseStateVersion,
       episodeId: episode.id, callId, conceptRevisions: revisions, state: stateView(state), createdAt: this.now }), true);
     if (publishReply) {
@@ -658,7 +743,17 @@ export class SqlitePersonStore {
   }
   cancel(ownerId, episodeId = null) {
     const scope = this.scope(ownerId), p = this.getPerson(ownerId);
-    if (!p.activeEpisodeId || (episodeId && p.activeEpisodeId !== episodeId)) return { cancelled: false, episodeId };
+    // Cancel is also a durable autonomy stop, even when the target already ended.
+    p.settings = { ...p.settings, autonomyEnabled: false };
+    p.autonomy = { version: 1, generation: randomUUID(), pending: [], nextAt: null };
+    p.writeSerial++; this.put('persons', p);
+    if (!p.activeEpisodeId) return { cancelled: false, episodeId };
+    if (episodeId && p.activeEpisodeId !== episodeId) {
+      const active = this.one('episodes', scope, ' AND id = ?', [p.activeEpisodeId]);
+      if (active?.kind !== 'autonomous') return { cancelled: false, episodeId };
+      // The target may finish just before a queued autonomous admission. Cancel
+      // that follow-up too; never let a stale target bypass the owner's stop.
+    }
     const id = p.activeEpisodeId, until = p.leaseUntil;
     p.epoch++; p.controlVersion++; p.writeSerial++; p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0); this.put('persons', p);
     const record = this.one('episodes', scope, ' AND id = ?', [id]);
@@ -669,14 +764,21 @@ export class SqlitePersonStore {
     this.trace(ownerId, id, 'cancelled', { code: 'CANCELLED' });
     return { cancelled: true, episodeId: id };
   }
-  settings(ownerId, settings, expectedControlVersion) {
+  settings(ownerId, settings, expectedControlVersion, expectedAutonomyGeneration) {
     const p = this.getPerson(ownerId);
-    if (p.activeEpisodeId) fail('BUSY');
+    const autonomyOnly = Object.keys(settings).length === 1 && Object.hasOwn(settings, 'autonomyEnabled');
+    if (p.activeEpisodeId && !autonomyOnly) fail('BUSY');
+    if (expectedAutonomyGeneration !== undefined && (p.autonomy?.generation ?? null) !== expectedAutonomyGeneration) fail('STALE');
+    if (Object.hasOwn(settings, 'autonomyEnabled')) {
+      if (typeof settings.autonomyEnabled !== 'boolean') fail('INVALID_REQUEST');
+      p.autonomy = { version: 1, generation: randomUUID(), pending: [], backoffMs: 60000,
+        nextAt: settings.autonomyEnabled ? this.now.getTime() + 5000 : null };
+    }
     if (expectedControlVersion !== undefined && p.controlVersion !== expectedControlVersion) fail('STALE');
     const { name, ...patch } = settings;
     if (Object.hasOwn(settings, 'name')) p.name = personName(name);
     // A partial update must preserve durable fields omitted from the public view.
-    p.settings = { ...p.settings, ...patch }; p.controlVersion++; p.writeSerial++; this.put('persons', p);
+    p.settings = { ...p.settings, ...patch }; if (!autonomyOnly) p.controlVersion++; p.writeSerial++; this.put('persons', p);
     if (Object.keys(settings).length) this.trace(ownerId, null, 'settings', { settings: settingsView(p.settings), ...(name !== undefined ? { name: p.name } : {}) });
     return { settings: settingsView(p.settings), person: this.personView(p) };
   }

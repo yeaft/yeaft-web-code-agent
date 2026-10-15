@@ -162,6 +162,9 @@ describe('Person task host', () => {
     expect(new Set(all.map(host => host.dataRoot)).size).toBe(5);
     const aContext = await a.attach();
     const id = await background(aContext, 'setInterval(()=>{},1000)');
+    // Native schemas serialize optional defaults as empty strings. Keep that
+    // equivalent to omitted, without accepting a foreign Session namespace.
+    expect((await json(aContext, 'ListTasks', { sessionId: '' })).tasks.map(task => task.id)).toContain(id);
     const childOptions = withProvider(new ParallelAdapter());
     const child = await json(await a.attach({}, childOptions), 'SpawnAgent', { name: 'private', task: 'private' });
     for (const other of all.slice(1)) {
@@ -206,7 +209,8 @@ describe('Person task host', () => {
     writeFileSync(join(root, 'agents.json'), JSON.stringify({ scope: h.scope, agents: [agent] }));
     store.writeTask({ ...shell, id: agent.taskId, kind: 'sub_agent', runtime: { subAgentId: agent.id }, log: { path: store.logPath(sessionId, agent.taskId) } });
     store.appendLog(sessionId, agent.taskId, 'previous child evidence');
-    const recovered = host(), context = await recovered.attach();
+    const observed = vi.fn();
+    const recovered = host({ onCompletion: observed }), context = await recovered.attach();
     expect((await json(context, 'WaitTask', { taskId: shell.id })).status).toBe('orphaned');
     expect((await json(context, 'ReadTaskLog', { taskId: shell.id })).text).toContain('previous shell evidence');
     const result = await json(context, 'WaitAgent', { agent_id: agent.id });
@@ -215,5 +219,6 @@ describe('Person task host', () => {
     expect(recovered.evidence().completions.map(item => item.task.status)).toEqual(['orphaned', 'orphaned']);
     expect((await json(context, 'ReadTaskLog', { taskId: agent.taskId })).text).toContain('previous child evidence');
     expect((await json(context, 'ListTasks')).tasks).toHaveLength(0);
+    expect(observed).not.toHaveBeenCalled();
   });
 });

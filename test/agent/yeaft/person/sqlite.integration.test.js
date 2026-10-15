@@ -77,7 +77,8 @@ describe('Person real SQLite authority in managed workers', () => {
     expect((await a.searchChanges('alice')).items).toHaveLength(1);
     await expect(b.admit('alice', input('different'))).rejects.toMatchObject({ code: 'BUSY' });
     await expect(b.admit('alice', input('one', { text: 'different' }))).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
-    await expect(b.settings('alice', { autonomyEnabled: false })).rejects.toMatchObject({ code: 'BUSY' });
+    await expect(b.settings('alice', { autonomyEnabled: false })).resolves.toMatchObject({ settings: { autonomyEnabled: false } });
+    await expect(a.heartbeat(results.find(r => !r.duplicate).episode)).resolves.toBeUndefined();
     await b.cancel('alice');
     const races = await Promise.allSettled([a.admit('alice', input('a')), b.admit('alice', input('b'))]);
     expect(races.filter(r => r.status === 'fulfilled')).toHaveLength(1);

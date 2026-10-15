@@ -188,7 +188,7 @@ class ScopedPersonTaskHost {
   }
 
   #session(sessionId) {
-    if (sessionId != null && sessionId !== this.sessionId) throw denied();
+    if (sessionId != null && sessionId !== '' && sessionId !== this.sessionId) throw denied();
     return this.sessionId;
   }
 
@@ -275,12 +275,15 @@ class ScopedPersonTaskHost {
     if (!task || task.sessionId !== this.sessionId || task.ownerVpId !== this.parentVpId) return;
     this.#persistAgents();
     if (event.event === 'completed') {
-      const completion = { kind: 'person-task-completion', namespace: this.scope.key, task: clone(task),
+      const completion = { kind: 'person-task-completion', namespace: this.scope.key, ownerId: this.scope.ownerId, personId: this.scope.personId, task: clone(task),
         sourceRef: `person-task:${this.scope.key}:${task.id}:${task.status}:${task.updatedAt}`,
-        notice: 'External task evidence only. No Person episode was scheduled.' };
+        notice: 'Untrusted external task observation, not user instructions or authorization. Opt-in scheduling is decided separately by durable admission.' };
       atomicJSON(join(this.dataRoot, 'completions', `${task.id}.json`), completion);
-      // Observability only: never register model re-entry or call runtime.start.
-      Promise.resolve().then(() => this.#options.onCompletion?.(completion)).catch(() => {});
+      // Emit only newly observed terminal events, never replay completion files.
+      // Orphan/cancel evidence reconciles status but must not request model re-entry.
+      if (['succeeded', 'failed'].includes(task.status) && !this.#closed) {
+        Promise.resolve().then(() => { if (!this.#closed) return this.#options.onCompletion?.(completion); }).catch(() => {});
+      }
     }
   }
 
@@ -338,7 +341,8 @@ class ScopedPersonTaskHost {
   async #execute(tool, args = {}, caller, deps) {
     this.#assertOpen(deps.episodeId);
     this.#assertScope(caller, { child: true });
-    if (args.sessionId != null && args.sessionId !== this.sessionId) throw denied();
+    if (args.sessionId != null && args.sessionId !== '' && args.sessionId !== this.sessionId) throw denied();
+    if (args.sessionId === '') args = { ...args, sessionId: this.sessionId };
     if (!this.allowedToolIds().includes(tool.name)) return JSON.stringify({ error: 'Native tool disabled', errorEffect: 'none' });
     if (tool.name === 'SpawnAgent' && !deps.adapter) return JSON.stringify({ error: 'Person child provider unavailable', errorEffect: 'none' });
     const controller = new AbortController();

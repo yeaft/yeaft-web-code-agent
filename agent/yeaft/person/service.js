@@ -2,6 +2,7 @@ import { SqlitePersonRepository } from './sqlite-repository.js';
 import { LocalPersonMemory } from './local-memory.js';
 import { ensurePersonStorage } from './sqlite-storage.js';
 import { PersonRuntime } from './runtime.js';
+import { PersonAutonomy } from './autonomy.js';
 import { PersonCapabilities } from './capabilities.js';
 import { EXECUTION_INSTRUCTIONS } from './execution-protocol.js';
 import { personMinimumRequestBytes } from './request-budget.js';
@@ -52,8 +53,11 @@ export function createPersonService(options = {}) {
       effortEnabled: options.effortEnabled, minimumRequestBytes });
   };
   const runtime = new PersonRuntime({ repository, getProvider, budget: { calls: null }, workDir, yeaftDir, config, namespace });
+  const autonomy = repository ? new PersonAutonomy({ repository, runtime }) : null;
+  runtime.toolOptions.onCompletion = completion => autonomy?.observe(completion);
   let closed = false;
   const requests = new Set();
+  const autonomyStops = new Map();
   async function handle({ ownerId, op, payload = {} } = {}) {
     if (closed) fail('CLOSED');
     text(ownerId, 256); // Owners are opaque authenticated IDs, not database selectors.
@@ -64,16 +68,18 @@ export function createPersonService(options = {}) {
       try { agentDefaultModel = resolveAgentDefaultModel(config ?? loadConfig({ dir: yeaftDir })); } catch { /* Invalid/missing native config. */ }
       const filePublication = outputFilePublicationSupport();
       const status = { outputsSupported: true, outputsFileSupported: filePublication.supported, outputsFileReason: filePublication.reason,
-        renameSupported: true, defaultModelSupported: true, configured, storage: 'sqlite', modelReady: false,
+        renameSupported: true, defaultModelSupported: true, autonomySupported: true, autonomyEnabled: false, configured, storage: 'sqlite', modelReady: false,
         executionsSupported: true, pauseSupported: true, main: runtime.execution(ownerId),
         defaultModel: null, agentDefaultModel, modelCandidates: [], effectiveModelCandidates: [], effectiveDefaultModel: null };
       if (!configured) return { ...status, reason: 'Digital person storage configuration is missing.', storageReady: false };
       try { await repository.init(); }
       catch (error) { return { ...status, reason: safeError(error).message, storageReady: false }; }
       try {
-        const settings = (await repository.getPerson(ownerId)).settings;
+        const person = await repository.getPerson(ownerId);
+        const settings = person.settings;
         status.modelCandidates = settings.modelCandidates ?? [];
         status.defaultModel = settings.defaultModel ?? null;
+        status.autonomyEnabled = settings.autonomyEnabled === true && person.autonomy?.version === 1;
       } catch (error) { if (error.code !== 'NOT_OPEN') throw error; }
       try {
         const provider = await getProvider();
@@ -88,7 +94,7 @@ export function createPersonService(options = {}) {
         return { ...status, agentDefaultModel: provider.agentDefaultModel,
           reason: status.modelReady ? null : `${modelReason} Choose models or reset to Agent defaults.`,
           storageReady: true, models: provider.availableModels, availableModels: provider.availableModels,
-          availableModelsTruncated: provider.availableModelsTruncated, autonomySupported: false };
+          availableModelsTruncated: provider.availableModelsTruncated };
       } catch (error) { return { ...status, reason: safeError(error, 'MODEL_UNAVAILABLE').message, storageReady: true, models: [], availableModels: [] }; }
     }
     if (!configured) fail('NOT_CONFIGURED');
@@ -170,25 +176,33 @@ export function createPersonService(options = {}) {
       case 'cancel': {
         object(payload, ['episodeId'], []);
         if (payload.episodeId != null) identifier(payload.episodeId);
+        autonomyStops.set(ownerId, (autonomyStops.get(ownerId) ?? 0) + 1);
         const release = runtime.beginCancellation(ownerId);
         try {
           const result = await repository.cancel(ownerId, payload.episodeId);
           // Even a repeated cancel must join an already-fenced local execution.
           // A durable cancelled status alone does not prove host effects stopped.
-          await runtime.cancel(payload.episodeId, 'CANCELLED', ownerId);
+          await Promise.all([runtime.cancel(payload.episodeId, 'CANCELLED', ownerId),
+            ...(result.cancelled && payload.episodeId && result.episodeId !== payload.episodeId
+              ? [runtime.cancel(result.episodeId, 'CANCELLED', ownerId)] : [])]);
           return result;
         } finally { release(); }
       }
       case 'settings': {
+        const stopGeneration = autonomyStops.get(ownerId) ?? 0;
         object(payload, ['name', 'autonomyEnabled', 'modelCandidates', 'defaultModel'], []);
         const patch = { ...payload };
         if (Object.hasOwn(patch, 'name')) patch.name = personName(patch.name);
         if (Object.hasOwn(payload, 'autonomyEnabled') && typeof payload.autonomyEnabled !== 'boolean') fail('INVALID_REQUEST');
         if (Object.hasOwn(payload, 'modelCandidates')) validateModelCandidates(payload.modelCandidates);
         if (Object.hasOwn(payload, 'defaultModel')) validateDefaultModel(payload.defaultModel);
-        // Timer-driven autonomy is deliberately not claimed or silently enabled.
-        if (payload.autonomyEnabled === true) fail('UNSUPPORTED');
-        let expectedControlVersion;
+        if (runtime.pendingCancellations.has(ownerId)) fail('BUSY');
+        let expectedControlVersion, expectedAutonomyGeneration;
+        if (Object.hasOwn(payload, 'autonomyEnabled')) {
+          const prior = await repository.getPerson(ownerId);
+          expectedAutonomyGeneration = prior.autonomy?.generation ?? null;
+          if (runtime.pendingCancellations.has(ownerId)) fail('BUSY');
+        }
         if (Object.hasOwn(payload, 'modelCandidates') || Object.hasOwn(payload, 'defaultModel')) {
           const prior = await repository.getPerson(ownerId);
           if (prior.activeEpisodeId) fail('BUSY');
@@ -204,7 +218,8 @@ export function createPersonService(options = {}) {
           // Fence the merge base across concurrent services; retry from fresh settings.
           expectedControlVersion = prior.controlVersion;
         }
-        return repository.settings(ownerId, patch, expectedControlVersion);
+        if (Object.hasOwn(payload, 'autonomyEnabled') && (autonomyStops.get(ownerId) ?? 0) !== stopGeneration) fail('STALE');
+        return repository.settings(ownerId, patch, expectedControlVersion, expectedAutonomyGeneration);
       }
       default: fail('INVALID_REQUEST');
     }
@@ -217,7 +232,9 @@ export function createPersonService(options = {}) {
     },
     async close() {
       closed = true;
+      const stoppingAutonomy = autonomy?.close();
       await Promise.allSettled([...requests]);
+      await stoppingAutonomy;
       await runtime.close();
       await memory?.close();
       await repository?.close().catch(() => {});

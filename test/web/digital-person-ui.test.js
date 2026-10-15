@@ -7,6 +7,7 @@ import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { acceptPersonResponse } from '../../web/stores/helpers/digital-person.js';
 import DigitalPersonPage from '../../web/components/DigitalPersonPage.js';
+import PersonManagement from '../../web/components/PersonManagement.js';
 import PersonTurnUsage from '../../web/components/PersonTurnUsage.js';
 import { personTurn } from '../fixtures/person-turns.js';
 import { personRecords } from '../fixtures/person-records.js';
@@ -53,6 +54,29 @@ async function render(messages = en) {
 }
 
 describe('Digital Person surface', () => {
+  it.each([en, zhCN])('offers explicit autonomy control only in Management and distinguishes autonomous activity', async messages => {
+    const localize = key => messages[key] || key;
+    wrapper = mount(PersonManagement, { props: {
+      execution: { active: { episodeId: 'auto', kind: 'autonomous', status: 'paused', models: [] }, loaded: true },
+      page: { tasks: [], agents: [], loaded: true }, log: {}, autonomySupported: true,
+    }, global: { config: { globalProperties: { $t: localize } } } });
+    const toggle = wrapper.get('input[type="checkbox"]');
+    expect(toggle.element.checked).toBe(false);
+    expect(wrapper.text()).toContain(messages['person.autonomy.label']);
+    expect(wrapper.text()).toContain(messages['person.autonomy.scope']);
+    expect(wrapper.text()).toContain(messages['person.autonomous']);
+    await toggle.setValue(true);
+    expect(wrapper.emitted('autonomy')).toEqual([[true]]);
+    await wrapper.setProps({ autonomyPending: true, autonomyEnabled: true });
+    expect(toggle.attributes('disabled')).toBeDefined();
+    await wrapper.setProps({ autonomyPending: false, autonomyDisabled: true });
+    expect(toggle.attributes('disabled')).toBeDefined();
+    await wrapper.setProps({ autonomyDisabled: false, disabled: true });
+    expect(toggle.attributes('disabled')).toBeDefined();
+    await wrapper.setProps({ autonomySupported: false });
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false);
+  });
+
   it.each([en, zhCN])('renders one reply header with timestamped progress/final parts and a single inline waiting status', async messages => {
     const markdown = {};
     runInNewContext(readFileSync(resolve(process.cwd(), 'web/vendor/marked.min.js'), 'utf8'), markdown);

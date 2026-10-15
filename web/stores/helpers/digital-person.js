@@ -50,7 +50,7 @@ export function personState() {
     activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false, feedbackSuppressedEpisodeId: null,
     models: [], modelCandidates: [], effectiveModelCandidates: [], defaultModel: null,
     agentDefaultModel: null, effectiveDefaultModel: null, defaultModelSupported: false,
-    settingsPending: false, renameSupported: false, outputsSupported: false, outputsFileSupported: null, outputs: outputState(),
+    settingsPending: false, autonomySupported: false, renameSupported: false, outputsSupported: false, outputsFileSupported: null, outputs: outputState(),
     memory: inspectionPage(), skills: inspectionPage(), search: { ...inspectionPage(), query: '' },
     turns: { ...inspectionPage(), stale: false },
     executions: { active: null, loaded: false, loading: false, stale: false, error: null, pending: null },
@@ -117,6 +117,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
 
   function applyModelStatus(status) {
     state.renameSupported = status.renameSupported === true;
+    state.autonomySupported = status.autonomySupported === true;
     state.outputsSupported = status.outputsSupported === true;
     state.outputsFileSupported = typeof status.outputsFileSupported === 'boolean' ? status.outputsFileSupported : null;
     state.defaultModelSupported = status.defaultModelSupported === true;
@@ -741,7 +742,8 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   async function settings(update) {
-    if (!current() || state.settingsPending || state.loading || state.busy || state.commandPending || !state.person || digitalPersonGate(chat, agentId)) return false;
+    const autonomyOnly = update && !Array.isArray(update) && Object.keys(update).length === 1 && typeof update.autonomyEnabled === 'boolean';
+    if (!current() || state.settingsPending || state.loading || (state.busy && !autonomyOnly) || state.commandPending || state.cancelPending || !state.person || digitalPersonGate(chat, agentId)) return false;
     const g = generation;
     state.settingsPending = true;
     state.error = null;
