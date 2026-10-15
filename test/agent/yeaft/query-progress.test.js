@@ -42,11 +42,17 @@ describe('query-local progress evidence', () => {
   it('does not treat waiting, polling, approval or publication as new evidence or stagnation', () => {
     const progress = new QueryProgress();
     expect(webFetchTool.duplicateCallPolicy({})).toBe('warn');
+    expect(webFetchTool.duplicateCallPolicy({ raw: true })).toBe('warn');
+    const rawDocument = new QueryProgress();
+    for (let i = 0; i < 13; i++) observe(rawDocument, 'WebFetch', 'unchanged schema', {
+      policy: webFetchTool.duplicateCallPolicy({ raw: true }),
+    });
+    expect(rawDocument.snapshot()).toMatchObject({ stage: 'stopped' });
     for (let i = 0; i < 30; i++) {
       expect(observe(progress, 'WaitAgent', 'running')).toBeNull();
       expect(observe(progress, 'ReadTaskLog', 'same tail')).toBeNull();
       expect(observe(progress, 'PresentResponse', `promise ${i}`)).toBeNull();
-      expect(observe(progress, 'Poll', 'running', { policy: webFetchTool.duplicateCallPolicy({ raw: true }) })).toBeNull();
+      expect(observe(progress, 'Poll', 'running', { policy: webFetchTool.duplicateCallPolicy({ raw: true, polling: true }) })).toBeNull();
     }
     expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0, lastEvidenceAt: null });
   });

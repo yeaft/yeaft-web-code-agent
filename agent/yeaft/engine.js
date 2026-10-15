@@ -2128,6 +2128,13 @@ export class Engine {
     const queryProgress = new QueryProgress();
     const progressIdentity = { turnId: queryTurnId, threadId: runtimeThreadId, sessionId: runtimeSessionId, vpId: requestIdentity.vpId };
     let progressReportPending = false;
+    const resetProgressEvidence = () => {
+      queryProgress.resetEvidence();
+      progressReportPending = false;
+    };
+    const syncProgressInput = (items) => {
+      if (items.some(item => !item.internal || item.taskId)) resetProgressEvidence();
+    };
     const userQuestionPreview = String(prompt || '').slice(0, 200);
     const queryVpId = vpPersona && typeof vpPersona === 'object'
       && typeof vpPersona.vpId === 'string'
@@ -2158,7 +2165,10 @@ export class Engine {
     const readOnlyToolReuseOwner = this.#currentAbortCtrl;
     this.#activeReadOnlyToolReuse = {
       owner: readOnlyToolReuseOwner,
-      invalidate: invalidateReadOnlyToolReuse,
+      invalidate: () => {
+        invalidateReadOnlyToolReuse();
+        resetProgressEvidence();
+      },
     };
 
     // Durability boundary: a valid user turn must exist on disk before any
@@ -2839,7 +2849,7 @@ export class Engine {
       const currentContextWindow = resolveContextWindow(currentModel, requestConfig);
 
       const appendedBeforeStream = this.#drainPendingUserMessages(drainPendingUserMessages);
-      if (appendedBeforeStream.some(item => !item.internal)) { queryProgress.resetEvidence(); progressReportPending = false; }
+      syncProgressInput(appendedBeforeStream);
       if (appendedBeforeStream.length > 0) {
         for (const item of appendedBeforeStream) {
           this.#persistAppendedUserMessage(item, runtimeSessionId);
@@ -2860,8 +2870,7 @@ export class Engine {
         // this query was parked. Its task-result update is the authoritative
         // synchronization point before the next provider loop.
         invalidateReadOnlyToolReuse();
-        queryProgress.resetEvidence();
-        progressReportPending = false;
+        resetProgressEvidence();
       }
       if (taskResultUpdatesBeforeStream.length > 0) {
         for (const update of taskResultUpdatesBeforeStream) {
@@ -3931,7 +3940,9 @@ export class Engine {
       // investigation loop. Ignore unsolicited calls even from a noncompliant
       // adapter, and never auto-continue a truncated reporting response.
       yield queryProgress.snapshot(progressIdentity);
-      if (signal?.aborted) {
+      // Normal tool calls have already been persisted. On abort let that batch
+      // reach the skipped-result path so every call remains durably paired.
+      if (signal?.aborted && (toolCalls.length === 0 || executionPolicy?.finalize || progressReporting)) {
         yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
         yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId, terminal: true };
         break;
@@ -3946,8 +3957,7 @@ export class Engine {
             if (appended.length === 0) throw new Error('Could not close pending user input for progress report');
           }
           if (appended.length > 0) {
-            queryProgress.resetEvidence();
-            progressReportPending = false;
+            syncProgressInput(appended);
             for (const item of appended) {
               this.#persistAppendedUserMessage(item, runtimeSessionId);
               conversationMessages.push({ role: 'user', content: item.content });
@@ -4008,6 +4018,7 @@ export class Engine {
       if (toolCalls.length === 0) {
         const appendedAfterAssistant = this.#drainPendingUserMessages(drainPendingUserMessages);
         if (appendedAfterAssistant.length > 0) {
+          syncProgressInput(appendedAfterAssistant);
           for (const item of appendedAfterAssistant) {
             this.#persistAppendedUserMessage(item, runtimeSessionId);
             conversationMessages.push({ role: 'user', content: item.content });
@@ -4097,6 +4108,7 @@ export class Engine {
             // that completed while we waited may have changed the workspace,
             // so it is the same cache synchronization boundary.
             invalidateReadOnlyToolReuse();
+            resetProgressEvidence();
             for (const update of taskResultUpdatesAfterAsyncWait) {
               yield {
                 type: 'tool_result_update',
@@ -4114,6 +4126,7 @@ export class Engine {
           }
           const appendedAfterAsyncWait = this.#drainPendingUserMessages(drainPendingUserMessages);
           if (appendedAfterAsyncWait.length > 0) {
+            syncProgressInput(appendedAfterAsyncWait);
             for (const item of appendedAfterAsyncWait) {
               this.#persistAppendedUserMessage(item, runtimeSessionId);
               conversationMessages.push({ role: 'user', content: item.content });
@@ -4145,6 +4158,7 @@ export class Engine {
           if (appendedBeforeClose.length === 0) {
             throw new Error('Could not close pending user input for terminal completion');
           }
+          syncProgressInput(appendedBeforeClose);
           for (const item of appendedBeforeClose) {
             this.#persistAppendedUserMessage(item, runtimeSessionId);
             conversationMessages.push({ role: 'user', content: item.content });
@@ -4828,7 +4842,7 @@ export class Engine {
           call: tc, output, isError, readOnly: readOnlyTool,
           executed: !skipped && !duplicateCallSuppressed && !failureBlock && !reusedReadOnlyResult && !readyParallelExecution?.shared && hasTool && !needsProjectDocReload,
           reused: reusedReadOnlyResult || Boolean(readyParallelExecution?.shared),
-          skipped: skipped || !hasTool || needsProjectDocReload,
+          skipped: skipped || needsProjectDocReload,
           policy: duplicateCallPolicy,
         });
         const toolDurationMs = readyParallelExecution?.durationMs ?? (Date.now() - toolStartTime);

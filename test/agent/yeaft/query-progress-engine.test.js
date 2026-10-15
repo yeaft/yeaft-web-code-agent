@@ -12,7 +12,7 @@ function setup(response) {
   };
   const adapter = { async *stream(params) {
     requests.push(structuredClone({ tools: params.tools, system: params.system, messages: params.messages }));
-    yield* response(requests.length);
+    yield* response(requests.length, params);
   } };
   const engine = new Engine({ adapter, trace: new NullTrace(), conversationStore: store,
     config: { model: 'test-model', maxOutputTokens: 1024 } });
@@ -49,6 +49,14 @@ describe('query progress Engine boundaries', () => {
     // Reminders are model-only, and raw tool output is never replaced in persistence.
     expect(rows.filter(r => r.role === 'tool').every(r => r.content.startsWith('unchanged'))).toBe(true);
     expect(rows.some(r => r.content.startsWith('[system note] Query progress'))).toBe(false);
+
+    const unavailable = setup(n => n <= 12 ? [call(`missing-${n}`, 'Unavailable'), stop]
+      : [{ type: 'text_delta', text: 'Tool is unavailable; cannot proceed.' }, { type: 'stop', stopReason: 'end_turn' }]);
+    const missingEvents = await consume(unavailable.engine);
+    expect(unavailable.requests).toHaveLength(13);
+    expect(missingEvents.filter(e => e.type === 'tool_end')).toHaveLength(12);
+    expect(missingEvents.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ failedCalls: 12, toolExecutions: 0 });
+    expect(missingEvents.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'no_progress' })]);
   });
 
   it('allows long fresh investigations, reports exact dispatch count and supplies durable history boundary', async () => {
@@ -122,6 +130,52 @@ describe('query progress Engine boundaries', () => {
     expect(events.some(e => e.type === 'user_append')).toBe(true);
     expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
     expect(closeAttempts).toBe(1);
+
+    // A normal tool-free stream drains input on a different path than reporting.
+    let normal;
+    let repaired = false;
+    let reads = 0;
+    normal = setup(n => {
+      if (n <= 3 || n === 5) return [call(`permission-${n}`, 'Read'), stop];
+      if (n === 4) {
+        repaired = true;
+        normal.engine.appendUserMessage('Permissions repaired; retry the read.');
+      }
+      return [{ type: 'text_delta', text: 'acknowledged' }, { type: 'stop', stopReason: 'end_turn' }];
+    });
+    normal.engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async () => {
+      reads++;
+      if (!repaired) throw Error('EACCES');
+      return 'verified recovered file';
+    } });
+    await consume(normal.engine);
+    expect(reads).toBe(4);
+    expect(normal.rows.some(row => row.content === 'verified recovered file')).toBe(true);
+
+    // An owned async completion is a synchronization boundary even while parked
+    // after a tool-free response; it must clear stale read-failure guards.
+    repaired = false;
+    reads = 0;
+    const asyncWork = setup(n => n <= 3 || n === 6 ? [call(`async-read-${n}`, 'Read'), stop]
+      : n === 4 ? [call('start-owned', 'Start'), stop]
+        : [{ type: 'text_delta', text: 'waiting or finished' }, { type: 'stop', stopReason: 'end_turn' }]);
+    asyncWork.engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async () => {
+      reads++;
+      if (!repaired) throw Error('EACCES');
+      return 'async repaired file';
+    } });
+    asyncWork.engine.registerTool({ name: 'Start', isReadOnly: () => true, execute: async (_input, ctx) => {
+      ctx.registerAsyncTask('owned-result');
+      return 'background work started';
+    } });
+    for await (const event of asyncWork.engine.query({ prompt: 'verify repaired file', sessionId: 's' })) {
+      if (event.type === 'async_task_wait_start') {
+        repaired = true;
+        expect(asyncWork.engine.notifyAsyncTaskCompleted('owned-result', 'permissions repaired')).toBe(true);
+      }
+    }
+    expect(reads).toBe(4);
+    expect(asyncWork.rows.some(row => row.content === 'async repaired file')).toBe(true);
   });
 
   it('honors abort at the report progress yield without publishing a fallback or no-progress error', async () => {
@@ -137,6 +191,22 @@ describe('query progress Engine boundaries', () => {
     expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'aborted' })]);
     expect(events.some(e => e.code === 'no_progress')).toBe(false);
     expect(rows.some(r => String(r.content).includes('requested task is not confirmed complete'))).toBe(false);
+
+    // Normal calls were already persisted before this new progress yield.
+    // Aborting here must still synthesize every skipped tool result.
+    const normalAbort = new AbortController();
+    let dispatched = 0;
+    const normal = setup(() => [call('paired-a', 'Read'), call('paired-b', 'Read'), stop]);
+    normal.engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async () => { dispatched++; return 'not expected'; } });
+    const normalEvents = [];
+    for await (const event of normal.engine.query({ prompt: 'cancel batch', sessionId: 's', signal: normalAbort.signal })) {
+      normalEvents.push(event);
+      if (event.type === 'query_progress') normalAbort.abort();
+    }
+    expect(dispatched).toBe(0);
+    expect(normalEvents.filter(e => e.type === 'tool_end')).toHaveLength(2);
+    expect(normal.rows.filter(row => row.role === 'tool')).toHaveLength(2);
+    expect(normalEvents.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'aborted' })]);
   });
 
   it('keeps user abort authoritative without starting a recovery response', async () => {
