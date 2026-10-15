@@ -2,8 +2,8 @@ import { createPersonService as createService } from '../../../../agent/yeaft/pe
 
 /** Translate historical proposal scripts at the test boundary only. Runtime sees
  * real native calls, its own assistant/tool transcript, and tools-free cognition.
- * The terminal proposal is reused for the additional final request so scripted
- * counters still describe decisions, not a duplicate invocation of the script. */
+ * A terminal proposal first reports its goal, then supplies cached public text
+ * and final cognition. Extra protocol requests never rerun scripted effects. */
 export function nativeFixtureAdapter(adapter) {
   const episodes = new Map();
   return { ...adapter, async *stream(params) {
@@ -11,6 +11,12 @@ export function nativeFixtureAdapter(adapter) {
     const id = params.requestIdentity.threadId;
     const state = episodes.get(id) ?? { previous: null, final: null, calls: 0 };
     episodes.set(id, state);
+    if (params.tools.length && state.final) {
+      if (state.final.reply) yield { type: 'text_delta', text: state.final.reply };
+      for (const event of state.final.usage) yield event;
+      yield { type: 'stop', stopReason: 'end_turn' };
+      return;
+    }
     if (!params.tools.length && state.final) {
       yield { type: 'text_delta', text: state.final.text };
       for (const event of state.final.usage) yield event;
@@ -20,7 +26,8 @@ export function nativeFixtureAdapter(adapter) {
     }
     const first = params.messages[0].content;
     const input = JSON.parse(Array.isArray(first) ? first[0].text : first);
-    const lastTool = params.messages.findLast(message => message.role === 'tool');
+    // Goal bookkeeping is invisible to historical capability-result scripts.
+    const lastTool = params.messages.findLast(message => message.role === 'tool' && JSON.parse(message.content).id !== 'Execution.goal');
     if (lastTool) {
       const projection = JSON.parse(lastTool.content);
       let result = projection;
@@ -87,9 +94,20 @@ export function nativeFixtureAdapter(adapter) {
       yield { type: 'stop', stopReason: 'tool_use' };
       return;
     }
-    state.final = { text, usage: events.filter(event => event.type === 'usage') };
-    if (proposal.reply) yield { type: 'text_delta', text: proposal.reply };
-    yield { type: 'stop', stopReason: 'end_turn' };
+    state.final = { text, reply: proposal.reply, usage: events.filter(event => event.type === 'usage') };
+    const evidence = params.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content))
+      .filter(result => result.sourceRef && result.errorEffect !== 'none' && result.id !== 'Execution.goal' && !result.id?.startsWith('catalog.'));
+    const sourceRefs = [...new Set(evidence.map(result => result.sourceRef))].slice(-4);
+    const kind = sourceRefs.length ? 'work' : proposal.reply ? 'answer' : 'exploration';
+    yield { type: 'tool_call', id: `fixture-goal-${state.calls}`, name: 'Execution__goal', input: {
+      objective: 'Finish the scripted fixture decision.', acceptance: 'Return the scripted result using the observed execution evidence.',
+      kind, status: kind === 'exploration' ? 'resting' : 'completed',
+      reason: proposal.activity?.summary || 'The scripted fixture has no further action.', nextStep: '',
+      sourceRefs: sourceRefs.length ? sourceRefs : [input.trigger.ref],
+      acceptanceChecks: sourceRefs.length ? [{ check: 'The scripted operation returned the evidence used in the terminal result.', sourceRefs }] : [],
+      waitFor: [], blocker: null,
+    } };
+    yield { type: 'stop', stopReason: 'tool_use' };
   } };
 }
 

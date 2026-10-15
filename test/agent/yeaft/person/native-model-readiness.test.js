@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
 
-import { config, finalProposal } from './fixtures.js';
+import { config, finalProposal, goalInput } from './fixtures.js';
 
 const services = [], directories = [];
 const request = (service, op, payload = {}) => service.request({ ownerId: 'alice', op, payload });
@@ -66,8 +66,13 @@ describe('native execution model readiness', () => {
   it('runs a compatible explicit subset without escaping it in either native phase', async () => {
     const stream = vi.fn(async function* (params) {
       const input = JSON.parse(params.messages[0].content);
-      yield { type: 'text_delta', text: params.tools.length ? 'Execution complete.' : JSON.stringify(finalProposal(input.state.version)) };
-      yield { type: 'stop', stopReason: 'end_turn' };
+      if (params.tools.length && !params.messages.some(message => message.toolCalls?.some(call => call.name === 'Execution__goal'))) {
+        yield { type: 'tool_call', id: 'goal', name: 'Execution__goal', input: goalInput([input.trigger.ref]) };
+        yield { type: 'stop', stopReason: 'tool_use' };
+      } else {
+        yield { type: 'text_delta', text: params.tools.length ? 'Execution complete.' : JSON.stringify(finalProposal(input.state.version)) };
+        yield { type: 'stop', stopReason: 'end_turn' };
+      }
     });
     const instance = await service(nativeConfig(), { stream });
     await request(instance, 'open');
@@ -76,9 +81,9 @@ describe('native execution model readiness', () => {
     expect(stream).not.toHaveBeenCalled();
     await request(instance, 'think', { clientMessageId: 'compatible-window' });
     expect((await idle(instance)).latestEpisode.status).toBe('completed');
-    expect(stream).toHaveBeenCalledTimes(2);
-    expect(stream.mock.calls.map(([params]) => params.model)).toEqual(['test/second', 'test/second']);
-    expect(stream.mock.calls[0][0].tools.some(tool => tool.name === 'Bash')).toBe(true);
-    expect(stream.mock.calls[1][0].tools).toEqual([]);
+    expect(stream).toHaveBeenCalledTimes(3);
+    expect(stream.mock.calls.map(([params]) => params.model)).toEqual(['test/second', 'test/second', 'test/second']);
+    expect(stream.mock.calls.slice(0, 2).every(([params]) => params.tools.some(tool => tool.name === 'Bash'))).toBe(true);
+    expect(stream.mock.calls[2][0].tools).toEqual([]);
   });
 });

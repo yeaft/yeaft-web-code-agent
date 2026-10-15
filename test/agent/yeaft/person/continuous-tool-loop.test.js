@@ -9,7 +9,7 @@ import { AnthropicAdapter } from '../../../../agent/yeaft/llm/anthropic.js';
 import { OpenAIResponsesAdapter } from '../../../../agent/yeaft/llm/openai-responses.js';
 import { createProviderContext } from '../../../../agent/yeaft/llm/provider-state.js';
 import fileWrite from '../../../../agent/yeaft/tools/file-write.js';
-import { config, finalProposal } from './fixtures.js';
+import { config, finalProposal, goalInput } from './fixtures.js';
 
 const dirs = [], runtimes = [];
 
@@ -67,6 +67,7 @@ describe('Person continuous native execution then one final cognition', () => {
         { type: 'stop', stopReason: 'max_tokens' },
       ];
       if (index === 1) return tools(['unknown', 'NotRegistered', {}]);
+      if (index === 2) return tools(['goal', 'Execution__goal', goalInput([JSON.parse(params.messages[0].content).trigger.ref])]);
       return text(params.tools.length ? 'Response corrected before execution.' : JSON.stringify(final(params)));
     });
     await run.start().promise;
@@ -82,25 +83,33 @@ describe('Person continuous native execution then one final cognition', () => {
     vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
       const body = JSON.parse(options.body); wire.push(body);
       const index = wire.length - 1;
+      const refs = protocol === 'anthropic'
+        ? body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []).filter(block => block.type === 'tool_result').map(block => JSON.parse(block.content).sourceRef).filter(Boolean)
+        : body.input.filter(item => item.type === 'function_call_output').map(item => JSON.parse(item.output).sourceRef).filter(Boolean);
+      const goal = goalInput(refs, { kind: 'work', acceptanceChecks: [{ check: 'Both FileWrite results confirm the requested file contents were written.', sourceRefs: refs }] });
       if (protocol === 'anthropic') {
         const content = index === 0 ? [
           { type: 'thinking', thinking: 'PRIVATE-REASONING', signature: 'signed' },
           { type: 'tool_use', id: 'native-a', name: 'FileWrite', input: { file_path: 'wire-a', content: 'a' } },
           { type: 'tool_use', id: 'native-b', name: 'FileWrite', input: { file_path: 'wire-b', content: 'b' } },
-        ] : [{ type: 'text', text: index === 1 ? 'Two actual files written.' : JSON.stringify(final({ messages: [{ content: body.messages[0].content }] })) }];
-        return json({ id: `msg-${index}`, content, stop_reason: index === 0 ? 'tool_use' : 'end_turn', usage: { input_tokens: 10, output_tokens: 8 } });
+        ] : index === 1 ? [{ type: 'tool_use', id: 'native-goal', name: 'Execution__goal', input: goal }]
+          : [{ type: 'text', text: index === 2 ? 'Two actual files written.' : JSON.stringify(final({ messages: [{ content: body.messages[0].content }] })) }];
+        return json({ id: `msg-${index}`, content, stop_reason: index < 2 ? 'tool_use' : 'end_turn', usage: { input_tokens: 10, output_tokens: 8 } });
       }
       const output = index === 0 ? [
         { type: 'reasoning', id: 'r', encrypted_content: 'PRIVATE-ENCRYPTED', summary: [] },
         { type: 'function_call', id: 'f1', call_id: 'native-a', name: 'FileWrite', arguments: JSON.stringify({ file_path: 'wire-a', content: 'a' }), status: 'completed' },
         { type: 'function_call', id: 'f2', call_id: 'native-b', name: 'FileWrite', arguments: JSON.stringify({ file_path: 'wire-b', content: 'b' }), status: 'completed' },
-      ] : [{ type: 'message', id: `m-${index}`, role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: index === 1 ? 'Two actual files written.' : JSON.stringify(final({ messages: [{ content: body.input.find(item => item.role === 'user').content[0].text }] })), annotations: [] }] }];
+      ] : index === 1 ? [{ type: 'function_call', id: 'fg', call_id: 'native-goal', name: 'Execution__goal', arguments: JSON.stringify(goal), status: 'completed' }]
+        : [{ type: 'message', id: `m-${index}`, role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: index === 2 ? 'Two actual files written.' : JSON.stringify(final({ messages: [{ content: body.input.find(item => item.role === 'user').content[0].text }] })), annotations: [] }] }];
       return json({ id: `response-${index}`, status: 'completed', output, usage: { input_tokens: 10, output_tokens: 8 } });
     }));
     const native = protocol === 'anthropic' ? new AnthropicAdapter({ apiKey: 'fixture' }) : new OpenAIResponsesAdapter({ apiKey: 'fixture' });
     const run = await setup(null, { adapter: { stream: params => native.stream({ ...params, model: context.origin.model, providerContext: context }) } });
     await run.start().promise;
     expect(run.repository.commit).toHaveBeenCalledTimes(1);
+    expect(wire).toHaveLength(4);
+    expect(run.traces.find(trace => trace.kind === 'capability_result' && trace.capability.id === 'Execution.goal').result).toMatchObject({ ok: true, goal: { kind: 'work', status: 'completed' } });
     expect(await readFile(join(run.workDir, 'wire-a'), 'utf8')).toBe('a');
     expect(await readFile(join(run.workDir, 'wire-b'), 'utf8')).toBe('b');
     expect(JSON.stringify(wire[1])).toContain(protocol === 'anthropic' ? 'PRIVATE-REASONING' : 'PRIVATE-ENCRYPTED');
