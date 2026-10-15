@@ -267,7 +267,7 @@ export class SqlitePersonStore {
     const source = this.one('episodes', this.scope(ownerId), ' AND id = ?', [event.episodeId]);
     if (source?.autonomyGeneration !== a.generation) return false;
     const key = digest([event.taskId, event.status]);
-    if ((a.seen ?? []).includes(key)) return false;
+    if ((a.seen ?? []).includes(key) || (a.integratedSourceRefs ?? []).includes(event.sourceRef)) return false;
     a.seen = [...(a.seen ?? []), key].slice(-64);
     a.pending = [...(a.pending ?? []), { taskId: event.taskId, status: event.status, sourceRef: event.sourceRef }].slice(-8);
     a.nextAt = this.now.getTime() + 5000; a.backoffMs = 60000;
@@ -312,7 +312,8 @@ export class SqlitePersonStore {
       clientMessageId: `autonomy-${a.generation}-${(a.sequence ?? 0) + 1}` });
     admitted.episode.scheduling = scheduling; this.put('episodes', admitted.episode);
     p = this.getPerson(ownerId);
-    p.autonomy = { ...a, sequence: (a.sequence ?? 0) + 1, pending: [], lastFingerprint: fingerprint };
+    // Admission is not consumption: failed cognition must leave observations retryable.
+    p.autonomy = { ...a, sequence: (a.sequence ?? 0) + 1, lastFingerprint: fingerprint };
     this.put('persons', p);
     this.trace(ownerId, admitted.episodeId, 'autonomy_scheduled', { scheduling });
     return admitted;
@@ -334,7 +335,10 @@ export class SqlitePersonStore {
       p.autonomy = { ...p.autonomy, backoffMs: 60000, nextAt: this.now.getTime() + 60000, lastFingerprint: null };
     }
     const id = randomUUID();
-    const hasMessage = kind === 'send' || (kind === 'think' && attachments.length > 0);
+    // Explicit text-only Think instructions are user input too, even if this
+    // episode fails before cognition commits. Empty Think/Dream/scheduler wakes
+    // must never replace the latest substantive user instruction.
+    const hasMessage = kind === 'send' || (kind === 'think' && (input.trim().length > 0 || attachments.length > 0));
     p.activeEpisodeId = id; p.leaseOwner = workerId; p.leaseUntil = new Date(this.now.getTime() + this.leaseMs);
     p.epoch++; p.writeSerial++; p.inputWatermark++; if (hasMessage) p.messageSeq++;
     this.put('persons', p);
@@ -430,6 +434,10 @@ export class SqlitePersonStore {
     const safeEffective = { model: call.requested.model, effort: typeof effective?.effort === 'string' && effective.effort.length <= 128 ? effective.effort : null,
       effortObserved: effective?.effortObserved === true };
     if (typeof effective?.wireMode === 'string' && effective.wireMode.length <= 128) safeEffective.wireMode = effective.wireMode;
+    // Only evidence actually rendered to a successful model call can be
+    // acknowledged at commit. Scheduling metadata and inherited refs are not reads.
+    if (!failed) record.integratedTaskSourceRefs = [...new Set([...(record.integratedTaskSourceRefs ?? []),
+      ...(call.manifest?.renderedSourceRefs ?? []).filter(ref => typeof ref === 'string' && ref.startsWith('person-task:'))])].slice(-64);
     delete record.openCall; delete record.callFinalizeUntil; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, failed ? 'call_failed' : 'call_output', {
       callId, requested: call.requested, effective: safeEffective, output: publicOutput(output, failed),
@@ -730,6 +738,17 @@ export class SqlitePersonStore {
     }
     const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running') fail('STALE');
+    if (p.settings.autonomyEnabled === true && p.autonomy?.generation === record.autonomyGeneration) {
+      const integrated = new Set(record.integratedTaskSourceRefs ?? []);
+      if (integrated.size) {
+        // Exact event identity only. A completion arriving after the last model
+        // read survives; rollback of any rejected commit preserves every event.
+        p.autonomy.pending = (p.autonomy.pending ?? []).filter(event => !integrated.has(event.sourceRef));
+        p.autonomy.integratedSourceRefs = [...new Set([...(p.autonomy.integratedSourceRefs ?? []), ...integrated])].slice(-64);
+        p.autonomy.lastFingerprint = digest(continuation ?? null);
+        this.put('persons', p);
+      }
+    }
     delete record.executionControl;
     Object.assign(record, { status: 'completed', endedAt: this.now, stateVersion: p.stateVersion }); this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'committed', { callId, parentVersion: episode.baseStateVersion, stateVersion: p.stateVersion, conceptRevisions: revisions, decision: proposal.decision });

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { PersonAutonomy } from '../../../../agent/yeaft/person/autonomy.js';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
+import { assembleContext } from '../../../../agent/yeaft/person/runtime.js';
 import { createPersonService } from './fixture-adapter.js';
 import { config, finalProposal } from './fixtures.js';
 
@@ -22,11 +23,11 @@ function edit(r, update) {
   } finally { db.close(); }
 }
 const due = r => edit(r, p => { p.autonomy.nextAt = 0; });
-const event = episode => ({ episodeId: episode.id, taskId: 'task-one', status: 'succeeded', sourceRef: 'person-task:scoped:task-one:succeeded:now' });
-async function complete(r, episode, continuation) {
+const event = (episode, taskId = 'task-one') => ({ episodeId: episode.id, taskId, status: 'succeeded', sourceRef: `person-task:scoped:${taskId}:succeeded:now` });
+async function complete(r, episode, continuation, renderedSourceRefs = []) {
   const p = finalProposal(episode.baseStateVersion);
   p.state.continuation = continuation; p.concepts = []; p.state.focusConceptIds = [];
-  await r.startCall(episode, { callId: 'final', requested: selection, effective: selection, request: {}, manifest: { sourceRefs: [] } });
+  await r.startCall(episode, { callId: 'final', requested: selection, effective: selection, request: {}, manifest: { sourceRefs: renderedSourceRefs, renderedSourceRefs } });
   await r.finalizeCall(episode, { callId: 'final', output: { text: 'final', complete: true } });
   return r.commit(episode, p, selection, 'final');
 }
@@ -71,12 +72,12 @@ it('rests quietly after ready, blocked or empty continuation, coalesces new task
   expect((await r.getPerson('alice')).autonomy.backoffMs).toBeGreaterThan(60_000);
   expect(await r.autonomyObserve('alice', event(first))).toBe(true);
   expect(await r.autonomyObserve('alice', { ...event(first), sourceRef: 'another-timestamp' })).toBe(false);
-  for (let i = 0; i < 20; i++) await r.autonomyObserve('alice', { ...event(first), taskId: `task-${i}` });
+  for (let i = 0; i < 20; i++) await r.autonomyObserve('alice', event(first, `task-${i}`));
   due(r); const second = (await r.autonomyAdmit('alice', admission)).episode;
   expect(second.scheduling.reason).toBe('task-completion');
   expect(second.scheduling.observations).toHaveLength(8);
   expect(Buffer.byteLength(second.text)).toBeLessThan(8192);
-  await complete(r, second, { ...ready, status: 'blocked' });
+  await complete(r, second, { ...ready, status: 'blocked' }, second.scheduling.observations.map(item => item.sourceRef));
   expect((await r.list('alice', 'messages')).items.filter(m => m.role === 'assistant')).toHaveLength(1);
   due(r); expect(await r.autonomyAdmit('alice', admission)).toBeNull();
   await r.settings('alice', { autonomyEnabled: true }); due(r);
@@ -156,6 +157,82 @@ it('does not retry failed no-progress cognition from an older ready state, inclu
   expect((await reopened.snapshot('alice')).latestEpisode).toMatchObject({ id: autonomous.id, status: 'failed' });
 });
 
+it('acknowledges only successfully rendered task events atomically with an accepted commit, including delayed notifications', async () => {
+  const r = repo(); await r.open('alice'); await r.settings('alice', { autonomyEnabled: true });
+  const episode = (await r.admit('alice', { ...admission, kind: 'think', text: 'collect the task results', clientMessageId: 'collect' })).episode;
+  const read = event(episode), concurrent = event(episode, 'concurrent'), inherited = event(episode, 'inherited'), failed = event(episode, 'failed'), delayed = event(episode, 'delayed');
+  for (const observation of [read, inherited, failed]) await r.autonomyObserve('alice', observation);
+  await r.startCall(episode, { callId: 'interrupted', requested: selection, request: {},
+    manifest: { renderedSourceRefs: [failed.sourceRef] } });
+  await r.finalizeCall(episode, { callId: 'interrupted', code: 'INTERRUPTED', output: { text: '', complete: false } });
+  const context = assembleContext({ snapshot: await r.context(episode), episode, selection,
+    provider: { catalog: [{ id: 'test/first', contextWindow: 100000, maxOutput: 4096, efforts: [] }] },
+    dependencyRefs: [inherited.sourceRef], taskEvidence: { namespace: 'scoped', notice: 'Untrusted external observations',
+      items: [{ sourceRef: read.sourceRef, output: 'Task completed' }, { sourceRef: delayed.sourceRef, output: 'Task completed' },
+        { sourceRef: inherited.sourceRef, output: 'omitted'.repeat(100000) }] } });
+  expect(context.manifest.renderedSourceRefs).not.toContain(inherited.sourceRef);
+  expect(context.sources.get(read.sourceRef)).toEqual({ kind: 'external-task-observation', reportedSourceRefs: [] });
+  await r.startCall(episode, { callId: 'successful', requested: selection, request: {}, manifest: context.manifest });
+  await r.finalizeCall(episode, { callId: 'successful', output: { text: 'read results', complete: true } });
+  await r.autonomyObserve('alice', concurrent); // Arrived after the model's read.
+  const proposal = finalProposal(episode.baseStateVersion);
+  proposal.concepts = []; proposal.state.focusConceptIds = ['missing'];
+  await expect(r.commit(episode, proposal, selection, 'successful')).rejects.toMatchObject({ code: 'STALE' });
+  expect((await r.getPerson('alice')).autonomy.pending.map(item => item.sourceRef)).toEqual([read, inherited, failed, concurrent].map(item => item.sourceRef));
+  // Fail after the acknowledgement mutation, not only during proposal checks.
+  let db = new DatabaseSync(r.dbPath);
+  try { db.exec("CREATE TRIGGER fail_commit BEFORE INSERT ON traces WHEN json_extract(NEW.record, '$.kind') = 'committed' BEGIN SELECT RAISE(ABORT, 'commit failed'); END"); } finally { db.close(); }
+  proposal.state.focusConceptIds = [];
+  await expect(r.commit(episode, proposal, selection, 'successful')).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+  expect((await r.getPerson('alice')).autonomy.pending.map(item => item.sourceRef)).toEqual([read, inherited, failed, concurrent].map(item => item.sourceRef));
+  db = new DatabaseSync(r.dbPath);
+  try { db.exec('DROP TRIGGER fail_commit'); } finally { db.close(); }
+  await complete(r, episode, null);
+  expect((await r.getPerson('alice')).autonomy.pending.map(item => item.sourceRef)).toEqual([inherited, failed, concurrent].map(item => item.sourceRef));
+  // Evidence can reach the model before its asynchronous scheduler callback.
+  expect(await r.autonomyObserve('alice', delayed)).toBe(false);
+  due(r); const retry = (await r.autonomyAdmit('alice', admission)).episode;
+  expect(retry.scheduling.observations.map(item => item.sourceRef)).toEqual([inherited, failed, concurrent].map(item => item.sourceRef));
+  expect((await r.getPerson('alice')).autonomy.pending).toHaveLength(3); // Admission is not consumption.
+  await r.finish(retry, 'failed', 'INTERRUPTED');
+  due(r); expect((await r.autonomyAdmit('alice', admission)).episode.scheduling.observations).toHaveLength(3);
+});
+
+it('keeps failed text-only Think prohibitions as mandatory latest user input across restart and scheduler reentry', async () => {
+  const r = repo(); await r.open('alice'); await r.settings('alice', { autonomyEnabled: true });
+  const send = (await r.admit('alice', { ...admission, kind: 'send', text: 'Investigate the repository', clientMessageId: 'send' })).episode;
+  await complete(r, send, null);
+  const think = (await r.admit('alice', { ...admission, kind: 'think', text: 'Do not write files or run commands.', clientMessageId: 'think-stop' })).episode;
+  const instruction = (await r.context(think)).latestUserInstruction;
+  expect(instruction).toMatchObject({ id: think.messageId, episodeId: think.id, role: 'user', text: think.text });
+  expect(think.messageId).not.toBeNull();
+  await r.startCall(think, { callId: 'failed-think', requested: selection, request: {} });
+  await r.finalizeCall(think, { callId: 'failed-think', code: 'INTERRUPTED', output: { text: '', complete: false } });
+  await r.finish(think, 'failed', 'INTERRUPTED');
+  const reopened = repo(); await reopened.open('alice');
+  const provider = { catalog: [{ id: 'test/first', contextWindow: 100000, maxOutput: 4096, efforts: [] }] };
+  for (const kind of ['think', 'dream', 'autonomous']) {
+    let next;
+    if (kind === 'autonomous') {
+      await reopened.autonomyObserve('alice', event(think)); due(reopened);
+      next = (await reopened.autonomyAdmit('alice', admission)).episode;
+    } else next = (await reopened.admit('alice', { ...admission, kind, text: '', clientMessageId: `empty-${kind}` })).episode;
+    const snapshot = await reopened.context(next);
+    expect(snapshot.latestUserInstruction).toEqual(instruction);
+    const assembled = assembleContext({ snapshot: { ...snapshot, messages: [] }, episode: next, selection, provider });
+    const input = JSON.parse(assembled.messages[0].content), ref = `message:${think.messageId}:1`;
+    expect(input.latestUserInstruction).toEqual(JSON.parse(JSON.stringify(instruction)));
+    expect(assembled.manifest.renderedSourceRefs).toContain(ref);
+    expect(assembled.sources.get(ref)).toMatchObject({ role: 'user', reportedSourceRefs: [ref] });
+    expect(assembled.sources.get(`trigger:${next.id}`).reportedSourceRefs).toEqual([]);
+    // The latest instruction is mandatory even when nothing else fits.
+    const tinyProvider = { catalog: [{ ...provider.catalog[0], contextWindow: 100 }] };
+    expect(() => assembleContext({ snapshot, episode: next, selection, provider: tinyProvider })).toThrow();
+    await reopened.finish(next, 'failed', 'INTERRUPTED');
+  }
+  expect((await reopened.list('alice', 'messages')).items.filter(m => m.role === 'user').map(m => m.text)).toEqual([think.text, send.text]);
+});
+
 it('joins shutdown/admission races without starting queued models or replaying effects', async () => {
   const r = repo(); await r.open('alice'); await r.settings('alice', { autonomyEnabled: true }); due(r);
   const entered = deferred(), release = deferred(), start = vi.fn(), snapshot = vi.fn();
@@ -177,19 +254,43 @@ it('joins shutdown/admission races without starting queued models or replaying e
 });
 
 it('exposes supported opt-in settings without model calls on status/read, and dispatches native episodes with the same identity', async () => {
-  const calls = []; let launched = false;
-  const service = createPersonService({ yeaftDir: root, workDir: root, config, embedding: { enabled: false }, adapter: {
+  const calls = [], episodes = new Map(), resumedEvidence = [];
+  const service = createPersonService({ yeaftDir: root, workDir: root, config, nativeFixture: false, embedding: { enabled: false }, adapter: {
     async *stream(params) {
-      const input = JSON.parse(params.messages[0].content); calls.push(input);
-      const p = finalProposal(input.state.version); p.activity.sourceRefs = [input.trigger.ref];
-      p.concepts = []; p.state.focusConceptIds = []; p.state.continuation = null;
-      if (input.trigger.text === 'launch' && !launched) {
-        launched = true;
-        p.next = { model: 'test/first', effort: null, reason: 'Launch authorized test', capability: { id: 'Bash', args: {
-          command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setTimeout(()=>console.log('observed result'),300)")}`, background: true,
-        } } };
+      const input = JSON.parse(params.messages[0].content), id = params.requestIdentity.threadId;
+      const state = episodes.get(id) ?? { stage: 0 }; episodes.set(id, state);
+      if (!state.stage) calls.push(input);
+      const goal = (status, extra = {}) => ({ objective: 'Collect the authorized test result', acceptance: 'Read the completed task log',
+        kind: 'work', status, reason: '', nextStep: 'Collect the task result', sourceRefs: [input.trigger.ref], acceptanceChecks: [], waitFor: [], blocker: null, ...extra });
+      const tool = (name, args) => ({ type: 'tool_call', id: `${name}-${state.stage}`, name, input: args });
+      if (!params.tools.length) {
+        const p = finalProposal(input.state.version); p.activity.sourceRefs = [input.trigger.ref];
+        p.concepts = []; p.state.focusConceptIds = []; p.state.continuation = null; p.reply = null;
+        yield { type: 'text_delta', text: JSON.stringify(p) };
+      } else if (input.trigger.text === 'launch') {
+        const lastTool = params.messages.findLast(message => message.role === 'tool');
+        if (state.stage === 0) {
+          yield tool('Execution__goal', goal('active'));
+          yield tool('Bash', { command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setTimeout(()=>console.log('observed result'),300)")}`, background: true });
+        } else if (state.stage === 1) {
+          state.taskId = JSON.parse(lastTool.content).output.match(/Started background task (\S+)\./)[1];
+          yield tool('Execution__goal', goal('waiting', { waitFor: [state.taskId] }));
+        } else if (state.stage === 2) {
+          const ready = params.messages.findLast(message => message.role === 'user' && message.content?.includes?.('execution-results-ready'));
+          resumedEvidence.push(JSON.parse(ready.content).taskEvidence);
+          yield tool('ReadTaskLog', { taskId: state.taskId, offset: 0, maxBytes: 4096 });
+        } else if (state.stage === 3) {
+          const result = JSON.parse(lastTool.content);
+          expect(result.output).toContain('observed result');
+          yield tool('Execution__goal', goal('completed', { reason: 'The completed log contains the expected result', nextStep: '',
+            sourceRefs: [result.sourceRef], acceptanceChecks: [{ check: 'Task log contains observed result', sourceRefs: [result.sourceRef] }] }));
+        } else yield { type: 'text_delta', text: 'Observed result collected.' };
+      } else if (state.stage === 0) {
+        yield tool('Execution__goal', goal('resting', { kind: 'exploration', reason: 'No new authorized work', nextStep: '' }));
       }
-      yield { type: 'text_delta', text: JSON.stringify(p) }; yield { type: 'stop', stopReason: 'end_turn' };
+      const toolUse = params.tools.length && (input.trigger.text === 'launch' ? state.stage < 4 : state.stage === 0);
+      state.stage++;
+      yield { type: 'stop', stopReason: toolUse ? 'tool_use' : 'end_turn' };
     },
   } }); services.push(service);
   const request = (op, payload = {}) => service.request({ ownerId: 'alice', op, payload });
@@ -221,14 +322,13 @@ it('exposes supported opt-in settings without model calls on status/read, and di
   const count = calls.length; due(r); await instance.tick();
   expect(calls).toHaveLength(count); // null continuation does not spin
   await request('think', { text: 'launch', clientMessageId: 'manual-launch' });
-  await vi.waitFor(async () => expect((await request('snapshot')).busy).toBe(false));
-  await vi.waitFor(async () => expect((await r.getPerson('alice')).autonomy.pending).toHaveLength(1));
-  due(r); await instance.tick();
-  await vi.waitFor(async () => expect((await request('snapshot')).busy).toBe(false));
-  const result = calls.at(-1);
-  expect(JSON.parse(result.trigger.text).reason).toBe('task-completion');
-  expect(result.taskEvidence.items.some(item => item.kind === 'completion')).toBe(true);
+  await vi.waitFor(async () => expect((await request('snapshot')).busy).toBe(false), { timeout: 8000 });
+  expect((await request('snapshot')).latestEpisode.status).toBe('completed');
+  expect(resumedEvidence[0].items.some(item => item.kind === 'completion')).toBe(true);
+  expect((await r.getPerson('alice')).autonomy.pending).toHaveLength(0);
   const completedCalls = calls.length;
+  due(r); await instance.tick();
+  expect(calls).toHaveLength(completedCalls); // Originating episode already integrated this completion.
   await service.close(); spy.mockRestore(); due(r);
   expect(calls).toHaveLength(completedCalls);
 }, 12_000);
