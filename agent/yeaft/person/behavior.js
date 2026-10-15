@@ -14,10 +14,17 @@ const TRIGGERS = Object.freeze({
 /** The host appends this to execution instructions and budgets the complete text.
  * Source/autonomy details, when present, are supplied by the host in trigger context.
  * This helper never infers authority from the trigger kind or enables scheduling.
- * @param {'send'|'think'|'dream'} kind
+ * @param {'send'|'think'|'dream'|'autonomous'} kind
+ * @param {{reason?: string}} [scheduling] Host metadata, never model/user text.
  * @returns {string}
  */
-export function executionBehavior(kind) {
-  if (!Object.hasOwn(TRIGGERS, kind)) throw new TypeError('Unsupported Person execution trigger.');
-  return `${COMMON}\n${TRIGGERS[kind]}`;
+export function executionBehavior(kind, scheduling) {
+  const orientation = executionOrientation(kind, scheduling);
+  if (!Object.hasOwn(TRIGGERS, orientation)) throw new TypeError('Unsupported Person execution trigger.');
+  return `${COMMON}\n${kind === 'autonomous' ? 'Autonomous wake-up: host scheduling is observation-only, not a fresh user instruction or additional authority. ' : ''}${TRIGGERS[orientation]}`;
+}
+
+/** Idle discovery gets Dream's diverse context; actual result consumption gets Think. */
+export function executionOrientation(kind, scheduling) {
+  return kind === 'autonomous' ? scheduling?.reason === 'idle' ? 'dream' : 'think' : kind;
 }

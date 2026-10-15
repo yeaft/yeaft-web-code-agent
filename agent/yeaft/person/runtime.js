@@ -45,6 +45,7 @@ export function assembleContext({ instructions = PROPOSAL_INSTRUCTIONS, toolSche
   const context = {
     person: { id: snapshot.person.id, name: snapshot.person.name, soulRevision: snapshot.person.soulRevision },
     state: snapshot.state, trigger: { kind: episode.kind, text: episode.text, ref: triggerRef,
+      ...(episode.scheduling ? { scheduling: episode.scheduling } : {}),
       ...(attachments.length ? { messageRef: inputMessageRef, attachments: attachments.map(file => ({ ...attachmentMetadata(file),
         ...(file.kind === 'text' ? { content: file.content } : { contentDelivery: 'image-block', ...(imageBudget?.detail ? { detail: imageBudget.detail } : {}) }), trust: 'untrusted-user-content' })) } : {}) },
     ...(environment ? { environment } : {}),
@@ -421,7 +422,7 @@ export class PersonRuntime {
       const initialTools = capabilities.executionTools();
       const executionInstructions = `${EXECUTION_INSTRUCTIONS}
 
-${executionBehavior(episode.kind)}`;
+${executionBehavior(episode.kind, episode.scheduling)}`;
       const context = assembleContext({ instructions: executionInstructions, toolSchemas: initialTools,
         reservedContextBytes: personFinalContextReserveBytes(executionInstructions), snapshot, episode, provider, selection,
         attachments, activeCapabilities: [], capabilityMap: capabilities.catalog(), environment: toolHost.environment,
@@ -527,7 +528,7 @@ ${executionBehavior(episode.kind)}`;
           try {
             try { proposal = JSON.parse(output.text); } catch { fail('INVALID_PROPOSAL'); }
             validateProposal(proposal, { stateVersion: episode.baseStateVersion, state: snapshot.state, sourceRefs, concepts: readConcepts,
-              sources: readSources, catalog: provider.catalog, dream: episode.kind === 'dream' });
+              sources: readSources, catalog: provider.catalog, dream: episode.kind === 'dream' || episode.kind === 'autonomous' });
           } catch (error) {
             const safe = safeError(error, 'INVALID_PROPOSAL');
             const diagnostics = proposalDiagnostics(proposal, { sourceRefs, concepts: readConcepts });

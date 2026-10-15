@@ -12,6 +12,7 @@ import { capabilityExperienceView, recordCapabilityExperience } from './capabili
 import { chronologicalCursor, conceptView, inspectionCursor, inspectionPage, inspectRequest, messageView, personName, searchRequest, settingsView, stateView } from './inspection.js';
 import { TOKEN_FIELDS, turnsPage, turnView } from './turn-diagnostics.js';
 import { personPresentation } from './presentation.js';
+import { executionOrientation } from './behavior.js';
 import { inspectCapabilities } from './capabilities.js';
 import { executionEvidencePage, executionReadRequest, nativeInvocationMatches } from './execution-evidence.js';
 import { OUTPUT_LIMITS, outputArgs, outputMime, outputReadRequest, outputsPage, outputUrl, outputView } from './outputs.js';
@@ -553,7 +554,7 @@ export class SqlitePersonStore {
     const p = this.own(episode), scope = this.episodeScope(episode), state = this.one('states', scope);
     const focused = this.focused(scope, state.focusConceptIds.slice(0, 12));
     const latestUser = this.one('messages', scope, " AND json_extract(record, '$.role') = 'user' ORDER BY seq DESC");
-    const dream = episode.kind === 'dream', recentLimit = dream ? 6 : 12;
+    const dream = executionOrientation(episode.kind, episode.scheduling) === 'dream', recentLimit = dream ? 6 : 12;
     const recent = this.rows('concepts', scope, ` ORDER BY updatedAt DESC, id ASC LIMIT ${recentLimit}`);
     let messages = dream ? [] : this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12');
     let older = [], olderMessages = [];
