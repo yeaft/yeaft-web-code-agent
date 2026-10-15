@@ -45,7 +45,7 @@ schemas、目录和实际执行遵守当前 Agent 的 `plugins.tools` 配置：�
 内核「管理」已有页面提供 **自主跟进 / Autonomous follow-up** 开关，直接写入 `settings.autonomyEnabled`。新数字人和升级后的历史记录均默认关闭；旧记录即使残留 `autonomyEnabled:true`，没有新版显式同意标记也不调度。`status.autonomySupported:true` 只表示实现支持，不等于已授权开启。
 
 - 调度器每 5 秒检查一次持久 due time，不从 status／snapshot／消息读取路径启动模型。首次开启后约 5 秒可进行空闲认知；已有 continuation 的 `waiting`／`blocked`、未变化的 `ready` 或空接续点不会反复唤醒。无增量检查按 1 分钟至 1 小时指数退避，只有新用户输入或当前同意代内的新任务结果重置退避。
-- 新的成功／失败任务结果合并为有界观察：最多 8 项、仅任务 ID、状态和证据引用，不塞入日志或指令。相同任务终态去重；取消、orphaned 和历史完成文件不触发重入。跨重启读取真实任务状态，失去控制的任务标为 orphaned，不重新执行命令或重放完成通知。
+- 新的成功／失败任务结果合并为有界观察：最多 8 项、仅任务 ID、状态和证据引用，不塞入日志或指令。相同任务终态去重；取消、orphaned 和历史完成文件不触发重入。准入不提前消费观察：仅在成功模型请求实际读到精确证据后，与 accepted commit 同一事务确认；失败调用／提交保留，期间新到的观察不被清空，已消费观察的迟到通知不重复唤醒。跨重启读取真实任务状态，失去控制的任务标为 orphaned，不重新执行命令或重放完成通知。
 - 自主准入复用 SQLite 的 Person 身份、owner、lease、epoch、control/input/state fence 和原生 episode，不创建 Session 或 Work Center。多个服务只能准入同一个活动执行；运行／暂停中的执行不能被调度绕过。自主执行没有额外的累计调用或整轮配额。
 - 触发种类为 `autonomous`，不是 `send`，没有伪造用户消息。system-generated scheduling metadata 显式标注 `observationOnly:true`、`authorization:false`；任务输出始终非可信。模型必须核实当前证据与用户授权，不因定时器或任务成功获得新权限。管理页区分手动与自主执行。
 - **取消**也关闭自主跟进，清空排队观察并更换同意代；旧任务、旧回调和已排队的自主准入不能在取消后复活。只有再次手动开启才允许新调度。自主开关可在活动执行期间修改，不使当前暂停 lease 失效；它不是取消按钮。显式关闭持久生效，后续 waiting／空闲提交、迟到任务完成和重启均不恢复开关。新开启前的旧任务不作为新同意代的唤醒来源。

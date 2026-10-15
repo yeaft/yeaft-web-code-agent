@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
-import { personInput, personCognition, personToolResults, personToolCall, personStop } from '../../fixtures/person-provider.js';
+import { personInput, personCognition, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
 import { config, finalProposal } from '../../../test/agent/yeaft/person/fixtures.js';
@@ -27,6 +27,9 @@ for (const scenario of [{ width: 1280, theme: 'light' }, { width: 320, theme: 'd
       await setImmediate();
       calls.push(params);
       const input = personInput(params);
+      // This spec exercises goal protocol itself. The shared operation helper
+      // intentionally filters goal bookkeeping for other scenario scripts.
+      const results = params.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content));
       expect(input.trigger.kind).toBe('send');
       if (personCognition(params)) {
         const proposal = finalProposal(input.state.version);
@@ -34,7 +37,7 @@ for (const scenario of [{ width: 1280, theme: 'light' }, { width: 320, theme: 'd
         proposal.activity.sourceRefs = [input.trigger.ref]; proposal.reply = reply;
         yield { type: 'text_delta', text: JSON.stringify(proposal) };
         yield personStop(false);
-      } else if (!personToolResults(params).length) {
+      } else if (!results.length) {
         expect(params.tools.map(tool => tool.name)).toContain('Execution__goal');
         yield personToolCall('manual-answer-goal', 'Execution.goal', {
           objective: 'Answer the direct question about manual use',
@@ -44,7 +47,7 @@ for (const scenario of [{ width: 1280, theme: 'light' }, { width: 320, theme: 'd
         });
         yield personStop(true);
       } else {
-        expect(personToolResults(params)).toEqual(expect.arrayContaining([
+        expect(results).toEqual(expect.arrayContaining([
           expect.objectContaining({ id: 'Execution.goal', ok: true, goal: expect.objectContaining({ kind: 'answer', status: 'completed' }) }),
         ]));
         yield { type: 'text_delta', text: reply };

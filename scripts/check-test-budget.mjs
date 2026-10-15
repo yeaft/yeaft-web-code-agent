@@ -11,9 +11,12 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // Deliberate growth requires reviewing the coverage tradeoff and this budget.
 // +1 distinct safety regression: scoped task archive recovery across restart.
 // Recoverable read -> actual edit/validation extends the existing SQLite loop case.
-// +9 opt-in autonomy: seven durable scheduling/control regressions and en/zh Management control.
-// Includes persistent disable and no-progress failure idle retry fences.
-export const TEST_CASE_LIMIT = 510;
+// +37 reviewed user-centered Person closure/autonomy regressions:
+// 8 goal validation + 3 host wait/control + 2 native continuation/no-progress;
+// 9 durable scheduler/provenance + 5 user understanding/Dream context/behavior;
+// 2 test-adapter non-replay + 6 UI polling/consent + 2 light/dark browser cases.
+// These cover distinct new protocol/control boundaries; existing cases are retained.
+export const TEST_CASE_LIMIT = 538;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

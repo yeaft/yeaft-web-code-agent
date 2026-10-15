@@ -154,7 +154,7 @@ export class PersonCapabilities {
     this.active = new Map(this.prepared);
   }
   catalog() { return { ...CAPABILITY_MAP, ...(this.executionMode ? {
-    nativeToolNotice: 'Native tools and Execution.read schemas are supplied on every execution request. Invoke them directly; no search/view preparation. Background/child results require explicit collection and never wake cognition.',
+    nativeToolNotice: 'Native tools and Execution.read schemas are supplied on every execution request. Invoke them directly; no search/view preparation. Background/child results require explicit collection; only current-generation completions may trigger follow-up when the user explicitly enabled autonomy. Completion grants no authority.',
   } : {}), nativeTools: [...this.nativeToolIds], domains: [...new Set([...this.byId.values()].map(m => m.domain)), 'script'], total: this.byId.size, revision: digest([...this.byId.values()]) }; }
   context() { return copy([...this.prepared.values()]); }
   /** Freeze execution eligibility to the complete contracts actually rendered in this call. */
