@@ -93,6 +93,54 @@ describe('Person continuous execution with real SQLite authority', () => {
     expect((await call(run.service, 'traces', {}, 'bob')).items).toEqual([]);
   });
 
+  it('continues an active goal after premature end_turn, modifies/verifies a real file and distills only once', async () => {
+    let actualRef;
+    const goal = (status, refs = []) => ({ objective: 'Modify and verify the fixture', acceptance: 'File contains after and shell check passes',
+      status, reason: status === 'completed' ? 'Actual file readback and shell validation passed' : '', nextStep: 'Edit then verify',
+      sourceRefs: refs, waitFor: [], blocker: null });
+    const run = await setup((params, index) => {
+      if (index === 0) return tools(['goal', 'Execution__goal', goal('active')], ['read', 'FileRead', { file_path: 'fixture' }]);
+      if (index === 1) return text('I have inspected it; next execution opportunity I can edit it.');
+      if (index === 2) {
+        expect(params.tools.length).toBeGreaterThan(0);
+        expect(params.messages.at(-1).content).toContain('execution-continue');
+        return tools(['edit', 'FileEdit', { file_path: 'fixture', old_string: 'before', new_string: 'after' }]);
+      }
+      if (index === 3) return tools(['verify', 'Bash', { command: 'test "$(cat fixture)" = after && printf CHECKED' }]);
+      if (index === 4) {
+        actualRef = JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'verify').content).sourceRef;
+        return tools(['done', 'Execution__goal', goal('completed', [actualRef])]);
+      }
+      if (index === 5) return text('Modified and actually verified.');
+      expect(params.tools).toEqual([]);
+      expect(params.messages.at(-1).content).toContain('"status":"completed"');
+      return text(JSON.stringify(final(params)));
+    });
+    await writeFile(join(run.dir, 'fixture'), 'before'); await run.start();
+    const snapshot = await run.idle();
+    expect(snapshot.latestEpisode.status).toBe('completed');
+    expect(await readFile(join(run.dir, 'fixture'), 'utf8')).toBe('after');
+    const records = await traces(run.service);
+    expect(records.filter(t => t.kind === 'goal_boundary')).toHaveLength(1);
+    expect(records.filter(t => t.kind === 'call_output' && t.output.protocol === 'cognition')).toHaveLength(1);
+    expect(records.filter(t => t.kind === 'capability_started' && t.capability.id === 'FileEdit')).toHaveLength(1);
+    expect((await call(run.service, 'messages')).items.some(m => m.text.includes('next execution opportunity'))).toBe(false);
+  });
+
+  it('reports no-progress honestly without endless prompts or turning it into a fake external blocker', async () => {
+    const run = await setup((params, index) => {
+      if (index === 0) return tools(['goal', 'Execution__goal', { objective: 'Verify fixture', acceptance: 'Check actual result', status: 'active',
+        reason: '', nextStep: 'Read fixture', sourceRefs: [], waitFor: [], blocker: null }]);
+      if (params.tools.length) return text('I will continue on the next opportunity.');
+      expect(params.messages.at(-1).content).toContain('"status":"stalled"');
+      return text(JSON.stringify(final(params)));
+    });
+    await run.start(); expect((await run.idle()).latestEpisode.status).toBe('completed');
+    const records = await traces(run.service);
+    expect(records.filter(t => t.kind === 'call_output')).toHaveLength(4);
+    expect(records.find(t => t.kind === 'goal_boundary' && t.code === 'GOAL_NO_PROGRESS').goal.status).toBe('stalled');
+  });
+
   it('repairs malformed tool input and final provenance/JSON without replaying a completed host effect', async () => {
     const effect = vi.spyOn(fileWrite, 'execute');
     const run = await setup((params, index) => {

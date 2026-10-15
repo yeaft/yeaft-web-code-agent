@@ -606,6 +606,17 @@ class ScopedPersonTaskHost {
     }
   }
 
+  /** Exact owner-scoped control state, never the capped model evidence page. */
+  goalState(episodeId) {
+    this.#persistAgents();
+    return {
+      tasks: this.#manager.listActiveTasks(this.sessionId, this.parentVpId).map(task => ({ id: task.id, status: task.status,
+        currentEpisode: task.source?.episodeId === episodeId })),
+      agents: [...this.#agents.values()].map(agent => ({ id: agent.id, status: agent.status,
+        executionPending: agent.executionPending, currentEpisode: agent.personEpisodeId === episodeId })),
+    };
+  }
+
   /** Completion records remain facts, not user messages or automatic triggers. */
   evidence({ limit = 50 } = {}) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid evidence limit');
@@ -708,6 +719,10 @@ export class PersonTaskHost {
     if (!episode?.id || !episode.ownerId || !episode.personId
         || (episode.namespace != null && episode.namespace !== this.#options.namespace)) throw denied();
     return this.#host(episode.ownerId, episode.personId).context(input);
+  }
+
+  goalState(ownerId, episodeId) {
+    return this.#host(ownerId).goalState(episodeId);
   }
 
   snapshot(ownerId) { return this.#host(ownerId).snapshot(ownerId); }

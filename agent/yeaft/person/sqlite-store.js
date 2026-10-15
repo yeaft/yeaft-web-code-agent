@@ -326,6 +326,7 @@ export class SqlitePersonStore {
     if (!record || record.status !== 'running') fail('STALE');
     const experience = recordCapabilityExperience(p.capabilityExperience, record, kind, data, this.now.toISOString());
     if (experience) p.capabilityExperience = experience;
+    if (kind === 'execution_goal') { record.executionGoal = data.goal; this.put('episodes', record); }
     p.writeSerial++; this.put('persons', p);
     return this.trace(episode.ownerId, episode.id, kind, data);
   }
@@ -413,6 +414,7 @@ export class SqlitePersonStore {
     const data = { callId, ...(started.modelCallId !== undefined ? { modelCallId: started.modelCallId, toolUseId: started.toolUseId, toolIndex: started.toolIndex } : {}), ...(started.capabilityManifest ? { capabilityManifest: started.capabilityManifest } : {}),
       ...(failed ? { capabilityId: started.capability.id, code: code || result.code } : { capability: started.capability }),
       ...(result !== undefined ? { result } : {}) };
+    if (live && started.capability.id === 'Execution.goal' && result?.ok === true) record.executionGoal = result.goal;
     delete record.openCapability; this.put('episodes', record);
     if (live) {
       const experience = recordCapabilityExperience(p.capabilityExperience, record, outcome, data, this.now.toISOString());

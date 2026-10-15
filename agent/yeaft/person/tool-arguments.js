@@ -4,6 +4,7 @@ import { executionReadRequest } from './execution-evidence.js';
 import { outputArgs } from './outputs.js';
 import { personPresentation } from './presentation.js';
 import { scriptInput } from './script-executor.js';
+import { validateExecutionGoal } from './execution-goal.js';
 
 /** Pre-dispatch schema check, deliberately separate from execution: rejection
  * here proves that no host effect has begun and can safely become tool feedback.
@@ -50,7 +51,8 @@ export function validateToolArguments(value, schema) {
  * callers must not wrap capability execution in the same catch. */
 export function validateCapabilityArguments({ id, args }) {
   try {
-    if (id === 'Capability.create') validateCreatedDefinition(args);
+    if (id === 'Execution.goal') validateExecutionGoal(args);
+    else if (id === 'Capability.create') validateCreatedDefinition(args);
     else if (id === 'Execution.read') executionReadRequest(args);
     else if (id === 'Output.publish') outputArgs(args);
     else if (id === 'PresentResponse') personPresentation(args);
