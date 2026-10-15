@@ -57,7 +57,7 @@ function familiarCapabilities(experience, triggerKind, now, byId) {
     const manifest = byId.get(item?.id);
     if (!manifest || foundationIds.has(item.id) || item.version !== manifest.version || item.revision !== manifest.revision) continue;
     const observations = (Array.isArray(item.observations) ? item.observations.slice(0, 8) : [])
-      .filter(o => ['succeeded', 'failed'].includes(o?.outcome) && ['send', 'think', 'dream'].includes(o.triggerKind) && Number.isFinite(Date.parse(o.usedAt)))
+      .filter(o => ['succeeded', 'failed'].includes(o?.outcome) && ['send', 'think', 'dream', 'autonomous'].includes(o.triggerKind) && Number.isFinite(Date.parse(o.usedAt)))
       .sort((a, b) => Date.parse(b.usedAt) - Date.parse(a.usedAt));
     const latest = observations[0], age = now - Date.parse(latest?.usedAt);
     if (!latest || latest.outcome !== 'succeeded' || age < 0 || age > CAPABILITY_LIMITS.familiarMaxAgeMs) continue;

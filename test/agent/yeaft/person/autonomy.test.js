@@ -63,7 +63,7 @@ it('requires new explicit consent after upgrade and serializes autonomous admiss
   await expect(a.heartbeat(admitted.episode)).resolves.toBeUndefined();
 });
 
-it('rests quietly after ready, blocked or empty continuation, coalesces new task observations, and suppresses repeated replies', async () => {
+it('backs off successful resting exploration, suppresses unchanged commitments, coalesces observations and avoids repeated replies', async () => {
   const r = repo(); await r.open('alice'); await r.settings('alice', { autonomyEnabled: true });
   const ready = { goal: 'finish', nextStep: 'check', status: 'ready', condition: 'new evidence' };
   due(r); const first = (await r.autonomyAdmit('alice', admission)).episode;
@@ -85,6 +85,23 @@ it('rests quietly after ready, blocked or empty continuation, coalesces new task
   expect(await r.autonomyAdmit('alice', admission)).toBeNull();
   await r.autonomyObserve('alice', event(second)); // previous consent generation is stale
   expect((await r.getPerson('alice')).autonomy.pending).toHaveLength(0);
+  // An unchanged successful, uncommitted exploration may return after its quiet
+  // interval. No advancing time or toggling consent can revive ready/blocked work.
+  const manual = (await r.admit('alice', { ...admission, kind: 'think', text: 'explore freely', clientMessageId: 'explore' })).episode;
+  await complete(r, manual, null); due(r);
+  let exploration = (await r.autonomyAdmit('alice', admission)).episode;
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await r.append(exploration, 'execution_goal', { goal: { kind: 'exploration', status: 'resting' } });
+    // Simulate a very long run: admission's due time is already in the past.
+    due(r); await complete(r, exploration, null);
+    const settings = (await r.getPerson('alice')).autonomy;
+    expect(settings.nextAt).toBeGreaterThan(Date.now());
+    expect(settings.backoffMs).toBeLessThanOrEqual(3600000);
+    expect(await r.autonomyAdmit('alice', admission)).toBeNull();
+    due(r); exploration = (await r.autonomyAdmit('alice', admission)).episode;
+  }
+  await r.finish(exploration, 'failed', 'GOAL_NO_PROGRESS'); due(r);
+  expect(await r.autonomyAdmit('alice', admission)).toBeNull();
 });
 
 it('cancel fences queued admissions and stale completion generations until explicit reenable, while toggling never bypasses a paused job', async () => {
@@ -316,11 +333,20 @@ it('exposes supported opt-in settings without model calls on status/read, and di
   await vi.waitFor(() => expect(instance).toBeTruthy(), { timeout: 7000, interval: 20 });
   await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0));
   await vi.waitFor(async () => expect((await request('snapshot')).busy).toBe(false));
+  const autonomousSnapshot = await request('snapshot');
+  expect(autonomousSnapshot.latestEpisode.status).toBe('completed');
+  const traces = (await r.list('alice', 'traces', { limit: 50 })).items;
+  expect(traces.some(trace => trace.kind === 'committed' && trace.episodeId === autonomousSnapshot.latestEpisode.id)).toBe(true);
+  expect(traces.some(trace => trace.kind === 'capability_result' && trace.capability?.id === 'Execution.goal' && trace.result?.goal?.status === 'resting')).toBe(true);
+  expect((await r.getPerson('alice')).capabilityExperience)
+    .toEqual(expect.arrayContaining([expect.objectContaining({ id: 'Execution.goal', observations: expect.arrayContaining([
+      expect.objectContaining({ triggerKind: 'autonomous', outcome: 'succeeded' }),
+    ]) })]));
   expect(calls[0].trigger).toMatchObject({ kind: 'autonomous' });
   expect(JSON.parse(calls[0].trigger.text)).toMatchObject({ authorization: false, observationOnly: true });
   expect((await request('messages')).items.some(m => m.role === 'user')).toBe(false);
-  const count = calls.length; due(r); await instance.tick();
-  expect(calls).toHaveLength(count); // null continuation does not spin
+  const count = calls.length; await instance.tick();
+  expect(calls).toHaveLength(count); // successful rest waits for the durable backoff, not each scheduler tick
   await request('think', { text: 'launch', clientMessageId: 'manual-launch' });
   await vi.waitFor(async () => expect((await request('snapshot')).busy).toBe(false), { timeout: 8000 });
   expect((await request('snapshot')).latestEpisode.status).toBe('completed');

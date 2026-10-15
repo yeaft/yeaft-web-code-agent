@@ -298,8 +298,12 @@ export class SqlitePersonStore {
     // Failed cognition may leave an older ready continuation behind: don't turn
     // that into an automatic retry, even after restart or toggling consent.
     const latest = this.one('episodes', this.scope(ownerId), ' ORDER BY inputWatermark DESC');
-    const quiet = !taskCompletion && (latest?.status === 'failed' || a.lastFingerprint === fingerprint ||
-      (continuation && continuation.status !== 'ready'));
+    // Successful uncommitted discovery may rest and return after the durable quiet
+    // interval. This is not permission to retry unchanged work or a failed run.
+    const restedExploration = latest?.status === 'completed' && latest.kind === 'autonomous' &&
+      latest.executionGoal?.kind === 'exploration' && latest.executionGoal.status === 'resting' && continuation == null;
+    const quiet = !taskCompletion && (latest?.status === 'failed' ||
+      (a.lastFingerprint === fingerprint && !restedExploration) || (continuation && continuation.status !== 'ready'));
     a.nextAt = now + Math.min(a.backoffMs ?? 60000, 3600000);
     a.backoffMs = Math.min((a.backoffMs ?? 60000) * 2, 3600000);
     p.writeSerial++; this.put('persons', p);
@@ -699,7 +703,8 @@ export class SqlitePersonStore {
   }
   commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     const p = this.own(episode), scope = this.episodeScope(episode);
-    if (proposal.baseStateVersion !== episode.baseStateVersion) fail('STALE');
+    const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    if (!record || record.status !== 'running' || proposal.baseStateVersion !== episode.baseStateVersion) fail('STALE');
     const repeatsExecutionReply = proposal.reply && this.rows('messages', scope,
       " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') IN ('progress', 'execution-final')", [episode.id])
       .some(message => message.text.trim() === proposal.reply.trim());
@@ -728,7 +733,13 @@ export class SqlitePersonStore {
     if (this.one('states', scope)?.version !== episode.baseStateVersion) fail('STALE');
     this.put('states', state);
     if (episode.kind === 'autonomous' && p.autonomy?.generation === episode.autonomyGeneration) {
-      p.autonomy.lastFingerprint = digest(continuation ?? null); this.put('persons', p);
+      p.autonomy.lastFingerprint = digest(continuation ?? null);
+      // Backoff starts when discovery actually rests, not when a potentially long
+      // episode was admitted. Never immediately wake after a long execution.
+      if (record.executionGoal?.kind === 'exploration' && record.executionGoal.status === 'resting' && continuation == null) {
+        p.autonomy.nextAt = this.now.getTime() + (p.autonomy.backoffMs ?? 60000);
+      }
+      this.put('persons', p);
     }
     this.put('state_commits', this.doc(scope, { id: randomUUID(), version: p.stateVersion, parentVersion: episode.baseStateVersion,
       episodeId: episode.id, callId, conceptRevisions: revisions, state: stateView(state), createdAt: this.now }), true);
@@ -736,8 +747,6 @@ export class SqlitePersonStore {
       const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id, callId, replyKind: 'final', role: 'assistant', text: proposal.reply, createdAt: this.now });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
     }
-    const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
-    if (!record || record.status !== 'running') fail('STALE');
     if (p.settings.autonomyEnabled === true && p.autonomy?.generation === record.autonomyGeneration) {
       const integrated = new Set(record.integratedTaskSourceRefs ?? []);
       if (integrated.size) {
