@@ -18,6 +18,7 @@
  */
 
 import { randomUUID, createHash } from 'crypto';
+import { QueryProgress, progressReminder } from './query-progress.js';
 import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
@@ -1442,6 +1443,8 @@ export class Engine {
       signal,
       effortDecision: snapshotEffortDecision(vpCtx?.effortDecision),
       requestIdentity: vpCtx?.requestIdentity,
+      queryTurnId: vpCtx?.queryTurnId,
+      historyBeforeSeq: vpCtx?.historyBeforeSeq,
       yeaftDir: this.#yeaftDir,
       managedCliReady: this.#managedCliReady,
       runtimePlatform: getRuntimePlatformInfo(),
@@ -2122,6 +2125,9 @@ export class Engine {
     const effortConstraint = isSubAgent || scenario === 'sub_agent' || vpPersona?.subAgent
       ? Object.freeze({ parentDecision: snapshotEffortDecision(parentEffortDecision) }) : null;
     const queryStartedAt = Date.now();
+    const queryProgress = new QueryProgress();
+    const progressIdentity = { turnId: queryTurnId, threadId: runtimeThreadId, sessionId: runtimeSessionId, vpId: requestIdentity.vpId };
+    let progressReportPending = false;
     const userQuestionPreview = String(prompt || '').slice(0, 200);
     const queryVpId = vpPersona && typeof vpPersona === 'object'
       && typeof vpPersona.vpId === 'string'
@@ -2833,6 +2839,7 @@ export class Engine {
       const currentContextWindow = resolveContextWindow(currentModel, requestConfig);
 
       const appendedBeforeStream = this.#drainPendingUserMessages(drainPendingUserMessages);
+      if (appendedBeforeStream.some(item => !item.internal)) { queryProgress.resetEvidence(); progressReportPending = false; }
       if (appendedBeforeStream.length > 0) {
         for (const item of appendedBeforeStream) {
           this.#persistAppendedUserMessage(item, runtimeSessionId);
@@ -2853,6 +2860,8 @@ export class Engine {
         // this query was parked. Its task-result update is the authoritative
         // synchronization point before the next provider loop.
         invalidateReadOnlyToolReuse();
+        queryProgress.resetEvidence();
+        progressReportPending = false;
       }
       if (taskResultUpdatesBeforeStream.length > 0) {
         for (const update of taskResultUpdatesBeforeStream) {
@@ -2887,7 +2896,8 @@ export class Engine {
       // tool-free response for a useful handoff, under the existing signal.
       const executionPolicy = isSubAgent
         ? this.#toolRegistry?.prepareProviderRequest?.() : null;
-      if (executionPolicy?.finalize) toolDefs = [];
+      const progressReporting = progressReportPending;
+      if (executionPolicy?.finalize || progressReporting) toolDefs = [];
       ({ resolvedSkillContent, resolvedSkills, skillResolutionError } = resolveSkillPromptState({
         skillManager: this.#skillManager,
         prompt,
@@ -2906,6 +2916,7 @@ export class Engine {
       reportedSkillError = skillResolutionError;
       systemPrompt = buildCurrentSystemPrompt();
       if (executionPolicy?.prompt) systemPrompt += `\n\n${executionPolicy.prompt}`;
+      if (progressReporting) systemPrompt += `\n\n${progressReminder('report', queryProgress.snapshot().reason)}`;
       let requestDebugMessages = [];
       let requestInputBreakdown = null;
 
@@ -3140,7 +3151,12 @@ export class Engine {
           continuationCommitted = true;
         };
         let childDispatchReserved = false;
+        let progressRequestCounted = false;
         const commitDispatch = () => {
+          if (!progressRequestCounted) {
+            queryProgress.requestStarted();
+            progressRequestCounted = true;
+          }
           if (isSubAgent && !childDispatchReserved) {
             this.#toolRegistry?.reserveProviderRequest?.({ reporting: !!executionPolicy?.finalize });
             childDispatchReserved = true;
@@ -3260,7 +3276,7 @@ export class Engine {
             case 'tool_call':
               // No dispatch or orphan protocol rows during the reserved report,
               // even if an adapter ignores the absence of tool definitions.
-              if (executionPolicy?.finalize) break;
+              if (executionPolicy?.finalize || progressReporting) break;
               if (toolCalls.length === 0) {
                 traceRequest('llm.first_tool_call', {
                   durationMs: perfNowMs() - requestPerfStart,
@@ -3505,7 +3521,7 @@ export class Engine {
         // the caller. Replaying that request would publish a duplicate call and
         // leave ambiguous execution ownership, so only pre-tool failures are
         // eligible for transparent retry or model fallback.
-        const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize;
+        const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize && !progressReporting;
         if (earlyIsContextOverflow && canReplayProviderRequest
           && contextOverflowRecoveryAttempts < 3) {
           contextOverflowRecoveryAttempts += 1;
@@ -3914,8 +3930,42 @@ export class Engine {
       // The reporting allowance is exactly one provider response, not another
       // investigation loop. Ignore unsolicited calls even from a noncompliant
       // adapter, and never auto-continue a truncated reporting response.
-      if (executionPolicy?.finalize) {
-        yield { type: 'turn_end', turnNumber, stopReason: 'budget_report', threadId, terminal: true };
+      yield queryProgress.snapshot(progressIdentity);
+      if (signal?.aborted) {
+        yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+        yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId, terminal: true };
+        break;
+      }
+      if (executionPolicy?.finalize || progressReporting) {
+        if (progressReporting) {
+          // The reporting allowance cannot discard input accepted during its
+          // stream. Honor the same atomic input-close fence as normal endings.
+          let appended = this.#drainPendingUserMessages(drainPendingUserMessages);
+          if (appended.length === 0 && typeof closePendingUserInput === 'function' && !closePendingUserInput()) {
+            appended = this.#drainPendingUserMessages(drainPendingUserMessages);
+            if (appended.length === 0) throw new Error('Could not close pending user input for progress report');
+          }
+          if (appended.length > 0) {
+            queryProgress.resetEvidence();
+            progressReportPending = false;
+            for (const item of appended) {
+              this.#persistAppendedUserMessage(item, runtimeSessionId);
+              conversationMessages.push({ role: 'user', content: item.content });
+              yield { type: 'user_append', turnId: queryTurnId, loopNumber: turnNumber, threadId,
+                preview: String(item.preview || '').slice(0, 200), internal: Boolean(item.internal) };
+            }
+            yield { type: 'turn_end', turnNumber, stopReason: 'user_append_continue', threadId };
+            continue;
+          }
+          if (!responseText.trim()) {
+            const report = 'Execution paused after repeated tool results or failures without observed progress. The requested task is not confirmed complete. Review the preceding tool results and resolve the blocker before resuming.';
+            this.#persistConversationMessage({ role: 'assistant', content: report, responseKind: 'progress' }, { sessionId: runtimeSessionId, turnId: queryTurnId, model: currentModel, stopReason: 'no_progress', executionOrigin });
+            yield { type: 'text_delta', text: report, threadId };
+          }
+          if (!signal?.aborted) yield { type: 'error', error: 'Execution paused after repeated non-progress batches; task completion was not verified.', code: 'no_progress', retryable: false };
+        }
+        if (signal?.aborted) yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+        yield { type: 'turn_end', turnNumber, stopReason: signal?.aborted ? 'aborted' : progressReporting ? 'no_progress' : 'budget_report', threadId, terminal: true };
         break;
       }
 
@@ -4216,6 +4266,8 @@ export class Engine {
       const toolCtx = this.#buildToolContext(signal, {
         effortDecision: snapshotEffortDecision(requestEffortDecision),
         requestIdentity,
+        queryTurnId,
+        historyBeforeSeq: Number.isFinite(persistedQueryUser?.seq) ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id),
         router,
         senderVpId,
         sessionId: runtimeSessionId,
@@ -4401,6 +4453,7 @@ export class Engine {
         if (signal?.aborted) abortedDuringTools = true;
 
         if (!preparedParallelExecution && !toolBatchBarrier && !signal?.aborted
+            && !queryProgress.blocked(tc)
             && toolAllowedForRequest(tc) && isConcurrencySafeTool(this, tc.name, tc.input)
             && duplicatePolicyForCall(tc) !== 'suppress'
             && !mayMutateWorkspaceAfterReturn(this, tc.name, tc.input)) {
@@ -4409,7 +4462,7 @@ export class Engine {
             candidateIndex < toolCalls.length;
             candidateIndex += 1) {
             const candidate = toolCalls[candidateIndex];
-            if (!toolAllowedForRequest(candidate)
+            if (queryProgress.blocked(candidate) || !toolAllowedForRequest(candidate)
                 || !isConcurrencySafeTool(this, candidate.name, candidate.input)
                 || duplicatePolicyForCall(candidate) === 'suppress'
                 || mayMutateWorkspaceAfterReturn(this, candidate.name, candidate.input)) break;
@@ -4491,6 +4544,7 @@ export class Engine {
           && duplicateCallPolicy === 'suppress'
           && successfulDuplicateCount >= DUP_TOOL_THRESHOLD - 1;
         let suppressionCount = queryDuplicateSuppressions.get(duplicateCallKey) || 0;
+        const failureBlock = !readyParallelExecution && !skipped ? queryProgress.blocked(tc) : null;
 
         let output;
         let displayImages = [];
@@ -4570,6 +4624,11 @@ export class Engine {
             : `Error: unknown tool "${tc.name}"`;
           isError = true;
           yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true, threadId: this.currentThreadId };
+        } else if (failureBlock) {
+          output = failureBlock;
+          isError = true;
+          yield { type: 'tool_start', id: tc.id, name: tc.name, input: tc.input, threadId: this.currentThreadId };
+          yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true, suppressed: true, threadId: this.currentThreadId };
         } else if (needsProjectDocReload) {
           projectDocSource = freshProjectDocSource;
           projectDocLoadedPathHints = [...new Set([
@@ -4738,7 +4797,7 @@ export class Engine {
           ])].slice(-128);
         }
 
-        if (!skipped && !duplicateCallSuppressed && !isError && !reusedReadOnlyResult
+        if (!skipped && !duplicateCallSuppressed && !failureBlock && !isError && !reusedReadOnlyResult
             && duplicateCallPolicy !== 'allow') {
           const nextDuplicateCount = successfulDuplicateCount + 1;
           queryDuplicateCounts.set(duplicateCallKey, nextDuplicateCount);
@@ -4765,6 +4824,13 @@ export class Engine {
             `[system note] ${tc.name} rejected the same arguments twice before execution: ${validationError.slice(0, 300)}. Correct the arguments using its schema/error hint or choose a different tool. No operation was performed; repeating unchanged arguments will not help.`,
           );
         }
+        const repeatedResultCallId = queryProgress.observe({
+          call: tc, output, isError, readOnly: readOnlyTool,
+          executed: !skipped && !duplicateCallSuppressed && !failureBlock && !reusedReadOnlyResult && !readyParallelExecution?.shared && hasTool && !needsProjectDocReload,
+          reused: reusedReadOnlyResult || Boolean(readyParallelExecution?.shared),
+          skipped: skipped || !hasTool || needsProjectDocReload,
+          policy: duplicateCallPolicy,
+        });
         const toolDurationMs = readyParallelExecution?.durationMs ?? (Date.now() - toolStartTime);
 
         // feat-6af5f9f1 PR B: emit a structured `tool_exec` event for the
@@ -4779,7 +4845,7 @@ export class Engine {
           name: tc.name,
           durationMs: toolDurationMs,
           isError,
-          suppressed: duplicateCallSuppressed,
+          suppressed: duplicateCallSuppressed || Boolean(failureBlock),
           toolOutput: output,
           ...(reusedReadOnlyResult ? { reused: true, reusedCallId: reusedReadOnlyCallId } : {}),
           ...(skipped ? { skipped: true } : {}),
@@ -4789,7 +4855,7 @@ export class Engine {
         // 2026-05-13: feed the per-tool counters. Stays best-effort — a
         // stats sink that throws shouldn't crash the engine. `record`
         // already swallows internal write errors.
-        if (!skipped && !duplicateCallSuppressed
+        if (!skipped && !duplicateCallSuppressed && !failureBlock && !reusedReadOnlyResult && !readyParallelExecution?.shared
             && this.#toolStats && typeof this.#toolStats.record === 'function') {
           try {
             this.#toolStats.record({
@@ -4815,7 +4881,7 @@ export class Engine {
           reusedCallId: reusedReadOnlyCallId,
         });
 
-        if (!skipped && !duplicateCallSuppressed && !reusedReadOnlyResult
+        if (!skipped && !duplicateCallSuppressed && !failureBlock && !reusedReadOnlyResult && !isError
             && !readOnlyToolReuseDisabled && cacheableTool) {
           readOnlyToolResults.set(duplicateKey, {
             output,
@@ -4828,7 +4894,10 @@ export class Engine {
         // Append only the bounded copy to the model message history. Raw
         // `output` is still used for debug traces, UI events, exec-log, and
         // persistence so large tool results are not lost outside context.
-        const contextOutput = truncateToolResultIfNeeded(output, {
+        const modelOutput = repeatedResultCallId && !isError && modelImages.length === 0
+          ? `[Unchanged read result: already returned by call ${repeatedResultCallId}; reuse it instead of reading again.]\n${output}`
+          : output;
+        const contextOutput = truncateToolResultIfNeeded(modelOutput, {
           toolName: tc.name,
           language: this.#config?.language,
         });
@@ -4862,7 +4931,7 @@ export class Engine {
         // user-conversation turn), not the inner loop's turnNumber.
         // Aligns exec-log layout with dup detection lookback and the
         // T2 fallback-stub readTurn() call below.
-        if (!skipped && !duplicateCallSuppressed) {
+        if (!skipped && !duplicateCallSuppressed && !failureBlock && !reusedReadOnlyResult && !readyParallelExecution?.shared) {
           this.#execLog.append(queryNumber, buildExecLogEntry({
             loopIdx: queryToolCount,
             toolName: tc.name,
@@ -4935,6 +5004,13 @@ export class Engine {
         conversationMessages.push({ role: 'user', content: reminder });
       }
       if (pendingDupReminders.length > 0) duplicateReminderAwaitingResponse = true;
+      const progressAction = queryProgress.finishBatch();
+      yield queryProgress.snapshot(progressIdentity);
+      if (progressAction && !signal?.aborted && !endTurnRequested) {
+        const reason = queryProgress.snapshot().reason;
+        conversationMessages.push({ role: 'user', content: progressReminder(progressAction, reason) });
+        if (progressAction === 'report') progressReportPending = true;
+      }
       if (terminateAfterDuplicateBatch) {
         yield {
           type: 'error',

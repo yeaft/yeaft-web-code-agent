@@ -91,6 +91,8 @@ Guidelines:
   },
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
+  // Raw API reads may be live status polling; ordinary pages retain loop checks.
+  duplicateCallPolicy: (input) => input?.raw === true ? 'allow' : 'warn',
   async execute(input, ctx) {
     const { url, max_length = 50000, raw = false } = input;
     if (!url) return JSON.stringify({ error: 'url is required' });

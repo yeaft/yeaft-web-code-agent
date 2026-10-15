@@ -1,0 +1,124 @@
+import { describe, expect, it } from 'vitest';
+import { QueryProgress } from '../../../agent/yeaft/query-progress.js';
+import webFetchTool from '../../../agent/yeaft/tools/web-fetch.js';
+
+function observe(progress, name, output, extra = {}) {
+  progress.observe({ call: { id: 'c', name, input: { path: 'rfc' } }, output, readOnly: true, ...extra });
+  return progress.finishBatch();
+}
+
+describe('query-local progress evidence', () => {
+  it('escalates repeated exact results across tool batches, not assistant promises', () => {
+    const progress = new QueryProgress();
+    expect(observe(progress, 'FileRead', 'same document')).toBeNull();
+    const actions = [];
+    for (let i = 0; i < 12; i++) {
+      progress.observe({ call: { id: `c${i}`, name: 'FileRead', input: { path: 'rfc' } }, output: 'same document', readOnly: true });
+      actions.push(progress.finishBatch());
+    }
+    expect(actions.filter(Boolean)).toEqual(['warning', 'recovering', 'report']);
+    expect(progress.snapshot()).toMatchObject({ stage: 'stopped', stagnantBatches: 12, repeatedCalls: 12 });
+  });
+
+  it('keeps distinct pages and changed-then-restored results independent', () => {
+    const progress = new QueryProgress();
+    for (let offset = 0; offset < 40; offset++) {
+      progress.observe({ call: { name: 'FileRead', input: { offset } }, output: 'identical lines', readOnly: true });
+      expect(progress.finishBatch()).toBeNull();
+    }
+    expect(observe(progress, 'Status', 'A')).toBeNull();
+    expect(observe(progress, 'Status', 'B')).toBeNull();
+    expect(observe(progress, 'Status', 'A')).toBeNull();
+    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0, repeatedCalls: 0 });
+  });
+
+  it('keeps arbitrarily long investigations obtaining new evidence running', () => {
+    const progress = new QueryProgress();
+    for (let i = 0; i < 200; i++) expect(observe(progress, 'FileRead', `page ${i}`)).toBeNull();
+    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0, toolExecutions: 200 });
+    expect(progress.snapshot().lastEvidenceAt).toEqual(expect.any(Number));
+  });
+
+  it('does not treat waiting, polling, approval or publication as new evidence or stagnation', () => {
+    const progress = new QueryProgress();
+    expect(webFetchTool.duplicateCallPolicy({})).toBe('warn');
+    for (let i = 0; i < 30; i++) {
+      expect(observe(progress, 'WaitAgent', 'running')).toBeNull();
+      expect(observe(progress, 'ReadTaskLog', 'same tail')).toBeNull();
+      expect(observe(progress, 'PresentResponse', `promise ${i}`)).toBeNull();
+      expect(observe(progress, 'Poll', 'running', { policy: webFetchTool.duplicateCallPolicy({ raw: true }) })).toBeNull();
+    }
+    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0, lastEvidenceAt: null });
+  });
+
+  it('stops unchanged failures without replaying possible side effects', () => {
+    const progress = new QueryProgress();
+    const call = { id: 'write-1', name: 'FileWrite', input: { content: 'RFC' } };
+    for (let i = 0; i < 3; i++) {
+      progress.observe({ call, output: 'Error: connection timed out', isError: true });
+      progress.finishBatch();
+    }
+    expect(progress.blocked(call)).toMatch(/NOT executed.*side effects may already have happened/s);
+    expect(progress.blocked({ ...call, input: { content: 'corrected RFC' } })).toBeNull();
+    expect(progress.snapshot()).toMatchObject({ failedCalls: 3, lastEvidenceAt: null });
+  });
+
+  it('blocks an uncertain mutation immediately and groups variable permission errors', () => {
+    const progress = new QueryProgress();
+    const call = { id: 'write', name: 'SendMail', input: { to: 'user' } };
+    progress.observe({ call, output: 'Error: connection timeout (request 1)', isError: true });
+    expect(progress.blocked(call)).toContain('NOT executed');
+    const read = { name: 'RemoteRead', input: {} };
+    progress.observe({ call: read, output: 'Error: timeout', isError: true, readOnly: true });
+    expect(progress.blocked(read)).toBeNull();
+    for (let i = 0; i < 3; i++) {
+      progress.observe({ call: read, output: `EACCES request=${i}`, isError: true, readOnly: true });
+    }
+    expect(progress.blocked(read)).toContain('3 equivalent failures');
+    const partial = { name: 'Bash', input: { command: 'change-and-test' } };
+    progress.observe({ call: partial, output: JSON.stringify({ error: 'Command exited with code 1.', errorEffect: 'unknown', replaySafe: false }), isError: true });
+    expect(progress.blocked(partial)).toContain('NOT executed');
+    observe(progress, 'FileWrite', 'created file', { readOnly: false });
+    expect(progress.blocked(read)).toBeNull();
+    expect(progress.blocked(partial)).toContain('NOT executed');
+    progress.resetEvidence();
+    expect(progress.blocked(partial)).toContain('NOT executed');
+    expect(observe(progress, 'RemoteRead', 'now exists')).toBeNull();
+  });
+
+  it('counts reuse and suppression but not execution; mixed new evidence clears recovery', () => {
+    const progress = new QueryProgress();
+    observe(progress, 'ViewImage', 'image');
+    for (let i = 0; i < 8; i++) observe(progress, 'ViewImage', 'image', { executed: false, reused: true });
+    expect(progress.snapshot()).toMatchObject({ stage: 'recovering', toolExecutions: 1, reusedCalls: 8 });
+    expect(observe(progress, 'FileEdit', 'modified section', { readOnly: false })).toBeNull();
+    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0 });
+  });
+
+  it('allows fresh edits to invalidate read observations without identical writes keeping a loop alive', () => {
+    const progress = new QueryProgress();
+    for (let i = 0; i < 30; i++) {
+      observe(progress, 'FileEdit', 'ok', { readOnly: false, call: { name: 'FileEdit', input: { content: `revision ${i}` } } });
+      expect(observe(progress, 'FileRead', 'same generic document output')).toBeNull();
+    }
+    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0 });
+    const actions = [];
+    for (let i = 0; i < 12; i++) {
+      observe(progress, 'FileEdit', 'ok', { readOnly: false, call: { name: 'FileEdit', input: { content: 'revision 29' } } });
+      actions.push(observe(progress, 'FileRead', 'same generic document output'));
+    }
+    expect(progress.snapshot()).toMatchObject({ stage: 'stopped' });
+  });
+
+  it('keeps identities/content out of public counters, resets for new input and bounds observations', () => {
+    const progress = new QueryProgress();
+    for (let i = 0; i < 1500; i++) observe(progress, 'FileRead', `secret document ${i}`);
+    progress.requestStarted();
+    const snapshot = progress.snapshot({ sessionId: 's', turnId: 't' });
+    expect(snapshot).toMatchObject({ sessionId: 's', turnId: 't', modelRequests: 1 });
+    expect(JSON.stringify(snapshot)).not.toMatch(/secret|rfc/);
+    progress.resetEvidence();
+    expect(observe(progress, 'FileRead', 'secret document 1499')).toBeNull();
+    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0 });
+  });
+});
