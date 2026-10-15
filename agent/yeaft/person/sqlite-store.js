@@ -475,11 +475,54 @@ export class SqlitePersonStore {
   }
   context(episode) {
     const p = this.own(episode), scope = this.episodeScope(episode), state = this.one('states', scope);
-    const focused = this.focused(scope, state.focusConceptIds).slice(0, 12);
-    const recent = this.rows('concepts', scope, ' ORDER BY updatedAt DESC, id ASC LIMIT 12');
+    const focused = this.focused(scope, state.focusConceptIds.slice(0, 12));
+    const latestUser = this.one('messages', scope, " AND json_extract(record, '$.role') = 'user' ORDER BY seq DESC");
+    const dream = episode.kind === 'dream', recentLimit = dream ? 6 : 12;
+    const recent = this.rows('concepts', scope, ` ORDER BY updatedAt DESC, id ASC LIMIT ${recentLimit}`);
+    let messages = dream ? [] : this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12');
+    let older = [], olderMessages = [];
+    if (dream) {
+      // Rotate complete records, not LLM summaries or random full-database loads.
+      // SQL counts/offsets may scan indexes; only the small selected pages are decoded.
+      // inputWatermark advances on admission, including episodes that never commit.
+      const rotation = Math.max(0, episode.inputWatermark - 1);
+      const recentUsers = this.rows('messages', scope, " AND json_extract(record, '$.role') = 'user' ORDER BY seq DESC LIMIT 6");
+      const boundary = recentUsers.at(-1)?.seq ?? 0;
+      const userClause = " AND json_extract(record, '$.role') = 'user' AND seq < ?";
+      const count = this.sql(`SELECT count(*) AS n FROM messages WHERE ${SCOPE}${userClause}`).get(...scopeValues(scope), boundary).n;
+      if (count) {
+        const offset = rotation * 4 % count;
+        olderMessages = this.rows('messages', scope, `${userClause} ORDER BY seq ASC LIMIT 4 OFFSET ?`, [boundary, offset]);
+        if (olderMessages.length < Math.min(4, count)) olderMessages.push(...this.rows('messages', scope,
+          `${userClause} ORDER BY seq ASC LIMIT ?`, [boundary, Math.min(4, count) - olderMessages.length]));
+      }
+      // Assistant progress is not evidence of user interests. Keep at most two
+      // substantive replies for conversational grounding, independent of progress volume.
+      const replies = this.rows('messages', scope,
+        " AND json_extract(record, '$.role') = 'assistant' AND coalesce(json_extract(record, '$.replyKind'), '') != 'progress' ORDER BY seq DESC LIMIT 2");
+      messages = [...recentUsers, ...olderMessages, ...replies];
+      const excluded = [...new Set([...focused, ...recent].map(c => c.id))];
+      const exclusion = excluded.length ? ` AND id NOT IN (${excluded.map(() => '?').join(',')})` : '';
+      for (const kind of ['claim', 'question', 'method', 'self-model', 'scenario', 'interest']) {
+        const clause = ` AND json_extract(record, '$.kind') = ?${exclusion}`;
+        const params = [kind, ...excluded];
+        const total = this.sql(`SELECT count(*) AS n FROM concepts WHERE ${SCOPE}${clause}`).get(...scopeValues(scope), ...params).n;
+        if (total) older.push(...this.rows('concepts', scope, `${clause} ORDER BY updatedAt ASC, id ASC LIMIT 1 OFFSET ?`, [...params, rotation % total]));
+      }
+    }
+    // A long assistant progress stream must never erase the newest user stop or
+    // prohibition. Runtime also receives it separately for mandatory admission.
+    if (latestUser && !messages.some(m => m.id === latestUser.id)) messages = [...messages.slice(0, 11), latestUser];
+    messages.sort((a, b) => a.seq - b.seq);
     return { person: this.personView(p), capabilityExperience: capabilityExperienceView(p.capabilityExperience),
-      state: stateView(state), messages: this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12').reverse().map(messageView),
-      concepts: [...new Map([...focused, ...recent].map(c => [c.id, conceptView(c)])).values()] };
+      state: stateView(state), latestUserInstruction: messageView(latestUser), messages: messages.map(messageView),
+      concepts: [...new Map([...focused, ...recent, ...older].map(c => [c.id, conceptView(c)])).values()],
+      contextSelection: { strategy: dream ? 'dream-diverse' : 'recent', rotation: dream ? episode.inputWatermark - 1 : null,
+        limits: { messages: 12, focusedConcepts: 12, recentConcepts: recentLimit, olderConcepts: dream ? 6 : 0 },
+        recentUserMessageRefs: dream ? messages.filter(m => m.role === 'user' && !olderMessages.some(old => old.id === m.id)).map(m => `message:${m.id}:${m.revision}`) : [],
+        olderUserMessageRefs: olderMessages.map(m => `message:${m.id}:${m.revision}`),
+        focusedConceptRefs: focused.map(c => `concept:${c.id}:${c.revision}`), recentConceptRefs: recent.map(c => `concept:${c.id}:${c.revision}`),
+        olderConceptRefs: older.map(c => `concept:${c.id}:${c.revision}`) } };
   }
   /** Atomic capability publication: exact started invocation + live lease, never
    * publishProgress's no-open-capability path. JSON carries the canonical payload;
@@ -582,7 +625,9 @@ export class SqlitePersonStore {
     if (new Set(proposal.state.focusConceptIds).size !== proposal.state.focusConceptIds.length || focus.length !== proposal.state.focusConceptIds.length) fail('STALE');
     const priorState = this.one('states', scope);
     const continuation = Object.hasOwn(proposal.state, 'continuation') ? proposal.state.continuation : priorState?.continuation;
-    const state = this.doc(scope, { ...proposal.state, ...(continuation !== undefined ? { continuation } : {}), version: p.stateVersion, conceptRefs: focus.map(c => ({ id: c.id, revision: c.revision })),
+    const understanding = Object.hasOwn(proposal.state, 'understanding') ? proposal.state.understanding : priorState?.understanding;
+    const state = this.doc(scope, { ...proposal.state, ...(continuation !== undefined ? { continuation } : {}),
+      ...(understanding !== undefined ? { understanding } : {}), version: p.stateVersion, conceptRefs: focus.map(c => ({ id: c.id, revision: c.revision })),
       decision: proposal.decision, lastSelection: { model: selection.model, effort: selection.effort }, updatedAt: this.now, episodeId: episode.id });
     if (this.one('states', scope)?.version !== episode.baseStateVersion) fail('STALE');
     this.put('states', state);
