@@ -104,6 +104,7 @@ import {
   touchYeaftHistoryCache,
 } from './helpers/yeaft-history-cache.js';
 import { planNextYeaftHistoryPage } from './helpers/yeaft-history-pagination.js';
+import { applyQueryProgress, reconcileQueryProgressSnapshot } from './helpers/query-progress.js';
 
 const { defineStore } = Pinia;
 
@@ -4864,6 +4865,11 @@ export const useChatStore = defineStore('chat', {
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
+      // Ephemeral observability bypasses output/history and watchdog handling.
+      if (msg.event?.type === 'query_progress') {
+        applyQueryProgress(this, msg);
+        return;
+      }
       // Rolling upgrades may still deliver old Dream LLM debug events through
       // an older Server. Never retain their prompt/response as ordinary turns.
       if (['turn_open', 'loop', 'turn_close'].includes(msg.event?.type)
@@ -6042,7 +6048,9 @@ export const useChatStore = defineStore('chat', {
               turnId: event.turnId,
               vpId: event.vpId,
               sessionId: event.sessionId || null,
-              threadId: event.threadId || null,
+              threadId: event.threadId || 'main',
+              conversationId: msg.conversationId || null,
+              connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
               isStreaming: true,
               startedAt: event.ts || Date.now(),
             },
@@ -6291,6 +6299,7 @@ export const useChatStore = defineStore('chat', {
           break;
         }
         case 'vp_status_snapshot': {
+          reconcileQueryProgressSnapshot(this, msg);
           // Bulk hydrate. Snapshot scoping (see broker JSDoc):
           //   - sessionId == null → unscoped, replace the WHOLE table.
           //     This is what session_ready / reset broadcasts use, so

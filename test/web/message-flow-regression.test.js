@@ -49,6 +49,54 @@ globalThis.Pinia = {
 const { useChatStore } = await import('../../web/stores/chat.js');
 
 describe('message flow regressions', () => {
+  it('keeps progress ephemeral and Agent/Session/turn/generation scoped, terminal cannot resurrect it', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'a';
+    store.yeaftAgentId = 'a';
+    store.yeaftConversationId = 'conv';
+    store.yeaftConversationIdsByAgent = { a: 'conv', b: 'conv-b' };
+    store.messagesMap = { conv: [], 'conv-b': [] };
+    store.connectionState = 'connected';
+    const event = { type: 'query_progress', sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main',
+      revision: 1, modelRequests: 2, toolExecutions: 3, reusedCalls: 1, repeatedCalls: 1, failedCalls: 0,
+      stage: 'warning', reason: 'repeated_results', lastEvidenceAt: 100, stagnantBatches: 2 };
+    const frame = (e, agentId = 'a', conversationId = 'conv') => store.handleYeaftOutput({ agentId, conversationId, event: e });
+    const start = { ...event, type: 'vp_turn_start' };
+    frame(start);
+    const active = () => Object.values(store.activeVpTurns).find(row => row.agentId === 'a');
+    frame({ ...event, text: 'PRIVATE', input: { key: 'PRIVATE' } });
+    expect(active().queryProgress).toEqual(event);
+    expect(store.messagesMap.conv).toEqual([]);
+    expect(JSON.stringify(active())).not.toContain('PRIVATE');
+    frame({ ...event, revision: 2 }, 'b', 'conv-b');
+    frame({ ...event, revision: 2, sessionId: 'other' });
+    frame({ ...event, revision: 2, threadId: 'other' });
+    frame({ ...event, revision: 2 }, 'a', 'old-conv');
+    frame({ ...event, revision: 0 });
+    expect(active().queryProgress.revision).toBe(1);
+    store.chatHistoryConnectionGeneration++;
+    frame({ ...event, revision: 2 });
+    expect(active().queryProgress.revision).toBe(1);
+    frame({ type: 'vp_status_snapshot', sessionId: 's', statuses: [{ sessionId: 's', vpId: 'v', turnId: 't', state: 'tool' }] });
+    expect(active().queryProgress).toBeUndefined();
+    frame(event);
+    expect(active().queryProgress).toBeUndefined();
+    frame({ ...event, revision: 2 });
+    expect(active().queryProgress.revision).toBe(2);
+    frame({ ...event, type: 'vp_turn_end', reason: 'aborted' });
+    frame({ ...event, revision: 3 });
+    expect(Object.values(store.activeVpTurns)).toEqual([]);
+    frame(start);
+    expect(active().queryProgress).toBeUndefined();
+    frame({ ...event, revision: 4, stage: 'recovering', reason: 'repeated_failure' });
+    expect(active().queryProgress.stage).toBe('recovering');
+    frame({ ...event, type: 'vp_turn_end', reason: 'errored' });
+    frame({ ...event, revision: 5 });
+    expect(Object.values(store.activeVpTurns)).toEqual([]);
+    expect(store.messagesMap.conv).toEqual([]);
+  });
   it('opens an exact cross-Agent Session without loading the previous Agent and migrates the full runtime state', () => {
     storeFactories.clear();
     runtimeSessionsStore.sessionList = [

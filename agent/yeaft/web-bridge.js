@@ -4153,6 +4153,27 @@ export function __testHandleEngineEvent(event, hctx) {
 }
 
 function handleEngineEvent(event, hctx) {
+  // Observability is not provider activity: never touch watchdogs, text or history.
+  if (event.type === 'query_progress') {
+    const counters = ['revision', 'modelRequests', 'toolExecutions', 'reusedCalls', 'repeatedCalls', 'failedCalls', 'stagnantBatches'];
+    if (hctx.queryProgressTerminal || hctx.signal?.aborted
+        || event.turnId !== hctx.turnId || event.sessionId !== hctx.sessionId || event.vpId !== hctx.vpId
+        || event.threadId !== (hctx.threadId || 'main')
+        || ![event.turnId, event.sessionId, event.vpId].every(value => typeof value === 'string' && value.length > 0)
+        || !counters.every(key => Number.isSafeInteger(event[key]) && event[key] >= 0)
+        || event.revision <= (hctx.queryProgressRevision || 0)
+        || !['running', 'warning', 'recovering', 'stopped'].includes(event.stage)
+        || ![null, 'repeated_results', 'repeated_failure'].includes(event.reason)
+        || !(event.lastEvidenceAt === null || (Number.isFinite(event.lastEvidenceAt) && event.lastEvidenceAt >= 0))) return;
+    hctx.queryProgressRevision = event.revision;
+    const { turnId, threadId, sessionId, vpId, revision, modelRequests, toolExecutions, reusedCalls,
+      repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches } = event;
+    sendToServer({ type: 'yeaft_output', conversationId: yeaftConversationId, sessionId, vpId, turnId, threadId,
+      event: { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
+        toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches } });
+    return;
+  }
+  if (event.type === 'aborted' || (event.type === 'turn_end' && event.terminal === true)) hctx.queryProgressTerminal = true;
   // Hidden progress has no wire/history/status projection and must not flush
   // pending visible text or resume a paused/terminal provider watchdog.
   if (event.type === 'provider_activity') {

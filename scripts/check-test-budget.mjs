@@ -16,7 +16,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // 9 durable scheduler/provenance + 5 user understanding/Dream context/behavior;
 // 2 test-adapter non-replay + 6 UI polling/consent + 2 light/dark browser cases.
 // These cover distinct new protocol/control boundaries; existing cases are retained.
-export const TEST_CASE_LIMIT = 538;
+// +3 query-progress boundaries: bridge side effects, frontend ownership, browser lifecycle.
+export const TEST_CASE_LIMIT = 541;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

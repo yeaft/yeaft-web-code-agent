@@ -18,6 +18,7 @@ import YeaftConversationOutline from './YeaftConversationOutline.js';
 import WorkCenterPage from './WorkCenterPage.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows, resolveTimelineSession, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
+import { visibleQueryProgress } from '../stores/helpers/query-progress.js';
 import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 import {
   clearOverlayPointerGesture,
@@ -1526,7 +1527,12 @@ export default {
         connectionState: store.connectionState,
         vpLabelOf: (id) => vpStore.vpLabel(id),
         vpDescriptionOf: (id) => vpStore.vpDescription(id),
-      });
+      }).map(row => ({
+        ...row,
+        queryProgress: visibleQueryProgress(store, {
+          agentId: activeAgentId, sessionId: filter, turnId: row.turnId, vpId: row.vpId,
+        }),
+      }));
     });
 
     const onEditVpFromTimeline = (vpId) => {

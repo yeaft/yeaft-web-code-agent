@@ -220,7 +220,7 @@ export default {
             v-for="row in rows"
             :key="row.vpId"
             class="yeaft-vp-timeline-row"
-            :class="['is-status-' + row.status, { 'is-stopping': row.isStopping }]"
+            :class="['is-status-' + row.status, { 'is-stopping': row.isStopping, 'has-query-progress': !!row.queryProgress }]"
             tabindex="0"
             role="button"
             :aria-label="row.displayName + ' — ' + statusLabel(row)"
@@ -240,6 +240,19 @@ export default {
                 class="yeaft-vp-timeline-thread-count"
                 :title="threadCountTitle(row)"
               >{{ row.runningThreadCount }} threads</span>
+            </div>
+            <div v-if="row.queryProgress" class="yeaft-query-progress" :class="'is-' + row.queryProgress.stage" role="status">
+              <span class="yeaft-query-progress-state">{{ $t('yeaft.queryProgress.stage.' + row.queryProgress.stage) }}</span>
+              <span v-if="row.queryProgress.reason">{{ $t('yeaft.queryProgress.reason.' + row.queryProgress.reason) }}</span>
+              <span class="yeaft-query-progress-counts">
+                <span>{{ $t('yeaft.queryProgress.requests', { count: row.queryProgress.modelRequests }) }}</span>
+                <span>{{ $t('yeaft.queryProgress.tools', { count: row.queryProgress.toolExecutions }) }}</span>
+                <span>{{ $t('yeaft.queryProgress.reused', { count: row.queryProgress.reusedCalls }) }}</span>
+                <span>{{ $t('yeaft.queryProgress.repeated', { count: row.queryProgress.repeatedCalls }) }}</span>
+                <span>{{ $t('yeaft.queryProgress.failed', { count: row.queryProgress.failedCalls }) }}</span>
+              </span>
+              <span>{{ row.queryProgress.lastEvidenceAt === null ? $t('yeaft.queryProgress.noEvidence') : $t('yeaft.queryProgress.lastEvidence', { time: formatTaskTime(row.queryProgress.lastEvidenceAt) }) }}</span>
+              <span class="yeaft-query-progress-caveat">{{ $t('yeaft.queryProgress.caveat') }}</span>
             </div>
             <!--
               Right-side affordance cluster. Both buttons stop click
