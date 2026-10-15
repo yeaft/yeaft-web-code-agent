@@ -97,7 +97,10 @@ it('cancel fences queued admissions and stale completion generations until expli
   await r.finish(first, 'completed', null); due(r);
   const queued = (await r.autonomyAdmit('alice', admission)).episode;
   const generation = (await r.getPerson('alice')).autonomy.generation;
+  expect(await r.autonomyObserve('alice', event(queued))).toBe(true); // completion queued before cancel
   expect(await r.cancel('alice', first.id)).toEqual({ cancelled: true, episodeId: queued.id });
+  expect((await r.getPerson('alice')).autonomy.pending).toEqual([]);
+  expect(await r.autonomyObserve('alice', { ...event(first), taskId: 'late-result' })).toBe(false);
   await expect(r.settings('alice', { autonomyEnabled: true }, undefined, generation)).rejects.toMatchObject({ code: 'STALE' });
   await expect(r.heartbeat(queued)).rejects.toMatchObject({ code: 'STALE' });
   expect(await r.autonomyObserve('alice', event(queued))).toBe(false);
@@ -106,6 +109,51 @@ it('cancel fences queued admissions and stale completion generations until expli
   expect(await r.autonomyObserve('alice', event(queued))).toBe(false);
   const next = await r.autonomyAdmit('alice', admission);
   expect(next.episodeId).not.toBe(queued.id);
+});
+
+it('keeps disabled consent durable across waiting and idle commits, late completions and storage reopen', async () => {
+  const r = repo(); await r.open('alice'); await r.settings('alice', { autonomyEnabled: true }); due(r);
+  const active = (await r.autonomyAdmit('alice', admission)).episode;
+  expect(await r.autonomyObserve('alice', event(active))).toBe(true);
+  await r.settings('alice', { autonomyEnabled: false });
+  await complete(r, active, { goal: 'finish', nextStep: 'wait', status: 'waiting', condition: 'task result' });
+  expect(await r.autonomyObserve('alice', { ...event(active), taskId: 'late-result' })).toBe(false);
+  const reopened = repo();
+  expect((await reopened.open('alice')).person.settings.autonomyEnabled).toBe(false);
+  expect((await reopened.getPerson('alice')).autonomy.pending).toEqual([]);
+  due(reopened); expect(await reopened.autonomyAdmit('alice', admission)).toBeNull();
+  // Completing later manual work does not implicitly restore an old opt-in.
+  const manual = (await reopened.admit('alice', { ...admission, kind: 'think', text: 'check', clientMessageId: 'while-disabled' })).episode;
+  await complete(reopened, manual, null);
+  expect(await reopened.autonomyObserve('alice', event(manual))).toBe(false);
+  const start = vi.fn();
+  const s = scheduler(reopened, { ...admission, isOwnerRunning: () => false, start });
+  due(reopened); await s.tick();
+  expect(start).not.toHaveBeenCalled();
+  expect((await reopened.getPerson('alice')).settings.autonomyEnabled).toBe(false);
+  expect((await reopened.autonomyOwners()).owners).toEqual([]);
+});
+
+it('does not retry failed no-progress cognition from an older ready state, including after reopen or consent changes', async () => {
+  const r = repo(); await r.open('alice'); await r.settings('alice', { autonomyEnabled: true });
+  const ready = { goal: 'finish', nextStep: 'check', status: 'ready', condition: 'new evidence' };
+  const seed = (await r.admit('alice', { ...admission, kind: 'think', text: 'seed', clientMessageId: 'seed' })).episode;
+  await complete(r, seed, ready);
+  const manual = (await r.admit('alice', { ...admission, kind: 'think', text: 'check', clientMessageId: 'no-progress' })).episode;
+  await r.finish(manual, 'failed', 'NO_PROGRESS');
+  const reopened = repo();
+  due(reopened); expect(await reopened.autonomyAdmit('alice', admission)).toBeNull();
+  await reopened.settings('alice', { autonomyEnabled: true });
+  due(reopened); expect(await reopened.autonomyAdmit('alice', admission)).toBeNull();
+  expect((await reopened.snapshot('alice')).latestEpisode).toMatchObject({ id: manual.id, status: 'failed' });
+  // A new manual execution can supersede the failure. A new autonomous failure
+  // must remain failed too, rather than reviving the prior ready continuation.
+  const next = (await reopened.admit('alice', { ...admission, kind: 'think', text: 'new input', clientMessageId: 'new-input' })).episode;
+  await complete(reopened, next, ready); due(reopened);
+  const autonomous = (await reopened.autonomyAdmit('alice', admission)).episode;
+  await reopened.finish(autonomous, 'failed', 'NO_PROGRESS');
+  due(reopened); expect(await reopened.autonomyAdmit('alice', admission)).toBeNull();
+  expect((await reopened.snapshot('alice')).latestEpisode).toMatchObject({ id: autonomous.id, status: 'failed' });
 });
 
 it('joins shutdown/admission races without starting queued models or replaying effects', async () => {

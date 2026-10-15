@@ -292,7 +292,12 @@ export class SqlitePersonStore {
     const continuation = state?.continuation ?? null;
     const fingerprint = digest(continuation);
     const pending = a.pending ?? [], taskCompletion = pending.length > 0;
-    const quiet = !taskCompletion && (a.lastFingerprint === fingerprint ||
+    // The most recent persisted outcome is only an idle retry fence, never an
+    // active-task predicate. Task readiness belongs to the exact task host state.
+    // Failed cognition may leave an older ready continuation behind: don't turn
+    // that into an automatic retry, even after restart or toggling consent.
+    const latest = this.one('episodes', this.scope(ownerId), ' ORDER BY inputWatermark DESC');
+    const quiet = !taskCompletion && (latest?.status === 'failed' || a.lastFingerprint === fingerprint ||
       (continuation && continuation.status !== 'ready'));
     a.nextAt = now + Math.min(a.backoffMs ?? 60000, 3600000);
     a.backoffMs = Math.min((a.backoffMs ?? 60000) * 2, 3600000);
