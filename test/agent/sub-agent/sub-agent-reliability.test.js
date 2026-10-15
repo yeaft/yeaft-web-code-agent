@@ -1,6 +1,7 @@
 // Sub-agent ownership, driver cleanup, and collectable follow-up replies.
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Engine } from '../../../agent/yeaft/engine.js';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -95,10 +96,24 @@ describe('wait-agent envelope shape', () => {
       if (calls++ === 0) { yield { type: 'tool_call', id: 'owned-call', name: 'FileRead', input: {} }; yield { type: 'stop', stopReason: 'tool_use' }; }
       else { yield { type: 'text_delta', text: 'done' }; yield { type: 'stop', stopReason: 'end_turn' }; }
     } };
+    let querySpy;
     try {
       const manager = new TaskManager({ yeaftDir: dir });
+      const refreshSpy = vi.spyOn(manager, 'refreshTaskLog');
+      const onEvent = vi.fn();
+      const originalQuery = Engine.prototype.query;
+      querySpy = vi.spyOn(Engine.prototype, 'query').mockImplementation(async function* (...args) {
+        // Inject Engine control events at the runner boundary, while keeping
+        // the actual child query/tool flow below intact.
+        const refreshCount = refreshSpy.mock.calls.length;
+        for (const type of ['provider_activity', 'query_progress', 'query_progress']) {
+          yield { type, toolCalls: 2, repeatedResults: 1 };
+          expect(refreshSpy).toHaveBeenCalledTimes(refreshCount);
+        }
+        yield* originalQuery.apply(this, args);
+      });
       const registry = mkParentRegistry().register(owned);
-      const deps = mkDeps(adapter, { parentToolRegistry: registry, parentSessionId: 'owned-scope', childVpId: 'owned-vp', taskManager: manager, subAgentLogDir: dir });
+      const deps = mkDeps(adapter, { parentToolRegistry: registry, parentSessionId: 'owned-scope', childVpId: 'owned-vp', taskManager: manager, subAgentLogDir: dir, onEvent });
       const ctx = { cwd: dir, queryTurnId: 'owned-query', parentEngineDeps: deps, taskManager: manager };
       const spec = { name: 'owned', mission: 'use owned', baseline: '04f0705a' };
       const spawned = JSON.parse(await agentTool.execute(spec, ctx));
@@ -113,6 +128,11 @@ describe('wait-agent envelope shape', () => {
       expect(agent.__driverStarted).toBe(false);
       expect(agent.subEngine).toBe(null);
       expect(agent.status).toBe(STATUS.COMPLETED);
+      const childLog = fs.readFileSync(agent.outputFile, 'utf8');
+      expect(childLog).toContain('text_delta');
+      expect(childLog).not.toMatch(/provider_activity|query_progress/);
+      expect(onEvent.mock.calls.some(([, evt]) => ['provider_activity', 'query_progress'].includes(evt.type))).toBe(false);
+      expect(JSON.stringify(agent.engineMessages)).not.toContain('query_progress');
       expect(agent.subVpPersona.runtimePreamble).toContain('Workspace baseline: 04f0705a');
       const terminalRetry = JSON.parse(await agentTool.execute({ ...spec, name: 'terminal-renamed' }, ctx));
       expect(terminalRetry).toMatchObject({ reused: true, status: STATUS.COMPLETED, agentId: spawned.agentId, taskId: spawned.taskId });
@@ -123,7 +143,11 @@ describe('wait-agent envelope shape', () => {
       expect(repeated).toMatchObject({ alreadyCollected: true, resultRef: collected.resultRef, status: STATUS.COMPLETED });
       expect(repeated).not.toHaveProperty('result');
       expect(calls).toBe(2);
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+      expect(querySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      querySpy?.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('separates completed lifecycle from an incomplete budget outcome in WaitAgent', async () => {
