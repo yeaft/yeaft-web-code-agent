@@ -67,6 +67,7 @@ describe('Digital Person surface', () => {
     expect(wrapper.text()).toContain(messages['person.autonomous']);
     await toggle.setValue(true);
     expect(wrapper.emitted('autonomy')).toEqual([[true]]);
+    expect(toggle.element.checked).toBe(false); // rejected/unacknowledged consent is not displayed as enabled
     await wrapper.setProps({ autonomyPending: true, autonomyEnabled: true });
     expect(toggle.attributes('disabled')).toBeDefined();
     await wrapper.setProps({ autonomyPending: false, autonomyDisabled: true });

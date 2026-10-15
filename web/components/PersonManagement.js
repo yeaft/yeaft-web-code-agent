@@ -57,10 +57,16 @@ export default {
       confirming.value = false;
       Vue.nextTick(() => controls.value?.querySelector('[data-execution-control="cancel"]')?.focus());
     }
+    function changeAutonomy(event) {
+      const enabled = event.target.checked;
+      // Consent is acknowledged by persisted props, never by the DOM's optimistic toggle.
+      event.target.checked = !!props.autonomyEnabled;
+      emit('autonomy', enabled);
+    }
     const callModel = call => call.model || call.dispatched?.model || call.requested?.model || '—';
     const callStatus = call => ['running', 'completed', 'failed', 'cancelled', 'interrupted'].includes(call.status) ? call.status : 'unknown';
     const time = value => value ? new Date(value).toLocaleString() : '';
-    return { active, blocked, confirming, controls, elapsed, status, step, canCancel, control, confirm, dismiss, callModel, callStatus, time,
+    return { active, blocked, confirming, controls, elapsed, status, step, canCancel, control, confirm, dismiss, changeAutonomy, callModel, callStatus, time,
       known: usageKnown, number: usageNumber, input: usageInput, extras: usageExtras, duration: usageDuration };
   },
   template: `
@@ -68,7 +74,7 @@ export default {
       @refresh="$emit('refresh')" @more="$emit('more')" @log="(id, more) => $emit('log', id, more)" @stop="(kind, id) => $emit('stop', kind, id)">
       <template #before>
         <section v-if="autonomySupported" class="person-main-execution" :aria-busy="autonomyPending">
-          <label><input type="checkbox" :checked="autonomyEnabled" :disabled="disabled || autonomyDisabled || autonomyPending" @change="$emit('autonomy', $event.target.checked)"> {{ $t('person.autonomy.label') }}</label>
+          <label><input type="checkbox" :checked="autonomyEnabled" :disabled="disabled || autonomyDisabled || autonomyPending" @change="changeAutonomy"> {{ $t('person.autonomy.label') }}</label>
           <p class="person-muted">{{ $t('person.autonomy.scope') }}</p>
           <p v-if="autonomyPending" class="person-muted" role="status">{{ $t('person.management.pending') }}</p>
         </section>

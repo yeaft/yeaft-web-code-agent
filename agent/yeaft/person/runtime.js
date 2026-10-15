@@ -619,6 +619,12 @@ ${executionBehavior(episode.kind, episode.scheduling)}`;
                 ? executionGoal.update(invocation.args, { sourceRefs, taskState: this.tasks()?.goalState(episode.ownerId, episode.id) })
                 : capabilities.execute(invocation, { signal, callId: traceCallId }));
             }
+            // Internal structured reads (e.g. Recall) have no host archive ID.
+            // Bind them to this exact durable invocation so goal acceptance can
+            // cite real observations rather than falling back to trigger refs.
+            if (!finalized && result && !result.sourceRef && invocation.id !== 'Execution.goal' && !invocation.id.startsWith('catalog.')) {
+              result = { ...result, sourceRef: `trace:${episode.id}:${traceCallId}` };
+            }
             if (!finalized && !await finalize(result)) fail('STALE');
             signal.throwIfAborted();
             // A confirmed nonzero exit is useful failure evidence (for example a

@@ -17,6 +17,13 @@ function final(params) {
   p.concepts = []; p.state.focusConceptIds = []; p.activity.sourceRefs = [input.trigger.ref]; p.reply = 'Actual changes verified.';
   return p;
 }
+function closure(params, id = 'finish') {
+  const results = params.messages.filter(m => m.role === 'tool').map(m => JSON.parse(m.content));
+  const refs = [...new Set(results.filter(r => r.sourceRef && r.id !== 'Execution.goal' && r.errorEffect !== 'none').map(r => r.sourceRef))].slice(-4);
+  return tools([id, 'Execution__goal', { objective: 'Complete and verify the authorized fixture', acceptance: 'Actual operation and verification are observed',
+    kind: 'work', status: 'completed', reason: 'Observed actual results', nextStep: '', sourceRefs: refs,
+    acceptanceChecks: [{ check: 'The real file operation and subsequent result were observed', sourceRefs: refs }], waitFor: [], blocker: null }]);
+}
 async function until(read, check) {
   for (let i = 0; i < 200; i++) { const value = await read(); if (check(value)) return value; await new Promise(r => setTimeout(r, 10)); }
   throw new Error('Person did not reach the expected boundary');
@@ -74,21 +81,23 @@ describe('Person continuous execution with real SQLite authority', () => {
         const page = JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === 'recover').content);
         expect(page).toMatchObject({ callId: originalCallId, output: 'VERIFIED', eof: true, authority: 'evidence-only' });
         expect(page.executionTraceCallId).not.toBe(originalCallId);
-        return text('Read, edited and verified the actual file despite an evidence miss.');
+        return closure(params);
       }
+      if (index === 7) return text('Read, edited and verified the actual file despite an evidence miss.');
       expect(params.tools).toEqual([]); return text(JSON.stringify(final(params)));
     });
     await writeFile(join(run.dir, 'fixture'), 'before'); await run.start();
-    expect((await run.idle()).latestEpisode.status).toBe('completed'); expect(requests).toBe(8);
+    const completed = await run.idle();
+    expect(completed.latestEpisode.status).toBe('completed'); expect(requests).toBe(9);
     expect(await readFile(join(run.dir, 'fixture'), 'utf8')).toBe('after');
     const records = await traces(run.service);
-    expect(records.filter(t => t.kind === 'capability_started').reverse().map(t => t.capability.id)).toEqual(['Execution.read', 'FileRead', 'Execution.read', 'FileEdit', 'Bash', 'Execution.read']);
+    expect(records.filter(t => t.kind === 'capability_started').reverse().map(t => t.capability.id)).toEqual(['Execution.read', 'FileRead', 'Execution.read', 'FileEdit', 'Bash', 'Execution.read', 'Execution.goal']);
     expect(records.filter(t => t.kind === 'capability_failed').map(t => t.result.code).sort()).toEqual(['INVALID_REQUEST', 'NOT_FOUND']);
     expect(records.filter(t => t.kind === 'activity')).toHaveLength(1);
     expect(records.filter(t => t.kind === 'call_output' && t.output.protocol === 'cognition')).toHaveLength(1);
     expect(records.filter(t => t.kind === 'call_output').every(t => t.output.usage.inputTokens === 13)).toBe(true);
     const turn = (await call(run.service, 'turns')).items[0];
-    expect(turn.loopCount).toBe(8); expect(turn.calls.flatMap(c => c.capabilities ?? [])).toHaveLength(6);
+    expect(turn.loopCount).toBe(9); expect(turn.calls.flatMap(c => c.capabilities ?? [])).toHaveLength(7);
     await call(run.service, 'open', {}, 'bob');
     expect((await call(run.service, 'traces', {}, 'bob')).items).toEqual([]);
   });
@@ -96,6 +105,7 @@ describe('Person continuous execution with real SQLite authority', () => {
   it('continues an active goal after premature end_turn, modifies/verifies a real file and distills only once', async () => {
     let actualRef;
     const goal = (status, refs = []) => ({ objective: 'Modify and verify the fixture', acceptance: 'File contains after and shell check passes',
+      kind: 'work', acceptanceChecks: status === 'completed' ? [{ check: 'Actual file readback and shell validation passed', sourceRefs: refs }] : [],
       status, reason: status === 'completed' ? 'Actual file readback and shell validation passed' : '', nextStep: 'Edit then verify',
       sourceRefs: refs, waitFor: [], blocker: null });
     const run = await setup((params, index) => {
@@ -129,16 +139,16 @@ describe('Person continuous execution with real SQLite authority', () => {
 
   it('reports no-progress honestly without endless prompts or turning it into a fake external blocker', async () => {
     const run = await setup((params, index) => {
-      if (index === 0) return tools(['goal', 'Execution__goal', { objective: 'Verify fixture', acceptance: 'Check actual result', status: 'active',
+      if (index === 0) return tools(['goal', 'Execution__goal', { objective: 'Verify fixture', acceptance: 'Check actual result', kind: 'work', acceptanceChecks: [], status: 'active',
         reason: '', nextStep: 'Read fixture', sourceRefs: [], waitFor: [], blocker: null }]);
       if (params.tools.length) return text('I will continue on the next opportunity.');
-      expect(params.messages.at(-1).content).toContain('"status":"stalled"');
-      return text(JSON.stringify(final(params)));
+      throw new Error('No cognition request is allowed after unresolved execution failure');
     });
-    await run.start(); expect((await run.idle()).latestEpisode.status).toBe('completed');
+    await run.start(); expect((await run.idle()).latestEpisode).toMatchObject({ status: 'failed', terminalCode: 'GOAL_NO_PROGRESS' });
     const records = await traces(run.service);
-    expect(records.filter(t => t.kind === 'call_output')).toHaveLength(4);
-    expect(records.find(t => t.kind === 'goal_boundary' && t.code === 'GOAL_NO_PROGRESS').goal.status).toBe('stalled');
+    expect(records.filter(t => t.kind === 'call_output')).toHaveLength(3);
+    expect(records.find(t => t.kind === 'goal_boundary' && t.code === 'GOAL_NO_PROGRESS').goal.status).toBe('active');
+    expect(records.filter(t => t.kind === 'call_output' && t.output.protocol === 'cognition')).toHaveLength(0);
   });
 
   it('repairs malformed tool input and final provenance/JSON without replaying a completed host effect', async () => {
@@ -149,9 +159,10 @@ describe('Person continuous execution with real SQLite authority', () => {
         { type: 'tool_call', id: 'bad', name: 'FileWrite', input: {} }, { type: 'stop', stopReason: 'tool_use' },
       ];
       if (index === 1) return tools(['check', 'FileRead', { file_path: 'once' }]);
-      if (index === 2) return text('The single write completed.');
-      if (index === 3) { const p = final(params); p.activity.sourceRefs = ['tool:invented']; return text(JSON.stringify(p)); }
-      if (index === 4) return text('{malformed');
+      if (index === 2) return closure(params);
+      if (index === 3) return text('The single write completed.');
+      if (index === 4) { const p = final(params); p.activity.sourceRefs = ['tool:invented']; return text(JSON.stringify(p)); }
+      if (index === 5) return text('{malformed');
       return text(JSON.stringify(final(params)));
     });
     await run.start(); expect((await run.idle()).latestEpisode.status).toBe('completed'); expect(effect).toHaveBeenCalledTimes(1);
@@ -166,6 +177,7 @@ describe('Person continuous execution with real SQLite authority', () => {
     const run = await setup(async (params, index) => {
       providerCalls++;
       if (index === 0) { entered.resolve(); await release.promise; return tools(['pause', 'FileWrite', { file_path: 'paused', content: 'completed' }]); }
+      if (index === 1) return closure(params);
       return text(params.tools.length ? 'Completed.' : JSON.stringify(final(params)));
     });
     const { episodeId } = await run.start(); await entered.promise;
@@ -173,7 +185,7 @@ describe('Person continuous execution with real SQLite authority', () => {
     await until(() => call(run.service, 'executions'), value => value.main?.status === 'paused');
     expect((await traces(run.service)).filter(t => t.kind === 'capability_started')).toHaveLength(0);
     await call(run.service, 'resume', { episodeId }); expect((await run.idle()).latestEpisode.status).toBe('completed');
-    expect(providerCalls).toBe(3); expect((await traces(run.service)).filter(t => t.kind === 'capability_started')).toHaveLength(1);
+    expect(providerCalls).toBe(4); expect((await traces(run.service)).filter(t => t.kind === 'capability_started')).toHaveLength(2);
   });
 
   it('cancel waits for a real in-flight effect and archives its actual after-terminal result', async () => {
