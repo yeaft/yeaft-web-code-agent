@@ -629,7 +629,9 @@ ${executionBehavior(episode.kind, episode.scheduling)}`;
             // Recall pages carry structured message/concept reads; if projection
             // cannot retain them it must not manufacture their provenance.
             observe(projection);
-            executionGoal.progress(invocation.id, projection);
+            if (executionGoal.progress(invocation.id, projection)) await this.repository.append(episode, 'execution_goal', {
+              id: 'Execution.goal', ok: true, goal: executionGoal.view(), origin: 'host-subsequent-execution',
+            });
           } catch (error) {
             const safe = safeError(error, 'UNSUPPORTED');
             if (!finalized) await finalize(result, safe.code).catch(() => {});

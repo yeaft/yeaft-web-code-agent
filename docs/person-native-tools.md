@@ -2,7 +2,7 @@
 
 Digital Person 已实现连续的 native tool 对话，不再要求每个执行 loop 都生成认知 proposal JSON。工具直接复用 `agent/yeaft/tools/` 的定义、JSON Schema、执行函数和 `ToolRegistry` dispatch；执行中的每次模型请求都提供当前可用的完整 tools schemas，模型直接调用，无需先 `catalog.view` 或通过 `next.capability` 请求。
 
-执行与最终认知整理始终属于同一个 Person、Soul 和 episode，不增加选择器模型，不创建普通 Session 或 WorkItem。模型以无工具的 `end_turn` 结束执行后，运行时禁用 tools，请求一次最终认知 JSON（`next:null`）；通过校验才原子提交。子 Agent 是独立的原生 Engine 执行者，不替换 Person 的身份或 Soul。
+执行与最终认知整理始终属于同一个 Person、Soul 和 episode，不增加选择器模型，不创建普通 Session 或 WorkItem。模型的无工具 `end_turn` 只是边界，不直接结束目标。必须先使用 `Execution.goal` 报告有效终态；未完成则继续原生执行，等待则由宿主等结果接续。只有有效收束后禁用 tools，请求一次最终认知 JSON（`next:null`）；通过校验才原子提交。子 Agent 是独立的原生 Engine 执行者，不替换 Person 的身份或 Soul。
 
 ## 当前支持
 
@@ -65,8 +65,10 @@ schemas、目录和实际执行遵守当前 Agent 的 `plugins.tools` 配置：�
 
 ## 连续执行、最终认知与证据
 
-当前链路是显式 `send / think / dream` 准入 → 读取 Soul、已接受状态与有界记忆 → 连续 native tool 对话 → 无工具 `end_turn` → 禁用 tools 的最终认知 JSON（`next:null`）→ 原子提交。执行时返回真实 `assistant` 工具调用和 `tool` role 结果，延续同一对话；不在工具之间插入 proposal／activity／认知提交，不另请一个模型充当“人”。`Think` 是主体认知方法，不是另一个模型；一次提交也不等于所有目标已经完成。
+当前链路是显式 `send / think / dream` 准入 → 读取 Soul、已接受状态与有界记忆 → 连续 native tool 对话 → 经目标终态校验的无工具 `end_turn` → 禁用 tools 的最终认知 JSON（`next:null`）→ 原子提交。执行时返回真实 `assistant` 工具调用和 `tool` role 结果，延续同一对话；不在工具之间插入 proposal／activity／认知提交，不另请一个模型充当“人”。`Think` 是主体认知方法，不是另一个模型；一次提交也不等于所有目标已经完成。
 
+- **目标独立于模型 turn**：`Execution.goal` 仅在接受承诺／关键里程碑／结束边界使用，不是每步认知表单。未完成目标的 objective／acceptance／kind 保持稳定，换路线更新 nextStep；真实观察支撑 acceptanceChecks，引用存在不等于语义验收。宿主精确核对待处理任务／子线程及未确认副作用，不能用 capped snapshot 关闭。等待由宿主无模型轮询地接续；暂停、取消仍生效。连续空答且无实际动作记为 `GOAL_NO_PROGRESS` 失败，不冒充完成或外部阻塞，也不增加工具调用总额度。
+- **入口即生效的行为语义**：Send 优先当前请求，Think 推进未决问题或实际结果，Dream 从用户真实利益出发开放探索替代手段、挑战前提与跨领域联系，不默认期货等于赚钱。假设不是用户报告，兴趣不是授权；有价值且可逆的授权内验证应实际执行，无承诺探索可安静休息。详见 [用户理解与多样上下文](./design/person-user-understanding.md)。
 - **每个工具有独立证据身份**：一次模型输出可包含多个工具，各自生成独立 trace `callId`，并绑定父 `modelCallId`、供应商 `toolUseId` 和从 0 开始的 `toolIndex`。模型调用与工具调用不共用一个结果槽；多工具不重复累计父模型 usage。
 - **最终整理与有限修正**：正常只请求一次最终 JSON；格式、schema 或实际已读取的 `sourceRefs` 不合法时，最多再请求 **2 次额外修正**。修正仍禁用 tools，只纠正最终认知产物；不得回放已执行副作用、补造来源或把外部观察降格为用户报告。仍无效则失败，既有工具结果与公开进展保留，候选认识不提交。
 - **请求副本与原始证据分开**：原始工具结果持久存入 capability trace。模型只接收有界结果副本；较早结果可替换为 evidence receipts，完整旧 assistant/tool 组可从本次请求省略。receipt 保留工具／调用身份、成功失败、来源、原始字节数、SHA-256 和 `Execution.read` 回读入口，不是合成认知总结。不能把预览当作完整证据，也不能为取回省略输出重做副作用。

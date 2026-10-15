@@ -63,7 +63,7 @@ const closed = new Set(['completed', 'blocked', 'abandoned', 'resting']);
 export const pendingGoalTask = record => Boolean(record && (record.executionPending === true || !['completed', 'succeeded', 'failed', 'cancelled', 'closed', 'abandoned', 'orphaned', 'idle'].includes(record.status)));
 
 export class ExecutionGoal {
-  constructor() { this.current = null; this.revision = 0; this.emptyEndings = 0; this.observations = new Map(); }
+  constructor() { this.current = null; this.revision = 0; this.emptyEndings = 0; this.observations = new Map(); this.executionRevision = 0; this.reportedExecutionRevision = 0; }
   update(value, { sourceRefs, taskState = { tasks: [], agents: [] } } = {}) {
     validateExecutionGoal(value);
     const refs = [...value.sourceRefs, ...value.acceptanceChecks.flatMap(check => check.sourceRefs)];
@@ -73,7 +73,8 @@ export class ExecutionGoal {
       if (['objective', 'acceptance', 'kind'].some(key => value[key] !== previous[key])) return this.rejected('The unresolved commitment is stable. Keep objective, acceptance and kind; change routes using nextStep. Explicitly close the old goal before selecting a new one.');
       if (value.status === 'resting') return this.rejected('An accepted commitment cannot become resting. Complete it, report a real blocker or evidence-based abandonment.');
     }
-    if (value.status === 'completed' && value.kind !== 'answer') {
+    if (value.status === 'completed' && value.kind === 'answer' && this.executionRevision && !value.acceptanceChecks.length) return this.rejected('Actual execution occurred. Even an answer must reconcile that work with acceptanceChecks linked to actual observations; answer is not an execution-verification escape hatch.');
+    if (value.status === 'completed' && (value.kind !== 'answer' || this.executionRevision)) {
       if (value.acceptanceChecks.some(check => check.sourceRefs.some(ref => !this.observations.has(ref)))) return this.rejected('Acceptance checks need actual tool observations from this execution, not trigger/history/concept refs. Explain how those observations satisfy acceptance; existence alone is not proof.');
     }
     if (value.status === 'abandoned' && !value.sourceRefs.some(ref => this.observations.has(ref))) return this.rejected('Abandonment needs an actual observation supporting the decision, not only an earlier intention.');
@@ -84,10 +85,11 @@ export class ExecutionGoal {
   }
   transition(value) {
     this.current = structuredClone(value); this.revision++;
+    this.reportedExecutionRevision = this.executionRevision;
     return { id: 'Execution.goal', ok: true, goal: this.view(), authority: 'fallible-model-goal-report-not-acceptance-proof', notice: 'Host verifies identity, origin and lifecycle, not semantic truth. Continue active tools; do not report between every tool. Goal reports grant no authority.' };
   }
   rejected(output) { return { id: 'Execution.goal', ok: false, code: 'INVALID_TOOL_INPUT', errorEffect: 'none', replaySafe: true, output }; }
-  view() { return this.current ? { ...structuredClone(this.current), revision: this.revision } : null; }
+  view() { return this.current ? { ...structuredClone(this.current), revision: this.revision, executionRevision: this.executionRevision, reportedExecutionRevision: this.reportedExecutionRevision } : null; }
   resume() { return this.transition({ ...this.current, status: 'active', waitFor: [], nextStep: 'Collect the actual awaited results, then continue the goal. Missing records are not proof of success.' }); }
   /** Detect repeated empty refusal only. This is not a tool quota, useful-progress
    * detector or a fake external blocker. Runtime persists failure, not completion. */
@@ -101,7 +103,17 @@ export class ExecutionGoal {
   progress(id, result) {
     if (id === 'Execution.goal' || id.startsWith('catalog.')) return;
     // A failing test is also real execution evidence. Rejected arguments are not.
-    if (result?.errorEffect !== 'none') this.emptyEndings = 0;
-    if (result?.sourceRef && result?.errorEffect !== 'none') this.observations.set(result.sourceRef, { capability: id, ok: result.ok !== false });
+    if (result?.errorEffect === 'none') return;
+    this.emptyEndings = 0; this.executionRevision++;
+    if (result?.sourceRef) this.observations.set(result.sourceRef, { capability: id, ok: result.ok !== false, revision: this.executionRevision });
+    // A terminal report cannot bless effects that happened after it, including
+    // later calls in the same provider batch. Reopen the same stable commitment.
+    if (this.current && closed.has(this.current.status)) {
+      this.current = { ...this.current, status: 'active', reason: '', waitFor: [], blocker: null,
+        nextStep: 'Reconcile the subsequent execution results and verify acceptance before reporting closure again.' };
+      this.revision++;
+      return true;
+    }
+    return false;
   }
 }

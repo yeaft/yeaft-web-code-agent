@@ -36,6 +36,21 @@ describe('Goal lifecycle independent of model end_turn', () => {
     expect(goal.endBoundary()).toBeNull();
     expect(new ExecutionGoal().update(active({ kind: 'answer', status: 'completed', reason: 'Answered the question' }), noTasks).ok).toBe(true);
   });
+  it('requires verification after actual execution even for an answer and invalidates stale closure after later effects', () => {
+    const goal = new ExecutionGoal();
+    goal.progress('FileWrite', { ok: true, sourceRef: 'tool:one' });
+    const answer = active({ kind: 'answer', status: 'completed', reason: 'Answered' });
+    expect(goal.update(answer, noTasks).ok).toBe(false);
+    answer.acceptanceChecks = [{ check: 'Observed the actual result', sourceRefs: ['tool:one'] }];
+    expect(goal.update(answer, noTasks).ok).toBe(true);
+    expect(goal.endBoundary()).toBeNull();
+    expect(goal.progress('Bash', { ok: false, sourceRef: 'tool:one' })).toBe(true);
+    expect(goal.view()).toMatchObject({ status: 'active', executionRevision: 2, reportedExecutionRevision: 1 });
+    expect(goal.endBoundary().continueExecution).toBe(true);
+    expect(goal.update({ ...answer, kind: 'exploration' }, noTasks).ok).toBe(false);
+    expect(goal.update(answer, noTasks).ok).toBe(true);
+    expect(goal.endBoundary()).toBeNull();
+  });
   it('checks exact refs, owned pending IDs, ready idle agents, pending effects and host revision transitions', () => {
     const goal = new ExecutionGoal();
     expect(goal.update(active({ sourceRefs: ['invented'] }), context).ok).toBe(false);
