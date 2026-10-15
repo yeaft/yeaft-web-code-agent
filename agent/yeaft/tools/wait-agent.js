@@ -36,6 +36,7 @@ import { isTerminalAgentStatus, STATUS } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness } from '../sub-agent/liveness.js';
 import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
 import { describeAgentLifecycle, describeAgentOutcome } from '../sub-agent/outcome.js';
+import { getAgentResultRef } from '../sub-agent/result-reference.js';
 
 /**
  * Build the status-specific next-step guidance the LLM reads after a wait.
@@ -203,7 +204,19 @@ function buildEnvelope(agent, { timedOut = false } = {}) {
     env.truncated = Boolean(agent.finalReport?.truncated);
     env.partial_output = resultText;
   }
-  env.result = resultText;
+  env.resultRef = getAgentResultRef(agent);
+  const settled = !timedOut && (status === STATUS.IDLE || isTerminalAgentStatus(status));
+  if (settled && agent.collectedResultRef === env.resultRef) {
+    env.alreadyCollected = true;
+    env.next_steps = 'This unchanged reply was already collected. Reuse resultRef; read outputFile only if you need the original evidence. Do not wait again for this reply. PromptAgent queues new work; CloseAgent finalizes idle work.';
+    // Preserve lifecycle/outcome and live diagnostics, not duplicate evidence.
+    if (env.error) env.error = env.error.slice(0, 400);
+    delete env.partial_output;
+    delete env.final_report;
+  } else {
+    env.result = resultText;
+    if (settled) agent.collectedResultRef = env.resultRef;
+  }
   return env;
 }
 
@@ -235,6 +248,10 @@ wait loop but does not cancel or prove failure: inspect outputFile before decidi
 For ordinary SpawnAgent background work, use ListAgents or later completion
 notifications instead of repeatedly re-waiting.
 
+An unchanged reply already collected by WaitAgent returns alreadyCollected=true and
+resultRef instead of repeating result text. PromptAgent starts a new collectable revision,
+even when its reply text is identical. Lifecycle and liveness remain current.
+
 The default wait is a bounded 5000ms poll; callers may request up to 300000ms
 (5 minutes). This caps one WaitAgent call only, not the sub-agent lifetime.`,
     zh: `等待子 Agent 的下一次状态变更（turn 结束、终止或等待超时）并获取状态信封。
@@ -255,6 +272,9 @@ PromptAgent 后若非 stale/stalled 的有界等待超时，必须在同一父�
 再次调用 WaitAgent，直到 idle/terminal；不要改用 ListAgents/notification 丢下未收集的回复。
 若信封显示 stale/stalled，应停止盲目等待并检查 outputFile；它只是诊断，不会取消任务，也不能证明
 provider 或工具已经卡死。仅在确实要取消时使用 CloseAgent。
+
+WaitAgent 已收集且未变化的回复仅返回 alreadyCollected=true 和 resultRef，不重印结果。
+PromptAgent 会产生新的可收集 revision，即使回复文本相同；生命周期和 liveness 仍实时返回。
 
 普通 SpawnAgent 异步流程仍用 ListAgents 做非阻塞状态检查，并依赖后续 completion
 notification；默认 5000ms、最大 300000ms 仅限制单次 WaitAgent 调用，不限制子 Agent 生命周期。`
