@@ -198,17 +198,18 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     Object.assign(state, personState(), progress, { outputs: state.outputs, feedbackSuppressedEpisodeId, retryCommand: outbox().get(agentId) || null });
   }
 
-  async function snapshot() {
+  async function snapshot({ automatic = false } = {}) {
     const g = generation;
     const requestNumber = ++snapshotRequest;
+    const valid = () => current(g) && requestNumber === snapshotRequest && (!automatic || canObserve());
     let data;
     try { data = await request('snapshot'); }
     catch (error) {
-      if (!current(g) || requestNumber !== snapshotRequest) return;
+      if (!valid()) return;
       state.progressStale = true;
       throw error;
     }
-    if (!current(g) || requestNumber !== snapshotRequest) return;
+    if (!valid()) return;
     if (state.person && state.person.id !== data.person?.id) outputs.reset();
     state.person = data.person;
     if (state.outputsSupported) outputs.snapshot(data.outputs);
@@ -238,6 +239,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     state.episodeId = data.episodeId || null;
     state.activityEpisodeId = state.episodeId || state.latestEpisode?.id || state.activityEpisodeId;
     state.progressStale = false;
+    return true;
   }
 
   // Automatic activity reads must not wait for a slow diagnostic-history page.
@@ -318,23 +320,39 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     }
   }
 
+  function canObserve() {
+    return current() && foreground() && state.person && !state.loading && !state.settingsPending
+      && !state.commandPending && !state.cancelPending && !state.executions.pending
+      && (state.busy || state.person.settings?.autonomyEnabled === true) && !digitalPersonGate(chat, agentId);
+  }
   function schedule() {
     clearTimeout(poll);
-    if (!current() || !state.busy || digitalPersonGate(chat, agentId)) return;
+    poll = null;
+    if (!canObserve() || polling) return;
     const g = generation;
-    poll = setTimeout(async () => {
-      if (!current(g) || polling) return;
-      polling = true;
-      try {
-        await snapshot();
-        if (!current(g)) return;
+    poll = setTimeout(() => { if (current(g)) void observe(); }, pollMs);
+  }
+  async function observe() {
+    clearTimeout(poll);
+    poll = null;
+    if (!canObserve() || polling) return;
+    const g = generation;
+    const wasBusy = state.busy;
+    const episode = `${state.latestEpisode?.id}:${state.latestEpisode?.status}`;
+    polling = true;
+    try {
+      const applied = await snapshot({ automatic: true });
+      if (!applied || !current(g)) return;
+      // Idle autonomy needs only a snapshot. Read activity on admission, progress
+      // and completion, including an episode that ended between discovery ticks.
+      if (wasBusy || state.busy || episode !== `${state.latestEpisode?.id}:${state.latestEpisode?.status}`) {
         await page('traces', false, { preserveHistory: true });
-      } catch (error) {
-        if (current(g)) showError(error);
-      } finally {
-        if (current(g)) { polling = false; schedule(); }
       }
-    }, pollMs);
+    } catch (error) {
+      if (current(g)) showError(error);
+    } finally {
+      if (current(g)) { polling = false; schedule(); }
+    }
   }
 
   async function open(nextAgentId) {
@@ -356,11 +374,10 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       await snapshot();
       if (!current(g)) return;
       await Promise.all([page('messages'), page('traces')]);
-      if (current(g)) schedule();
     } catch (error) {
       if (current(g)) showError(error);
     } finally {
-      if (current(g)) state.loading = false;
+      if (current(g)) { state.loading = false; schedule(); }
     }
   }
 
@@ -463,7 +480,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       }
       return false;
     } finally {
-      if (current(g)) state.commandPending = false;
+      if (current(g)) { state.commandPending = false; schedule(); }
     }
   }
 
@@ -525,9 +542,12 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     if (visible && foreground() && !state.loading) void readExecutions();
   }
   function visibilityChanged() {
+    clearTimeout(poll);
+    poll = null;
     clearTimeout(executionPoll);
     clearTimeout(taskPoll);
     if (!foreground()) return;
+    void observe();
     if (managementVisible) void readExecutions();
     if (tasksVisible) void readTasks();
   }
@@ -600,6 +620,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
         target.pending = null;
         if (acknowledged) await readExecutions();
         scheduleExecutions();
+        schedule();
       }
     }
   }
@@ -744,21 +765,30 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   async function settings(update) {
     const autonomyOnly = update && !Array.isArray(update) && Object.keys(update).length === 1 && typeof update.autonomyEnabled === 'boolean';
     if (!current() || state.settingsPending || state.loading || (state.busy && !autonomyOnly) || state.commandPending || state.cancelPending || !state.person || digitalPersonGate(chat, agentId)) return false;
-    const g = generation;
+    const g = generation, control = executionControl;
+    clearTimeout(poll);
+    poll = null;
+    snapshotRequest += 1;
     state.settingsPending = true;
     state.error = null;
     try {
       const payload = Array.isArray(update) ? { modelCandidates: [...update] } : update;
       const result = await request('settings', payload);
-      if (!current(g)) return false;
+      if (!current(g) || control !== executionControl || state.cancelPending) return false;
       state.modelCandidates = result.settings.modelCandidates || [];
       state.defaultModel = result.settings.defaultModel ?? null;
       state.person.settings = result.settings;
       if (result.person?.id === state.person.id) state.person = result.person;
       snapshotRequest += 1; // Fence an older snapshot from undoing a successful rename.
+      // Enabling can admit work immediately; disabling does not cancel the live
+      // episode. Reconcile both settings and execution before choosing the poll.
+      if (Object.hasOwn(payload, 'autonomyEnabled')) {
+        await snapshot();
+        if (!current(g) || control !== executionControl || state.cancelPending) return false;
+      }
       // A candidate correction can recover model readiness without reopening the page.
       const status = await request('status');
-      if (!current(g)) return false;
+      if (!current(g) || control !== executionControl || state.cancelPending) return false;
       applyModelStatus(status);
       state.modelReady = status.modelReady !== false;
       state.reason = status.reason || '';
@@ -767,7 +797,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       if (current(g)) showError(error);
       return false;
     } finally {
-      if (current(g)) state.settingsPending = false;
+      if (current(g)) { state.settingsPending = false; schedule(); }
     }
   }
 
@@ -783,12 +813,17 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     // A cancellation request makes the last running status unreliable, even
     // if acknowledgement is lost or a reconnect sees an older running snapshot.
     state.feedbackSuppressedEpisodeId = episodeId;
+    clearTimeout(poll);
+    poll = null;
+    snapshotRequest += 1;
     state.cancelPending = true;
     target.pending = 'cancel';
     let acknowledged = false;
     try {
       await request('cancel', { episodeId });
       if (!current(g) || target !== state.executions || control !== executionControl) return false;
+      snapshotRequest += 1;
+      state.person.settings = { ...state.person.settings, autonomyEnabled: false };
       if (target.active?.episodeId === episodeId) target.active = { ...target.active, status: 'cancelling' };
       acknowledged = true;
       await refresh({ preserveHistory: true });
@@ -803,6 +838,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
         target.pending = null;
         if (acknowledged && managementVisible) await readExecutions();
         scheduleExecutions();
+        schedule();
       }
     }
   }
