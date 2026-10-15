@@ -75,6 +75,38 @@ it('honors pending wait immediately without model polling, pauses safely, then c
   expect(records.find(r => r.kind === 'execution_goal' && r.goal.status === 'active')?.goal.revision).toBe(3);
 }, 10000);
 
+it('rejects answer-as-work closure and reopens a same-batch terminal report before later effects', async () => {
+  let firstRef, checkedRef;
+  const closure = (refs = []) => goal('completed', { kind: 'answer', reason: 'Verified actual artifact',
+    sourceRefs: refs, acceptanceChecks: refs.map(ref => ({ check: 'Observed actual file contents', sourceRefs: [ref] })) });
+  const run = await setup((params, index) => {
+    const result = id => JSON.parse(params.messages.find(m => m.role === 'tool' && m.toolCallId === id).content);
+    if (index === 0) return tool('write', 'FileWrite', { file_path: 'artifact', content: 'before' });
+    if (index === 1) { firstRef = result('write').sourceRef; return tool('bypass', 'Execution__goal', closure()); }
+    if (index === 2) {
+      expect(result('bypass')).toMatchObject({ ok: false, code: 'INVALID_TOOL_INPUT' });
+      return [...tool('closed', 'Execution__goal', closure([firstRef])).slice(0, -1), ...tool('later', 'FileEdit', { file_path: 'artifact', old_string: 'before', new_string: 'after' })];
+    }
+    if (index === 3) return text('Old completion should not close the later edit.');
+    if (index === 4) {
+      expect(params.messages.at(-1).content).toContain('execution-continue');
+      return tool('check', 'FileRead', { file_path: 'artifact' });
+    }
+    if (index === 5) { checkedRef = result('check').sourceRef; return tool('verified', 'Execution__goal', closure([checkedRef])); }
+    if (index === 6) return text('Artifact read back and verified after the last edit.');
+    expect(params.tools).toEqual([]);
+    const p = finalProposal(JSON.parse(params.messages[0].content).state.version); p.concepts = []; p.state.focusConceptIds = []; p.reply = null;
+    return text(JSON.stringify(p));
+  });
+  await run.request('send', { text: 'Write, edit and verify the authorized artifact.', clientMessageId: 'stale-closure' });
+  expect((await until(() => run.request('snapshot'), state => !state.busy)).latestEpisode.status).toBe('completed');
+  expect(await readFile(join(run.dir, 'artifact'), 'utf8')).toBe('after');
+  const records = (await run.request('traces', { limit: 50 })).items;
+  expect(records.filter(r => r.kind === 'goal_boundary')).toHaveLength(1);
+  expect(records.some(r => r.kind === 'execution_goal' && r.origin === 'host-subsequent-execution' && r.goal.status === 'active')).toBe(true);
+  expect(records.filter(r => r.kind === 'activity')).toHaveLength(1);
+});
+
 it('cancels a host wait, joins background effects and never reenters the model', async () => {
   let calls = 0;
   const run = await setup((params, index) => {
