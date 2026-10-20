@@ -19,7 +19,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +3 query-progress boundaries: bridge side effects, frontend ownership, browser lifecycle.
 // +24: history boundary (7), progress evidence (9), Engine lifecycle (6),
 // and delegation identity/result-revision safety (2). No retired cases excluded.
-export const TEST_CASE_LIMIT = 565;
+// +6 PR #1846 review regressions: repaired-command revalidation, distinct negative
+// reads, two reporting-time completion paths, timeout safety, validation blockers.
+// Delegation/UI recovery extend existing lifecycle cases without extra cases.
+export const TEST_CASE_LIMIT = 571;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

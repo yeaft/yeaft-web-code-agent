@@ -52,7 +52,7 @@ Provider 静默 watchdog 只判断流是否活跃，不是 query 的总时长上
 - 等待、用户确认、展示和显式允许的实时观察不累计停滞。WebFetch 仅在用户要求等待外部任务时显式设置 `polling: true`；`raw` 只改变响应格式，不豁免普通文档/API 的重复检测。
 - 相同失败达到三次后阻止原样重放；非只读操作的 `errorEffect: unknown`、`replaySafe: false` 或兼容超时/断连错误首次出现后即禁止原样重放，应先验证目标状态。新输入或成功写入不自动解除不确定副作用保护。唯一的已结束命令分类要求 Bash 明确返回非零退出、未超时且确认进程终止：它仍不立即重放，但在成功修复或新输入后可重新验证；这不代表失败命令已回滚。
 - HistorySearch 默认排除当前用户消息及其后的记录，边界在命中上限之前应用；`includeCurrentTurn: true` 可显式回看本轮。兄弟 Session 不使用当前 Session 的序号边界。
-- SpawnAgent 复用当前 query 内相同 owner/workspace 和任务规格的委派；显式 `taskKey` 的规格变化报冲突。PromptAgent 的新结果 revision 仍可领取。
+- SpawnAgent 复用当前 query 内相同 owner/workspace 和任务规格的委派；显式 `taskKey` 的规格变化报冲突。接受 PromptAgent 后续任务或收尾控制后，原身份保留，但原规格重试被拒绝，不能把 Agent 的最新回复当作原委派证据；已领取的原回复或原日志仍可查阅。WaitAgent 可逐 revision 领取后续回复。
 
 Web Session 状态区显示请求、工具执行、复用、重复和失败计数。`query_progress` 只包含白名单元数据，不进入 transcript、模型历史或 provider watchdog；重连隐藏旧计数，终态后的延迟事件不能复活 turn。
 
