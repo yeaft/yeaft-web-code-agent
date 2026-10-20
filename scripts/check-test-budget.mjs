@@ -16,7 +16,13 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // 9 durable scheduler/provenance + 5 user understanding/Dream context/behavior;
 // 2 test-adapter non-replay + 6 UI polling/consent + 2 light/dark browser cases.
 // These cover distinct new protocol/control boundaries; existing cases are retained.
-export const TEST_CASE_LIMIT = 538;
+// +3 query-progress boundaries: bridge side effects, frontend ownership, browser lifecycle.
+// +24: history boundary (7), progress evidence (9), Engine lifecycle (6),
+// and delegation identity/result-revision safety (2). No retired cases excluded.
+// +6 PR #1846 review regressions: repaired-command revalidation, distinct negative
+// reads, two reporting-time completion paths, timeout safety, validation blockers.
+// Delegation/UI recovery extend existing lifecycle cases without extra cases.
+export const TEST_CASE_LIMIT = 571;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

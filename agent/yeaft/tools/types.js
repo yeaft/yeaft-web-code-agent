@@ -25,6 +25,8 @@
  * @property {(input: {query:string, cursor?:number, maxResults?:number}) => Promise<object>|object} [discoverTools] — page through hidden registered tool capabilities and activate returned entries for the next provider loop
  * @property {import('../tasks/manager.js').TaskManager} [taskManager] — Session task manager
  * @property {string} [sessionId] — current Session id
+ * @property {string} [queryTurnId] — unique identity of the owning Engine query
+ * @property {number} [historyBeforeSeq] — durable current-user boundary; default history recall excludes this sequence and later
  * @property {string[]} [projectSessionIds] — same-Agent sibling Session ids in the current Project
  * @property {string} [threadId] — current Session thread id
  * @property {string} [currentVpId] — R6: VP id of the caller (set in multi-VP groups)

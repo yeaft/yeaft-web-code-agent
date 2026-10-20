@@ -104,6 +104,7 @@ import {
   touchYeaftHistoryCache,
 } from './helpers/yeaft-history-cache.js';
 import { planNextYeaftHistoryPage } from './helpers/yeaft-history-pagination.js';
+import { applyQueryProgress, reconcileQueryProgressSnapshot } from './helpers/query-progress.js';
 
 const { defineStore } = Pinia;
 
@@ -4864,6 +4865,11 @@ export const useChatStore = defineStore('chat', {
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
+      // Ephemeral observability bypasses output/history and watchdog handling.
+      if (msg.event?.type === 'query_progress') {
+        applyQueryProgress(this, msg);
+        return;
+      }
       // Rolling upgrades may still deliver old Dream LLM debug events through
       // an older Server. Never retain their prompt/response as ordinary turns.
       if (['turn_open', 'loop', 'turn_close'].includes(msg.event?.type)
@@ -6042,7 +6048,9 @@ export const useChatStore = defineStore('chat', {
               turnId: event.turnId,
               vpId: event.vpId,
               sessionId: event.sessionId || null,
-              threadId: event.threadId || null,
+              threadId: event.threadId || 'main',
+              conversationId: msg.conversationId || null,
+              connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
               isStreaming: true,
               startedAt: event.ts || Date.now(),
             },
@@ -6130,7 +6138,10 @@ export const useChatStore = defineStore('chat', {
               if (event.sessionId && mSessionId && mSessionId !== event.sessionId) continue;
               if (event.vpId && m.speakerVpId && m.speakerVpId !== event.vpId) continue;
               if (event.turnId && m.turnId && m.turnId !== event.turnId) continue;
-              if (m.status && m.status !== 'pending') continue;
+              // The preceding result frame may have already finished streaming
+              // and stamped `completed`. Failure metadata is authoritative.
+              if (m.status && m.status !== 'pending'
+                  && !(m.status === 'completed' && nextStatus === 'errored' && m.turnId === event.turnId)) continue;
               m.status = nextStatus;
               m.turnEndAt = stampedAt;
               m.turnEndReason = event.reason || null;
@@ -6270,6 +6281,8 @@ export const useChatStore = defineStore('chat', {
             state: event.state,
             since: event.since || Date.now(),
             turnId: event.turnId || null,
+            runningThreadCount: event.runningThreadCount || 0,
+            threads: Array.isArray(event.threads) ? event.threads : [],
             title: event.title || '',
             sessionId,
             vpId: event.vpId,
@@ -6291,6 +6304,7 @@ export const useChatStore = defineStore('chat', {
           break;
         }
         case 'vp_status_snapshot': {
+          reconcileQueryProgressSnapshot(this, msg);
           // Bulk hydrate. Snapshot scoping (see broker JSDoc):
           //   - sessionId == null → unscoped, replace the WHOLE table.
           //     This is what session_ready / reset broadcasts use, so
@@ -6318,6 +6332,8 @@ export const useChatStore = defineStore('chat', {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
+                runningThreadCount: row.runningThreadCount || 0,
+                threads: Array.isArray(row.threads) ? row.threads : [],
                 title: row.title || '',
                 sessionId: rowSessionId,
                 vpId: row.vpId,
@@ -6343,6 +6359,8 @@ export const useChatStore = defineStore('chat', {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
+                runningThreadCount: row.runningThreadCount || 0,
+                threads: Array.isArray(row.threads) ? row.threads : [],
                 title: row.title || '',
                 sessionId: rowSessionId,
                 vpId: row.vpId,

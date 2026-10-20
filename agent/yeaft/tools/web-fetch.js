@@ -79,6 +79,13 @@ Guidelines:
           zh: '最大内容长度，单位字符（默认 50000）',
         },
       },
+      polling: {
+        type: 'boolean',
+        description: {
+          en: 'Set true only for user-requested live status polling while waiting for external work. Not for repeatedly reading documents, schemas or static API responses. Does not change response formatting.',
+          zh: '仅在用户要求等待外部任务并轮询实时状态时设为 true，不用于重复读取文档、schema 或静态 API 响应；不改变响应格式。',
+        },
+      },
       raw: {
         type: 'boolean',
         description: {
@@ -91,6 +98,8 @@ Guidelines:
   },
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
+  // Live waiting is explicit; raw formatting alone never exempts static reads.
+  duplicateCallPolicy: (input) => input?.polling === true ? 'allow' : 'warn',
   async execute(input, ctx) {
     const { url, max_length = 50000, raw = false } = input;
     if (!url) return JSON.stringify({ error: 'url is required' });

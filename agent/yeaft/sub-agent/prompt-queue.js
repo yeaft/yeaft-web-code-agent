@@ -11,6 +11,9 @@ import { snapshotEffortDecision } from '../effort.js';
  * @param {{ projectSessionIds?: string[], projectLabel?: string, projectInstruction?: string }} projectContext
  */
 export function enqueueSubAgentPrompt(agent, prompt, projectContext = {}) {
+  // Reserve the original delegation identity, but stop reusing its mutable
+  // evidence as soon as follow-up work is accepted (even before it runs).
+  agent.delegationSuperseded = true;
   if (!Array.isArray(agent.pendingPrompts)) agent.pendingPrompts = [];
   agent.pendingPrompts.push({
     prompt,

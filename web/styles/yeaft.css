@@ -3491,6 +3491,25 @@
   background: var(--sidebar-hover);
   outline: none;
 }
+.yeaft-vp-timeline-row.has-query-progress { flex-wrap: wrap; }
+.yeaft-vp-timeline-row.has-query-progress .yeaft-vp-timeline-row-body { flex-basis: calc(100% - 52px); }
+.yeaft-query-progress {
+  order: 2;
+  flex: 1 0 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.yeaft-query-progress-state { color: var(--text-primary); font-weight: 500; }
+.yeaft-query-progress.is-warning .yeaft-query-progress-state,
+.yeaft-query-progress.is-stopped .yeaft-query-progress-state { color: var(--status-busy); }
+.yeaft-query-progress-counts { display: flex; flex-wrap: wrap; gap: 2px 10px; font-variant-numeric: tabular-nums; }
+.yeaft-query-progress-caveat { color: var(--text-muted); }
 .yeaft-vp-timeline-row-body {
   flex: 1;
   min-width: 0;          /* let inner ellipsis work inside the flex item */

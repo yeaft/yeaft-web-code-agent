@@ -18,6 +18,7 @@ import YeaftConversationOutline from './YeaftConversationOutline.js';
 import WorkCenterPage from './WorkCenterPage.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows, resolveTimelineSession, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
+import { visibleQueryProgress } from '../stores/helpers/query-progress.js';
 import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 import {
   clearOverlayPointerGesture,
@@ -97,6 +98,20 @@ export function visibleSessionStatusTasks(taskMap) {
   return Object.values(taskMap || {})
     .filter(task => task?.status === 'running')
     .sort((a, b) => sessionTaskSortTime(b) - sessionTaskSortTime(a));
+}
+
+/** Show the latest live thread with an authorized observation, not the broker's
+ * latest aggregate identity (which may name an already completed thread). */
+export function timelineQueryProgress(store, row, { agentId, sessionId }) {
+  const owners = Array.isArray(row.threads) && row.threads.length ? row.threads
+    .filter(thread => ['typing', 'thinking', 'retrying', 'streaming', 'tool'].includes(thread.state) && thread.turnId)
+    .slice().sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0)
+      || String(a.threadId).localeCompare(String(b.threadId))) : [row];
+  for (const owner of owners) {
+    const progress = visibleQueryProgress(store, { agentId, sessionId, vpId: row.vpId, turnId: owner.turnId });
+    if (progress && (!owner.threadId || progress.threadId === owner.threadId)) return progress;
+  }
+  return null;
 }
 
 export default {
@@ -1526,7 +1541,10 @@ export default {
         connectionState: store.connectionState,
         vpLabelOf: (id) => vpStore.vpLabel(id),
         vpDescriptionOf: (id) => vpStore.vpDescription(id),
-      });
+      }).map(row => ({
+        ...row,
+        queryProgress: timelineQueryProgress(store, row, { agentId: activeAgentId, sessionId: filter }),
+      }));
     });
 
     const onEditVpFromTimeline = (vpId) => {

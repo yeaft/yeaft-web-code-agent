@@ -33,6 +33,8 @@ import { STATUS, isTerminalAgentStatus } from '../sub-agent/status.js';
 import { diagnoseAgentLiveness, makeLiveness } from '../sub-agent/liveness.js';
 import { TASK_RESULT_DELIVERY } from '../tasks/store.js';
 import { captureParentEffortDecision } from '../effort.js';
+import { buildDelegationIdentity, resolveAgentCwd } from '../sub-agent/task-identity.js';
+import { getAgentResultRef } from '../sub-agent/result-reference.js';
 
 /** In-memory sub-agent registry. */
 const agents = new Map();
@@ -95,6 +97,11 @@ export function validateSpec(input) {
     return { ok: false, error: 'spec must be an object' };
   }
   const { name, task, mission, expected_output, persona, budget } = input;
+  for (const key of ['taskKey', 'baseline', 'cwd']) {
+    if (input[key] !== undefined && !cleanString(input[key])) {
+      return { ok: false, error: `${key} must be a non-empty string` };
+    }
+  }
   if (!cleanString(name)) {
     return { ok: false, error: 'name is required' };
   }
@@ -237,6 +244,7 @@ Pick a preset persona to pre-wire a tool subset and model tier:
 
 Guidelines:
 - Give a clear, focused mission — what "done" looks like
+- Exact spec retries in the same parent query/workspace reuse the existing agent (even renamed or terminal), unless follow-up work superseded its original evidence; that retry is rejected, not respawned. Use a new taskKey for an intentional independent run; taskKey conflicts require a new key, not a changed spec.
 - Use expected_output when the return shape matters
 - Delegate one clear result with the workspace/base and completion evidence. Let the child choose its steps; do simple work directly. Split unrelated goals, not individual reads.
 - Usually omit budget so the child can finish. Add a budget only when the task actually needs a hard lifetime ceiling; tool exhaustion reserves one tool-free handoff and unfinished work stays budget_exceeded.
@@ -261,6 +269,7 @@ stops or finalizes work no longer needed.`,
 
 使用指南：
 - 给出清晰聚焦的 mission——"完成"是什么样子
+- 同一父级 query/workspace 内完全相同的规格重试会复用已有 Agent（含改名或已结束任务）；若后续工作已替代原任务证据，则拒绝重试，不自动重建。需要独立执行时使用新的 taskKey；同 key 规格冲突不能通过修改规格重试解决。
 - 当返回结构重要时使用 expected_output
 - 一次只委派一个明确结果，提供工作目录/基线和完成证据，让子 Agent 自主选择步骤；简单工作直接做。拆分不相关目标，不要拆成逐个读取任务。
 - 通常省略 budget，让子 Agent 完成工作；仅当任务确实需要硬性累计上限时才设置。不要给多文件 review 人为设置极小额度。工具额度耗尽后保留一次无工具交付机会，未完成仍返回 budget_exceeded。
@@ -277,6 +286,20 @@ stops or finalizes work no longer needed.`,
         description: {
           en: 'A descriptive name for the sub-agent (e.g. "test-writer", "refactor-auth")',
           zh: '子 Agent 的描述性名称（如 "test-writer"、"refactor-auth"）',
+        },
+      },
+      taskKey: {
+        type: 'string',
+        description: {
+          en: 'Optional exact task identity within this parent query/workspace. Retries reuse the agent even after completion, but are rejected after follow-up work supersedes its original evidence. Changing the spec under this key is an error. Use a new key for an intentional independent run.',
+          zh: '可选的父级 query/workspace 内精确任务标识；重试复用原 Agent（含已结束任务），后续工作替代原证据后则拒绝复用；同 key 修改任务规格会报冲突。明确需要独立执行时使用新 key。',
+        },
+      },
+      baseline: {
+        type: 'string',
+        description: {
+          en: 'Optional immutable workspace baseline (e.g. commit SHA); included in task identity and passed to the child.',
+          zh: '可选不可变 workspace 基线（如 commit SHA）；纳入任务身份并传给子 Agent。',
         },
       },
       task: {
@@ -360,6 +383,9 @@ stops or finalizes work no longer needed.`,
   // tools. A parent query therefore cannot safely reuse filesystem snapshots
   // after a SpawnAgent call returns.
   mayMutateWorkspaceAfterReturn: () => true,
+  // Execute retries through the identity check, never cache an old status.
+  cacheWithinQuery: false,
+  duplicateCallPolicy: () => 'allow',
   async execute(input, ctx) {
     // NB: every envelope below puts `next_steps` (or `error_next_steps`) at
     // the FIRST position because `agent/yeaft/tools/registry.js` caps tool
@@ -377,8 +403,49 @@ stops or finalizes work no longer needed.`,
     const spec = validation.spec;
     const grants = validateToolGrants(input.allow_tools === undefined ? [] : input.allow_tools, ctx?.parentEngineDeps?.parentToolRegistry);
     if (!grants.ok) return JSON.stringify({ next_steps: ERROR_NEXT_STEPS, error: grants.error });
-    const { name, cwd } = input;
+    const { name } = input;
     const callerScope = getCallerAgentScope(ctx);
+    const identity = buildDelegationIdentity(input, spec, grants.tools, ctx);
+    if (identity) {
+      for (const agent of agents.values()) {
+        const prior = agent.delegationIdentity;
+        if (!prior || !agentBelongsToScope(agent, callerScope)
+          || prior.queryTurnId !== identity.queryTurnId || prior.workspace !== identity.workspace) continue;
+        const sameIdentity = identity.taskKey !== null
+          ? prior.taskKey === identity.taskKey
+          : prior.taskKey === null && prior.specHash === identity.specHash;
+        if (!sameIdentity) continue;
+        if (prior.specHash !== identity.specHash) {
+          return JSON.stringify({
+            next_steps: ERROR_NEXT_STEPS,
+            error: `Task identity conflict: taskKey "${identity.taskKey}" already has a different spec. Use a new taskKey for independent work.`,
+            agentId: agent.id,
+          });
+        }
+        // Identity stays reserved, but the mutable record no longer owns the
+        // original evidence after a continuation. Check accepted follow-up and
+        // finalization controls before the runner starts; revisions are a fallback.
+        if (agent.delegationSuperseded || agent.finalizationRequested || agent.resultRevision > 1) {
+          return JSON.stringify({
+            next_steps: 'Do not use this agent\'s latest reply as the original delegation evidence. Reuse the original reply if already collected; otherwise inspect the original turn in the agent log. Use a new taskKey only for intentional independent work.',
+            error: 'Delegation evidence superseded: this agent accepted follow-up work and its latest result no longer belongs to the original delegation.',
+            agentId: agent.id,
+          });
+        }
+        return JSON.stringify({
+          next_steps: 'This exact delegation already exists. Reuse its evidence; do not respawn it. Use ListAgents for status or WaitAgent to collect an uncollected reply; read outputFile only when the evidence is needed.',
+          success: true,
+          reused: true,
+          agentId: agent.id,
+          name: agent.name,
+          status: agent.status,
+          taskId: agent.taskId || null,
+          outputFile: agent.outputFile || null,
+          resultRef: getAgentResultRef(agent),
+          liveness: diagnoseAgentLiveness(agent),
+        });
+      }
+    }
 
     // Check for name collision — any non-terminal agent with the same
     // name blocks the new spawn. Terminal agents (closed/failed/abandoned/
@@ -403,6 +470,9 @@ stops or finalizes work no longer needed.`,
       name,
       task: spec.task,
       mission: spec.mission,
+      baseline: input.baseline || null,
+      delegationIdentity: identity,
+      delegationSuperseded: false,
       expected_output: spec.expected_output,
       persona: spec.persona,
       personaData: persona || null,
@@ -410,7 +480,7 @@ stops or finalizes work no longer needed.`,
       parentEffortDecision: captureParentEffortDecision(ctx),
       budget: spec.budget,
       allowTools: grants.tools,
-      cwd: cwd || ctx?.cwd || process.cwd(),
+      cwd: resolveAgentCwd(input.cwd, ctx?.cwd),
       status: STATUS.CREATED,
       messages: [],
       result: null,
@@ -501,6 +571,7 @@ stops or finalizes work no longer needed.`,
       allow_tools: agent.allowTools,
       status: agent.status,
       outputFile: agent.outputFile || null,
+      resultRef: getAgentResultRef(agent),
       taskId: agent.taskId || null,
       liveness,
       stale: liveness.stale,

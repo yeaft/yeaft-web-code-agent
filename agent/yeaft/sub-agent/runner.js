@@ -171,9 +171,10 @@ export function startSubAgent(agent, deps = {}) {
     agent.subEngine = subEngine;
     agent.engineMessages = agent.engineMessages || [];
     agent.liveness = agent.liveness || makeLiveness();
-    agent.parentVpId = deps.parentVpId || null;
-    agent.parentSessionId = deps.parentSessionId || null;
-    agent.parentThreadId = deps.parentThreadId || 'main';
+    // Preserve tool-boundary ownership when host deps omit caller identifiers.
+    agent.parentVpId = agent.parentVpId || deps.parentVpId || null;
+    agent.parentSessionId = agent.parentSessionId || deps.parentSessionId || null;
+    agent.parentThreadId = agent.parentThreadId || deps.parentThreadId || 'main';
     outputLog = createOutputLog(agent.id, deps.subAgentLogDir);
     agent.outputLog = outputLog;
     agent.outputFile = outputLog.path;
@@ -187,7 +188,7 @@ export function startSubAgent(agent, deps = {}) {
       parentName: deps.parentName || 'parent',
       parentVpId: deps.parentVpId || null,
       agentName: agent.name,
-      mission: agent.mission || agent.task || '',
+      mission: (agent.mission || agent.task || '') + (agent.baseline ? `\n\nWorkspace baseline: ${agent.baseline}` : ''),
       expectedOutput: agent.expected_output,
       presetPrompt: (agent.personaData || getPersona(agent.persona))?.systemPrompt,
       budget: agent.budget,
@@ -457,6 +458,9 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         continue;
       }
 
+      // Every actual query is a new evidence revision, even if its reply text
+      // happens to equal the previous reply. PromptAgent must stay collectable.
+      agent.resultRevision = (agent.resultRevision || 0) + 1;
       // Partial evidence belongs to this query, never a previous follow-up.
       agent.partial_output = '';
       agent.lastResult = '';
@@ -495,8 +499,9 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
           // Liveness — update first so even listener throws don't lose
           // the bump.
           bumpLivenessFromEvent(agent.liveness, evt);
-          // Hidden provider progress is liveness only, never a log/task/UI event.
-          if (evt?.type === 'provider_activity') continue;
+          // Provider activity and UI-only query counters are liveness only here:
+          // never persist them in the child log or churn task notifications.
+          if (evt?.type === 'provider_activity' || evt?.type === 'query_progress') continue;
 
           // Mirror every raw event to the durable log. We still keep
           // `sub_agent_event` text_delta suppressed so the inline transcript

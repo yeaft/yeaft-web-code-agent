@@ -38,8 +38,14 @@ function searchableContent(msg) {
   return '';
 }
 
-function matchesMessage(msg, terms) {
+function matchesMessage(msg, terms, source, boundary) {
   if (!msg || msg.role === 'tool' || !isVisibleConversationRow(msg)) return false;
+  // Sequence numbers belong to the source Session, not to a sibling transcript
+  // (or a row's optional sessionId). Filter before counting toward any limit.
+  if (boundary && source.sessionId === boundary.sessionId) {
+    const seq = Number.isFinite(msg.seq) ? msg.seq : parseSeqFromId(msg.id);
+    if (Number.isFinite(seq) && seq >= boundary.beforeSeq) return false;
+  }
   const content = searchableContent(msg).toLocaleLowerCase();
   return content.length > 0 && terms.every(term => content.includes(term));
 }
@@ -59,7 +65,7 @@ function withSource(msg, source) {
   return {
     ...publicMessage,
     content: searchableContent(msg),
-    sessionId: msg.sessionId || source.sessionId || null,
+    sessionId: source.sessionId || msg.sessionId || null,
     historySource: source.kind,
   };
 }
@@ -67,7 +73,7 @@ function withSource(msg, source) {
 /**
  * Search Markdown messages in one directory, newest first.
  */
-function searchMarkdownDir(dir, terms, limit, source, telemetry) {
+function searchMarkdownDir(dir, terms, limit, source, telemetry, boundary) {
   if (!existsSync(dir)) return [];
 
   const files = readdirSync(dir)
@@ -84,12 +90,12 @@ function searchMarkdownDir(dir, terms, limit, source, telemetry) {
     const lowerRaw = raw.toLocaleLowerCase();
     if (!terms.every(term => lowerRaw.includes(term))) continue;
     const msg = parseMessage(raw);
-    if (matchesMessage(msg, terms)) results.push(withSource(msg, source));
+    if (matchesMessage(msg, terms, source, boundary)) results.push(withSource(msg, source));
   }
   return results;
 }
 
-function searchSegmentDir(dir, terms, limit, source, telemetry) {
+function searchSegmentDir(dir, terms, limit, source, telemetry, boundary) {
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir)
     .filter(f => f.endsWith('.jsonl'))
@@ -109,7 +115,7 @@ function searchSegmentDir(dir, terms, limit, source, telemetry) {
       if (!lines[i]?.trim()) continue;
       recordMessageScan(telemetry);
       const msg = parseJsonLine(lines[i]);
-      if (matchesMessage(msg, terms)) results.push(withSource(msg, source));
+      if (matchesMessage(msg, terms, source, boundary)) results.push(withSource(msg, source));
     }
   }
   return results;
@@ -154,7 +160,10 @@ function sessionConversationDirs(dir) {
  * @param {string} dir — Yeaft root directory (e.g. ~/.yeaft)
  * @param {string} keyword — search terms
  * @param {number} [limit=10] — max results
- * @param {{telemetry?: {scannedFiles?: number, scannedBytes?: number, scannedMessages?: number}, sessionIds?: string[]}} [options]
+ * @param {{telemetry?: {scannedFiles?: number, scannedBytes?: number, scannedMessages?: number}, sessionIds?: string[], boundarySessionId?: string, beforeSeq?: number, beforeMessageId?: string}} [options]
+ *   A trusted exclusive boundary applies only to boundarySessionId's transcript.
+ *   Finite beforeSeq takes precedence over a monotonic beforeMessageId. Without
+ *   a valid boundary, legacy search behavior is preserved.
  * @returns {object[]} — matching messages, newest first
  */
 export function searchMessages(dir, keyword, limit = 10, options = {}) {
@@ -168,6 +177,13 @@ export function searchMessages(dir, keyword, limit = 10, options = {}) {
     telemetry.scannedBytes = 0;
     telemetry.scannedMessages = 0;
   }
+
+  const beforeSeq = Number.isFinite(options.beforeSeq)
+    ? options.beforeSeq
+    : parseSeqFromId(options.beforeMessageId);
+  const boundary = typeof options.boundarySessionId === 'string' && options.boundarySessionId && Number.isFinite(beforeSeq)
+    ? { sessionId: options.boundarySessionId, beforeSeq }
+    : null;
 
   const requestedSessionIds = Array.isArray(options.sessionIds)
     ? new Set(options.sessionIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))
@@ -191,8 +207,8 @@ export function searchMessages(dir, keyword, limit = 10, options = {}) {
   const segmentDirs = conversationDirs.map(source => ({ ...source, dir: join(source.dir, 'segments') }));
 
   const results = [
-    ...segmentDirs.flatMap(source => searchSegmentDir(source.dir, terms, resultLimit, source, telemetry)),
-    ...markdownDirs.flatMap(source => searchMarkdownDir(source.dir, terms, resultLimit, source, telemetry)),
+    ...segmentDirs.flatMap(source => searchSegmentDir(source.dir, terms, resultLimit, source, telemetry, boundary)),
+    ...markdownDirs.flatMap(source => searchMarkdownDir(source.dir, terms, resultLimit, source, telemetry, boundary)),
   ]
     .sort(compareNewest)
     .slice(0, resultLimit);
