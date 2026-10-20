@@ -25,10 +25,14 @@ function resultHash(output) {
   return createHash('sha256').update(typeof output === 'string' ? output : JSON.stringify(output) || '').digest('hex');
 }
 
-function failureKind(output, call) {
+function failureKind(output, call, readOnly) {
   const text = typeof output === 'string' ? output : JSON.stringify(output) || '';
+  const errorText = text.replace(/^Error:\s*/, '');
   let contract;
-  try { contract = typeof output === 'string' ? JSON.parse(output) : output; } catch { /* legacy text errors */ }
+  // MCP and legacy tools throw JSON envelopes; Engine prefixes their messages
+  // with "Error: ". Preserve that contract for classification without changing
+  // the raw persisted/UI tool output.
+  try { contract = typeof output === 'string' ? JSON.parse(errorText) : output; } catch { /* legacy text errors */ }
   // Confirmed nonzero exit is not rollback evidence. It is, however, a finished
   // command that can be revalidated after an edit or new input, unlike a timeout
   // or an operation whose lifecycle is still unknown.
@@ -36,15 +40,20 @@ function failureKind(output, call) {
       && contract.failureType === 'exit_nonzero' && contract.terminationConfirmed === true
       && contract.timedOut === false && Number.isInteger(contract.exitCode)) return 'terminated_command';
   if (contract?.errorEffect === 'unknown' || contract?.replaySafe === false) return 'uncertain';
-  const message = typeof contract?.error === 'string' ? contract.error : text;
-  // Lifecycle uncertainty outranks error wording. Business words (e.g. schema
-  // migration) are never proof that a dispatched operation had no side effects.
-  if (/timed?\s*out|timeout|ECONNRESET|disconnect|socket hang up|connection closed/i.test(message)) return 'uncertain';
   // Match the registry's explicit pre-execution validation contract, not words
   // in arbitrary messages or file paths such as /schema/validation/*.json.
   if (contract?.code === 'invalid_arguments' && contract.errorEffect === 'none') return 'validation';
+  // A dispatched mutation without an explicit no-effect contract is unsafe to
+  // replay regardless of whether its message happens to mention a timeout.
+  if (!readOnly && contract?.errorEffect !== 'none') return 'uncertain';
+  const message = typeof contract?.error === 'string' ? contract.error : errorText;
   if (['EPERM', 'EACCES'].includes(contract?.code)
-      || /^(?:Error:\s*)?(?:Failed to read file:\s*)?(?:EPERM\b|EACCES\b|permission denied\b|access denied\b|forbidden\b)/i.test(message)) return 'permission';
+      || /^(?:Failed to read file:\s*)?(?:EPERM\b|EACCES\b|permission denied\b|access denied\b|forbidden\b)/i.test(message)) return 'permission';
+  // Known negative filesystem observations contain paths, not lifecycle data.
+  // Names such as /timeout/schema/ are domain evidence, never timeout signals.
+  if (readOnly && (/^(?:File not found:|ENOENT\b|Path is a directory:|Cannot read binary file:|File too large:)/i.test(message)
+      || contract?.code === 'ENOENT')) return resultHash(output);
+  if (/timed?\s*out|timeout|ECONNRESET|disconnect|socket hang up|connection closed/i.test(message)) return 'uncertain';
   return resultHash(output);
 }
 
@@ -93,7 +102,7 @@ export class QueryProgress {
     const hash = resultHash(output);
     if (isError) {
       const prior = this.#failures.get(key);
-      const kind = failureKind(output, call);
+      const kind = failureKind(output, call, readOnly);
       if (executed && !readOnly) {
         // A partial mutation may have changed even a previously unreadable
         // resource. Permit verification, never a replay of the mutation itself.

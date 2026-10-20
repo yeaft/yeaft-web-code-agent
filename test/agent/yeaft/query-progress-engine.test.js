@@ -3,11 +3,14 @@ import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { createBashTool } from '../../../agent/yeaft/tools/bash.js';
 import fileReadTool from '../../../agent/yeaft/tools/file-read.js';
+import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
+import { buildMcpFlattenedTools } from '../../../agent/yeaft/tools/mcp-tools.js';
+import discoverTools from '../../../agent/yeaft/tools/discover-tools.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-function setup(response) {
+function setup(response, deps = {}) {
   const requests = [];
   const rows = [];
   const store = {
@@ -20,7 +23,7 @@ function setup(response) {
     yield* response(requests.length, params);
   } };
   const engine = new Engine({ adapter, trace: new NullTrace(), conversationStore: store,
-    config: { model: 'test-model', maxOutputTokens: 1024 } });
+    config: { model: 'test-model', maxOutputTokens: 1024 }, ...deps });
   return { engine, requests, rows };
 }
 const call = (id, name, input = {}) => ({ type: 'tool_call', id, name, input });
@@ -81,7 +84,7 @@ describe('query progress Engine boundaries', () => {
 
   it('never replays an uncertain side effect and retains a result for every rejected tool call', async () => {
     for (const error of ['connection timeout after dispatch', 'schema migration timeout after dispatch',
-      'validation request disconnected after dispatch']) {
+      'validation request disconnected after dispatch', 'upstream failed after committing operation']) {
       const { engine, requests } = setup(n => n <= 3 ? [call(`w${n}`, 'Send'), stop]
         : [{ type: 'text_delta', text: 'Need to verify delivery state.' }, { type: 'stop', stopReason: 'end_turn' }]);
       let executions = 0;
@@ -91,6 +94,28 @@ describe('query progress Engine boundaries', () => {
       expect(events.filter(e => e.type === 'tool_end')).toHaveLength(3);
       expect(events.filter(e => e.type === 'tool_end' && e.suppressed)).toHaveLength(2);
       expect(JSON.stringify(requests.at(-1).messages)).toContain('side effects may already have happened');
+    }
+
+    // Exercise the actual MCP -> registry -> thrown-error boundary: its JSON
+    // envelope is prefixed with "Error: " by Engine before progress observes it.
+    for (const contract of [
+      { error: 'upstream failed after committing operation', errorEffect: 'unknown', replaySafe: false },
+      { error: 'required property missing', code: 'invalid_arguments', errorEffect: 'none', replaySafe: true },
+    ]) {
+      let effects = 0;
+      const manager = {
+        listTools: () => [{ name: 'review__mutate', server: 'review', inputSchema: { type: 'object', properties: {} } }],
+        async callTool() { effects++; return { isError: true, content: [{ type: 'text', text: JSON.stringify(contract) }] }; },
+      };
+      const registry = new ToolRegistry().register(discoverTools).registerAll(buildMcpFlattenedTools(manager));
+      const mcp = setup(n => n === 1 ? [call('discover-mcp', 'DiscoverTools', { query: 'mutate' }), stop]
+        : n <= 4 ? [call(`mcp-${n}`, 'mcp__review__mutate'), stop]
+        : [{ type: 'text_delta', text: 'Reported safe blocker.' }, { type: 'stop', stopReason: 'end_turn' }],
+      { toolRegistry: registry });
+      const mcpEvents = await consume(mcp.engine);
+      expect(effects).toBe(contract.errorEffect === 'unknown' ? 1 : 3);
+      expect(mcpEvents.filter(e => e.type === 'tool_end' && e.suppressed)).toHaveLength(contract.errorEffect === 'unknown' ? 2 : 0);
+      expect(mcpEvents.filter(e => e.type === 'tool_end' && e.name === 'mcp__review__mutate')).toHaveLength(3);
     }
 
     // A command may create the missing file before a later step fails. The
@@ -139,7 +164,7 @@ describe('query progress Engine boundaries', () => {
   });
 
   it('treats distinct negative read observations as evidence, not repeated failures', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'yeaft-schema-validation-forbidden-'));
+    const dir = await mkdtemp(join(tmpdir(), 'yeaft-timeout-schema-validation-forbidden-'));
     try {
       await writeFile(join(dir, 'candidate-20.json'), 'target evidence');
       const { engine, requests, rows } = setup(n => n <= 20
