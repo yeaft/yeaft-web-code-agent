@@ -51,13 +51,16 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   }
   // Two live threads, followed by a completed latest thread: the aggregate
   // turnId is null, so recovery must consult the broker's threads[] owners.
-  const parallel = { ...event, turnId: 'parallel-turn', threadId: 'parallel' };
+  const parallel = { ...event, turnId: 'parallel-turn', threadId: 'parallel', modelRequests: 7 };
   send({ ...parallel, type: 'vp_turn_start' });
   send(parallel);
   broker.transition({ ...parallel, state: 'tool' });
+  await expect(progress).toContainText('Requests 7');
   broker.transition({ sessionId: session.id, vpId: event.vpId, threadId: 'finished', turnId: 'finished-turn', state: 'tool' });
   broker.settleIdle({ sessionId: session.id, vpId: event.vpId, threadId: 'finished' });
   broker.broadcastSnapshot();
+  await expect(progress).toBeVisible();
+  await expect(progress).toContainText('Requests 7');
   const liveOwners = () => page.evaluate(agentId => {
     const chat = window.Pinia.useChatStore();
     return Object.values(chat.activeVpTurns).filter(row => row.agentId === agentId).map(row => ({

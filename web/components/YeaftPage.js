@@ -100,6 +100,20 @@ export function visibleSessionStatusTasks(taskMap) {
     .sort((a, b) => sessionTaskSortTime(b) - sessionTaskSortTime(a));
 }
 
+/** Show the latest live thread with an authorized observation, not the broker's
+ * latest aggregate identity (which may name an already completed thread). */
+export function timelineQueryProgress(store, row, { agentId, sessionId }) {
+  const owners = Array.isArray(row.threads) && row.threads.length ? row.threads
+    .filter(thread => ['typing', 'thinking', 'retrying', 'streaming', 'tool'].includes(thread.state) && thread.turnId)
+    .slice().sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0)
+      || String(a.threadId).localeCompare(String(b.threadId))) : [row];
+  for (const owner of owners) {
+    const progress = visibleQueryProgress(store, { agentId, sessionId, vpId: row.vpId, turnId: owner.turnId });
+    if (progress && (!owner.threadId || progress.threadId === owner.threadId)) return progress;
+  }
+  return null;
+}
+
 export default {
   name: 'YeaftPage',
   components: { NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
@@ -1529,9 +1543,7 @@ export default {
         vpDescriptionOf: (id) => vpStore.vpDescription(id),
       }).map(row => ({
         ...row,
-        queryProgress: visibleQueryProgress(store, {
-          agentId: activeAgentId, sessionId: filter, turnId: row.turnId, vpId: row.vpId,
-        }),
+        queryProgress: timelineQueryProgress(store, row, { agentId: activeAgentId, sessionId: filter }),
       }));
     });
 

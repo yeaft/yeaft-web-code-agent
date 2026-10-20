@@ -4458,7 +4458,7 @@ function handleEngineEvent(event, hctx) {
         }
         break;
       }
-      if (event.stopReason === 'error') {
+      if (event.stopReason === 'error' || event.stopReason === 'no_progress') {
         if (typeof hctx.markEngineTerminal === 'function') {
           hctx.markEngineTerminal('error', hctx.lastEngineErrorDetail || event.detail || null);
         }
@@ -4715,7 +4715,7 @@ function handleEngineEvent(event, hctx) {
       // Move the broker out of its running-only `retrying` state here so
       // reconnect snapshots cannot resurrect a finished Session as active.
       maybeTransitionVpStatus(hctx, 'error');
-      const errMsg = event.error?.message || 'Unknown error';
+      const errMsg = (typeof event.error === 'string' ? event.error : event.error?.message) || 'Unknown error';
       const retryAttempts = Number.isFinite(event.retryAttempts) ? event.retryAttempts : 0;
       const exhaustedIdle = event.reason === 'stream_idle_timeout' && event.retryExhausted;
       const contentPolicyDenied = event.reason === 'content_policy_denied'
@@ -4727,6 +4727,7 @@ function handleEngineEvent(event, hctx) {
           : errMsg;
       hctx.lastEngineErrorDetail = {
         message: visibleErrMsg,
+        ...(event.code ? { code: event.code } : {}),
         ...(event.reason ? { reason: event.reason } : {}),
         ...(event.retryExhausted !== undefined ? { retryExhausted: !!event.retryExhausted } : {}),
         ...(Number.isFinite(event.retryAttempts) ? { retryAttempts: event.retryAttempts } : {}),
@@ -8049,6 +8050,7 @@ export const __testHooks = {
   projectVisibleHistoryChunkMessages,
   persistInboundMessageOnceByMsgId,
   buildPendingRescueEnvelope,
+  runVpTurnForTest: runVpTurn,
   runYeaftSessionSendForTest(msg) {
     return runYeaftSessionSend(msg);
   },

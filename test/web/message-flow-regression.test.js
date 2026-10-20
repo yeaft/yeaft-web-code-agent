@@ -5,6 +5,16 @@ import * as Vue from 'vue';
 import { mount } from '@vue/test-utils';
 import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
 import { createVpStatusBroker } from '../../agent/yeaft/vp-status-broker.js';
+import ctx from '../../agent/context.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { __testHooks, __testResetVpState, __testSetSession } from '../../agent/yeaft/web-bridge.js';
+import { NullTrace } from '../../agent/yeaft/debug-trace.js';
+import { ToolRegistry } from '../../agent/yeaft/tools/registry.js';
+import { buildTimelineRows } from '../../web/stores/helpers/vp-timeline.js';
+import VpTimelinePane from '../../web/components/VpTimelinePane.js';
+import en from '../../web/i18n/en.js';
 import { visibleQueryProgress } from '../../web/stores/helpers/query-progress.js';
 
 const storeFactories = new Map();
@@ -49,9 +59,10 @@ globalThis.Pinia = {
   useSessionsStore: () => runtimeSessionsStore,
 };
 const { useChatStore } = await import('../../web/stores/chat.js');
+const { timelineQueryProgress } = await import('../../web/components/YeaftPage.js');
 
 describe('message flow regressions', () => {
-  it('keeps progress ephemeral and Agent/Session/turn/generation scoped, terminal cannot resurrect it', () => {
+  it('keeps progress ephemeral and Agent/Session/turn/generation scoped, terminal cannot resurrect it', async () => {
     storeFactories.clear();
     const store = useChatStore();
     store.currentView = 'yeaft';
@@ -75,7 +86,7 @@ describe('message flow regressions', () => {
       .find(row => row.agentId === agentId && row.turnId === turnId);
     const visible = (turnId = 't', agentId = 'a') => visibleQueryProgress(store, { agentId, sessionId: 's', turnId, vpId: 'v' });
     let now = 1000;
-    const broker = createVpStatusBroker({ send: () => {}, now: () => ++now });
+    const broker = createVpStatusBroker({ send: frame, now: () => ++now });
     const owner = { sessionId: 's', vpId: 'v', threadId: 'main', turnId: 't', state: 'tool' };
     broker.transition(owner);
     const snapshot = (sessionId = 's') => ({ type: 'vp_status_snapshot', sessionId, statuses: broker.snapshot(sessionId) });
@@ -107,7 +118,7 @@ describe('message flow regressions', () => {
     // Same Session/VP/turn ids on a second Agent are independent owners.
     frame(start, 'b', 'conv-b');
     frame(event, 'b', 'conv-b');
-    const parallel = { ...event, turnId: 'parallel-turn', threadId: 'parallel' };
+    const parallel = { ...event, turnId: 'parallel-turn', threadId: 'parallel', modelRequests: 7 };
     const finished = { ...event, turnId: 'finished-turn', threadId: 'finished' };
     for (const progress of [parallel, finished]) {
       frame({ ...progress, type: 'vp_turn_start' });
@@ -122,6 +133,41 @@ describe('message flow regressions', () => {
     expect(visible(finished.turnId)).toBeNull();
     frame({ ...finished, revision: 2 });
     expect(visible(finished.turnId)).toBeNull();
+    // The exact YeaftPage projection must remain visibly populated even
+    // though the real broker's latest (completed) aggregate has turnId=null.
+    vi.stubGlobal('Vue', Vue);
+    const pane = mount({
+      components: { VpTimelinePane },
+      setup() {
+        const rows = Vue.computed(() => buildTimelineRows({
+          vpList: [{ vpId: 'v' }],
+          vpStatuses: { v: Object.values(store.vpStatuses).find(status => status.agentId === 'a' && status.sessionId === 's') },
+          connectionState: store.connectionState,
+        }).map(row => ({ ...row, queryProgress: timelineQueryProgress(store, row, { agentId: 'a', sessionId: 's' }) })));
+        return { rows };
+      },
+      template: '<VpTimelinePane :rows="rows" />',
+    }, { global: { mocks: { $t: (key, args = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (_, name) => args[name] ?? '') } } });
+    try {
+      expect(pane.get('.yeaft-query-progress').text()).toContain('Requests 7');
+      // A live thread with no fresh counters cannot hide an observed sibling.
+      broker.transition({ ...owner, threadId: 'unobserved', turnId: 'unobserved-turn' });
+      await Vue.nextTick();
+      expect(pane.get('.yeaft-query-progress').text()).toContain('Requests 7');
+      broker.settleIdle({ sessionId: 's', vpId: 'v', threadId: 'unobserved' });
+      broker.transition({ ...owner, state: 'streaming' });
+      frame(snapshot());
+      await Vue.nextTick();
+      expect(pane.get('.yeaft-query-progress').text()).toContain('Requests 2');
+      // Restore the parallel owner for the reconnect coverage below.
+      broker.transition({ ...owner, threadId: 'parallel', turnId: parallel.turnId, state: 'streaming' });
+      frame(snapshot());
+      await Vue.nextTick();
+      expect(pane.get('.yeaft-query-progress').text()).toContain('Requests 7');
+    } finally {
+      pane.unmount();
+      vi.unstubAllGlobals();
+    }
 
     const inventory = agents => store.handleMessage({ type: 'agent_list', agents });
     inventory(store.agents);
@@ -171,14 +217,70 @@ describe('message flow regressions', () => {
     frame({ ...event, type: 'vp_turn_end', reason: 'aborted' });
     frame({ ...event, revision: 5 });
     expect(Object.values(store.activeVpTurns)).toEqual([]);
-    frame(start);
-    expect(active().queryProgress).toBeUndefined();
-    frame({ ...event, revision: 4, stage: 'recovering', reason: 'repeated_failure' });
-    expect(active().queryProgress.stage).toBe('recovering');
-    frame({ ...event, type: 'vp_turn_end', reason: 'errored' });
-    frame({ ...event, revision: 5 });
-    expect(Object.values(store.activeVpTurns)).toEqual([]);
-    expect(store.messagesMap.conv).toEqual([]);
+    // Real Engine -> runVpTurn -> wire -> store, including the bridge's
+    // outer result/terminal handling (not a hand-crafted errored event).
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-progress-wire-'));
+    const saved = { CONFIG: ctx.CONFIG, ws: ctx.ws, outboundSendQueue: ctx.outboundSendQueue,
+      outboundSendQueueActive: ctx.outboundSendQueueActive, serverEncryptionRequired: ctx.serverEncryptionRequired };
+    try {
+      await __testResetVpState();
+      ctx.CONFIG = { yeaftDir: root };
+      ctx.ws = { readyState: 1, send() {} };
+      ctx.outboundSendQueue = [];
+      ctx.outboundSendQueueActive = true;
+      ctx.serverEncryptionRequired = false;
+      let requests = 0;
+      const persisted = [];
+      __testSetSession({ yeaftDir: root, config: { model: 'test-model', maxOutputTokens: 1024 }, trace: new NullTrace(),
+        conversationStore: {
+          append(row) { const saved = { ...row, id: `m${persisted.length + 1}`, seq: persisted.length + 1 }; persisted.push(saved); return saved; },
+          loadRecentBySession() { return []; },
+          update(row, patch) { Object.assign(row, patch); return row; },
+        },
+        toolRegistry: new ToolRegistry().register({ name: 'Read', isReadOnly: () => true, execute: async () => 'unchanged evidence' }),
+        adapter: { async *stream() {
+          if (++requests <= 13) {
+            yield { type: 'tool_call', id: `r${requests}`, name: 'Read', input: {} };
+            yield { type: 'stop', stopReason: 'tool_use' };
+          } else {
+            yield { type: 'text_delta', text: 'Blocked; task completion is not verified.' };
+            yield { type: 'stop', stopReason: 'end_turn' };
+          }
+        } },
+      });
+      __testHooks.setYeaftConversationIdForTest('conv');
+      await __testHooks.runVpTurnForTest({ prompt: 'edit and verify', sessionId: 's', vpId: 'v', threadId: 'main',
+        turnId: 't', envelope: {}, vpAbort: new AbortController(), baseSnapshot: [] });
+      const wire = ctx.outboundSendQueue.map(row => row.msg);
+      const error = wire.find(row => row.event?.type === 'error');
+      expect(requests).toBe(14);
+      expect(error.event.message).toBe('Execution paused after repeated non-progress batches; task completion was not verified.');
+      expect(wire.filter(row => row.data?.type === 'result')).toEqual([expect.objectContaining({ data: { type: 'result', result_text: '', is_error: true } })]);
+      expect(wire.filter(row => row.event?.type === 'vp_turn_end')).toEqual([expect.objectContaining({ event: expect.objectContaining({
+        reason: 'errored', detail: { code: 'no_progress', message: error.event.message },
+      }) })]);
+      // A legacy historical row without turn identity must not be reclassified.
+      store.messagesMap.conv.push({ id: 'old-response', type: 'assistant', content: 'Earlier answer',
+        sessionId: 's', speakerVpId: 'v', status: 'completed' });
+      store.messagesMap.conv.push({ id: 'new-user', type: 'user', content: 'edit and verify', sessionId: 's' });
+      for (const msg of wire) store.handleYeaftOutput({ ...msg, agentId: 'a' });
+      expect(Object.values(store.activeVpTurns)).toEqual([]);
+      expect(visible()).toBeNull();
+      const assistant = store.messagesMap.conv.filter(row => row.type === 'assistant' && row.turnId === 't');
+      expect(store.messagesMap.conv.find(row => row.id === 'old-response').status).toBe('completed');
+      expect(assistant.length).toBeGreaterThan(0);
+      expect(assistant.every(row => row.responseKind === 'progress' && row.status === 'errored' && !row.isStreaming)).toBe(true);
+      expect(assistant.some(row => row.turnEndDetail?.code === 'no_progress')).toBe(true);
+      expect(JSON.stringify(store.messagesMap.conv)).toContain(error.event.message);
+      frame({ ...event, revision: 999 });
+      expect(visible()).toBeNull();
+    } finally {
+      await __testResetVpState();
+      __testHooks.resetVpStatusBroker();
+      __testSetSession(null);
+      Object.assign(ctx, saved);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
   it('opens an exact cross-Agent Session without loading the previous Agent and migrates the full runtime state', () => {
     storeFactories.clear();

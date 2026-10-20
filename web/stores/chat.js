@@ -6138,7 +6138,10 @@ export const useChatStore = defineStore('chat', {
               if (event.sessionId && mSessionId && mSessionId !== event.sessionId) continue;
               if (event.vpId && m.speakerVpId && m.speakerVpId !== event.vpId) continue;
               if (event.turnId && m.turnId && m.turnId !== event.turnId) continue;
-              if (m.status && m.status !== 'pending') continue;
+              // The preceding result frame may have already finished streaming
+              // and stamped `completed`. Failure metadata is authoritative.
+              if (m.status && m.status !== 'pending'
+                  && !(m.status === 'completed' && nextStatus === 'errored' && m.turnId === event.turnId)) continue;
               m.status = nextStatus;
               m.turnEndAt = stampedAt;
               m.turnEndReason = event.reason || null;
@@ -6278,6 +6281,8 @@ export const useChatStore = defineStore('chat', {
             state: event.state,
             since: event.since || Date.now(),
             turnId: event.turnId || null,
+            runningThreadCount: event.runningThreadCount || 0,
+            threads: Array.isArray(event.threads) ? event.threads : [],
             title: event.title || '',
             sessionId,
             vpId: event.vpId,
@@ -6327,6 +6332,8 @@ export const useChatStore = defineStore('chat', {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
+                runningThreadCount: row.runningThreadCount || 0,
+                threads: Array.isArray(row.threads) ? row.threads : [],
                 title: row.title || '',
                 sessionId: rowSessionId,
                 vpId: row.vpId,
@@ -6352,6 +6359,8 @@ export const useChatStore = defineStore('chat', {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
+                runningThreadCount: row.runningThreadCount || 0,
+                threads: Array.isArray(row.threads) ? row.threads : [],
                 title: row.title || '',
                 sessionId: rowSessionId,
                 vpId: row.vpId,
