@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { createBashTool } from '../../../agent/yeaft/tools/bash.js';
+import fileReadTool from '../../../agent/yeaft/tools/file-read.js';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function setup(response) {
   const requests = [];
@@ -76,15 +80,18 @@ describe('query progress Engine boundaries', () => {
   });
 
   it('never replays an uncertain side effect and retains a result for every rejected tool call', async () => {
-    const { engine, requests } = setup(n => n <= 3 ? [call(`w${n}`, 'Send'), stop]
-      : [{ type: 'text_delta', text: 'Need to verify delivery state.' }, { type: 'stop', stopReason: 'end_turn' }]);
-    let executions = 0;
-    engine.registerTool({ name: 'Send', execute: async () => { executions++; throw Error('connection timeout after dispatch'); } });
-    const events = await consume(engine);
-    expect(executions).toBe(1);
-    expect(events.filter(e => e.type === 'tool_end')).toHaveLength(3);
-    expect(events.filter(e => e.type === 'tool_end' && e.suppressed)).toHaveLength(2);
-    expect(JSON.stringify(requests.at(-1).messages)).toContain('side effects may already have happened');
+    for (const error of ['connection timeout after dispatch', 'schema migration timeout after dispatch',
+      'validation request disconnected after dispatch']) {
+      const { engine, requests } = setup(n => n <= 3 ? [call(`w${n}`, 'Send'), stop]
+        : [{ type: 'text_delta', text: 'Need to verify delivery state.' }, { type: 'stop', stopReason: 'end_turn' }]);
+      let executions = 0;
+      engine.registerTool({ name: 'Send', execute: async () => { executions++; throw Error(error); } });
+      const events = await consume(engine);
+      expect(executions, error).toBe(1);
+      expect(events.filter(e => e.type === 'tool_end')).toHaveLength(3);
+      expect(events.filter(e => e.type === 'tool_end' && e.suppressed)).toHaveLength(2);
+      expect(JSON.stringify(requests.at(-1).messages)).toContain('side effects may already have happened');
+    }
 
     // A command may create the missing file before a later step fails. The
     // previously blocked read must execute to verify, but never replay the write.
@@ -132,19 +139,22 @@ describe('query progress Engine boundaries', () => {
   });
 
   it('treats distinct negative read observations as evidence, not repeated failures', async () => {
-    const { engine, requests, rows } = setup(n => n <= 20
-      ? [call(`candidate-${n}`, 'Read', { path: `candidate-${n}.json` }), stop]
-      : [{ type: 'text_delta', text: 'Found target.' }, { type: 'stop', stopReason: 'end_turn' }]);
-    engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async ({ path }) => {
-      if (path !== 'candidate-20.json') throw Error(`ENOENT: ${path}`);
-      return 'target evidence';
-    } });
-    const events = await consume(engine);
-    expect(requests).toHaveLength(21);
-    expect(rows.some(row => row.role === 'tool' && row.content === 'target evidence')).toBe(true);
-    expect(events.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({
-      stage: 'running', repeatedCalls: 0, failedCalls: 19, stagnantBatches: 0,
-    });
+    const dir = await mkdtemp(join(tmpdir(), 'yeaft-schema-validation-forbidden-'));
+    try {
+      await writeFile(join(dir, 'candidate-20.json'), 'target evidence');
+      const { engine, requests, rows } = setup(n => n <= 20
+        ? [call(`candidate-${n}`, 'FileRead', { file_path: join(dir, `candidate-${n}.json`) }), stop]
+        : [{ type: 'text_delta', text: 'Found target.' }, { type: 'stop', stopReason: 'end_turn' }]);
+      engine.registerTool(fileReadTool);
+      const events = await consume(engine);
+      expect(requests).toHaveLength(21);
+      expect(rows.some(row => row.role === 'tool' && row.content.includes('target evidence'))).toBe(true);
+      expect(events.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({
+        stage: 'running', repeatedCalls: 0, failedCalls: 19, stagnantBatches: 0,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it.each([false, true])('consumes an owned completion accepted during reporting (another task pending: %s)', async remainingTask => {

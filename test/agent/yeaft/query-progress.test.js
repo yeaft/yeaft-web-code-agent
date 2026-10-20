@@ -133,7 +133,8 @@ describe('query-local progress evidence', () => {
     for (let i = 0; i < 12; i++) {
       progress.observe({
         call: { name: 'FileRead', input: { path: `candidate-${i}` } },
-        output: i % 2 ? 'EACCES: permission denied' : 'invalid_arguments: required property path',
+        output: i % 2 ? 'EACCES: permission denied'
+          : JSON.stringify({ error: 'required property path', code: 'invalid_arguments', errorEffect: 'none' }),
         readOnly: true, isError: true,
       });
       progress.finishBatch();

@@ -36,9 +36,15 @@ function failureKind(output, call) {
       && contract.failureType === 'exit_nonzero' && contract.terminationConfirmed === true
       && contract.timedOut === false && Number.isInteger(contract.exitCode)) return 'terminated_command';
   if (contract?.errorEffect === 'unknown' || contract?.replaySafe === false) return 'uncertain';
-  if (/invalid[_ ]arguments|validation|schema|unexpected parameter|required propert/i.test(text)) return 'validation';
-  if (/EPERM|EACCES|permission denied|access denied|forbidden/i.test(text)) return 'permission';
-  if (/timed?\s*out|timeout|ECONNRESET|disconnect|socket hang up|connection closed/i.test(text)) return 'uncertain';
+  const message = typeof contract?.error === 'string' ? contract.error : text;
+  // Lifecycle uncertainty outranks error wording. Business words (e.g. schema
+  // migration) are never proof that a dispatched operation had no side effects.
+  if (/timed?\s*out|timeout|ECONNRESET|disconnect|socket hang up|connection closed/i.test(message)) return 'uncertain';
+  // Match the registry's explicit pre-execution validation contract, not words
+  // in arbitrary messages or file paths such as /schema/validation/*.json.
+  if (contract?.code === 'invalid_arguments' && contract.errorEffect === 'none') return 'validation';
+  if (['EPERM', 'EACCES'].includes(contract?.code)
+      || /^(?:Error:\s*)?(?:Failed to read file:\s*)?(?:EPERM\b|EACCES\b|permission denied\b|access denied\b|forbidden\b)/i.test(message)) return 'permission';
   return resultHash(output);
 }
 
