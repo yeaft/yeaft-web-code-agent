@@ -1,7 +1,7 @@
 /**
- * Query-local loop evidence. Activity is not completion: only changed successful
- * results count as observed evidence. No transcript, arguments or result bodies
- * escape this object. Polling/waiting is neutral, not stagnation or progress.
+ * Query-local loop evidence. Activity is not completion: only changed observations
+ * (including new negative reads) count as evidence. No transcript, arguments or
+ * result bodies escape this object. Polling/waiting is neutral, not stagnation or progress.
  */
 import { createHash } from 'node:crypto';
 import { argsHashOf } from './tool-folding/exec-log.js';
@@ -25,10 +25,16 @@ function resultHash(output) {
   return createHash('sha256').update(typeof output === 'string' ? output : JSON.stringify(output) || '').digest('hex');
 }
 
-function failureKind(output) {
+function failureKind(output, call) {
   const text = typeof output === 'string' ? output : JSON.stringify(output) || '';
   let contract;
   try { contract = typeof output === 'string' ? JSON.parse(output) : output; } catch { /* legacy text errors */ }
+  // Confirmed nonzero exit is not rollback evidence. It is, however, a finished
+  // command that can be revalidated after an edit or new input, unlike a timeout
+  // or an operation whose lifecycle is still unknown.
+  if (call.name === 'Bash' && contract?.code === 'bash_exit_nonzero'
+      && contract.failureType === 'exit_nonzero' && contract.terminationConfirmed === true
+      && contract.timedOut === false && Number.isInteger(contract.exitCode)) return 'terminated_command';
   if (contract?.errorEffect === 'unknown' || contract?.replaySafe === false) return 'uncertain';
   if (/invalid[_ ]arguments|validation|schema|unexpected parameter|required propert/i.test(text)) return 'validation';
   if (/EPERM|EACCES|permission denied|access denied|forbidden/i.test(text)) return 'permission';
@@ -63,11 +69,12 @@ export class QueryProgress {
     this.#batch = { evidence: false, repeated: false, failed: false };
   }
 
-  /** Never replay an identical failed operation; its side effects may be unknown. */
+  /** Limit unchanged failures; never automatically replay an uncertain mutation. */
   blocked(call) {
     const failure = this.#failures.get(`${call.name}:${argsHashOf(call.input)}`);
     // A possibly committed mutation must be verified before even the first replay.
-    if (!failure || (failure.count < FAILURE_LIMIT && !(failure.kind === 'uncertain' && !failure.readOnly))) return null;
+    if (!failure || (failure.count < FAILURE_LIMIT
+        && !(['uncertain', 'terminated_command'].includes(failure.kind) && !failure.readOnly))) return null;
     return `Blocked unchanged failed call to ${call.name} after ${failure.count} equivalent failures. This call was NOT executed. Use the earlier error to correct the arguments or choose a different supported path. If an earlier operation timed out or disconnected, its side effects may already have happened: verify the target state before retrying. Otherwise report the concrete blocker. Previous failed call: ${failure.callId}.`;
   }
 
@@ -80,7 +87,7 @@ export class QueryProgress {
     const hash = resultHash(output);
     if (isError) {
       const prior = this.#failures.get(key);
-      const kind = failureKind(output);
+      const kind = failureKind(output, call);
       if (executed && !readOnly) {
         // A partial mutation may have changed even a previously unreadable
         // resource. Permit verification, never a replay of the mutation itself.
@@ -93,8 +100,16 @@ export class QueryProgress {
       if (executed) boundedSet(this.#failures, key, {
         kind, readOnly, count: prior?.kind === kind ? prior.count + 1 : 1, callId: call.id,
       });
-      this.#batch.failed = true;
-      if (!executed || prior?.kind === kind) {
+      const repeated = !executed || prior?.kind === kind;
+      // A first negative observation for a distinct read narrows the search.
+      // Validation/permission failures are blockers, not domain evidence.
+      if (readOnly && !repeated && !['validation', 'permission', 'uncertain'].includes(kind)) {
+        this.#batch.evidence = true;
+        this.#state.lastEvidenceAt = Date.now();
+      } else {
+        this.#batch.failed = true;
+      }
+      if (repeated) {
         this.#batch.repeated = true;
         this.#state.repeatedCalls += 1;
       }
@@ -112,10 +127,10 @@ export class QueryProgress {
       } else {
         boundedSet(this.#mutations, key, hash);
         this.#results.clear();
-        // Reads that failed before a mutation may now succeed; retain all
-        // mutation failures, especially operations with uncertain side effects.
+        // Reads and confirmed, finished commands may now succeed after an
+        // edit. Unknown/timeout side effects still require explicit verification.
         for (const [failedKey, failure] of this.#failures) {
-          if (failure.readOnly) this.#failures.delete(failedKey);
+          if (failure.readOnly || failure.kind === 'terminated_command') this.#failures.delete(failedKey);
         }
         this.#batch.evidence = true;
         this.#state.lastEvidenceAt = Date.now();

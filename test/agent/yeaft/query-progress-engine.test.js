@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { createBashTool } from '../../../agent/yeaft/tools/bash.js';
 
 function setup(response) {
   const requests = [];
@@ -109,6 +110,74 @@ describe('query progress Engine boundaries', () => {
     expect(writeExecutions).toBe(1);
     expect(partialEvents.filter(e => e.type === 'tool_end')).toHaveLength(6);
     expect(partial.rows.filter(r => r.role === 'tool').some(r => r.content === 'created content')).toBe(true);
+  });
+
+  it('reruns a confirmed nonzero Bash command after a successful repair', async () => {
+    let repaired = false;
+    let executions = 0;
+    const { engine, requests } = setup(n => n === 1 || n === 3
+      ? [call(`test-${n}`, 'Bash', { command: 'npm test' }), stop]
+      : n === 2 ? [call('repair', 'FileEdit', { path: 'rfc' }), stop]
+        : [{ type: 'text_delta', text: 'Tests passed after repair.' }, { type: 'stop', stopReason: 'end_turn' }]);
+    engine.registerTool(createBashTool({ runProcessImpl: async () => {
+      executions++;
+      return { code: repaired ? 0 : 1, stdout: repaired ? 'PASS' : 'FAIL', stderr: '', timedOut: false };
+    } }));
+    engine.registerTool({ name: 'FileEdit', execute: async () => { repaired = true; return 'file repaired'; } });
+    const events = await consume(engine);
+    expect(executions).toBe(2);
+    expect(requests).toHaveLength(4);
+    expect(events.some(e => e.type === 'tool_end' && e.suppressed)).toBe(false);
+    expect(events.filter(e => e.type === 'tool_end').at(-1)).toMatchObject({ output: 'PASS' });
+  });
+
+  it('treats distinct negative read observations as evidence, not repeated failures', async () => {
+    const { engine, requests, rows } = setup(n => n <= 20
+      ? [call(`candidate-${n}`, 'Read', { path: `candidate-${n}.json` }), stop]
+      : [{ type: 'text_delta', text: 'Found target.' }, { type: 'stop', stopReason: 'end_turn' }]);
+    engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async ({ path }) => {
+      if (path !== 'candidate-20.json') throw Error(`ENOENT: ${path}`);
+      return 'target evidence';
+    } });
+    const events = await consume(engine);
+    expect(requests).toHaveLength(21);
+    expect(rows.some(row => row.role === 'tool' && row.content === 'target evidence')).toBe(true);
+    expect(events.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({
+      stage: 'running', repeatedCalls: 0, failedCalls: 19, stagnantBatches: 0,
+    });
+  });
+
+  it.each([false, true])('consumes an owned completion accepted during reporting (another task pending: %s)', async remainingTask => {
+    let engine;
+    let delivered = false;
+    const run = setup(n => {
+      if (n === 1) return [call('start', 'Start'), stop];
+      if (n <= 14) return [call(`read-${n}`, 'Read'), stop];
+      if (n === 15) {
+        delivered = engine.notifyAsyncTaskCompleted('owned', 'NEW_BACKGROUND_EVIDENCE');
+      }
+      if (n === 16 && remainingTask) {
+        expect(engine.notifyAsyncTaskCompleted('other', 'SECOND_BACKGROUND_EVIDENCE')).toBe(true);
+      }
+      return [{ type: 'text_delta', text: n === 15 ? 'Paused.' : 'Consumed new evidence.' }, { type: 'stop', stopReason: 'end_turn' }];
+    });
+    engine = run.engine;
+    engine.registerTool({ name: 'Start', execute: async (_input, ctx) => {
+      ctx.registerAsyncTask('owned');
+      if (remainingTask) ctx.registerAsyncTask('other');
+      return 'started';
+    } });
+    engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async () => 'same' });
+    const events = await consume(engine);
+    expect(delivered).toBe(true);
+    expect(run.requests).toHaveLength(remainingTask ? 17 : 16);
+    if (remainingTask) expect(JSON.stringify(run.requests[16].messages)).toContain('SECOND_BACKGROUND_EVIDENCE');
+    expect(run.requests[14].tools).toBeUndefined();
+    expect(run.requests[15].tools.length).toBeGreaterThan(0);
+    expect(JSON.stringify(run.requests[15].messages)).toContain('NEW_BACKGROUND_EVIDENCE');
+    expect(events.some(e => e.type === 'tool_result_update' && e.taskId === 'owned')).toBe(true);
+    expect(events.some(e => e.code === 'no_progress')).toBe(false);
+    expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
   });
 
   it('preserves accepted user input arriving during the reporting stream', async () => {

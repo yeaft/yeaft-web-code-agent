@@ -3949,6 +3949,13 @@ export class Engine {
       }
       if (executionPolicy?.finalize || progressReporting) {
         if (progressReporting) {
+          // An owned completion accepted during this tool-free stream resets
+          // progress. Resume at the normal pre-stream drains so both updated
+          // tool rows and folded/message deliveries reach the next request.
+          if (!progressReportPending) {
+            yield { type: 'turn_end', turnNumber, stopReason: 'async_task_continue', threadId };
+            continue;
+          }
           // The reporting allowance cannot discard input accepted during its
           // stream. Honor the same atomic input-close fence as normal endings.
           let appended = this.#drainPendingUserMessages(drainPendingUserMessages);
@@ -3967,6 +3974,10 @@ export class Engine {
             yield { type: 'turn_end', turnNumber, stopReason: 'user_append_continue', threadId };
             continue;
           }
+          // No more same-turn deliveries after this decision. Later task
+          // completions must use the coordinator rescue path, not be accepted
+          // between the final report/error yields and terminal turn_end.
+          this.retireAsyncTasks('no_progress');
           if (!responseText.trim()) {
             const report = 'Execution paused after repeated tool results or failures without observed progress. The requested task is not confirmed complete. Review the preceding tool results and resolve the blocker before resuming.';
             this.#persistConversationMessage({ role: 'assistant', content: report, responseKind: 'progress' }, { sessionId: runtimeSessionId, turnId: queryTurnId, model: currentModel, stopReason: 'no_progress', executionOrigin });
@@ -4048,7 +4059,8 @@ export class Engine {
       // tell the user the outcome or continue the work. Do not wait
       // for another user turn."
       if ((stopReason !== 'tool_use' || toolCalls.length === 0)
-          && this.#pendingAsyncTaskIds.size > 0
+          && (this.#pendingAsyncTaskIds.size > 0
+            || this.#pendingTaskResultUpdates.length > 0 || this.#pendingTaskResultMessages.length > 0)
           && !signal?.aborted) {
         const asyncTaskWaitTimeoutMs = this.#asyncTaskWaitTimeoutMs();
         const deferredTaskIds = [];

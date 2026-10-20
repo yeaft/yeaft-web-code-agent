@@ -101,6 +101,46 @@ describe('query-local progress evidence', () => {
     expect(progress.blocked(partial)).toContain('NOT executed');
   });
 
+  it('revalidates a confirmed nonzero command only after new evidence, without relaxing timeout protection', () => {
+    const call = { id: 'test', name: 'Bash', input: { command: 'npm test' } };
+    const contract = {
+      code: 'bash_exit_nonzero', failureType: 'exit_nonzero', terminationConfirmed: true,
+      timedOut: false, exitCode: 1, errorEffect: 'unknown', replaySafe: false,
+    };
+    const progress = new QueryProgress();
+    progress.observe({ call, output: JSON.stringify(contract), isError: true });
+    progress.finishBatch();
+    expect(progress.blocked(call)).toContain('NOT executed');
+    observe(progress, 'FileEdit', 'repaired source', { readOnly: false });
+    expect(progress.blocked(call)).toBeNull();
+    for (const uncertain of [
+      { ...contract, terminationConfirmed: false },
+      { ...contract, timedOut: true },
+      { ...contract, failureType: 'timeout' },
+      { ...contract, code: 'bash_execution_failed' },
+    ]) {
+      const guarded = new QueryProgress();
+      guarded.observe({ call, output: JSON.stringify(uncertain), isError: true });
+      guarded.finishBatch();
+      observe(guarded, 'FileEdit', 'repaired source', { readOnly: false });
+      guarded.resetEvidence();
+      expect(guarded.blocked(call)).toContain('NOT executed');
+    }
+  });
+
+  it('keeps distinct validation and permission errors as blockers, not negative read evidence', () => {
+    const progress = new QueryProgress();
+    for (let i = 0; i < 12; i++) {
+      progress.observe({
+        call: { name: 'FileRead', input: { path: `candidate-${i}` } },
+        output: i % 2 ? 'EACCES: permission denied' : 'invalid_arguments: required property path',
+        readOnly: true, isError: true,
+      });
+      progress.finishBatch();
+    }
+    expect(progress.snapshot()).toMatchObject({ stage: 'stopped', lastEvidenceAt: null, failedCalls: 12 });
+  });
+
   it('counts reuse and suppression but not execution; mixed new evidence clears recovery', () => {
     const progress = new QueryProgress();
     observe(progress, 'ViewImage', 'image');
