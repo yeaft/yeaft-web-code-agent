@@ -15,6 +15,7 @@ import sendMessage from '../../../agent/yeaft/tools/send-message.js';
 import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
 import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
 import listAgents from '../../../agent/yeaft/tools/list-agents.js';
+import updateAgent from '../../../agent/yeaft/tools/update-agent.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
@@ -228,12 +229,19 @@ describe('wait-agent envelope shape', () => {
       expect(conflict.agentId).toBe(spawned.agentId);
     }
     expect(getAgentRegistry().size).toBe(1);
+    expect(JSON.parse(await sendMessage.execute({ agent_id: spawned.agentId, message: 'Follow-up review' }, ctx)).success).toBe(true);
+    const superseded = JSON.parse(await agentTool.execute(canonicalRetry, ctx));
+    expect(superseded).toMatchObject({ agentId: spawned.agentId, error: expect.stringMatching(/Delegation evidence superseded/) });
+    expect(superseded).not.toHaveProperty('resultRef');
     const independent = JSON.parse(await agentTool.execute({ ...spec, name: 'independent', taskKey: 'review-independent' }, ctx));
     expect(independent.success).toBe(true);
     expect(independent.agentId).not.toBe(spawned.agentId);
     const implicit = { ...spec, name: 'implicit', taskKey: undefined };
     const first = JSON.parse(await agentTool.execute(implicit, ctx));
     expect(JSON.parse(await agentTool.execute({ ...implicit, name: 'implicit-retry' }, ctx))).toMatchObject({ reused: true, agentId: first.agentId });
+    expect(JSON.parse(await updateAgent.execute({ agent_id: first.agentId, reason: 'Collect final evidence', request_finalize: true }, ctx)).success).toBe(true);
+    // Final-report control must fence reuse before its query revision starts.
+    expect(JSON.parse(await agentTool.execute(implicit, ctx))).toMatchObject({ agentId: first.agentId, error: expect.stringMatching(/Delegation evidence superseded/) });
     const similar = JSON.parse(await agentTool.execute({ ...implicit, name: 'similar', mission: 'Review the baseline' }, ctx));
     expect(similar.success).toBe(true);
     expect(similar.agentId).not.toBe(first.agentId);
@@ -259,22 +267,35 @@ describe('wait-agent envelope shape', () => {
     expect(legacyRetry.reused).not.toBe(true);
   });
 
-  it('collects identical-text PromptAgent revisions once each while preserving live wait and cancellation', async () => {
+  it('collects PromptAgent revisions once each without reusing continuation evidence for the original delegation', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'child-reply-revision-'));
     let calls = 0;
     let releaseFollowUp;
     const followUpGate = new Promise(resolve => { releaseFollowUp = resolve; });
     const reply = 'evidence '.repeat(3000);
+    const continuationReply = 'Task B evidence';
     const adapter = { async *stream() {
-      if (calls++ > 0) await followUpGate;
-      yield { type: 'text_delta', text: reply };
+      const call = calls++;
+      if (call > 0) await followUpGate;
+      if (call === 3) {
+        yield { type: 'error', error: 'Task C failed', retryable: false };
+        return;
+      }
+      yield { type: 'text_delta', text: call === 2 ? continuationReply : reply };
       yield { type: 'stop', stopReason: 'end_turn' };
     } };
     const ctx = { cwd: dir, queryTurnId: 'reply-query', sessionId: 'ctx-session', senderVpId: 'vp-test',
       parentEngineDeps: mkDeps(adapter, { subAgentLogDir: dir }) };
+    const spec = { name: 'revisions', mission: 'Return evidence' };
+    const assertRetryRejected = async () => {
+      const retry = JSON.parse(await agentTool.execute({ ...spec, name: 'original-retry' }, ctx));
+      expect(retry).toMatchObject({ agentId: agent.id, error: expect.stringMatching(/Delegation evidence superseded/) });
+      for (const key of ['success', 'reused', 'result', 'resultRef', 'outputFile', 'taskId']) expect(retry).not.toHaveProperty(key);
+      expect(getAgentRegistry().size).toBe(1);
+    };
     let agent;
     try {
-      const spawned = JSON.parse(await agentTool.execute({ name: 'revisions', mission: 'Return evidence' }, ctx));
+      const spawned = JSON.parse(await agentTool.execute(spec, ctx));
       agent = getAgentRegistry().get(spawned.agentId);
       // The runner must not discard ctx ownership when deps omit the session.
       expect(agent.parentSessionId).toBe('ctx-session');
@@ -285,13 +306,21 @@ describe('wait-agent envelope shape', () => {
       expect(repeated).toMatchObject({ alreadyCollected: true, resultRef: first.resultRef });
       expect(repeated).not.toHaveProperty('result');
       expect(JSON.stringify(repeated).length).toBeLessThan(2500);
-      const prompted = JSON.parse(await sendMessage.execute({ agent_id: agent.id, message: 'Return identical evidence again' }, ctx));
-      expect(prompted.success).toBe(true);
+      expect(JSON.parse(await agentTool.execute(spec, ctx))).toMatchObject({ reused: true, resultRef: first.resultRef });
+      // Retry synchronously at acceptance, before the driver can start B or
+      // increment resultRevision. The queue itself must reserve ownership.
+      const promptPromise = sendMessage.execute({ agent_id: agent.id, message: 'Return identical evidence again' }, ctx);
+      const queuedRetryPromise = assertRetryRejected();
+      expect(JSON.parse(await promptPromise).success).toBe(true);
+      await queuedRetryPromise;
+      expect(agent.collectedResultRef).toBe(first.resultRef);
       const live = JSON.parse(await waitAgent.execute({ agent_id: agent.id, timeout_ms: 10 }, ctx));
       expect(live).toMatchObject({ status: STATUS.RUNNING, timedOut: true, mustCollectReply: true, stale: false });
       expect(live).not.toHaveProperty('alreadyCollected');
       expect(live.next_steps).toMatch(/must be collected/i);
       expect(live.next_steps).toMatch(/Call WaitAgent again/i);
+      expect(agent.promptReplyPending).toBe(true);
+      await assertRetryRejected();
       expect(agent.promptReplyPending).toBe(true);
       const abort = new AbortController();
       abort.abort();
@@ -299,6 +328,9 @@ describe('wait-agent envelope shape', () => {
       expect(cancelled.error).toBe('Wait cancelled');
       expect(agent.abortController.signal.aborted).toBe(false);
       releaseFollowUp();
+      await vi.waitFor(() => expect(agent.status).toBe(STATUS.IDLE));
+      await assertRetryRejected();
+      expect(agent.collectedResultRef).toBe(first.resultRef);
       const second = JSON.parse(await waitAgent.execute({ agent_id: agent.id, timeout_ms: 2000 }, ctx));
       expect(second).toMatchObject({ status: STATUS.IDLE, result: reply, mustCollectReply: false });
       expect(second.resultRef).not.toBe(first.resultRef);
@@ -306,11 +338,27 @@ describe('wait-agent envelope shape', () => {
       expect(agent.promptReplyPending).toBe(false);
       expect(agent.promptReplyPendingAt).toBeNull();
       expect(JSON.parse(await waitAgent.execute({ agent_id: agent.id }, ctx))).toMatchObject({ alreadyCollected: true, resultRef: second.resultRef });
+      await assertRetryRejected();
+      expect(JSON.parse(await sendMessage.execute({ agent_id: agent.id, message: 'Task B: return different evidence' }, ctx)).success).toBe(true);
+      const third = JSON.parse(await waitAgent.execute({ agent_id: agent.id, timeout_ms: 2000 }, ctx));
+      expect(third).toMatchObject({ status: STATUS.IDLE, result: continuationReply });
+      expect(third.resultRef).not.toBe(first.resultRef);
+      await assertRetryRejected();
+      expect(agent.collectedResultRef).toBe(third.resultRef);
+      expect(JSON.parse(await waitAgent.execute({ agent_id: agent.id }, ctx))).toMatchObject({ alreadyCollected: true, resultRef: third.resultRef });
+      expect(JSON.parse(await sendMessage.execute({ agent_id: agent.id, message: 'Task C: fail without a result' }, ctx)).success).toBe(true);
+      const failed = JSON.parse(await waitAgent.execute({ agent_id: agent.id, timeout_ms: 2000 }, ctx));
+      expect(failed).toMatchObject({ status: STATUS.FAILED, error: 'Task C failed', result: '' });
+      expect(failed.resultRef).not.toBe(third.resultRef);
+      expect(agent.resultRevision).toBe(4);
+      await assertRetryRejected();
+      expect(agent.collectedResultRef).toBe(failed.resultRef);
+      expect(JSON.parse(await waitAgent.execute({ agent_id: agent.id }, ctx))).toMatchObject({ alreadyCollected: true, resultRef: failed.resultRef });
       const closed = JSON.parse(await closeAgent.execute({ agent_id: agent.id }, ctx));
-      expect(closed.status).toBe(STATUS.CLOSED);
+      expect(closed.status).toBe(STATUS.FAILED);
       expect(agent.abortController.signal.aborted).toBe(true);
       await agent.driverPromise;
-      expect(calls).toBe(2);
+      expect(calls).toBe(4);
     } finally {
       releaseFollowUp();
       if (agent) {

@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 
-/** Stable evidence reference; liveness/status changes alone do not create new evidence. */
+/** Reference to the agent's current reply, not its initial delegation; liveness/status alone do not change it. */
 export function getAgentResultRef(agent) {
   const evidence = JSON.stringify({
     result: agent.result ?? null,

@@ -244,7 +244,7 @@ Pick a preset persona to pre-wire a tool subset and model tier:
 
 Guidelines:
 - Give a clear, focused mission — what "done" looks like
-- Exact spec retries in the same parent query/workspace reuse the existing agent (even renamed or terminal). Use a new taskKey for an intentional independent run; taskKey conflicts require a new key, not a changed spec.
+- Exact spec retries in the same parent query/workspace reuse the existing agent (even renamed or terminal), unless follow-up work superseded its original evidence; that retry is rejected, not respawned. Use a new taskKey for an intentional independent run; taskKey conflicts require a new key, not a changed spec.
 - Use expected_output when the return shape matters
 - Delegate one clear result with the workspace/base and completion evidence. Let the child choose its steps; do simple work directly. Split unrelated goals, not individual reads.
 - Usually omit budget so the child can finish. Add a budget only when the task actually needs a hard lifetime ceiling; tool exhaustion reserves one tool-free handoff and unfinished work stays budget_exceeded.
@@ -269,7 +269,7 @@ stops or finalizes work no longer needed.`,
 
 使用指南：
 - 给出清晰聚焦的 mission——"完成"是什么样子
-- 同一父级 query/workspace 内完全相同的规格重试会复用已有 Agent（含改名或已结束任务）。需要独立执行时使用新的 taskKey；同 key 规格冲突不能通过修改规格重试解决。
+- 同一父级 query/workspace 内完全相同的规格重试会复用已有 Agent（含改名或已结束任务）；若后续工作已替代原任务证据，则拒绝重试，不自动重建。需要独立执行时使用新的 taskKey；同 key 规格冲突不能通过修改规格重试解决。
 - 当返回结构重要时使用 expected_output
 - 一次只委派一个明确结果，提供工作目录/基线和完成证据，让子 Agent 自主选择步骤；简单工作直接做。拆分不相关目标，不要拆成逐个读取任务。
 - 通常省略 budget，让子 Agent 完成工作；仅当任务确实需要硬性累计上限时才设置。不要给多文件 review 人为设置极小额度。工具额度耗尽后保留一次无工具交付机会，未完成仍返回 budget_exceeded。
@@ -291,8 +291,8 @@ stops or finalizes work no longer needed.`,
       taskKey: {
         type: 'string',
         description: {
-          en: 'Optional exact task identity within this parent query/workspace. Retries reuse the agent even after completion; changing the spec under this key is an error. Use a new key for an intentional independent run.',
-          zh: '可选的父级 query/workspace 内精确任务标识；重试复用原 Agent（含已结束任务），同 key 修改任务规格会报冲突。明确需要独立执行时使用新 key。',
+          en: 'Optional exact task identity within this parent query/workspace. Retries reuse the agent even after completion, but are rejected after follow-up work supersedes its original evidence. Changing the spec under this key is an error. Use a new key for an intentional independent run.',
+          zh: '可选的父级 query/workspace 内精确任务标识；重试复用原 Agent（含已结束任务），后续工作替代原证据后则拒绝复用；同 key 修改任务规格会报冲突。明确需要独立执行时使用新 key。',
         },
       },
       baseline: {
@@ -422,6 +422,16 @@ stops or finalizes work no longer needed.`,
             agentId: agent.id,
           });
         }
+        // Identity stays reserved, but the mutable record no longer owns the
+        // original evidence after a continuation. Check accepted follow-up and
+        // finalization controls before the runner starts; revisions are a fallback.
+        if (agent.delegationSuperseded || agent.finalizationRequested || agent.resultRevision > 1) {
+          return JSON.stringify({
+            next_steps: 'Do not use this agent\'s latest reply as the original delegation evidence. Reuse the original reply if already collected; otherwise inspect the original turn in the agent log. Use a new taskKey only for intentional independent work.',
+            error: 'Delegation evidence superseded: this agent accepted follow-up work and its latest result no longer belongs to the original delegation.',
+            agentId: agent.id,
+          });
+        }
         return JSON.stringify({
           next_steps: 'This exact delegation already exists. Reuse its evidence; do not respawn it. Use ListAgents for status or WaitAgent to collect an uncollected reply; read outputFile only when the evidence is needed.',
           success: true,
@@ -462,6 +472,7 @@ stops or finalizes work no longer needed.`,
       mission: spec.mission,
       baseline: input.baseline || null,
       delegationIdentity: identity,
+      delegationSuperseded: false,
       expected_output: spec.expected_output,
       persona: spec.persona,
       personaData: persona || null,

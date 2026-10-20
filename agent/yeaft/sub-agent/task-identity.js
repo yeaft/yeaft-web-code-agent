@@ -25,6 +25,8 @@ function canonicalWorkspace(cwd) {
  * Exact, query-local delegation identity. Names are labels, not task identity.
  * No queryTurnId means a legacy caller: do not infer a scope or deduplicate it.
  * The owner is checked separately with agentBelongsToScope before reuse.
+ * Keep this initial identity reserved across continuations; their latest mutable
+ * evidence must not be returned for an original-spec retry.
  */
 export function buildDelegationIdentity(input, spec, grants, ctx = {}) {
   const queryTurnId = typeof ctx?.queryTurnId === 'string' ? ctx.queryTurnId.trim() : '';
