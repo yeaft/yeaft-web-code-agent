@@ -6,6 +6,7 @@
 import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading, restorePanels } from '../session.js';
 import { maxDbMessageId } from '../messages.js';
+import { invalidateOfflineQueryProgress } from '../query-progress.js';
 
 /**
  * Decide whether the current Yeaft agent just RESTARTED (a fresh process),
@@ -110,6 +111,9 @@ export function handleAgentList(store, msg) {
   const previousCurrentAgentOnline = !!(previousCurrentAgentId
     && previousAgents.some(a => a && a.id === previousCurrentAgentId && a.online));
   store.agents = nextAgents;
+  // Agent-only disconnects leave the browser socket/generation intact. Retire
+  // progress ownership now; an online inventory alone cannot re-authorize it.
+  invalidateOfflineQueryProgress(store);
   // Sidebar catch-up waits for an authenticated inventory of this socket, not
   // merely onopen with an old online Agent record. Routine broadcasts dedupe.
   store.workCenterActivityConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);

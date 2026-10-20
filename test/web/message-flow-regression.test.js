@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import { mount } from '@vue/test-utils';
 import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
+import { createVpStatusBroker } from '../../agent/yeaft/vp-status-broker.js';
+import { visibleQueryProgress } from '../../web/stores/helpers/query-progress.js';
 
 const storeFactories = new Map();
 function defineStore(id, options) {
@@ -59,13 +61,24 @@ describe('message flow regressions', () => {
     store.yeaftConversationIdsByAgent = { a: 'conv', b: 'conv-b' };
     store.messagesMap = { conv: [], 'conv-b': [] };
     store.connectionState = 'connected';
+    store.agents = [{ id: 'a', online: true }, { id: 'b', online: true }];
+    store.sendWsMessage = vi.fn(() => true);
+    store.requestYeaftSessionBootstrap = vi.fn();
+    store.loadOpenedYeaftSessionsForConnectedAgents = vi.fn();
     const event = { type: 'query_progress', sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main',
       revision: 1, modelRequests: 2, toolExecutions: 3, reusedCalls: 1, repeatedCalls: 1, failedCalls: 0,
       stage: 'warning', reason: 'repeated_results', lastEvidenceAt: 100, stagnantBatches: 2 };
     const frame = (e, agentId = 'a', conversationId = 'conv') => store.handleYeaftOutput({ agentId, conversationId, event: e });
     const start = { ...event, type: 'vp_turn_start' };
     frame(start);
-    const active = () => Object.values(store.activeVpTurns).find(row => row.agentId === 'a');
+    const active = (turnId = 't', agentId = 'a') => Object.values(store.activeVpTurns)
+      .find(row => row.agentId === agentId && row.turnId === turnId);
+    const visible = (turnId = 't', agentId = 'a') => visibleQueryProgress(store, { agentId, sessionId: 's', turnId, vpId: 'v' });
+    let now = 1000;
+    const broker = createVpStatusBroker({ send: () => {}, now: () => ++now });
+    const owner = { sessionId: 's', vpId: 'v', threadId: 'main', turnId: 't', state: 'tool' };
+    broker.transition(owner);
+    const snapshot = (sessionId = 's') => ({ type: 'vp_status_snapshot', sessionId, statuses: broker.snapshot(sessionId) });
     frame({ ...event, text: 'PRIVATE', input: { key: 'PRIVATE' } });
     expect(active().queryProgress).toEqual(event);
     expect(store.messagesMap.conv).toEqual([]);
@@ -76,17 +89,87 @@ describe('message flow regressions', () => {
     frame({ ...event, revision: 2 }, 'a', 'old-conv');
     frame({ ...event, revision: 0 });
     expect(active().queryProgress.revision).toBe(1);
+    // Scoped and unscoped routine broker snapshots preserve live observations.
+    frame(snapshot());
+    frame(snapshot(null));
+    expect(visible()).toEqual(event);
     store.chatHistoryConnectionGeneration++;
+    expect(visible()).toBeNull();
     frame({ ...event, revision: 2 });
     expect(active().queryProgress.revision).toBe(1);
-    frame({ type: 'vp_status_snapshot', sessionId: 's', statuses: [{ sessionId: 's', vpId: 'v', turnId: 't', state: 'tool' }] });
+    frame(snapshot());
     expect(active().queryProgress).toBeUndefined();
     frame(event);
     expect(active().queryProgress).toBeUndefined();
     frame({ ...event, revision: 2 });
     expect(active().queryProgress.revision).toBe(2);
-    frame({ ...event, type: 'vp_turn_end', reason: 'aborted' });
+
+    // Same Session/VP/turn ids on a second Agent are independent owners.
+    frame(start, 'b', 'conv-b');
+    frame(event, 'b', 'conv-b');
+    const parallel = { ...event, turnId: 'parallel-turn', threadId: 'parallel' };
+    const finished = { ...event, turnId: 'finished-turn', threadId: 'finished' };
+    for (const progress of [parallel, finished]) {
+      frame({ ...progress, type: 'vp_turn_start' });
+      frame(progress);
+      broker.transition({ ...owner, turnId: progress.turnId, threadId: progress.threadId });
+    }
+    broker.settleIdle({ sessionId: 's', vpId: 'v', threadId: 'finished' });
+    expect(snapshot().statuses[0]).toMatchObject({ turnId: null, state: 'tool', runningThreadCount: 2 });
+    frame(snapshot());
+    expect(visible()).toMatchObject({ revision: 2 });
+    expect(visible(parallel.turnId)).toEqual(parallel);
+    expect(visible(finished.turnId)).toBeNull();
+    frame({ ...finished, revision: 2 });
+    expect(visible(finished.turnId)).toBeNull();
+
+    const inventory = agents => store.handleMessage({ type: 'agent_list', agents });
+    inventory(store.agents);
+    const generation = store.chatHistoryConnectionGeneration;
+    // Server removes an Agent from agent_list on disconnect; browser WS stays up.
+    inventory([{ id: 'b', online: true }]);
+    expect(store.connectionState).toBe('connected');
+    expect(store.chatHistoryConnectionGeneration).toBe(generation);
+    expect(visible()).toBeNull();
+    expect(active().queryProgress).toBeUndefined();
+    expect(visible(parallel.turnId)).toBeNull();
+    expect(visible('t', 'b')).toEqual(event);
+    frame(snapshot());
     frame({ ...event, revision: 3 });
+    expect(active().connectionGeneration).toBe(-1);
+    inventory([{ id: 'a', online: true }, { id: 'b', online: true }]);
+    frame({ ...event, revision: 3 });
+    expect(visible()).toBeNull();
+    frame(snapshot(), 'b', 'conv-b');
+    frame(snapshot(), 'a', 'retired-conv');
+    frame({ ...snapshot(), sessionId: 'other-session' });
+    frame({ ...snapshot(), statuses: [{ sessionId: 's', vpId: 'v', turnId: 't', threadId: 'wrong-thread', state: 'tool' }] });
+    frame({ ...event, revision: 3 });
+    expect(visible()).toBeNull();
+    // The latest aggregate turn is idle/null, but BOTH live threads recover.
+    frame(snapshot());
+    expect(active().connectionGeneration).toBe(generation);
+    expect(active(parallel.turnId).connectionGeneration).toBe(generation);
+    expect(active(finished.turnId).connectionGeneration).toBe(-1);
+    expect(visible()).toBeNull();
+    frame({ ...event, revision: 2 });
+    expect(visible()).toBeNull();
+    frame({ ...event, revision: 3 });
+    frame({ ...parallel, revision: 2 });
+    expect(visible()).toMatchObject({ revision: 3 });
+    expect(visible(parallel.turnId)).toMatchObject({ revision: 2 });
+    // Explicit offline records use the same fence as the server's absent form.
+    inventory([{ id: 'a', online: false }, { id: 'b', online: true }]);
+    inventory([{ id: 'a', online: true }, { id: 'b', online: true }]);
+    expect(visible()).toBeNull();
+    frame(snapshot());
+    expect(visible()).toBeNull();
+    frame({ ...event, revision: 4 });
+    expect(visible()).toMatchObject({ revision: 4 });
+    for (const progress of [parallel, finished]) frame({ ...progress, type: 'vp_turn_end', reason: 'aborted' });
+    frame({ ...event, type: 'vp_turn_end', reason: 'aborted' }, 'b', 'conv-b');
+    frame({ ...event, type: 'vp_turn_end', reason: 'aborted' });
+    frame({ ...event, revision: 5 });
     expect(Object.values(store.activeVpTurns)).toEqual([]);
     frame(start);
     expect(active().queryProgress).toBeUndefined();
