@@ -102,7 +102,10 @@ function mountHarness() {
   app.provide('t', (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (_, name) => values[name] ?? ''));
   app.config.globalProperties.$t = key => key;
   app.mount('#app');
-  window.harness = { requests, respondSaved };
+  window.harness = {
+    requests, respondSaved,
+    setWorkDir(workDir) { sessions.sessions['agent-b\u001fsession-y'].workDir = workDir; },
+  };
 }
 
 const HTML = `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -370,6 +373,16 @@ test('SVG opens visually on desktop/narrow light/dark, zooms and preserves unsav
   expect(write).toMatchObject({ filePath: `/fixture/project/${file}`, content: `<!-- saved -->\n${SVG_CONTENT}` });
   await page.evaluate(message => window.harness.respondSaved(message), write);
   await expect(page.locator('.file-content-dirty')).toHaveCount(0);
+  // Workspace changes deactivate the previous KeepAlive host while zoom is open.
+  await page.getByRole('button', { name: 'message.imagePreview', exact: true }).click();
+  await expect(page.locator('.image-preview-overlay')).toBeVisible();
+  await page.evaluate(() => window.harness.setWorkDir('/fixture/other-project'));
+  await expect(page.locator('.image-preview-overlay')).toHaveCount(0);
+  expect(await page.evaluate(() => {
+    const key = new KeyboardEvent('keydown', { key: '+', cancelable: true });
+    document.dispatchEvent(key);
+    return key.defaultPrevented;
+  })).toBe(false);
   expect(errors).toEqual([]);
 });
 

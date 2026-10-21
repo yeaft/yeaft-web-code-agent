@@ -30,10 +30,21 @@ export default {
     const previewUrl = Vue.ref('');
     const loading = Vue.ref(true);
     const failed = Vue.ref(false);
+    let previewController = null;
+    const closePreview = () => {
+      previewController?.abort();
+      previewController = null;
+    };
+    Vue.onBeforeUnmount(closePreview);
+    Vue.onDeactivated(closePreview);
     Vue.watch(() => props.content, content => {
+      closePreview();
       loading.value = true;
       failed.value = false;
-      previewUrl.value = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(content.toWellFormed())}`;
+      // Unicode mode leaves paired surrogates intact and replaces only lone
+      // ones. String#toWellFormed is unavailable in older supported browsers.
+      const wellFormed = content.replace(/[\uD800-\uDFFF]/gu, '\uFFFD');
+      previewUrl.value = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(wellFormed)}`;
     }, { immediate: true, flush: 'sync' });
 
     const settle = (event, error) => {
@@ -44,7 +55,10 @@ export default {
     };
     const openPreview = trigger => {
       if (loading.value || failed.value) return;
+      closePreview();
+      previewController = new AbortController();
       openImagePreview(previewUrl.value, {
+        signal: previewController.signal,
         alt: props.name,
         closeLabel: t('common.close'),
         zoomOutLabel: t('message.zoomOut'),

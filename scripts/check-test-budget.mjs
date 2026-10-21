@@ -22,9 +22,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +6 PR #1846 review regressions: repaired-command revalidation, distinct negative
 // reads, two reporting-time completion paths, timeout safety, validation blockers.
 // Delegation/UI recovery extend existing lifecycle cases without extra cases.
-// +5 SVG preview boundaries: editable/default mode, opaque URL/stale decode,
-// responsive edit/undo/save/zoom, animated image security, invalid-source recovery.
-export const TEST_CASE_LIMIT = 576;
+// +6 SVG preview boundaries: editable/default mode, opaque URL/stale decode,
+// responsive edit/undo/save/zoom, animated image security, invalid-source recovery,
+// and zoom ownership disposal. Legacy string API coverage extends the URL case.
+export const TEST_CASE_LIMIT = 577;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
