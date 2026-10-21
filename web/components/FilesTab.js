@@ -5,6 +5,7 @@ import { createFileOperations } from './files/fileOperations.js';
 import { createFileTree } from './files/fileTree.js';
 import { createFileEditor, getFileType, isPreviewableTextFile } from './files/fileEditor.js';
 import { createFilePreview } from './files/filePreview.js';
+import SvgPreview from './files/SvgPreview.js';
 import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
@@ -127,6 +128,7 @@ export function createFileCloseEventHandlers({ liveStore, props, tabs, isDispose
 
 export default {
   name: 'FilesTab',
+  components: { SvgPreview },
   props: {
     treeInitiallyVisible: { type: Boolean, default: true },
     routeKey: { type: String, required: true },
@@ -367,6 +369,7 @@ export default {
             <iframe :key="activeFile.path" :srcdoc="htmlPreviewDocument" sandbox="" referrerpolicy="no-referrer"
               :title="$t('files.htmlPreviewTitle', { name: activeFile.name })" class="file-preview-iframe html-preview-iframe"></iframe>
           </div>
+          <SvgPreview v-if="isActiveSvg && textPreviewMode" :key="activeFile.path" :content="activeFile.content || ''" :name="activeFile.name" />
           <!-- 搜索/替换栏 + CodeMirror 编辑器 -->
           <template v-if="!isActiveTextPreview || !textPreviewMode">
           <div class="find-replace-bar" v-if="findBarVisible">
@@ -713,7 +716,7 @@ export default {
     const isTextZoomAvailable = Vue.computed(() => {
       const file = tabs?.activeFile.value;
       return !!file && (!file.fileType || file.fileType === 'text')
-        && !(preview?.isActiveHtml.value && preview.textPreviewMode.value);
+        && !((preview?.isActiveHtml.value || preview?.isActiveSvg.value) && preview.textPreviewMode.value);
     });
     const onWheel = (e) => {
       if (!isTextZoomAvailable.value) return;
@@ -1110,7 +1113,7 @@ export default {
       isActiveMarkdown: preview.isActiveMarkdown, textPreviewMode: preview.textPreviewMode,
       mdRenderedHtml: preview.mdRenderedHtml, switchToTextEdit: preview.switchToTextEdit,
       switchToTextPreview: preview.switchToTextPreview,
-      isActiveTextPreview: preview.isActiveTextPreview, isActiveHtml: preview.isActiveHtml,
+      isActiveTextPreview: preview.isActiveTextPreview, isActiveHtml: preview.isActiveHtml, isActiveSvg: preview.isActiveSvg,
       htmlPreviewDocument: preview.htmlPreviewDocument,
       folderPickerOpen: fp.folderPickerOpen, folderPickerPath: fp.folderPickerPath,
       folderPickerEntries: fp.folderPickerEntries, folderPickerLoading: fp.folderPickerLoading,

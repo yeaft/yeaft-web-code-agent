@@ -54,7 +54,9 @@ On Windows, the top-level drive list shows only fixed disks, not mapped network 
 - use `Ctrl+S` to save on the Agent
 - preview Markdown, images, PDFs, supported Office documents, and browser-supported MP4, M4V, WebM, OGV/OGG, and MOV videos; videos stream from the Agent and can also be downloaded
 
-HTML (`.html` / `.htm`) and Markdown open in Preview by default. Switch between **Preview / Edit**; preview reflects your current edits, including unsaved changes. HTML uses an isolated static preview with inline styles and data images. Scripts, link navigation, form submission, and external or relative-path resources are disabled. Use your project’s local development server for interactive or multi-file pages.
+SVG (`.svg`), HTML (`.html` / `.htm`), and Markdown open in Preview by default. Switch between **Preview / Edit**; preview reflects your current edits, including unsaved changes. HTML uses an isolated static preview with inline styles and data images. Scripts, link navigation, form submission, and external or relative-path resources are disabled. Use your project’s local development server for interactive or multi-file pages.
+
+SVG renders in safe image mode with gradients, filters, and self-contained CSS/SMIL animations. JavaScript and linked resources are disabled. Click the image to zoom; invalid SVG shows an error while Edit remains available to fix the source.
 
 Clicking a file reference in a response opens Workbench directly in Files for the current Session route, loads the file, and reveals the starting line when specified. Markdown links, inline code, and plain-text paths are supported, including `src/main.js:20-35`, `src/main.js#L20-L35`, and Unicode filenames. Put paths containing spaces in inline code or Markdown links.
 
@@ -85,7 +87,7 @@ Browser embeds HTTP/HTTPS pages directly in your client browser. It does not sta
 - URLs are scoped to the owning Agent/Session or WorkItem and workspace, kept only for the lifetime of the Workbench component. Switching tools restores the last opened URL; closing the Browser tab clears it. Refreshing Yeaft clears this ephemeral state.
 - `localhost` and private network addresses refer to your **client device and network**, not the Agent. An HTTPS Yeaft page may block HTTP content.
 - Sites can refuse embedding using CSP or `X-Frame-Options`. A blank iframe is not proof the site loaded; use **Open in new tab**. Yeaft does not bypass these restrictions.
-- The iframe allows scripts and forms but not same-origin access, popups, or top-level navigation. This protects the control plane, but may limit sign-in, storage, and interaction. Credentials in URLs and destinations on Yeaft’s origin are rejected. Embedded content does not inherit Yeaft’s visual theme.
+- Unlike the Files panel’s static HTML preview, Browser allows JavaScript (inline and external scripts) and forms, but not same-origin access, popups, or top-level navigation. Module scripts and `fetch` remain subject to CORS, and sign-in or storage may be limited. Use **Open in new tab** when full site capabilities are needed. Credentials in URLs and destinations on Yeaft’s origin are rejected. Embedded content does not inherit Yeaft’s visual theme.
 
 Legacy Agent Browser Runtime configuration/CLI remains for compatibility; this Workbench view does not use it. No existing runtime process or instance data is changed by opening this view.
 

@@ -33,8 +33,12 @@ export function isHtmlFile(name) {
   return dot >= 0 && HTML_EXT.has(name.substring(dot).toLowerCase());
 }
 
+export function isSvgFile(name) {
+  return name.toLowerCase().endsWith('.svg');
+}
+
 export function isPreviewableTextFile(name) {
-  return isMarkdownFile(name) || isHtmlFile(name);
+  return isMarkdownFile(name) || isHtmlFile(name) || isSvgFile(name);
 }
 
 export function getModeForFile(filename) {

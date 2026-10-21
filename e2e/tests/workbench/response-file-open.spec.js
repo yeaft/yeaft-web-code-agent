@@ -293,3 +293,150 @@ test('Markdown retains default Preview, unsaved rendering, undo and correlated s
   await page.evaluate(message => window.harness.respondSaved(message), write);
   await expect(page.locator('.file-content-dirty')).toHaveCount(0);
 });
+
+const SVG_CONTENT = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 240 120">
+  <defs><linearGradient id="paint"><stop stop-color="#067a68"/><stop offset="1" stop-color="#75e3c1"/></linearGradient>
+    <filter id="shadow"><feGaussianBlur stdDeviation="1"/></filter><path id="shape" d="M0 0h30v30H0z"/></defs>
+  <rect width="240" height="120" fill="#f3f4f6"/>
+  <use xlink:href="#shape" x="180" y="20" fill="url(#paint)" filter="url(#shadow)"/>
+  <rect x="10" y="25" width="40" height="40" fill="#067a68"><animate attributeName="x" values="10;110;10" dur="1s" repeatCount="indefinite"/></rect>
+  <style>@keyframes fade { from { opacity: .2 } to { opacity: 1 } } .css-motion { animation: fade .5s infinite alternate; }</style>
+  <circle class="css-motion" cx="200" cy="85" r="12" fill="#067a68"/>
+  <text x="10" y="100" font-size="16">SVG preview 中文</text>
+</svg>`;
+
+async function expectSvgPreview(page) {
+  await expect(page.getByRole('button', { name: 'files.preview', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const image = page.locator('.svg-preview-image');
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(el => el.complete && el.naturalWidth > 0)).toBe(true);
+  await expect(page.locator('.CodeMirror, .svg-preview-container iframe, .svg-preview-container svg')).toHaveCount(0);
+  return image;
+}
+
+// Returns pixels from the image renderer, not an inline SVG DOM. This verifies
+// real gradients/filter/use and animation rendering in the image security mode.
+async function svgPixels(image) {
+  return image.evaluate(el => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 240; canvas.height = 120;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(el, 0, 0, 240, 120);
+    return Array.from(ctx.getImageData(0, 0, 240, 120).data);
+  });
+}
+
+test('SVG opens visually on desktop/narrow light/dark, zooms and preserves unsaved source/undo/save', async ({ page, harness }, testInfo) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const file = 'docs/场景.SVG';
+  for (const theme of ['light', 'dark']) {
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(htmlHarnessUrl(harness, { file, content: SVG_CONTENT, theme }));
+      await openReference(page, file);
+      const image = await expectSvgPreview(page);
+      const bounds = await image.boundingBox();
+      expect(bounds.width).toBeGreaterThan(20);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
+      // Local fragment references and filters must still paint in image mode.
+      const pixels = await svgPixels(image);
+      const pixel = (x, y) => pixels.slice((y * 240 + x) * 4, (y * 240 + x) * 4 + 4);
+      expect(pixel(195, 35)).not.toEqual(pixel(230, 35));
+      await testInfo.attach(`svg-${theme}-${width}`, { body: await page.screenshot(), contentType: 'image/png' });
+      await page.getByRole('button', { name: 'message.imagePreview', exact: true }).click();
+      await expect(page.locator('.image-preview-overlay')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.image-preview-overlay')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'message.imagePreview', exact: true })).toBeFocused();
+    }
+  }
+  // Unsaved edits render immediately; returning to Edit retains undo history.
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await expect(page.locator('.CodeMirror')).toBeVisible();
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.replaceRange('<!-- unsaved -->\n', { line: 0, ch: 0 }));
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  const image = await expectSvgPreview(page);
+  expect(await image.evaluate(async el => (await fetch(el.src)).text())).toContain('<!-- unsaved -->');
+  await expect(page.locator('.file-content-dirty')).toBeVisible();
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.undo());
+  await expect(page.locator('.file-content-dirty')).toHaveCount(0);
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.replaceRange('<!-- saved -->\n', { line: 0, ch: 0 }));
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  await expectSvgPreview(page);
+  await saveButton(page).click();
+  const write = await page.evaluate(() => window.harness.requests.find(msg => msg.type === 'write_file'));
+  expect(write).toMatchObject({ filePath: `/fixture/project/${file}`, content: `<!-- saved -->\n${SVG_CONTENT}` });
+  await page.evaluate(message => window.harness.respondSaved(message), write);
+  await expect(page.locator('.file-content-dirty')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('SVG image mode animates but never runs scripts, navigates or fetches linked resources', async ({ page, context, harness }) => {
+  const attempts = [];
+  const isProbe = url => url.pathname.includes('__svg-preview-probe__');
+  context.on('request', request => { if (isProbe(new URL(request.url()))) attempts.push(request.url()); });
+  await context.route(isProbe, route => route.abort());
+  const content = SVG_CONTENT.replace('</svg>', `
+    <script>parent.__svgPreviewTouched = true;
+      try { localStorage.setItem('__svgPreviewTouched', 'owned'); document.documentElement.setAttribute('data-storage', 'allowed'); }
+      catch { document.documentElement.setAttribute('data-storage', 'denied'); }
+    </script>
+    <script href="/__svg-preview-probe__/script.js"/>
+    <style>@import url('https://preview.invalid/__svg-preview-probe__/style.css'); text { font-family: probe; }
+      @font-face { font-family: probe; src: url('/__svg-preview-probe__/font.woff2'); }</style>
+    <image href="https://preview.invalid/__svg-preview-probe__/image.png" width="10" height="10"/>
+    <use href="/__svg-preview-probe__/other.svg#shape"/>
+    <a href="/__svg-preview-probe__/navigate" target="_top"><rect width="240" height="120" fill="transparent"/>
+      <set attributeName="href" to="/__svg-preview-probe__/smil" begin="0s"/></a>
+    <foreignObject width="240" height="120"><div xmlns="http://www.w3.org/1999/xhtml">
+      <img src="/__svg-preview-probe__/html.png" onerror="parent.__svgPreviewTouched = true"/>
+      <iframe src="/__svg-preview-probe__/frame"/>
+    </div></foreignObject>
+  </svg>`).replace('viewBox="0 0 240 120"', 'viewBox="0 0 240 120" onload="parent.__svgPreviewTouched = true"');
+  await page.goto(htmlHarnessUrl(harness, { file: 'scene.svg', content: SVG_CONTENT }));
+  await openReference(page, 'scene.svg');
+  const image = await expectSvgPreview(page);
+  const firstPixels = await svgPixels(image);
+  // A positive rendered-pixel change proves declarative animation survives.
+  await expect.poll(async () => JSON.stringify(await svgPixels(image)) !== JSON.stringify(firstPixels)).toBe(true);
+  // foreignObject deliberately taints canvas reads, so probe its security with
+  // real request/navigation/parent-DOM observation instead of canvas pixels.
+  await page.goto(htmlHarnessUrl(harness, { file: 'scene.svg', content }));
+  await page.evaluate(() => { window.__svgPreviewTouched = false; });
+  await openReference(page, 'scene.svg');
+  await expectSvgPreview(page);
+  await page.getByRole('button', { name: 'message.imagePreview', exact: true }).click();
+  await expect(page.locator('.image-preview-overlay')).toBeVisible();
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => window.__svgPreviewTouched)).toBe(false);
+  expect(attempts).toEqual([]);
+  expect(page.url()).toBe(htmlHarnessUrl(harness, { file: 'scene.svg', content }));
+  // The exact image URL can be opened as an active SVG document through native
+  // browser UI. It must never inherit Yeaft's origin or access its credentials.
+  const source = await page.locator('.svg-preview-image').getAttribute('src');
+  expect(source).toMatch(/^data:image\/svg\+xml;/);
+  const direct = await context.newPage();
+  await direct.goto(source);
+  await expect(direct.locator('svg')).toHaveAttribute('data-storage', 'denied');
+  expect(await direct.evaluate(() => window.origin)).toBe('null');
+  expect(await page.evaluate(() => localStorage.getItem('__svgPreviewTouched'))).toBeNull();
+  await direct.close();
+});
+
+test('invalid or empty SVG exposes an error and can be repaired from Edit without saving', async ({ page, harness }) => {
+  await page.goto(htmlHarnessUrl(harness, { file: 'broken.svg', content: '<svg>malformed' }));
+  await openReference(page, 'broken.svg');
+  await expect(page.locator('.svg-preview-container [role="alert"]')).toHaveText('files.svgPreviewLoadFailed');
+  await expect(page.locator('.svg-preview-container [role="status"]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue(''));
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  await expect(page.locator('.svg-preview-container [role="alert"]')).toHaveText('files.svgPreviewLoadFailed');
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await page.evaluate(content => document.querySelector('.CodeMirror').CodeMirror.setValue(content), SVG_CONTENT);
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  await expectSvgPreview(page);
+  await expect(page.locator('.file-content-dirty')).toBeVisible();
+});
