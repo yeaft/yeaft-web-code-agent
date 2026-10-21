@@ -42,12 +42,21 @@ async function externalPages(page) {
     const path = new URL(request.url()).pathname;
     // Count document navigations, not incidental native-tab favicon requests.
     if (request.isNavigationRequest()) requests.push({ url: request.url(), referer: request.headers().referer || '', path });
+    if (path === '/preview.js') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/javascript',
+        body: "document.getElementById('external-script').textContent = 'External script executed';",
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'text/html; charset=utf-8',
       headers: path === '/blocked' ? { 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" } : {},
       body: `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>External ${path}</title></head>
-        <body><h1>External ${path}</h1><p id="script">Script pending</p>
+        <body><h1>External ${path}</h1><p id="script">Script pending</p><p id="external-script">External script pending</p>
+        <script src="${ORIGIN}/preview.js"></script>
         <script>
           let parentAccess = 'allowed';
           try { void parent.document.cookie; } catch { parentAccess = 'denied'; }
@@ -111,6 +120,7 @@ async function rendered(page, path, panel = page.locator('.workbench-panel:visib
   await expect(panel.locator('.browser-frame')).toHaveAttribute('src', `${ORIGIN}${path}`);
   await expect(panel.frameLocator('.browser-frame').getByRole('heading', { name: `External ${path}`, exact: true })).toBeVisible();
   await expect(panel.frameLocator('.browser-frame').locator('#script')).toHaveText('Script executed; parent access denied');
+  await expect(panel.frameLocator('.browser-frame').locator('#external-script')).toHaveText('External script executed');
 }
 
 async function oneNavigation(page, requests, path, action, panel = page.locator('.workbench-panel:visible')) {

@@ -77,9 +77,9 @@ describe('test budget gate', () => {
   });
 
   it('enforces the combined case budget and rejects invalid counts', () => {
-    expect(TEST_CASE_LIMIT).toBe(571);
-    expect(checkCaseBudget({ unit: 518, browser: 53 })).toMatchObject({ total: 571, exceeded: false });
-    expect(checkCaseBudget({ unit: 519, browser: 53 })).toMatchObject({ total: 572, exceeded: true });
+    expect(TEST_CASE_LIMIT).toBe(577);
+    expect(checkCaseBudget({ unit: 521, browser: 56 })).toMatchObject({ total: 577, exceeded: false });
+    expect(checkCaseBudget({ unit: 522, browser: 56 })).toMatchObject({ total: 578, exceeded: true });
     expect(() => checkCaseBudget({ unit: NaN, browser: 0 })).toThrow('Invalid collected test count');
     expect(() => checkCaseBudget({ unit: -1, browser: 0 })).toThrow('Invalid collected test count');
   });

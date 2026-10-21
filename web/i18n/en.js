@@ -1746,6 +1746,8 @@ export default {
   'files.videoPreviewLoadFailed': 'The video could not be played. Its codec may not be supported by this browser.',
   'files.videoStreamUnavailable': 'Video streaming is unavailable for this Agent or Session.',
   'files.htmlPreviewStatic': 'Static preview · scripts and linked resources are disabled',
+  'files.svgPreviewSafe': 'Image preview · scripts and linked resources are disabled; CSS/SMIL animations are supported',
+  'files.svgPreviewLoadFailed': 'The SVG could not be rendered. Switch to Edit to check the source.',
   'files.htmlPreviewTitle': 'HTML preview: {name}',
   'files.preview': 'Preview',
   'files.edit': 'Edit',

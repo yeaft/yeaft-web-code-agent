@@ -1744,6 +1744,8 @@ export default {
   'files.videoPreviewLoadFailed': '视频无法播放，当前浏览器可能不支持该视频编码。',
   'files.videoStreamUnavailable': '当前 Agent 或 Session 不支持视频流式播放。',
   'files.htmlPreviewStatic': '静态预览 · 不执行脚本或加载链接资源',
+  'files.svgPreviewSafe': '图片预览 · 不执行脚本或加载链接资源，支持 CSS/SMIL 动画',
+  'files.svgPreviewLoadFailed': 'SVG 渲染失败，请切换到编辑检查源码。',
   'files.htmlPreviewTitle': 'HTML 预览：{name}',
   'files.preview': '预览',
   'files.edit': '编辑',

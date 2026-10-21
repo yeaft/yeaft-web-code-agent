@@ -18,6 +18,10 @@ const ZOOM_STEP = 0.25;
  * Click the backdrop or press Escape to close. Multi-image galleries support
  * previous/next controls and the Left/Right arrow keys. Scroll over the image
  * to zoom around the pointer; +, -, and 0 are keyboard alternatives.
+ * @param {string} src Image source URL.
+ * @param {object} [options] Labels, gallery, trigger, and optional lifecycle signal.
+ * @param {AbortSignal} [options.signal] Owner abort removes the overlay immediately
+ * without restoring focus into a stale route. Existing callers still receive the DOM overlay.
  */
 export function openImagePreview(src, {
   alt = 'Preview',
@@ -31,8 +35,9 @@ export function openImagePreview(src, {
   gallery = null,
   initialIndex = null,
   trigger = null,
+  signal = null,
 } = {}) {
-  if (!src) return null;
+  if (!src || signal?.aborted) return null;
 
   const entries = (Array.isArray(gallery) ? gallery : [src])
     .map(entry => normalizeGalleryEntry(entry, alt))
@@ -186,7 +191,18 @@ export function openImagePreview(src, {
   const remove = () => {
     if (fallbackTimer) clearTimeout(fallbackTimer);
     fallbackTimer = null;
+    signal?.removeEventListener('abort', dispose);
+    overlay.removeEventListener('transitionend', remove);
     if (overlay.isConnected) overlay.remove();
+  };
+  const cleanupListeners = () => {
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', updateZoom);
+  };
+  const dispose = () => {
+    closing = true;
+    cleanupListeners();
+    remove();
   };
   const close = () => {
     if (closing) return;
@@ -194,8 +210,7 @@ export function openImagePreview(src, {
     overlay.classList.remove('visible');
     overlay.addEventListener('transitionend', remove, { once: true });
     fallbackTimer = setTimeout(remove, 250);
-    document.removeEventListener('keydown', onKey);
-    window.removeEventListener('resize', updateZoom);
+    cleanupListeners();
     if (trigger?.isConnected && typeof trigger.focus === 'function') trigger.focus();
   };
 
@@ -280,5 +295,7 @@ export function openImagePreview(src, {
 
   document.addEventListener('keydown', onKey);
   window.addEventListener('resize', updateZoom);
+  if (signal?.aborted) dispose();
+  else signal?.addEventListener('abort', dispose, { once: true });
   return overlay;
 }
