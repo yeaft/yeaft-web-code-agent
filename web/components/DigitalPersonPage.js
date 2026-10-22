@@ -17,7 +17,8 @@ import { PERSON_FILE_ACCEPT, validatePersonFiles, uploadPersonFiles } from '../s
 import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
 import PersonResponseLoading from './PersonResponseLoading.js';
-import { createPersonConversationProjector } from '../utils/person-conversation.js';
+import { createPersonConversationProjector, personResponseOrigins } from '../utils/person-conversation.js';
+import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.js';
 import { projectPersonActivity, projectPersonFeedback } from '../utils/person-activity.js';
 import { useAuthStore } from '../stores/auth.js';
 import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
@@ -67,6 +68,7 @@ export default {
     const messagePane = Vue.ref(null);
     const readingColumn = Vue.ref(null);
     const transcript = Vue.ref(null);
+    const followingLatest = Vue.ref(true);
     const transcriptIdentity = Vue.computed(() => JSON.stringify([attachmentScope(), chat.chatHistoryConnectionGeneration, state.person?.id]));
     let historyArmed = false;
     let historyAnchor = null;
@@ -83,6 +85,7 @@ export default {
       historyAnchor = entry ? { key: entry.dataset.virtualId, top: entry.getBoundingClientRect().top - top } : null;
     }
     function conversationScroll(position) {
+      scheduleConversationNavigation();
       if (historyArmed && position.scrollTop < 240 && !gate.value && !state.loading && !state.messagesLoading && state.messageCursor != null) {
         historyArmed = false;
         historyPending = true;
@@ -94,7 +97,7 @@ export default {
     }
     function loadOlderMessages() {
       historyArmed = false;
-      transcript.value?.setBottomFollowEnabled(false);
+      setBottomFollow(false);
       historyPending = true;
       captureHistoryAnchor();
       return controller.page('messages', true);
@@ -173,6 +176,64 @@ export default {
         } : null };
       });
     });
+    const responseOrigins = Vue.computed(() => personResponseOrigins(conversation.value));
+    const activeResponseKey = Vue.ref('');
+    const atLatest = Vue.ref(true);
+    let navigationFrame = null;
+    function updateConversationNavigation() {
+      navigationFrame = null;
+      const pane = messagePane.value;
+      if (!pane) return;
+      atLatest.value = followingLatest.value && !hasResponseFocus.value
+        && pane.scrollHeight - pane.scrollTop - pane.clientHeight <= 48;
+      activeResponseKey.value = resolveLongResponseOrigin({
+        viewportTop: pane.getBoundingClientRect().top + pane.clientTop,
+        viewportHeight: pane.clientHeight,
+        responses: [...pane.querySelectorAll('.person-reply')].map(element => {
+          const rect = element.getBoundingClientRect();
+          return { originMessageId: element.dataset.responseKey, top: rect.top, bottom: rect.bottom, height: rect.height };
+        }),
+      });
+    }
+    function scheduleConversationNavigation() {
+      if (disposed || navigationFrame !== null) return;
+      navigationFrame = requestAnimationFrame(updateConversationNavigation);
+    }
+    function setBottomFollow(enabled) {
+      followingLatest.value = enabled;
+      transcript.value?.setBottomFollowEnabled(enabled);
+      scheduleConversationNavigation();
+    }
+    function releaseReadingAnchor() {
+      historyArmed = false;
+      historyAnchor = null;
+      historyPending = false;
+      if (responseFocus) responseFocus.locked = false;
+      responsePinned.value = false;
+      setBottomFollow(false);
+      transcript.value?.clearTargetAnchor();
+    }
+    async function backToCurrentTurn() {
+      const key = responseOrigins.value.get(activeResponseKey.value);
+      if (!key) return;
+      releaseReadingAnchor();
+      await transcript.value?.scrollToKey(key, { align: 'start' });
+      scheduleConversationNavigation();
+    }
+    function scrollToLatest() {
+      releaseReadingAnchor();
+      // The reply-top reserve must not become an empty "latest" destination.
+      resetResponseFocus();
+      const identity = transcriptIdentity.value;
+      setBottomFollow(true);
+      Vue.nextTick(() => {
+        if (disposed || !followingLatest.value || identity !== transcriptIdentity.value) return;
+        transcript.value?.scrollToBottom();
+        scheduleConversationNavigation();
+      });
+    }
+    Vue.watch(conversation, scheduleConversationNavigation, { flush: 'post' });
+    Vue.watch(transcriptIdentity, () => { activeResponseKey.value = ''; atLatest.value = true; followingLatest.value = true; }, { flush: 'sync' });
     const loadingReplyKey = Vue.computed(() => {
       const tail = conversation.value.at(-1);
       return activity.value.loading && !state.commandPending && tail?.role === 'assistant'
@@ -335,7 +396,7 @@ export default {
         previousIds: new Set(state.messages.map(message => message.id)),
         locked: true, viewportHeight: messagePane.value?.clientHeight || 0,
       };
-      transcript.value?.setBottomFollowEnabled(false);
+      setBottomFollow(false);
       transcript.value?.clearTargetAnchor();
       hasResponseFocus.value = true;
       responsePinned.value = true;
@@ -357,7 +418,7 @@ export default {
       }
       historyArmed = true;
       historyAnchor = null;
-      transcript.value?.setBottomFollowEnabled(false);
+      setBottomFollow(false);
       transcript.value?.clearTargetAnchor();
       if (responseFocus) responseFocus.locked = false;
       responsePinned.value = false;
@@ -453,11 +514,11 @@ export default {
       // Restore the visible reader in the same DOM batch, before paint, and
       // consume the transcript's queued estimate-based compensation.
       if (typeof MutationObserver !== 'undefined' && readingColumn.value) {
-        historyLayoutObserver = new MutationObserver(reconcileHistoryAnchor);
+        historyLayoutObserver = new MutationObserver(() => { reconcileHistoryAnchor(); scheduleConversationNavigation(); });
         historyLayoutObserver.observe(readingColumn.value, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
       }
       if (typeof ResizeObserver !== 'undefined') {
-        responseLayoutObserver = new ResizeObserver(() => { reconcileHistoryAnchor(); reconcileResponseLayout(); scheduleResponseLayout(); });
+        responseLayoutObserver = new ResizeObserver(() => { reconcileHistoryAnchor(); reconcileResponseLayout(); scheduleResponseLayout(); scheduleConversationNavigation(); });
         if (messagePane.value) responseLayoutObserver.observe(messagePane.value);
         if (readingColumn.value) responseLayoutObserver.observe(readingColumn.value);
       }
@@ -467,6 +528,7 @@ export default {
       resetResponseFocus();
       responseLayoutObserver?.disconnect();
       historyLayoutObserver?.disconnect();
+      if (navigationFrame !== null) cancelAnimationFrame(navigationFrame);
     });
     function leave() {
       chat.leaveDigitalPerson();
@@ -502,7 +564,7 @@ export default {
     const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -549,6 +611,7 @@ export default {
       </div>
       <div class="person-workspace">
         <main id="person-conversation" :inert="modalPanel && panel ? true : undefined" class="person-conversation" :aria-label="$t('person.conversation')">
+          <div class="person-transcript">
           <div ref="messagePane" class="person-messages virtual-transcript-scroller" :class="{ 'is-response-pinned': responsePinned }" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading"
             @wheel.passive="releaseResponseFocus" @touchmove.passive="releaseResponseFocus" @keydown="releaseResponseFocus" @pointerdown.passive="releaseResponseFocus">
             <div ref="readingColumn" class="person-reading-column">
@@ -561,7 +624,7 @@ export default {
                   <ul v-if="message.attachments?.length" class="person-sent-files" :aria-label="$t('person.attachedFiles')"><li v-for="(file, index) in message.attachments" :key="file.id || index">{{ file.name }}</li></ul>
                   <p v-if="['queued', 'received', 'stopped'].includes(message.deliveryState)" class="person-delivery" :data-delivery-state="message.deliveryState">{{ $t('person.delivery.' + message.deliveryState) }}</p>
                 </div>
-                <article v-else-if="message.role === 'assistant'" class="person-message person-reply" :data-message-id="message.messageId" :data-episode-id="message.episodeId">
+                <article v-else-if="message.role === 'assistant'" class="person-message person-reply" :data-message-id="message.messageId" :data-episode-id="message.episodeId" :data-response-key="message.key">
                   <div v-if="message.replyContext" class="person-reply-context">
                     <span>{{ $t('person.replyContext', { count: message.replyContext.count }) }}</span>
                     <blockquote v-for="excerpt in message.replyContext.excerpts" :key="excerpt.id">{{ excerpt.text }}</blockquote>
@@ -588,6 +651,11 @@ export default {
               <PersonResponseLoading v-if="activity.loading && !loadingReplyKey" :feedback="feedback" />
               <div v-if="hasResponseFocus" ref="responseTail" class="person-response-tail" aria-hidden="true"></div>
             </div>
+          </div>
+          <nav v-if="conversation.length" class="transcript-navigation person-transcript-navigation" :aria-label="$t('message.navigation')">
+            <button v-if="activeResponseKey" type="button" class="transcript-navigation-btn response-origin-btn" :aria-label="$t('person.backToCurrentTurn')" :title="$t('person.backToCurrentTurn')" @click="backToCurrentTurn">{{ $t('message.currentTurn') }}</button>
+            <button v-if="!atLatest" type="button" class="transcript-navigation-btn scroll-to-latest" @click="scrollToLatest">{{ $t('message.scrollToLatest') }}</button>
+          </nav>
           </div>
           <div class="input-area person-composer">
             <label class="person-sr-only" for="person-input">{{ $t('person.input') }}</label>

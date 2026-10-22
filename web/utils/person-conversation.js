@@ -59,3 +59,31 @@ export function createPersonConversationProjector() {
     return blocks;
   };
 }
+
+/**
+ * Resolve each reading block to its loaded question, or its own opening for
+ * autonomous/partial history. Explicit reply targets never borrow another topic.
+ * Keys belong to the current owner-scoped projection, not persisted turn IDs.
+ * @param {Array<object>} blocks Projected, ordered conversation blocks.
+ * @returns {Map<string, string>} Response key -> navigation target key.
+ */
+export function personResponseOrigins(blocks) {
+  const users = new Map();
+  const episodeUsers = new Map();
+  const origins = new Map();
+  let previousUser;
+  for (const block of blocks) {
+    if (block.role === 'user') {
+      users.set(block.messageId || block.id, block);
+      previousUser = block;
+      if (block.episodeId && !episodeUsers.has(block.episodeId)) episodeUsers.set(block.episodeId, block);
+    } else if (block.role === 'assistant') {
+      const targets = replyTargets(block);
+      const question = targets !== null
+        ? targets.map(id => users.get(id)).find(Boolean)
+        : block.episodeId ? episodeUsers.get(block.episodeId) : previousUser;
+      origins.set(block.key, question?.key || block.key);
+    }
+  }
+  return origins;
+}

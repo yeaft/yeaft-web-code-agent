@@ -62,6 +62,8 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-activity-row[data-activity-status="failed"] .person-activity-row-status { color: var(--error); }
 .person-activity-limited { margin-top: var(--work-center-space-2); color: var(--text-muted); font-size: 11px; }
 .person-conversation { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.person-transcript { display: flex; position: relative; flex: 1; min-height: 0; min-width: 0; }
+.person-transcript-navigation { position: absolute; bottom: 12px; right: max(12px, env(safe-area-inset-right)); margin: 0; }
 .person-messages { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--work-center-space-4) var(--agent-setup-space-lg); }
 .person-messages.is-response-pinned { overflow-anchor: none; }
 .person-reading-column { width: min(var(--session-content-width), 880px); margin: 0 auto; display: flow-root; }

@@ -1028,6 +1028,7 @@ export default {
   'messages.loadMore': '↑ Click or scroll up to load more',
   'message.loadingMore': 'Loading more messages...',
   'message.loadMore': '↑ Click or scroll up to load more',
+  'person.backToCurrentTurn': 'Back to this turn’s beginning',
   'message.navigation': 'Conversation navigation',
   'message.currentTurn': '↑ Turn',
   'message.scrollToLatest': '↓ Latest',

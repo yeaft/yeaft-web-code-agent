@@ -32,7 +32,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +3 VP inspector boundaries: execution/reuse/skip accounting, streamed usage
 // cache/retry deltas, and accessible token/failure disclosure with legacy frames.
 // Bounded metadata/security and mobile layout extend existing cases.
-export const TEST_CASE_LIMIT = 614;
+// +4 reviewed Person navigation browser cases: short-reply reserve exit and
+// Latest ownership while history is pending, each on desktop/light and 320px/dark.
+// Origin identity and follow-growth assertions extend existing cases.
+export const TEST_CASE_LIMIT = 618;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
