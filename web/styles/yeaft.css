@@ -3479,45 +3479,79 @@
    kept as the right-side operational signal. */
 .yeaft-vp-timeline-row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  cursor: pointer;
+  padding: 8px;
+  border-radius: var(--response-radius);
   transition: background 0.15s;
 }
 .yeaft-vp-timeline-row:hover,
-.yeaft-vp-timeline-row:focus-visible {
-  background: var(--sidebar-hover);
-  outline: none;
-}
-.yeaft-vp-timeline-row.has-query-progress { flex-wrap: wrap; }
-.yeaft-vp-timeline-row.has-query-progress .yeaft-vp-timeline-row-body { flex-basis: calc(100% - 52px); }
-.yeaft-query-progress {
-  order: 2;
-  flex: 1 0 100%;
-  min-width: 0;
+.yeaft-vp-timeline-row:focus-within { background: var(--sidebar-hover); }
+.yeaft-vp-timeline-row-header {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
 }
-.yeaft-query-progress-state { color: var(--text-primary); font-weight: 500; }
-.yeaft-query-progress.is-warning .yeaft-query-progress-state,
-.yeaft-query-progress.is-stopped .yeaft-query-progress-state { color: var(--status-busy); }
-.yeaft-query-progress-counts { display: flex; flex-wrap: wrap; gap: 2px 10px; font-variant-numeric: tabular-nums; }
-.yeaft-query-progress-caveat { color: var(--text-muted); }
 .yeaft-vp-timeline-row-body {
   flex: 1;
-  min-width: 0;          /* let inner ellipsis work inside the flex item */
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
   overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  border-radius: 4px;
 }
+.yeaft-vp-timeline-row-body:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.yeaft-query-progress {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.yeaft-query-progress-tokens { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.yeaft-query-progress-tokens > span { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.yeaft-query-progress-tokens strong { color: var(--text-primary); font-size: 14px; font-weight: 500; }
+.yeaft-query-progress-label { color: var(--text-muted); }
+.yeaft-query-progress-state { color: var(--text-primary); font-weight: 500; }
+.yeaft-query-progress.is-warning .yeaft-query-progress-state,
+.yeaft-query-progress.is-stopped .yeaft-query-progress-state { color: var(--status-busy); }
+.yeaft-query-progress-counts { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 10px; }
+.yeaft-query-progress-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.yeaft-query-progress .btn-ghost {
+  padding: 1px 3px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  min-height: 24px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.yeaft-query-progress .btn-ghost:hover { background: var(--sidebar-hover); color: var(--text-primary); }
+.yeaft-query-progress .btn-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.yeaft-query-progress .has-failures { color: var(--error); }
+.yeaft-query-progress-details-toggle { margin-inline-start: auto; }
+.yeaft-query-progress-details,
+.yeaft-query-progress-failures { display: flex; flex-direction: column; gap: 4px; }
+.yeaft-query-progress-tool-row { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, minmax(30px, auto)); gap: 6px; padding: 3px 0; }
+.yeaft-query-progress-tool-row > :not(:first-child) { text-align: end; }
+.yeaft-query-progress-tool-row code { min-width: 0; white-space: normal; overflow-wrap: anywhere; color: var(--text-primary); font-size: inherit; }
+.yeaft-query-progress-tool-head { color: var(--text-muted); }
+.yeaft-query-progress-failure-list { max-height: 240px; overflow: auto; }
 .yeaft-vp-timeline-row-copy {
   flex: 1 1 auto;
   min-width: 0;
@@ -3584,10 +3618,7 @@
   }
 }
 
-/* ── Per-VP right-side action cluster (abort + edit icons) ──
-   Both use <span role="button"> rather than <button> because the
-   parent row is already role="button" and nesting native buttons is
-   an a11y violation. */
+/* Native sibling buttons keep mention, abort, edit and diagnostics independent. */
 .yeaft-vp-timeline-row-actions {
   display: inline-flex;
   align-items: center;
@@ -3599,8 +3630,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   border-radius: 4px;
   color: var(--text-muted);
   cursor: pointer;
@@ -4596,4 +4630,8 @@
     grid-row: 2;
     gap: 4px;
   }
+}
+
+@media (hover: none) {
+  .yeaft-vp-timeline-row .yeaft-vp-timeline-edit { opacity: 0.7; }
 }

@@ -3311,7 +3311,9 @@ export class Engine {
               totalUsage.cacheInputDeltaTokens += cacheInputDeltaTokens;
               cumulativeInputTokens += inputTokens + cacheInputDeltaTokens;
               cumulativeOutputTokens += outputTokens;
+              queryProgress.usageObserved(event, { inputTokens: cumulativeInputTokens, outputTokens: cumulativeOutputTokens });
               yield event;
+              yield queryProgress.snapshot(progressIdentity);
               break;
             }
             case 'stop':

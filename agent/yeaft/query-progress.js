@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { argsHashOf } from './tool-folding/exec-log.js';
 
 const MAX_ENTRIES = 1024;
+const MAX_TOOL_STATS = 128;
 const WARNING_BATCHES = 4;
 const RECOVERY_BATCHES = 8;
 const REPORT_BATCHES = 12;
@@ -61,6 +62,8 @@ export class QueryProgress {
   #results = new Map();
   #mutations = new Map();
   #failures = new Map();
+  #toolStats = new Map();
+  #toolStatsTruncated = false;
   #batch = { evidence: false, repeated: false, failed: false };
   #revision = 0;
   #state = {
@@ -69,6 +72,19 @@ export class QueryProgress {
   };
 
   requestStarted() { this.#state.modelRequests += 1; }
+
+  /** Reuse Engine's query-wide totals, including its provider-specific cache delta. */
+  usageObserved(usage, totals) {
+    const reported = key => (!Array.isArray(usage.reportedTokenFields) || usage.reportedTokenFields.includes(key))
+      && Number.isSafeInteger(usage[key]) && usage[key] >= 0;
+    const inputReported = reported('inputTokens') || (!usage.cacheTokensAreIncludedInInput
+      && ['cacheReadTokens', 'cacheWriteTokens'].some(key => reported(key) && usage[key] > 0));
+    for (const [key, known] of [['inputTokens', inputReported], ['outputTokens', reported('outputTokens')]]) {
+      if (!known) continue;
+      if (Number.isSafeInteger(totals[key]) && totals[key] >= 0) this.#state[key] = totals[key];
+      else delete this.#state[key];
+    }
+  }
 
   /** Caller feedback/new owned task results may invalidate prior observations. */
   resetEvidence() {
@@ -98,6 +114,24 @@ export class QueryProgress {
     if (executed) this.#state.toolExecutions += 1;
     if (reused) this.#state.reusedCalls += 1;
     if (isError) this.#state.failedCalls += 1;
+    // Keep this bounded independently of the evidence caches. Existing rows
+    // remain cumulative even after the catalogue limit or an evidence reset.
+    const name = call.name;
+    const validName = typeof name === 'string' && /^[^\u0000-\u001f\u007f]{1,128}$/.test(name) && name.trim() === name;
+    // Never rewrite names: truncation/normalization can collide with another tool.
+    let stats = this.#toolStats.get(name);
+    if (!stats && validName && this.#toolStats.size < MAX_TOOL_STATS) {
+      stats = { name, executions: 0, failedCalls: 0, blockedCalls: 0 };
+      this.#toolStats.set(name, stats);
+    }
+    if (!stats) this.#toolStatsTruncated = true;
+    if (stats) {
+      if (executed) stats.executions += 1;
+      if (isError) {
+        stats.failedCalls += 1;
+        if (!executed) stats.blockedCalls += 1;
+      }
+    }
     const key = `${call.name}:${argsHashOf(call.input)}`;
     const hash = resultHash(output);
     if (isError) {
@@ -188,7 +222,9 @@ export class QueryProgress {
   }
 
   snapshot(identity = {}) {
-    return { type: 'query_progress', ...identity, revision: ++this.#revision, ...this.#state };
+    return { type: 'query_progress', ...identity, revision: ++this.#revision, ...this.#state,
+      toolStats: [...this.#toolStats.values()].map(stats => ({ ...stats })),
+      ...(this.#toolStatsTruncated ? { toolStatsTruncated: true } : {}) };
   }
 }
 

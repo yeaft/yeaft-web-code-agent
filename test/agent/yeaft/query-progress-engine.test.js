@@ -63,7 +63,8 @@ describe('query progress Engine boundaries', () => {
     const missingEvents = await consume(unavailable.engine);
     expect(unavailable.requests).toHaveLength(13);
     expect(missingEvents.filter(e => e.type === 'tool_end')).toHaveLength(12);
-    expect(missingEvents.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ failedCalls: 12, toolExecutions: 0 });
+    expect(missingEvents.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ failedCalls: 12, toolExecutions: 0,
+      toolStats: [{ name: 'Unavailable', executions: 0, failedCalls: 12, blockedCalls: 12 }] });
     expect(missingEvents.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'no_progress' })]);
   });
 
@@ -93,6 +94,8 @@ describe('query progress Engine boundaries', () => {
       expect(executions, error).toBe(1);
       expect(events.filter(e => e.type === 'tool_end')).toHaveLength(3);
       expect(events.filter(e => e.type === 'tool_end' && e.suppressed)).toHaveLength(2);
+      expect(events.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ toolExecutions: 1, failedCalls: 3,
+        toolStats: [{ name: 'Send', executions: 1, failedCalls: 3, blockedCalls: 2 }] });
       expect(JSON.stringify(requests.at(-1).messages)).toContain('side effects may already have happened');
     }
 
@@ -232,6 +235,8 @@ describe('query progress Engine boundaries', () => {
     expect(setupResult.requests).toHaveLength(15);
     expect(JSON.stringify(setupResult.requests.at(-1).messages)).toContain('apply the edit now');
     expect(events.some(e => e.type === 'user_append')).toBe(true);
+    expect(events.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ modelRequests: 15, toolExecutions: 13,
+      toolStats: [{ name: 'Read', executions: 13, failedCalls: 0, blockedCalls: 0 }] });
     expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
     expect(closeAttempts).toBe(1);
 
@@ -309,8 +314,83 @@ describe('query progress Engine boundaries', () => {
     }
     expect(dispatched).toBe(0);
     expect(normalEvents.filter(e => e.type === 'tool_end')).toHaveLength(2);
+    expect(normalEvents.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ toolExecutions: 0, failedCalls: 0, toolStats: [] });
     expect(normal.rows.filter(row => row.role === 'tool')).toHaveLength(2);
     expect(normalEvents.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'aborted' })]);
+  });
+
+  it('counts only dispatched executions across parallel sharing, cached reuse and batch skips', async () => {
+    let reads = 0;
+    let skipped = 0;
+    const { engine } = setup(n => n === 1
+      ? [call('read-a', 'Read'), call('read-b', 'Read'), stop]
+      : n === 2 ? [call('cached-read', 'Read'), stop]
+        : n === 3 ? [call('barrier', 'Barrier'), call('skip', 'NeverRun'), stop]
+          : [{ type: 'text_delta', text: 'Done.' }, { type: 'stop', stopReason: 'end_turn' }]);
+    engine.registerTool({ name: 'Read', isReadOnly: () => true, isConcurrencySafe: () => true, cacheWithinQuery: true,
+      execute: async () => { reads++; return 'PRIVATE read result'; } });
+    engine.registerTool({ name: 'Barrier', execute: async (_input, ctx) => {
+      ctx.requestToolBatchBarrier('PRIVATE barrier reason'); return 'changed state';
+    } });
+    engine.registerTool({ name: 'NeverRun', execute: async () => { skipped++; return 'unexpected'; } });
+    const events = await consume(engine);
+    expect(reads).toBe(1);
+    expect(skipped).toBe(0);
+    const progress = events.filter(e => e.type === 'query_progress').at(-1);
+    expect(progress).toMatchObject({ modelRequests: 4, toolExecutions: 2, reusedCalls: 2, failedCalls: 0,
+      toolStats: [
+        { name: 'Read', executions: 1, failedCalls: 0, blockedCalls: 0 },
+        { name: 'Barrier', executions: 1, failedCalls: 0, blockedCalls: 0 },
+      ] });
+    expect(JSON.stringify(progress)).not.toContain('PRIVATE');
+  });
+
+  it('publishes query-wide usage deltas immediately, retaining cache semantics and retry costs', async () => {
+    const { engine } = setup(function* (n) {
+      if (n === 1) {
+        yield { type: 'usage', inputTokens: 10, outputTokens: 1, cacheReadTokens: 30, cacheWriteTokens: 5 };
+        yield { type: 'error', error: 'temporary upstream failure', retryable: true };
+      } else if (n === 2) {
+        yield { type: 'usage', inputTokens: 100, outputTokens: 2, cacheReadTokens: 80, cacheTokensAreIncludedInInput: true };
+        yield call('read', 'Read');
+        yield stop;
+      } else {
+        if (n === 3) engine.appendUserMessage('PRIVATE additional instruction');
+        yield { type: 'usage', inputTokens: 20, outputTokens: 0, reportedTokenFields: ['inputTokens'] };
+        yield { type: 'usage', inputTokens: 0, outputTokens: 7, reportedTokenFields: ['outputTokens'] };
+        yield { type: 'text_delta', text: 'Final answer without tools.' };
+        yield { type: 'stop', stopReason: 'end_turn' };
+      }
+    }, { config: { model: 'test-model', maxOutputTokens: 1024,
+      llmRetry: { maxRetries: 1, baseDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } } });
+    engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async () => 'PRIVATE result' });
+    const events = await consume(engine);
+    expect(events.filter(e => e.type === 'llm_retry')).toHaveLength(1);
+    const usageIndexes = events.flatMap((event, index) => event.type === 'usage' ? [index] : []);
+    expect(usageIndexes.map(index => events[index + 1])).toEqual([
+      expect.objectContaining({ type: 'query_progress', inputTokens: 45, outputTokens: 1, modelRequests: 1 }),
+      expect.objectContaining({ type: 'query_progress', inputTokens: 145, outputTokens: 3, modelRequests: 2 }),
+      expect.objectContaining({ type: 'query_progress', inputTokens: 165, outputTokens: 3, modelRequests: 3 }),
+      expect.objectContaining({ type: 'query_progress', inputTokens: 165, outputTokens: 10, modelRequests: 3 }),
+      expect.objectContaining({ type: 'query_progress', inputTokens: 185, outputTokens: 10, modelRequests: 4 }),
+      expect.objectContaining({ type: 'query_progress', inputTokens: 185, outputTokens: 17, modelRequests: 4 }),
+    ]);
+    const progress = events.filter(e => e.type === 'query_progress').at(-1);
+    expect(progress).toMatchObject({ inputTokens: 185, outputTokens: 17, toolExecutions: 1,
+      toolStats: [{ name: 'Read', executions: 1, failedCalls: 0, blockedCalls: 0 }] });
+    expect(events.find(e => e.type === 'turn_close')).toMatchObject({ inputTokens: 185, outputTokens: 17 });
+    expect(JSON.stringify(progress)).not.toContain('PRIVATE');
+
+    const unknown = setup(() => [
+      { type: 'usage', inputTokens: 0, outputTokens: 0, reportedTokenFields: [], usageIncomplete: true },
+      { type: 'usage', inputTokens: 0, outputTokens: 4, reportedTokenFields: ['outputTokens'] },
+      { type: 'text_delta', text: 'No input usage was reported.' }, { type: 'stop', stopReason: 'end_turn' },
+    ]);
+    const unknownEvents = await consume(unknown.engine);
+    const unknownProgress = unknownEvents.filter(e => e.type === 'query_progress');
+    expect(unknownProgress.every(event => !Object.hasOwn(event, 'inputTokens'))).toBe(true);
+    expect(unknownProgress[0]).not.toHaveProperty('outputTokens');
+    expect(unknownProgress.at(-1)).toMatchObject({ outputTokens: 4, toolStats: [] });
   });
 
   it('keeps user abort authoritative without starting a recovery response', async () => {

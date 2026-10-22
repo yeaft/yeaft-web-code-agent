@@ -35,8 +35,25 @@ export function normalizeQueryProgress(event) {
       || !(event.lastEvidenceAt === null || (Number.isFinite(event.lastEvidenceAt) && event.lastEvidenceAt >= 0))) return null;
   const { turnId, threadId, sessionId, vpId, revision, modelRequests, toolExecutions, reusedCalls,
     repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches } = event;
+  const extra = {};
+  for (const key of ['inputTokens', 'outputTokens']) {
+    if (Number.isSafeInteger(event[key]) && event[key] >= 0) extra[key] = event[key];
+  }
+  // Bounded, metadata-only diagnostics. Never retain arguments, output or errors.
+  if (Array.isArray(event.toolStats) && event.toolStats.length <= 128) {
+    const names = new Set();
+    const valid = event.toolStats.every(row => row && typeof row.name === 'string'
+      && /^[^\u0000-\u001f\u007f]{1,128}$/.test(row.name) && row.name.trim() === row.name
+      && !names.has(row.name) && names.add(row.name)
+      && ['executions', 'failedCalls', 'blockedCalls'].every(key => Number.isSafeInteger(row[key]) && row[key] >= 0)
+      && row.blockedCalls <= row.failedCalls);
+    if (valid) {
+      extra.toolStats = event.toolStats.map(({ name, executions, failedCalls, blockedCalls }) => ({ name, executions, failedCalls, blockedCalls }));
+      if (typeof event.toolStatsTruncated === 'boolean') extra.toolStatsTruncated = event.toolStatsTruncated;
+    }
+  }
   return { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
-    toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches };
+    toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...extra };
 }
 
 /** Progress can update a live owner, never open/revive a turn or a conversation. */

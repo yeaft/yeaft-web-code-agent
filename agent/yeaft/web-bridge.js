@@ -4168,9 +4168,26 @@ function handleEngineEvent(event, hctx) {
     hctx.queryProgressRevision = event.revision;
     const { turnId, threadId, sessionId, vpId, revision, modelRequests, toolExecutions, reusedCalls,
       repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches } = event;
+    // Optional enhancements must never invalidate a legacy progress frame or
+    // carry arbitrary provider/tool payloads across this projection boundary.
+    const enhanced = {};
+    for (const key of ['inputTokens', 'outputTokens']) {
+      if (Number.isSafeInteger(event[key]) && event[key] >= 0) enhanced[key] = event[key];
+    }
+    if (Array.isArray(event.toolStats) && event.toolStats.length <= 128) {
+      const names = new Set();
+      if (event.toolStats.every(row => row && typeof row.name === 'string'
+          && /^[^\u0000-\u001f\u007f]{1,128}$/.test(row.name) && row.name.trim() === row.name
+          && !names.has(row.name) && names.add(row.name)
+          && ['executions', 'failedCalls', 'blockedCalls'].every(key => Number.isSafeInteger(row[key]) && row[key] >= 0)
+          && row.blockedCalls <= row.failedCalls)) {
+        enhanced.toolStats = event.toolStats.map(({ name, executions, failedCalls, blockedCalls }) => ({ name, executions, failedCalls, blockedCalls }));
+        if (typeof event.toolStatsTruncated === 'boolean') enhanced.toolStatsTruncated = event.toolStatsTruncated;
+      }
+    }
     sendToServer({ type: 'yeaft_output', conversationId: yeaftConversationId, sessionId, vpId, turnId, threadId,
       event: { type: 'query_progress', turnId, threadId, sessionId, vpId, revision, modelRequests,
-        toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches } });
+        toolExecutions, reusedCalls, repeatedCalls, failedCalls, stage, reason, lastEvidenceAt, stagnantBatches, ...enhanced } });
     return;
   }
   if (event.type === 'aborted' || (event.type === 'turn_end' && event.terminal === true)) hctx.queryProgressTerminal = true;
