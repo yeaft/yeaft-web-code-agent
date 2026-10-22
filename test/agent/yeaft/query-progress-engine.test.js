@@ -6,6 +6,8 @@ import fileReadTool from '../../../agent/yeaft/tools/file-read.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { buildMcpFlattenedTools } from '../../../agent/yeaft/tools/mcp-tools.js';
 import discoverTools from '../../../agent/yeaft/tools/discover-tools.js';
+import presentResponse from '../../../agent/yeaft/tools/present-response.js';
+import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,12 +21,14 @@ function setup(response, deps = {}) {
     update(row, patch) { Object.assign(row, patch); return row; },
   };
   const adapter = { async *stream(params) {
+    params.onRequestStart?.();
     requests.push(structuredClone({ tools: params.tools, system: params.system, messages: params.messages }));
     yield* response(requests.length, params);
   } };
-  const engine = new Engine({ adapter, trace: new NullTrace(), conversationStore: store,
-    config: { model: 'test-model', maxOutputTokens: 1024 }, ...deps });
-  return { engine, requests, rows };
+  const { decorateAdapter = value => value, ...engineDeps } = deps;
+  const engine = new Engine({ adapter: decorateAdapter(adapter), trace: new NullTrace(), conversationStore: store,
+    config: { model: 'test-model', maxOutputTokens: 1024 }, ...engineDeps });
+  return { engine, store, requests, rows };
 }
 const call = (id, name, input = {}) => ({ type: 'tool_call', id, name, input });
 const stop = { type: 'stop', stopReason: 'tool_use' };
@@ -69,18 +73,76 @@ describe('query progress Engine boundaries', () => {
   });
 
   it('allows long fresh investigations, reports exact dispatch count and supplies durable history boundary', async () => {
-    const { engine, requests } = setup(n => n <= 30
-      ? [call(`r${n}`, 'Read', { offset: n }), stop]
-      : [{ type: 'text_delta', text: 'verified output' }, { type: 'stop', stopReason: 'end_turn' }]);
-    const contexts = [];
-    engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async (input, ctx) => {
-      contexts.push(ctx); return `page ${input.offset}`;
-    } });
-    const events = await consume(engine);
-    expect(requests).toHaveLength(31);
-    expect(events.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ stage: 'running', modelRequests: 31 });
-    expect(contexts.every(ctx => ctx.historyBeforeSeq === 1 && typeof ctx.queryTurnId === 'string')).toBe(true);
-    expect(events.filter(e => e.type === 'turn_end' && e.terminal)[0]).toMatchObject({ stopReason: 'end_turn' });
+    // T1 is synchronous query work even when its content fails validation or
+    // the provider rejects after reporting usage. Accounting remains independent.
+    for (const variant of ['ready', 'auth-retry', 'included-cache', 'separate-cache', 'empty', 'fold-error',
+      'error-with-usage', 'error-no-usage', 'error-auth-retry-with-usage']) {
+      const accounted = [];
+      let shared;
+      let reflections = 0;
+      const usage = { inputTokens: 1000, outputTokens: 100,
+        ...(['included-cache', 'separate-cache'].includes(variant)
+          ? { cacheReadTokens: 800, cacheWriteTokens: 50, cacheTokensAreIncludedInInput: variant === 'included-cache' } : {}) };
+      const { engine, requests, store } = setup(n => [
+        { type: 'usage', inputTokens: 10, outputTokens: 1 },
+        ...(n <= 30 ? [call(`r${n}`, 'Read', { offset: n }), stop]
+          : [{ type: 'text_delta', text: 'verified output' }, { type: 'stop', stopReason: 'end_turn' }]),
+      ], { decorateAdapter: adapter => {
+        adapter.call = async params => {
+          if (params.system === 'child-side-call') return { text: 'child answer', usage: { inputTokens: 7000, outputTokens: 700 } };
+          reflections++;
+          // Router reuses these params after a 401 credential refresh: each
+          // fetch invokes the hook. Other variants exercise legacy fallback.
+          if (variant === 'ready' || variant.includes('auth-retry')) params.onRequestStart?.();
+          if (variant.includes('auth-retry')) params.onRequestStart?.();
+          if (variant.startsWith('error-')) {
+            throw Object.assign(new Error('reflection failed'), variant.endsWith('with-usage') ? { usage } : {});
+          }
+          return { text: variant === 'empty' ? '' : '# Reflection\nFresh pages verified.', usage };
+        };
+        shared = withUsageAccounting(adapter, value => accounted.push(value));
+        return shared;
+      } });
+      // The same paid call also counts if publishing the folded range fails.
+      store.foldMessages = (_, record) => {
+        if (variant === 'fold-error') throw new Error('fold storage unavailable');
+        return store.append(record);
+      };
+      const contexts = [];
+      engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async (input, ctx) => {
+        contexts.push(ctx);
+        if (input.offset === 1) {
+          // A child Engine uses the same accounting adapter: its usage must not
+          // leak into this query's counters through an adapter-wide observer.
+          const child = new Engine({ adapter: { async *stream(params) {
+            const result = await shared.call({ ...params, system: 'child-side-call' });
+            yield { type: 'usage', ...result.usage };
+            yield { type: 'text_delta', text: result.text };
+            yield { type: 'stop', stopReason: 'end_turn' };
+          } }, trace: new NullTrace(), config: { model: 'test-model', maxOutputTokens: 1024 } });
+          const childEvents = await consume(child, { isSubAgent: true, threadId: 'child' });
+          expect(childEvents.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ modelRequests: 1, inputTokens: 7000, outputTokens: 700 });
+        }
+        return `page ${input.offset}`;
+      } });
+      const events = await consume(engine);
+      expect(requests, variant).toHaveLength(31);
+      expect(reflections, variant).toBe(1);
+      const inputTokens = variant === 'error-no-usage' ? 310 : variant === 'separate-cache' ? 2160 : 1310;
+      const outputTokens = variant === 'error-no-usage' ? 31 : 131;
+      const progress = events.filter(e => e.type === 'query_progress');
+      const modelRequests = variant.includes('auth-retry') ? 33 : 32;
+      expect(progress.at(-1), variant).toMatchObject({ stage: 'running', modelRequests, inputTokens, outputTokens });
+      const reflectionEnd = events.findIndex(e => e.type === 'reflection' && e.status !== 'pending');
+      expect(events[reflectionEnd], variant).toMatchObject({ status:
+        ['empty', 'fold-error'].includes(variant) || variant.startsWith('error-') ? 'error' : 'ready' });
+      expect(events[reflectionEnd + 1], variant).toMatchObject({ type: 'query_progress', modelRequests: modelRequests - 1,
+        inputTokens: inputTokens - 10, outputTokens: outputTokens - 1 });
+      expect(accounted, variant).toHaveLength(33); // 31 streams, one T1, one child — no extra billing.
+      expect(contexts.every(ctx => ctx.historyBeforeSeq === 1 && typeof ctx.queryTurnId === 'string')).toBe(true);
+      expect(events.filter(e => e.type === 'turn_end' && e.terminal)[0]).toMatchObject({ stopReason: 'end_turn' });
+      expect(events.find(e => e.type === 'turn_close')).toMatchObject({ inputTokens: 310, outputTokens: 31 });
+    }
   });
 
   it('never replays an uncertain side effect and retains a result for every rejected tool call', async () => {
@@ -343,6 +405,40 @@ describe('query progress Engine boundaries', () => {
         { name: 'Barrier', executions: 1, failedCalls: 0, blockedCalls: 0 },
       ] });
     expect(JSON.stringify(progress)).not.toContain('PRIVATE');
+
+    // Publication executes in the tool batch but acknowledges only after its
+    // strict durable write. Correct the failed call, not its successful peers
+    // or execution count, and retain the pre-existing replay/loop policy.
+    const presentation = summary => ({ title: 'Result', summary, blocks: [{ type: 'markdown', text: summary }] });
+    const publication = setup(n => n === 1 ? [
+      call('publish-ok', 'PresentResponse', presentation('Delivered first')),
+      call('publish-failed', 'PresentResponse', presentation('Storage retry')),
+      call('publish-after', 'PresentResponse', presentation('Delivered last')), stop,
+    ] : n === 2 ? [call('publish-retry', 'PresentResponse', presentation('Storage retry')), stop]
+      : [{ type: 'text_delta', text: 'Delivered safely.' }, { type: 'stop', stopReason: 'end_turn' }]);
+    publication.engine.registerTool(presentResponse);
+    const append = publication.store.append.bind(publication.store);
+    let failOnce = true;
+    publication.store.append = row => {
+      if (row.presentation?.summary === 'Storage retry' && failOnce) {
+        failOnce = false;
+        throw new Error('disk unavailable');
+      }
+      return append(row);
+    };
+    const publishedEvents = await consume(publication.engine);
+    const ends = publishedEvents.filter(event => event.type === 'tool_end');
+    expect(ends.map(event => [event.id, event.isError])).toEqual([
+      ['publish-ok', false], ['publish-failed', true], ['publish-after', false], ['publish-retry', false],
+    ]);
+    expect(publishedEvents.filter(event => event.type === 'response_presentation')).toHaveLength(3);
+    expect(publication.rows.find(row => row.toolCallId === 'publish-failed')).toMatchObject({ isError: true,
+      content: expect.stringContaining('Response publication failed: disk unavailable') });
+    expect(publication.requests).toHaveLength(3);
+    expect(publishedEvents.filter(event => event.type === 'query_progress').at(-1)).toMatchObject({
+      toolExecutions: 4, failedCalls: ends.filter(event => event.isError).length, stagnantBatches: 0,
+      toolStats: [{ name: 'PresentResponse', executions: 4, failedCalls: 1, blockedCalls: 0 }],
+    });
   });
 
   it('publishes query-wide usage deltas immediately, retaining cache semantics and retry costs', async () => {

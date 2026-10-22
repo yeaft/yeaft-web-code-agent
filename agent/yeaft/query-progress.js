@@ -63,6 +63,8 @@ export class QueryProgress {
   #mutations = new Map();
   #failures = new Map();
   #toolStats = new Map();
+  #pendingOutcomes = new Map();
+  #usageTotals = { inputTokens: 0, outputTokens: 0 };
   #toolStatsTruncated = false;
   #batch = { evidence: false, repeated: false, failed: false };
   #revision = 0;
@@ -73,15 +75,19 @@ export class QueryProgress {
 
   requestStarted() { this.#state.modelRequests += 1; }
 
-  /** Reuse Engine's query-wide totals, including its provider-specific cache delta. */
-  usageObserved(usage, totals) {
+  /** Query-local telemetry only: include synchronous side calls, not billing or loop budgets. */
+  usageObserved(usage) {
     const reported = key => (!Array.isArray(usage.reportedTokenFields) || usage.reportedTokenFields.includes(key))
       && Number.isSafeInteger(usage[key]) && usage[key] >= 0;
+    const cacheInputDelta = usage.cacheTokensAreIncludedInInput ? 0
+      : (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0);
+    this.#usageTotals.inputTokens += (usage.inputTokens || 0) + cacheInputDelta;
+    this.#usageTotals.outputTokens += usage.outputTokens || 0;
     const inputReported = reported('inputTokens') || (!usage.cacheTokensAreIncludedInInput
       && ['cacheReadTokens', 'cacheWriteTokens'].some(key => reported(key) && usage[key] > 0));
     for (const [key, known] of [['inputTokens', inputReported], ['outputTokens', reported('outputTokens')]]) {
       if (!known) continue;
-      if (Number.isSafeInteger(totals[key]) && totals[key] >= 0) this.#state[key] = totals[key];
+      if (Number.isSafeInteger(this.#usageTotals[key]) && this.#usageTotals[key] >= 0) this.#state[key] = this.#usageTotals[key];
       else delete this.#state[key];
     }
   }
@@ -109,7 +115,7 @@ export class QueryProgress {
     return `Blocked unchanged failed call to ${call.name} after ${failure.count} equivalent failures. This call was NOT executed. Use the earlier error to correct the arguments or choose a different supported path. If an earlier operation timed out or disconnected, its side effects may already have happened: verify the target state before retrying. Otherwise report the concrete blocker. Previous failed call: ${failure.callId}.`;
   }
 
-  observe({ call, output, isError = false, readOnly = false, executed = true, reused = false, skipped = false, policy = 'warn' }) {
+  observe({ call, output, isError = false, readOnly = false, executed = true, reused = false, skipped = false, policy = 'warn', pendingOutcome = false }) {
     if (skipped) return;
     if (executed) this.#state.toolExecutions += 1;
     if (reused) this.#state.reusedCalls += 1;
@@ -132,6 +138,10 @@ export class QueryProgress {
         if (!executed) stats.blockedCalls += 1;
       }
     }
+    // Only publications with a delayed durable acknowledgement need correction.
+    // Keep it separate from evidence/failure caches so final telemetry cannot
+    // change duplicate detection, replay protection or loop-guard decisions.
+    if (pendingOutcome) this.#pendingOutcomes.set(call.id, { stats, isError, executed });
     const key = `${call.name}:${argsHashOf(call.input)}`;
     const hash = resultHash(output);
     if (isError) {
@@ -200,8 +210,22 @@ export class QueryProgress {
     }
   }
 
+  /** Final acknowledgement may change status, but must never count another execution. */
+  finalizeOutcome(callId, isError) {
+    const pending = this.#pendingOutcomes.get(callId);
+    if (!pending) return;
+    this.#pendingOutcomes.delete(callId);
+    const delta = Number(isError) - Number(pending.isError);
+    this.#state.failedCalls += delta;
+    if (pending.stats) {
+      pending.stats.failedCalls += delta;
+      if (!pending.executed) pending.stats.blockedCalls += delta;
+    }
+  }
+
   /** Called only AFTER every tool result is paired and persisted. */
   finishBatch() {
+    this.#pendingOutcomes.clear();
     const previousStage = this.#state.stage;
     if (this.#batch.evidence) {
       this.#state.stagnantBatches = 0;

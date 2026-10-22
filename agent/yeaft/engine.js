@@ -3311,7 +3311,7 @@ export class Engine {
               totalUsage.cacheInputDeltaTokens += cacheInputDeltaTokens;
               cumulativeInputTokens += inputTokens + cacheInputDeltaTokens;
               cumulativeOutputTokens += outputTokens;
-              queryProgress.usageObserved(event, { inputTokens: cumulativeInputTokens, outputTokens: cumulativeOutputTokens });
+              queryProgress.usageObserved(event);
               yield event;
               yield queryProgress.snapshot(progressIdentity);
               break;
@@ -4858,6 +4858,7 @@ export class Engine {
           reused: reusedReadOnlyResult || Boolean(readyParallelExecution?.shared),
           skipped: skipped || needsProjectDocReload,
           policy: duplicateCallPolicy,
+          pendingOutcome: pendingPresentations.has(tc.id),
         });
         const toolDurationMs = readyParallelExecution?.durationMs ?? (Date.now() - toolStartTime);
 
@@ -4996,9 +4997,11 @@ export class Engine {
           if (toolMessage) Object.assign(toolMessage, { content: output, isError: true });
           const toolRecord = this.#persistedToolMessages.get(callId);
           try { this.#conversationStore?.update?.(toolRecord, { content: output, isError: true }); } catch { /* original storage failure */ }
+          queryProgress.finalizeOutcome(callId, true);
           yield { type: 'tool_end', id: callId, name: 'PresentResponse', output, isError: true, threadId: runtimeThreadId };
           continue;
         }
+        queryProgress.finalizeOutcome(callId, false);
         publishedResponses.set(callId, record);
         lastPersistedAssistantTextMessage = record;
         // Metadata is transcript/UI-only. Providers receive the summary as a
@@ -5139,8 +5142,39 @@ export class Engine {
             loopRange: [batchStart, batchEnd],
             toolCount: pairs.length,
           };
+          // Observe only this synchronous query-owned call. Do not tap the
+          // shared accounting adapter (also used by children), or feed these
+          // costs into the main loop's token/dispatch budget. Capture raw usage
+          // before reflection diagnostics normalize away cache-inclusion flags.
+          const reflectionAdapter = typeof this.#adapter.call === 'function' ? {
+            call: async params => {
+              let dispatches = 0;
+              let result;
+              let failure;
+              try {
+                result = await this.#adapter.call({
+                  ...params,
+                  onRequestStart: (...args) => {
+                    dispatches++;
+                    queryProgress.requestStarted();
+                    params.onRequestStart?.(...args);
+                  },
+                });
+                return result;
+              } catch (error) {
+                failure = error;
+                throw error;
+              } finally {
+                // Native adapters report every dispatch, including a refreshed
+                // credential retry. Legacy adapters without the hook count once.
+                if (dispatches === 0) queryProgress.requestStarted();
+                const usage = result?.usage || failure?.usage;
+                if (usage) queryProgress.usageObserved(usage);
+              }
+            },
+          } : this.#adapter;
           const { content, durationMs } = await runT1Reflection({
-            adapter: this.#adapter,
+            adapter: reflectionAdapter,
             model: this.#config.model,
             originalUserMsg: prompt,
             toolPairs: pairs,
@@ -5230,6 +5264,7 @@ export class Engine {
           // when every T1 attempt has errored.
           lastT1AtLoopCount = completedToolLoops;
         }
+        yield queryProgress.snapshot(progressIdentity);
         }
       }
 
