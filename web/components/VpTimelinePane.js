@@ -221,80 +221,101 @@ export default {
             :key="row.vpId"
             class="yeaft-vp-timeline-row"
             :class="['is-status-' + row.status, { 'is-stopping': row.isStopping, 'has-query-progress': !!row.queryProgress }]"
-            tabindex="0"
-            role="button"
-            :aria-label="row.displayName + ' — ' + statusLabel(row)"
-            :title="$t('yeaft.vpTimeline.mention')"
-            @click="$emit('mention-vp', row.vpId)"
-            @keydown.enter.prevent="$emit('mention-vp', row.vpId)"
-            @keydown.space.prevent="$emit('mention-vp', row.vpId)"
           >
-            <div class="yeaft-vp-timeline-row-body">
-              <span class="yeaft-vp-timeline-row-copy">
-                <span class="yeaft-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
-                <span v-if="row.description" class="yeaft-vp-timeline-row-description">{{ row.description }}</span>
+            <div class="yeaft-vp-timeline-row-header">
+              <button type="button" class="yeaft-vp-timeline-row-body"
+                :aria-label="row.displayName + ' — ' + statusLabel(row)"
+                :title="$t('yeaft.vpTimeline.mention')"
+                @click="$emit('mention-vp', row.vpId)">
+                <span class="yeaft-vp-timeline-row-copy">
+                  <span class="yeaft-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
+                  <span v-if="row.description" class="yeaft-vp-timeline-row-description">{{ row.description }}</span>
+                </span>
+                <span class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
+                <span
+                  v-if="row.runningThreadCount > 1"
+                  class="yeaft-vp-timeline-thread-count"
+                  :title="threadCountTitle(row)"
+                >{{ row.runningThreadCount }} threads</span>
+              </button>
+              <span class="yeaft-vp-timeline-row-actions">
+                <button
+                  type="button"
+                  v-if="isActiveStatus(row.status)"
+                  class="yeaft-vp-timeline-abort"
+                  :class="{ 'is-stopping': row.isStopping }"
+                  :aria-label="$t('yeaft.vpTimeline.abort')"
+                  :disabled="row.isStopping"
+                  :title="$t('yeaft.vpTimeline.abort')"
+                  @click.stop="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  class="yeaft-vp-timeline-edit"
+                  :aria-label="$t('yeaft.vpTimeline.edit')"
+                  :title="$t('yeaft.vpTimeline.edit')"
+                  @click.stop="$emit('edit-vp', row.vpId)"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 20h9"/>
+                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                  </svg>
+                </button>
               </span>
-              <span class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
-              <span
-                v-if="row.runningThreadCount > 1"
-                class="yeaft-vp-timeline-thread-count"
-                :title="threadCountTitle(row)"
-              >{{ row.runningThreadCount }} threads</span>
             </div>
-            <div v-if="row.queryProgress" class="yeaft-query-progress" :class="'is-' + row.queryProgress.stage" role="status">
-              <span class="yeaft-query-progress-state">{{ $t('yeaft.queryProgress.stage.' + row.queryProgress.stage) }}</span>
-              <span v-if="row.queryProgress.reason">{{ $t('yeaft.queryProgress.reason.' + row.queryProgress.reason) }}</span>
-              <span class="yeaft-query-progress-counts">
-                <span>{{ $t('yeaft.queryProgress.requests', { count: row.queryProgress.modelRequests }) }}</span>
-                <span>{{ $t('yeaft.queryProgress.tools', { count: row.queryProgress.toolExecutions }) }}</span>
-                <span>{{ $t('yeaft.queryProgress.reused', { count: row.queryProgress.reusedCalls }) }}</span>
-                <span>{{ $t('yeaft.queryProgress.repeated', { count: row.queryProgress.repeatedCalls }) }}</span>
-                <span>{{ $t('yeaft.queryProgress.failed', { count: row.queryProgress.failedCalls }) }}</span>
-              </span>
-              <span>{{ row.queryProgress.lastEvidenceAt === null ? $t('yeaft.queryProgress.noEvidence') : $t('yeaft.queryProgress.lastEvidence', { time: formatTaskTime(row.queryProgress.lastEvidenceAt) }) }}</span>
-              <span class="yeaft-query-progress-caveat">{{ $t('yeaft.queryProgress.caveat') }}</span>
+            <div v-if="row.queryProgress" class="yeaft-query-progress" :class="'is-' + row.queryProgress.stage">
+              <div class="yeaft-query-progress-tokens" :aria-label="$t('yeaft.queryProgress.tokenScope')">
+                <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.inputTokens') }}</span><strong>{{ formatTokenCount(row.queryProgress.inputTokens) }}</strong></span>
+                <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.outputTokens') }}</span><strong>{{ formatTokenCount(row.queryProgress.outputTokens) }}</strong></span>
+              </div>
+              <div class="yeaft-query-progress-counts">
+                <span>{{ $t('yeaft.queryProgress.requests', { count: formatCount(row.queryProgress.modelRequests) }) }}</span>
+                <span>{{ $t('yeaft.queryProgress.tools', { count: formatCount(row.queryProgress.toolExecutions) }) }}</span>
+                <button type="button" class="btn-ghost yeaft-query-progress-failures-toggle"
+                  :class="{ 'has-failures': row.queryProgress.failedCalls > 0 }"
+                  :aria-expanded="isProgressExpanded(row, 'failures')"
+                  :aria-label="$t('yeaft.queryProgress.failureToggle', { count: row.queryProgress.failedCalls })"
+                  @click="toggleProgress(row, 'failures')">
+                  {{ $t('yeaft.queryProgress.failed', { count: formatCount(row.queryProgress.failedCalls) }) }}
+                  <span aria-hidden="true">{{ isProgressExpanded(row, 'failures') ? '▾' : '▸' }}</span>
+                </button>
+                <button type="button" class="btn-ghost yeaft-query-progress-details-toggle" :aria-expanded="isProgressExpanded(row, 'details')" @click="toggleProgress(row, 'details')">
+                  {{ $t('yeaft.queryProgress.details') }} <span aria-hidden="true">{{ isProgressExpanded(row, 'details') ? '▾' : '▸' }}</span>
+                </button>
+              </div>
+              <div v-if="row.queryProgress.stage !== 'running'" class="yeaft-query-progress-footer">
+                <span class="yeaft-query-progress-state" role="status">{{ $t('yeaft.queryProgress.stage.' + row.queryProgress.stage) }}</span>
+              </div>
+              <section v-if="isProgressExpanded(row, 'failures')" class="yeaft-query-progress-failures" :aria-label="$t('yeaft.queryProgress.failureTitle')">
+                <p class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.failureTitle') }}</p>
+                <template v-if="Array.isArray(row.queryProgress.toolStats)">
+                  <div v-if="failedTools(row.queryProgress).length" class="yeaft-query-progress-failure-list">
+                    <div class="yeaft-query-progress-tool-row yeaft-query-progress-tool-head" aria-hidden="true">
+                      <span>{{ $t('yeaft.queryProgress.toolName') }}</span><span>{{ $t('yeaft.queryProgress.executions') }}</span><span>{{ $t('yeaft.queryProgress.failures') }}</span><span>{{ $t('yeaft.queryProgress.blocked') }}</span>
+                    </div>
+                    <div v-for="tool in failedTools(row.queryProgress)" :key="tool.name" class="yeaft-query-progress-tool-row"
+                      :aria-label="$t('yeaft.queryProgress.toolSummary', { name: tool.name, executions: tool.executions, failures: tool.failedCalls, blocked: tool.blockedCalls })">
+                      <code>{{ tool.name }}</code><span>{{ formatCount(tool.executions) }}</span><span>{{ formatCount(tool.failedCalls) }}</span><span>{{ formatCount(tool.blockedCalls) }}</span>
+                    </div>
+                  </div>
+                  <p v-else>{{ $t(row.queryProgress.toolStatsTruncated ? 'yeaft.queryProgress.failuresNotListed' : 'yeaft.queryProgress.noFailures') }}</p>
+                  <p class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.failureNote') }}</p>
+                  <p v-if="row.queryProgress.toolStatsTruncated">{{ $t('yeaft.queryProgress.statsTruncated') }}</p>
+                </template>
+                <p v-else>{{ $t('yeaft.queryProgress.statsUnavailable') }}</p>
+              </section>
+              <div v-if="isProgressExpanded(row, 'details')" class="yeaft-query-progress-details">
+                <span>{{ $t('yeaft.queryProgress.tokenScope') }}</span>
+                <span v-if="row.queryProgress.reason">{{ $t('yeaft.queryProgress.reason.' + row.queryProgress.reason) }}</span>
+                <span>{{ $t('yeaft.queryProgress.reused', { count: row.queryProgress.reusedCalls }) }} · {{ $t('yeaft.queryProgress.repeated', { count: row.queryProgress.repeatedCalls }) }}</span>
+                <span>{{ row.queryProgress.lastEvidenceAt === null ? $t('yeaft.queryProgress.noEvidence') : $t('yeaft.queryProgress.lastEvidence', { time: formatTaskTime(row.queryProgress.lastEvidenceAt) }) }}</span>
+                <span>{{ $t('yeaft.queryProgress.caveat') }}</span>
+              </div>
             </div>
-            <!--
-              Right-side affordance cluster. Both buttons stop click
-              propagation so they don't fall through to the row's primary
-              mention action. The abort button is only visible while the VP
-              is actually doing something; the edit button is hover-revealed
-              (CSS) so the row stays visually quiet at rest.
-            -->
-            <span class="yeaft-vp-timeline-row-actions">
-              <span
-                v-if="isActiveStatus(row.status)"
-                class="yeaft-vp-timeline-abort"
-                :class="{ 'is-stopping': row.isStopping }"
-                role="button"
-                tabindex="0"
-                :aria-label="$t('yeaft.vpTimeline.abort')"
-                :aria-disabled="row.isStopping ? 'true' : 'false'"
-                :title="$t('yeaft.vpTimeline.abort')"
-                @click.stop="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
-                @keydown.enter.stop.prevent="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
-                @keydown.space.stop.prevent="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
-              >
-                <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
-                </svg>
-              </span>
-              <span
-                class="yeaft-vp-timeline-edit"
-                role="button"
-                tabindex="0"
-                :aria-label="$t('yeaft.vpTimeline.edit')"
-                :title="$t('yeaft.vpTimeline.edit')"
-                @click.stop="$emit('edit-vp', row.vpId)"
-                @keydown.enter.stop.prevent="$emit('edit-vp', row.vpId)"
-                @keydown.space.stop.prevent="$emit('edit-vp', row.vpId)"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 20h9"/>
-                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
-                </svg>
-              </span>
-            </span>
           </li>
         </ul>
       </section>
@@ -396,6 +417,23 @@ export default {
       if (text.length <= 96) return text;
       return text.slice(0, 95) + '…';
     });
+
+    const expandedProgress = Vue.ref({});
+    const progressKey = (row) => JSON.stringify([row.vpId, row.queryProgress?.sessionId, row.queryProgress?.turnId, row.queryProgress?.threadId]);
+    const isProgressExpanded = (row, section) => !!expandedProgress.value[progressKey(row)]?.[section];
+    const toggleProgress = (row, section) => {
+      const key = progressKey(row);
+      expandedProgress.value = { ...expandedProgress.value, [key]: {
+        ...expandedProgress.value[key], [section]: !isProgressExpanded(row, section),
+      } };
+    };
+    Vue.watch(() => props.rows.filter(row => row.queryProgress).map(progressKey), keys => {
+      expandedProgress.value = Object.fromEntries(Object.entries(expandedProgress.value).filter(([key]) => keys.includes(key)));
+    });
+    const formatCount = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
+    const formatTokenCount = value => Number.isSafeInteger(value) && value >= 0 ? formatCount(value) : $t('yeaft.queryProgress.unavailable');
+    const failedTools = progress => (progress.toolStats || []).filter(tool => tool.failedCalls > 0)
+      .slice().sort((a, b) => b.failedCalls - a.failedCalls || a.name.localeCompare(b.name));
 
     const expandedTasks = Vue.ref({});
     const taskLogRefs = new Map();
@@ -519,6 +557,11 @@ export default {
       isActiveStatus,
       threadCountTitle,
       vpTextColorFor,
+      isProgressExpanded,
+      toggleProgress,
+      formatCount,
+      formatTokenCount,
+      failedTools,
       expandedTasks,
       toggleTaskExpanded,
       taskOwnerName,

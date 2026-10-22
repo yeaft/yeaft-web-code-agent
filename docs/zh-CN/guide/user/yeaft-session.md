@@ -99,6 +99,10 @@ Yeaft 页面提供：
 - composer 内的 model/effort selector；
 - 可选 debug panel，用于检查 provider request、tools、tokens 和 stop reason；不再显示 Dream event 或设置。
 
+Session status 中，VP 名称、运行状态与停止操作位于同一标题行。执行期间显示当前线程本轮累计的输入/输出 token（完整数字，输入含缓存、不含子 Agent），以及模型请求、实际工具执行和失败调用次数；这些是 Provider 上报的使用量，不是当前上下文大小，也不是整个 Session 的历史总量。未上报的 token 显示“未提供”，不会当作零。
+
+点击“失败”可按工具展开执行、失败及拦截次数。失败包括未实际执行即被拦截的调用，执行次数同时包含成功与失败；参数、输出和错误原文仍在对话工具记录中，不复制到状态事件。工具明细最多保留 128 种，总计仍覆盖全部。旧 Agent 未提供明细时会明确提示。复用、重复结果、最近证据时间与统计口径收在“运行详情”；有新证据不代表任务已经完成。断线或 turn 结束后，实时统计不保留为历史进度。
+
 Debug output 可能包含 project 文本与 tool result，只应由当前 owner 使用，不要随意导出或共享。
 
 ### 回复中的图片

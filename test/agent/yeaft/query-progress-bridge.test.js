@@ -44,9 +44,44 @@ it('forwards only scoped progress metadata without touching timers, text batchin
   expect(ctx.outboundSendQueue).toHaveLength(1);
   vi.advanceTimersByTime(200);
   expect(ctx.outboundSendQueue).toHaveLength(2);
+
+  const enhanced = { ...progress, revision: 2, inputTokens: 0, outputTokens: 25,
+    toolStats: [{ name: 'FileRead', executions: 2, failedCalls: 1, blockedCalls: 1 }], toolStatsTruncated: false };
+  __testHandleEngineEvent({ ...enhanced, unknown: 'PRIVATE', toolStats: enhanced.toolStats.map(row => ({ ...row,
+    input: { password: 'PRIVATE' }, output: 'PRIVATE', error: 'PRIVATE', other: 'PRIVATE' })) }, hctx);
+  expect(ctx.outboundSendQueue.at(-1).msg.event).toEqual(enhanced);
+  expect(JSON.stringify(ctx.outboundSendQueue)).not.toContain('PRIVATE');
+
+  let revision = 2;
+  for (const optional of [
+    { inputTokens: -1, outputTokens: Infinity, toolStats: 'PRIVATE', toolStatsTruncated: 'PRIVATE' },
+    { inputTokens: Number.MAX_SAFE_INTEGER + 1, outputTokens: 1.5, toolStats: [null] },
+    { inputTokens: '0', outputTokens: null, toolStats: [{ name: 'x'.repeat(129), executions: 1, failedCalls: 0, blockedCalls: 0 }] },
+    { toolStats: [{ name: 'FileRead', executions: -1, failedCalls: 1, blockedCalls: 0 }] },
+    { toolStats: [{ name: 'FileRead', executions: 1, failedCalls: 0, blockedCalls: 1 }] },
+    { toolStats: [{ name: '', executions: 0, failedCalls: 0, blockedCalls: 0 }] },
+    ...[' FileRead', 'FileRead ', '\tFileRead', 'File\nRead', 'File\u0000Read', 'File\u001fRead', 'File\u007fRead',
+      '\u00a0FileRead', 'FileRead\u00a0'].map(name => ({ toolStats: [{ name, executions: 1, failedCalls: 0, blockedCalls: 0 }], toolStatsTruncated: true })),
+    { toolStats: [...enhanced.toolStats, ...enhanced.toolStats], toolStatsTruncated: true },
+    { toolStats: Array.from({ length: 129 }, (_, i) => ({ name: `Tool${i}`, executions: 1, failedCalls: 0, blockedCalls: 0 })) },
+    { toolStatsTruncated: true },
+  ]) {
+    const expected = { ...progress, revision: ++revision };
+    __testHandleEngineEvent({ ...expected, ...optional, text: 'PRIVATE' }, hctx);
+    expect(ctx.outboundSendQueue.at(-1).msg.event).toEqual(expected);
+  }
+  const boundedStats = Array.from({ length: 128 }, (_, i) => ({ name: i === 127 ? 'x'.repeat(128) : `Tool${i}`, executions: 1, failedCalls: 0, blockedCalls: 0 }));
+  __testHandleEngineEvent({ ...progress, revision: ++revision, inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: -1,
+    toolStats: boundedStats, toolStatsTruncated: true }, hctx);
+  expect(ctx.outboundSendQueue.at(-1).msg.event).toEqual({ ...progress, revision, inputTokens: Number.MAX_SAFE_INTEGER,
+    toolStats: boundedStats, toolStatsTruncated: true });
+  expect(JSON.stringify(ctx.outboundSendQueue)).not.toContain('PRIVATE');
+  expect(hctx.streamTextBatch.timer).toBeNull();
+  expect(hctx.toolCallsAccum).toEqual([]);
+  for (const timer of ['resetQueryTimer', 'pauseQueryTimer', 'touchQueryTimer', 'stopQueryTimer']) expect(hctx[timer]).not.toHaveBeenCalled();
   hctx.skipPartialHistory = true;
   __testHandleEngineEvent({ type: 'turn_end', terminal: true, stopReason: 'end_turn' }, hctx);
   const count = ctx.outboundSendQueue.length;
-  __testHandleEngineEvent({ ...progress, revision: 3 }, hctx);
+  __testHandleEngineEvent({ ...enhanced, revision: revision + 1 }, hctx);
   expect(ctx.outboundSendQueue).toHaveLength(count);
 });

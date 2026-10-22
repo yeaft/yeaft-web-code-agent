@@ -148,7 +148,31 @@ describe('query-local progress evidence', () => {
     for (let i = 0; i < 8; i++) observe(progress, 'ViewImage', 'image', { executed: false, reused: true });
     expect(progress.snapshot()).toMatchObject({ stage: 'recovering', toolExecutions: 1, reusedCalls: 8 });
     expect(observe(progress, 'FileEdit', 'modified section', { readOnly: false })).toBeNull();
-    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0 });
+    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0,
+      toolStats: [
+        { name: 'ViewImage', executions: 1, failedCalls: 0, blockedCalls: 0 },
+        { name: 'FileEdit', executions: 1, failedCalls: 0, blockedCalls: 0 },
+      ] });
+    observe(progress, 'Missing', 'PRIVATE error', { executed: false, isError: true });
+    observe(progress, 'ViewImage', 'PRIVATE error', { isError: true });
+    observe(progress, 'ViewImage', 'PRIVATE error', { executed: false, isError: true });
+    observe(progress, 'ViewImage', 'PRIVATE skipped', { executed: false, isError: true, skipped: true });
+    observe(progress, 'SkippedOnly', 'PRIVATE skipped', { executed: false, isError: true, skipped: true });
+    observe(progress, 'Suppressed', 'PRIVATE prior result', { executed: false });
+    const stats = progress.snapshot();
+    expect(stats).toMatchObject({ toolExecutions: 3, failedCalls: 3, reusedCalls: 8,
+      toolStats: [
+        { name: 'ViewImage', executions: 2, failedCalls: 2, blockedCalls: 1 },
+        { name: 'FileEdit', executions: 1, failedCalls: 0, blockedCalls: 0 },
+        { name: 'Missing', executions: 0, failedCalls: 1, blockedCalls: 1 },
+        { name: 'Suppressed', executions: 0, failedCalls: 0, blockedCalls: 0 },
+      ] });
+    expect(stats.toolStats.reduce((sum, row) => sum + row.failedCalls, 0)).toBe(stats.failedCalls);
+    expect(JSON.stringify(stats)).not.toContain('PRIVATE');
+    progress.resetEvidence();
+    expect(progress.snapshot()).toMatchObject({ toolExecutions: 3, failedCalls: 3, reusedCalls: 8, toolStats: stats.toolStats });
+    observe(progress, 'ViewImage', 'new image');
+    expect(stats.toolStats[0].executions).toBe(2); // Snapshots do not share mutable rows.
   });
 
   it('allows fresh edits to invalidate read observations without identical writes keeping a loop alive', () => {
@@ -175,6 +199,31 @@ describe('query-local progress evidence', () => {
     expect(JSON.stringify(snapshot)).not.toMatch(/secret|rfc/);
     progress.resetEvidence();
     expect(observe(progress, 'FileRead', 'secret document 1499')).toBeNull();
-    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0 });
+    expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0,
+      toolExecutions: 1501, toolStats: [{ name: 'FileRead', executions: 1501, failedCalls: 0, blockedCalls: 0 }] });
+    expect(progress.snapshot()).not.toHaveProperty('inputTokens');
+    expect(progress.snapshot()).not.toHaveProperty('outputTokens');
+    for (let i = 1; i < 128; i++) observe(progress, `Tool${i}`, 'PRIVATE result');
+    observe(progress, 'Overflow', 'PRIVATE error', { isError: true, executed: false });
+    observe(progress, 'FileRead', 'PRIVATE error', { isError: true });
+    expect(progress.snapshot()).toMatchObject({ toolStatsTruncated: true, toolExecutions: 1629, failedCalls: 2 });
+    expect(progress.snapshot().toolStats).toHaveLength(128);
+    expect(progress.snapshot().toolStats[0]).toEqual({ name: 'FileRead', executions: 1502, failedCalls: 1, blockedCalls: 0 });
+    const names = new QueryProgress();
+    const validName = 'x'.repeat(128);
+    const otherName = `${'x'.repeat(127)}B`;
+    observe(names, validName, 'PRIVATE output');
+    observe(names, otherName, 'PRIVATE output');
+    const invalidNames = [`${validName}A`, `${validName}B`, '', ' FileRead', 'FileRead ', '\tFileRead',
+      'File\nRead', 'File\u0000Read', 'File\u001fRead', 'File\u007fRead', '\u00a0FileRead', 'FileRead\u00a0'];
+    for (const name of invalidNames) observe(names, name, 'PRIVATE error', { isError: true, executed: false });
+    names.resetEvidence();
+    observe(names, validName, 'PRIVATE error', { isError: true });
+    expect(names.snapshot()).toMatchObject({ toolStatsTruncated: true, toolExecutions: 3, failedCalls: invalidNames.length + 1,
+      toolStats: [
+        { name: validName, executions: 2, failedCalls: 1, blockedCalls: 0 },
+        { name: otherName, executions: 1, failedCalls: 0, blockedCalls: 0 },
+      ] });
+    expect(JSON.stringify(names.snapshot())).not.toContain('PRIVATE');
   });
 });

@@ -15,7 +15,7 @@ import { ToolRegistry } from '../../agent/yeaft/tools/registry.js';
 import { buildTimelineRows } from '../../web/stores/helpers/vp-timeline.js';
 import VpTimelinePane from '../../web/components/VpTimelinePane.js';
 import en from '../../web/i18n/en.js';
-import { visibleQueryProgress } from '../../web/stores/helpers/query-progress.js';
+import { normalizeQueryProgress, visibleQueryProgress } from '../../web/stores/helpers/query-progress.js';
 
 const storeFactories = new Map();
 function defineStore(id, options) {
@@ -62,6 +62,61 @@ const { useChatStore } = await import('../../web/stores/chat.js');
 const { timelineQueryProgress } = await import('../../web/components/YeaftPage.js');
 
 describe('message flow regressions', () => {
+  it('shows exact turn tokens and independent accessible failure drilldown with bounded metadata', async () => {
+    const base = { type: 'query_progress', sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main',
+      revision: 1, modelRequests: 187, toolExecutions: 363, reusedCalls: 0, repeatedCalls: 0, failedCalls: 5,
+      stage: 'running', reason: null, lastEvidenceAt: 100, stagnantBatches: 0 };
+    const stats = [{ name: 'Bash', executions: 12, failedCalls: 4, blockedCalls: 1, output: 'PRIVATE' },
+      { name: 'FileRead', executions: 8, failedCalls: 1, blockedCalls: 0 },
+      { name: 'FileEdit', executions: 5, failedCalls: 0, blockedCalls: 0 }];
+    const progress = normalizeQueryProgress({ ...base, inputTokens: 1234567, outputTokens: 98765,
+      toolStats: stats, toolStatsTruncated: false, text: 'PRIVATE' });
+    expect(progress).toMatchObject({ inputTokens: 1234567, outputTokens: 98765 });
+    expect(JSON.stringify(progress)).not.toContain('PRIVATE');
+    for (const toolStats of [[...stats, stats[0]], [{ name: 'x', executions: -1, failedCalls: 0, blockedCalls: 0 }],
+      [{ name: 'x', executions: 0, failedCalls: 0, blockedCalls: 1 }], [{ name: 'x'.repeat(129), executions: 0, failedCalls: 0, blockedCalls: 0 }],
+      Array(129).fill(stats[0])]) {
+      expect(normalizeQueryProgress({ ...base, inputTokens: -1, outputTokens: Infinity, toolStats })).toEqual(base);
+    }
+    vi.stubGlobal('Vue', Vue);
+    const row = { vpId: 'v', displayName: 'Software assistant', status: 'tool', runningThreadCount: 1, queryProgress: progress };
+    const pane = mount(VpTimelinePane, { props: { rows: [row] },
+      global: { config: { globalProperties: { $t: (key, args = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (_, name) => args[name] ?? '') } } } });
+    try {
+      expect(pane.get('.yeaft-query-progress-tokens').text()).toContain((1234567).toLocaleString());
+      expect(pane.find('.yeaft-query-progress-details').exists()).toBe(false);
+      expect(pane.find('.yeaft-query-progress-failures').exists()).toBe(false);
+      expect(pane.find('button button, [role="button"] button').exists()).toBe(false);
+      await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
+      expect(pane.get('.yeaft-query-progress-failures-toggle').attributes('aria-expanded')).toBe('true');
+      expect(pane.findAll('.yeaft-query-progress-tool-row')).toHaveLength(3);
+      expect(pane.get('.yeaft-query-progress-failures').text()).toContain('Bash');
+      expect(pane.get('.yeaft-query-progress-failures').text()).not.toContain('FileEdit');
+      expect(pane.emitted('mention-vp')).toBeUndefined();
+      await pane.get('.yeaft-query-progress-details-toggle').trigger('click');
+      expect(pane.get('.yeaft-query-progress-details').text()).toContain('not context size');
+      await pane.get('.yeaft-vp-timeline-abort').trigger('click');
+      expect(pane.emitted('cancel-vp-turn')).toEqual([['v']]);
+      expect(pane.emitted('mention-vp')).toBeUndefined();
+      await pane.get('.yeaft-vp-timeline-row-body').trigger('click');
+      expect(pane.emitted('mention-vp')).toEqual([['v']]);
+      await pane.setProps({ rows: [{ ...row, isStopping: true }] });
+      expect(pane.get('.yeaft-vp-timeline-abort').attributes()).toHaveProperty('disabled');
+      await pane.setProps({ rows: [{ ...row, queryProgress: { ...base, turnId: 'new' } }] });
+      expect(pane.get('.yeaft-query-progress-tokens').text()).toContain('Not provided');
+      expect(pane.find('.yeaft-query-progress-failures').exists()).toBe(false);
+      await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
+      expect(pane.get('.yeaft-query-progress-failures').text()).toContain('has not provided');
+      await pane.setProps({ rows: [{ ...row, queryProgress: { ...progress, toolStats: [], toolStatsTruncated: true } }] });
+      await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
+      expect(pane.get('.yeaft-query-progress-failures').text()).toContain('outside the retained');
+      expect(pane.get('.yeaft-query-progress-failures').text()).toContain('first 128');
+    } finally {
+      pane.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps progress ephemeral and Agent/Session/turn/generation scoped, terminal cannot resurrect it', async () => {
     storeFactories.clear();
     const store = useChatStore();

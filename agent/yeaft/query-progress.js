@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { argsHashOf } from './tool-folding/exec-log.js';
 
 const MAX_ENTRIES = 1024;
+const MAX_TOOL_STATS = 128;
 const WARNING_BATCHES = 4;
 const RECOVERY_BATCHES = 8;
 const REPORT_BATCHES = 12;
@@ -61,6 +62,10 @@ export class QueryProgress {
   #results = new Map();
   #mutations = new Map();
   #failures = new Map();
+  #toolStats = new Map();
+  #pendingOutcomes = new Map();
+  #usageTotals = { inputTokens: 0, outputTokens: 0 };
+  #toolStatsTruncated = false;
   #batch = { evidence: false, repeated: false, failed: false };
   #revision = 0;
   #state = {
@@ -69,6 +74,23 @@ export class QueryProgress {
   };
 
   requestStarted() { this.#state.modelRequests += 1; }
+
+  /** Query-local telemetry only: include synchronous side calls, not billing or loop budgets. */
+  usageObserved(usage) {
+    const reported = key => (!Array.isArray(usage.reportedTokenFields) || usage.reportedTokenFields.includes(key))
+      && Number.isSafeInteger(usage[key]) && usage[key] >= 0;
+    const cacheInputDelta = usage.cacheTokensAreIncludedInInput ? 0
+      : (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0);
+    this.#usageTotals.inputTokens += (usage.inputTokens || 0) + cacheInputDelta;
+    this.#usageTotals.outputTokens += usage.outputTokens || 0;
+    const inputReported = reported('inputTokens') || (!usage.cacheTokensAreIncludedInInput
+      && ['cacheReadTokens', 'cacheWriteTokens'].some(key => reported(key) && usage[key] > 0));
+    for (const [key, known] of [['inputTokens', inputReported], ['outputTokens', reported('outputTokens')]]) {
+      if (!known) continue;
+      if (Number.isSafeInteger(this.#usageTotals[key]) && this.#usageTotals[key] >= 0) this.#state[key] = this.#usageTotals[key];
+      else delete this.#state[key];
+    }
+  }
 
   /** Caller feedback/new owned task results may invalidate prior observations. */
   resetEvidence() {
@@ -93,11 +115,33 @@ export class QueryProgress {
     return `Blocked unchanged failed call to ${call.name} after ${failure.count} equivalent failures. This call was NOT executed. Use the earlier error to correct the arguments or choose a different supported path. If an earlier operation timed out or disconnected, its side effects may already have happened: verify the target state before retrying. Otherwise report the concrete blocker. Previous failed call: ${failure.callId}.`;
   }
 
-  observe({ call, output, isError = false, readOnly = false, executed = true, reused = false, skipped = false, policy = 'warn' }) {
+  observe({ call, output, isError = false, readOnly = false, executed = true, reused = false, skipped = false, policy = 'warn', pendingOutcome = false }) {
     if (skipped) return;
     if (executed) this.#state.toolExecutions += 1;
     if (reused) this.#state.reusedCalls += 1;
     if (isError) this.#state.failedCalls += 1;
+    // Keep this bounded independently of the evidence caches. Existing rows
+    // remain cumulative even after the catalogue limit or an evidence reset.
+    const name = call.name;
+    const validName = typeof name === 'string' && /^[^\u0000-\u001f\u007f]{1,128}$/.test(name) && name.trim() === name;
+    // Never rewrite names: truncation/normalization can collide with another tool.
+    let stats = this.#toolStats.get(name);
+    if (!stats && validName && this.#toolStats.size < MAX_TOOL_STATS) {
+      stats = { name, executions: 0, failedCalls: 0, blockedCalls: 0 };
+      this.#toolStats.set(name, stats);
+    }
+    if (!stats) this.#toolStatsTruncated = true;
+    if (stats) {
+      if (executed) stats.executions += 1;
+      if (isError) {
+        stats.failedCalls += 1;
+        if (!executed) stats.blockedCalls += 1;
+      }
+    }
+    // Only publications with a delayed durable acknowledgement need correction.
+    // Keep it separate from evidence/failure caches so final telemetry cannot
+    // change duplicate detection, replay protection or loop-guard decisions.
+    if (pendingOutcome) this.#pendingOutcomes.set(call.id, { stats, isError, executed });
     const key = `${call.name}:${argsHashOf(call.input)}`;
     const hash = resultHash(output);
     if (isError) {
@@ -166,8 +210,22 @@ export class QueryProgress {
     }
   }
 
+  /** Final acknowledgement may change status, but must never count another execution. */
+  finalizeOutcome(callId, isError) {
+    const pending = this.#pendingOutcomes.get(callId);
+    if (!pending) return;
+    this.#pendingOutcomes.delete(callId);
+    const delta = Number(isError) - Number(pending.isError);
+    this.#state.failedCalls += delta;
+    if (pending.stats) {
+      pending.stats.failedCalls += delta;
+      if (!pending.executed) pending.stats.blockedCalls += delta;
+    }
+  }
+
   /** Called only AFTER every tool result is paired and persisted. */
   finishBatch() {
+    this.#pendingOutcomes.clear();
     const previousStage = this.#state.stage;
     if (this.#batch.evidence) {
       this.#state.stagnantBatches = 0;
@@ -188,7 +246,9 @@ export class QueryProgress {
   }
 
   snapshot(identity = {}) {
-    return { type: 'query_progress', ...identity, revision: ++this.#revision, ...this.#state };
+    return { type: 'query_progress', ...identity, revision: ++this.#revision, ...this.#state,
+      toolStats: [...this.#toolStats.values()].map(stats => ({ ...stats })),
+      ...(this.#toolStatsTruncated ? { toolStatsTruncated: true } : {}) };
   }
 }
 
