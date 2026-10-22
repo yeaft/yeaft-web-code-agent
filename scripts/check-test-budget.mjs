@@ -35,7 +35,11 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +4 reviewed Person navigation browser cases: short-reply reserve exit and
 // Latest ownership while history is pending, each on desktop/light and 320px/dark.
 // Origin identity and follow-growth assertions extend existing cases.
-export const TEST_CASE_LIMIT = 618;
+// +37 reviewed tool-reliability regressions: 6 project-document write gates,
+// 3 GitRead argument boundaries, 3 image ownership/size cases, 18 web
+// lifecycle/evidence/query-isolation/presentation, and 7 recent-stats/UI cases.
+// Historical failures and all existing safety checks remain visible.
+export const TEST_CASE_LIMIT = 655;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
