@@ -31,6 +31,7 @@ import {
   pickProjectDocFile,
   selectProjectDocContext,
   projectDocPathHintsFromToolCall,
+  projectDocToolCallNeedsWriteReview,
   projectDocWriteScopesNeedingReload,
   DEFAULT_PROJECT_DOC_MAX_BYTES,
 } from './sessions/project-doc.js';
@@ -4608,15 +4609,31 @@ export class Engine {
           : this.#tools.has(tc.name);
         const toolProjectDocPathHints = projectDocPathHintsFromToolCall(tc.name, tc.input);
         const readOnlyTool = hasTool ? isReadOnlyTool(this, tc.name, tc.input) : false;
-        const missingProjectDocScopes = hasTool && !readOnlyTool
-          ? projectDocWriteScopesNeedingReload(projectDocContext, toolProjectDocPathHints)
+        const projectDocWrite = hasTool
+          && projectDocToolCallNeedsWriteReview(tc.name, tc.input, readOnlyTool);
+        const missingProjectDocScopes = projectDocWrite
+          // Shell code is opaque: cwd alone cannot identify its write targets.
+          // Load all omitted rules rather than interpreting command words as paths.
+          ? projectDocWriteScopesNeedingReload(projectDocContext, tc.name === 'Bash' ? [] : toolProjectDocPathHints)
           : new Set();
         // A changed rule source was not present in the request that generated
         // this write, even when its scope label is unchanged. Never replay it.
-        const freshProjectDocSource = hasTool && !readOnlyTool
+        const freshProjectDocSource = projectDocWrite
           ? this.#getProjectDocBlock(workDir) : projectDocSource;
         const projectDocSourceChanged = freshProjectDocSource !== projectDocSource;
-        const needsProjectDocReload = missingProjectDocScopes.size > 0 || projectDocSourceChanged;
+        const nextProjectDocPathHints = [...new Set([
+          ...projectDocLoadedPathHints, ...toolProjectDocPathHints,
+        ])];
+        const reloadedProjectDocContext = missingProjectDocScopes.size > 0 || projectDocSourceChanged
+          ? selectProjectDocContext(freshProjectDocSource, {
+              prompt, messages, pathHints: nextProjectDocPathHints,
+              language: this.#config.language || 'en',
+              forcedScopes: [...projectDocContext.selectedScopes, ...missingProjectDocScopes],
+            })
+          : projectDocContext;
+        // Scope bookkeeping (including core sections already shown) is not a
+        // new instruction. Only stop a write when its model-visible rules change.
+        const needsProjectDocReload = reloadedProjectDocContext.text !== projectDocContext.text;
 
         if (abortSkipped) {
           output = `Skipped ${tc.name} because the turn was aborted before this tool started.`;
@@ -4665,22 +4682,15 @@ export class Engine {
           yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true, suppressed: true, threadId: this.currentThreadId };
         } else if (needsProjectDocReload) {
           projectDocSource = freshProjectDocSource;
-          projectDocLoadedPathHints = [...new Set([
-            ...projectDocLoadedPathHints,
-            ...toolProjectDocPathHints,
-          ])];
-          const previouslySelectedProjectDocScopes = new Set(projectDocContext.selectedScopes);
-          projectDocContext = selectProjectDocContext(projectDocSource, {
-            prompt,
-            messages,
-            pathHints: projectDocLoadedPathHints,
-            language: this.#config.language || 'en',
-            forcedScopes: [...previouslySelectedProjectDocScopes, ...missingProjectDocScopes],
-          });
+          projectDocLoadedPathHints = nextProjectDocPathHints;
+          projectDocContext = reloadedProjectDocContext;
           const zh = String(this.#config?.language || '').toLowerCase().startsWith('zh');
+          const target = toolProjectDocPathHints.length > 0
+            ? (zh ? `路径 ${toolProjectDocPathHints.join(', ')}` : toolProjectDocPathHints.join(', '))
+            : (zh ? `${tc.name} 写操作` : `the ${tc.name} write`);
           const notice = zh
-            ? `项目规则已针对路径 ${toolProjectDocPathHints.join(', ')} 重新加载。先复核新载入的规则，再重新提交写操作；本次调用未执行。`
-            : `Project rules were reloaded for ${toolProjectDocPathHints.join(', ')}. Review the newly loaded rules before resubmitting the write; this call was not executed.`;
+            ? `项目规则已针对${target}重新加载。先复核新载入的规则，再重新提交写操作；本次调用未执行。`
+            : `Project rules were reloaded for ${target}. Review the newly loaded rules before resubmitting the write; this call was not executed.`;
           promptNotices = [notice];
           systemPrompt = buildCurrentSystemPrompt();
           output = notice;

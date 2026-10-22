@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { rmSync, mkdtempSync } from 'fs';
+import { rmSync, mkdtempSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { Engine } from '../../../agent/yeaft/engine.js';
@@ -12,6 +12,11 @@ import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { createFullRegistry } from '../../../agent/yeaft/tools/index.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
+import {
+  projectDocPathHintsFromToolCall,
+  projectDocToolCallNeedsWriteReview,
+  selectProjectDocContext,
+} from '../../../agent/yeaft/sessions/project-doc.js';
 
 /**
  * MockAdapter — emits pre-configured events for testing.
@@ -355,6 +360,166 @@ describe('Engine', () => {
           errorMessage: 'Error: permission denied',
         }),
       ]);
+    });
+  });
+
+  describe('project document write review', () => {
+    const call = (id, name, input = {}) => ({ type: 'tool_call', id, name, input });
+    const toolStop = { type: 'stop', stopReason: 'tool_use' };
+    const done = { type: 'stop', stopReason: 'end_turn' };
+    const document = (coreHeading = 'Core') => `# Fixture
+## ${coreHeading}
+${'Stable instruction.\n'.repeat(520)}
+## Agent
+AGENT_BODY
+## Web
+WEB_BODY
+## Work Center
+WORK_CENTER_BODY
+## Release
+RELEASE_BODY`;
+
+    async function runWithDoc(source, responses, tools, onRequest = () => {}) {
+      const workDir = mkdtempSync(join(tmpdir(), 'yeaft-project-doc-gate-'));
+      try {
+        if (source != null) writeFileSync(join(workDir, 'CLAUDE.md'), source);
+        const requests = [];
+        const adapter = { async *stream(params) {
+          requests.push(structuredClone({ system: params.system, messages: params.messages }));
+          onRequest(requests.length, workDir);
+          yield* responses[requests.length - 1];
+        } };
+        const engine = new Engine({ adapter, trace, config: { model: 'test-model', maxOutputTokens: 1024 } });
+        for (const tool of tools) engine.registerTool(tool);
+        const events = [];
+        for await (const event of engine.query({ prompt: 'inspect repository', workDir })) events.push(event);
+        return { events, requests };
+      } finally {
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+
+    it('selects only concrete input paths and classifies workspace writes separately from lifecycle effects', () => {
+      for (const name of ['EnterWorktree', 'ExitWorktree', 'CloseAgent', 'SpawnAgent', 'Agent', 'PromptAgent',
+        'SendMessage', 'UpdateAgent', 'WaitAgent', 'AskUser', 'PresentResponse', 'CreateWorkItem', 'JsReplReset']) {
+        expect(projectDocPathHintsFromToolCall(name, { path: 'web/component.js', cwd: 'agent' }), name).toEqual([]);
+        expect(projectDocToolCallNeedsWriteReview(name, {}), name).toBe(false);
+      }
+      for (const command of ['pwd', 'pwd -P', 'git status', 'git status --short']) {
+        expect(projectDocPathHintsFromToolCall('Bash', { command }), command).toEqual([]);
+        expect(projectDocToolCallNeedsWriteReview('Bash', { command }), command).toBe(false);
+      }
+      expect(projectDocPathHintsFromToolCall('Bash', { command: 'echo web > server/output.js', cwd: 'agent' }))
+        .toEqual(['agent']);
+      expect(projectDocPathHintsFromToolCall('FileEdit', { file_path: 'web/view.js', new_string: 'agent/secret.js' }))
+        .toEqual(['web/view.js']);
+      expect(projectDocPathHintsFromToolCall('ApplyPatch', { patch: '--- a/web/deleted.js\n+++ /dev/null\n--- /dev/null\n+++ b/agent/added.js' }))
+        .toEqual(['web/deleted.js', 'agent/added.js']);
+      for (const command of ['pwd; touch x', 'git status --short > file', 'git status $(touch x)', 'node -e "write()"',
+        'git status --short && rm file', 'pwd\necho x > file', 'git\nstatus']) {
+        expect(projectDocToolCallNeedsWriteReview('Bash', { command }), command).toBe(true);
+      }
+      for (const name of ['FileEdit', 'FileWrite', 'ApplyPatch', 'JsRepl', 'mcp__custom__write']) {
+        expect(projectDocToolCallNeedsWriteReview(name, {}), name).toBe(true);
+      }
+      expect(projectDocToolCallNeedsWriteReview('NotebookEdit', { action: 'read' })).toBe(false);
+      expect(projectDocToolCallNeedsWriteReview('NotebookEdit', { action: 'delete' })).toBe(true);
+      expect(projectDocToolCallNeedsWriteReview('ImageGeneration', { output_path: 'web/image.png' })).toBe(true);
+    });
+
+    it('executes pathless lifecycle calls and exact shell reads on their first request without loading unrelated scopes', async () => {
+      const calls = [call('enter', 'EnterWorktree'), call('close', 'CloseAgent'),
+        call('pwd', 'Bash', { command: 'pwd' }), call('status', 'Bash', { command: 'git status --short' })];
+      const executed = [];
+      const { events, requests } = await runWithDoc(document(), [[...calls, toolStop], [done]],
+        ['EnterWorktree', 'CloseAgent', 'Bash'].map(name => ({ name, execute: async input => {
+          executed.push([name, input]); return 'ok';
+        } })));
+      expect(executed).toHaveLength(4);
+      expect(events.filter(event => event.type === 'tool_end')).toHaveLength(4);
+      expect(events.filter(event => event.type === 'tool_end').every(event => !event.isError && !event.skipped)).toBe(true);
+      expect(requests[0].system).toBe(requests[1].system);
+      expect(String(requests[0].system)).not.toContain('WORK_CENTER_BODY');
+    });
+
+    it('does not manufacture a first-write rule change when matching core rules were already shown', async () => {
+      let executions = 0;
+      const source = document('Core Agent').replace('## Agent\nAGENT_BODY\n', '');
+      expect(selectProjectDocContext(source).scoped).toBe(true);
+      const { events, requests } = await runWithDoc(source,
+        [[call('edit', 'FileEdit', { file_path: 'agent/file.js' }), toolStop], [done]],
+        [{ name: 'FileEdit', execute: async () => { executions++; return 'ok'; } }]);
+      expect(executions).toBe(1);
+      expect(events.find(event => event.type === 'tool_end')).toMatchObject({ id: 'edit', isError: false });
+      expect(requests[0].system).toBe(requests[1].system);
+    });
+
+    it('blocks real edits, deletion patches and opaque shell writes until newly loaded rules reach a fresh model request', async () => {
+      for (const [name, input, body] of [
+        ['FileEdit', { file_path: 'agent/file.js' }, 'AGENT_BODY'],
+        ['FileWrite', { file_path: 'web/file.js' }, 'WEB_BODY'],
+        ['ApplyPatch', { patch: '--- a/web/deleted.js\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n' }, 'WEB_BODY'],
+        ['Bash', { command: 'echo changed > web/file.js', cwd: 'agent' }, 'WEB_BODY'],
+        ['Bash', { command: 'git status --short; echo changed > file' }, 'WORK_CENTER_BODY'],
+      ]) {
+        let executions = 0;
+        const { events, requests } = await runWithDoc(document(), [
+          [call('first', name, input), call('same-batch', name, input), toolStop],
+          [call('retry', name, input), toolStop], [done],
+        ], [{ name, execute: async () => { executions++; return 'ok'; } }]);
+        expect(executions, name).toBe(1);
+        expect(events.filter(event => event.type === 'tool_end').map(event => [event.id, event.isError, event.skipped]), name)
+          .toEqual([['first', true, true], ['same-batch', true, true], ['retry', false, undefined]]);
+        expect(String(requests[0].system), name).not.toContain(body);
+        expect(String(requests[1].system), name).toContain(body);
+        const notice = events.find(event => event.type === 'tool_end').output;
+        expect(notice, name).not.toContain(input.command || 'impossible command marker');
+        if (name === 'Bash' && !input.cwd) expect(notice).toContain('the Bash write');
+      }
+    });
+
+    it('keeps same-response reads from retroactively authorizing writes but preloads rules for the next response', async () => {
+      const executed = [];
+      const { events, requests } = await runWithDoc(document(), [
+        [call('read', 'FileRead', { file_path: 'web/file.js' }), call('edit', 'FileEdit', { file_path: 'web/file.js' }), toolStop],
+        [call('retry', 'FileEdit', { file_path: 'web/file.js' }), toolStop], [done],
+      ], [
+        { name: 'FileRead', isReadOnly: () => true, execute: async () => { executed.push('read'); return 'ok'; } },
+        { name: 'FileEdit', execute: async () => { executed.push('edit'); return 'ok'; } },
+      ]);
+      expect(executed).toEqual(['read', 'edit']);
+      expect(events.find(event => event.type === 'tool_end' && event.id === 'edit')).toMatchObject({ isError: true, skipped: true });
+      expect(String(requests[1].system)).toContain('WEB_BODY');
+
+      let writes = 0;
+      const preloaded = await runWithDoc(document(), [
+        [call('read', 'FileRead', { file_path: 'web/file.js' }), toolStop],
+        [call('edit', 'FileEdit', { file_path: 'web/file.js' }), toolStop], [done],
+      ], [
+        { name: 'FileRead', isReadOnly: () => true, execute: async () => 'ok' },
+        { name: 'FileEdit', execute: async () => { writes++; return 'ok'; } },
+      ]);
+      expect(writes).toBe(1);
+      expect(preloaded.events.filter(event => event.type === 'tool_end').every(event => !event.isError)).toBe(true);
+    });
+
+    it('still requires review when the document changes or first appears after the generating request', async () => {
+      for (const source of [null, '# Initial rules\nOriginal policy']) {
+        let executions = 0;
+        const { events, requests } = await runWithDoc(source, [
+          [call('first', 'FileEdit', { file_path: 'file.js' }), toolStop],
+          [call('retry', 'FileEdit', { file_path: 'file.js' }), toolStop], [done],
+        ], [{ name: 'FileEdit', execute: async () => { executions++; return 'ok'; } }], (n, workDir) => {
+          if (n !== 1) return;
+          const path = join(workDir, 'CLAUDE.md');
+          writeFileSync(path, '# Changed rules\nNEW_POLICY');
+          utimesSync(path, new Date(Date.now() + 2000), new Date(Date.now() + 2000));
+        });
+        expect(executions).toBe(1);
+        expect(events.find(event => event.type === 'tool_end')).toMatchObject({ id: 'first', skipped: true, isError: true });
+        expect(String(requests[0].system)).not.toContain('NEW_POLICY');
+        expect(String(requests[1].system)).toContain('NEW_POLICY');
+      }
     });
   });
 
