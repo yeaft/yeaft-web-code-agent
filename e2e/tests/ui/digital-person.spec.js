@@ -418,6 +418,33 @@ for (const scenario of responseScenarios) {
   });
 }
 
+for (const scenario of responseScenarios) {
+  test(`Digital Person latest exits short reply reserve ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
+    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+    await openResponseConversation(page, serverUrl, scenario);
+    const input = page.locator('#person-input');
+    await input.fill('A short answer, please'); await input.press('Enter');
+    mock.reply('short-answer', 'Short verified answer.', 'person-a', undefined, { replyKind: 'final' });
+    await expect(page.locator(replySelector('short-answer'))).toContainText('Short verified answer.');
+    const tail = page.locator('.person-response-tail');
+    await expect.poll(() => tail.evaluate(el => parseFloat(el.style.height))).toBeGreaterThan(0);
+    const latest = page.getByRole('button', { name: '↓ Latest', exact: true });
+    await expect(latest).toBeVisible();
+    const scrollTop = await page.locator('.person-messages').evaluate(el => el.scrollTop);
+    await startResponseFrames(page, replySelector('short-answer'));
+    mock.complete();
+    await expect(page.locator('.stop-btn')).toHaveCount(0);
+    await expect(page.locator('.person-response-loading')).toHaveCount(0);
+    expectPinnedFrames(await finishResponseFrames(page));
+    await startResponseFrames(page, replySelector('short-answer'));
+    expectScrollStable(await finishResponseFrames(page), scrollTop);
+    await latest.focus(); await latest.press('Enter');
+    await expect(tail).toHaveCount(0);
+    await expect(latest).toHaveCount(0);
+    await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
+  });
+}
+
 // Delays are authoritative backend timestamps, not a browser-generated timer.
 // Only the wire runtime is scripted; rendering, polling, input and scrolling are real.
 for (const scenario of responseScenarios) {
@@ -485,14 +512,41 @@ for (const scenario of responseScenarios) {
       { replyKind: 'final', createdAt: mock.replyAt(156000) });
     await expect(page.locator(replySelector('final-answer'))).toBeAttached();
     await expect(feedback).toHaveCount(0);
+    expectScrollStable(await finishResponseFrames(page), scrollTop);
+    const currentTurn = page.getByRole('button', { name: zh ? '回到本轮开头' : 'Back to this turn’s beginning', exact: true });
+    const latest = page.getByRole('button', { name: zh ? '↓ 最新' : '↓ Latest', exact: true });
+    await expect(currentTurn).toBeVisible();
+    await expect(latest).toBeVisible();
+    await currentTurn.focus(); await expect(currentTurn).toBeFocused();
+    await currentTurn.press('Enter');
+    const question = page.locator('.virtual-transcript-item').filter({ hasText: 'Delayed verified work' });
+    await expect(question).toBeInViewport();
+    await expect.poll(() => question.evaluate(el => Math.abs(el.getBoundingClientRect().top - el.closest('.person-messages').getBoundingClientRect().top))).toBeLessThanOrEqual(2);
+    await expect(currentTurn).toHaveCount(0);
+    await latest.click();
+    await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
+    await expect(latest).toHaveCount(0);
+    await expect(page.locator('.person-response-tail')).toHaveCount(0);
+    mock.reply('final-growth', 'Additional delivered evidence.\n\n'.repeat(15), 'person-a', undefined, { replyKind: 'progress' });
+    await expect(page.locator(replySelector('final-growth'))).toContainText('Additional delivered evidence.');
+    await expect.poll(() => page.locator('.person-messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
+    await page.screenshot({ path: testInfo.outputPath(`person-navigation-${scenario.width}-${scenario.theme}.png`) });
+
+    // After following growth, explicitly read upwards again. Completion must
+    // preserve that unpinned reading position, not reclaim bottom ownership.
+    await page.locator('.person-messages').hover(); await page.mouse.wheel(0, -220);
+    await expect(latest).toBeVisible();
+    await page.waitForTimeout(400);
+    const completionScroll = await page.locator('.person-messages').evaluate(el => el.scrollTop);
+    await startResponseFrames(page, replySelector('progress-one'));
     mock.complete();
     await expect(input).toBeEnabled();
     await expect(page.locator('.person-response-loading')).toHaveCount(0);
-    const completedIds = ['progress-one', 'progress-two', 'progress-after-scroll', 'final-answer'];
-    const completedKinds = ['progress', 'progress', 'progress', 'final'];
+    const completedIds = ['progress-one', 'progress-two', 'progress-after-scroll', 'final-answer', 'final-growth'];
+    const completedKinds = ['progress', 'progress', 'progress', 'final', 'progress'];
     await expectReplyGroup(page, 'progress-one', completedIds, { zh, kinds: completedKinds });
     expect(await group.evaluate((el, original) => el === original, firstArticle)).toBe(true);
-    expectScrollStable(await finishResponseFrames(page), scrollTop);
+    expectScrollStable(await finishResponseFrames(page), completionScroll);
     await expect(page.locator('.person-messages')).not.toHaveClass(/is-response-pinned/);
     await page.screenshot({ path: testInfo.outputPath(`person-grouped-completed-${scenario.width}-${scenario.theme}.png`) });
 
@@ -549,6 +603,30 @@ for (const scenario of responseScenarios) {
   });
 }
 
+for (const scenario of responseScenarios) {
+  test(`Digital Person latest wins over pending history ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl }) => {
+    const rows = Array.from({ length: 100 }, (_, i) => ({ id: `row-${i}`, role: 'assistant', text: `Window item ${i}. ` + 'Readable content. '.repeat(15), createdAt: i + 101 }));
+    const older = Array.from({ length: 50 }, (_, i) => ({ id: `old-${i}`, role: 'assistant', text: `Older item ${i}. ` + 'Earlier content. '.repeat(15), createdAt: i + 1 }));
+    const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: rows, olderMessages: older });
+    await openResponseConversation(page, serverUrl, scenario);
+    const pane = page.locator('.person-messages');
+    await page.locator('#person-input').fill('Continue after history');
+    await page.locator('#person-input').press('Enter');
+    mock.reply('new-tail', 'A new tail before history.\n\n'.repeat(50));
+    await expect(pane.locator(replySelector('new-tail'))).toBeAttached();
+    await pane.hover(); await page.mouse.wheel(0, -100000);
+    await expect.poll(() => mock.messageHistoryPending()).toBe(true);
+    await page.getByRole('button', { name: '↓ Latest', exact: true }).click();
+    await expect(pane.locator(replySelector('new-tail'))).toBeInViewport();
+    mock.finishMessageHistory();
+    await expect(page.getByRole('button', { name: 'Load older messages' })).toHaveCount(0);
+    await expect.poll(() => pane.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
+    mock.reply('new-tail-two', 'More tail evidence.\n\n'.repeat(30));
+    await expect(pane.locator(replySelector('new-tail-two'))).toBeAttached();
+    await expect.poll(() => pane.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
+  });
+}
+
 for (const width of [320]) {
   test(`Digital Person starts at latest, windows long history and prepends on scroll ${width}px`, async ({ page, serverUrl }) => {
     const rows = Array.from({ length: 240 }, (_, i) => ({ id: `message-${i + 101}`, role: 'assistant', text: `Latest window item ${i + 101}. ` + 'Readable content. '.repeat(15), seq: i + 101, createdAt: i + 101 }));
@@ -592,6 +670,11 @@ for (const width of [320]) {
     await page.waitForTimeout(400);
     await pane.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await expect(pane).toContainText('Historical item 0');
+    // The latest row is virtualized away; navigation must mount it, not query
+    // an absent DOM row, and paging must not leave a stale history anchor.
+    await page.getByRole('button', { name: '↓ Latest', exact: true }).click();
+    await expect(pane.locator(replySelector('message-340'))).toBeInViewport();
+    await expect.poll(() => pane.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
     await page.locator('.person-thoughts-button').click();
     const thoughts = page.locator('#person-thoughts');
     // Journal rows group persisted traces by episode, newest sequence first.

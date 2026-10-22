@@ -992,6 +992,7 @@ export default {
   'messages.loadMore': '↑ 点击或向上滚动加载更多',
   'message.loadingMore': '加载更多消息...',
   'message.loadMore': '↑ 点击或向上滚动加载更多',
+  'person.backToCurrentTurn': '回到本轮开头',
   'message.navigation': '对话导航',
   'message.currentTurn': '↑ 本轮',
   'message.scrollToLatest': '↓ 最新',

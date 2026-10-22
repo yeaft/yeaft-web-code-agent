@@ -13,7 +13,7 @@ import { personTurn } from '../fixtures/person-turns.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
-import { createPersonConversationProjector, projectPersonConversation } from '../../web/utils/person-conversation.js';
+import { createPersonConversationProjector, projectPersonConversation, personResponseOrigins } from '../../web/utils/person-conversation.js';
 
 vi.mock('../../web/stores/auth.js', () => ({ useAuthStore: () => ({ userId: 'owner', authGeneration: 1 }) }));
 let wrapper;
@@ -131,6 +131,18 @@ describe('Digital Person surface', () => {
     const changed = project(rows.map(row => row.id === 'a' ? { ...row, replyToMessageIds: ['q3'] } : row), 'owner-a');
     expect(changed[0].key).not.toBe(original[0].key);
     expect(project(rows, 'owner-b').map(row => row.key)).not.toEqual(original.map(row => row.key));
+    const blocks = project([
+      { id: 'q1', role: 'user', episodeId: 'continuous' }, reply('a', ['q1']),
+      { id: 'q2', role: 'user', episodeId: 'continuous' }, reply('b', ['q2']),
+      reply('legacy'), reply('unloaded', ['missing']),
+      { id: 'dream', role: 'assistant', episodeId: 'dream' },
+    ], 'owner-a');
+    const origins = personResponseOrigins(blocks);
+    expect(blocks.filter(row => row.role === 'assistant').map(row => origins.get(row.key)))
+      .toEqual([blocks[0].key, blocks[2].key, blocks[0].key, blocks[5].key, blocks[6].key]);
+    // A partial assistant block never borrows a question from another episode.
+    const partial = project([{ id: 'q', role: 'user', episodeId: 'old' }, { id: 'a', role: 'assistant', episodeId: 'new' }], 'owner-b');
+    expect(personResponseOrigins(partial).get(partial[1].key)).toBe(partial[1].key);
   });
 
   it.each([en, zhCN])('shows accurate delivery and compact reply context using only loaded user records', async messages => {
