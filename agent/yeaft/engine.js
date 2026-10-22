@@ -19,6 +19,7 @@
 
 import { randomUUID, createHash } from 'crypto';
 import { QueryProgress, progressReminder } from './query-progress.js';
+import { createWebResearchState } from './web-research.js';
 import { promises as fsp } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
@@ -1444,6 +1445,7 @@ export class Engine {
       effortDecision: snapshotEffortDecision(vpCtx?.effortDecision),
       requestIdentity: vpCtx?.requestIdentity,
       queryTurnId: vpCtx?.queryTurnId,
+      webResearch: vpCtx?.webResearch,
       historyBeforeSeq: vpCtx?.historyBeforeSeq,
       yeaftDir: this.#yeaftDir,
       managedCliReady: this.#managedCliReady,
@@ -2596,6 +2598,9 @@ export class Engine {
     const queryDuplicateSuppressions = new Map();
     const queryValidationFailures = new Map();
     const fileReadObservations = new Map();
+    // Success reuse and in-flight sharing must not cross user turns, Sessions,
+    // or child Engines. Never copy this ledger into parentEngineDeps.
+    const webResearch = createWebResearchState();
     let duplicateReminderAwaitingResponse = false;
     const queryNumber = (this.#__queryCounter = (this.#__queryCounter || 0) + 1);
 
@@ -4295,6 +4300,7 @@ export class Engine {
         effortDecision: snapshotEffortDecision(requestEffortDecision),
         requestIdentity,
         queryTurnId,
+        webResearch,
         historyBeforeSeq: Number.isFinite(persistedQueryUser?.seq) ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id),
         router,
         senderVpId,
