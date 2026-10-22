@@ -13,6 +13,7 @@ import { personTurn } from '../fixtures/person-turns.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
+import { createPersonConversationProjector, projectPersonConversation } from '../../web/utils/person-conversation.js';
 
 vi.mock('../../web/stores/auth.js', () => ({ useAuthStore: () => ({ userId: 'owner', authGeneration: 1 }) }));
 let wrapper;
@@ -117,6 +118,80 @@ describe('Digital Person surface', () => {
     state.messages.push({ id: 'question2', role: 'user', text: 'New question', createdAt: 94000 }, { ...p1, id: 'next', episodeId: 'next-turn' });
     await Vue.nextTick();
     expect(wrapper.findAll('.person-reply')).toHaveLength(2);
+  });
+
+  it('keeps answer target sets separate with stable owner-scoped identities and legacy progress grouping', () => {
+    const reply = (id, ids) => ({ id, role: 'assistant', episodeId: 'continuous', ...(ids ? { replyToMessageIds: ids } : {}) });
+    const rows = [reply('a', ['q1']), reply('b', ['q2']), reply('c', ['q2']), reply('d'), reply('e'), reply('f', ['q1', 'q2']), reply('g', ['q2', 'q1'])];
+    expect(projectPersonConversation(rows).map(block => block.parts.map(part => part.id))).toEqual([['a'], ['b', 'c'], ['d', 'e'], ['f', 'g']]);
+    const project = createPersonConversationProjector();
+    const original = project(rows, 'owner-a');
+    const replay = project(rows.map(row => ({ ...row })), 'owner-a');
+    expect(replay.map(row => row.key)).toEqual(original.map(row => row.key));
+    const changed = project(rows.map(row => row.id === 'a' ? { ...row, replyToMessageIds: ['q3'] } : row), 'owner-a');
+    expect(changed[0].key).not.toBe(original[0].key);
+    expect(project(rows, 'owner-b').map(row => row.key)).not.toEqual(original.map(row => row.key));
+  });
+
+  it.each([en, zhCN])('shows accurate delivery and compact reply context using only loaded user records', async messages => {
+    await render(messages);
+    const user = (id, deliveryState) => ({ id, role: 'user', text: `Question ${id} <script>quoted only</script> ` + 'long excerpt '.repeat(40), episodeId: 'continuous', deliveryState, createdAt: 1 });
+    const reply = (id, ids) => ({ id, role: 'assistant', text: 'Answer', episodeId: 'continuous', replyToMessageIds: ids, createdAt: 2 });
+    wrapper.vm.state.messages = [user('q1', 'queued'), user('q2', 'received'), user('q3', 'stopped'), reply('a1', ['q1', 'q2', 'q3']), reply('a2', ['not-loaded'])];
+    await Vue.nextTick();
+    expect(wrapper.findAll('.person-delivery').map(node => node.text())).toEqual(['queued', 'received', 'stopped'].map(state => messages[`person.delivery.${state}`]));
+    const contexts = wrapper.findAll('.person-reply-context');
+    expect(contexts).toHaveLength(2);
+    expect(contexts[0].findAll('blockquote')).toHaveLength(2);
+    expect(contexts[0].text()).toContain(messages['person.replyContext'].replace('{count}', '3'));
+    expect(contexts[0].find('script').exists()).toBe(false);
+    expect(contexts[1].text()).toBe(messages['person.replyContext'].replace('{count}', '1'));
+    expect(contexts[1].find('blockquote').exists()).toBe(false);
+    expect(requests.some(r => r.op === 'search')).toBe(false);
+  });
+
+  it('allows busy/paused input, repeated sends and uploads without refocusing the reader on each supplement', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ files: [{ fileId: 'busy-file' }] }) })));
+    await render();
+    Object.assign(wrapper.vm.state, { busy: true, episodeId: 'e', latestEpisode: { id: 'e', status: 'paused' } });
+    await Vue.nextTick();
+    const input = wrapper.get('#person-input');
+    expect(input.attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('.person-inbox-hint').text()).toBe(en['person.inboxHint']);
+    const idleActions = wrapper.findAll('.person-composer .btn-ghost').filter(button => ['Think', 'Dream'].includes(button.text()));
+    expect(idleActions.every(button => button.attributes('disabled') !== undefined)).toBe(true);
+    const files = wrapper.get('input[type="file"]');
+    Object.defineProperty(files.element, 'files', { value: [new File(['x'], 'busy.txt', { type: 'text/plain' })], configurable: true });
+    await files.trigger('change'); await flushPromises();
+    const send = chat.sendWsMessage;
+    let pending;
+    chat.sendWsMessage = request => {
+      if (request.op !== 'send') return send(request);
+      requests.push(request); pending = request; return true;
+    };
+    const acknowledge = async () => {
+      acceptPersonResponse(chat, { ...pending, type: 'person_response', ok: true, data: { episodeId: 'e' } });
+      await flushPromises();
+    };
+    input.element.focus();
+    await input.setValue('First supplement'); await input.trigger('keydown', { key: 'Enter' });
+    expect(input.attributes('disabled')).toBeDefined(); // short transport lock only
+    input.element.blur(); // browser blurs a disabled textarea (happy-dom does not)
+    await acknowledge();
+    expect(document.activeElement).toBe(input.element);
+    expect(wrapper.vm.hasResponseFocus).toBe(false);
+    await input.setValue('New question'); await input.trigger('keydown', { key: 'Enter' });
+    const stop = wrapper.get('.stop-btn'); stop.element.focus();
+    await acknowledge();
+    expect(document.activeElement).toBe(stop.element); // never steal deliberate reading/control focus
+    input.element.focus();
+    expect(requests.filter(r => r.op === 'send')).toHaveLength(2);
+    expect(requests.filter(r => r.op === 'send')[0].payload.attachments).toEqual([{ fileId: 'busy-file' }]);
+    wrapper.vm.state.messages.push({ id: 'streaming-progress', role: 'assistant', episodeId: 'e', text: 'Still working' });
+    await Vue.nextTick();
+    expect(document.activeElement).toBe(input.element);
+    expect(input.attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('.stop-btn').exists()).toBe(true);
   });
 
   it('renders one model with multiple independent tool trace rows and prefers the new array over legacy scalar', async () => {

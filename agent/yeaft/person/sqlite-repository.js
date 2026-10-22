@@ -93,6 +93,17 @@ export class SqlitePersonRepository {
   async autonomyAdmit(ownerId, input) { return this.request('autonomyAdmit', [ownerId, input]); }
   async admit(ownerId, input) { return this.request('admit', [ownerId, input]); }
   async receipt(ownerId, clientMessageId, requestHash) { return this.request('receipt', [ownerId, clientMessageId, requestHash]); }
+  /** Read-only, live-owner check of stored received version against arrivals. */
+  async pendingInputs(episode) { return this.request('pendingInputs', [episode]); }
+  /** Atomically acknowledge at most four inputs with bounded textual context.
+   * Returns public messages, full attachment envelopes and the received version.
+   * The caller must set episode.inboxVersion to that version before new work. */
+  async receiveInputs(episode) { return this.request('receiveInputs', [episode]); }
+  /** Throws INPUT_PENDING without invalidating the lease or in-flight finalizers. */
+  async guardExecutionInput(episode) { return this.request('guardExecutionInput', [episode]); }
+  /** Exact consumed user targets; first publication requires its started
+   * Conversation.reply capability. Identical callId retries return the message. */
+  async publishReply(episode, data) { return this.request('publishReply', [episode, data]); }
   async executionControl(episode, control) { return this.request('executionControl', [episode, control]); }
   async heartbeat(episode) { return this.request('heartbeat', [episode]); }
   async append(episode, kind, data) { return this.request('append', [episode, kind, data]); }

@@ -69,7 +69,7 @@ export class ExecutionGoal {
     const refs = [...value.sourceRefs, ...value.acceptanceChecks.flatMap(check => check.sourceRefs)];
     if (refs.some(ref => !sourceRefs.has(ref))) return this.rejected('Use only exact sourceRefs already supplied in this episode.');
     const previous = this.current;
-    if (previous && !closed.has(previous.status)) {
+    if (previous && !closed.has(previous.status) && !this.userRevisionOpen) {
       if (['objective', 'acceptance', 'kind'].some(key => value[key] !== previous[key])) return this.rejected('The unresolved commitment is stable. Keep objective, acceptance and kind; change routes using nextStep. Explicitly close the old goal before selecting a new one.');
       if (value.status === 'resting') return this.rejected('An accepted commitment cannot become resting. Complete it, report a real blocker or evidence-based abandonment.');
     }
@@ -83,7 +83,19 @@ export class ExecutionGoal {
     if (closed.has(value.status) && tasks.some(task => task.currentEpisode && pendingGoalTask(task))) return this.rejected('This episode still owns pending effects. Wait for and collect them, or explicitly stop/join them before terminal closure.');
     return this.transition(value);
   }
+  /** New user input permits one explicit goal revision, never erases accepted
+   * work or its observations. Unrelated questions need Conversation.reply. */
+  userInput() {
+    this.emptyEndings = 0; this.userRevisionOpen = true;
+    if (this.current) {
+      this.current = { ...this.current, status: 'active', reason: '', waitFor: [], blocker: null,
+        nextStep: 'Reconcile the new user input with this commitment. Preserve untouched work and collect owned pending effects; answer unrelated topics separately with Conversation.reply.' };
+      this.revision++;
+    }
+    return this.view();
+  }
   transition(value) {
+    this.userRevisionOpen = false;
     this.current = structuredClone(value); this.revision++;
     this.reportedExecutionRevision = this.executionRevision;
     return { id: 'Execution.goal', ok: true, goal: this.view(), authority: 'fallible-model-goal-report-not-acceptance-proof', notice: 'Host verifies identity, origin and lifecycle, not semantic truth. Continue active tools; do not report between every tool. Goal reports grant no authority.' };
@@ -101,7 +113,7 @@ export class ExecutionGoal {
     return { continueExecution: true, goal: this.view(), pendingEffects: pending.map(task => task.id), instruction: 'Execution cannot close without a valid goal disposition. Use Execution__goal at this boundary (not cognitive JSON). Keep unfinished commitments active and take the next feasible authorized action. For a direct answer, report kind:answer completed; for uncommitted exploration without worthwhile action, report kind:exploration resting. Work completion needs actual acceptance observations; blocked needs a specific external impediment, not another execution opportunity. Collect/join pending effects. Do not ask the user merely to continue.' };
   }
   progress(id, result) {
-    if (id === 'Execution.goal' || id.startsWith('catalog.')) return;
+    if (id === 'Execution.goal' || id === 'Conversation.reply' || id.startsWith('catalog.')) return;
     // A failing test is also real execution evidence. Rejected arguments are not.
     if (result?.errorEffect === 'none') return;
     this.emptyEndings = 0; this.executionRevision++;

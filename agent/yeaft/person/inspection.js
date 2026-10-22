@@ -47,7 +47,7 @@ export function personName(value) {
 const pick = (value, keys) => value == null ? null : Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
 export const settingsView = value => pick(value, ['autonomyEnabled', 'modelCandidates', 'defaultModel']);
 export function messageView(value) {
-  const result = pick(value, ['id', 'schemaVersion', 'revision', 'seq', 'episodeId', 'clientMessageId', 'callId', 'replyKind', 'role', 'text', 'createdAt']);
+  const result = pick(value, ['id', 'schemaVersion', 'revision', 'seq', 'episodeId', 'clientMessageId', 'callId', 'replyKind', 'replyToMessageIds', 'deliveryState', 'receivedAt', 'role', 'text', 'createdAt']);
   if (result && value.role === 'assistant') {
     const presentation = presentationView(value.presentation);
     if (presentation) result.presentation = presentation;

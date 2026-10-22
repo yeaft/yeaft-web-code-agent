@@ -1,4 +1,4 @@
-import { fail, identifier, object, page, PersonError, text } from './contracts.js';
+import { fail, identifier, LIMITS, object, page, PersonError, text } from './contracts.js';
 import { validateCreatedDefinition } from './created-capability-contract.js';
 import { executionReadRequest } from './execution-evidence.js';
 import { outputArgs } from './outputs.js';
@@ -51,7 +51,12 @@ export function validateToolArguments(value, schema) {
  * callers must not wrap capability execution in the same catch. */
 export function validateCapabilityArguments({ id, args }) {
   try {
-    if (id === 'Execution.goal') validateExecutionGoal(args);
+    if (id === 'Conversation.reply') {
+      object(args, ['messageIds', 'text']);
+      if (!Array.isArray(args.messageIds) || args.messageIds.length < 1 || args.messageIds.length > 24 || new Set(args.messageIds).size !== args.messageIds.length) fail('INVALID_REQUEST');
+      args.messageIds.forEach(id => identifier(id));
+      text(args.text, LIMITS.outputBytes);
+    } else if (id === 'Execution.goal') validateExecutionGoal(args);
     else if (id === 'Capability.create') validateCreatedDefinition(args);
     else if (id === 'Execution.read') executionReadRequest(args);
     else if (id === 'Output.publish') outputArgs(args);

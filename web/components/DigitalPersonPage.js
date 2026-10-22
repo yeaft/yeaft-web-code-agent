@@ -162,13 +162,24 @@ export default {
     const feedback = Vue.computed(() => projectPersonFeedback(state, gate.value));
     const responding = Vue.computed(() => !gate.value && (state.busy || state.commandPending));
     const projectConversation = createPersonConversationProjector();
-    const conversation = Vue.computed(() => projectConversation(state.messages, JSON.stringify([attachmentScope(), state.person?.id])).map(block => ({ ...block, id: block.key, messageId: block.id })));
+    const conversation = Vue.computed(() => {
+      // Resolve links only inside this owner's already-loaded Person window.
+      const users = new Map(state.messages.filter(message => message.role === 'user').map(message => [message.id, message]));
+      return projectConversation(state.messages, JSON.stringify([attachmentScope(), state.person?.id])).map(block => {
+        const ids = [...new Set((block.replyToMessageIds || []).filter(id => typeof id === 'string' && id))];
+        return { ...block, id: block.key, messageId: block.id, replyContext: ids.length ? {
+          count: ids.length, excerpts: ids.map(id => users.get(id)).filter(Boolean).slice(0, 2)
+            .map(user => ({ id: user.id, text: user.text?.trim().replace(/\s+/g, ' ').slice(0, 180) || '' })).filter(user => user.text),
+        } : null };
+      });
+    });
     const loadingReplyKey = Vue.computed(() => {
       const tail = conversation.value.at(-1);
       return activity.value.loading && !state.commandPending && tail?.role === 'assistant'
         && tail.episodeId && tail.episodeId === state.episodeId ? tail.key : null;
     });
-    const canCompose = Vue.computed(() => ready.value && !state.busy && !state.commandPending && !state.settingsPending && !state.retryCommand);
+    const canCompose = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.commandPending && !state.retryCommand);
+    const canStartEpisode = Vue.computed(() => canCompose.value && !state.busy && !state.loading && !state.settingsPending);
     const fileError = Vue.computed(() => attachmentError.value || (attachments.value.some(row => row.uploadError) ? 'person.filesFailed' : ''));
     const canSend = Vue.computed(() => canCompose.value && filesReady.value && (!!draft.value.trim() || !!attachments.value.length));
     async function saveSettings(candidates) {
@@ -176,14 +187,38 @@ export default {
     }
 
     async function command(op, retry = false) {
-      if (!retry && (op === 'send' ? !canSend.value : !canCompose.value || (op === 'think' && !filesReady.value))) return;
+      if (!retry && (op === 'send' ? !canSend.value : !canStartEpisode.value || (op === 'think' && !filesReady.value))) return;
       const g = draftGeneration;
       if (!retry) pendingDraft = { text: draft.value, rows: attachments.value.slice() };
       const submitted = pendingDraft;
       // Focus only a locally submitted conversation turn, never a historical
       // snapshot, reconnect, or autonomous think/dream episode.
-      const focusGeneration = op === 'send' ? (retry && responseFocus ? responseFocusGeneration : beginResponseFocus()) : null;
-      const accepted = await controller.command(op, draft.value, retry, op === 'dream' ? [] : attachments.value.slice());
+      // Supplements belong to the continuous execution, not a new reader turn.
+      // Keep typing focus and any user-controlled reading position untouched.
+      const focusGeneration = op === 'send' && !state.busy ? (retry && responseFocus ? responseFocusGeneration : beginResponseFocus()) : null;
+      // The shared composer briefly disables its textarea during transport;
+      // browsers blur disabled controls. Restore only that lost typing focus,
+      // never a Send-button click or a deliberate move elsewhere while waiting.
+      const typingInput = document.activeElement?.id === 'person-input' ? document.activeElement : null;
+      let movedFocus = false;
+      const navigation = event => { if (event.type !== 'keydown' || event.key === 'Tab') movedFocus = true; };
+      const focusElsewhere = event => { if (event.target !== typingInput && event.target !== document.body) movedFocus = true; };
+      if (typingInput) {
+        document.addEventListener('pointerdown', navigation);
+        document.addEventListener('keydown', navigation);
+        document.addEventListener('focusin', focusElsewhere);
+      }
+      let accepted;
+      try {
+        accepted = await controller.command(op, draft.value, retry, op === 'dream' ? [] : attachments.value.slice());
+        await Vue.nextTick();
+        if (typingInput && !movedFocus && g === draftGeneration && canCompose.value
+          && document.activeElement === document.body && typingInput.isConnected) typingInput.focus({ preventScroll: true });
+      } finally {
+        document.removeEventListener('pointerdown', navigation);
+        document.removeEventListener('keydown', navigation);
+        document.removeEventListener('focusin', focusElsewhere);
+      }
       if (g !== draftGeneration) return;
       if (focusGeneration === responseFocusGeneration && responseFocus) {
         if (accepted) {
@@ -467,7 +502,7 @@ export default {
     const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -509,7 +544,7 @@ export default {
       </div>
       <div v-if="state.retryCommand && !state.commandPending" class="person-retry" :inert="modalPanel && panel ? true : undefined" role="status">
         <p>{{ $t('person.uncertain') }}</p>
-        <button type="button" class="btn-secondary" :disabled="!!gate || state.loading || !state.person || state.settingsPending" @click="command(state.retryCommand.op, true)">{{ $t('person.retrySame') }}</button>
+        <button type="button" class="btn-secondary" :disabled="!!gate || !state.person" @click="command(state.retryCommand.op, true)">{{ $t('person.retrySame') }}</button>
         <button type="button" class="btn-ghost" @click="discardRetry()">{{ $t('person.discardRetry') }}</button>
       </div>
       <div class="person-workspace">
@@ -524,8 +559,13 @@ export default {
                 <div v-if="message.role === 'user'">
                   <UserTurnBlock :message="asUserMessage(message)" :session-actions="false" />
                   <ul v-if="message.attachments?.length" class="person-sent-files" :aria-label="$t('person.attachedFiles')"><li v-for="(file, index) in message.attachments" :key="file.id || index">{{ file.name }}</li></ul>
+                  <p v-if="['queued', 'received', 'stopped'].includes(message.deliveryState)" class="person-delivery" :data-delivery-state="message.deliveryState">{{ $t('person.delivery.' + message.deliveryState) }}</p>
                 </div>
                 <article v-else-if="message.role === 'assistant'" class="person-message person-reply" :data-message-id="message.messageId" :data-episode-id="message.episodeId">
+                  <div v-if="message.replyContext" class="person-reply-context">
+                    <span>{{ $t('person.replyContext', { count: message.replyContext.count }) }}</span>
+                    <blockquote v-for="excerpt in message.replyContext.excerpts" :key="excerpt.id">{{ excerpt.text }}</blockquote>
+                  </div>
                   <header class="person-message-meta"><strong>{{ state.person?.name || $t('person.title') }}</strong></header>
                   <section v-for="(part, index) in message.parts" :key="part.id" class="person-reply-part" :data-message-id="part.id">
                     <div class="person-reply-part-meta" :class="{ 'person-reply-divider': index > 0 }">
@@ -551,14 +591,15 @@ export default {
           </div>
           <div class="input-area person-composer">
             <label class="person-sr-only" for="person-input">{{ $t('person.input') }}</label>
-            <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="responding" :show-stop="!gate && state.busy" :stop-disabled="state.cancelPending" :stop-label="$t(state.cancelPending ? 'person.cancelling' : 'chatInput.stop')" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')"
+            <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="state.commandPending" :show-stop="!gate && state.busy" :stop-disabled="state.cancelPending" :stop-label="$t(state.cancelPending ? 'person.cancelling' : 'chatInput.stop')" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')"
               keyboard-send attachments-enabled :attachments="attachments" :attachment-accept="PERSON_FILE_ACCEPT"
               @send="command('send')" @stop="controller.cancel()" @files-selected="addFiles" @retry-attachment="retryAttachment" @remove-attachment="removeAttachment">
               <template #start-actions>
-                <button type="button" class="btn-ghost" :disabled="!canCompose || !filesReady" @click="command('think')" :title="$t('person.thinkHint')">{{ $t('person.think') }}</button>
-                <button type="button" class="btn-ghost" :disabled="!canCompose" @click="command('dream')">{{ $t('person.dream') }}</button>
+                <button type="button" class="btn-ghost" :disabled="!canStartEpisode || !filesReady" @click="command('think')" :title="$t('person.thinkHint')">{{ $t('person.think') }}</button>
+                <button type="button" class="btn-ghost" :disabled="!canStartEpisode" @click="command('dream')">{{ $t('person.dream') }}</button>
               </template>
             </MessageComposer>
+            <p v-if="ready && state.busy" class="person-inbox-hint">{{ $t('person.inboxHint') }}</p>
             <p v-if="fileError" class="person-upload-error person-settings-error" role="alert">{{ $t(fileError) }}</p>
           </div>
         </main>
