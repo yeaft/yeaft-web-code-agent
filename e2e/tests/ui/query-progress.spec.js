@@ -29,6 +29,11 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   send({ ...event, type: 'vp_turn_start' });
   broker.transition({ sessionId: session.id, vpId: event.vpId, turnId: event.turnId, threadId: event.threadId, state: 'tool' });
   send({ ...event, text: 'PRIVATE_PROGRESS_TEXT', input: { secret: 'PRIVATE_PROGRESS_TEXT' } });
+  await page.evaluate(agentId => window.Pinia.useVpStore().applySnapshot({ vps: [{
+    vpId: 'progress-vp', displayName: 'Software assistant', displayNameZh: '软件全能助手',
+    description: 'End-to-end software product, engineering, quality, release and operations',
+    descriptionZh: '端到端的软件产品、工程、质量、发布与运行能力',
+  }] }, agentId), mockAgent.agentId);
   const progress = page.locator('.yeaft-query-progress');
   await expect(progress).toBeVisible();
   await expect(progress).toContainText('Requests 2');
@@ -78,6 +83,13 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath(`query-progress-${theme}-320.png`), fullPage: true });
   }
+  await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
+  await expect(progress).toContainText('输入 token');
+  await expect(progress).toContainText('执行');
+  await assertHeader();
+  expect(await progress.locator('.yeaft-query-progress-failures').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('query-progress-zh-dark-320.png'), fullPage: true });
+  await page.evaluate(() => window.Pinia.useChatStore().changeLocale('en'));
   // Two live threads, followed by a completed latest thread: the aggregate
   // turnId is null, so recovery must consult the broker's threads[] owners.
   const parallel = { ...event, turnId: 'parallel-turn', threadId: 'parallel', modelRequests: 7 };

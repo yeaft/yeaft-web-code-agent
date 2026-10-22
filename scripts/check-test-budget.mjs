@@ -29,7 +29,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // regressions, 2 cancellation-generation interleavings, 10 UI/controller state
 // and attribution cases, 2 mock-UI and 2 real relay/SQLite/filesystem browser cases.
 // Related assertions extend existing cases; no prior coverage is excluded.
-export const TEST_CASE_LIMIT = 611;
+// +3 VP inspector boundaries: execution/reuse/skip accounting, streamed usage
+// cache/retry deltas, and accessible token/failure disclosure with legacy frames.
+// Bounded metadata/security and mobile layout extend existing cases.
+export const TEST_CASE_LIMIT = 614;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
