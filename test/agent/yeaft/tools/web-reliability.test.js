@@ -6,6 +6,9 @@ import {
   WEB_REQUEST_TIMEOUT_MS,
 } from '../../../../agent/yeaft/web-research.js';
 import { normalizePresentation, PRESENTATION_SCHEMA } from '../../../../agent/yeaft/response-presentation.js';
+import { Engine } from '../../../../agent/yeaft/engine.js';
+import { ToolRegistry } from '../../../../agent/yeaft/tools/registry.js';
+import { NullTrace } from '../../../../agent/yeaft/debug-trace.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json' },
@@ -29,6 +32,41 @@ afterEach(() => {
 });
 
 describe('query-local web evidence', () => {
+  it('shares active evidence across Engine loops, not across user queries', async () => {
+    const fetch = vi.fn(async () => text('verified content'));
+    vi.stubGlobal('fetch', fetch);
+    const registry = new ToolRegistry();
+    registry.register(webFetch);
+    const contexts = [];
+    const originalExecute = registry.get('WebFetch').execute;
+    registry.get('WebFetch').execute = (input, ctx) => {
+      contexts.push(ctx);
+      return originalExecute(input, ctx);
+    };
+    const responses = [];
+    const call = id => ({ type: 'tool_call', id, name: 'WebFetch', input: { url: 'https://docs.test/engine' } });
+    const batch = calls => [...calls, { type: 'stop', stopReason: 'tool_use' }];
+    responses.push(batch([call('first'), call('concurrent')]), batch([call('later-loop')]), [
+      { type: 'text_delta', text: 'Verified answer' }, { type: 'stop', stopReason: 'end_turn' },
+    ], batch([call('next-query')]), [
+      { type: 'text_delta', text: 'Fresh verification' }, { type: 'stop', stopReason: 'end_turn' },
+    ]);
+    const engine = new Engine({
+      adapter: { async *stream() { yield* responses.shift(); } }, trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 1024 }, toolRegistry: registry,
+    });
+    const first = [];
+    for await (const event of engine.query({ prompt: 'Verify the official page' })) first.push(event);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(first.filter(event => event.type === 'tool_end' && !event.isError)).toHaveLength(3);
+    expect(contexts[1].webResearch).toBe(contexts[0].webResearch);
+    expect(contexts[2].webResearch).toBe(contexts[0].webResearch);
+    expect(contexts[0].parentEngineDeps).not.toHaveProperty('webResearch');
+    for await (const _event of engine.query({ prompt: 'Verify again in a fresh turn' })) { /* drain */ }
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(contexts[3].webResearch).not.toBe(contexts[0].webResearch);
+  });
+
   it('shares concurrent exact searches, reuses success with a smaller limit, and isolates queries', async () => {
     let release;
     const fetch = vi.fn(() => new Promise(resolve => { release = resolve; }));
