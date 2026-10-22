@@ -7,7 +7,7 @@
 
 import { defineTool } from './types.js';
 import {
-  attachResearchGuidance, canonicalWebUrl, recordWebResearchCall, setBounded,
+  attachResearchGuidance, canonicalWebUrl, recordWebResearchCall, safeWebUrl, setBounded,
   shareWebRequest, webFetchKey, webHttpFailure, webRequestFailure, withWebDeadline,
 } from '../web-research.js';
 
@@ -108,13 +108,14 @@ Guidelines:
     const { url, max_length = 50000, raw = false, polling = false } = input;
     const research = ctx?.webResearch;
     const signal = ctx?.signal;
+    const visibleUrl = safeWebUrl(url);
     let canonicalUrl;
     try {
       canonicalUrl = canonicalWebUrl(url);
       if (!['http:', 'https:'].includes(new URL(canonicalUrl).protocol)) throw new Error('Only HTTP(S) URLs are supported');
       if (!Number.isInteger(max_length) || max_length < 1) throw new Error('max_length must be a positive integer');
-    } catch (error) {
-      return JSON.stringify({ error: `Invalid fetch input: ${error.message}`, code: 'invalid_arguments', errorEffect: 'none', hint: 'Provide a full HTTP(S) URL and a positive integer max_length.' });
+    } catch {
+      return JSON.stringify({ error: 'Invalid fetch input: a full HTTP(S) URL and positive integer max_length are required', code: 'invalid_arguments', errorEffect: 'none', hint: 'Provide a full HTTP(S) URL and a positive integer max_length.' });
     }
 
     try {
@@ -133,8 +134,8 @@ Guidelines:
               headers: { 'User-Agent': 'Yeaft/1.0 (compatible; bot)', Accept: 'text/html, application/json, text/plain, */*' },
               redirect: 'follow',
             });
-            const finalUrl = response.url || canonicalUrl;
-            if (!response.ok) return { ...webHttpFailure(response.status, response.statusText), url: finalUrl };
+            const finalUrl = safeWebUrl(response.url || canonicalUrl) || visibleUrl;
+            if (!response.ok) return { ...webHttpFailure(response.status), url: finalUrl };
             const contentType = response.headers.get('content-type') || '';
             const body = await response.text();
             const content = raw || contentType.includes('json') || contentType.includes('text/plain') ? body : htmlToText(body);
@@ -146,7 +147,7 @@ Guidelines:
           });
           signal?.throwIfAborted();
         } catch (error) {
-          result = { ...webRequestFailure(error, signal), url: canonicalUrl };
+          result = { ...webRequestFailure(error, signal), url: visibleUrl };
         }
         recordWebResearchCall(research);
         const previousAuth = research?.authorizationFailures.get(canonicalUrl);
@@ -167,7 +168,7 @@ Guidelines:
       });
       return attachResearchGuidance(output, research);
     } catch (error) {
-      return attachResearchGuidance({ ...webRequestFailure(error, signal), url: canonicalUrl }, research);
+      return attachResearchGuidance({ ...webRequestFailure(error, signal), url: visibleUrl }, research);
     }
   },
 });

@@ -152,7 +152,7 @@ async function tryTavily(query, limit, apiKey, signal) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ api_key: apiKey, query, max_results: Math.min(limit, 10), include_answer: true, search_depth: 'basic' }),
   });
-  if (!res.ok) return webHttpFailure(res.status, res.statusText);
+  if (!res.ok) return webHttpFailure(res.status);
   const data = await res.json();
   if (!Array.isArray(data?.results) || data.error) return invalidSearchResponse();
   return {
@@ -166,7 +166,7 @@ async function tryGenericApi(query, limit, urlStr, signal) {
   url.searchParams.set('q', query);
   url.searchParams.set('limit', String(limit));
   const res = await fetch(url.toString(), { signal, headers: { 'User-Agent': 'Yeaft/1.0', Accept: 'application/json' } });
-  if (!res.ok) return webHttpFailure(res.status, res.statusText);
+  if (!res.ok) return webHttpFailure(res.status);
   const data = await res.json();
   if (!Array.isArray(data?.results) || data.error) return invalidSearchResponse();
   return { ...data, provider: 'generic', query, results: data.results.slice(0, limit) };
@@ -187,7 +187,7 @@ async function tryHtmlScrape(query, limit, provider, signal) {
       'Accept-Language': 'en-US,en;q=0.9',
     },
   });
-  if (!res.ok) return webHttpFailure(res.status, res.statusText);
+  if (!res.ok) return webHttpFailure(res.status);
   const html = await res.text();
   const blocked = /anomaly\.js|anomaly-modal|challenge-form|verify (?:that )?you(?:'re| are) (?:a )?human|unusual traffic|<title[^>]*>[^<]*(?:captcha|access denied)/i.test(html);
   const results = ddg ? parseDdgHtml(html, limit) : parseBingHtml(html, limit);

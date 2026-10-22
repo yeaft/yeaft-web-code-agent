@@ -1,4 +1,6 @@
 /** Query-local web evidence and request lifecycle. Nothing persists across queries. */
+import { STATUS_CODES } from 'node:http';
+
 const MAX_TRACKED = 64;
 export const WEB_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -69,6 +71,23 @@ export function webFetchKey(url, { raw = false, maxLength = 50000 } = {}) {
   return JSON.stringify([canonicalWebUrl(url), raw, maxLength]);
 }
 
+/** Diagnostic identity only. Keep request credentials out of model-visible URLs. */
+export function safeWebUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) return undefined;
+    url.username = '';
+    url.password = '';
+    url.hash = '';
+    for (const key of new Set(url.searchParams.keys())) {
+      if (/key|token|secret|pass(?:word|wd)?|auth|credential|signature|(?:^|[-_])sig(?:$|[-_])/i.test(key)) {
+        url.searchParams.set(key, '[redacted]');
+      }
+    }
+    return url.href;
+  } catch { return undefined; }
+}
+
 /** Wait for completion OR abort, including non-cooperative fetch/body implementations. */
 async function abortable(work, signal) {
   signal?.throwIfAborted();
@@ -114,7 +133,9 @@ export async function shareWebRequest(state, key, signal, work) {
   return abortable(() => entry.promise, signal);
 }
 
-export function webHttpFailure(status, statusText = '') {
+export function webHttpFailure(status) {
+  // Remote reason phrases can contain arbitrary text, including request secrets.
+  const statusText = STATUS_CODES[status] || 'Unknown status';
   let hint = 'Inspect the HTTP status and use another authoritative URL if this endpoint remains unavailable.';
   if (status === 401 || status === 403) hint = 'This URL denied access; use a publicly accessible official page or an authorized access path. Other URLs on this host may still work.';
   else if (status === 404 || status === 410) hint = 'Verify the exact URL against the official site index; this page may have moved or been removed.';
@@ -126,7 +147,10 @@ export function webRequestFailure(error, signal) {
   const cancelled = signal?.aborted || error?.name === 'AbortError';
   const timeout = !cancelled && error?.name === 'TimeoutError';
   return {
-    error: cancelled ? 'Web request cancelled' : timeout ? 'Web request timed out' : `Web request failed: ${error?.message || String(error)}`,
+    // Fetch/Request/parser exception text can echo configured URL credentials.
+    // Keep diagnostics categorical; never forward arbitrary exception messages.
+    error: cancelled ? 'Web request cancelled' : timeout ? 'Web request timed out'
+      : error?.name === 'SyntaxError' ? 'Web response could not be parsed' : 'Web request failed',
     code: cancelled ? 'cancelled' : timeout ? 'timeout' : error?.name === 'SyntaxError' ? 'invalid_response' : 'network_error',
     errorEffect: 'none',
     hint: cancelled ? 'Stop research for this cancelled call. A later explicit call can retry.'

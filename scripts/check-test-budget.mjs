@@ -39,7 +39,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // 3 GitRead argument boundaries, 3 image ownership/size cases, 18 web
 // lifecycle/evidence/query-isolation/presentation, and 7 recent-stats/UI cases.
 // Historical failures and all existing safety checks remain visible.
-export const TEST_CASE_LIMIT = 655;
+// +2 review regressions: web advice is not evidence; diagnostic credentials stay private.
+export const TEST_CASE_LIMIT = 657;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

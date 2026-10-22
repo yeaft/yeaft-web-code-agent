@@ -152,7 +152,7 @@ describe('query-local web evidence', () => {
     vi.stubGlobal('fetch', fetch);
     const ctx = context();
     const forbidden = await runFetch('https://docs.test/private', ctx);
-    expect(forbidden).toMatchObject({ error: 'HTTP 403: ', code: 'http_error', status: 403, errorEffect: 'none' });
+    expect(forbidden).toMatchObject({ error: 'HTTP 403: Forbidden', code: 'http_error', status: 403, errorEffect: 'none' });
     expect(forbidden.hint).toContain('Other URLs');
     expect(await runFetch('https://docs.test/public', ctx)).toMatchObject({ status: 200, content: 'public page' });
     const missing = await runFetch('https://docs.test/private', ctx);
@@ -219,6 +219,43 @@ describe('web backend failure boundaries', () => {
     expect((await runSearch('retry malformed', ctx)).failures[0].code).toBe('invalid_response');
     expect((await runSearch('retry malformed', ctx)).results).toEqual([]);
     expect(fetch).toHaveBeenCalledTimes(5);
+  });
+
+  it('never echoes configured credentials, arbitrary exceptions, or remote reason phrases in diagnostics', async () => {
+    const endpoint = 'https://REVIEW_FAKE_USER:REVIEW_FAKE_PASSWORD@search.invalid/?api_key=REVIEW_FAKE_KEY';
+    const checkSafe = value => {
+      expect(JSON.stringify(value)).not.toMatch(/REVIEW_FAKE_(?:USER|PASSWORD|KEY|TOKEN|SECRET)/);
+      return value;
+    };
+    const ctx = context();
+    ctx.config.search.searchApiUrl = endpoint;
+    // Native Request rejects userinfo URLs before any real network request.
+    vi.stubGlobal('fetch', vi.fn(async (url, options) => new Request(url, options)));
+    expect(checkSafe(await runSearch('safe diagnostics', ctx))).toMatchObject({ code: 'search_unavailable', failures: [{ code: 'network_error', error: 'Web request failed' }] });
+    expect(checkSafe(await runFetch(endpoint, ctx))).toMatchObject({ code: 'network_error' });
+    expect(checkSafe(await runFetch('https://REVIEW_FAKE_PASSWORD@[bad]', ctx))).toMatchObject({ code: 'invalid_arguments' });
+
+    for (const failure of [new TypeError(`Failed request ${endpoint}`), new SyntaxError('REVIEW_FAKE_SECRET')]) {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw failure; }));
+      checkSafe(await runSearch('safe errors', ctx));
+      checkSafe(await runFetch(endpoint, ctx));
+    }
+    const redirected = 'https://REVIEW_FAKE_USER:REVIEW_FAKE_PASSWORD@docs.test/?access_token=REVIEW_FAKE_TOKEN&signature=REVIEW_FAKE_SECRET&view=public';
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, status: 403, statusText: 'REVIEW_FAKE_PASSWORD', url: redirected,
+    })));
+    expect(checkSafe(await runSearch('safe HTTP errors', ctx))).toMatchObject({ failures: [{ error: 'HTTP 403: Forbidden', status: 403 }] });
+    const forbidden = checkSafe(await runFetch(endpoint, ctx));
+    expect(forbidden).toMatchObject({ error: 'HTTP 403: Forbidden', status: 403 });
+    expect(new URL(forbidden.url).searchParams.get('access_token')).toBe('[redacted]');
+    expect(new URL(forbidden.url).searchParams.get('view')).toBe('public');
+    checkSafe(await runFetch(endpoint, ctx)); // Prior authorization diagnostics are sanitized too.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, url: redirected, headers: new Headers(), text: async () => 'public body',
+    })));
+    const success = checkSafe(await runFetch(endpoint, ctx));
+    expect(success.content).toBe('public body');
+    expect(checkSafe(await runFetch(endpoint, ctx)).reused).toBe(true);
   });
 
   it('cancellation during Tavily stops generic and HTML fallback and permits a later same-query retry', async () => {
