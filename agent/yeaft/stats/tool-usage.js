@@ -19,7 +19,8 @@
  *       totalDurationMs: number,
  *       durations: number[],   // ring of last N durations for p50/p95
  *       lastCalledAt: ISO8601 string,
- *       lastError: string | null
+ *       lastError: string | null,
+ *       recentOutcomes: (null | string)[] // last 100: null=success, safe reason=error
  *     }
  *   }
  * }
@@ -44,6 +45,62 @@ const DEFAULT_RING_SIZE = 100;
 const DEFAULT_FLUSH_EVERY_N = 20;
 const DEFAULT_FLUSH_INTERVAL_MS = 30_000;
 const SCHEMA_VERSION = 1;
+const RECENT_WINDOW_SIZE = 100;
+
+// Fixed vocabulary: never persist arbitrary messages, paths, URLs or provider
+// strings as category keys. Unknown structured codes fall back to a category.
+const ERROR_REASONS = new Set([
+  'invalid_arguments', 'git_cwd_outside_repository', 'git_exit_unconfirmed',
+  'git_timeout', 'git_output_limit', 'git_failed', 'git_filter_inspection_failed',
+  'git_execution_error', 'bash_exit_nonzero', 'exit_nonzero',
+  'timeout', 'cancelled', 'permission', 'not_found', 'network', 'rate_limit', 'conflict', 'http_error', 'other',
+]);
+
+function safeReason(value) {
+  return typeof value === 'string' && ERROR_REASONS.has(value) ? value : null;
+}
+
+function errorReason(errorMessage, errorCode) {
+  const explicit = safeReason(errorCode);
+  if (explicit) return explicit;
+  const text = typeof errorMessage === 'string' ? errorMessage.slice(0, 500) : '';
+  let code;
+  try {
+    const parsed = JSON.parse(text);
+    code = parsed?.code ?? parsed?.errorCode ?? parsed?.failureType ?? parsed?.error?.code;
+  } catch {
+    // Engine output may end mid-JSON. Only accept a complete allowlisted code
+    // value; do not turn a truncated/free-form value into a category key.
+    code = text.match(/"(?:code|errorCode|failureType)"\s*:\s*"([A-Za-z0-9_-]{1,64})"/)?.[1];
+  }
+  const structured = safeReason(code);
+  if (structured) return structured;
+  if (/timed?\s*out|timeout|ETIMEDOUT/i.test(text)) return 'timeout';
+  if (/abort|cancelled|canceled/i.test(text)) return 'cancelled';
+  if (/rate.?limit|too many requests|\b429\b/i.test(text)) return 'rate_limit';
+  if (/EACCES|EPERM|permission denied|access denied|forbidden|unauthorized|\b40[13]\b/i.test(text)) return 'permission';
+  if (/ENOENT|not found|does not exist|\b404\b/i.test(text)) return 'not_found';
+  if (/ECONN|ENOTFOUND|EAI_AGAIN|fetch failed|network|socket/i.test(text)) return 'network';
+  if (/already exists|uncommitted changes|conflict/i.test(text)) return 'conflict';
+  if (/HTTP\s*(?:error[: ]*)?[45]\d\d/i.test(text)) return 'http_error';
+  return 'other';
+}
+
+function readToolRecord(rec, ringSize) {
+  return {
+    callCount: Number(rec.callCount) || 0,
+    errorCount: Number(rec.errorCount) || 0,
+    totalDurationMs: Number(rec.totalDurationMs) || 0,
+    durations: Array.isArray(rec.durations) ? rec.durations.slice(-ringSize) : [],
+    lastCalledAt: typeof rec.lastCalledAt === 'string' ? rec.lastCalledAt : null,
+    lastError: typeof rec.lastError === 'string' ? rec.lastError : null,
+    // Old durations/lastError cannot tell us which calls failed. Never infer
+    // recent outcomes from lifetime counters on legacy files.
+    recentOutcomes: Array.isArray(rec.recentOutcomes)
+      ? rec.recentOutcomes.slice(-RECENT_WINDOW_SIZE).map(value => value === null ? null : safeReason(value) || 'other')
+      : [],
+  };
+}
 
 function defaultStatsPath() {
   return join(homedir(), '.yeaft', 'stats', 'tool-usage.json');
@@ -57,6 +114,7 @@ function emptyToolRecord() {
     durations: [],
     lastCalledAt: null,
     lastError: null,
+    recentOutcomes: [],
   };
 }
 
@@ -116,14 +174,7 @@ export class ToolUsageStats {
       if (parsed && typeof parsed === 'object' && parsed.tools && typeof parsed.tools === 'object') {
         for (const [name, rec] of Object.entries(parsed.tools)) {
           if (!rec || typeof rec !== 'object') continue;
-          this.#tools[name] = {
-            callCount: Number(rec.callCount) || 0,
-            errorCount: Number(rec.errorCount) || 0,
-            totalDurationMs: Number(rec.totalDurationMs) || 0,
-            durations: Array.isArray(rec.durations) ? rec.durations.slice(-this.#ringSize) : [],
-            lastCalledAt: typeof rec.lastCalledAt === 'string' ? rec.lastCalledAt : null,
-            lastError: typeof rec.lastError === 'string' ? rec.lastError : null,
-          };
+          this.#tools[name] = readToolRecord(rec, this.#ringSize);
         }
       }
     } catch {
@@ -143,14 +194,7 @@ export class ToolUsageStats {
       if (parsed && typeof parsed === 'object' && parsed.tools && typeof parsed.tools === 'object') {
         for (const [name, rec] of Object.entries(parsed.tools)) {
           if (!rec || typeof rec !== 'object') continue;
-          this.#tools[name] = {
-            callCount: Number(rec.callCount) || 0,
-            errorCount: Number(rec.errorCount) || 0,
-            totalDurationMs: Number(rec.totalDurationMs) || 0,
-            durations: Array.isArray(rec.durations) ? rec.durations.slice(-this.#ringSize) : [],
-            lastCalledAt: typeof rec.lastCalledAt === 'string' ? rec.lastCalledAt : null,
-            lastError: typeof rec.lastError === 'string' ? rec.lastError : null,
-          };
+          this.#tools[name] = readToolRecord(rec, this.#ringSize);
         }
       }
     } catch {
@@ -162,9 +206,12 @@ export class ToolUsageStats {
    * Record a single tool execution. Updates in-memory counters and
    * may trigger a throttled persist.
    *
-   * @param {{ name: string, durationMs?: number, isError?: boolean, errorMessage?: string }} args
+   * `errorCode` is optional structured metadata; `isError` alone controls
+   * failure accounting. Category extraction never changes that outcome.
+   *
+   * @param {{ name: string, durationMs?: number, isError?: boolean, errorMessage?: string|null, errorCode?: string|null }} args
    */
-  record({ name, durationMs = 0, isError = false, errorMessage = null } = {}) {
+  record({ name, durationMs = 0, isError = false, errorMessage = null, errorCode = null } = {}) {
     if (typeof name !== 'string' || !name) return;
     const dur = Math.max(0, Number(durationMs) || 0);
     let rec = this.#tools[name];
@@ -179,6 +226,10 @@ export class ToolUsageStats {
       rec.durations.splice(0, rec.durations.length - this.#ringSize);
     }
     rec.lastCalledAt = new Date().toISOString();
+    rec.recentOutcomes.push(isError ? errorReason(errorMessage, errorCode) : null);
+    if (rec.recentOutcomes.length > RECENT_WINDOW_SIZE) {
+      rec.recentOutcomes.splice(0, rec.recentOutcomes.length - RECENT_WINDOW_SIZE);
+    }
     if (isError) {
       rec.errorCount += 1;
       if (typeof errorMessage === 'string' && errorMessage) {
@@ -260,10 +311,12 @@ export class ToolUsageStats {
   }
 
   /**
-   * Snapshot for CLI/UI rendering. Computes p50/p95/avg/errorRate per
-   * tool from the in-memory rings.
+   * Snapshot for CLI/UI rendering. Existing counters/errorRate remain lifetime
+   * values; recent is based only on recorded outcomes, never historical totals.
+   * Its reason counters sum to recent.errorCount and its rate is null when
+   * there are no samples (including legacy files with no recentOutcomes).
    *
-   * @returns {Record<string, {callCount: number, errorCount: number, errorRate: number, avgMs: number, p50Ms: number, p95Ms: number, lastCalledAt: string|null, lastError: string|null}>}
+   * @returns {Record<string, {callCount: number, errorCount: number, errorRate: number, avgMs: number, p50Ms: number, p95Ms: number, lastCalledAt: string|null, lastError: string|null, recent: {windowSize: number, callCount: number, errorCount: number, errorRate: number|null, errorReasons: Record<string, number>}}> }
    */
   snapshot() {
     /** @type {Record<string, any>} */
@@ -271,6 +324,14 @@ export class ToolUsageStats {
     for (const [name, rec] of Object.entries(this.#tools)) {
       const sorted = rec.durations.slice().sort((a, b) => a - b);
       const avg = rec.callCount > 0 ? rec.totalDurationMs / rec.callCount : 0;
+      const errorReasons = Object.create(null);
+      let recentErrors = 0;
+      for (const reason of rec.recentOutcomes) {
+        if (reason === null) continue;
+        recentErrors += 1;
+        errorReasons[reason] = (errorReasons[reason] || 0) + 1;
+      }
+      const recentCalls = rec.recentOutcomes.length;
       out[name] = {
         callCount: rec.callCount,
         errorCount: rec.errorCount,
@@ -280,6 +341,13 @@ export class ToolUsageStats {
         p95Ms: Math.round(percentile(sorted, 95)),
         lastCalledAt: rec.lastCalledAt,
         lastError: rec.lastError,
+        recent: {
+          windowSize: RECENT_WINDOW_SIZE,
+          callCount: recentCalls,
+          errorCount: recentErrors,
+          errorRate: recentCalls > 0 ? recentErrors / recentCalls : null,
+          errorReasons,
+        },
       };
     }
     return out;

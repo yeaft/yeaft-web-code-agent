@@ -5,8 +5,8 @@
  * `fetchYeaftToolStats()` → `yeaft_tool_stats` WS round-trip). Two
  * views via tab toggle:
  *
- *   • "All tools" — table ranked by call count (desc), shows
- *     calls / errors / p50 / p95 / last-called.
+ *   • "All tools" — ranked by lifetime call count (desc), compares
+ *     lifetime/recent errors with expandable latency and recent reasons.
  *   • "Unused"    — built-in tools that have NEVER been called.
  *
  * Pure data renderer — refresh action calls `chatStore.fetchYeaftToolStats()`
@@ -105,6 +105,15 @@ export default {
         this.chatStore.fetchYeaftToolStats();
       }
     },
+    recentReasons(row) {
+      return Object.entries(row.recent?.errorReasons || {})
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    },
+    reasonLabel(reason) {
+      const key = `yeaft.toolStats.reason.${reason}`;
+      const label = this.$t?.(key);
+      return label && label !== key ? label : reason;
+    },
     formatMs(ms) {
       if (!Number.isFinite(ms)) return '-';
       if (ms < 1000) return `${ms}ms`;
@@ -135,7 +144,7 @@ export default {
   },
   template: `
     <div v-if="modelValue" class="tool-stats-drawer-backdrop" @click.self="close">
-      <div class="tool-stats-drawer" role="dialog" aria-label="Tool usage statistics">
+      <div class="tool-stats-drawer" role="dialog" :aria-label="$t ? $t('yeaft.toolStats.title') : 'Tool Usage Stats'">
         <div class="tool-stats-drawer-header">
           <h3>{{ $t ? $t('yeaft.toolStats.title') : 'Tool Usage Stats' }}</h3>
           <div class="tool-stats-drawer-actions">
@@ -174,37 +183,45 @@ export default {
               body and don't double-render the banner + table.
             -->
             <div v-if="stats.notice" class="tool-stats-banner">{{ stats.notice }}</div>
-            <table v-if="activeTab === 'all'" class="tool-stats-table">
-              <thead>
-                <tr>
-                  <th>{{ $t ? $t('yeaft.toolStats.col.name') : 'Tool' }}</th>
-                  <th class="num">{{ $t ? $t('yeaft.toolStats.col.calls') : 'Calls' }}</th>
-                  <th class="num">{{ $t ? $t('yeaft.toolStats.col.errors') : 'Errors' }}</th>
-                  <th class="num">{{ $t ? $t('yeaft.toolStats.col.errRate') : 'Err%' }}</th>
-                  <th class="num">{{ $t ? $t('yeaft.toolStats.col.p50') : 'p50' }}</th>
-                  <th class="num">{{ $t ? $t('yeaft.toolStats.col.p95') : 'p95' }}</th>
-                  <th class="num">{{ $t ? $t('yeaft.toolStats.col.avg') : 'Avg' }}</th>
-                  <th>{{ $t ? $t('yeaft.toolStats.col.last') : 'Last' }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="rankedRows.length === 0">
-                  <td colspan="8" class="tool-stats-empty-row">
-                    {{ $t ? $t('yeaft.toolStats.empty') : '(no tool calls recorded yet)' }}
-                  </td>
-                </tr>
-                <tr v-for="row in rankedRows" :key="row.name">
-                  <td class="tool-stats-name">{{ row.name }}</td>
-                  <td class="num">{{ row.callCount }}</td>
-                  <td class="num">{{ row.errorCount }}</td>
-                  <td class="num">{{ formatPct(row.errorRate) }}</td>
-                  <td class="num">{{ formatMs(row.p50Ms) }}</td>
-                  <td class="num">{{ formatMs(row.p95Ms) }}</td>
-                  <td class="num">{{ formatMs(row.avgMs) }}</td>
-                  <td class="tool-stats-last">{{ formatLastCalled(row.lastCalledAt) }}</td>
-                </tr>
-              </tbody>
-            </table>
+            <div v-if="activeTab === 'all'" class="tool-stats-list">
+              <p class="tool-stats-window-note">{{ $t ? $t('yeaft.toolStats.windowNote') : 'Recent: up to the last 100 calls per tool collected since this feature was enabled; not a time window. Historical totals are unchanged.' }}</p>
+              <div v-if="rankedRows.length === 0" class="tool-stats-empty-row">
+                {{ $t ? $t('yeaft.toolStats.empty') : '(no tool calls recorded yet)' }}
+              </div>
+              <details v-for="row in rankedRows" :key="row.name" class="tool-stats-entry">
+                <summary>
+                  <span class="tool-stats-name">{{ row.name }}</span>
+                  <span class="tool-stats-comparison">
+                    <span class="tool-stats-lifetime">
+                      <span class="tool-stats-period">{{ $t ? $t('yeaft.toolStats.lifetime') : 'Lifetime' }}</span>
+                      <strong>{{ formatPct(row.errorRate) }}</strong>
+                      <span>{{ row.errorCount }} / {{ row.callCount }} {{ $t ? $t('yeaft.toolStats.errorsCalls') : 'errors / calls' }}</span>
+                    </span>
+                    <span class="tool-stats-recent">
+                      <span class="tool-stats-period">{{ $t ? $t('yeaft.toolStats.recent') : 'Recent' }}</span>
+                      <template v-if="row.recent && row.recent.callCount > 0">
+                        <strong>{{ formatPct(row.recent.errorRate) }}</strong>
+                        <span>{{ row.recent.errorCount }} / {{ row.recent.callCount }} {{ $t ? $t('yeaft.toolStats.errorsCalls') : 'errors / calls' }}</span>
+                      </template>
+                      <span v-else>{{ $t ? $t('yeaft.toolStats.noRecent') : 'No recent samples' }}</span>
+                    </span>
+                  </span>
+                </summary>
+                <div class="tool-stats-detail">
+                  <div class="tool-stats-latency">
+                    <span>p50 {{ formatMs(row.p50Ms) }}</span>
+                    <span>p95 {{ formatMs(row.p95Ms) }}</span>
+                    <span>{{ $t ? $t('yeaft.toolStats.col.avg') : 'Avg' }} {{ formatMs(row.avgMs) }}</span>
+                    <span>{{ $t ? $t('yeaft.toolStats.col.last') : 'Last' }} {{ formatLastCalled(row.lastCalledAt) }}</span>
+                  </div>
+                  <div class="tool-stats-period">{{ $t ? $t('yeaft.toolStats.recentReasons') : 'Recent error reasons / codes' }}</div>
+                  <ul v-if="recentReasons(row).length" class="tool-stats-reasons">
+                    <li v-for="[reason, count] in recentReasons(row)" :key="reason"><span>{{ reasonLabel(reason) }}</span><strong>{{ count }}</strong></li>
+                  </ul>
+                  <p v-else class="tool-stats-reasons-empty">{{ $t ? $t(row.recent && row.recent.callCount > 0 ? 'yeaft.toolStats.noRecentErrors' : 'yeaft.toolStats.noRecent') : 'No recent error samples' }}</p>
+                </div>
+              </details>
+            </div>
             <div v-else class="tool-stats-unused">
               <div v-if="unusedRows.length === 0" class="tool-stats-empty-row">
                 {{ $t ? $t('yeaft.toolStats.noneUnused') : '(every registered tool has been called at least once)' }}
