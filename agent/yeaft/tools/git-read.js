@@ -54,16 +54,18 @@ function errorOutput(message, operation) {
   });
 }
 
-// Some strict-schema providers require every property. Treat their empty
-// placeholders as omitted, without accepting unknown keys or non-default
-// arguments belonging to another operation.
+// Some strict-schema providers require every property. Treat empty
+// placeholders as omitted. limit is harmless catalogue metadata outside log:
+// providers may fill any schema-valid value, not just the default of 20.
+// Unknown keys and substantive revision/path fields remain operation-specific.
 function normalizeInput(input) {
   const result = { ...input };
   for (const key of ['cwd', 'base', 'head', 'revision', 'paths', 'limit']) {
     if (result[key] === null || result[key] === undefined
         || (['cwd', 'base', 'head', 'revision'].includes(key) && result[key] === '')
         || (key === 'paths' && Array.isArray(result[key]) && result[key].length === 0)
-        || (key === 'limit' && result.operation !== 'log' && result[key] === DEFAULT_LOG_LIMIT)) {
+        || (key === 'limit' && result.operation !== 'log'
+          && Number.isInteger(result[key]) && result[key] >= 1 && result[key] <= MAX_LOG_LIMIT)) {
       delete result[key];
     }
   }
@@ -297,7 +299,7 @@ GitRead 不 fetch、不写 Git 状态、不创建 worktree。它禁用 pager、e
         items: { type: 'string', minLength: 1, maxLength: MAX_VALUE_LENGTH },
         description: 'diff/show only; empty/omitted means all paths',
       },
-      limit: { type: 'integer', minimum: 1, maximum: MAX_LOG_LIMIT, description: 'log only; default 20. Empty optional fields are ignored; omit fields for other operations.' },
+      limit: { type: 'integer', minimum: 1, maximum: MAX_LOG_LIMIT, description: 'Maximum log entries, default 20. Ignored by status/diff/show for strict-schema compatibility. Empty optional fields are treated as omitted.' },
     },
     required: ['operation'],
   },

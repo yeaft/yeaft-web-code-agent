@@ -312,9 +312,16 @@ export function resolvePersistedAttachmentPath(attachmentPath, opts = {}) {
   }
 }
 
-/** Shared bounded read for model history and browser preview. Never follows symlinks. */
-function readPersistedAttachment(att, opts, maxBytes) {
-  const absPath = resolvePersistedAttachmentPath(att?.path, opts);
+/**
+ * Read a bounded, owner-scoped attachment for host consumers, never via symlinks.
+ * Ownership is derived from opts, not the supplied path or attachment metadata.
+ * @param {string} attachmentPath
+ * @param {{cwd?:string, legacyRoot?:string, yeaftDir?:string, sessionId?:string}} opts
+ * @param {number} maxBytes
+ * @returns {{path:string, buffer:Buffer, modified:string}}
+ */
+export function readPersistedAttachmentFile(attachmentPath, opts, maxBytes) {
+  const absPath = resolvePersistedAttachmentPath(attachmentPath, opts);
   if (!absPath) throw new Error('file missing or outside this Session / 文件缺失或不属于本会话');
   const fd = openSync(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
@@ -328,15 +335,21 @@ function readPersistedAttachment(att, opts, maxBytes) {
       if (!read) throw new Error('image changed while reading');
       offset += read;
     }
-    return {
-      data: buffer.toString('base64'),
-      mimeType: att.mimeType || 'image/png',
-      filename: att.name || basename(absPath),
-      bytes: buffer.length,
-    };
+    return { path: absPath, buffer, modified: stat.mtime.toISOString() };
   } finally {
     closeSync(fd);
   }
+}
+
+/** Shared bounded read for model history and browser preview. Never follows symlinks. */
+function readPersistedAttachment(att, opts, maxBytes) {
+  const { path, buffer } = readPersistedAttachmentFile(att?.path, opts, maxBytes);
+  return {
+    data: buffer.toString('base64'),
+    mimeType: att.mimeType || 'image/png',
+    filename: att.name || basename(path),
+    bytes: buffer.length,
+  };
 }
 
 /** Short-lived web preview; missing/denied/oversized images have no preview. */
