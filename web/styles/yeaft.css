@@ -3534,7 +3534,7 @@
 .yeaft-query-progress .btn-ghost {
   padding: 1px 3px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--response-radius);
   background: transparent;
   font: inherit;
   min-height: 24px;
