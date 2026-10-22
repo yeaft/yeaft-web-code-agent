@@ -6,6 +6,10 @@
  */
 
 import { defineTool } from './types.js';
+import {
+  attachResearchGuidance, canonicalWebUrl, recordWebResearchCall, setBounded,
+  shareWebRequest, webFetchKey, webHttpFailure, webRequestFailure, withWebDeadline,
+} from '../web-research.js';
 
 /** Strip HTML tags and normalize whitespace for readability. */
 function htmlToText(html) {
@@ -98,69 +102,72 @@ Guidelines:
   },
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
-  // Live waiting is explicit; raw formatting alone never exempts static reads.
+  // Success-only reuse and active sharing belong to the query ledger, not Engine's cache.
   duplicateCallPolicy: (input) => input?.polling === true ? 'allow' : 'warn',
   async execute(input, ctx) {
-    const { url, max_length = 50000, raw = false } = input;
-    if (!url) return JSON.stringify({ error: 'url is required' });
+    const { url, max_length = 50000, raw = false, polling = false } = input;
+    const research = ctx?.webResearch;
+    const signal = ctx?.signal;
+    let canonicalUrl;
+    try {
+      canonicalUrl = canonicalWebUrl(url);
+      if (!['http:', 'https:'].includes(new URL(canonicalUrl).protocol)) throw new Error('Only HTTP(S) URLs are supported');
+      if (!Number.isInteger(max_length) || max_length < 1) throw new Error('max_length must be a positive integer');
+    } catch (error) {
+      return JSON.stringify({ error: `Invalid fetch input: ${error.message}`, code: 'invalid_arguments', errorEffect: 'none', hint: 'Provide a full HTTP(S) URL and a positive integer max_length.' });
+    }
 
     try {
-      // Validate URL
-      let parsedUrl;
-      try {
-        parsedUrl = new URL(url);
-      } catch {
-        return JSON.stringify({ error: `Invalid URL: ${url}` });
-      }
-
-      // Only allow http(s)
-      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-        return JSON.stringify({ error: `Unsupported protocol: ${parsedUrl.protocol}` });
-      }
-
-      const response = await fetch(url, {
-        signal: ctx?.signal,
-        headers: {
-          'User-Agent': 'Yeaft/1.0 (compatible; bot)',
-          'Accept': 'text/html, application/json, text/plain, */*',
-        },
-        redirect: 'follow',
+      signal?.throwIfAborted();
+      const key = webFetchKey(canonicalUrl, { raw, maxLength: max_length });
+      const prior = !polling && research?.fetches.get(key);
+      if (prior) return attachResearchGuidance(prior, research, {
+        reused: true, reuseReason: 'This URL and response mode already succeeded in this query. Use polling:true only for requested live status checks.',
       });
-
-      if (!response.ok) {
-        return JSON.stringify({
-          error: `HTTP ${response.status}: ${response.statusText}`,
-          url,
-        });
-      }
-
-      const contentType = response.headers.get('content-type') || '';
-      const body = await response.text();
-
-      let content;
-      if (raw || contentType.includes('json') || contentType.includes('text/plain')) {
-        content = body;
-      } else {
-        content = htmlToText(body);
-      }
-
-      // Truncate if too long
-      const truncated = content.length > max_length;
-      if (truncated) {
-        content = content.slice(0, max_length);
-      }
-
-      return JSON.stringify({
-        url: response.url, // final URL after redirects
-        status: response.status,
-        contentType,
-        contentLength: content.length,
-        truncated,
-        content,
+      const output = await shareWebRequest(research, JSON.stringify(['fetch', key, polling]), signal, async () => {
+        let result;
+        try {
+          result = await withWebDeadline(signal, async bounded => {
+            const response = await fetch(canonicalUrl, {
+              signal: bounded,
+              headers: { 'User-Agent': 'Yeaft/1.0 (compatible; bot)', Accept: 'text/html, application/json, text/plain, */*' },
+              redirect: 'follow',
+            });
+            const finalUrl = response.url || canonicalUrl;
+            if (!response.ok) return { ...webHttpFailure(response.status, response.statusText), url: finalUrl };
+            const contentType = response.headers.get('content-type') || '';
+            const body = await response.text();
+            const content = raw || contentType.includes('json') || contentType.includes('text/plain') ? body : htmlToText(body);
+            return {
+              url: finalUrl, status: response.status, contentType,
+              contentLength: Math.min(content.length, max_length), truncated: content.length > max_length,
+              content: content.slice(0, max_length),
+            };
+          });
+          signal?.throwIfAborted();
+        } catch (error) {
+          result = { ...webRequestFailure(error, signal), url: canonicalUrl };
+        }
+        recordWebResearchCall(research);
+        const previousAuth = research?.authorizationFailures.get(canonicalUrl);
+        if (previousAuth && result.error) {
+          result.priorAuthorizationFailure = previousAuth;
+          result.hint += ' This same URL previously denied access in this query; check public access before retrying.';
+        }
+        const output = JSON.stringify(result);
+        if (research) {
+          if (!result.error) {
+            setBounded(research.fetches, key, output);
+            research.authorizationFailures.delete(canonicalUrl);
+          } else if ([401, 403].includes(result.status)) {
+            setBounded(research.authorizationFailures, canonicalUrl, { status: result.status, url: result.url });
+          }
+        }
+        return output;
       });
-    } catch (err) {
-      if (err.name === 'AbortError') return JSON.stringify({ error: 'Fetch cancelled' });
-      return JSON.stringify({ error: `Fetch failed: ${err.message}`, url });
+      return attachResearchGuidance(output, research);
+    } catch (error) {
+      return attachResearchGuidance({ ...webRequestFailure(error, signal), url: canonicalUrl }, research);
     }
   },
 });
