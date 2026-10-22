@@ -29,6 +29,7 @@ import { stat, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve, extname, isAbsolute } from 'path';
 import { checkPathAllowed } from './path-safety.js';
+import { readPersistedAttachmentFile, resolvePersistedAttachmentPath } from '../attachments.js';
 
 /** Default max image size in bytes (20 MiB). Override via ctx.maxImageBytes. */
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -149,7 +150,7 @@ Path examples:
 
 Supported formats: PNG, JPEG (.jpg/.jpeg/.jfif), GIF, WebP.
 Max size: 20 MiB by default (configurable via ctx.maxImageBytes).
-Path must live under the project directory or an explicit host allowlist.`,
+Path must live under the project directory, the current Session's attachments, or an explicit host allowlist. Attachments from other Sessions are not allowed.`,
     zh: `加载本地图片文件并附加到对话中，使 LLM 可以查看。
 
 返回 base64 data URI（image 字段）及元数据（格式、尺寸、大小）。引擎将图片作为原生多模态工具结果交给模型。
@@ -170,7 +171,7 @@ Path must live under the project directory or an explicit host allowlist.`,
 
 支持格式：PNG、JPEG（.jpg/.jpeg/.jfif）、GIF、WebP。
 最大文件：默认 20 MiB（可通过 ctx.maxImageBytes 配置）。
-路径必须在项目目录下或已加入宿主白名单。`
+路径必须在项目目录、当前 Session 的附件目录下或已加入宿主白名单；不允许读取其他 Session 的附件。`
   },
   parameters: {
     type: 'object',
@@ -216,8 +217,14 @@ Path must live under the project directory or an explicit host allowlist.`,
         : DEFAULT_MAX_IMAGE_BYTES;
     const absPath = resolve(cwd, file_path);
 
+    // Session uploads intentionally live outside workDir. Reuse the same
+    // owner + no-symlink resolver as history/preview, never allow the whole
+    // instance's sessions directory just to make an uploaded image readable.
+    const attachmentOptions = { yeaftDir: ctx?.yeaftDir, sessionId: ctx?.sessionId, cwd };
+    const sessionAttachment = Boolean(ctx?.yeaftDir && ctx?.sessionId
+      && resolvePersistedAttachmentPath(file_path, attachmentOptions));
     const pathErr = checkPathAllowed(absPath, cwd, allowlist);
-    if (pathErr) {
+    if (pathErr && !sessionAttachment) {
       // prev-3 P2: split "absolute outside project" from "relative ..".
       // The `..` case is already handled above, so anything reaching here
       // is either an absolute path outside cwd/allowlist or a relative
@@ -229,6 +236,9 @@ Path must live under the project directory or an explicit host allowlist.`,
         : 'Resolved path is outside the project directory. ';
       return JSON.stringify({
         error: hint + pathErr.message,
+        code: 'image_path_denied',
+        errorEffect: 'none',
+        hint: 'Use the current Session attachment path, a project image, or an explicitly allowlisted directory.',
         path: absPath,
       });
     }
@@ -254,37 +264,48 @@ Path must live under the project directory or an explicit host allowlist.`,
       });
     }
 
-    if (!existsSync(absPath)) {
-      return JSON.stringify({ error: `Image not found: ${absPath}` });
-    }
-
-    let fileStat;
-    try {
-      fileStat = await stat(absPath);
-    } catch (err) {
-      return JSON.stringify({ error: `Failed to stat image: ${err.message}` });
-    }
-
-    if (!fileStat.isFile()) {
-      return JSON.stringify({ error: 'file_path does not point to a regular file' });
-    }
-
-    if (fileStat.size > maxBytes) {
-      return JSON.stringify({
-        error:
-          `Image exceeds ${formatBytes(maxBytes)} (${formatBytes(fileStat.size)} actual). ` +
-          `Reduce image size (resize/crop), or set \`maxImageBytes\` in ` +
-          `~/.yeaft/config.json if your LLM supports more.`,
-        size: fileStat.size,
-        maxSize: maxBytes,
-      });
-    }
-
     let buffer;
-    try {
-      buffer = await readFile(absPath);
-    } catch (err) {
-      return JSON.stringify({ error: `Failed to read image: ${err.message}` });
+    let modified;
+    if (sessionAttachment) {
+      try {
+        // Recheck ownership and symlinks at the actual bounded file read.
+        ({ buffer, modified } = readPersistedAttachmentFile(file_path, attachmentOptions, maxBytes));
+      } catch (err) {
+        return JSON.stringify({ error: `Failed to read Session image: ${err.message}`, code: 'image_attachment_unavailable', errorEffect: 'none' });
+      }
+    } else {
+      if (!existsSync(absPath)) {
+        return JSON.stringify({ error: `Image not found: ${absPath}`, code: 'image_not_found', errorEffect: 'none' });
+      }
+
+      let fileStat;
+      try {
+        fileStat = await stat(absPath);
+      } catch (err) {
+        return JSON.stringify({ error: `Failed to stat image: ${err.message}` });
+      }
+
+      if (!fileStat.isFile()) {
+        return JSON.stringify({ error: 'file_path does not point to a regular file' });
+      }
+
+      if (fileStat.size > maxBytes) {
+        return JSON.stringify({
+          error:
+            `Image exceeds ${formatBytes(maxBytes)} (${formatBytes(fileStat.size)} actual). ` +
+            `Reduce image size (resize/crop), or set \`maxImageBytes\` in ` +
+            `~/.yeaft/config.json if your LLM supports more.`,
+          size: fileStat.size,
+          maxSize: maxBytes,
+        });
+      }
+
+      try {
+        buffer = await readFile(absPath);
+      } catch (err) {
+        return JSON.stringify({ error: `Failed to read image: ${err.message}` });
+      }
+      modified = fileStat.mtime.toISOString();
     }
 
     const mediaType = EXT_TO_MIME[ext];
@@ -296,9 +317,9 @@ Path must live under the project directory or an explicit host allowlist.`,
       path: absPath,
       format: ext.slice(1).toUpperCase() === 'JPG' ? 'JPEG' : ext.slice(1).toUpperCase(),
       media_type: mediaType,
-      size: fileStat.size,
-      sizeFormatted: formatBytes(fileStat.size),
-      modified: fileStat.mtime.toISOString(),
+      size: buffer.length,
+      sizeFormatted: formatBytes(buffer.length),
+      modified,
       image: dataUri,
     };
     // Normalise .jfif to JPEG in display format too, for consistency.

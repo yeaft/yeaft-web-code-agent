@@ -20,16 +20,20 @@ export const PRESENTATION_SCHEMA = obj({
     block('diagram', { nodes: arr(obj({ id: str(40), label: str(160) }, ['id', 'label']), 12), edges: arr(obj({ from: str(40), to: str(40), label: str(120) }, ['from', 'to']), 24, 0) }, ['nodes', 'edges']),
     block('image', { url: str(2000), alt: str(240), caption: str(1000) }, ['url', 'alt']),
     block('link', { url: str(2000), text: str(1000) }, ['url', 'text']),
-    block('map', { points: arr(obj({ label: str(160), latitude: { type: 'number', minimum: -90, maximum: 90 }, longitude: { type: 'number', minimum: -180, maximum: 180 }, detail: str(1000) }, ['label', 'latitude', 'longitude']), 20), embed: obj({ provider: { type: 'string', enum: ['openstreetmap', 'google'] }, url: str(2000) }, ['provider']) }, ['points']),
+    block('map', { points: arr(obj({ label: str(160), latitude: { type: 'number', minimum: -90, maximum: 90 }, longitude: { type: 'number', minimum: -180, maximum: 180 }, detail: str(1000) }, ['label', 'latitude', 'longitude']), 20), embed: { anyOf: [
+      obj({ provider: { type: 'string', enum: ['openstreetmap'] }, url: str(2000) }, ['provider']),
+      obj({ provider: { type: 'string', enum: ['google'] }, url: str(2000) }, ['provider', 'url']),
+    ] } }, ['points']),
   ] }, 12),
 }, ['summary', 'blocks']);
 
-export const PRESENT_RESPONSE_DESCRIPTION = `Publish a rich user-visible response inside this turn: cards, metrics, comparison tables, bar/line charts, timelines, relationship diagrams, images, artifact links or maps. Cards may include an optional image {url,alt,fit:cover|contain} and source/action url; use contain for weather icons or team logos and cover for photography. Optional: use normal text for simple answers. Supply a self-contained summary for copying, search, model history and older clients; do not repeat the whole rich answer afterwards. Use only verified data, mark uncertainty, and never fabricate chart values or coordinates. No HTML/JavaScript, arbitrary SVG, styling or executable content. Image/link URLs must be credential-free HTTP(S); images load automatically in the reader’s browser without a referrer. Links open in the owning in-app browser by default; the reader can explicitly choose a new tab. Maps default to offline coordinate sketches. Set map.embed={provider:openstreetmap} for the dedicated OSM street-map embed, or {provider:google,url} with a verified official https://www.google.com/maps/embed?pb=... share URL (not a homepage or API-key URL). Embed availability depends on the reader's network; coordinates remain available. Never invent routes, ETAs, weather or scores; attach verified image sources and dated data. phase=progress continues work; phase=final is a delivery intent, not proof of task success. Runtime still owns persistence, cancellation and turn termination. Validation failure publishes nothing; correct the payload or answer in text.`;
+export const PRESENT_RESPONSE_DESCRIPTION = `Publish a rich user-visible response inside this turn: cards, metrics, comparison tables, bar/line charts, timelines, relationship diagrams, images, artifact links or maps. Cards may include an optional image {url,alt,fit:cover|contain} and source/action url; use contain for weather icons or team logos and cover for photography. Optional: use normal text for simple answers. Supply a self-contained summary for copying, search, model history and older clients; do not repeat the whole rich answer afterwards. Use only verified data, mark uncertainty, and never fabricate chart values or coordinates. No HTML/JavaScript, arbitrary SVG, styling or executable content. Image/link URLs must be credential-free HTTP(S); images load automatically in the reader’s browser without a referrer. Links open in the owning in-app browser by default; the reader can explicitly choose a new tab. Maps default to offline coordinate sketches. Set map.embed={provider:openstreetmap} without a URL; runtime generates the dedicated OSM street-map embed, or {provider:google,url} with a verified official https://www.google.com/maps/embed?pb=... share URL (not a homepage or API-key URL). Embed availability depends on the reader's network; coordinates remain available. Never invent routes, ETAs, weather or scores; attach verified image sources and dated data. phase=progress continues work; phase=final is a delivery intent, not proof of task success. Runtime still owns persistence, cancellation and turn termination. Validation failure publishes nothing; correct the payload or answer in text.`;
 
 function check(value, schema, path) {
   if (schema.anyOf) {
-    const candidate = schema.anyOf.find(s => value?.type === s.properties.type.enum[0]);
-    if (!candidate) throw new Error(`${path}: unsupported block type`);
+    const key = schema.anyOf[0].properties.type ? 'type' : 'provider';
+    const candidate = schema.anyOf.find(s => s.properties[key].enum.includes(value?.[key]));
+    if (!candidate) throw new Error(`${path}.${key}: unsupported value`);
     return check(value, candidate, path);
   }
   if (schema.type === 'object') {
@@ -87,7 +91,25 @@ export function safePresentationUrl(value) {
 
 /** Only official map share embeds are allowed. API keys/configuration never enter transcripts. */
 export function normalizeMapEmbed(embed) {
-  if (embed?.provider === 'openstreetmap' && embed.url === undefined) return { provider: 'openstreetmap' };
+  if (embed?.provider === 'openstreetmap') {
+    if (embed.url !== undefined) {
+      // Compatibility for official legacy OSM embeds. Never reuse a model URL:
+      // normalize it to provider-only so the reader generates the bounds/marker.
+      const url = new URL(safePresentationUrl(embed.url));
+      const keys = [...url.searchParams.keys()];
+      const tuple = (name, count) => {
+        const parts = (url.searchParams.get(name) || '').split(',');
+        return parts.length === count && parts.every(part => part.trim() && Number.isFinite(Number(part)));
+      };
+      if (url.origin !== 'https://www.openstreetmap.org' || url.pathname !== '/export/embed.html' || url.hash
+        || new Set(keys).size !== keys.length || keys.some(key => !['bbox', 'layer', 'marker'].includes(key))
+        || !tuple('bbox', 4) || (url.searchParams.has('marker') && !tuple('marker', 2))
+        || (url.searchParams.has('layer') && url.searchParams.get('layer') !== 'mapnik')) {
+        throw new Error('map: invalid legacy OpenStreetMap embed URL; use provider-only openstreetmap');
+      }
+    }
+    return { provider: 'openstreetmap' };
+  }
   if (embed?.provider === 'google') {
     const url = new URL(safePresentationUrl(embed.url));
     const params = [...url.searchParams];

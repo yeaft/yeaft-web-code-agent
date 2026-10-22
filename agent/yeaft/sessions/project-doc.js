@@ -201,22 +201,45 @@ export function selectProjectDocContext(text, {
   };
 }
 
-/** Extract concrete workspace path hints from a tool call input. */
+// These tools manage runtime state, not project files. Do not confuse their
+// side effects (or an Agent's target cwd) with a write in this workspace.
+const PROJECT_DOC_LIFECYCLE_TOOLS = new Set([
+  'Skill', 'EnterWorktree', 'ExitWorktree', 'AskUser', 'PresentResponse',
+  'DiscoverTools', 'HistorySearch', 'ListTasks', 'ReadTaskLog', 'WaitTask',
+  'CancelTask', 'SpawnAgent', 'Agent', 'UpdateAgent', 'PromptAgent', 'SendMessage',
+  'WaitAgent', 'CloseAgent', 'ListAgents', 'RouteForward', 'CreateWorkItem', 'JsReplReset',
+]);
+
+/** Project-rule review is separate from tool caching/concurrency metadata. */
+export function projectDocToolCallNeedsWriteReview(toolName, input = {}, readOnly = false) {
+  if (readOnly || PROJECT_DOC_LIFECYCLE_TOOLS.has(toolName)) return false;
+  if (toolName === 'NotebookEdit') return input?.action !== 'read';
+  if (toolName === 'ImageGeneration') return Boolean(input?.output_path);
+  if (toolName === 'Bash') {
+    // Deliberately exact: no compound commands, substitutions, redirects or
+    // arbitrary options. Everything else remains a potential write.
+    const command = typeof input?.command === 'string' ? input.command.trim() : '';
+    return !/^(?:pwd(?:[ \t]+-[LP])?|git[ \t]+status(?:[ \t]+--short)?)$/.test(command);
+  }
+  // FileWrite/FileEdit/ApplyPatch and unknown extension tools fail closed.
+  return true;
+}
+
+/** Extract concrete workspace path hints, never shell code or lifecycle inputs. */
 export function projectDocPathHintsFromToolCall(toolName, input = {}) {
+  if (PROJECT_DOC_LIFECYCLE_TOOLS.has(toolName)) return [];
   const hints = [];
   for (const key of ['file_path', 'path', 'cwd', 'workDir', 'notebook_path', 'output_path']) {
     if (typeof input?.[key] === 'string' && input[key].trim()) hints.push(input[key].trim());
   }
-  if (toolName === 'Bash' && typeof input?.command === 'string' && input.command.trim()) {
-    hints.push(input.command.trim());
-  }
   if (toolName === 'ApplyPatch' && typeof input?.patch === 'string') {
-    for (const match of input.patch.matchAll(/^\+\+\+\s+(?:b\/)?(.+)$/gm)) {
+    // Include deletion targets too; +++ /dev/null has no destination path.
+    for (const match of input.patch.matchAll(/^(?:---|\+\+\+)\s+(?:[ab]\/)?(.+)$/gm)) {
       const path = match[1]?.trim();
       if (path && path !== '/dev/null') hints.push(path);
     }
   }
-  return hints;
+  return [...new Set(hints)];
 }
 
 export function projectDocWriteScopesNeedingReload(projectDocContext, pathHints) {

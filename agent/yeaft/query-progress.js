@@ -26,6 +26,18 @@ function resultHash(output) {
   return createHash('sha256').update(typeof output === 'string' ? output : JSON.stringify(output) || '').digest('hex');
 }
 
+/** Web advice/reuse annotations are not new evidence; raw output stays intact. */
+function observationOutput(call, output) {
+  if (call.name !== 'WebFetch' && call.name !== 'WebSearch') return output;
+  try {
+    const value = typeof output === 'string' ? JSON.parse(output.replace(/^Error:\s*/, '')) : output;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return output;
+    const { researchGuidance, relatedPriorQuery, convergenceHint, reused, reuseReason,
+      priorQuery, priorAuthorizationFailure, hint, ...evidence } = value;
+    return evidence;
+  } catch { return output; }
+}
+
 function failureKind(output, call, readOnly) {
   const text = typeof output === 'string' ? output : JSON.stringify(output) || '';
   const errorText = text.replace(/^Error:\s*/, '');
@@ -143,10 +155,11 @@ export class QueryProgress {
     // change duplicate detection, replay protection or loop-guard decisions.
     if (pendingOutcome) this.#pendingOutcomes.set(call.id, { stats, isError, executed });
     const key = `${call.name}:${argsHashOf(call.input)}`;
-    const hash = resultHash(output);
+    const observation = observationOutput(call, output);
+    const hash = resultHash(observation);
     if (isError) {
       const prior = this.#failures.get(key);
-      const kind = failureKind(output, call, readOnly);
+      const kind = failureKind(observation, call, readOnly);
       if (executed && !readOnly) {
         // A partial mutation may have changed even a previously unreadable
         // resource. Permit verification, never a replay of the mutation itself.

@@ -22,6 +22,11 @@
  */
 
 import { defineTool } from './types.js';
+import {
+  attachResearchGuidance, findPriorSearch, findRelatedSearch, normalizeSearchQuery,
+  recordSearch, recordWebResearchCall, shareWebRequest, webHttpFailure,
+  webRequestFailure, withWebDeadline,
+} from '../web-research.js';
 
 export default defineTool({
   name: 'WebSearch',
@@ -66,147 +71,134 @@ Guidelines:
   },
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
+  // The ledger caches successes only; Engine's general cache would freeze errors.
   async execute(input, ctx) {
-    const { query, limit = 5 } = input;
-    if (!query || typeof query !== 'string') {
-      return JSON.stringify({ error: 'query is required' });
+    const query = normalizeSearchQuery(input.query);
+    const limit = input.limit ?? 5;
+    if (typeof input.query !== 'string' || !query || !Number.isInteger(limit) || limit < 1) {
+      return JSON.stringify({ error: 'query must be non-empty text and limit a positive integer', code: 'invalid_arguments', errorEffect: 'none', hint: 'Supply a targeted query and a positive integer result limit.' });
     }
 
-    const search = ctx?.config?.search || {};
+    const research = ctx?.webResearch;
     const signal = ctx?.signal;
-    const errors = [];
-
-    // Backend preference set in YeaftSettings → Search tab. When the
-    // user picks `playwright` we'd normally call the playwright-service;
-    // that service is not yet shipped (next PR), so the preference is
-    // recorded for forward-compat and we transparently fall through to
-    // Tavily / HTML scrape. Once the service lands we'll insert a
-    // tryPlaywright backend here ahead of Tavily.
-    // Anything other than 'playwright' is treated as 'tavily'.
-
-    // 1. Tavily — default, fast, structured.
-    if (search.tavilyApiKey) {
-      const r = await tryTavily(query, limit, search.tavilyApiKey, signal);
-      if (r.ok) return JSON.stringify(r.data, null, 2);
-      errors.push(`tavily: ${r.error}`);
+    try {
+      signal?.throwIfAborted();
+      const prior = findPriorSearch(research, query, limit);
+      if (prior) {
+        const data = JSON.parse(prior.output);
+        return attachResearchGuidance({ ...data, results: data.results.slice(0, limit) }, research, {
+          reused: true, priorQuery: prior.query,
+          reuseReason: 'This exact trimmed query already succeeded with at least the requested limit in this query.',
+        });
+      }
+      const related = findRelatedSearch(research, query);
+      const output = await shareWebRequest(research, JSON.stringify(['search', query, limit]), signal, async () => {
+        const result = await searchWeb(query, limit, ctx);
+        recordWebResearchCall(research);
+        const output = JSON.stringify(result);
+        if (!result.error) recordSearch(research, query, limit, output);
+        return output;
+      });
+      return attachResearchGuidance(output, research, related ? {
+        relatedPriorQuery: related.query,
+        convergenceHint: 'A similar query already completed. Use this result for the specific unresolved fact; semantic variants are not interchangeable.',
+      } : {});
+    } catch (error) {
+      return attachResearchGuidance(webRequestFailure(error, signal), research);
     }
-
-    // 2. Generic JSON endpoint (legacy escape hatch — SearXNG, custom proxy, etc).
-    const genericUrl = search.searchApiUrl || ctx?.config?.searchApiUrl;
-    if (genericUrl) {
-      const r = await tryGenericApi(query, limit, genericUrl, signal);
-      if (r.ok) return JSON.stringify(r.data, null, 2);
-      errors.push(`searchApiUrl: ${r.error}`);
-    }
-
-    // 3. HTML-scrape fallback. Often blocked on cloud IPs; useful for
-    //    self-hosted / residential setups with no API key.
-    if (!search.disableHtmlFallback) {
-      const r = await tryHtmlScrape(query, limit, signal);
-      if (r.ok) return JSON.stringify(r.data, null, 2);
-      errors.push(`html: ${r.error}`);
-    }
-
-    return JSON.stringify({
-      error: 'No web search backend succeeded.',
-      attempted: errors,
-      hint: 'Set search.tavilyApiKey in ~/.yeaft/config.json (free tier: https://tavily.com).',
-    });
   },
 });
+
+async function searchWeb(query, limit, ctx) {
+  const search = ctx?.config?.search || {};
+  const signal = ctx?.signal;
+  const failures = [];
+  const backends = [];
+  if (search.tavilyApiKey) backends.push(['tavily', bounded => tryTavily(query, limit, search.tavilyApiKey, bounded)]);
+  const genericUrl = search.searchApiUrl || ctx?.config?.searchApiUrl;
+  if (genericUrl) backends.push(['generic', bounded => tryGenericApi(query, limit, genericUrl, bounded)]);
+  if (!search.disableHtmlFallback) {
+    backends.push(['duckduckgo-html', bounded => tryHtmlScrape(query, limit, 'duckduckgo-html', bounded)]);
+    backends.push(['bing-html', bounded => tryHtmlScrape(query, limit, 'bing-html', bounded)]);
+  }
+  for (const [provider, work] of backends) {
+    signal?.throwIfAborted();
+    try {
+      const result = await withWebDeadline(signal, work);
+      signal?.throwIfAborted();
+      if (!result.error) return result;
+      failures.push({ provider, ...result });
+    } catch (error) {
+      const failure = webRequestFailure(error, signal);
+      // Cancellation is terminal: never start the next backend.
+      if (failure.code === 'cancelled') return { ...failure, query, failures };
+      failures.push({ provider, ...failure });
+    }
+  }
+  const last = failures.at(-1);
+  return {
+    error: 'No web search backend succeeded.', code: 'search_unavailable', errorEffect: 'none', query,
+    ...(last?.status ? { status: last.status } : {}),
+    attempted: failures.map(failure => `${failure.provider}: ${failure.error}`), failures,
+    hint: 'Inspect backend failures: HTML search may be bot-blocked or its markup may have changed. Use a known official URL with WebFetch or another available source; verify an already configured search endpoint if applicable. Rephrasing alone will not fix access failures.',
+  };
+}
 
 // ─── Backend implementations ────────────────────────────────────────
 
 async function tryTavily(query, limit, apiKey, signal) {
-  try {
-    const res = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query,
-        max_results: Math.max(1, Math.min(limit, 10)),
-        include_answer: true,
-        search_depth: 'basic',
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      return { ok: false, error: `${res.status} ${res.statusText} ${text.slice(0, 200)}` };
-    }
-    const data = await res.json();
-    return {
-      ok: true,
-      data: {
-        provider: 'tavily',
-        query,
-        answer: data.answer || null,
-        results: (data.results || []).slice(0, limit).map((r) => ({
-          title: r.title,
-          url: r.url,
-          snippet: r.content,
-          score: r.score,
-        })),
-      },
-    };
-  } catch (err) {
-    if (err?.name === 'AbortError') return { ok: false, error: 'cancelled' };
-    return { ok: false, error: err.message || String(err) };
-  }
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST', signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey, query, max_results: Math.min(limit, 10), include_answer: true, search_depth: 'basic' }),
+  });
+  if (!res.ok) return webHttpFailure(res.status);
+  const data = await res.json();
+  if (!Array.isArray(data?.results) || data.error) return invalidSearchResponse();
+  return {
+    provider: 'tavily', query, answer: data.answer || null,
+    results: data.results.slice(0, limit).map(r => ({ title: r.title, url: r.url, snippet: r.content, score: r.score })),
+  };
 }
 
 async function tryGenericApi(query, limit, urlStr, signal) {
-  try {
-    const url = new URL(urlStr);
-    url.searchParams.set('q', query);
-    url.searchParams.set('limit', String(limit));
-    const res = await fetch(url.toString(), {
-      signal,
-      headers: { 'User-Agent': 'Yeaft/1.0', Accept: 'application/json' },
-    });
-    if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
-    const data = await res.json();
-    return { ok: true, data: { provider: 'generic', query, ...data } };
-  } catch (err) {
-    if (err?.name === 'AbortError') return { ok: false, error: 'cancelled' };
-    return { ok: false, error: err.message || String(err) };
-  }
+  const url = new URL(urlStr);
+  url.searchParams.set('q', query);
+  url.searchParams.set('limit', String(limit));
+  const res = await fetch(url.toString(), { signal, headers: { 'User-Agent': 'Yeaft/1.0', Accept: 'application/json' } });
+  if (!res.ok) return webHttpFailure(res.status);
+  const data = await res.json();
+  if (!Array.isArray(data?.results) || data.error) return invalidSearchResponse();
+  return { ...data, provider: 'generic', query, results: data.results.slice(0, limit) };
 }
 
-/**
- * HTML-scrape fallback. Tries DuckDuckGo's lite HTML endpoint first
- * (smaller markup, but more aggressive bot detection on cloud IPs),
- * then Bing. We intentionally keep the regex-based parsers minimal —
- * they break less than full DOM selectors when sites tweak markup.
- */
-async function tryHtmlScrape(query, limit, signal) {
-  const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-  const headers = { 'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9' };
+function invalidSearchResponse() {
+  return { error: 'Search endpoint did not return a results array', code: 'invalid_response', errorEffect: 'none', hint: 'Verify the configured endpoint returns a JSON object with results: [], including for no matches.' };
+}
 
-  try {
-    const ddg = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { signal, headers });
-    if (ddg.ok) {
-      const html = await ddg.text();
-      const results = parseDdgHtml(html, limit);
-      if (results.length) return { ok: true, data: { provider: 'duckduckgo-html', query, results } };
-    }
-  } catch (err) {
-    if (err?.name === 'AbortError') return { ok: false, error: 'cancelled' };
-  }
-
-  try {
-    const bing = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, { signal, headers });
-    if (bing.ok) {
-      const html = await bing.text();
-      const results = parseBingHtml(html, limit);
-      if (results.length) return { ok: true, data: { provider: 'bing-html', query, results } };
-    }
-  } catch (err) {
-    if (err?.name === 'AbortError') return { ok: false, error: 'cancelled' };
-  }
-
-  return { ok: false, error: 'all HTML scrape backends returned 0 results (likely bot-blocked)' };
+/** Zero matches need an explicit no-results marker, not an empty parser output. */
+async function tryHtmlScrape(query, limit, provider, signal) {
+  const ddg = provider === 'duckduckgo-html';
+  const endpoint = ddg ? 'https://html.duckduckgo.com/html/?q=' : 'https://www.bing.com/search?q=';
+  const res = await fetch(endpoint + encodeURIComponent(query), {
+    signal,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  });
+  if (!res.ok) return webHttpFailure(res.status);
+  const html = await res.text();
+  const blocked = /anomaly\.js|anomaly-modal|challenge-form|verify (?:that )?you(?:'re| are) (?:a )?human|unusual traffic|<title[^>]*>[^<]*(?:captcha|access denied)/i.test(html);
+  const results = ddg ? parseDdgHtml(html, limit) : parseBingHtml(html, limit);
+  const noMatches = ddg ? /class=["'][^"']*\bno-results\b|No results found for/i.test(html)
+    : /class=["'][^"']*\bb_no\b|There are no results for|No results found for/i.test(html);
+  if (!blocked && (results.length || noMatches)) return { provider, query, results };
+  return {
+    error: blocked ? 'HTML search returned a bot challenge' : 'HTML search markup was not recognized; zero matches are not confirmed',
+    code: blocked ? 'bot_blocked' : 'unrecognized_response', status: res.status, errorEffect: 'none',
+    hint: 'Use a known official URL or another available source. Retrying a rephrased query will not fix a bot challenge or parser mismatch.',
+  };
 }
 
 /**

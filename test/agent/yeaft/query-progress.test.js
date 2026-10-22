@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { QueryProgress } from '../../../agent/yeaft/query-progress.js';
 import webFetchTool from '../../../agent/yeaft/tools/web-fetch.js';
+import { attachResearchGuidance } from '../../../agent/yeaft/web-research.js';
 
 function observe(progress, name, output, extra = {}) {
   progress.observe({ call: { id: 'c', name, input: { path: 'rfc' } }, output, readOnly: true, ...extra });
@@ -125,6 +126,34 @@ describe('query-local progress evidence', () => {
       observe(guarded, 'FileEdit', 'repaired source', { readOnly: false });
       guarded.resetEvidence();
       expect(guarded.blocked(call)).toContain('NOT executed');
+    }
+  });
+
+  it('ignores web advice when comparing failures and observations but retains actual changed evidence', () => {
+    for (const name of ['WebFetch', 'WebSearch']) {
+      const call = { id: 'web', name, input: { query: 'same', url: 'https://docs.test/' } };
+      for (const prefixed of [false, true]) {
+        const progress = new QueryProgress();
+        for (let i = 0; i < 6; i++) {
+          const output = attachResearchGuidance({ error: 'HTTP 503: Service Unavailable', code: 'http_error', status: 503, errorEffect: 'none' }, { completedCalls: i + 4 }, {
+            priorAuthorizationFailure: { status: 403, count: i }, hint: `Advisory ${i}`,
+          });
+          progress.observe({ call, output: prefixed ? `Error: ${output}` : output, readOnly: true, isError: true });
+          progress.finishBatch();
+        }
+        expect(progress.blocked(call)).toContain('6 equivalent failures');
+        expect(progress.snapshot()).toMatchObject({ repeatedCalls: 5, stagnantBatches: 5 });
+      }
+      const progress = new QueryProgress();
+      const observeWeb = (body, extra = {}) => {
+        progress.observe({ call, output: attachResearchGuidance(body, { completedCalls: 10 }, extra), readOnly: true });
+        return progress.finishBatch();
+      };
+      observeWeb({ content: 'A', results: [{ title: 'A' }] });
+      for (let i = 0; i < 4; i++) observeWeb({ content: 'A', results: [{ title: 'A' }] }, { relatedPriorQuery: `query ${i}`, convergenceHint: `hint ${i}` });
+      expect(progress.snapshot()).toMatchObject({ stage: 'warning', repeatedCalls: 4 });
+      observeWeb({ content: 'B', results: [{ title: 'B' }] });
+      expect(progress.snapshot()).toMatchObject({ stage: 'running', stagnantBatches: 0 });
     }
   });
 
