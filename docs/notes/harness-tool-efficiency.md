@@ -4,7 +4,7 @@
 
 ## 工具契约
 
-- `GitRead` 将严格 schema 常见的空占位参数视为省略；仍拒绝未知字段、非默认的跨 operation 参数及危险 revision/path。校验错误明确标注尚未执行，并给出最小调用示例。同一 query 中同参数的确定性校验错误重复两次后，Engine 提醒改正参数；网络、测试、运行时失败不被误判成参数错误。
+- `GitRead` 将严格 schema 常见的空占位参数视为省略；非 `log` 操作忽略 schema 范围内的整数 `limit`（1～50），不再只兼容默认值 20。越界或非整数值、未知字段、有实际语义的跨 operation 参数及危险 revision/path 仍被拒绝。校验错误明确标注尚未执行，并给出最小调用示例。同一 query 中同参数的确定性校验错误重复两次后，Engine 提醒改正参数；网络、测试、运行时失败不被误判成参数错误。
 - `GitRead` 的 Git 非零退出、超时、捕获阶段截断及退出未确认使用有界 JSON error envelope；Engine 据此标记 `tool_end.isError`，不再把文本中的失败退出码算成功。诊断包含 operation、失败阶段、实际 cwd 与 stderr；显示层裁剪已成功完成的输出仍是成功，不能与因捕获上限终止混淆。
 - `GitRead show` 先通过固定 `rev-parse --verify --end-of-options <revision>^{commit}` 解析唯一 commit，再按 SHA 读取；支持 tag，拒绝范围、tree、blob 等对象。`log` 保留有界范围读取。只有 status 和默认工作区 diff 检查并覆盖内容 filter，log/show/显式 base...head diff 只读对象，不做无意义的 filter 查询。
 - 主 Agent 的 `GitRead` schema 随 Git、diff、review、提交、分支等近期意图激活；未匹配时仍可通过 `DiscoverTools` 获取。reviewer 子 Agent 始终可见已授权的 GitRead，不要求 Bash，也不因使命正文缺少关键词而隐藏；激活不突破 registry/allowlist。
@@ -50,6 +50,16 @@
 不新建自动相关性判断或验证缓存。审查和验证应注明工作目录、base/head SHA、命令与结果；这些身份改变时，说明原证据覆盖范围，再对实际受影响部分补验。不能因为旧 head 曾通过就声称新 head 已通过，也不因清理失败重复执行远端合并。
 
 合并与本地清理解耦：使用 head-match 合并；若后续 worktree/branch 删除失败，先查询 PR 的 `merged` 与 `mergeCommit` 确认远端结果，然后只重试本任务清理。不要把 `gh pr merge --delete-branch` 的本地清理错误当作远端未合并。
+
+## 失败率、规则门禁与网页证据
+
+- 工具统计同时保留历史累计和每工具最近 100 次新调用的错误率；近期是调用数窗口，不是时间窗口。旧文件没有逐次结果时显示“暂无近期样本”，不从累计比例或延迟记录倒推。错误原因仅使用固定安全词汇，不把路径、URL 或凭据写成分类键；分类不改变 `isError` 和历史错误数。
+- 项目规则复核针对工作区写入，而不是所有有副作用的工具。EnterWorktree、CloseAgent 等生命周期调用不因空路径触发虚假复核；Bash 命令文本不作为文件路径。未知扩展工具及不在精确只读白名单内的 Bash 仍保守处理，真实 FileEdit/FileWrite/ApplyPatch 写入及同批次隔离不放宽。规则选择元数据变化、但模型已看到的正文未变时，不制造一次失败重试。
+- `ViewImage` 复用附件读取的 Session ownership、符号链接和大小边界，允许读取当前 Session 在实例目录下的附件，不把整个实例的 Session 根目录加入白名单。项目图片与宿主显式 allowlist 的既有契约保持；缺失文件、其他 Session 和访问拒绝仍是真实失败。
+- WebSearch/WebFetch 的 deadline 同时约束请求和响应体读取，并合并调用方取消信号；搜索取消后不再尝试其他 backend。后端明确返回的零结果是成功；bot challenge、未知 HTML 和外部 HTTP 拒绝不能伪装成零结果。
+- 网页证据账本仅属于当前 query，跨 loop 共享、跨用户 turn/Session/子 Engine 不复用。只复用成功结果和共享进行中的相同请求，503、取消和其他失败可在后续调用重试。搜索只 trim 首尾空白，不合并大小写、C++、site:、否定词或引号变体；相似查询只提示证据缺口，不强制阻断。WebFetch 的 URL identity 忽略 fragment，但保留查询参数、响应模式和长度预算；`polling: true` 绕过已完成结果复用。
+- 401/403 提示只针对具体 URL，不封锁整台 host。重复研究给出有界收敛提示，不增加默认硬预算或新的摘要 LLM。外部访问限制仍如实返回，不绕过认证、反爬或服务商限制。
+- 地图展示使用 provider-specific 契约：OSM 仅需 `{ provider: 'openstreetmap' }`，由浏览器生成官方 embed；Google 必须提供官方 `pb` share URL。合法旧 OSM embed 规范化为 provider-only，任意或携带凭据的 URL 仍拒绝。
 
 ## 验收重点
 
