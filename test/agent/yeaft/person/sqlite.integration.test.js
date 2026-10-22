@@ -75,14 +75,17 @@ describe('Person real SQLite authority in managed workers', () => {
     expect(results.filter(r => !r.duplicate)).toHaveLength(1);
     expect((await a.list('alice', 'messages')).items).toHaveLength(1);
     expect((await a.searchChanges('alice')).items).toHaveLength(1);
-    await expect(b.admit('alice', input('different'))).rejects.toMatchObject({ code: 'BUSY' });
+    const appended = await b.admit('alice', input('different'));
+    expect(appended).toMatchObject({ appended: true, episodeId: results[0].episodeId, deliveryState: 'queued' });
+    await expect(b.admit('alice', input('busy-think', { kind: 'think' }))).rejects.toMatchObject({ code: 'BUSY' });
     await expect(b.admit('alice', input('one', { text: 'different' }))).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     await expect(b.settings('alice', { autonomyEnabled: false })).resolves.toMatchObject({ settings: { autonomyEnabled: false } });
     await expect(a.heartbeat(results.find(r => !r.duplicate).episode)).resolves.toBeUndefined();
     await b.cancel('alice');
-    const races = await Promise.allSettled([a.admit('alice', input('a')), b.admit('alice', input('b'))]);
-    expect(races.filter(r => r.status === 'fulfilled')).toHaveLength(1);
-    expect(races.find(r => r.status === 'rejected').reason.code).toBe('BUSY');
+    const races = await Promise.all([a.admit('alice', input('a')), b.admit('alice', input('b'))]);
+    expect(races[0].episodeId).toBe(races[1].episodeId);
+    expect(races.filter(result => result.appended)).toHaveLength(1);
+    expect((await a.list('alice', 'messages')).items.filter(message => ['a', 'b'].includes(message.clientMessageId))).toHaveLength(2);
   });
 
   it('fences admissions in independent OS processes', async () => {

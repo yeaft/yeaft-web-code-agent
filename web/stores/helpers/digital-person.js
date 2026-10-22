@@ -69,6 +69,28 @@ function mergeRows(previous, next) {
   });
 }
 
+function mergeMessage(previous, incoming) {
+  if (!previous) return incoming;
+  const previousRevision = Number.isSafeInteger(previous.revision) ? previous.revision : 0;
+  const incomingRevision = Number.isSafeInteger(incoming.revision) ? incoming.revision : 0;
+  const merged = incomingRevision < previousRevision ? { ...incoming, ...previous } : { ...previous, ...incoming };
+  // Receipt metadata may precede a durable revision. Equal/legacy or queued
+  // reads cannot undo a final outcome; a newer durable final revision wins.
+  if (['received', 'stopped'].includes(previous.deliveryState)
+    && (incomingRevision <= previousRevision || !['received', 'stopped'].includes(incoming.deliveryState))) {
+    merged.deliveryState = previous.deliveryState;
+    if (previous.receivedAt) merged.receivedAt = previous.receivedAt;
+  }
+  return merged;
+}
+
+function mergeMessages(previous, incoming, replace = false) {
+  const existing = new Map(previous.map(row => [row.id, row]));
+  // Replacement keeps only IDs in this page, but reconciles their latest known
+  // revisions/receipt metadata rather than resurrecting an older row version.
+  return mergeRows(replace ? [] : previous, (incoming || []).map(row => mergeMessage(existing.get(row?.id), row)));
+}
+
 /** `scope` is the current authenticated browser identity, not a wire owner ID.
  * The Server owns authorization; no owner supplied by this client is trusted.
  */
@@ -226,14 +248,14 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     if (!state.messages.length || (Number.isSafeInteger(firstSeq) && Number.isSafeInteger(lastSeq) && firstSeq > lastSeq + 1)) {
       messageWindowVersion += 1;
       messageHistoryVersion += 1;
-      state.messages = mergeRows([], incoming);
+      state.messages = mergeMessages(state.messages, incoming, true);
       state.messageCursor = data.nextMessagesCursor ?? null;
     } else {
       // New tail rows invalidate replacement/latest reads, not independent
       // older pages. Only a gap reset changes the history cursor generation.
       const existing = new Set(state.messages.map(row => row.id));
       if (incoming.some(row => !existing.has(row.id))) messageWindowVersion += 1;
-      state.messages = mergeRows(state.messages, incoming);
+      state.messages = mergeMessages(state.messages, incoming);
     }
     state.busy = data.busy === true;
     state.episodeId = data.episodeId || null;
@@ -288,7 +310,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       if (!current(g) || (kind === 'messages' && (more ? historyVersion !== messageHistoryVersion : windowVersion !== messageWindowVersion))) return;
       const keepTraceWindow = kind === 'traces' && !more && preserveHistory && tracePaged;
       if (!keepTraceWindow) {
-        state[kind] = mergeRows(more ? state[kind] : [], data.items);
+        state[kind] = kind === 'messages' ? mergeMessages(state.messages, data.items, !more) : mergeRows(more ? state[kind] : [], data.items);
         state[cursorKey] = data.nextCursor ?? null;
       }
       if (kind === 'traces' && !more && activityVersion === activityRequest && traceVersion === traceRefreshVersion) {
@@ -407,14 +429,17 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
 
   async function command(op, text = '', retry = false, attachments = []) {
     // Read-only receipt reconciliation must remain available when the selected model disappears.
-    if (state.settingsPending || state.commandPending || state.loading || !state.person || (!retry && (!state.configured || state.modelReady === false)) || digitalPersonGate(chat, agentId)) return false;
+    if (state.commandPending || (!retry && op !== 'send' && (state.settingsPending || state.loading)) || !state.person || (!retry && (!state.configured || state.modelReady === false)) || digitalPersonGate(chat, agentId)) return false;
     if (state.retryCommand && !retry) return false;
-    if (!retry && (state.busy || (op === 'send' && !text.trim() && !attachments.length))) return false;
+    if (!retry && ((op !== 'send' && state.busy) || (op === 'send' && !text.trim() && !attachments.length))) return false;
     const envelope = retry ? state.retryCommand : {
       op, payload: { ...(op === 'dream' ? {} : { text: text.trim(), ...(attachments.length ? { attachments: attachments.map(({ fileId }) => ({ fileId })) } : {}) }), clientMessageId: id() },
     };
     if (!envelope) return false;
     const g = generation;
+    const personId = state.person.id;
+    const wasBusy = state.busy;
+    const control = executionControl;
     if (!retry) retainedFiles().set(agentId, attachments.map(row => row.file).filter(Boolean));
     outbox().set(agentId, envelope);
     state.retryCommand = envelope;
@@ -454,18 +479,39 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       outbox().delete(agentId);
       retainedFiles().delete(agentId);
       state.retryCommand = null;
-      snapshotRequest += 1; // An older in-flight idle snapshot cannot undo this acknowledgement.
-      // Receipt reconciliation refreshes live activity below; keep the original
-      // command identity separate so another tab's newer episode cannot replace it.
+      snapshotRequest += 1; // Pre-admission snapshots cannot undo this acknowledgement.
+      // Admission/delivery and execution are separate identities. In particular,
+      // an old receipt or queued ACK must never change the live Stop target.
       state.commandEpisodeId = data.episodeId || null;
-      state.episodeId = state.commandEpisodeId;
-      state.activityEpisodeId = state.episodeId;
-      state.activityStale = false;
-      state.progressStale = false;
-      state.busy = !data.status || ['accepted', 'running'].includes(data.status);
-      // Poll rather than treating the acknowledgement as a completed model turn.
-      schedule();
-      if (data.found || !state.busy) await refresh({ preserveHistory: true });
+      if (data.messageId && ['queued', 'received', 'stopped'].includes(data.deliveryState)) {
+        state.messages = state.messages.map(message => {
+          if (message.id !== data.messageId) return message;
+          // A durable row may already have advanced past this delayed ACK.
+          // Received and stopped are final, mutually exclusive delivery states.
+          if (['received', 'stopped'].includes(message.deliveryState) && message.deliveryState !== data.deliveryState) return message;
+          return { ...message, clientMessageId: message.clientMessageId || data.clientMessageId || envelope.payload.clientMessageId,
+            deliveryState: data.deliveryState, ...(data.receivedAt ? { receivedAt: data.receivedAt } : {}) };
+        });
+      }
+      // A new idle admission is enough to keep Stop and observation available
+      // if reconciliation fails. Inbox appends, duplicates and old receipts are
+      // not new executions; cancellation and identity changes always win.
+      const newAdmission = !data.deliveryState || (envelope.op === 'send' && data.deliveryState === 'received' && ['accepted', 'running'].includes(data.status));
+      if (newAdmission && !data.found && !data.duplicate && !wasBusy && !state.busy && !state.cancelPending
+        && state.commandEpisodeId && control === executionControl && state.person?.id === personId) {
+        state.episodeId = state.commandEpisodeId;
+        state.activityEpisodeId = state.episodeId;
+        state.activityStale = false;
+        state.progressStale = false;
+        state.busy = !data.status || ['accepted', 'running'].includes(data.status);
+      }
+      if (data.found || data.deliveryState) {
+        // Reconcile durable rows and running/paused status without extending the
+        // transport lock. A slow/failed read must not block another inbox send or
+        // turn a known admission back into an unknown send.
+        void snapshot().catch(error => { if (current(g)) showError(error); })
+          .finally(() => { if (current(g)) schedule(); });
+      } else if (!state.busy) await refresh({ preserveHistory: true });
       return true;
     } catch (error) {
       if (current(g)) {

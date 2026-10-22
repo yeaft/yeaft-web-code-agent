@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -288,7 +288,7 @@ it('exposes supported opt-in settings without model calls on status/read, and di
         const lastTool = params.messages.findLast(message => message.role === 'tool');
         if (state.stage === 0) {
           yield tool('Execution__goal', goal('active'));
-          yield tool('Bash', { command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setTimeout(()=>console.log('observed result'),300)")}`, background: true });
+          yield tool('Bash', { command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("const fs=require('fs');const timer=setInterval(()=>{if(fs.existsSync('release-task')){clearInterval(timer);console.log('observed result')}},25)")}`, background: true });
         } else if (state.stage === 1) {
           state.taskId = JSON.parse(lastTool.content).output.match(/Started background task (\S+)\./)[1];
           yield tool('Execution__goal', goal('waiting', { waitFor: [state.taskId] }));
@@ -348,6 +348,10 @@ it('exposes supported opt-in settings without model calls on status/read, and di
   const count = calls.length; await instance.tick();
   expect(calls).toHaveLength(count); // successful rest waits for the durable backoff, not each scheduler tick
   await request('think', { text: 'launch', clientMessageId: 'manual-launch' });
+  // The short task must remain pending until the host accepts the waiting goal;
+  // otherwise waiting is correctly rejected and no results-ready capsule follows.
+  await vi.waitFor(async () => expect((await request('executions')).main?.phase).toBe('waiting'));
+  await writeFile(join(root, 'release-task'), 'ready');
   await vi.waitFor(async () => expect((await request('snapshot')).busy).toBe(false), { timeout: 8000 });
   expect((await request('snapshot')).latestEpisode.status).toBe('completed');
   expect(resumedEvidence[0].items.some(item => item.kind === 'completion')).toBe(true);

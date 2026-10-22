@@ -25,7 +25,11 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +6 SVG preview boundaries: editable/default mode, opaque URL/stale decode,
 // responsive edit/undo/save/zoom, animated image security, invalid-source recovery,
 // and zoom ownership disposal. Legacy string API coverage extends the URL case.
-export const TEST_CASE_LIMIT = 577;
+// +34 reviewed live-inbox boundaries: 18 storage/runtime delivery and dispatch
+// regressions, 2 cancellation-generation interleavings, 10 UI/controller state
+// and attribution cases, 2 mock-UI and 2 real relay/SQLite/filesystem browser cases.
+// Related assertions extend existing cases; no prior coverage is excluded.
+export const TEST_CASE_LIMIT = 611;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -141,7 +141,7 @@ export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config
   return {
     environment: { cwd, runtimePlatform },
     allowedToolIds: () => allowedNativeToolIds(currentConfig()),
-    async execute(id, args, { signal, callId, episodeId } = {}) {
+    async execute(id, args, { signal, callId, episodeId, beforeDispatch } = {}) {
       signal?.throwIfAborted();
       const tool = registry.get(id);
       if (!tool) fail('UNSUPPORTED');
@@ -167,8 +167,18 @@ export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config
         return pending;
       } });
       let output, error, joinedOutput, joined = false;
-      try { output = await joinedRegistry.execute(id, args, { ...ctx, signal: controller.signal }); }
-      catch (caught) { error = caught; controller.abort(caught); }
+      try {
+        // Preparation above may await owned task state. Keep the final gate around
+        // the registry invocation itself; waiting for pause/input happens before
+        // the registry timeout and before any real tool promise has started.
+        const dispatch = () => joinedRegistry.execute(id, args, { ...ctx, signal: controller.signal });
+        output = await (beforeDispatch ? beforeDispatch(dispatch) : dispatch());
+      } catch (caught) {
+        // Nothing was dispatched: preserve the host control disposition rather
+        // than manufacturing a failed observation with unknown side effects.
+        if (!pending && caught?.code === 'INPUT_PENDING') throw caught;
+        error = caught; controller.abort(caught);
+      }
       finally {
         // Also retain the real result of tools that outlive the registry race.
         if (pending) {

@@ -86,6 +86,139 @@ describe('Digital Person owner / Agent request boundary', () => {
     expect(f.state.retryCommand).toBeNull();
   });
 
+  it('accepts repeated busy/paused inbox sends without changing the active Stop target, but keeps think/dream idle-only', async () => {
+    const f = fixture(); let paused = false;
+    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, messages: [], busy: true, episodeId: 'active', latestEpisode: { id: 'active', status: paused ? 'paused' : 'running' } }
+      : r.op === 'send' ? { episodeId: 'active', messageId: r.payload.clientMessageId, deliveryState: 'queued', status: 'queued' } : undefined);
+    await f.controller.open('a');
+    expect(await f.controller.command('send', 'A supplement')).toBe(true);
+    expect(f.state.busy).toBe(true); expect(f.state.episodeId).toBe('active');
+    expect(await f.controller.command('send', 'An unrelated question')).toBe(true);
+    expect(await f.controller.command('think')).toBe(false);
+    expect(await f.controller.command('dream')).toBe(false);
+    expect(f.requests.filter(r => ['think', 'dream'].includes(r.op))).toHaveLength(0);
+    paused = true; await f.controller.refresh();
+    expect(await f.controller.command('send', 'While paused')).toBe(true);
+    expect(f.state.latestEpisode.status).toBe('paused');
+    f.auto(r => r.op === 'snapshot' ? false : r.op === 'send' ? { episodeId: 'unrelated', messageId: 'next', deliveryState: 'queued' } : undefined);
+    f.state.settingsPending = true;
+    const next = f.controller.command('send', 'While settings are pending');
+    await Promise.resolve(); await Promise.resolve();
+    expect(f.state.commandPending).toBe(false); // the snapshot is not the send transport
+    expect(await next).toBe(true);
+    expect(f.state.episodeId).toBe('active');
+    f.state.settingsPending = false;
+    f.auto();
+    expect(f.requests.some(r => r.op === 'resume')).toBe(false);
+    await f.controller.cancel();
+    expect(f.requests.find(r => r.op === 'cancel').payload).toEqual({ episodeId: 'active' });
+  });
+
+  it('keeps the first idle send observable and stoppable when its acknowledgement snapshot fails', async () => {
+    vi.useFakeTimers(); const f = fixture(); let busy = false, failSnapshot = false;
+    f.auto(r => {
+      if (r.op === 'snapshot') {
+        if (failSnapshot) { f.response(r, null, { ok: false, errorCode: 'requestFailed' }); return false; }
+        return { person: { id: 'p' }, messages: [], busy, episodeId: busy ? 'new' : null };
+      }
+      if (r.op === 'send') { busy = true; failSnapshot = true; return { episodeId: 'new', duplicate: false, status: 'running', messageId: 'first', deliveryState: 'received' }; }
+      if (r.op === 'cancel') { busy = false; failSnapshot = false; return {}; }
+    });
+    await f.controller.open('a');
+    expect(await f.controller.command('send', 'Start work')).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.state.busy).toBe(true); expect(f.state.episodeId).toBe('new');
+    expect(f.state.progressStale).toBe(true); expect(f.state.commandPending).toBe(false);
+    expect(f.state.retryCommand).toBeNull();
+    const snapshots = f.requests.filter(r => r.op === 'snapshot').length;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.requests.filter(r => r.op === 'snapshot')).toHaveLength(snapshots + 2);
+    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    expect(await f.controller.cancel()).toBe(true);
+    expect(f.requests.find(r => r.op === 'cancel').payload).toEqual({ episodeId: 'new' });
+    expect(f.state.busy).toBe(false); expect(f.state.episodeId).toBeNull();
+    const settled = f.requests.length; await vi.advanceTimersByTimeAsync(500);
+    expect(f.requests).toHaveLength(settled);
+  });
+
+  it('reconciles a queued receipt without reverting delivery on delayed pages or resending its envelope', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    const user = { id: 'queued-user', seq: 2, revision: 1, role: 'user', text: 'Question', episodeId: 'old', deliveryState: 'queued' };
+    const history = { id: 'history', seq: 1, role: 'assistant', text: 'Earlier reply' };
+    const received = { ...user, revision: 2, deliveryState: 'received', receivedAt: '2026-01-01T00:00:00.000Z' };
+    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, messages: [user], busy: true, episodeId: 'active' }
+      : r.op === 'messages' ? { items: [history, user] } : r.op === 'send' ? false : undefined);
+    await f.controller.open('a');
+    const sending = f.controller.command('send', 'Question');
+    const envelope = f.requests.at(-1).payload;
+    await vi.advanceTimersByTimeAsync(101); expect(await sending).toBe(false);
+    let finishSnapshot, delayedPage;
+    f.auto(r => r.op === 'receipt' ? { found: true, kind: 'send', text: 'Question', clientMessageId: envelope.clientMessageId,
+      episodeId: 'old', messageId: user.id, deliveryState: 'received', receivedAt: received.receivedAt }
+      : r.op === 'snapshot' ? (finishSnapshot = r, false) : r.op === 'messages' ? (delayedPage = r, false) : undefined);
+    const reading = f.controller.page('messages');
+    const retrying = f.controller.command('send', '', true);
+    await Promise.resolve(); await Promise.resolve();
+    expect(f.state.episodeId).toBe('active'); expect(f.state.busy).toBe(true);
+    expect(f.state.messages.at(-1)).toMatchObject({ deliveryState: 'received', receivedAt: received.receivedAt });
+    f.response(finishSnapshot, { person: { id: 'p' }, messages: [received], busy: true, episodeId: 'active' });
+    expect(await retrying).toBe(true);
+    await Promise.resolve();
+    expect(f.state.messages.at(-1).revision).toBe(2);
+    f.response(delayedPage, { items: [user], nextCursor: '2' }); await reading;
+    const reconciled = { ...received, clientMessageId: envelope.clientMessageId };
+    expect(f.state.messages).toEqual([reconciled]); // Latest replacement still drops unrelated history.
+    expect(f.state.messageCursor).toBe('2');
+    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, messages: [user], busy: true, episodeId: 'active' }
+      : r.op === 'messages' ? { items: [{ ...user, revision: 2 }], nextCursor: '2' } : undefined);
+    await f.controller.refresh(); // Stale snapshots and equal-revision pages cannot regress final delivery either.
+    expect(f.state.messages).toEqual([reconciled]);
+    expect(f.state.episodeId).toBe('active'); expect(f.state.busy).toBe(true);
+    expect(f.requests.filter(r => r.op === 'send')).toHaveLength(1);
+    expect(f.requests.find(r => r.op === 'receipt').payload.clientMessageId).toBe(envelope.clientMessageId);
+  });
+
+  it.each(['stopped', 'received'])('preserves %s delivery when a busy send ACK arrives after cancellation', async deliveryState => {
+    const f = fixture(); let busy = true; let delayed;
+    const message = { id: 'late', seq: 1, role: 'user', text: 'Late supplement', episodeId: 'active', deliveryState,
+      ...(deliveryState === 'received' ? { receivedAt: '2026-01-01T00:00:00.000Z' } : {}) };
+    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, messages: busy ? [] : [message], busy, episodeId: busy ? 'active' : null }
+      : r.op === 'messages' ? { items: busy ? [] : [message] }
+      : r.op === 'send' ? (delayed = r, false) : r.op === 'cancel' ? (busy = false, {}) : undefined);
+    await f.controller.open('a');
+    const sending = f.controller.command('send', 'Late supplement');
+    await f.controller.cancel();
+    expect(f.state.messages).toEqual([message]);
+    f.auto(r => r.op === 'snapshot' ? false : undefined);
+    f.response(delayed, { episodeId: 'active', messageId: 'late', deliveryState: 'queued', status: 'running' });
+    expect(await sending).toBe(true);
+    expect(f.state.messages).toEqual([message]);
+    expect(f.state.busy).toBe(false); expect(f.state.episodeId).toBeNull();
+    expect(f.requests.filter(r => r.op === 'cancel').map(r => r.payload.episodeId)).toEqual(['active']);
+  });
+
+  it('does not provisionally adopt cancelled idle admissions, duplicates or queued appends', async () => {
+    const f = fixture(); let busy = false, delayed;
+    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, messages: [], busy, episodeId: busy ? 'active' : null }
+      : r.op === 'send' ? (delayed = r, false) : r.op === 'cancel' ? (busy = false, {}) : undefined);
+    await f.controller.open('a');
+    const sending = f.controller.command('send', 'Start work');
+    busy = true; await f.controller.refresh(); // Another read discovers the admitted work before its ACK.
+    await f.controller.cancel();
+    f.auto(r => r.op === 'snapshot' ? false : undefined);
+    f.response(delayed, { episodeId: 'active', duplicate: false, messageId: 'first', deliveryState: 'received', status: 'running' });
+    expect(await sending).toBe(true);
+    expect(f.state.busy).toBe(false); expect(f.state.episodeId).toBeNull();
+    f.auto(r => r.op === 'snapshot' ? false
+      : r.op === 'send' ? { episodeId: 'old', duplicate: true, messageId: 'old', deliveryState: 'received', status: 'running' } : undefined);
+    expect(await f.controller.command('send', 'A duplicate admission')).toBe(true);
+    expect(f.state.busy).toBe(false); expect(f.state.episodeId).toBeNull();
+    f.auto(r => r.op === 'snapshot' ? false
+      : r.op === 'send' ? { episodeId: 'other', duplicate: false, messageId: 'queued', deliveryState: 'queued', status: 'running' } : undefined);
+    expect(await f.controller.command('send', 'An append discovered while locally idle')).toBe(true);
+    expect(f.state.busy).toBe(false); expect(f.state.episodeId).toBeNull();
+  });
+
   it('never transfers an uncertain command between owners', async () => {
     const f = fixture(); f.auto(); await f.controller.open('a');
     f.auto(r => r.op === 'think' ? false : undefined);
@@ -178,6 +311,8 @@ describe('Digital Person owner / Agent request boundary', () => {
   it('merges a slow older page during live output instead of starving scroll pagination', async () => {
     vi.useFakeTimers(); const f = fixture();
     let rows = Array.from({ length: 80 }, (_, i) => ({ id: `m${i + 1}`, seq: i + 1 }));
+    rows[30] = { ...rows[30], revision: 2, deliveryState: 'stopped', clientMessageId: 'stopped-input' };
+    rows[31] = { ...rows[31], revision: 2, deliveryState: 'received', receivedAt: '2026-01-01T00:00:00.000Z' };
     let delayed;
     f.auto(r => {
       if (r.op === 'snapshot') return { person: { id: 'p' }, messages: rows.slice(-20), nextMessagesCursor: String(rows.at(-20).seq), busy: true };
@@ -190,8 +325,10 @@ describe('Digital Person owner / Agent request boundary', () => {
     const older = f.controller.page('messages', true);
     rows.push({ id: 'm81', seq: 81 });
     await vi.advanceTimersByTimeAsync(51);
-    f.response(delayed, { items: rows.slice(0, 30), nextCursor: null }); await older;
-    expect(f.state.messages.map(row => row.seq)).toEqual(rows.map(row => row.seq));
+    f.response(delayed, { items: [...rows.slice(0, 30),
+      { id: 'm31', seq: 31, revision: 1, deliveryState: 'queued' },
+      { id: 'm32', seq: 32, deliveryState: 'queued' }], nextCursor: null }); await older;
+    expect(f.state.messages).toEqual(rows);
     expect(f.state.messageCursor).toBeNull();
   });
 });

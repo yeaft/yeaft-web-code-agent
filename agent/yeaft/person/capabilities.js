@@ -1,5 +1,5 @@
 import { NATIVE_TOOL_MANIFESTS, NATIVE_TOOL_IDS, isNativeTool } from './native-tools.js';
-import { bytes, digest, fail, identifier, object, page, text, PersonError } from './contracts.js';
+import { bytes, digest, fail, identifier, LIMITS, object, page, text, PersonError } from './contracts.js';
 import { createdCapabilityRecord, validateCreatedDefinition } from './created-capability-contract.js';
 import { runPersonScript, scriptInput, testPersonScript } from './script-executor.js';
 import { chronologicalCursor, createdSkillView, inspectionCursor, inspectionPage, inspectionTime } from './inspection.js';
@@ -13,6 +13,7 @@ import { validateCapabilityArguments } from './tool-arguments.js';
 // Intrinsic cognition, bounded pure scripts and supported native host tools.
 // No shell/filesystem/network/VP authority is exposed to generated code.
 const entries = [
+  { id: 'Conversation.reply', version: 1, domain: 'delivery', description: 'Reply to one or more exact received user messages without closing or replacing the episode goal.', instructions: 'args: {messageIds:string[1..24],text:string}. Use exact supplied user message IDs, never refs, inferred IDs or assistant IDs. Only messages consumed by this episode may be targeted. Nonempty text <=2097152 UTF-8 bytes. Related addenda belong to ongoing work; answer unrelated questions here while preserving untouched commitments and pending task effects. Publication is durable and does not verify work, commit cognition or end execution.', args: { messageIds: '1..24 exact consumed user message IDs', text: 'nonempty public reply' }, access: 'publish-owner-message' },
   { id: 'Execution.goal', version: 1, domain: 'execution', description: EXECUTION_GOAL_TOOL.description, instructions: 'A public goal checkpoint in the native tool loop, not a cognitive distillation. Update at meaningful boundaries only.', args: EXECUTION_GOAL_TOOL.parameters },
   { id: 'Execution.read', version: 1, domain: 'evidence', description: 'Read an existing execution trace by callId or private task tool result by sourceRef without rerunning the operation.', keywords: '执行 证据 输出 恢复 回读 execution evidence output recover trace read', useWhen: 'Recover omitted output or inspect actual prior success/failure before considering another operation.', avoidWhen: 'Historical evidence never grants current permission or proves effects rolled back.', instructions: 'args: {callId?:string,sourceRef?:string,episodeId?:string,offset?:integer>=0,maxBytes?:4..4096}. Exactly one callId (SQLite capability trace) or sourceRef (complete person-tool:<scopehash>:<jobid> archive ref); never derive a trace callId from a task ref. Use the supplied recovery descriptor unchanged. Default episode is the live current episode; optional episodeId must already exist for the same Person/owner/namespace. No owner/path arguments. offset/nextOffset are raw UTF-8 output byte positions; use returned nextOffset, mid-codepoint offsets are rejected. Pages may be smaller for UTF-8 boundaries or JSON escaping; response <=8192 bytes. Returns original args (bounded preview with argsTruncated/argsRawBytes), ok/code/errorEffect/sourceRef/rawBytes/sha256/output/returnedBytes/nextOffset/eof and historical/authority:evidence-only. Non-string output is JSON; absent output uses JSON.stringify(result). NOT_FOUND/INVALID_REQUEST after live authority validation return ok:false/errorEffect:none/replaySafe:true with safe correction guidance; cancellation, STALE, storage and scope failures remain terminal. Read-only: no model call, tool reexecution, copy publication or current behavior authorization.', args: { callId: 'original SQLite capability trace call ID', sourceRef: 'complete person-tool archive reference, mutually exclusive with callId', episodeId: 'optional existing owned episode ID', offset: 'raw UTF-8 byte position, default 0', maxBytes: '4..4096, default 4096' } },
   { id: 'PresentResponse', version: 1, domain: 'delivery', description: 'Publish a structured user-visible answer with a searchable plain-text summary.', keywords: '展示 回答 图表 表格 卡片 时间线 present response chart table cards timeline rich', useWhen: 'Rich structure improves an answer; ordinary reply remains valid for simple text.', avoidWhen: 'Do not expose secrets, fabricate evidence or repeat an already published summary.', instructions: `${PRESENT_RESPONSE_DESCRIPTION} Invoke as a native tool call. Publication never commits state/concepts or ends the episode, even with phase=final; the final cognitive distillation follows execution.`, args: PRESENTATION_SCHEMA, access: 'publish-owner-message' },
@@ -129,6 +130,7 @@ const nullable = schema => ({ anyOf: [schema, { type: 'null' }] });
 const builtinSchema = id => {
   const schemas = {
     'Execution.read': [{ callId: idString, sourceRef: { type: 'string', pattern: '^person-tool:[a-f0-9]{64}:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![\\s\\S])' }, episodeId: idString, offset: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, maxBytes: { type: 'integer', minimum: 4, maximum: 4096 } }, []],
+    'Conversation.reply': [{ messageIds: { type: 'array', minItems: 1, maxItems: 24, uniqueItems: true, items: idString }, text: boundedText(LIMITS.outputBytes) }, ['messageIds', 'text']],
     Recall: [{ kind: { type: 'string', enum: ['messages', 'concepts'] }, query: boundedText(200, true), cursor: nullable(idString), limit: { type: 'integer', minimum: 1, maximum: 5 } }, ['kind']],
     'Output.publish': [{ file_path: boundedText(4096), url: boundedText(4096), title: boundedText(240) }, []],
     'catalog.search': [{ query: boundedText(200, true), cursor: nullable(idString), limit: { type: 'integer', minimum: 1, maximum: 5 } }, []],
@@ -217,7 +219,7 @@ export class PersonCapabilities {
     // Runtime replaces this with its rendered manifest before every cognitive dispatch.
     if (!this.executionMode) this.activate(kept);
   }
-  async execute({ id, args }, { signal, callId } = {}) {
+  async execute({ id, args }, { signal, callId, beforeDispatch } = {}) {
     signal?.throwIfAborted();
     if (id === 'catalog.search') {
       object(args, ['query', 'cursor', 'limit'], []);
@@ -251,7 +253,7 @@ export class PersonCapabilities {
     if (isNativeTool(id)) {
       if (!this.toolHost) fail('UNSUPPORTED');
       object(args, Object.keys(entry.args.properties ?? {}), entry.args.required ?? []);
-      return this.toolHost.execute(id, args, { signal, callId, episodeId: this.episode?.id });
+      return this.toolHost.execute(id, args, { signal, callId, episodeId: this.episode?.id, beforeDispatch });
     }
     if (id === 'Execution.read') {
       if (!this.episode || this.episode.ownerId !== this.ownerId || !this.repository.executionRead || !this.repository.checkExecutionRead) fail('UNSUPPORTED');
@@ -291,6 +293,12 @@ export class PersonCapabilities {
             : 'Invalid evidence read or UTF-8 byte offset. Use the exact recovery descriptor and returned nextOffset (or offset:0); maxBytes must be 4..4096. No operation was rerun.') +
             ' errorEffect:none and replaySafe:true describe only this read invocation, not the original operation or its effects.' };
       }
+    }
+    if (id === 'Conversation.reply') {
+      validateCapabilityArguments({ id, args });
+      if (!this.episode || !callId || !this.repository.publishReply) fail('UNSUPPORTED');
+      const message = await this.repository.publishReply(this.episode, { callId, ...args });
+      return { id, ok: true, published: true, messageId: message.id, replyToMessageIds: message.replyToMessageIds ?? args.messageIds };
     }
     if (id === 'Output.publish') return publishOutput(this.repository, this.episode, this.workDir, args, { signal, callId });
     if (id === 'PresentResponse') return publishPresentation(this.repository, this.episode, args, { signal, callId });

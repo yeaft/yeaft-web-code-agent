@@ -15,7 +15,8 @@ test('Person joins parallel work and background results; Management controls pen
   test.setTimeout(90000);
   const dir = await mkdtemp(join(tmpdir(), 'person-async-e2e-'));
   const children = [], childRequests = [], results = [];
-  const observations = new Map();
+  const observations = new Map(), readyEpisodes = new Set();
+  let service;
   let parentCalls = 0, pauseCalls = 0, cancelCalls = 0, taskId, longTaskId, release, releaseMain, releaseCancel;
   const mainGate = new Promise(resolve => { releaseMain = resolve; });
   const cancelGate = new Promise(resolve => { releaseCancel = resolve; });
@@ -76,7 +77,10 @@ test('Person joins parallel work and background results; Management controls pen
           const id = resultsSoFar[0].output.match(/Started background task (\S+)\./)[1];
           if (text === 'Long background') longTaskId = id;
           else taskId = id;
-          const waiting = params.messages.some(message => message.role === 'user' && message.content.includes('execution-results-ready'));
+          // The host-ready capsule may retire after later groups; this model
+          // already observed it and must not re-enter waiting after completion.
+          if (params.messages.some(message => message.role === 'user' && message.content.includes('execution-results-ready'))) readyEpisodes.add(key);
+          const waiting = readyEpisodes.has(key);
           if (text === 'Long background' && !waiting) {
             batch.push(personGoal(params, {
               objective: text, acceptance,
@@ -135,7 +139,7 @@ test('Person joins parallel work and background results; Management controls pen
   } };
   const bridge = createPersonBridge({ context: { agentId: mockAgent.agentId, CONFIG: { serverUrl, yeaftDir: dir, workDir: dir } },
     send: msg => mockAgent.send(msg),
-    createService: options => createPersonService({ ...options, workDir: dir, config, adapter, embedding: { enabled: false } }),
+    createService: options => (service = createPersonService({ ...options, workDir: dir, config, adapter, embedding: { enabled: false } })),
   });
   const listener = msg => { if (msg.type === 'person_request') void bridge.request(msg); };
   mockAgent._messageHandlers.push(listener);
@@ -147,9 +151,23 @@ test('Person joins parallel work and background results; Management controls pen
     await page.evaluate(id => window.Pinia.useChatStore().setDigitalPersonUiEnabled(true, id), mockAgent.agentId);
     await page.locator('.sidebar-person-trigger:visible').click();
     const send = async text => {
+      // These are independent sequential execution scenarios. An enabled inbox
+      // no longer implies the previous episode has committed; wait for its real
+      // terminal UI state rather than accidentally append to the scripted goal.
+      await expect(page.locator('.person-composer').getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
+      const ownerId = mockAgent.messages('person_request')[0]?.ownerId;
+      // A final reply may precede cognition commit. These fixtures intentionally
+      // start distinct episodes; use persisted activity, not text visibility.
+      await expect.poll(async () => {
+        try { return (await service.request({ ownerId, op: 'snapshot' })).busy; }
+        catch (error) { if (error.code === 'NOT_OPEN') return null; throw error; }
+      }).toBe(false);
       await expect(page.locator('#person-input')).toBeEnabled();
       await page.locator('#person-input').fill(text);
       await page.getByRole('button', { name: 'Send', exact: true }).click();
+      // Clearing follows the admission ACK. Without this, an assertion matching
+      // a previous reply can race ahead before the new Stop target is installed.
+      await expect(page.locator('#person-input')).toHaveValue('');
     };
     await send('Parallel work');
     await expect(page.locator('.person-messages')).toContainText('Independent result 1; Independent result 2', { timeout: 20000 });
@@ -166,7 +184,7 @@ test('Person joins parallel work and background results; Management controls pen
     expect(mockAgent.conversations.size).toBe(0);
     await expect(page.locator('.person-messages')).not.toContainText('Activity details');
     await send('Long background');
-    await expect(page.locator('#person-input')).toBeDisabled();
+    await expect(page.locator('#person-input')).toBeEnabled();
     await expect.poll(() => longTaskId).toBeTruthy();
     await page.locator('.person-thoughts-button').click();
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();

@@ -108,6 +108,80 @@ describe('Person async native service integration', () => {
     expect(await readFile(join(logs, sessionDirs[0], `${taskId}.log`), 'utf8')).toContain('completed');
   });
 
+  it.each(['joining', 'joined'])('fences an in-flight new admission when cancellation of the previous committed episode is %s', async phase => {
+    const dir = await directory(), committed = deferred(), commitRelease = deferred(), admitEntered = deferred(), admitRelease = deferred();
+    let runtime, parentCalls = 0, cancellation, sending;
+    const originalStart = PersonRuntime.prototype.start;
+    const starts = vi.spyOn(PersonRuntime.prototype, 'start').mockImplementation(function (episode) {
+      runtime = this;
+      return originalStart.call(this, episode);
+    });
+    const originalCommit = SqlitePersonRepository.prototype.commit;
+    vi.spyOn(SqlitePersonRepository.prototype, 'commit').mockImplementation(async function (...args) {
+      const result = await originalCommit.apply(this, args);
+      if (args[0].clientMessageId === 'previous') {
+        committed.resolve();
+        await commitRelease.promise; // SQLite is inactive, but the old local job still needs joining.
+      }
+      return result;
+    });
+    const originalAdmit = SqlitePersonRepository.prototype.admit;
+    vi.spyOn(SqlitePersonRepository.prototype, 'admit').mockImplementation(async function (ownerId, input) {
+      if (input.clientMessageId === 'racing-send') {
+        admitEntered.resolve();
+        await admitRelease.promise;
+      }
+      return originalAdmit.call(this, ownerId, input);
+    });
+    const s = service(dir, parentAdapter(() => { parentCalls++; }, async function* () { throw new Error('no child expected'); }));
+    await call(s, 'open');
+    const previous = await call(s, 'send', { text: 'previous input', clientMessageId: 'previous' });
+    try {
+      await committed.promise;
+      expect((await call(s, 'snapshot')).busy).toBe(false);
+      expect(runtime.running.has(previous.episodeId)).toBe(true);
+      sending = call(s, 'send', { text: 'must not execute', clientMessageId: 'racing-send' });
+      await admitEntered.promise;
+      cancellation = call(s, 'cancel', { episodeId: previous.episodeId });
+      await vi.waitFor(() => expect(runtime.running.get(previous.episodeId)?.status).toBe('cancelling'));
+      expect(runtime.pendingCancellations.has('alice')).toBe(true);
+      await expect(call(s, 'send', { text: 'also blocked', clientMessageId: 'later-send' })).rejects.toMatchObject({ code: 'BUSY' });
+      expect(await call(s, 'receipt', { clientMessageId: 'later-send' })).toMatchObject({ found: false });
+      if (phase === 'joined') {
+        commitRelease.resolve(); await cancellation;
+        expect(runtime.pendingCancellations.has('alice')).toBe(false);
+      }
+      admitRelease.resolve();
+      const ack = await sending;
+      expect(ack).toMatchObject({ duplicate: false, status: 'cancelled', deliveryState: 'received' });
+      expect(ack.episodeId).not.toBe(previous.episodeId);
+      expect(parentCalls).toBe(1); expect(starts).toHaveBeenCalledTimes(1);
+      expect(runtime.running.has(ack.episodeId)).toBe(false);
+      expect(await call(s, 'receipt', { clientMessageId: 'racing-send' })).toMatchObject({
+        found: true, episodeId: ack.episodeId, messageId: ack.messageId, status: 'cancelled', deliveryState: 'received',
+      });
+      expect(await call(s, 'send', { text: 'must not execute', clientMessageId: 'racing-send' })).toEqual({ ...ack, duplicate: true });
+      if (phase === 'joining') {
+        expect(runtime.pendingCancellations.has('alice')).toBe(true);
+        await expect(call(s, 'send', { text: 'still blocked', clientMessageId: 'joining-send' })).rejects.toMatchObject({ code: 'BUSY' });
+      }
+      commitRelease.resolve(); await cancellation;
+      const snapshot = await call(s, 'snapshot');
+      expect(snapshot).toMatchObject({ busy: false, state: { version: 1 }, latestEpisode: { id: ack.episodeId, status: 'cancelled' } });
+      expect((await call(s, 'messages')).items.filter(message => message.role === 'user')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ clientMessageId: 'previous', text: 'previous input', deliveryState: 'received' }),
+        expect.objectContaining({ id: ack.messageId, clientMessageId: 'racing-send', text: 'must not execute', deliveryState: 'received' }),
+      ]));
+      expect(await call(s, 'receipt', { clientMessageId: 'previous' })).toMatchObject({ episodeId: previous.episodeId, status: 'completed' });
+      await call(s, 'send', { text: 'allowed after cancellation', clientMessageId: 'after-race' });
+      expect((await idle(s)).latestEpisode.status).toBe('completed');
+      expect(parentCalls).toBe(2);
+    } finally {
+      commitRelease.resolve(); admitRelease.resolve();
+      await Promise.allSettled([sending, cancellation].filter(Boolean));
+    }
+  });
+
   it('fences owner admission throughout cancellation of a waiting goal and overlapping joins', async () => {
     const dir = await directory(), toolStarted = deferred(), toolRelease = deferred(), toolAborted = deferred();
     const durableEntered = [deferred(), deferred()], durableRelease = [deferred(), deferred()];

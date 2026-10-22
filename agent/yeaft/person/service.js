@@ -147,19 +147,27 @@ export function createPersonService(options = {}) {
         object(payload, op === 'dream' ? ['clientMessageId'] : ['text', 'clientMessageId', 'files'], ['clientMessageId']);
         identifier(payload.clientMessageId);
         validateFiles(payload.files, payload.text ?? '', op);
+        const stopGeneration = autonomyStops.get(ownerId) ?? 0;
         // Durable cancellation may already fence the old episode; do not start a
         // new local activity while its host effects are still being joined.
-        if (runtime.isOwnerRunning(ownerId)) {
+        if (runtime.pendingCancellations.has(ownerId) || (op !== 'send' && runtime.isOwnerRunning(ownerId))) {
           const receipt = await repository.receipt(ownerId, payload.clientMessageId);
           if (!receipt.found) fail('BUSY');
         }
         const admitted = await repository.admit(ownerId, { kind: op, text: payload.text ?? '', clientMessageId: payload.clientMessageId,
           workerId: runtime.workerId, budget: runtime.budget, files: payload.files });
-        if (!admitted.duplicate) {
-          if (closed) await repository.finish(admitted.episode, 'interrupted', 'INTERRUPTED');
-          else runtime.start(admitted.episode);
+        if (!admitted.duplicate && !admitted.appended) {
+          const cancelled = (autonomyStops.get(ownerId) ?? 0) !== stopGeneration || runtime.pendingCancellations.has(ownerId);
+          if (closed || cancelled) {
+            // Admission can outlive the entire cancellation join. Fence only this
+            // new lease, never an appended input or a replacement job.
+            await repository.finish(admitted.episode, cancelled ? 'cancelled' : 'interrupted', cancelled ? 'CANCELLED' : 'INTERRUPTED');
+            const receipt = await repository.receipt(ownerId, payload.clientMessageId);
+            admitted.status = receipt.status; admitted.deliveryState = receipt.deliveryState;
+          } else runtime.start(admitted.episode);
         }
-        return { episodeId: admitted.episodeId, duplicate: admitted.duplicate, status: admitted.status };
+        return { episodeId: admitted.episodeId, duplicate: admitted.duplicate, status: admitted.status,
+          messageId: admitted.messageId, deliveryState: admitted.deliveryState };
       }
       case 'traces': await repository.recover(ownerId); return repository.list(ownerId, 'traces', page(payload));
       case 'messages': return repository.list(ownerId, 'messages', page(payload));
