@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import ctx from '../../../agent/context.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
@@ -20,6 +21,7 @@ import {
 
 // Native ingress, classification, fan-out, drivers, tasks, CRUD and durable
 // transcript traversal are real. Only the model query has a terminal gate.
+const realQuery = Engine.prototype.query;
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const original = Object.fromEntries(['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'].map(key => [key, ctx[key]]));
 let root, store, calls, runtime, capture;
@@ -104,8 +106,8 @@ beforeEach(() => {
     // query normally owns the private running flag. Model that lifecycle here
     // so the REAL wakeForPendingUserMessage accepts related input on this engine.
     Object.defineProperty(this, 'isRunning', { configurable: true, get: () => call.running });
-    const output = { sessionId: id, role: 'assistant', threadId: args.threadId,
-      speakerVpId: args.senderVpId, turnId: args.vpTurnId, causalRootId: args.currentUserMessage?.id };
+    const output = { sessionId: args.sessionId || id, role: 'assistant', threadId: args.threadId,
+      speakerVpId: args.senderVpId, turnId: args.vpTurnId, causalRootId: args.causalRootId || args.currentUserMessage?.id };
     try {
       store.append({ ...output, content: `partial ${args.prompt}`, incomplete: true });
       yield { type: 'text_delta', text: 'working' };
@@ -310,6 +312,91 @@ it('keeps model_reentry tasks in the epoch after drivers finish, while status-on
   expect(history(id)).toEqual(sourceHistory);
   expect(history('session_other')).toEqual(otherHistory);
   expectSourceRunning();
+
+  // Real Engine acceptance is not consumption: with a 4K window the result
+  // appended to its durable tool row is clipped from the provider request.
+  // Its undelivered rescue must retain the old human request even after a
+  // newer human request has reached disk (and merge must group it there).
+  const pressureId = 'session_pressure';
+  seedSession(pressureId);
+  const originalUser = completedTurn('background', pressureId).user;
+  const evidence = `BACKGROUND_HEAD\n${'e'.repeat(27000)}\nBACKGROUND_TAIL`;
+  const requests = [];
+  const coordinator = __testHooks.asyncTaskCoordinatorForTest();
+  const undelivered = vi.spyOn(coordinator, 'onUndelivered');
+  const consumed = vi.spyOn(coordinator, 'onConsumed');
+  let asyncTask;
+  const engine = new Engine({ conversationStore: store, trace: new NullTrace(),
+    sessionId: pressureId, vpId: 'alpha', taskManager: runtime.taskManager,
+    config: { model: 'test-model', maxOutputTokens: 1024, maxContextTokens: 4000, archive: { toolResults: false } },
+    adapter: { async *stream(params) {
+      params.onRequestStart?.();
+      requests.push(structuredClone(params.messages));
+      const n = requests.length;
+      if (n === 1) yield { type: 'tool_call', id: 'start', name: 'Start', input: {} };
+      else if (n <= 8) yield { type: 'tool_call', id: `read-${n}`, name: 'Read', input: { offset: n } };
+      else {
+        if (n === 9) {
+          completedTurn('newer', pressureId);
+          runtime.taskManager.completeTask(pressureId, asyncTask.id, { status: 'succeeded', summary: evidence });
+          expect(notify).toHaveLastReturnedWith(true);
+        }
+        yield { type: 'text_delta', text: 'handled current evidence' };
+      }
+      yield { type: 'stop', stopReason: n <= 8 ? 'tool_use' : 'end_turn' };
+    } },
+  });
+  const notify = vi.spyOn(engine, 'notifyAsyncTaskCompleted');
+  engine.setAsyncTaskCoordinator(coordinator);
+  engine.registerTool({ name: 'Start', execute: async (_input, toolCtx) => {
+    asyncTask = runtime.taskManager.startTask({ sessionId: pressureId, ownerVpId: 'alpha', resultDelivery: 'model_reentry',
+      source: { threadId: 'main', causalRootId: toolCtx.causalRootId } });
+    toolCtx.registerAsyncTask(asyncTask.id);
+    return 'started';
+  } });
+  engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async ({ offset }) => `HEAD ${offset}\n${'x'.repeat(28000)}\nTAIL ${offset}` });
+  const beforeRescue = calls.length;
+  for await (const _event of realQuery.call(engine, { prompt: 'background', sessionId: pressureId, threadId: 'main',
+    userAlreadyPersisted: true, currentUserMessage: originalUser, causalRootId: originalUser.id })) { /* consume lifecycle */ }
+  expect(requests.at(-1).some(row => typeof row.content === 'string' && row.content.includes(evidence))).toBe(false);
+  expect(rows(pressureId).find(row => row.role === 'tool' && row.toolCallId === 'start').content).toContain(evidence);
+  expect(consumed).not.toHaveBeenCalled();
+  expect(undelivered).toHaveBeenCalledExactlyOnceWith(asyncTask.id,
+    expect.objectContaining({ causalRootId: originalUser.id, sessionId: pressureId }), engine);
+  expect(notify.mock.calls[0][2].causalRootId).toBe(originalUser.id);
+  await waitCalls(beforeRescue + 1);
+  const rescued = calls.at(-1);
+  expect(rescued.causalRootId).toBe(originalUser.id);
+  expect(rescued.inboundEnvelope._causalRootId).toBe(originalUser.id);
+  rescued.gate.resolve();
+  await __testDrainVpDrivers();
+  const pressureRows = rows(pressureId);
+  const newerIndex = pressureRows.findIndex(row => row.content === 'question newer');
+  const rescueRow = pressureRows.find(row => row.internal && row.content.includes('<task-result'));
+  expect(newerIndex).toBeGreaterThan(-1);
+  expect(pressureRows.indexOf(rescueRow)).toBeGreaterThan(newerIndex);
+  expect(rescueRow.causalRootId).toBe(originalUser.id);
+  const rescueAnswer = pressureRows.find(row => row.stopReason === 'end_turn' && row.content.includes('<task-result'));
+  expect(rescueAnswer.causalRootId).toBe(originalUser.id);
+  handleYeaftMergeSessions({ sessionId: pressureId, otherSessionId: 'session_other', requestId: 'undelivered-merge' });
+  const pressureMerge = result('undelivered-merge');
+  expect(pressureMerge).toMatchObject({ ok: true, op: 'merge' });
+  const mergedPressure = rows(pressureMerge.session.id);
+  expect(mergedPressure.findIndex(row => row.origin?.messageId === rescueRow.id))
+    .toBeLessThan(mergedPressure.findIndex(row => row.content === 'question newer'));
+  const mergedOriginal = mergedPressure.find(row => row.origin?.messageId === originalUser.id);
+  expect(mergedPressure.find(row => row.origin?.messageId === rescueRow.id).causalRootId).toBe(mergedOriginal.id);
+  expect(mergedPressure.findIndex(row => row.origin?.messageId === rescueAnswer.id))
+    .toBeLessThan(mergedPressure.findIndex(row => row.content === 'question newer'));
+
+  // Older Engine deliveries may omit provenance: the bridge must recover it
+  // from the persisted task source, not from the latest human/internal row.
+  coordinator.onRegister(asyncTask.id, engine);
+  coordinator.onUndelivered(asyncTask.id, { sessionId: pressureId, vpId: 'alpha', content: 'legacy delivery' }, engine);
+  await waitCalls(beforeRescue + 2);
+  expect(calls.at(-1).causalRootId).toBe(originalUser.id);
+  calls.at(-1).gate.resolve();
+  await __testDrainVpDrivers();
 });
 
 it('rejects invalid/incomplete or active message boundaries while permitting completed historical message forks', async () => {

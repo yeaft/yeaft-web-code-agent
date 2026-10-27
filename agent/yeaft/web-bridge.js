@@ -685,6 +685,10 @@ function buildAsyncTaskCoordinator() {
       const releaseActivity = beginSessionActivity(sessionId);
       try {
         if (!deleteOwnerIfMatch(taskId, engine)) return;
+        let causalRootId = delivery?.causalRootId || null;
+        if (!causalRootId && sessionId) {
+          try { causalRootId = session?.taskManager?.getTask?.(sessionId, taskId)?.source?.causalRootId || null; } catch { /* legacy fallback is best-effort */ }
+        }
         scheduleTaskResultRescue({
           taskId,
           sessionId,
@@ -693,7 +697,7 @@ function buildAsyncTaskCoordinator() {
           content: delivery?.content,
           taskKind: delivery?.taskKind,
           taskStatus: delivery?.taskStatus,
-          causalRootId: delivery?.causalRootId || null,
+          causalRootId,
         });
       } finally {
         releaseActivity();
@@ -2243,6 +2247,7 @@ function scheduleTaskResultReentry(event) {
         threadId,
         taskKind: task.kind,
         taskStatus: task.status,
+        causalRootId: task.source?.causalRootId || null,
       });
       if (accepted) return;
     } catch {

@@ -202,7 +202,7 @@ describe('query progress Engine boundaries', () => {
       if (n === 1) return [call('start', 'Start'), stop];
       if (n <= 8) return [call(`read-${n}`, 'Read', { offset: n }), stop];
       if (n === 9) {
-        expect(run.engine.notifyAsyncTaskCompleted('owned', evidence)).toBe(true);
+        expect(run.engine.notifyAsyncTaskCompleted('owned', evidence, { causalRootId: 'newer-human' })).toBe(true);
         ackedBeforeDispatch = consumed.length;
       }
       return [{ type: 'text_delta', text: 'handled current evidence' }, { type: 'stop', stopReason: 'end_turn' }];
@@ -211,7 +211,7 @@ describe('query progress Engine boundaries', () => {
     });
     run.engine.setAsyncTaskCoordinator({
       onConsumed: id => consumed.push(id),
-      onUndelivered: id => undelivered.push(id),
+      onUndelivered: (id, delivery) => undelivered.push({ id, delivery }),
     });
     run.engine.registerTool({ name: 'Start', execute: async (_input, ctx) => {
       ctx.registerAsyncTask('owned');
@@ -222,7 +222,7 @@ describe('query progress Engine boundaries', () => {
       executions++;
       return `HEAD ${offset}\n${'x'.repeat(28000)}\nTAIL ${offset}`;
     } });
-    const events = await consume(run.engine);
+    const events = await consume(run.engine, { causalRootId: 'original-human' });
     expect(ackedBeforeDispatch).toBe(0);
     expect(executions).toBe(7);
     const finalRequest = run.requests.at(-1);
@@ -234,7 +234,7 @@ describe('query progress Engine boundaries', () => {
     } else {
       expect(includesEvidence).toBe(false);
       expect(consumed).toEqual([]);
-      expect(undelivered).toEqual(['owned']);
+      expect(undelivered).toEqual([{ id: 'owned', delivery: expect.objectContaining({ causalRootId: 'original-human' }) }]);
     }
     expect(run.rows.find(row => row.role === 'tool' && row.toolCallId === 'start').content).toContain(evidence);
     expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
