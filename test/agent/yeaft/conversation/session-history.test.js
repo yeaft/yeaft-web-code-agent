@@ -86,6 +86,14 @@ describe('durable native Session fork and merge', () => {
     ]);
     store.copySession('early-output', 'causal-fence', { beforeMessageId: 'm0005' });
     expect(raw(dir, 'causal-fence').map(row => row.content)).toEqual(['prior', 'prior answer']);
+    // Independent source streams can reuse a client identity. After merge the
+    // later request's fence must not absorb the earlier request or its replies.
+    request(store, 'client-left', 'independent left', 1, { clientMessageId: 'same-client' });
+    request(store, 'client-right', 'independent right', 2, { clientMessageId: 'same-client' });
+    store.mergeSessions('client-left', 'client-right', 'client-collision');
+    const later = raw(dir, 'client-collision').find(row => row.content === 'independent right');
+    store.copySession('client-collision', 'client-prefix', { beforeMessageId: later.id });
+    expect(raw(dir, 'client-prefix').map(row => row.content)).toEqual(['independent left', 'independent left answer']);
   });
 
   it('captures an inclusive raw snapshot before async input persistence, including cold, internal and folded rows', () => {
@@ -419,6 +427,18 @@ describe('durable native Session fork and merge', () => {
     expect(readFileSync(join(dir, 'sessions', source.id, 'session.json'), 'utf8')).toBe(sourceBefore);
     expect(raw(dir, other.id)).toEqual(otherBefore);
     expect(JSON.parse(readFileSync(join(dir, 'sessions-manifest.json'), 'utf8')).sessions.some(row => row.id === merged.id)).toBe(true);
+    // Re-merging branches with a shared middle request must not pull B ahead
+    // of A: AB + BC => ABC, not BAC. The shared B body is still retained once.
+    for (const [label, seconds] of [['A', 1], ['B', 2], ['C', 3]]) request(store, label, label, seconds);
+    store.mergeSessions('A', 'B', 'AB');
+    store.mergeSessions('B', 'C', 'BC');
+    expect(store.mergeSessions('AB', 'BC', 'ABC').sharedTurnCount).toBe(1);
+    expect(raw(dir, 'ABC').map(row => row.content)).toEqual(['A', 'A answer', 'B', 'B answer', 'C', 'C answer']);
+    store.mergeSessions('BC', 'AB', 'ABC-reversed');
+    expect(raw(dir, 'ABC-reversed').map(row => row.content)).toEqual(raw(dir, 'ABC').map(row => row.content));
+    store.copySession('ABC', 'ABC-fork');
+    expect(store.mergeSessions('ABC-fork', 'BC', 'ABC-repeated').sharedTurnCount).toBe(2);
+    expect(raw(dir, 'ABC-repeated').map(row => row.content)).toEqual(raw(dir, 'ABC').map(row => row.content));
   });
 
   it('rolls back newly-created metadata, manifest, transcript and attachments on merge write failure', () => {

@@ -254,8 +254,13 @@ export function planSessionMerge(inputs) {
   for (const [other, source] of aliases) {
     if (!equivalentRows(source, other, aliases)) ambiguous('Shared human request has divergent or partial branch history');
   }
-  const common = left.filter(turn => [...aliases.values()].includes(turn));
-  const tails = [...left.filter(turn => !common.includes(turn)), ...right.filter(turn => !aliases.has(turn))];
+  // Only an aligned shared prefix precedes the chronological merge. A shared
+  // request can also occur in the middle after earlier merges (AB + BC); moving
+  // every shared request to the front would incorrectly produce B, A, C.
+  let prefixLength = 0;
+  while (prefixLength < left.length && aliases.get(right[prefixLength]) === left[prefixLength]) prefixLength++;
+  const common = left.slice(0, prefixLength);
+  const tails = [...left.slice(prefixLength), ...right.slice(prefixLength).filter(turn => !aliases.has(turn))];
   const timestamp = turn => {
     const value = sentAt(turn.user);
     const parsed = typeof value === 'number' ? value : Date.parse(value);

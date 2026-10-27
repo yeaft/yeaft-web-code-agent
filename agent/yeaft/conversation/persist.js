@@ -2144,23 +2144,28 @@ export class ConversationStore {
       const user = rows[index];
       // A multi-VP legacy request can have several persisted human variants.
       // Fence before the first variant, never before just the running VP.
-      let humanCutoff = user.clientMessageId
-        ? rows.findIndex(row => isHumanRequest(row) && row.clientMessageId === user.clientMessageId)
-        : index;
+      const originStream = row => row.origin?.streamId || streamId;
+      const variant = row => isHumanRequest(row) && user.clientMessageId
+        && row.clientMessageId === user.clientMessageId && originStream(row) === originStream(user);
+      let humanCutoff = user.clientMessageId ? rows.findIndex(variant) : index;
       // Follow only this request's causal closure, not every turn in the
       // suffix: a late answer to an older request must not pull the fence back
-      // into (and truncate) that older request.
+      // into (and truncate) that older request. Client/VP identities are scoped
+      // by origin stream: a merged Session may contain independent collisions.
       const vpTurnKey = row => row.turnId
-        ? JSON.stringify([row.speakerVpId || row.vpId || '', row.turnId]) : null;
-      const excludedRows = new Set(rows.filter(row => row === user || (isHumanRequest(row)
-        && user.clientMessageId && row.clientMessageId === user.clientMessageId)));
+        ? JSON.stringify([originStream(row), row.speakerVpId || row.vpId || '', row.turnId]) : null;
+      const clientKey = (row, id) => JSON.stringify([originStream(row), id]);
+      const excludedRows = new Set(rows.filter(row => row === user || variant(row)));
       let previousSize;
       do {
         previousSize = excludedRows.size;
-        const excluded = new Set([...excludedRows].flatMap(row => [row.id, row.clientMessageId].filter(Boolean)));
+        const excluded = new Set([...excludedRows].map(row => row.id));
+        const clients = new Set([...excludedRows].filter(row => row.clientMessageId)
+          .map(row => clientKey(row, row.clientMessageId)));
         const turns = new Set([...excludedRows].map(vpTurnKey).filter(Boolean));
         for (const row of rows) {
-          if (excluded.has(row.causalRootId) || turns.has(vpTurnKey(row))) excludedRows.add(row);
+          if (excluded.has(row.causalRootId) || clients.has(clientKey(row, row.causalRootId))
+              || turns.has(vpTurnKey(row))) excludedRows.add(row);
         }
       } while (excludedRows.size > previousSize);
       humanCutoff = Math.min(humanCutoff, rows.findIndex(row => excludedRows.has(row)));
