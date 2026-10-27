@@ -65,6 +65,61 @@ describe('durable native Session fork and merge', () => {
       .toThrow(expect.objectContaining({ code: 'fork_boundary_not_found' }));
   });
 
+  it('captures an inclusive raw snapshot before async input persistence, including cold, internal and folded rows', () => {
+    const dir = root();
+    const store = new ConversationStore(dir);
+    expect(store.getSessionCopyFence('source')).toBeNull();
+    expect(existsSync(join(dir, 'sessions', 'source'))).toBe(false);
+    const first = request(store, 'source', 'first', 1);
+    const internal = store.append({ sessionId: 'source', role: 'user', content: 'control', userAuthored: false, cold: true });
+    const folded = store.foldMessages([first.answer, internal], {
+      sessionId: 'source', role: 'user', content: 'cold reflection', _reflection: true, cold: true,
+    });
+    const fence = new ConversationStore(dir).getSessionCopyFence('source');
+    expect(fence).toEqual({ messageId: folded.id, seq: Number(folded.id.slice(1)) });
+    const expected = raw(dir, 'source');
+    // Routing awaits can delay the next prompt's durable write; the captured
+    // raw head remains a safe snapshot even after later outputs and tombstones.
+    request(store, 'source', 'running', 2);
+    const later = store.foldMessages([folded], { sessionId: 'source', role: 'user', content: 'later fold', _reflection: true });
+    expect(store.getSessionCopyFence('source').messageId).toBe(later.id);
+    const restarted = new ConversationStore(dir);
+    expect(restarted.copySession('source', 'snapshot', { throughMessageId: fence.messageId }).copiedCount).toBe(expected.length);
+    expect(raw(dir, 'snapshot').map(row => row.content)).toEqual(expected.map(row => row.content));
+    expect(raw(dir, 'snapshot')[2].cold).toBe(true);
+    expect(raw(dir, 'snapshot')[3].foldedMessageIds).toEqual(raw(dir, 'snapshot').slice(1, 3).map(row => row.id));
+    restarted.copySession('source', 'empty', { throughMessageId: null });
+    expect(raw(dir, 'empty')).toEqual([]);
+    expect(raw(dir, 'source').at(-1).id).toBe(later.id);
+  });
+
+  it('validates every raw snapshot fence and clamps inclusive, exclusive and assistant-turn cutoffs to the earliest', () => {
+    const dir = root();
+    const store = new ConversationStore(dir);
+    const first = request(store, 'source', 'first', 1);
+    const second = request(store, 'source', 'second', 2);
+    const third = request(store, 'source', 'third', 3);
+    const boundaries = [
+      { throughMessageId: second.answer.id, throughTurnId: first.answer.turnId },
+      { throughMessageId: first.answer.id, throughTurnId: third.answer.turnId, beforeMessageId: third.user.id },
+      { throughMessageId: third.answer.id, beforeMessageId: second.user.id },
+    ];
+    for (const [index, options] of boundaries.entries()) {
+      store.copySession('source', `earlier-${index}`, options);
+      expect(raw(dir, `earlier-${index}`).map(row => row.content)).toEqual(['first', 'first answer']);
+    }
+    store.copySession('source', 'empty', { throughMessageId: null, throughTurnId: third.answer.turnId, beforeMessageId: second.user.id });
+    expect(raw(dir, 'empty')).toEqual([]);
+    for (const [throughMessageId, code] of [[undefined, 'invalid_fork_boundary'], ['', 'invalid_fork_boundary'],
+      [3, 'invalid_fork_boundary'], ['missing', 'fork_boundary_not_found']]) {
+      expect(() => store.copySession('source', 'invalid', { throughMessageId, beforeMessageId: first.user.id }))
+        .toThrow(expect.objectContaining({ code }));
+      expect(existsSync(join(dir, 'sessions', 'invalid'))).toBe(false);
+    }
+    expect(() => store.copySession('source', 'invalid', { throughMessageId: null, throughTurnId: 'missing' }))
+      .toThrow(expect.objectContaining({ code: 'fork_boundary_not_found' }));
+  });
+
   it('deduplicates fork lineage once and preserves atomic interleaved multi-VP requests, references and attachment ownership', () => {
     const dir = root();
     const store = new ConversationStore(dir);
@@ -195,6 +250,11 @@ describe('durable native Session fork and merge', () => {
     const copied = copySession(dir, source.id, { ...options, beforeMessageId: running.user.id });
     expect(copied.copiedMessageCount).toBe(2);
     expect(raw(dir, copied.id)[0].origin).toEqual(earlier.user.origin);
+    const snapshot = copySession(dir, source.id, { ...options, throughMessageId: earlier.answer.id });
+    expect(raw(dir, snapshot.id).map(row => row.content)).toEqual(['source', 'source answer']);
+    const empty = copySession(dir, source.id, { ...options, throughMessageId: null });
+    expect(empty.copiedMessageCount).toBe(0);
+    expect(raw(dir, empty.id)).toEqual([]);
     const sourceBefore = readFileSync(join(dir, 'sessions', source.id, 'session.json'), 'utf8');
     const otherBefore = raw(dir, other.id);
     const merged = mergeSessions(dir, source.id, other.id, { ...options, name: 'new merged' });

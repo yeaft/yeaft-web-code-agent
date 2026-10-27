@@ -582,7 +582,9 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
  * Server-owned assets retain their original ownership; message references are preserved.
  * @param {string} yeaftDir Agent-owned data root
  * @param {string} sourceSessionId Existing Session
- * @param {{name?:string, throughTurnId?:string, beforeMessageId?:string}} [options]
+ * @param {{name?:string, throughTurnId?:string, throughMessageId?:string|null, beforeMessageId?:string}} [options]
+ * throughMessageId is an inclusive raw snapshot fence; explicit null copies no
+ * transcript. All supplied fences are validated and the earliest cutoff wins.
  * @returns {object} New Session metadata with copiedMessageCount
  */
 export function copySession(yeaftDir, sourceSessionId, options = {}) {
@@ -623,7 +625,7 @@ export function copySession(yeaftDir, sourceSessionId, options = {}) {
 
     const transcript = new ConversationStore(sourceYeaftDir);
     const transcriptOptions = {};
-    for (const key of ['throughTurnId', 'beforeMessageId']) {
+    for (const key of ['throughTurnId', 'throughMessageId', 'beforeMessageId']) {
       if (Object.prototype.hasOwnProperty.call(options, key)) transcriptOptions[key] = options[key];
     }
     const { copiedCount } = transcript.copySession(sourceSessionId, copied.id, transcriptOptions);

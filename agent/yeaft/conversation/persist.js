@@ -1984,6 +1984,27 @@ export class ConversationStore {
   }
 
   /**
+   * Capture the newest durable raw row synchronously, before routing/input awaits.
+   * Includes cold, internal and folded source rows, not just visible history.
+   * A caller may retain this fence across awaits and pass its messageId (or null
+   * for an empty Session) to copySession's inclusive throughMessageId option.
+   * Active-input exclusion is the caller's responsibility: capture before enqueue
+   * and clamp to the fence preceding the earliest still-active input envelope.
+   *
+   * @param {string} sessionId Agent-owned Session identity
+   * @returns {{messageId: string, seq: number}|null} Newest raw row, or null if empty
+   */
+  getSessionCopyFence(sessionId) {
+    if (!sessionId) return null;
+    const primary = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sessionId));
+    if (!primary.hasData() && this.#sessionFileEntries('all', sessionId).length === 0) return null;
+    for (const row of this.#iterateSessionRows(sessionId, { desc: true, projection: 'transcript' })) {
+      if (row?.sessionId === sessionId) return { messageId: row.id, seq: parseSeqFromId(row.id) };
+    }
+    return null;
+  }
+
+  /**
    * Copy the complete durable transcript to a new Session identity.
    *
    * Unlike visible history readers, this includes cold rows, internal rows,
@@ -1994,10 +2015,13 @@ export class ConversationStore {
    *
    * @param {string} sourceSessionId
    * @param {string} targetSessionId
-   * @param {{throughTurnId?: string, beforeMessageId?: string}} [options] Inclusive
-   * assistant-turn endpoint and/or exclusive durable human-message fence. Both
-   * must be valid; when combined, the earlier cutoff wins. Internal user rows
-   * cannot act as fences. Callers fencing a running query must supply its human ID.
+   * @param {{throughTurnId?: string, throughMessageId?: string|null, beforeMessageId?: string}} [options]
+   * Inclusive assistant-turn endpoint, inclusive raw-message snapshot fence,
+   * and/or exclusive durable human-message fence. Explicit throughMessageId:null
+   * copies an empty snapshot; omission copies all rows unless another fence wins.
+   * Every supplied boundary must be valid; the earliest cutoff wins. Internal
+   * rows may anchor throughMessageId but cannot anchor beforeMessageId. To exclude
+   * active inputs not yet durable, pass the snapshot captured before their enqueue.
    * @returns {{ copiedCount: number, idMap: Map<string, string> }}
    */
   copySession(sourceSessionId, targetSessionId, options = {}) {
@@ -2007,6 +2031,16 @@ export class ConversationStore {
     const { rows: durableRows, streamId } = this.#loadDurableSession(sourceSessionId);
     let rows = durableRows;
     let cutoff = rows.length;
+    if (Object.prototype.hasOwnProperty.call(options, 'throughMessageId')) {
+      if (options.throughMessageId === null) cutoff = 0;
+      else {
+        const fence = typeof options.throughMessageId === 'string' ? options.throughMessageId.trim() : '';
+        if (!fence) throw historyError('invalid_fork_boundary', 'throughMessageId must be a nonempty string or null');
+        const index = rows.findIndex(row => row.id === fence);
+        if (index < 0) throw historyError('fork_boundary_not_found', `Durable message not found: ${fence}`);
+        cutoff = index + 1;
+      }
+    }
     if (Object.prototype.hasOwnProperty.call(options, 'beforeMessageId')) {
       const fence = typeof options.beforeMessageId === 'string' ? options.beforeMessageId.trim() : '';
       if (!fence) throw historyError('invalid_fork_boundary', 'beforeMessageId must be a nonempty string');
@@ -2016,7 +2050,7 @@ export class ConversationStore {
       const user = rows[index];
       // A multi-VP legacy request can have several persisted human variants.
       // Fence before the first variant, never before just the running VP.
-      cutoff = user.clientMessageId
+      let humanCutoff = user.clientMessageId
         ? rows.findIndex(row => isHumanRequest(row) && row.clientMessageId === user.clientMessageId)
         : index;
       // Also fence late/interleaved outputs and their transitive causal chain.
@@ -2026,13 +2060,14 @@ export class ConversationStore {
         ? JSON.stringify([row.speakerVpId || row.vpId || '', row.turnId]) : null;
       let previous;
       do {
-        previous = cutoff;
-        const excluded = new Set(rows.slice(cutoff).flatMap(row => [row.id, row.clientMessageId].filter(Boolean)));
-        const turns = new Set(rows.slice(cutoff).map(vpTurnKey).filter(Boolean));
-        const earlyOutput = rows.findIndex((row, i) => i < cutoff
+        previous = humanCutoff;
+        const excluded = new Set(rows.slice(humanCutoff).flatMap(row => [row.id, row.clientMessageId].filter(Boolean)));
+        const turns = new Set(rows.slice(humanCutoff).map(vpTurnKey).filter(Boolean));
+        const earlyOutput = rows.findIndex((row, i) => i < humanCutoff
           && (excluded.has(row.causalRootId) || turns.has(vpTurnKey(row))));
-        if (earlyOutput >= 0) cutoff = earlyOutput;
-      } while (cutoff < previous);
+        if (earlyOutput >= 0) humanCutoff = earlyOutput;
+      } while (humanCutoff < previous);
+      cutoff = Math.min(cutoff, humanCutoff);
     }
     if (Object.prototype.hasOwnProperty.call(options, 'throughTurnId')) {
       const throughTurnId = typeof options.throughTurnId === 'string'
