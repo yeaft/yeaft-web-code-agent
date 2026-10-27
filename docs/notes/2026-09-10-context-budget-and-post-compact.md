@@ -16,12 +16,13 @@
 
 1. 在 32K 内选择旧历史，当前 turn 原样进入下一层；
 2. 对可归档的长 tool result 生成 provider-only stub；
-3. 按模型窗口支付 system、schemas 和 output reserve，先丢最旧历史，再丢当前 turn 中最旧的可淘汰工具协议单元；
-4. 保持 tool call/result 配对。
+3. 按模型窗口支付 system、schemas 和 output reserve；当前 turn 超过剩余预算时，先从最旧的工具结果开始 compact 请求副本中的文本，保留首尾、省略标记、错误状态和调用配对，尽量保护最新结果；
+4. compact 后仍不足时，再丢最旧历史及当前 turn 中最旧的可淘汰工具协议单元；
+5. 保持 tool call/result 配对。
 
 若 provider 的实际 tokenizer 仍返回 context overflow，未产生 tool call 的请求最多以更小窗口重试三次。已执行工具不会重放；已经流给用户的部分文本会作为 continuation 边界保存，后续请求只继续，不重复显示。Query 内不会为此调用 conversation compact / summary LLM。
 
-长工具执行仍由 T1 reflection 控制增长。触发单位是 tool loop（一次 assistant tool-use batch 及其执行），不是 batch 内的工具数量；每约 30 个 tool loop 折叠一次。
+不再按工具循环次数运行 T1 reflection，也不再启动 T2 reflection 或将其结果带入下一轮。执行期 compact 是确定性的 tool-result 投影，不额外调用模型、不生成反思内容、不折叠或覆盖 transcript。图片和文档不按字节切割；仅压缩文本不足以适配时，仍使用已有整块附件/工具协议单元的有界降级。请求诊断中的 `tool_result_compact` 记录数量与预算，不复制敏感结果正文。
 
 ## 响应后 compact
 

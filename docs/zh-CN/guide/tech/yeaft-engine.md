@@ -22,8 +22,8 @@ agent/yeaft/
   sub-agent/            child-agent runner、log、liveness、notification
   tasks/                持久 background shell job
   work-center/          WorkItem/Action/Run planner、store、watcher、runner
-  tool-folding/         turn reflection 与长 tool arc folding
-  compact/              context compaction
+  tool-folding/         执行日志、重复提示与旧 reflection 兼容 helper
+  history-window.js     确定性 history window 与执行期工具结果 compact
   dream/                保留但禁用的 maintenance 实现
   archive/              大型/raw turn 与 tool-result archive helper
   templates/            双语 base、unified、保留的 dream、plan、persona prompt
@@ -37,7 +37,7 @@ agent/yeaft/
 2. **构造 context** — 组合 system prompt、VP persona、确定性的有预算 history window、当前 user content 和支持的 attachment。Web Session 只保留有界的临时 runtime cache，完整 transcript 仍由 ConversationStore 持有；不再从磁盘加载 LLM 对话摘要。
 3. **Stream LLM** — 选择配置的 provider/model，调用 Anthropic Messages 或 OpenAI Responses adapter。
 4. **执行工具** — 通过 `ToolRegistry` 运行允许的 call，append result block 并继续 stream。
-5. **Fold 长 arc** — 周期性 reflect tool batch，并 summary 长 turn，同时在 persistence/debug 路径保留 raw output。
+5. **按压力 compact** — 当前 turn 超过实际模型窗口的剩余预算（已计入 system、schemas 和 output reserve）时，先压缩 provider 副本中较旧的 tool-result 文本。保持工具配对和 persistence/debug 原始输出；不再周期性 reflection，也不额外调用执行期摘要模型。仍超限时使用确定性的工具协议单元裁剪和有界 overflow recovery。
 6. **结束** — 持久化 message、usage、trace、task state 和 terminal result；确认已注入 notification；可为后续 history window 生成独立的 turn 后 compact。
 7. **恢复** — 在配置上限内 auto-continue `max_tokens`；context error 直接暴露，不触发隐藏摘要调用；分类为 retryable 的 failure 可以切换 eligible fallback model。
 

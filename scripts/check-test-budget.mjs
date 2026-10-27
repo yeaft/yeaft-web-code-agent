@@ -40,7 +40,14 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // lifecycle/evidence/query-isolation/presentation, and 7 recent-stats/UI cases.
 // Historical failures and all existing safety checks remain visible.
 // +2 review regressions: web advice is not evidence; diagnostic credentials stay private.
-export const TEST_CASE_LIMIT = 657;
+// +10 reviewed pressure-compaction boundaries: 7 provider-copy cases covering
+// low pressure, protocol/text/error preservation, structured JSON, parallel batches,
+// Unicode accounting, multimodal integrity and bounded fallback; 1 Engine overflow
+// recovery/non-replay case and 2 actual-delivery async acknowledgement windows.
+// Reflection removal extends the existing long-investigation case; none excluded.
+// +2 review regressions: exact unsafe JSON numbers/deep fallback, and a real
+// Engine continuation after deeply nested external tool output.
+export const TEST_CASE_LIMIT = 669;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

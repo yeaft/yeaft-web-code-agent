@@ -565,6 +565,130 @@ function truncateToolResultsForModel(messages, options = {}) {
   });
 }
 
+const TOOL_COMPACT_MARKER = '\n[tool result compacted for context budget; middle omitted]\n';
+const MIN_TOOL_SAMPLE_BYTES = 64;
+const TOOL_ERROR_FIELDS = new Set(['error', 'code', 'errorEffect', 'failureType', 'status']);
+const BINARY_PART_TYPES = new Set(['image', 'input_image', 'document', 'input_file']);
+
+function sampleToolText(text, retainedBytes) {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= retainedBytes + Buffer.byteLength(TOOL_COMPACT_MARKER)) return text;
+  let headEnd = Math.floor(retainedBytes / 2);
+  let tailStart = bytes.length - (retainedBytes - headEnd);
+  // UTF-8 boundaries also keep CJK and astral characters intact. The marker is
+  // charged together with both samples by estimateContentTokens below.
+  while (headEnd > 0 && (bytes[headEnd] & 0xc0) === 0x80) headEnd -= 1;
+  while (tailStart < bytes.length && (bytes[tailStart] & 0xc0) === 0x80) tailStart += 1;
+  return bytes.subarray(0, headEnd).toString('utf8') + TOOL_COMPACT_MARKER
+    + bytes.subarray(tailStart).toString('utf8');
+}
+
+function sampleToolJson(value, retainedBytes) {
+  if (typeof value === 'string') return sampleToolText(value, retainedBytes);
+  if (!value || typeof value !== 'object' || BINARY_PART_TYPES.has(value.type)) return value;
+  if (Array.isArray(value)) return value.map(item => sampleToolJson(item, retainedBytes));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key, TOOL_ERROR_FIELDS.has(key) ? item : sampleToolJson(item, retainedBytes),
+  ]));
+}
+
+function toolTextSampler(text) {
+  // Keep structured output parseable, including JSON inside text content parts
+  // and JSON string scalars. Only string leaves are sampled; flags, exit codes
+  // and Bash error markers stay whole. Unsafe numeric round trips and deeply
+  // nested structures stay intact for the existing protocol-unit budget fitter.
+  if (/^\s*[\[{"]/.test(text)) {
+    try {
+      const value = JSON.parse(text, (_key, item, context) => {
+        if (typeof item === 'number' && context?.source !== JSON.stringify(item)) {
+          throw new RangeError('JSON numeric representation would change');
+        }
+        return item;
+      });
+      const pending = [{ value, depth: 0 }];
+      while (pending.length > 0) {
+        const next = pending.pop();
+        if (!next.value || typeof next.value !== 'object') continue;
+        if (next.depth >= 64) return () => text;
+        for (const item of Object.values(next.value)) pending.push({ value: item, depth: next.depth + 1 });
+      }
+      return bytes => JSON.stringify(sampleToolJson(value, bytes));
+    } catch (error) {
+      // A valid but unsafe/deep JSON value must not crash sampling or silently
+      // change facts. Only invalid JSON falls through to ordinary text sampling.
+      if (!(error instanceof SyntaxError)) return () => text;
+    }
+  }
+  return bytes => sampleToolText(text, bytes);
+}
+
+function toolContentSampler(content) {
+  // Content parts keep their ordering, metadata and binary payloads. In
+  // particular, do not collapse mixed text/image/document output into JSON.
+  if (Array.isArray(content) && content.some(part => part && typeof part === 'object'
+    && (['text', 'input_text', 'output_text'].includes(part.type) || BINARY_PART_TYPES.has(part.type)))) {
+    const samplers = content.map(part => {
+      if (typeof part === 'string') return toolTextSampler(part);
+      if (part && ['text', 'input_text', 'output_text'].includes(part.type)
+        && typeof part.text === 'string') {
+        const sample = toolTextSampler(part.text);
+        return bytes => ({ ...part, text: sample(bytes) });
+      }
+      return () => part;
+    });
+    return bytes => samplers.map(sample => sample(bytes));
+  }
+  return toolTextSampler(serializeJsonValue(content));
+}
+
+function compactToolContentToBudget(content, tokenBudget) {
+  const sample = toolContentSampler(content);
+  const minimum = sample(MIN_TOOL_SAMPLE_BYTES);
+  if (estimateContentTokens(minimum) > tokenBudget) return minimum;
+  // Search measured content cost, not tokenBudget * chars/bytes. JSON escaping,
+  // CJK and multipart framing otherwise make small budgets easy to overshoot.
+  let low = MIN_TOOL_SAMPLE_BYTES;
+  let high = Math.max(low, Buffer.byteLength(serializeJsonValue(content), 'utf8'));
+  let fitted = minimum;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = sample(mid);
+    if (estimateContentTokens(candidate) <= tokenBudget) {
+      low = mid;
+      fitted = candidate;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return fitted;
+}
+
+function compactCurrentToolResults(messages, messageBudget) {
+  const out = messages.slice();
+  let excess = estimateMessagesTokens(out) - messageBudget;
+  let compactedToolResults = 0;
+  let compactedToolResultTokensSaved = 0;
+  // Protect the complete newest tool batch, not merely its last result. All
+  // parallel results are evidence for the next assistant continuation.
+  let latestEnd = out.length - 1;
+  while (latestEnd >= 0 && out[latestEnd]?.role !== 'tool') latestEnd -= 1;
+  let latestStart = latestEnd;
+  while (latestStart > 0 && out[latestStart - 1]?.role === 'tool') latestStart -= 1;
+  for (let index = 0; index < latestStart && excess > 0; index += 1) {
+    const message = out[index];
+    if (message?.role !== 'tool') continue;
+    const before = estimateContentTokens(message.content);
+    const content = compactToolContentToBudget(message.content, Math.max(0, before - excess));
+    const saved = before - estimateContentTokens(content);
+    if (saved <= 0) continue;
+    out[index] = { ...message, content };
+    excess -= saved;
+    compactedToolResults += 1;
+    compactedToolResultTokensSaved += saved;
+  }
+  return { messages: out, compactedToolResults, compactedToolResultTokensSaved };
+}
+
 const HISTORY_SOURCE_INDEX = Symbol('historySourceIndex');
 
 function withHistorySourceIndexes(messages, offset = 0) {
@@ -1139,8 +1263,9 @@ export function buildHistoryBuckets(snapshot, options = {}) {
  * Fit one provider-request copy to the actual model window. The caller tells
  * us where current-turn rows begin; only the prefix is subject to the history
  * budget. If the complete request is still too large, old history disappears
- * first, followed by the oldest disposable current-turn protocol units. The
- * source array and durable transcript are never mutated.
+ * first. Under current-turn pressure, sample old tool-result text before
+ * evicting disposable protocol units; the latest tool batch stays lossless
+ * until the final budget fallback. The source and transcript are never mutated.
  *
  * @param {Array<object>} messages
  * @param {{ contextWindow:number, systemTokens?:number, toolSchemaTokens?:number,
@@ -1167,9 +1292,9 @@ export function fitProviderRequestToContext(messages, options = {}) {
   const historySource = source.slice(0, split);
   const currentSource = source.slice(split);
 
-  let current = pairSanitize(truncateToolResultsForModel(
-    currentSource.map(message => ({ ...message })), { language: options.language },
-  ));
+  let current = pairSanitize(currentSource.map(message => ({ ...message })));
+  const compact = compactCurrentToolResults(current, messageBudget);
+  current = compact.messages;
   if (estimateMessagesTokens(current) > messageBudget || current.length > messageCap) {
     const fitted = [];
     if (current.length > 0 && messageBudget >= 2 && messageCap > 0) {
@@ -1222,6 +1347,8 @@ export function fitProviderRequestToContext(messages, options = {}) {
       currentMessagesAfter: current.length,
       droppedHistoryMessages: historySource.length - history.length,
       droppedCurrentMessages: currentSource.length - current.length,
+      compactedToolResults: compact.compactedToolResults,
+      compactedToolResultTokensSaved: compact.compactedToolResultTokensSaved,
     },
   };
 }
