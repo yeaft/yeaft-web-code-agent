@@ -69,26 +69,36 @@ describe('durable native Session fork and merge', () => {
     const dir = root();
     const store = new ConversationStore(dir);
     expect(store.getSessionCopyFence('source')).toBeNull();
+    const emptyBoundary = JSON.parse(JSON.stringify(store.captureSessionCopyBoundary('source')));
     expect(existsSync(join(dir, 'sessions', 'source'))).toBe(false);
     const first = request(store, 'source', 'first', 1);
     const internal = store.append({ sessionId: 'source', role: 'user', content: 'control', userAuthored: false, cold: true });
     const folded = store.foldMessages([first.answer, internal], {
       sessionId: 'source', role: 'user', content: 'cold reflection', _reflection: true, cold: true,
     });
+    const legacy = join(dir, 'sessions', 'source', 'conversation', 'cold');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, `${first.answer.id}.md`), `---\nid: ${first.answer.id}\nrole: assistant\nsessionId: source\n---\nstale duplicate`);
+    // Legacy-only rows (including cold rows) must use exactly the same capture
+    // and copy set, not just the segmented head or the visible projection.
+    writeFileSync(join(legacy, 'm0000.md'), '---\nid: m0000\nrole: user\nsessionId: source\n---\nlegacy-only');
     const fence = new ConversationStore(dir).getSessionCopyFence('source');
+    const boundary = JSON.parse(JSON.stringify(store.captureSessionCopyBoundary('source')));
     expect(fence).toEqual({ messageId: folded.id, seq: Number(folded.id.slice(1)) });
-    const expected = raw(dir, 'source');
+    const expected = ['legacy-only', ...raw(dir, 'source').map(row => row.content)];
     // Routing awaits can delay the next prompt's durable write; the captured
     // raw head remains a safe snapshot even after later outputs and tombstones.
     request(store, 'source', 'running', 2);
     const later = store.foldMessages([folded], { sessionId: 'source', role: 'user', content: 'later fold', _reflection: true });
     expect(store.getSessionCopyFence('source').messageId).toBe(later.id);
     const restarted = new ConversationStore(dir);
-    expect(restarted.copySession('source', 'snapshot', { throughMessageId: fence.messageId }).copiedCount).toBe(expected.length);
-    expect(raw(dir, 'snapshot').map(row => row.content)).toEqual(expected.map(row => row.content));
-    expect(raw(dir, 'snapshot')[2].cold).toBe(true);
-    expect(raw(dir, 'snapshot')[3].foldedMessageIds).toEqual(raw(dir, 'snapshot').slice(1, 3).map(row => row.id));
-    restarted.copySession('source', 'empty', { throughMessageId: null });
+    expect(restarted.copySession('source', 'snapshot', { throughBoundary: boundary }).copiedCount).toBe(expected.length);
+    expect(raw(dir, 'snapshot').map(row => row.content)).toEqual(expected);
+    expect(raw(dir, 'snapshot')[3].cold).toBe(true);
+    expect(raw(dir, 'snapshot')[4].foldedMessageIds).toEqual(raw(dir, 'snapshot').slice(2, 4).map(row => row.id));
+    restarted.copySession('source', 'old-snapshot', { throughMessageId: fence.messageId });
+    expect(raw(dir, 'old-snapshot').map(row => row.content)).toEqual(expected);
+    restarted.copySession('source', 'empty', { throughBoundary: emptyBoundary });
     expect(raw(dir, 'empty')).toEqual([]);
     expect(raw(dir, 'source').at(-1).id).toBe(later.id);
   });
@@ -118,6 +128,39 @@ describe('durable native Session fork and merge', () => {
     }
     expect(() => store.copySession('source', 'invalid', { throughMessageId: null, throughTurnId: 'missing' }))
       .toThrow(expect.objectContaining({ code: 'fork_boundary_not_found' }));
+  });
+
+  it('rejects invalid or changed opaque prefixes and never truncates an active requested turn to the captured boundary', () => {
+    const dir = root();
+    const store = new ConversationStore(dir);
+    const first = request(store, 'source', 'first', 1);
+    const active = request(store, 'source', 'active', 2);
+    const boundary = JSON.parse(JSON.stringify(store.captureSessionCopyBoundary('source')));
+    store.append({ sessionId: 'source', role: 'assistant', content: 'late active output', turnId: active.answer.turnId });
+    const reject = (options, code = 'invalid_fork_boundary') => {
+      expect(() => new ConversationStore(dir).copySession('source', 'invalid', options))
+        .toThrow(expect.objectContaining({ code }));
+      expect(existsSync(join(dir, 'sessions', 'invalid'))).toBe(false);
+    };
+    reject({ throughBoundary: boundary, throughTurnId: active.answer.turnId }, 'incomplete_fork_boundary');
+    store.copySession('source', 'historical', { throughBoundary: boundary, throughTurnId: first.answer.turnId });
+    expect(raw(dir, 'historical').map(row => row.content)).toEqual(['first', 'first answer']);
+    for (const token of [null, undefined, {}, { ...boundary, sessionId: 'other' }, { ...boundary, streamId: 'other' },
+      { ...boundary, rowCount: -1 }, { ...boundary, rowCount: 100 }, { ...boundary, digest: 'bad' }]) {
+      reject({ throughBoundary: token });
+    }
+    // A row inserted behind the captured head is not part of that snapshot.
+    const legacy = join(dir, 'sessions', 'source', 'conversation', 'messages');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, 'm0000.md'), '---\nid: m0000\nrole: user\nsessionId: source\n---\ninserted');
+    reject({ throughBoundary: boundary });
+    rmSync(join(legacy, 'm0000.md'));
+    const segment = join(dir, 'sessions', 'source', 'conversation', 'segments', '000001.jsonl');
+    const original = readFileSync(segment, 'utf8');
+    writeFileSync(segment, original.replace('active answer', 'rewritten answer'));
+    reject({ throughBoundary: boundary });
+    writeFileSync(segment, original.split('\n').filter(line => !line.includes('active answer')).join('\n'));
+    reject({ throughBoundary: boundary });
   });
 
   it('deduplicates fork lineage once and preserves atomic interleaved multi-VP requests, references and attachment ownership', () => {
@@ -244,17 +287,23 @@ describe('durable native Session fork and merge', () => {
     handle.saveMeta({ ...handle.getMeta(), announcement: 'source announcement' });
     handle.close();
     const store = new ConversationStore(dir);
+    const emptyBoundary = store.captureSessionCopyBoundary(source.id);
     const earlier = request(store, source.id, 'source', 3);
+    const throughBoundary = JSON.parse(JSON.stringify(store.captureSessionCopyBoundary(source.id)));
     const running = request(store, source.id, 'running', 5);
     request(store, other.id, 'other', 1);
     const copied = copySession(dir, source.id, { ...options, beforeMessageId: running.user.id });
     expect(copied.copiedMessageCount).toBe(2);
     expect(raw(dir, copied.id)[0].origin).toEqual(earlier.user.origin);
-    const snapshot = copySession(dir, source.id, { ...options, throughMessageId: earlier.answer.id });
+    const snapshot = copySession(dir, source.id, { ...options, throughBoundary });
     expect(raw(dir, snapshot.id).map(row => row.content)).toEqual(['source', 'source answer']);
-    const empty = copySession(dir, source.id, { ...options, throughMessageId: null });
+    const empty = copySession(dir, source.id, { ...options, throughBoundary: emptyBoundary });
     expect(empty.copiedMessageCount).toBe(0);
     expect(raw(dir, empty.id)).toEqual([]);
+    const sessionsBeforeInvalid = readdirSync(join(dir, 'sessions')).sort();
+    expect(() => copySession(dir, source.id, { ...options, throughBoundary, throughTurnId: running.answer.turnId }))
+      .toThrow(expect.objectContaining({ code: 'incomplete_fork_boundary' }));
+    expect(readdirSync(join(dir, 'sessions')).sort()).toEqual(sessionsBeforeInvalid);
     const sourceBefore = readFileSync(join(dir, 'sessions', source.id, 'session.json'), 'utf8');
     const otherBefore = raw(dir, other.id);
     const merged = mergeSessions(dir, source.id, other.id, { ...options, name: 'new merged' });

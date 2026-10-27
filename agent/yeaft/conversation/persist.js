@@ -1984,6 +1984,40 @@ export class ConversationStore {
   }
 
   /**
+   * 同步捕获完整 durable raw transcript 的不透明、可 JSON 序列化前缀边界。
+   * 包含 cold、legacy、internal 和 folded source rows；空历史也返回显式边界。
+   * 调用者须在输入 enqueue 的第一个 await 前捕获，并在整个活动生命周期
+   * 保留最早边界。捕获不代表请求完成；Store 不判断 runtime activity。
+   * copySession 验证前缀未被替换、删改或插入；仅追加新行不会使边界失效。
+   *
+   * @param {string} sessionId Agent-owned Session identity
+   * @returns {object} Opaque serializable boundary for options.throughBoundary
+   * @throws {Error} invalid_fork_boundary for a missing Session identity
+   */
+  captureSessionCopyBoundary(sessionId) {
+    if (typeof sessionId !== 'string' || !sessionId) {
+      throw historyError('invalid_fork_boundary', 'Session identity is required');
+    }
+    const { rows, streamId } = this.#loadDurableSession(sessionId);
+    return {
+      version: 1,
+      sessionId,
+      streamId,
+      rowCount: rows.length,
+      lastMessageId: rows.at(-1)?.id ?? null,
+      digest: this.#sessionCopyPrefixDigest(rows),
+    };
+  }
+
+  #sessionCopyPrefixDigest(rows) {
+    const hash = createHash('sha256');
+    for (const row of rows) hash.update(JSON.stringify(row)).update('\n');
+    return hash.digest('hex');
+  }
+
+  /**
+   * Compatibility fence reader. New runtime callers should use the opaque
+   * captureSessionCopyBoundary / throughBoundary API instead.
    * Capture the newest durable raw row synchronously, before routing/input awaits.
    * Includes cold, internal and folded source rows, not just visible history.
    * A caller may retain this fence across awaits and pass its messageId (or null
@@ -2015,13 +2049,13 @@ export class ConversationStore {
    *
    * @param {string} sourceSessionId
    * @param {string} targetSessionId
-   * @param {{throughTurnId?: string, throughMessageId?: string|null, beforeMessageId?: string}} [options]
-   * Inclusive assistant-turn endpoint, inclusive raw-message snapshot fence,
-   * and/or exclusive durable human-message fence. Explicit throughMessageId:null
-   * copies an empty snapshot; omission copies all rows unless another fence wins.
-   * Every supplied boundary must be valid; the earliest cutoff wins. Internal
-   * rows may anchor throughMessageId but cannot anchor beforeMessageId. To exclude
-   * active inputs not yet durable, pass the snapshot captured before their enqueue.
+   * @param {{throughBoundary?: object, throughTurnId?: string, throughMessageId?: string|null, beforeMessageId?: string}} [options]
+   * throughBoundary 是 captureSessionCopyBoundary 返回的原始前缀边界；可跨
+   * await/重启传递但不能手工构造。显式空边界复制空历史。组合 throughTurnId
+   * 时，其完整历史 endpoint 必须在边界之内，否则 incomplete_fork_boundary；
+   * 不会把活动 turn 截短伪装成完整 turn。前缀删改拒绝为 invalid_fork_boundary。
+   * 兼容旧 inclusive throughMessageId（null 为空）和 exclusive beforeMessageId；
+   * 所有已提供边界均验证，取较早 cutoff。runtime 负责在最早活动输入前捕获。
    * @returns {{ copiedCount: number, idMap: Map<string, string> }}
    */
   copySession(sourceSessionId, targetSessionId, options = {}) {
@@ -2031,6 +2065,21 @@ export class ConversationStore {
     const { rows: durableRows, streamId } = this.#loadDurableSession(sourceSessionId);
     let rows = durableRows;
     let cutoff = rows.length;
+    let capturedCutoff = null;
+    if (Object.prototype.hasOwnProperty.call(options, 'throughBoundary')) {
+      const boundary = options.throughBoundary;
+      if (!boundary || typeof boundary !== 'object' || boundary.version !== 1
+          || boundary.sessionId !== sourceSessionId
+          || (boundary.rowCount !== 0 && boundary.streamId !== streamId)
+          || !Number.isSafeInteger(boundary.rowCount) || boundary.rowCount < 0
+          || boundary.rowCount > rows.length || typeof boundary.digest !== 'string'
+          || boundary.lastMessageId !== (rows[boundary.rowCount - 1]?.id ?? null)
+          || boundary.digest !== this.#sessionCopyPrefixDigest(rows.slice(0, boundary.rowCount))) {
+        throw historyError('invalid_fork_boundary', 'Captured Session prefix is invalid or has changed');
+      }
+      capturedCutoff = boundary.rowCount;
+      cutoff = capturedCutoff;
+    }
     if (Object.prototype.hasOwnProperty.call(options, 'throughMessageId')) {
       if (options.throughMessageId === null) cutoff = 0;
       else {
@@ -2038,7 +2087,7 @@ export class ConversationStore {
         if (!fence) throw historyError('invalid_fork_boundary', 'throughMessageId must be a nonempty string or null');
         const index = rows.findIndex(row => row.id === fence);
         if (index < 0) throw historyError('fork_boundary_not_found', `Durable message not found: ${fence}`);
-        cutoff = index + 1;
+        cutoff = Math.min(cutoff, index + 1);
       }
     }
     if (Object.prototype.hasOwnProperty.call(options, 'beforeMessageId')) {
@@ -2092,6 +2141,9 @@ export class ConversationStore {
         throw error;
       }
       const endpoint = rows.reduce((last, row, index) => row?.turnId === throughTurnId ? index : last, -1);
+      if (capturedCutoff !== null && endpoint >= capturedCutoff) {
+        throw historyError('incomplete_fork_boundary', `Assistant turn exceeds captured Session prefix: ${throughTurnId}`);
+      }
       const prefix = rows.slice(0, endpoint + 1);
       const sanitized = pairSanitize(prefix);
       const pairShape = row => ({
@@ -2175,7 +2227,7 @@ export class ConversationStore {
       rowsById.set(row.id, row);
     }
     const rows = [...rowsById.values()].sort(compareMessagesBySeq);
-    return { sessionId: sourceSessionId, streamId: primary.metadata().streamId, rows };
+    return { sessionId: sourceSessionId, streamId: rows.length || primary.hasData() ? primary.metadata().streamId : null, rows };
   }
 
   /**
