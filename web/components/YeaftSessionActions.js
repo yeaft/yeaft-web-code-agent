@@ -2,8 +2,10 @@ import NavigationIcon from './NavigationIcon.js';
 export default {
   components: { NavigationIcon },
   name: 'YeaftSessionActions',
-  emits: ['toggle-search', 'reload-messages', 'toggle-session-status', 'toggle-workbench', 'reload-page', 'fork-session'],
+  emits: ['toggle-search', 'reload-messages', 'toggle-session-status', 'toggle-workbench', 'reload-page', 'fork-session', 'merge-session'],
   props: {
+    mergeDisabled: { type: Boolean, default: false },
+    mergeTitle: { type: String, default: '' },
     showFork: { type: Boolean, default: false },
     forkDisabled: { type: Boolean, default: false },
     forkState: { type: String, default: 'idle' },
@@ -42,6 +44,13 @@ export default {
         aria-live="polite"
         aria-atomic="true"
       >{{ forkState === 'copying' ? $t('yeaft.session.copying') : $t('yeaft.session.copyComplete') }}</span>
+      <button v-if="showFork" type="button" class="yeaft-fork-btn yeaft-merge-btn"
+        :disabled="mergeDisabled" :title="mergeTitle || $t('yeaft.session.merge')"
+        :aria-label="$t('yeaft.session.merge')" @click="$emit('merge-session')">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h2m6-6v2a4 4 0 0 1-4 4h-2v4"/>
+        </svg>
+      </button>
       <button
         ref="searchButtonRef"
         type="button"

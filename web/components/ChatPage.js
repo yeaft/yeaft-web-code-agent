@@ -515,6 +515,8 @@ export default {
         this.store.toggleCatalogSessionPin(row);
       } else if (action === 'remove') {
         this.store.hideCatalogSession(row);
+      } else if (runtimeProvider === 'yeaft' && action === 'merge') {
+        this.store.openSessionMerge(row);
       } else if (runtimeProvider === 'yeaft' && action === 'copy') {
         const result = await this.store.copyCatalogSession(row);
         if (!result?.ok) {

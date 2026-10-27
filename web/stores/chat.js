@@ -638,6 +638,9 @@ export const useChatStore = defineStore('chat', {
     // 连接状态
     sessionForkPendingKey: null, // one explicit copy operation at a time across both UI entry points
     sessionForkState: 'idle', // idle | copying | success | error
+    sessionMergeSource: null, // explicit (agentId, sessionId) chosen by an entry point
+    sessionMergePendingKey: null,
+    sessionBranchNavigationGeneration: 0,
     digitalPersonOpen: false,
     digitalPersonAgentId: null,
     digitalPersonUiEnabledByAgent: readPersonUiPreferences(),
@@ -5964,18 +5967,32 @@ export const useChatStore = defineStore('chat', {
           // and have no envelope context. Keep these two channels in sync
           // if you change the wire-stamping rule.
           const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
-          // A fork acknowledgement is broadcast for inventory updates. Only
+          // Branch acknowledgements are broadcast for inventory updates. Only
           // the initiating tab may focus it, and another Agent must not settle
           // this tab's request even if it echoes the same request id.
-          if (event.op === 'copy' && pending?.agentId && pending.agentId !== msg.agentId) break;
-          if (event.op === 'copy' && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
+          const isBranchResult = event.op === 'copy' || event.op === 'merge';
+          if (pending && (isBranchResult || pending.op === 'copy' || pending.op === 'merge') && (pending.op !== event.op
+              || pending.agentId !== msg.agentId
+              || (event.sourceSessionId && event.sourceSessionId !== pending.sessionId)
+              || (event.op === 'merge' && (event.otherSessionId !== pending.otherSessionId
+                || event.sourceSessionId !== pending.sessionId)))) break;
+          if (isBranchResult && event.session?.agentId && event.session.agentId !== msg.agentId) break;
+          if (isBranchResult && pending && (
+            pending.connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)
+            || pending.authGeneration !== Number(useAuthStore().authGeneration || 0)
+          )) {
+            this._sessionCrudPending.delete(event.requestId);
+            pending.resolve({ ok: false, op: pending.op, error: { code: 'stale_request' } });
+            break;
+          }
+          if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
             this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
           if (gs) gs.applyCrudResult(event, msg.agentId || null, {
-            // The initiating copy action owns navigation so it can render a
+            // The initiating branch action owns navigation so it can render a
             // visible success state before entering the new Session. Other
             // tabs still receive the inventory update without being redirected.
-            activate: event.op !== 'copy',
+            activate: !isBranchResult,
           });
           if (event.ok && event.op === 'delete' && event.sessionId && msg.agentId) {
             this.clearYeaftHistoryMemory({
@@ -6010,6 +6027,8 @@ export const useChatStore = defineStore('chat', {
                 op: event.op,
                 session: sessionWithAgent,
                 sessionId: resolvedSessionId,
+                sourceSessionId: event.sourceSessionId || null,
+                otherSessionId: event.otherSessionId || null,
                 sessions: resolvedSessionList,
                 config: event.config || null,
                 error: event.error || null,
@@ -6466,6 +6485,7 @@ export const useChatStore = defineStore('chat', {
     //   op                data shape
     //   list              (ignored)
     //   create            { name, roster?, defaultVpId?, workDir? }  → msg.payload
+    //   merge             { sessionId, otherSessionId }      → flat
     //   rename            { sessionId, name }                → flat
     //   archive           { sessionId }                      → flat
     //   add_member        { sessionId, vpId }                → flat
@@ -6483,6 +6503,7 @@ export const useChatStore = defineStore('chat', {
         list: 'yeaft_list_sessions',
         create: 'yeaft_create_session',
         copy: 'yeaft_copy_session',
+        merge: 'yeaft_merge_sessions',
         rename: 'yeaft_rename_session',
         update: 'yeaft_update_session',
         update_config: 'yeaft_update_session_config',
@@ -6516,13 +6537,13 @@ export const useChatStore = defineStore('chat', {
       if (gs) gs.markPending(requestId, op);
 
       return new Promise((resolve) => {
-        // Copy is a durable Agent-side operation. Once accepted by the socket it
+        // Copy/merge are durable Agent operations. Once accepted by the socket they
         // may legitimately outlive a browser timer, and timing out locally would
-        // report failure even though the clone is still being committed. Keep
+        // report failure even though a new Session is still being committed. Keep
         // the correlated request open until its result or a real disconnect.
         const timeoutMs = Number.isFinite(opts.timeoutMs)
           ? Math.max(1, Number(opts.timeoutMs))
-          : (op === 'copy' ? null : YEAFT_SESSION_CRUD_TIMEOUT_MS);
+          : (op === 'copy' || op === 'merge' ? null : YEAFT_SESSION_CRUD_TIMEOUT_MS);
         const timer = timeoutMs == null ? null : setTimeout(() => {
           if (this._sessionCrudPending && this._sessionCrudPending.has(requestId)) {
             this._sessionCrudPending.delete(requestId);
@@ -6532,6 +6553,9 @@ export const useChatStore = defineStore('chat', {
         }, timeoutMs);
         this._sessionCrudPending.set(requestId, {
           op,
+          authGeneration: Number(useAuthStore().authGeneration || 0),
+          sessionId: data?.sessionId || null,
+          otherSessionId: data?.otherSessionId || null,
           agentId: overrideAgentId || this.currentAgent,
           connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
           resolve: (result) => {
@@ -6541,7 +6565,7 @@ export const useChatStore = defineStore('chat', {
           },
         });
         const sent = this.sendWsMessage(msg);
-        if (op === 'copy' && !sent) {
+        if ((op === 'copy' || op === 'merge') && !sent) {
           if (timer) clearTimeout(timer);
           this._sessionCrudPending.delete(requestId);
           if (gs?.pending) delete gs.pending[requestId];
@@ -7385,7 +7409,10 @@ export const useChatStore = defineStore('chat', {
       if (this.sessionForkPendingKey) return 'fork_pending';
       if (this.connectionState !== 'connected'
           || !this.agents.some(agent => agent.id === route.agentId && agent.online)) return 'agent_offline';
-      if (this.isYeaftSessionProcessing(route.sessionId, route.agentId)) return 'session_running';
+      if (this.isYeaftSessionProcessing(route.sessionId, route.agentId)
+          && !this.agents.find(agent => agent.id === route.agentId)?.capabilities?.includes('session_fork_while_running')) {
+        return 'session_running';
+      }
       return null;
     },
     async copyCatalogSession(row, options = {}) {
@@ -7401,6 +7428,7 @@ export const useChatStore = defineStore('chat', {
           return { ok: false, op: 'copy', error: { code: 'session_fork_from_turn_unsupported' } };
         }
       }
+      const fence = this.sessionBranchFence();
       this.sessionForkPendingKey = yeaftCatalogKey(route.agentId, route.sessionId);
       this.sessionForkState = 'copying';
       try {
@@ -7411,8 +7439,10 @@ export const useChatStore = defineStore('chat', {
           ...(fromTurn ? { throughTurnId: options.throughTurnId } : {}),
         }, { agentId: route.agentId });
         if (!result?.ok || !result.session?.id) return result;
+        if (result.session.agentId !== route.agentId || !this.isSessionBranchFenceCurrent(fence)) return result;
         this.sessionForkState = 'success';
         await new Promise(resolve => setTimeout(resolve, YEAFT_SESSION_COPY_SUCCESS_MS));
+        if (!this.isSessionBranchFenceCurrent(fence)) return result;
         const copiedRoute = {
           runtimeProvider: 'yeaft',
           agentId: route.agentId,
@@ -7428,6 +7458,70 @@ export const useChatStore = defineStore('chat', {
       } finally {
         this.sessionForkState = 'idle';
         this.sessionForkPendingKey = null;
+      }
+    },
+    // Navigation belongs to the initiating browser view, never to a broadcast
+    // CRUD acknowledgement or a view entered after reconnect / owner change.
+    sessionBranchFence() {
+      return {
+        connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
+        authGeneration: Number(useAuthStore().authGeneration || 0),
+        route: JSON.stringify(this.activeSessionRoute),
+        navigationGeneration: this.sessionBranchNavigationGeneration,
+      };
+    },
+    isSessionBranchFenceCurrent(fence) {
+      return fence.navigationGeneration === this.sessionBranchNavigationGeneration
+        && fence.connectionGeneration === Number(this.chatHistoryConnectionGeneration || 0)
+        && fence.authGeneration === Number(useAuthStore().authGeneration || 0)
+        && fence.route === JSON.stringify(this.activeSessionRoute);
+    },
+    sessionMergeUnavailableReason(row) {
+      const route = row?.routeRef;
+      if (route?.runtimeProvider !== 'yeaft' || !route.agentId || !route.sessionId) return 'bad_route';
+      const agent = this.agents.find(agent => agent.id === route.agentId);
+      if (this.connectionState !== 'connected' || !agent?.online || row.availability === 'offline') return 'agent_offline';
+      if (!agent.capabilities?.includes('session_merge')) return 'session_merge_unsupported';
+      if (this.sessionMergePendingKey) return 'merge_pending';
+      if (this.isYeaftSessionProcessing(route.sessionId, route.agentId)) return 'session_running';
+      return null;
+    },
+    sessionMergeCandidates(row) {
+      const source = row?.routeRef;
+      const unavailable = this.sessionMergeUnavailableReason(row);
+      if (!source || (unavailable && unavailable !== 'merge_pending')) return [];
+      return this.sidebarSessionCatalog.filter(candidate => (
+        candidate.routeRef?.runtimeProvider === 'yeaft'
+        && candidate.routeRef.agentId === source.agentId
+        && candidate.routeRef.sessionId !== source.sessionId
+        && candidate.availability === 'online'
+        && !this.isYeaftSessionProcessing(candidate.routeRef.sessionId, source.agentId)
+      ));
+    },
+    openSessionMerge(row) {
+      if (this.sessionMergeUnavailableReason(row)) return false;
+      this.sessionMergeSource = { ...row, routeRef: { ...row.routeRef } };
+      return true;
+    },
+    async mergeCatalogSessions(row, otherRow) {
+      const unavailable = this.sessionMergeUnavailableReason(row);
+      if (unavailable) return { ok: false, op: 'merge', error: { code: unavailable } };
+      const route = row.routeRef;
+      const other = otherRow?.routeRef;
+      if (!other || other.runtimeProvider !== 'yeaft' || other.agentId !== route.agentId
+          || !this.sessionMergeCandidates(row).some(candidate => candidate.routeRef.sessionId === other.sessionId)) {
+        return { ok: false, op: 'merge', error: { code: 'invalid_merge_source' } };
+      }
+      this.sessionMergePendingKey = yeaftCatalogKey(route.agentId, route.sessionId);
+      try {
+        return await this.sessionCrudRequest('merge', {
+          sessionId: route.sessionId,
+          otherSessionId: other.sessionId,
+        }, { agentId: route.agentId });
+      } catch (error) {
+        return { ok: false, op: 'merge', error: { code: 'merge_failed', message: error?.message || String(error) } };
+      } finally {
+        this.sessionMergePendingKey = null;
       }
     },
     reorderCatalogSessions(rows) {
