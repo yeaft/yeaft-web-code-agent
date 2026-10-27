@@ -36,9 +36,19 @@ Choose **Copy session** from the active Session’s sidebar menu, or the copy ic
 
 The fork copies the complete persisted conversation, announcement, VP roster/default VP, working directory, and Session model/effort overrides. If the source belongs to a Project, the Server puts the fork in the same Project, so the shared instruction continues to apply. The source remains unchanged; later conversation and Session setting changes are independent.
 
-Wait for a running response to finish before forking. Forking is unavailable while disconnected or another fork is pending. Background processes, running tasks, debug traces, and Session memory files are not cloned. Available uploaded attachments are copied into the new Session’s own storage; missing or inaccessible legacy files remain explicitly unavailable. Both Server and Agent must support Project inheritance for this behavior.
+A supporting Agent can fork while responding: the new Session contains the complete durable history before the active input, excluding that input and its response or tools, without stopping the source. Overlapping inputs or parallel VPs use the safe prefix before the earliest active input. Older Agents still require the response to finish. Forking is unavailable while disconnected or another fork is pending. Background processes, running tasks, debug traces, and Session memory files are not cloned. Available uploaded attachments are copied into the new Session’s own storage; missing or inaccessible legacy files remain explicitly unavailable. Both Server and Agent must support Project inheritance for this behavior.
 
 Choose **Fork from this turn** below a completed AI response to copy the chronological history prefix through that turn, inclusive, without later messages. The new Session inherits the same configuration and Project; the source is never truncated or changed. This requires a supporting Agent. Older responses without a reliable turn ID have no action; ambiguous boundaries or boundaries that split a tool call/result are rejected rather than falling back to a full copy. With parallel VPs, persisted message order is authoritative, so other VP messages before the boundary are included.
+
+## Merge two Sessions
+
+Choose **Merge Sessions** from the sidebar menu or conversation header, then select another native Session on the same Agent. Both Sessions must be idle and the Agent must support merging.
+
+Merging opens a new Session and leaves both sources unchanged. The new Session inherits the initiating source's working directory, announcement, default VP, model settings and Project, with a union of both VP rosters. Shared history is retained once; remaining whole request turns are ordered by the user's sent time. Without shared history, all turns are time-ordered. Identical prompt text alone is never treated as shared history; ambiguous divergence is rejected rather than guessed. Tool calls and results stay together.
+
+Attachments are verified and copied into the new Session's storage. Conflicting shared attachment bytes or entirely unavailable copies cause an explicit failure, not silent loss. This does not merge Git files or migrate running tasks. Project ownership remains Server-authoritative.
+
+Forks and merged Sessions continue from canonical text and tool history, not provider-private signatures or reasoning continuation bound to a source Session. Source transcripts remain intact. Historical **Fork from this turn** also works while a later response is running, provided the selected endpoint precedes the active input; the current response has no fork action.
 
 ## Route a turn
 
