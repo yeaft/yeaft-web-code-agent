@@ -1375,6 +1375,7 @@ export class Engine {
       effortDecision: snapshotEffortDecision(vpCtx?.effortDecision),
       requestIdentity: vpCtx?.requestIdentity,
       queryTurnId: vpCtx?.queryTurnId,
+      causalRootId: vpCtx?.causalRootId || null,
       webResearch: vpCtx?.webResearch,
       historyBeforeSeq: vpCtx?.historyBeforeSeq,
       yeaftDir: this.#yeaftDir,
@@ -1651,6 +1652,7 @@ export class Engine {
         const persistedContinuation = this.#persistConversationMessage(continuation, {
           sessionId: update.sessionId || this.#sessionId,
           turnId: update.turnId || null,
+          causalRootId: update.causalRootId || null,
         });
         if (persistedContinuation?.id) continuation._persistedMessageId = persistedContinuation.id;
         conversationMessages.push(continuation);
@@ -4090,6 +4092,7 @@ export class Engine {
         effortDecision: snapshotEffortDecision(requestEffortDecision),
         requestIdentity,
         queryTurnId,
+        causalRootId,
         webResearch,
         historyBeforeSeq: Number.isFinite(persistedQueryUser?.seq) ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id),
         router,
@@ -5195,7 +5198,7 @@ export class Engine {
    *
    * @param {string} taskId
    * @param {string|Array} content — pre-formatted task result body
-   * @param {{ preview?: string, sessionId?: string, vpId?: string, threadId?: string, taskKind?: string, taskStatus?: string, turnId?: string }} [opts]
+   * @param {{ preview?: string, sessionId?: string, vpId?: string, threadId?: string, taskKind?: string, taskStatus?: string, turnId?: string, causalRootId?: string }} [opts]
    * @returns {boolean}
    */
   notifyAsyncTaskCompleted(taskId, content, opts = {}) {
@@ -5235,6 +5238,11 @@ export class Engine {
       taskKind: opts.taskKind,
       taskStatus: opts.taskStatus,
       turnId: opts.turnId || meta.turnId || null,
+      // Registration owns provenance even when newer human input arrives before
+      // completion. Retain it until provider acceptance or undelivered rescue.
+      causalRootId: meta.causalRootId
+        || (typeof opts.causalRootId === 'string' ? opts.causalRootId.trim() : null)
+        || this.#currentCausalRootId || null,
     };
     this.#acceptedAsyncTaskResults.set(taskId, delivery);
     this.#asyncTaskToolMeta.delete(taskId);
@@ -5248,6 +5256,7 @@ export class Engine {
         sessionId: delivery.sessionId,
         vpId: delivery.vpId,
         turnId: delivery.turnId,
+        causalRootId: delivery.causalRootId,
         // Capture durable row ownership at completion time, independently of
         // any provider-only compacted request copy.
         folded: !hasLiveToolRow,
@@ -5268,7 +5277,7 @@ export class Engine {
    * Register a result-producing async task as belonging to the current query.
    * Called by tools such as SpawnAgent via `toolCtx.registerAsyncTask`.
    * @param {string} taskId
-   * @param {{ id?: string, name?: string, threadId?: string, toolCallId?: string, toolName?: string, sessionId?: string, vpId?: string, turnId?: string }} [meta]
+   * @param {{ id?: string, name?: string, threadId?: string, toolCallId?: string, toolName?: string, sessionId?: string, vpId?: string, turnId?: string, causalRootId?: string }} [meta]
    * @returns {void}
    */
   #registerAsyncTask(taskId, meta = {}) {
@@ -5277,22 +5286,23 @@ export class Engine {
     const toolCallId = typeof meta.toolCallId === 'string' && meta.toolCallId
       ? meta.toolCallId
       : (typeof meta.id === 'string' && meta.id ? meta.id : null);
-    if (toolCallId) {
-      this.#asyncTaskToolMeta.set(taskId, {
-        toolCallId,
-        toolName: typeof meta.toolName === 'string' && meta.toolName ? meta.toolName : (typeof meta.name === 'string' ? meta.name : undefined),
-        threadId: typeof meta.threadId === 'string' && meta.threadId ? meta.threadId : undefined,
-        sessionId: typeof meta.sessionId === 'string' && meta.sessionId
-          ? meta.sessionId
-          : (this.#sessionId || null),
-        vpId: typeof meta.vpId === 'string' && meta.vpId ? meta.vpId : (this.#vpId || null),
-        // query() exposes the wire turn id while the task is registered.
-        // Keep the originating turn even for legacy missing/folded tool rows.
-        turnId: typeof meta.turnId === 'string' && meta.turnId
-          ? meta.turnId
-          : (this.#currentQueryTurnId || null),
-      });
-    }
+    this.#asyncTaskToolMeta.set(taskId, {
+      toolCallId,
+      toolName: typeof meta.toolName === 'string' && meta.toolName ? meta.toolName : (typeof meta.name === 'string' ? meta.name : undefined),
+      threadId: typeof meta.threadId === 'string' && meta.threadId ? meta.threadId : undefined,
+      sessionId: typeof meta.sessionId === 'string' && meta.sessionId
+        ? meta.sessionId
+        : (this.#sessionId || null),
+      vpId: typeof meta.vpId === 'string' && meta.vpId ? meta.vpId : (this.#vpId || null),
+      // query() exposes the wire turn id while the task is registered.
+      // Keep provenance even for legacy missing/folded tool rows.
+      turnId: typeof meta.turnId === 'string' && meta.turnId
+        ? meta.turnId
+        : (this.#currentQueryTurnId || null),
+      causalRootId: typeof meta.causalRootId === 'string' && meta.causalRootId.trim()
+        ? meta.causalRootId.trim()
+        : (this.#currentCausalRootId || null),
+    });
     try { this.#asyncTaskCoordinator?.onRegister?.(taskId, this); } catch { /* coord must not throw into tools */ }
   }
 

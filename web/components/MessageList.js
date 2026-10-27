@@ -963,13 +963,12 @@ export default {
 
       const finishTurn = () => {
         if (currentTurn) {
-          const activeTurnMeta = currentTurn.turnId
-            ? Object.values(store.activeVpTurns || {}).find((row) => (
-              ((row?.turnId || null) === currentTurn.turnId
-                || (!row?.turnId && store.activeVpTurns?.[currentTurn.turnId] === row))
-              && (!store.currentAgent || !row?.agentId || row.agentId === store.currentAgent)
-            )) || null
-            : null;
+          const turnIds = new Set([currentTurn.turnId, ...currentTurn.messages.map(message => message.turnId)].filter(Boolean));
+          const activeTurnMeta = Object.entries(store.activeVpTurns || {}).find(([key, row]) => (
+            turnIds.has(row?.turnId || key)
+            && (!store.currentAgent || !row?.agentId || row.agentId === store.currentAgent)
+            && (!row?.sessionId || row.sessionId === activeYeaftSessionId.value)
+          ))?.[1] || null;
           // A replayed reply can merge multiple runtime turn IDs. Keep the
           // first ID for debug/grouping, but fork through its latest durable
           // assistant row (tool-use rows also project persisted assistants).

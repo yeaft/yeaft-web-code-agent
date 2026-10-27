@@ -47,7 +47,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // Reflection removal extends the existing long-investigation case; none excluded.
 // +2 review regressions: exact unsafe JSON numbers/deep fallback, and a real
 // Engine continuation after deeply nested external tool output.
-export const TEST_CASE_LIMIT = 669;
+// +25 reviewed Session fork/merge boundaries: 10 durable identity/order/rollback,
+// 6 active-ingress/task runtime, 6 owner/Agent/capability/dispatch server cases,
+// and 3 browser capability/correlation/navigation cases. No prior tests removed.
+export const TEST_CASE_LIMIT = 694;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -370,6 +370,10 @@ export default {
       if (!this.canEditRow(row)) return 'agent_offline';
       return this.isProcessing(row) ? 'session_running' : null;
     },
+    mergeUnavailableReason(row) {
+      return this.resolvedProjectStore?.sessionMergeUnavailableReason?.(row) ||
+        (typeof this.resolvedProjectStore?.sessionMergeUnavailableReason !== 'function' ? 'session_merge_unsupported' : null);
+    },
     isUnread(row) {
       return typeof this.isSessionUnread === 'function' ? !!this.isSessionUnread(row) : false;
     },
@@ -504,6 +508,7 @@ export default {
       const normalizedAction = action === 'delete' ? 'remove' : action;
       if (!this.canRunAction(row, normalizedAction)) return;
       if (action === 'copy' && this.forkUnavailableReason(row)) return;
+      if (action === 'merge' && this.mergeUnavailableReason(row)) return;
       if (action === 'rename') {
         const generation = this.actionGeneration;
         const title = await promptDialog(this.$t('yeaft.session.renamePrompt', { name: row.title }), row.title);
@@ -1077,6 +1082,7 @@ export default {
             <button class="session-menu-item" @click.stop="runAction('rename', floatingMenu.row)">{{ $t('chat.sidebar.renameConv') }}</button>
             <template v-if="floatingMenu.row.runtimeProvider === 'yeaft'">
               <button type="button" class="session-menu-item" :disabled="!!forkUnavailableReason(floatingMenu.row)" :title="forkUnavailableReason(floatingMenu.row) ? $t('yeaft.session.error.' + forkUnavailableReason(floatingMenu.row)) : $t('yeaft.session.copy')" @click.stop="runAction('copy', floatingMenu.row)">{{ $t('yeaft.session.copy') }}</button>
+              <button type="button" class="session-menu-item" :disabled="!!mergeUnavailableReason(floatingMenu.row)" :title="mergeUnavailableReason(floatingMenu.row) ? $t('yeaft.session.error.' + mergeUnavailableReason(floatingMenu.row)) : $t('yeaft.session.merge')" @click.stop="runAction('merge', floatingMenu.row)">{{ $t('yeaft.session.merge') }}</button>
               <button class="session-menu-item" @click.stop="runAction('settings', floatingMenu.row)">{{ $t('yeaft.session.openSettings') }}</button>
               <button v-if="floatingMenu.inProject" class="session-menu-item" @click.stop="moveRow(floatingMenu.row, null)">{{ $t('sidebar.projects.remove') }}</button>
               <button class="session-menu-item session-menu-parent" :class="{ active: projectSubmenuOpen }" aria-haspopup="menu" :aria-expanded="projectSubmenuOpen ? 'true' : 'false'" @click.stop="projectSubmenuOpen ? closeProjectMoveList() : openProjectMoveList()">

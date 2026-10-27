@@ -442,6 +442,8 @@ export default {
         s?.reorderCatalogSessions?.(sessions);
       } else if (action === 'pin') {
         s?.toggleCatalogSessionPin?.(row);
+      } else if (runtimeProvider === 'yeaft' && action === 'merge') {
+        s.openSessionMerge(row);
       } else if (runtimeProvider === 'yeaft' && action === 'copy') {
         const result = await s?.copyCatalogSession?.(row);
         if (!result?.ok) {

@@ -82,6 +82,7 @@ import {
   SessionCrudError,
   createSessionFromSpec,
   copySession,
+  mergeSessions,
   renameSession,
   updateSessionAnnouncement,
   updateSessionWorkDir,
@@ -499,6 +500,90 @@ const vpEngineConfigKeys = new Map();
 const vpAborts = new Map();
 
 /**
+ * A conservative Session-wide activity epoch. Its durable prefix is captured
+ * synchronously before ingress can await boot/classification or persist a user
+ * row. Overlapping inputs, fan-out, handoffs and task reentry share that prefix;
+ * no active-turn boundary is reconstructed from the latest transcript row.
+ */
+const sessionCopyEpochs = new Map();
+const modelReentryActivity = new Map();
+
+function hasSessionRuntimeWork(sessionId) {
+  const prefix = `${sessionId}::`;
+  if ([...vpDrivers.keys(), ...vpAborts.keys()].some(key => key.startsWith(prefix))) return true;
+  for (const [key, inbox] of vpInboxes) {
+    if (key.startsWith(prefix) && inbox?.length) return true;
+  }
+  for (const [key, threads] of vpThreads) {
+    if (key.startsWith(prefix) && [...threads.values()].some(thread => thread.pendingQueries?.length)) return true;
+  }
+  for (const engine of asyncTaskOwners.values()) {
+    if (engine?.sessionId === sessionId) return true;
+  }
+  for (const task of session?.taskManager?.listActiveTasks?.(sessionId) || []) {
+    if (task.ownerVpId && taskResultDeliveryFor(task) === TASK_RESULT_DELIVERY.MODEL_REENTRY) return true;
+  }
+  return false;
+}
+
+function settleSessionCopyEpoch(sessionId) {
+  const epoch = sessionCopyEpochs.get(sessionId);
+  if (epoch && epoch.pending === 0 && !hasSessionRuntimeWork(sessionId)) sessionCopyEpochs.delete(sessionId);
+}
+
+function beginSessionActivity(sessionId, { unknownBoundary = false } = {}) {
+  settleSessionCopyEpoch(sessionId);
+  let epoch = sessionCopyEpochs.get(sessionId);
+  if (!epoch) {
+    let boundary = null;
+    // Legacy/untracked running work has no trustworthy pre-ingress boundary.
+    if (!unknownBoundary && !hasSessionRuntimeWork(sessionId)) {
+      try {
+        const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
+        const store = new ConversationStore(root);
+        boundary = JSON.stringify(store.captureSessionCopyBoundary(sessionId));
+      } catch { /* fail closed for running copies if capture was unavailable */ }
+    }
+    epoch = { boundary, pending: 0 };
+    sessionCopyEpochs.set(sessionId, epoch);
+  }
+  epoch.pending += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    epoch.pending -= 1;
+    if (sessionCopyEpochs.get(sessionId) === epoch) settleSessionCopyEpoch(sessionId);
+  };
+}
+
+function sessionHasActiveWork(sessionId) {
+  settleSessionCopyEpoch(sessionId);
+  return sessionCopyEpochs.has(sessionId) || hasSessionRuntimeWork(sessionId);
+}
+
+function trackModelReentryActivity(event) {
+  const task = event?.task;
+  if (!task?.sessionId || !task?.ownerVpId || taskResultDeliveryFor(task) !== TASK_RESULT_DELIVERY.MODEL_REENTRY) return null;
+  const key = `${task.sessionId}::${task.id}`;
+  let release = modelReentryActivity.get(key);
+  // Sub-agent final logging refreshes terminal tasks after completion. Such
+  // updates must never reacquire a lease: there is no later completion to free
+  // it. Still release an existing lease for any terminal-state notification.
+  if (isTerminalTaskStatus(task.status) && event.event !== 'completed') {
+    modelReentryActivity.delete(key);
+    return release || null;
+  }
+  if (!release) {
+    release = beginSessionActivity(task.sessionId, { unknownBoundary: event.event !== 'started' });
+    modelReentryActivity.set(key, release);
+  }
+  if (event.event !== 'completed') return null;
+  modelReentryActivity.delete(key);
+  return release;
+}
+
+/**
  * Owner index for background tasks currently parked on a running engine.
  * Populated by the per-engine async-task coordinator at register time;
  * cleared at notify time or when the engine teardown unregisters whatever
@@ -594,32 +679,51 @@ function buildAsyncTaskCoordinator() {
       deleteOwnerIfMatch(taskId, engine);
     },
     onUndelivered(taskId, delivery, engine) {
-      if (!deleteOwnerIfMatch(taskId, engine)) return;
-      scheduleTaskResultRescue({
-        taskId,
-        sessionId: delivery?.sessionId || engine?.sessionId || null,
-        vpId: delivery?.vpId || engine?.vpId || null,
-        threadId: delivery?.threadId || engine?.currentThreadId || 'main',
-        content: delivery?.content,
-        taskKind: delivery?.taskKind,
-        taskStatus: delivery?.taskStatus,
-      });
+      if (asyncTaskOwners.get(taskId) !== engine) return;
+      const sessionId = delivery?.sessionId || engine?.sessionId || null;
+      // Bridge ownership to the rescue before deleting the last live owner.
+      const releaseActivity = beginSessionActivity(sessionId);
+      try {
+        if (!deleteOwnerIfMatch(taskId, engine)) return;
+        let causalRootId = delivery?.causalRootId || null;
+        if (!causalRootId && sessionId) {
+          try { causalRootId = session?.taskManager?.getTask?.(sessionId, taskId)?.source?.causalRootId || null; } catch { /* legacy fallback is best-effort */ }
+        }
+        scheduleTaskResultRescue({
+          taskId,
+          sessionId,
+          vpId: delivery?.vpId || engine?.vpId || null,
+          threadId: delivery?.threadId || engine?.currentThreadId || 'main',
+          content: delivery?.content,
+          taskKind: delivery?.taskKind,
+          taskStatus: delivery?.taskStatus,
+          causalRootId,
+        });
+      } finally {
+        releaseActivity();
+      }
     },
     onDeferred(taskId, engine) {
-      if (!engine?.ownsPendingAsyncTask?.(taskId)) return;
-      if (!deleteOwnerIfMatch(taskId, engine)) return;
+      if (!engine?.ownsPendingAsyncTask?.(taskId) || asyncTaskOwners.get(taskId) !== engine) return;
       const sessionId = engine?.sessionId || null;
-      const task = sessionId && session?.taskManager?.getTask?.(sessionId, taskId);
-      if (!task || !isTerminalTaskStatus(task.status)) return;
-      scheduleTaskResultRescue({
-        taskId,
-        sessionId: task.sessionId || sessionId,
-        vpId: task.ownerVpId || engine?.vpId || null,
-        threadId: task.source?.threadId || task.runtime?.threadId || engine?.currentThreadId || 'main',
-        content: formatTaskResultForVp(task),
-        taskKind: task.kind,
-        taskStatus: task.status,
-      });
+      const releaseActivity = beginSessionActivity(sessionId);
+      try {
+        if (!deleteOwnerIfMatch(taskId, engine)) return;
+        const task = sessionId && session?.taskManager?.getTask?.(sessionId, taskId);
+        if (!task || !isTerminalTaskStatus(task.status)) return;
+        scheduleTaskResultRescue({
+          taskId,
+          sessionId: task.sessionId || sessionId,
+          vpId: task.ownerVpId || engine?.vpId || null,
+          threadId: task.source?.threadId || task.runtime?.threadId || engine?.currentThreadId || 'main',
+          content: formatTaskResultForVp(task),
+          taskKind: task.kind,
+          taskStatus: task.status,
+          causalRootId: task.source?.causalRootId || null,
+        });
+      } finally {
+        releaseActivity();
+      }
     },
   };
 }
@@ -1037,12 +1141,19 @@ function buildPendingRescueEnvelope({ sessionId, taskId = null, threadId = 'main
     sessionId,
     taskId,
     trigger: 'pending_rescue',
+    ...(leftover?.persistedMessage ? {
+      _persistedUserMessage: leftover.persistedMessage,
+      _inboundAlreadyPersisted: true,
+      _causalRootId: leftover.causalRootId || leftover.persistedMessage.id,
+    } : {}),
     msg: {
-      id: followUpId,
+      ...leftover?.sourceMessage,
+      id: leftover?.sourceMessage?.id || followUpId,
       from: leftoverIsInternal && leftover.senderVpId ? leftover.senderVpId : 'user',
       role: leftoverIsInternal ? 'assistant' : 'user',
       text: replayText,
       meta: {
+        ...leftover?.sourceMessage?.meta,
         rescuedFrom: 'pendingQueries',
         threadId,
         ...(leftoverInjectedBy ? { injectedBy: leftoverInjectedBy } : {}),
@@ -2067,33 +2178,39 @@ function enqueueForVp(sessionId, vpId, envelope) {
   registerRoutePromise(envelope?.msg?.id, routePromise);
 }
 
-function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus }) {
+function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus, causalRootId = null }) {
   if (!sessionId || !vpId || !taskId) return false;
   const text = typeof content === 'string'
     ? content
     : (() => { try { return JSON.stringify(content); } catch { return String(content); } })();
   if (!text.trim()) return false;
   const msgId = `task_result_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
+  const releaseActivity = beginSessionActivity(sessionId);
   queueMicrotask(() => {
-    enqueueForVp(sessionId, vpId, {
-      sessionId,
-      taskId,
-      trigger: 'task_result',
-      _promptSuffix: '',
-      msg: {
-        id: msgId,
-        from: 'tool',
-        role: 'assistant',
-        text,
-        meta: {
-          injectedBy: 'task_result',
-          taskId,
-          taskKind,
-          taskStatus,
-          sourceThreadId: threadId,
+    try {
+      enqueueForVp(sessionId, vpId, {
+        sessionId,
+        taskId,
+        trigger: 'task_result',
+        _causalRootId: causalRootId,
+        _promptSuffix: '',
+        msg: {
+          id: msgId,
+          from: 'tool',
+          role: 'assistant',
+          text,
+          meta: {
+            injectedBy: 'task_result',
+            taskId,
+            taskKind,
+            taskStatus,
+            sourceThreadId: threadId,
+          },
         },
-      },
-    });
+      });
+    } finally {
+      releaseActivity();
+    }
   });
   return true;
 }
@@ -2130,6 +2247,7 @@ function scheduleTaskResultReentry(event) {
         threadId,
         taskKind: task.kind,
         taskStatus: task.status,
+        causalRootId: task.source?.causalRootId || null,
       });
       if (accepted) return;
     } catch {
@@ -2146,10 +2264,20 @@ function scheduleTaskResultReentry(event) {
     content: formatted,
     taskKind: task.kind,
     taskStatus: task.status,
+    causalRootId: task.source?.causalRootId || null,
   });
 }
 
 async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
+  const releaseActivity = beginSessionActivity(sessionId);
+  try {
+    return await routeActiveEnvelopeToVpThread(sessionId, vpId, envelope);
+  } finally {
+    releaseActivity();
+  }
+}
+
+async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope) {
   const routeStart = perfNowMs();
   const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
   const runningThreads = getRunningThreads(sessionId, vpId);
@@ -2225,7 +2353,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
     const content = promptParts || prompt;
     const injectedBy = envelope?.msg?.meta?.injectedBy;
     const isInternalAppend = injectedBy === 'route_forward' || injectedBy === 'task_result';
-    thread.pendingQueries.push({
+    const pending = {
       content,
       preview: prompt,
       originalText: text,
@@ -2234,7 +2362,9 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
       injectedBy: isInternalAppend ? injectedBy : null,
       senderVpId: isInternalAppend ? (envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null) : null,
       sourceThreadId: isInternalAppend ? visibleInboundThreadId(envelope, thread.threadId) : null,
-    });
+      sourceMessage: envelope?.msg,
+    };
+    thread.pendingQueries.push(pending);
     // A thread parked on a background task has no adapter activity to poll this
     // queue. Wake its Engine explicitly so the new user message is consumed
     // immediately while the task remains tracked in TaskManager. If the Engine
@@ -2260,6 +2390,9 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
         ts: envelope?.msg?.ts || null,
         clientMessageId: envelope?.msg?.meta?.clientMessageId || null,
       });
+      pending.persistedMessage = envelope?._persistedUserMessage || null;
+      pending.persisted = Boolean(pending.persistedMessage);
+      pending.causalRootId = envelope?._causalRootId || pending.persistedMessage?.id || null;
       thread.updatedAt = Date.now();
       try {
         sendSessionEvent({
@@ -2318,6 +2451,7 @@ async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
 function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
   const key = threadKey(sessionId, vpId, threadId);
   if (vpDrivers.has(key)) return;
+  const releaseActivity = beginSessionActivity(sessionId);
   const promise = (async () => {
     while (true) {
       const inbox = vpInboxes.get(key);
@@ -2475,10 +2609,12 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
         }
       }
     }
+  })().finally(() => {
     vpDrivers.delete(key);
     const tail = vpInboxes.get(key);
     if (tail && tail.length > 0) ensureDriverRunning(sessionId, vpId, threadId);
-  })();
+    releaseActivity();
+  });
   vpDrivers.set(key, promise);
 }
 
@@ -2522,6 +2658,8 @@ export async function __testResetVpState() {
   vpEngines.clear();
   vpEngineConfigKeys.clear();
   asyncTaskOwners.clear();
+  sessionCopyEpochs.clear();
+  modelReentryActivity.clear();
   vpAborts.clear();
   sessionContexts.clear();
   projectContextBySession.clear();
@@ -3294,11 +3432,12 @@ function decorateSessionsWithRuntimeState(sessions) {
   return rows.map(session => {
     if (!session || !session.id) return session;
     const runtime = bySession.get(session.id);
-    if (!runtime) return { ...session, running: false, active: false };
+    const hasWork = sessionHasActiveWork(session.id);
+    if (!runtime) return { ...session, running: hasWork, active: hasWork };
     return {
       ...session,
-      running: !!runtime.running,
-      active: !!runtime.running,
+      running: hasWork || !!runtime.running,
+      active: hasWork || !!runtime.running,
       runningVpCount: runtime.runningVpCount || 0,
       latestActivityAt: runtime.latestActivityAt || null,
     };
@@ -3677,10 +3816,15 @@ export function handleYeaftCopySession(msg) {
     const source = decorateSessionsWithRuntimeState(snapshotSessions(yeaftDir))
       .find(session => session?.id === sessionId);
     if (!source) throw new SessionCrudError('not_found', sessionId);
-    if (source.running) throw new SessionCrudError('session_running', sessionId, 'Cannot copy a running Session');
+    const active = sessionHasActiveWork(sessionId);
+    const epoch = sessionCopyEpochs.get(sessionId);
+    if ((active || source.running) && !epoch?.boundary) {
+      throw new SessionCrudError('session_running', sessionId, 'No safe copy boundary for this running Session');
+    }
     const session = copySession(yeaftDir, sessionId, {
       ...configuredVpPaths(),
       name: msg && msg.name,
+      ...(epoch?.boundary ? { throughBoundary: JSON.parse(epoch.boundary) } : {}),
       ...(msg && Object.prototype.hasOwnProperty.call(msg, 'throughTurnId')
         ? { throughTurnId: msg.throughTurnId }
         : {}),
@@ -3691,6 +3835,33 @@ export function handleYeaftCopySession(msg) {
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'copy', requestId, ok: false, error: sessionErrorPayload(err) });
+  }
+}
+
+/** Merge creates a new Session; neither source runtime is stopped or retired. */
+export function handleYeaftMergeSessions(msg) {
+  const requestId = msg?.requestId;
+  const sessionId = msg?.sessionId;
+  const otherSessionId = msg?.otherSessionId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const sources = decorateSessionsWithRuntimeState(snapshotSessions(yeaftDir));
+    for (const id of [sessionId, otherSessionId]) {
+      const source = sources.find(row => row?.id === id);
+      if (!source) throw new SessionCrudError('not_found', id);
+      if (sessionHasActiveWork(id) || source.running) {
+        throw new SessionCrudError('session_running', id, 'Cannot merge a running Session');
+      }
+    }
+    const session = mergeSessions(yeaftDir, sessionId, otherSessionId, {
+      ...configuredVpPaths(), name: msg?.name,
+    });
+    recordAgentSessionCreated();
+    session.config = loadSessionConfig(yeaftDir, session.id);
+    sendSessionCrudResult({ op: 'merge', requestId, ok: true, sourceSessionId: sessionId, otherSessionId, session });
+    sendSessionSnapshotBroadcast();
+  } catch (err) {
+    sendSessionCrudResult({ op: 'merge', requestId, ok: false, sourceSessionId: sessionId, otherSessionId, error: sessionErrorPayload(err) });
   }
 }
 
@@ -4008,11 +4179,14 @@ export function installYeaftRuntimeBridge(s) {
 
   if (s.taskManager && typeof s.taskManager.setEventSink === 'function') {
     s.taskManager.setEventSink((event) => {
+      const releaseActivity = trackModelReentryActivity(event);
       try {
         const sessionId = event?.task?.sessionId || event?.sessionId || null;
         sendSessionEvent(event, { sessionId });
         scheduleTaskResultReentry(event);
-      } catch { /* never let task event delivery throw */ }
+      } catch { /* never let task event delivery throw */ } finally {
+        releaseActivity?.();
+      }
     });
   }
 
@@ -4932,6 +5106,21 @@ async function runYeaftSessionSend(msg) {
   }
   traceDuration('session_send.open_session', openSessionStart, { ok: !!sessionHandle });
 
+  const releaseActivity = beginSessionActivity(sessionId);
+  try {
+    return await dispatchAcceptedSessionSend({
+      msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart,
+      tracePerf, traceDuration, turnConfig, sessionHandle, sessionRoot, sessionMetaForRuntime,
+    });
+  } finally {
+    releaseActivity();
+  }
+}
+
+async function dispatchAcceptedSessionSend({
+  msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart,
+  tracePerf, traceDuration, turnConfig, sessionHandle, sessionRoot, sessionMetaForRuntime,
+}) {
   const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
   if (!sessionHandle) {
@@ -5145,7 +5334,6 @@ async function runYeaftSessionSend(msg) {
     turnId: report?.message?.id || null,
     ok: true,
   });
-
 }
 
 /**
@@ -5454,7 +5642,9 @@ async function runVpTurnWithEscalation(args) {
   const { sessionId, vpId, turnId, threadId, thread, vpAbort } = args;
   const escalationState = { escalated: false, terminalEmitted: false };
 
-  await raceWithEscalation(runVpTurn({ ...args, escalationState }), {
+  const releaseActivity = beginSessionActivity(sessionId);
+  const inner = runVpTurn({ ...args, escalationState }).finally(releaseActivity);
+  await raceWithEscalation(inner, {
     signal: vpAbort?.signal,
     graceMs: ESCALATE_AFTER_ABORT_MS,
     onEscalate: () => {
@@ -5802,6 +5992,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         // would render the user's prompt N times.
         userAlreadyPersisted: true,
         currentUserMessage: inboundEnvelope?._persistedUserMessage || null,
+        // Persist exact human ownership, not the most recently written prompt:
+        // other VP threads can accept a new request before this one responds.
+        causalRootId: inboundEnvelope?._causalRootId || inboundEnvelope?._persistedUserMessage?.id || null,
         askUser: ({ question, options }, toolCall = null) => new Promise((resolve, reject) => {
           const requestId = `ask_${randomUUID()}`;
           const signal = vpAbort.signal;
@@ -6204,6 +6397,9 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  */
 function persistInboundMessageOnceByMsgId({ envelope = null, msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, quote, internal = false, ts = null, clientMessageId = null }) {
   if (!session?.conversationStore) return false;
+  // A related input is already durable on its original thread. Rescuing it
+  // must retain that exact row even if routing chooses another thread.
+  if (envelope?._inboundAlreadyPersisted && envelope._persistedUserMessage?.sessionId === sessionId) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
   // `if (persistedMsgId)`); refusing here keeps the helper's contract
@@ -6263,7 +6459,10 @@ function persistInboundMessageOnceByMsgId({ envelope = null, msgId, text, sessio
     if (persistRole === 'assistant' && speakerVpId && typeof speakerVpId === 'string') {
       record.speakerVpId = speakerVpId;
     }
-    if (internal) record.internal = true;
+    if (internal) {
+      record.internal = true;
+      if (envelope?._causalRootId) record.causalRootId = envelope._causalRootId;
+    }
     if (persistRole === 'user' && Array.isArray(attachments) && attachments.length > 0) {
       record.attachments = attachments;
     }
@@ -8054,6 +8253,8 @@ export function handleYeaftMcpReload(msg = {}) {
 }
 
 export const __testHooks = {
+  sessionHasActiveWork,
+  scheduleTaskResultRescue,
   loadProjects,
   sharedProjectContext,
   normalizeProjectContext,

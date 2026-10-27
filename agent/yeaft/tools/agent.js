@@ -521,7 +521,10 @@ stops or finalizes work no longer needed.`,
           title: spec.mission || spec.task || name,
           resultDelivery: TASK_RESULT_DELIVERY.MODEL_REENTRY,
           runtime: { subAgentId: agentId, name, cwd: agent.cwd },
-          source: { threadId: callerScope.parentThreadId || ctx?.threadId || 'main' },
+          source: {
+            threadId: callerScope.parentThreadId || ctx?.threadId || 'main',
+            ...(ctx.causalRootId ? { causalRootId: ctx.causalRootId } : {}),
+          },
         });
         if (task?.id) {
           agent.taskId = task.id;
