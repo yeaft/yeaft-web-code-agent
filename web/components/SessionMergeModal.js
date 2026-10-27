@@ -29,6 +29,9 @@ export default {
   },
   watch: {
     contextKey() { this.close(); },
+    busy(busy) {
+      if (busy) this.$nextTick(() => this.$refs.close?.focus());
+    },
   },
   mounted() {
     this.returnFocus = document.activeElement;
@@ -59,9 +62,13 @@ export default {
       } else if (event.key === 'Tab') {
         const controls = [...this.$refs.dialog.querySelectorAll('button:not(:disabled), select:not(:disabled)')];
         const first = controls[0], last = controls.at(-1);
-        if (event.shiftKey && document.activeElement === first) {
+        const active = document.activeElement;
+        if (!controls.includes(active)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        } else if (event.shiftKey && active === first) {
           event.preventDefault(); last?.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
+        } else if (!event.shiftKey && active === last) {
           event.preventDefault(); first?.focus();
         }
       }
