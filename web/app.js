@@ -46,7 +46,12 @@ const App = {
     const chatStore = useChatStore();
     const authStore = useAuthStore();
 
-    Vue.watch(() => [JSON.stringify(chatStore.activeSessionRoute), chatStore.currentView, chatStore.digitalPersonOpen, chatStore.workCenterOpen], () => {
+    Vue.watch([
+      () => JSON.stringify(chatStore.activeSessionRoute),
+      () => chatStore.currentView,
+      () => chatStore.digitalPersonOpen,
+      () => chatStore.workCenterOpen,
+    ], () => {
       chatStore.sessionBranchNavigationGeneration++;
     }, { flush: 'sync' });
 
