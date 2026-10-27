@@ -180,6 +180,10 @@ export function createRouter(deps = {}) {
         role: 'assistant',     // VP-authored — persists as assistant turn
         text,
         taskId: args.taskId ?? null,
+        // Runtime provenance follows the human request through handoffs; the
+        // coordinator forwards underscore fields without persisting them.
+        _causalRootId: args.inboundEnvelope?._causalRootId
+          || args.inboundEnvelope?._persistedUserMessage?.id || null,
         // route_forward is already visible as the source VP's tool action.
         // Persist the synthetic handoff for audit/dispatch, but keep it out
         // of UI replay and future visible history so it doesn't render as a

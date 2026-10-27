@@ -686,6 +686,7 @@ function buildAsyncTaskCoordinator() {
           content: delivery?.content,
           taskKind: delivery?.taskKind,
           taskStatus: delivery?.taskStatus,
+          causalRootId: delivery?.causalRootId || null,
         });
       } finally {
         releaseActivity();
@@ -707,6 +708,7 @@ function buildAsyncTaskCoordinator() {
           content: formatTaskResultForVp(task),
           taskKind: task.kind,
           taskStatus: task.status,
+          causalRootId: task.source?.causalRootId || null,
         });
       } finally {
         releaseActivity();
@@ -1128,12 +1130,19 @@ function buildPendingRescueEnvelope({ sessionId, taskId = null, threadId = 'main
     sessionId,
     taskId,
     trigger: 'pending_rescue',
+    ...(leftover?.persistedMessage ? {
+      _persistedUserMessage: leftover.persistedMessage,
+      _inboundAlreadyPersisted: true,
+      _causalRootId: leftover.causalRootId || leftover.persistedMessage.id,
+    } : {}),
     msg: {
-      id: followUpId,
+      ...leftover?.sourceMessage,
+      id: leftover?.sourceMessage?.id || followUpId,
       from: leftoverIsInternal && leftover.senderVpId ? leftover.senderVpId : 'user',
       role: leftoverIsInternal ? 'assistant' : 'user',
       text: replayText,
       meta: {
+        ...leftover?.sourceMessage?.meta,
         rescuedFrom: 'pendingQueries',
         threadId,
         ...(leftoverInjectedBy ? { injectedBy: leftoverInjectedBy } : {}),
@@ -2158,7 +2167,7 @@ function enqueueForVp(sessionId, vpId, envelope) {
   registerRoutePromise(envelope?.msg?.id, routePromise);
 }
 
-function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus }) {
+function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus, causalRootId = null }) {
   if (!sessionId || !vpId || !taskId) return false;
   const text = typeof content === 'string'
     ? content
@@ -2172,6 +2181,7 @@ function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', 
         sessionId,
         taskId,
         trigger: 'task_result',
+        _causalRootId: causalRootId,
         _promptSuffix: '',
         msg: {
           id: msgId,
@@ -2242,6 +2252,7 @@ function scheduleTaskResultReentry(event) {
     content: formatted,
     taskKind: task.kind,
     taskStatus: task.status,
+    causalRootId: task.source?.causalRootId || null,
   });
 }
 
@@ -2330,7 +2341,7 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope) {
     const content = promptParts || prompt;
     const injectedBy = envelope?.msg?.meta?.injectedBy;
     const isInternalAppend = injectedBy === 'route_forward' || injectedBy === 'task_result';
-    thread.pendingQueries.push({
+    const pending = {
       content,
       preview: prompt,
       originalText: text,
@@ -2339,7 +2350,9 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope) {
       injectedBy: isInternalAppend ? injectedBy : null,
       senderVpId: isInternalAppend ? (envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null) : null,
       sourceThreadId: isInternalAppend ? visibleInboundThreadId(envelope, thread.threadId) : null,
-    });
+      sourceMessage: envelope?.msg,
+    };
+    thread.pendingQueries.push(pending);
     // A thread parked on a background task has no adapter activity to poll this
     // queue. Wake its Engine explicitly so the new user message is consumed
     // immediately while the task remains tracked in TaskManager. If the Engine
@@ -2365,6 +2378,9 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope) {
         ts: envelope?.msg?.ts || null,
         clientMessageId: envelope?.msg?.meta?.clientMessageId || null,
       });
+      pending.persistedMessage = envelope?._persistedUserMessage || null;
+      pending.persisted = Boolean(pending.persistedMessage);
+      pending.causalRootId = envelope?._causalRootId || pending.persistedMessage?.id || null;
       thread.updatedAt = Date.now();
       try {
         sendSessionEvent({
@@ -5964,6 +5980,9 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         // would render the user's prompt N times.
         userAlreadyPersisted: true,
         currentUserMessage: inboundEnvelope?._persistedUserMessage || null,
+        // Persist exact human ownership, not the most recently written prompt:
+        // other VP threads can accept a new request before this one responds.
+        causalRootId: inboundEnvelope?._causalRootId || inboundEnvelope?._persistedUserMessage?.id || null,
         askUser: ({ question, options }, toolCall = null) => new Promise((resolve, reject) => {
           const requestId = `ask_${randomUUID()}`;
           const signal = vpAbort.signal;
@@ -6366,6 +6385,9 @@ function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistan
  */
 function persistInboundMessageOnceByMsgId({ envelope = null, msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments, quote, internal = false, ts = null, clientMessageId = null }) {
   if (!session?.conversationStore) return false;
+  // A related input is already durable on its original thread. Rescuing it
+  // must retain that exact row even if routing chooses another thread.
+  if (envelope?._inboundAlreadyPersisted && envelope._persistedUserMessage?.sessionId === sessionId) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
   // `if (persistedMsgId)`); refusing here keeps the helper's contract
@@ -6425,7 +6447,10 @@ function persistInboundMessageOnceByMsgId({ envelope = null, msgId, text, sessio
     if (persistRole === 'assistant' && speakerVpId && typeof speakerVpId === 'string') {
       record.speakerVpId = speakerVpId;
     }
-    if (internal) record.internal = true;
+    if (internal) {
+      record.internal = true;
+      if (envelope?._causalRootId) record.causalRootId = envelope._causalRootId;
+    }
     if (persistRole === 'user' && Array.isArray(attachments) && attachments.length > 0) {
       record.attachments = attachments;
     }
