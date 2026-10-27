@@ -22,7 +22,7 @@ agent/yeaft/
   sub-agent/            child-agent runner, logs, liveness, notifications
   tasks/                persistent background shell jobs
   work-center/          WorkItem/Action/Run planner, store, watcher, runner
-  tool-folding/         turn reflection and long tool-arc folding
+  tool-folding/         execution log, duplicate hints, legacy reflection helpers
   history-window.js     deterministic provider history window
   dream/                retained, disabled maintenance implementation
   archive/              large/raw tool-result archive helpers
@@ -37,7 +37,7 @@ A normal VP turn follows this shape. `history-window.js` is deterministic and ne
 2. **Build context** — combine the system prompt, VP persona, deterministic budgeted history window, current user content, and supported attachments. The Web Session source is a bounded disposable runtime cache; the complete transcript stays in ConversationStore, and no LLM conversation summary is loaded from disk.
 3. **Stream LLM** — select the configured provider/model and call either the Anthropic Messages or OpenAI Responses adapter.
 4. **Execute tools** — run allowed calls through `ToolRegistry`, append result blocks, and continue streaming.
-5. **Fold long arcs** — periodically reflect tool batches and summarize long turns while retaining raw output in persistence/debug paths.
+5. **Compact under pressure** — when current-turn results exceed the actual model-window budget (including system, schemas, and output reserve), compact older tool-result text in the provider copy first. Preserve tool pairing and raw persistence/debug output; no periodic reflection or extra in-turn summary call runs. If still oversized, use deterministic protocol-unit eviction and bounded overflow recovery.
 6. **Finish** — persist messages, usage, traces, task state, and terminal result; acknowledge injected notifications; optionally produce the separate post-turn compact for a future history window.
 7. **Recover** — auto-continue `max_tokens` responses within the configured limit; surface context errors without a hidden summary call; use an eligible fallback model for classified retryable failures.
 

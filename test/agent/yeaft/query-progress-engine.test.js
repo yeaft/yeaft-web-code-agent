@@ -8,7 +8,8 @@ import { buildMcpFlattenedTools } from '../../../agent/yeaft/tools/mcp-tools.js'
 import discoverTools from '../../../agent/yeaft/tools/discover-tools.js';
 import presentResponse from '../../../agent/yeaft/tools/present-response.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -72,77 +73,171 @@ describe('query progress Engine boundaries', () => {
     expect(missingEvents.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'no_progress' })]);
   });
 
-  it('allows long fresh investigations, reports exact dispatch count and supplies durable history boundary', async () => {
-    // T1 is synchronous query work even when its content fails validation or
-    // the provider rejects after reporting usage. Accounting remains independent.
-    for (const variant of ['ready', 'auth-retry', 'included-cache', 'separate-cache', 'empty', 'fold-error',
-      'error-with-usage', 'error-no-usage', 'error-auth-retry-with-usage']) {
-      const accounted = [];
-      let shared;
-      let reflections = 0;
-      const usage = { inputTokens: 1000, outputTokens: 100,
-        ...(['included-cache', 'separate-cache'].includes(variant)
-          ? { cacheReadTokens: 800, cacheWriteTokens: 50, cacheTokensAreIncludedInInput: variant === 'included-cache' } : {}) };
-      const { engine, requests, store } = setup(n => [
-        { type: 'usage', inputTokens: 10, outputTokens: 1 },
-        ...(n <= 30 ? [call(`r${n}`, 'Read', { offset: n }), stop]
-          : [{ type: 'text_delta', text: 'verified output' }, { type: 'stop', stopReason: 'end_turn' }]),
-      ], { decorateAdapter: adapter => {
-        adapter.call = async params => {
-          if (params.system === 'child-side-call') return { text: 'child answer', usage: { inputTokens: 7000, outputTokens: 700 } };
-          reflections++;
-          // Router reuses these params after a 401 credential refresh: each
-          // fetch invokes the hook. Other variants exercise legacy fallback.
-          if (variant === 'ready' || variant.includes('auth-retry')) params.onRequestStart?.();
-          if (variant.includes('auth-retry')) params.onRequestStart?.();
-          if (variant.startsWith('error-')) {
-            throw Object.assign(new Error('reflection failed'), variant.endsWith('with-usage') ? { usage } : {});
-          }
-          return { text: variant === 'empty' ? '' : '# Reflection\nFresh pages verified.', usage };
-        };
-        shared = withUsageAccounting(adapter, value => accounted.push(value));
-        return shared;
-      } });
-      // The same paid call also counts if publishing the folded range fails.
-      store.foldMessages = (_, record) => {
-        if (variant === 'fold-error') throw new Error('fold storage unavailable');
-        return store.append(record);
+  it('keeps long fresh investigations free of reflection and isolates child accounting', async () => {
+    const accounted = [];
+    let shared;
+    let reflections = 0;
+    let folds = 0;
+    const { engine, requests, store, rows } = setup(n => [
+      { type: 'usage', inputTokens: 10, outputTokens: 1 },
+      ...(n <= 35 ? [call(`r${n}`, 'Read', { offset: n }), stop]
+        : [{ type: 'text_delta', text: 'verified output' }, { type: 'stop', stopReason: 'end_turn' }]),
+    ], { decorateAdapter: adapter => {
+      adapter.call = async params => {
+        if (params.system === 'child-side-call') return { text: 'child answer', usage: { inputTokens: 7000, outputTokens: 700 } };
+        reflections++;
+        throw new Error('reflection must not run');
       };
-      const contexts = [];
-      engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async (input, ctx) => {
-        contexts.push(ctx);
-        if (input.offset === 1) {
-          // A child Engine uses the same accounting adapter: its usage must not
-          // leak into this query's counters through an adapter-wide observer.
-          const child = new Engine({ adapter: { async *stream(params) {
-            const result = await shared.call({ ...params, system: 'child-side-call' });
-            yield { type: 'usage', ...result.usage };
-            yield { type: 'text_delta', text: result.text };
-            yield { type: 'stop', stopReason: 'end_turn' };
-          } }, trace: new NullTrace(), config: { model: 'test-model', maxOutputTokens: 1024 } });
-          const childEvents = await consume(child, { isSubAgent: true, threadId: 'child' });
-          expect(childEvents.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ modelRequests: 1, inputTokens: 7000, outputTokens: 700 });
-        }
-        return `page ${input.offset}`;
-      } });
+      shared = withUsageAccounting(adapter, value => accounted.push(value));
+      return shared;
+    } });
+    store.foldMessages = () => { folds++; throw new Error('history must not be folded'); };
+    const contexts = [];
+    engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async (input, ctx) => {
+      contexts.push(ctx);
+      if (input.offset === 1) {
+        const child = new Engine({ adapter: { async *stream(params) {
+          const result = await shared.call({ ...params, system: 'child-side-call' });
+          yield { type: 'usage', ...result.usage };
+          yield { type: 'text_delta', text: result.text };
+          yield { type: 'stop', stopReason: 'end_turn' };
+        } }, trace: new NullTrace(), config: { model: 'test-model', maxOutputTokens: 1024 } });
+        const childEvents = await consume(child, { isSubAgent: true, threadId: 'child' });
+        expect(childEvents.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ modelRequests: 1, inputTokens: 7000, outputTokens: 700 });
+      }
+      return `page ${input.offset}`;
+    } });
+    const events = await consume(engine);
+    expect(requests).toHaveLength(36);
+    expect(reflections).toBe(0);
+    expect(folds).toBe(0);
+    expect(events.filter(e => e.type === 'reflection')).toEqual([]);
+    expect(events.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ stage: 'running', modelRequests: 36, inputTokens: 360, outputTokens: 36 });
+    expect(requests.at(-1).messages.filter(m => m.role === 'tool')).toHaveLength(35);
+    expect(rows.filter(m => m.role === 'tool')).toHaveLength(35);
+    expect(accounted).toHaveLength(37); // 36 streams and one child, no maintenance call.
+    expect(contexts.every(ctx => ctx.historyBeforeSeq === 1 && typeof ctx.queryTurnId === 'string')).toBe(true);
+    expect(events.filter(e => e.type === 'turn_end' && e.terminal)[0]).toMatchObject({ stopReason: 'end_turn' });
+    expect(events.find(e => e.type === 'turn_close')).toMatchObject({ inputTokens: 360, outputTokens: 36 });
+    // The old asynchronous T2 threshold must not produce a late fold or call.
+    await consume(engine);
+    expect(reflections).toBe(0);
+    expect(folds).toBe(0);
+  });
+
+  it('compacts tool results under window pressure and retries overflow without replay or durable folding', async () => {
+    const { LLMContextError } = await import('../../../agent/yeaft/llm/adapter.js');
+    const { estimateMessagesTokens } = await import('../../../agent/yeaft/history-window.js');
+    const root = await mkdtemp(join(tmpdir(), 'yeaft-pressure-compact-'));
+    const config = { model: 'test-model', maxOutputTokens: 1024, maxContextTokens: 24000,
+      yeaftDir: root, archive: { toolResults: false } };
+    try {
+      let executions = 0;
+      let summaryCalls = 0;
+      const { engine, requests, rows, store } = setup(n => {
+        if (n <= 8) return [call(`large-${n}`, 'Read', { offset: n }), stop];
+        if (n === 9) throw new LLMContextError('provider actual context limit');
+        return [{ type: 'text_delta', text: 'verified compact recovery' }, { type: 'stop', stopReason: 'end_turn' }];
+      }, {
+        config,
+        decorateAdapter: adapter => { adapter.call = async () => { summaryCalls++; throw Error('no reflection'); }; return adapter; },
+      });
+      let folds = 0;
+      store.foldMessages = () => { folds++; };
+      const result = offset => `HEAD page ${offset}\n${'x'.repeat(28000)}\nTAIL page ${offset}`;
+      engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async ({ offset }) => { executions++; return result(offset); } });
       const events = await consume(engine);
-      expect(requests, variant).toHaveLength(31);
-      expect(reflections, variant).toBe(1);
-      const inputTokens = variant === 'error-no-usage' ? 310 : variant === 'separate-cache' ? 2160 : 1310;
-      const outputTokens = variant === 'error-no-usage' ? 31 : 131;
-      const progress = events.filter(e => e.type === 'query_progress');
-      const modelRequests = variant.includes('auth-retry') ? 33 : 32;
-      expect(progress.at(-1), variant).toMatchObject({ stage: 'running', modelRequests, inputTokens, outputTokens });
-      const reflectionEnd = events.findIndex(e => e.type === 'reflection' && e.status !== 'pending');
-      expect(events[reflectionEnd], variant).toMatchObject({ status:
-        ['empty', 'fold-error'].includes(variant) || variant.startsWith('error-') ? 'error' : 'ready' });
-      expect(events[reflectionEnd + 1], variant).toMatchObject({ type: 'query_progress', modelRequests: modelRequests - 1,
-        inputTokens: inputTokens - 10, outputTokens: outputTokens - 1 });
-      expect(accounted, variant).toHaveLength(33); // 31 streams, one T1, one child — no extra billing.
-      expect(contexts.every(ctx => ctx.historyBeforeSeq === 1 && typeof ctx.queryTurnId === 'string')).toBe(true);
-      expect(events.filter(e => e.type === 'turn_end' && e.terminal)[0]).toMatchObject({ stopReason: 'end_turn' });
-      expect(events.find(e => e.type === 'turn_close')).toMatchObject({ inputTokens: 310, outputTokens: 31 });
+      expect(executions).toBe(8);
+      expect(requests).toHaveLength(10);
+      expect(summaryCalls).toBe(0);
+      expect(folds).toBe(0);
+      expect(events.some(e => e.type === 'reflection')).toBe(false);
+      flushAgentPerfTrace(config);
+      const traceDir = join(root, 'perf-traces');
+      const traceFiles = await readdir(traceDir);
+      const traceText = (await Promise.all(traceFiles.map(name => readFile(join(traceDir, name), 'utf8')))).join('\n');
+      const compactTraces = traceText.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+        .filter(row => row.phase === 'tool_result_compact').map(row => row.detail);
+      expect(traceText).not.toContain('HEAD page');
+      expect(compactTraces.length).toBeGreaterThan(0);
+      expect(compactTraces.at(-1)).toMatchObject({ recoveryAttempt: 1 });
+      expect(compactTraces.every(item => item.compactedToolResults > 0 && item.estimatedTokens <= item.contextWindow)).toBe(true);
+      expect(estimateMessagesTokens(requests[9].messages)).toBeLessThan(estimateMessagesTokens(requests[8].messages));
+      const toolRows = rows.filter(row => row.role === 'tool');
+      expect(toolRows).toHaveLength(8);
+      expect(toolRows.map(row => row.content)).toEqual(Array.from({ length: 8 }, (_, i) => result(i + 1)));
+      expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+    } finally {
+      flushAgentPerfTrace(config);
+      await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('continues past deeply nested tool JSON without a sampling crash or maintenance call', async () => {
+    const deep = '['.repeat(3_000) + '"' + 'x'.repeat(10_000) + '"' + ']'.repeat(3_000);
+    let summaryCalls = 0;
+    const { engine, requests, rows } = setup(n => n <= 2
+      ? [call(`json-${n}`, 'Read', { offset: n }), stop]
+      : [{ type: 'text_delta', text: 'continued safely' }, { type: 'stop', stopReason: 'end_turn' }], {
+      config: { model: 'test-model', maxOutputTokens: 1024, maxContextTokens: 8000, archive: { toolResults: false } },
+      decorateAdapter: adapter => { adapter.call = async () => { summaryCalls++; throw Error('no reflection'); }; return adapter; },
+    });
+    engine.registerTool({ name: 'Read', isReadOnly: () => true,
+      execute: async ({ offset }) => offset === 1 ? deep : 'y'.repeat(15_000) });
+    const events = await consume(engine);
+    expect(requests).toHaveLength(3);
+    expect(summaryCalls).toBe(0);
+    expect(rows.find(row => row.role === 'tool').content).toBe(deep);
+    expect(events.filter(event => event.type === 'turn_end' && event.terminal))
+      .toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+  });
+
+  it.each([24000, 4000])('only consumes async evidence actually delivered after compaction (window %s)', async window => {
+    const consumed = [];
+    const undelivered = [];
+    const evidence = `BACKGROUND_HEAD\n${'e'.repeat(27000)}\nBACKGROUND_TAIL`;
+    let run;
+    let ackedBeforeDispatch;
+    run = setup(n => {
+      if (n === 1) return [call('start', 'Start'), stop];
+      if (n <= 8) return [call(`read-${n}`, 'Read', { offset: n }), stop];
+      if (n === 9) {
+        expect(run.engine.notifyAsyncTaskCompleted('owned', evidence)).toBe(true);
+        ackedBeforeDispatch = consumed.length;
+      }
+      return [{ type: 'text_delta', text: 'handled current evidence' }, { type: 'stop', stopReason: 'end_turn' }];
+    }, {
+      config: { model: 'test-model', maxOutputTokens: 1024, maxContextTokens: window, archive: { toolResults: false } },
+    });
+    run.engine.setAsyncTaskCoordinator({
+      onConsumed: id => consumed.push(id),
+      onUndelivered: id => undelivered.push(id),
+    });
+    run.engine.registerTool({ name: 'Start', execute: async (_input, ctx) => {
+      ctx.registerAsyncTask('owned');
+      return 'started';
+    } });
+    let executions = 0;
+    run.engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async ({ offset }) => {
+      executions++;
+      return `HEAD ${offset}\n${'x'.repeat(28000)}\nTAIL ${offset}`;
+    } });
+    const events = await consume(run.engine);
+    expect(ackedBeforeDispatch).toBe(0);
+    expect(executions).toBe(7);
+    const finalRequest = run.requests.at(-1);
+    const includesEvidence = finalRequest.messages.some(message => typeof message.content === 'string' && message.content.includes(evidence));
+    if (window === 24000) {
+      expect(includesEvidence).toBe(true);
+      expect(consumed).toEqual(['owned']);
+      expect(undelivered).toEqual([]);
+    } else {
+      expect(includesEvidence).toBe(false);
+      expect(consumed).toEqual([]);
+      expect(undelivered).toEqual(['owned']);
+    }
+    expect(run.rows.find(row => row.role === 'tool' && row.toolCallId === 'start').content).toContain(evidence);
+    expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
   });
 
   it('never replays an uncertain side effect and retains a result for every rejected tool call', async () => {
