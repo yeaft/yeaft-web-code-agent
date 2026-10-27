@@ -40,7 +40,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // lifecycle/evidence/query-isolation/presentation, and 7 recent-stats/UI cases.
 // Historical failures and all existing safety checks remain visible.
 // +2 review regressions: web advice is not evidence; diagnostic credentials stay private.
-export const TEST_CASE_LIMIT = 657;
+// +19 reviewed Session history boundaries: 10 durable fork/merge identity,
+// ordering/reference/rollback cases, 6 active-ingress/task runtime cases and
+// 3 browser capability, correlation and navigation cases. No prior tests removed.
+export const TEST_CASE_LIMIT = 676;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

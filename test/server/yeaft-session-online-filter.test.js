@@ -218,12 +218,164 @@ describe('Yeaft Session online Agent filtering', () => {
       expect(projects.contextForSession(owner.id, 'agent-a', 'source').projectId).toBe(project.id);
       expect(persistedSession.get(owner.id, 'agent-a', 'target').projectId).toBe(movedProject.id);
       expect(otherTab.sent).toHaveLength(1);
+
+      // Merge inherits only the initiator's authoritative Project and cannot
+      // reuse either source identity. The two sources keep their membership.
+      const mergeProject = projects.create(owner.id, 'Other branch Project');
+      projects.moveSession(owner.id, { agentId: 'agent-a', sessionId: 'other-source', projectId: mergeProject.id });
+      const mergeResult = { ...forkResult('source', 'merged'), op: 'merge', otherSessionId: 'other-source' };
+      await handleAgentOutput('agent-a', agent, mergeResult);
+      expect(ownerTab.sent.at(-1)).toMatchObject({ ...mergeResult, agentId: 'agent-a', projectsAuthoritative: true });
+      expect(persistedSession.get(owner.id, 'agent-a', 'merged').projectId).toBe(project.id);
+      expect(projects.contextForSession(owner.id, 'agent-a', 'source').projectId).toBe(project.id);
+      expect(projects.contextForSession(owner.id, 'agent-a', 'other-source').projectId).toBe(mergeProject.id);
+      for (const target of ['source', 'other-source']) {
+        await handleAgentOutput('agent-a', agent, { ...mergeResult, sessionId: target, session: { id: target, name: 'Invalid' } });
+        expect(ownerTab.sent.at(-1)).toMatchObject({ ok: false, error: { code: 'project_inheritance_failed' } });
+      }
+      projects.moveSession(owner.id, { agentId: 'agent-a', sessionId: 'merged', projectId: movedProject.id });
+      await handleAgentOutput('agent-a', agent, mergeResult);
+      expect(persistedSession.get(owner.id, 'agent-a', 'merged').projectId).toBe(movedProject.id);
     } finally {
       db.exec('DROP TRIGGER IF EXISTS fail_fork_inheritance');
       observer.close();
       sendToWebClient.mockImplementation(async (client, msg) => { client.sent.push(msg); });
     }
   });
+  it('scopes both merge inputs to the requested owner and Agent, never currentAgent or browser Project metadata', async () => {
+    CONFIG.skipAuth = false;
+    const owner = userDb.getOrCreate('merge-route-owner');
+    const otherOwner = userDb.getOrCreate('merge-route-other');
+    const client = { userId: owner.id, currentAgent: 'wrong-agent', sent: [] };
+    agents.set('merge-agent', { ownerId: owner.id, ws: { readyState: 1 }, capabilities: ['session_merge'] });
+    sessions.upsertFromSnapshot(owner.id, 'merge-agent', { id: 'merge-source' });
+    sessions.upsertFromSnapshot(owner.id, 'merge-agent', { id: 'merge-other' });
+    sessions.upsertFromSnapshot(owner.id, 'other-agent', { id: 'different-agent-only' });
+    sessions.upsertFromSnapshot(otherOwner.id, 'merge-agent', { id: 'foreign-owner-only' });
+    const request = {
+      type: 'yeaft_merge_sessions', agentId: 'merge-agent', requestId: 'merge-route',
+      sessionId: 'merge-source', otherSessionId: 'merge-other', name: 'Merged',
+    };
+    const check = vi.fn(async () => { throw new Error('Uncorrelated access checker must not run'); });
+    expect(await handleClientConversation('merge-client', client, {
+      ...request, projectId: 'forged-project', otherAgentId: 'other-agent', ownerId: otherOwner.id,
+    }, check)).toBe(true);
+    expect(forwardToAgent).toHaveBeenCalledExactlyOnceWith('merge-agent', {
+      type: request.type, requestId: request.requestId, sessionId: request.sessionId,
+      otherSessionId: request.otherSessionId, name: request.name,
+    });
+    expect(client.sent).toEqual([]);
+    forwardToAgent.mockClear();
+    for (const field of ['sessionId', 'otherSessionId']) {
+      const denied = { ...request, [field]: field === 'sessionId' ? 'foreign-owner-only' : 'different-agent-only' };
+      await handleClientConversation('merge-client', client, denied, check);
+      expect(client.sent.at(-1)).toMatchObject({
+        type: 'session_crud_result', op: 'merge', requestId: request.requestId,
+        agentId: request.agentId, sourceSessionId: denied.sessionId, otherSessionId: denied.otherSessionId,
+        ok: false, error: { code: 'agent_access_denied' },
+      });
+    }
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(client.sent).toHaveLength(2);
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('correlates merge failures when no Agent is selected, missing, or offline', async () => {
+    CONFIG.skipAuth = false;
+    agents.set('merge-offline', { ownerId: 'user-1', ws: { readyState: 3 }, capabilities: ['session_merge'] });
+    const client = { userId: 'user-1', sent: [] };
+    for (const agentId of [null, 'missing-agent', 'merge-offline']) {
+      client.sent = [];
+      await handleClientConversation('merge-client', client, {
+        type: 'yeaft_merge_sessions', agentId, requestId: 'merge-unavailable',
+        sessionId: 'source', otherSessionId: 'other',
+      }, allow);
+      expect(client.sent).toEqual([{
+        type: 'session_crud_result', op: 'merge', ok: false, requestId: 'merge-unavailable',
+        agentId, sourceSessionId: 'source', otherSessionId: 'other',
+        error: { code: 'agent_unavailable', message: expect.any(String) },
+      }]);
+    }
+    expect(forwardToAgent).not.toHaveBeenCalled();
+  });
+
+  it('rejects foreign-Agent merges with one correlated result instead of the generic ACL error', async () => {
+    CONFIG.skipAuth = false;
+    agents.set('foreign-merge-agent', { ownerId: 'user-2', ws: { readyState: 1 }, capabilities: ['session_merge'] });
+    const client = { userId: 'user-1', sent: [] };
+    const check = vi.fn(async () => false);
+    await handleClientConversation('merge-client', client, {
+      type: 'yeaft_merge_sessions', agentId: 'foreign-merge-agent', requestId: 'merge-denied',
+      sessionId: 'source', otherSessionId: 'other',
+    }, check);
+    expect(client.sent).toEqual([{
+      type: 'session_crud_result', op: 'merge', ok: false, requestId: 'merge-denied',
+      agentId: 'foreign-merge-agent', sourceSessionId: 'source', otherSessionId: 'other',
+      error: { code: 'agent_access_denied', message: expect.any(String) },
+    }]);
+    expect(check).not.toHaveBeenCalled();
+    expect(forwardToAgent).not.toHaveBeenCalled();
+  });
+
+  it('rejects merge on an older Agent with the original request and both Session identities', async () => {
+    CONFIG.skipAuth = false;
+    agents.set('old-merge-agent', { ownerId: 'user-1', ws: { readyState: 1 } });
+    const client = { userId: 'user-1', currentAgent: 'old-merge-agent', sent: [] };
+    await handleClientConversation('merge-client', client, {
+      type: 'unify_merge_sessions', requestId: 'merge-unsupported', sessionId: 'source', otherSessionId: 'other',
+    }, allow);
+    expect(client.sent).toEqual([{
+      type: 'session_crud_result', op: 'merge', ok: false, requestId: 'merge-unsupported',
+      agentId: 'old-merge-agent', sourceSessionId: 'source', otherSessionId: 'other',
+      error: { code: 'session_merge_unsupported', message: expect.any(String) },
+    }]);
+    expect(forwardToAgent).not.toHaveBeenCalled();
+  });
+
+  it('reports unsuccessful and thrown merge dispatches without leaving the request pending', async () => {
+    CONFIG.skipAuth = false;
+    const owner = userDb.getOrCreate('merge-dispatch-owner');
+    agents.set('merge-agent', { ownerId: owner.id, ws: { readyState: 1 }, capabilities: ['session_merge'] });
+    sessions.upsertFromSnapshot(owner.id, 'merge-agent', { id: 'dispatch-source' });
+    sessions.upsertFromSnapshot(owner.id, 'merge-agent', { id: 'dispatch-other' });
+    const client = { userId: owner.id, currentAgent: 'merge-agent', sent: [] };
+    forwardToAgent.mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('socket closed'));
+    for (const requestId of ['merge-false', 'merge-throw']) {
+      await handleClientConversation('merge-client', client, {
+        type: 'yeaft_merge_sessions', requestId, sessionId: 'dispatch-source', otherSessionId: 'dispatch-other',
+      }, allow);
+      expect(client.sent.at(-1)).toEqual({
+        type: 'session_crud_result', op: 'merge', ok: false, requestId,
+        agentId: 'merge-agent', sourceSessionId: 'dispatch-source', otherSessionId: 'dispatch-other',
+        error: { code: 'agent_unavailable', message: expect.any(String) },
+      });
+    }
+    expect(client.sent).toHaveLength(2);
+    expect(forwardToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the fork-from-turn capability guard without blocking whole-Session copies', async () => {
+    CONFIG.skipAuth = false;
+    const agent = { ownerId: 'user-1', ws: { readyState: 1 }, capabilities: ['session_merge'] };
+    agents.set('fork-agent', agent);
+    const client = { userId: 'user-1', currentAgent: 'fork-agent', sent: [] };
+    const copy = { type: 'yeaft_copy_session', requestId: 'fork-turn', sessionId: 'source' };
+    // Presence matters: even malformed/empty boundaries must never become full copies on old Agents.
+    await handleClientConversation('fork-client', client, { ...copy, throughTurnId: '' }, allow);
+    expect(client.sent).toEqual([{
+      type: 'session_crud_result', op: 'copy', requestId: copy.requestId, agentId: 'fork-agent', ok: false,
+      error: { code: 'session_fork_from_turn_unsupported', message: expect.any(String) },
+    }]);
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    await handleClientConversation('fork-client', client, copy, allow);
+    expect(forwardToAgent).toHaveBeenLastCalledWith('fork-agent', copy);
+    agent.capabilities.push('session_fork_from_turn');
+    await handleClientConversation('fork-client', client, { ...copy, throughTurnId: 'turn-1' }, allow);
+    expect(forwardToAgent).toHaveBeenLastCalledWith('fork-agent', { ...copy, throughTurnId: 'turn-1' });
+    expect(forwardToAgent).toHaveBeenCalledTimes(2);
+    expect(client.sent).toHaveLength(1);
+  });
+
   it('hydrates owner inventory as separate Agent slices and excludes disconnected Agents', async () => {
     CONFIG.skipAuth = false;
     agents.set('agent-a', { ws: { readyState: 1 }, ownerId: 'user-1', conversations: new Map() });

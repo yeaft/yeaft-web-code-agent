@@ -91,12 +91,14 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
     }
     return { ...event, sessions: decorateYeaftSessionsWithPinned(agentId, event.sessions) };
   }
-  // A fork is a new Session on the same Agent, not a new Project. Resolve
+  // A fork/merge is a new Session on the same Agent, not a new Project. Resolve
   // membership here (never from browser/Agent project metadata) before the
   // successful acknowledgement can focus the new Session in the browser.
-  if (event.ok && ownerId && op === 'copy' && event.sourceSessionId && event.session?.id) {
+  if (event.ok && ownerId && (op === 'copy' || op === 'merge') && event.sourceSessionId && event.session?.id) {
     try {
-      if (event.sourceSessionId === event.session.id) throw new Error('Fork must have a new Session identity');
+      if (event.sourceSessionId === event.session.id || event.otherSessionId === event.session.id) {
+        throw new Error('Fork/merge must have a new Session identity');
+      }
       transaction(() => {
         // Replayed acknowledgements must not undo a later user Project move.
         if (yeaftSessionDb.getForAgent(ownerId, agentId, event.session.id)) return;
@@ -104,13 +106,13 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
         yeaftProjectDb.inheritSessionProject(ownerId, agentId, event.sourceSessionId, event.session.id);
       })();
     } catch (e) {
-      console.warn('[Server] Fork Project inheritance failed:', e?.message || e);
+      console.warn('[Server] Session Project inheritance failed:', e?.message || e);
       return {
         ...event,
         ok: false,
         error: {
           code: 'project_inheritance_failed',
-          message: `Fork ${event.session.id} was created, but its Project could not be saved.`,
+          message: `${op === 'merge' ? 'Merged Session' : 'Fork'} ${event.session.id} was created, but its Project could not be saved.`,
         },
       };
     }

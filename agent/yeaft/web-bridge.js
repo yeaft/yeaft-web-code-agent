@@ -3833,7 +3833,7 @@ export function handleYeaftMergeSessions(msg) {
     sendSessionCrudResult({ op: 'merge', requestId, ok: true, sourceSessionId: sessionId, otherSessionId, session });
     sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendSessionCrudResult({ op: 'merge', requestId, ok: false, error: sessionErrorPayload(err) });
+    sendSessionCrudResult({ op: 'merge', requestId, ok: false, sourceSessionId: sessionId, otherSessionId, error: sessionErrorPayload(err) });
   }
 }
 
