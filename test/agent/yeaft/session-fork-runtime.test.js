@@ -261,7 +261,7 @@ it('keeps model_reentry tasks in the epoch after drivers finish, while status-on
   handleYeaftMergeSessions({ sessionId: 'session_other', otherSessionId: id, requestId: 'busy-merge' });
   expect(result('busy-merge')).toMatchObject({ op: 'merge', ok: false, error: { code: 'session_running', sessionId: id } });
   expect(inventory()).toEqual(beforeBusyMerge);
-  runtime.taskManager.completeTask(id, task.id, { status: 'completed', summary: 'ready' });
+  runtime.taskManager.completeTask(id, task.id, { status: 'succeeded', summary: 'ready' });
   // Completion releases the task lease only after queuing the rescue microtask.
   expectFork(copy('task-completion-gap'), prefix);
   await waitCalls(2);
@@ -270,6 +270,21 @@ it('keeps model_reentry tasks in the epoch after drivers finish, while status-on
   expectFork(copy('task-reentry'), prefix);
   calls[1].gate.resolve();
   await __testDrainVpDrivers();
+  // The real sub-agent runner refreshes the terminal log after completeTask.
+  // Completed, failed and cancelled tasks must not resurrect the activity epoch.
+  runtime.taskManager.refreshTaskLog(id, task.id);
+  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
+  for (const status of ['failed', 'cancelled']) {
+    const terminalTask = runtime.taskManager.startTask({ sessionId: id, ownerVpId: 'alpha', resultDelivery: 'model_reentry', source: { threadId: calls[0].threadId } });
+    const callCount = calls.length;
+    runtime.taskManager.completeTask(id, terminalTask.id, { status, summary: status });
+    runtime.taskManager.refreshTaskLog(id, terminalTask.id);
+    await waitCalls(callCount + 1);
+    calls.at(-1).gate.resolve();
+    await __testDrainVpDrivers();
+    runtime.taskManager.refreshTaskLog(id, terminalTask.id);
+    expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
+  }
   const statusOnly = runtime.taskManager.startTask({ sessionId: id, ownerVpId: 'alpha', resultDelivery: 'status_only' });
   expect(runtime.taskManager.listActiveTasks(id).map(task => task.id)).toEqual([statusOnly.id]);
   expect(__testHooks.sessionHasActiveWork(id)).toBe(false);

@@ -567,6 +567,13 @@ function trackModelReentryActivity(event) {
   if (!task?.sessionId || !task?.ownerVpId || taskResultDeliveryFor(task) !== TASK_RESULT_DELIVERY.MODEL_REENTRY) return null;
   const key = `${task.sessionId}::${task.id}`;
   let release = modelReentryActivity.get(key);
+  // Sub-agent final logging refreshes terminal tasks after completion. Such
+  // updates must never reacquire a lease: there is no later completion to free
+  // it. Still release an existing lease for any terminal-state notification.
+  if (isTerminalTaskStatus(task.status) && event.event !== 'completed') {
+    modelReentryActivity.delete(key);
+    return release || null;
+  }
   if (!release) {
     release = beginSessionActivity(task.sessionId, { unknownBoundary: event.event !== 'started' });
     modelReentryActivity.set(key, release);
