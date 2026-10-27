@@ -17,7 +17,7 @@
  * Reference: yeaft-yeaft-implementation-plan.md §3.1, §4 (Phase 2)
  */
 
-import { randomUUID, createHash } from 'crypto';
+import { randomUUID } from 'crypto';
 import { QueryProgress, progressReminder } from './query-progress.js';
 import { createWebResearchState } from './web-research.js';
 import { promises as fsp } from 'fs';
@@ -55,12 +55,6 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 // pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
 
-function foldingMessageKey(message) {
-  return message?._persistedMessageId || message?.id || createHash('sha256').update(JSON.stringify([
-    message?.role, message?.toolCallId, message?.toolCalls, message?.content,
-  ])).digest('hex');
-}
-
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
 import { bindProviderState } from './llm/provider-state.js';
 import {
@@ -71,8 +65,7 @@ import {
   removePostCompactIfSource,
   savePostCompact,
 } from './post-compact.js';
-import { DEFAULT_CONTEXT_WINDOW, getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens, resolveModel } from './models.js';
-import { lookupModelLimitSync } from './llm/models-dev.js';
+import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens, computeBudget } from './memory/budget.js';
@@ -84,18 +77,11 @@ import { createPluginSkillManager } from './plugins.js';
 import { extractDisplayImages, stripDisplayImageData } from './image-assets.js';
 import { acknowledgePendingNotifications, formatNotificationsForPrompt, peekPendingNotifications } from './sub-agent/notifications.js';
 import {
-  TOOL_LOOP_REFLECTION_INTERVAL,
-  TURN_SUMMARY_THRESHOLD,
   DUP_TOOL_THRESHOLD,
   ExecLog,
   buildEntry as buildExecLogEntry,
   argsHashOf,
-  runT1Reflection,
-  runT2Reflection,
-  buildFallbackStub,
-  collapseRangeToReflection,
   buildDuplicateReminder,
-  extractToolPairsFromRange,
 } from './tool-folding/index.js';
 
 /**
@@ -465,47 +451,6 @@ export function estimateProviderInputBreakdown({
   };
 }
 
-export const GROUP_CONTEXT_PRESSURE_RATIO = 0.8;
-
-export function shouldAllowGroupReflection({
-  system = '',
-  messages = [],
-  model = null,
-  config = {},
-  sessionId = null,
-} = {}) {
-  if (!sessionId) {
-    return {
-      allowed: true,
-      tokenEstimate: estimateMessagesTokens(system, messages),
-      threshold: 0,
-      contextWindow: null,
-      ratio: GROUP_CONTEXT_PRESSURE_RATIO,
-      usedFallbackContextWindow: false,
-    };
-  }
-  const contextWindow = resolveContextWindow(model, config);
-  // Telemetry: did the resolver hit either of its top non-default rungs?
-  // Used by `usedFallbackContextWindow` below — if neither models.dev nor
-  // the global config provided a number, we fell through to DEFAULT and
-  // callers may want to surface that to the user.
-  const hasModelsDevContext = !!lookupModelLimitSync(model, resolveModel(model)?.provider || null)?.context;
-  const hasConfigContext = Number.isFinite(config?.maxContextTokens) && config.maxContextTokens > 0;
-  const threshold = Math.floor(contextWindow * GROUP_CONTEXT_PRESSURE_RATIO);
-  const tokenEstimate = estimateMessagesTokens(system, messages);
-  const overThreshold = tokenEstimate >= threshold;
-  return {
-    // Group send defaults to no reflection. Trust the model until context
-    // pressure says we are near the model window.
-    allowed: overThreshold,
-    tokenEstimate,
-    threshold,
-    contextWindow,
-    ratio: GROUP_CONTEXT_PRESSURE_RATIO,
-    usedFallbackContextWindow: !hasModelsDevContext && !hasConfigContext && contextWindow === DEFAULT_CONTEXT_WINDOW,
-  };
-}
-
 // ─── Engine Events (superset of adapter events) ──────────────────
 
 /**
@@ -769,24 +714,8 @@ export class Engine {
    */
   #currentAbortCtrl = null;
 
-  /**
-   * PR-L — V7 Tool History Reflection state. Owned per Engine instance.
-   *
-   *   • `#execLog` — append-only log of every tool execution, used for
-   *     fallback-stub generation and duplicate-call detection. Persists
-   *     to <yeaftDir>/tool-log/<traceId>/<turnIdx>.jsonl when yeaftDir
-   *     is set; in-memory only otherwise.
-   *   • `#pendingT2` — Map<turnNumber, { promise, loopRange, count, ... }>
-   *     keyed by the turn number that triggered T2. The next query() call
-   *     non-blocking-checks this map; if the promise has resolved, the
-   *     prior turn's history is rewritten with the reflection. If still
-   *     pending, the engine falls back to the exec-log stub.
-   *   • `#reflectedTurns` — Set<turnNumber>; ensures T1 fires at most
-   *     once per reflection interval measured in tool loops.
-   */
+  /** Append-only tool execution diagnostics and query-local duplicate lookup. */
   #execLog = null;
-  #pendingT2 = new Map();
-  #reflectedTurns = new Set();
   #__queryCounter = 0;
 
   /** Derived post-response summaries, keyed by Session/VP/thread scope. */
@@ -1684,17 +1613,6 @@ export class Engine {
     return this.#conversationStore.append(this.#conversationRecord(message, context), { strict: context.strict === true });
   }
 
-  #persistFoldedRange(foldedMessages, reflection, context = {}) {
-    if (!this.#canPersistConversation() || typeof this.#conversationStore?.foldMessages !== 'function') return null;
-    const persistedRows = (foldedMessages || [])
-      .map(message => message?._persistedMessageId || message?.id)
-      .filter(id => typeof id === 'string' && id)
-      .map(id => ({ id }));
-    if (persistedRows.length === 0) return null;
-    const record = this.#conversationRecord(reflection, context);
-    return this.#conversationStore.foldMessages(persistedRows, record);
-  }
-
   #formatTaskResultUpdateContent(content) {
     if (typeof content === 'string') return content;
     try { return JSON.stringify(content); } catch { return String(content); }
@@ -1714,10 +1632,9 @@ export class Engine {
           msg && msg.role === 'tool' && msg.toolCallId === update.toolCallId
         ));
       if (!toolMsg) {
-        // T1/T2 may have folded the original tool row before this task
-        // completed. The reflection is the canonical history, so a late
-        // completion must not recreate the hidden tool arc on disk or in the
-        // provider transcript. This is engine control context, not a fresh
+        // Legacy histories may have folded the original tool row before this
+        // task completed. A late completion must not recreate the hidden tool arc
+        // on disk or in the provider transcript. This is engine control context, not a fresh
         // user-authored message; ConversationStore keeps it off the visible
         // transcript while retaining it for the next provider boundary.
         const contextContent = truncateToolResultIfNeeded(appendText, {
@@ -2536,64 +2453,10 @@ export class Engine {
       },
     ];
 
-    const groupReflectionGate = shouldAllowGroupReflection({
-      system: systemPrompt,
-      messages: conversationMessages,
-      model: this.#config.model,
-      config: this.#config,
-      sessionId,
-    });
-    const groupReflectionAllowed = groupReflectionGate.allowed === true;
-    if (sessionId && groupReflectionGate?.usedFallbackContextWindow) {
-      this.#trace.log?.('group_context_window_fallback', {
-        sessionId,
-        model: this.#config.model,
-        contextWindow: groupReflectionGate.contextWindow,
-        threshold: groupReflectionGate.threshold,
-      });
-    }
-
-    // PR-L: T2 carry-forward. If a previous query()'s end-of-turn
-    // reflection has resolved, rewrite that turn's range in
-    // `conversationMessages` to a single assistant reflection message.
-    // If still pending, fall back to the exec-log stub — non-blocking,
-    // never wait. This runs BEFORE the first adapter.stream so the
-    // upcoming call sees the rewritten history. Group send defaults to no
-    // reflection; only high context pressure (>=80% of model window)
-    // enables the carry-forward rewrite.
-    if (groupReflectionAllowed) {
-      yield* this.#applyPendingT2Reflections(conversationMessages, prompt, {
-        sessionId: runtimeSessionId,
-        model: this.#config.model,
-      });
-    }
-
-    // PR-L: track this query()'s tool-arc for reflection.
-    // `turnStartIdx` is where the current user message lives; the arc
-    // we may collapse spans (arcStartIdx .. last assistant/tool).
-    //
-    // Periodic T1 fires every 30 tool loops, not every 30 calls. A single
-    // provider batch can contain many parallel calls but is still one loop.
-    // track:
-    //   • `lastT1AtLoopCount` — tool-loop snapshot at the last T1
-    //     ATTEMPT (success OR error). Trigger when
-    //     `completedToolLoops - lastT1AtLoopCount >= interval`.
-    //   • `arcStartIdx` — first index of the current (uncollapsed)
-    //     tool arc. Initialised to turnStartIdx + 1; reset after each
-    //     successful T1 collapse to `conversationMessages.length`
-    //     (i.e. the slot the next assistant message will land in).
-    //   • `t1CollapsesDone` — count of T1 firings that ACTUALLY
-    //     rewrote history. Distinct from `lastT1AtLoopCount` because
-    //     the catch block bumps the latter to back off after a
-    //     transient reflector error WITHOUT having collapsed
-    //     anything. The T2 schedule check below is gated on this
-    //     counter (==0 means "no T1 ever rewrote the arc, T2 may
-    //     fall back at end_turn").
+    // Current-turn protocol stays on the live tape. Only the disposable
+    // provider copy is compacted when its actual model-window budget is full.
     const turnStartIdx = conversationMessages.length - 1;
     let queryToolCount = 0;
-    let lastT1AtLoopCount = 0;
-    let arcStartIdx = turnStartIdx + 1;
-    let t1CollapsesDone = 0;
     // Duplicate policy is scoped to one user query. Only successful, real
     // executions increment these counters; errors and cache reuse do not.
     const queryDuplicateCounts = new Map();
@@ -3064,7 +2927,7 @@ export class Engine {
         ));
         const toolSchemaTokens = toolDefs.length > 0
           ? approxTokens(JSON.stringify(toolDefs)) : 0;
-        const fittedRequest = fitProviderRequestToContext(wireMessages, {
+        const fitOptions = {
           contextWindow: Math.max(1, Math.floor(currentContextWindow * providerContextScale)),
           systemTokens: estimateMessagesTokens(systemPrompt, []),
           toolSchemaTokens,
@@ -3072,9 +2935,50 @@ export class Engine {
           historyMessageCount,
           historyTokenBudget: historyBudget,
           language: requestConfig.language,
+        };
+        let fittedRequest = fitProviderRequestToContext(wireMessages, fitOptions);
+        // A task can complete on an old tool row. Sampling or evicting that row
+        // must not acknowledge unseen evidence. Re-inject only missing pending
+        // deliveries as fresh provider-only notes, then check the final copy.
+        const taskDeliveries = Array.from(this.#pendingAsyncTaskConfirmIds).flatMap(taskId => {
+          const delivery = this.#acceptedAsyncTaskResults.get(taskId);
+          if (!delivery) return [];
+          const text = truncateToolResultIfNeeded(this.#formatTaskResultUpdateContent(delivery.content), {
+            toolName: 'async task result', language: requestConfig.language,
+          });
+          return [{ taskId, text }];
         });
+        const includesDelivery = (messages, text) => messages.some(message => (
+          this.#formatTaskResultUpdateContent(message.content).includes(text)
+        ));
+        const missingDeliveries = taskDeliveries.filter(({ text }) => !includesDelivery(fittedRequest.messages, text));
+        if (missingDeliveries.length > 0) {
+          fittedRequest = fitProviderRequestToContext([...wireMessages, ...missingDeliveries.map(({ text }) => ({
+            role: 'user', content: `[system note] Async task completion:\n${text}`,
+          }))], fitOptions);
+        }
         wireMessages = fittedRequest.messages;
+        const deliveredTaskIds = taskDeliveries.filter(({ text }) => includesDelivery(wireMessages, text))
+          .map(({ taskId }) => taskId);
         historyMessageCount = fittedRequest.meta.historyMessagesAfter;
+        if (fittedRequest.meta.compactedToolResults > 0) {
+          // Compaction invalidates file-read hints, not execution/reuse safety
+          // ledgers. The complete result remains in transcript/debug storage.
+          fileReadObservations.clear();
+          recordAgentPerfTrace(requestConfig, {
+            traceId: perfTraceId || queryTurnId,
+            phase: 'tool_result_compact',
+            sessionId: runtimeSessionId,
+            vpId: queryVpId,
+            turnId: queryTurnId,
+            threadId: runtimeThreadId,
+            detail: {
+              model: currentModel,
+              recoveryAttempt: contextOverflowRecoveryAttempts,
+              ...fittedRequest.meta,
+            },
+          });
+        }
         if (fittedRequest.meta.droppedHistoryMessages > 0
           || fittedRequest.meta.droppedCurrentMessages > 0
           || providerContextScale < 1) {
@@ -3085,49 +2989,6 @@ export class Engine {
             recoveryAttempt: contextOverflowRecoveryAttempts,
             ...fittedRequest.meta,
           });
-        }
-
-        // task-704b: pre-flight total-token guard. Even with the per-tool
-        // cap (registry.js: 10% of contextWindow per result), N tool
-        // results plus history can still breach the wire limit before we
-        // ever call adapter.stream(). Estimate the total token cost; if
-        // it exceeds PREFLIGHT_RATIO of the live context window, run an
-        // emergency archive sweep with `turnAgeMin: 0` so even
-        // current-turn-but-not-this-call bulky results get stubbed. The
-        // normal sweep above only stubs results older than 5 user turns
-        // — that's the wrong cadence when the *current* turn already has
-        // 4 large grep results.
-        //
-        // PREFLIGHT_RATIO = 0.85 leaves ~15% of the window for the model's
-        // own output tokens + tools metadata + light future history.
-        // The estimator (`estimateMessagesTokens`) is approxTokens
-        // (char/4 with CJK weighting) — good enough for a guard rail; a
-        // real tokenizer would be exact but adds a heavy dep.
-        if (scenario !== 'work-item' && this.#yeaftDir && (this.#config?.archive?.toolResults !== false)) {
-          const PREFLIGHT_RATIO = 0.85;
-          const threshold = Math.floor(currentContextWindow * PREFLIGHT_RATIO);
-          const estimate = estimateMessagesTokens(systemPrompt, wireMessages);
-          if (estimate > threshold) {
-            try {
-              const sweep = await archiveToolResults({
-                root: `${this.#yeaftDir}/memory`,
-                scopeDir: 'user',
-                messages: wireMessages,
-                turnAgeMin: 0,
-                lengthMin: this.#config?.archive?.lengthMin ?? 2000,
-              });
-              wireMessages = sweep.nextMessages;
-              if (sweep.archivedCount > 0) {
-                this.#trace.log?.('preflight_sweep', {
-                  archivedCount: sweep.archivedCount,
-                  archivedBytes: sweep.archivedBytes,
-                  estimateBefore: estimate,
-                  threshold,
-                  contextWindow: currentContextWindow,
-                });
-              }
-            } catch { /* best-effort */ }
-          }
         }
 
         // Freeze diagnostics only after every provider-only trim/sweep has
@@ -3225,7 +3086,7 @@ export class Engine {
         // is not delivery: fetch may remain pending and then be aborted before
         // the provider processes anything. Ack only after a normal stream end
         // that included the provider's terminal stop event.
-        const requestAsyncTaskIds = Array.from(this.#pendingAsyncTaskConfirmIds);
+        const requestAsyncTaskIds = deliveredTaskIds;
         let sawProviderStop = false;
         for await (const event of providerStream) {
           // task-325a (abort-stop fix): per-event abort short-circuit.
@@ -4211,80 +4072,8 @@ export class Engine {
         yield { type: 'turn_end', turnNumber, stopReason, threadId, terminal: true };
 
         // Message durability is handled incrementally before this terminal
-        // branch. There is no hidden end-of-turn LLM maintenance step.
-
-        // PR-L: T2 end-of-turn (asynchronous) reflection. Fires when the
-        // total tool count for this query() exceeds TURN_SUMMARY_THRESHOLD
-        // (8) AND no T1 has actually rewritten the arc yet. Kicks off the
-        // primary-model call without await; the next query()'s
-        // `#applyPendingT2Reflections` carries the result forward.
-        //
-        // Periodic-T1 fix: gate on `t1CollapsesDone === 0`, NOT
-        // `lastT1AtLoopCount === 0`. The catch block of T1 advances
-        // `lastT1AtLoopCount` after a reflector error to avoid
-        // tight-loop retries — but no collapse happened, so T2 should
-        // still be allowed to fall back at end_turn. Fowler-review
-        // critical finding.
-        if (groupReflectionAllowed && queryToolCount > TURN_SUMMARY_THRESHOLD && t1CollapsesDone === 0) {
-          const arcStart = turnStartIdx + 1;
-          const arcEnd = conversationMessages.length - 1;
-          if (arcEnd > arcStart) {
-            const { pairs, assistantText } = extractToolPairsFromRange(
-              conversationMessages, arcStart, arcEnd,
-            );
-            yield {
-              type: 'reflection',
-              turnId: queryTurnId,
-              loopNumber: turnNumber,
-              trigger: 't2',
-              status: 'pending',
-              loopRange: [arcStart, arcEnd],
-              toolCount: pairs.length,
-            };
-            const promise = runT2Reflection({
-              adapter: this.#adapter,
-              model: this.#config.model,
-              originalUserMsg: prompt,
-              toolPairs: pairs,
-              assistantText,
-              language: this.#config.language,
-              signal,
-              onComplete: diagnostic => this.#trace.log?.('tool_reflection', {
-                sessionId: runtimeSessionId, turnId: queryTurnId,
-                trigger: 't2', model: this.#config.model, ...diagnostic,
-              }),
-            });
-            // Detach: never await. The promise outlives this query() and
-            // the next call will pick it up (or use the fallback stub if
-            // it hasn't resolved by then).
-            // PR-L follow-up: latch a synchronously-readable ready flag
-            // and result on the info record so `#applyPendingT2Reflections`
-            // can decide ready-vs-pending without racing microtasks.
-            const info = {
-              promise,
-              loopRange: [arcStart, arcEnd],
-              // Absolute indexes do not survive history-window reconstruction.
-              arcKeys: conversationMessages.slice(arcStart, arcEnd + 1).map(foldingMessageKey),
-              arcRows: conversationMessages.slice(arcStart, arcEnd + 1).map(message => ({
-                role: message.role, id: message.id, _persistedMessageId: message._persistedMessageId,
-                toolCallId: message.toolCallId, toolCalls: message.toolCalls?.map(call => ({ id: call.id })),
-              })),
-              count: pairs.length,
-              originalUserMsg: prompt,
-              originatingTurnId: queryTurnId,
-              causalRootId,
-              executionOrigin,
-              ready: false,
-              result: null,
-              error: null,
-            };
-            promise.then(
-              (v) => { info.ready = true; info.result = v; },
-              (err) => { info.ready = true; info.error = err; },
-            );
-            this.#pendingT2.set(queryNumber, info);
-          }
-        }
+        // branch. No reflection or durable history fold runs here; the separate
+        // post-response compact is scheduled only after turn_close delivery.
 
         break;
       }
@@ -4415,7 +4204,6 @@ export class Engine {
       // break out of the outer while-loop cleanly once the current
       // tool batch finishes reporting.
       let abortedDuringTools = false;
-      let batchHasUnseenImages = false;
       /** @type {string[]} */
       const pendingDupReminders = [];
       let terminateAfterDuplicateBatch = false;
@@ -4948,7 +4736,6 @@ export class Engine {
           toolName: tc.name,
           language: this.#config?.language,
         });
-        if (modelImages.length > 0) batchHasUnseenImages = true;
         const toolMessage = {
           role: 'tool',
           toolCallId: tc.id,
@@ -5090,10 +4877,8 @@ export class Engine {
       // clean wire shape. Used by `route_forward` to hand off control
       // to other VPs without continuing to generate.
       //
-      // Order matters: this runs BEFORE T1 reflection (which would
-      // collapse the arc into a summary that's only valuable across
-      // multi-iteration tool loops) and BEFORE the abortedDuringTools
-      // check (so a clean handoff doesn't get reported as 'aborted').
+      // A clean handoff must precede the abortedDuringTools check so it
+      // does not get reported as 'aborted'.
       if (endTurnRequested && !toolBatchBarrier) {
         if (pendingSubAgentNotifs.length > 0) {
           acknowledgePendingNotifications(notifScope, pendingSubAgentNotifs.map(n => n.id));
@@ -5110,180 +4895,6 @@ export class Engine {
           terminal: true,
         };
         break;
-      }
-
-      // PR-L: T1 in-turn (synchronous) reflection. Fires every 30 completed
-      // tool loops. A provider response containing many parallel tool calls is
-      // one loop, not many. Generates a markdown reflection
-      // over the assistant+tool arc since the last T1 firing (or
-      // since the user prompt for the first batch) and rewrites that
-      // range to a SINGLE synthetic user message before the next
-      // adapter.stream() runs.
-      //
-      // Loop semantics:
-      //   - First interval: arcStartIdx = turnStartIdx + 1.
-      //   - Each subsequent interval: arcStartIdx is updated to the slot
-      //     right after the just-inserted reflection message; fires
-      //     again whenever 30 more tool loops have completed.
-      //   - The dedup Set key includes the loop count so each interval
-      //     within the same query gets a distinct entry — without
-      //     this the second batch would be silently skipped.
-      const completedToolLoops = toolLoopTurns + 1;
-      const t1BatchDue = completedToolLoops - lastT1AtLoopCount
-        >= TOOL_LOOP_REFLECTION_INTERVAL;
-      // Text-only reflection cannot consume visual input. Defer folding until
-      // the primary provider has received this image batch at least once.
-      if (t1BatchDue && !batchHasUnseenImages && !toolBatchBarrier
-          && !abortedDuringTools && !signal?.aborted) {
-        const t1DedupKey = `${queryNumber}:t1-loop:${completedToolLoops}`;
-        if (this.#reflectedTurns.has(t1DedupKey)) {
-          // Defensive: should never hit since t1BatchDue gates re-entry
-          // and queryNumber namespaces queries. Kept as belt-and-
-          // suspenders against any future external mutation of the
-          // cursor (or a re-entrant query() that this code doesn't
-          // anticipate).
-        } else {
-          this.#reflectedTurns.add(t1DedupKey);
-        const batchStart = arcStartIdx;
-        const batchEnd = conversationMessages.length - 1;
-        try {
-          const { pairs, assistantText } = extractToolPairsFromRange(
-            conversationMessages, batchStart, batchEnd,
-          );
-          yield {
-            type: 'reflection',
-            turnId: queryTurnId,
-            threadId,
-            loopNumber: turnNumber,
-            trigger: 't1',
-            status: 'pending',
-            loopRange: [batchStart, batchEnd],
-            toolCount: pairs.length,
-          };
-          // Observe only this synchronous query-owned call. Do not tap the
-          // shared accounting adapter (also used by children), or feed these
-          // costs into the main loop's token/dispatch budget. Capture raw usage
-          // before reflection diagnostics normalize away cache-inclusion flags.
-          const reflectionAdapter = typeof this.#adapter.call === 'function' ? {
-            call: async params => {
-              let dispatches = 0;
-              let result;
-              let failure;
-              try {
-                result = await this.#adapter.call({
-                  ...params,
-                  onRequestStart: (...args) => {
-                    dispatches++;
-                    queryProgress.requestStarted();
-                    params.onRequestStart?.(...args);
-                  },
-                });
-                return result;
-              } catch (error) {
-                failure = error;
-                throw error;
-              } finally {
-                // Native adapters report every dispatch, including a refreshed
-                // credential retry. Legacy adapters without the hook count once.
-                if (dispatches === 0) queryProgress.requestStarted();
-                const usage = result?.usage || failure?.usage;
-                if (usage) queryProgress.usageObserved(usage);
-              }
-            },
-          } : this.#adapter;
-          const { content, durationMs } = await runT1Reflection({
-            adapter: reflectionAdapter,
-            model: this.#config.model,
-            originalUserMsg: prompt,
-            toolPairs: pairs,
-            assistantText,
-            language: this.#config.language,
-            signal,
-            onComplete: diagnostic => this.#trace.log?.('tool_reflection', {
-              sessionId: runtimeSessionId, turnId: queryTurnId,
-              trigger: 't1', model: this.#config.model, ...diagnostic,
-            }),
-          });
-          const { messages: next, reflection: reflectionMessage, foldedMessages } = collapseRangeToReflection(
-            conversationMessages, batchStart, batchEnd, content,
-          );
-          const durableRowsInRange = foldedMessages
-            .some(message => message?._persistedMessageId || message?.id);
-          const persistedReflection = this.#persistFoldedRange(
-            foldedMessages,
-            reflectionMessage,
-            { sessionId: runtimeSessionId, model: currentModel, executionOrigin },
-          );
-          if (durableRowsInRange && !persistedReflection) {
-            throw new Error('T1 reflection could not publish its durable range replacement');
-          }
-          if (persistedReflection?.id) reflectionMessage._persistedMessageId = persistedReflection.id;
-          // Raw tool rows inside the replacement range are now tombstoned in
-          // durable history. Late async completions must follow the folded
-          // continuation path rather than appending to those stale rows.
-          const foldedToolCallIds = conversationMessages
-            .slice(batchStart, batchEnd + 1)
-            .filter(message => message?.role === 'tool' && message.toolCallId)
-            .map(message => message.toolCallId);
-          for (const toolCallId of foldedToolCallIds) {
-            this.#persistedToolMessages.delete(toolCallId);
-          }
-          conversationMessages.length = 0;
-          for (const m of next) conversationMessages.push(m);
-          // The preserved users precede the reflection. The next arc starts
-          // immediately after it, i.e. at conversationMessages.length
-          // (the next assistant message will land here).
-          arcStartIdx = conversationMessages.length;
-          // Read hints must not imply raw ranges remain in model context.
-          fileReadObservations.clear();
-          lastT1AtLoopCount = completedToolLoops;
-          // Bump the success counter — used by the T2 schedule check
-          // to decide whether T2 still has work to do at end_turn.
-          // Distinct from lastT1AtLoopCount which the catch block
-          // also bumps (but without rewriting history).
-          t1CollapsesDone += 1;
-          yield {
-            type: 'reflection',
-            turnId: queryTurnId,
-            threadId,
-            loopNumber: turnNumber,
-            trigger: 't1',
-            // PR-L bug fix: keep the same loopRange as the `pending` event
-            // so the frontend key stays stable across pending → ready and
-            // the spinner card is replaced in place (no orphan).
-            status: 'ready',
-            loopRange: [batchStart, batchEnd],
-            toolCount: pairs.length,
-            content,
-            durationMs,
-          };
-        } catch (err) {
-          // Best-effort. On failure leave history unchanged so the loop
-          // continues normally — never block the turn.
-          yield {
-            type: 'reflection',
-            turnId: queryTurnId,
-            threadId,
-            loopNumber: turnNumber,
-            trigger: 't1',
-            status: 'error',
-            error: err && err.message || String(err),
-          };
-          // Advance lastT1AtLoopCount past this interval so we don't
-          // tight-loop on a hiccuping reflector. The next attempt is
-          // another 30 tool loops from now, not immediately. arcStartIdx is
-          // left alone because history wasn't rewritten — the tail still
-          // begins where it did. The trade-off: the next batch's
-          // reflection will cover the tools that just failed too,
-          // which is fine (they're still in conversationMessages).
-          //
-          // We do NOT bump t1CollapsesDone — see the variable's
-          // declaration comment. This keeps the T2 fallback path live
-          // when every T1 attempt has errored.
-          lastT1AtLoopCount = completedToolLoops;
-        }
-        yield queryProgress.snapshot(progressIdentity);
-        }
       }
 
       // task-325a: if abort fired between tools, converge now — emit
@@ -5458,109 +5069,6 @@ export class Engine {
   get mcpManager() { return this.#mcpManager; }
 
   /**
-   * PR-L — V7 Tool History Reflection helpers.
-   *
-   * `#applyPendingT2Reflections` is called at the start of every
-   * `#runQuery` to carry forward any prior turn's async reflection. It is
-   * a generator so it can yield reflection events to the engine consumer.
-   * Non-blocking: never awaits a pending promise.
-   *
-   * @param {Array} conversationMessages
-   * @param {string} originalUserMsg
-   * @param {{sessionId?: string, model?: string}} context
-   */
-  async *#applyPendingT2Reflections(conversationMessages, originalUserMsg, context = {}) {
-    if (this.#pendingT2.size === 0) return;
-    // Drain in insertion order (Map preserves it). We process all entries
-    // because the user could send multiple prompts back-to-back before
-    // the engine resumes — each historical turn gets its rewrite.
-    const drained = [...this.#pendingT2.entries()];
-    this.#pendingT2.clear();
-
-    for (const [turnNumber, info] of drained) {
-      const keys = info.arcKeys;
-      if (!Array.isArray(keys) || keys.length === 0) continue;
-      const currentKeys = conversationMessages.map(foldingMessageKey);
-      const startIdx = currentKeys.findIndex((key, index) => key === keys[0]
-        && keys.every((expected, offset) => currentKeys[index + offset] === expected));
-      const endIdx = startIdx + keys.length - 1;
-      const rangePresent = startIdx >= 0;
-
-      // PR-L follow-up: deterministic readiness check. The info record
-      // carries `ready / result / error` flags that are flipped from the
-      // promise's then/catch handler; reading them here is purely
-      // synchronous bookkeeping — no microtask race.
-      let content;
-      let trigger;
-      let durationMs = 0;
-      if (!info.ready) {
-        // Still in flight — fall back to the exec-log stub. Detach the
-        // unresolved promise so we don't leak it (handlers above already
-        // swallow rejection by routing into info.error).
-        const entries = this.#execLog ? this.#execLog.readTurn(turnNumber) : [];
-        content = buildFallbackStub({ execLogEntries: entries, originalUserMsg: info.originalUserMsg || originalUserMsg });
-        trigger = 't2-fallback';
-      } else if (info.error) {
-        // Promise rejected — leave history unchanged, no event.
-        continue;
-      } else if (info.result && typeof info.result.content === 'string' && info.result.content) {
-        content = info.result.content;
-        trigger = 't2';
-        durationMs = info.result.durationMs || 0;
-      } else {
-        // Resolved but with no usable content — defensively skip.
-        continue;
-      }
-
-      // Rewrite history and publish the same logical replacement to disk.
-      const { messages: next, reflection: reflectionMessage, foldedMessages } = rangePresent
-        ? collapseRangeToReflection(conversationMessages, startIdx, endIdx, content)
-        : collapseRangeToReflection(info.arcRows, 0, info.arcRows.length - 1, content);
-      const durableRowsInRange = foldedMessages
-        .some(message => message?._persistedMessageId || message?.id);
-      const persistedReflection = this.#persistFoldedRange(
-        foldedMessages,
-        reflectionMessage,
-        {
-          ...context,
-          causalRootId: info.causalRootId || null,
-          executionOrigin: info.executionOrigin === 'route_forward' ? 'route_forward' : null,
-        },
-      );
-      if (durableRowsInRange && !persistedReflection) continue;
-      if (persistedReflection?.id) reflectionMessage._persistedMessageId = persistedReflection.id;
-      // T2 replaces this arc in durable and in-memory history just like T1.
-      // Forget its raw result handles before a late async task can append to a
-      // tombstoned tool row at the next provider boundary.
-      const foldedToolCallIds = foldedMessages
-        .filter(message => message?.role === 'tool' && message.toolCallId)
-        .map(message => message.toolCallId);
-      for (const toolCallId of foldedToolCallIds) {
-        this.#persistedToolMessages.delete(toolCallId);
-      }
-      // History may have evicted the old arc. Publish only its original
-      // durable row IDs; never replace unrelated rows at stale indexes.
-      if (rangePresent) {
-        conversationMessages.length = 0;
-        for (const m of next) conversationMessages.push(m);
-      }
-
-      yield {
-        type: 'reflection',
-        turnId: info.originatingTurnId || null,
-        trigger,
-        status: 'ready',
-        // Wire identity must match the original pending card, even if the
-        // history window shifted or evicted its internal replacement range.
-        loopRange: info.loopRange,
-        toolCount: info.count || 0,
-        content,
-        durationMs,
-      };
-    }
-  }
-
-  /**
    * PR-L — read-only accessor for tests.
    */
   get _execLog() { return this.#execLog; }
@@ -5714,10 +5222,9 @@ export class Engine {
       ? opts.preview
       : (typeof content === 'string' ? content.slice(0, 200) : '[task result]');
     const meta = this.#asyncTaskToolMeta.get(taskId) || {};
-    // A completion that lands while its original tool arc is still present
-    // can update that tool result in-place. Once T1/T2 folded the arc, the
-    // provider must receive only a continuation note; otherwise we recreate
-    // a raw tool row after the reflection and invalidate the fold.
+    // A completion updates its original tool row when available. Legacy folded
+    // histories instead receive a continuation note; provider-only compaction
+    // never clears this durable handle or changes result ownership.
     const hasLiveToolRow = typeof meta.toolCallId === 'string'
       && meta.toolCallId
       && Boolean(this.#persistedToolMessages.get(meta.toolCallId));
@@ -5743,9 +5250,8 @@ export class Engine {
         sessionId: delivery.sessionId,
         vpId: delivery.vpId,
         turnId: delivery.turnId,
-        // #persistedToolMessages is cleared as soon as folding publishes its
-        // durable reflection. Capture that boundary at completion time so a
-        // later drain cannot infer stale liveness from an unrelated row.
+        // Capture durable row ownership at completion time, independently of
+        // any provider-only compacted request copy.
         folded: !hasLiveToolRow,
       });
     } else {
@@ -5783,8 +5289,7 @@ export class Engine {
           : (this.#sessionId || null),
         vpId: typeof meta.vpId === 'string' && meta.vpId ? meta.vpId : (this.#vpId || null),
         // query() exposes the wire turn id while the task is registered.
-        // Persist it with a late completion even after T1/T2 removed the
-        // original tool row from the in-memory arc.
+        // Keep the originating turn even for legacy missing/folded tool rows.
         turnId: typeof meta.turnId === 'string' && meta.turnId
           ? meta.turnId
           : (this.#currentQueryTurnId || null),

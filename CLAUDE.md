@@ -103,6 +103,7 @@ Query 的重要契约：
 - Provider 的部分输出失败按 continuation 处理，避免可见文本重放；silence watchdog 只计 provider 阶段，工具、AskUser 与异步任务有独立生命周期。
 - `Engine.query()` 是 terminal boundary，正常、abort、handoff 和异常最终都产生 `turn_end { terminal: true }`。内部 loop 事件不表示 VP 已结束。
 - `history-window.js` 用默认 32K 只裁当前 turn 之前的历史；每个 provider 边界再按实际模型窗口校验 system、schemas、历史、当前 turn 和输出预留。query 内只缩减请求副本，不调用摘要 LLM；响应交付后达到模型窗口 80% 才异步生成供下一轮使用的 post compact，且不改写 transcript。
+- turn 内不运行 T1/T2 reflection。当前工具结果超过实际模型窗口的剩余预算时，先 compact provider 副本中的旧工具文本；不调用摘要 LLM、不折叠 transcript。响应后 compact 仍是独立能力。
 - Raw tool output / provider trace 与进入 UI、模型上下文的有预算副本是不同数据层。可见历史过滤 internal、reflection 与敏感工具内容，首屏可轻量回放，无须等待完整引擎启动。
 
 ### LLM provider 与配置
