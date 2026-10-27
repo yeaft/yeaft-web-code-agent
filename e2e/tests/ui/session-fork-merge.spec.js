@@ -1,9 +1,15 @@
 import { expect } from '@playwright/test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
+import { createSessionFromSpec, copySession, mergeSessions, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
 import { test } from '../../fixtures/test-server.js';
 
-// Real app/store/components, deterministic histories and CRUD acknowledgements.
-// The merge wire is captured at the browser transport boundary so this focused
-// UI suite also runs against the pre-merge Server during a rolling upgrade.
+// The first case uses real browser/Server/Agent WebSockets and disk CRUD without
+// an LLM. The remaining cases intercept the browser transport to inject hostile
+// acknowledgements that must never complete another Agent's or view's operation.
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true' } });
 
 const A = 'branch-a', B = 'branch-b';
@@ -66,36 +72,192 @@ async function openMerge(page) {
   return page.getByRole('dialog', { name: 'Merge Sessions', exact: true });
 }
 
-test('running Session forks require capability and only completed responses expose turn fork', async ({ chatPage: page, mockAgent }) => {
-  await setup(page, mockAgent);
-  await page.evaluate(agentId => {
-    const chat = window.Pinia.useChatStore();
-    chat.activeVpTurns.current = { turnId: 'current', sessionId: 'branch-a', agentId };
-    chat.agents.find(agent => agent.id === agentId).capabilities = ['work_center', 'session_fork_from_turn'];
-  }, mockAgent.agentId);
-  const fork = page.locator('.yeaft-session-actions .yeaft-fork-btn:not(.yeaft-merge-btn)');
-  const prior = page.locator('.assistant-turn').filter({ hasText: 'Prior completed answer' });
-  const current = page.locator('.assistant-turn').filter({ hasText: 'Current unfinished answer' });
-  await expect(fork).toBeDisabled();
-  await expect(prior.locator('.fork-turn-action-btn')).toBeDisabled();
-  await expect(current.locator('.fork-turn-action-btn')).toHaveCount(0);
-  await page.evaluate(agentId => window.Pinia.useChatStore().agents.find(agent => agent.id === agentId)
-    .capabilities.push('session_fork_while_running'), mockAgent.agentId);
-  await expect(fork).toBeEnabled();
-  await expect(prior.locator('.fork-turn-action-btn')).toBeEnabled();
-  await expect(current.locator('.fork-turn-action-btn')).toHaveCount(0);
-  await expect(page.locator('.yeaft-merge-btn')).toBeDisabled();
-  await prior.hover();
-  await prior.locator('.fork-turn-action-btn').click();
-  expect(await page.evaluate(() => window.__branchRequests.at(-1))).toMatchObject({ type: 'yeaft_copy_session', sessionId: A, throughTurnId: 'prior' });
-  await result(page, mockAgent, { ok: false, error: { code: 'invalid_fork_boundary' } });
-  await page.getByRole('button', { name: 'OK', exact: true }).click();
-  await fork.click();
-  const request = await page.evaluate(() => window.__branchRequests.at(-1));
-  expect(request).toMatchObject({ type: 'yeaft_copy_session', sessionId: A });
-  expect(request).not.toHaveProperty('throughTurnId');
-  await result(page, mockAgent);
-  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.sessionId)).toBe('new-session');
+test('turn fork and divergent merge relay through Server, persist history and inherit the initiating Project', async ({ chatPage: page, mockAgent }) => {
+  const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-browser-merge-'));
+  const store = new ConversationStore(yeaftDir);
+  const source = createSessionFromSpec(yeaftDir, { name: 'Initiator', roster: ['omni'], defaultVpId: 'omni', workDir: yeaftDir });
+  const acknowledgements = [];
+  const appendTurn = (sessionId, turnId, question, answer, seconds) => {
+    const time = `2026-10-27T00:00:0${seconds}.000Z`;
+    const user = store.append({ sessionId, role: 'user', content: question, turnId, time });
+    store.append({ sessionId, role: 'assistant', content: answer, turnId, time,
+      causalRootId: user.id, speakerVpId: 'omni', stopReason: 'end_turn' });
+  };
+  const publish = () => mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: snapshotSessions(yeaftDir) } });
+  const handler = request => {
+    if (request.type === 'yeaft_load_history' && request.limit !== 0) {
+      const messages = new ConversationStore(yeaftDir).loadAllBySession(request.sessionId)
+        .map(row => ({ ...row, seq: Number(row.id.slice(1)), ts: Date.parse(row.time) }));
+      mockAgent.send({ type: 'yeaft_history_chunk', sessionId: request.sessionId, requestId: request.requestId,
+        mode: 'recent', messages, oldestSeq: messages[0]?.seq ?? null,
+        latestSeq: messages.at(-1)?.seq ?? null, hasMore: false });
+    }
+    if (!['yeaft_copy_session', 'yeaft_merge_sessions'].includes(request.type)) return;
+    const op = request.type === 'yeaft_copy_session' ? 'copy' : 'merge';
+    let event;
+    try {
+      const session = op === 'copy'
+        ? copySession(yeaftDir, request.sessionId, request)
+        : mergeSessions(yeaftDir, request.sessionId, request.otherSessionId, request);
+      event = { type: 'session_crud_result', op, ok: true, requestId: request.requestId,
+        sourceSessionId: request.sessionId, otherSessionId: request.otherSessionId, session };
+    } catch (error) {
+      event = { type: 'session_crud_result', op, ok: false, requestId: request.requestId,
+        sourceSessionId: request.sessionId, otherSessionId: request.otherSessionId,
+        error: { code: error.code, message: error.message } };
+    }
+    acknowledgements.push(event);
+    // No browser sendWsMessage/handleYeaftOutput overrides: the real Server must
+    // correlate the response, inherit membership, and publish its catalog.
+    mockAgent.send({ type: 'yeaft_output', event });
+    publish();
+  };
+  mockAgent._messageHandlers.push(handler);
+  try {
+    appendTurn(source.id, 'prior', 'Prior question', 'Prior completed answer', 1);
+    appendTurn(source.id, 'current', 'Current question', 'Current unfinished answer', 5);
+    mockAgent.send({ type: 'agent_capabilities_updated', capabilities });
+    publish();
+    const open = async sessionId => {
+      await expect.poll(() => page.evaluate(({ agentId, sessionId }) => window.Pinia.useChatStore().sidebarSessionCatalog
+        .some(row => row.routeRef.agentId === agentId && row.routeRef.sessionId === sessionId), { agentId: mockAgent.agentId, sessionId })).toBe(true);
+      await page.evaluate(({ agentId, sessionId }) => {
+        const chat = window.Pinia.useChatStore();
+        chat.openCatalogSession(chat.sidebarSessionCatalog.find(row => row.routeRef.agentId === agentId && row.routeRef.sessionId === sessionId));
+        chat.closeSessionSidebar();
+      }, { agentId: mockAgent.agentId, sessionId });
+    };
+    const project = await page.evaluate(async ({ agentId, sessionId }) => {
+      const chat = window.Pinia.useChatStore();
+      const created = await chat.mutateProject('create', { name: 'Initiating Project' }, agentId);
+      const moved = await chat.mutateProject('move_session', { sessionId, projectId: created.result?.id }, agentId);
+      return { created, moved };
+    }, { agentId: mockAgent.agentId, sessionId: source.id });
+    expect(project.created.ok).toBe(true);
+    expect(project.moved.ok).toBe(true);
+    const projectId = project.created.result.id;
+    const inventory = () => page.evaluate(agentId => {
+      const chat = window.Pinia.useChatStore();
+      return chat.sidebarSessionCatalog.filter(row => row.routeRef.agentId === agentId)
+        .map(row => ({ sessionId: row.routeRef.sessionId, projectId: row.projectId }));
+    }, mockAgent.agentId);
+    await open(source.id);
+    await expect.poll(inventory).toContainEqual({ sessionId: source.id, projectId });
+    await expect(page.locator('.assistant-turn').filter({ hasText: 'Prior completed answer' })).toBeVisible();
+    const expectUnsupported = async (request, code) => {
+      mockAgent.send({ type: 'agent_capabilities_updated', capabilities: ['work_center', 'plaintext-ok'] });
+      await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore().agents
+        .find(agent => agent.id === agentId)?.capabilities, mockAgent.agentId)).toEqual(['work_center', 'plaintext-ok']);
+      // Bypass only the UI capability gate, not transport or response handling:
+      // an outdated client must receive a real correlated Server rejection.
+      const response = await page.evaluate(({ agentId, request }) => new Promise((resolve, reject) => {
+        const chat = window.Pinia.useChatStore();
+        const socket = chat.ws;
+        const timeout = setTimeout(() => { socket.removeEventListener('message', onMessage); reject(new Error('Missing capability rejection')); }, 5000);
+        const onMessage = message => {
+          const frame = JSON.parse(message.data);
+          const event = frame.type === 'yeaft_output' ? frame.event : frame;
+          if (event?.type !== 'session_crud_result' || event.requestId !== request.requestId) return;
+          clearTimeout(timeout);
+          socket.removeEventListener('message', onMessage);
+          resolve(event);
+        };
+        socket.addEventListener('message', onMessage);
+        chat.sendWsMessage({ ...request, agentId });
+      }), { agentId: mockAgent.agentId, request });
+      expect(response).toMatchObject({ ok: false, requestId: request.requestId, error: { code } });
+      expect(mockAgent.messages(request.type).some(message => message.requestId === request.requestId)).toBe(false);
+      mockAgent.send({ type: 'agent_capabilities_updated', capabilities });
+      await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore().agents
+        .find(agent => agent.id === agentId)?.capabilities, mockAgent.agentId)).toEqual(capabilities);
+    };
+    await expectUnsupported({ type: 'yeaft_copy_session', requestId: 'unsupported-turn-fork', sessionId: source.id, throughTurnId: 'prior' }, 'session_fork_from_turn_unsupported');
+    await page.evaluate(({ agentId, sessionId }) => {
+      const chat = window.Pinia.useChatStore();
+      chat.activeVpTurns.current = { turnId: 'current', sessionId, agentId };
+      chat.agents.find(agent => agent.id === agentId).capabilities = ['work_center', 'session_fork_from_turn'];
+    }, { agentId: mockAgent.agentId, sessionId: source.id });
+    const fork = page.locator('.yeaft-session-actions .yeaft-fork-btn:not(.yeaft-merge-btn)');
+    const prior = page.locator('.assistant-turn').filter({ hasText: 'Prior completed answer' });
+    const current = page.locator('.assistant-turn').filter({ hasText: 'Current unfinished answer' });
+    await expect(fork).toBeDisabled();
+    await expect(prior.locator('.fork-turn-action-btn')).toBeDisabled();
+    await expect(current.locator('.fork-turn-action-btn')).toHaveCount(0);
+    mockAgent.send({ type: 'agent_capabilities_updated', capabilities });
+    await expect(fork).toBeEnabled();
+    await expect(prior.locator('.fork-turn-action-btn')).toBeEnabled();
+    await expect(current.locator('.fork-turn-action-btn')).toHaveCount(0);
+    await expect(page.locator('.yeaft-merge-btn')).toBeDisabled();
+    await prior.hover();
+    await prior.locator('.fork-turn-action-btn').click();
+    const copyRequest = await mockAgent.waitForMessage('yeaft_copy_session');
+    expect(copyRequest).toMatchObject({ sessionId: source.id, throughTurnId: 'prior' });
+    expect(copyRequest.requestId).toBeTruthy();
+    await expect.poll(() => acknowledgements.find(event => event.requestId === copyRequest.requestId)).toMatchObject({ ok: true, op: 'copy' });
+    const copied = acknowledgements.find(event => event.requestId === copyRequest.requestId).session;
+    expect(copied.copiedMessageCount).toBe(2);
+    await expect.poll(inventory).toContainEqual({ sessionId: copied.id, projectId });
+    await expectUnsupported({ type: 'yeaft_merge_sessions', requestId: 'unsupported-merge', sessionId: source.id, otherSessionId: copied.id }, 'session_merge_unsupported');
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.sessionId)).toBe(copied.id);
+    expect(new ConversationStore(yeaftDir).loadAllBySession(copied.id).map(row => row.content)).toEqual(['Prior question', 'Prior completed answer']);
+    appendTurn(copied.id, 'branch', 'Branch question', 'Branch completed answer', 3);
+    const sourceBefore = new ConversationStore(yeaftDir).loadAllBySession(source.id);
+    const copiedBefore = new ConversationStore(yeaftDir).loadAllBySession(copied.id);
+    // A conflicting Project on the other branch must not override the initiator.
+    const otherProject = await page.evaluate(async ({ agentId, sessionId }) => {
+      const chat = window.Pinia.useChatStore();
+      delete chat.activeVpTurns.current;
+      const created = await chat.mutateProject('create', { name: 'Other Project' }, agentId);
+      const moved = await chat.mutateProject('move_session', { sessionId, projectId: created.result?.id }, agentId);
+      return { created, moved };
+    }, { agentId: mockAgent.agentId, sessionId: copied.id });
+    expect(otherProject.created.ok).toBe(true);
+    expect(otherProject.moved.ok).toBe(true);
+    await open(source.id);
+    const dialog = await openMerge(page);
+    await dialog.locator('select').selectOption(copied.id);
+    await dialog.getByRole('button', { name: 'Merge Sessions', exact: true }).click();
+    const mergeRequest = await mockAgent.waitForMessage('yeaft_merge_sessions');
+    expect(mergeRequest).toMatchObject({ sessionId: source.id, otherSessionId: copied.id });
+    expect(mergeRequest.requestId).toBeTruthy();
+    expect(mergeRequest.requestId).not.toBe(copyRequest.requestId);
+    await expect.poll(() => acknowledgements.find(event => event.requestId === mergeRequest.requestId)).toMatchObject({ ok: true, op: 'merge' });
+    const merged = acknowledgements.find(event => event.requestId === mergeRequest.requestId).session;
+    expect(merged).toMatchObject({ copiedMessageCount: 6, sharedTurnCount: 1 });
+    expect([source.id, copied.id]).not.toContain(merged.id);
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute)).toMatchObject({ agentId: mockAgent.agentId, sessionId: merged.id });
+    const expected = ['Prior question', 'Prior completed answer', 'Branch question', 'Branch completed answer', 'Current question', 'Current unfinished answer'];
+    const mergedRows = new ConversationStore(yeaftDir).loadAllBySession(merged.id);
+    expect(mergedRows.map(row => row.content)).toEqual(expected);
+    expect(new Set(mergedRows.map(row => row.id)).size).toBe(6);
+    expect(new ConversationStore(yeaftDir).loadAllBySession(source.id)).toEqual(sourceBefore);
+    expect(new ConversationStore(yeaftDir).loadAllBySession(copied.id)).toEqual(copiedBefore);
+    await expect(page.locator('.assistant-turn')).toHaveCount(3);
+    await expect(page.locator('.assistant-turn')).toHaveText(expected.filter((_, index) => index % 2).map(text => new RegExp(text)));
+    await expect.poll(inventory).toEqual(expect.arrayContaining([
+      { sessionId: source.id, projectId }, { sessionId: copied.id, projectId: otherProject.created.result.id },
+      { sessionId: merged.id, projectId },
+    ]));
+    // Fresh browser state must reconstruct Server-owned membership and history,
+    // not merely retain an optimistic CRUD-result projection.
+    await page.reload();
+    await page.waitForFunction(agentId => window.Pinia?.useChatStore?.().agents
+      .some(agent => agent.id === agentId && agent.status === 'ready'), mockAgent.agentId);
+    await expect.poll(inventory).toEqual(expect.arrayContaining([
+      { sessionId: source.id, projectId }, { sessionId: copied.id, projectId: otherProject.created.result.id },
+      { sessionId: merged.id, projectId },
+    ]));
+    await open(merged.id);
+    await expect(page.locator('.assistant-turn')).toHaveCount(3);
+    await expect(page.locator('.assistant-turn')).toHaveText(expected.filter((_, index) => index % 2).map(text => new RegExp(text)));
+    expect(mockAgent.messages('yeaft_copy_session')).toHaveLength(1);
+    expect(mockAgent.messages('yeaft_merge_sessions')).toHaveLength(1);
+  } finally {
+    mockAgent._messageHandlers = mockAgent._messageHandlers.filter(candidate => candidate !== handler);
+    await closeConversationHistoryIndexes();
+    rmSync(yeaftDir, { recursive: true, force: true });
+  }
 });
 
 test('merge modal filters sources, handles errors and opens only the correlated new Session', async ({ chatPage: page, mockAgent }, info) => {
