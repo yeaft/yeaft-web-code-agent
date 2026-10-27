@@ -7,7 +7,10 @@ import { closeConversationHistoryIndexes } from '../../../../agent/yeaft/convers
 import { createSessionFromSpec, copySession, mergeSessions } from '../../../../agent/yeaft/sessions/session-crud.js';
 import { loadSessionConfig, saveSessionConfig } from '../../../../agent/yeaft/sessions/session-config.js';
 import { openSession } from '../../../../agent/yeaft/sessions/session-store.js';
-import { persistYeaftAttachments } from '../../../../agent/yeaft/attachments.js';
+import { persistYeaftAttachments, hydratePersistedAttachmentHistory } from '../../../../agent/yeaft/attachments.js';
+import { AnthropicAdapter } from '../../../../agent/yeaft/llm/anthropic.js';
+import { OpenAIResponsesAdapter } from '../../../../agent/yeaft/llm/openai-responses.js';
+import { createProviderContext, createProviderState } from '../../../../agent/yeaft/llm/provider-state.js';
 
 const roots = [];
 function root() {
@@ -36,6 +39,7 @@ function request(store, sessionId, label, seconds, extra = {}) {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   await closeConversationHistoryIndexes();
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -63,6 +67,25 @@ describe('durable native Session fork and merge', () => {
     }
     expect(() => store.copySession('source', 'invalid', { beforeMessageId: first.user.id, throughTurnId: 'missing' }))
       .toThrow(expect.objectContaining({ code: 'fork_boundary_not_found' }));
+    // A prior VP can finish after the active input. Its turn in the suffix is
+    // unrelated to the fence and must not remove the earlier complete answer.
+    const prior = request(store, 'interleaved', 'prior', 1);
+    const active = request(store, 'interleaved', 'active', 2);
+    store.append({ sessionId: 'interleaved', role: 'assistant', content: 'late prior answer',
+      turnId: prior.answer.turnId, causalRootId: prior.user.id, speakerVpId: 'omni' });
+    store.copySession('interleaved', 'unrelated-tail', { beforeMessageId: active.user.id });
+    expect(raw(dir, 'unrelated-tail').map(row => row.content)).toEqual(['prior', 'prior answer']);
+    // Conversely, outputs causally linked to a late persisted input must all
+    // stay excluded, even when discovered transitively and before that input.
+    seed(dir, 'early-output', [
+      { id: 'm0001', role: 'user', content: 'prior' },
+      { id: 'm0002', role: 'assistant', content: 'prior answer', turnId: 'prior-turn' },
+      { id: 'm0003', role: 'assistant', content: 'early child', causalRootId: 'm0004' },
+      { id: 'm0004', role: 'assistant', content: 'early root', causalRootId: 'late-client', turnId: 'late-turn' },
+      { id: 'm0005', role: 'user', content: 'late input', clientMessageId: 'late-client' },
+    ]);
+    store.copySession('early-output', 'causal-fence', { beforeMessageId: 'm0005' });
+    expect(raw(dir, 'causal-fence').map(row => row.content)).toEqual(['prior', 'prior answer']);
   });
 
   it('captures an inclusive raw snapshot before async input persistence, including cold, internal and folded rows', () => {
@@ -166,10 +189,12 @@ describe('durable native Session fork and merge', () => {
   it('deduplicates fork lineage once and preserves atomic interleaved multi-VP requests, references and attachment ownership', () => {
     const dir = root();
     const store = new ConversationStore(dir);
-    const uploaded = persistYeaftAttachments([{ name: 'note.txt', mimeType: 'text/plain', data: Buffer.from('asset').toString('base64') }],
-      { yeaftDir: dir, sessionId: 'source' }).promptAttachments[0];
+    const [note, uploaded] = persistYeaftAttachments([
+      { name: 'note.txt', mimeType: 'text/plain', data: Buffer.from('note').toString('base64') },
+      { name: 'image.png', mimeType: 'image/png', data: Buffer.from('asset').toString('base64') },
+    ], { yeaftDir: dir, sessionId: 'source' }).promptAttachments;
     const serverAsset = { name: 'server', fileId: 'server-owned', ownerSessionId: 'original' };
-    const shared = request(store, 'source', 'shared', 1, { clientMessageId: 'shared-client', attachments: [uploaded, serverAsset] });
+    const shared = request(store, 'source', 'shared', 1, { clientMessageId: 'shared-client', attachments: [note, uploaded, serverAsset] });
     const toolOwner = store.append({ sessionId: 'source', role: 'assistant', content: '', turnId: 'other-vp', speakerVpId: 'reviewer',
       causalRootId: shared.user.id, toolCalls: [{ id: 'tool', name: 'Read', input: {} }] });
     const result = store.append({ sessionId: 'source', role: 'tool', content: 'tool result', toolCallId: 'tool',
@@ -184,6 +209,17 @@ describe('durable native Session fork and merge', () => {
     const branchShared = raw(dir, 'branch')[0];
     store.append({ ...late, sessionId: 'branch', causalRootId: branchShared.id });
     request(store, 'branch', 'same question', 3);
+    const branchAsset = branchShared.attachments[1];
+    // Same attachment metadata/path aliases cannot prove byte equality.
+    writeFileSync(branchAsset.path, 'other'); // Same size, different content.
+    expect(() => store.mergeSessions('source', 'branch', 'conflicting-assets'))
+      .toThrow(expect.objectContaining({ code: 'merge_attachment_conflict' }));
+    expect(existsSync(join(dir, 'sessions', 'conflicting-assets', 'conversation'))).toBe(false);
+    expect(existsSync(join(dir, 'sessions', 'conflicting-assets', 'attachments'))).toBe(false);
+    writeFileSync(branchAsset.path, 'asset');
+    // A valid right alias must rescue missing left bytes, not retain a stale
+    // source-owned path that silently becomes an unavailable image.
+    rmSync(uploaded.path);
     const sourceBefore = raw(dir, 'source');
     const branchBefore = raw(dir, 'branch');
     const merged = new ConversationStore(dir).mergeSessions('source', 'branch', 'merged');
@@ -194,9 +230,11 @@ describe('durable native Session fork and merge', () => {
     expect(new Set(rows.map(row => row.id)).size).toBe(rows.length);
     const mergedUser = rows[0];
     expect(mergedUser.origin).toEqual(shared.user.origin);
-    expect(mergedUser.attachments[0].path).not.toBe(uploaded.path);
-    expect(readFileSync(mergedUser.attachments[0].path, 'utf8')).toBe('asset');
-    expect(mergedUser.attachments[1]).toEqual(serverAsset);
+    expect(readFileSync(mergedUser.attachments[0].path, 'utf8')).toBe('note');
+    expect(mergedUser.attachments[1].path).not.toBe(uploaded.path);
+    expect(mergedUser.attachments[1].path).toContain(join('sessions', 'merged', 'attachments'));
+    expect(readFileSync(mergedUser.attachments[1].path, 'utf8')).toBe('asset');
+    expect(mergedUser.attachments[2]).toEqual(serverAsset);
     const mergedOwner = rows.find(row => row.origin.messageId === toolOwner.id);
     expect(rows.find(row => row.role === 'tool').toolCallId).toBe(mergedOwner.toolCalls[0].id);
     expect(rows.find(row => row.origin.messageId === reflection.id)).toMatchObject({
@@ -207,8 +245,16 @@ describe('durable native Session fork and merge', () => {
     expect(raw(dir, 'branch')).toEqual(branchBefore);
     store.copySession('merged', 'nested');
     expect(store.mergeSessions('merged', 'nested', 'nested-merge').sharedTurnCount).toBe(3);
-    rmSync(uploaded.path);
-    expect(readFileSync(mergedUser.attachments[0].path, 'utf8')).toBe('asset');
+    rmSync(branchAsset.path);
+    expect(readFileSync(mergedUser.attachments[1].path, 'utf8')).toBe('asset');
+    const hydrated = hydratePersistedAttachmentHistory(rows, { yeaftDir: dir, sessionId: 'merged' });
+    expect(hydrated[0].content).toContainEqual({ type: 'image', source: {
+      type: 'base64', media_type: 'image/png', data: Buffer.from('asset').toString('base64'),
+    } });
+    expect(() => store.mergeSessions('source', 'branch', 'missing-assets'))
+      .toThrow(expect.objectContaining({ code: 'merge_attachment_unavailable' }));
+    expect(existsSync(join(dir, 'sessions', 'missing-assets', 'conversation'))).toBe(false);
+    expect(existsSync(join(dir, 'sessions', 'missing-assets', 'attachments'))).toBe(false);
   });
 
   it('supports old forks by guarded client/VP-turn identity and rejects partial shared-request divergence', () => {
@@ -235,12 +281,21 @@ describe('durable native Session fork and merge', () => {
     expect(() => store.mergeSessions('legacy-merge', 'old', 'divergent')).toThrow(expect.objectContaining({ code: 'ambiguous_merge_history' }));
   });
 
-  it('namespaces colliding message, turn and tool IDs and timestamp-sorts whole unrelated requests with stable ties', () => {
+  it('namespaces colliding identities, sorts whole requests and serializes canonical fork/merge history without native owner state', async () => {
     const dir = root();
+    const identity = { instanceScope: 'instance', ownerScope: 'owner', sessionId: 'left', vpId: 'vp', threadId: 'main' };
+    const context = createProviderContext({ protocol: 'anthropic', model: 'claude-sonnet-4', credentialScopeId: 'account' });
     const rows = label => [
       { id: 'm0001', role: 'user', content: 'same question', time: at(2), clientMessageId: label },
       { id: 'm0002', role: 'assistant', content: label, time: at(2), turnId: 'collision', speakerVpId: 'vp', causalRootId: 'm0001',
-        toolCalls: [{ id: 'collision', name: 'Read', input: {} }] },
+        toolCalls: [{ id: 'collision', name: 'Read', input: {} }],
+        thinkingBlocks: [{ thinking: 'PRIVATE-legacy', signature: 'PRIVATE-signature' }],
+        providerState: createProviderState({ context, identity: { ...identity, sessionId: label }, items: [
+          { type: 'thinking', thinking: 'PRIVATE-thinking', signature: 'PRIVATE-signed' },
+          { type: 'redacted_thinking', data: 'PRIVATE-redacted' },
+          { type: 'text', text: label },
+          { type: 'tool_use', id: 'collision', name: 'Read', input: {} },
+        ] }) },
       { id: 'm0003', role: 'tool', content: label, time: at(2), turnId: 'collision', speakerVpId: 'vp', toolCallId: 'collision' },
     ];
     seed(dir, 'left', rows('left'));
@@ -261,6 +316,55 @@ describe('durable native Session fork and merge', () => {
     expect(out.idMaps.get('left').get('m0001')).not.toBe(out.idMaps.get('right').get('m0001'));
     store.copySession('merged', 'fork');
     expect(store.mergeSessions('merged', 'fork', 'again').sharedTurnCount).toBe(2);
+    store.copySession('left', 'direct-fork');
+    // Native source state is immutable provenance. A projected fork is still
+    // equivalent to its source for deduplication (without comparing signatures).
+    expect(store.mergeSessions('left', 'direct-fork', 'shared-native').sharedTurnCount).toBe(1);
+    expect(raw(dir, 'left')[1].providerState).toEqual(rows('left')[1].providerState);
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      id: 'done', status: 'completed', output: [], content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn',
+    }), { headers: { 'content-type': 'application/json' } })));
+    vi.stubGlobal('fetch', fetch);
+    const anthropic = new AnthropicAdapter({ apiKey: 'fixture' });
+    // Retaining the source envelope must STILL fail closed for a new owner or
+    // changed tool projection. Historical conversion is not a replay bypass.
+    const original = raw(dir, 'left');
+    await expect(anthropic.call({ model: context.origin.model, messages: original, providerContext: context,
+      requestIdentity: { ...identity, sessionId: 'direct-fork' } }))
+      .rejects.toThrow(expect.objectContaining({ code: 'PROVIDER_STATE_INVALID', message: expect.stringContaining('owner changed') }));
+    await expect(anthropic.call({ model: context.origin.model, providerContext: context, requestIdentity: identity,
+      messages: original.map(row => row.role === 'assistant' ? { ...row, toolCalls: [{ ...row.toolCalls[0], id: 'changed' }] } : row) }))
+      .rejects.toThrow(expect.objectContaining({ code: 'PROVIDER_STATE_INVALID', message: expect.stringContaining('projection changed') }));
+    expect(fetch).not.toHaveBeenCalled();
+    for (const sessionId of ['direct-fork', 'merged']) {
+      const history = new ConversationStore(dir).loadSessionHistoryForVp(sessionId, 'vp');
+      expect(history.some(row => row.providerState || row.thinkingBlocks)).toBe(false);
+      // A new human turn makes these completed arcs historical, not a native
+      // continuation of the signed tool turn.
+      const messages = [...history, { role: 'user', content: 'next request' }];
+      for (const method of ['call', 'stream']) {
+        const params = { model: context.origin.model, system: 'system', messages, providerContext: context,
+          requestIdentity: { ...identity, sessionId }, effort: 'high', effortSource: 'user' };
+        if (method === 'call') await anthropic.call(params);
+        else for await (const event of anthropic.stream(params)) expect(event).toBeDefined();
+        const wire = JSON.parse(fetch.mock.calls.at(-1)[1].body);
+        expect(wire.thinking).toMatchObject({ type: 'enabled' });
+        expect(wire.messages.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text', text: 'next request' }] });
+        expect(JSON.stringify(wire)).not.toContain('PRIVATE');
+        const blocks = wire.messages.flatMap(message => message.content);
+        const calls = blocks.filter(block => block.type === 'tool_use');
+        expect(calls.map(call => call.id)).toEqual(history.flatMap(row => (row.toolCalls || []).map(call => call.id)));
+        expect(blocks.filter(block => block.type === 'tool_result').map(block => block.tool_use_id)).toEqual(calls.map(call => call.id));
+        expect(calls).toHaveLength(sessionId === 'merged' ? 2 : 1);
+      }
+      const responses = new OpenAIResponsesAdapter({ apiKey: 'fixture' });
+      await responses.call({ model: 'gpt-5', messages, requestIdentity: { ...identity, sessionId },
+        providerContext: createProviderContext({ protocol: 'openai-responses', model: 'gpt-5', credentialScopeId: 'account' }) });
+      const wire = JSON.parse(fetch.mock.calls.at(-1)[1].body);
+      expect(JSON.stringify(wire)).not.toContain('PRIVATE');
+      expect(wire.input.filter(item => item.type === 'function_call').map(item => item.call_id))
+        .toEqual(wire.input.filter(item => item.type === 'function_call_output').map(item => item.call_id));
+    }
   });
 
   it('refuses incomplete tool history instead of silently sanitizing away source messages', () => {

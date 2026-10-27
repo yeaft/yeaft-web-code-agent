@@ -22,6 +22,18 @@ export function messageOrigin(row, sessionId, streamId) {
   return { sessionId, streamId, messageId: row.id, ...(row.turnId ? { turnId: row.turnId } : {}) };
 }
 
+/**
+ * Cross-Session rows are historical projections, never native continuations.
+ * Signatures/encrypted reasoning are bound to the original owner and exact
+ * tool IDs. Keep the source transcript (linked by origin) as provenance, not
+ * an opaque payload in the new Session. Reconstruct only canonical text/tools.
+ * This deliberately does not relax replayProviderState's owner/digest fences.
+ */
+export function historicalReplayRow(row) {
+  const { providerState, thinkingBlocks, ...history } = row;
+  return history;
+}
+
 function originKey(origin) {
   return JSON.stringify([origin.streamId, origin.messageId]);
 }
@@ -198,7 +210,7 @@ function equivalentRows(left, right, aliases) {
     const remap = value => rowRefs.get(value) || value;
     const callRefs = new Map([...turn.links.calls].map(([key, call]) => [key, `call:${call.index}:${call.callIndex}`]));
     return turn.rows.map((row, index) => {
-      const copy = { ...row };
+      const copy = historicalReplayRow(row);
       for (const key of ['id', 'seq', 'sessionId', 'origin', 'cold']) delete copy[key];
       if (row.turnId) copy.turnId = row.origin?.turnId || row.turnId;
       if (row.causalRootId) copy.causalRootId = rowRefs.get(row.causalRootId) || clientRefs.get(row.causalRootId) || row.causalRootId;
@@ -257,7 +269,7 @@ export function planSessionMerge(inputs) {
 
 /**
  * 为计划分配新 persisted IDs 并重写内部引用；每个源有独立命名空间。
- * 附件由调用者按实际源所有权复制；provider opaque state 不被解释。
+ * 附件由调用者按实际源所有权复制；provider 私有状态转为 canonical 历史。
  * @param {object} plan planSessionMerge 的返回值
  * @param {string} targetSessionId 新 Session
  * @param {number} firstSeq 已保留的起始序号
@@ -295,7 +307,7 @@ export function materializeSessionMerge(plan, targetSessionId, firstSeq) {
     const callId = call => `merge_${ids.get(turn.rows[call.index].id)}_${call.callIndex}`;
     const calls = new Map([...turn.links.calls].map(([key, call]) => [key, callId(call)]));
     for (const [index, row] of turn.rows.entries()) {
-      const copy = { ...row, id: ids.get(row.id), sessionId: targetSessionId,
+      const copy = { ...historicalReplayRow(row), id: ids.get(row.id), sessionId: targetSessionId,
         origin: messageOrigin(row, turn.input.sessionId, turn.input.streamId) };
       delete copy.seq;
       if (row.turnId) {

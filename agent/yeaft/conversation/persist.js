@@ -31,9 +31,9 @@ import {
   iterateCanonicalVisibleEntriesNewestFirst,
   normalizeLiteralSearch,
 } from './visible-entry.js';
-import { copyPersistedSessionAttachments } from '../attachments.js';
+import { copyPersistedSessionAttachments, readPersistedAttachmentFile, persistYeaftAttachments, MAX_TOTAL_BYTES } from '../attachments.js';
 import { markConversationDirty } from './history-index-state.js';
-import { historyError, isHumanRequest, messageOrigin, planSessionMerge, materializeSessionMerge } from './session-history.js';
+import { historyError, isHumanRequest, messageOrigin, historicalReplayRow, planSessionMerge, materializeSessionMerge } from './session-history.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -92,6 +92,49 @@ const MESSAGE_SEQUENCE_RESERVATION_SIZE = 256;
 // cross-process uniqueness; this cache only consumes ranges already reserved
 // by this process, so long-lived stores cannot diverge or reuse one another's ids.
 const messageSequenceReservations = new Map();
+
+/** Validate every shared local blob before choosing a source; metadata is not content identity. */
+function copyMergeAttachments(plan, yeaftDir, targetSessionId) {
+  const copiedPaths = new Map();
+  for (const turn of plan.turns) {
+    const alternatives = [...plan.aliases].filter(([, source]) => source === turn).map(([other]) => other);
+    turn.rows = turn.rows.map((row, index) => {
+      if (!Array.isArray(row.attachments)) return row;
+      return { ...row, attachments: row.attachments.map((att, attachmentIndex) => {
+        // Server-owned IDs are metadata, not permission to read another owner.
+        const candidates = [turn, ...alternatives];
+        if (!candidates.some(candidate => candidate.rows[index].attachments[attachmentIndex]?.path)) return att;
+        let chosen = null;
+        for (const candidate of candidates) {
+          const source = candidate.rows[index].attachments[attachmentIndex];
+          let payload;
+          try {
+            payload = readPersistedAttachmentFile(source.path, {
+              yeaftDir, sessionId: candidate.input.sessionId,
+            }, MAX_TOTAL_BYTES);
+          } catch { continue; } // Another verified alias may still own the blob.
+          if (chosen && !chosen.buffer.equals(payload.buffer)) {
+            throw historyError('merge_attachment_conflict', `Shared attachment has different bytes: ${att.name || 'file'}`);
+          }
+          chosen ||= payload;
+        }
+        if (!chosen) {
+          throw historyError('merge_attachment_unavailable', `Required attachment is missing or inaccessible: ${att.name || 'file'}`);
+        }
+        if (!copiedPaths.has(chosen.path)) {
+          const bundle = persistYeaftAttachments([{ ...att, data: chosen.buffer.toString('base64') }], {
+            yeaftDir, sessionId: targetSessionId,
+          });
+          if (bundle.failed.length || bundle.promptAttachments.length !== 1) {
+            throw historyError('merge_attachment_copy_failed', `Session attachment copy failed: ${bundle.failed[0]?.error || 'missing output'}`);
+          }
+          copiedPaths.set(chosen.path, bundle.promptAttachments[0].path);
+        }
+        return { ...att, path: copiedPaths.get(chosen.path) };
+      }) };
+    });
+  }
+}
 
 function sleepSync(ms) {
   if (ms <= 0) return;
@@ -2045,7 +2088,9 @@ export class ConversationStore {
    * reflections, and the rows hidden by reflection tombstones. New persisted
    * message ids are allocated in original order. References that point to a
    * copied persisted message are remapped; external/client/tool identities are
-   * intentionally preserved.
+   * intentionally preserved. Provider-native continuation/thinking payloads
+   * stay in the source transcript; the target replays canonical text/tools,
+   * with origin linking back to the untouched provider provenance.
    *
    * @param {string} sourceSessionId
    * @param {string} targetSessionId
@@ -2102,20 +2147,23 @@ export class ConversationStore {
       let humanCutoff = user.clientMessageId
         ? rows.findIndex(row => isHumanRequest(row) && row.clientMessageId === user.clientMessageId)
         : index;
-      // Also fence late/interleaved outputs and their transitive causal chain.
-      // Expanding toward the past is conservative: never copy part of the
-      // running request merely because its prompt was persisted unusually late.
+      // Follow only this request's causal closure, not every turn in the
+      // suffix: a late answer to an older request must not pull the fence back
+      // into (and truncate) that older request.
       const vpTurnKey = row => row.turnId
         ? JSON.stringify([row.speakerVpId || row.vpId || '', row.turnId]) : null;
-      let previous;
+      const excludedRows = new Set(rows.filter(row => row === user || (isHumanRequest(row)
+        && user.clientMessageId && row.clientMessageId === user.clientMessageId)));
+      let previousSize;
       do {
-        previous = humanCutoff;
-        const excluded = new Set(rows.slice(humanCutoff).flatMap(row => [row.id, row.clientMessageId].filter(Boolean)));
-        const turns = new Set(rows.slice(humanCutoff).map(vpTurnKey).filter(Boolean));
-        const earlyOutput = rows.findIndex((row, i) => i < humanCutoff
-          && (excluded.has(row.causalRootId) || turns.has(vpTurnKey(row))));
-        if (earlyOutput >= 0) humanCutoff = earlyOutput;
-      } while (humanCutoff < previous);
+        previousSize = excludedRows.size;
+        const excluded = new Set([...excludedRows].flatMap(row => [row.id, row.clientMessageId].filter(Boolean)));
+        const turns = new Set([...excludedRows].map(vpTurnKey).filter(Boolean));
+        for (const row of rows) {
+          if (excluded.has(row.causalRootId) || turns.has(vpTurnKey(row))) excludedRows.add(row);
+        }
+      } while (excludedRows.size > previousSize);
+      humanCutoff = Math.min(humanCutoff, rows.findIndex(row => excludedRows.has(row)));
       cutoff = Math.min(cutoff, humanCutoff);
     }
     if (Object.prototype.hasOwnProperty.call(options, 'throughTurnId')) {
@@ -2170,7 +2218,7 @@ export class ConversationStore {
     const assetRows = copyPersistedSessionAttachments(rows, { yeaftDir: this.#dir, sourceSessionId, targetSessionId });
     const copies = assetRows.map(row => {
       const copy = {
-        ...row,
+        ...historicalReplayRow(row),
         id: idMap.get(row.id),
         sessionId: targetSessionId,
         origin: messageOrigin(row, sourceSessionId, streamId),
@@ -2263,18 +2311,10 @@ export class ConversationStore {
     const count = plan.turns.reduce((sum, turn) => sum + turn.rows.length, 0);
     const firstSeq = count ? this.#reserveSeqRange(count) : 0;
     try {
-      // Ownership is taken from each actual source, never from origin metadata.
-      for (const input of inputs) {
-        const selected = plan.turns.filter(turn => turn.input === input);
-        const assetRows = copyPersistedSessionAttachments(selected.flatMap(turn => turn.rows), {
-          yeaftDir: this.#dir, sourceSessionId: input.sessionId, targetSessionId,
-        });
-        let offset = 0;
-        for (const turn of selected) {
-          turn.rows = assetRows.slice(offset, offset + turn.rows.length);
-          offset += turn.rows.length;
-        }
-      }
+      // Ownership is taken from every actual source, including deduplicated
+      // aliases. Missing primary blobs may use an available verified alias;
+      // byte conflicts or entirely missing local blobs reject atomically.
+      copyMergeAttachments(plan, this.#dir, targetSessionId);
       const { rows, idMaps } = materializeSessionMerge(plan, targetSessionId, firstSeq);
       if (rows.length) {
         const target = this.#segmentStoreForConversationDir(targetDir);
