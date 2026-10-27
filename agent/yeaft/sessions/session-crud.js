@@ -580,6 +580,10 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
  * Create an independent Session from an existing Session's durable state.
  * The Server inherits Project membership when it receives the copy result.
  * Server-owned assets retain their original ownership; message references are preserved.
+ * @param {string} yeaftDir Agent-owned data root
+ * @param {string} sourceSessionId Existing Session
+ * @param {{name?:string, throughTurnId?:string, beforeMessageId?:string}} [options]
+ * @returns {object} New Session metadata with copiedMessageCount
  */
 export function copySession(yeaftDir, sourceSessionId, options = {}) {
   const sourceYeaftDir = resolveSessionYeaftDir(yeaftDir, sourceSessionId);
@@ -618,9 +622,10 @@ export function copySession(yeaftDir, sourceSessionId, options = {}) {
     }
 
     const transcript = new ConversationStore(sourceYeaftDir);
-    const transcriptOptions = Object.prototype.hasOwnProperty.call(options, 'throughTurnId')
-      ? { throughTurnId: options.throughTurnId }
-      : {};
+    const transcriptOptions = {};
+    for (const key of ['throughTurnId', 'beforeMessageId']) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) transcriptOptions[key] = options[key];
+    }
     const { copiedCount } = transcript.copySession(sourceSessionId, copied.id, transcriptOptions);
     return { ...requireSessionMeta(sourceYeaftDir, copied.id), copiedMessageCount: copiedCount };
   } catch (error) {
@@ -628,6 +633,62 @@ export function copySession(yeaftDir, sourceSessionId, options = {}) {
     deleteSession(sourceYeaftDir, copied.id, options);
     if (['invalid_fork_boundary', 'fork_boundary_not_found', 'ambiguous_fork_boundary', 'incomplete_fork_boundary'].includes(error?.code)) {
       throw new SessionCrudError(error.code, sourceSessionId, error.message);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create a NEW Session from two idle Sessions in this Agent data root.
+ * Source config, announcement, default VP and workDir win; roster is the
+ * source-first union. Server inherits source Project membership separately.
+ * Neither source transcript nor metadata is modified. Any failure after target
+ * creation removes the new Session (including attachments and discovery entry).
+ * Ambiguous/partial shared requests fail closed with ambiguous_merge_history.
+ *
+ * @param {string} yeaftDir Agent-owned data root
+ * @param {string} sourceId Source of config/project/workdir semantics
+ * @param {string} otherId Other idle Session; must differ from sourceId
+ * @param {{name?:string, libDir?:string}} [options]
+ * @returns {object} New Session metadata, copiedMessageCount and sharedTurnCount
+ * @throws {SessionCrudError} invalid_merge_source, not_found, or ambiguous_merge_history
+ */
+export function mergeSessions(yeaftDir, sourceId, otherId, options = {}) {
+  if (typeof sourceId !== 'string' || typeof otherId !== 'string'
+      || !/^[A-Za-z0-9_-]+$/.test(sourceId) || !/^[A-Za-z0-9_-]+$/.test(otherId)
+      || sourceId === otherId) {
+    throw new SessionCrudError('invalid_merge_source', sourceId, 'Merge requires two distinct Sessions');
+  }
+  const sourceRoot = resolveSessionYeaftDir(yeaftDir, sourceId);
+  const otherRoot = resolveSessionYeaftDir(yeaftDir, otherId);
+  if (resolve(sourceRoot) !== resolve(otherRoot)) {
+    throw new SessionCrudError('invalid_merge_source', sourceId, 'Merge sources must belong to the same Agent data root');
+  }
+  const sourceMeta = requireSessionMeta(sourceRoot, sourceId);
+  const otherMeta = requireSessionMeta(otherRoot, otherId);
+  const sourceConfig = loadSessionConfig(sourceRoot, sourceId);
+  const roster = [...new Set([...(sourceMeta.roster || []), ...(otherMeta.roster || [])])];
+  const merged = createSessionFromSpec(sourceRoot, {
+    name: String(options.name || '').trim() || `${sourceMeta.name} merged`,
+    roster,
+    defaultVpId: sourceMeta.defaultVpId || roster[0] || null,
+    workDir: sourceMeta.workDir || '',
+  }, { ...options, preserveEmptyRoster: true });
+  try {
+    saveSessionConfig(sourceRoot, merged.id, sourceConfig);
+    const target = requireSession(sourceRoot, merged.id);
+    try {
+      const meta = { ...target.getMeta(), announcement: sourceMeta.announcement || '', metadataUpdatedAt: new Date().toISOString() };
+      target.saveMeta(meta);
+      addOrUpdateManifestSession(sourceRoot, meta, target.dir);
+    } finally { target.close(); }
+    const { copiedCount, sharedTurnCount } = new ConversationStore(sourceRoot)
+      .mergeSessions(sourceId, otherId, merged.id, options);
+    return { ...requireSessionMeta(sourceRoot, merged.id), copiedMessageCount: copiedCount, sharedTurnCount };
+  } catch (error) {
+    deleteSession(sourceRoot, merged.id, options);
+    if (error?.code === 'ambiguous_merge_history' || error?.code === 'invalid_merge_source') {
+      throw new SessionCrudError(error.code, sourceId, error.message);
     }
     throw error;
   }

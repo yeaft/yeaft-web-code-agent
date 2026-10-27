@@ -43,6 +43,7 @@ export {
   ensureDefaultSessionIfEmpty,
   createSessionFromSpec,
   copySession,
+  mergeSessions,
   renameSession,
   archiveSession,
   deleteSession,

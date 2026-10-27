@@ -33,6 +33,7 @@ import {
 } from './visible-entry.js';
 import { copyPersistedSessionAttachments } from '../attachments.js';
 import { markConversationDirty } from './history-index-state.js';
+import { historyError, isHumanRequest, messageOrigin, planSessionMerge, materializeSessionMerge } from './session-history.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -1544,7 +1545,9 @@ export class ConversationStore {
     };
 
     try {
-      this.#segmentStoreFor(fullMsg, { create: true }).append(fullMsg);
+      const segment = this.#segmentStoreFor(fullMsg, { create: true });
+      if (fullMsg.sessionId) fullMsg.origin = messageOrigin(fullMsg, fullMsg.sessionId, segment.metadata().streamId);
+      segment.append(fullMsg);
     } catch (err) {
       if (!strict && isPermissionError(err)) {
         if (!_permissionWarned) {
@@ -1611,7 +1614,12 @@ export class ConversationStore {
 
     for (const batch of batches.values()) {
       try {
-        this.#segmentStoreFor(batch[0], { create: true }).appendBatch(batch);
+        const segment = this.#segmentStoreFor(batch[0], { create: true });
+        if (batch[0].sessionId) {
+          const { streamId } = segment.metadata();
+          for (const row of batch) row.origin = messageOrigin(row, row.sessionId, streamId);
+        }
+        segment.appendBatch(batch);
       } catch (err) {
         if (isPermissionError(err)) {
           if (!_permissionWarned) {
@@ -1986,32 +1994,46 @@ export class ConversationStore {
    *
    * @param {string} sourceSessionId
    * @param {string} targetSessionId
-   * @param {{throughTurnId?: string}} [options]
+   * @param {{throughTurnId?: string, beforeMessageId?: string}} [options] Inclusive
+   * assistant-turn endpoint and/or exclusive durable human-message fence. Both
+   * must be valid; when combined, the earlier cutoff wins. Internal user rows
+   * cannot act as fences. Callers fencing a running query must supply its human ID.
    * @returns {{ copiedCount: number, idMap: Map<string, string> }}
    */
   copySession(sourceSessionId, targetSessionId, options = {}) {
     if (!sourceSessionId || !targetSessionId || sourceSessionId === targetSessionId) {
       return { copiedCount: 0, idMap: new Map() };
     }
-    const primary = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sourceSessionId));
-    const segmentedRows = primary.readAllRaw({ includeCold: true });
-    const legacyRows = this.#sessionFileEntries('all', sourceSessionId)
-      .map(entry => {
-        try { return this.readMessageFile(entry.path); } catch (err) {
-          if (isPermissionError(err)) return null;
-          throw err;
-        }
-      })
-      .filter(Boolean);
-    // Migration can temporarily leave the same durable row in both the legacy
-    // markdown layout and the segment store. Preserve legacy-only rows, but let
-    // the canonical segment copy win when both contain the same persisted id.
-    const rowsById = new Map();
-    for (const row of [...legacyRows, ...segmentedRows]) {
-      if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id) continue;
-      rowsById.set(row.id, row);
+    const { rows: durableRows, streamId } = this.#loadDurableSession(sourceSessionId);
+    let rows = durableRows;
+    let cutoff = rows.length;
+    if (Object.prototype.hasOwnProperty.call(options, 'beforeMessageId')) {
+      const fence = typeof options.beforeMessageId === 'string' ? options.beforeMessageId.trim() : '';
+      if (!fence) throw historyError('invalid_fork_boundary', 'beforeMessageId must be a nonempty string');
+      const index = rows.findIndex(row => row.id === fence);
+      if (index < 0) throw historyError('fork_boundary_not_found', `Human message not found: ${fence}`);
+      if (!isHumanRequest(rows[index])) throw historyError('invalid_fork_boundary', 'beforeMessageId must identify a durable human request');
+      const user = rows[index];
+      // A multi-VP legacy request can have several persisted human variants.
+      // Fence before the first variant, never before just the running VP.
+      cutoff = user.clientMessageId
+        ? rows.findIndex(row => isHumanRequest(row) && row.clientMessageId === user.clientMessageId)
+        : index;
+      // Also fence late/interleaved outputs and their transitive causal chain.
+      // Expanding toward the past is conservative: never copy part of the
+      // running request merely because its prompt was persisted unusually late.
+      const vpTurnKey = row => row.turnId
+        ? JSON.stringify([row.speakerVpId || row.vpId || '', row.turnId]) : null;
+      let previous;
+      do {
+        previous = cutoff;
+        const excluded = new Set(rows.slice(cutoff).flatMap(row => [row.id, row.clientMessageId].filter(Boolean)));
+        const turns = new Set(rows.slice(cutoff).map(vpTurnKey).filter(Boolean));
+        const earlyOutput = rows.findIndex((row, i) => i < cutoff
+          && (excluded.has(row.causalRootId) || turns.has(vpTurnKey(row))));
+        if (earlyOutput >= 0) cutoff = earlyOutput;
+      } while (cutoff < previous);
     }
-    let rows = [...rowsById.values()].sort(compareMessagesBySeq);
     if (Object.prototype.hasOwnProperty.call(options, 'throughTurnId')) {
       const throughTurnId = typeof options.throughTurnId === 'string'
         ? options.throughTurnId.trim()
@@ -2047,8 +2069,9 @@ export class ConversationStore {
         error.code = 'incomplete_fork_boundary';
         throw error;
       }
-      rows = prefix;
+      cutoff = Math.min(cutoff, prefix.length);
     }
+    rows = rows.slice(0, cutoff);
     if (rows.length === 0) return { copiedCount: 0, idMap: new Map() };
 
     const firstSeq = this.#reserveSeqRange(rows.length);
@@ -2063,7 +2086,10 @@ export class ConversationStore {
         ...row,
         id: idMap.get(row.id),
         sessionId: targetSessionId,
+        origin: messageOrigin(row, sourceSessionId, streamId),
       };
+      delete copy.seq;
+      if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remapId(row.quote.messageId) };
       if (idMap.has(row.causalRootId)) copy.causalRootId = remapId(row.causalRootId);
       if (Array.isArray(row.foldedMessageIds)) {
         copy.foldedMessageIds = row.foldedMessageIds.map(remapId);
@@ -2089,6 +2115,96 @@ export class ConversationStore {
       throw new Error(`Session transcript copy incomplete: expected ${rows.length}, persisted ${persistedIds.size}`);
     }
     return { copiedCount: written.length, idMap };
+  }
+
+  #loadDurableSession(sourceSessionId) {
+    const primary = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sourceSessionId));
+    const segmentedRows = primary.readAllRaw({ includeCold: true });
+    if (new Set(segmentedRows.map(row => row.id)).size !== segmentedRows.length) {
+      throw historyError('ambiguous_merge_history', 'Duplicate persisted identity within one Session');
+    }
+    const legacyRows = this.#sessionFileEntries('all', sourceSessionId)
+      .map(entry => {
+        try { return this.readMessageFile(entry.path); } catch (err) {
+          if (isPermissionError(err)) return null;
+          throw err;
+        }
+      })
+      .filter(Boolean);
+    // Migration can temporarily leave the same durable row in both the legacy
+    // markdown layout and the segment store. Preserve legacy-only rows, but let
+    // the canonical segment copy win when both contain the same persisted id.
+    const rowsById = new Map();
+    for (const row of [...legacyRows, ...segmentedRows]) {
+      if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id) continue;
+      rowsById.set(row.id, row);
+    }
+    const rows = [...rowsById.values()].sort(compareMessagesBySeq);
+    return { sessionId: sourceSessionId, streamId: primary.metadata().streamId, rows };
+  }
+
+  /**
+   * Merge two idle, Agent-owned Session transcripts into an EMPTY target.
+   * Sources are never rewritten. Shared whole human requests are deduplicated
+   * by origin (or guarded legacy client/VP-turn identities); divergent copies
+   * of a shared request reject with `ambiguous_merge_history`. Common requests
+   * precede timestamp-sorted branch requests, with source/order tie breaks.
+   * Message/tool references are namespaced per source; local attachments are
+   * independently copied and Server-owned attachment metadata stays unchanged.
+   * CRUD owns target metadata/manifest rollback; this method rolls back its
+   * newly-created conversation and attachment directories on write failure.
+   *
+   * @param {string} sourceSessionId Source of config/project/workdir semantics
+   * @param {string} otherSessionId Other idle Session in the same data root
+   * @param {string} targetSessionId New Session, distinct from both sources
+   * @param {object} [options] Reserved; caller guarantees both sources are idle
+   * @returns {{copiedCount:number, sharedTurnCount:number, idMaps:Map<string,Map<string,string>>}}
+   */
+  mergeSessions(sourceSessionId, otherSessionId, targetSessionId, options = {}) {
+    if (![sourceSessionId, otherSessionId, targetSessionId].every(id =>
+      typeof id === 'string' && /^[A-Za-z0-9_-]+$/.test(id))
+        || new Set([sourceSessionId, otherSessionId, targetSessionId]).size !== 3) {
+      throw historyError('invalid_merge_source', 'Merge requires three distinct Session identities');
+    }
+    const targetDir = this.#sessionConversationDir(targetSessionId);
+    const attachmentDir = join(this.#dir, 'sessions', targetSessionId, 'attachments');
+    if (existsSync(targetDir) || existsSync(attachmentDir)) {
+      throw historyError('duplicate', 'Merge target must have no conversation or attachments');
+    }
+    const inputs = [sourceSessionId, otherSessionId].map(id => this.#loadDurableSession(id));
+    const plan = planSessionMerge(inputs);
+    const count = plan.turns.reduce((sum, turn) => sum + turn.rows.length, 0);
+    const firstSeq = count ? this.#reserveSeqRange(count) : 0;
+    try {
+      // Ownership is taken from each actual source, never from origin metadata.
+      for (const input of inputs) {
+        const selected = plan.turns.filter(turn => turn.input === input);
+        const assetRows = copyPersistedSessionAttachments(selected.flatMap(turn => turn.rows), {
+          yeaftDir: this.#dir, sourceSessionId: input.sessionId, targetSessionId,
+        });
+        let offset = 0;
+        for (const turn of selected) {
+          turn.rows = assetRows.slice(offset, offset + turn.rows.length);
+          offset += turn.rows.length;
+        }
+      }
+      const { rows, idMaps } = materializeSessionMerge(plan, targetSessionId, firstSeq);
+      if (rows.length) {
+        const target = this.#segmentStoreForConversationDir(targetDir);
+        const written = target.appendBatch(rows);
+        const persisted = target.readAllRaw({ includeCold: true });
+        if (written.length !== rows.length || persisted.length !== rows.length
+            || persisted.some((row, index) => row.id !== rows[index].id)) {
+          throw new Error('Session transcript merge incomplete');
+        }
+        this.#markDirty({ sessionId: targetSessionId }, 'merge-sessions');
+      }
+      return { copiedCount: count, sharedTurnCount: plan.sharedTurnCount, idMaps };
+    } catch (error) {
+      rmSync(targetDir, { recursive: true, force: true });
+      rmSync(attachmentDir, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   /**
