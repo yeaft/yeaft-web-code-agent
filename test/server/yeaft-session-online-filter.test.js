@@ -277,6 +277,14 @@ describe('Yeaft Session online Agent filtering', () => {
     }
     expect(forwardToAgent).not.toHaveBeenCalled();
     expect(client.sent).toHaveLength(2);
+    for (const otherSessionId of ['', null, request.sessionId]) {
+      await handleClientConversation('merge-client', client, { ...request, otherSessionId }, check);
+      expect(client.sent.at(-1)).toMatchObject({
+        requestId: request.requestId, sourceSessionId: request.sessionId, otherSessionId,
+        ok: false, error: { code: 'invalid_merge_source' },
+      });
+    }
+    expect(forwardToAgent).not.toHaveBeenCalled();
     expect(check).not.toHaveBeenCalled();
   });
 

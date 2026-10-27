@@ -1624,6 +1624,53 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'yeaft_merge_sessions':
+    case 'unify_merge_sessions': {
+      const mergeAgentId = msg.agentId || client.currentAgent || null;
+      const reject = async (code, message) => sendToWebClient(client, {
+        type: 'session_crud_result', op: 'merge', ok: false,
+        requestId: msg.requestId ?? null,
+        agentId: mergeAgentId,
+        sourceSessionId: msg.sessionId ?? null,
+        otherSessionId: msg.otherSessionId ?? null,
+        error: { code, message },
+      });
+      // Use the shared ACL directly: checkAgentAccess emits an uncorrelated
+      // error, which would leave the browser's pending merge waiting forever.
+      const accessError = resolveAgentAccessError(mergeAgentId, client.userId, client.role);
+      if (accessError) {
+        await reject(accessError === 'Agent access denied' ? 'agent_access_denied' : 'agent_unavailable', accessError);
+        break;
+      }
+      if (!agents.get(mergeAgentId)?.capabilities?.includes('session_merge')) {
+        await reject('session_merge_unsupported', 'The selected Agent does not support merging Sessions.');
+        break;
+      }
+      if (typeof msg.sessionId !== 'string' || !msg.sessionId.trim()
+          || typeof msg.otherSessionId !== 'string' || !msg.otherSessionId.trim()
+          || msg.sessionId === msg.otherSessionId) {
+        await reject('invalid_merge_source', 'Select two different Sessions on the same Agent.');
+        break;
+      }
+      if (!CONFIG.skipAuth && (!yeaftSessionDb.getForAgent(client.userId, mergeAgentId, msg.sessionId)
+          || !yeaftSessionDb.getForAgent(client.userId, mergeAgentId, msg.otherSessionId))) {
+        await reject('agent_access_denied', 'Both Sessions must belong to the selected Agent and current user.');
+        break;
+      }
+      // Session ids are scoped to this one Agent; no cross-Agent lookup or
+      // fallback is allowed even if another Agent has an identically named id.
+      let dispatched = false;
+      try {
+        dispatched = await forwardToAgent(mergeAgentId, {
+          type: 'yeaft_merge_sessions', requestId: msg.requestId,
+          sessionId: msg.sessionId, otherSessionId: msg.otherSessionId,
+          ...(msg.name !== undefined ? { name: msg.name } : {}),
+        });
+      } catch { /* Report a correlated dispatch failure below. */ }
+      if (!dispatched) await reject('agent_unavailable', 'Agent is unavailable; Sessions were not merged.');
+      break;
+    }
+
     case 'yeaft_merge_thread':
     case 'unify_merge_thread': {
       const mergeAgentId = msg.agentId || client.currentAgent;
