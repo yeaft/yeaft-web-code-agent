@@ -226,9 +226,9 @@ test('Plugins keep the existing sidebar and browse responsively in light desktop
   expect(await page.locator('.plugin-center-content').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
   await page.getByRole('button', { name: 'All plugins', exact: true }).click();
   await expect(page.getByRole('button', { name: 'View Review guide details', exact: true })).toBeFocused();
-  await page.getByRole('button', { name: 'More plugin actions', exact: true }).click();
+  await page.getByRole('button', { name: 'More actions', exact: true }).click();
   await page.getByRole('button', { name: 'Enabled only', exact: true }).click();
-  await page.getByRole('button', { name: 'More plugin actions', exact: true }).click();
+  await page.getByRole('button', { name: 'More actions', exact: true }).click();
   const filterGeometry = await page.locator('.plugin-center-menu-check').evaluate(mark => {
     const row = mark.parentElement, style = getComputedStyle(row);
     return {
