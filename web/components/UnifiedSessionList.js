@@ -925,7 +925,7 @@ export default {
                   class="sidebar-primary-action sidebar-plugins-entry"
                   :class="{ active: resolvedProjectStore.pluginCenterOpen }"
                   :aria-current="resolvedProjectStore.pluginCenterOpen ? 'page' : undefined"
-                  :disabled="!agents.some(agent => agent?.online)" @click="openPlugins">
+                  :disabled="!(resolvedProjectStore.pluginCenterAgents || agents).some(agent => agent?.online || resolvedProjectStore.pluginConfigByAgent?.[agent.id]?.loaded)" @click="openPlugins">
             <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M14 3.5a3 3 0 0 0-4.24 4.24L3.5 14l6.5 6.5 6.26-6.26A3 3 0 0 0 20.5 10L17 13.5l-2.5-2.5L18 7.5A3 3 0 0 0 14 3.5z"/></svg>
             <span>{{ $t('yeaft.plugins.title') }}</span>
           </button>

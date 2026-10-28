@@ -2,14 +2,15 @@
 import * as Vue from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  acceptPluginConfigReply, loadPluginConfig, retryPluginConfig, savePluginConfig, setPluginEnabled,
+  acceptPluginConfigReply, clearPluginState, loadPluginConfig, pluginCenterAgents, retryPluginConfig, savePluginConfig, setPluginEnabled,
 } from '../../web/stores/helpers/plugin-config.js';
 
 globalThis.Vue = Vue;
-globalThis.Pinia = { defineStore: () => () => ({}) };
+const storeOptions = {};
+globalThis.Pinia = { defineStore: (id, options) => { storeOptions[id] = options; return () => ({}); } };
 const { handleMessage } = await import('../../web/stores/helpers/messageHandler.js');
 
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 function harness({ loaded = true, plugins = {} } = {}) {
   const sent = [];
@@ -204,6 +205,49 @@ describe('Agent-scoped Plugin Center auto-save', () => {
     });
   });
 
+  it('clears private caches and retires queued/in-flight work across reset and same-store login', async () => {
+    const h = harness();
+    const auth = { ...storeOptions.auth.state(), ...storeOptions.auth.actions,
+      startSessionRefresh: vi.fn(), stopSessionRefresh: vi.fn() };
+    h.store.clearPluginState = () => clearPluginState(h.store);
+    vi.stubGlobal('Pinia', { ...globalThis.Pinia, useChatStore: () => h.store });
+    h.store.pluginCatalogByKey = { a: { catalog: { skills: [{ name: 'private' }] } } };
+    const done = h.toggle('tools', 'shell', false, ['shell', 'read']);
+    await flush();
+    h.toggle('skills', 'review', false, ['review', 'plan']);
+    const oldRequest = h.sent[0];
+    auth.reset();
+    await done;
+    expect(h.store.pluginConfigByAgent).toEqual({});
+    expect(h.store.pluginCatalogByKey).toEqual({});
+    expect(h.store._pluginPending).toEqual({});
+    expect(h.store.pluginCenterOpen).toBe(false);
+    h.reply(oldRequest);
+    await flush();
+    expect(h.store.pluginConfigByAgent).toEqual({});
+    expect(h.sent).toHaveLength(1);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ success: true, token: 'bob', userId: 'bob' }) })));
+    expect(await auth.login('bob', 'password')).toBe(true);
+    expect(h.store.pluginConfigByAgent).toEqual({});
+    const next = h.toggle('tools', 'read', false, ['shell', 'read']);
+    await flush();
+    expect(h.sent[1].type).toBe('get_yeaft_plugins');
+    h.reply(h.sent[1], { plugins: { tools: ['read', 'new-tool'], skills: [] } });
+    await flush();
+    expect(h.sent[2].plugins).toEqual({ tools: ['new-tool'], skills: [] });
+    h.reply(h.sent[2]);
+    await next;
+    // A new auth generation without an explicit logout clears too.
+    expect(await auth.login('bob', 'password')).toBe(true);
+    expect(h.store.pluginConfigByAgent).toEqual({});
+    // Even a drain which has not sent its first request cannot restart later.
+    const queued = h.toggle('tools', 'shell', false, ['shell']);
+    auth.reset();
+    await queued;
+    expect(h.sent).toHaveLength(3);
+    expect(h.store.pluginConfigByAgent).toEqual({});
+  });
+
   it('keeps legacy whole-config save/load promises compatible and loads before an initial edit', async () => {
     const h = harness({ loaded: false });
     const done = savePluginConfig(h.store, { skills: ['plan'] }, 'a');
@@ -221,5 +265,12 @@ describe('Agent-scoped Plugin Center auto-save', () => {
     expect(h.sent[2].plugins).toEqual({});
     h.reply(h.sent[2]);
     expect(await restoreAll).toMatchObject({ plugins: {}, error: null });
+    h.store.agents = [];
+    expect(pluginCenterAgents(h.store)).toEqual([
+      expect.objectContaining({ id: 'a', online: false }),
+    ]);
+    expect(h.store.pluginConfigByAgent.a.agent).not.toHaveProperty('online');
+    h.store.agents = [{ id: 'a', name: 'reconnected', online: true }];
+    expect(pluginCenterAgents(h.store)).toEqual(h.store.agents);
   });
 });

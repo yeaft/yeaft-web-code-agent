@@ -66,6 +66,17 @@ describe('Plugin Center workspace', () => {
 
   it('switches Agent state, preserves cached offline rows, distinguishes connection from enabled and retries attributed errors', async () => {
     await render();
+    chat.pluginConfigByAgent.a.loading = true;
+    await Vue.nextTick();
+    const cachedToggle = wrapper.get('[data-entry="skills:review"] .plugin-center-switch');
+    expect(cachedToggle.attributes('disabled')).toBeDefined();
+    await cachedToggle.trigger('click');
+    expect(chat.setPluginEnabled).not.toHaveBeenCalled();
+    // Authoritative refresh can change a different field while rows stay cached.
+    chat.pluginConfigByAgent.a = { ...chat.pluginConfigByAgent.a, loading: false, plugins: { tools: [] }, draft: { tools: [] } };
+    await Vue.nextTick();
+    expect(wrapper.get('[data-entry="tools:FileRead"] .plugin-center-switch').attributes('aria-checked')).toBe('false');
+    expect(cachedToggle.attributes('disabled')).toBeUndefined();
     await wrapper.vm.selectAgent('b'); await flushPromises();
     expect(wrapper.get('[data-entry="skills:review"] .plugin-center-switch').attributes('aria-checked')).toBe('false');
     expect(wrapper.get('[data-entry="mcpServers:github"] .plugin-center-switch').attributes('aria-checked')).toBe('true');
@@ -78,7 +89,19 @@ describe('Plugin Center workspace', () => {
     await wrapper.vm.selectAgent('c'); await flushPromises();
     expect(wrapper.findAll('.plugin-center-row')).toHaveLength(3);
     for (const toggle of wrapper.findAll('.plugin-center-switch')) expect(toggle.attributes('disabled')).toBeDefined();
-    expect(chat.loadPluginConfig).not.toHaveBeenCalledWith('c', expect.anything());
+    expect(chat.loadPluginConfig).not.toHaveBeenCalledWith('c');
+    await wrapper.vm.selectAgent('b'); await flushPromises();
+    chat.pluginCatalogByKey.b = { loading: false, error: 'timeout' };
+    await Vue.nextTick();
+    expect(wrapper.get('.plugin-center-state').text()).toContain('timeout');
+    expect(wrapper.get('.plugin-center-state button').attributes('disabled')).toBeUndefined();
+    chat.pluginConfigByAgent.b.agent = { ...chat.agents.find(agent => agent.id === 'b') };
+    chat.pluginCatalogByKey.b = { catalog, loaded: true };
+    chat.agents = [];
+    await Vue.nextTick();
+    expect(wrapper.findAll('.plugin-center-row')).toHaveLength(3);
+    expect(wrapper.get('.plugin-center-agent-name').text()).toBe('Beta');
+    for (const toggle of wrapper.findAll('.plugin-center-switch')) expect(toggle.attributes('disabled')).toBeDefined();
   });
 
   it('creates in captured Agent/project scope, auto-enables explicit selections and guards unsaved forms', async () => {

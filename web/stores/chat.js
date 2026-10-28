@@ -1216,6 +1216,7 @@ export const useChatStore = defineStore('chat', {
   }),
 
   getters: {
+    pluginCenterAgents: state => pluginConfigHelpers.pluginCenterAgents(state),
     sidebarSessionCatalog(state) {
       if (!sidebarCatalogAuthIsCurrent(state, useAuthStore())) return [];
       return sidebarSessionCatalogRows(state, getSessionsStore()?.sessionList || []);
@@ -1765,11 +1766,15 @@ export const useChatStore = defineStore('chat', {
       if (!this.workCenterUiEnabled) this.leaveWorkCenter();
     },
     openPluginCenter(agentId = null) {
-      const target = this.agents.find(agent => agent?.online && agent.id === agentId)
-        || this.agents.find(agent => agent?.online && agent.id === this.currentAgent)
-        || this.agents.find(agent => agent?.online)
+      const agents = pluginConfigHelpers.pluginCenterAgents(this);
+      const inspectable = agent => agent?.online || this.pluginConfigByAgent[agent?.id]?.loaded;
+      const target = agents.find(agent => inspectable(agent) && agent.id === agentId)
+        || agents.find(agent => inspectable(agent) && agent.id === this.currentAgent)
+        || agents.find(agent => inspectable(agent) && agent.id === this.pluginCenterAgentId)
+        || agents.find(agent => inspectable(agent))
         || null;
       if (!target) return false;
+      this.leaveWorkCenter();
       this.pluginCenterAgentId = target.id;
       this.pluginCenterOpen = true;
       return true;
@@ -1779,6 +1784,9 @@ export const useChatStore = defineStore('chat', {
     },
     pluginCatalogKey(agentId, workDir = '') {
       return `${agentId || ''}\u001f${String(workDir || '').trim()}`;
+    },
+    clearPluginState() {
+      pluginConfigHelpers.clearPluginState(this);
     },
     loadPluginConfig(agentId = this.pluginCenterAgentId || this.currentAgent) {
       return pluginConfigHelpers.loadPluginConfig(this, agentId);
@@ -8811,6 +8819,7 @@ export const useChatStore = defineStore('chat', {
       this.authenticated = false;
       this.sessionKey = null;
       this.agents = [];
+      this.clearPluginState();
       this.currentAgent = null;
       this.currentAgentInfo = null;
       this.yeaftStatusByAgent = {};

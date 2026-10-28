@@ -17,15 +17,23 @@ function clearYeaftHistoryMemory() {
   }
 }
 
+function clearPluginBrowserState() {
+  try { globalThis.Pinia?.useChatStore?.()?.clearPluginState?.(); } catch {
+    // Authentication can initialize before the chat store is installed.
+  }
+}
+
 let activeYeaftHistoryOwnerId = null;
 
 function bindYeaftHistoryOwner(ownerId) {
+  clearPluginBrowserState();
   const nextOwnerId = String(ownerId || '').trim() || null;
   if (activeYeaftHistoryOwnerId !== nextOwnerId) clearYeaftHistoryMemory();
   activeYeaftHistoryOwnerId = nextOwnerId;
 }
 
 function clearYeaftHistoryOwner() {
+  clearPluginBrowserState();
   clearYeaftHistoryMemory();
   activeYeaftHistoryOwnerId = null;
 }

@@ -1,4 +1,5 @@
 import NavigationIcon from './NavigationIcon.js';
+import { pluginCenterAgents } from '../stores/helpers/plugin-config.js';
 import { confirmDialog, useDialogState } from '../utils/dialog.js';
 import { agentSupportsYeaftPlugins } from '../utils/yeaft-plugin-capability.js';
 import { agentSupportsYeaftManagedSkills } from '../utils/yeaft-managed-skill-capability.js';
@@ -21,10 +22,10 @@ export default {
     store() {
       try { return window.Pinia?.useChatStore?.() || null; } catch { return null; }
     },
-    agents() { return this.store?.agents || []; },
+    agents() { return pluginCenterAgents(this.store); },
     agentId() { return this.store?.pluginCenterAgentId || this.store?.currentAgent || null; },
     selectedAgent() { return this.agents.find(agent => agent.id === this.agentId) || null; },
-    online() { return !!this.selectedAgent?.online && this.store?.connectionState !== 'disconnected'; },
+    online() { return !!this.selectedAgent?.online && (!this.store?.connectionState || this.store.connectionState === 'connected'); },
     agentSupportsPlugins() { return !!this.selectedAgent && agentSupportsYeaftPlugins(this.selectedAgent); },
     agentSupportsManagedSkills() { return !!this.selectedAgent && agentSupportsYeaftManagedSkills(this.selectedAgent); },
     activeSession() { return this.store?.activePluginSession?.() || {}; },
@@ -34,13 +35,13 @@ export default {
     catalogWorkDir() { return this.projectSkillAvailable ? this.activeSession.workDir : ''; },
     configRecord() { return this.store?.pluginConfigByAgent?.[this.agentId] || {}; },
     selection() { return this.configRecord.draft ?? this.configRecord.plugins ?? {}; },
-    configReady() { return this.online && this.agentSupportsPlugins && this.configRecord.loaded && !(this.configRecord.error && this.configRecord.errorOperation === 'load'); },
+    configReady() { return this.online && this.agentSupportsPlugins && this.configRecord.loaded && !this.configRecord.loading && !(this.configRecord.error && this.configRecord.errorOperation === 'load'); },
     catalogRecord() {
       const key = this.store?.pluginCatalogKey?.(this.agentId, this.catalogWorkDir);
       return this.store?.pluginCatalogByKey?.[key] || {};
     },
     catalog() { return { tools: [], skills: [], skillSources: [], mcpServers: [], ...this.catalogRecord.catalog }; },
-    loading() { return this.online && this.agentSupportsPlugins && (!this.catalogRecord.loaded || this.catalogRecord.loading || this.configRecord.loading); },
+    loading() { return this.online && this.agentSupportsPlugins && ((!this.catalogRecord.loaded && !this.catalogRecord.error) || this.catalogRecord.loading || this.configRecord.loading); },
     loadError() { return this.catalogRecord.error || (this.configRecord.errorOperation === 'load' ? this.configRecord.error : '') || ''; },
     categories() {
       return ['all', ...FIELDS].map(id => ({ id, label: this.$t('yeaft.plugins.' + id) }));
@@ -103,7 +104,7 @@ export default {
       if (!this.agentId || !this.online || !this.agentSupportsPlugins) return;
       const agentId = this.agentId, workDir = this.catalogWorkDir;
       await Promise.all([
-        this.store.loadPluginConfig(agentId, { force }),
+        this.store.loadPluginConfig(agentId),
         (force || !this.catalogRecord.loaded) ? this.store.loadPluginCatalog(agentId, workDir) : Promise.resolve(),
       ]);
     },

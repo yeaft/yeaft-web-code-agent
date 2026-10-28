@@ -6,6 +6,28 @@ const runtimes = new WeakMap();
 const fields = ['tools', 'skills', 'mcpServers'];
 const REQUEST_TIMEOUT = 10_000;
 
+/** Auth boundary: discard private cache/intent and retire async continuations. */
+export function clearPluginState(store) {
+  const agents = runtimes.get(store);
+  for (const state of agents?.values() || []) {
+    state.cancelled = true;
+    state.intents = [];
+  }
+  for (const pending of Object.values(store._pluginPending || {})) {
+    clearTimeout(pending.timer);
+    if (pending.finish) pending.finish({ stale: true });
+    else pending.resolve?.({ stale: true, error: 'Authentication changed' });
+  }
+  store._pluginPending = {};
+  runtimes.delete(store);
+  store.pluginConfigByAgent = {};
+  store.pluginCatalogByKey = {};
+  store.pluginCatalogRequestByKey = {};
+  store.managedSkillRequestByKey = {};
+  store.pluginCenterAgentId = null;
+  store.pluginCenterOpen = false;
+}
+
 function runtime(store, agentId) {
   let agents = runtimes.get(store);
   if (!agents) runtimes.set(store, agents = new Map());
@@ -33,6 +55,16 @@ function patch(store, agentId, changes) {
   const next = { ...record(store, agentId), ...changes, agentId };
   store.pluginConfigByAgent = { ...store.pluginConfigByAgent, [agentId]: next };
   return next;
+}
+
+/** Plugin-only inventory: cached Agents are always read-only until live again. */
+export function pluginCenterAgents(store) {
+  const live = store?.agents || [];
+  const ids = new Set(live.map(agent => agent.id));
+  const cached = Object.values(store?.pluginConfigByAgent || {})
+    .filter(record => record.loaded && record.agent?.id && !ids.has(record.agent.id))
+    .map(record => ({ ...record.agent, online: false }));
+  return [...live, ...cached];
 }
 
 function availabilityError(store, agentId) {
@@ -134,10 +166,22 @@ export function loadPluginConfig(store, agentId) {
 
 async function readConfig(store, agentId) {
   const state = runtime(store, agentId);
-  patch(store, agentId, { loading: true });
+  const agent = store.agents?.find(item => item?.id === agentId);
+  patch(store, agentId, {
+    loading: true,
+    // Keep only display/capability metadata with this in-memory cache. The
+    // Server removes disconnected Agents from inventory rather than marking
+    // them offline; cached metadata must never authorize writes.
+    ...(agent ? { agent: {
+      id: agent.id, name: agent.name,
+      capabilityMetadataProvided: agent.capabilityMetadataProvided,
+      capabilities: Array.isArray(agent.capabilities) ? [...agent.capabilities] : [],
+    } } : {}),
+  });
   const result = await request(store, agentId, 'config');
   // An edit or newer read supersedes this read, even if its Promise callback
   // runs after the newer action started. It must not clear a save or its error.
+  if (state.cancelled) return { stale: true };
   if (result.stale || (result.fence != null && result.fence !== state.fence)) {
     return { ...record(store, agentId), stale: true };
   }
@@ -159,8 +203,10 @@ async function drain(store, agentId, reconcile) {
   const connectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);
   // Coalesce all synchronous toggles before creating a wire write.
   await Promise.resolve();
+  if (state.cancelled) return { stale: true };
   if (reconcile || !record(store, agentId).loaded) {
     const result = await readConfig(store, agentId);
+    if (state.cancelled) return { stale: true };
     if (result.error) return failure(store, agentId, result.error, record(store, agentId).uncertain);
   }
   while (state.intents.length) {
@@ -172,6 +218,7 @@ async function drain(store, agentId, reconcile) {
     const desired = applyIntents(record(store, agentId).plugins, state.intents.slice(0, count));
     patch(store, agentId, { optimistic: desired, draft: copy(desired), loading: false });
     const result = await request(store, agentId, 'save', desired);
+    if (state.cancelled) return { stale: true };
     if (result.error || result.stale) {
       return failure(store, agentId, result.error || 'Plugin configuration changed; retry required', result.uncertain);
     }
@@ -191,7 +238,7 @@ function start(store, agentId, reconcile = false) {
   state.stopError = null;
   patch(store, agentId, { saving: true });
   const task = drain(store, agentId, reconcile).catch(error => (
-    failure(store, agentId, error?.message || String(error), true)
+    state.cancelled ? { stale: true } : failure(store, agentId, error?.message || String(error), true)
   )).finally(() => { if (state.task === task) state.task = null; });
   state.task = task;
   return task;
