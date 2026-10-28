@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/test-server.js';
+import { clickPersonAction } from '../../helpers/person-actions.js';
 import { personRecords } from '../../../test/fixtures/person-records.js';
 
 import { readFileSync } from 'node:fs';
@@ -17,7 +18,7 @@ const conversationRecords = new WeakMap();
 // This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [] } = {}) {
+async function mockPersonSocket(page, { conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], personName = 'Ada', agentName = 'Owner Agent A' } = {}) {
   await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
@@ -37,11 +38,14 @@ async function mockPersonSocket(page, { conversationFlow = false, modelPreferenc
   let messageHistoryReply;
   let messageHistoryLoaded = false;
   let saveSettings;
+  let holdStatus = false;
+  let statusReplies = [];
+  let searchError = null;
   let models = [{ id: 'provider/model-a' }, { id: 'provider/model-b' }];
   let modelSettings = { modelCandidates: [], defaultModel: null };
   const effectiveCandidates = () => modelSettings.modelCandidates.length ? modelSettings.modelCandidates : models.slice(0, 8).map(model => model.id);
   const agents = [
-    { id: 'person-a', name: 'Owner Agent A', online: true, capabilities: ['digital_person'] },
+    { id: 'person-a', name: agentName, online: true, capabilities: ['digital_person'] },
     { id: 'person-b', name: 'Owner Agent B', online: true, capabilities: ['digital_person'] },
     { id: 'old-agent', name: 'Old Agent', online: true, capabilities: [] },
   ];
@@ -58,13 +62,16 @@ async function mockPersonSocket(page, { conversationFlow = false, modelPreferenc
       if (request.type !== 'person_request') { server.send(message); return; }
       requests.push(request);
       const reply = (data, extra = {}) => route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op, ok: true, data, ...extra }));
-      if (request.op === 'status') reply({ configured: true, renameSupported: true, reason: '', models,
-        ...(modelPreferences ? { defaultModelSupported: true, ...modelSettings, agentDefaultModel: models[0]?.id || null,
-          effectiveModelCandidates: effectiveCandidates(), effectiveDefaultModel: modelSettings.defaultModel || effectiveCandidates()[0] || null } : {}) });
+      if (request.op === 'status') {
+        const respond = () => reply({ configured: true, renameSupported: true, outputsSupported: true, reason: '', models,
+          ...(modelPreferences ? { defaultModelSupported: true, ...modelSettings, agentDefaultModel: models[0]?.id || null,
+            effectiveModelCandidates: effectiveCandidates(), effectiveDefaultModel: modelSettings.defaultModel || effectiveCandidates()[0] || null } : {}) });
+        if (holdStatus) statusReplies.push(respond); else respond();
+      }
       else if (request.op === 'open') reply({ person: { id: 'person-1' } });
       else if (request.op === 'snapshot') {
         viewedAgentId = request.agentId;
-        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? 'Ada' : 'Bea', ...(modelPreferences ? { settings: modelSettings } : {}) }, state: { version: 4, currentEpisodeId: 'episode-1', summary: '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? activeEpisode : null });
+        reply({ person: { id: 'person-1', name: request.agentId === 'person-a' ? personName : 'Bea', ...(modelPreferences ? { settings: modelSettings } : {}) }, state: { version: 4, currentEpisodeId: 'episode-1', summary: '' }, messages: agentMessages.get(request.agentId) || [], busy, latestEpisode, episodeId: busy ? activeEpisode : null });
       } else if (request.op === 'messages') {
         if (conversationFlow && request.payload.cursor && olderMessages.length) {
           messageHistoryReply = () => {
@@ -93,7 +100,15 @@ async function mockPersonSocket(page, { conversationFlow = false, modelPreferenc
         reply({ items: request.payload.section === 'memory'
           ? [{ id: 'curiosity', kind: 'interest', statement: 'An interest saved in memory. <script>text only</script>', revision: 2, epistemicState: 'hypothesis', sourceRefs: ['message:older'] }]
           : [{ id: 'Script.sum', domain: 'script', description: 'Sum numbers', version: 1, code: 'return input.reduce((a,b)=>a+b,0)' }], nextCursor: null });
+      } else if (request.op === 'outputs') {
+        reply({ items: [], nextCursor: null });
       } else if (request.op === 'search') {
+        if (searchError) {
+          route.send(JSON.stringify({ type: 'person_response', agentId: request.agentId, requestId: request.requestId, op: request.op,
+            ok: false, error: { code: 'search_failed', message: searchError } }));
+          searchError = null;
+          return;
+        }
         reply({ items: [{ id: 'archived', role: 'user', text: 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
         if (conversationFlow && request.op === 'send') {
@@ -136,6 +151,10 @@ async function mockPersonSocket(page, { conversationFlow = false, modelPreferenc
     });
   });
   return { requests,
+    holdStatus() { holdStatus = true; },
+    statusPending() { return statusReplies.length > 0; },
+    finishStatus() { holdStatus = false; const replies = statusReplies; statusReplies = []; replies.forEach(reply => reply()); },
+    failSearch(message) { searchError = message; },
     pause() { latestEpisode = { ...latestEpisode, status: 'paused' }; },
     receive(messageId) { const row = messages.find(row => row.id === messageId); row.deliveryState = 'received'; row.receivedAt = new Date().toISOString(); },
     messageHistoryPending() { return !!messageHistoryReply; },
@@ -322,7 +341,7 @@ for (const scenario of [{ width: 320, theme: 'dark', locale: 'zh-CN' }]) {
     const zh = scenario.locale === 'zh-CN';
     if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
     await page.locator('.sidebar-person-trigger:visible').click();
-    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
+    await clickPersonAction(page, 'settings');
     const dialog = page.getByRole('dialog');
     const list = dialog.locator('.person-model-list input');
     await expect(list.nth(0)).toBeChecked();
@@ -350,7 +369,7 @@ for (const scenario of [{ width: 320, theme: 'dark', locale: 'zh-CN' }]) {
     mock.finishSettings();
     await expect(dialog).toHaveCount(0);
     expect(mock.requests.filter(r => r.op === 'settings').at(-1).payload).toEqual({ modelCandidates: ['provider/model-b'], defaultModel: 'provider/model-b' });
-    await page.getByRole('button', { name: zh ? '配置' : 'Settings', exact: true }).click();
+    await clickPersonAction(page, 'settings');
     await expect(select).toHaveValue('provider/model-b');
     await expect(list.nth(0)).not.toBeChecked();
     await expect(list.nth(1)).toBeChecked();
@@ -587,7 +606,7 @@ for (const scenario of responseScenarios) {
     expectPinnedFrames(cancelFrames);
     expectScrollStable(cancelFrames, cancelScroll);
     mock.waiting('model', 122000); // deliberately replay an older running status
-    await page.locator('.person-header-actions button').first().click();
+    await clickPersonAction(page, 'refresh');
     await expect(input).toBeEnabled();
     await expect(feedback).toHaveCount(0);
     mock.disconnect();
@@ -675,7 +694,7 @@ for (const width of [320]) {
     await page.getByRole('button', { name: '↓ Latest', exact: true }).click();
     await expect(pane.locator(replySelector('message-340'))).toBeInViewport();
     await expect.poll(() => pane.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(4);
-    await page.locator('.person-thoughts-button').click();
+    await clickPersonAction(page, 'inside');
     const thoughts = page.locator('#person-thoughts');
     // Journal rows group persisted traces by episode, newest sequence first.
     // Missing trigger evidence is an episode, not a synthetic cancelled row.
@@ -688,3 +707,232 @@ for (const width of [320]) {
     await expect.poll(() => thoughts.locator('.person-thought').count()).toBeLessThan(30);
   });
 }
+
+async function expectPersonFits(page) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await page.locator('.person-header').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+}
+
+async function expectMobilePersonPanel(page) {
+  const panel = page.locator('#person-side-panel');
+  await expect(panel).toHaveAttribute('role', 'dialog');
+  await expect(panel).toHaveAttribute('aria-modal', 'true');
+  await expect.poll(() => panel.evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    return Math.max(Math.abs(rect.left), Math.abs(rect.top), Math.abs(rect.right - innerWidth), Math.abs(rect.bottom - innerHeight));
+  })).toBeLessThanOrEqual(2);
+  return panel;
+}
+
+async function expectInspectorScroller(page) {
+  const nav = page.locator('.person-inspector-nav');
+  expect(await nav.evaluate(el => getComputedStyle(el).overflowX)).toBe('auto');
+  expect(await nav.locator('button').evaluateAll(elements => {
+    const tops = elements.map(el => el.getBoundingClientRect().top);
+    return Math.max(...tops) - Math.min(...tops);
+  })).toBeLessThanOrEqual(1);
+  // Keyboard activation must reveal the active item, not rely on a click's
+  // implicit scrollIntoView. Reset the scroller after focus to distinguish the
+  // component's active-item scrolling from native browser focus scrolling.
+  const sections = nav.locator('button');
+  await sections.first().focus();
+  for (let i = 1; i < await sections.count(); i++) await page.keyboard.press('Tab');
+  await nav.evaluate(el => { el.scrollLeft = 0; });
+  await page.keyboard.press('Enter');
+  await expect(sections.last()).toHaveAttribute('aria-current', 'page');
+  await expect.poll(() => sections.last().evaluate(el => {
+    const item = el.getBoundingClientRect(), nav = el.parentElement.getBoundingClientRect();
+    return item.left >= nav.left - 1 && item.right <= nav.right + 1;
+  })).toBe(true);
+  // Reopen the first section through the keyboard too; both scroll directions
+  // must reveal the active item without introducing a second row.
+  await sections.last().focus();
+  for (let i = 1; i < await sections.count(); i++) await page.keyboard.press('Shift+Tab');
+  await nav.evaluate(el => { el.scrollLeft = el.scrollWidth; });
+  await page.keyboard.press('Enter');
+  await expect(sections.first()).toHaveAttribute('aria-current', 'page');
+  await expect.poll(() => sections.first().evaluate(el => {
+    const item = el.getBoundingClientRect(), nav = el.parentElement.getBoundingClientRect();
+    return item.left >= nav.left - 1 && item.right <= nav.right + 1;
+  })).toBe(true);
+}
+
+for (const width of [320, 390]) {
+  for (const theme of ['light', 'dark']) {
+    test(`Digital Person mobile actions preserve reading and draft ${width}px ${theme}`, async ({ page, serverUrl }, testInfo) => {
+      test.setTimeout(60000);
+      const zh = theme === 'dark';
+      const name = '知微 Ada—VeryLongUnbrokenDigitalPersonName'.repeat(4);
+      const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation,
+        personName: name, agentName: 'Owner Agent With An Extremely Long Unbroken Name'.repeat(4) });
+      await openResponseConversation(page, serverUrl, { width, theme });
+      if (zh) await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
+      const more = page.locator('.person-more-button');
+      await expect(more).toHaveAccessibleName(zh ? '更多操作' : 'More actions');
+      await expect(page.locator('.person-identity h1')).toHaveText(name);
+      const headerControls = [page.locator('.person-navigation > button'), page.locator('#person-agent .modern-select-trigger'), more];
+      for (const control of headerControls) {
+        const box = await control.boundingBox();
+        expect(box.width).toBeGreaterThanOrEqual(44);
+        expect(box.height).toBeGreaterThanOrEqual(44);
+      }
+      const row = await page.locator('.person-navigation > button, #person-agent .modern-select-trigger, .person-identity h1, .person-more-button')
+        .evaluateAll(elements => elements.map(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, center: r.top + r.height / 2 }; }));
+      expect(row).toHaveLength(4);
+      expect(Math.max(...row.map(r => r.center)) - Math.min(...row.map(r => r.center))).toBeLessThanOrEqual(2);
+      for (let i = 1; i < row.length; i++) expect(row[i].left).toBeGreaterThanOrEqual(row[i - 1].right - 1);
+      for (const selector of ['.person-search-button', '.person-outputs-button', '.person-thoughts-button', '.person-settings-button', '.person-header-actions > button:first-child']) {
+        await expect(page.locator(selector)).not.toBeVisible();
+      }
+      await expectPersonFits(page);
+      const input = page.locator('#person-input');
+      await input.fill('Keep this unsent draft while browsing');
+      const pane = page.locator('.person-messages');
+      await pane.hover(); await page.mouse.wheel(0, -180);
+      await expect.poll(() => pane.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeGreaterThan(30);
+      // Settle native wheel momentum before measuring preservation.
+      await page.waitForTimeout(400);
+      const readingPosition = await pane.evaluate(el => el.scrollTop);
+      await more.focus(); await page.keyboard.press('Enter');
+      const sheet = page.locator('#person-actions-sheet');
+      await expect(sheet).toHaveAttribute('role', 'dialog');
+      await expect(sheet).toHaveAttribute('aria-modal', 'true');
+      await expect(more).toHaveAttribute('aria-expanded', 'true');
+      for (const action of ['search', 'outputs', 'inside', 'settings', 'refresh']) {
+        const button = sheet.locator(`.person-action-${action}`);
+        await expect(button).toBeVisible();
+        expect((await button.innerText()).trim()).not.toBe('');
+        await expect(button.locator('svg')).toHaveCount(1);
+        expect((await button.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      }
+      await expect(page.locator('.person-header')).toHaveAttribute('inert', '');
+      await expect(page.locator('#person-conversation')).toHaveAttribute('inert', '');
+      const controls = sheet.locator('button:not([disabled])');
+      expect(await sheet.evaluate(el => el.contains(document.activeElement))).toBe(true);
+      await controls.last().focus(); await page.keyboard.press('Tab');
+      await expect(controls.first()).toBeFocused();
+      await page.keyboard.press('Shift+Tab'); await expect(controls.last()).toBeFocused();
+      await input.evaluate(el => el.focus());
+      expect(await sheet.evaluate(el => el.contains(document.activeElement))).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`person-actions-${width}-${theme}.png`) });
+      await page.keyboard.press('Escape');
+      await expect(sheet).not.toBeVisible(); await expect(more).toBeFocused();
+      await more.click(); await sheet.locator('.person-actions-close').click();
+      await expect(sheet).not.toBeVisible(); await expect(more).toBeFocused();
+      await more.click();
+      // The top-left header lies behind the bottom sheet's backdrop.
+      await page.mouse.click(2, 2);
+      await expect(sheet).not.toBeVisible(); await expect(more).toBeFocused();
+      await expect(more).toHaveAttribute('aria-expanded', 'false');
+      for (const action of ['search', 'outputs', 'inside']) {
+        await clickPersonAction(page, action);
+        const panel = await expectMobilePersonPanel(page);
+        await expect(sheet).not.toBeVisible();
+        if (action === 'search') {
+          await page.locator('.person-search-form input').fill('durable archive');
+          await page.locator('.person-search-form input').press('Enter');
+          await expect(panel.locator('.person-search-result')).toContainText('durable archive');
+        } else if (action === 'inside') {
+          await expectInspectorScroller(page);
+          await page.screenshot({ path: testInfo.outputPath(`person-inspector-${width}-${theme}.png`) });
+        }
+        await page.keyboard.press('Escape');
+        await expect(panel).toHaveCount(0); await expect(more).toBeFocused();
+        await expect(input).toHaveValue('Keep this unsent draft while browsing');
+        await expect.poll(() => pane.evaluate((el, position) => Math.abs(el.scrollTop - position), readingPosition)).toBeLessThanOrEqual(2);
+        await expectPersonFits(page);
+      }
+      await clickPersonAction(page, 'settings');
+      const settings = page.getByRole('dialog');
+      await expect(settings).toBeVisible();
+      await settings.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+      await expect(settings).toHaveCount(0); await expect(more).toBeFocused();
+      await expect(input).toHaveValue('Keep this unsent draft while browsing');
+      await input.click(); await expect(input).toBeFocused();
+      await input.press('End'); await input.press('!');
+      await expect(input).toHaveValue('Keep this unsent draft while browsing!');
+      expect(mock.requests.filter(r => ['send', 'think', 'dream'].includes(r.op))).toHaveLength(0);
+    });
+  }
+}
+
+test('Digital Person keeps desktop actions and changes sheets at the 600px breakpoint', async ({ page, serverUrl }) => {
+  await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+  await openResponseConversation(page, serverUrl, { width: 1280, theme: 'light' });
+  const more = page.locator('.person-more-button');
+  await expect(more).not.toBeVisible();
+  for (const action of ['search', 'outputs', 'inside']) {
+    await clickPersonAction(page, action);
+    const panel = page.locator('#person-side-panel');
+    await expect(panel).toHaveAttribute('role', 'complementary');
+    await expect(page.locator('#person-input')).toBeEnabled();
+    await page.keyboard.press('Escape');
+    // A non-modal desktop drawer only handles Escape while focus is inside it.
+    await expect(panel).toHaveCount(0);
+  }
+  await page.setViewportSize({ width: 900, height: 800 });
+  await clickPersonAction(page, 'inside');
+  await expectInspectorScroller(page);
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 600, height: 800 });
+  await expect(more).toBeVisible(); await more.click();
+  await expect(page.locator('#person-actions-sheet')).toBeVisible();
+  await page.setViewportSize({ width: 601, height: 800 });
+  await expect(page.locator('#person-actions-sheet')).not.toBeVisible();
+  await expect(more).not.toBeVisible();
+  await expect(page.locator('.person-header')).not.toHaveAttribute('inert', '');
+  await expect(page.locator('.person-search-button')).toBeVisible();
+  await expect(page.locator('#person-input')).toBeEnabled();
+  await expectPersonFits(page);
+});
+
+test('Digital Person mobile actions expose loading, disabled and recoverable error states', async ({ page, serverUrl }) => {
+  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+  await openResponseConversation(page, serverUrl, { width: 390, theme: 'light' });
+  const more = page.locator('.person-more-button'), sheet = page.locator('#person-actions-sheet');
+  mock.holdStatus();
+  await clickPersonAction(page, 'refresh');
+  await expect.poll(() => mock.statusPending()).toBe(true);
+  await expect(page.locator('.person-connection-notice')).toBeVisible();
+  await more.click();
+  await expect(sheet.locator('.person-action-refresh')).toBeDisabled();
+  await expect(sheet.locator('.person-action-settings')).toBeDisabled();
+  await sheet.locator('.person-actions-close').click();
+  await expect(more).toBeFocused();
+  mock.finishStatus();
+  await expect(page.locator('#person-input')).toBeEnabled();
+  mock.failSearch('Archive is temporarily unavailable');
+  await clickPersonAction(page, 'search');
+  const query = page.locator('.person-search-form input');
+  await query.fill('archive'); await query.press('Enter');
+  await expect(page.locator('.person-search [role="alert"]')).toContainText('Archive is temporarily unavailable');
+  await query.press('Enter');
+  await expect(page.locator('.person-search-result')).toContainText('durable archive');
+  await expect(page.locator('.person-search [role="alert"]')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(more).toBeFocused();
+  // Simulate the transport's disconnected projection without racing its real
+  // auto-reconnect timer; the live inbox tests cover the actual socket reconnect.
+  await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'disconnected'; });
+  await expect(page.locator('.person-connection-notice')).toBeVisible();
+  await more.click();
+  await expect(sheet.locator('.person-action-refresh')).toBeDisabled();
+  await expect(sheet.locator('.person-action-settings')).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(more).toBeFocused(); await expectPersonFits(page);
+});
+
+test('Digital Person mobile sheet does not survive owner scope changes', async ({ page, serverUrl }) => {
+  await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+  await openResponseConversation(page, serverUrl, { width: 320, theme: 'dark' });
+  await page.locator('#person-agent .modern-select-trigger').click();
+  await page.getByRole('option', { name: 'Owner Agent B', exact: true }).click();
+  await expect(page.locator('.person-identity h1')).toHaveText('Bea');
+  await page.locator('.person-more-button').click();
+  await expect(page.locator('#person-actions-sheet')).toBeVisible();
+  // authGeneration is the existing controller's ownership fence; no production
+  // identity is changed and no authorization bypass is claimed by this UI test.
+  await page.evaluate(() => { window.Pinia.useAuthStore().authGeneration++; });
+  await expect(page.locator('#person-actions-sheet')).not.toBeVisible();
+  await expect(page.locator('.person-header')).not.toHaveAttribute('inert', '');
+});

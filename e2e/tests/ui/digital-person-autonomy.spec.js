@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
+import { clickPersonAction } from '../../helpers/person-actions.js';
 import { personInput, personCognition, personToolCall, personStop } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
@@ -89,7 +90,7 @@ for (const scenario of [{ width: 1280, theme: 'light' }, { width: 320, theme: 'd
       await page.locator('.sidebar-person-trigger:visible').click();
       await expect(page.locator('#person-input')).toBeEnabled();
       await page.locator('#person-input').fill('Keep this draft while managing autonomy');
-      await page.locator('.person-thoughts-button').click();
+      await clickPersonAction(page, 'inside');
       const managementTab = page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true });
       await managementTab.focus(); await page.keyboard.press('Enter');
       const management = page.locator('.person-management');
@@ -173,7 +174,7 @@ for (const scenario of [{ width: 1280, theme: 'light' }, { width: 320, theme: 'd
       if (scenario.width <= 768) await page.locator('.header-sidebar-toggle').click();
       await page.locator('.sidebar-person-trigger:visible').click();
       await expect(page.locator('#person-input')).toBeEnabled();
-      await page.locator('.person-thoughts-button').click();
+      await clickPersonAction(page, 'inside');
       await managementTab.click();
       await expect(checkbox).toBeEnabled(); await expect(checkbox).not.toBeChecked();
       await management.getByRole('button', { name: 'Refresh', exact: true }).click();

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
+import { clickPersonAction } from '../../helpers/person-actions.js';
 import { personInput, personCognition, personToolResults, personToolCall, personStop, personGoal } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
@@ -99,7 +100,7 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await page.locator('.sidebar-person-trigger:visible').click();
     await expect(page.locator('#person-input')).toBeEnabled();
     // Name-only patch must reach the real service and persist without editing candidates.
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await clickPersonAction(page, 'settings');
     let rename = page.getByRole('dialog');
     await expect(rename.locator('.person-model-list input:checked')).toHaveCount(2);
     await expect(rename.locator('.person-default-model-field')).toContainText('Agent default: test/first');
@@ -117,7 +118,7 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect.poll(() => completedCognitions).toBe(2);
     await expect(page.locator('#person-input')).toBeEnabled();
     idleCalls = calls;
-    await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
+    await clickPersonAction(page, 'inside');
     await expect(page.locator('#person-thoughts')).toContainText('Reconsider the available experience.');
     await expect(page.locator('#person-thoughts')).toContainText('A hypothesis is not a fact.');
     await expect(page.locator('#person-thoughts pre')).toHaveCount(0);
@@ -147,7 +148,7 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(completedCognitions).toBe(4);
     idleCalls = calls;
-    await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
+    await clickPersonAction(page, 'inside');
     const learnedThought = page.locator('#person-thoughts .person-thought').first();
     await expect(learnedThought).toContainText('Learned a reusable sum; result 12.');
     await learnedThought.locator('.person-thought-evidence > summary').click();
@@ -165,7 +166,7 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(completedCognitions).toBe(5);
     idleCalls = calls;
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await clickPersonAction(page, 'settings');
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Name', { exact: true }).fill('Mira');
     await dialog.getByLabel('Follow Agent model defaults').uncheck();
@@ -176,7 +177,7 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect(dialog).toHaveCount(0);
     await expect(page.locator('.person-identity h1')).toHaveText('Mira');
     expect(calls).toBe(idleCalls); // Reading/saving candidates never starts cognition.
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await clickPersonAction(page, 'settings');
     rename = page.getByRole('dialog');
     await rename.getByLabel('Name', { exact: true }).fill('知微 Mira');
     await rename.getByRole('button', { name: 'Save', exact: true }).click();
@@ -204,12 +205,12 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect(page.locator('#person-input')).toBeEnabled();
     await expect(page.locator('.person-sent-files')).toContainText('reference.txt');
     await expect(page.locator('.person-identity h1')).toHaveText('知微 Mira');
-    await page.locator('.person-search-button').click();
+    await clickPersonAction(page, 'search');
     await page.locator('.person-search-form input').fill('Reuse the sum');
     await page.locator('.person-search-form input').press('Enter');
     await expect(page.locator('.person-search-result')).toContainText('Reuse the sum script.');
     await page.locator('.person-panel-header .header-action-btn').click();
-    await page.locator('.person-thoughts-button').click();
+    await clickPersonAction(page, 'inside');
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Memory', exact: true }).click();
     await expect(page.locator('.person-knowledge')).toContainText('What would change my understanding?');
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Skills & capabilities', exact: true }).click();
@@ -231,7 +232,7 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect(savedScript.locator('pre')).toContainText('return input.reduce');
     expect(calls).toBe(idleCalls); // Browsing persisted data never invokes inference or scripts.
     await page.locator('.person-panel-header .header-action-btn').click();
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await clickPersonAction(page, 'settings');
     const reopened = page.getByRole('dialog');
     await expect(reopened.getByLabel('test/first', { exact: true })).toBeChecked();
     await expect(reopened.getByLabel('test/second', { exact: true })).toBeChecked();
