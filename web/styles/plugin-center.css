@@ -30,7 +30,7 @@
 .plugin-center-more-menu { right: 0; min-width: 180px; }
 .plugin-center-menu button { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; border-radius: 6px; padding: 10px 12px; background: transparent; color: var(--text-primary); font-size: 13px; text-align: left; }
 .plugin-center-menu button:hover { background: var(--sidebar-hover); }
-.plugin-center-more-menu button > span:last-child:not(:first-child) { margin-left: auto; }
+.plugin-center-menu-check { margin-left: auto; }
 .plugin-center-agent-menu button { min-height: 48px; padding: 8px 10px; border-radius: 10px; font-family: var(--font-sans); font-size: 14px; font-weight: 400; }
 .plugin-center-agent-menu button[aria-pressed="true"] { background: var(--sidebar-hover); }
 .plugin-center-agent-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -302,7 +302,7 @@ export default {
               <button ref="moreTrigger" type="button" class="btn-ghost plugin-center-icon-button" aria-haspopup="true" :aria-expanded="menu === 'more'" :aria-label="$t('yeaft.plugins.more')" @click="toggleMenu('more')"><NavigationIcon name="more" :size="18" /></button>
               <div v-if="menu === 'more'" ref="moreMenu" class="plugin-center-menu plugin-center-more-menu" :aria-label="$t('yeaft.plugins.more')" @keydown="menuKeydown">
                 <button type="button" class="plugin-center-mobile-create" :disabled="!configReady || !agentSupportsManagedSkills || skillMutationLoading" @click="openSkillForm">{{ $t('yeaft.plugins.createSkill') }}</button>
-                <button type="button" :aria-pressed="enabledOnly" @click="enabledOnly = !enabledOnly; menu = null">{{ $t('yeaft.plugins.enabledOnly') }}<span v-if="enabledOnly" aria-hidden="true">✓</span></button>
+                <button type="button" :aria-pressed="enabledOnly" @click="enabledOnly = !enabledOnly; menu = null">{{ $t('yeaft.plugins.enabledOnly') }}<span v-if="enabledOnly" class="plugin-center-menu-check" aria-hidden="true">✓</span></button>
                 <button type="button" :disabled="!online || loading" @click="load(true); menu = null">{{ $t('common.refresh') }}</button>
                 <button type="button" @click="$emit('close')">{{ $t('yeaft.plugins.backToChat') }}</button>
               </div>
