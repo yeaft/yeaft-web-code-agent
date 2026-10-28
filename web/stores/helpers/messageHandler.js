@@ -4,7 +4,7 @@
  */
 
 import { acceptPersonResponse } from './digital-person.js';
-import { acceptPluginConfigReply } from './plugin-config.js';
+import { acceptPluginConfigReply, acceptPluginSkillDetailReply } from './plugin-config.js';
 import { useAuthStore } from '../auth.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
@@ -1331,6 +1331,7 @@ export function handleMessage(store, msg) {
     }
 
     case 'yeaft_plugin_catalog_result': {
+      if (acceptPluginSkillDetailReply(store, msg)) break;
       const pending = msg.requestId ? store._pluginPending?.[msg.requestId] : null;
       const catalogPending = pending?.kind === 'catalog' ? pending : null;
       const catalog = msg.catalog && typeof msg.catalog === 'object'

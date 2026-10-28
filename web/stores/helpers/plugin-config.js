@@ -309,3 +309,50 @@ export function retryPluginConfig(store, agentId) {
   // config before rebasing item intents; never resend an old full snapshot.
   return start(store, agentId, true);
 }
+
+/** Read a single effective Skill on demand; never cache private Prompt content. */
+export function loadPluginSkillDetail(store, name, agentId, workDir = '') {
+  const error = availabilityError(store, agentId);
+  if (error || typeof name !== 'string' || !name.trim()) return Promise.resolve({ error: error || 'Invalid skill name' });
+  const requestId = `skill-detail-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return new Promise(resolve => {
+    const finish = result => { clearTimeout(timer); delete store._pluginPending[requestId]; resolve(result); };
+    const timer = setTimeout(() => finish({ error: 'timeout' }), REQUEST_TIMEOUT);
+    store._pluginPending ||= {};
+    store._pluginPending[requestId] = {
+      kind: 'skill-detail', agentId, name, finish, timer,
+      generation: Number(store.pluginStateGeneration || 0), socket: store.ws,
+      connectionGeneration: Number(store.chatHistoryConnectionGeneration || 0),
+    };
+    try {
+      if (!store.sendWsMessage({ type: 'yeaft_plugin_catalog', requestId, agentId, workDir: String(workDir || '').trim(), skillName: name })) finish({ error: 'Connection unavailable' });
+    } catch (error) { finish({ error: error?.message || String(error) }); }
+  });
+}
+
+/** A detail reply cannot populate catalog caches or cross Agent/auth/connection fences. */
+export function acceptPluginSkillDetailReply(store, msg) {
+  const pending = msg.requestId ? store._pluginPending?.[msg.requestId] : null;
+  if (pending?.kind !== 'skill-detail') return false;
+  if (msg.agentId !== pending.agentId) return true;
+  if (pending.generation !== Number(store.pluginStateGeneration || 0) || pending.socket !== store.ws
+      || pending.connectionGeneration !== Number(store.chatHistoryConnectionGeneration || 0)) {
+    pending.finish({ stale: true });
+    return true;
+  }
+  const detail = msg.skillDetail;
+  if (msg.error) pending.finish({ error: String(msg.error) });
+  else if (!detail) pending.finish({ unsupported: true });
+  else if (detail.name !== pending.name || typeof detail.content !== 'string') pending.finish({ error: 'Invalid skill detail response' });
+  else pending.finish({ skillDetail: {
+    name: detail.name, content: detail.content,
+    description: typeof detail.description === 'string' ? detail.description : '',
+    trigger: typeof detail.trigger === 'string' ? detail.trigger : '',
+    tier: typeof detail.tier === 'string' ? detail.tier : 'bundled',
+    keywords: Array.isArray(detail.keywords) ? detail.keywords.filter(value => typeof value === 'string') : [],
+    references: Array.isArray(detail.references) ? detail.references.filter(value => typeof value === 'string') : [],
+    templates: Array.isArray(detail.templates) ? detail.templates.filter(value => typeof value === 'string') : [],
+    contentTruncated: detail.contentTruncated === true,
+  } });
+  return true;
+}

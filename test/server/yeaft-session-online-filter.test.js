@@ -66,6 +66,72 @@ afterEach(() => {
   broadcastAgentList.mockClear();
 });
 
+describe('Yeaft Plugin Skill detail relay', () => {
+  it('preserves skillName and client correlation, whitelists detail fields and isolates owner/auth boundaries', async () => {
+    CONFIG.skipAuth = false;
+    const agent = { ws: { readyState: 1 }, ownerId: 'owner-1', capabilities: ['yeaft_plugins'], capabilityMetadataProvided: true };
+    agents.set('plugin-agent', agent);
+    const client = { authenticated: true, userId: 'owner-1', sent: [] };
+    const sibling = { authenticated: true, userId: 'owner-1', sent: [] };
+    const foreign = { authenticated: true, userId: 'owner-2', sent: [] };
+    const anonymous = { authenticated: false, userId: 'owner-1', sent: [] };
+    webClients.set('plugin-client', client);
+    webClients.set('sibling', sibling);
+    webClients.set('foreign', foreign);
+    webClients.set('anonymous', anonymous);
+    await handleClientConversation('plugin-client', client, {
+      type: 'yeaft_plugin_catalog', agentId: 'plugin-agent', requestId: 'skill-detail',
+      skillName: 'inspect', workDir: '/requested/project', _requestClientId: 'foreign',
+    }, allow);
+    expect(forwardToAgent).toHaveBeenLastCalledWith('plugin-agent', {
+      type: 'yeaft_plugin_catalog', requestId: 'skill-detail', skillName: 'inspect',
+      workDir: '/requested/project', _requestClientId: 'plugin-client',
+    });
+    const skillDetail = {
+      name: 'inspect', description: 'Inspect code', trigger: 'inspect', keywords: ['code'],
+      category: 'development', tier: 'project', content: 'Bounded body',
+      references: ['guide.md'], templates: ['form.md'], contentTruncated: true,
+    };
+    const result = {
+      type: 'yeaft_plugin_catalog_result', requestId: 'skill-detail',
+      catalog: { tools: [], skills: [], skillSources: [], mcpServers: [] },
+      skillDetail: { ...skillDetail, _path: '/private/root', internal: 'SECRET', linkedContent: 'SECRET',
+        keywords: ['code', { secret: 'SECRET' }], references: ['guide.md', { _path: 'SECRET' }] },
+      _requestClientId: 'plugin-client', ownerId: 'owner-2', internal: 'SECRET',
+    };
+    await handleAgentOutput('plugin-agent', agent, result);
+    expect(client.sent).toEqual([{
+      type: 'yeaft_plugin_catalog_result', agentId: 'plugin-agent', requestId: 'skill-detail',
+      catalog: result.catalog, skillDetail, error: null,
+    }]);
+    expect(JSON.stringify(client.sent)).not.toContain('SECRET');
+    expect(sibling.sent).toEqual([]);
+    for (const _requestClientId of ['foreign', 'anonymous', 'missing', undefined]) {
+      await handleAgentOutput('plugin-agent', agent, { ...result, _requestClientId });
+    }
+    expect(client.sent).toHaveLength(1);
+    expect(sibling.sent).toEqual([]);
+    expect(foreign.sent).toEqual([]);
+    expect(anonymous.sent).toEqual([]);
+
+    const { skillDetail: _discard, ...legacy } = result;
+    await handleAgentOutput('plugin-agent', agent, legacy);
+    expect(client.sent.at(-1)).not.toHaveProperty('skillDetail');
+    for (const detail of [null, 'invalid', []]) {
+      await handleAgentOutput('plugin-agent', agent, { ...result, skillDetail: detail, error: 'Skill unavailable' });
+      expect(client.sent.at(-1)).toMatchObject({ skillDetail: null, error: 'Skill unavailable' });
+    }
+    // Existing capability negotiation is unchanged; no detail capability is required.
+    forwardToAgent.mockClear();
+    agent.capabilities = [];
+    await handleClientConversation('plugin-client', client, {
+      type: 'yeaft_plugin_catalog', agentId: 'plugin-agent', requestId: 'unsupported', skillName: 'inspect',
+    }, allow);
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    expect(client.sent.at(-1)).toMatchObject({ requestId: 'unsupported', error: expect.stringContaining('does not support Plugins') });
+  });
+});
+
 describe('Yeaft Session online Agent filtering', () => {
   const sendIdentity = {
     id: 'user-message-original', requestId: 'send-request-original',

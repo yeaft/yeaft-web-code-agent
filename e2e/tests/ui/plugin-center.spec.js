@@ -15,6 +15,7 @@ const CAPABILITIES = [
 const SESSION_A = 'plugins-session-a';
 const SESSION_B = 'plugins-session-b';
 const LONG_TOOL = 'InspectAnExtremelyLongUnbrokenPluginIdentifierWithoutHorizontalOverflow';
+const PROMPT = '# Review workflow\n\n## When to use\nBefore shipping changes.\n\n## Instructions\n' + 'Check ownership, correctness and recovery.\n'.repeat(160) + '\n<script>window.skillPromptExecuted = true</script>';
 const DESCRIPTION = 'Review correctness, ownership and recovery before shipping.\n\n'.repeat(45);
 
 function pluginAgent(agent, initialPlugins = {}) {
@@ -24,7 +25,7 @@ function pluginAgent(agent, initialPlugins = {}) {
     replyConfig(request) {
       agent.send({ type: 'yeaft_plugins', requestId: request.requestId, plugins: structuredClone(state.plugins) });
     },
-    saveError: '', catalogError: '', createError: '',
+    saveError: '', catalogError: '', createError: '', detailError: '', legacyDetails: false,
     catalog: {
       skills: [
         { id: 'user:review-guide', name: 'review-guide', label: 'Review guide', description: DESCRIPTION, tier: 'user', managed: true },
@@ -59,7 +60,12 @@ function pluginAgent(agent, initialPlugins = {}) {
       else state.replySave(request);
     } else if (request.type === 'yeaft_plugin_catalog') {
       agent.send({ type: 'yeaft_plugin_catalog_result', requestId: request.requestId,
-        _requestClientId: request._requestClientId, catalog: state.catalog, error: state.catalogError || null });
+        _requestClientId: request._requestClientId, catalog: state.catalog,
+        ...(request.skillName && !state.legacyDetails ? { skillDetail: {
+          name: request.skillName, description: 'Review correctness, ownership and recovery before shipping.',
+          tier: 'user', trigger: 'review', keywords: ['code review', 'shipping'], content: PROMPT,
+          references: ['checklist.md'], templates: ['report.md'],
+        } } : {}), error: (request.skillName ? state.detailError : state.catalogError) || null });
     } else if (request.type === 'yeaft_managed_skill') {
       if (!state.createError && request.action === 'create') {
         const skill = { ...request.skill, id: `user:${request.skill.name}`, label: request.skill.name, tier: 'user', managed: true };
@@ -175,7 +181,7 @@ async function responsiveGeometry(page, width) {
 }
 
 test('Plugins keep the existing sidebar and browse responsively in light desktop and dark 320px', async ({ page, serverUrl, mockAgent }, testInfo) => {
-  pluginAgent(mockAgent);
+  const state = pluginAgent(mockAgent);
   await boot(page, serverUrl, mockAgent);
   await showSidebar(page);
   await expect(page.locator('.sidebar-primary-actions > button').nth(0)).toHaveAccessibleName('New chat');
@@ -202,9 +208,37 @@ test('Plugins keep the existing sidebar and browse responsively in light desktop
   await page.getByRole('button', { name: 'View Review guide details', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Review guide', exact: true })).toBeFocused();
   await expect(page.getByRole('heading', { name: 'Skill sources', exact: true })).toBeVisible();
+  await expect(page.locator('.plugin-center-skill-content')).toHaveText(PROMPT);
+  await expect(page.locator('.plugin-center-skill-command')).toContainText('/skill:review-guide');
+  await expect(page.locator('.plugin-center-skill-usage')).toContainText('code review, shipping');
+  await expect(page.locator('.plugin-center-skill-files')).toContainText('references/checklist.md');
+  expect(await page.evaluate(() => window.skillPromptExecuted)).toBeUndefined();
+  expect(state.requests.filter(request => request.skillName)).toHaveLength(1);
+  await page.locator('.plugin-center-skill-prompt').scrollIntoViewIfNeeded();
+  await screenshot(page, testInfo, 'plugins-skill-prompt-light.png');
+  await page.evaluate(() => window.Pinia.useChatStore().toggleTheme());
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.locator('.plugin-center-skill-prompt').scrollIntoViewIfNeeded();
+  expect(await page.locator('.plugin-center-content').evaluate(element => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+  await screenshot(page, testInfo, 'plugins-skill-prompt-dark-320.png');
+  await page.evaluate(() => window.Pinia.useChatStore().toggleTheme());
+  await page.setViewportSize({ width: 1440, height: 900 });
   expect(await page.locator('.plugin-center-content').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
   await page.getByRole('button', { name: 'All plugins', exact: true }).click();
   await expect(page.getByRole('button', { name: 'View Review guide details', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'More actions', exact: true }).click();
+  await page.locator('.plugin-center-more-menu').getByRole('button', { name: 'Enabled only', exact: true }).click();
+  await page.getByRole('button', { name: 'More actions', exact: true }).click();
+  const filterGeometry = await page.locator('.plugin-center-menu-check').evaluate(mark => {
+    const row = mark.parentElement, style = getComputedStyle(row);
+    return {
+      aligned: Math.abs(mark.getBoundingClientRect().right - row.getBoundingClientRect().right + parseFloat(style.paddingRight)) < 1,
+      margin: getComputedStyle(mark).marginLeft,
+    };
+  });
+  expect(filterGeometry.aligned).toBe(true);
+  expect(parseFloat(filterGeometry.margin)).toBeGreaterThan(0);
+  await page.locator('.plugin-center-more-menu').getByRole('button', { name: 'Enabled only', exact: true }).click();
 
   // Keep the sidebar's actual width in the calculation at tablet/desktop sizes.
   for (const width of [1440, 1280, 1024, 900, 768, 375, 320]) await responsiveGeometry(page, width);
@@ -226,6 +260,49 @@ test('Plugins keep the existing sidebar and browse responsively in light desktop
   await showSidebar(page);
   await expect(page.locator('.sidebar-plugins-entry')).toHaveAttribute('aria-current', 'page');
   await screenshot(page, testInfo, 'plugins-dark-320-sidebar.png');
+});
+
+test('Agent picker uses aligned sidebar-style names without dots or checkmarks across selection, themes and offline cache', async ({ page, serverUrl, mockAgent }, testInfo) => {
+  pluginAgent(mockAgent);
+  await boot(page, serverUrl, mockAgent);
+  const second = new MockAgent(serverUrl, 'server-2');
+  const third = new MockAgent(serverUrl, 'C1');
+  await second.connect(); pluginAgent(second);
+  await third.connect(); pluginAgent(third);
+  try {
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().agents.filter(agent => agent.online).length)).toBe(3);
+    await openPlugins(page);
+    await selectAgent(page, 'C1');
+    await third.disconnect();
+    await selectAgent(page, 'server-2');
+    for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'dark'], [320, 'light']]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(theme => { if (document.documentElement.dataset.theme !== theme) window.Pinia.useChatStore().toggleTheme(); }, theme);
+      await page.getByRole('button', { name: 'Select Agent', exact: true }).click();
+      const menu = page.locator('.plugin-center-agent-menu');
+      await expect(menu.locator('button')).toHaveCount(3);
+      await expect(menu.locator('.plugin-center-dot')).toHaveCount(0);
+      expect(await menu.innerText()).not.toContain('✓');
+      await expect(menu.locator('button[aria-pressed="true"]')).toHaveText('server-2');
+      const geometry = await menu.evaluate(element => {
+        const labels = [...element.querySelectorAll('.plugin-center-agent-option-name')];
+        const rows = [...element.querySelectorAll('button')];
+        const x = labels[0].getBoundingClientRect().left;
+        return {
+          aligned: labels.every(label => Math.abs(label.getBoundingClientRect().left - x) < 1),
+          sameHeight: rows.every(row => Math.abs(row.getBoundingClientRect().height - rows[0].getBoundingClientRect().height) < 1),
+          fits: element.getBoundingClientRect().right <= innerWidth && element.getBoundingClientRect().left >= 0,
+          textAlign: rows.every(row => getComputedStyle(row).textAlign === 'left'),
+        };
+      });
+      expect(geometry).toEqual({ aligned: true, sameHeight: true, fits: true, textAlign: true });
+      await screenshot(page, testInfo, `plugins-agent-picker-${theme}-${width}.png`);
+      await page.keyboard.press('End');
+      await expect(menu.locator('button').last()).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('button', { name: 'Select Agent', exact: true })).toBeFocused();
+    }
+  } finally { await second.disconnect(); await third.disconnect(); }
 });
 
 test('Agent-scoped auto-save survives slow replies, Agent switching and leaving for the same or another Session', async ({ page, serverUrl, mockAgent }, testInfo) => {

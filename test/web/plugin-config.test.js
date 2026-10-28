@@ -2,7 +2,7 @@
 import * as Vue from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  acceptPluginConfigReply, clearPluginState, loadPluginConfig, pluginCenterAgents, retryPluginConfig, savePluginConfig, setPluginEnabled,
+  acceptPluginConfigReply, clearPluginState, loadPluginConfig, loadPluginSkillDetail, pluginCenterAgents, retryPluginConfig, savePluginConfig, setPluginEnabled,
 } from '../../web/stores/helpers/plugin-config.js';
 
 globalThis.Vue = Vue;
@@ -41,6 +41,46 @@ function harness({ loaded = true, plugins = {} } = {}) {
 async function flush() { for (let index = 0; index < 12; index++) await Promise.resolve(); }
 
 describe('Agent-scoped Plugin Center auto-save', () => {
+  it('reads named Prompts without catalog cache pollution and fences wrong Agent, auth and connection generations', async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.store.pluginCatalogByKey = { cached: { catalog: { skills: ['existing'] }, loaded: true } };
+    const respond = (message, overrides = {}) => handleMessage(h.store, {
+      type: 'yeaft_plugin_catalog_result', requestId: message.requestId, agentId: message.agentId,
+      skillDetail: { name: 'review', content: '<script>private prompt</script>', tier: 'user', _path: '/private/path' }, ...overrides,
+    });
+    const detail = loadPluginSkillDetail(h.store, 'review', 'b', '/workspace/b');
+    const request = h.sent.at(-1);
+    expect(request).toMatchObject({ type: 'yeaft_plugin_catalog', skillName: 'review', agentId: 'b', workDir: '/workspace/b' });
+    respond(request, { agentId: 'a' });
+    expect(h.store._pluginPending[request.requestId]).toBeDefined();
+    respond(request);
+    expect(await detail).toMatchObject({ skillDetail: { name: 'review', content: '<script>private prompt</script>' } });
+    expect((await detail).skillDetail).not.toHaveProperty('_path');
+    expect(h.store.pluginCatalogByKey.cached.catalog.skills).toEqual(['existing']);
+    expect(Object.keys(h.store.pluginCatalogByKey)).toEqual(['cached']);
+    const stale = loadPluginSkillDetail(h.store, 'review', 'a');
+    h.store.chatHistoryConnectionGeneration++;
+    respond(h.sent.at(-1));
+    expect(await stale).toEqual({ stale: true });
+    const cancelled = loadPluginSkillDetail(h.store, 'review', 'a');
+    const old = h.sent.at(-1);
+    clearPluginState(h.store);
+    expect(await cancelled).toMatchObject({ stale: true });
+    respond(old);
+    expect(h.store.pluginCatalogByKey).toEqual({});
+    const legacy = loadPluginSkillDetail(h.store, 'review', 'a');
+    respond(h.sent.at(-1), { skillDetail: undefined });
+    expect(await legacy).toEqual({ unsupported: true });
+    const wrongName = loadPluginSkillDetail(h.store, 'review', 'a');
+    respond(h.sent.at(-1), { skillDetail: { name: 'other', content: 'other prompt' } });
+    expect(await wrongName).toEqual({ error: 'Invalid skill detail response' });
+    const timedOut = loadPluginSkillDetail(h.store, 'review', 'a');
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(await timedOut).toEqual({ error: 'timeout' });
+    expect(h.store._pluginPending).toEqual({});
+  });
+
   it('coalesces synchronous toggles and serializes later same/different-field changes without losing intent', async () => {
     const h = harness();
     const done = h.toggle('tools', 'shell', false, ['shell', 'read']);

@@ -1843,6 +1843,9 @@ export const useChatStore = defineStore('chat', {
         });
       });
     },
+    loadPluginSkillDetail(name, agentId = this.pluginCenterAgentId || this.currentAgent, workDir = '') {
+      return pluginConfigHelpers.loadPluginSkillDetail(this, name, agentId, workDir);
+    },
     loadPluginCatalog(agentId = this.pluginCenterAgentId || this.currentAgent, workDir = '') {
       if (!agentId) return Promise.resolve({ catalog: { tools: [], skills: [], mcpServers: [] }, error: 'no agent' });
       const target = this.agents.find(agent => agent?.id === agentId);
