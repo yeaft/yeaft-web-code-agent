@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
+import { clickPersonAction } from '../../helpers/person-actions.js';
 import { personInput, personCognition, personToolResults, personToolCall, personStop, personGoal } from '../../fixtures/person-provider.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
 import { createPersonService } from '../../../agent/yeaft/person/service.js';
@@ -186,7 +187,7 @@ test('Person joins parallel work and background results; Management controls pen
     await send('Long background');
     await expect(page.locator('#person-input')).toBeEnabled();
     await expect.poll(() => longTaskId).toBeTruthy();
-    await page.locator('.person-thoughts-button').click();
+    await clickPersonAction(page, 'inside');
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();
     await expect(page.locator('.person-task-browser')).toContainText('Background tasks');
     await expect(page.locator('.person-task-browser')).toContainText('Child threads');
@@ -214,7 +215,7 @@ test('Person joins parallel work and background results; Management controls pen
     await page.locator('.person-panel-header .header-action-btn').click();
     await send('Pause main');
     await expect.poll(() => pauseCalls).toBe(1);
-    await page.locator('.person-thoughts-button').click();
+    await clickPersonAction(page, 'inside');
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();
     await expect(main).toContainText('Requesting model');
     await expect(main.locator('.person-execution-models')).toContainText('—');
@@ -244,7 +245,7 @@ test('Person joins parallel work and background results; Management controls pen
     await page.locator('.person-panel-header .header-action-btn').click();
     await send('Cancel main');
     await expect.poll(() => cancelCalls).toBe(1);
-    await page.locator('.person-thoughts-button').click();
+    await clickPersonAction(page, 'inside');
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();
     await main.locator('[data-execution-control="cancel"]').click();
     await expect(main).toContainText('Cancel this main execution?');
@@ -256,7 +257,7 @@ test('Person joins parallel work and background results; Management controls pen
     const beforeInspection = parentCalls;
     await page.locator('.person-panel-header .header-action-btn').click();
     await page.locator('#person-input').fill('Keep this draft');
-    await page.locator('.person-thoughts-button').click();
+    await clickPersonAction(page, 'inside');
     await page.locator('.person-inspector-nav').getByRole('button', { name: 'Management', exact: true }).click();
     await expect(page.locator('.person-task-item')).toHaveCount(4);
     await page.locator('.person-task-item').filter({ hasText: 'Shell task' }).first().getByRole('button', { name: 'View log', exact: true }).click();

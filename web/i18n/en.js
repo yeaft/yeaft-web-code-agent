@@ -87,6 +87,7 @@ export default {
   "person.outputsResize": "Resize output panel",
   "person.outputsExpand": "Expand",
   "person.outputsCollapse": "Restore split view",
+  "person.moreActions": "More actions",
   "person.settings": "Settings",
   "person.modelCandidates": "Candidate models",
   "person.modelCandidatesHint": "Allow up to 8 models configured on this Agent. The digital person can switch within this set; they are not called all at once.",

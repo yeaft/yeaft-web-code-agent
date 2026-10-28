@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { test } from '../../fixtures/test-server.js';
+import { clickPersonAction, personActionOpener } from '../../helpers/person-actions.js';
 import { personInput, personCognition, personToolResults, personToolCall, personStop, personGoal } from '../../fixtures/person-provider.js';
 import { MockAgent } from '../../fixtures/mock-agent.js';
 import { createPersonBridge } from '../../../agent/yeaft/person/bridge.js';
@@ -126,7 +127,7 @@ async function publish(page, title) {
 }
 
 async function openOutputs(page) {
-  await page.getByRole('button', { name: 'Outputs', exact: true }).first().click();
+  await clickPersonAction(page, 'outputs');
   await expect(page.locator('#person-side-panel')).toBeVisible();
 }
 
@@ -294,7 +295,7 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
     await panel.getByRole('button', { name: 'Expand', exact: true }).click();
     await panel.getByRole('button', { name: 'Close reader', exact: true }).click();
     await expect(panel).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Outputs', exact: true }).first()).toBeFocused();
+    await expect(personActionOpener(page, 'outputs')).toBeFocused();
     await openOutputs(page);
     await expect.poll(async () => Math.abs((await panel.boundingBox()).width - resized.width)).toBeLessThan(2);
     await expect(panel).not.toHaveAttribute('aria-modal', 'true');
@@ -318,7 +319,7 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
       await page.screenshot({ path: testInfo.outputPath(`outputs-320-${theme}.png`) });
       await page.keyboard.press('Escape');
       await expect(panel).toHaveCount(0);
-      await expect(page.getByRole('button', { name: 'Outputs', exact: true }).first()).toBeFocused();
+      await expect(personActionOpener(page, 'outputs')).toBeFocused();
       await openOutputs(page);
       await expect(panel.getByRole('heading', { name: 'Layout result', exact: true })).toBeVisible();
       await page.setViewportSize({ width: 1280, height: 800 });
@@ -429,7 +430,7 @@ test('Output reader keeps only explicitly opened document tabs and stays separat
     await expect(panel.getByRole('tab')).toHaveCount(0);
     await expect(panel.locator('iframe, img, pre, .markdown-body')).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Inside the digital person', exact: true }).click();
+    await clickPersonAction(page, 'inside');
     await expect(panel.locator('.person-inspector-nav')).toBeVisible();
     await expect(panel.locator('.person-inspector-nav').getByRole('button', { name: 'Outputs', exact: true })).toHaveCount(0);
     await expect(panel.getByRole('tab')).toHaveCount(0);

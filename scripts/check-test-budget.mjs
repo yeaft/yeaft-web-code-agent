@@ -50,7 +50,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +25 reviewed Session fork/merge boundaries: 10 durable identity/order/rollback,
 // 6 active-ingress/task runtime, 6 owner/Agent/capability/dispatch server cases,
 // and 3 browser capability/correlation/navigation cases. No prior tests removed.
-export const TEST_CASE_LIMIT = 694;
+// +11 reviewed mobile navigation boundaries: 4 bilingual focus/identity/control
+// cases and 7 browser layout/theme/breakpoint/recovery/scope cases. Existing
+// inbox, outputs and inspector coverage is retained through the new action entry.
+export const TEST_CASE_LIMIT = 705;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
