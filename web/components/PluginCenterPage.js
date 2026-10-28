@@ -13,6 +13,7 @@ export default {
   data() {
     return {
       disposed: false,
+      skillDetail: null, skillDetailLoading: false, skillDetailError: '', skillDetailUnsupported: false, skillDetailSequence: 0,
       searchQuery: '', activeCategory: 'all', enabledOnly: false,
       searchOpen: false, menu: null, detailKey: null, listScrollTop: 0, formBackground: [], formOpener: null,
       showSkillForm: false, skillScope: 'user', skillMutationLoading: false, skillMutationError: '',
@@ -59,6 +60,13 @@ export default {
         && (!query || [item.id, item.label, item.description].some(value => String(value || '').toLocaleLowerCase().includes(query))));
     },
     detail() { return this.entries.find(item => item.key === this.detailKey) || null; },
+    skillCommand() { return this.detail ? `/skill:${this.pluginName(this.detail)} ${this.$t('yeaft.plugins.skillExampleTask')}` : ''; },
+    detailDescription() {
+      if (!this.detail) return '';
+      if (this.detail.field !== 'skills') return this.itemDescription(this.detail);
+      const description = String(this.skillDetail?.description || this.detail.description || '').trim();
+      return ['|', '>'].includes(description) ? '' : description;
+    },
     detailSources() {
       return this.detail?.field === 'skills'
         ? this.catalog.skillSources.filter(item => (item.name || item.label) === this.pluginName(this.detail)) : [];
@@ -69,7 +77,11 @@ export default {
   watch: {
     agentId: { immediate: true, handler() { this.detailKey = null; this.menu = null; this.load(); } },
     catalogWorkDir() { this.detailKey = null; this.load(); },
-    online(next, previous) { if (next && !previous) this.load(true); },
+    online(next, previous) {
+      if (next && !previous) { this.load(true); this.loadSkillDetail(); }
+      if (!next) { this.skillDetailSequence++; this.skillDetail = null; this.skillDetailLoading = false; this.skillDetailError = ''; this.skillDetailUnsupported = false; }
+    },
+    detailKey() { this.loadSkillDetail(); },
     showSkillForm(open) {
       if (open) {
         this.formOpener = document.activeElement;
@@ -118,6 +130,24 @@ export default {
         this.store.loadPluginConfig(agentId),
         (force || !this.catalogRecord.loaded) ? this.store.loadPluginCatalog(agentId, workDir) : Promise.resolve(),
       ]);
+      if (!this.disposed && agentId === this.agentId && workDir === this.catalogWorkDir) this.loadSkillDetail();
+    },
+    async loadSkillDetail() {
+      const sequence = ++this.skillDetailSequence;
+      this.skillDetail = null; this.skillDetailError = ''; this.skillDetailUnsupported = false; this.skillDetailLoading = false;
+      if (this.detail?.field !== 'skills' || !this.online) return;
+      const fence = this.operationFence(), key = this.detailKey, name = this.pluginName(this.detail);
+      this.skillDetailLoading = true;
+      try {
+        const result = await this.store.loadPluginSkillDetail(name, this.agentId, this.catalogWorkDir);
+        if (sequence !== this.skillDetailSequence || key !== this.detailKey || !this.operationCurrent(fence) || !this.online) return;
+        if (result?.stale) return;
+        this.skillDetail = result?.skillDetail || null;
+        this.skillDetailError = result?.error || '';
+        this.skillDetailUnsupported = result?.unsupported === true;
+      } catch (error) {
+        if (sequence === this.skillDetailSequence && this.operationCurrent(fence)) this.skillDetailError = error?.message || String(error);
+      } finally { if (sequence === this.skillDetailSequence) this.skillDetailLoading = false; }
     },
     pluginName(item) { return item.field === 'skills' ? (item.name || item.label || item.id) : item.id; },
     enabled(item) { return !Array.isArray(this.selection[item.field]) || this.selection[item.field].includes(this.pluginName(item)); },
@@ -241,7 +271,10 @@ export default {
         const result = await this.store.mutateManagedSkill({ action: 'remove', scope, name: item.name || item.label, sessionId: scope === 'project' ? sessionId : '' }, agentId);
         if (!this.operationCurrent(fence)) return;
         if (result?.error || result?.stale) this.skillMutationError = result.error || '';
-        else await this.store.loadPluginCatalog(agentId, workDir);
+        else {
+          await this.store.loadPluginCatalog(agentId, workDir);
+          if (this.operationCurrent(fence)) await this.loadSkillDetail();
+        }
       } catch (error) { this.skillMutationError = error?.message || String(error); }
       finally { this.skillMutationLoading = false; }
     },
@@ -254,10 +287,10 @@ export default {
           <template v-if="!searchOpen">
             <div class="plugin-center-menu-host plugin-center-agent-host">
               <button ref="agentsTrigger" type="button" class="btn-ghost plugin-center-agent-trigger" aria-haspopup="true" :aria-expanded="menu === 'agents'" :aria-label="$t('yeaft.plugins.selectAgent')" @click="toggleMenu('agents')">
-                <span class="plugin-center-agent-caption">Agent</span><span class="plugin-center-dot" :class="{ 'is-offline': !online }"></span><span class="plugin-center-agent-name">{{ selectedAgent?.name || agentId || $t('yeaft.plugins.noAgent') }}</span><NavigationIcon name="chevron" :size="12" />
+                <span class="plugin-center-agent-caption">Agent</span><span class="plugin-center-agent-name">{{ selectedAgent?.name || agentId || $t('yeaft.plugins.noAgent') }}</span><NavigationIcon name="chevron" :size="12" />
               </button>
               <div v-if="menu === 'agents'" ref="agentsMenu" class="plugin-center-menu plugin-center-agent-menu" :aria-label="$t('yeaft.plugins.selectAgent')" @keydown="menuKeydown">
-                <button v-for="agent in agents" :key="agent.id" type="button" :aria-pressed="agentId === agent.id" :disabled="skillMutationLoading" @click="selectAgent(agent.id)"><span class="plugin-center-dot" :class="{ 'is-offline': !agent.online }"></span><span>{{ agent.name || agent.id }}</span><small v-if="!agent.online">{{ $t('yeaft.plugins.offlineLabel') }}</small><span v-else-if="agentId === agent.id" aria-hidden="true">✓</span></button>
+                <button v-for="agent in agents" :key="agent.id" type="button" :aria-pressed="agentId === agent.id" :disabled="skillMutationLoading" @click="selectAgent(agent.id)"><span class="plugin-center-agent-option-name" :title="agent.name || agent.id">{{ agent.name || agent.id }}</span><small v-if="!agent.online">{{ $t('yeaft.plugins.offlineLabel') }}</small></button>
               </div>
             </div>
             <nav class="plugin-center-tabs" :aria-label="$t('yeaft.plugins.categoryLabel')"><button v-for="category in categories" :key="category.id" type="button" class="btn-ghost" :class="{ 'is-active': activeCategory === category.id }" :aria-pressed="activeCategory === category.id" @click="activeCategory = category.id">{{ category.label }}</button></nav>
@@ -287,7 +320,30 @@ export default {
           <section v-else-if="detail" class="plugin-center-detail">
             <button type="button" class="btn-ghost plugin-center-back" @click="backToList"><NavigationIcon name="back" :size="15" />{{ $t('yeaft.plugins.allPlugins') }}</button>
             <div class="plugin-center-detail-title"><span class="plugin-center-entry-icon"><NavigationIcon :name="itemIcon(detail)" :size="23" /></span><div><h1 ref="detailTitle" tabindex="-1">{{ detail.label }}</h1><p>{{ $t('yeaft.plugins.' + detail.field) }} · {{ itemSource(detail) }}</p></div><span class="plugin-center-save-indicator" :class="{ 'is-visible': itemSaving(detail) }" role="status" :aria-label="itemSaving(detail) ? $t('common.saving') : ''"></span><button type="button" class="plugin-center-switch" role="switch" :aria-checked="enabled(detail)" :aria-label="$t('yeaft.plugins.toggleLabel', { name: detail.label })" :disabled="!configReady" @click="toggle(detail)"><span></span></button></div>
-            <p class="plugin-center-detail-description">{{ itemDescription(detail) }}</p>
+            <p v-if="detailDescription" class="plugin-center-detail-description">{{ detailDescription }}</p>
+            <template v-if="detail.field === 'skills'">
+              <section class="plugin-center-skill-usage" :aria-label="$t('yeaft.plugins.skillUsage')">
+                <h2>{{ $t('yeaft.plugins.skillUsage') }}</h2>
+                <p>{{ $t('yeaft.plugins.skillUsageHelp') }}</p>
+                <pre class="plugin-center-skill-command"><code>{{ skillCommand }}</code></pre>
+                <p v-if="skillDetail?.trigger"><strong>{{ $t('yeaft.plugins.skillTriggerLabel') }}</strong> {{ skillDetail.trigger }}</p>
+                <p v-if="skillDetail?.keywords?.length"><strong>{{ $t('yeaft.plugins.skillKeywords') }}</strong> {{ skillDetail.keywords.join(', ') }}</p>
+              </section>
+              <section class="plugin-center-skill-prompt" :aria-label="$t('yeaft.plugins.skillPrompt')" :aria-busy="skillDetailLoading ? 'true' : 'false'">
+                <h2>{{ $t('yeaft.plugins.skillPrompt') }}</h2>
+                <p v-if="skillDetailLoading" class="plugin-center-detail-note" role="status">{{ $t('yeaft.plugins.skillDetailLoading') }}</p>
+                <div v-else-if="skillDetailError" class="plugin-center-error" role="alert"><p>{{ $t('yeaft.plugins.skillDetailError', { error: skillDetailError }) }}</p><button type="button" class="btn-secondary" :disabled="!online" @click="loadSkillDetail">{{ $t('yeaft.plugins.retry') }}</button></div>
+                <p v-else-if="skillDetailUnsupported" class="plugin-center-detail-note" role="status">{{ $t('yeaft.plugins.skillDetailUnsupported') }}</p>
+                <template v-else-if="skillDetail">
+                  <p class="plugin-center-detail-note plugin-center-skill-effective">{{ $t('yeaft.plugins.skillEffectiveSource', { source: $t('yeaft.plugins.skillTier.' + skillDetail.tier) }) }}</p>
+                  <p v-if="skillDetail.contentTruncated" class="plugin-center-notice" role="status">{{ $t('yeaft.plugins.skillPromptTruncated') }}</p>
+                  <pre v-if="skillDetail.content" class="plugin-center-skill-content" tabindex="0">{{ skillDetail.content }}</pre>
+                  <p v-else class="plugin-center-detail-note">{{ $t('yeaft.plugins.skillPromptEmpty') }}</p>
+                  <div v-if="skillDetail.references?.length || skillDetail.templates?.length" class="plugin-center-skill-files"><h3>{{ $t('yeaft.plugins.skillFiles') }}</h3><ul><li v-for="file in skillDetail.references" :key="'references/' + file">references/{{ file }}</li><li v-for="file in skillDetail.templates" :key="'templates/' + file">templates/{{ file }}</li></ul></div>
+                </template>
+                <p v-else-if="!online" class="plugin-center-detail-note">{{ $t('yeaft.plugins.skillDetailOffline') }}</p>
+              </section>
+            </template>
             <dl class="plugin-center-properties"><dt>{{ $t('yeaft.plugins.identifier') }}</dt><dd>{{ detail.id }}</dd><dt>{{ $t('yeaft.plugins.agentLabel') }}</dt><dd>{{ selectedAgent.name || agentId }}</dd><dt>{{ $t('yeaft.plugins.source') }}</dt><dd>{{ itemSource(detail) }}</dd><template v-if="detail.field === 'mcpServers'"><dt>{{ $t('yeaft.plugins.connection') }}</dt><dd>{{ itemSource(detail) }}</dd></template></dl>
             <template v-if="detailSources.length"><h2>{{ $t('yeaft.plugins.skillSources') }}</h2><div v-for="source in detailSources" :key="source.id" class="plugin-center-source-row"><div><strong>{{ source.label }}</strong><small>{{ $t('yeaft.plugins.skillTier.' + source.tier) }}</small></div><button v-if="source.managed" type="button" class="btn-ghost plugin-center-remove" :disabled="!online || !agentSupportsManagedSkills || skillMutationLoading || (source.tier === 'project' && !projectSkillAvailable)" @click="removeSkill(source)">{{ $t('yeaft.plugins.removeSkill') }}</button></div></template>
             <p class="plugin-center-detail-note">{{ $t('yeaft.plugins.applyBoundary') }}</p>

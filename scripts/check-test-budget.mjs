@@ -57,7 +57,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // bounded parsing, inert paginated rendering, and responsive edit/undo/save browser flow.
 // +23 reviewed Plugin Center boundaries: 9 store ordering/recovery/auth, 6 navigation,
 // 5 bilingual/detail/form UI and 3 real relay/browser cases. No prior tests removed.
-export const TEST_CASE_LIMIT = 733;
+// +7 reviewed plugin refinements: 3 Agent/relay detail boundaries, 3 frontend
+// ownership/Prompt/picker regressions and 1 multi-theme responsive picker browser case.
+export const TEST_CASE_LIMIT = 740;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

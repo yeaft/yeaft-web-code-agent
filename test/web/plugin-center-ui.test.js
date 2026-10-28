@@ -25,6 +25,7 @@ beforeEach(() => {
     pluginCatalogByKey: { a: { catalog, loaded: true }, b: { catalog, loaded: true }, c: { catalog, loaded: true } },
     pluginCatalogKey: id => id, activePluginSession: () => ({ agentId: 'a', sessionId: 'session', workDir: '/repo' }),
     loadPluginConfig: vi.fn(async () => ({})), loadPluginCatalog: vi.fn(async () => ({})),
+    loadPluginSkillDetail: vi.fn(async name => ({ skillDetail: { name, description: 'Review code', content: '# Workflow\n\n<script>alert(1)</script>', trigger: 'review', keywords: ['code'], tier: 'user', references: ['checklist.md'], templates: [] } })),
     setPluginEnabled: vi.fn(), retryPluginConfig: vi.fn(), mutateManagedSkill: vi.fn(async () => ({ result: { name: 'new-skill' } })),
   });
   vi.stubGlobal('Vue', Vue);
@@ -64,6 +65,53 @@ describe('Plugin Center workspace', () => {
     await wrapper.get('.plugin-center-agent-menu').trigger('keydown', { key: 'Escape' });
     expect(wrapper.find('.plugin-center-agent-menu').exists()).toBe(false);
     expect(document.activeElement).toBe(wrapper.get('.plugin-center-agent-trigger').element);
+  });
+
+  it('keeps Agent names in identical rows without status dots or checkmarks', async () => {
+    await render();
+    await wrapper.get('.plugin-center-agent-trigger').trigger('click');
+    const buttons = wrapper.findAll('.plugin-center-agent-menu button');
+    expect(buttons.map(button => button.get('.plugin-center-agent-option-name').text())).toEqual(['Alpha', 'Beta', 'c']);
+    expect(buttons.map(button => button.attributes('aria-pressed'))).toEqual(['true', 'false', 'false']);
+    expect(wrapper.find('.plugin-center-dot').exists()).toBe(false);
+    expect(wrapper.get('.plugin-center-agent-menu').text()).not.toContain('✓');
+    await buttons[1].trigger('click'); await flushPromises();
+    expect(wrapper.vm.agentId).toBe('b');
+    await wrapper.get('.plugin-center-agent-trigger').trigger('click');
+    expect(wrapper.findAll('.plugin-center-agent-menu button').map(button => button.attributes('aria-pressed'))).toEqual(['false', 'true', 'false']);
+  });
+
+  it('loads the effective Prompt on demand, shows usage and fences navigation, offline, errors and unsupported Agents', async () => {
+    await render(zh);
+    expect(chat.loadPluginSkillDetail).not.toHaveBeenCalled();
+    await wrapper.get('[data-entry="skills:review"] .plugin-center-row-main').trigger('click'); await flushPromises();
+    expect(chat.loadPluginSkillDetail).toHaveBeenCalledWith('review', 'a', '/repo');
+    expect(wrapper.get('.plugin-center-skill-content').text()).toBe('# Workflow\n\n<script>alert(1)</script>');
+    expect(wrapper.find('script').exists()).toBe(false);
+    expect(wrapper.get('.plugin-center-skill-command').text()).toBe('/skill:review 在这里描述你的任务');
+    expect(wrapper.get('.plugin-center-skill-usage').text()).toContain('review');
+    expect(wrapper.get('.plugin-center-skill-files').text()).toContain('references/checklist.md');
+    expect(wrapper.get('.plugin-center-skill-effective').text()).toContain('用户级');
+    await wrapper.get('.plugin-center-back').trigger('click');
+    let complete;
+    chat.loadPluginSkillDetail.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    await wrapper.get('[data-entry="skills:review"] .plugin-center-row-main').trigger('click');
+    expect(wrapper.get('.plugin-center-skill-prompt').attributes('aria-busy')).toBe('true');
+    await wrapper.vm.selectAgent('b'); await flushPromises();
+    complete({ skillDetail: { name: 'review', content: 'Alpha private Prompt' } }); await flushPromises();
+    expect(wrapper.text()).not.toContain('Alpha private Prompt');
+    chat.loadPluginSkillDetail.mockResolvedValueOnce({ error: 'read denied' });
+    await wrapper.get('[data-entry="skills:review"] .plugin-center-row-main').trigger('click'); await flushPromises();
+    expect(wrapper.get('.plugin-center-skill-prompt [role="alert"]').text()).toContain('read denied');
+    chat.loadPluginSkillDetail.mockResolvedValueOnce({ unsupported: true });
+    await wrapper.get('.plugin-center-skill-prompt button').trigger('click'); await flushPromises();
+    expect(wrapper.get('.plugin-center-skill-prompt').text()).toContain(zh['yeaft.plugins.skillDetailUnsupported']);
+    chat.agents[1].online = false; await Vue.nextTick();
+    await wrapper.get('.plugin-center-back').trigger('click');
+    const requests = chat.loadPluginSkillDetail.mock.calls.length;
+    await wrapper.get('[data-entry="skills:review"] .plugin-center-row-main').trigger('click');
+    expect(chat.loadPluginSkillDetail).toHaveBeenCalledTimes(requests);
+    expect(wrapper.get('.plugin-center-skill-prompt').text()).toContain(zh['yeaft.plugins.skillDetailOffline']);
   });
 
   it('switches Agent state, preserves cached offline rows, distinguishes connection from enabled and retries attributed errors', async () => {
