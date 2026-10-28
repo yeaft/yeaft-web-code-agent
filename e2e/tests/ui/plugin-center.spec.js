@@ -227,7 +227,7 @@ test('Plugins keep the existing sidebar and browse responsively in light desktop
   await page.getByRole('button', { name: 'All plugins', exact: true }).click();
   await expect(page.getByRole('button', { name: 'View Review guide details', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'More actions', exact: true }).click();
-  await page.getByRole('button', { name: 'Enabled only', exact: true }).click();
+  await page.locator('.plugin-center-more-menu').getByRole('button', { name: 'Enabled only', exact: true }).click();
   await page.getByRole('button', { name: 'More actions', exact: true }).click();
   const filterGeometry = await page.locator('.plugin-center-menu-check').evaluate(mark => {
     const row = mark.parentElement, style = getComputedStyle(row);
@@ -238,7 +238,7 @@ test('Plugins keep the existing sidebar and browse responsively in light desktop
   });
   expect(filterGeometry.aligned).toBe(true);
   expect(parseFloat(filterGeometry.margin)).toBeGreaterThan(0);
-  await page.getByRole('button', { name: 'Enabled only', exact: true }).click();
+  await page.locator('.plugin-center-more-menu').getByRole('button', { name: 'Enabled only', exact: true }).click();
 
   // Keep the sidebar's actual width in the calculation at tablet/desktop sizes.
   for (const width of [1440, 1280, 1024, 900, 768, 375, 320]) await responsiveGeometry(page, width);
