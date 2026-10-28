@@ -137,7 +137,7 @@ export default {
       />
 
       <WorkCenterPage v-if="store.workCenterOpen" />
-      <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" />
+      <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" @toggle-sidebar="toggleSidebar" />
 
       <!-- Center Conversation. The Session status pane is rendered as a
            sibling to the RIGHT of this main column; turn debug opens as the

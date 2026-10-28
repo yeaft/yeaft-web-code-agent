@@ -1,653 +1,305 @@
+import NavigationIcon from './NavigationIcon.js';
+import { confirmDialog, useDialogState } from '../utils/dialog.js';
 import { agentSupportsYeaftPlugins } from '../utils/yeaft-plugin-capability.js';
 import { agentSupportsYeaftManagedSkills } from '../utils/yeaft-managed-skill-capability.js';
 
+const FIELDS = ['skills', 'mcpServers', 'tools'];
+
 export default {
   name: 'PluginCenterPage',
-  emits: ['close'],
+  components: { NavigationIcon },
+  emits: ['close', 'toggle-sidebar'],
   data() {
     return {
-      saving: false,
-      error: '',
-      selection: null,
-      savedSelection: null,
-      searchQuery: '',
-      activeCategory: 'all',
-      configLoading: false,
-      configLoadError: '',
-      configLoadedAgentId: null,
-      configLoadGeneration: 0,
-      refreshGeneration: 0,
-      saveGeneration: 0,
-      skillMutationLoading: false,
-      skillMutationError: '',
-      skillScope: 'user',
-      showSkillForm: false,
-      skillForm: {
-        name: '',
-        description: '',
-        trigger: '',
-        content: '',
-      },
+      searchQuery: '', activeCategory: 'all', enabledOnly: false,
+      searchOpen: false, menu: null, detailKey: null, listScrollTop: 0, formBackground: [], formOpener: null,
+      showSkillForm: false, skillScope: 'user', skillMutationLoading: false, skillMutationError: '',
+      skillForm: { name: '', description: '', trigger: '', content: '' },
     };
   },
   computed: {
     store() {
-      try { return window.Pinia?.useChatStore?.() || null; } catch (_) { return null; }
+      try { return window.Pinia?.useChatStore?.() || null; } catch { return null; }
     },
-    agents() {
-      return (this.store?.agents || []).filter(agent => agent?.online);
-    },
-    agentId() {
-      return this.store?.pluginCenterAgentId || this.store?.currentAgent || null;
-    },
-    selectedAgent() {
-      return this.agents.find(agent => agent.id === this.agentId) || null;
-    },
-    agentSupportsPlugins() {
-      return agentSupportsYeaftPlugins(this.selectedAgent);
-    },
-    agentSupportsManagedSkills() {
-      return agentSupportsYeaftManagedSkills(this.selectedAgent);
-    },
-    skillManagementUnavailableMessage() {
-      return this.selectedAgent?.capabilityMetadataProvided === true
-        ? this.$t('yeaft.plugins.skillManagementUpgradeRequired')
-        : this.$t('yeaft.plugins.skillManagementVersionUnknown');
-    },
-    activeSession() {
-      return this.store?.activePluginSession?.() || { sessionId: '', agentId: '', workDir: '' };
-    },
+    agents() { return this.store?.agents || []; },
+    agentId() { return this.store?.pluginCenterAgentId || this.store?.currentAgent || null; },
+    selectedAgent() { return this.agents.find(agent => agent.id === this.agentId) || null; },
+    online() { return !!this.selectedAgent?.online && this.store?.connectionState !== 'disconnected'; },
+    agentSupportsPlugins() { return !!this.selectedAgent && agentSupportsYeaftPlugins(this.selectedAgent); },
+    agentSupportsManagedSkills() { return !!this.selectedAgent && agentSupportsYeaftManagedSkills(this.selectedAgent); },
+    activeSession() { return this.store?.activePluginSession?.() || {}; },
     projectSkillAvailable() {
       return this.activeSession.agentId === this.agentId && !!this.activeSession.sessionId && !!this.activeSession.workDir;
     },
-    configRecord() {
-      return this.store?.pluginConfigByAgent?.[this.agentId] || null;
-    },
-    catalogWorkDir() {
-      return this.projectSkillAvailable ? this.activeSession.workDir : '';
-    },
+    catalogWorkDir() { return this.projectSkillAvailable ? this.activeSession.workDir : ''; },
+    configRecord() { return this.store?.pluginConfigByAgent?.[this.agentId] || {}; },
+    selection() { return this.configRecord.draft ?? this.configRecord.plugins ?? {}; },
+    configReady() { return this.online && this.agentSupportsPlugins && this.configRecord.loaded && !(this.configRecord.error && this.configRecord.errorOperation === 'load'); },
     catalogRecord() {
       const key = this.store?.pluginCatalogKey?.(this.agentId, this.catalogWorkDir);
-      return key ? this.store?.pluginCatalogByKey?.[key] || null : null;
+      return this.store?.pluginCatalogByKey?.[key] || {};
     },
-    catalog() {
-      return this.catalogRecord?.catalog || { tools: [], skills: [], skillSources: [], mcpServers: [] };
+    catalog() { return { tools: [], skills: [], skillSources: [], mcpServers: [], ...this.catalogRecord.catalog }; },
+    loading() { return this.online && this.agentSupportsPlugins && (!this.catalogRecord.loaded || this.catalogRecord.loading || this.configRecord.loading); },
+    loadError() { return this.catalogRecord.error || (this.configRecord.errorOperation === 'load' ? this.configRecord.error : '') || ''; },
+    categories() {
+      return ['all', ...FIELDS].map(id => ({ id, label: this.$t('yeaft.plugins.' + id) }));
     },
-    managedSkillSources() {
-      return Array.isArray(this.catalog.skillSources)
-        ? this.catalog.skillSources.filter(item => item?.managed)
-        : [];
+    entries() {
+      return FIELDS.flatMap(field => this.catalog[field].map(item => ({
+        ...item, field, key: `${field}:${item.id}`, label: item.label || item.name || item.id,
+      })));
     },
-    loading() {
-      return this.agentSupportsPlugins
-        && (!this.catalogRecord || !!this.catalogRecord.loading);
+    visibleEntries() {
+      const query = this.searchQuery.trim().toLocaleLowerCase();
+      return this.entries.filter(item => (this.activeCategory === 'all' || this.activeCategory === item.field)
+        && (!this.enabledOnly || this.enabled(item))
+        && (!query || [item.id, item.label, item.description].some(value => String(value || '').toLocaleLowerCase().includes(query))));
     },
-    configReady() {
-      return !!this.agentId
-        && this.agentSupportsPlugins
-        && this.configLoadedAgentId === this.agentId
-        && !this.configLoading
-        && !this.configLoadError;
+    detail() { return this.entries.find(item => item.key === this.detailKey) || null; },
+    detailSources() {
+      return this.detail?.field === 'skills'
+        ? this.catalog.skillSources.filter(item => (item.name || item.label) === this.pluginName(this.detail)) : [];
     },
-    hasCatalog() {
-      return this.catalog.tools.length + this.catalog.skills.length + this.catalog.mcpServers.length > 0;
-    },
-    hasExplicitSelection() {
-      return !!this.selection && Object.keys(this.selection).length > 0;
-    },
-    enabledCount() {
-      if (!this.hasExplicitSelection) return this.catalog.tools.length + this.catalog.skills.length + this.catalog.mcpServers.length;
-      return ['tools', 'skills', 'mcpServers'].reduce((count, field) => (
-        count + (Array.isArray(this.selection[field])
-          ? this.selection[field].length
-          : this.catalog[field].length)
-      ), 0);
-    },
-    totalCount() {
-      return this.catalog.tools.length + this.catalog.skills.length + this.catalog.mcpServers.length;
-    },
-    categoryDefinitions() {
-      return [
-        { id: 'all', label: this.$t('yeaft.plugins.all'), count: this.totalCount },
-        { id: 'tools', label: this.$t('yeaft.plugins.tools'), count: this.catalog.tools.length },
-        { id: 'skills', label: this.$t('yeaft.plugins.skills'), count: this.catalog.skills.length },
-        { id: 'mcpServers', label: this.$t('yeaft.plugins.mcpServers'), count: this.catalog.mcpServers.length },
-      ];
-    },
-    normalizedSearchQuery() {
-      return this.searchQuery.trim().toLocaleLowerCase();
-    },
-    filteredCatalog() {
-      const matches = (item) => {
-        if (!this.normalizedSearchQuery) return true;
-        const searchable = [item?.id, item?.name, item?.label, item?.description];
-        if (Number.isFinite(item?.toolCount)) searchable.push(String(item.toolCount));
-        return searchable
-          .filter(Boolean)
-          .some(value => String(value).toLocaleLowerCase().includes(this.normalizedSearchQuery));
-      };
-      return {
-        tools: this.catalog.tools.filter(matches),
-        skills: this.catalog.skills.filter(matches),
-        mcpServers: this.catalog.mcpServers.filter(matches),
-      };
-    },
-    visibleCategories() {
-      return ['tools', 'skills', 'mcpServers'].filter((field) => (
-        (this.activeCategory === 'all' || this.activeCategory === field)
-        && this.filteredCatalog[field].length > 0
-      ));
-    },
-    hasSearchResults() {
-      return this.visibleCategories.length > 0;
-    },
-    visibleResultCount() {
-      return this.visibleCategories.reduce((total, field) => total + this.filteredCatalog[field].length, 0);
-    },
-    isDirty() {
-      return JSON.stringify(this.normalizedSelection(this.selection))
-        !== JSON.stringify(this.normalizedSelection(this.savedSelection));
-    },
-    statusSummary() {
-      if (!this.agentId) return this.$t('yeaft.plugins.noAgent');
-      if (!this.agentSupportsPlugins) return this.$t('yeaft.plugins.upgradeRequired');
-      if (this.loading || this.configLoading) return this.$t('yeaft.plugins.loading');
-      const error = this.catalogRecord?.error || this.configLoadError;
-      if (error) return this.$t('yeaft.plugins.loadError', { error });
-      if (!this.hasCatalog) return this.$t('yeaft.plugins.empty');
-      return this.hasExplicitSelection
-        ? this.$t('yeaft.plugins.selectedSummary', { count: this.enabledCount })
-        : this.$t('yeaft.plugins.allAvailable');
-    },
+    skillFormDirty() { return Object.values(this.skillForm).some(value => value.trim()); },
+    saveErrors() { return Object.entries(this.store?.pluginConfigByAgent || {}).filter(([, record]) => (record.errorOperation === 'save' && record.error)); },
   },
   watch: {
-    catalogWorkDir(next, previous) {
-      if (next === previous || !this.agentId || !this.agentSupportsPlugins) return;
-      this.store?.loadPluginCatalog?.(this.agentId, next).catch(() => {});
+    agentId: { immediate: true, handler() { this.detailKey = null; this.menu = null; this.load(); } },
+    catalogWorkDir() { this.detailKey = null; this.load(); },
+    online(next, previous) { if (next && !previous) this.load(true); },
+    showSkillForm(open) {
+      if (open) {
+        this.formOpener = document.activeElement;
+        this.$nextTick(() => {
+          this.formBackground = [...document.body.children].filter(element => !element.classList.contains('plugin-center-form-overlay'));
+          this.formBackground.forEach(element => { element.inert = true; });
+        });
+      } else {
+        this.restoreFormBackground();
+        this.$nextTick(() => this.formOpener?.isConnected && this.formOpener.focus());
+      }
     },
-    agentId: {
-      immediate: true,
-      handler(next) {
-        ++this.configLoadGeneration;
-        ++this.refreshGeneration;
-        ++this.saveGeneration;
-        this.saving = false;
-        this.error = '';
-        if (!next) {
-          this.selection = null;
-          this.savedSelection = null;
-          this.searchQuery = '';
-          this.activeCategory = 'all';
-          this.configLoading = false;
-          this.configLoadError = '';
-          this.configLoadedAgentId = null;
-          return;
-        }
-        this.searchQuery = '';
-        this.activeCategory = 'all';
-        if (!this.agentSupportsPlugins) {
-          this.selection = null;
-          this.savedSelection = null;
-          this.configLoading = false;
-          this.configLoadError = this.$t('yeaft.plugins.upgradeRequired');
-          this.configLoadedAgentId = null;
-          return;
-        }
-        this.loadConfig(next);
-        this.store?.loadPluginCatalog?.(next, this.catalogWorkDir).catch(() => {});
-      },
-    },
+    activeCategory() { this.detailKey = null; },
+    searchQuery() { this.detailKey = null; },
+  },
+  mounted() {
+    document.addEventListener('pointerdown', this.closePopups);
+    document.addEventListener('keydown', this.onKeydown);
+    window.addEventListener('beforeunload', this.beforeUnload);
+  },
+  beforeUnmount() {
+    this.restoreFormBackground();
+    document.removeEventListener('pointerdown', this.closePopups);
+    document.removeEventListener('keydown', this.onKeydown);
+    window.removeEventListener('beforeunload', this.beforeUnload);
   },
   methods: {
-    loadConfig(agentId = this.agentId, generation = ++this.configLoadGeneration) {
-      if (!agentId) return;
-      ++this.refreshGeneration;
-      ++this.saveGeneration;
-      this.saving = false;
-      this.selection = null;
-      this.savedSelection = null;
-      this.configLoadedAgentId = null;
-      this.configLoading = false;
-      this.configLoadError = '';
-      if (!this.agentSupportsPlugins) {
-        this.configLoadError = this.$t('yeaft.plugins.upgradeRequired');
-        return;
-      }
-      if (this.configRecord?.loaded && !this.configRecord?.error) {
-        this.selection = this.copySelection(this.configRecord.plugins);
-        this.savedSelection = this.copySelection(this.configRecord.plugins);
-        this.configLoadedAgentId = agentId;
-        return;
-      }
-      const request = this.store?.loadPluginConfig?.(agentId);
-      this.configLoading = true;
-      Promise.resolve(request)
-        .then((record) => {
-          if (generation !== this.configLoadGeneration || agentId !== this.agentId) return;
-          if (record?.error) {
-            this.configLoadError = record.error;
-            return;
-          }
-          this.selection = this.copySelection(record?.plugins);
-          this.savedSelection = this.copySelection(record?.plugins);
-          this.configLoadedAgentId = agentId;
-        })
-        .catch((err) => {
-          if (generation !== this.configLoadGeneration || agentId !== this.agentId) return;
-          this.configLoadError = err?.message || String(err);
-        })
-        .finally(() => {
-          if (generation === this.configLoadGeneration && agentId === this.agentId) {
-            this.configLoading = false;
-          }
-        });
+    restoreFormBackground() {
+      this.formBackground.forEach(element => { element.inert = false; });
+      this.formBackground = [];
     },
-    copySelection(plugins = {}) {
-      const copy = {};
-      for (const field of ['tools', 'skills', 'mcpServers']) {
-        if (Array.isArray(plugins?.[field])) copy[field] = [...plugins[field]];
-      }
-      return copy;
+    async load(force = false) {
+      if (!this.agentId || !this.online || !this.agentSupportsPlugins) return;
+      const agentId = this.agentId, workDir = this.catalogWorkDir;
+      await Promise.all([
+        this.store.loadPluginConfig(agentId, { force }),
+        (force || !this.catalogRecord.loaded) ? this.store.loadPluginCatalog(agentId, workDir) : Promise.resolve(),
+      ]);
     },
-    normalizedSelection(plugins = {}) {
-      const normalized = {};
-      for (const field of ['tools', 'skills', 'mcpServers']) {
-        if (Array.isArray(plugins?.[field])) normalized[field] = [...plugins[field]].sort();
-      }
-      return normalized;
+    pluginName(item) { return item.field === 'skills' ? (item.name || item.label || item.id) : item.id; },
+    enabled(item) { return !Array.isArray(this.selection[item.field]) || this.selection[item.field].includes(this.pluginName(item)); },
+    toggle(item) {
+      if (!this.configReady) return;
+      this.store.setPluginEnabled(item.field, this.pluginName(item), !this.enabled(item), this.catalog[item.field].map(entry => this.pluginName({ ...entry, field: item.field })), this.agentId);
     },
-    pluginName(field, item) {
-      return field === 'skills' ? (item?.name || item?.label || item?.id) : item?.id;
+    itemSaving(item) {
+      const confirmed = this.configRecord.plugins?.[item.field];
+      const wasEnabled = !Array.isArray(confirmed) || confirmed.includes(this.pluginName(item));
+      return this.configRecord.saving && wasEnabled !== this.enabled(item);
     },
-    enabled(field, item) {
-      const name = this.pluginName(field, item);
-      if (!this.selection || !Array.isArray(this.selection[field])) return true;
-      return this.selection[field].includes(name);
+    itemDescription(item) {
+      if (item.field === 'mcpServers') return this.$t('yeaft.plugins.mcpDescription', { count: item.toolCount || 0 });
+      return item.description || this.$t(item.field === 'skills' ? 'yeaft.plugins.skillDescription' : 'yeaft.plugins.toolDescription');
     },
-    toggle(field, item, checked) {
-      if (!this.configReady || this.saving) return;
-      const name = this.pluginName(field, item);
-      if (!name) return;
-      const selection = this.selection || {};
-      const current = new Set(Array.isArray(selection[field])
-        ? selection[field]
-        : this.catalog[field].map(entry => this.pluginName(field, entry)));
-      if (checked) current.add(name);
-      else current.delete(name);
-      this.selection = { ...selection, [field]: [...current] };
+    itemSource(item) {
+      if (item.field === 'mcpServers') return this.$t(item.ready === true ? 'yeaft.plugins.connected' : item.ready === false ? 'yeaft.plugins.notConnected' : 'yeaft.plugins.connectionUnknown');
+      if (item.field === 'tools') return this.$t('yeaft.plugins.bundled');
+      return item.tier ? this.$t('yeaft.plugins.skillTier.' + item.tier) : this.$t('yeaft.plugins.agentLabel');
     },
-    useAll() {
-      if (!this.configReady || this.saving) return;
-      this.selection = {};
-      this.error = '';
+    itemIcon(item) { return item.field === 'skills' ? 'activity' : item.field === 'mcpServers' ? 'globe' : 'file'; },
+    agentName(id) { const agent = this.agents.find(entry => entry.id === id); return agent?.name || id; },
+    async selectAgent(id) {
+      if (id === this.agentId) { this.menu = null; return; }
+      if (!await this.closeSkillForm()) return;
+      this.store.pluginCenterAgentId = id;
     },
-    async refresh() {
-      if (!this.agentId || !this.agentSupportsPlugins) return;
-      const targetAgentId = this.agentId;
-      const targetLoadGeneration = this.configLoadGeneration;
-      const targetRefreshGeneration = ++this.refreshGeneration;
-      const isCurrentRefresh = () => (
-        targetAgentId === this.agentId
-        && targetLoadGeneration === this.configLoadGeneration
-        && targetRefreshGeneration === this.refreshGeneration
-      );
-      this.error = '';
-      try {
-        const result = await this.store?.loadPluginCatalog?.(targetAgentId, this.catalogWorkDir);
-        if (isCurrentRefresh() && result?.error) this.error = result.error;
-      } catch (err) {
-        if (isCurrentRefresh()) this.error = err?.message || String(err);
-      }
+    toggleMenu(name) {
+      this.menu = this.menu === name ? null : name;
+      if (this.menu) this.$nextTick(() => this.$refs[name + 'Menu']?.querySelector('button')?.focus());
     },
-    async save() {
-      if (this.saving || !this.agentId || !this.agentSupportsPlugins || !this.configReady) return;
-      const targetAgentId = this.agentId;
-      const targetLoadGeneration = this.configLoadGeneration;
-      const targetSaveGeneration = ++this.saveGeneration;
-      const submittedSelection = this.copySelection(this.selection || {});
-      const isCurrentSave = () => (
-        targetAgentId === this.agentId
-        && targetLoadGeneration === this.configLoadGeneration
-        && targetSaveGeneration === this.saveGeneration
-      );
-      this.saving = true;
-      this.error = '';
-      try {
-        const result = await this.store?.savePluginConfig?.(submittedSelection, targetAgentId);
-        if (!isCurrentSave()) return;
-        if (result?.error) this.error = result.error;
-        else {
-          const savedSelection = this.copySelection(result?.plugins ?? submittedSelection);
-          this.selection = savedSelection;
-          this.savedSelection = this.copySelection(savedSelection);
+    closePopups(event) { if (!event.target.closest('.plugin-center-menu-host')) this.menu = null; },
+    onKeydown(event) {
+      if (event.key !== 'Escape' || event.defaultPrevented || useDialogState().open) return;
+      if (this.menu) { const menu = this.menu; this.menu = null; this.$refs[menu + 'Trigger']?.focus(); }
+      else if (this.searchOpen) this.closeSearch();
+      else if (this.showSkillForm) this.closeSkillForm();
+    },
+    menuKeydown(event) {
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      const buttons = [...event.currentTarget.querySelectorAll('button:not(:disabled)')];
+      const current = buttons.indexOf(document.activeElement);
+      const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+        : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+      event.preventDefault(); buttons[index]?.focus();
+    },
+    openSearch() { this.searchOpen = true; this.menu = null; this.$nextTick(() => this.$refs.mobileSearch?.focus()); },
+    closeSearch() { this.searchOpen = false; this.$nextTick(() => this.$refs.searchTrigger?.focus()); },
+    openDetail(item) {
+      this.listScrollTop = this.$refs.content?.scrollTop || 0;
+      this.detailKey = item.key; this.menu = null;
+      this.$nextTick(() => { this.$refs.content.scrollTop = 0; this.$refs.detailTitle?.focus(); });
+    },
+    backToList() {
+      const key = this.detailKey; this.detailKey = null;
+      this.$nextTick(() => {
+        this.$refs.content.scrollTop = this.listScrollTop;
+        [...this.$el.querySelectorAll('.plugin-center-row-main')].find(button => button.dataset.entry === key)?.focus({ preventScroll: true });
+      });
+    },
+    resetFilters() { this.searchQuery = ''; this.activeCategory = 'all'; this.enabledOnly = false; },
+    openSkillForm() {
+      this.menu = null; this.showSkillForm = true; this.skillMutationError = '';
+      this.$nextTick(() => this.$refs.skillName?.focus());
+    },
+    async closeSkillForm() {
+      if (!this.showSkillForm) return true;
+      if (this.skillMutationLoading) return false;
+      if (this.skillFormDirty) {
+        const discard = await confirmDialog(this.$t('yeaft.plugins.discardSkill'));
+        if (!discard) {
+          this.formBackground.forEach(element => { element.inert = true; });
+          return false;
         }
-      } catch (err) {
-        if (isCurrentSave()) this.error = err?.message || String(err);
-      } finally {
-        if (isCurrentSave()) this.saving = false;
       }
+      this.showSkillForm = false; this.skillMutationError = '';
+      this.skillForm = { name: '', description: '', trigger: '', content: '' };
+      return true;
     },
-    resetSkillForm() {
-      this.skillForm.name = '';
-      this.skillForm.description = '';
-      this.skillForm.trigger = '';
-      this.skillForm.content = '';
-      this.skillMutationError = '';
-    },
-    async refreshCatalogForSkillScope() {
-      await this.store?.loadPluginCatalog?.(this.agentId, this.catalogWorkDir);
+    beforeUnload(event) { if (this.showSkillForm && this.skillFormDirty) { event.preventDefault(); event.returnValue = ''; } },
+    formKeydown(event) {
+      if (event.key !== 'Tab') return;
+      const controls = [...event.currentTarget.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)')];
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     },
     async createSkill() {
-      if (this.skillMutationLoading || !this.agentSupportsManagedSkills) return;
-      if (this.skillScope === 'project' && !this.projectSkillAvailable) {
-        this.skillMutationError = this.$t('yeaft.plugins.projectScopeUnavailable');
-        return;
-      }
-      this.skillMutationLoading = true;
-      this.skillMutationError = '';
+      if (this.skillMutationLoading || !this.online || !this.agentSupportsManagedSkills) return;
+      const agentId = this.agentId, workDir = this.catalogWorkDir, scope = this.skillScope;
+      if (scope === 'project' && !this.projectSkillAvailable) return;
+      this.skillMutationLoading = true; this.skillMutationError = '';
       try {
-        const result = await this.store?.mutateManagedSkill?.({
-          action: 'create',
-          scope: this.skillScope,
-          skill: { ...this.skillForm },
-          sessionId: this.skillScope === 'project' ? this.activeSession.sessionId : '',
-        }, this.agentId);
-        if (result?.error) {
-          this.skillMutationError = result.error;
-          return;
+        const result = await this.store.mutateManagedSkill({ action: 'create', scope, skill: { ...this.skillForm }, sessionId: scope === 'project' ? this.activeSession.sessionId : '' }, agentId);
+        if (result?.error) { this.skillMutationError = result.error; return; }
+        if (result?.result?.name && Array.isArray(this.selection.skills)) {
+          this.store.setPluginEnabled('skills', result.result.name, true, [], agentId);
         }
-        const createdName = typeof result?.result?.name === 'string'
-          ? result.result.name.trim()
-          : '';
-        if (createdName && Array.isArray(this.selection?.skills)) {
-          this.selection = {
-            ...this.selection,
-            skills: [...new Set([...this.selection.skills, createdName])],
-          };
-        }
-        this.resetSkillForm();
-        this.showSkillForm = false;
-        await this.refreshCatalogForSkillScope();
-      } catch (err) {
-        this.skillMutationError = err?.message || String(err);
-      } finally {
-        this.skillMutationLoading = false;
-      }
+        this.skillForm = { name: '', description: '', trigger: '', content: '' }; this.showSkillForm = false;
+        await this.store.loadPluginCatalog(agentId, workDir);
+      } catch (error) { this.skillMutationError = error?.message || String(error); }
+      finally { this.skillMutationLoading = false; }
     },
     async removeSkill(item) {
-      if (!item?.managed || this.skillMutationLoading || !this.agentSupportsManagedSkills) return;
+      if (!item.managed || this.skillMutationLoading || !this.online || !this.agentSupportsManagedSkills) return;
+      const agentId = this.agentId, workDir = this.catalogWorkDir, sessionId = this.activeSession.sessionId;
       const scope = item.tier === 'project' ? 'project' : 'user';
-      if (scope === 'project' && !this.projectSkillAvailable) {
-        this.skillMutationError = this.$t('yeaft.plugins.projectScopeUnavailable');
-        return;
-      }
-      if (!confirm(this.$t('yeaft.plugins.confirmRemoveSkill', { name: item.label }))) return;
-      this.skillMutationLoading = true;
-      this.skillMutationError = '';
+      if (scope === 'project' && !this.projectSkillAvailable) return;
+      if (!await confirmDialog(this.$t('yeaft.plugins.confirmRemoveSkill', { name: item.label }), { destructive: true })) return;
+      if (agentId !== this.agentId || workDir !== this.catalogWorkDir || !this.online) return;
+      this.skillMutationLoading = true; this.skillMutationError = '';
       try {
-        const result = await this.store?.mutateManagedSkill?.({
-          action: 'remove',
-          scope,
-          name: item.name || item.label,
-          sessionId: scope === 'project' ? this.activeSession.sessionId : '',
-        }, this.agentId);
+        const result = await this.store.mutateManagedSkill({ action: 'remove', scope, name: item.name || item.label, sessionId: scope === 'project' ? sessionId : '' }, agentId);
         if (result?.error) this.skillMutationError = result.error;
-        else await this.refreshCatalogForSkillScope();
-      } catch (err) {
-        this.skillMutationError = err?.message || String(err);
-      } finally {
-        this.skillMutationLoading = false;
-      }
-    },
-    selectAgent(agentId) {
-      if (!agentId || agentId === this.agentId) return;
-      this.store.pluginCenterAgentId = agentId;
+        else await this.store.loadPluginCatalog(agentId, workDir);
+      } catch (error) { this.skillMutationError = error?.message || String(error); }
+      finally { this.skillMutationLoading = false; }
     },
   },
   template: `
     <section class="plugin-center-page" :aria-label="$t('yeaft.plugins.title')">
-      <header class="plugin-center-header">
-        <div class="plugin-center-heading">
-          <h1>{{ $t('yeaft.plugins.title') }}</h1>
-          <p>{{ $t('yeaft.plugins.subtitle') }}</p>
-        </div>
-        <div class="plugin-center-header-actions">
-          <button type="button" class="plugin-center-icon-button" @click="refresh" :disabled="loading || !agentSupportsPlugins" :title="$t('common.refresh')" :aria-label="$t('common.refresh')">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0 2 5.3M20 4v7h-7"/></svg>
-          </button>
-          <button type="button" class="plugin-center-close-button" @click="$emit('close')">{{ $t('common.close') }}</button>
-        </div>
-      </header>
-
-      <div class="plugin-center-layout">
-        <aside class="plugin-center-agent-rail" :aria-label="$t('yeaft.plugins.agentLabel')">
-          <div class="plugin-center-rail-heading">
-            <span>{{ $t('yeaft.plugins.agentLabel') }}</span>
-            <span class="plugin-center-rail-count">{{ agents.length }}</span>
-          </div>
-          <div class="plugin-center-agent-list">
-            <button
-              v-for="agent in agents"
-              :key="agent.id"
-              type="button"
-              class="plugin-center-agent"
-              :class="{ 'is-active': agent.id === agentId }"
-              :aria-pressed="agent.id === agentId"
-              @click="selectAgent(agent.id)"
-            >
-              <span class="plugin-center-agent-mark" aria-hidden="true">{{ (agent.name || agent.id || '?').slice(0, 1).toUpperCase() }}</span>
-              <span class="plugin-center-agent-copy">
-                <strong>{{ agent.name || agent.id }}</strong>
-                <small>{{ agent.id }}</small>
-              </span>
-            </button>
-          </div>
-        </aside>
-
-        <main class="plugin-center-content">
-          <section class="plugin-center-overview" :aria-label="$t('yeaft.plugins.overviewLabel')">
-            <div class="plugin-center-overview-copy">
-              <h2>{{ selectedAgent?.name || selectedAgent?.id || $t('yeaft.plugins.noAgent') }}</h2>
-              <p>{{ statusSummary }}</p>
-            </div>
-            <div v-if="configReady && !loading && !catalogRecord?.error && hasCatalog" class="plugin-center-overview-stats">
-              <span class="plugin-center-enabled-count"><strong>{{ enabledCount }}</strong> / {{ totalCount }}</span>
-              <span>{{ $t('yeaft.plugins.enabledLabel') }}</span>
-            </div>
-            <button type="button" class="btn-secondary plugin-center-use-all" @click="useAll" :disabled="!configReady || !hasExplicitSelection || saving">
-              {{ $t('yeaft.plugins.useAll') }}
-            </button>
-          </section>
-
-          <div v-if="!agentSupportsPlugins" class="plugin-center-state is-error">
-            <span class="plugin-center-state-icon" aria-hidden="true">!</span>
-            <p>{{ $t('yeaft.plugins.upgradeRequired') }}</p>
-          </div>
-          <div v-else-if="loading" class="plugin-center-state">
-            <span class="plugin-center-loading-dot" aria-hidden="true"></span>
-            <p>{{ $t('yeaft.plugins.loading') }}</p>
-          </div>
-          <div v-else-if="catalogRecord?.error" class="plugin-center-state is-error">
-            <span class="plugin-center-state-icon" aria-hidden="true">!</span>
-            <p>{{ $t('yeaft.plugins.loadError', { error: catalogRecord.error }) }}</p>
-            <button type="button" class="btn-secondary" @click="refresh">{{ $t('yeaft.plugins.retry') }}</button>
-          </div>
-          <div v-else-if="configLoadError" class="plugin-center-state is-error">
-            <span class="plugin-center-state-icon" aria-hidden="true">!</span>
-            <p>{{ $t('yeaft.plugins.loadError', { error: configLoadError }) }}</p>
-            <button type="button" class="btn-secondary" @click="loadConfig(agentId)">{{ $t('yeaft.plugins.retry') }}</button>
-          </div>
-          <template v-else>
-            <div class="plugin-center-toolbar">
-              <label class="plugin-center-search">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-                <input v-model="searchQuery" type="search" :placeholder="$t('yeaft.plugins.searchPlaceholder')" :aria-label="$t('yeaft.plugins.searchPlaceholder')">
-              </label>
-              <span class="plugin-center-result-count">{{ $t('yeaft.plugins.resultCount', { count: visibleResultCount }) }}</span>
-            </div>
-
-            <div class="plugin-center-tabs" role="tablist" :aria-label="$t('yeaft.plugins.categoryLabel')">
-              <button
-                v-for="category in categoryDefinitions"
-                :key="category.id"
-                type="button"
-                role="tab"
-                class="plugin-center-tab"
-                :class="{ 'is-active': activeCategory === category.id }"
-                :aria-selected="activeCategory === category.id"
-                @click="activeCategory = category.id"
-              >
-                <span>{{ category.label }}</span>
-                <span class="plugin-center-tab-count">{{ category.count }}</span>
+      <div class="plugin-center-workspace" :inert="showSkillForm || null">
+        <header class="plugin-center-header" :aria-label="$t('yeaft.plugins.toolbar')">
+          <button type="button" class="btn-ghost plugin-center-icon-button plugin-center-sidebar-toggle" :aria-label="$t('chat.sidebar.expand')" @click="$emit('toggle-sidebar')"><NavigationIcon name="menu" :size="18" /></button>
+          <template v-if="!searchOpen">
+            <div class="plugin-center-menu-host plugin-center-agent-host">
+              <button ref="agentsTrigger" type="button" class="btn-ghost plugin-center-agent-trigger" aria-haspopup="true" :aria-expanded="menu === 'agents'" :aria-label="$t('yeaft.plugins.selectAgent')" @click="toggleMenu('agents')">
+                <span class="plugin-center-agent-caption">Agent</span><span class="plugin-center-dot" :class="{ 'is-offline': !online }"></span><span class="plugin-center-agent-name">{{ selectedAgent?.name || agentId || $t('yeaft.plugins.noAgent') }}</span><NavigationIcon name="chevron" :size="12" />
               </button>
+              <div v-if="menu === 'agents'" ref="agentsMenu" class="plugin-center-menu plugin-center-agent-menu" :aria-label="$t('yeaft.plugins.selectAgent')" @keydown="menuKeydown">
+                <button v-for="agent in agents" :key="agent.id" type="button" :aria-pressed="agentId === agent.id" :disabled="skillMutationLoading" @click="selectAgent(agent.id)"><span class="plugin-center-dot" :class="{ 'is-offline': !agent.online }"></span><span>{{ agent.name || agent.id }}</span><small v-if="!agent.online">{{ $t('yeaft.plugins.offlineLabel') }}</small><span v-else-if="agentId === agent.id" aria-hidden="true">✓</span></button>
+              </div>
             </div>
-
-            <section class="plugin-center-skill-management" aria-labelledby="plugin-manage-skills-title">
-              <div class="plugin-center-section-heading">
-                <div>
-                  <h2 id="plugin-manage-skills-title">{{ $t('yeaft.plugins.manageSkills') }}</h2>
-                  <p class="plugin-center-section-description">{{ $t('yeaft.plugins.manageSkillsDescription') }}</p>
-                </div>
-                <button type="button" class="btn-secondary plugin-center-skill-create" @click="showSkillForm = !showSkillForm" :disabled="skillMutationLoading || !agentSupportsManagedSkills">
-                  {{ showSkillForm ? $t('common.cancel') : $t('yeaft.plugins.createSkill') }}
-                </button>
+            <nav class="plugin-center-tabs" :aria-label="$t('yeaft.plugins.categoryLabel')"><button v-for="category in categories" :key="category.id" type="button" class="btn-ghost" :class="{ 'is-active': activeCategory === category.id }" :aria-pressed="activeCategory === category.id" @click="activeCategory = category.id">{{ category.label }}</button></nav>
+            <select class="plugin-center-category-select" v-model="activeCategory" :aria-label="$t('yeaft.plugins.categoryLabel')"><option v-for="category in categories" :key="category.id" :value="category.id">{{ category.label }}</option></select>
+            <label class="plugin-center-search"><NavigationIcon name="search" :size="15" /><input v-model="searchQuery" type="search" :placeholder="$t('yeaft.plugins.searchShort')" :aria-label="$t('yeaft.plugins.searchPlaceholder')"></label>
+            <button ref="searchTrigger" type="button" class="btn-ghost plugin-center-icon-button plugin-center-compact-search" :aria-label="$t('yeaft.plugins.searchPlaceholder')" @click="openSearch"><NavigationIcon name="search" :size="18" /></button>
+            <button type="button" class="btn-secondary plugin-center-create" :disabled="!online || !agentSupportsManagedSkills || skillMutationLoading" @click="openSkillForm"><NavigationIcon name="add" :size="14" /><span>{{ $t('yeaft.plugins.createSkill') }}</span></button>
+            <div class="plugin-center-menu-host">
+              <button ref="moreTrigger" type="button" class="btn-ghost plugin-center-icon-button" aria-haspopup="true" :aria-expanded="menu === 'more'" :aria-label="$t('yeaft.plugins.more')" @click="toggleMenu('more')"><NavigationIcon name="more" :size="18" /></button>
+              <div v-if="menu === 'more'" ref="moreMenu" class="plugin-center-menu plugin-center-more-menu" :aria-label="$t('yeaft.plugins.more')" @keydown="menuKeydown">
+                <button type="button" class="plugin-center-mobile-create" :disabled="!online || !agentSupportsManagedSkills || skillMutationLoading" @click="openSkillForm">{{ $t('yeaft.plugins.createSkill') }}</button>
+                <button type="button" :aria-pressed="enabledOnly" @click="enabledOnly = !enabledOnly; menu = null">{{ $t('yeaft.plugins.enabledOnly') }}<span v-if="enabledOnly" aria-hidden="true">✓</span></button>
+                <button type="button" :disabled="!online || loading" @click="load(true); menu = null">{{ $t('common.refresh') }}</button>
+                <button type="button" @click="$emit('close')">{{ $t('yeaft.plugins.backToChat') }}</button>
               </div>
-              <p v-if="!agentSupportsManagedSkills" class="plugin-center-scope-hint is-error">{{ skillManagementUnavailableMessage }}</p>
-              <div v-if="showSkillForm" class="plugin-center-skill-form">
-                <div class="plugin-center-scope-control">
-                  <span>{{ $t('yeaft.plugins.skillScope') }}</span>
-                  <div class="plugin-center-scope-options" role="radiogroup" :aria-label="$t('yeaft.plugins.skillScope')">
-                    <label>
-                      <input v-model="skillScope" type="radio" value="user" :disabled="skillMutationLoading">
-                      <span>{{ $t('yeaft.plugins.userScope') }}</span>
-                    </label>
-                    <label :class="{ 'is-disabled': !projectSkillAvailable }">
-                      <input v-model="skillScope" type="radio" value="project" :disabled="skillMutationLoading || !projectSkillAvailable">
-                      <span>{{ $t('yeaft.plugins.projectScope') }}</span>
-                    </label>
-                  </div>
-                </div>
-                <p class="plugin-center-scope-hint">
-                  {{ skillScope === 'project' ? $t('yeaft.plugins.projectScopeDescription') : $t('yeaft.plugins.userScopeDescription') }}
-                </p>
-                <label>
-                  <span>{{ $t('yeaft.plugins.skillName') }}</span>
-                  <input v-model="skillForm.name" type="text" :disabled="skillMutationLoading" autocomplete="off">
-                </label>
-                <label>
-                  <span>{{ $t('yeaft.plugins.skillDescriptionLabel') }}</span>
-                  <input v-model="skillForm.description" type="text" :disabled="skillMutationLoading">
-                </label>
-                <label>
-                  <span>{{ $t('yeaft.plugins.skillTrigger') }}</span>
-                  <input v-model="skillForm.trigger" type="text" :disabled="skillMutationLoading">
-                </label>
-                <label>
-                  <span>{{ $t('yeaft.plugins.skillInstructions') }}</span>
-                  <textarea v-model="skillForm.content" :disabled="skillMutationLoading" rows="5"></textarea>
-                </label>
-                <p v-if="skillMutationError" class="plugin-center-skill-error" role="alert">{{ skillMutationError }}</p>
-                <div class="plugin-center-skill-form-actions">
-                  <button type="button" class="btn-primary" @click="createSkill" :disabled="skillMutationLoading || !skillForm.name || !skillForm.description || !skillForm.content || !agentSupportsManagedSkills">
-                    {{ skillMutationLoading ? $t('common.saving') : $t('yeaft.plugins.createSkill') }}
-                  </button>
-                  <button type="button" class="btn-secondary" @click="resetSkillForm" :disabled="skillMutationLoading">{{ $t('yeaft.plugins.resetSkillForm') }}</button>
-                </div>
-              </div>
-              <div v-if="managedSkillSources.length" class="plugin-center-managed-skill-list">
-                <div v-for="item in managedSkillSources" :key="item.id" class="plugin-center-managed-skill-row">
-                  <span class="plugin-center-card-copy">
-                    <strong>{{ item.label }}</strong>
-                    <small>{{ $t('yeaft.plugins.skillTier.' + item.tier) }}</small>
-                  </span>
-                  <button type="button" class="plugin-center-skill-remove" :disabled="skillMutationLoading || !agentSupportsManagedSkills" @click="removeSkill(item)">
-                    {{ $t('yeaft.plugins.removeSkill') }}
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            <div v-if="!hasSearchResults && hasCatalog" class="plugin-center-empty-search">
-              <span class="plugin-center-empty-search-icon" aria-hidden="true">⌕</span>
-              <h2>{{ $t('yeaft.plugins.noMatchesTitle') }}</h2>
-              <p>{{ $t('yeaft.plugins.noMatchesBody') }}</p>
-            </div>
-
-            <div v-else-if="hasCatalog" class="plugin-center-sections">
-              <section v-if="visibleCategories.includes('tools')" class="plugin-center-section" aria-labelledby="plugin-tools-title">
-                <div class="plugin-center-section-heading">
-                  <div>
-                    <h2 id="plugin-tools-title">{{ $t('yeaft.plugins.tools') }}</h2>
-                  </div>
-                  <span>{{ filteredCatalog.tools.length }}</span>
-                </div>
-                <div class="plugin-center-card-grid">
-                  <label v-for="item in filteredCatalog.tools" :key="item.id" class="plugin-center-card" :class="{ 'is-disabled': !configReady || saving || !enabled('tools', item) }">
-                    <input type="checkbox" :checked="enabled('tools', item)" :disabled="!configReady || saving" @change="toggle('tools', item, $event.target.checked)">
-                    <span class="plugin-center-card-icon" aria-hidden="true">⌘</span>
-                    <span class="plugin-center-card-copy">
-                      <strong>{{ item.label }}</strong>
-                      <small>{{ item.description || $t('yeaft.plugins.toolDescription') }}</small>
-                    </span>
-                    <span class="plugin-center-toggle" aria-hidden="true"></span>
-                  </label>
-                </div>
-              </section>
-
-              <section v-if="visibleCategories.includes('skills')" class="plugin-center-section" aria-labelledby="plugin-skills-title">
-                <div class="plugin-center-section-heading">
-                  <div>
-                    <h2 id="plugin-skills-title">{{ $t('yeaft.plugins.skills') }}</h2>
-                  </div>
-                  <span>{{ filteredCatalog.skills.length }}</span>
-                </div>
-                <div class="plugin-center-card-grid">
-                  <label v-for="item in filteredCatalog.skills" :key="item.id" class="plugin-center-card" :class="{ 'is-disabled': !configReady || saving || !enabled('skills', item) }">
-                    <input type="checkbox" :checked="enabled('skills', item)" :disabled="!configReady || saving" @change="toggle('skills', item, $event.target.checked)">
-                    <span class="plugin-center-card-icon" aria-hidden="true">✦</span>
-                    <span class="plugin-center-card-copy">
-                      <strong>{{ item.label }}</strong>
-                      <small>{{ item.description || $t('yeaft.plugins.skillDescription') }}</small>
-                      <small v-if="item.tier" class="plugin-center-skill-tier">{{ $t('yeaft.plugins.skillTier.' + item.tier) }}</small>
-                    </span>
-                    <span class="plugin-center-toggle" aria-hidden="true"></span>
-                  </label>
-                </div>
-              </section>
-
-              <section v-if="visibleCategories.includes('mcpServers')" class="plugin-center-section" aria-labelledby="plugin-mcp-title">
-                <div class="plugin-center-section-heading">
-                  <div>
-                    <h2 id="plugin-mcp-title">{{ $t('yeaft.plugins.mcpServers') }}</h2>
-                  </div>
-                  <span>{{ filteredCatalog.mcpServers.length }}</span>
-                </div>
-                <div class="plugin-center-card-grid">
-                  <label v-for="item in filteredCatalog.mcpServers" :key="item.id" class="plugin-center-card" :class="{ 'is-disabled': !configReady || saving || !enabled('mcpServers', item) }">
-                    <input type="checkbox" :checked="enabled('mcpServers', item)" :disabled="!configReady || saving" @change="toggle('mcpServers', item, $event.target.checked)">
-                    <span class="plugin-center-card-icon" aria-hidden="true">◌</span>
-                    <span class="plugin-center-card-copy">
-                      <strong>{{ item.label }}</strong>
-                      <small>{{ $t('yeaft.plugins.mcpDescription', { count: item.toolCount || 0 }) }}</small>
-                    </span>
-                    <span class="plugin-center-toggle" aria-hidden="true"></span>
-                  </label>
-                </div>
-              </section>
             </div>
           </template>
-        </main>
+          <template v-else><label class="plugin-center-expanded-search"><NavigationIcon name="search" :size="18" /><input ref="mobileSearch" v-model="searchQuery" type="search" :placeholder="$t('yeaft.plugins.searchShort')" :aria-label="$t('yeaft.plugins.searchPlaceholder')"></label><button type="button" class="btn-ghost plugin-center-icon-button" :aria-label="$t('yeaft.plugins.closeSearch')" @click="closeSearch"><NavigationIcon name="close" :size="18" /></button></template>
+        </header>
+        <div v-if="!online" class="plugin-center-notice" role="status">{{ $t('yeaft.plugins.offline') }}</div>
+        <div v-for="[id, record] in saveErrors" :key="id" class="plugin-center-notice is-error" role="alert"><span>{{ $t('yeaft.plugins.saveFailed', { agent: agentName(id), error: record.error }) }}</span><button type="button" class="btn-ghost" :disabled="!agents.find(a => a.id === id)?.online || record.saving" @click="store.retryPluginConfig(id)">{{ $t('yeaft.plugins.retry') }}</button></div>
+        <div ref="content" class="plugin-center-content" :aria-busy="loading ? 'true' : 'false'">
+          <div v-if="!selectedAgent" class="plugin-center-state">{{ $t('yeaft.plugins.noAgent') }}</div>
+          <div v-else-if="!agentSupportsPlugins" class="plugin-center-state is-error">{{ $t('yeaft.plugins.upgradeRequired') }}</div>
+          <div v-else-if="loading && !catalogRecord.loaded" class="plugin-center-state" role="status">{{ $t('yeaft.plugins.loading') }}</div>
+          <div v-else-if="loadError" class="plugin-center-state is-error" role="alert"><p>{{ $t('yeaft.plugins.loadError', { error: loadError }) }}</p><button type="button" class="btn-secondary" :disabled="!online" @click="load(true)">{{ $t('yeaft.plugins.retry') }}</button></div>
+          <section v-else-if="detail" class="plugin-center-detail">
+            <button type="button" class="btn-ghost plugin-center-back" @click="backToList"><NavigationIcon name="back" :size="15" />{{ $t('yeaft.plugins.allPlugins') }}</button>
+            <div class="plugin-center-detail-title"><span class="plugin-center-entry-icon"><NavigationIcon :name="itemIcon(detail)" :size="23" /></span><div><h1 ref="detailTitle" tabindex="-1">{{ detail.label }}</h1><p>{{ $t('yeaft.plugins.' + detail.field) }} · {{ itemSource(detail) }}</p></div><span class="plugin-center-save-indicator" :class="{ 'is-visible': itemSaving(detail) }" role="status" :aria-label="itemSaving(detail) ? $t('common.saving') : ''"></span><button type="button" class="plugin-center-switch" role="switch" :aria-checked="enabled(detail)" :aria-label="$t('yeaft.plugins.toggleLabel', { name: detail.label })" :disabled="!configReady" @click="toggle(detail)"><span></span></button></div>
+            <p class="plugin-center-detail-description">{{ itemDescription(detail) }}</p>
+            <dl class="plugin-center-properties"><dt>{{ $t('yeaft.plugins.identifier') }}</dt><dd>{{ detail.id }}</dd><dt>{{ $t('yeaft.plugins.agentLabel') }}</dt><dd>{{ selectedAgent.name || agentId }}</dd><dt>{{ $t('yeaft.plugins.source') }}</dt><dd>{{ itemSource(detail) }}</dd><template v-if="detail.field === 'mcpServers'"><dt>{{ $t('yeaft.plugins.connection') }}</dt><dd>{{ itemSource(detail) }}</dd></template></dl>
+            <template v-if="detailSources.length"><h2>{{ $t('yeaft.plugins.skillSources') }}</h2><div v-for="source in detailSources" :key="source.id" class="plugin-center-source-row"><div><strong>{{ source.label }}</strong><small>{{ $t('yeaft.plugins.skillTier.' + source.tier) }}</small></div><button v-if="source.managed" type="button" class="btn-ghost plugin-center-remove" :disabled="!online || !agentSupportsManagedSkills || skillMutationLoading || (source.tier === 'project' && !projectSkillAvailable)" @click="removeSkill(source)">{{ $t('yeaft.plugins.removeSkill') }}</button></div></template>
+            <p class="plugin-center-detail-note">{{ $t('yeaft.plugins.applyBoundary') }}</p>
+            <p v-if="skillMutationError" class="plugin-center-error" role="alert">{{ skillMutationError }}</p>
+          </section>
+          <div v-else class="plugin-center-catalog">
+            <button v-if="enabledOnly" type="button" class="btn-ghost plugin-center-filter" @click="enabledOnly = false">{{ $t('yeaft.plugins.enabledOnly') }}<NavigationIcon name="close" :size="12" /></button>
+            <article v-for="item in visibleEntries" :key="item.key" class="plugin-center-row" :data-entry="item.key">
+              <button type="button" class="plugin-center-row-main" :data-entry="item.key" :aria-label="$t('yeaft.plugins.viewDetails', { name: item.label })" @click="openDetail(item)"><span class="plugin-center-entry-icon"><NavigationIcon :name="itemIcon(item)" :size="21" /></span><span class="plugin-center-row-copy"><strong>{{ item.label }}</strong><small>{{ itemDescription(item) }}</small></span></button>
+              <span class="plugin-center-row-meta"><span>{{ $t('yeaft.plugins.' + item.field) }}</span><span class="plugin-center-origin" :class="{ 'is-connected': item.field === 'mcpServers' && item.ready === true }">{{ itemSource(item) }}</span></span>
+              <span class="plugin-center-save-indicator" :class="{ 'is-visible': itemSaving(item) }" role="status" :aria-label="itemSaving(item) ? $t('common.saving') : ''"></span>
+              <button type="button" class="plugin-center-switch" role="switch" :aria-checked="enabled(item)" :aria-label="$t('yeaft.plugins.toggleLabel', { name: item.label })" :disabled="!configReady" @click="toggle(item)"><span></span></button>
+            </article>
+            <div v-if="!visibleEntries.length" class="plugin-center-state"><NavigationIcon name="search" :size="24" /><p>{{ searchQuery || enabledOnly ? $t('yeaft.plugins.noMatchesTitle') : $t('yeaft.plugins.empty') }}</p><button v-if="searchQuery || enabledOnly" type="button" class="btn-secondary" @click="resetFilters">{{ $t('yeaft.plugins.clearFilters') }}</button></div>
+          </div>
+        </div>
       </div>
-
-      <footer class="plugin-center-footer">
-        <span v-if="error" class="plugin-center-error" role="alert">{{ error }}</span>
-        <span v-else-if="isDirty" class="plugin-center-unsaved">{{ $t('yeaft.plugins.unsavedChanges') }}</span>
-        <span class="plugin-center-footer-spacer"></span>
-        <button type="button" class="btn-secondary plugin-center-cancel" @click="$emit('close')">{{ $t('common.close') }}</button>
-        <button type="button" class="btn-primary plugin-center-save" @click="save" :disabled="saving || loading || !configReady || !agentId || !isDirty">
-          {{ saving ? $t('common.saving') : $t('common.save') }}
-        </button>
-      </footer>
+      <Teleport to="body"><div v-if="showSkillForm" class="modal-overlay plugin-center-form-overlay" @click.self="closeSkillForm">
+        <form class="modal plugin-center-skill-form" role="dialog" aria-modal="true" aria-labelledby="plugin-skill-form-title" @submit.prevent="createSkill" @keydown="formKeydown">
+          <header><h2 id="plugin-skill-form-title">{{ $t('yeaft.plugins.createSkill') }}</h2><button type="button" class="btn-ghost plugin-center-icon-button" :disabled="skillMutationLoading" :aria-label="$t('common.close')" @click="closeSkillForm"><NavigationIcon name="close" :size="18" /></button></header>
+          <div class="plugin-center-form-body">
+            <label><span>{{ $t('yeaft.plugins.skillScope') }}</span><select v-model="skillScope" :disabled="skillMutationLoading"><option value="user">{{ $t('yeaft.plugins.userScope') }}</option><option value="project" :disabled="!projectSkillAvailable">{{ $t('yeaft.plugins.projectScope') }}</option></select></label>
+            <p class="plugin-center-detail-note">{{ $t(skillScope === 'project' ? 'yeaft.plugins.projectScopeDescription' : 'yeaft.plugins.userScopeDescription') }}</p>
+            <label><span>{{ $t('yeaft.plugins.skillName') }}</span><input ref="skillName" v-model="skillForm.name" required autocomplete="off" :disabled="skillMutationLoading"></label>
+            <label><span>{{ $t('yeaft.plugins.skillDescriptionLabel') }}</span><input v-model="skillForm.description" required :disabled="skillMutationLoading"></label>
+            <label><span>{{ $t('yeaft.plugins.skillTrigger') }}</span><input v-model="skillForm.trigger" :disabled="skillMutationLoading"></label>
+            <label><span>{{ $t('yeaft.plugins.skillInstructions') }}</span><textarea v-model="skillForm.content" rows="8" required :disabled="skillMutationLoading"></textarea></label>
+            <p v-if="skillMutationError" class="plugin-center-error" role="alert">{{ skillMutationError }}</p>
+          </div>
+          <footer><button type="button" class="btn-secondary" :disabled="skillMutationLoading" @click="closeSkillForm">{{ $t('common.cancel') }}</button><button type="submit" class="btn-primary" :disabled="skillMutationLoading || !online || !skillForm.name.trim() || !skillForm.description.trim() || !skillForm.content.trim()">{{ skillMutationLoading ? $t('common.saving') : $t('yeaft.plugins.createSkill') }}</button></footer>
+        </form>
+      </div></Teleport>
     </section>
   `,
 };

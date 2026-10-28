@@ -512,6 +512,11 @@
   background: var(--sidebar-hover);
 }
 
+.sidebar-primary-action.active,
+.sidebar-primary-action.active:hover:not(:disabled) {
+  background: var(--session-active);
+}
+
 .sidebar-nav-item:disabled {
   opacity: 0.4;
   cursor: not-allowed;

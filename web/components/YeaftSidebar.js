@@ -133,10 +133,6 @@ export default {
 
       <!-- task-342: sidebar bottom — Settings entry + version badge. -->
       <div class="sidebar-bottom">
-        <button class="sidebar-nav-item" :disabled="onlineAgents.length === 0" @click="onOpenPlugins">
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M14 3.5a3 3 0 0 0-4.24 4.24L3.5 14l6.5 6.5 6.26-6.26A3 3 0 0 0 20.5 10L17 13.5l-2.5-2.5L18 7.5A3 3 0 0 0 14 3.5z"/></svg>
-          <span>{{ $t('yeaft.plugins.title') }}</span>
-        </button>
         <button class="sidebar-nav-item" @click="$emit('open-settings')">
           <svg viewBox="0 0 24 24" width="20" height="20"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
           <span>{{ tr('chat.sidebar.settings', 'Settings') }}</span>
@@ -373,10 +369,6 @@ export default {
         || this.workCenterAgents.find(agent => agent.id === s?.workCenterAgentId)
         || this.workCenterAgents[0];
       if (s && typeof s.enterWorkCenter === 'function') s.enterWorkCenter(target?.id || null);
-    },
-    onOpenPlugins() {
-      const s = this.chatStore || this.store;
-      if (s && typeof s.openPluginCenter === 'function') s.openPluginCenter();
     },
     async restartAgent(agentId) {
       const s = this.chatStore || this.store;
