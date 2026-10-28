@@ -124,6 +124,47 @@ export function createPluginSkillManager(skillManager, plugins) {
   };
 }
 
+const PLUGIN_SKILL_CONTENT_MAX_BYTES = 256 * 1024;
+
+/**
+ * Read one effective layered Skill from the full catalog manager, independently
+ * of inference allowlists. Only the body and linked filenames belong to this
+ * browser projection; never pass a linked file path to SkillManager.view().
+ */
+export function buildPluginSkillDetail({ skillManager } = {}, skillName) {
+  if (typeof skillName !== 'string' || !skillName.trim()
+    || skillName !== skillName.trim() || /[/\\\u0000-\u001f\u007f]/.test(skillName)
+    || skillName === '.' || skillName === '..') {
+    throw new Error('invalid skillName: expected a non-empty Skill name');
+  }
+  const viewed = skillManager?.view?.(skillName);
+  const skill = viewed?.skill;
+  if (!skill || skill.name !== skillName) throw new Error(`skill not found: ${skillName}`);
+
+  let content = typeof skill.content === 'string' ? skill.content : '';
+  const contentTruncated = Buffer.byteLength(content, 'utf8') > PLUGIN_SKILL_CONTENT_MAX_BYTES;
+  if (contentTruncated) {
+    const bytes = Buffer.from(content, 'utf8');
+    let end = PLUGIN_SKILL_CONTENT_MAX_BYTES;
+    // Do not decode an incomplete UTF-8 code point into a replacement character.
+    while ((bytes[end] & 0xc0) === 0x80) end--;
+    content = bytes.subarray(0, end).toString('utf8');
+  }
+  const strings = value => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+  return {
+    name: skillName,
+    description: typeof skill.description === 'string' ? skill.description : '',
+    trigger: typeof skill.trigger === 'string' ? skill.trigger : '',
+    keywords: strings(skill.keywords),
+    category: typeof skill.category === 'string' ? skill.category : null,
+    tier: typeof skill._tier === 'string' ? skill._tier : null,
+    content,
+    references: strings(viewed.references),
+    templates: strings(viewed.templates),
+    ...(contentTruncated ? { contentTruncated: true } : {}),
+  };
+}
+
 /** Build a browser-safe catalog from already discovered Agent assets. */
 export function buildPluginCatalog({ toolRegistry, skillManager, mcpConfig, mcpManager } = {}) {
   const tools = typeof toolRegistry?.getAllTools === 'function'

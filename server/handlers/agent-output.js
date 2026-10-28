@@ -8,6 +8,20 @@ import { yeaftAssetStore } from '../yeaft-asset-store.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
 
 
+/** Keep Skill detail read-only and browser-safe, including replies from newer Agents. */
+function projectPluginSkillDetail(detail) {
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
+  const out = {};
+  for (const field of ['name', 'description', 'trigger', 'category', 'tier', 'content']) {
+    if (typeof detail[field] === 'string' || detail[field] === null) out[field] = detail[field];
+  }
+  for (const field of ['keywords', 'references', 'templates']) {
+    if (Array.isArray(detail[field])) out[field] = detail[field].filter(item => typeof item === 'string');
+  }
+  if (detail.contentTruncated === true) out.contentTruncated = true;
+  return out;
+}
+
 // Older Dream bridges reused the ordinary debug lifecycle with a reserved
 // dream- turn id. Drop these before projection/relay, not only named Dream events.
 function isRetiredDreamEvent(event) {
@@ -903,6 +917,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
           agentId,
           requestId: msg.requestId || null,
           catalog: msg.catalog || { tools: [], skills: [], mcpServers: [] },
+          ...(Object.prototype.hasOwnProperty.call(msg, 'skillDetail')
+            ? { skillDetail: projectPluginSkillDetail(msg.skillDetail) } : {}),
           error: msg.error || null,
         });
       }

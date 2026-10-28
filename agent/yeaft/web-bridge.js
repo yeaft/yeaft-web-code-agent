@@ -32,7 +32,7 @@ import {
   removeManagedProjectSkill,
   removeManagedSkill,
 } from './skills.js';
-import { buildPluginCatalog, createPluginSkillManager, resolveMcpPluginPolicy } from './plugins.js';
+import { buildPluginCatalog, buildPluginSkillDetail, createPluginSkillManager, resolveMcpPluginPolicy } from './plugins.js';
 import { MCPManager } from './mcp.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
@@ -3655,13 +3655,17 @@ export function __testLoadPluginCatalogMcpConfig(yeaftDir) {
 export function handleYeaftPluginCatalog(msg = {}) {
   const requestId = msg.requestId || null;
   const requestedWorkDir = normalizeSessionWorkDir(msg.workDir);
+  const wantsSkillDetail = Object.prototype.hasOwnProperty.call(msg, 'skillName');
   try {
-    const catalog = buildPluginCatalog(resolvePluginCatalogRuntime(requestedWorkDir));
+    const runtime = resolvePluginCatalogRuntime(requestedWorkDir);
+    const skillDetail = wantsSkillDetail ? buildPluginSkillDetail(runtime, msg.skillName) : null;
+    const catalog = buildPluginCatalog(runtime);
     sendToServer({
       type: 'yeaft_plugin_catalog_result',
       requestId,
       ...(msg._requestClientId ? { _requestClientId: msg._requestClientId } : {}),
       catalog,
+      ...(wantsSkillDetail ? { skillDetail } : {}),
       error: null,
     });
   } catch (err) {
@@ -3670,6 +3674,7 @@ export function handleYeaftPluginCatalog(msg = {}) {
       requestId,
       ...(msg._requestClientId ? { _requestClientId: msg._requestClientId } : {}),
       catalog: { tools: [], skills: [], mcpServers: [] },
+      ...(wantsSkillDetail ? { skillDetail: null } : {}),
       error: err?.message || String(err),
     });
   }
