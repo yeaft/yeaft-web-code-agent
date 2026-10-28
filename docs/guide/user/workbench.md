@@ -54,7 +54,9 @@ On Windows, the top-level drive list shows only fixed disks, not mapped network 
 - use `Ctrl+S` to save on the Agent
 - preview Markdown, images, PDFs, supported Office documents, and browser-supported MP4, M4V, WebM, OGV/OGG, and MOV videos; videos stream from the Agent and can also be downloaded
 
-SVG (`.svg`), HTML (`.html` / `.htm`), and Markdown open in Preview by default. Switch between **Preview / Edit**; preview reflects your current edits, including unsaved changes. HTML uses an isolated static preview with inline styles and data images. Scripts, link navigation, form submission, and external or relative-path resources are disabled. Use your project’s local development server for interactive or multi-file pages.
+CSV (`.csv`), SVG (`.svg`), HTML (`.html` / `.htm`), and Markdown open in Preview by default. Switch between **Preview / Edit**; preview reflects your current edits, including unsaved changes. HTML uses an isolated static preview with inline styles and data images. Scripts, link navigation, form submission, and external or relative-path resources are disabled. Use your project’s local development server for interactive or multi-file pages.
+
+CSV opens as a read-only table with sticky headers, row numbers, horizontal scrolling, and 50-row pages. You can turn off **First row is header** for headerless files. Commas, quoted newlines, escaped quotes, a UTF-8 BOM, and empty fields are supported; values are text only, not executable formulas or HTML. Preview scans at most the first 1 million source characters and displays up to 1,000 records, 100 columns, and 10,000 characters per cell, with an explicit partial-preview notice. Incomplete records at the scan boundary are omitted. These limits never change the original file; **Edit** still shows the full loaded text. Invalid CSV shows an error with the record number and can be repaired in Edit.
 
 SVG renders in safe image mode with gradients, filters, and self-contained CSS/SMIL animations. JavaScript and linked resources are disabled. Click the image to zoom; invalid SVG shows an error while Edit remains available to fix the source.
 

@@ -453,3 +453,93 @@ test('invalid or empty SVG exposes an error and can be repaired from Edit withou
   await expectSvgPreview(page);
   await expect(page.locator('.file-content-dirty')).toBeVisible();
 });
+
+test('CSV table previews are inert, responsive, paginated and retain unsaved edit/undo/save', async ({ page, harness }, testInfo) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const file = 'docs/数据.CSV';
+  const content = '\ufeff名称,备注,数量\r\n"A,B","line 1\nline ""2""",001\r\n' +
+    '"<img src=x onerror=alert(1)>","=SUM(A1:A2)",\r\n' +
+    Array.from({ length: 60 }, (_, i) => `row-${i},${'long content '.repeat(15)},${i}`).join('\r\n');
+  for (const theme of ['light', 'dark']) {
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(htmlHarnessUrl(harness, { file, content, theme }));
+      await openReference(page, file);
+      await expect(page.getByRole('button', { name: 'files.preview', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('.CodeMirror')).toHaveCount(0);
+      await expect(page.locator('.csv-preview-table thead th').nth(1)).toHaveText('名称');
+      await expect(page.locator('.csv-preview-table tbody tr')).toHaveCount(50);
+      const firstRow = page.locator('.csv-preview-table tbody tr').first();
+      await expect(firstRow.locator('td').nth(0)).toHaveText('A,B');
+      await expect(firstRow.locator('td').nth(1)).toHaveText('line 1\nline "2"');
+      await expect(firstRow.locator('td').nth(2)).toHaveText('001');
+      await expect(page.locator('.csv-preview-table tbody tr').nth(1)).toContainText('<img src=x onerror=alert(1)>');
+      await expect(page.locator('.csv-preview-container img, .csv-preview-container script, .csv-preview-container iframe')).toHaveCount(0);
+      const scroll = page.locator('.csv-preview-scroll');
+      await scroll.focus();
+      await expect(scroll).toBeFocused();
+      const bounds = await scroll.boundingBox();
+      expect(bounds.width).toBeGreaterThan(20);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
+      await scroll.evaluate(el => { el.scrollTop = 500; el.scrollLeft = 100; });
+      const header = await page.locator('.csv-preview-table thead th').first().boundingBox();
+      expect(Math.abs(header.y - bounds.y)).toBeLessThan(2);
+      await testInfo.attach(`csv-${theme}-${width}`, { body: await page.screenshot(), contentType: 'image/png' });
+      await page.getByRole('button', { name: 'files.csvNext', exact: true }).click();
+      await expect(page.locator('.csv-preview-table tbody tr')).toHaveCount(12);
+      await expect(page.locator('.csv-preview-table tbody tr').first().locator('td').first()).toHaveText('row-48');
+      await expect(page.getByRole('button', { name: 'files.csvNext', exact: true })).toBeDisabled();
+      await page.locator('.csv-preview-toolbar input').uncheck();
+      await expect(page.locator('.csv-preview-table tbody tr').first().locator('td').first()).toHaveText('名称');
+      await page.locator('.csv-preview-toolbar input').check();
+    }
+  }
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await expect(page.locator('.CodeMirror')).toBeVisible();
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.replaceRange('Changed ', { line: 0, ch: 0 }));
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  await expect(page.locator('.csv-preview-table thead th').nth(1)).toContainText('Changed');
+  await expect(page.locator('.file-content-dirty')).toBeVisible();
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.undo());
+  await expect(page.locator('.file-content-dirty')).toHaveCount(0);
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('"bad'));
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  await expect(page.locator('.csv-preview-container [role="alert"]')).toHaveText('files.csvInvalid');
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue(''));
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  await expect(page.locator('.csv-preview-container [role="status"]')).toHaveText('files.csvEmpty');
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  const large = 'name,value\n' + Array.from({ length: 1001 }, (_, i) => `${i},${i}`).join('\n');
+  await page.evaluate(value => document.querySelector('.CodeMirror').CodeMirror.setValue(value), large);
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  await expect(page.locator('.csv-preview-notice')).toHaveText('files.csvLimited');
+  await expect(page.locator('.csv-preview-table tbody tr')).toHaveCount(50);
+  await saveButton(page).click();
+  const write = await page.evaluate(() => window.harness.requests.find(msg => msg.type === 'write_file'));
+  expect(write.content).toBe(large); // preview limits must never truncate the saved file.
+  await page.evaluate(message => window.harness.respondSaved(message), write);
+  await expect(page.locator('.file-content-dirty')).toHaveCount(0);
+  // A multiline or very long sticky header must never cover the data viewport.
+  const longHeader = '"' + 'long header\n'.repeat(800) + '",value\nAlice,001\nBob,002';
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await page.evaluate(value => document.querySelector('.CodeMirror').CodeMirror.setValue(value), longHeader);
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  const header = page.locator('.csv-header-content').first();
+  expect((await header.boundingBox()).height).toBeLessThan(150);
+  await header.focus();
+  await expect(header).toBeFocused();
+  await header.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await expect(page.locator('.csv-preview-table tbody tr').first().locator('td').first()).toHaveText('Alice');
+  const data = await page.locator('.csv-preview-table tbody tr').first().boundingBox();
+  const heading = await page.locator('.csv-preview-table thead').boundingBox();
+  expect(data.y).toBeGreaterThanOrEqual(heading.y + heading.height - 1);
+  await page.getByRole('button', { name: 'files.edit', exact: true }).click();
+  await page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.setValue('"' + 'x'.repeat(1000000) + '"'));
+  await page.getByRole('button', { name: 'files.preview', exact: true }).click();
+  await expect(page.locator('.csv-preview-container')).toContainText('files.csvNoCompleteRecords');
+  await expect(page.locator('.csv-preview-container')).not.toContainText('files.csvEmpty');
+  expect(errors).toEqual([]);
+});
