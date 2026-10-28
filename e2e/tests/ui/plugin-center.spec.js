@@ -226,6 +226,31 @@ test('Plugins keep the existing sidebar and browse responsively in light desktop
   expect(await page.locator('.plugin-center-content').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
   await page.getByRole('button', { name: 'All plugins', exact: true }).click();
   await expect(page.getByRole('button', { name: 'View Review guide details', exact: true })).toBeFocused();
+
+  const deploy = state.catalog.skills[1];
+  for (const [width, theme, description] of [[1440, 'light', '|'], [1440, 'dark', ''], [320, 'dark', '>'], [320, 'light', undefined]]) {
+    deploy.description = description;
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(theme => { if (document.documentElement.dataset.theme !== theme) window.Pinia.useChatStore().toggleTheme(); }, theme);
+    await page.getByRole('button', { name: 'More actions', exact: true }).click();
+    await page.locator('.plugin-center-more-menu').getByRole('button', { name: 'Refresh', exact: true }).click();
+    await expect.poll(() => page.evaluate(expected => {
+      const store = window.Pinia.useChatStore();
+      return Object.values(store.pluginCatalogByKey).some(record => record.loaded && !record.loading
+        && record.catalog?.skills.some(skill => skill.name === 'deploy-playbook' && skill.description === expected));
+    }, description)).toBe(true);
+    await expect(row(page, 'skills:bundled:deploy-playbook').locator('.plugin-center-row-copy small')).toHaveCount(0);
+    await expect(row(page, 'skills:user:review-guide').locator('.plugin-center-row-copy small')).toContainText('Review correctness');
+    const centered = await row(page, 'skills:bundled:deploy-playbook').evaluate(element => {
+      const title = element.querySelector('strong').getBoundingClientRect();
+      const icon = element.querySelector('.plugin-center-entry-icon').getBoundingClientRect();
+      return Math.abs(title.top + title.height / 2 - icon.top - icon.height / 2) < 1;
+    });
+    expect(centered).toBe(true);
+    await screenshot(page, testInfo, `plugins-no-description-${theme}-${width}.png`);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   await page.getByRole('button', { name: 'More actions', exact: true }).click();
   await page.locator('.plugin-center-more-menu').getByRole('button', { name: 'Enabled only', exact: true }).click();
   await page.getByRole('button', { name: 'More actions', exact: true }).click();

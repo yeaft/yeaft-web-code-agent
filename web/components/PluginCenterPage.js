@@ -64,8 +64,7 @@ export default {
     detailDescription() {
       if (!this.detail) return '';
       if (this.detail.field !== 'skills') return this.itemDescription(this.detail);
-      const description = String(this.skillDetail?.description || this.detail.description || '').trim();
-      return ['|', '>'].includes(description) ? '' : description;
+      return this.skillDescription(this.skillDetail?.description ?? this.detail.description);
     },
     detailSources() {
       return this.detail?.field === 'skills'
@@ -160,9 +159,14 @@ export default {
       const wasEnabled = !Array.isArray(confirmed) || confirmed.includes(this.pluginName(item));
       return this.configRecord.saving && wasEnabled !== this.enabled(item);
     },
+    skillDescription(value) {
+      const description = String(value ?? '').trim();
+      return /^[|>](?:[+-][1-9]?|[1-9][+-]?)?$/.test(description) ? '' : description;
+    },
     itemDescription(item) {
+      if (item.field === 'skills') return this.skillDescription(item.description);
       if (item.field === 'mcpServers') return this.$t('yeaft.plugins.mcpDescription', { count: item.toolCount || 0 });
-      return item.description || this.$t(item.field === 'skills' ? 'yeaft.plugins.skillDescription' : 'yeaft.plugins.toolDescription');
+      return item.description || this.$t('yeaft.plugins.toolDescription');
     },
     itemSource(item) {
       if (item.field === 'mcpServers') return this.$t(item.ready === true ? 'yeaft.plugins.connected' : item.ready === false ? 'yeaft.plugins.notConnected' : 'yeaft.plugins.connectionUnknown');
@@ -352,7 +356,7 @@ export default {
           <div v-else class="plugin-center-catalog">
             <button v-if="enabledOnly" type="button" class="btn-ghost plugin-center-filter" @click="enabledOnly = false">{{ $t('yeaft.plugins.enabledOnly') }}<NavigationIcon name="close" :size="12" /></button>
             <article v-for="item in visibleEntries" :key="item.key" class="plugin-center-row" :data-entry="item.key">
-              <button type="button" class="plugin-center-row-main" :data-entry="item.key" :aria-label="$t('yeaft.plugins.viewDetails', { name: item.label })" @click="openDetail(item)"><span class="plugin-center-entry-icon"><NavigationIcon :name="itemIcon(item)" :size="21" /></span><span class="plugin-center-row-copy"><strong>{{ item.label }}</strong><small>{{ itemDescription(item) }}</small></span></button>
+              <button type="button" class="plugin-center-row-main" :data-entry="item.key" :aria-label="$t('yeaft.plugins.viewDetails', { name: item.label })" @click="openDetail(item)"><span class="plugin-center-entry-icon"><NavigationIcon :name="itemIcon(item)" :size="21" /></span><span class="plugin-center-row-copy"><strong>{{ item.label }}</strong><small v-if="itemDescription(item)">{{ itemDescription(item) }}</small></span></button>
               <span class="plugin-center-row-meta"><span>{{ $t('yeaft.plugins.' + item.field) }}</span><span class="plugin-center-origin" :class="{ 'is-connected': item.field === 'mcpServers' && item.ready === true }">{{ itemSource(item) }}</span></span>
               <span class="plugin-center-save-indicator" :class="{ 'is-visible': itemSaving(item) }" role="status" :aria-label="itemSaving(item) ? $t('common.saving') : ''"></span>
               <button type="button" class="plugin-center-switch" role="switch" :aria-checked="enabled(item)" :aria-label="$t('yeaft.plugins.toggleLabel', { name: item.label })" :disabled="!configReady" @click="toggle(item)"><span></span></button>

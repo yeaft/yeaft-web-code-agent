@@ -65,6 +65,21 @@ describe('Plugin Center workspace', () => {
     await wrapper.get('.plugin-center-agent-menu').trigger('keydown', { key: 'Escape' });
     expect(wrapper.find('.plugin-center-agent-menu').exists()).toBe(false);
     expect(document.activeElement).toBe(wrapper.get('.plugin-center-agent-trigger').element);
+
+    for (const description of [undefined, null, '', ' \n ', '|', ' | ', '>', '|-', '|+', '|2-', '>+2']) {
+      chat.pluginCatalogByKey.a.catalog = { ...catalog, skills: [{ ...catalog.skills[0], description }] };
+      await Vue.nextTick();
+      expect(wrapper.find('[data-entry="skills:review"] .plugin-center-row-copy small').exists()).toBe(false);
+      chat.loadPluginSkillDetail.mockResolvedValueOnce({ skillDetail: { name: 'review', description } });
+      await wrapper.get('[data-entry="skills:review"] .plugin-center-row-main').trigger('click'); await flushPromises();
+      expect(wrapper.find('.plugin-center-detail-description').exists()).toBe(false);
+      await wrapper.get('.plugin-center-back').trigger('click');
+    }
+    chat.pluginCatalogByKey.a.catalog = { ...catalog, skills: [{ ...catalog.skills[0], description: '  | Actual description  ' }] };
+    await Vue.nextTick();
+    expect(wrapper.get('[data-entry="skills:review"] .plugin-center-row-copy small').text()).toBe('| Actual description');
+    expect(wrapper.get('[data-entry="tools:FileRead"] .plugin-center-row-copy small').text()).toBe(messages['yeaft.plugins.toolDescription']);
+    expect(wrapper.get('[data-entry="mcpServers:github"] .plugin-center-row-copy small').text()).toContain('2');
   });
 
   it('keeps Agent names in identical rows without status dots or checkmarks', async () => {
