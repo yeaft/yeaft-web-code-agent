@@ -55,6 +55,78 @@ async function render(messages = en) {
 }
 
 describe('Digital Person surface', () => {
+  it.each([en, zhCN])('offers labelled mobile actions, restores the visible opener and preserves the draft', async messages => {
+    vi.stubGlobal('innerWidth', 320);
+    await render(messages);
+    const more = wrapper.get('.person-more-button');
+    const input = wrapper.get('#person-input');
+    await input.setValue('Keep my draft');
+    await more.trigger('click'); await flushPromises();
+    const sheet = wrapper.get('#person-actions-sheet');
+    expect(sheet.attributes('aria-modal')).toBe('true');
+    expect(sheet.text()).toContain(messages['person.moreActions']);
+    expect(sheet.findAll('.person-actions-list button').map(button => button.text())).toEqual([
+      'person.searchMessages', 'person.outputs', 'person.inside', 'person.settings', 'common.refresh',
+    ].map(key => messages[key]));
+    expect(wrapper.get('.person-header').attributes('inert')).toBeDefined();
+    expect(wrapper.get('#person-conversation').attributes('inert')).toBeDefined();
+    expect(document.activeElement).toBe(sheet.get('.person-actions-close').element);
+    const last = sheet.get('.person-action-refresh');
+    last.element.focus(); await last.trigger('keydown', { key: 'Tab' });
+    expect(document.activeElement).toBe(sheet.get('.person-actions-close').element);
+    await sheet.get('.person-actions-close').trigger('keydown', { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last.element);
+    await last.trigger('keydown', { key: 'Escape' }); await flushPromises();
+    expect(wrapper.find('#person-actions-sheet').exists()).toBe(false);
+    expect(document.activeElement).toBe(more.element);
+    await more.trigger('click'); await flushPromises();
+    await wrapper.get('.person-action-search').trigger('click'); await flushPromises();
+    expect(wrapper.find('#person-actions-sheet').exists()).toBe(false);
+    expect(document.activeElement).toBe(wrapper.get('.person-search-form input').element);
+    await wrapper.get('.person-panel-header button').trigger('click'); await flushPromises();
+    expect(document.activeElement).toBe(more.element);
+    await more.trigger('click'); await flushPromises();
+    await wrapper.get('.person-action-settings').trigger('click'); await flushPromises();
+    expect(wrapper.find('.person-settings-modal').exists()).toBe(true);
+    await wrapper.get('.person-settings-close').trigger('click'); await flushPromises();
+    expect(document.activeElement).toBe(more.element);
+    expect(input.element.value).toBe('Keep my draft');
+    expect(requests.some(r => ['send', 'think', 'dream', 'cancel'].includes(r.op))).toBe(false);
+  });
+
+  it('keeps inspection available while offline/busy but disables unsafe refresh and settings', async () => {
+    vi.stubGlobal('innerWidth', 320);
+    await render();
+    Object.assign(wrapper.vm.state, { busy: true, commandPending: true });
+    await wrapper.get('.person-more-button').trigger('click'); await flushPromises();
+    expect(wrapper.get('.person-action-settings').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.person-action-refresh').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('.person-action-search').attributes('disabled')).toBeUndefined();
+    wrapper.vm.state.commandPending = null;
+    chat.connectionState = 'disconnected';
+    await Vue.nextTick();
+    expect(wrapper.get('.person-action-refresh').attributes('disabled')).toBeDefined();
+    await wrapper.get('.person-action-inside').trigger('click'); await flushPromises();
+    expect(wrapper.get('#person-side-panel').text()).toContain(en['person.disconnected']);
+  });
+
+  it('dismisses transient actions on Agent/desktop changes without executing a stale settings selection', async () => {
+    vi.stubGlobal('innerWidth', 320);
+    await render();
+    await wrapper.get('.person-more-button').trigger('click'); await flushPromises();
+    // The select handler awaits removal of inert before mounting settings.
+    const pending = wrapper.vm.selectMore('settings');
+    wrapper.vm.agentId = 'b';
+    await pending; await flushPromises();
+    expect(wrapper.vm.settingsOpen).toBe(false);
+    expect(wrapper.find('#person-actions-sheet').exists()).toBe(false);
+    await wrapper.get('.person-more-button').trigger('click'); await flushPromises();
+    vi.stubGlobal('innerWidth', 1280);
+    window.dispatchEvent(new Event('resize')); await flushPromises();
+    expect(wrapper.find('#person-actions-sheet').exists()).toBe(false);
+    expect(document.activeElement).toBe(wrapper.get('.person-thoughts-button').element);
+  });
+
   it.each([en, zhCN])('offers explicit autonomy control only in Management and distinguishes autonomous activity', async messages => {
     const localize = key => messages[key] || key;
     wrapper = mount(PersonManagement, { props: {

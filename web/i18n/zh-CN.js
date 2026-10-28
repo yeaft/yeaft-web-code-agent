@@ -87,6 +87,7 @@ export default {
   "person.outputsResize": "调整产出面板宽度",
   "person.outputsExpand": "展开",
   "person.outputsCollapse": "恢复分栏",
+  "person.moreActions": "更多操作",
   "person.settings": "配置",
   "person.modelCandidates": "模型候选",
   "person.modelCandidatesHint": "允许使用当前 Agent 上最多 8 个已配置的模型。数字人可在候选范围内切换，并非同时调用全部模型。",

@@ -13,6 +13,7 @@
 .person-navigation > button { flex-shrink: 0; }
 .person-identity { min-width: 0; text-align: center; }
 .person-identity h1 { margin: 0; min-width: 0; font-size: 16px; line-height: 1.5; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-more-button { display: none; }
 .person-header-actions { display: flex; align-items: center; justify-self: end; gap: var(--work-center-space-2); min-width: 0; }
 .person-breadcrumb { min-width: 0; max-width: 100%; }
 .person-agent-select { width: auto; max-width: 100%; min-width: 0; font-family: var(--font-sans); }
@@ -125,9 +126,14 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
   .person-side-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; z-index: 31; box-shadow: var(--modal-shadow); padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
 @media (max-width: 600px) {
-  .person-header { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: var(--work-center-space-2) var(--work-center-space-3); gap: var(--work-center-space-2); }
-  .person-identity { grid-column: 1 / -1; grid-row: 1; }
-  .person-navigation, .person-header-actions { grid-row: 2; }
+  .person-header { grid-template-columns: auto minmax(0, 1fr) 44px; min-height: 56px; padding: var(--work-center-space-1) var(--work-center-space-2); gap: var(--work-center-space-2); flex-shrink: 0; }
+  .person-navigation { gap: var(--work-center-space-1); max-width: 44vw; }
+  .person-identity { text-align: left; }
+  .person-header .person-desktop-actions { display: none; }
+  .person-header .header-action-btn { width: 44px; min-width: 44px; height: 44px; padding: var(--work-center-space-2); }
+  .person-header .person-more-button { display: inline-flex; align-items: center; justify-content: center; }
+  .person-agent-select .modern-select-trigger { min-height: 44px; padding-inline: var(--work-center-space-1); font-size: 12px; color: var(--text-secondary); }
+  .person-agent-select .modern-select-label { min-width: 0; }
   .person-connection-notice { padding-left: var(--work-center-space-3); padding-right: var(--work-center-space-3); }
   .person-journal-toolbar, .person-notice { padding-left: var(--work-center-space-3); padding-right: var(--work-center-space-3); }
   .person-messages, .person-journal-scroll { padding: var(--work-center-space-3); }
@@ -245,10 +251,6 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 @media (max-width: 900px) {
   .person-outputs .btn-ghost, .person-inspector-nav .btn-ghost, .person-panel-header button { min-height: 44px; }
 }
-@media (max-width: 600px) {
-  .person-header-actions { gap: 0; }
-  .person-header-actions .header-action-btn { width: 32px; padding: 4px; }
-}
 
 /* Inspector windows keep the scroll owner directly above VirtualTranscript. */
 .person-inspector-list > .virtual-transcript,
@@ -275,4 +277,18 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-execution-calls > summary { cursor: pointer; border-radius: var(--agent-setup-control-radius); }
 @media (max-width: 900px) {
   .person-management .person-task-actions button, .person-management .person-journal-toolbar button { min-height: 44px; }
+}
+
+/* Low-frequency mobile navigation lives in a text-labelled bottom sheet. */
+.modal-overlay.person-actions-overlay { align-items: flex-end; background: var(--modal-overlay-bg); }
+.person-actions-sheet.modal { display: flex; flex-direction: column; width: 100%; max-width: 600px; max-height: calc(100dvh - env(safe-area-inset-top, 0px) - var(--work-center-space-4)); border: 0; border-radius: var(--agent-setup-radius) var(--agent-setup-radius) 0 0; box-shadow: var(--modal-shadow); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.person-actions-sheet .person-panel-header { padding-block: var(--work-center-space-2); }
+.person-actions-sheet .header-action-btn { width: 44px; min-width: 44px; height: 44px; }
+.person-actions-list { overflow: auto; overscroll-behavior: contain; padding: 0 var(--work-center-space-2) var(--work-center-space-2); }
+.person-actions-list .btn-ghost { width: 100%; justify-content: flex-start; min-height: 48px; gap: var(--work-center-space-3); padding: var(--work-center-space-3) var(--work-center-space-4); text-align: left; font-size: 14px; }
+.person-actions-list svg { flex-shrink: 0; }
+@media (max-width: 900px) {
+  .person-side-panel .person-inspector-nav { flex-shrink: 0; flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; padding-bottom: var(--work-center-space-2); }
+  .person-inspector-nav > button { flex-shrink: 0; white-space: nowrap; }
+  .person-side-panel .person-panel-header { padding-top: max(var(--work-center-space-2), env(safe-area-inset-top, 0px)); }
 }
