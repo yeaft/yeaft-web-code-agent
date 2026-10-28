@@ -4,6 +4,7 @@
  */
 
 import { acceptPersonResponse } from './digital-person.js';
+import { acceptPluginConfigReply } from './plugin-config.js';
 import { useAuthStore } from '../auth.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
@@ -1299,21 +1300,7 @@ export function handleMessage(store, msg) {
     // the Plugin Center can inspect a non-current Agent.
     case 'yeaft_plugins':
     case 'yeaft_plugins_updated': {
-      const record = {
-        plugins: msg.plugins && typeof msg.plugins === 'object' ? msg.plugins : {},
-        error: msg.error || null,
-        loaded: true,
-        at: Date.now(),
-      };
-      if (msg.agentId) {
-        store.pluginConfigByAgent = { ...store.pluginConfigByAgent, [msg.agentId]: record };
-      }
-      const pending = msg.requestId ? store._pluginPending?.[msg.requestId] : null;
-      if (pending) {
-        clearTimeout(pending.timer);
-        delete store._pluginPending[msg.requestId];
-        pending.resolve(record);
-      }
+      acceptPluginConfigReply(store, msg);
       break;
     }
 

@@ -22,8 +22,8 @@ test('legacy empty inventory keeps the final sidebar and permits first Session c
   await expect(navigation).toHaveAttribute('aria-busy', 'false');
   await expect(page.locator('.session-tab-solo')).toHaveCount(0);
   await expect(navigation.locator('.session-item')).toHaveCount(0);
-  await expect(navigation.locator('.sidebar-primary-action')).toBeEnabled();
-  await navigation.locator('.sidebar-primary-action').click();
+  await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry)')).toBeEnabled();
+  await navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry)').click();
   const modal = page.locator('.yeaft-session-create-modal');
   await expect(modal).toBeVisible();
   expect(await page.evaluate(() => window.Pinia.useChatStore().sessionCatalogProtocolSupported)).toBe(false);
@@ -48,7 +48,7 @@ test('legacy empty inventory keeps the final sidebar and permits first Session c
     store.customConversationTitles[conversation.id] = 'First Chat';
     return conversation.id;
   });
-  await navigation.locator('.sidebar-primary-action').click();
+  await navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry)').click();
   await expect(modal).toBeVisible();
   await modal.locator('.resume-control-row').nth(1).locator('.modern-select-trigger').click();
   await page.locator('.yeaft-session-create-select-menu .modern-select-option', { hasText: 'Claude Code' }).click();

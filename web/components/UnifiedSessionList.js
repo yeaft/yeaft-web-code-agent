@@ -348,6 +348,7 @@ export default {
       if (this.projectSubmenuOpen) this.$nextTick(this.positionProjectSubmenu);
     },
     isActive(row) {
+      if (this.resolvedProjectStore?.pluginCenterOpen) return false;
       const route = row?.routeRef;
       const active = this.activeRoute;
       return !!route && !!active
@@ -477,14 +478,21 @@ export default {
       const agent = this.agents.find(item => item.id === row?.routeRef?.agentId);
       return row?.agentName || agent?.name || row?.routeRef?.agentId || '';
     },
+    openPlugins() {
+      const store = this.resolvedProjectStore;
+      if (typeof store?.openPluginCenter !== 'function') return;
+      if (store.openPluginCenter() !== false) store.closeSessionSidebar?.();
+    },
     createSession() {
       if (this.loading) return;
+      this.resolvedProjectStore?.closePluginCenter?.();
       if (this.workCenterOpen) this.$emit('close-work-center');
       this.$emit('create');
     },
     createSessionInProject(project) {
       if (!this.canEditProject(project)) return;
       this.closeMenus();
+      this.resolvedProjectStore?.closePluginCenter?.();
       if (this.workCenterOpen) this.$emit('close-work-center');
       this.$emit('create-in-project', { project });
     },
@@ -912,6 +920,16 @@ export default {
           </svg>
           <span>{{ $t('sidebar.sessions.newChat') }}</span>
         </button>
+        <slot name="after-create">
+          <button v-if="resolvedProjectStore?.openPluginCenter" type="button"
+                  class="sidebar-primary-action sidebar-plugins-entry"
+                  :class="{ active: resolvedProjectStore.pluginCenterOpen }"
+                  :aria-current="resolvedProjectStore.pluginCenterOpen ? 'page' : undefined"
+                  :disabled="!(resolvedProjectStore.pluginCenterAgents || agents).some(agent => agent?.online || resolvedProjectStore.pluginConfigByAgent?.[agent.id]?.loaded)" @click="openPlugins">
+            <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M14 3.5a3 3 0 0 0-4.24 4.24L3.5 14l6.5 6.5 6.26-6.26A3 3 0 0 0 20.5 10L17 13.5l-2.5-2.5L18 7.5A3 3 0 0 0 14 3.5z"/></svg>
+            <span>{{ $t('yeaft.plugins.title') }}</span>
+          </button>
+        </slot>
       </div>
 
       <div class="sidebar-session-results">

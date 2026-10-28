@@ -14,6 +14,7 @@ import { agentSupportsYeaftManagedSkills } from '../utils/yeaft-managed-skill-ca
 
 // Helper modules
 import * as wsHelpers from './helpers/websocket.js';
+import * as pluginConfigHelpers from './helpers/plugin-config.js';
 import * as msgHelpers from './helpers/messages.js';
 import * as assistantOutputHelpers from './helpers/assistantOutput.js';
 import * as handlerHelpers from './helpers/messageHandler.js';
@@ -778,6 +779,7 @@ export const useChatStore = defineStore('chat', {
     pluginCenterOpen: false,
     pluginCenterAgentId: null,
     pluginConfigByAgent: {},
+    pluginStateGeneration: 0,
     pluginCatalogByKey: {},
     pluginCatalogRequestByKey: {},
     managedSkillRequestByKey: {},
@@ -1215,6 +1217,7 @@ export const useChatStore = defineStore('chat', {
   }),
 
   getters: {
+    pluginCenterAgents: state => pluginConfigHelpers.pluginCenterAgents(state),
     sidebarSessionCatalog(state) {
       if (!sidebarCatalogAuthIsCurrent(state, useAuthStore())) return [];
       return sidebarSessionCatalogRows(state, getSessionsStore()?.sessionList || []);
@@ -1740,6 +1743,7 @@ export const useChatStore = defineStore('chat', {
           : (compatibleAgents[0]?.id || null));
       // Work Center requests carry their own Agent identity. Do not switch the
       // chat Agent: leaving this surface must return to the original Session.
+      this.closePluginCenter();
       this.workCenterAgentId = target;
       this.workCenterOpen = true;
       // Reveal the destination instead of leaving the mobile drawer over it.
@@ -1763,11 +1767,15 @@ export const useChatStore = defineStore('chat', {
       if (!this.workCenterUiEnabled) this.leaveWorkCenter();
     },
     openPluginCenter(agentId = null) {
-      const target = this.agents.find(agent => agent?.online && agent.id === agentId)
-        || this.agents.find(agent => agent?.online && agent.id === this.currentAgent)
-        || this.agents.find(agent => agent?.online)
+      const agents = pluginConfigHelpers.pluginCenterAgents(this);
+      const inspectable = agent => agent?.online || this.pluginConfigByAgent[agent?.id]?.loaded;
+      const target = agents.find(agent => inspectable(agent) && agent.id === agentId)
+        || agents.find(agent => inspectable(agent) && agent.id === this.currentAgent)
+        || agents.find(agent => inspectable(agent) && agent.id === this.pluginCenterAgentId)
+        || agents.find(agent => inspectable(agent))
         || null;
       if (!target) return false;
+      this.leaveWorkCenter();
       this.pluginCenterAgentId = target.id;
       this.pluginCenterOpen = true;
       return true;
@@ -1778,41 +1786,20 @@ export const useChatStore = defineStore('chat', {
     pluginCatalogKey(agentId, workDir = '') {
       return `${agentId || ''}\u001f${String(workDir || '').trim()}`;
     },
+    clearPluginState() {
+      pluginConfigHelpers.clearPluginState(this);
+    },
     loadPluginConfig(agentId = this.pluginCenterAgentId || this.currentAgent) {
-      if (!agentId) return Promise.resolve({ plugins: {}, error: 'no agent' });
-      const target = this.agents.find(agent => agent?.id === agentId);
-      if (!agentSupportsYeaftPlugins(target)) {
-        return Promise.resolve({ plugins: {}, error: 'The selected Agent does not support Plugins; upgrade and restart the Agent' });
-      }
-      const requestId = `plugins-get-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          const pending = this._pluginPending?.[requestId];
-          if (!pending) return;
-          delete this._pluginPending[requestId];
-          resolve({ plugins: {}, error: 'timeout' });
-        }, 10_000);
-        this._pluginPending[requestId] = { resolve, timer, kind: 'config', agentId };
-        this.sendWsMessage({ type: 'get_yeaft_plugins', agentId, requestId });
-      });
+      return pluginConfigHelpers.loadPluginConfig(this, agentId);
     },
     savePluginConfig(plugins, agentId = this.pluginCenterAgentId || this.currentAgent) {
-      if (!agentId) return Promise.resolve({ plugins: {}, error: 'no agent' });
-      const target = this.agents.find(agent => agent?.id === agentId);
-      if (!agentSupportsYeaftPlugins(target)) {
-        return Promise.resolve({ plugins: {}, error: 'The selected Agent does not support Plugins; upgrade and restart the Agent' });
-      }
-      const requestId = `plugins-save-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          const pending = this._pluginPending?.[requestId];
-          if (!pending) return;
-          delete this._pluginPending[requestId];
-          resolve({ plugins: {}, error: 'timeout' });
-        }, 10_000);
-        this._pluginPending[requestId] = { resolve, timer, kind: 'save', agentId };
-        this.sendWsMessage({ type: 'update_yeaft_plugins', agentId, requestId, plugins });
-      });
+      return pluginConfigHelpers.savePluginConfig(this, plugins, agentId);
+    },
+    setPluginEnabled(field, itemName, enabled, catalogNames, agentId = this.pluginCenterAgentId || this.currentAgent) {
+      return pluginConfigHelpers.setPluginEnabled(this, field, itemName, enabled, catalogNames, agentId);
+    },
+    retryPluginConfig(agentId = this.pluginCenterAgentId || this.currentAgent) {
+      return pluginConfigHelpers.retryPluginConfig(this, agentId);
     },
     activePluginSession() {
       const sessionId = this.yeaftActiveSessionFilter || getSessionsStore()?.activeSessionId || null;
@@ -7579,6 +7566,11 @@ export const useChatStore = defineStore('chat', {
     openCatalogSession(descriptor) {
       if (!descriptor?.catalogKey || !descriptor.routeRef) return false;
       const { runtimeProvider, agentId, sessionId } = descriptor.routeRef;
+      if (!['yeaft', 'claude-code', 'copilot'].includes(runtimeProvider)) return false;
+      // Leave auxiliary surfaces before provider navigation can short-circuit
+      // for an already-active Session (including CLI split panes).
+      this.closePluginCenter();
+      this.closeSessionSidebar();
       this.activeCatalogKey = descriptor.catalogKey;
       if (runtimeProvider === 'yeaft') {
         // A catalog click is also an explicit freshness request, including a
@@ -7590,7 +7582,6 @@ export const useChatStore = defineStore('chat', {
         if (!wasSyncing) this.reloadYeaftMessages();
         return true;
       }
-      if (runtimeProvider !== 'claude-code' && runtimeProvider !== 'copilot') return false;
       if (this.currentView === 'yeaft') this.leaveYeaft();
       this.selectConversation(sessionId, agentId, { refresh: true });
       return true;
@@ -8829,6 +8820,7 @@ export const useChatStore = defineStore('chat', {
       this.authenticated = false;
       this.sessionKey = null;
       this.agents = [];
+      this.clearPluginState();
       this.currentAgent = null;
       this.currentAgentInfo = null;
       this.yeaftStatusByAgent = {};

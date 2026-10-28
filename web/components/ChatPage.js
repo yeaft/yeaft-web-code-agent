@@ -19,6 +19,7 @@ import SessionSidebarShell from './SessionSidebarShell.js';
 import UnifiedSessionList from './UnifiedSessionList.js';
 import SessionCreateModal from './SessionCreateModal.js';
 import WorkCenterPage from './WorkCenterPage.js';
+import PluginCenterPage from './PluginCenterPage.js';
 import { shortenPath as shortenPathUtil } from '../utils/path-display.js';
 import { getLastPathSegment as _getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 import { sortSessionsByActivity } from '../stores/helpers/session-order.js';
@@ -27,7 +28,7 @@ import { collapseSidebar } from '../utils/sidebar-collapse.js';
 
 export default {
   name: 'ChatPage',
-  components: { FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
+  components: { FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
@@ -142,6 +143,7 @@ export default {
       </SessionSidebarShell>
 
       <WorkCenterPage v-if="store.workCenterOpen" />
+      <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" @toggle-sidebar="store.toggleSessionSidebar()" />
 
       <!-- Single-panel Main Chat Area -->
       <main v-else-if="!store.isSplitMode" class="main-content" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">

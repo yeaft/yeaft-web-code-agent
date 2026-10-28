@@ -14,6 +14,7 @@ import YeaftPage from './components/YeaftPage.js';
 import SplitPane from './components/SplitPane.js';
 import ToolLine from './components/ToolLine.js';
 import AppDialog from './components/AppDialog.js';
+import PluginSaveNotices from './components/PluginSaveNotices.js';
 import SessionMergeModal from './components/SessionMergeModal.js';
 import UserShortcutsRuntime from './components/UserShortcutsRuntime.js';
 import { removeLegacyYeaftHistoryDatabase } from './stores/helpers/legacy-yeaft-history-cache-cleanup.js';
@@ -29,13 +30,14 @@ window.Pinia = {
 };
 
 const App = {
-  components: { DigitalPersonPage, LoginPage, ChatPage, YeaftPage, AppDialog, SessionMergeModal, UserShortcutsRuntime },
+  components: { DigitalPersonPage, LoginPage, ChatPage, YeaftPage, AppDialog, SessionMergeModal, UserShortcutsRuntime, PluginSaveNotices },
   template: `
     <AppDialog />
     <div v-if="!authStore.initialized" class="auth-bootstrap" aria-busy="true"><span class="session-loading-spinner"></span></div>
     <LoginPage v-else-if="!authStore.isAuthenticated" />
     <template v-else>
       <UserShortcutsRuntime />
+      <PluginSaveNotices />
       <SessionMergeModal v-if="chatStore.sessionMergeSource" :source="chatStore.sessionMergeSource" @close="chatStore.sessionMergeSource = null" />
       <DigitalPersonPage v-if="chatStore.digitalPersonOpen" />
       <YeaftPage v-else-if="chatStore.currentView === 'yeaft'" />

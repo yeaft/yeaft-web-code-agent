@@ -55,7 +55,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // inbox, outputs and inspector coverage is retained through the new action entry.
 // +5 reviewed CSV preview cases: quoted/Unicode values, malformed recovery,
 // bounded parsing, inert paginated rendering, and responsive edit/undo/save browser flow.
-export const TEST_CASE_LIMIT = 710;
+// +23 reviewed Plugin Center boundaries: 9 store ordering/recovery/auth, 6 navigation,
+// 5 bilingual/detail/form UI and 3 real relay/browser cases. No prior tests removed.
+export const TEST_CASE_LIMIT = 733;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
