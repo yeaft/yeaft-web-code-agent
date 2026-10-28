@@ -12,6 +12,7 @@ export default {
   emits: ['close', 'toggle-sidebar'],
   data() {
     return {
+      disposed: false,
       searchQuery: '', activeCategory: 'all', enabledOnly: false,
       searchOpen: false, menu: null, detailKey: null, listScrollTop: 0, formBackground: [], formOpener: null,
       showSkillForm: false, skillScope: 'user', skillMutationLoading: false, skillMutationError: '',
@@ -73,6 +74,7 @@ export default {
       if (open) {
         this.formOpener = document.activeElement;
         this.$nextTick(() => {
+          if (this.disposed || !this.showSkillForm) return;
           this.formBackground = [...document.body.children].filter(element => !element.classList.contains('plugin-center-form-overlay'));
           this.formBackground.forEach(element => { element.inert = true; });
         });
@@ -90,18 +92,27 @@ export default {
     window.addEventListener('beforeunload', this.beforeUnload);
   },
   beforeUnmount() {
+    this.disposed = true;
     this.restoreFormBackground();
     document.removeEventListener('pointerdown', this.closePopups);
     document.removeEventListener('keydown', this.onKeydown);
     window.removeEventListener('beforeunload', this.beforeUnload);
   },
   methods: {
+    operationFence() {
+      return { store: this.store, generation: Number(this.store?.pluginStateGeneration || 0), agentId: this.agentId, workDir: this.catalogWorkDir };
+    },
+    operationCurrent(fence) {
+      return !this.disposed && this.store?.pluginCenterOpen && fence.store === this.store
+        && fence.generation === Number(this.store?.pluginStateGeneration || 0)
+        && fence.agentId === this.agentId && fence.workDir === this.catalogWorkDir;
+    },
     restoreFormBackground() {
       this.formBackground.forEach(element => { element.inert = false; });
       this.formBackground = [];
     },
     async load(force = false) {
-      if (!this.agentId || !this.online || !this.agentSupportsPlugins) return;
+      if (this.disposed || !this.store?.pluginCenterOpen || !this.agentId || !this.online || !this.agentSupportsPlugins) return;
       const agentId = this.agentId, workDir = this.catalogWorkDir;
       await Promise.all([
         this.store.loadPluginConfig(agentId),
@@ -132,7 +143,8 @@ export default {
     agentName(id) { const agent = this.agents.find(entry => entry.id === id); return agent?.name || id; },
     async selectAgent(id) {
       if (id === this.agentId) { this.menu = null; return; }
-      if (!await this.closeSkillForm()) return;
+      const fence = this.operationFence();
+      if (!await this.closeSkillForm() || !this.operationCurrent(fence)) return;
       this.store.pluginCenterAgentId = id;
     },
     toggleMenu(name) {
@@ -159,11 +171,12 @@ export default {
     openDetail(item) {
       this.listScrollTop = this.$refs.content?.scrollTop || 0;
       this.detailKey = item.key; this.menu = null;
-      this.$nextTick(() => { this.$refs.content.scrollTop = 0; this.$refs.detailTitle?.focus(); });
+      this.$nextTick(() => { if (!this.disposed && this.$refs.content) { this.$refs.content.scrollTop = 0; this.$refs.detailTitle?.focus(); } });
     },
     backToList() {
       const key = this.detailKey; this.detailKey = null;
       this.$nextTick(() => {
+        if (this.disposed || !this.$refs.content) return;
         this.$refs.content.scrollTop = this.listScrollTop;
         [...this.$el.querySelectorAll('.plugin-center-row-main')].find(button => button.dataset.entry === key)?.focus({ preventScroll: true });
       });
@@ -177,7 +190,9 @@ export default {
       if (!this.showSkillForm) return true;
       if (this.skillMutationLoading) return false;
       if (this.skillFormDirty) {
+        const fence = this.operationFence();
         const discard = await confirmDialog(this.$t('yeaft.plugins.discardSkill'));
+        if (!this.operationCurrent(fence)) return false;
         if (!discard) {
           this.formBackground.forEach(element => { element.inert = true; });
           return false;
@@ -196,13 +211,15 @@ export default {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     },
     async createSkill() {
-      if (this.skillMutationLoading || !this.online || !this.agentSupportsManagedSkills) return;
+      if (this.disposed || !this.store?.pluginCenterOpen || this.skillMutationLoading || !this.configReady || !this.agentSupportsManagedSkills) return;
+      const fence = this.operationFence();
       const agentId = this.agentId, workDir = this.catalogWorkDir, scope = this.skillScope;
       if (scope === 'project' && !this.projectSkillAvailable) return;
       this.skillMutationLoading = true; this.skillMutationError = '';
       try {
         const result = await this.store.mutateManagedSkill({ action: 'create', scope, skill: { ...this.skillForm }, sessionId: scope === 'project' ? this.activeSession.sessionId : '' }, agentId);
-        if (result?.error) { this.skillMutationError = result.error; return; }
+        if (!this.operationCurrent(fence)) return;
+        if (result?.error || result?.stale) { this.skillMutationError = result.error || ''; return; }
         if (result?.result?.name && Array.isArray(this.selection.skills)) {
           this.store.setPluginEnabled('skills', result.result.name, true, [], agentId);
         }
@@ -212,16 +229,18 @@ export default {
       finally { this.skillMutationLoading = false; }
     },
     async removeSkill(item) {
-      if (!item.managed || this.skillMutationLoading || !this.online || !this.agentSupportsManagedSkills) return;
+      if (this.disposed || !this.store?.pluginCenterOpen || !item.managed || this.skillMutationLoading || !this.online || !this.agentSupportsManagedSkills) return;
+      const fence = this.operationFence();
       const agentId = this.agentId, workDir = this.catalogWorkDir, sessionId = this.activeSession.sessionId;
       const scope = item.tier === 'project' ? 'project' : 'user';
       if (scope === 'project' && !this.projectSkillAvailable) return;
       if (!await confirmDialog(this.$t('yeaft.plugins.confirmRemoveSkill', { name: item.label }), { destructive: true })) return;
-      if (agentId !== this.agentId || workDir !== this.catalogWorkDir || !this.online) return;
+      if (!this.operationCurrent(fence) || !this.online) return;
       this.skillMutationLoading = true; this.skillMutationError = '';
       try {
         const result = await this.store.mutateManagedSkill({ action: 'remove', scope, name: item.name || item.label, sessionId: scope === 'project' ? sessionId : '' }, agentId);
-        if (result?.error) this.skillMutationError = result.error;
+        if (!this.operationCurrent(fence)) return;
+        if (result?.error || result?.stale) this.skillMutationError = result.error || '';
         else await this.store.loadPluginCatalog(agentId, workDir);
       } catch (error) { this.skillMutationError = error?.message || String(error); }
       finally { this.skillMutationLoading = false; }
@@ -245,11 +264,11 @@ export default {
             <select class="plugin-center-category-select" v-model="activeCategory" :aria-label="$t('yeaft.plugins.categoryLabel')"><option v-for="category in categories" :key="category.id" :value="category.id">{{ category.label }}</option></select>
             <label class="plugin-center-search"><NavigationIcon name="search" :size="15" /><input v-model="searchQuery" type="search" :placeholder="$t('yeaft.plugins.searchShort')" :aria-label="$t('yeaft.plugins.searchPlaceholder')"></label>
             <button ref="searchTrigger" type="button" class="btn-ghost plugin-center-icon-button plugin-center-compact-search" :aria-label="$t('yeaft.plugins.searchPlaceholder')" @click="openSearch"><NavigationIcon name="search" :size="18" /></button>
-            <button type="button" class="btn-secondary plugin-center-create" :disabled="!online || !agentSupportsManagedSkills || skillMutationLoading" @click="openSkillForm"><NavigationIcon name="add" :size="14" /><span>{{ $t('yeaft.plugins.createSkill') }}</span></button>
+            <button type="button" class="btn-secondary plugin-center-create" :disabled="!configReady || !agentSupportsManagedSkills || skillMutationLoading" @click="openSkillForm"><NavigationIcon name="add" :size="14" /><span>{{ $t('yeaft.plugins.createSkill') }}</span></button>
             <div class="plugin-center-menu-host">
               <button ref="moreTrigger" type="button" class="btn-ghost plugin-center-icon-button" aria-haspopup="true" :aria-expanded="menu === 'more'" :aria-label="$t('yeaft.plugins.more')" @click="toggleMenu('more')"><NavigationIcon name="more" :size="18" /></button>
               <div v-if="menu === 'more'" ref="moreMenu" class="plugin-center-menu plugin-center-more-menu" :aria-label="$t('yeaft.plugins.more')" @keydown="menuKeydown">
-                <button type="button" class="plugin-center-mobile-create" :disabled="!online || !agentSupportsManagedSkills || skillMutationLoading" @click="openSkillForm">{{ $t('yeaft.plugins.createSkill') }}</button>
+                <button type="button" class="plugin-center-mobile-create" :disabled="!configReady || !agentSupportsManagedSkills || skillMutationLoading" @click="openSkillForm">{{ $t('yeaft.plugins.createSkill') }}</button>
                 <button type="button" :aria-pressed="enabledOnly" @click="enabledOnly = !enabledOnly; menu = null">{{ $t('yeaft.plugins.enabledOnly') }}<span v-if="enabledOnly" aria-hidden="true">✓</span></button>
                 <button type="button" :disabled="!online || loading" @click="load(true); menu = null">{{ $t('common.refresh') }}</button>
                 <button type="button" @click="$emit('close')">{{ $t('yeaft.plugins.backToChat') }}</button>
@@ -298,7 +317,7 @@ export default {
             <label><span>{{ $t('yeaft.plugins.skillInstructions') }}</span><textarea v-model="skillForm.content" rows="8" required :disabled="skillMutationLoading"></textarea></label>
             <p v-if="skillMutationError" class="plugin-center-error" role="alert">{{ skillMutationError }}</p>
           </div>
-          <footer><button type="button" class="btn-secondary" :disabled="skillMutationLoading" @click="closeSkillForm">{{ $t('common.cancel') }}</button><button type="submit" class="btn-primary" :disabled="skillMutationLoading || !online || !skillForm.name.trim() || !skillForm.description.trim() || !skillForm.content.trim()">{{ skillMutationLoading ? $t('common.saving') : $t('yeaft.plugins.createSkill') }}</button></footer>
+          <footer><button type="button" class="btn-secondary" :disabled="skillMutationLoading" @click="closeSkillForm">{{ $t('common.cancel') }}</button><button type="submit" class="btn-primary" :disabled="skillMutationLoading || !configReady || !skillForm.name.trim() || !skillForm.description.trim() || !skillForm.content.trim()">{{ skillMutationLoading ? $t('common.saving') : $t('yeaft.plugins.createSkill') }}</button></footer>
         </form>
       </div></Teleport>
     </section>

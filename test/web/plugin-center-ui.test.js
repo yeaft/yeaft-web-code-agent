@@ -4,6 +4,8 @@ import * as Vue from 'vue';
 import { mount, flushPromises } from '@vue/test-utils';
 import PluginCenterPage from '../../web/components/PluginCenterPage.js';
 import PluginSaveNotices from '../../web/components/PluginSaveNotices.js';
+import { clearPluginState } from '../../web/stores/helpers/plugin-config.js';
+import { confirmDialog } from '../../web/utils/dialog.js';
 import en from '../../web/i18n/en.js';
 import zh from '../../web/i18n/zh-CN.js';
 
@@ -112,6 +114,13 @@ describe('Plugin Center workspace', () => {
     expect(wrapper.element.closest('body').firstElementChild.inert).toBe(true);
     wrapper.vm.skillScope = 'project';
     wrapper.vm.skillForm = { name: 'new-skill', description: 'description', trigger: '', content: 'instructions' };
+    chat.pluginConfigByAgent.a.loading = true;
+    await Vue.nextTick();
+    expect(document.querySelector('.plugin-center-skill-form button[type="submit"]').disabled).toBe(true);
+    await wrapper.vm.createSkill();
+    expect(chat.mutateManagedSkill).not.toHaveBeenCalled();
+    chat.pluginConfigByAgent.a.loading = false;
+    await Vue.nextTick();
     await wrapper.vm.createSkill(); await flushPromises();
     expect(chat.mutateManagedSkill).toHaveBeenCalledWith({ action: 'create', scope: 'project', sessionId: 'session', skill: { name: 'new-skill', description: 'description', trigger: '', content: 'instructions' } }, 'a');
     expect(chat.setPluginEnabled).toHaveBeenCalledWith('skills', 'new-skill', true, [], 'a');
@@ -123,6 +132,35 @@ describe('Plugin Center workspace', () => {
     await wrapper.vm.selectAgent('b'); await flushPromises();
     expect(wrapper.vm.showSkillForm).toBe(false);
     expect(wrapper.vm.agentId).toBe('b');
+    await wrapper.vm.selectAgent('a'); await flushPromises();
+    let confirm;
+    confirmDialog.mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
+    const removing = wrapper.vm.removeSkill(catalog.skillSources[0]);
+    clearPluginState(chat);
+    confirm(true);
+    await removing;
+    expect(chat.mutateManagedSkill).toHaveBeenCalledTimes(1);
+    // Reopen in the new auth epoch, then retire a successful create reply.
+    chat.pluginCenterOpen = true; chat.pluginCenterAgentId = 'a';
+    chat.pluginConfigByAgent = { a: { loaded: true, plugins: {}, draft: {} } };
+    let complete;
+    chat.mutateManagedSkill.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    await Vue.nextTick();
+    const creating = wrapper.vm.createSkill();
+    clearPluginState(chat);
+    const catalogLoads = chat.loadPluginCatalog.mock.calls.length;
+    complete({ result: { name: 'private-skill' } });
+    await creating; await flushPromises();
+    expect(chat.loadPluginCatalog).toHaveBeenCalledTimes(catalogLoads);
+    expect(chat.setPluginEnabled).toHaveBeenCalledTimes(1);
+    // Leaving the page also invalidates a still-open deletion confirmation.
+    chat.pluginCenterOpen = true; chat.pluginCenterAgentId = 'a';
+    await Vue.nextTick();
+    confirmDialog.mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
+    const leftPage = wrapper.vm.removeSkill(catalog.skillSources[0]);
+    wrapper.unmount(); wrapper = null;
+    confirm(true); await leftPage;
+    expect(chat.mutateManagedSkill).toHaveBeenCalledTimes(2);
   });
 
   it('keeps failed saves visible outside the plugin page without inventing success', async () => {

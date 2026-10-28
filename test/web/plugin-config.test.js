@@ -125,15 +125,31 @@ describe('Agent-scoped Plugin Center auto-save', () => {
     h.reply(h.sent[1], { plugins: { tools: ['shell', 'read'] } });
     await latest;
     const inFlight = loadPluginConfig(h.store, 'a');
-    h.reply(h.sent[2], { plugins: { tools: ['stale'] } });
+    h.reply(h.sent[2], { plugins: { tools: ['superseded'] } });
     const save = h.toggle('tools', 'shell', false, ['shell', 'read']);
     await inFlight;
     await flush();
-    expect(h.sent.at(-1).plugins).toEqual({ tools: ['read'] });
+    expect(h.sent.at(-1).type).toBe('get_yeaft_plugins');
+    h.reply(h.sent.at(-1), { plugins: { tools: ['shell', 'remote-only-tool'], skills: [] } });
+    await flush();
+    expect(h.sent.at(-1).plugins).toEqual({ tools: ['remote-only-tool'], skills: [] });
     h.reply();
     await save;
     h.reply(h.sent[2], { plugins: { tools: ['duplicate'] } });
-    expect(h.store.pluginConfigByAgent.a.plugins).toEqual({ tools: ['read'] });
+    expect(h.store.pluginConfigByAgent.a.plugins).toEqual({ tools: ['remote-only-tool'], skills: [] });
+    // Managed-skill creation can enqueue an enable while a cached refresh is
+    // pending. Rebase in the store, not merely in ordinary switch controls.
+    const refresh = loadPluginConfig(h.store, 'a');
+    const oldRefresh = h.sent.at(-1);
+    const enabling = h.toggle('skills', 'new-skill', true, []);
+    await flush();
+    h.reply(oldRefresh, { plugins: { skills: [] } });
+    await refresh;
+    h.reply(h.sent.at(-1), { plugins: { tools: ['newer-remote-tool'] } });
+    await flush();
+    // Missing skills means all are enabled; never narrow it to only new-skill.
+    expect(h.sent.at(-1).plugins).toEqual({ tools: ['newer-remote-tool'] });
+    h.reply(); await enabling;
   });
 
   it('times out uncertain writes, ignores late replies, and reads before retrying against current config', async () => {

@@ -8,6 +8,7 @@ const REQUEST_TIMEOUT = 10_000;
 
 /** Auth boundary: discard private cache/intent and retire async continuations. */
 export function clearPluginState(store) {
+  store.pluginStateGeneration = Number(store.pluginStateGeneration || 0) + 1;
   const agents = runtimes.get(store);
   for (const state of agents?.values() || []) {
     state.cancelled = true;
@@ -84,6 +85,9 @@ function applyIntents(plugins, intents) {
       next = copy(intent.plugins);
       continue;
     }
+    // Missing field already enables everything, including a newly created
+    // skill. A refresh may have removed the former explicit selection.
+    if (intent.enabled && !Array.isArray(next[intent.field])) continue;
     const selected = new Set(Array.isArray(next[intent.field]) ? next[intent.field] : intent.catalogNames);
     if (intent.enabled) selected.add(intent.itemName);
     else selected.delete(intent.itemName);
@@ -271,7 +275,9 @@ function enqueue(store, agentId, intent) {
   }
   const optimistic = applyIntents(current.plugins, state.intents);
   patch(store, agentId, { optimistic, draft: copy(optimistic) });
-  return state.task || start(store, agentId);
+  // Every caller, including managed-skill auto-enable, must rebase a cached
+  // edit against an authoritative read already requested by reopen/reconnect.
+  return state.task || start(store, agentId, current.loading);
 }
 
 /**

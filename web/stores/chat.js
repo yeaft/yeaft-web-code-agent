@@ -779,6 +779,7 @@ export const useChatStore = defineStore('chat', {
     pluginCenterOpen: false,
     pluginCenterAgentId: null,
     pluginConfigByAgent: {},
+    pluginStateGeneration: 0,
     pluginCatalogByKey: {},
     pluginCatalogRequestByKey: {},
     managedSkillRequestByKey: {},
