@@ -37,8 +37,12 @@ export function isSvgFile(name) {
   return name.toLowerCase().endsWith('.svg');
 }
 
+export function isCsvFile(name) {
+  return name.toLowerCase().endsWith('.csv');
+}
+
 export function isPreviewableTextFile(name) {
-  return isMarkdownFile(name) || isHtmlFile(name) || isSvgFile(name);
+  return isMarkdownFile(name) || isHtmlFile(name) || isSvgFile(name) || isCsvFile(name);
 }
 
 export function getModeForFile(filename) {
@@ -60,6 +64,14 @@ export function getModeForFile(filename) {
     'md': 'markdown', 'markdown': 'markdown',
   };
   return modeMap[ext] || 'text/plain';
+}
+
+/** Editors normalize line endings; a full undo must restore the original text. */
+export function updateFileText(file, current) {
+  const original = file.originalContent || '';
+  const normalize = text => text.replace(/\r\n?/g, '\n');
+  file.content = normalize(current) === normalize(original) ? original : current;
+  file.isDirty = file.content !== original;
 }
 
 export function createFileEditor(store, {
@@ -98,8 +110,7 @@ export function createFileEditor(store, {
       ta.style.cssText = 'width:100%;height:100%;border:none;outline:none;resize:none;padding:12px;font-family:monospace;font-size:12px;background:var(--bg-main);color:var(--text-main);white-space:pre;tab-size:4;';
       ta.spellcheck = false;
       ta.addEventListener('input', () => {
-        fileObj.content = ta.value;
-        fileObj.isDirty = (ta.value !== fileObj.originalContent);
+        updateFileText(fileObj, ta.value);
       });
       ta.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveFile(); }
@@ -139,8 +150,7 @@ export function createFileEditor(store, {
 
       cm.on('change', () => {
         const current = cm.getValue();
-        fileObj.content = current;
-        fileObj.isDirty = (current !== fileObj.originalContent);
+        updateFileText(fileObj, current);
       });
 
       fileObj.cmInstance = cm;

@@ -1053,6 +1053,51 @@
   min-height: 0;
   background: var(--bg-main);
 }
+/* CSV is text, rendered as inert cells rather than HTML or a spreadsheet runtime. */
+.csv-preview-container { min-width: 0; }
+.csv-preview-toolbar,
+.csv-preview-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.csv-preview-toolbar label { display: flex; align-items: center; gap: 6px; }
+.csv-preview-notice {
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  background: var(--bg-workbench);
+  font-size: 12px;
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
+}
+.csv-preview-notice[role="alert"] { color: var(--text-danger); }
+.csv-preview-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.csv-preview-scroll:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+.csv-preview-table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; color: var(--text-primary); }
+.csv-preview-table th,
+.csv-preview-table td {
+  padding: 8px 12px;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 80px;
+  max-width: 360px;
+}
+.csv-preview-table thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-workbench); font-weight: 600; }
+.csv-header-content { max-height: 4.5em; max-width: 336px; overflow: auto; }
+.csv-header-content:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+.csv-preview-table .csv-row-number { min-width: 36px; width: 36px; color: var(--text-muted); background: var(--bg-workbench); font-weight: 400; text-align: right; }
+.csv-preview-pagination { justify-content: flex-end; }
+.csv-preview-pagination button { font: inherit; padding: 4px 8px; }
+.csv-preview-pagination button:disabled { opacity: .4; cursor: not-allowed; }
 .file-preview-image-button {
   flex: 1;
   min-width: 0;
