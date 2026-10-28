@@ -42,6 +42,7 @@ export default {
     const mobileHeader = Vue.ref(window.innerWidth <= 600);
     const moreOpen = Vue.ref(false);
     const moreButton = Vue.ref(null);
+    const settingsButton = Vue.ref(null);
     const inspectorNav = Vue.ref(null);
     let draftGeneration = 0;
     let pendingDraft = null;
@@ -132,6 +133,19 @@ export default {
     });
     const { attachments, error: attachmentError, filesReady, addFiles, retryAttachment, removeAttachment } = attachmentQueue;
     const controller = createPersonController({ chat, state, scope, reupload: attachmentQueue.uploadFiles });
+    let settingsOpener = null;
+    let settingsScope = '';
+    Vue.watch(settingsOpen, open => {
+      if (open) { settingsOpener = document.activeElement; settingsScope = attachmentScope(); }
+      else Vue.nextTick(() => {
+        // Child unmount runs while the header is still inert. Restore only
+        // after that attribute is removed, and never into another owner.
+        if (disposed || settingsScope !== attachmentScope() || moreOpen.value || panel.value) return;
+        const opener = mobileHeader.value ? moreButton.value
+          : settingsOpener === moreButton.value ? settingsButton.value : settingsOpener;
+        if (opener?.isConnected && !opener.disabled) opener.focus();
+      });
+    }, { flush: 'sync' });
     Vue.watch(attachmentScope, () => {
       resetResponseFocus();
       draftGeneration++;
@@ -614,7 +628,7 @@ export default {
     const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div class="person-page">
@@ -633,7 +647,7 @@ export default {
           <button ref="searchButton" type="button" class="header-action-btn person-search-button" :class="{ active: panel === 'search' }" :aria-expanded="panel === 'search'" aria-controls="person-side-panel" :aria-label="$t('person.searchMessages')" :title="$t('person.searchMessages')" @click="panel === 'search' ? closePanel() : openPanel('search')"><NavigationIcon name="search" /></button>
           <button ref="outputButton" type="button" class="header-action-btn person-outputs-button" :class="{ active: panel === 'outputs' }" :aria-expanded="panel === 'outputs'" aria-controls="person-side-panel" :aria-label="$t('person.outputs')" :title="$t('person.outputs')" @click="panel === 'outputs' ? closePanel() : openPanel('outputs')"><NavigationIcon name="file" /></button>
           <button ref="thoughtButton" type="button" class="header-action-btn person-thoughts-button" :class="{ active: !!panel && !['search', 'outputs'].includes(panel) }" :aria-expanded="!!panel && !['search', 'outputs'].includes(panel)" aria-controls="person-side-panel" :aria-label="$t('person.inside')" :title="$t('person.inside')" @click="togglePanel()"><NavigationIcon name="eye" /></button>
-          <button type="button" class="header-action-btn person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending" @click="settingsOpen = true" :aria-label="$t('person.settings')" :title="$t('person.settings')"><NavigationIcon name="settings" /></button>
+          <button ref="settingsButton" type="button" class="header-action-btn person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending" @click="settingsOpen = true" :aria-label="$t('person.settings')" :title="$t('person.settings')"><NavigationIcon name="settings" /></button>
         </div>
         <button ref="moreButton" type="button" class="header-action-btn person-more-button" :aria-label="$t('person.moreActions')" :title="$t('person.moreActions')" aria-haspopup="dialog" :aria-expanded="moreOpen" aria-controls="person-actions-sheet" @click="moreOpen = true"><NavigationIcon name="more" /></button>
       </header>
@@ -724,7 +738,7 @@ export default {
         </main>
         <PaneResizeHandle v-if="panel && !modalPanel" v-model="panelWidth" :label="$t('person.outputsResize')" controls="person-side-panel" :min-size="280" :min-remaining="360" :default-size="420" />
         <div v-if="panel && modalPanel" class="person-panel-backdrop" aria-hidden="true" @click="closePanel()"></div>
-        <aside v-if="panel" id="person-side-panel" ref="sidePanel" class="person-side-panel" :class="{ 'is-expanded': expandedPanel }" :style="!modalPanel ? { flexBasis: 'min(' + panelWidth + 'px, calc(100% - 360px))' } : {}" :role="modalPanel ? 'dialog' : 'complementary'" :aria-modal="modalPanel ? true : undefined" :aria-labelledby="panel !== 'outputs' ? 'person-panel-title' : undefined" :aria-label="panel === 'outputs' ? $t('person.outputs') : undefined">
+        <aside v-if="panel" :inert="settingsOpen || moreOpen ? true : undefined" id="person-side-panel" ref="sidePanel" class="person-side-panel" :class="{ 'is-expanded': expandedPanel }" :style="!modalPanel ? { flexBasis: 'min(' + panelWidth + 'px, calc(100% - 360px))' } : {}" :role="modalPanel ? 'dialog' : 'complementary'" :aria-modal="modalPanel ? true : undefined" :aria-labelledby="panel !== 'outputs' ? 'person-panel-title' : undefined" :aria-label="panel === 'outputs' ? $t('person.outputs') : undefined">
           <header v-if="panel !== 'outputs'" class="person-panel-header">
             <h2 id="person-panel-title">{{ $t(panel === 'search' ? 'person.searchMessages' : 'person.inside') }}</h2>
             <button ref="closePanelButton" type="button" class="header-action-btn" :aria-label="$t('common.close')" :title="$t('common.close')" @click="closePanel()"><NavigationIcon name="close" /></button>

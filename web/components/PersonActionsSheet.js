@@ -1,4 +1,5 @@
 import NavigationIcon from './NavigationIcon.js';
+import { clearOverlayPointerGesture, shouldDismissFromOverlayClick, trackOverlayPointerDown, trackOverlayPointerUp } from '../utils/overlay-dismiss.js';
 
 /** Mobile-only navigation. Choosing an action never starts or cancels an episode. */
 export default {
@@ -37,10 +38,13 @@ export default {
       document.removeEventListener('keydown', keydown);
       document.removeEventListener('focusin', keepFocus);
     });
-    return { dialog };
+    function overlayClick(event) {
+      if (shouldDismissFromOverlayClick(event)) emit('close');
+    }
+    return { dialog, overlayClick, trackOverlayPointerDown, trackOverlayPointerUp, clearOverlayPointerGesture };
   },
   template: `
-    <div class="modal-overlay person-actions-overlay" @click.self="$emit('close')">
+    <div class="modal-overlay person-actions-overlay" @pointerdown="trackOverlayPointerDown" @pointerup="trackOverlayPointerUp" @pointercancel="clearOverlayPointerGesture" @click="overlayClick">
       <section id="person-actions-sheet" ref="dialog" class="modal person-actions-sheet" role="dialog" aria-modal="true" aria-labelledby="person-actions-title" tabindex="-1">
         <header class="person-panel-header">
           <h2 id="person-actions-title">{{ $t('person.moreActions') }}</h2>
