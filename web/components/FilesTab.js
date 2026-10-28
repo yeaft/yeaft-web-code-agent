@@ -6,6 +6,7 @@ import { createFileTree } from './files/fileTree.js';
 import { createFileEditor, getFileType, isPreviewableTextFile } from './files/fileEditor.js';
 import { createFilePreview } from './files/filePreview.js';
 import SvgPreview from './files/SvgPreview.js';
+import CsvPreview from './files/CsvPreview.js';
 import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
@@ -128,7 +129,7 @@ export function createFileCloseEventHandlers({ liveStore, props, tabs, isDispose
 
 export default {
   name: 'FilesTab',
-  components: { SvgPreview },
+  components: { SvgPreview, CsvPreview },
   props: {
     treeInitiallyVisible: { type: Boolean, default: true },
     routeKey: { type: String, required: true },
@@ -370,6 +371,7 @@ export default {
               :title="$t('files.htmlPreviewTitle', { name: activeFile.name })" class="file-preview-iframe html-preview-iframe"></iframe>
           </div>
           <SvgPreview v-if="isActiveSvg && textPreviewMode" :key="activeFile.path" :content="activeFile.content || ''" :name="activeFile.name" />
+          <CsvPreview v-if="isActiveCsv && textPreviewMode" :key="activeFile.path" :content="activeFile.content || ''" :name="activeFile.name" :font-size="fontSize" />
           <!-- 搜索/替换栏 + CodeMirror 编辑器 -->
           <template v-if="!isActiveTextPreview || !textPreviewMode">
           <div class="find-replace-bar" v-if="findBarVisible">
@@ -1113,7 +1115,7 @@ export default {
       isActiveMarkdown: preview.isActiveMarkdown, textPreviewMode: preview.textPreviewMode,
       mdRenderedHtml: preview.mdRenderedHtml, switchToTextEdit: preview.switchToTextEdit,
       switchToTextPreview: preview.switchToTextPreview,
-      isActiveTextPreview: preview.isActiveTextPreview, isActiveHtml: preview.isActiveHtml, isActiveSvg: preview.isActiveSvg,
+      isActiveTextPreview: preview.isActiveTextPreview, isActiveHtml: preview.isActiveHtml, isActiveSvg: preview.isActiveSvg, isActiveCsv: preview.isActiveCsv,
       htmlPreviewDocument: preview.htmlPreviewDocument,
       folderPickerOpen: fp.folderPickerOpen, folderPickerPath: fp.folderPickerPath,
       folderPickerEntries: fp.folderPickerEntries, folderPickerLoading: fp.folderPickerLoading,

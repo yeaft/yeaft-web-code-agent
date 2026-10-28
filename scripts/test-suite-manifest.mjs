@@ -109,6 +109,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/person-task-active-snapshot.test.js",
   "test/web/safe-message-markdown.test.js",
   "test/web/svg-preview.test.js",
+  "test/web/csv-preview.test.js",
   "test/web/tool-stats-drawer.test.js",
   "test/web/stores/auth-session-refresh.test.js",
   "test/web/stores/load-more-yeaft-history.test.js",

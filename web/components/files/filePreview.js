@@ -1,9 +1,9 @@
 /**
  * filePreview — File preview composable for FilesTab.
- * Manages Markdown and HTML preview/rendering, Mermaid diagrams, Office/PDF/Image/SVG preview.
+ * Manages Markdown and HTML preview/rendering, Mermaid diagrams, Office/PDF/Image/SVG/CSV preview.
  */
 import { renderMermaidIn } from '../../utils/markdown.js';
-import { isMarkdownFile, isHtmlFile, isSvgFile, isPreviewableTextFile } from './fileEditor.js';
+import { isMarkdownFile, isHtmlFile, isSvgFile, isCsvFile, isPreviewableTextFile } from './fileEditor.js';
 
 /** Build an inert, network-free document; never insert workspace HTML into the app DOM. */
 export function createHtmlPreviewDocument(content, { background = '', color = '', colorScheme = 'light' } = {}) {
@@ -65,6 +65,7 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
 
   const isActiveSvg = Vue.computed(() => !!activeFile.value && isSvgFile(activeFile.value.name));
   const isActiveHtml = Vue.computed(() => !!activeFile.value && isHtmlFile(activeFile.value.name));
+  const isActiveCsv = Vue.computed(() => !!activeFile.value && isCsvFile(activeFile.value.name));
   const isActiveTextPreview = Vue.computed(() => !!activeFile.value && isPreviewableTextFile(activeFile.value.name));
   const htmlPreviewDocument = Vue.computed(() => {
     const theme = getTheme();
@@ -192,7 +193,7 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
 
   return {
     textPreviewMode, mdPreviewRef, officePreviewContainer,
-    isActiveMarkdown, isActiveHtml, isActiveSvg, isActiveTextPreview, mdRenderedHtml, htmlPreviewDocument,
+    isActiveMarkdown, isActiveHtml, isActiveSvg, isActiveCsv, isActiveTextPreview, mdRenderedHtml, htmlPreviewDocument,
     initMermaid, renderMermaidBlocks, switchToTextEdit, switchToTextPreview, renderOfficeLocal
   };
 }
