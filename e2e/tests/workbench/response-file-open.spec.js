@@ -115,6 +115,7 @@ function mountHarness() {
 
 const HTML = `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/web/styles/variables.css"><link rel="stylesheet" href="/web/styles/workbench.css"><link rel="stylesheet" href="/web/styles/files.css"><link rel="stylesheet" href="/web/styles/chat-messages.css"><link rel="stylesheet" href="/web/vendor/codemirror.min.css">
+<style>html,body,#app{height:100%;margin:0}.workbench-panel{height:calc(100vh - 24px)}</style>
 <script src="/web/vendor/vue.global.prod.js"></script><script src="/web/vendor/vue-demi.iife.js"></script><script src="/web/vendor/pinia.iife.prod.js"></script><script src="/web/vendor/marked.min.js"></script><script src="/web/vendor/codemirror.min.js"></script></head>
 <body><div id="app"></div><script type="module">
 import { useChatStore } from '/web/stores/chat.js';
@@ -483,7 +484,7 @@ test('CSV table previews are inert, responsive, paginated and retain unsaved edi
       await openReference(page, file);
       await expect(page.getByRole('button', { name: 'files.preview', exact: true })).toHaveAttribute('aria-pressed', 'true');
       await expect(page.locator('.CodeMirror')).toHaveCount(0);
-      await expect(page.locator('.csv-preview-table thead th').nth(1)).toHaveText('名称');
+      await expect(page.locator('.csv-preview-table thead th .csv-header-content').first()).toHaveText('名称');
       await expect(page.locator('.csv-preview-table tbody tr')).toHaveCount(50);
       const firstRow = page.locator('.csv-preview-table tbody tr').first();
       await expect(firstRow.locator('td').nth(0)).toHaveText('A,B');
@@ -498,16 +499,20 @@ test('CSV table previews are inert, responsive, paginated and retain unsaved edi
       expect(bounds.width).toBeGreaterThan(20);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
       await scroll.evaluate(el => { el.scrollTop = 500; el.scrollLeft = 100; });
-      const header = await page.locator('.csv-preview-table thead th').first().boundingBox();
-      expect(Math.abs(header.y - bounds.y)).toBeLessThan(2);
+      await expect.poll(async () => {
+        const header = await page.locator('.csv-preview-table thead th').first().boundingBox();
+        const currentBounds = await scroll.boundingBox();
+        return Math.abs(header.y - currentBounds.y);
+      }).toBeLessThan(2);
+      expect((await scroll.boundingBox()).height).toBeGreaterThan(100);
       await testInfo.attach(`csv-${theme}-${width}`, { body: await page.screenshot(), contentType: 'image/png' });
       await page.getByRole('button', { name: 'files.csvNext', exact: true }).click();
       await expect(page.locator('.csv-preview-table tbody tr')).toHaveCount(12);
       await expect(page.locator('.csv-preview-table tbody tr').first().locator('td').first()).toHaveText('row-48');
       await expect(page.getByRole('button', { name: 'files.csvNext', exact: true })).toBeDisabled();
-      await page.locator('.csv-preview-toolbar input').uncheck();
+      await page.locator('.csv-preview-toolbar input[type=checkbox]').uncheck();
       await expect(page.locator('.csv-preview-table tbody tr').first().locator('td').first()).toHaveText('名称');
-      await page.locator('.csv-preview-toolbar input').check();
+      await page.locator('.csv-preview-toolbar input[type=checkbox]').check();
     }
   }
   await page.getByRole('button', { name: 'files.edit', exact: true }).click();

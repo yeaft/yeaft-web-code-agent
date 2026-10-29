@@ -8,6 +8,7 @@ import { createFilePreview } from './files/filePreview.js';
 import SvgPreview from './files/SvgPreview.js';
 import CsvPreview from './files/CsvPreview.js';
 import FilePreviewFallback from './files/FilePreviewFallback.js';
+import SpreadsheetPreview from './files/SpreadsheetPreview.js';
 import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
@@ -130,7 +131,7 @@ export function createFileCloseEventHandlers({ liveStore, props, tabs, isDispose
 
 export default {
   name: 'FilesTab',
-  components: { SvgPreview, CsvPreview, FilePreviewFallback },
+  components: { SvgPreview, CsvPreview, FilePreviewFallback, SpreadsheetPreview },
   props: {
     treeInitiallyVisible: { type: Boolean, default: true },
     routeKey: { type: String, required: true },
@@ -421,6 +422,7 @@ export default {
           <div ref="editorContainer" class="file-editor-container"></div>
           </template>
           </template>
+          <SpreadsheetPreview v-else-if="activeFile.fileType === 'office' && /\\.xlsx?$/i.test(activeFile.name) && activeFile._arrayBuffer" :key="activeFile.path" :buffer="activeFile._arrayBuffer" :name="activeFile.name" :font-size="fontSize" />
           <!-- Office 文件预览 -->
           <div v-else-if="activeFile.fileType === 'office'" class="file-preview-container">
             <FilePreviewFallback v-if="activeFile.previewError" :file="activeFile" :error="activeFile.previewError" @download="downloadActiveFile" />

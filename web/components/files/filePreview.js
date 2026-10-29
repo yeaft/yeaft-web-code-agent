@@ -129,6 +129,7 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
   );
 
   const renderOfficeLocal = async (file) => {
+    if (/\.xlsx?$/i.test(file?.name || '')) { file.previewLoading = false; return false; }
     const liveContainer = officePreviewContainer.value;
     if (!liveContainer || !file._arrayBuffer) return false;
 
@@ -140,7 +141,6 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
       ? ownerDocument.createElement('div')
       : { innerHTML: '' };
     const ext = ('.' + file.name.split('.').pop()).toLowerCase();
-    let workbook = null;
     const isLatestFileRender = () => fileRenderGenerations.get(file) === generation;
     const canCommit = () => generation === officeRenderGeneration
       && isLatestFileRender()
@@ -156,13 +156,6 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
           ignoreWidth: false,
           ignoreHeight: true
         });
-      } else if (ext === '.xlsx' || ext === '.xls') {
-        workbook = XLSX.read(file._arrayBuffer, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const html = XLSX.utils.sheet_to_html(workbook.Sheets[sheetName], { editable: false });
-        attemptContainer.innerHTML = '<div class="xlsx-sheet-tabs">' +
-          workbook.SheetNames.map((n, i) => `<button class="xlsx-sheet-tab${i === 0 ? ' active' : ''}" data-idx="${i}">${n}</button>`).join('') +
-          '</div><div class="xlsx-table-wrap">' + html + '</div>';
       } else {
         throw new Error(t('files.previewUnavailable'));
       }
@@ -172,18 +165,6 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
         liveContainer.replaceChildren(...attemptContainer.childNodes);
       } else {
         liveContainer.innerHTML = attemptContainer.innerHTML;
-      }
-      if (workbook) {
-        liveContainer.querySelectorAll('.xlsx-sheet-tab').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const idx = parseInt(btn.dataset.idx);
-            const sheetName = workbook.SheetNames[idx];
-            const html = XLSX.utils.sheet_to_html(workbook.Sheets[sheetName], { editable: false });
-            liveContainer.querySelector('.xlsx-table-wrap').innerHTML = html;
-            liveContainer.querySelectorAll('.xlsx-sheet-tab').forEach(tab => tab.classList.remove('active'));
-            btn.classList.add('active');
-          });
-        });
       }
       return true;
     } catch (e) {

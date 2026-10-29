@@ -872,7 +872,7 @@
 .file-path-crumb {
   flex-shrink: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--agent-setup-control-radius);
   background: transparent;
   color: var(--text-muted);
   padding: 5px 4px;
@@ -1053,8 +1053,28 @@
   min-height: 0;
   background: var(--bg-main);
 }
-/* CSV is text, rendered as inert cells rather than HTML or a spreadsheet runtime. */
+/* Shared CSV / Excel read-only table: one bounded scroll owner in a flex chain. */
 .csv-preview-container { min-width: 0; }
+.preview-table-container { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.table-preview-hint { padding: 0 12px 8px; color: var(--text-muted); font-size: 12px; flex-shrink: 0; overflow-wrap: anywhere; }
+.csv-preview-toolbar input[type="search"],
+.csv-preview-toolbar select { font: inherit; color: var(--text-primary); background: var(--bg-main); border: 1px solid var(--border-color); border-radius: var(--agent-setup-control-radius); padding: 4px 6px; min-width: 0; max-width: 100%; }
+.csv-preview-toolbar input[type="search"] { width: 160px; }
+.csv-preview-toolbar select { max-width: 180px; }
+.table-search-label { flex-wrap: wrap; }
+.csv-preview-container .btn-ghost { border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-secondary); font: inherit; padding: 4px 8px; cursor: pointer; }
+.csv-preview-container .btn-ghost:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text-primary); }
+.csv-preview-container .btn-ghost:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+.table-copy:disabled { opacity: .4; cursor: not-allowed; }
+.table-sort { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; width: 100%; font: inherit; color: inherit; text-align: left; padding: 0; }
+.csv-preview-table td { cursor: cell; }
+.csv-preview-table td.table-cell-selected { background: var(--sidebar-hover); box-shadow: inset 0 0 0 1px var(--accent-blue); }
+.csv-preview-table td:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+@media (max-width: 480px) {
+  .csv-preview-toolbar { gap: 6px 8px; padding: 6px 8px; }
+  .table-preview-hint { padding: 0 8px 6px; }
+  .csv-preview-toolbar input[type="search"] { width: 128px; }
+}
 .csv-preview-toolbar,
 .csv-preview-pagination {
   display: flex;
@@ -1076,7 +1096,7 @@
   overflow-wrap: anywhere;
 }
 .csv-preview-notice[role="alert"] { color: var(--text-danger); }
-.csv-preview-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.csv-preview-scroll { flex: 1 1 0; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; background: var(--bg-main); }
 .csv-preview-scroll:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 .csv-preview-table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; color: var(--text-primary); }
 .csv-preview-table th,
@@ -1094,7 +1114,8 @@
 .csv-preview-table thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-workbench); font-weight: 600; }
 .csv-header-content { max-height: 4.5em; max-width: 336px; overflow: auto; }
 .csv-header-content:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
-.csv-preview-table .csv-row-number { min-width: 36px; width: 36px; color: var(--text-muted); background: var(--bg-workbench); font-weight: 400; text-align: right; }
+.csv-preview-table .csv-row-number { position: sticky; left: 0; z-index: 2; min-width: 36px; width: 36px; color: var(--text-muted); background: var(--bg-workbench); font-weight: 400; text-align: right; white-space: nowrap; overflow-wrap: normal; }
+.csv-preview-table thead .csv-row-number { z-index: 3; }
 .csv-preview-pagination { justify-content: flex-end; }
 .csv-preview-pagination button { font: inherit; padding: 4px 8px; }
 .csv-preview-pagination button:disabled { opacity: .4; cursor: not-allowed; }
@@ -1189,27 +1210,10 @@
 .xlsx-sheet-tab:hover { color: var(--text-primary); }
 .xlsx-sheet-tab.active {
   color: var(--text-primary);
-  border-bottom-color: var(--accent-color, #d97706);
+  border-bottom-color: var(--accent-blue);
 }
-.xlsx-table-wrap {
-  overflow: auto;
-  flex: 1;
-}
-.xlsx-table-wrap table {
-  border-collapse: collapse;
-  font-size: 12px;
-  width: 100%;
-}
-.xlsx-table-wrap td, .xlsx-table-wrap th {
-  border: 1px solid #ddd;
-  padding: 4px 8px;
-  text-align: left;
-  white-space: nowrap;
-}
-.xlsx-table-wrap th {
-  background: #f5f5f5;
-  font-weight: 600;
-}
+.xlsx-sheet-tab:disabled { opacity: .5; cursor: wait; }
+.xlsx-sheet-tab:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 
 /* === Markdown File Preview === */
 .md-preview-container {
