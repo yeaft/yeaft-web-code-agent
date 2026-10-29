@@ -1814,6 +1814,7 @@ export default {
   'files.tableCopyFailed': 'Clipboard unavailable. Focus a cell and use Ctrl/Cmd+C.',
   'files.tableReadOnly': 'View only · Click or drag to select; Shift+click / Shift+arrows extends. Ctrl/Cmd+A selects this page; Ctrl/Cmd+C copies. Sort/filter covers the loaded preview only.',
   'files.tableEmpty': 'This worksheet is empty.',
+  'files.sheetPreviewRangeEmpty': 'No data in the preview range (first {rows} rows and {columns} columns). The worksheet may be empty or contain data outside this range. Download the original to check.',
   'files.tableNoMatches': 'No matching rows.',
   'files.tablePreviewTitle': 'Table preview: {name}',
   'files.tableSort': 'Sort column {column}: ascending, descending, original order',

@@ -79,6 +79,7 @@ export default {
       <div v-if="sheetsLimited" class="csv-preview-notice" role="status">{{ $t('files.sheetNamesLimited', { sheets: limits.sheets }) }}</div>
       <div v-if="error" class="csv-preview-notice" role="alert">{{ $t(error) }} <button type="button" class="btn-ghost" @click="load">{{ $t('common.retry') }}</button></div>
       <div v-else-if="loading" class="preview-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('files.loadingPreview') }}</div>
+      <div v-else-if="parsed && !parsed.rows.length" class="preview-unsupported" role="status">{{ $t('files.sheetPreviewRangeEmpty', { rows: limits.rows, columns: limits.columns }) }}</div>
       <template v-else-if="parsed">
         <div v-if="limited" class="csv-preview-notice" role="status">{{ $t('files.sheetLimited', { rows: limits.rows, columns: limits.columns, characters: limits.cellCharacters }) }}</div>
         <PreviewTable :key="activeSheet" :rows="parsed.rows" :column-count="parsed.columnCount" :name="name + ' · ' + names[activeSheet]" :default-header="false" />

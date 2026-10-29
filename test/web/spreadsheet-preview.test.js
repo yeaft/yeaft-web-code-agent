@@ -41,6 +41,10 @@ describe('read-only spreadsheet preview', () => {
       expect(parsed.rows[1]).toEqual(['<img src=x onerror=alert(1)>', '42', '1/2/26']);
       expect(parsed.rows[2][1]).toBe('');
       expect(readSpreadsheetSheet(XLSX, buffer, 'Empty').rows).toEqual([]);
+      // A real sparse workbook may have no !ref at all after sheetRows truncates
+      // its only cell. It must not be presented as proof the full sheet is empty.
+      const sparse = { A1500: { t: 's', v: 'visible data' }, '!ref': 'A1500' };
+      expect(readSpreadsheetSheet(XLSX, bufferFor(sparse, bookType), 'Data').rows.every(row => row.every(value => !value))).toBe(true);
     }
     expect(() => readSpreadsheetNames(XLSX, new ArrayBuffer(limits.bytes + 1))).toThrow('size');
     expect(() => readSpreadsheetNames(XLSX, new ArrayBuffer(0))).toThrow('size');
@@ -150,7 +154,8 @@ describe('read-only spreadsheet preview', () => {
       expect(wrapper.find('tbody').exists()).toBe(false);
       worker.reply({ rows: [], columnCount: 0, limited: {} });
       await Vue.nextTick();
-      expect(wrapper.text()).toContain('files.tableEmpty');
+      expect(wrapper.text()).toContain('files.sheetPreviewRangeEmpty');
+      expect(wrapper.text()).not.toContain('files.tableEmpty');
       await wrapper.setProps({ buffer: new ArrayBuffer(2) });
       expect(worker.terminate).toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(limits.timeoutMs);

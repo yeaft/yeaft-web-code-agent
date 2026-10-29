@@ -1812,6 +1812,7 @@ export default {
   'files.tableCopyFailed': '剪贴板不可用，请聚焦单元格后按 Ctrl/Cmd+C。',
   'files.tableReadOnly': '仅查看 · 单击或拖动选择；Shift+单击 / Shift+方向键扩展。Ctrl/Cmd+A 选择当前页，Ctrl/Cmd+C 复制。排序和筛选仅作用于已加载预览。',
   'files.tableEmpty': '此工作表为空。',
+  'files.sheetPreviewRangeEmpty': '预览范围（前 {rows} 行、{columns} 列）内没有数据。工作表可能为空，也可能在范围外含有数据，请下载原文件确认。',
   'files.tableNoMatches': '没有匹配的行。',
   'files.tablePreviewTitle': '表格预览：{name}',
   'files.tableSort': '第 {column} 列排序：升序、降序、原始顺序',

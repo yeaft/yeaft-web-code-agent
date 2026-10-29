@@ -35,6 +35,9 @@ export function readSpreadsheetSheet(XLSX, buffer, name) {
   const sheet = book.Sheets?.[name];
   if (!sheet) throw new Error('invalid');
   const limited = { rows: false, columns: false, cell: false, characters: false };
+  // A bounded SheetJS read can omit both !ref and !fullref when all values
+  // are below the row prefix. This is no data in the preview, not proof the
+  // complete worksheet is empty; the viewer must preserve that distinction.
   if (!sheet['!ref']) return { rows: [], columnCount: 0, limited };
   const range = XLSX.utils.decode_range(sheet['!fullref'] || sheet['!ref']);
   if (![range.e.r, range.e.c].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error('invalid');
