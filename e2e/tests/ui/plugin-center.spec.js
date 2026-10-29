@@ -287,8 +287,60 @@ test('Plugins keep the existing sidebar and browse responsively in light desktop
   await screenshot(page, testInfo, 'plugins-dark-320-sidebar.png');
 });
 
-test('Agent picker uses aligned sidebar-style names without dots or checkmarks across selection, themes and offline cache', async ({ page, serverUrl, mockAgent }, testInfo) => {
-  pluginAgent(mockAgent);
+async function switchThemeColors(page, testInfo) {
+  const settingsColors = {};
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => { if (document.documentElement.dataset.theme !== theme) window.Pinia.useChatStore().toggleTheme(); }, theme);
+    await page.locator('.sidebar-bottom .sidebar-nav-item').click();
+    const settingsSwitch = page.locator('.sp-setting-switch[aria-labelledby="general-work-center-label"]');
+    if (await settingsSwitch.getAttribute('aria-checked') !== 'true') await settingsSwitch.click();
+    await expect(settingsSwitch).toHaveAttribute('aria-checked', 'true');
+    // Wait for the real Settings transition before comparing rendered colors.
+    await expect.poll(() => settingsSwitch.evaluate(element => element.getAnimations().length)).toBe(0);
+    settingsColors[theme] = await settingsSwitch.evaluate(element => ({
+      track: getComputedStyle(element).backgroundColor,
+      knob: getComputedStyle(element.querySelector('.sp-setting-switch-knob')).backgroundColor,
+    }));
+    await page.locator('.settings-close').click();
+  }
+  expect(settingsColors.light.track).toBe('rgb(74, 124, 201)');
+
+  for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'dark'], [320, 'light']]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(theme => { if (document.documentElement.dataset.theme !== theme) window.Pinia.useChatStore().toggleTheme(); }, theme);
+    const expected = settingsColors[theme];
+    await expect.poll(() => toggle(page, 'Review guide').evaluate(element => getComputedStyle(element, '::before').backgroundColor)).toBe(expected.track);
+    const offSwitch = toggle(page, 'Run shell commands');
+    await expect(offSwitch).toHaveAttribute('aria-checked', 'false');
+    expect(await offSwitch.evaluate(element => getComputedStyle(element, '::before').backgroundColor)).not.toBe(expected.track);
+    for (const control of await page.locator('.plugin-center-switch[aria-checked="true"]').all()) {
+      expect(await control.evaluate(element => ({
+        track: getComputedStyle(element, '::before').backgroundColor,
+        knob: getComputedStyle(element.querySelector('span')).backgroundColor,
+      }))).toEqual(expected);
+    }
+    await screenshot(page, testInfo, `plugins-switches-${theme}-${width}.png`);
+    await page.getByRole('button', { name: 'View Review guide details', exact: true }).click();
+    const detailSwitch = page.locator('.plugin-center-detail .plugin-center-switch');
+    expect(await detailSwitch.evaluate(element => ({
+      track: getComputedStyle(element, '::before').backgroundColor,
+      knob: getComputedStyle(element.querySelector('span')).backgroundColor,
+    }))).toEqual(expected);
+    await page.keyboard.press('Tab');
+    await expect(detailSwitch).toBeFocused();
+    expect(await detailSwitch.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('solid');
+    await page.getByRole('button', { name: 'All plugins', exact: true }).click();
+    await responsiveGeometry(page, width);
+  }
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Wait for Vue's desktop resize update; a transient hidden sidebar here is
+  // not a collapsed sidebar that needs a toggle click.
+  await expect(page.locator('.sidebar-plugins-entry')).toBeVisible();
+}
+
+test('Plugin controls match Settings colors and sidebar-style Agent rows across themes and offline cache', async ({ page, serverUrl, mockAgent }, testInfo) => {
+  pluginAgent(mockAgent, { skills: ['review-guide'], tools: ['FileRead'], mcpServers: ['github'] });
   await boot(page, serverUrl, mockAgent);
   const second = new MockAgent(serverUrl, 'server-2');
   const third = new MockAgent(serverUrl, 'C1');
@@ -297,6 +349,8 @@ test('Agent picker uses aligned sidebar-style names without dots or checkmarks a
   try {
     await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().agents.filter(agent => agent.online).length)).toBe(3);
     await openPlugins(page);
+    await selectAgent(page, 'test-agent');
+    await switchThemeColors(page, testInfo);
     await selectAgent(page, 'C1');
     await third.disconnect();
     await selectAgent(page, 'server-2');
@@ -460,7 +514,10 @@ test('Plugin failures retry explicitly, managed skill creation uses Agent relay,
   await expect.soft(page.locator('.plugin-center-row')).toHaveCount(7);
   await expect.soft(page.getByRole('switch')).toHaveCount(7);
   await expect.soft(toggle(page, 'Read files')).toHaveAttribute('aria-checked', 'false');
-  for (const control of await page.getByRole('switch').all()) await expect(control).toBeDisabled();
+  for (const control of await page.getByRole('switch').all()) {
+    await expect(control).toBeDisabled();
+    expect(await control.evaluate(element => getComputedStyle(element).opacity)).toBe('0.35');
+  }
   await expect(page.locator('.plugin-center-create')).toBeDisabled();
   await page.getByRole('button', { name: 'More actions', exact: true }).click();
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
