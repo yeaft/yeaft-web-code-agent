@@ -1650,6 +1650,8 @@ export default {
   'workbench.browserOpenExternal': 'Open in new tab',
   'workbench.browserFrameLabel': 'Embedded web page',
   'workbench.browserFrameLoading': 'Loading embedded page…',
+  'workbench.browserEmbedNotice': 'Client-side preview only. Blank page or login not working? Open in a new tab to use your browser’s cookies and full website features. Some sites block embedding.',
+  'workbench.browserFrameWaiting': 'The preview is taking longer than expected. Open in a new tab to browse directly; embedding or third-party cookie restrictions may prevent this page from working here.',
   'workbench.browserStart': 'Start browser',
   'workbench.browserAddressLabel': 'Browser address',
   'workbench.browserAddressPlaceholder': 'example.com',

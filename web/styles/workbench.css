@@ -777,6 +777,23 @@
   color: var(--error);
 }
 
+.browser-embed-notice {
+  flex: 0 0 auto;
+  padding: 0 10px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.browser-embed-notice p {
+  margin: 0;
+}
+
+.browser-actions .browser-external {
+  color: var(--accent-blue);
+}
+
 .browser-stage {
   flex: 1;
   min-width: 0;

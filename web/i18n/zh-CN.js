@@ -1648,6 +1648,8 @@ export default {
   'workbench.browserOpenExternal': '新标签页打开',
   'workbench.browserFrameLabel': '嵌入网页',
   'workbench.browserFrameLoading': '正在加载嵌入网页…',
+  'workbench.browserEmbedNotice': '此处仅为客户端内嵌预览。空白或无法登录？请在新标签页打开，使用本机浏览器的 Cookie 和完整网站功能。部分网站禁止内嵌。',
+  'workbench.browserFrameWaiting': '预览等待较久，可在新标签页直接浏览。网站的内嵌限制或第三方 Cookie 限制可能导致此处无法使用。',
   'workbench.browserStart': '启动浏览器',
   'workbench.browserAddressLabel': '浏览器地址',
   'workbench.browserAddressPlaceholder': 'example.com',
