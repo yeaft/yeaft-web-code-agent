@@ -334,7 +334,9 @@ async function switchThemeColors(page, testInfo) {
   }
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await showSidebar(page);
+  // Wait for Vue's desktop resize update; a transient hidden sidebar here is
+  // not a collapsed sidebar that needs a toggle click.
+  await expect(page.locator('.sidebar-plugins-entry')).toBeVisible();
 }
 
 test('Plugin controls match Settings colors and sidebar-style Agent rows across themes and offline cache', async ({ page, serverUrl, mockAgent }, testInfo) => {
