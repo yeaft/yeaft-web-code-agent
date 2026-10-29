@@ -504,6 +504,7 @@ test('local Excel previews scroll, select, copy, sort and filter without writing
   values[1][2] = '<img src=x onerror=alert(1)>';
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(values), '<svg onload=alert(1)>');
   XLSX.utils.book_append_sheet(book, {}, 'Empty');
+  XLSX.utils.book_append_sheet(book, { A1500: { t: 's', v: 'Data outside preview' }, '!ref': 'A1500' }, 'Sparse');
   const bytes = Buffer.from(XLSX.write(book, { type: 'array', bookType: 'xlsx' }));
   const path = join(harness.workDir, 'sheet.xlsx');
   await writeFile(path, bytes);
@@ -550,7 +551,11 @@ test('local Excel previews scroll, select, copy, sort and filter without writing
     await page.locator('select').selectOption('1');
     await expect(page.getByText('No matching rows.', { exact: true })).toBeVisible();
     await page.locator('.xlsx-sheet-tab').nth(1).click();
-    await expect(page.getByText('This worksheet is empty.', { exact: true })).toBeVisible();
+    await expect(page.getByText('No data in the preview range', { exact: false })).toBeVisible();
+    await expect(page.getByText('This worksheet is empty.', { exact: true })).toHaveCount(0);
+    await page.locator('.xlsx-sheet-tab').nth(2).click();
+    await expect(page.getByText('No data in the preview range', { exact: false })).toBeVisible();
+    await expect(page.getByText('This worksheet is empty.', { exact: true })).toHaveCount(0);
     await page.locator('.xlsx-sheet-tab').first().click();
     await expect(page.locator('tbody tr')).toHaveCount(50);
     await expect(page.locator('input[type=search]')).toHaveValue('');
