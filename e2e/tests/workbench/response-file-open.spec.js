@@ -55,6 +55,11 @@ function mountHarness() {
   // path. The request id must correlate this response to the relative tab.
   const respondFile = message => {
     window.dispatchEvent(new CustomEvent('workbench-message', { detail: {
+      ...(params.get('preview') ? {
+        binary: true, mimeType: params.get('mime') || 'application/octet-stream',
+        previewUrl: '/api/preview/fixture?token=private',
+        ...(params.get('preview') === 'error' ? { error: 'Permission denied' } : {}),
+      } : {}),
       type: 'file_content', requestId: message.requestId,
       filePath: canonicalPath(message.filePath), content: fileContents.get(canonicalPath(message.filePath)),
       agentId: message.agentId, conversationId: message.conversationId,
@@ -103,7 +108,7 @@ function mountHarness() {
   app.config.globalProperties.$t = key => key;
   app.mount('#app');
   window.harness = {
-    requests, respondSaved,
+    requests, respondSaved, openFile: filePath => store.openFileInExplorer(filePath),
     setWorkDir(workDir) { sessions.sessions['agent-b\u001fsession-y'].workDir = workDir; },
   };
 }
@@ -127,6 +132,16 @@ class HarnessServer {
   async serve(request, response) {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname === '/') { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(HTML); return; }
+    if (url.pathname === '/api/preview/fixture') {
+      // Small playable PCM WAV, with no external runtime dependencies.
+      const wav = Buffer.alloc(44 + 800);
+      wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+      wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+      wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
+      wav.write('data', 36); wav.writeUInt32LE(800, 40); wav.fill(128, 44);
+      response.writeHead(200, { 'Content-Type': 'audio/wav', ...(url.searchParams.has('download') ? { 'Content-Disposition': 'attachment; filename=fixture.wav' } : {}) });
+      response.end(wav); return;
+    }
     const file = resolve(ROOT, `.${url.pathname}`);
     if (!file.startsWith(join(ROOT, 'web') + sep)) { response.writeHead(404).end(); return; }
     try {
@@ -543,3 +558,51 @@ test('CSV table previews are inert, responsive, paginated and retain unsaved edi
   await expect(page.locator('.csv-preview-container')).not.toContainText('files.csvEmpty');
   expect(errors).toEqual([]);
 });
+
+for (const theme of ['light', 'dark']) {
+  test(`non-text previews expose local playback and download fallback (${theme})`, async ({ page, context, harness }) => {
+    test.setTimeout(60000);
+    await page.setViewportSize(theme === 'dark' ? { width: 320, height: 720 } : { width: 1280, height: 800 });
+    const external = [];
+    await context.route(url => url.hostname !== '127.0.0.1', route => { external.push(route.request().url()); return route.abort(); });
+    await page.addInitScript(() => localStorage.setItem('officePreviewMode', 'online'));
+    const open = async (file, mime = 'application/octet-stream', preview = 'binary') => {
+      await page.goto(`${harness.url}/?${new URLSearchParams({ file, mime, preview, theme })}`);
+      await expect.poll(() => page.evaluate(() => !!window.harness)).toBe(true);
+      await page.evaluate(file => window.harness.openFile(file), file);
+      await expect(page.locator('.file-content-path [aria-current="location"]')).toHaveText(file.split('/').at(-1));
+      await expect(page.locator('.CodeMirror')).toHaveCount(0);
+      await expect(page.locator('.file-content-actions button').filter({ hasText: 'files.download' })).toBeVisible();
+    };
+    await open('media/track.wav', 'audio/wav');
+    const audio = page.locator('audio');
+    await expect(audio).toBeVisible();
+    await expect.poll(() => audio.evaluate(el => el.readyState)).toBeGreaterThanOrEqual(1);
+    await expect(page.locator('.preview-loading')).toHaveCount(0);
+    const download = page.waitForEvent('download');
+    await page.locator('.file-content-actions button').filter({ hasText: 'files.download' }).click();
+    expect((await download).suggestedFilename()).toBe('fixture.wav');
+    await audio.evaluate(el => el.dispatchEvent(new Event('error')));
+    await expect(page.locator('.file-preview-fallback')).toContainText('files.audioPreviewLoadFailed');
+    await expect(page.locator('.file-preview-fallback button')).toBeVisible();
+
+    for (const file of ['private/deck.pptx', 'private/archive.zip']) {
+      await open(file);
+      await expect(page.locator('.file-preview-fallback-format')).toContainText(file.endsWith('pptx') ? 'PPTX' : 'ZIP');
+      await expect(page.locator('.preview-loading, iframe')).toHaveCount(0);
+      const bounds = await page.locator('.file-preview-fallback').boundingBox();
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual((await page.viewportSize()).width + 1);
+    }
+    await open('private/report.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    await expect(page.locator('.file-preview-fallback')).toContainText('files.previewUnavailable');
+    await expect(page.locator('iframe')).toHaveCount(0);
+    await open('private/blocked.pdf', 'application/pdf', 'error');
+    await expect(page.locator('.file-preview-fallback')).toContainText('Permission denied');
+    await expect(page.locator('.file-preview-fallback button')).toBeVisible();
+    await open('private/report.pdf', 'application/pdf');
+    await expect(page.locator('.file-preview-note')).toContainText('files.pdfPreviewHint');
+    const pdfFrame = page.locator('.file-preview-iframe');
+    if (await pdfFrame.count()) await expect(pdfFrame).toHaveAttribute('title', 'files.pdfPreviewTitle');
+    expect(external).toEqual([]);
+  });
+}

@@ -1873,3 +1873,41 @@
   .workdir-picker .folder-picker-input { height: 44px; font-size: 16px; }
   .workdir-picker .folder-picker-footer > div > button { flex: 1; }
 }
+
+/* Terminal preview states share readable, keyboard-accessible downloads. */
+.file-preview-fallback {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--agent-setup-space-md);
+  padding: var(--agent-setup-space-lg);
+  overflow: auto;
+  color: var(--text-secondary);
+  text-align: center;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.file-preview-fallback-name,
+.file-preview-audio-name {
+  max-width: 100%;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.file-preview-fallback-format,
+.file-preview-fallback-hint,
+.file-preview-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.file-preview-fallback-message { margin: 0; white-space: pre-wrap; }
+.file-preview-fallback[role="alert"] .file-preview-fallback-message { color: var(--error); }
+.file-preview-note { padding: var(--agent-setup-space-md); overflow-wrap: anywhere; }
+.file-preview-audio-container { align-items: center; justify-content: center; gap: var(--response-space-md); padding: var(--response-space-md); }
+.file-preview-audio { width: min(100%, 560px); flex-shrink: 0; }

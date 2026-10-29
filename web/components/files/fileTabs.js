@@ -122,6 +122,11 @@ export function createFileTabs(store, {
     }));
     bumpTabRevision();
     activeFileIndex.value = saved.activeIndex;
+    // Preview URLs/buffers are intentionally not persisted with editor state.
+    // Reload non-text tabs under their original owner instead of a blank viewer.
+    for (const file of openFiles.value) {
+      if (file.fileType !== 'text') requestFileContent(store, file, file.path, { t });
+    }
     Vue.nextTick(() => {
       const file = activeFile.value;
       if (file && (!file.fileType || file.fileType === 'text') && editorContainer.value) {

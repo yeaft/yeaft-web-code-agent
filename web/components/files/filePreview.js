@@ -66,7 +66,9 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
   const isActiveSvg = Vue.computed(() => !!activeFile.value && isSvgFile(activeFile.value.name));
   const isActiveHtml = Vue.computed(() => !!activeFile.value && isHtmlFile(activeFile.value.name));
   const isActiveCsv = Vue.computed(() => !!activeFile.value && isCsvFile(activeFile.value.name));
-  const isActiveTextPreview = Vue.computed(() => !!activeFile.value && isPreviewableTextFile(activeFile.value.name));
+  const isActiveTextPreview = Vue.computed(() => !!activeFile.value
+    && (!activeFile.value.fileType || activeFile.value.fileType === 'text')
+    && isPreviewableTextFile(activeFile.value.name));
   const htmlPreviewDocument = Vue.computed(() => {
     const theme = getTheme();
     if (!isActiveHtml.value) return '';
@@ -146,7 +148,8 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
       && officePreviewContainer.value === liveContainer;
 
     try {
-      if (ext === '.docx' && window.docx) {
+      if (ext === '.docx') {
+        if (!window.docx) throw new Error(t('files.previewUnavailable'));
         await window.docx.renderAsync(file._arrayBuffer, attemptContainer, null, {
           className: 'docx-preview-content',
           inWrapper: true,
@@ -160,8 +163,8 @@ export function createFilePreview(activeFile, { editorContainer, createEditor, d
         attemptContainer.innerHTML = '<div class="xlsx-sheet-tabs">' +
           workbook.SheetNames.map((n, i) => `<button class="xlsx-sheet-tab${i === 0 ? ' active' : ''}" data-idx="${i}">${n}</button>`).join('') +
           '</div><div class="xlsx-table-wrap">' + html + '</div>';
-      } else if (ext === '.pptx' || ext === '.ppt') {
-        attemptContainer.innerHTML = '<div class="preview-unsupported">' + (t ? t('files.pptxNotSupported') : 'PowerPoint preview not supported') + '</div>';
+      } else {
+        throw new Error(t('files.previewUnavailable'));
       }
 
       if (!canCommit()) return false;

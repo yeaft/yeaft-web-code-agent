@@ -159,43 +159,56 @@ export function createWsHandler({
             const previewBaseUrl = msg.previewUrl
               ? new URL(msg.previewUrl, origin).href
               : `${origin}/api/preview/${msg.fileId}?token=${msg.previewToken}`;
-            const ft = file.fileType || getFileType(file.name);
-            file.fileType = ft;
-            if (ft === 'pdf' || ft === 'image') {
-              file.blobUrl = previewBaseUrl;
-              file.previewError = null;
-              file.previewLoading = ft === 'image';
-            } else if (ft === 'office') {
-              const mode = localStorage.getItem('officePreviewMode') || 'local';
-              if (mode === 'online') {
-                file.previewUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(previewBaseUrl);
-                file.previewLoading = false;
-              } else {
-                fetch(previewBaseUrl)
-                  .then(r => {
-                    if (!r.ok) throw new Error(`Preview request failed (${r.status})`);
-                    return r.arrayBuffer();
-                  })
-                  .then(buf => {
-                    file._arrayBuffer = buf;
-                    file.localPreviewReady = true;
-                    if (tabIndex === activeFileIndex.value) {
-                      Vue.nextTick(() => {
-                        if (tabIndex === activeFileIndex.value) renderOfficeLocal(file);
-                        else file.previewLoading = false;
-                      });
-                    } else {
-                      file.previewLoading = false;
-                    }
-                  }).catch(e => {
-                    file.previewError = e.message;
+            // A binary reply is authoritative, even for an unknown/text extension.
+            // MIME is only used to confirm a supported renderer, never to render
+            // arbitrary active content or infer HTML from an untrusted file.
+            const detectedType = file.fileType || getFileType(file.name);
+            const ft = detectedType === 'text' ? 'binary' : detectedType;
+            const expectedMime = {
+              pdf: ['application/pdf'], image: ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/x-icon'],
+              audio: ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/flac', 'audio/aac'],
+              office: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'],
+            };
+            file.fileType = msg.mimeType && expectedMime[ft] && !expectedMime[ft].includes(msg.mimeType) ? 'binary' : ft;
+            file.mimeType = msg.mimeType || 'application/octet-stream';
+            file.blobUrl = previewBaseUrl;
+            file.previewError = null;
+            file.previewLoading = file.fileType === 'image' || file.fileType === 'audio';
+            if (file.fileType === 'office') {
+              // Private capability URLs must never be sent to Office Online or
+              // another external conversion service, including legacy settings.
+              file.previewLoading = true;
+              const requestId = file.requestId;
+              fetch(previewBaseUrl)
+                .then(r => {
+                  if (!r.ok) throw new Error(`Preview request failed (${r.status})`);
+                  return r.arrayBuffer();
+                })
+                .then(buf => {
+                  if (!openFiles.value.includes(file) || file.requestId !== requestId) return;
+                  file._arrayBuffer = buf;
+                  file.localPreviewReady = true;
+                  if (activeFile.value === file) {
+                    Vue.nextTick(() => {
+                      if (activeFile.value === file) renderOfficeLocal(file);
+                      else file.previewLoading = false;
+                    });
+                  } else {
                     file.previewLoading = false;
-                  });
-              }
-            } else {
-              file.previewLoading = false;
+                  }
+                }).catch(e => {
+                  if (!openFiles.value.includes(file) || file.requestId !== requestId) return;
+                  file.previewError = e.message;
+                  file.previewLoading = false;
+                });
             }
             saveTabsState(store.currentConversation);
+            return;
+          }
+          if (file.fileType && file.fileType !== 'text') {
+            file.previewLoading = false;
+            file.previewError = t('files.previewUnavailable');
             return;
           }
           file.content = msg.content || '';

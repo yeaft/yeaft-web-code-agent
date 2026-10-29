@@ -59,7 +59,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // 5 bilingual/detail/form UI and 3 real relay/browser cases. No prior tests removed.
 // +7 reviewed plugin refinements: 3 Agent/relay detail boundaries, 3 frontend
 // ownership/Prompt/picker regressions and 1 multi-theme responsive picker browser case.
-export const TEST_CASE_LIMIT = 740;
+// +9 non-text preview safety: 7 binary/MIME/private-Office/fallback transport+UI
+// and restore ownership boundaries; 2 native audio/download responsive browser cases.
+export const TEST_CASE_LIMIT = 749;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

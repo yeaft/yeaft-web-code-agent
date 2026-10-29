@@ -7,6 +7,7 @@ import { createFileEditor, getFileType, isPreviewableTextFile } from './files/fi
 import { createFilePreview } from './files/filePreview.js';
 import SvgPreview from './files/SvgPreview.js';
 import CsvPreview from './files/CsvPreview.js';
+import FilePreviewFallback from './files/FilePreviewFallback.js';
 import { createQuickOpen } from './files/quickOpen.js';
 import { createFolderPicker } from './files/folderPicker.js';
 import { createFileTabs } from './files/fileTabs.js';
@@ -129,7 +130,7 @@ export function createFileCloseEventHandlers({ liveStore, props, tabs, isDispose
 
 export default {
   name: 'FilesTab',
-  components: { SvgPreview, CsvPreview },
+  components: { SvgPreview, CsvPreview, FilePreviewFallback },
   props: {
     treeInitiallyVisible: { type: Boolean, default: true },
     routeKey: { type: String, required: true },
@@ -340,7 +341,7 @@ export default {
               <button type="button" class="zoom-btn" @click="zoomIn" :title="$t('git.zoomIn')">+</button>
             </template>
             <button
-              v-if="activeFile.fileType === 'video'"
+              v-if="activeFile.fileType !== 'text' || activeFile.loadError"
               type="button"
               class="file-action-btn file-action-text"
               @click="downloadActiveFile"
@@ -354,9 +355,7 @@ export default {
           <span class="spinner-mini" aria-hidden="true"></span>
           <span>{{ $t('files.loadingFile') }}</span>
         </div>
-        <div v-else-if="activeFile?.loadError" class="file-load-state file-load-error" role="alert">
-          {{ activeFile.loadError }}
-        </div>
+        <FilePreviewFallback v-else-if="activeFile?.loadError" :file="activeFile" :error="activeFile.loadError" @download="downloadActiveFile" />
         <template v-else-if="activeFile">
           <!-- 文本文件: CodeMirror 编辑器 -->
           <template v-if="!activeFile.fileType || activeFile.fileType === 'text'">
@@ -424,24 +423,27 @@ export default {
           </template>
           <!-- Office 文件预览 -->
           <div v-else-if="activeFile.fileType === 'office'" class="file-preview-container">
-            <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
+            <FilePreviewFallback v-if="activeFile.previewError" :file="activeFile" :error="activeFile.previewError" @download="downloadActiveFile" />
             <template v-else>
               <div v-if="activeFile.previewLoading" class="preview-loading">
                 <span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}
               </div>
-              <iframe v-if="activeFile.previewUrl && !activeFile.previewLoading" :src="activeFile.previewUrl" class="file-preview-iframe" allowfullscreen></iframe>
               <div v-if="activeFile.localPreviewReady" v-show="!activeFile.previewLoading" ref="officePreviewContainer" class="office-local-preview"></div>
             </template>
           </div>
           <!-- PDF 预览 -->
           <div v-else-if="activeFile.fileType === 'pdf'" class="file-preview-container">
-            <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
+            <FilePreviewFallback v-if="activeFile.previewError" :file="activeFile" :error="activeFile.previewError" @download="downloadActiveFile" />
             <div v-else-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
-            <iframe v-else :src="activeFile.blobUrl" class="file-preview-iframe"></iframe>
+            <template v-else>
+              <div class="file-preview-note">{{ $t('files.pdfPreviewHint') }}</div>
+              <iframe v-if="pdfPreviewSupported" :src="activeFile.blobUrl" :title="$t('files.pdfPreviewTitle', { name: activeFile.name })" class="file-preview-iframe" @error="onPdfPreviewError(activeFile, $event)"></iframe>
+              <FilePreviewFallback v-else :file="activeFile" :error="$t('files.pdfPreviewUnsupported')" @download="downloadActiveFile" />
+            </template>
           </div>
           <!-- 图片预览 -->
           <div v-else-if="activeFile.fileType === 'image'" class="file-preview-container">
-            <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
+            <FilePreviewFallback v-if="activeFile.previewError" :file="activeFile" :error="activeFile.previewError" @download="downloadActiveFile" />
             <template v-else>
               <div v-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
               <button
@@ -462,9 +464,21 @@ export default {
               </button>
             </template>
           </div>
+          <!-- 音频仅在当前浏览器本地播放，不使用外部服务 -->
+          <div v-else-if="activeFile.fileType === 'audio'" class="file-preview-container file-preview-audio-container">
+            <FilePreviewFallback v-if="activeFile.previewError" :file="activeFile" :error="activeFile.previewError" @download="downloadActiveFile" />
+            <template v-else>
+              <strong class="file-preview-audio-name">{{ activeFile.name }}</strong>
+              <div v-if="activeFile.previewLoading" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
+              <audio v-if="activeFile.blobUrl" :key="activeFile.blobUrl" :src="activeFile.blobUrl" :aria-label="activeFile.name"
+                class="file-preview-audio" controls preload="metadata"
+                @loadedmetadata="onAudioPreviewLoad(activeFile, $event)" @error="onAudioPreviewError(activeFile, $event)"></audio>
+              <span class="file-preview-note">{{ $t('files.audioPreviewHint') }}</span>
+            </template>
+          </div>
           <!-- 视频预览 -->
           <div v-else-if="activeFile.fileType === 'video'" class="file-preview-container file-preview-video-container">
-            <div v-if="activeFile.previewError" class="preview-error">{{ activeFile.previewError }}</div>
+            <FilePreviewFallback v-if="activeFile.previewError" :file="activeFile" :error="activeFile.previewError" @download="downloadActiveFile" />
             <template v-else>
               <div v-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
               <video
@@ -481,6 +495,7 @@ export default {
               ></video>
             </template>
           </div>
+          <FilePreviewFallback v-else :file="activeFile" @download="downloadActiveFile" />
         </template>
       </div>
       <div class="file-col-placeholder" v-if="openFiles.length === 0">
@@ -676,6 +691,10 @@ export default {
     const onImagePreviewError = (file, event) => (
       updateMediaPreviewState(file, event, t('files.previewLoadFailed'))
     );
+    const pdfPreviewSupported = navigator.pdfViewerEnabled !== false;
+    const onPdfPreviewError = (file, event) => updateMediaPreviewState(file, event, t('files.pdfPreviewUnsupported'));
+    const onAudioPreviewLoad = (file, event) => updateMediaPreviewState(file, event);
+    const onAudioPreviewError = (file, event) => updateMediaPreviewState(file, event, t('files.audioPreviewLoadFailed'));
     const onVideoPreviewLoad = (file, event) => updateMediaPreviewState(file, event);
     const onVideoPreviewError = (file, event) => (
       updateMediaPreviewState(file, event, t('files.videoPreviewLoadFailed'))
@@ -884,7 +903,19 @@ export default {
     const goToLineConfirm = () => qo.goToLineConfirm(tabs.activeFile);
     const downloadActiveFile = () => {
       const file = tabs.activeFile.value;
-      if (file) ops.downloadFile({ path: file.path, type: 'file' });
+      if (!file) return;
+      if (file.blobUrl) {
+        const url = new URL(file.blobUrl, location.href);
+        url.searchParams.set('download', '1');
+        const link = document.createElement('a');
+        link.href = url.href;
+        link.download = file.name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      } else {
+        ops.downloadFile({ path: file.path, type: 'file' });
+      }
     };
 
     // --- Watchers ---
@@ -1170,6 +1201,7 @@ export default {
       confirmFolderPicker: fp.confirmFolderPicker,
       getFileIcon: () => '', getFileIconHtml, getFolderIcon, formatSize,
       onImagePreviewLoad, onImagePreviewError, onVideoPreviewLoad, onVideoPreviewError,
+      onAudioPreviewLoad, onAudioPreviewError, onPdfPreviewError, pdfPreviewSupported,
       refresh: tree.refresh, placeholderPath: Vue.computed(() => {
         const dir = getEffectiveWorkDir();
         return dir ? t('files.workDir', { dir }) : t('files.enterDirPath');
