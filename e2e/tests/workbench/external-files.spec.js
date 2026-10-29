@@ -155,16 +155,16 @@ function mountHarness(config) {
 
 function html(config) {
   return `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="/web/styles/variables.css"><link rel="stylesheet" href="/web/styles/workbench.css"><link rel="stylesheet" href="/web/styles/files.css"><link rel="stylesheet" href="/web/styles/terminal.css"><link rel="stylesheet" href="/web/styles/chat-messages.css"><link rel="stylesheet" href="/web/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/styles/variables.css"><link rel="stylesheet" href="/styles/workbench.css"><link rel="stylesheet" href="/styles/files.css"><link rel="stylesheet" href="/styles/terminal.css"><link rel="stylesheet" href="/styles/chat-messages.css"><link rel="stylesheet" href="/vendor/codemirror.min.css">
 <style>html,body,#app{height:100%;margin:0}#app{display:flex}.workbench-panel{height:100%}</style>
-<script src="/web/vendor/vue.global.prod.js"></script><script src="/web/vendor/vue-demi.iife.js"></script><script src="/web/vendor/pinia.iife.prod.js"></script><script src="/web/vendor/codemirror.min.js"></script>
+<script src="/vendor/vue.global.prod.js"></script><script src="/vendor/vue-demi.iife.js"></script><script src="/vendor/pinia.iife.prod.js"></script><script src="/vendor/codemirror.min.js"></script>
 </head><body><div id="app"></div><script type="module">
-import { useChatStore } from '/web/stores/chat.js';
-import { useSessionsStore } from '/web/stores/sessions.js';
-import WorkbenchPanel from '/web/components/WorkbenchPanel.js';
-import FilesTab from '/web/components/FilesTab.js';
-import { workbenchRouteKey, workbenchWorkspaceGeneration } from '/web/utils/workbench-route.js';
-import translations from '/web/i18n/en.js';
+import { useChatStore } from '/stores/chat.js';
+import { useSessionsStore } from '/stores/sessions.js';
+import WorkbenchPanel from '/components/WorkbenchPanel.js';
+import FilesTab from '/components/FilesTab.js';
+import { workbenchRouteKey, workbenchWorkspaceGeneration } from '/utils/workbench-route.js';
+import translations from '/i18n/en.js';
 (${mountHarness.toString()})(${JSON.stringify(config)});
 </script></body></html>`;
 }
@@ -312,12 +312,13 @@ class ExternalFilesServer {
       response.end(preview.bytes);
       return;
     }
-    const file = resolve(ROOT, `.${url.pathname}`);
+    // Match server/index.js: web/ is the static root, not a URL prefix.
+    const file = resolve(ROOT, 'web', `.${url.pathname}`);
     if (!file.startsWith(join(ROOT, 'web') + sep)) { response.writeHead(404).end(); return; }
     try {
       // Optional read-only candidate used for red/green validation from an
       // independent test worktree; no production source is copied or modified.
-      const body = await readFile(url.pathname === '/web/components/FilesTab.js'
+      const body = await readFile(url.pathname === '/components/FilesTab.js'
         && process.env.E2E_FILES_TAB_SOURCE ? process.env.E2E_FILES_TAB_SOURCE : file);
       response.writeHead(200, { 'Content-Type': extname(file) === '.css' ? 'text/css' : 'text/javascript' });
       response.end(body);
@@ -508,7 +509,9 @@ test('local Excel previews scroll, select, copy, sort and filter without writing
   await writeFile(path, bytes);
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const errors = [];
+  const workerUrls = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('worker', worker => workerUrls.push(worker.url()));
   for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto(harness.url);
@@ -551,9 +554,16 @@ test('local Excel previews scroll, select, copy, sort and filter without writing
     await page.locator('.xlsx-sheet-tab').first().click();
     await expect(page.locator('tbody tr')).toHaveCount(50);
     await expect(page.locator('input[type=search]')).toHaveValue('');
+    await page.locator('tbody tr').nth(49).locator('td').first().click();
+    await expect(page.locator('.table-cell-selected')).toHaveCount(1);
     await page.getByRole('button', { name: 'Next', exact: true }).click();
     await expect(page.locator('tbody tr')).toHaveCount(31);
+    await expect(page.locator('.table-copy')).toBeDisabled();
   }
+  expect(workerUrls.length).toBeGreaterThanOrEqual(2);
+  expect(workerUrls.every(url => url === `${harness.url}/spreadsheet-worker.js`)).toBe(true);
+  // The old URL must not be a harness alias that could mask a source-app 404.
+  expect((await page.request.get(`${harness.url}/web/spreadsheet-worker.js`)).status()).toBe(404);
   expect(await readFile(path)).toEqual(bytes);
   expect(harness.requests.some(message => message.type === 'write_file')).toBe(false);
   expect(errors).toEqual([]);

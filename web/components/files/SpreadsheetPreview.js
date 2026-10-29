@@ -26,14 +26,17 @@ export default {
     };
     const fail = () => { stop(); loading.value = false; error.value = 'files.sheetError'; };
     function request(payload) {
+      if (!worker || error.value) return;
       loading.value = true;
       error.value = '';
       parsed.value = null;
       clearTimeout(timer);
       timer = setTimeout(fail, SPREADSHEET_PREVIEW_LIMITS.timeoutMs);
-      worker.postMessage({ ...payload, id: ++requestId });
+      try { worker.postMessage({ ...payload, id: ++requestId }); }
+      catch { fail(); }
     }
     function selectSheet(index) {
+      if (!worker || error.value || !Number.isInteger(index) || index < 0 || index >= names.value.length) return;
       activeSheet.value = index;
       request({ name: names.value[index] });
     }
@@ -43,7 +46,7 @@ export default {
       activeSheet.value = 0;
       if (!props.buffer.byteLength || props.buffer.byteLength > SPREADSHEET_PREVIEW_LIMITS.bytes) { fail(); return; }
       try {
-        worker = new Worker(typeof SPREADSHEET_WORKER_URL === 'undefined' ? '/web/spreadsheet-worker.js' : SPREADSHEET_WORKER_URL);
+        worker = new Worker(new URL(typeof SPREADSHEET_WORKER_URL === 'undefined' ? '../../spreadsheet-worker.js' : SPREADSHEET_WORKER_URL, import.meta.url));
         worker.onerror = fail;
         worker.onmessage = ({ data }) => {
           if (data.id !== requestId) return;
@@ -59,6 +62,7 @@ export default {
           }
         };
         // Structured clone, not transfer: keep the original file buffer intact.
+        error.value = '';
         request({ buffer: props.buffer });
       } catch { fail(); }
     }

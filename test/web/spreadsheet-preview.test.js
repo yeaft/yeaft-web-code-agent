@@ -101,8 +101,15 @@ describe('read-only spreadsheet preview', () => {
       await wrapper.get('.table-copy').trigger('click');
       await Vue.nextTick();
       expect(wrapper.text()).toContain('files.tableCopyFailed');
-      await wrapper.findAll('.csv-preview-pagination button')[1].trigger('click');
+      await wrapper.findAll('tbody tr')[49].find('td').trigger('mousedown', { button: 0 });
+      expect(wrapper.vm.selectionLabel).toBe('A12:A12');
+      wrapper.vm.page = 1;
+      expect(wrapper.vm.selection).toBeNull(); // Must clear before the shorter page renders.
+      await Vue.nextTick();
       expect(wrapper.findAll('tbody tr')).toHaveLength(10);
+      wrapper.vm.selection = { anchor: { row: 49, column: 0 }, focus: { row: 49, column: 0 } };
+      expect(wrapper.vm.selectionLabel).toBe(''); // Defensive against stale/out-of-range state.
+      wrapper.vm.selection = null;
       expect(wrapper.get('.table-copy').element.disabled).toBe(true);
       await wrapper.get('input[type=search]').setValue('59');
       expect(wrapper.findAll('tbody tr')).toHaveLength(2); // n=59 and name=59
@@ -120,7 +127,7 @@ describe('read-only spreadsheet preview', () => {
     vi.useFakeTimers();
     const workers = [];
     class Worker {
-      constructor() { this.messages = []; this.terminate = vi.fn(); workers.push(this); }
+      constructor(url) { this.url = url; this.messages = []; this.terminate = vi.fn(); workers.push(this); }
       postMessage(message) { this.messages.push(message); }
       reply(result, id = this.messages.at(-1).id) { this.onmessage({ data: { id, result } }); }
     }
@@ -128,6 +135,7 @@ describe('read-only spreadsheet preview', () => {
     const wrapper = mount(SpreadsheetPreview, { props: { name: 'data.xlsx', buffer: new ArrayBuffer(1) }, global: { mocks: { $t: t } } });
     try {
       const worker = workers[0];
+      expect(worker.url.pathname).toBe(`${process.cwd()}/web/spreadsheet-worker.js`);
       worker.reply({ names: ['<img src=x>', 'Empty'], sheetsLimited: false });
       await Vue.nextTick();
       expect(wrapper.find('img').exists()).toBe(false);
@@ -149,10 +157,23 @@ describe('read-only spreadsheet preview', () => {
       expect(wrapper.get('[role=alert]').text()).toContain('files.sheetError');
       expect(workers[1].terminate).toHaveBeenCalled();
       await wrapper.get('[role=alert] button').trigger('click');
+      workers[2].reply({ names: ['Broken', 'Other'], sheetsLimited: false });
       workers[2].onmessage({ data: { id: workers[2].messages.at(-1).id, error: 'password protected' } });
       await Vue.nextTick();
       expect(wrapper.get('[role=alert]').text()).toContain('files.sheetError');
       expect(wrapper.text()).not.toContain('password protected');
+      expect(wrapper.findAll('.xlsx-sheet-tab').every(tab => tab.element.disabled)).toBe(true);
+      const messageCount = workers[2].messages.length;
+      wrapper.vm.selectSheet(1); // Even a direct/stale handler cannot use the terminated worker.
+      expect(workers[2].messages).toHaveLength(messageCount);
+      expect(wrapper.vm.activeSheet).toBe(0);
+      await wrapper.get('[role=alert] button').trigger('click');
+      expect(workers).toHaveLength(4);
+      workers[3].reply({ names: ['Recovered'], sheetsLimited: false });
+      workers[3].reply({ rows: [['ok']], columnCount: 1, limited: {} });
+      await Vue.nextTick();
+      expect(wrapper.get('tbody td').text()).toBe('ok');
+      expect(wrapper.get('.xlsx-sheet-tab').element.disabled).toBe(false);
     } finally { wrapper.unmount(); vi.useRealTimers(); }
     expect(workers.at(-1).terminate).toHaveBeenCalled();
   });

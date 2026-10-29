@@ -32,6 +32,9 @@ export default {
     const activeCell = Vue.computed(() => selection.value?.focus || { row: 0, column: 0 });
     const selectionLabel = Vue.computed(() => {
       if (!selection.value) return '';
+      const valid = cell => Number.isInteger(cell.row) && !!visibleRows.value[cell.row]
+        && Number.isInteger(cell.column) && cell.column >= 0 && cell.column < props.columnCount;
+      if (!valid(selection.value.anchor) || !valid(selection.value.focus)) return '';
       const address = cell => spreadsheetColumn(cell.column) + visibleRows.value[cell.row].number;
       return address(selection.value.anchor) + ':' + address(selection.value.focus);
     });
@@ -83,9 +86,12 @@ export default {
       Vue.nextTick(() => scroll.value?.querySelector(`td[data-row="${row}"][data-column="${column}"]`)?.focus());
     }
     Vue.watch(() => [props.rows, firstRowHeader.value, query.value, filterColumn.value, sortColumn.value, sortDirection.value], () => { page.value = 0; selection.value = null; copyState.value = ''; }, { flush: 'sync' });
-    Vue.watch(() => [page.value, props.rows, firstRowHeader.value, query.value, filterColumn.value, sortColumn.value, sortDirection.value], () => {
+    Vue.watch(page, () => {
       selection.value = null;
       copyState.value = '';
+      dragging.value = false;
+    }, { flush: 'sync' });
+    Vue.watch(() => [page.value, props.rows, firstRowHeader.value, query.value, filterColumn.value, sortColumn.value, sortDirection.value], () => {
       if (scroll.value) scroll.value.scrollTop = 0;
     }, { flush: 'post' });
     return { firstRowHeader, query, filterColumn, sortColumn, sortDirection, page, scroll, selection, copyState, headers,
