@@ -97,4 +97,20 @@ describe('file tab read recovery', () => {
     expect(reads).toHaveLength(3);
     expect(reads[2].requestId).not.toBe(oldRequestId);
   });
+
+  it('reloads non-text restored tabs with their original file owner, not the current selection', () => {
+    const { tabs, sendWsMessage } = harness();
+    tabs.openFileInTab('track.m4a', 'track.m4a', route);
+    const audio = tabs.activeFile.value;
+    audio.loading = false;
+    audio.blobUrl = '/api/preview/private?token=secret';
+    tabs.saveTabsState('conversation-a');
+    sendWsMessage.mockClear();
+    tabs.restoreTabsState('conversation-a');
+    expect(tabs.activeFile.value).toMatchObject({ fileType: 'audio', loading: true, blobUrl: null });
+    expect(sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'read_file', agentId: 'agent-a', conversationId: 'conversation-a', workDir: '/workspace', filePath: '/workspace/track.m4a',
+    }));
+  });
+
 });

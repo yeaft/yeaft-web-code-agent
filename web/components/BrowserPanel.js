@@ -98,6 +98,7 @@ export function browserSessionMatchesSource(snapshot, expected) {
 // capability unmounts; no module-level cache crosses users or workspaces.
 
 const MAX_ROUTES = 100;
+const FRAME_WAIT_MS = 12_000;
 
 function stateForRoute(routeKey, routeStates) {
   let state = routeStates.get(routeKey);
@@ -152,6 +153,9 @@ export default {
       </div>
       <p v-if="state.error" class="browser-error" role="alert">{{ $t(state.error) }}</p>
       <p v-if="loading" class="browser-status" role="status">{{ $t('workbench.browserFrameLoading') }}</p>
+      <div v-if="frame" class="browser-embed-notice">
+        <p>{{ $t(waiting ? 'workbench.browserFrameWaiting' : 'workbench.browserEmbedNotice') }}</p>
+      </div>
       <div class="browser-stage">
         <iframe v-if="frame" :key="frame.key" ref="iframe" class="browser-frame"
           :src="frame.url" :title="$t('workbench.browserFrameLabel')"
@@ -172,6 +176,12 @@ export default {
     const frame = Vue.shallowRef(null);
     const iframe = Vue.ref(null);
     const loading = Vue.ref(false);
+    const waiting = Vue.ref(false);
+    let frameTimer = null;
+    function clearFrameTimer() {
+      clearTimeout(frameTimer);
+      frameTimer = null;
+    }
     let activeRoute = null;
     let frameRevision = 0;
     let disposed = false;
@@ -179,8 +189,19 @@ export default {
     function showFrame(url) {
       // No allow-same-origin: even a redirect to Yeaft cannot access parent
       // credentials or remove the sandbox. Popups and top navigation are denied.
+      clearFrameTimer();
       frame.value = { url, routeKey: activeRoute, key: String(++frameRevision) };
       loading.value = true;
+      waiting.value = false;
+      const currentFrame = frame.value;
+      frameTimer = setTimeout(() => {
+        if (disposed || frame.value !== currentFrame || activeRoute !== props.routeKey) return;
+        // Cross-origin embeds cannot reliably report rendering failure. A deadline
+        // only explains the wait; it must not claim the destination was blocked.
+        loading.value = false;
+        waiting.value = true;
+        frameTimer = null;
+      }, FRAME_WAIT_MS);
     }
 
     function navigate(value = state.value.address, notify = true) {
@@ -213,15 +234,19 @@ export default {
       if (disposed || activeRoute !== props.routeKey || !frame.value
         || frame.value.routeKey !== activeRoute || event.currentTarget !== iframe.value
         || event.currentTarget?.dataset.frameKey !== frame.value.key) return;
+      clearFrameTimer();
       loading.value = false;
+      waiting.value = false;
     }
 
     Vue.watch(() => [props.routeKey, props.initialUrl, props.navigation?.url, props.navigation?.revision], () => {
       if (activeRoute !== props.routeKey) {
         activeRoute = props.routeKey;
         state.value = stateForRoute(activeRoute, routeStates);
+        clearFrameTimer();
         frame.value = null;
         loading.value = false;
+        waiting.value = false;
         // Revalidate retained URLs against the current control-plane origin.
         if (state.value.url && normalizeBrowserAddress(state.value.url)) showFrame(state.value.url);
         else state.value.url = '';
@@ -242,9 +267,10 @@ export default {
 
     Vue.onBeforeUnmount(() => {
       disposed = true;
+      clearFrameTimer();
       frame.value = null;
     });
 
-    return { state, frame, iframe, loading, navigate, refresh, onFrameLoad };
+    return { state, frame, iframe, loading, waiting, navigate, refresh, onFrameLoad };
   },
 };

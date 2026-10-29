@@ -176,6 +176,29 @@ test('Browser URLs remain isolated across Sessions and workspace generations', a
   await oneNavigation(page, requests, '/other-workspace', () => address.press('Enter'));
   await oneNavigation(page, requests, '/a-private', () => changeWorkspace('/tmp/browser-a'));
   await oneNavigation(page, requests, '/response-b', () => openSession(page, mockAgent, SESSION_B));
+
+  // A DENY/CSP destination is not repairable inside an iframe. The visible
+  // native link uses the client browser's actual first-party cookies and JS.
+  await page.context().addCookies([{ name: 'client-login', value: 'signed-in-fixture', url: ORIGIN }]);
+  await address.fill(`${ORIGIN}/blocked`);
+  await address.press('Enter');
+  await expect(page.locator('.browser-embed-notice')).toContainText('Client-side preview only');
+  for (const [width, theme] of [[320, 'dark'], [1280, 'light']]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.evaluate(theme => document.documentElement.setAttribute('data-theme', theme), theme);
+    const notice = page.locator('.browser-embed-notice');
+    await expect(notice).toBeVisible();
+    const box = await notice.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width + 1);
+  }
+  const popupPromise = page.waitForEvent('popup');
+  await page.locator('.browser-external').click();
+  const popup = await popupPromise;
+  await expect(popup).toHaveURL(`${ORIGIN}/blocked`);
+  await expect(popup.locator('#external-script')).toHaveText('External script executed');
+  expect(await popup.evaluate(() => document.cookie)).toContain('client-login=signed-in-fixture');
+  await popup.close();
   await noRemoteBrowser(page, mockAgent);
 });
 

@@ -299,28 +299,9 @@ export default {
                     </button>
                   </div>
                 </div>
-                <div class="sp-row sp-general-select-row">
+                <div class="sp-row">
                   <span class="sp-label">{{ $t('files.officePreviewMode') }}</span>
-                  <div class="sp-custom-select" :class="{ open: openDropdown === 'officePreview' }" v-click-outside="() => closeDropdown('officePreview')">
-                    <button class="sp-custom-select-trigger" type="button"
-                            :aria-expanded="openDropdown === 'officePreview'" :aria-label="$t('files.officePreviewMode')"
-                            @click="toggleDropdown('officePreview')">
-                      <span>{{ $t('settings.general.currentValue', { value: officePreviewOptions.find(o => o.value === officePreviewMode)?.label }) }}</span>
-                      <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-                    </button>
-                    <div class="sp-custom-select-menu" v-show="openDropdown === 'officePreview'">
-                      <div
-                        class="sp-custom-select-option"
-                        :class="{ active: officePreviewMode === opt.value }"
-                        v-for="opt in officePreviewOptions"
-                        :key="opt.value"
-                        @click="setOfficePreviewMode(opt.value); closeDropdown('officePreview')"
-                      >
-                        {{ opt.label }}
-                        <svg v-if="officePreviewMode === opt.value" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-                      </div>
-                    </div>
-                  </div>
+                  <span class="sp-desc">{{ $t('files.officeLocalOnly') }}</span>
                 </div>
               </div>
               <UserShortcutsSettings />
@@ -564,7 +545,6 @@ export default {
       isError: false,
       selectedLocale: chatStore.locale,
       openDropdown: null,
-      officePreviewMode: localStorage.getItem('officePreviewMode') || 'local',
       telemetryDraft: {
         enabled: true,
         retentionDays: 3,
@@ -658,12 +638,6 @@ export default {
       return [
         { value: 'zh-CN', label: '中文' },
         { value: 'en', label: 'English' }
-      ];
-    },
-    officePreviewOptions() {
-      return [
-        { value: 'local', label: this.$t('files.localRender') },
-        { value: 'online', label: this.$t('files.officeOnline') }
       ];
     },
     roleOptions() {
@@ -1025,11 +999,6 @@ export default {
       if (this.chatStore.theme !== theme) {
         this.chatStore.toggleTheme();
       }
-    },
-
-    setOfficePreviewMode(mode) {
-      this.officePreviewMode = mode;
-      localStorage.setItem('officePreviewMode', mode);
     },
 
     applyInitialEntryPoint() {

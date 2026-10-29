@@ -4,7 +4,9 @@
  */
 
 // File type detection constants
-const OFFICE_EXT = new Set(['.docx', '.xlsx', '.xls', '.pptx', '.ppt']);
+const OFFICE_EXT = new Set(['.docx', '.xlsx', '.xls']);
+const AUDIO_EXT = new Set(['.mp3', '.wav', '.m4a', '.flac', '.aac']);
+const BINARY_EXT = new Set(['.doc', '.ppt', '.pptx', '.zip', '.gz', '.bz2', '.xz', '.7z', '.rar', '.tar', '.exe', '.dll', '.so', '.dylib', '.wasm', '.bin', '.sqlite', '.sqlite3', '.db', '.woff', '.woff2', '.ttf', '.otf', '.avif', '.heic', '.tif', '.tiff']);
 const PDF_EXT = new Set(['.pdf']);
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico']);
 const VIDEO_EXT = new Set(['.mp4', '.m4v', '.webm', '.ogv', '.ogg', '.mov']);
@@ -19,6 +21,8 @@ export function getFileType(name) {
   if (PDF_EXT.has(ext)) return 'pdf';
   if (IMAGE_EXT.has(ext)) return 'image';
   if (VIDEO_EXT.has(ext)) return 'video';
+  if (AUDIO_EXT.has(ext)) return 'audio';
+  if (BINARY_EXT.has(ext)) return 'binary';
   return 'text';
 }
 
@@ -93,7 +97,7 @@ export function createFileEditor(store, {
 
   const createEditor = (fileObj, retryCount = 0) => {
     // Delayed reads/retries may outlive a tab or a switch back to Preview.
-    if (!fileObj || Vue.toRaw(fileObj) !== Vue.toRaw(activeFile.value) || !canCreateEditor(fileObj)) return;
+    if (!fileObj || (fileObj.fileType && fileObj.fileType !== 'text') || Vue.toRaw(fileObj) !== Vue.toRaw(activeFile.value) || !canCreateEditor(fileObj)) return;
     if (!editorContainer.value) {
       if (retryCount < 20) {
         setTimeout(() => createEditor(fileObj, retryCount + 1), 100);

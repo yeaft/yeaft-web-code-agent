@@ -12,6 +12,26 @@ export const MAX_WORKBENCH_PREVIEW_BYTES = 20 * 1024 * 1024;
 export const WORKBENCH_FILE_CHUNK_BYTES = 1024 * 1024;
 export const WORKBENCH_VIDEO_CHUNK_BYTES = 1024 * 1024;
 
+// Unknown extensions may be binary. Never open lossy UTF-8 or control bytes in
+// an editable buffer: saving that buffer could irreversibly corrupt the file.
+export function isBinaryFileContent(buffer) {
+  if (buffer.some(byte => byte === 0 || (byte < 32 && ![9, 10, 12, 13].includes(byte)))) return true;
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function assertPreviewSize(size) {
+  if (size <= MAX_WORKBENCH_PREVIEW_BYTES) return;
+  const error = new Error(`File is too large to transfer (${(size / 1024 / 1024).toFixed(1)} MB). The file limit is 20 MB.`);
+  error.code = 'FILE_PREVIEW_TOO_LARGE';
+  error.details = { sizeBytes: size, limitBytes: MAX_WORKBENCH_PREVIEW_BYTES };
+  throw error;
+}
+
 async function canonicalWorkspaceReadPath(filePath, workDir, errorMessage = 'File is outside the active workspace.') {
   const canonicalRoot = await realpath(resolve(workDir));
   const canonicalFile = await realpath(resolveAndValidatePath(filePath, canonicalRoot));
@@ -199,20 +219,33 @@ export async function handleReadFile(msg) {
       error.code = 'VIDEO_STREAM_REQUIRED';
       throw error;
     }
-    const mimeType = BINARY_EXTENSIONS[ext];
-
+    let mimeType = BINARY_EXTENSIONS[ext];
+    const fileStat = await stat(resolved);
+    if (!fileStat.isFile()) throw new Error('Path is not a regular file.');
+    if (mimeType) assertPreviewSize(fileStat.size);
+    // Keep the existing text-file size behavior. Unknown binary files are
+    // classified from a bounded prefix before allocating their full contents.
+    if (!mimeType) {
+      const handle = await open(resolved, 'r');
+      try {
+        const sample = Buffer.alloc(Math.min(fileStat.size, 8192));
+        const { bytesRead } = await handle.read(sample, 0, sample.length, 0);
+        // Do not mistake a UTF-8 character split at the sample boundary for
+        // binary. Streaming decoding still rejects invalid bytes within it.
+        const prefix = sample.subarray(0, bytesRead);
+        let invalidUtf8 = false;
+        try { new TextDecoder('utf-8', { fatal: true }).decode(prefix, { stream: bytesRead < fileStat.size }); }
+        catch { invalidUtf8 = true; }
+        if (invalidUtf8 || prefix.some(byte => byte === 0 || (byte < 32 && ![9, 10, 12, 13].includes(byte)))) {
+          mimeType = 'application/octet-stream';
+          assertPreviewSize(fileStat.size);
+        }
+      } finally { await handle.close(); }
+    }
+    const buffer = await readFile(resolved);
+    if (!mimeType && isBinaryFileContent(buffer)) mimeType = 'application/octet-stream';
     if (mimeType) {
-      const fileStat = await stat(resolved);
-      if (fileStat.size > MAX_WORKBENCH_PREVIEW_BYTES) {
-        const error = new Error(`File is too large to transfer (${(fileStat.size / 1024 / 1024).toFixed(1)} MB). The file limit is 20 MB.`);
-        error.code = 'FILE_PREVIEW_TOO_LARGE';
-        error.details = {
-          sizeBytes: fileStat.size,
-          limitBytes: MAX_WORKBENCH_PREVIEW_BYTES,
-        };
-        throw error;
-      }
-      const buffer = await readFile(resolved);
+      assertPreviewSize(buffer.length);
       console.log('[Agent] Sending binary file_content:', { filePath: resolved, size: buffer.length, mimeType, conversationId });
       await sendBinaryFile(msg, {
         conversationId,
@@ -223,8 +256,7 @@ export async function handleReadFile(msg) {
         requestedFilePath: filePath,
       }, buffer, mimeType);
     } else {
-      // Text file: read as utf-8
-      const content = await readFile(resolved, 'utf-8');
+      const content = buffer.toString('utf-8');
 
       // 检测语言
       const langMap = {

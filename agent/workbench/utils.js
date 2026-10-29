@@ -30,6 +30,14 @@ export function validateGitPath(filePath) {
 // Binary file extensions → MIME type mapping
 export const BINARY_EXTENSIONS = {
   '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac', '.aac': 'audio/aac',
+  // Unsupported formats are downloads, never decoded into the text editor.
+  ...Object.fromEntries(['.zip', '.gz', '.bz2', '.xz', '.7z', '.rar', '.tar',
+    '.exe', '.dll', '.so', '.dylib', '.wasm', '.bin', '.sqlite', '.sqlite3', '.db',
+    '.woff', '.woff2', '.ttf', '.otf', '.avif', '.heic', '.tif', '.tiff']
+    .map(ext => [ext, 'application/octet-stream'])),
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.xls': 'application/vnd.ms-excel',

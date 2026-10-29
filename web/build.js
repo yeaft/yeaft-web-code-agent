@@ -82,6 +82,14 @@ copyFileSync(join(vendorDir, 'katex', 'katex.min.css'), join(katexDistDir, 'kate
 copyFileSync(join(vendorDir, 'katex', 'LICENSE'), join(katexDistDir, 'LICENSE'));
 cpSync(join(vendorDir, 'katex', 'fonts'), join(katexDistDir, 'fonts'), { recursive: true });
 
+// Keep spreadsheet decompression/parsing off the UI thread, with a cancellable deadline.
+esbuild.buildSync({
+  entryPoints: [join(__dirname, 'spreadsheet-worker.js')],
+  bundle: true, minify: true, format: 'iife',
+  outfile: join(distDir, 'spreadsheet-worker.js'),
+  define: { SPREADSHEET_VENDOR_URL: JSON.stringify('./xlsx.min.js') },
+});
+
 // Step 2: Bundle app code with esbuild
 console.log('2. Bundling application code...');
 
@@ -112,7 +120,8 @@ esbuild.buildSync({
   outfile: join(distDir, 'app.bundle.js'),
   external: [], // Bundle everything
   define: {
-    'process.env.NODE_ENV': '"production"'
+    'process.env.NODE_ENV': '"production"',
+    SPREADSHEET_WORKER_URL: JSON.stringify('./spreadsheet-worker.js'),
   },
   legalComments: 'none',
   drop: ['console', 'debugger'], // Remove console.log in production

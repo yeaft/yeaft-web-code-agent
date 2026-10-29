@@ -1,5 +1,6 @@
 import { test as base, expect } from '@playwright/test';
 import { createServer } from 'node:http';
+import { runInNewContext } from 'node:vm';
 import { WebSocketServer } from 'ws';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 
@@ -154,15 +155,16 @@ function mountHarness(config) {
 
 function html(config) {
   return `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="/web/styles/variables.css"><link rel="stylesheet" href="/web/styles/workbench.css"><link rel="stylesheet" href="/web/styles/files.css"><link rel="stylesheet" href="/web/styles/terminal.css"><link rel="stylesheet" href="/web/styles/chat-messages.css"><link rel="stylesheet" href="/web/vendor/codemirror.min.css">
-<script src="/web/vendor/vue.global.prod.js"></script><script src="/web/vendor/vue-demi.iife.js"></script><script src="/web/vendor/pinia.iife.prod.js"></script><script src="/web/vendor/codemirror.min.js"></script>
+<link rel="stylesheet" href="/styles/variables.css"><link rel="stylesheet" href="/styles/workbench.css"><link rel="stylesheet" href="/styles/files.css"><link rel="stylesheet" href="/styles/terminal.css"><link rel="stylesheet" href="/styles/chat-messages.css"><link rel="stylesheet" href="/vendor/codemirror.min.css">
+<style>html,body,#app{height:100%;margin:0}#app{display:flex}.workbench-panel{height:100%}</style>
+<script src="/vendor/vue.global.prod.js"></script><script src="/vendor/vue-demi.iife.js"></script><script src="/vendor/pinia.iife.prod.js"></script><script src="/vendor/codemirror.min.js"></script>
 </head><body><div id="app"></div><script type="module">
-import { useChatStore } from '/web/stores/chat.js';
-import { useSessionsStore } from '/web/stores/sessions.js';
-import WorkbenchPanel from '/web/components/WorkbenchPanel.js';
-import FilesTab from '/web/components/FilesTab.js';
-import { workbenchRouteKey, workbenchWorkspaceGeneration } from '/web/utils/workbench-route.js';
-import translations from '/web/i18n/en.js';
+import { useChatStore } from '/stores/chat.js';
+import { useSessionsStore } from '/stores/sessions.js';
+import WorkbenchPanel from '/components/WorkbenchPanel.js';
+import FilesTab from '/components/FilesTab.js';
+import { workbenchRouteKey, workbenchWorkspaceGeneration } from '/utils/workbench-route.js';
+import translations from '/i18n/en.js';
 (${mountHarness.toString()})(${JSON.stringify(config)});
 </script></body></html>`;
 }
@@ -310,12 +312,13 @@ class ExternalFilesServer {
       response.end(preview.bytes);
       return;
     }
-    const file = resolve(ROOT, `.${url.pathname}`);
+    // Match server/index.js: web/ is the static root, not a URL prefix.
+    const file = resolve(ROOT, 'web', `.${url.pathname}`);
     if (!file.startsWith(join(ROOT, 'web') + sep)) { response.writeHead(404).end(); return; }
     try {
       // Optional read-only candidate used for red/green validation from an
       // independent test worktree; no production source is copied or modified.
-      const body = await readFile(url.pathname === '/web/components/FilesTab.js'
+      const body = await readFile(url.pathname === '/components/FilesTab.js'
         && process.env.E2E_FILES_TAB_SOURCE ? process.env.E2E_FILES_TAB_SOURCE : file);
       response.writeHead(200, { 'Content-Type': extname(file) === '.css' ? 'text/css' : 'text/javascript' });
       response.end(body);
@@ -487,4 +490,86 @@ test('late real directory/file responses cannot steal the current tab selection 
   await expect(page.locator('.CodeMirror')).toContainText('Original disk content.');
   await expect(treeEntry(page, join(harness.workDir, 'first-long-directory'))).toHaveCount(0);
   expect(await page.evaluate(() => window.harness.bridgeErrors)).toEqual([]);
+});
+
+// One real Files -> Agent bytes -> worker -> shared table workflow, across themes
+// and narrow layouts. This is not a mocked sheet_to_html/component harness.
+test('local Excel previews scroll, select, copy, sort and filter without writing source files', async ({ page, context, harness }, testInfo) => {
+  const sandbox = {};
+  runInNewContext(await readFile(join(ROOT, 'web/vendor/xlsx.min.js'), 'utf8'), sandbox);
+  const XLSX = sandbox.XLSX;
+  const book = XLSX.utils.book_new();
+  const values = Array.from({ length: 81 }, (_, r) => Array.from({ length: 24 }, (_, c) =>
+    r === 0 ? `Heading ${c}` : c === 0 ? `row-${r}` : c === 1 ? 82 - r : `${r}:${c} long cell content`));
+  values[1][2] = '<img src=x onerror=alert(1)>';
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(values), '<svg onload=alert(1)>');
+  XLSX.utils.book_append_sheet(book, {}, 'Empty');
+  XLSX.utils.book_append_sheet(book, { A1500: { t: 's', v: 'Data outside preview' }, '!ref': 'A1500' }, 'Sparse');
+  const bytes = Buffer.from(XLSX.write(book, { type: 'array', bookType: 'xlsx' }));
+  const path = join(harness.workDir, 'sheet.xlsx');
+  await writeFile(path, bytes);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const errors = [];
+  const workerUrls = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('worker', worker => workerUrls.push(worker.url()));
+  for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto(harness.url);
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; localStorage.setItem('officePreviewMode', 'local'); }, theme);
+    await openFiles(page);
+    await page.evaluate(path => window.harness.openFile(path), path);
+    await expect(page.locator('.spreadsheet-preview tbody tr')).toHaveCount(50);
+    await expect(page.locator('.xlsx-sheet-tab').first()).toHaveText('<svg onload=alert(1)>');
+    await expect(page.locator('.spreadsheet-preview img, .spreadsheet-preview svg, .spreadsheet-preview a')).toHaveCount(0);
+    const scroll = page.locator('.csv-preview-scroll');
+    const bounds = await scroll.boundingBox();
+    expect(bounds.width).toBeGreaterThan(20);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
+    await scroll.evaluate(el => { el.scrollTop = 300; el.scrollLeft = 600; });
+    expect(await scroll.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+    expect(await scroll.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    const corner = await page.locator('thead .csv-row-number').boundingBox();
+    expect(Math.abs(corner.x - bounds.x)).toBeLessThan(2);
+    expect(Math.abs(corner.y - bounds.y)).toBeLessThan(2);
+    const rowNumber = await page.locator('tbody .csv-row-number').nth(15).boundingBox();
+    expect(Math.abs(rowNumber.x - bounds.x)).toBeLessThan(2);
+    await testInfo.attach(`sheet-${theme}-${width}`, { body: await page.screenshot(), contentType: 'image/png' });
+    await scroll.evaluate(el => { el.scrollTop = 0; el.scrollLeft = 0; });
+    await page.locator('input[type=checkbox]').check();
+    const cells = page.locator('tbody tr').first().locator('td');
+    await cells.nth(0).click();
+    await page.keyboard.press('Shift+ArrowRight');
+    await expect(page.locator('.table-cell-selected')).toHaveCount(2);
+    await page.keyboard.press('Control+c');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('row-1\t81');
+    await page.locator('.table-sort').nth(1).click();
+    await expect(page.locator('tbody tr').first().locator('td').first()).toHaveText('row-80');
+    await expect(page.locator('tbody th').first()).toHaveText('81');
+    await page.locator('input[type=search]').fill('row-80');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+    await page.locator('select').selectOption('1');
+    await expect(page.getByText('No matching rows.', { exact: true })).toBeVisible();
+    await page.locator('.xlsx-sheet-tab').nth(1).click();
+    await expect(page.getByText('No data in the preview range', { exact: false })).toBeVisible();
+    await expect(page.getByText('This worksheet is empty.', { exact: true })).toHaveCount(0);
+    await page.locator('.xlsx-sheet-tab').nth(2).click();
+    await expect(page.getByText('No data in the preview range', { exact: false })).toBeVisible();
+    await expect(page.getByText('This worksheet is empty.', { exact: true })).toHaveCount(0);
+    await page.locator('.xlsx-sheet-tab').first().click();
+    await expect(page.locator('tbody tr')).toHaveCount(50);
+    await expect(page.locator('input[type=search]')).toHaveValue('');
+    await page.locator('tbody tr').nth(49).locator('td').first().click();
+    await expect(page.locator('.table-cell-selected')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Next', exact: true }).click();
+    await expect(page.locator('tbody tr')).toHaveCount(31);
+    await expect(page.locator('.table-copy')).toBeDisabled();
+  }
+  expect(workerUrls.length).toBeGreaterThanOrEqual(2);
+  expect(workerUrls.every(url => url === `${harness.url}/spreadsheet-worker.js`)).toBe(true);
+  // The old URL must not be a harness alias that could mask a source-app 404.
+  expect((await page.request.get(`${harness.url}/web/spreadsheet-worker.js`)).status()).toBe(404);
+  expect(await readFile(path)).toEqual(bytes);
+  expect(harness.requests.some(message => message.type === 'write_file')).toBe(false);
+  expect(errors).toEqual([]);
 });

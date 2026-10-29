@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import agentCtx from '../../agent/context.js';
@@ -161,5 +161,36 @@ describe('stable Workbench preview URLs', () => {
     await reply();
     await rejected;
     expect(state.previewFiles.size).toBe(0);
+  });
+});
+
+describe('Agent non-text reads', () => {
+  it('preserves audio/binary bytes, accepts UTF-8 text and rejects binary over 20 MiB', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-binary-read-'));
+    const send = vi.fn();
+    const previousSend = agentCtx.sendToServer;
+    agentCtx.sendToServer = send;
+    const read = async (name, buffer) => {
+      writeFileSync(join(root, name), buffer);
+      await handleReadFile({ conversationId: 'binary-test', filePath: join(root, name), workDir: root, requestId: name });
+      return send.mock.lastCall[0];
+    };
+    try {
+      expect(await read('音频.MP3', Buffer.from([255, 251, 144, 0]))).toMatchObject({ binary: true, mimeType: 'audio/mpeg', content: '//uQAA==' });
+      expect(await read('legacy.doc', bytes)).toMatchObject({ binary: true, mimeType: 'application/msword' });
+      expect(await read('archive.zip', bytes)).toMatchObject({ binary: true, mimeType: 'application/octet-stream' });
+      expect(await read('unknown.custom', Buffer.from([65, 0, 66]))).toMatchObject({ binary: true, content: 'QQBC', mimeType: 'application/octet-stream' });
+      expect(await read('invalid-utf8', Buffer.from([255, 254, 65]))).toMatchObject({ binary: true, mimeType: 'application/octet-stream' });
+      expect(await read('README', Buffer.from('Unicode 中文\r\ntext\t👍'))).toMatchObject({ content: 'Unicode 中文\r\ntext\t👍' });
+      // A UTF-8 character crossing the prefix boundary must not become binary.
+      const split = Buffer.from('a'.repeat(8191) + '中文');
+      expect(await read('split', split)).toMatchObject({ content: split.toString('utf8') });
+      const oversized = join(root, 'huge.custom');
+      writeFileSync(oversized, Buffer.from([0]));
+      truncateSync(oversized, 20 * 1024 * 1024 + 1);
+      await handleReadFile({ conversationId: 'binary-test', filePath: oversized, workDir: root });
+      expect(send.mock.lastCall[0]).toMatchObject({ errorCode: 'FILE_PREVIEW_TOO_LARGE', errorDetails: { limitBytes: 20 * 1024 * 1024 } });
+      expect(send.mock.lastCall[0].binary).toBeUndefined();
+    } finally { agentCtx.sendToServer = previousSend; rmSync(root, { recursive: true, force: true }); }
   });
 });
