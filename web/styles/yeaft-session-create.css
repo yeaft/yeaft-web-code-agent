@@ -448,7 +448,7 @@
 .yeaft-session-create-modal.task-mode {
   width: min(1120px, calc(100vw - 48px));
   max-width: 1120px;
-  height: auto;
+  height: calc(100dvh - 48px);
   max-height: calc(100dvh - 48px);
   color: var(--text-primary);
 }
@@ -478,7 +478,7 @@
 .task-create-close:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text-primary); }
 .session-create-flow.is-task {
   display: block;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -523,9 +523,9 @@
   padding: 16px 24px;
   background: var(--bg-main);
 }
-.scheduled-task-create-body { padding: 12px 24px 12px; min-width: 0; }
+.scheduled-task-create-body { display: flex; flex-direction: column; min-height: 100%; padding: 12px 24px; min-width: 0; }
 .scheduled-task-create-body > .scheduled-task-error { margin-bottom: var(--work-center-space-4); }
-.scheduled-task-main, .scheduled-task-environment, .scheduled-task-timing { display: flex; flex-direction: column; min-width: 0; gap: 20px; }
+.scheduled-task-content, .scheduled-task-sidebar, .scheduled-task-main, .scheduled-task-environment, .scheduled-task-timing { display: flex; flex-direction: column; min-width: 0; gap: 20px; }
 .task-required { margin-inline-start: var(--work-center-space-2); color: var(--text-secondary); font-size: 11px; font-weight: 400; }
 .task-name-field .resume-input { border: 1px solid var(--border-color); }
 .task-month-days { margin: 0; padding: 0; border: 0; min-width: 0; }
@@ -574,7 +574,7 @@
 .scheduled-task-option-row { display: flex; justify-content: space-between; align-items: center; gap: var(--work-center-space-4); min-height: 48px; cursor: pointer; }
 .scheduled-task-option-copy { display: grid; min-width: 0; gap: var(--work-center-space-1); }
 .scheduled-task-option-row .agent-settings-switch { margin-inline-end: 2px; }
-.scheduled-task-editor:disabled { opacity: .7; }
+.scheduled-task-editor[aria-disabled="true"] { opacity: .7; }
 .scheduled-task-editor input:disabled, .scheduled-task-editor textarea:disabled { cursor: not-allowed; }
 .scheduled-task-error { margin: 0; font-size: 12px; line-height: 1.55; color: var(--error); overflow-wrap: anywhere; }
 .scheduled-task-existing-schedule { display: grid; gap: var(--work-center-space-2); color: var(--text-secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -610,9 +610,9 @@
 .task-settings-nav .session-tab:disabled { cursor: not-allowed; opacity: .55; }
 .task-settings-active .group-settings-pane { display: flex; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
 .scheduled-task-settings { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
-.scheduled-task-settings-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 24px; }
-.scheduled-task-settings-scroll > .scheduled-task-help { margin-bottom: var(--work-center-space-4); }
-.scheduled-task-settings .scheduled-task-editor { margin-inline: auto; }
+.scheduled-task-settings-scroll { display: flex; flex-direction: column; gap: var(--work-center-space-4); flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 24px; }
+.scheduled-task-settings-scroll > .scheduled-task-help { flex: 0 0 auto; }
+.scheduled-task-settings .scheduled-task-editor { width: 100%; }
 .scheduled-task-settings-footer { flex: 0 0 auto; padding: 16px 24px; background: var(--bg-main); }
 .scheduled-task-settings-footer > .scheduled-task-error { margin-bottom: var(--work-center-space-3); max-height: 72px; overflow-y: auto; }
 .scheduled-task-save-row { display: flex; align-items: center; justify-content: space-between; gap: var(--work-center-space-3); }
@@ -658,10 +658,11 @@
 .scheduled-task-dismiss:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
 
 @media (min-width: 641px) {
-  .task-settings-modal { width: min(1120px, 94vw); }
-  .task-settings-modal.task-settings-active { height: auto; max-height: calc(100dvh - 48px); }
+  .task-settings-modal { width: min(1120px, calc(100vw - 48px)); height: calc(100dvh - 48px); max-height: calc(100dvh - 48px); }
 }
 @media (max-width: 640px) {
+  .task-settings-overlay { padding: 0; }
+  .task-settings-modal { height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
   .task-settings-modal .group-settings-header { padding: 16px 16px 8px; }
   .task-settings-heading h2 { font-size: 18px; }
   .task-settings-nav.session-tab-bar { padding: 0 16px; gap: 24px; }
@@ -713,24 +714,33 @@
 .scheduled-task-trigger-options .btn[aria-pressed="true"] { color: var(--text-primary); font-weight: 600; }
 .scheduled-task-trigger-options .btn[aria-pressed="true"]::after { background: var(--settings-control-active); }
 
+/* Stable columns: long content scrolls within its own column on desktop.
+ * Mobile retains the single body scroller and persistent footer. */
 @media (min-width: 901px) {
-  .scheduled-task-editor { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "main timing" "main options" "environment environment"; grid-template-rows: auto 1fr auto; align-items: start; gap: 16px 32px; }
-  .scheduled-task-main { grid-area: main; }
-  .scheduled-task-environment { grid-area: environment; }
-  .task-mode .scheduled-task-editor.is-manual .yeaft-session-create-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .scheduled-task-timing { grid-area: timing; }
-  .scheduled-task-options { grid-area: options; }
-  .scheduled-task-main, .scheduled-task-timing { gap: var(--work-center-space-4); }
+  .session-create-flow.is-task { display: flex; flex-direction: column; overflow: hidden; }
+  .scheduled-task-create-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  .scheduled-task-settings-scroll { overflow: hidden; }
+  .scheduled-task-editor { display: grid; min-height: 0; flex: 1 1 0; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-items: stretch; gap: 32px; }
+  .scheduled-task-content, .scheduled-task-sidebar { min-height: 0; gap: 24px; }
+  .scheduled-task-content { padding: 3px; overflow-y: auto; overscroll-behavior: contain; }
+  .scheduled-task-environment { flex: 0 0 auto; }
+  .scheduled-task-main { flex: 1 0 auto; gap: var(--work-center-space-4); }
+  .scheduled-task-prompt { flex: 1 0 auto; }
+  .scheduled-task-field textarea { flex: 1 0 140px; min-height: 140px; height: 140px; }
+  .scheduled-task-sidebar { justify-content: space-between; }
+  .scheduled-task-timing { padding: 3px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; gap: var(--work-center-space-4); }
+  .scheduled-task-timing > * { flex-shrink: 0; }
   .scheduled-task-editor .work-center-schedule-editor { gap: var(--work-center-space-3); }
-  .scheduled-task-options { grid-template-columns: minmax(0, 1fr); gap: var(--work-center-space-2); }
-  .scheduled-task-editor:not(.is-manual) { grid-template-areas: "main timing" "environment timing" "options timing"; grid-template-rows: auto auto 1fr; }
-  .scheduled-task-editor:not(.is-manual) .scheduled-task-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--work-center-space-4); }
-  .scheduled-task-settings .scheduled-task-editor { grid-template-areas: "main timing" "options timing"; grid-template-rows: auto 1fr; }
-  .scheduled-task-option-row { gap: var(--work-center-space-2); }
-  .scheduled-task-options .scheduled-task-help { display: none; }
-  .scheduled-task-field textarea { min-height: 140px; height: 140px; }
+  .scheduled-task-options { flex: 0 0 auto; gap: 0; }
+  .scheduled-task-option-row { gap: var(--work-center-space-3); }
   .scheduled-task-prompt .scheduled-task-help { display: none; }
   .scheduled-task-settings-scroll { padding-top: 20px; }
+}
+/* Short desktop windows cannot fit both fixed options and a useful timing
+ * viewport. Scroll the whole right column instead of crushing its controls. */
+@media (min-width: 901px) and (max-height: 640px) {
+  .scheduled-task-sidebar { justify-content: flex-start; overflow-y: auto; overscroll-behavior: contain; padding: 3px; }
+  .scheduled-task-timing { flex: 0 0 auto; overflow: visible; padding: 0; }
 }
 @media (max-width: 640px) {
   .scheduled-task-editor .task-month-days-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }

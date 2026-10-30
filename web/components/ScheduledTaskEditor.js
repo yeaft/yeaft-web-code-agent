@@ -79,7 +79,8 @@ export default {
     },
   },
   template: `
-    <fieldset class="scheduled-task-editor" :class="{ 'is-manual': modelValue.trigger?.type === 'manual' }" :disabled="disabled">
+    <div class="scheduled-task-editor" role="group" :aria-disabled="disabled">
+      <div class="scheduled-task-content">
       <div class="scheduled-task-main">
       <slot name="heading"></slot>
       <label class="scheduled-task-field scheduled-task-prompt">
@@ -89,6 +90,8 @@ export default {
       </label>
       </div>
       <div v-if="$slots.default" class="scheduled-task-environment"><slot></slot></div>
+      </div>
+      <div class="scheduled-task-sidebar">
       <div class="scheduled-task-timing">
       <div class="scheduled-task-field">
         <span class="scheduled-task-field-title">{{ $t('scheduledTasks.triggerLabel') }}</span>
@@ -117,6 +120,7 @@ export default {
           </span>
         </label>
       </div>
-    </fieldset>
+      </div>
+    </div>
   `,
 };

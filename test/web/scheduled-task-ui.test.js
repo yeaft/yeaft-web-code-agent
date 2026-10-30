@@ -67,7 +67,7 @@ it('creates task Sessions with the existing roster and folder contract and rejec
   const chat = Vue.reactive({ scheduledTaskProtocolSupported: true, agents, currentAgent: 'a', createYeaftSession: create, sendWsMessage: vi.fn(), setActiveSessionFilter: vi.fn(), yeaftStatusByAgent: { a: { availableModels: [{ provider: 'test', id: 'model', label: 'Model' }] } } });
   const vp = { snapshotStatus: 'ready', snapshotAgentId: 'a', lastVpSnapshotAgentId: 'a', vpList: [{ vpId: 'omni', name: 'Omni' }] };
   window.Pinia = { useChatStore: () => chat, useVpStore: () => vp, useSessionsStore: () => ({ sessionList: [], setActive: vi.fn() }) };
-  wrapper = mount(SessionCreateModal, { props: { taskMode: true }, global: { mocks: { $t: t }, stubs: { ModernSelect: true, FolderPickerDialog: true } } });
+  wrapper = mount(SessionCreateModal, { props: { taskMode: true }, global: { mocks: { $t: t }, stubs: { ModernSelect: true, FolderPickerDialog: true, VpAvatar: true } } });
   expect(wrapper.vm.canSubmit).toBe(false);
   expect(document.querySelector('.task-create-header')).not.toBeNull();
   expect(document.querySelector('.yeaft-create-submit svg')).toBeNull();
@@ -75,6 +75,14 @@ it('creates task Sessions with the existing roster and folder contract and rejec
   expect(document.querySelector('.resume-modal-footer')?.closest('.session-create-flow')).toBeNull();
   await wrapper.setData({ taskDraft: task, taskValid: true, form: { ...wrapper.vm.form, workDir: '/repo', vpIds: ['omni'] } });
   expect(wrapper.vm.canSubmit).toBe(true);
+  // The layout wrapper is no longer a fieldset: slot controls must explicitly
+  // preserve native disabled semantics while the create request is in flight.
+  await wrapper.setData({ busy: true, vpRosterOpen: true });
+  expect(document.querySelector('.scheduled-task-editor').getAttribute('aria-disabled')).toBe('true');
+  expect(document.querySelector('.yeaft-roster-default-star').disabled).toBe(true);
+  expect([...document.querySelectorAll('.scheduled-task-editor input, .scheduled-task-editor textarea, .scheduled-task-editor button')]
+    .every(control => control.disabled)).toBe(true);
+  await wrapper.setData({ busy: false, vpRosterOpen: false });
   chat.scheduledTaskProtocolSupported = false;
   await Vue.nextTick();
   expect(wrapper.vm.canSubmit).toBe(false);

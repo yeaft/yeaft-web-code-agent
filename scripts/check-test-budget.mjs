@@ -73,8 +73,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +7 reviewed task calendar cases: 3 form/preview/capability boundaries,
 // 3 recurrence validation/advance/reopen boundaries and 1 multi-theme browser flow.
 // +1 task-as-Session browser lifecycle: shared sorting/Project moves and visibility.
-// +1 rendered task/Settings control contract: actual cascade, shared blue switches,
-// quiet hover/focus/disabled actions and content-sized manual layout across themes.
+// +1 rendered task/Settings control contract: actual cascade, theme-aware switches,
+// quiet hover/focus/disabled actions and stable full-height columns across themes.
 export const TEST_CASE_LIMIT = 813;
 
 function walkFiles(directory) {
