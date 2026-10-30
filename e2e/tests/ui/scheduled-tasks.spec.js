@@ -40,7 +40,7 @@ async function select(page, scope, label, option) {
 }
 
 function taskRow(page, name = 'Daily workspace review') {
-  return page.locator('.tasks-section .session-item').filter({ has: page.locator('.sidebar-session-title-text', { hasText: name }) });
+  return page.locator('.sidebar-session-row').filter({ has: page.locator('.sidebar-session-title-text', { hasText: name }) });
 }
 
 async function openTask(page) {
@@ -72,7 +72,7 @@ async function noOverflow(page, selectors) {
     elements: selectors.map(selector => ({ selector, overflow: false, outside: false })) });
 }
 
-test('creates a scheduled Session with selected Agent, directory and VP, without duplicating it in recents', async ({ page, serverUrl, mockAgent }, testInfo) => {
+test('creates a task Session in recents with selected Agent, directory and VP', async ({ page, serverUrl, mockAgent }, testInfo) => {
   scheduledTaskAgent(mockAgent, { sessions: [], marker: 'Primary' });
   const other = new MockAgent(serverUrl, 'task-secondary');
   await other.connect();
@@ -83,7 +83,7 @@ test('creates a scheduled Session with selected Agent, directory and VP, without
     for (const [index, name] of ['New chat', 'New task', 'Plugins'].entries()) {
       await expect(page.locator('.sidebar-primary-actions > button').nth(index)).toHaveAccessibleName(name);
     }
-    await expect(page.locator('.sidebar-section-toggle')).toHaveText(['Projects', 'Tasks', 'Recents']);
+    await expect(page.locator('.sidebar-section-toggle')).toHaveText(['Projects', 'Recents']);
     await page.locator('.sidebar-task-create').click();
     const modal = page.locator('.yeaft-session-create-modal.task-mode');
     await expect(modal).toBeVisible();
@@ -129,16 +129,18 @@ test('creates a scheduled Session with selected Agent, directory and VP, without
     await expect(page.locator('.scheduled-task-bar')).toContainText('Next run');
     await showSidebar(page);
     await expect(taskRow(page, 'Scheduled review with selected VP')).toHaveCount(1);
-    await expect(page.locator('.recents-section .session-item')).toHaveCount(1);
-    await expect(page.locator('.recents-section')).not.toContainText('Scheduled review with selected VP');
-    for (const section of ['projects', 'tasks', 'recents']) {
+    await expect(page.locator('.recents-section .session-item')).toHaveCount(3);
+    await expect(page.locator('.recents-section')).toContainText('Scheduled review with selected VP');
+    await expect(taskRow(page, 'Scheduled review with selected VP').getByRole('img', { name: 'Task', exact: true })).toBeVisible();
+    await expect(page.locator('.tasks-section')).toHaveCount(0);
+    for (const section of ['projects', 'recents']) {
       const toggle = page.locator(`.${section}-section .sidebar-section-toggle`);
       await toggle.click();
       await expect(toggle).toHaveAttribute('aria-expanded', 'false');
       await toggle.click();
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     }
-    await page.locator('.recents-section .session-item').click();
+    await page.locator('.recents-section .session-item').filter({ hasText: 'Ordinary conversation' }).click();
     await expect(page.locator('.scheduled-task-bar')).toHaveCount(0);
     await showSidebar(page);
     await taskRow(page, 'Scheduled review with selected VP').click();
@@ -152,6 +154,80 @@ test('creates a scheduled Session with selected Agent, directory and VP, without
     expect(mockAgent.messages('yeaft_session_send')).toHaveLength(0);
     await shot(page, testInfo, 'task-session-conversation.png');
   } finally { await other.disconnect(); }
+});
+
+test('task rows share pin, drag, Project menu, rename and removal behavior with Sessions', async ({ page, serverUrl, mockAgent }, testInfo) => {
+  const state = scheduledTaskAgent(mockAgent);
+  await boot(page, serverUrl, mockAgent);
+  const recents = page.locator('.recents-section');
+  const projects = page.locator('.projects-section');
+  const task = taskRow(page);
+  const chat = recents.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' });
+  await expect(task).toHaveAttribute('draggable', 'true');
+  await expect(task.getByRole('img', { name: 'Task', exact: true })).toBeVisible();
+  await task.hover();
+  await task.getByRole('button', { name: 'Pin to top', exact: true }).click();
+  await expect(task.locator('.session-pin-icon')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => Object.keys(window.Pinia.useChatStore().sessionCatalogMutationRequests).length)).toBe(0);
+  await task.hover();
+  await task.getByRole('button', { name: 'Unpin', exact: true }).click();
+  await expect(task.locator('.session-pin-icon')).toHaveCount(0);
+  await task.dragTo(chat, { targetPosition: { x: 80, y: 30 } });
+  await expect(recents.locator('.sidebar-session-title-text')).toHaveText(['Ordinary conversation', 'Daily workspace review']);
+  await projects.locator('.sidebar-section-heading').hover();
+  await projects.getByRole('button', { name: 'New project', exact: true }).click();
+  await projects.locator('.sidebar-project-create input').fill('Automation');
+  await projects.locator('.sidebar-project-create-confirm').click();
+  const project = projects.locator('.sidebar-project').filter({ hasText: 'Automation' });
+  await expect(project.locator('.sidebar-project-header')).toBeVisible();
+  await task.dragTo(project.locator('.sidebar-project-header'));
+  await expect(project.locator('.sidebar-session-row')).toHaveCount(1);
+  await expect(recents.locator('.sidebar-session-row')).toHaveCount(1);
+  await page.reload();
+  await expect(project.locator('.sidebar-session-task')).toBeVisible();
+  await task.hover();
+  await task.locator('.session-dots-btn').click();
+  await page.getByRole('button', { name: 'Remove from project', exact: true }).click();
+  await expect(recents.locator('.sidebar-session-task')).toBeVisible();
+  await task.hover();
+  await task.locator('.session-dots-btn').click();
+  await page.getByRole('button', { name: 'Move to Projects', exact: true }).click();
+  await page.locator('.session-submenu').getByRole('button', { name: 'Automation', exact: true }).click();
+  await expect(project.locator('.sidebar-session-task')).toBeVisible();
+  await task.dragTo(recents.locator('.sidebar-section-heading'));
+  await expect(recents.locator('.sidebar-session-task')).toBeVisible();
+  await expect(project.locator('.sidebar-session-row')).toHaveCount(0);
+  await task.hover();
+  await task.locator('.session-dots-btn').click();
+  await page.getByRole('button', { name: 'Rename', exact: true }).click();
+  await page.locator('.app-dialog-input').fill('Review automation — daily workspace checks and delivery summary');
+  await page.locator('.app-dialog-confirm').click();
+  const renamed = taskRow(page, 'Review automation');
+  await expect(renamed).toBeVisible();
+  expect(state.sessions.get(TASK_SESSION_ID).task.enabled).toBe(true);
+  // The badge remains visible with clipped titles and keyboard focus.
+  for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'light'], [320, 'dark']]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await showSidebar(page);
+    await page.mouse.move(0, 0);
+    await renamed.focus();
+    await expect(renamed.getByRole('img', { name: 'Task', exact: true })).toBeVisible();
+    expect(await renamed.locator('.sidebar-session-title-text').evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+    await noOverflow(page, ['.sidebar-navigation', '.recents-section']);
+    await shot(page, testInfo, `task-sidebar-${theme}-${width}.png`);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await renamed.hover();
+  await renamed.getByRole('button', { name: 'Remove from sidebar', exact: true }).click();
+  await expect(renamed).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.sidebar-navigation')).toHaveAttribute('aria-busy', 'false');
+  await expect(taskRow(page, 'Review automation')).toHaveCount(0);
+  await expect(recents.locator('.sidebar-session-row')).toHaveCount(1);
+  // Removing a row has exactly the normal Session visibility-only semantics.
+  expect(state.sessions.get(TASK_SESSION_ID).task.enabled).toBe(true);
+  expect(state.requests.filter(request => request.type === 'yeaft_scheduled_task')).toHaveLength(0);
 });
 
 test('task editing preserves failed drafts for retry, then manually runs the same Session', async ({ page, serverUrl, mockAgent }, testInfo) => {
@@ -275,7 +351,7 @@ test('an older Agent cannot turn New task into an ordinary Session', async ({ pa
   await shot(page, testInfo, 'task-legacy-agent-blocked.png');
   expect(mockAgent.messages('yeaft_create_session')).toHaveLength(0);
   expect(mockAgent.messages('create_conversation')).toHaveLength(0);
-  await expect(page.locator('.tasks-section .session-item')).toHaveCount(0);
+  await expect(page.locator('.sidebar-session-task')).toHaveCount(0);
 });
 
 test('another tab pausing a task fences a dirty draft until reload and never silently re-enables it', async ({ page, context, serverUrl, mockAgent }) => {

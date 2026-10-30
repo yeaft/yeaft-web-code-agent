@@ -55,11 +55,11 @@ for (const surface of [
     const navigation = page.locator('.sidebar-navigation');
     await expect(navigation).toBeVisible();
     await expect(navigation).toHaveAttribute('aria-busy', 'true');
-    await expect(navigation.locator('.sidebar-section-toggle')).toHaveCount(3);
+    await expect(navigation.locator('.sidebar-section-toggle')).toHaveCount(2);
     await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry):not(.sidebar-task-create)')).toBeDisabled();
     await expect(navigation.locator('.sidebar-task-create')).toBeDisabled();
     await expect(navigation.locator('.sidebar-section')).toHaveClass([
-      'sidebar-section projects-section', 'sidebar-section tasks-section', 'sidebar-section recents-section',
+      'sidebar-section projects-section', 'sidebar-section recents-section',
     ]);
     await expect(navigation.locator('.sidebar-catalog-loading')).toHaveCount(2);
     await expect(page.locator('.session-tab-solo')).toHaveCount(0);

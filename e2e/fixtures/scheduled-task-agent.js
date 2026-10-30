@@ -80,6 +80,13 @@ export function scheduledTaskAgent(agent, { sessions = [taskSession(), {
       state.sessions.set(session.id, session);
       state.reply(request, 'create', session);
       state.publish();
+    } else if (request.type === 'yeaft_rename_session') {
+      const previous = state.sessions.get(request.sessionId);
+      if (!previous) return;
+      const session = { ...previous, name: request.name };
+      state.sessions.set(session.id, session);
+      state.reply(request, 'rename', session);
+      state.publish();
     } else if (request.type === 'yeaft_scheduled_task' && request.op === 'update') {
       if (state.holdUpdates) state.heldUpdates.push(request);
       else state.replyUpdate(request);

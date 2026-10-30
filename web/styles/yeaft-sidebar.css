@@ -131,6 +131,8 @@
 .sidebar-session-copy { display: flex; flex: 1; min-width: 0; }
 .sidebar-session-row .title { display: flex; align-items: center; min-width: 0; }
 .sidebar-session-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-session-task { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 14px; height: 14px; margin-left: 6px; color: var(--accent-blue); }
+.sidebar-session-task svg { width: 100%; height: 100%; }
 .sidebar-session-unread { width: 7px; height: 7px; margin-left: 7px; border-radius: 50%; background: var(--success); flex: 0 0 auto; }
 .sidebar-session-row .session-actions {
   position: absolute;

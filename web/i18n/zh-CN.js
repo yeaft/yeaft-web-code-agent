@@ -2885,7 +2885,7 @@ export default {
   "scheduledTasks.scheduleHint": "结果保留在此任务中。错过的重复时间不补跑，同一任务不叠加执行；暂停不会中止正在执行的任务。",
   "scheduledTasks.title": "任务",
   "scheduledTasks.task": "任务",
-  "scheduledTasks.empty": "暂无任务",
+  "scheduledTasks.itemLabel": "任务",
   "scheduledTasks.subtitle": "在对话中手动或定时执行提示词。",
   "scheduledTasks.create": "创建任务",
   "scheduledTasks.prompt": "提示词",
