@@ -72,7 +72,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // regressions remain intact.
 // +7 reviewed task calendar cases: 3 form/preview/capability boundaries,
 // 3 recurrence validation/advance/reopen boundaries and 1 multi-theme browser flow.
-export const TEST_CASE_LIMIT = 811;
+// +1 task-as-Session browser lifecycle: shared sorting/Project moves and visibility.
+export const TEST_CASE_LIMIT = 812;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

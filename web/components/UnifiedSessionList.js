@@ -34,15 +34,14 @@ const SIDEBAR_SECTION_COLLAPSE_KEY = 'yeaft-sidebar-section-collapse';
 
 function readCollapsedSections() {
   try {
-    if (typeof localStorage === 'undefined') return { projects: false, tasks: false, recents: false };
+    if (typeof localStorage === 'undefined') return { projects: false, recents: false };
     const parsed = JSON.parse(localStorage.getItem(SIDEBAR_SECTION_COLLAPSE_KEY) || '{}');
     return {
       projects: parsed?.projects === true,
-      tasks: parsed?.tasks === true,
       recents: parsed?.recents === true,
     };
   } catch {
-    return { projects: false, tasks: false, recents: false };
+    return { projects: false, recents: false };
   }
 }
 
@@ -51,7 +50,6 @@ function writeCollapsedSections(value) {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(SIDEBAR_SECTION_COLLAPSE_KEY, JSON.stringify({
         projects: value?.projects === true,
-        tasks: value?.tasks === true,
         recents: value?.recents === true,
       }));
     }
@@ -151,7 +149,7 @@ export function calculateFloatingSubmenuPosition(parentRect, menuSize, viewport 
 }
 
 
-// Both sections deliberately share Session row behavior and actions.
+// Recents use the same Session row behavior and actions as Project members.
 function sessionRowsTemplate(section, rows) {
   return `          <div
             v-for="row in (isSectionCollapsed('${section}') ? [] : ${rows})"
@@ -177,6 +175,9 @@ function sessionRowsTemplate(section, rows) {
               <span class="title" :title="row.title">
                 <span v-if="isProcessing(row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
                 <span class="sidebar-session-title-text">{{ row.title }}</span>
+                <span v-if="row.task" class="sidebar-session-task" role="img" :aria-label="$t('scheduledTasks.itemLabel')" :title="$t('scheduledTasks.itemLabel')">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                </span>
                 <span v-if="isUnread(row)" class="sidebar-session-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
               </span>
             </span>
@@ -292,7 +293,7 @@ export default {
     projectSessionRows() {
       const out = new Map(this.projectRows.map(project => [projectIdentityKey(project), []]));
       for (const row of this.sessions) {
-        if (row.runtimeProvider !== 'yeaft' || row.task) continue;
+        if (row.runtimeProvider !== 'yeaft') continue;
         const project = this.projectBySessionKey.get(`${row.routeRef?.agentId}\u001f${row.routeRef?.sessionId}`);
         const key = projectIdentityKey(project);
         if (project && out.has(key)) out.get(key).push(row);
@@ -306,12 +307,9 @@ export default {
       }
       return out;
     },
-    taskRows() {
-      return sortRows(this.sessions.filter(row => row.runtimeProvider === 'yeaft' && row.task), this.hasCompleteCatalogOrder);
-    },
     recentRows() {
       return sortRows(this.sessions.filter(row => {
-        if (row.task || !this.isRowOnline(row)) return false;
+        if (!this.isRowOnline(row)) return false;
         if (row.runtimeProvider === 'yeaft') {
           const key = `${row.routeRef?.agentId}\u001f${row.routeRef?.sessionId}`;
           if (this.projectBySessionKey.has(key)) return false;
@@ -498,7 +496,7 @@ export default {
       return this.collapsedSections?.[section] === true;
     },
     toggleSection(section) {
-      if (!['projects', 'tasks', 'recents'].includes(section)) return;
+      if (!['projects', 'recents'].includes(section)) return;
       this.collapsedSections = {
         ...this.collapsedSections,
         [section]: !this.isSectionCollapsed(section),
@@ -1074,6 +1072,9 @@ export default {
                   <span class="title" :title="row.title">
                     <span v-if="isProcessing(row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
                     <span class="sidebar-session-title-text">{{ row.title }}</span>
+                    <span v-if="row.task" class="sidebar-session-task" role="img" :aria-label="$t('scheduledTasks.itemLabel')" :title="$t('scheduledTasks.itemLabel')">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
                     <span v-if="isUnread(row)" class="sidebar-session-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
                   </span>
                 </span>
@@ -1090,17 +1091,6 @@ export default {
               <div v-if="!loading && (rowsByProject.get(projectKey(project)) || []).length === 0" class="sidebar-section-empty">{{ $t('sidebar.projects.noSessions') }}</div>
             </div>
           </div>
-        </section>
-
-        <section class="sidebar-section tasks-section" :class="{ 'is-collapsed': isSectionCollapsed('tasks') }">
-          <div class="sidebar-section-heading">
-            <button type="button" class="sidebar-section-toggle" @click="toggleSection('tasks')" :aria-expanded="String(!isSectionCollapsed('tasks'))">
-              <span>{{ $t('scheduledTasks.title') }}</span>
-              <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('tasks') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
-            </button>
-          </div>
-          ${sessionRowsTemplate('tasks', 'taskRows')}
-          <div v-if="!isSectionCollapsed('tasks') && !loading && taskRows.length === 0" class="sidebar-section-empty">{{ $t('scheduledTasks.empty') }}</div>
         </section>
 
         <section class="sidebar-section recents-section" :class="{ 'drag-over': dragTargetProjectId === '__recents__', 'is-collapsed': isSectionCollapsed('recents') }" @dragover="dragOverRecents" @dragleave="clearGroupDragTarget('__recents__', $event)" @drop="dropOnRecents">

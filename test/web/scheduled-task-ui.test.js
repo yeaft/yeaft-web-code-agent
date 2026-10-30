@@ -21,17 +21,43 @@ const row = (id, extra = {}) => ({ catalogKey: `yeaft:a:${id}`, runtimeProvider:
 beforeEach(() => { vi.stubGlobal('Vue', Vue); localStorage.clear(); });
 afterEach(() => { vi.restoreAllMocks(); delete window.Pinia; wrapper?.unmount(); document.body.innerHTML = ''; vi.unstubAllGlobals(); });
 
-it('separates tasks from project chats and recents, persists collapse, and selects the real Session', async () => {
+it('lists task Sessions in recents or their owning Project with a badge and shared actions', async () => {
+  // Old Tasks-collapse state must not hide tasks in either current section.
+  localStorage.setItem('yeaft-sidebar-section-collapse', JSON.stringify({ tasks: true }));
   const taskRow = row('task', { task });
-  wrapper = mount(UnifiedSessionList, { props: { scheduledTaskProtocolSupported: true, agents, sessions: [taskRow, row('chat')], projects: [{ id: 'p', name: 'Project', members: [{ agentId: 'a', sessionId: 'task' }] }] }, global: { mocks: { $t: t } } });
-  expect(wrapper.get('.tasks-section').findAll('.sidebar-session-row')).toHaveLength(1);
-  expect(wrapper.get('.projects-section').findAll('.sidebar-session-row')).toHaveLength(0);
-  expect(wrapper.get('.recents-section').findAll('.sidebar-session-row')).toHaveLength(1);
-  await wrapper.get('.tasks-section .sidebar-session-row').trigger('keydown', { key: 'Enter' });
+  const otherTask = row('task', { catalogKey: 'yeaft:b:task', task, routeRef: { runtimeProvider: 'yeaft', agentId: 'b', sessionId: 'task' } });
+  const project = { id: 'p', name: 'Project', members: [{ agentId: 'a', sessionId: 'task' }] };
+  const mutateProject = vi.fn(async () => ({ ok: true }));
+  wrapper = mount(UnifiedSessionList, { attachTo: document.body, props: { agents: [...agents, { id: 'b', online: true }],
+    sessions: [taskRow, otherTask, row('chat')], projects: [project],
+    projectStore: { mutateProject }, isSessionUnread: item => item.catalogKey === taskRow.catalogKey }, global: { mocks: { $t: t } } });
+  expect(wrapper.find('.tasks-section').exists()).toBe(false);
+  expect(wrapper.get('.projects-section').findAll('.sidebar-session-row')).toHaveLength(1);
+  expect(wrapper.get('.recents-section').findAll('.sidebar-session-row')).toHaveLength(2);
+  expect(wrapper.get('.projects-section .sidebar-session-task').attributes('aria-label')).toBe('Task');
+  expect(wrapper.get('.recents-section').findAll('.sidebar-session-task')).toHaveLength(1);
+  expect(wrapper.get('.projects-section .sidebar-session-row .sidebar-session-unread').exists()).toBe(true);
+  expect(wrapper.get('.sidebar-project-unread').exists()).toBe(true);
+  await wrapper.get('.projects-section .sidebar-session-row').trigger('keydown', { key: 'Enter' });
   expect(wrapper.emitted('select')[0][0]).toEqual(taskRow);
-  await wrapper.get('.tasks-section .sidebar-section-toggle').trigger('click');
-  expect(wrapper.find('.tasks-section .sidebar-session-row').exists()).toBe(false);
-  expect(JSON.parse(localStorage.getItem('yeaft-sidebar-section-collapse')).tasks).toBe(true);
+  await wrapper.get('.projects-section .session-quick-action').trigger('click');
+  expect(wrapper.emitted('action').at(-1)[0]).toEqual({ action: 'pin', row: taskRow });
+  await wrapper.get('.projects-section .session-quick-action[aria-label="Remove from sidebar"]').trigger('click');
+  expect(wrapper.emitted('action').at(-1)[0]).toEqual({ action: 'remove', row: taskRow });
+  await wrapper.get('.projects-section .sidebar-session-row .session-dots-btn').trigger('click');
+  const menu = document.querySelector('.session-menu-floating');
+  expect(menu.textContent).toContain('Remove from project');
+  await wrapper.vm.moveRow(taskRow, null);
+  expect(mutateProject).toHaveBeenLastCalledWith('move_session', { sessionId: 'task', projectId: null }, 'a');
+  // Use the same drag/reorder path across Projects and Recents for task rows.
+  wrapper.vm.startDrag(otherTask);
+  await wrapper.vm.dropOnProject(project);
+  expect(mutateProject).toHaveBeenLastCalledWith('move_session', expect.objectContaining({ sessionId: 'task', projectId: 'p', catalogOrder: expect.any(Array) }), 'b');
+  await wrapper.setProps({ projects: [{ ...project, members: [] }] });
+  expect(wrapper.get('.recents-section').findAll('.sidebar-session-row')).toHaveLength(3);
+  await wrapper.get('.recents-section .sidebar-section-toggle').trigger('click');
+  expect(wrapper.find('.recents-section .sidebar-session-row').exists()).toBe(false);
+  expect(JSON.parse(localStorage.getItem('yeaft-sidebar-section-collapse'))).toEqual({ projects: false, recents: true });
   await wrapper.get('.sidebar-task-create').trigger('click');
   expect(wrapper.emitted('create-task')).toHaveLength(1);
 });

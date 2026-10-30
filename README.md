@@ -60,7 +60,7 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 
 ### Scheduled tasks
 
-- **New task** appears above **Plugins**; the collapsible **Tasks** section sits between **Projects** and **Recents**.
+- **New task** appears above **Plugins**. Tasks are Sessions with a small clock icon in **Recents** or their Project, sharing the same pin, reorder, move, rename and remove actions as chats.
 - Choose an Agent, folder and VPs, then configure a prompt and a one-time or recurring schedule. Tasks reuse the full Session conversation and workbench, with manual execution, configuration editing and pause controls.
 - The online Agent owns durable scheduling; results remain in task history and clickable notifications open the exact task. Older Agents require an upgrade. Connector event triggers are not connected yet. See [task and recovery boundaries](docs/guide/tasks.md).
 

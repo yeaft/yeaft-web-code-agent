@@ -2888,7 +2888,7 @@ export default {
   "scheduledTasks.scheduleHint": "Results stay in this task. Missed repeats are skipped; runs never overlap. Pausing does not stop a run already in progress.",
   "scheduledTasks.title": "Tasks",
   "scheduledTasks.task": "Task",
-  "scheduledTasks.empty": "No tasks yet",
+  "scheduledTasks.itemLabel": "Task",
   "scheduledTasks.subtitle": "Run a prompt in a Session, on demand or on a schedule.",
   "scheduledTasks.create": "Create task",
   "scheduledTasks.prompt": "Prompt",
