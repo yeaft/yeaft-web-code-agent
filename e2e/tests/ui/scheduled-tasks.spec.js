@@ -616,6 +616,7 @@ test('task and Settings controls share blue switches, quiet actions and a conten
     });
     await page.locator('.settings-nav-item').filter({ hasText: 'Security' }).click();
     const security = page.locator('.settings-pane:visible');
+    await expect(security.locator('.agent-installer-copy svg')).toHaveCount(0);
     await quietAction(page, security.locator('.sp-btn:not(.sp-btn-danger)').first());
     await quietAction(page, security.locator('.sp-btn-danger').first());
     expect(await security.locator('.sp-btn-danger').first().evaluate(element => getComputedStyle(element).color))
@@ -647,6 +648,7 @@ test('task and Settings controls share blue switches, quiet actions and a conten
     await page.locator('.sidebar-task-create').click();
     const modal = page.locator('.task-mode');
     const create = modal.getByRole('button', { name: 'Create task', exact: true });
+    await expect(create.locator('svg')).toHaveCount(0);
     await quietAction(page, create); // The disabled state must not become a filled block either.
     await modal.getByRole('textbox', { name: 'Prompt', exact: true }).fill('Summarize workspace changes and report the results.');
     await expect(create).toBeEnabled();
@@ -713,7 +715,7 @@ test('task and Settings controls share blue switches, quiet actions and a conten
     const dateInput = advanced.locator('.schedule-date-picker__trigger').first();
     await expect(dateInput).toBeVisible();
     expect(await dateInput.evaluate(element => ({ border: getComputedStyle(element).borderWidth,
-      background: getComputedStyle(element).backgroundColor }))).toMatchObject({ border: '1px' });
+      background: getComputedStyle(element).backgroundColor, borderColor: getComputedStyle(element).borderColor }))).toMatchObject({ border: '1px', borderColor: expect.not.stringMatching(/rgba\(0, 0, 0, 0\)/) });
     expect(await dateInput.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
     await advanced.locator('summary').click();
     await shot(page, testInfo, `quiet-task-settings-monthly-${theme}.png`);

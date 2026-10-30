@@ -593,6 +593,7 @@
   font-size: 13px;
   font-weight: 400;
 }
+.scheduled-task-editor .schedule-date-picker .schedule-date-picker__trigger { border-color: var(--border-color); }
 .scheduled-task-editor .work-center-schedule-preview { align-items: baseline; }
 .scheduled-task-editor .work-center-field-help { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; font-weight: 400; }
 .scheduled-task-editor .work-center-error { margin: 0; color: var(--error); font-size: 12px; line-height: 1.55; }

@@ -83,10 +83,6 @@ export default {
           :disabled="!command || loading || copyState === 'copying'"
           @click="copyCommand"
         >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path v-if="copyState === 'copied'" d="m5 12 4 4L19 6" />
-            <template v-else><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></template>
-          </svg>
           <span>{{ copyLabel }}</span>
         </button>
       </div>

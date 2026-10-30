@@ -70,6 +70,7 @@ it('creates task Sessions with the existing roster and folder contract and rejec
   wrapper = mount(SessionCreateModal, { props: { taskMode: true }, global: { mocks: { $t: t }, stubs: { ModernSelect: true, FolderPickerDialog: true } } });
   expect(wrapper.vm.canSubmit).toBe(false);
   expect(document.querySelector('.task-create-header')).not.toBeNull();
+  expect(document.querySelector('.yeaft-create-submit svg')).toBeNull();
   expect(document.querySelector('.session-create-flow.is-task .scheduled-task-editor')).not.toBeNull();
   expect(document.querySelector('.resume-modal-footer')?.closest('.session-create-flow')).toBeNull();
   await wrapper.setData({ taskDraft: task, taskValid: true, form: { ...wrapper.vm.form, workDir: '/repo', vpIds: ['omni'] } });
