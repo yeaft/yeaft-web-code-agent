@@ -90,7 +90,7 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     await expect(modal.getByRole('combobox', { name: 'Provider', exact: true })).toHaveCount(0);
     await expect(modal.getByRole('button', { name: 'Create task', exact: true })).toBeDisabled();
     await select(page, modal, 'Agent', 'task-secondary');
-    other.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: 'test/reasoner', availableModels: [
+    other.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: 'test/reasoner', catalogEpoch: 'task-effort-e2e', catalogRevision: 1, catalogRefreshedAt: Date.now(), availableModels: [
       { provider: 'test', id: 'reasoner', label: 'Task reasoner', effortOptions: ['low', 'medium', 'high', 'xhigh'] },
       { provider: 'test', id: 'plain', label: 'Plain model' },
     ] } });
