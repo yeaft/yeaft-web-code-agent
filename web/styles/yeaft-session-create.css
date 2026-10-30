@@ -499,6 +499,8 @@
   gap: var(--work-center-space-2);
 }
 
+.task-model-fields { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--work-center-space-3); min-width: 0; }
+.task-model-fields > .resume-control-row { min-width: 0; }
 .yeaft-session-create-modal.task-mode .resume-control-label { width: auto; flex: none; font-size: 13px; }
 .yeaft-session-create-modal.task-mode .resume-input,
 .yeaft-session-create-modal.task-mode .modern-select-trigger,

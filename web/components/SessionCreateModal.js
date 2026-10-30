@@ -34,7 +34,7 @@ import VpAvatar from './VpAvatar.js';
 import ModernSelect from './ModernSelect.js';
 import { getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 import { buildVpDomainSections } from '../utils/vp-domains.js';
-import { modelOptionRef } from '../utils/modelRefs.js';
+import { getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
 import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
 
 // Both creation modes keep the same parent bindings and picker lifecycle.
@@ -208,9 +208,15 @@ const creationControls = `
             </div>
             </div>
 
-          <div v-if="taskMode" class="resume-control-row">
-            <label class="resume-control-label">{{ $t('scheduledTasks.model') }}</label>
-            <ModernSelect v-model="form.model" :options="taskModelOptions" :aria-label="$t('scheduledTasks.model')" :disabled="busy" menu-class="yeaft-session-create-select-menu" />
+          <div v-if="taskMode" class="task-model-fields">
+            <div class="resume-control-row">
+              <label class="resume-control-label">{{ $t('scheduledTasks.model') }}</label>
+              <ModernSelect v-model="form.model" :options="taskModelOptions" :aria-label="$t('scheduledTasks.model')" :disabled="busy" menu-class="yeaft-session-create-select-menu" />
+            </div>
+            <div class="resume-control-row">
+              <label class="resume-control-label">{{ $t('scheduledTasks.effort') }}</label>
+              <ModernSelect v-model="form.modelEffort" :options="taskEffortOptions" :aria-label="$t('scheduledTasks.effort')" :disabled="busy || !taskSelectableEfforts.length" :title="!form.model ? $t('scheduledTasks.effortChooseModel') : !taskSelectableEfforts.length ? $t('yeaft.modelMenu.noEffort') : ''" menu-class="yeaft-session-create-select-menu" />
+            </div>
           </div>
           </div>
         </div>
@@ -393,6 +399,7 @@ export default {
         vpIds: [],
         defaultVpId: null,
         model: '',
+        modelEffort: '',
         workDir: '',
         // Which agent owns the new session — populated in mounted().
         agentId: this.initialAgentId || null,
@@ -584,13 +591,33 @@ export default {
         createdAt: session.lastModified,
       }));
     },
-    taskModelOptions() {
-      const models = this.chat?.yeaftStatusByAgent?.[this.form.agentId]?.availableModels
+    taskModels() {
+      return this.chat?.yeaftStatusByAgent?.[this.form.agentId]?.availableModels
         || (this.chat?.currentAgent === this.form.agentId ? this.chat?.yeaftAvailableModels : []) || [];
+    },
+    taskModelOptions() {
       return [
         { value: '', label: this.$t('scheduledTasks.defaultModel') },
-        ...models.map(model => ({ value: modelOptionRef(model), label: model.label || model.id })),
+        ...this.taskModels.map(model => ({ value: modelOptionRef(model), label: model.label || model.id })),
       ];
+    },
+    taskSelectableEfforts() {
+      // Inherit may resolve to different VP models; only expose capabilities
+      // for an explicit model owned by the Agent selected in this dialog.
+      const model = this.taskModels.find(item => modelOptionMatchesRef(item, this.form.model));
+      return getSelectableModelEfforts(model?.effortOptions);
+    },
+    taskEffortOptions() {
+      return [
+        { value: '', label: this.$t('scheduledTasks.defaultEffort') },
+        ...this.taskSelectableEfforts.map(effort => ({ value: effort, label: this.$t(`yeaft.modelMenu.effort.${effort}`) })),
+      ];
+    },
+    taskSessionConfig() {
+      return {
+        ...(this.form.model ? { model: this.form.model } : {}),
+        ...(this.taskSelectableEfforts.includes(this.form.modelEffort) ? { modelEffort: this.form.modelEffort } : {}),
+      };
     },
     taskMonthDaysSupported() {
       return this.agentOptions.find(item => item.id === this.form.agentId)?.capabilities?.includes('scheduled_task_month_days') === true;
@@ -649,7 +676,10 @@ export default {
     this.applyDefaultSelection();
   },
   watch: {
-    folderPickerAgentId() { this.closeFolderPicker(); this.form.model = ''; },
+    folderPickerAgentId() { this.closeFolderPicker(); this.form.model = ''; this.form.modelEffort = ''; },
+    taskSelectableEfforts(options) {
+      if (!options.includes(this.form.modelEffort)) this.form.modelEffort = '';
+    },
     // Re-apply default selection once vpList hydrates after mount.
     // Watch the VP identity signature, not only length: switching agents can
     // return the same number of VPs in a different library. The create UI must
@@ -1190,7 +1220,10 @@ export default {
           || getLastPathSegment(this.form.workDir.trim())
           || this.$t('yeaft.session.create.untitled');
         const res = await this.chat.createYeaftSession({
-          ...(this.taskMode ? { task: { ...this.taskDraft, prompt: this.taskDraft.prompt.trim() }, ...(this.form.model ? { config: { model: this.form.model } } : {}) } : {}),
+          ...(this.taskMode ? {
+            task: { ...this.taskDraft, prompt: this.taskDraft.prompt.trim() },
+            ...(Object.keys(this.taskSessionConfig).length ? { config: this.taskSessionConfig } : {}),
+          } : {}),
           displayName: derivedName,
           vpIds: submittedVpIds,
           defaultVpId,

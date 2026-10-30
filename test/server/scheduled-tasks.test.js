@@ -176,11 +176,11 @@ describe('Session-backed scheduled tasks', () => {
     });
     await handleClientConversation('client-a', client, {
       type: 'yeaft_create_session', agentId: 'agent-a', requestId: 'create-1', _requestClientId: 'foreign',
-      payload: { name: 'Build', roster: ['vp'], workDir: '/work', task, lastRun: 'forged', _requestClientId: 'foreign' },
+      payload: { name: 'Build', roster: ['vp'], workDir: '/work', config: { model: 'test/model', modelEffort: 'xhigh' }, task, lastRun: 'forged', _requestClientId: 'foreign' },
     }, allow);
     expect(forwardToAgent).toHaveBeenLastCalledWith('agent-a', {
       type: 'yeaft_create_session', requestId: 'create-1', _requestClientId: 'client-a',
-      payload: { name: 'Build', roster: ['vp'], workDir: '/work', task: editableTask },
+      payload: { name: 'Build', roster: ['vp'], workDir: '/work', config: { model: 'test/model', modelEffort: 'xhigh' }, task: editableTask },
     });
     await handleClientConversation('client-a', client, request({ op: 'update', task: { enabled: false } }), allow);
     expect(forwardToAgent).toHaveBeenLastCalledWith('agent-a', expect.objectContaining({ task: { enabled: false } }));

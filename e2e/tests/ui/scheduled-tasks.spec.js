@@ -90,6 +90,21 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     await expect(modal.getByRole('combobox', { name: 'Provider', exact: true })).toHaveCount(0);
     await expect(modal.getByRole('button', { name: 'Create task', exact: true })).toBeDisabled();
     await select(page, modal, 'Agent', 'task-secondary');
+    other.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: 'test/reasoner', availableModels: [
+      { provider: 'test', id: 'reasoner', label: 'Task reasoner', effortOptions: ['low', 'medium', 'high', 'xhigh'] },
+      { provider: 'test', id: 'plain', label: 'Plain model' },
+    ] } });
+    const effort = modal.getByRole('combobox', { name: 'Reasoning effort', exact: true });
+    await expect(effort).toBeDisabled();
+    await select(page, modal, 'Model', 'Task reasoner');
+    await expect(effort).toBeEnabled();
+    await select(page, modal, 'Reasoning effort', 'X-High');
+    await select(page, modal, 'Model', 'Plain model');
+    await expect(effort).toBeDisabled();
+    await expect(effort).toHaveText('Default');
+    await select(page, modal, 'Model', 'Task reasoner');
+    await expect(effort).toHaveText('Default');
+    await select(page, modal, 'Reasoning effort', 'High');
     await modal.getByPlaceholder('Task name (optional)').fill('Scheduled review with selected VP');
     await modal.locator('.workdir-browse-btn').click();
     const picker = page.locator('.folder-picker-dialog');
@@ -108,11 +123,25 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     await select(page, modal, 'Trigger', 'Schedule');
     await select(page, modal, 'Repeat', 'Every day');
     await expect(modal.locator('.work-center-schedule-preview')).toBeVisible();
-    for (const width of [1440, 320]) {
-      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'light'], [320, 'dark']]) {
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       await page.setViewportSize({ width, height: 900 });
-      await noOverflow(page, ['.yeaft-session-create-modal', '.scheduled-task-create-body', '.scheduled-task-editor']);
-      await shot(page, testInfo, `task-create-light-${width}.png`);
+      await effort.scrollIntoViewIfNeeded();
+      await expect(effort).toBeVisible();
+      const modelBounds = await modal.getByRole('combobox', { name: 'Model', exact: true }).boundingBox();
+      const effortBounds = await effort.boundingBox();
+      expect(Math.abs(modelBounds.y - effortBounds.y)).toBeLessThan(2);
+      expect(effortBounds.x).toBeGreaterThan(modelBounds.x + modelBounds.width);
+      await noOverflow(page, ['.yeaft-session-create-modal', '.scheduled-task-create-body', '.scheduled-task-editor', '.task-model-fields']);
+      await effort.focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('option', { name: 'X-High', exact: true })).toBeVisible();
+      await page.keyboard.press('End');
+      await page.keyboard.press('Enter');
+      await expect(effort).toBeFocused();
+      await expect(effort).toHaveText('X-High');
+      await select(page, modal, 'Reasoning effort', 'High');
+      await shot(page, testInfo, `task-create-${theme}-${width}.png`);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
     await modal.getByRole('button', { name: 'Create task', exact: true }).click();
@@ -121,6 +150,7 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     expect(created.requestId).toBeTruthy();
     expect(created.payload).toMatchObject({ name: 'Scheduled review with selected VP',
       workDir: '/tmp/test/review-workspace', roster: ['reviewer'], defaultVpId: 'reviewer',
+      config: { model: 'test/reasoner', modelEffort: 'high' },
       task: { prompt: prompt.trim(), enabled: true, notify: true, trigger: { type: 'schedule',
         scheduledFor: expect.any(Number), recurrence: { frequency: 'daily', timeZone: expect.any(String) } } } });
     expect(created.payload.task.trigger.scheduledFor).toBeGreaterThan(Date.now());
@@ -151,6 +181,11 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     const sent = await other.waitForMessage('yeaft_session_send');
     expect(sent).toMatchObject({ sessionId: 'created-task-1', text: 'Explain the latest task result' });
     expect(secondary.sessions.get('created-task-1').task.trigger.type).toBe('schedule');
+    expect(secondary.sessions.get('created-task-1').config).toEqual({ model: 'test/reasoner', modelEffort: 'high' });
+    await page.reload();
+    await expect.poll(() => page.evaluate(({ agentId }) => window.Pinia.useSessionsStore()
+      .sessionById('created-task-1', agentId)?.config, { agentId: other.agentId }))
+      .toEqual({ model: 'test/reasoner', modelEffort: 'high' });
     expect(mockAgent.messages('yeaft_session_send')).toHaveLength(0);
     await shot(page, testInfo, 'task-session-conversation.png');
   } finally { await other.disconnect(); }

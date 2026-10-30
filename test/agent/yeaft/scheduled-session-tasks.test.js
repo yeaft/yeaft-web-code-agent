@@ -358,6 +358,7 @@ it('waits for Server context after restart then executes native ingress and wait
     expect(store.loadVisibleBySession('session_task', Infinity, Infinity).messages.some(row => row.role === 'user' && row.content === task().prompt)).toBe(true);
     expect(queryInput).toMatchObject({ prompt: expect.stringContaining(task().prompt), projectInstruction: 'Always verify recovery evidence.', projectLabel: 'Server Project (server-project)' });
     expect(requests[0].system).toContain('Always verify recovery evidence.');
+    expect(requests[0]).toMatchObject({ model: 'test/model', effort: 'high', effortSource: 'user' });
     expect(read().task).toMatchObject({ nextRunAt: null, _scheduledRuns: 1, lastRun: { trigger: 'schedule' } });
     const snapshot = ctx.outboundSendQueue.find(item => item.msg.event?.type === 'session_list_updated').msg.event.sessions;
     expect(snapshot.find(row => row.id === 'session_task').config).toEqual(config);
