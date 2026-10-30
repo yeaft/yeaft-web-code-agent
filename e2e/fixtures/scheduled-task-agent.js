@@ -2,7 +2,7 @@
 // all inventory, CRUD, history and notifications travel over real WebSockets.
 import { randomUUID } from 'node:crypto';
 
-export const TASK_CAPABILITIES = ['work_center', 'plaintext-ok', 'workbench_session_routes', 'scheduled_tasks'];
+export const TASK_CAPABILITIES = ['work_center', 'plaintext-ok', 'workbench_session_routes', 'scheduled_tasks', 'scheduled_task_month_days'];
 export const TASK_SESSION_ID = 'shared-task-session';
 export const CHAT_SESSION_ID = 'ordinary-session';
 

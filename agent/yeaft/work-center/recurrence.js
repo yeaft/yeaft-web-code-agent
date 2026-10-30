@@ -13,7 +13,7 @@ export function validateScheduleTimestamp(value, name = 'scheduledFor') {
 export function normalizeRecurrence(value) {
   if (value == null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid recurrence');
-  const allowed = ['frequency', 'timeZone', 'time', 'weekdays', 'dayOfMonth', 'endsAt', 'maxRuns'];
+  const allowed = ['frequency', 'timeZone', 'time', 'weekdays', 'dayOfMonth', 'daysOfMonth', 'endsAt', 'maxRuns'];
   if (Object.keys(value).some(key => !allowed.includes(key))) throw new Error('Unknown recurrence field');
   if (!['daily', 'weekdays', 'weekly', 'monthly'].includes(value.frequency)) throw new Error('Invalid recurrence frequency');
   if (typeof value.timeZone !== 'string' || value.timeZone.length > 100 || /^[+-]/.test(value.timeZone)) throw new Error('Invalid recurrence timeZone');
@@ -24,12 +24,17 @@ export function normalizeRecurrence(value) {
       || new Set(value.weekdays).size !== value.weekdays.length)) throw new Error('Invalid recurrence weekdays');
   if (value.frequency === 'weekly' && !value.weekdays?.length) throw new Error('Weekly recurrence requires weekdays');
   if (value.dayOfMonth !== undefined && (!Number.isInteger(value.dayOfMonth) || value.dayOfMonth < 1 || value.dayOfMonth > 31)) throw new Error('Invalid recurrence dayOfMonth');
-  if (value.frequency === 'monthly' && value.dayOfMonth === undefined) throw new Error('Monthly recurrence requires dayOfMonth');
+  if (value.daysOfMonth !== undefined && (!Array.isArray(value.daysOfMonth) || !value.daysOfMonth.length || value.daysOfMonth.length > 31
+      || [...value.daysOfMonth].some(day => !Number.isInteger(day) || day < 1 || day > 31)
+      || new Set(value.daysOfMonth).size !== value.daysOfMonth.length)) throw new Error('Invalid recurrence daysOfMonth');
+  if (value.dayOfMonth !== undefined && value.daysOfMonth !== undefined) throw new Error('Recurrence cannot contain both dayOfMonth and daysOfMonth');
+  if (value.frequency === 'monthly' && value.dayOfMonth === undefined && value.daysOfMonth === undefined) throw new Error('Monthly recurrence requires dayOfMonth or daysOfMonth');
   if (value.endsAt != null) validateScheduleTimestamp(value.endsAt, 'endsAt');
   if (value.maxRuns != null && (!Number.isInteger(value.maxRuns) || value.maxRuns < 1 || value.maxRuns > 1000)) throw new Error('Invalid recurrence maxRuns');
   return { frequency: value.frequency, timeZone: value.timeZone, time: value.time,
     ...(value.weekdays !== undefined ? { weekdays: [...value.weekdays].sort() } : {}),
     ...(value.dayOfMonth !== undefined ? { dayOfMonth: value.dayOfMonth } : {}),
+    ...(value.daysOfMonth !== undefined ? { daysOfMonth: [...value.daysOfMonth].sort((a, b) => a - b) } : {}),
     endsAt: value.endsAt ?? null, maxRuns: value.maxRuns ?? null };
 }
 
@@ -66,7 +71,8 @@ function matchesDate(date, recurrence) {
   if (recurrence.frequency === 'weekly') return recurrence.weekdays.includes(weekday);
   if (recurrence.frequency === 'monthly') {
     const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-    return d.getUTCDate() === Math.min(recurrence.dayOfMonth, last);
+    // Match each civil date once even when several selected days clamp to month-end.
+    return (recurrence.daysOfMonth ?? [recurrence.dayOfMonth]).some(day => d.getUTCDate() === Math.min(day, last));
   }
   return true;
 }

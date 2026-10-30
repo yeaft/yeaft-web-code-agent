@@ -4847,7 +4847,7 @@ export const useChatStore = defineStore('chat', {
     // store fields; until then this is a thin facade.
     createYeaftSession({ displayName, vpIds, defaultVpId, workDir, agentId, task, config } = {}) {
       if (task !== undefined) {
-        const rejection = scheduledTaskHelpers.scheduledTaskRequestError(this, agentId, 'create');
+        const rejection = scheduledTaskHelpers.scheduledTaskRequestError(this, agentId, 'create', task);
         if (rejection) return Promise.resolve(rejection);
       }
       const roster = Array.isArray(vpIds) ? vpIds.slice() : [];

@@ -44,6 +44,14 @@ describe('Session-backed task store integration', () => {
     store.agents[0].online = false;
     await expect(tasks.runScheduledTask(store, { agentId: 'a', sessionId: 'same' })).resolves.toMatchObject({ ok: false, error: { code: 'agent_offline' } });
     expect(store.sessionCrudRequest).toHaveBeenCalledTimes(2);
+    store.agents[0].online = true;
+    const task = { prompt: 'Monthly', trigger: { type: 'schedule', recurrence: { frequency: 'monthly', daysOfMonth: [1, 15] } } };
+    await expect(tasks.updateScheduledTask(store, { agentId: 'a', sessionId: 'same', task })).resolves.toMatchObject({ error: { code: 'scheduled_task_month_days_unsupported' } });
+    await expect(options.chat.actions.createYeaftSession.call(store, { agentId: 'a', task })).resolves.toMatchObject({ error: { code: 'scheduled_task_month_days_unsupported' } });
+    expect(store.sessionCrudRequest).toHaveBeenCalledTimes(2);
+    store.agents[0].capabilities.push('scheduled_task_month_days');
+    await expect(tasks.updateScheduledTask(store, { agentId: 'a', sessionId: 'same', task })).resolves.toEqual({ ok: true });
+
   });
 
   it('normalizes task metadata and updates without switching the active conversation', () => {

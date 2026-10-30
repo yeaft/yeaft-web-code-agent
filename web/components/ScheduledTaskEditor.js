@@ -6,7 +6,8 @@ export function newScheduledTask() {
 }
 
 function draftForTrigger(trigger) {
-  const draft = scheduleDraft();
+  const initial = scheduleDraft();
+  const draft = { ...initial, daysOfMonth: [initial.dayOfMonth] };
   if (trigger?.type !== 'schedule') return draft;
   const recurrence = trigger.recurrence;
   const timeZone = recurrence?.timeZone || draft.timeZone;
@@ -17,6 +18,7 @@ function draftForTrigger(trigger) {
       frequency: recurrence?.frequency || 'once',
       weekdays: recurrence?.weekdays || draft.weekdays,
       dayOfMonth: recurrence?.dayOfMonth || Number(local.date.slice(-2)),
+      daysOfMonth: recurrence?.daysOfMonth || [recurrence?.dayOfMonth || Number(local.date.slice(-2))],
       end: recurrence?.endsAt ? 'date' : recurrence?.maxRuns ? 'count' : 'never',
       endDate: recurrence?.endsAt ? dateInZone(recurrence.endsAt, timeZone).date : '',
       maxRuns: recurrence?.maxRuns || draft.maxRuns,
@@ -32,6 +34,7 @@ export default {
   props: {
     modelValue: { type: Object, required: true },
     disabled: { type: Boolean, default: false },
+    monthlyMultipleSupported: { type: Boolean, default: false },
   },
   emits: ['update:modelValue', 'valid'],
   data() {
@@ -54,7 +57,8 @@ export default {
       if (this.modelValue.trigger.type === 'manual') return true;
       // An existing completed one-off or recurring schedule can be left intact
       // when editing prompt / notification settings, even if its start is past.
-      return !this.scheduleTouched || (this.scheduleValid && !scheduleFormResult(this.schedule).error);
+      return !this.scheduleTouched || (this.scheduleValid && !scheduleFormResult(this.schedule).error
+        && (this.monthlyMultipleSupported || this.schedule.frequency !== 'monthly' || this.schedule.daysOfMonth?.length <= 1));
     },
   },
   watch: {
@@ -76,11 +80,17 @@ export default {
   },
   template: `
     <fieldset class="scheduled-task-editor" :disabled="disabled">
+      <div class="scheduled-task-main">
+      <slot name="heading"></slot>
       <label class="scheduled-task-field scheduled-task-prompt">
-        <span class="scheduled-task-field-title">{{ $t('scheduledTasks.prompt') }}</span>
+        <span class="scheduled-task-field-title">{{ $t('scheduledTasks.prompt') }}<span class="task-required">{{ $t('scheduledTasks.required') }}</span></span>
         <span class="scheduled-task-help">{{ $t('scheduledTasks.promptHint') }}</span>
-        <textarea :value="modelValue.prompt" rows="5" required :disabled="disabled" :aria-label="$t('scheduledTasks.prompt')" :placeholder="$t('scheduledTasks.promptPlaceholder')" @input="patch('prompt', $event.target.value)"></textarea>
+        <textarea :value="modelValue.prompt" rows="5" required aria-required="true" :disabled="disabled" :aria-label="$t('scheduledTasks.prompt')" :placeholder="$t('scheduledTasks.promptPlaceholder')" @input="patch('prompt', $event.target.value)"></textarea>
       </label>
+      <slot></slot>
+
+      </div>
+      <div class="scheduled-task-timing">
       <div class="scheduled-task-field">
         <span class="scheduled-task-field-title">{{ $t('scheduledTasks.triggerLabel') }}</span>
         <div class="scheduled-task-trigger-options" role="group" :aria-label="$t('scheduledTasks.triggerLabel')">
@@ -92,8 +102,10 @@ export default {
         <p>{{ $t('scheduledTasks.existingSchedule') }}: {{ existingScheduleLabel }} · {{ $t('workCenter.scheduling.' + schedule.frequency) }} · {{ schedule.timeZone }}</p>
         <button type="button" class="btn-secondary" :disabled="disabled" @click="scheduleTouched = true">{{ $t('scheduledTasks.changeSchedule') }}</button>
       </div>
-      <WorkCenterScheduleEditor v-else-if="modelValue.trigger?.type === 'schedule'" :model-value="schedule" :disabled="disabled" :schedule-hint="$t('scheduledTasks.scheduleHint')" recurring-supported @update:model-value="updateSchedule" @valid="scheduleValid = $event" />
+      <WorkCenterScheduleEditor v-else-if="modelValue.trigger?.type === 'schedule'" :model-value="schedule" :disabled="disabled" :schedule-hint="$t('scheduledTasks.scheduleHint')" compact :monthly-multiple-supported="monthlyMultipleSupported" recurring-supported @update:model-value="updateSchedule" @valid="scheduleValid = $event" />
       <p v-else-if="!supportedTrigger" class="scheduled-task-error" role="alert">{{ $t('scheduledTasks.unsupportedTrigger') }}</p>
+
+      </div>
       <div class="scheduled-task-options">
         <label v-for="key in ['enabled', 'notify']" :key="key" class="scheduled-task-option-row">
           <span class="scheduled-task-option-copy">
