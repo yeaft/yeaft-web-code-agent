@@ -37,65 +37,8 @@ import { buildVpDomainSections } from '../utils/vp-domains.js';
 import { modelOptionRef } from '../utils/modelRefs.js';
 import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
 
-const OMNI_VP_ID = 'omni';
-
-const VP_ROSTER_POPUP_GAP_PX = 4;
-
-/**
- * Pick a popup direction and the exact height available inside both its modal
- * clipping boundary and the current visual viewport.
- *
- * Prefer opening down when the popup already fits there. Otherwise use the
- * upper side when it fits, falling back to whichever side exposes more room.
- * The returned height is consumed as a CSS max-height, so the last checklist
- * item remains reachable through the popup's own scroller.
- *
- * @param {{top: number, bottom: number}} anchorRect
- * @param {{top: number, bottom: number}} boundaryRect
- * @param {{top: number, bottom: number}} viewportRect
- * @param {number} desiredHeight
- * @returns {{placement: 'up'|'down', availableHeight: number}}
- */
-export function resolveVpRosterPopupLayout(anchorRect, boundaryRect, viewportRect, desiredHeight = 0) {
-  const clipTop = Math.max(boundaryRect.top, viewportRect.top);
-  const clipBottom = Math.min(boundaryRect.bottom, viewportRect.bottom);
-  const above = Math.max(0, anchorRect.top - clipTop - VP_ROSTER_POPUP_GAP_PX);
-  const below = Math.max(0, clipBottom - anchorRect.bottom - VP_ROSTER_POPUP_GAP_PX);
-  const target = Math.max(0, Number(desiredHeight) || 0);
-
-  let placement = 'down';
-  if (below < target && above >= target) placement = 'up';
-  else if (below < target && above > below) placement = 'up';
-
-  return {
-    placement,
-    availableHeight: Math.floor(placement === 'up' ? above : below),
-  };
-}
-
-export default {
-  name: 'SessionCreateModal',
-  components: { FolderPickerDialog, VpAvatar, ModernSelect, ScheduledTaskEditor },
-  props: {
-    taskMode: { type: Boolean, default: false },
-    initialProvider: { type: String, default: 'yeaft' },
-    initialAgentId: { type: String, default: null },
-  },
-  emits: ['close', 'created'],
-  template: `
-    <Teleport to="body">
-    <div class="modal-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t(taskMode ? 'scheduledTasks.new' : 'yeaft.session.create.title')">
-      <div class="modal resume-modal yeaft-session-create-modal" :class="{ 'task-mode': taskMode }">
-        <header v-if="taskMode" class="task-create-header">
-          <div class="yeaft-session-create-heading">
-            <h2>{{ $t('scheduledTasks.new') }}</h2>
-            <p>{{ $t('scheduledTasks.subtitle') }}</p>
-          </div>
-          <button type="button" class="btn-ghost task-create-close" :disabled="busy" @click="requestClose" :aria-label="$t('yeaft.session.create.close')">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg>
-          </button>
-        </header>
-        <div class="session-create-flow" :class="{ 'is-task': taskMode }">
+// Both creation modes keep the same parent bindings and picker lifecycle.
+const creationControls = `
         <div class="resume-modal-controls">
           <button v-if="!taskMode" class="resume-close-btn" type="button" @click="requestClose" :aria-label="$t('yeaft.session.create.close')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -108,7 +51,7 @@ export default {
 
           <div class="yeaft-session-create-fields">
             <div class="resume-control-row">
-            <label class="resume-control-label">{{ $t('yeaft.session.create.agentLabel') }}</label>
+            <label class="resume-control-label">{{ $t('yeaft.session.create.agentLabel') }}<span v-if="taskMode" class="task-required">{{ $t('scheduledTasks.required') }}</span></label>
             <ModernSelect
               v-model="form.agentId"
               :options="agentSelectOptions"
@@ -130,7 +73,7 @@ export default {
 
           <!-- Name (optional — only consulted on Create; ignored when
                clicking a row in the resume list). -->
-          <div class="resume-control-row">
+          <div v-if="!taskMode" class="resume-control-row">
             <label class="resume-control-label">{{ $t('yeaft.session.create.nameLabel') }}</label>
             <input
               type="text"
@@ -144,37 +87,12 @@ export default {
             />
           </div>
 
-          <!-- Work directory -->
-          <div class="resume-control-row">
-            <label class="resume-control-label">{{ $t('yeaft.session.create.workDirLabel') }}</label>
-            <div class="workdir-input-group">
-              <input
-                type="text"
-                v-model.trim="form.workDir"
-                :placeholder="workDirPlaceholder"
-                autocomplete="off"
-                class="resume-input"
-                :disabled="busy"
-                @keydown.enter.prevent="onSubmit"
-              />
-              <button
-                class="workdir-browse-btn"
-                type="button"
-                @click="openFolderPicker"
-                :disabled="busy || !folderPickerAgentId"
-                :title="$t('modal.newConv.browse')"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
-              </button>
-            </div>
-            </div>
-
           <!-- VP roster (yeaft-specific) — collapsed-by-default picker.
                Trigger shows the current selection summary (names if ≤3, else
                "N selected"); clicking opens the full list below. Mirrors the
                Copilot model picker pattern from ChatPage. -->
           <div v-if="isYeaftProvider" class="resume-control-row resume-control-row-vp">
-            <label class="resume-control-label">{{ $t('yeaft.session.create.vpPicker') }}</label>
+            <label class="resume-control-label">{{ $t('yeaft.session.create.vpPicker') }}<span v-if="taskMode" class="task-required">{{ $t('scheduledTasks.required') }}</span></label>
             <div class="yeaft-roster" ref="vpRosterRoot">
               <div v-if="vpList.length === 0 && vpLibraryEmpty" class="yeaft-roster-empty">
                 {{ $t('yeaft.session.create.rosterEmpty') }}
@@ -264,16 +182,111 @@ export default {
               </template>
             </div>
           </div>
+          <!-- Work directory -->
+          <div class="resume-control-row">
+            <label class="resume-control-label">{{ $t('yeaft.session.create.workDirLabel') }}</label>
+            <div class="workdir-input-group">
+              <input
+                type="text"
+                v-model.trim="form.workDir"
+                :placeholder="workDirPlaceholder"
+                autocomplete="off"
+                class="resume-input"
+                :disabled="busy"
+                @keydown.enter.prevent="onSubmit"
+              />
+              <button
+                class="workdir-browse-btn"
+                type="button"
+                @click="openFolderPicker"
+                :disabled="busy || !folderPickerAgentId"
+                :title="$t('modal.newConv.browse')"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+              </button>
+            </div>
+            </div>
+
           <div v-if="taskMode" class="resume-control-row">
             <label class="resume-control-label">{{ $t('scheduledTasks.model') }}</label>
             <ModernSelect v-model="form.model" :options="taskModelOptions" :aria-label="$t('scheduledTasks.model')" :disabled="busy" menu-class="yeaft-session-create-select-menu" />
           </div>
           </div>
         </div>
+`;
+
+const OMNI_VP_ID = 'omni';
+
+const VP_ROSTER_POPUP_GAP_PX = 4;
+
+/**
+ * Pick a popup direction and the exact height available inside both its modal
+ * clipping boundary and the current visual viewport.
+ *
+ * Prefer opening down when the popup already fits there. Otherwise use the
+ * upper side when it fits, falling back to whichever side exposes more room.
+ * The returned height is consumed as a CSS max-height, so the last checklist
+ * item remains reachable through the popup's own scroller.
+ *
+ * @param {{top: number, bottom: number}} anchorRect
+ * @param {{top: number, bottom: number}} boundaryRect
+ * @param {{top: number, bottom: number}} viewportRect
+ * @param {number} desiredHeight
+ * @returns {{placement: 'up'|'down', availableHeight: number}}
+ */
+export function resolveVpRosterPopupLayout(anchorRect, boundaryRect, viewportRect, desiredHeight = 0) {
+  const clipTop = Math.max(boundaryRect.top, viewportRect.top);
+  const clipBottom = Math.min(boundaryRect.bottom, viewportRect.bottom);
+  const above = Math.max(0, anchorRect.top - clipTop - VP_ROSTER_POPUP_GAP_PX);
+  const below = Math.max(0, clipBottom - anchorRect.bottom - VP_ROSTER_POPUP_GAP_PX);
+  const target = Math.max(0, Number(desiredHeight) || 0);
+
+  let placement = 'down';
+  if (below < target && above >= target) placement = 'up';
+  else if (below < target && above > below) placement = 'up';
+
+  return {
+    placement,
+    availableHeight: Math.floor(placement === 'up' ? above : below),
+  };
+}
+
+export default {
+  name: 'SessionCreateModal',
+  components: { FolderPickerDialog, VpAvatar, ModernSelect, ScheduledTaskEditor },
+  props: {
+    taskMode: { type: Boolean, default: false },
+    initialProvider: { type: String, default: 'yeaft' },
+    initialAgentId: { type: String, default: null },
+  },
+  emits: ['close', 'created'],
+  template: `
+    <Teleport to="body">
+    <div class="modal-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t(taskMode ? 'scheduledTasks.new' : 'yeaft.session.create.title')">
+      <div class="modal resume-modal yeaft-session-create-modal" :class="{ 'task-mode': taskMode }">
+        <header v-if="taskMode" class="task-create-header">
+          <div class="yeaft-session-create-heading">
+            <h2>{{ $t('scheduledTasks.new') }}</h2>
+            <p>{{ $t('scheduledTasks.subtitle') }}</p>
+          </div>
+          <button type="button" class="btn-ghost task-create-close" :disabled="busy" @click="requestClose" :aria-label="$t('yeaft.session.create.close')">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </header>
+        <div class="session-create-flow" :class="{ 'is-task': taskMode }">
+        <template v-if="!taskMode">${creationControls}</template>
 
         <div v-if="taskMode" class="scheduled-task-create-body">
           <p v-if="taskAgentUnavailable" class="scheduled-task-error" role="status">{{ taskAgentUnavailable }}</p>
-          <ScheduledTaskEditor v-model="taskDraft" :disabled="busy" @valid="taskValid = $event" />
+          <ScheduledTaskEditor v-model="taskDraft" :disabled="busy" :monthly-multiple-supported="taskMonthDaysSupported" @valid="taskValid = $event">
+            <template #heading>
+              <label class="scheduled-task-field task-name-field">
+                <span class="scheduled-task-field-title">{{ $t('yeaft.session.create.nameLabel') }}</span>
+                <input type="text" v-model.trim="form.name" :placeholder="$t('scheduledTasks.namePlaceholder')" maxlength="60" autocomplete="off" class="resume-input" :disabled="busy" @keydown.enter.prevent="onSubmit" />
+              </label>
+            </template>
+            ${creationControls}
+          </ScheduledTaskEditor>
         </div>
         <!-- Content area: folders or existing Sessions for the chosen workDir -->
         <div v-if="!taskMode" class="resume-modal-content">
@@ -578,6 +591,9 @@ export default {
         { value: '', label: this.$t('scheduledTasks.defaultModel') },
         ...models.map(model => ({ value: modelOptionRef(model), label: model.label || model.id })),
       ];
+    },
+    taskMonthDaysSupported() {
+      return this.agentOptions.find(item => item.id === this.form.agentId)?.capabilities?.includes('scheduled_task_month_days') === true;
     },
     taskAgentUnavailable() {
       if (this.chat?.scheduledTaskProtocolSupported !== true) return this.$t('scheduledTasks.serverUpgrade');

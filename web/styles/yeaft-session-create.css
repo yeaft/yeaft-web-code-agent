@@ -446,6 +446,8 @@
 /* Session-backed tasks: a single form surface, with persistent actions. */
 .session-create-flow { display: contents; }
 .yeaft-session-create-modal.task-mode {
+  width: min(1120px, calc(100vw - 48px));
+  max-width: 1120px;
   height: min(820px, calc(100dvh - 48px));
   max-height: calc(100dvh - 48px);
   color: var(--text-primary);
@@ -456,7 +458,7 @@
   justify-content: space-between;
   flex: 0 0 auto;
   gap: var(--work-center-space-3);
-  padding: 24px 24px 12px;
+  padding: 20px 24px 8px;
 }
 .task-create-header .yeaft-session-create-heading { min-width: 0; }
 .task-create-header .yeaft-session-create-heading p { color: var(--text-secondary); max-width: 48ch; }
@@ -483,7 +485,7 @@
   scrollbar-gutter: stable;
 }
 .yeaft-session-create-modal.task-mode .resume-modal-controls {
-  padding: 16px 24px 28px;
+  padding: 0;
   gap: var(--work-center-space-4);
 }
 .yeaft-session-create-modal.task-mode .yeaft-session-create-fields {
@@ -496,7 +498,7 @@
   align-items: stretch;
   gap: var(--work-center-space-2);
 }
-.yeaft-session-create-modal.task-mode .resume-control-row:has(.workdir-input-group) { grid-column: 1 / -1; }
+
 .yeaft-session-create-modal.task-mode .resume-control-label { width: auto; flex: none; font-size: 13px; }
 .yeaft-session-create-modal.task-mode .resume-input,
 .yeaft-session-create-modal.task-mode .modern-select-trigger,
@@ -520,11 +522,29 @@
   padding: 16px 24px;
   background: var(--bg-main);
 }
-.scheduled-task-create-body { padding: 0 24px 24px; min-width: 0; }
+.scheduled-task-create-body { padding: 12px 24px 12px; min-width: 0; }
+.scheduled-task-create-body > .scheduled-task-error { margin-bottom: var(--work-center-space-4); }
+.scheduled-task-main, .scheduled-task-timing { display: flex; flex-direction: column; min-width: 0; gap: 20px; }
+.task-required { margin-inline-start: var(--work-center-space-2); color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+.task-name-field .resume-input { border: 1px solid var(--border-color); }
+.task-month-days { margin: 0; padding: 0; border: 0; min-width: 0; }
+.task-month-days legend { margin-bottom: var(--work-center-space-2); color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+.task-month-days-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--work-center-space-1); }
+.scheduled-task-editor .task-month-days-grid .btn-secondary { min-width: 0; padding: 4px; min-height: 34px; }
+.task-month-days .work-center-field-help { margin-top: var(--work-center-space-2); }
+.scheduled-task-editor .task-month-days-grid button[aria-pressed="true"],
+.scheduled-task-editor .work-center-schedule-weekdays button[aria-pressed="true"] { background: var(--bg-user-msg); color: var(--text-primary); border-color: var(--accent-blue); }
+.task-schedule-advanced { color: var(--text-secondary); font-size: 12px; }
+.task-schedule-advanced summary { display: list-item; min-height: 32px; padding-block: 8px; cursor: pointer; }
+.task-schedule-advanced summary:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; border-radius: var(--agent-setup-control-radius); }
+.task-schedule-advanced[open] { display: grid; gap: var(--work-center-space-3); }
+.scheduled-task-editor .work-center-schedule-weekdays { margin: 0; padding: 0; }
+.scheduled-task-editor .work-center-schedule-weekdays .btn-secondary { padding-inline: 4px; }
+
 .scheduled-task-editor {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 20px;
   min-width: 0;
   padding: 0;
   margin: 0;
@@ -591,7 +611,7 @@
 .scheduled-task-settings { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
 .scheduled-task-settings-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 24px; }
 .scheduled-task-settings-scroll > .scheduled-task-help { margin-bottom: var(--work-center-space-4); }
-.scheduled-task-settings .scheduled-task-editor { max-width: 640px; margin-inline: auto; }
+.scheduled-task-settings .scheduled-task-editor { margin-inline: auto; }
 .scheduled-task-settings-footer { flex: 0 0 auto; padding: 16px 24px; background: var(--bg-main); }
 .scheduled-task-settings-footer > .scheduled-task-error { margin-bottom: var(--work-center-space-3); max-height: 72px; overflow-y: auto; }
 .scheduled-task-save-row { display: flex; align-items: center; justify-content: space-between; gap: var(--work-center-space-3); }
@@ -643,7 +663,7 @@
 .scheduled-task-dismiss:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
 
 @media (min-width: 641px) {
-  .task-settings-modal { width: min(760px, 92vw); height: min(760px, 90dvh); }
+  .task-settings-modal { width: min(1120px, 94vw); height: min(820px, calc(100dvh - 48px)); }
 }
 @media (max-width: 640px) {
   .task-settings-modal .group-settings-header { padding: 16px 16px 8px; }
@@ -665,7 +685,7 @@
   .scheduled-task-editor .work-center-schedule-field input,
   .scheduled-task-editor .work-center-schedule-field .modern-select-trigger,
   .scheduled-task-editor .schedule-date-picker .schedule-date-picker__trigger { min-height: 44px; }
-  .yeaft-session-create-modal.task-mode .resume-modal-controls { padding: 12px 16px 28px; }
+  .yeaft-session-create-modal.task-mode .resume-modal-controls { padding: 0; }
   .yeaft-session-create-modal.task-mode .yeaft-session-create-fields { grid-template-columns: minmax(0, 1fr); gap: var(--work-center-space-4); }
   .yeaft-session-create-modal.task-mode .resume-control-row { flex-direction: column; align-items: stretch; }
   .yeaft-session-create-modal.task-mode .resume-control-label { width: auto; flex: none; }
@@ -677,3 +697,24 @@
 }
 
 .scheduled-task-trigger-options .btn[aria-pressed="true"] { background: var(--bg-user-msg); border-color: var(--text-secondary); color: var(--text-primary); }
+
+@media (min-width: 901px) {
+  .scheduled-task-editor { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "main timing" "options timing"; align-items: start; gap: 16px 32px; }
+  .scheduled-task-main { grid-area: main; }
+  .scheduled-task-timing { grid-area: timing; }
+  .scheduled-task-options { grid-area: options; }
+  .scheduled-task-main, .scheduled-task-timing { gap: var(--work-center-space-4); }
+  .scheduled-task-editor .work-center-schedule-editor { gap: var(--work-center-space-3); }
+  .scheduled-task-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--work-center-space-4); }
+  .scheduled-task-option-row { gap: var(--work-center-space-2); }
+  .scheduled-task-options .scheduled-task-help { display: none; }
+  .scheduled-task-field textarea { min-height: 140px; height: 140px; }
+  .scheduled-task-prompt .scheduled-task-help { display: none; }
+  .scheduled-task-settings-scroll { padding-top: 20px; }
+}
+@media (max-width: 640px) {
+  .scheduled-task-editor .task-month-days-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .scheduled-task-editor .task-month-days-grid .btn-secondary { min-height: 44px; }
+  .task-schedule-advanced summary { min-height: 44px; padding-block: 12px; }
+  .scheduled-task-editor .work-center-schedule-weekdays > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--work-center-space-1); }
+}

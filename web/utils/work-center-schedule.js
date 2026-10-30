@@ -67,7 +67,9 @@ export function scheduleFormResult(draft, now = Date.now()) {
   try { new Intl.DateTimeFormat('en', { timeZone: draft.timeZone }).format(); }
   catch { return { error: 'invalidTimeZone' }; }
   if (draft.frequency === 'weekly' && (!draft.weekdays?.length || draft.weekdays.some(day => !Number.isInteger(day) || day < 0 || day > 6))) return { error: 'chooseWeekdays' };
-  if (draft.frequency === 'monthly' && (!Number.isInteger(Number(draft.dayOfMonth)) || draft.dayOfMonth < 1 || draft.dayOfMonth > 31)) return { error: 'invalidMonthDay' };
+  const monthDays = draft.daysOfMonth ?? [Number(draft.dayOfMonth)];
+  if (draft.frequency === 'monthly' && (!Array.isArray(monthDays) || !monthDays.length || monthDays.length > 31
+      || monthDays.some(day => !Number.isInteger(day) || day < 1 || day > 31))) return { error: 'invalidMonthDay' };
   let scheduledFor = null;
   const start = Date.parse(`${draft.date}T00:00:00Z`);
   for (let offset = 0; offset < (draft.frequency === 'once' ? 1 : 370); offset++) {
@@ -76,7 +78,7 @@ export function scheduleFormResult(draft, now = Date.now()) {
     if (draft.frequency === 'weekdays' && (weekday === 0 || weekday === 6)) continue;
     if (draft.frequency === 'weekly' && !draft.weekdays.includes(weekday)) continue;
     const lastDay = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() + 1, 0)).getUTCDate();
-    if (draft.frequency === 'monthly' && day.getUTCDate() !== Math.min(Number(draft.dayOfMonth), lastDay)) continue;
+    if (draft.frequency === 'monthly' && !monthDays.some(value => day.getUTCDate() === Math.min(value, lastDay))) continue;
     scheduledFor = wallTimeToEpoch(day.toISOString().slice(0, 10), draft.time, draft.timeZone);
     if (scheduledFor != null) break;
   }
@@ -99,7 +101,8 @@ export function scheduleFormResult(draft, now = Date.now()) {
   return { scheduledFor, recurrence: {
     frequency: draft.frequency, timeZone: draft.timeZone, time: draft.time,
     ...(draft.frequency === 'weekly' ? { weekdays: [...new Set(draft.weekdays)].sort() } : {}),
-    ...(draft.frequency === 'monthly' ? { dayOfMonth: Number(draft.dayOfMonth) } : {}),
+    ...(draft.frequency === 'monthly' ? (monthDays.length === 1
+      ? { dayOfMonth: monthDays[0] } : { daysOfMonth: [...new Set(monthDays)].sort((a, b) => a - b) }) : {}),
     endsAt, maxRuns,
   } };
 }

@@ -43,7 +43,9 @@ export default {
   },
   computed: {
     chat() { try { return window.Pinia?.useChatStore?.() || null; } catch { return null; } },
-    unavailable() { return scheduledTaskUnavailable(this.chat, this.agentId, this.sessionId, this.task, { allowRunning: true }); },
+    monthDaysSupported() { return this.chat?.agents?.find(item => item.id === this.agentId)?.capabilities?.includes('scheduled_task_month_days') === true; },
+    unavailable() { return scheduledTaskUnavailable(this.chat, this.agentId, this.sessionId, this.task, { allowRunning: true })
+      || (this.draft.trigger?.recurrence?.daysOfMonth && !this.monthDaysSupported ? 'scheduledTasks.monthDaysUpgrade' : ''); },
     dirty() { return configKey(this.draft) !== this.baseKey; },
     snapshotKey() { return configKey({ config: taskConfig(this.task), revision: this.task.revision }); },
     canSave() { return !this.busy && this.valid && this.dirty && !this.stale && !this.unavailable; },
@@ -113,7 +115,7 @@ export default {
           <p>{{ $t('scheduledTasks.stale') }}</p>
           <button type="button" class="btn btn-secondary" :disabled="busy" @click="reload">{{ $t('scheduledTasks.reload') }}</button>
         </div>
-        <ScheduledTaskEditor :key="editorVersion" v-model="draft" :disabled="busy || !!unavailable" @valid="valid = $event" />
+        <ScheduledTaskEditor :key="editorVersion" v-model="draft" :monthly-multiple-supported="monthDaysSupported" :disabled="busy || !!unavailable" @valid="valid = $event" />
       </div>
       <footer class="scheduled-task-settings-footer">
         <p v-if="error" class="scheduled-task-error" role="alert">{{ error }}</p>

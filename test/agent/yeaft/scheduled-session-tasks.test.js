@@ -25,7 +25,10 @@ it('rejects invalid task specs before creating any Session or discovery metadata
   for (const invalid of [task({ prompt: '  ' }), task({ enabled: 'yes' }), task({ notify: 1 }),
     task({ lastRun: { status: 'completed' } }), task({ nextRunAt: 0 }), task({ revision: 'forged' }),
     task({ _revision: 'forged' }), task({ prompt: 'x'.repeat(65537) }),
-    task({ trigger: { type: 'schedule', scheduledFor: -1 } }), task({ trigger: { type: 'cron' } })]) {
+    task({ trigger: { type: 'schedule', scheduledFor: -1 } }), task({ trigger: { type: 'cron' } }),
+    ...[{}, { daysOfMonth: [] }, { daysOfMonth: [0] }, { daysOfMonth: [32] }, { daysOfMonth: [1, 1] },
+      { dayOfMonth: 1, daysOfMonth: [1] }].map(days => task({ trigger: { type: 'schedule', scheduledFor: 1000,
+      recurrence: { frequency: 'monthly', timeZone: 'UTC', time: '12:00', ...days } } }))]) {
     expect(() => createSessionFromSpec(root, { name: 'Invalid', roster: [], task: invalid })).toThrow();
   }
   expect(existsSync(join(root, 'sessions'))).toBe(false);
@@ -38,6 +41,54 @@ function seed(definition = task(), id = 'session_task') {
   const h = createSession(join(root, 'sessions'), { id, roster: ['alpha'], defaultVpId: 'alpha', task: definition });
   h.close();
 }
+
+it('persists monthly dates across reopen/edit and advances the scheduler once per clamped civil date', async () => {
+  setup();
+  const epoch = value => Date.parse(value);
+  let now = epoch('2026-02-01T11:00:00Z');
+  const monthly = { frequency: 'monthly', timeZone: 'UTC', time: '12:00' };
+  seed(task({ trigger: { type: 'schedule', scheduledFor: now, recurrence: { ...monthly, daysOfMonth: [31, 1, 30, 29] } } }));
+  seed(task({ trigger: { type: 'schedule', scheduledFor: now, recurrence: { ...monthly, dayOfMonth: 31 } } }), 'session_legacy');
+  const handle = openSession(join(root, 'sessions'), 'session_task');
+  try {
+    expect(handle.getMeta().task).toMatchObject({ nextRunAt: epoch('2026-02-01T12:00:00Z'),
+      trigger: { recurrence: { ...monthly, daysOfMonth: [1, 29, 30, 31] } } });
+    expect(handle.getMeta().task.trigger.recurrence).not.toHaveProperty('dayOfMonth');
+  } finally { handle.close(); }
+  const legacyBytes = readFileSync(join(root, 'sessions/session_legacy/session.json'));
+  const { ScheduledTaskScheduler } = await schedulerModule();
+  const calls = [];
+  const scheduler = new ScheduledTaskScheduler({ yeaftDir: root, now: () => now, dispatch: msg => calls.push(msg), isActive: () => false });
+  try {
+    scheduler.start();
+    expect(readFileSync(join(root, 'sessions/session_legacy/session.json'))).toEqual(legacyBytes);
+    for (const [at, next] of [['2026-02-01T12:00:00Z', '2026-02-28T12:00:00Z'],
+      ['2026-02-28T12:00:00Z', '2026-03-01T12:00:00Z'], ['2026-03-01T12:00:00Z', '2026-03-29T12:00:00Z']]) {
+      now = epoch(at);
+      await scheduler.tick();
+      scheduler.observe('session_task', { type: 'vp_turn_end', reason: 'end_turn' });
+      await scheduler.tick(); await scheduler.tick();
+      expect(read().task).toMatchObject({ nextRunAt: epoch(next), lastRun: { status: 'completed', startedAt: now } });
+    }
+    expect(calls.filter(msg => msg.sessionId === 'session_task')).toHaveLength(3);
+    expect(read().task._scheduledRuns).toBe(3);
+    // Legacy storage is untouched until its own scheduled execution and keeps its singular format.
+    expect(JSON.parse(legacyBytes).task.trigger.recurrence).toEqual({ ...monthly, dayOfMonth: 31, endsAt: null, maxRuns: null });
+    expect(read('session_legacy').task).toMatchObject({ _scheduledRuns: 1, nextRunAt: epoch('2026-03-31T12:00:00Z') });
+    expect(read('session_legacy').task.trigger.recurrence).not.toHaveProperty('daysOfMonth');
+    const revision = read().task._revision;
+    const currentTrigger = read().task.trigger;
+    expect(scheduler.update('session_task', { trigger: { ...currentTrigger, recurrence: { ...monthly, daysOfMonth: [31, 30, 29, 1] } } }, revision).task.revision).toBe(revision);
+    expect(read().task._scheduledRuns).toBe(3);
+    scheduler.update('session_task', { trigger: { ...currentTrigger, scheduledFor: now, recurrence: { ...monthly, daysOfMonth: [5, 20] } } }, revision);
+    expect(read().task.trigger.recurrence.daysOfMonth).toEqual([5, 20]);
+    expect(read().task.nextRunAt).toBe(epoch('2026-03-05T12:00:00Z'));
+    const changed = readFileSync(join(root, 'sessions/session_task/session.json'));
+    expect(() => scheduler.update('session_task', { trigger: { ...currentTrigger,
+      recurrence: { ...monthly, dayOfMonth: 5, daysOfMonth: [5] } } }, read().task._revision)).toThrow(/both/);
+    expect(readFileSync(join(root, 'sessions/session_task/session.json'))).toEqual(changed);
+  } finally { scheduler.stop(); }
+});
 
 it('holds a run across routing and active work, rejects reentry, and preserves edits at completion', async () => {
   setup(); seed();

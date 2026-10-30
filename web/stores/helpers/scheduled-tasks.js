@@ -43,17 +43,18 @@ export function bindScheduledTaskNotificationOwner(store, nextOwnerId) {
   receiptState.delete(store);
 }
 
-export function scheduledTaskRequestError(store, agentId, op) {
+export function scheduledTaskRequestError(store, agentId, op, task) {
   const agent = store.agents?.find(row => row.id === agentId);
   const error = store.scheduledTaskProtocolSupported !== true ? 'scheduled_task_server_unsupported'
     : !agentId ? 'missing_agent'
     : !agent?.online || store.ws?.readyState !== 1 ? 'agent_offline'
-      : !agent.capabilities?.includes('scheduled_tasks') ? 'scheduled_tasks_unsupported' : null;
+      : !agent.capabilities?.includes('scheduled_tasks') ? 'scheduled_tasks_unsupported'
+        : task?.trigger?.recurrence?.daysOfMonth && !agent.capabilities.includes('scheduled_task_month_days') ? 'scheduled_task_month_days_unsupported' : null;
   return error ? { ok: false, op, error: { code: error } } : null;
 }
 
 export function updateScheduledTask(store, { agentId, sessionId, task, expectedRevision } = {}) {
-  const rejection = scheduledTaskRequestError(store, agentId, 'update_task');
+  const rejection = scheduledTaskRequestError(store, agentId, 'update_task', task);
   if (rejection) return Promise.resolve(rejection);
   return store.sessionCrudRequest('update_task', { sessionId, task, expectedRevision }, { agentId });
 }

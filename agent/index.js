@@ -178,7 +178,7 @@ async function detectCapabilities() {
   // agent build can speak plaintext WS frames. New servers see this and
   // flip `agent.encryptOutbound = false`, stopping outbound encryption
   // to this peer. Old servers ignore the unknown capability token.
-  const capabilities = ['scheduled_tasks', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
+  const capabilities = ['scheduled_tasks', 'scheduled_task_month_days', 'background_tasks', 'file_editor', 'ping_session', 'plaintext-ok', 'workbench_session_routes', 'workbench_request_correlation', 'workbench_terminal_cleanup_fence', 'workbench_file_content_chunks', 'workbench_video_stream', 'session_history_search', 'session_history_outline', 'session_history_window_prefetch', 'session_fork_from_turn', 'session_fork_while_running', 'session_merge', 'file_reference_resolution', 'response_image_preview', 'yeaft_plugins', 'yeaft_managed_skills', 'settings_request_correlation', 'work_center_feature_settings'];
   capabilities.push('digital_person', getAgentUpgradeCapability());
   if (ctx.CONFIG?.workCenterEnabled === true) {
     capabilities.push('work_center', 'work_center_message_v2', 'work_center_workbench');

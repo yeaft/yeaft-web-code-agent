@@ -2864,6 +2864,11 @@ export default {
   'workCenter.settings.instructionReset': 'Restore default',
 
   // Session-backed tasks
+  "scheduledTasks.required": "Required",
+  "scheduledTasks.monthDays": "Days of the month · select one or more",
+  "scheduledTasks.shortMonth": "Dates missing from a short month run on its last day, once per day.",
+  "scheduledTasks.monthDaysUpgrade": "Update this Agent to select multiple dates. A single date remains available.",
+  "scheduledTasks.moreScheduleOptions": "More options · time zone, start and end",
   "scheduledTasks.promptHint": "Instructions sent to this Session on every run.",
   "scheduledTasks.triggerHint.manual": "Run only when you choose Run now.",
   "scheduledTasks.triggerHint.schedule": "Run automatically at the times below.",

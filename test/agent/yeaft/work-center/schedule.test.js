@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WorkItemStore } from '../../../../agent/yeaft/work-center/store.js';
 import { WorkflowController } from '../../../../agent/yeaft/work-center/controller.js';
 import { WorkCenterService } from '../../../../agent/yeaft/work-center/service.js';
-import { nextOccurrence, latestOccurrence, normalizeRecurrence, MAX_SCHEDULE_TIMESTAMP } from '../../../../agent/yeaft/work-center/recurrence.js';
+import { initialOccurrence, nextOccurrence, latestOccurrence, normalizeRecurrence, MAX_SCHEDULE_TIMESTAMP } from '../../../../agent/yeaft/work-center/recurrence.js';
 
 describe('scheduled WorkItems', () => {
   const cleanups = [];
@@ -146,6 +146,28 @@ describe('recurring schedules', () => {
 });
 
 describe('schedule calendar in the persisted browser timezone', () => {
+  it('normalizes exclusive monthly formats without changing legacy shapes or accepting malformed dates', () => {
+    const monthly = { frequency: 'monthly', timeZone: 'UTC', time: '09:00' };
+    const legacy = normalizeRecurrence({ ...monthly, dayOfMonth: 31 });
+    expect(legacy).toEqual({ ...monthly, dayOfMonth: 31, endsAt: null, maxRuns: null });
+    expect(normalizeRecurrence(legacy)).toEqual(legacy);
+    const input = { ...monthly, daysOfMonth: [31, 2, 10, 1] };
+    const normalized = normalizeRecurrence(input);
+    expect(normalized).toEqual({ ...monthly, daysOfMonth: [1, 2, 10, 31], endsAt: null, maxRuns: null });
+    expect(normalizeRecurrence(normalized)).toEqual(normalized);
+    expect(input.daysOfMonth).toEqual([31, 2, 10, 1]);
+    expect(normalized.daysOfMonth).not.toBe(input.daysOfMonth);
+    expect(normalizeRecurrence({ ...monthly, daysOfMonth: Array.from({ length: 31 }, (_, i) => i + 1) }).daysOfMonth).toHaveLength(31);
+    expect(normalizeRecurrence({ ...monthly, daysOfMonth: [15] })).not.toHaveProperty('dayOfMonth');
+    for (const daysOfMonth of [null, [], [0], [32], [1.5], ['1'], [1, 1], 1, {}, [undefined],
+      new Array(1), Array.from({ length: 32 }, (_, i) => i + 1)]) {
+      expect(() => normalizeRecurrence({ ...monthly, daysOfMonth })).toThrow(/daysOfMonth/);
+    }
+    expect(() => normalizeRecurrence(monthly)).toThrow(/requires dayOfMonth or daysOfMonth/);
+    expect(() => normalizeRecurrence({ ...monthly, dayOfMonth: 1, daysOfMonth: [1] })).toThrow(/both/);
+    expect(() => normalizeRecurrence({ ...monthly, daysOfMonth: [1], unknown: true })).toThrow(/Unknown/);
+  });
+
   it.each([
     [{ ...daily, time: '02:30' }, '2026-03-07T07:30:00Z', '2026-03-09T06:30:00Z'],
     [{ ...daily, time: '01:30' }, '2026-11-01T05:30:00Z', '2026-11-02T06:30:00Z'],
@@ -155,6 +177,32 @@ describe('schedule calendar in the persisted browser timezone', () => {
   ])('computes %j after %s', (input, after, expected) => {
     expect(nextOccurrence(normalizeRecurrence(input), epoch(after))).toBe(epoch(expected));
   });
+  it('aligns initial/next/latest monthly dates and coalesces clamped month-end selections', () => {
+    const rule = normalizeRecurrence({ frequency: 'monthly', timeZone: 'Asia/Kolkata', time: '09:00', daysOfMonth: [1, 15, 28, 29, 30, 31] });
+    const dates = ['2026-01-31', '2026-02-01', '2026-02-15', '2026-02-28', '2026-03-01',
+      '2026-04-29', '2026-04-30', '2026-05-01',
+      '2028-02-28', '2028-02-29', '2028-03-01'];
+    for (const date of dates) {
+      const at = epoch(`${date}T03:30:00Z`);
+      expect(initialOccurrence(rule, at)).toBe(at);
+      expect(initialOccurrence(rule, at - 1)).toBe(at);
+      expect(latestOccurrence(rule, at)).toBe(at);
+      expect(latestOccurrence(rule, at + 1)).toBe(at);
+    }
+    for (const [after, expected] of [['2026-01-31', '2026-02-01'], ['2026-02-01', '2026-02-15'],
+      ['2026-02-15', '2026-02-28'], ['2026-02-28', '2026-03-01'], ['2026-04-29', '2026-04-30'],
+      ['2026-04-30', '2026-05-01'], ['2028-02-28', '2028-02-29'], ['2028-02-29', '2028-03-01']]) {
+      const at = epoch(`${after}T03:30:00Z`), next = epoch(`${expected}T03:30:00Z`);
+      expect(nextOccurrence(rule, at)).toBe(next);
+      expect(initialOccurrence(rule, at + 1)).toBe(next);
+      expect(latestOccurrence(rule, next - 1)).toBe(at);
+    }
+    const monthEnd = normalizeRecurrence({ ...rule, daysOfMonth: [29, 30, 31] });
+    expect(initialOccurrence(monthEnd, epoch('2026-02-01T00:00:00Z'))).toBe(epoch('2026-02-28T03:30:00Z'));
+    expect(nextOccurrence(monthEnd, epoch('2026-02-28T03:30:00Z'))).toBe(epoch('2026-03-29T03:30:00Z'));
+    expect(nextOccurrence(monthEnd, epoch('2028-02-29T03:30:00Z'))).toBe(epoch('2028-03-29T03:30:00Z'));
+  });
+
   it('coalesces a DST fold to the first instant and bounds the maximum date', () => {
     const rule = normalizeRecurrence({ ...daily, time: '01:30' });
     expect(latestOccurrence(rule, epoch('2026-11-01T06:45:00Z'))).toBe(epoch('2026-11-01T05:30:00Z'));

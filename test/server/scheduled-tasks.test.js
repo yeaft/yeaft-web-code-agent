@@ -85,7 +85,8 @@ describe('Session-backed scheduled tasks', () => {
     const catalog = projectSessionCatalog({ yeaftSessions: sessions.getByUser(owner) });
     expect(catalog.find(row => row.agentId === 'agent-a').task).toEqual(task);
     expect(catalog.find(row => row.agentId === 'agent-b')).not.toHaveProperty('task');
-    const replacement = { ...task, enabled: false, lastRun: { ...task.lastRun, error: 'failed', status: 'failed' } };
+    const replacement = { ...task, enabled: false, lastRun: { ...task.lastRun, error: 'failed', status: 'failed' },
+      trigger: { ...task.trigger, recurrence: { frequency: 'monthly', timeZone: 'UTC', time: '12:00', daysOfMonth: [1, 15, 31] } } };
     sessions.reconcileFromSnapshot(owner, 'agent-a', [{ id: 'same-id', task: replacement }]);
     expect(sessions.getForAgent(owner, 'agent-a', 'same-id').task).toEqual(replacement);
     sessions.reconcileFromSnapshot(owner, 'agent-a', []);

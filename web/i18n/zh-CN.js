@@ -2861,6 +2861,11 @@ export default {
   'workCenter.settings.instructionReset': '恢复默认值',
 
   // Session-backed tasks
+  "scheduledTasks.required": "必填",
+  "scheduledTasks.monthDays": "每月日期 · 可多选",
+  "scheduledTasks.shortMonth": "当月没有的日期归到月末，同一天只执行一次。",
+  "scheduledTasks.monthDaysUpgrade": "升级此 Agent 后可选择多个日期，当前仍可选择单个日期。",
+  "scheduledTasks.moreScheduleOptions": "更多选项 · 时区、开始与结束",
   "scheduledTasks.promptHint": "每次运行时，发送给此会话的指令。",
   "scheduledTasks.triggerHint.manual": "仅在你点击「立即执行」时运行。",
   "scheduledTasks.triggerHint.schedule": "按以下时间自动运行。",

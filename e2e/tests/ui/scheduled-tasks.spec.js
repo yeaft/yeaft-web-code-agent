@@ -333,13 +333,14 @@ async function scrollWithoutFooterOverlap(page, scrollerSelector, footerSelector
     element.scrollTop = element.scrollHeight;
     const footer = document.querySelector(footerSelector).getBoundingClientRect();
     const body = element.getBoundingClientRect();
-    const last = element.querySelector('.scheduled-task-options').getBoundingClientRect();
+    const last = element.querySelector('.scheduled-task-editor').getBoundingClientRect();
     return { scrollable: element.scrollHeight > element.clientHeight, scrolled: element.scrollTop > 0,
       bodyAboveFooter: body.bottom <= footer.top + 1, lastFieldAboveFooter: last.bottom <= footer.top + 1,
       footerVisible: footer.top >= 0 && footer.bottom <= innerHeight + 1,
       footerTop: footer.top, footerBottom: footer.bottom, viewportHeight: innerHeight };
   }, footerSelector);
-  expect.soft(result).toMatchObject({ scrollable: true, scrolled: true, bodyAboveFooter: true, lastFieldAboveFooter: true, footerVisible: true });
+  expect.soft(result).toMatchObject({ bodyAboveFooter: true, lastFieldAboveFooter: true, footerVisible: true });
+  if (await page.evaluate(() => innerWidth <= 900)) expect.soft(result).toMatchObject({ scrollable: true, scrolled: true });
 }
 
 test('redesigned task surfaces retain usable geometry, scrolling and keyboard controls across mobile themes and desktop', async ({ page, serverUrl, mockAgent }, testInfo) => {
@@ -411,4 +412,83 @@ test('redesigned task surfaces retain usable geometry, scrolling and keyboard co
       await settings.locator('.group-settings-close').click();
     }
   }
+});
+
+
+test('task form prioritizes required prompt and saves weekly or multiple monthly dates without desktop scrolling', async ({ page, serverUrl, mockAgent }, testInfo) => {
+  scheduledTaskAgent(mockAgent, { sessions: [] });
+  await boot(page, serverUrl, mockAgent);
+  await page.locator('.sidebar-task-create').click();
+  const modal = page.locator('.task-mode');
+  const prompt = modal.getByRole('textbox', { name: 'Prompt', exact: true });
+  await expect(prompt).toHaveAttribute('required', '');
+  await expect(prompt).toHaveAttribute('aria-required', 'true');
+  await expect(modal.getByRole('button', { name: 'Create task', exact: true })).toBeDisabled();
+  await modal.getByPlaceholder('Task name (optional)').fill('Multi-date task');
+  await prompt.fill('Review selected dates and retain results in this task.');
+  const ordering = await modal.evaluate(element => {
+    const prompt = element.querySelector('textarea');
+    const controls = element.querySelector('.resume-modal-controls');
+    return { beforeAgent: !!(prompt.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING),
+      aboveAgent: prompt.getBoundingClientRect().top < controls.getBoundingClientRect().top };
+  });
+  expect(ordering).toEqual({ beforeAgent: true, aboveAgent: true });
+  await select(page, modal, 'Trigger', 'Schedule');
+  await select(page, modal, 'Repeat', 'Every week');
+  const weekdays = modal.locator('.work-center-schedule-weekdays');
+  await weekdays.getByRole('button', { name: 'Wednesday', exact: true }).click();
+  await weekdays.getByRole('button', { name: 'Friday', exact: true }).click();
+  await expect(weekdays.locator('[aria-pressed="true"]')).toHaveCount(3);
+  await shot(page, testInfo, 'calendar-weekly-light-desktop.png');
+  await select(page, modal, 'Repeat', 'Every month');
+  const days = modal.locator('.task-month-days-grid');
+  for (const button of await days.locator('[aria-pressed="true"]').all()) await button.click();
+  await expect(modal.getByRole('button', { name: 'Create task', exact: true })).toBeDisabled();
+  for (const day of ['1', '15', '31']) await days.getByRole('button', { name: day, exact: true }).click();
+  await expect(days.locator('[aria-pressed="true"]')).toHaveText(['1', '15', '31']);
+  await expect(modal.getByRole('button', { name: 'Create task', exact: true })).toBeEnabled();
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    for (const [width, height] of [[1440, 900], [1280, 720], [390, 844], [320, 844]]) {
+      await page.setViewportSize({ width, height });
+      await noOverflow(page, ['.task-mode', '.scheduled-task-editor', '.task-month-days-grid']);
+      if (width > 900) {
+        const geometry = await modal.locator('.session-create-flow').evaluate(element => ({ height: element.clientHeight, content: element.scrollHeight }));
+        expect(geometry.content, JSON.stringify({ width, height, geometry })).toBeLessThanOrEqual(geometry.height + 1);
+        expect((await modal.boundingBox()).width).toBeGreaterThan(1000);
+      } else {
+        await touchTargets(modal, '.task-month-days-grid button, .scheduled-task-trigger-options button');
+      }
+      await shot(page, testInfo, `calendar-monthly-${theme}-${width}.png`);
+    }
+  }
+  await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'zh-CN'; });
+  await expect(prompt).toHaveAttribute('aria-label', '提示词');
+  for (const [width, height] of [[1280, 720], [320, 844]]) {
+    await page.setViewportSize({ width, height });
+    await noOverflow(page, ['.task-mode', '.scheduled-task-editor', '.task-month-days-grid']);
+    if (width > 900) expect(await modal.locator('.session-create-flow').evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
+    else await days.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, `calendar-monthly-zh-dark-${width}.png`);
+  }
+  await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'en'; });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const advanced = modal.locator('.task-schedule-advanced');
+  await advanced.locator('summary').click();
+  await select(page, modal, 'Time zone', 'Asia/Shanghai');
+  await select(page, modal, 'Ends', 'After a number of runs');
+  await modal.getByRole('spinbutton').fill('12');
+  await modal.getByRole('button', { name: 'Create task', exact: true }).click();
+  await expect(modal).not.toBeVisible();
+  const created = await mockAgent.waitForMessage('yeaft_create_session');
+  expect(created.payload.task.trigger.recurrence).toMatchObject({ frequency: 'monthly', daysOfMonth: [1, 15, 31], timeZone: 'Asia/Shanghai', maxRuns: 12 });
+  expect(created.payload.task.trigger.recurrence).not.toHaveProperty('dayOfMonth');
+  await page.locator('.scheduled-task-bar').getByRole('button', { name: 'Configure', exact: true }).click();
+  const settings = page.locator('.scheduled-task-settings');
+  await expect(settings.locator('.task-month-days-grid [aria-pressed="true"]')).toHaveText(['1', '15', '31']);
+  await settings.getByRole('textbox', { name: 'Prompt', exact: true }).fill('Updated monthly prompt.');
+  await settings.getByRole('button', { name: 'Save task', exact: true }).click();
+  await expect(settings.getByRole('button', { name: 'Save task', exact: true })).toBeDisabled();
+  const update = mockAgent.messages('yeaft_scheduled_task').find(message => message.op === 'update');
+  expect(update.task.trigger.recurrence.daysOfMonth).toEqual([1, 15, 31]);
 });

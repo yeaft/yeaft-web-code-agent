@@ -5,6 +5,8 @@ import { mount, flushPromises } from '@vue/test-utils';
 import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
 globalThis.Pinia = { defineStore: () => () => ({}) };
 const { default: SessionCreateModal } = await import('../../web/components/SessionCreateModal.js');
+import { scheduleFormResult } from '../../web/utils/work-center-schedule.js';
+import WorkCenterScheduleEditor from '../../web/components/WorkCenterScheduleEditor.js';
 import en from '../../web/i18n/en.js';
 import ScheduledTaskEditor from '../../web/components/ScheduledTaskEditor.js';
 import ScheduledTaskBar from '../../web/components/ScheduledTaskBar.js';
@@ -219,4 +221,42 @@ it('opens and dismisses notifications using their full Session identity and keep
   expect(wrapper.get('[role="alert"]').text()).toBe(en['scheduledTasks.openFailed']);
   await wrapper.get('.scheduled-task-dismiss').trigger('click');
   expect(store.dismissScheduledTaskNotification).toHaveBeenCalledWith(item.id);
+});
+
+
+it('previews monthly multi-dates and keeps single-date wire compatibility, including short months', () => {
+  const draft = { date: '2040-02-01', time: '09:30', timeZone: 'UTC', frequency: 'monthly', end: 'never', daysOfMonth: [31, 15, 1] };
+  const now = Date.UTC(2040, 0, 1);
+  expect(scheduleFormResult(draft, now)).toEqual({ scheduledFor: Date.UTC(2040, 1, 1, 9, 30), recurrence: { frequency: 'monthly', timeZone: 'UTC', time: '09:30', daysOfMonth: [1, 15, 31], endsAt: null, maxRuns: null } });
+  expect(scheduleFormResult({ ...draft, daysOfMonth: [31] }, now)).toMatchObject({ scheduledFor: Date.UTC(2040, 1, 29, 9, 30), recurrence: { dayOfMonth: 31 } });
+  expect(scheduleFormResult({ ...draft, daysOfMonth: [], dayOfMonth: 1 }, now)).toEqual({ error: 'invalidMonthDay' });
+  for (const daysOfMonth of [[0], [32], ['1'], [1.5]]) expect(scheduleFormResult({ ...draft, daysOfMonth }, now)).toEqual({ error: 'invalidMonthDay' });
+  expect(scheduleFormResult({ ...draft, daysOfMonth: undefined, dayOfMonth: 15 }, now).recurrence).toHaveProperty('dayOfMonth', 15);
+});
+
+it('rehydrates monthly multi-dates without silently changing a saved trigger on prompt-only edits', async () => {
+  const trigger = { type: 'schedule', scheduledFor: Date.UTC(2040, 0, 15, 9, 30), recurrence: { frequency: 'monthly', time: '09:30', timeZone: 'UTC', daysOfMonth: [1, 15, 31], endsAt: null, maxRuns: null } };
+  wrapper = mount(ScheduledTaskEditor, { props: { modelValue: { ...task, trigger }, monthlyMultipleSupported: true, 'onUpdate:modelValue': value => wrapper.setProps({ modelValue: value }) }, global: { mocks: { $t: t, $locale: 'en' } } });
+  expect(wrapper.vm.schedule.daysOfMonth).toEqual([1, 15, 31]);
+  expect(wrapper.findAll('.task-month-days-grid [aria-pressed="true"]').map(button => button.text())).toEqual(['1', '15', '31']);
+  await wrapper.get('textarea').setValue('Only edit the prompt');
+  expect(wrapper.props('modelValue').trigger).toEqual(trigger);
+  expect(wrapper.get('textarea').attributes('aria-required')).toBe('true');
+  expect(wrapper.get('.scheduled-task-prompt .task-required').text()).toBe('Required');
+});
+
+it('allows weekly multiple days and gates monthly multiple dates on additive Agent support', async () => {
+  const draft = { date: '2040-02-01', time: '09:30', timeZone: 'UTC', frequency: 'weekly', end: 'never', weekdays: [1], dayOfMonth: 1 };
+  wrapper = mount(WorkCenterScheduleEditor, { props: { modelValue: draft, compact: true, recurringSupported: true, 'onUpdate:modelValue': value => wrapper.setProps({ modelValue: value }) }, global: { mocks: { $t: t, $locale: 'en' } } });
+  await wrapper.get('[aria-label="Wednesday"]').trigger('click');
+  expect(wrapper.props('modelValue').weekdays).toEqual([1, 3]);
+  await wrapper.setProps({ modelValue: { ...draft, frequency: 'monthly' } });
+  await wrapper.findAll('.task-month-days-grid button')[14].trigger('click');
+  expect(wrapper.props('modelValue').daysOfMonth).toEqual([15]);
+  expect(wrapper.text()).toContain(en['scheduledTasks.monthDaysUpgrade']);
+  await wrapper.setProps({ monthlyMultipleSupported: true });
+  await wrapper.findAll('.task-month-days-grid button')[30].trigger('click');
+  expect(wrapper.props('modelValue').daysOfMonth).toEqual([15, 31]);
+  await wrapper.setProps({ disabled: true });
+  expect(wrapper.findAll('.task-month-days-grid button').every(button => button.attributes('disabled') !== undefined)).toBe(true);
 });

@@ -70,7 +70,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // notification cases; 6 real browser flows including mobile/theme geometry and
 // cross-tab stale edits. Existing Session, Work Center, sidebar and plugin
 // regressions remain intact.
-export const TEST_CASE_LIMIT = 804;
+// +7 reviewed task calendar cases: 3 form/preview/capability boundaries,
+// 3 recurrence validation/advance/reopen boundaries and 1 multi-theme browser flow.
+export const TEST_CASE_LIMIT = 811;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
