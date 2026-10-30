@@ -2867,7 +2867,7 @@ export default {
   "scheduledTasks.promptHint": "Instructions sent to this Session on every run.",
   "scheduledTasks.triggerHint.manual": "Run only when you choose Run now.",
   "scheduledTasks.triggerHint.schedule": "Run automatically at the times below.",
-  "scheduledTasks.enabledHint": "Allow manual and scheduled runs.",
+  "scheduledTasks.enabledHint": "Allow scheduled runs. Manual runs remain available.",
   "scheduledTasks.notifyHint": "Get a notification when a run finishes.",
   "scheduledTasks.configure": "Configure",
   "scheduledTasks.conflict": "This task changed elsewhere. Reload the latest settings before saving again. Your edits are still here.",

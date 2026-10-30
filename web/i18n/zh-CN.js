@@ -2862,9 +2862,9 @@ export default {
 
   // Session-backed tasks
   "scheduledTasks.promptHint": "每次运行时，发送给此会话的指令。",
-  "scheduledTasks.triggerHint.manual": "仅在你点击「立即运行」时执行。",
+  "scheduledTasks.triggerHint.manual": "仅在你点击「立即执行」时运行。",
   "scheduledTasks.triggerHint.schedule": "按以下时间自动运行。",
-  "scheduledTasks.enabledHint": "允许手动及定时运行。",
+  "scheduledTasks.enabledHint": "允许定时执行，暂停后仍可手动执行。",
   "scheduledTasks.notifyHint": "运行结束时接收通知。",
   "scheduledTasks.configure": "配置",
   "scheduledTasks.conflict": "此任务已在其他地方更改。请加载最新设置后重试，当前编辑已保留。",

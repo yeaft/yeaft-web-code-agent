@@ -1,12 +1,12 @@
 import ScheduledTaskEditor from './ScheduledTaskEditor.js';
 
-export function scheduledTaskUnavailable(chat, agentId, sessionId, task) {
+export function scheduledTaskUnavailable(chat, agentId, sessionId, task, { allowRunning = false } = {}) {
   if (chat?.scheduledTaskProtocolSupported !== true) return 'scheduledTasks.serverUpgrade';
   const agent = chat?.agents?.find(item => item.id === agentId);
   if (!agent?.online || (chat.connectionState && chat.connectionState !== 'connected')) return 'scheduledTasks.offline';
   if (!agent.capabilities?.includes('scheduled_tasks')) return 'scheduledTasks.upgrade';
-  if (task?.lastRun?.status === 'running' || task?.running || task?.status === 'running' || task?.runtime?.status === 'running'
-      || chat.isYeaftSessionProcessing?.(sessionId, agentId)) return 'scheduledTasks.running';
+  if (!allowRunning && (task?.lastRun?.status === 'running' || task?.running || task?.status === 'running' || task?.runtime?.status === 'running'
+      || chat.isYeaftSessionProcessing?.(sessionId, agentId))) return 'scheduledTasks.running';
   return '';
 }
 
@@ -43,7 +43,7 @@ export default {
   },
   computed: {
     chat() { try { return window.Pinia?.useChatStore?.() || null; } catch { return null; } },
-    unavailable() { return scheduledTaskUnavailable(this.chat, this.agentId, this.sessionId, this.task); },
+    unavailable() { return scheduledTaskUnavailable(this.chat, this.agentId, this.sessionId, this.task, { allowRunning: true }); },
     dirty() { return configKey(this.draft) !== this.baseKey; },
     snapshotKey() { return configKey({ config: taskConfig(this.task), revision: this.task.revision }); },
     canSave() { return !this.busy && this.valid && this.dirty && !this.stale && !this.unavailable; },

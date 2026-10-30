@@ -189,6 +189,22 @@ it('sends the edit revision, accepts its own broadcast ACK, and preserves a conf
   expect(wrapper.get('.btn-primary').attributes('disabled')).toBeDefined();
 });
 
+it('lets a running task pause future triggers without interrupting the current run', async () => {
+  const chat = { scheduledTaskProtocolSupported: true, agents, isYeaftSessionProcessing: () => true,
+    updateScheduledTask: vi.fn(async () => ({ ok: true })) };
+  window.Pinia = { useChatStore: () => chat };
+  wrapper = mount(ScheduledTaskSettings, { props: { agentId: 'a', sessionId: 'task',
+    task: { ...task, revision: 'running-revision', lastRun: { id: 'active-run', status: 'running' } } }, global: { mocks: { $t: t } } });
+  expect(wrapper.get('textarea').attributes('disabled')).toBeUndefined();
+  await wrapper.get('input[role="switch"][aria-label="Enabled"]').setValue(false);
+  expect(wrapper.get('.btn-primary').attributes('disabled')).toBeUndefined();
+  await wrapper.get('.btn-primary').trigger('click');
+  await flushPromises();
+  expect(chat.updateScheduledTask).toHaveBeenCalledWith({ agentId: 'a', sessionId: 'task',
+    expectedRevision: 'running-revision', task: { ...task, enabled: false } });
+  expect(wrapper.props('task').lastRun).toEqual({ id: 'active-run', status: 'running' });
+});
+
 it('opens and dismisses notifications using their full Session identity and keeps failed navigation visible', async () => {
   const item = { id: 'notification', agentId: 'b', sessionId: 'same-id', taskName: 'Build', status: 'failed', error: 'Timeout', createdAt: 1 };
   const store = { scheduledTaskNotifications: [{ ...item, id: 'older', taskName: 'Earlier build' }, item], openScheduledTaskNotification: vi.fn(async () => false), dismissScheduledTaskNotification: vi.fn() };
