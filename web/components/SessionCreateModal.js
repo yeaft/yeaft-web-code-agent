@@ -215,7 +215,7 @@ const creationControls = `
             </div>
             <div class="resume-control-row">
               <label class="resume-control-label">{{ $t('scheduledTasks.effort') }}</label>
-              <ModernSelect v-model="form.modelEffort" :options="taskEffortOptions" :aria-label="$t('scheduledTasks.effort')" :disabled="busy || !taskSelectableEfforts.length" :title="!form.model ? $t('scheduledTasks.effortChooseModel') : !taskSelectableEfforts.length ? $t('yeaft.modelMenu.noEffort') : ''" menu-class="yeaft-session-create-select-menu" />
+              <ModernSelect v-model="form.modelEffort" :options="taskEffortOptions" :menu-min-width="160" :aria-label="$t('scheduledTasks.effort')" :disabled="busy || !taskSelectableEfforts.length" :title="!form.model ? $t('scheduledTasks.effortChooseModel') : !taskSelectableEfforts.length ? $t('yeaft.modelMenu.noEffort') : ''" menu-class="yeaft-session-create-select-menu" />
             </div>
           </div>
           </div>

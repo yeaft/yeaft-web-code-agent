@@ -136,11 +136,15 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
       await effort.focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('option', { name: 'X-High', exact: true })).toBeVisible();
+      expect(await page.getByRole('listbox', { name: 'Effort', exact: true }).evaluate(element =>
+        [...element.querySelectorAll('.modern-select-option-label')].every(label => label.scrollWidth <= label.clientWidth + 1))).toBe(true);
       await page.keyboard.press('ArrowDown');
       await page.keyboard.press('Enter');
       await expect(effort).toBeFocused();
       await expect(effort).toHaveText('X-High');
       await select(page, modal, 'Effort', 'High');
+      await expect(effort).toHaveAttribute('aria-expanded', 'false');
+      await expect(page.getByRole('listbox', { name: 'Effort', exact: true })).toBeHidden();
       await shot(page, testInfo, `task-create-${theme}-${width}.png`);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
