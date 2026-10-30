@@ -153,7 +153,7 @@ export default {
                   </button>
                 </div>
                 <div class="sp-actions-row">
-                  <button class="sp-btn sp-btn-muted" @click="resetSecret" :disabled="resettingSecret">
+                  <button class="sp-btn sp-btn-danger" @click="resetSecret" :disabled="resettingSecret">
                     {{ resettingSecret ? $t('settings.security.resetting') : agentSecretActionLabel }}
                   </button>
                   <span class="sp-warning" v-if="resetConfirm">{{ $t('settings.security.resetWarning') }}</span>

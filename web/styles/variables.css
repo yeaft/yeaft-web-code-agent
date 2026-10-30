@@ -99,6 +99,9 @@ select option:checked {
   --accent-hover: #444444;
   --accent-fg: #ffffff;
   --accent-blue: #4a7cc9;
+  /* Shared enabled state for Settings, tasks and plugin switches. */
+  --settings-control-active: #4a7cc9;
+  --settings-switch-knob: #ffffff;
   --accent-blue-hover: #3a6ab5;
   --error: #d65d5d;
   --success: #4a9e5c;
@@ -378,6 +381,8 @@ select option:checked {
   --accent-hover: #b5b2ad;
   --accent-fg: #1a1a1a;
   --accent-blue: #b5b2ad;
+  --settings-control-active: #7ca6e8;
+  --settings-switch-knob: #fafaf8;
   --accent-blue-hover: #9a9792;
   --error: #d09090;
   --success: #7ab87e;

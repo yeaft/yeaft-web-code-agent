@@ -51,8 +51,8 @@
 .plugin-center-origin.is-connected { color: var(--success); }
 .plugin-center-switch { display: inline-flex; align-items: center; justify-content: center; width: 40px; min-width: 40px; height: 40px; padding: 0; border: 0; background: transparent; position: relative; cursor: pointer; border-radius: 8px; }
 .plugin-center-switch::before { content: ''; width: 30px; height: 18px; background: var(--text-muted); border-radius: 12px; transition: background .12s; }
-.plugin-center-switch span { position: absolute; width: 12px; height: 12px; border-radius: 50%; top: 14px; left: 8px; background: var(--bg-main); transition: transform .12s; }
-.plugin-center-switch[aria-checked=true]::before { background: var(--accent-blue); }
+.plugin-center-switch span { position: absolute; width: 12px; height: 12px; border-radius: 50%; top: 14px; left: 8px; background: var(--settings-switch-knob); transition: transform .12s; }
+.plugin-center-switch[aria-checked=true]::before { background: var(--settings-control-active); }
 .plugin-center-switch[aria-checked=true] span { transform: translateX(12px); }
 .plugin-center-switch:disabled { opacity: .35; cursor: not-allowed; }
 .plugin-center-save-indicator { display: inline-block; flex: 0 0 auto; width: 11px; height: 11px; visibility: hidden; border: 1px solid var(--border-color); border-top-color: var(--text-secondary); border-radius: 50%; }

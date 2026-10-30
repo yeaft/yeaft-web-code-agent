@@ -568,3 +568,131 @@ test('task form prioritizes required prompt and saves weekly or multiple monthly
   const update = mockAgent.messages('yeaft_scheduled_task').find(message => message.op === 'update');
   expect(update.task.trigger.recurrence.daysOfMonth).toEqual([1, 15, 31]);
 });
+
+async function quietAction(page, button) {
+  await page.mouse.move(0, 0);
+  await expect(button).toBeVisible();
+  await expect.poll(() => button.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, framed: style.borderStyle !== 'none'
+      && style.borderWidth !== '0px' && style.borderColor !== 'rgba(0, 0, 0, 0)' };
+  })).toEqual({ background: 'rgba(0, 0, 0, 0)', framed: false });
+  if (await button.isEnabled()) {
+    await button.hover();
+    await expect.poll(() => button.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+    // Keyboard focus is intentionally visible even though the resting box is not.
+    await button.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await expect(button).toBeFocused();
+    expect(await button.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('solid');
+  }
+  await page.mouse.move(0, 0);
+}
+
+test('task and Settings controls share blue switches, quiet actions and a content-sized desktop layout', async ({ page, serverUrl, mockAgent }, testInfo) => {
+  test.setTimeout(120000);
+  scheduledTaskAgent(mockAgent);
+  await boot(page, serverUrl, mockAgent);
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await page.locator('.sidebar-bottom .sidebar-nav-item').click();
+    const settingsSwitch = page.locator('.sp-setting-switch[aria-labelledby="general-work-center-label"]');
+    if (await settingsSwitch.getAttribute('aria-checked') !== 'true') await settingsSwitch.click();
+    await expect.poll(() => settingsSwitch.evaluate(element => element.getAnimations().length)).toBe(0);
+    const expected = await settingsSwitch.evaluate(element => ({
+      track: getComputedStyle(element).backgroundColor,
+      knob: getComputedStyle(element.querySelector('.sp-setting-switch-knob')).backgroundColor,
+    }));
+    expect(expected.track).toBe(theme === 'light' ? 'rgb(74, 124, 201)' : 'rgb(124, 166, 232)');
+    await page.locator('.settings-nav-item').filter({ hasText: 'Security' }).click();
+    const security = page.locator('.settings-pane:visible');
+    await quietAction(page, security.locator('.sp-btn:not(.sp-btn-danger)').first());
+    await quietAction(page, security.locator('.sp-btn-danger').first());
+    expect(await security.locator('.sp-btn-danger').first().evaluate(element => getComputedStyle(element).color))
+      .not.toBe(await security.locator('.sp-btn:not(.sp-btn-danger)').first().evaluate(element => getComputedStyle(element).color));
+    await shot(page, testInfo, `settings-quiet-actions-${theme}.png`);
+    await page.locator('.settings-close').click();
+    await page.locator('.agent-dropdown-trigger:visible').click();
+    await page.getByRole('button', { name: 'Agent settings', exact: true }).click();
+    const agentSettings = page.locator('.agent-settings-dialog');
+    const agentSwitch = agentSettings.getByRole('switch', { name: 'Digital Person', exact: true });
+    await page.evaluate(() => window.Pinia.useChatStore().setDigitalPersonUiEnabled(true));
+    await expect(agentSwitch).toBeChecked();
+    await expect.poll(() => agentSwitch.evaluate(element => ({
+      track: getComputedStyle(element.nextElementSibling).backgroundColor,
+      knob: getComputedStyle(element.nextElementSibling, '::after').backgroundColor,
+    }))).toEqual(expected);
+    // Do not invoke real maintenance actions. Inspect enabled/disabled styling only.
+    await quietAction(page, agentSettings.locator('.btn-secondary').first());
+    await agentSettings.locator('.agent-settings-close').click();
+    await page.evaluate(() => window.Pinia.useChatStore().setDigitalPersonUiEnabled(false));
+
+    await page.locator('.sidebar-task-create').click();
+    const modal = page.locator('.task-mode');
+    const create = modal.getByRole('button', { name: 'Create task', exact: true });
+    await quietAction(page, create); // The disabled state must not become a filled block either.
+    await modal.getByRole('textbox', { name: 'Prompt', exact: true }).fill('Summarize workspace changes and report the results.');
+    await expect(create).toBeEnabled();
+    await quietAction(page, create);
+    await quietAction(page, modal.getByRole('button', { name: 'Cancel', exact: true }));
+    const switches = modal.locator('.agent-settings-switch input');
+    for (const control of await switches.all()) {
+      await expect.poll(() => control.evaluate(element => ({
+        track: getComputedStyle(element.nextElementSibling).backgroundColor,
+        knob: getComputedStyle(element.nextElementSibling, '::after').backgroundColor,
+      }))).toEqual(expected);
+    }
+    await modal.locator('.scheduled-task-option-row').first().click();
+    await expect(switches.first()).not.toBeChecked();
+    await expect.poll(() => switches.first().evaluate(element => getComputedStyle(element.nextElementSibling).backgroundColor)).not.toBe(expected.track);
+    await switches.first().focus();
+    await page.keyboard.press('Space');
+    await expect(switches.first()).toBeChecked();
+    const trigger = modal.getByRole('group', { name: 'Trigger', exact: true });
+    const manual = trigger.getByRole('button', { name: 'Manual', exact: true });
+    await expect(manual).toHaveAttribute('aria-pressed', 'true');
+    await quietAction(page, manual);
+    expect(await manual.evaluate(element => getComputedStyle(element, '::after').backgroundColor)).toBe(expected.track);
+    await select(page, modal, 'Trigger', 'Schedule');
+    await expect(manual).toHaveAttribute('aria-pressed', 'false');
+    await quietAction(page, trigger.getByRole('button', { name: 'Schedule', exact: true }));
+    await select(page, modal, 'Trigger', 'Manual');
+
+    await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'zh-CN'; });
+    for (const [width, height] of [[1440, 900], [1280, 720], [320, 844]]) {
+      await page.setViewportSize({ width, height });
+      await noOverflow(page, ['.task-mode', '.scheduled-task-create-body', '.scheduled-task-editor']);
+      const geometry = await modal.evaluate(element => {
+        const last = element.querySelector('.scheduled-task-editor').getBoundingClientRect();
+        const footer = element.querySelector('.resume-modal-footer').getBoundingClientRect();
+        return { height: element.getBoundingClientRect().height, gap: footer.top - last.bottom };
+      });
+      if (width > 900) {
+        expect(geometry.height).toBeLessThan(600);
+        expect(geometry.gap).toBeLessThan(40);
+        expect(await modal.locator('.session-create-flow').evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
+      } else await touchTargets(modal, 'button');
+      await page.mouse.move(0, 0);
+      await shot(page, testInfo, `quiet-task-create-${theme}-${width}.png`);
+      if (width === 320) {
+        await modal.locator('.scheduled-task-options').scrollIntoViewIfNeeded();
+        await shot(page, testInfo, `quiet-task-create-controls-${theme}-${width}.png`);
+      }
+    }
+    await modal.locator('.task-create-close').click();
+    await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'en'; });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openTask(page);
+    await page.locator('.scheduled-task-bar').getByRole('button', { name: 'Configure', exact: true }).click();
+    const taskSettings = page.locator('.scheduled-task-settings');
+    await taskSettings.getByRole('textbox', { name: 'Prompt', exact: true }).fill('Edited prompt for the quiet save action.');
+    await quietAction(page, taskSettings.getByRole('button', { name: 'Save task', exact: true }));
+    await select(page, taskSettings, 'Trigger', 'Schedule');
+    await select(page, taskSettings, 'Repeat', 'Every month');
+    const selectedDay = taskSettings.locator('.task-month-days-grid [aria-pressed="true"]').first();
+    expect(await selectedDay.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+    await shot(page, testInfo, `quiet-task-settings-monthly-${theme}.png`);
+    await page.locator('.task-settings-modal .group-settings-close').click();
+  }
+});
