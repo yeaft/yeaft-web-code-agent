@@ -385,6 +385,7 @@ export default {
     <Teleport to="body">
     <div
       class="group-settings-overlay"
+      :class="{ 'task-settings-overlay': !!group?.task }"
       @pointerdown="trackOverlayPointerDown"
       @pointerup="trackOverlayPointerUp"
       @pointercancel="clearOverlayPointerGesture"

@@ -99,7 +99,7 @@ const creationControls = `
               </div>
               <div v-else-if="vpList.length === 0 && vpLibraryError" class="yeaft-roster-empty yeaft-roster-error" role="alert">
                 <span>{{ $t('yeaft.session.create.rosterError') }}</span>
-                <button type="button" class="btn-secondary yeaft-roster-retry" @click="retryVpSnapshot">
+                <button type="button" class="btn-secondary yeaft-roster-retry" :disabled="busy" @click="retryVpSnapshot">
                   {{ $t('yeaft.session.create.rosterRetry') }}
                 </button>
               </div>
@@ -170,6 +170,7 @@ const creationControls = `
                           :class="{ 'is-on': form.defaultVpId === vp.vpId }"
                           :aria-label="$t('yeaft.session.create.defaultVpHint')"
                           :aria-pressed="form.defaultVpId === vp.vpId"
+                          :disabled="busy"
                           :title="$t('yeaft.session.create.defaultVpHint')"
                           @click.stop="form.defaultVpId = vp.vpId"
                         >

@@ -569,6 +569,20 @@ test('task form prioritizes required prompt and saves weekly or multiple monthly
   expect(update.task.trigger.recurrence.daysOfMonth).toEqual([1, 15, 31]);
 });
 
+// Shell, footer and the column anchors must not move when changing trigger.
+async function taskGeometry(modal) {
+  return modal.evaluate(element => {
+    const rect = node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
+    const shell = rect(element);
+    const footer = rect(element.querySelector('.resume-modal-footer, .scheduled-task-settings-footer'));
+    const left = rect(element.querySelector('.scheduled-task-content'));
+    const right = rect(element.querySelector('.scheduled-task-sidebar'));
+    const environment = element.querySelector('.scheduled-task-environment');
+    return { top: shell.y, height: shell.height, footer, leftX: left.x, rightX: right.x,
+      environment: environment ? rect(environment) : null };
+  });
+}
+
 async function quietAction(page, button) {
   await page.mouse.move(0, 0);
   await expect(button).toBeVisible();
@@ -591,7 +605,7 @@ async function quietAction(page, button) {
   await page.mouse.move(0, 0);
 }
 
-test('task and Settings controls share blue switches, quiet actions and a content-sized desktop layout', async ({ page, serverUrl, mockAgent }, testInfo) => {
+test('task and Settings controls share theme-aware switches, quiet actions and a stable full-height layout', async ({ page, serverUrl, mockAgent }, testInfo) => {
   test.setTimeout(120000);
   scheduledTaskAgent(mockAgent);
   mockAgent._messageHandlers.push(request => {
@@ -609,7 +623,7 @@ test('task and Settings controls share blue switches, quiet actions and a conten
       track: getComputedStyle(element).backgroundColor,
       knob: getComputedStyle(element.querySelector('.sp-setting-switch-knob')).backgroundColor,
     }));
-    expect(expected.track).toBe(theme === 'light' ? 'rgb(74, 124, 201)' : 'rgb(124, 166, 232)');
+    expect(expected.track).toBe(theme === 'light' ? 'rgb(74, 124, 201)' : 'rgb(181, 178, 173)');
     const dangerColor = await page.evaluate(() => {
       const marker = document.createElement('span'); marker.style.color = 'var(--error)';
       document.body.append(marker); const color = getComputedStyle(marker).color; marker.remove(); return color;
@@ -672,25 +686,38 @@ test('task and Settings controls share blue switches, quiet actions and a conten
     await expect(manual).toHaveAttribute('aria-pressed', 'true');
     await quietAction(page, manual);
     expect(await manual.evaluate(element => getComputedStyle(element, '::after').backgroundColor)).toBe(expected.track);
+    const createGeometry = await taskGeometry(modal);
     await select(page, modal, 'Trigger', 'Schedule');
+    expect(await taskGeometry(modal)).toEqual(createGeometry);
     await expect(manual).toHaveAttribute('aria-pressed', 'false');
     await quietAction(page, trigger.getByRole('button', { name: 'Schedule', exact: true }));
+    await select(page, modal, 'Repeat', 'Every month');
+    expect(await taskGeometry(modal)).toEqual(createGeometry);
+    await modal.locator('.task-schedule-advanced summary').click();
+    expect(await taskGeometry(modal)).toEqual(createGeometry);
+    await modal.locator('.task-schedule-advanced summary').click();
     await select(page, modal, 'Trigger', 'Manual');
+    expect(await taskGeometry(modal)).toEqual(createGeometry);
 
     await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'zh-CN'; });
-    for (const [width, height] of [[1440, 900], [1280, 720], [320, 844]]) {
+    for (const [width, height] of [[1440, 900], [1280, 720], [1440, 480], [1024, 400], [800, 600], [320, 844], [320, 480]]) {
       await page.setViewportSize({ width, height });
       await noOverflow(page, ['.task-mode', '.scheduled-task-create-body', '.scheduled-task-editor']);
       const geometry = await modal.evaluate(element => {
-        const last = element.querySelector('.scheduled-task-editor').getBoundingClientRect();
+        const shell = element.getBoundingClientRect();
+        const editor = element.querySelector('.scheduled-task-editor').getBoundingClientRect();
         const footer = element.querySelector('.resume-modal-footer').getBoundingClientRect();
-        return { height: element.getBoundingClientRect().height, gap: footer.top - last.bottom };
+        return { height: shell.height, top: shell.top, footer: footer.bottom,
+          borderBottom: parseFloat(getComputedStyle(element).borderBottomWidth), gap: footer.top - editor.bottom };
       });
+      expect(geometry.height).toBe(width <= 640 ? height : height - 48);
+      expect(geometry.top).toBe(width <= 640 ? 0 : 24);
+      // Footer ends inside the shell's border, not at its outer edge.
+      expect(geometry.footer).toBe(height - (width <= 640 ? 0 : 24) - geometry.borderBottom);
       if (width > 900) {
-        expect(geometry.height).toBeLessThan(600);
         expect(geometry.gap).toBeLessThan(40);
         expect(await modal.locator('.session-create-flow').evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
-      } else await touchTargets(modal, 'button');
+      } else if (width <= 640) await touchTargets(modal, 'button');
       await page.mouse.move(0, 0);
       await shot(page, testInfo, `quiet-task-create-${theme}-${width}.png`);
       if (width === 320) {
@@ -706,12 +733,18 @@ test('task and Settings controls share blue switches, quiet actions and a conten
     const taskSettings = page.locator('.scheduled-task-settings');
     await taskSettings.getByRole('textbox', { name: 'Prompt', exact: true }).fill('Edited prompt for the quiet save action.');
     await quietAction(page, taskSettings.getByRole('button', { name: 'Save task', exact: true }));
+    const settingsModal = page.locator('.task-settings-modal');
+    const settingsGeometry = await taskGeometry(settingsModal);
+    expect(settingsGeometry.height).toBe(852);
     await select(page, taskSettings, 'Trigger', 'Schedule');
+    expect(await taskGeometry(settingsModal)).toEqual(settingsGeometry);
     await select(page, taskSettings, 'Repeat', 'Every month');
+    expect(await taskGeometry(settingsModal)).toEqual(settingsGeometry);
     const selectedDay = taskSettings.locator('.task-month-days-grid [aria-pressed="true"]').first();
     expect(await selectedDay.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
     const advanced = taskSettings.locator('.task-schedule-advanced');
     await advanced.locator('summary').click();
+    expect(await taskGeometry(settingsModal)).toEqual(settingsGeometry);
     const dateInput = advanced.locator('.schedule-date-picker__trigger').first();
     await expect(dateInput).toBeVisible();
     expect(await dateInput.evaluate(element => ({ border: getComputedStyle(element).borderWidth,
@@ -719,7 +752,28 @@ test('task and Settings controls share blue switches, quiet actions and a conten
     expect(await dateInput.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
     await advanced.locator('summary').click();
     await shot(page, testInfo, `quiet-task-settings-monthly-${theme}.png`);
+    for (const [width, height] of [[1440, 480], [1024, 400], [800, 600], [320, 480]]) {
+      await page.setViewportSize({ width, height });
+      await noOverflow(page, ['.task-settings-modal', '.scheduled-task-settings-scroll', '.scheduled-task-editor']);
+      const shell = await settingsModal.boundingBox();
+      expect(shell.height).toBe(width <= 640 ? height : height - 48);
+      expect(shell.y).toBe(width <= 640 ? 0 : 24);
+      const footer = await taskSettings.locator('.scheduled-task-settings-footer').boundingBox();
+      expect(footer.y + footer.height).toBeLessThanOrEqual(height);
+      const timing = taskSettings.locator('.scheduled-task-timing');
+      if (width > 900) {
+        expect(await timing.evaluate(element => element.clientHeight), 'Schedule must retain a usable scroll viewport at low height').toBeGreaterThanOrEqual(80);
+      }
+      await taskSettings.getByRole('button', { name: 'Schedule', exact: true }).scrollIntoViewIfNeeded();
+      await expect(taskSettings.getByRole('button', { name: 'Schedule', exact: true })).toBeInViewport();
+      await taskSettings.getByRole('switch', { name: 'Notify when finished', exact: true }).scrollIntoViewIfNeeded();
+      await expect(taskSettings.getByRole('switch', { name: 'Notify when finished', exact: true })).toBeInViewport();
+      await shot(page, testInfo, `quiet-task-settings-low-height-${theme}-${width}.png`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.locator('.task-settings-modal').getByRole('tab', { name: 'Session', exact: true }).click();
+    expect(await settingsModal.evaluate(element => ({ height: element.getBoundingClientRect().height, top: element.getBoundingClientRect().top })))
+      .toEqual({ height: settingsGeometry.height, top: settingsGeometry.top });
     const sessionPane = page.locator('.group-settings-section-session');
     await sessionPane.locator('.group-settings-input').first().fill('Edited task title');
     await quietAction(page, sessionPane.locator('.group-settings-primary').first());
