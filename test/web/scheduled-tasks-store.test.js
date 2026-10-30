@@ -26,9 +26,9 @@ describe('Session-backed task store integration', () => {
   it('passes task creation and explicit Agent through the existing Session creation API', () => {
     const store = harness();
     const task = { prompt: 'Review', trigger: { type: 'manual' } };
-    options.chat.actions.createYeaftSession.call(store, { displayName: ' Review ', vpIds: ['omni'], workDir: '/repo', agentId: 'a', task, config: { model: 'test/model' } });
+    options.chat.actions.createYeaftSession.call(store, { displayName: ' Review ', vpIds: ['omni'], workDir: '/repo', agentId: 'a', task, config: { model: 'test/model', modelEffort: 'xhigh' } });
     expect(store.sessionCrudRequest).toHaveBeenCalledWith('create', {
-      name: 'Review', roster: ['omni'], defaultVpId: 'omni', workDir: '/repo', task, config: { model: 'test/model' },
+      name: 'Review', roster: ['omni'], defaultVpId: 'omni', workDir: '/repo', task, config: { model: 'test/model', modelEffort: 'xhigh' },
     }, { agentId: 'a' });
     options.chat.actions.createYeaftSession.call(store, { displayName: 'Chat', vpIds: ['omni'], agentId: 'a' });
     expect(store.sessionCrudRequest.mock.calls[1][1]).not.toHaveProperty('task');

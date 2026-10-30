@@ -64,7 +64,7 @@ it('lists task Sessions in recents or their owning Project with a badge and shar
 
 it('creates task Sessions with the existing roster and folder contract and rejects unsupported Agents', async () => {
   const create = vi.fn(async () => ({ ok: true, session: { id: 'task', agentId: 'a', task } }));
-  const chat = Vue.reactive({ scheduledTaskProtocolSupported: true, agents, currentAgent: 'a', createYeaftSession: create, sendWsMessage: vi.fn(), setActiveSessionFilter: vi.fn(), yeaftStatusByAgent: { a: { availableModels: [{ provider: 'test', id: 'model', label: 'Model' }] } } });
+  const chat = Vue.reactive({ scheduledTaskProtocolSupported: true, agents, currentAgent: 'a', createYeaftSession: create, sendWsMessage: vi.fn(), setActiveSessionFilter: vi.fn(), yeaftStatusByAgent: { a: { availableModels: [{ provider: 'test', id: 'model', label: 'Model', effortOptions: ['low', 'medium', 'high', 'xhigh'] }] } } });
   const vp = { snapshotStatus: 'ready', snapshotAgentId: 'a', lastVpSnapshotAgentId: 'a', vpList: [{ vpId: 'omni', name: 'Omni' }] };
   window.Pinia = { useChatStore: () => chat, useVpStore: () => vp, useSessionsStore: () => ({ sessionList: [], setActive: vi.fn() }) };
   wrapper = mount(SessionCreateModal, { props: { taskMode: true }, global: { mocks: { $t: t }, stubs: { ModernSelect: true, FolderPickerDialog: true, VpAvatar: true } } });
@@ -98,10 +98,59 @@ it('creates task Sessions with the existing roster and folder contract and rejec
   await wrapper.setData({ form: { ...wrapper.vm.form, model: 'test/model' } });
   await wrapper.vm.onSubmit();
   expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model' }, task }));
+  expect(wrapper.vm.taskEffortOptions).toEqual([
+    { value: '', label: 'Default' }, { value: 'medium', label: 'Medium' },
+    { value: 'high', label: 'High' }, { value: 'xhigh', label: 'X-High' },
+  ]);
+  await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort: 'xhigh' } });
+  await wrapper.vm.onSubmit();
+  expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model', modelEffort: 'xhigh' }, task }));
+  await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort: '' } });
+  await wrapper.vm.onSubmit();
+  expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model' }, task }));
   chat.agents = [{ ...agents[0], capabilities: [] }];
   await Vue.nextTick();
   expect(wrapper.vm.canSubmit).toBe(false);
   delete window.Pinia;
+});
+
+it('scopes task effort capabilities to the selected Agent and clears incompatible overrides', async () => {
+  const models = [
+    { provider: 'test', id: 'model', effortOptions: ['low', 'medium', 'high', 'xhigh'] },
+    { provider: 'other', id: 'model', effortOptions: ['medium', 'high'] },
+    { provider: 'test', id: 'plain' },
+  ];
+  const chat = Vue.reactive({ scheduledTaskProtocolSupported: true,
+    agents: [...agents, { ...agents[0], id: 'b' }], currentAgent: 'a', sendWsMessage: vi.fn(),
+    yeaftAvailableModels: models, yeaftStatusByAgent: { a: { availableModels: models }, b: { availableModels: [] } } });
+  window.Pinia = { useChatStore: () => chat, useVpStore: () => ({}) };
+  wrapper = mount(SessionCreateModal, { props: { taskMode: true }, global: { mocks: { $t: t }, stubs: { ModernSelect: true, FolderPickerDialog: true, VpAvatar: true } } });
+  const effort = () => wrapper.findAllComponents({ name: 'ModernSelect' }).find(item => item.props('ariaLabel') === 'Effort');
+  expect(effort().props('disabled')).toBe(true);
+  expect(wrapper.vm.taskSessionConfig).toEqual({});
+  await wrapper.setData({ form: { ...wrapper.vm.form, model: 'test/model' } });
+  expect(effort().props('disabled')).toBe(false);
+  await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort: 'xhigh' } });
+  await wrapper.setData({ form: { ...wrapper.vm.form, model: 'other/model' } });
+  expect(wrapper.vm.form.modelEffort).toBe('');
+  await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort: 'high' } });
+  await wrapper.setData({ form: { ...wrapper.vm.form, model: 'test/model' } });
+  expect(wrapper.vm.form.modelEffort).toBe('high');
+  chat.yeaftStatusByAgent.a.availableModels[0].effortOptions = ['medium'];
+  await Vue.nextTick();
+  expect(wrapper.vm.form.modelEffort).toBe('');
+  await wrapper.setData({ form: { ...wrapper.vm.form, model: 'test/plain' } });
+  expect(effort().props('disabled')).toBe(true);
+  await wrapper.setData({ form: { ...wrapper.vm.form, model: 'test/model', modelEffort: 'medium' } });
+  await wrapper.setData({ busy: true });
+  expect(effort().props('disabled')).toBe(true);
+  await wrapper.setData({ busy: false, form: { ...wrapper.vm.form, agentId: 'b' } });
+  expect(wrapper.vm.form.model).toBe('');
+  expect(wrapper.vm.form.modelEffort).toBe('');
+  expect(wrapper.vm.taskModelOptions).toHaveLength(1);
+  expect(effort().props('disabled')).toBe(true);
+  await wrapper.setProps({ taskMode: false });
+  expect(effort()).toBeUndefined();
 });
 
 it('reuses schedule validation, emits only supported triggers and preserves an unchanged past schedule', async () => {

@@ -75,7 +75,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +1 task-as-Session browser lifecycle: shared sorting/Project moves and visibility.
 // +1 rendered task/Settings control contract: actual cascade, theme-aware switches,
 // quiet hover/focus/disabled actions and stable full-height columns across themes.
-export const TEST_CASE_LIMIT = 813;
+// +1 task effort capability boundary: Agent-scoped catalog, model changes,
+// incompatible override reset and disabled inheritance/unsupported models.
+export const TEST_CASE_LIMIT = 814;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
