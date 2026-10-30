@@ -345,6 +345,11 @@ test('redesigned task surfaces retain usable geometry, scrolling and keyboard co
     }
     for (const width of [320, 390, 1440]) {
       await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
+      // MatchMedia changes arrive after setViewportSize. Wait for the rendered
+      // sidebar projection, not a transient desktop-visible row on mobile.
+      await expect.poll(() => page.locator('.yeaft-sidebar').evaluate(element => ({
+        width: innerWidth, collapsed: element.classList.contains('collapsed'),
+      }))).toEqual({ width, collapsed: width < 769 });
       await showSidebar(page);
       await page.locator('.sidebar-task-create').click();
       const create = page.locator('.yeaft-session-create-modal.task-mode');
