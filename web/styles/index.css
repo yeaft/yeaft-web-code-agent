@@ -37,3 +37,5 @@
 @import './sub-agent.css';
 @import './search-settings.css';
 @import './mcp-settings.css';
+/* Shared settings action visuals follow module geometry and state styles. */
+@import './settings-controls.css';

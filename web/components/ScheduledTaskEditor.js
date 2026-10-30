@@ -79,7 +79,7 @@ export default {
     },
   },
   template: `
-    <fieldset class="scheduled-task-editor" :disabled="disabled">
+    <fieldset class="scheduled-task-editor" :class="{ 'is-manual': modelValue.trigger?.type === 'manual' }" :disabled="disabled">
       <div class="scheduled-task-main">
       <slot name="heading"></slot>
       <label class="scheduled-task-field scheduled-task-prompt">
@@ -87,9 +87,8 @@ export default {
         <span class="scheduled-task-help">{{ $t('scheduledTasks.promptHint') }}</span>
         <textarea :value="modelValue.prompt" rows="5" required aria-required="true" :disabled="disabled" :aria-label="$t('scheduledTasks.prompt')" :placeholder="$t('scheduledTasks.promptPlaceholder')" @input="patch('prompt', $event.target.value)"></textarea>
       </label>
-      <slot></slot>
-
       </div>
+      <div v-if="$slots.default" class="scheduled-task-environment"><slot></slot></div>
       <div class="scheduled-task-timing">
       <div class="scheduled-task-field">
         <span class="scheduled-task-field-title">{{ $t('scheduledTasks.triggerLabel') }}</span>

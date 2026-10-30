@@ -448,7 +448,7 @@
 .yeaft-session-create-modal.task-mode {
   width: min(1120px, calc(100vw - 48px));
   max-width: 1120px;
-  height: min(820px, calc(100dvh - 48px));
+  height: auto;
   max-height: calc(100dvh - 48px);
   color: var(--text-primary);
 }
@@ -478,7 +478,7 @@
 .task-create-close:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text-primary); }
 .session-create-flow.is-task {
   display: block;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -512,7 +512,8 @@
   font-size: 13px;
 }
 .yeaft-session-create-modal.task-mode .workdir-input-group { width: 100%; }
-.yeaft-session-create-modal.task-mode .workdir-browse-btn { height: 42px; min-width: 42px; }
+.yeaft-session-create-modal.task-mode .workdir-browse-btn { height: 42px; min-width: 42px; border-color: transparent; background: transparent; transition: background-color .15s, color .15s; }
+.yeaft-session-create-modal.task-mode .workdir-browse-btn:hover:not(:disabled) { background: var(--sidebar-hover); }
 .yeaft-session-create-modal.task-mode .resume-modal-footer {
   display: flex;
   flex: 0 0 auto;
@@ -524,7 +525,7 @@
 }
 .scheduled-task-create-body { padding: 12px 24px 12px; min-width: 0; }
 .scheduled-task-create-body > .scheduled-task-error { margin-bottom: var(--work-center-space-4); }
-.scheduled-task-main, .scheduled-task-timing { display: flex; flex-direction: column; min-width: 0; gap: 20px; }
+.scheduled-task-main, .scheduled-task-environment, .scheduled-task-timing { display: flex; flex-direction: column; min-width: 0; gap: 20px; }
 .task-required { margin-inline-start: var(--work-center-space-2); color: var(--text-secondary); font-size: 11px; font-weight: 400; }
 .task-name-field .resume-input { border: 1px solid var(--border-color); }
 .task-month-days { margin: 0; padding: 0; border: 0; min-width: 0; }
@@ -568,8 +569,7 @@
   border-radius: var(--agent-setup-control-radius);
 }
 .scheduled-task-field textarea::placeholder { color: var(--text-muted); }
-.scheduled-task-trigger-options { display: flex; gap: var(--work-center-space-2); }
-.scheduled-task-trigger-options .btn { flex: 1 1 0; }
+.scheduled-task-trigger-options { display: flex; align-self: flex-start; gap: var(--work-center-space-3); }
 .scheduled-task-options { display: grid; gap: var(--work-center-space-3); }
 .scheduled-task-option-row { display: flex; justify-content: space-between; align-items: center; gap: var(--work-center-space-4); min-height: 48px; cursor: pointer; }
 .scheduled-task-option-copy { display: grid; min-width: 0; gap: var(--work-center-space-1); }
@@ -593,6 +593,7 @@
   font-size: 13px;
   font-weight: 400;
 }
+.scheduled-task-editor .schedule-date-picker .schedule-date-picker__trigger { border-color: var(--border-color); }
 .scheduled-task-editor .work-center-schedule-preview { align-items: baseline; }
 .scheduled-task-editor .work-center-field-help { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; font-weight: 400; }
 .scheduled-task-editor .work-center-error { margin: 0; color: var(--error); font-size: 12px; line-height: 1.55; }
@@ -619,7 +620,7 @@
 .scheduled-task-stale { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--work-center-space-3); padding: 12px; margin-bottom: 24px; border-radius: var(--agent-setup-control-radius); background: var(--warn-bg); color: var(--warn-text); font-size: 13px; line-height: 1.5; }
 .scheduled-task-stale p { flex: 1 1 240px; margin: 0; }
 
-/* Explicit, token-based button geometry: these forms also live outside .modal. */
+/* Shared geometry; settings-controls.css owns action-button visuals. */
 .scheduled-task-settings .btn,
 .scheduled-task-editor .btn-secondary,
 .scheduled-task-bar .btn,
@@ -630,7 +631,7 @@
   gap: var(--work-center-space-2);
   min-height: 40px;
   padding: 9px 16px;
-  border: 1px solid var(--border-color);
+  border: 1px solid transparent;
   border-radius: var(--agent-setup-control-radius);
   background: transparent;
   color: var(--text-primary);
@@ -641,12 +642,6 @@
   cursor: pointer;
   transition: background .15s, opacity .15s;
 }
-.scheduled-task-settings .btn-primary,
-.scheduled-task-bar .btn-primary,
-.yeaft-session-create-modal.task-mode .resume-modal-footer .btn-primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
-.scheduled-task-settings .btn-primary:hover:not(:disabled),
-.scheduled-task-bar .btn-primary:hover:not(:disabled),
-.yeaft-session-create-modal.task-mode .resume-modal-footer .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); opacity: 1; }
 .scheduled-task-settings .btn-secondary:hover:not(:disabled),
 .scheduled-task-editor .btn-secondary:hover:not(:disabled),
 .scheduled-task-bar .btn-secondary:hover:not(:disabled) { background: var(--sidebar-hover); }
@@ -663,7 +658,8 @@
 .scheduled-task-dismiss:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
 
 @media (min-width: 641px) {
-  .task-settings-modal { width: min(1120px, 94vw); height: min(820px, calc(100dvh - 48px)); }
+  .task-settings-modal { width: min(1120px, 94vw); }
+  .task-settings-modal.task-settings-active { height: auto; max-height: calc(100dvh - 48px); }
 }
 @media (max-width: 640px) {
   .task-settings-modal .group-settings-header { padding: 16px 16px 8px; }
@@ -696,16 +692,40 @@
   .scheduled-task-field textarea { min-height: 156px; }
 }
 
-.scheduled-task-trigger-options .btn[aria-pressed="true"] { background: var(--bg-user-msg); border-color: var(--text-secondary); color: var(--text-primary); }
+/* Like Session tabs: a quiet underline communicates selection without a box. */
+.scheduled-task-trigger-options .btn {
+  position: relative;
+  min-width: 72px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.scheduled-task-trigger-options .btn::after {
+  content: '';
+  position: absolute;
+  inset-inline: var(--work-center-space-4);
+  bottom: 3px;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+}
+.scheduled-task-trigger-options .btn[aria-pressed="true"] { color: var(--text-primary); font-weight: 600; }
+.scheduled-task-trigger-options .btn[aria-pressed="true"]::after { background: var(--settings-control-active); }
 
 @media (min-width: 901px) {
-  .scheduled-task-editor { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "main timing" "options timing"; align-items: start; gap: 16px 32px; }
+  .scheduled-task-editor { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "main timing" "main options" "environment environment"; grid-template-rows: auto 1fr auto; align-items: start; gap: 16px 32px; }
   .scheduled-task-main { grid-area: main; }
+  .scheduled-task-environment { grid-area: environment; }
+  .task-mode .scheduled-task-editor.is-manual .yeaft-session-create-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .scheduled-task-timing { grid-area: timing; }
   .scheduled-task-options { grid-area: options; }
   .scheduled-task-main, .scheduled-task-timing { gap: var(--work-center-space-4); }
   .scheduled-task-editor .work-center-schedule-editor { gap: var(--work-center-space-3); }
-  .scheduled-task-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--work-center-space-4); }
+  .scheduled-task-options { grid-template-columns: minmax(0, 1fr); gap: var(--work-center-space-2); }
+  .scheduled-task-editor:not(.is-manual) { grid-template-areas: "main timing" "environment timing" "options timing"; grid-template-rows: auto auto 1fr; }
+  .scheduled-task-editor:not(.is-manual) .scheduled-task-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--work-center-space-4); }
+  .scheduled-task-settings .scheduled-task-editor { grid-template-areas: "main timing" "options timing"; grid-template-rows: auto 1fr; }
   .scheduled-task-option-row { gap: var(--work-center-space-2); }
   .scheduled-task-options .scheduled-task-help { display: none; }
   .scheduled-task-field textarea { min-height: 140px; height: 140px; }

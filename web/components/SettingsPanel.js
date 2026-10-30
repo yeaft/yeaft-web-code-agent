@@ -153,7 +153,7 @@ export default {
                   </button>
                 </div>
                 <div class="sp-actions-row">
-                  <button class="sp-btn sp-btn-muted" @click="resetSecret" :disabled="resettingSecret">
+                  <button class="sp-btn sp-btn-danger" @click="resetSecret" :disabled="resettingSecret">
                     {{ resettingSecret ? $t('settings.security.resetting') : agentSecretActionLabel }}
                   </button>
                   <span class="sp-warning" v-if="resetConfirm">{{ $t('settings.security.resetWarning') }}</span>
@@ -385,7 +385,6 @@ export default {
                       </div>
                     </div>
                     <button class="sp-btn-create" @click="createInvitation" :disabled="creatingInvite">
-                      <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
                       {{ creatingInvite ? $t('settings.invite.creating') : $t('settings.invite.createBtn') }}
                     </button>
                   </div>

@@ -369,7 +369,6 @@ export default {
             @click="onSubmit"
             :disabled="busy || !canSubmit"
           >
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             {{ busy ? $t('yeaft.session.create.creating') : $t(taskMode ? 'scheduledTasks.create' : 'yeaft.session.create.submit') }}
           </button>
         </div>

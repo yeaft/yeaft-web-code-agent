@@ -150,6 +150,7 @@ Work Center 是 Agent instance 级的持久目标执行系统，代码位于 `ag
 
 - 颜色、背景、边框、状态、阴影、圆角与常用间距复用 `web/styles/variables.css`。新增 token 同时定义 light `:root` 和 `[data-theme="dark"]`，组件不另设硬编码颜色。
 - 按钮使用 `.btn-primary` / `.btn-secondary` / `.btn-ghost`；侧栏使用 `session-tab-bar` / `session-tab`；输入控件沿用全局 focus、border、radius。
+- 任务和设置页的操作按钮由 `settings-controls.css` 统一为透明、无常驻方框，hover 才显示轻量底色；操作按钮只用文字或图标之一，不重复叠加（导航与输入状态标记除外），纯图标操作保留可访问名称；键盘 focus 保留清晰轮廓，危险操作保留警示文字。开关的启用轨道共用 `--settings-control-active`，明暗主题均为蓝色；输入型触发器与日历选中态不套用普通操作按钮样式。
 - 弹窗沿用所属模块的 overlay / shell。通用路径是 `.modal-overlay` + `.modal`，`.modal-card` 不是全局基础类。配置弹窗 header / footer 固定，中间 body 滚动。
 - 图标复用现有图标或 Symbols Nerd Font；含义不只靠 hover tooltip。用户文案通过 `$t()`，中英翻译同步。
 - UI 验证覆盖 light / dark、320px 窄屏、桌面、长内容滚动，以及键盘 focus、disabled、loading、error、empty 和 stale / reconnect 状态。

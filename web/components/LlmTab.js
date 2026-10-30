@@ -151,11 +151,9 @@ export default {
           <!-- Add provider button -->
           <div class="llm-add-row">
             <button class="sp-btn llm-add-btn" @click="addProvider">
-              <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
               {{ $t('settings.llm.addProvider') }}
             </button>
             <button v-if="context === 'yeaft'" class="sp-btn llm-add-btn" @click="showPresetPicker = true">
-              <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>
               {{ $t('settings.llm.addFromPreset') }}
             </button>
           </div>
