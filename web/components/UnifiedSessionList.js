@@ -34,14 +34,15 @@ const SIDEBAR_SECTION_COLLAPSE_KEY = 'yeaft-sidebar-section-collapse';
 
 function readCollapsedSections() {
   try {
-    if (typeof localStorage === 'undefined') return { projects: false, recents: false };
+    if (typeof localStorage === 'undefined') return { projects: false, tasks: false, recents: false };
     const parsed = JSON.parse(localStorage.getItem(SIDEBAR_SECTION_COLLAPSE_KEY) || '{}');
     return {
       projects: parsed?.projects === true,
+      tasks: parsed?.tasks === true,
       recents: parsed?.recents === true,
     };
   } catch {
-    return { projects: false, recents: false };
+    return { projects: false, tasks: false, recents: false };
   }
 }
 
@@ -50,6 +51,7 @@ function writeCollapsedSections(value) {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(SIDEBAR_SECTION_COLLAPSE_KEY, JSON.stringify({
         projects: value?.projects === true,
+        tasks: value?.tasks === true,
         recents: value?.recents === true,
       }));
     }
@@ -148,9 +150,52 @@ export function calculateFloatingSubmenuPosition(parentRect, menuSize, viewport 
   return { top, left, width, maxHeight, placement: placeLeft ? 'left' : 'right' };
 }
 
+
+// Both sections deliberately share Session row behavior and actions.
+function sessionRowsTemplate(section, rows) {
+  return `          <div
+            v-for="row in (isSectionCollapsed('${section}') ? [] : ${rows})"
+            :key="row.catalogKey"
+            class="session-item sidebar-session-row"
+            :class="{ active: isActive(row), processing: isProcessing(row), dragging: draggedRow?.catalogKey === row.catalogKey, 'drag-before': dragTargetRowKey === row.catalogKey && dragTargetPosition === 'before', 'drag-after': dragTargetRowKey === row.catalogKey && dragTargetPosition === 'after', 'actions-suppressed': suppressedActionsKey === row.catalogKey }"
+            :draggable="canDragRow(row)"
+            role="button"
+            :tabindex="loading ? -1 : 0"
+            :aria-disabled="loading"
+            @dragstart="startDrag(row, $event)"
+            @dragover="dragOverRow(row, null, $event)"
+            @dragleave="dragLeaveRow(row, $event)"
+            @drop="dropOnRow(row, null, $event)"
+            @dragend="finishDrag"
+            @pointerleave="restoreRowActions(row)"
+            @click="selectRow(row, $event, { suppressActions: true })"
+            @keydown.enter="selectRowFromKeyboard(row, $event)"
+            @keydown.space="selectRowFromKeyboard(row, $event)"
+          >
+            <span v-if="row.pinned" class="session-pin-icon" :aria-label="$t('sidebar.sessions.pinned')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
+            <span class="sidebar-session-copy">
+              <span class="title" :title="row.title">
+                <span v-if="isProcessing(row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
+                <span class="sidebar-session-title-text">{{ row.title }}</span>
+                <span v-if="isUnread(row)" class="sidebar-session-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
+              </span>
+            </span>
+            <span v-if="canEditRow(row)" class="session-actions" :class="{ 'menu-open': openMenuKey === row.catalogKey }">
+              <button type="button" class="session-quick-action" @click.stop="runAction('pin', row)" :title="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')" :aria-label="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+              </button>
+              <button type="button" class="session-quick-action" :disabled="!canRunAction(row, 'remove')" @click.stop="runAction('delete', row)" :title="canRunAction(row, 'remove') ? $t('sidebar.sessions.remove') : $t('sidebar.sessions.upgradeForAction')" :aria-label="$t('sidebar.sessions.remove')">
+                <svg class="session-remove-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
+              </button>
+              <button type="button" class="session-dots-btn" :disabled="loading" :class="{ 'menu-open': openMenuKey === row.catalogKey }" @click.stop="toggleSessionMenu(row, false, $event)" :aria-label="$t('sidebar.sessions.menu')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg></button>
+            </span>
+          </div>
+`;
+}
+
 export default {
   name: 'UnifiedSessionList',
-  emits: ['select', 'create', 'create-in-project', 'action', 'project-action', 'close-work-center'],
+  emits: ['select', 'create', 'create-task', 'create-in-project', 'action', 'project-action', 'close-work-center'],
   props: {
     sessions: { type: Array, default: () => [] },
     // Keep the final navigation mounted while its owner-scoped inventory loads.
@@ -247,7 +292,7 @@ export default {
     projectSessionRows() {
       const out = new Map(this.projectRows.map(project => [projectIdentityKey(project), []]));
       for (const row of this.sessions) {
-        if (row.runtimeProvider !== 'yeaft') continue;
+        if (row.runtimeProvider !== 'yeaft' || row.task) continue;
         const project = this.projectBySessionKey.get(`${row.routeRef?.agentId}\u001f${row.routeRef?.sessionId}`);
         const key = projectIdentityKey(project);
         if (project && out.has(key)) out.get(key).push(row);
@@ -261,9 +306,12 @@ export default {
       }
       return out;
     },
+    taskRows() {
+      return sortRows(this.sessions.filter(row => row.runtimeProvider === 'yeaft' && row.task), this.hasCompleteCatalogOrder);
+    },
     recentRows() {
       return sortRows(this.sessions.filter(row => {
-        if (!this.isRowOnline(row)) return false;
+        if (row.task || !this.isRowOnline(row)) return false;
         if (row.runtimeProvider === 'yeaft') {
           const key = `${row.routeRef?.agentId}\u001f${row.routeRef?.sessionId}`;
           if (this.projectBySessionKey.has(key)) return false;
@@ -450,7 +498,7 @@ export default {
       return this.collapsedSections?.[section] === true;
     },
     toggleSection(section) {
-      if (section !== 'projects' && section !== 'recents') return;
+      if (!['projects', 'tasks', 'recents'].includes(section)) return;
       this.collapsedSections = {
         ...this.collapsedSections,
         [section]: !this.isSectionCollapsed(section),
@@ -482,6 +530,12 @@ export default {
       const store = this.resolvedProjectStore;
       if (typeof store?.openPluginCenter !== 'function') return;
       if (store.openPluginCenter() !== false) store.closeSessionSidebar?.();
+    },
+    createTask() {
+      if (this.loading) return;
+      this.resolvedProjectStore?.closePluginCenter?.();
+      if (this.workCenterOpen) this.$emit('close-work-center');
+      this.$emit('create-task');
     },
     createSession() {
       if (this.loading) return;
@@ -920,6 +974,10 @@ export default {
           </svg>
           <span>{{ $t('sidebar.sessions.newChat') }}</span>
         </button>
+        <button type="button" class="sidebar-primary-action sidebar-task-create" :disabled="loading" @click="createTask" :aria-label="$t('scheduledTasks.new')">
+          <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>{{ $t('scheduledTasks.new') }}</span>
+        </button>
         <slot name="after-create">
           <button v-if="resolvedProjectStore?.openPluginCenter" type="button"
                   class="sidebar-primary-action sidebar-plugins-entry"
@@ -1034,6 +1092,17 @@ export default {
           </div>
         </section>
 
+        <section class="sidebar-section tasks-section" :class="{ 'is-collapsed': isSectionCollapsed('tasks') }">
+          <div class="sidebar-section-heading">
+            <button type="button" class="sidebar-section-toggle" @click="toggleSection('tasks')" :aria-expanded="String(!isSectionCollapsed('tasks'))">
+              <span>{{ $t('scheduledTasks.title') }}</span>
+              <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('tasks') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
+            </button>
+          </div>
+          ${sessionRowsTemplate('tasks', 'taskRows')}
+          <div v-if="!isSectionCollapsed('tasks') && !loading && taskRows.length === 0" class="sidebar-section-empty">{{ $t('scheduledTasks.empty') }}</div>
+        </section>
+
         <section class="sidebar-section recents-section" :class="{ 'drag-over': dragTargetProjectId === '__recents__', 'is-collapsed': isSectionCollapsed('recents') }" @dragover="dragOverRecents" @dragleave="clearGroupDragTarget('__recents__', $event)" @drop="dropOnRecents">
           <div class="sidebar-section-heading">
             <button type="button" class="sidebar-section-toggle" @click="toggleSection('recents')" :aria-expanded="String(!isSectionCollapsed('recents'))">
@@ -1047,43 +1116,7 @@ export default {
               </svg>
             </button>
           </div>
-          <div
-            v-for="row in (isSectionCollapsed('recents') ? [] : recentRows)"
-            :key="row.catalogKey"
-            class="session-item sidebar-session-row"
-            :class="{ active: isActive(row), processing: isProcessing(row), dragging: draggedRow?.catalogKey === row.catalogKey, 'drag-before': dragTargetRowKey === row.catalogKey && dragTargetPosition === 'before', 'drag-after': dragTargetRowKey === row.catalogKey && dragTargetPosition === 'after', 'actions-suppressed': suppressedActionsKey === row.catalogKey }"
-            :draggable="canDragRow(row)"
-            role="button"
-            :tabindex="loading ? -1 : 0"
-            :aria-disabled="loading"
-            @dragstart="startDrag(row, $event)"
-            @dragover="dragOverRow(row, null, $event)"
-            @dragleave="dragLeaveRow(row, $event)"
-            @drop="dropOnRow(row, null, $event)"
-            @dragend="finishDrag"
-            @pointerleave="restoreRowActions(row)"
-            @click="selectRow(row, $event, { suppressActions: true })"
-            @keydown.enter="selectRowFromKeyboard(row, $event)"
-            @keydown.space="selectRowFromKeyboard(row, $event)"
-          >
-            <span v-if="row.pinned" class="session-pin-icon" :aria-label="$t('sidebar.sessions.pinned')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
-            <span class="sidebar-session-copy">
-              <span class="title" :title="row.title">
-                <span v-if="isProcessing(row)" class="processing-dot" :aria-label="$t('sidebar.sessions.processing')"></span>
-                <span class="sidebar-session-title-text">{{ row.title }}</span>
-                <span v-if="isUnread(row)" class="sidebar-session-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
-              </span>
-            </span>
-            <span v-if="canEditRow(row)" class="session-actions" :class="{ 'menu-open': openMenuKey === row.catalogKey }">
-              <button type="button" class="session-quick-action" @click.stop="runAction('pin', row)" :title="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')" :aria-label="row.pinned ? $t('chat.sidebar.unpin') : $t('chat.sidebar.pin')">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
-              </button>
-              <button type="button" class="session-quick-action" :disabled="!canRunAction(row, 'remove')" @click.stop="runAction('delete', row)" :title="canRunAction(row, 'remove') ? $t('sidebar.sessions.remove') : $t('sidebar.sessions.upgradeForAction')" :aria-label="$t('sidebar.sessions.remove')">
-                <svg class="session-remove-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
-              </button>
-              <button type="button" class="session-dots-btn" :disabled="loading" :class="{ 'menu-open': openMenuKey === row.catalogKey }" @click.stop="toggleSessionMenu(row, false, $event)" :aria-label="$t('sidebar.sessions.menu')"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg></button>
-            </span>
-          </div>
+          ${sessionRowsTemplate('recents', 'recentRows')}
           <div v-if="!isSectionCollapsed('recents') && loading" class="sidebar-section-empty sidebar-catalog-loading" role="status"><span class="spinner-mini" aria-hidden="true"></span>{{ $t('common.loading') }}</div>
           <div v-else-if="!isSectionCollapsed('recents') && recentRows.length === 0" class="sidebar-section-empty">{{ $t('sidebar.recents.empty') }}</div>
         </section>

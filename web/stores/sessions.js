@@ -697,8 +697,14 @@ export const useSessionsStore = defineStore('sessions', {
         const key = this.applySnapshotUpsert(session, mutationAgentId);
         if (key && activate) this.setActive(session.id, mutationAgentId);
       }
-      if (result.ok && (result.op === 'rename' || result.op === 'update') && session && session.id) {
-        this.applySnapshotUpsert(session, mutationAgentId);
+      if (result.ok && ['rename', 'update', 'update_task', 'run_task'].includes(result.op) && session && session.id) {
+        // Task ACKs may come from an older Agent which omitted config.json.
+        // Preserve the exact Agent-scoped Session's model/effort in that case.
+        const taskAck = result.op === 'update_task' || result.op === 'run_task';
+        const key = taskAck ? findSessionKey(this, session.id, mutationAgentId) : '';
+        const row = taskAck && !Object.hasOwn(session, 'config')
+          ? { ...session, config: this.sessions[key]?.config || {} } : session;
+        this.applySnapshotUpsert(row, mutationAgentId);
       }
       const opSessionId = result.sessionId || result.groupId;
       const allowOwnerlessMutation = this.inventoryIdentityMode === 'legacy-bare';
@@ -863,6 +869,7 @@ export const useSessionsStore = defineStore('sessions', {
         defaultVpId: s.defaultVpId || null,
         announcement: typeof s.announcement === 'string' ? s.announcement : '',
         config: s.config && typeof s.config === 'object' ? { ...s.config } : {},
+        task: s.task && typeof s.task === 'object' ? JSON.parse(JSON.stringify(s.task)) : null,
         workDir: typeof s.workDir === 'string' ? s.workDir : '',
         createdAt: s.createdAt || null,
         updatedAt: s.updatedAt || null,

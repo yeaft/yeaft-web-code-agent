@@ -185,7 +185,8 @@ test('Plugins keep the existing sidebar and browse responsively in light desktop
   await boot(page, serverUrl, mockAgent);
   await showSidebar(page);
   await expect(page.locator('.sidebar-primary-actions > button').nth(0)).toHaveAccessibleName('New chat');
-  expect(await page.locator('.sidebar-plugins-entry').evaluate(element => element.previousElementSibling?.getAttribute('aria-label'))).toBe('New chat');
+  await expect(page.locator('.sidebar-primary-actions > button').nth(1)).toHaveAccessibleName('New task');
+  expect(await page.locator('.sidebar-plugins-entry').evaluate(element => element.previousElementSibling?.getAttribute('aria-label'))).toBe('New task');
   await expect(page.locator('.sidebar-plugins-entry')).toHaveCount(1);
   await openPlugins(page);
   await expect(page.locator('.plugin-center-row')).toHaveCount(6);

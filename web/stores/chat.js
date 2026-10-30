@@ -15,6 +15,7 @@ import { agentSupportsYeaftManagedSkills } from '../utils/yeaft-managed-skill-ca
 // Helper modules
 import * as wsHelpers from './helpers/websocket.js';
 import * as pluginConfigHelpers from './helpers/plugin-config.js';
+import * as scheduledTaskHelpers from './helpers/scheduled-tasks.js';
 import * as msgHelpers from './helpers/messages.js';
 import * as assistantOutputHelpers from './helpers/assistantOutput.js';
 import * as handlerHelpers from './helpers/messageHandler.js';
@@ -708,6 +709,8 @@ export const useChatStore = defineStore('chat', {
     // source Session unread until the user opens it. Key by catalog identity so
     // equal sessionIds owned by different Agents never clear each other.
     yeaftUnreadSessionKeys: {},
+    scheduledTaskNotifications: [],
+    scheduledTaskNotificationOwnerId: null,
     theme: localStorage.getItem('theme') || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
     themeFollowSystem: !localStorage.getItem('theme'),
     locale: localStorage.getItem('locale') || 'zh-CN',
@@ -767,6 +770,7 @@ export const useChatStore = defineStore('chat', {
     sessionProjects: [],
     sessionCatalogLoaded: false,
     sessionCatalogProtocolSupported: null,
+    scheduledTaskProtocolSupported: false,
     sidebarCatalogOwnerId: null,
     sidebarCatalogAuthGeneration: null,
     sidebarLegacySessionCatalog: [],
@@ -4841,7 +4845,11 @@ export const useChatStore = defineStore('chat', {
     // shared sessionCrudRequest path so callers can `await` and surface
     // the new session row immediately. Phase 4 will rename the wire +
     // store fields; until then this is a thin facade.
-    createYeaftSession({ displayName, vpIds, defaultVpId, workDir, agentId } = {}) {
+    createYeaftSession({ displayName, vpIds, defaultVpId, workDir, agentId, task, config } = {}) {
+      if (task !== undefined) {
+        const rejection = scheduledTaskHelpers.scheduledTaskRequestError(this, agentId, 'create');
+        if (rejection) return Promise.resolve(rejection);
+      }
       const roster = Array.isArray(vpIds) ? vpIds.slice() : [];
       // Caller may pin the default VP (e.g. SessionCreateModal's star button).
       // Fall back to the first roster member when omitted or invalid so the
@@ -4854,10 +4862,19 @@ export const useChatStore = defineStore('chat', {
       const payload = { roster, defaultVpId: resolvedDefault };
       if (trimmed) payload.name = trimmed;
       if (trimmedWorkDir) payload.workDir = trimmedWorkDir;
+      if (task !== undefined) payload.task = task;
+      if (config && typeof config === 'object') payload.config = config;
       return this.sessionCrudRequest('create', payload, { agentId });
     },
+    updateScheduledTask(options) { return scheduledTaskHelpers.updateScheduledTask(this, options); },
+    runScheduledTask(options) { return scheduledTaskHelpers.runScheduledTask(this, options); },
+    openScheduledTaskNotification(item) { return scheduledTaskHelpers.openScheduledTaskNotification(this, item); },
+    dismissScheduledTaskNotification(id) { return scheduledTaskHelpers.dismissScheduledTaskNotification(this, id); },
+    bindScheduledTaskNotificationOwner(ownerId) { scheduledTaskHelpers.bindScheduledTaskNotificationOwner(this, ownerId); },
     handleYeaftOutput(msg) {
       if (!msg) return;
+      const taskAuth = useAuthStore();
+      scheduledTaskHelpers.bindScheduledTaskNotificationOwner(this, taskAuth.userId || (taskAuth.skipAuth ? 'local' : null));
       // Ephemeral observability bypasses output/history and watchdog handling.
       if (msg.event?.type === 'query_progress') {
         applyQueryProgress(this, msg);
@@ -5880,6 +5897,10 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        case 'scheduled_task_notification':
+          scheduledTaskHelpers.acceptScheduledTaskNotification(this, event, msg.agentId);
+          break;
+
         // ★ task-334m: Group snapshot + roster delta + CRUD ack.
         case 'group_list_updated':
         case 'session_list_updated':
@@ -5920,6 +5941,7 @@ export const useChatStore = defineStore('chat', {
           // falls back to the legacy whole-replacement path.
           if (gs) {
             gs.applySnapshot(rows, msg.agentId || null);
+            scheduledTaskHelpers.reconcileScheduledTaskNotifications(this, rows, msg.agentId);
             this._hasHandledYeaftSessionHydrate = true;
             this.yeaftSessionHydrateError = null;
           }
@@ -5960,6 +5982,13 @@ export const useChatStore = defineStore('chat', {
           // Branch acknowledgements are broadcast for inventory updates. Only
           // the initiating tab may focus it, and another Agent must not settle
           // this tab's request even if it echoes the same request id.
+          const isTaskResult = event.op === 'update_task' || event.op === 'run_task';
+          const isPendingTask = pending?.op === 'update_task' || pending?.op === 'run_task';
+          if (pending && (isTaskResult || isPendingTask) && (pending.op !== event.op
+              || pending.agentId !== msg.agentId
+              || (event.session?.id && event.session.id !== pending.sessionId)
+              || pending.connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)
+              || pending.authGeneration !== Number(useAuthStore().authGeneration || 0))) break;
           const isBranchResult = event.op === 'copy' || event.op === 'merge';
           if (pending && (isBranchResult || pending.op === 'copy' || pending.op === 'merge') && (pending.op !== event.op
               || pending.agentId !== msg.agentId
@@ -6497,6 +6526,8 @@ export const useChatStore = defineStore('chat', {
         rename: 'yeaft_rename_session',
         update: 'yeaft_update_session',
         update_config: 'yeaft_update_session_config',
+        update_task: 'yeaft_scheduled_task',
+        run_task: 'yeaft_scheduled_task',
         archive: 'yeaft_archive_session',
         delete: 'yeaft_delete_session',
         add_member: 'yeaft_session_add_member',
@@ -6517,6 +6548,8 @@ export const useChatStore = defineStore('chat', {
       const msg = { type, requestId };
       if (op === 'create') msg.payload = data || {};
       else if (data && typeof data === 'object') Object.assign(msg, data);
+      if (op === 'update_task') msg.op = 'update';
+      if (op === 'run_task') msg.op = 'run';
       // Per-message agentId override — lets the create modal send the new
       // session to a chosen agent rather than the active one. Server will
       // fall back to client.currentAgent when omitted.
@@ -6555,7 +6588,7 @@ export const useChatStore = defineStore('chat', {
           },
         });
         const sent = this.sendWsMessage(msg);
-        if ((op === 'copy' || op === 'merge') && !sent) {
+        if (['copy', 'merge', 'update_task', 'run_task'].includes(op) && !sent) {
           if (timer) clearTimeout(timer);
           this._sessionCrudPending.delete(requestId);
           if (gs?.pending) delete gs.pending[requestId];

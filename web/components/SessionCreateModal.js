@@ -1,3 +1,4 @@
+import ScheduledTaskEditor, { newScheduledTask } from './ScheduledTaskEditor.js';
 import FolderPickerDialog from './FolderPickerDialog.js';
 /**
  * SessionCreateModal — chat-style "new session" modal.
@@ -33,6 +34,7 @@ import VpAvatar from './VpAvatar.js';
 import ModernSelect from './ModernSelect.js';
 import { getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 import { buildVpDomainSections } from '../utils/vp-domains.js';
+import { modelOptionRef } from '../utils/modelRefs.js';
 import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
 
 const OMNI_VP_ID = 'omni';
@@ -73,24 +75,35 @@ export function resolveVpRosterPopupLayout(anchorRect, boundaryRect, viewportRec
 
 export default {
   name: 'SessionCreateModal',
-  components: { FolderPickerDialog, VpAvatar, ModernSelect },
+  components: { FolderPickerDialog, VpAvatar, ModernSelect, ScheduledTaskEditor },
   props: {
+    taskMode: { type: Boolean, default: false },
     initialProvider: { type: String, default: 'yeaft' },
     initialAgentId: { type: String, default: null },
   },
   emits: ['close', 'created'],
   template: `
     <Teleport to="body">
-    <div class="modal-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t('yeaft.session.create.title')">
-      <div class="modal resume-modal yeaft-session-create-modal">
+    <div class="modal-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t(taskMode ? 'scheduledTasks.new' : 'yeaft.session.create.title')">
+      <div class="modal resume-modal yeaft-session-create-modal" :class="{ 'task-mode': taskMode }">
+        <header v-if="taskMode" class="task-create-header">
+          <div class="yeaft-session-create-heading">
+            <h2>{{ $t('scheduledTasks.new') }}</h2>
+            <p>{{ $t('scheduledTasks.subtitle') }}</p>
+          </div>
+          <button type="button" class="btn-ghost task-create-close" :disabled="busy" @click="requestClose" :aria-label="$t('yeaft.session.create.close')">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </header>
+        <div class="session-create-flow" :class="{ 'is-task': taskMode }">
         <div class="resume-modal-controls">
-          <button class="resume-close-btn" type="button" @click="requestClose" :aria-label="$t('yeaft.session.create.close')">
+          <button v-if="!taskMode" class="resume-close-btn" type="button" @click="requestClose" :aria-label="$t('yeaft.session.create.close')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
 
-          <header class="yeaft-session-create-heading">
-            <h2>{{ $t('yeaft.session.create.title') }}</h2>
-            <p>{{ $t('yeaft.session.create.subtitle') }}</p>
+          <header v-if="!taskMode" class="yeaft-session-create-heading">
+            <h2>{{ $t(taskMode ? 'scheduledTasks.new' : 'yeaft.session.create.title') }}</h2>
+            <p>{{ $t(taskMode ? 'scheduledTasks.subtitle' : 'yeaft.session.create.subtitle') }}</p>
           </header>
 
           <div class="yeaft-session-create-fields">
@@ -99,12 +112,13 @@ export default {
             <ModernSelect
               v-model="form.agentId"
               :options="agentSelectOptions"
+              :disabled="busy"
               :aria-label="$t('yeaft.session.create.agentLabel')"
               menu-class="yeaft-session-create-select-menu"
             />
           </div>
 
-          <div class="resume-control-row">
+          <div v-if="!taskMode" class="resume-control-row">
             <label class="resume-control-label">{{ $t('modal.newConv.provider') }}</label>
             <ModernSelect
               v-model="form.provider"
@@ -121,10 +135,11 @@ export default {
             <input
               type="text"
               v-model.trim="form.name"
-              :placeholder="$t('yeaft.session.create.namePlaceholder')"
+              :placeholder="$t(taskMode ? 'scheduledTasks.namePlaceholder' : 'yeaft.session.create.namePlaceholder')"
               maxlength="60"
               autocomplete="off"
               class="resume-input"
+              :disabled="busy"
               @keydown.enter.prevent="onSubmit"
             />
           </div>
@@ -139,6 +154,7 @@ export default {
                 :placeholder="workDirPlaceholder"
                 autocomplete="off"
                 class="resume-input"
+                :disabled="busy"
                 @keydown.enter.prevent="onSubmit"
               />
               <button
@@ -178,6 +194,7 @@ export default {
                   class="yeaft-roster-trigger"
                   :class="{ 'is-open': vpRosterOpen }"
                   :aria-expanded="vpRosterOpen"
+                  :disabled="busy"
                   aria-controls="yeaft-session-create-vp-picker"
                   ref="vpRosterTrigger"
                   @click="toggleVpRoster"
@@ -219,6 +236,7 @@ export default {
                             type="checkbox"
                             :value="vp.vpId"
                             :checked="form.vpIds.includes(vp.vpId)"
+                            :disabled="busy"
                             @change="toggleVp(vp.vpId, $event.target.checked)"
                           />
                           <VpAvatar :vp-id="vp.vpId" :size="20" :aria-label="vpLabelFor(vp.vpId)" />
@@ -246,11 +264,19 @@ export default {
               </template>
             </div>
           </div>
+          <div v-if="taskMode" class="resume-control-row">
+            <label class="resume-control-label">{{ $t('scheduledTasks.model') }}</label>
+            <ModernSelect v-model="form.model" :options="taskModelOptions" :aria-label="$t('scheduledTasks.model')" :disabled="busy" menu-class="yeaft-session-create-select-menu" />
+          </div>
           </div>
         </div>
 
+        <div v-if="taskMode" class="scheduled-task-create-body">
+          <p v-if="taskAgentUnavailable" class="scheduled-task-error" role="status">{{ taskAgentUnavailable }}</p>
+          <ScheduledTaskEditor v-model="taskDraft" :disabled="busy" @valid="taskValid = $event" />
+        </div>
         <!-- Content area: folders or existing Sessions for the chosen workDir -->
-        <div class="resume-modal-content">
+        <div v-if="!taskMode" class="resume-modal-content">
           <!-- Folder aggregation (workDir empty) -->
           <div class="resume-panel" v-if="!form.workDir">
             <div class="resume-panel-header">
@@ -321,7 +347,9 @@ export default {
           {{ submitError }}
         </div>
 
+        </div>
         <div class="resume-modal-footer">
+          <button v-if="taskMode" type="button" class="btn btn-secondary" :disabled="busy" @click="requestClose">{{ $t('common.cancel') }}</button>
           <button
             class="modern-btn btn-primary yeaft-create-submit"
             type="button"
@@ -329,7 +357,7 @@ export default {
             :disabled="busy || !canSubmit"
           >
             <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-            {{ busy ? $t('yeaft.session.create.creating') : $t('yeaft.session.create.submit') }}
+            {{ busy ? $t('yeaft.session.create.creating') : $t(taskMode ? 'scheduledTasks.create' : 'yeaft.session.create.submit') }}
           </button>
         </div>
 
@@ -343,12 +371,15 @@ export default {
   `,
   data() {
     return {
+      taskDraft: newScheduledTask(),
+      taskValid: false,
       form: {
-        provider: ['yeaft', 'copilot', 'claude-code'].includes(this.initialProvider) ? this.initialProvider : 'yeaft',
+        provider: !this.taskMode && ['yeaft', 'copilot', 'claude-code'].includes(this.initialProvider) ? this.initialProvider : 'yeaft',
         name: '',
         // Pre-checked once vpList hydrates (see applyDefaultSelection).
         vpIds: [],
         defaultVpId: null,
+        model: '',
         workDir: '',
         // Which agent owns the new session — populated in mounted().
         agentId: this.initialAgentId || null,
@@ -435,14 +466,14 @@ export default {
     agentOptions() {
       const s = this.chat;
       if (!s || !Array.isArray(s.agents)) return [];
-      return s.agents.map(a => ({ id: a.id, name: a.name, online: !!a.online, workDir: a.workDir || '' }));
+      return s.agents.map(a => ({ id: a.id, name: a.name, online: !!a.online, capabilities: a.capabilities || [], workDir: a.workDir || '' }));
     },
     agentSelectOptions() {
       return this.agentOptions.map(agent => ({
         value: agent.id,
         label: agent.name || agent.id,
-        sublabel: agent.online ? '' : this.$t('settings.dashboard.offline'),
-        disabled: !agent.online,
+        sublabel: !agent.online ? this.$t('settings.dashboard.offline') : (this.taskMode && !agent.capabilities.includes('scheduled_tasks') ? this.$t('scheduledTasks.upgrade') : ''),
+        disabled: !agent.online || (this.taskMode && !agent.capabilities.includes('scheduled_tasks')),
       }));
     },
     providerOptions() {
@@ -460,7 +491,7 @@ export default {
     // on a dead agent (canSubmit blocks, scan hits a dead ws). The
     // signature changes whenever any agent's id or online flag changes.
     agentSignature() {
-      return this.agentOptions.map(a => `${a.id}:${a.online ? 1 : 0}`).join(',');
+      return this.agentOptions.map(a => `${a.id}:${a.online ? 1 : 0}:${this.taskMode ? a.capabilities.includes('scheduled_tasks') : ''}`).join(',');
     },
     folderPickerAgentId() {
       return this.form.agentId || this.chat?.currentAgent || '';
@@ -540,7 +571,24 @@ export default {
         createdAt: session.lastModified,
       }));
     },
+    taskModelOptions() {
+      const models = this.chat?.yeaftStatusByAgent?.[this.form.agentId]?.availableModels
+        || (this.chat?.currentAgent === this.form.agentId ? this.chat?.yeaftAvailableModels : []) || [];
+      return [
+        { value: '', label: this.$t('scheduledTasks.defaultModel') },
+        ...models.map(model => ({ value: modelOptionRef(model), label: model.label || model.id })),
+      ];
+    },
+    taskAgentUnavailable() {
+      if (this.chat?.scheduledTaskProtocolSupported !== true) return this.$t('scheduledTasks.serverUpgrade');
+      const agent = this.agentOptions.find(item => item.id === this.form.agentId);
+      if (!agent && this.agentOptions.some(item => item.online) && !this.agentOptions.some(item => item.capabilities.includes('scheduled_tasks'))) return this.$t('scheduledTasks.upgrade');
+      if (!agent?.online || (this.chat?.connectionState && this.chat.connectionState !== 'connected')) return this.$t('scheduledTasks.offline');
+      if (!agent.capabilities.includes('scheduled_tasks')) return this.$t('scheduledTasks.upgrade');
+      return '';
+    },
     canSubmit() {
+      if (this.taskMode && (this.taskAgentUnavailable || !this.taskValid || !this.taskDraft.prompt.trim())) return false;
       if (this.isYeaftProvider && (!this.vpLibraryReady || this.form.vpIds.length === 0)) return false;
       if (!this.form.agentId) return false;
       const a = this.agentOptions.find(x => x.id === this.form.agentId);
@@ -585,7 +633,7 @@ export default {
     this.applyDefaultSelection();
   },
   watch: {
-    folderPickerAgentId() { this.closeFolderPicker(); },
+    folderPickerAgentId() { this.closeFolderPicker(); this.form.model = ''; },
     // Re-apply default selection once vpList hydrates after mount.
     // Watch the VP identity signature, not only length: switching agents can
     // return the same number of VPs in a different library. The create UI must
@@ -733,7 +781,7 @@ export default {
      */
     seedAgentDefault() {
       try {
-        const agents = this.agentOptions;
+        const agents = this.taskMode ? this.agentOptions.filter(a => a.capabilities.includes('scheduled_tasks')) : this.agentOptions;
         if (!Array.isArray(agents) || agents.length === 0) return;
         // Keep an already-valid online selection — don't clobber the user.
         const current = agents.find(a => a.id === this.form.agentId && a.online);
@@ -1126,6 +1174,7 @@ export default {
           || getLastPathSegment(this.form.workDir.trim())
           || this.$t('yeaft.session.create.untitled');
         const res = await this.chat.createYeaftSession({
+          ...(this.taskMode ? { task: { ...this.taskDraft, prompt: this.taskDraft.prompt.trim() }, ...(this.form.model ? { config: { model: this.form.model } } : {}) } : {}),
           displayName: derivedName,
           vpIds: submittedVpIds,
           defaultVpId,

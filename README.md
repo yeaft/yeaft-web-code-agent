@@ -58,6 +58,12 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 - Organize native Sessions into Projects, drag them between Project and Recents sections, and attach a Project instruction to all member Sessions.
 - Start a persistent WorkItem from the current Session; origin identity is stamped by the runtime.
 
+### Scheduled tasks
+
+- **New task** appears above **Plugins**; the collapsible **Tasks** section sits between **Projects** and **Recents**.
+- Choose an Agent, folder and VPs, then configure a prompt and a one-time or recurring schedule. Tasks reuse the full Session conversation and workbench, with manual execution, configuration editing and pause controls.
+- The online Agent owns durable scheduling; results remain in task history and clickable notifications open the exact task. Older Agents require an upgrade. Connector event triggers are not connected yet. See [task and recovery boundaries](docs/guide/tasks.md).
+
 ### Providers, tools, and context
 
 - Native adapters support Anthropic Messages and OpenAI Responses protocols.

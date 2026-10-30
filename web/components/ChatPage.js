@@ -1,3 +1,4 @@
+import ScheduledTaskNotifications from './ScheduledTaskNotifications.js';
 import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
 import FolderPickerDialog from './FolderPickerDialog.js';
 import { alertDialog, confirmDialog } from '../utils/dialog.js';
@@ -28,7 +29,7 @@ import { collapseSidebar } from '../utils/sidebar-collapse.js';
 
 export default {
   name: 'ChatPage',
-  components: { FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
+  components: { ScheduledTaskNotifications, FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
@@ -128,6 +129,7 @@ export default {
           :work-center-open="store.workCenterOpen"
           @select="store.openCatalogSession"
           @create="onUnifiedCreate"
+          @create-task="onUnifiedCreateTask"
           @create-in-project="onUnifiedCreateInProject"
           @close-work-center="store.leaveWorkCenter"
           @action="onUnifiedSessionAction"
@@ -142,6 +144,7 @@ export default {
         </div>
       </SessionSidebarShell>
 
+      <ScheduledTaskNotifications :store="store" />
       <WorkCenterPage v-if="store.workCenterOpen" />
       <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" @toggle-sidebar="store.toggleSessionSidebar()" />
 
@@ -195,6 +198,7 @@ export default {
 
       <SessionCreateModal
         v-if="unifiedSessionCreateOpen"
+        :task-mode="unifiedSessionCreateTaskMode"
         :initial-provider="unifiedSessionCreateProvider"
         :initial-agent-id="unifiedSessionCreateProject?.legacyAgentId || null"
         @close="closeUnifiedSessionCreate"
@@ -352,6 +356,7 @@ export default {
       // Unified conversation modal state
       showConversationModal: false,
       unifiedSessionCreateOpen: false,
+      unifiedSessionCreateTaskMode: false,
       unifiedSessionCreateProvider: 'yeaft',
       unifiedSessionCreateProject: null,
       convModalAgent: '',
@@ -477,12 +482,18 @@ export default {
       if (row?.runtimeProvider !== 'yeaft') return false;
       return this.store.isYeaftSessionUnread(row.routeRef?.sessionId, row.routeRef?.agentId);
     },
+    onUnifiedCreateTask() {
+      this.onUnifiedCreate();
+      this.unifiedSessionCreateTaskMode = true;
+    },
     onUnifiedCreate(provider = 'yeaft') {
+      this.unifiedSessionCreateTaskMode = false;
       this.unifiedSessionCreateProject = null;
       this.unifiedSessionCreateProvider = ['yeaft', 'copilot', 'claude-code'].includes(provider) ? provider : 'yeaft';
       this.unifiedSessionCreateOpen = true;
     },
     onUnifiedCreateInProject({ project } = {}) {
+      this.unifiedSessionCreateTaskMode = false;
       if (!project?.id) return;
       this.unifiedSessionCreateProject = project;
       this.unifiedSessionCreateProvider = 'yeaft';

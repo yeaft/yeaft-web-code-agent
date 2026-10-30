@@ -5,7 +5,7 @@ import { MockAgent } from './mock-agent.js';
 
 const PROJECT_ROOT = process.env.E2E_PROJECT_ROOT || process.cwd();
 
-async function getAvailablePort() {
+export async function getAvailablePort() {
   const server = createServer();
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -36,7 +36,7 @@ export async function useMockAgent(agent, use) {
   }
 }
 
-class TestServer {
+export class TestServer {
   constructor(port) {
     this.port = port;
     this.process = null;

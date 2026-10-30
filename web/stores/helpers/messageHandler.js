@@ -5,6 +5,7 @@
 
 import { acceptPersonResponse } from './digital-person.js';
 import { acceptPluginConfigReply, acceptPluginSkillDetailReply } from './plugin-config.js';
+import { reconcileScheduledTaskNotifications } from './scheduled-tasks.js';
 import { useAuthStore } from '../auth.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
@@ -210,6 +211,7 @@ function commitBufferedYeaftSessionInventory(store) {
     sessions?.applySnapshot?.(slice.sessions || [], slice.agentId || null, {
       deferActivation: index < orderedSlices.length - 1,
     });
+    reconcileScheduledTaskNotifications(store, slice.sessions, slice.agentId);
   });
   store.yeaftSessionHydrateSlices = [];
 }
@@ -361,6 +363,7 @@ export function handleMessage(store, msg) {
         if (msg.acceptPlaintext === true) {
           store.serverEncryptionRequired = false;
         }
+        store.scheduledTaskProtocolSupported = msg.scheduledTaskProtocol === 1;
         if (msg.sessionCatalogProtocol === 1) store.sessionCatalogProtocolSupported = true;
         else if (msg.sessionCatalogProtocol === 0 || msg.sessionCatalogProtocol === false) {
           store.sessionCatalogProtocolSupported = false;

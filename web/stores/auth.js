@@ -28,11 +28,13 @@ let activeYeaftHistoryOwnerId = null;
 function bindYeaftHistoryOwner(ownerId) {
   clearPluginBrowserState();
   const nextOwnerId = String(ownerId || '').trim() || null;
+  try { globalThis.Pinia?.useChatStore?.()?.bindScheduledTaskNotificationOwner?.(nextOwnerId); } catch {}
   if (activeYeaftHistoryOwnerId !== nextOwnerId) clearYeaftHistoryMemory();
   activeYeaftHistoryOwnerId = nextOwnerId;
 }
 
 function clearYeaftHistoryOwner() {
+  try { globalThis.Pinia?.useChatStore?.()?.bindScheduledTaskNotificationOwner?.(null); } catch {}
   clearPluginBrowserState();
   clearYeaftHistoryMemory();
   activeYeaftHistoryOwnerId = null;

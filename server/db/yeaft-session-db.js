@@ -39,7 +39,9 @@ function sessionOrderKey(agentId, sessionId) {
 
 function mapRow(row) {
   if (!row) return row;
+  const task = safeJsonParse(row.task_json, null);
   return {
+    ...(task && typeof task === 'object' && !Array.isArray(task) ? { task } : {}),
     id: row.id,
     userId: row.user_id || null,
     agentId: row.agent_id,
@@ -72,7 +74,7 @@ export const yeaftSessionDb = {
    * @param {string} userId
    * @param {string} agentId
    * @param {object} session  Shape from `web-bridge.snapshotSessions()`:
-   *   { id, name, roster[], defaultVpId, workDir, config, announcement, createdAt }
+   *   { id, name, roster[], defaultVpId, workDir, config, announcement, createdAt, task? }
    */
   upsertFromSnapshot(userId, agentId, session) {
     if (!session || !session.id || !agentId) return;
@@ -90,6 +92,7 @@ export const yeaftSessionDb = {
       session.createdAt || now,
       now,
       0,
+      safeJsonStringify(session.task && typeof session.task === 'object' && !Array.isArray(session.task) ? session.task : null),
     );
     if (session.metadataUpdatedAt) {
       stmts.touchYeaftSessionMetadata.run(

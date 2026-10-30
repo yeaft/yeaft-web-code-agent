@@ -6,6 +6,7 @@ import { advanceYeaftDebugRequestChunk, consumeYeaftDebugRequest, webClients, pr
 import { CONFIG } from '../config.js';
 import { yeaftAssetStore } from '../yeaft-asset-store.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
+import { syncProjectContextsToAgents } from './client-conversation.js';
 
 
 /** Keep Skill detail read-only and browser-safe, including replies from newer Agents. */
@@ -69,7 +70,7 @@ function reconcileAuthoritativeSessionSnapshot(ownerId, agentId, sessions) {
   return rows;
 }
 
-function syncYeaftSessionMetadata(agentId, agent, event) {
+async function syncYeaftSessionMetadata(agentId, agent, event) {
   if (!event || typeof event !== 'object') return event;
   const ownerId = agent?.ownerId || null;
 
@@ -80,6 +81,8 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
       .map(session => [session.id, { ...session }]));
     try {
       if (ownerId) {
+        // Catalog discovery can precede the one-time legacy Project import.
+        // Existing memberships are protected by importLegacyProjects itself.
         reconcileAuthoritativeSessionSnapshot(ownerId, agentId, rows);
         yeaftProjectDb.importLegacyProjects(
           ownerId,
@@ -87,6 +90,7 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
           event.projects,
           sessionId => rows.some(row => row?.id === sessionId),
         );
+        await syncProjectContextsToAgents(ownerId, agentId);
       }
     } catch (e) {
       console.warn(`[Server] yeaft session persist failed for agent ${agentId}:`, e?.message || e);
@@ -99,11 +103,29 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
   const sessionId = event.sessionId;
   if (event.ok && op === 'list' && Array.isArray(event.sessions)) {
     try {
-      if (ownerId) reconcileAuthoritativeSessionSnapshot(ownerId, agentId, event.sessions);
+      if (ownerId) {
+        reconcileAuthoritativeSessionSnapshot(ownerId, agentId, event.sessions);
+        await syncProjectContextsToAgents(ownerId, agentId);
+      }
     } catch (e) {
       console.warn(`[Server] yeaft session list persist failed for agent ${agentId}:`, e?.message || e);
     }
     return { ...event, sessions: decorateYeaftSessionsWithPinned(agentId, event.sessions) };
+  }
+  // Task state is Agent-authored. Persist successful CRUD rows as well as full
+  // snapshots so reloads after an acknowledgement cannot show stale run state.
+  if (event.ok && ownerId && event.session?.id
+      && (['update_task', 'run_task'].includes(op)
+        || (event.session.task && op !== 'copy' && op !== 'merge'))) {
+    try {
+      const existing = yeaftSessionDb.getForAgent(ownerId, agentId, event.session.id);
+      yeaftSessionDb.upsertFromSnapshot(ownerId, agentId, { ...existing, ...event.session });
+      agent.yeaftSessions ??= new Map();
+      agent.yeaftSessions.set(event.session.id, { ...existing, ...event.session });
+      if (op === 'create') await syncProjectContextsToAgents(ownerId, agentId);
+    } catch (e) {
+      console.warn(`[Server] task Session persist failed for agent ${agentId}:`, e?.message || e);
+    }
   }
   // A fork/merge is a new Session on the same Agent, not a new Project. Resolve
   // membership here (never from browser/Agent project metadata) before the
@@ -628,7 +650,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
     case 'session_output': {
       if (isRetiredDreamEvent(msg.event)) break;
       const data = hydrateInlinePreviewData(msg.data);
-      let event = syncYeaftSessionMetadata(agentId, agent, msg.event);
+      let event = await syncYeaftSessionMetadata(agentId, agent, msg.event);
       if ((event?.type === 'session_list_updated' || event?.type === 'session_crud_result') && agent.ownerId) {
         event = {
           ...event,
@@ -636,7 +658,12 @@ export async function handleAgentOutput(agentId, agent, msg) {
           projectsAuthoritative: true,
         };
       }
-      let catalogChanged = false;
+      // Task notifications are live owner events, never request-client events.
+      // Do not widen this boundary in skip-auth mode when an owner is known.
+      const taskNotification = event?.type === 'scheduled_task_notification';
+      const taskResult = event?.type === 'session_crud_result'
+        && (['update_task', 'run_task'].includes(event.op) || event.session?.task);
+      let catalogChanged = !!(taskResult && event.ok && event.session?.id);
       if (event?.type === 'yeaft_status') {
         agent.yeaftStatus = event;
         await broadcastAgentList();
@@ -655,6 +682,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
               defaultVpId: event.defaultVpId != null ? event.defaultVpId : (existing.defaultVpId || null),
               workDir: existing.workDir || '',
               config: existing.config || {},
+              ...(existing.task ? { task: existing.task } : {}),
               announcement: typeof event.announcement === 'string'
                 ? event.announcement
                 : (existing.announcement || ''),
@@ -685,7 +713,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       // History request completions are client-scoped; live Session output stays
       // broadcast to every authenticated tab owned by this user.
-      const hasRequestedClient = typeof msg._requestClientId === 'string' && !!msg._requestClientId;
+      const hasRequestedClient = !taskNotification
+        && typeof msg._requestClientId === 'string' && !!msg._requestClientId;
       const requestedClient = hasRequestedClient ? webClients.get(msg._requestClientId) : null;
       const outputClients = hasRequestedClient
         ? (requestedClient ? [[msg._requestClientId, requestedClient]] : [])
@@ -715,7 +744,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // are non-empty in practice, but we don't want the relay silently
       // eating a legitimate "" or 0 if one ever shows up.
       for (const [cId, c] of outputClients) {
-        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+        const ownerMatches = taskNotification || taskResult
+          ? !!agent.ownerId && c.userId === agent.ownerId
+          : CONFIG.skipAuth || c.userId === agent.ownerId;
+        if (c.authenticated && ownerMatches) {
           await sendToWebClient(c, {
             type: 'yeaft_output',
             conversationId: msg.conversationId,
@@ -977,7 +1009,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // Use one batch read (`getByAgent`) and a Set lookup instead of an
       // N+1 `get(id)` per row — relays this size hot path on every
       // snapshot per connected client.
-      const syncedEvent = syncYeaftSessionMetadata(agentId, agent, msg);
+      const syncedEvent = await syncYeaftSessionMetadata(agentId, agent, msg);
       const decoratedSessions = syncedEvent.sessions;
       await broadcastSessionCatalog(agent.ownerId);
       // Relay verbatim to web (agentId stamped so the web sessions store
@@ -1020,6 +1052,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
                 : (existing?.defaultVpId || null),
               workDir: existing?.workDir || '',
               config: existing?.config || {},
+              ...(existing?.task ? { task: existing.task } : {}),
               announcement: typeof msg.announcement === 'string'
                 ? msg.announcement
                 : (existing?.announcement || ''),
@@ -1042,12 +1075,19 @@ export async function handleAgentOutput(agentId, agent, msg) {
     }
 
     case 'session_crud_result': {
+      // Task-capable Agents may use the top-level CRUD alias. Normalize it to
+      // the same requester-scoped envelope as nested task acknowledgements.
+      if (['update_task', 'run_task'].includes(msg.op) || msg.session?.task) {
+        const { type: _type, _requestClientId, ...event } = msg;
+        await handleAgentOutput(agentId, agent, { type: 'yeaft_output', _requestClientId, event });
+        break;
+      }
       // Surface op result to the web (the only client that cares about
       // requestId routing). Keep the server shadow table in sync for list
       // probes too: entering Yeaft asks each connected agent for its opened
       // sessions, and that response must carry persisted server-side pin
       // state before it hits the web store.
-      const syncedMsg = syncYeaftSessionMetadata(agentId, agent, msg);
+      const syncedMsg = await syncYeaftSessionMetadata(agentId, agent, msg);
       const outboundMsg = agent.ownerId
         ? { ...syncedMsg, projects: yeaftProjectDb.listForAgent(agent.ownerId, agentId), projectsAuthoritative: true }
         : { ...syncedMsg, projects: [], projectsAuthoritative: true };

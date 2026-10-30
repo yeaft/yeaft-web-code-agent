@@ -404,6 +404,7 @@ const yeaftSessionsTable = `
     default_vp_id TEXT,
     work_dir TEXT,
     config_json TEXT,
+    task_json TEXT,
     announcement TEXT,
     created_at INTEGER,
     updated_at INTEGER NOT NULL,
@@ -519,6 +520,7 @@ const yeaftMigrations = [
   `ALTER TABLE yeaft_sessions ADD COLUMN is_pinned INTEGER DEFAULT 0`,
   `ALTER TABLE yeaft_sessions ADD COLUMN sort_order INTEGER`,
   `ALTER TABLE yeaft_sessions ADD COLUMN metadata_updated_at INTEGER`,
+  `ALTER TABLE yeaft_sessions ADD COLUMN task_json TEXT`,
 ];
 for (const migration of yeaftMigrations) {
   try { db.exec(migration); } catch (_) { /* column exists */ }
@@ -1408,8 +1410,8 @@ export const stmts = {
   upsertYeaftSession: db.prepare(`
     INSERT INTO yeaft_sessions
       (id, user_id, agent_id, name, roster_json, default_vp_id, work_dir,
-       config_json, announcement, created_at, updated_at, is_archived)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       config_json, announcement, created_at, updated_at, is_archived, task_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, agent_id, id) DO UPDATE SET
       user_id = COALESCE(excluded.user_id, user_id),
       name = excluded.name,
@@ -1417,6 +1419,7 @@ export const stmts = {
       default_vp_id = excluded.default_vp_id,
       work_dir = excluded.work_dir,
       config_json = excluded.config_json,
+      task_json = excluded.task_json,
       announcement = excluded.announcement,
       created_at = COALESCE(yeaft_sessions.created_at, excluded.created_at),
       updated_at = excluded.updated_at,

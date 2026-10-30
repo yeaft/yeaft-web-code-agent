@@ -2390,3 +2390,8 @@
   }
 }
 
+
+.tasks-section .sidebar-session-row {
+  margin-left: var(--work-center-space-4);
+}
+.tasks-section .sidebar-session-row[aria-disabled="true"] { opacity: .6; }

@@ -15,7 +15,7 @@
  *      style strips on incoming/outgoing message bodies.
  */
 
-import { delimiter, join } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { COLLAB_TOOL_POLICY } from './tools/registry.js';
 import { createFullRegistry } from './tools/index.js';
 import { existsSync, lstatSync } from 'node:fs';
@@ -102,6 +102,8 @@ import {
 } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta, SESSION_META_FILE } from './sessions/session-store.js';
 import { validateSessionId } from './sessions/ids.js';
+import { publicScheduledTask } from './sessions/scheduled-task-definition.js';
+import { ScheduledTaskScheduler, SCHEDULED_TASK_DISPATCH_GUARD } from './sessions/scheduled-task-scheduler.js';
 import { loadSessionConfig, normalizeSessionConfig, resolveSessionConfig, SessionConfigError } from './sessions/session-config.js';
 import { updateSessionConfig } from './sessions/session-crud.js';
 import { createCoordinator } from './sessions/coordinator.js';
@@ -2693,6 +2695,7 @@ function resolveGroupDefaultVpId(sessionId) {
 }
 
 function sendSessionOutputFrame(data, { sessionId, chatId, vpId, turnId, threadId, perfTraceId } = {}) {
+  scheduledTaskScheduler?.observe(sessionId, data);
   const resolvedVpId = vpId || (sessionId ? resolveGroupDefaultVpId(sessionId) : null);
   sendToServer({
     type: 'yeaft_output',
@@ -3156,6 +3159,7 @@ function mergedStatusForProjectRuntime(runtime, ownerSession = session) {
 
 /** Send a Yeaft Session metadata event over the legacy-compatible envelope. */
 function sendSessionEvent(event, { sessionId, chatId, vpId, turnId, threadId, requestId, requestClientId, perfTraceId, conversationId = yeaftConversationId } = {}) {
+  scheduledTaskScheduler?.observe(sessionId || event?.sessionId, event);
   sendToServer({
     type: 'yeaft_output',
     conversationId,
@@ -3498,11 +3502,12 @@ async function sharedProjectContext(yeaftDir, sessionId, options = {}) {
   return context;
 }
 
-function sendSessionCrudResult(payload) {
+function sendSessionCrudResult(payload, envelope) {
   const next = payload && payload.ok && Array.isArray(payload.sessions)
     ? { ...payload, sessions: decorateSessionsWithRuntimeState(payload.sessions) }
     : payload;
-  sendSessionEvent({ type: 'session_crud_result', ...next });
+  const projected = next?.session?.task ? { ...next, session: { ...next.session, task: publicScheduledTask(next.session.task) } } : next;
+  sendSessionEvent({ type: 'session_crud_result', ...projected }, envelope);
 }
 
 function isMcpServerEnabled(name, plugins = session?.config?.plugins) {
@@ -3708,6 +3713,72 @@ function sendSessionSnapshotBroadcast() {
  */
 export { sendSessionSnapshotBroadcast as broadcastYeaftSessionSnapshotEager };
 
+let scheduledTaskScheduler = null;
+
+/** Server authority is connection-scoped; cached context must not survive reconnect. */
+export function invalidateYeaftProjectContexts() {
+  projectContextBySession.clear();
+}
+
+function scheduledSessionReady(sessionId) {
+  return ctx.ws?.readyState === 1 && projectContextBySession.has(sessionId);
+}
+
+/** Start once per Agent data root, not per browser subscription or reconnect. */
+export function startYeaftScheduledTasks() {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  if (!yeaftDir) return null;
+  if (scheduledTaskScheduler?.yeaftDir !== resolve(yeaftDir)) {
+    scheduledTaskScheduler?.stop();
+    scheduledTaskScheduler = new ScheduledTaskScheduler({
+      yeaftDir,
+      canDispatch: scheduledSessionReady,
+      dispatch: msg => {
+        const guard = msg[SCHEDULED_TASK_DISPATCH_GUARD];
+        const input = { ...msg, projectContext: projectContextBySession.get(msg.sessionId) };
+        input[SCHEDULED_TASK_DISPATCH_GUARD] = () => {
+          guard(); // Includes readiness plus the persisted claim/config/identity checks.
+          // Runtime boot may have spanned a Project edit or reconnect. Use the
+          // latest authority at ingress, never the pre-boot context or legacy cache.
+          input.projectContext = projectContextBySession.get(msg.sessionId);
+        };
+        return handleYeaftSessionSend(input);
+      },
+      isActive: sessionHasActiveWork,
+      onChange: sendSessionSnapshotBroadcast,
+      notify: event => sendSessionEvent(event, { sessionId: event.sessionId }),
+    });
+  }
+  return scheduledTaskScheduler.start();
+}
+
+export function stopYeaftScheduledTasks() {
+  scheduledTaskScheduler?.stop();
+  scheduledTaskScheduler = null;
+}
+
+export function handleYeaftScheduledTask(msg = {}) {
+  const op = msg.op === 'update' ? 'update_task' : 'run_task';
+  const requestId = msg.requestId || null;
+  const respond = payload => sendSessionEvent({ type: 'session_crud_result', op, requestId, ...payload },
+    { requestId, requestClientId: msg._requestClientId });
+  try {
+    if (!['update', 'run'].includes(msg.op)) throw new Error('Invalid scheduled task operation');
+    if (msg.op === 'run' && msg.task !== undefined) throw new Error('task is only accepted for update');
+    if (!validateSessionId(msg.sessionId).ok) throw new Error('Invalid Session id');
+    if (msg.op === 'run' && Object.hasOwn(msg, 'projectContext')) {
+      handleYeaftProjectContextSync({ contexts: [{ sessionId: msg.sessionId, projectContext: msg.projectContext }] });
+    }
+    const scheduler = startYeaftScheduledTasks();
+    if (!scheduler) throw new Error('No Yeaft directory configured');
+    const result = msg.op === 'update' ? scheduler.update(msg.sessionId, msg.task, msg.expectedRevision) : scheduler.run(msg.sessionId);
+    result.config = loadSessionConfig(scheduler.yeaftDir, msg.sessionId);
+    respond({ ok: true, session: result });
+  } catch (error) {
+    respond({ ok: false, error: { code: error?.code || 'scheduled_task_error', sessionId: msg.sessionId, message: error?.message || String(error) } });
+  }
+}
+
 function sendSessionRosterChanged(session) {
   if (!session) return;
   const payload = {
@@ -3749,6 +3820,7 @@ export function handleYeaftProjectContextSync(msg) {
     const sessionId = typeof row?.sessionId === 'string' ? row.sessionId.trim() : '';
     if (!sessionId) continue;
     const projectContext = normalizeProjectContext(row.projectContext, sessionId);
+    if (!projectContext && row.projectContext !== null) continue;
     projectContextBySession.set(sessionId, projectContext || {
       projectId: null,
       projectName: null,
@@ -3801,15 +3873,18 @@ export function handleYeaftProjectMutation(msg) {
 export function handleYeaftCreateSession(msg) {
   const requestId = msg && msg.requestId;
   const payload = (msg && msg.payload) || {};
+  // Server authenticates/overwrites the requester identity. Task create results
+  // (including validation failures) must be routed back to that browser only.
+  const envelope = payload.task !== undefined ? { requestId, requestClientId: msg?._requestClientId } : undefined;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = createSessionFromSpec(yeaftDir, payload, configuredVpPaths());
     recordAgentSessionCreated();
     group.config = loadSessionConfig(yeaftDir, group.id);
-    sendSessionCrudResult({ op: 'create', requestId, ok: true, session: group });
+    sendSessionCrudResult({ op: 'create', requestId, ok: true, session: group }, envelope);
     sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendSessionCrudResult({ op: 'create', requestId, ok: false, error: sessionErrorPayload(err) });
+    sendSessionCrudResult({ op: 'create', requestId, ok: false, error: sessionErrorPayload(err) }, envelope);
   }
 }
 
@@ -5028,6 +5103,23 @@ async function runYeaftSessionSend(msg) {
   const sessionId = (typeof msg.sessionId === 'string' && msg.sessionId.trim())
     ? msg.sessionId.trim()
     : 'grp_default';
+  // Cache authority before the first await: an accepted send from the previous
+  // transport must not repopulate stale context after disconnect invalidation.
+  const hasInboundProjectContext = Object.prototype.hasOwnProperty.call(msg, 'projectContext');
+  const inboundProjectContext = normalizeProjectContext(msg.projectContext, sessionId);
+  if (hasInboundProjectContext) {
+    projectContextBySession.set(sessionId, inboundProjectContext || {
+      projectId: null,
+      projectName: null,
+      projectInstruction: '',
+      sessionIds: [],
+    });
+  } else {
+    // An old Server does not know this field. Drop any context cached from a
+    // newer Server before falling back to this Agent's legacy projects.json.
+    projectContextBySession.delete(sessionId);
+  }
+
   const perfTraceId = typeof msg.perfTraceId === 'string' && msg.perfTraceId.trim()
     ? msg.perfTraceId.trim()
     : null;
@@ -5128,6 +5220,9 @@ async function dispatchAcceptedSessionSend({
 }) {
   const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
+  // Runtime boot may await I/O. Re-read the claim immediately before ingress
+  // so edits, disable, archive or deletion during boot cannot execute stale work.
+  msg[SCHEDULED_TASK_DISPATCH_GUARD]?.();
   if (!sessionHandle) {
     try {
       const dir = join(sessionRoot, sessionId);
@@ -5243,21 +5338,6 @@ async function dispatchAcceptedSessionSend({
       failedFileCount: Array.isArray(attachmentBundle.failed) ? attachmentBundle.failed.length : 0,
     },
   });
-
-  const hasInboundProjectContext = Object.prototype.hasOwnProperty.call(msg, 'projectContext');
-  const inboundProjectContext = normalizeProjectContext(msg.projectContext, sessionId);
-  if (hasInboundProjectContext) {
-    projectContextBySession.set(sessionId, inboundProjectContext || {
-      projectId: null,
-      projectName: null,
-      projectInstruction: '',
-      sessionIds: [],
-    });
-  } else {
-    // An old Server does not know this field. Drop any context cached from a
-    // newer Server before falling back to this Agent's legacy projects.json.
-    projectContextBySession.delete(sessionId);
-  }
 
   // Ingest user text. The coordinator persists, applies mention/fanout
   // rules, and calls deliver() (== enqueueForVp) for each chosen VP —
