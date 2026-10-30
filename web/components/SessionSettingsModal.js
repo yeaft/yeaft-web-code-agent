@@ -1,3 +1,4 @@
+import ScheduledTaskSettings from './ScheduledTaskSettings.js';
 import FolderPickerDialog from './FolderPickerDialog.js';
 import folderPickerMixin from './mixins/folder-picker-mixin.js';
 /**
@@ -35,14 +36,14 @@ const SESSION_SETTINGS_SECTION = 'session';
 const LEGACY_SESSION_SETTINGS_SECTIONS = new Set(['announcement', 'rename', 'danger']);
 
 function normalizeSettingsSection(section) {
-  if (section === 'members' || section === SESSION_SETTINGS_SECTION) return section;
+  if (section === 'task' || section === 'members' || section === SESSION_SETTINGS_SECTION) return section;
   if (LEGACY_SESSION_SETTINGS_SECTIONS.has(section)) return SESSION_SETTINGS_SECTION;
   return SESSION_SETTINGS_SECTION;
 }
 
 export default {
   name: 'SessionSettingsModal',
-  components: { FolderPickerDialog },
+  components: { FolderPickerDialog, ScheduledTaskSettings },
   mixins: [folderPickerMixin],
   emits: ['close', 'open-vp-library'],
   props: {
@@ -51,12 +52,13 @@ export default {
     initialSection: {
       type: String,
       default: SESSION_SETTINGS_SECTION,
-      validator: v => [SESSION_SETTINGS_SECTION, 'announcement', 'members', 'rename', 'danger'].includes(v),
+      validator: v => [SESSION_SETTINGS_SECTION, 'task', 'announcement', 'members', 'rename', 'danger'].includes(v),
     },
     initialEditVpId: { type: String, default: '' },
   },
   data() {
     return {
+      taskBusy: false,
       section: this.initialEditVpId ? 'members' : normalizeSettingsSection(this.initialSection),
       // Announcement editor draft (lazy-init from store on first edit).
       announcementDraft: '',
@@ -135,6 +137,7 @@ export default {
     },
     sections() {
       return [
+        ...(this.group?.task ? [{ id: 'task', label: this.$t('scheduledTasks.task') }] : []),
         { id: SESSION_SETTINGS_SECTION, label: this.$t('yeaft.session.settings.nav.session') },
         { id: 'members', label: this.$t('yeaft.session.settings.nav.members') },
       ];
@@ -223,12 +226,12 @@ export default {
     onEsc(e) {
       if (e.key !== 'Escape' || this.folderPickerOpen) return;
       // Don't close mid-busy operation.
-      if (this.announcementBusy || this.renameBusy || this.workDirBusy || this.membersBusy || this.deleteBusy) return;
+      if (this.taskBusy || this.announcementBusy || this.renameBusy || this.workDirBusy || this.membersBusy || this.deleteBusy) return;
       this.requestClose();
     },
     onOverlayClick(event) {
       if (!shouldDismissFromOverlayClick(event)) return;
-      if (this.announcementBusy || this.renameBusy || this.workDirBusy || this.membersBusy || this.deleteBusy) return;
+      if (this.taskBusy || this.announcementBusy || this.renameBusy || this.workDirBusy || this.membersBusy || this.deleteBusy) return;
       this.requestClose();
     },
     requestClose() { this.$emit('close'); },
@@ -390,37 +393,44 @@ export default {
       aria-modal="true"
       :aria-label="$t('yeaft.session.settings.title', { name: groupDisplayName })"
     >
-      <div class="group-settings-modal">
+      <div class="group-settings-modal" :class="{ 'task-settings-modal': !!group?.task, 'task-settings-active': section === 'task' && !!group?.task }">
         <header class="group-settings-header">
-          <span class="group-settings-title">
+          <div v-if="group?.task" class="task-settings-heading">
+            <p class="scheduled-task-help">{{ $t('scheduledTasks.configuration') }}</p>
+            <h2>{{ groupDisplayName }}</h2>
+          </div>
+          <span v-else class="group-settings-title">
             {{ $t('yeaft.session.settings.title', { name: groupDisplayName }) }}
           </span>
           <button
             class="group-settings-close"
             type="button"
             @click="requestClose"
-            :disabled="announcementBusy || renameBusy || workDirBusy || membersBusy || deleteBusy"
+            :disabled="taskBusy || announcementBusy || renameBusy || workDirBusy || membersBusy || deleteBusy"
             :aria-label="$t('yeaft.session.settings.close')"
-          >×</button>
+          ><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg></button>
         </header>
 
         <div class="group-settings-body">
           <!-- Left nav -->
-          <nav class="group-settings-nav" role="tablist" aria-orientation="vertical">
+          <nav :class="group?.task ? 'session-tab-bar task-settings-nav' : 'group-settings-nav'" role="tablist" :aria-orientation="group?.task ? 'horizontal' : 'vertical'">
             <button
               v-for="s in sections"
               :key="s.id"
               type="button"
-              class="group-settings-nav-item"
-              :class="{ 'is-active': section === s.id }"
+              :class="group?.task ? ['session-tab', { active: section === s.id }] : ['group-settings-nav-item', { 'is-active': section === s.id }]"
               role="tab"
               :aria-selected="section === s.id"
+              :aria-controls="'session-settings-pane-' + s.id"
+              :id="'session-settings-tab-' + s.id"
+              :disabled="taskBusy"
               @click="selectSection(s.id)"
             >{{ s.label }}</button>
           </nav>
 
           <!-- Right pane -->
-          <section class="group-settings-pane">
+          <section class="group-settings-pane" role="tabpanel" :id="'session-settings-pane-' + section" :aria-labelledby="'session-settings-tab-' + section">
+            <ScheduledTaskSettings v-if="section === 'task' && group?.task" :key="targetAgentId + ':' + groupId" :task="group.task" :agent-id="targetAgentId" :session-id="groupId" @busy="taskBusy = $event" />
             <!-- Session management -->
             <div v-if="section === 'session'" class="group-settings-section group-settings-section-session">
               <section class="group-settings-card">

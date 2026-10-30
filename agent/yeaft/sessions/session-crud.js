@@ -52,6 +52,7 @@ import { isAbsolute, join, resolve } from 'path';
 import {
   openSession, createSession, loadSessionMeta,
 } from './session-store.js';
+import { normalizeScheduledTask, publicScheduledTask } from './scheduled-task-definition.js';
 import { addVp as rosterAdd, removeVp as rosterRemove, setDefaultVp } from './roster.js';
 import { seedDefaultSession, DEFAULT_SESSION_ID } from './seed-default.js';
 import { nextSessionId, validateVpId, isReservedVpId } from './ids.js';
@@ -511,6 +512,8 @@ export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
  */
 export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   const input = spec || {};
+  // Task validation precedes discovery repair and every filesystem mutation.
+  if (input.task !== undefined) normalizeScheduledTask(input.task);
   const normalizedWorkDir = normalizeWorkDir(input.workDir);
   const workspaceKey = canonicalWorkspaceKey(normalizedWorkDir);
   ensureSessionManifestReady(yeaftDir);
@@ -553,6 +556,7 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
 
   const handle = createSession(root, {
     id, name, roster, defaultVpId, workDir: normalizedWorkDir, workspaceKey,
+    ...(input.task !== undefined ? { task: input.task } : {}),
   });
   const meta = handle.getMeta();
   handle.close();
@@ -998,6 +1002,7 @@ export function snapshotSessions(yeaftDir) {
   // render the effective model without re-querying.
   for (const meta of byId.values()) {
     meta.config = loadSessionConfig(yeaftDir, meta.id);
+    if (meta.task) meta.task = publicScheduledTask(meta.task);
   }
   return Array.from(byId.values()).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 }

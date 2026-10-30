@@ -1,3 +1,5 @@
+import ScheduledTaskBar from './ScheduledTaskBar.js';
+import ScheduledTaskNotifications from './ScheduledTaskNotifications.js';
 import NavigationIcon from './NavigationIcon.js';
 import ChatInput from './ChatInput.js';
 import { alertDialog } from '../utils/dialog.js';
@@ -116,7 +118,7 @@ export function timelineQueryProgress(store, row, { agentId, sessionId }) {
 
 export default {
   name: 'YeaftPage',
-  components: { NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
+  components: { ScheduledTaskBar, ScheduledTaskNotifications, NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
   template: `
     <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
@@ -136,6 +138,7 @@ export default {
         @open-group-settings="openSessionSettings"
       />
 
+      <ScheduledTaskNotifications :store="store" />
       <WorkCenterPage v-if="store.workCenterOpen" />
       <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" @toggle-sidebar="toggleSidebar" />
 
@@ -195,6 +198,8 @@ export default {
             @reload-page="reloadPage"
           />
         </div>
+
+        <ScheduledTaskBar v-if="topbarGroup?.task" :key="(topbarGroup.agentId || store.currentAgent) + ':' + topbarGroup.id" :session="topbarGroup" :agent-id="topbarGroup.agentId || store.currentAgent" @configure="openSessionSettings({ sessionId: topbarGroup.id, agentId: topbarGroup.agentId || store.currentAgent, section: 'task' })" />
 
         <YeaftConversationOutline
           v-if="historySearchOpen && !showOnboardingGuide"

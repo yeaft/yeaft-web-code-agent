@@ -9,8 +9,13 @@ export default {
     modelValue: { type: Object, required: true },
     disabled: { type: Boolean, default: false },
     recurringSupported: { type: Boolean, default: false },
+    // The calendar is shared, but its execution semantics belong to the caller.
+    scheduleHint: { type: String, default: '' },
   },
-  emits: ['update:modelValue'],
+  emits: ['update:modelValue', 'valid'],
+  watch: {
+    result: { immediate: true, handler(value) { this.$emit('valid', !value.error); } },
+  },
   data() { return { now: Date.now(), timer: null }; },
   mounted() { this.timer = setInterval(() => { this.now = Date.now(); }, 30000); },
   beforeUnmount() { clearInterval(this.timer); },
@@ -100,7 +105,7 @@ export default {
         <strong>{{ nextRun }}</strong>
         <small>{{ modelValue.timeZone.replaceAll('_', ' ') }}</small>
       </div>
-      <p class="work-center-field-help">{{ $t(modelValue.frequency === 'once' ? 'workCenter.scheduling.onceHint' : 'workCenter.scheduling.recurringHint') }}</p>
+      <p class="work-center-field-help">{{ scheduleHint || $t(modelValue.frequency === 'once' ? 'workCenter.scheduling.onceHint' : 'workCenter.scheduling.recurringHint') }}</p>
     </div>
   `,
 };

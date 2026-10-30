@@ -106,6 +106,7 @@ export default {
         :work-center-open="chatStore?.workCenterOpen"
         @select="chatStore?.openCatalogSession"
         @create="onUnifiedCreate"
+        @create-task="onUnifiedCreateTask"
         @create-in-project="onUnifiedCreateInProject"
         @close-work-center="chatStore?.leaveWorkCenter"
         @action="onUnifiedSessionAction"
@@ -121,6 +122,7 @@ export default {
            new-conversation modal. -->
       <SessionCreateModal
         v-if="sessionCreateOpen"
+        :task-mode="sessionCreateTaskMode"
         :initial-agent-id="sessionCreateProject?.legacyAgentId || null"
         @close="closeSessionCreate"
         @created="onSessionCreated"
@@ -154,6 +156,7 @@ export default {
       // both "create new" and "restore from disk" — the standalone
       // sessionRestoreOpen flag + SessionRestoreModal are gone.
       sessionCreateOpen: false,
+      sessionCreateTaskMode: false,
       sessionCreateProject: null,
       // task-yeaft-group-editor: per-row action menu only — the rename
       // and delete modals have been folded into the unified
@@ -410,12 +413,18 @@ export default {
     // "Restore from disk" panel, so onOpenSessionRestore +
     // onSessionRestored are gone (folded into SessionCreateModal's own
     // `created` flow).
+    onUnifiedCreateTask() {
+      this.onOpenSessionCreate();
+      this.sessionCreateTaskMode = true;
+    },
     onOpenSessionCreate() {
+      this.sessionCreateTaskMode = false;
       this.sessionCreateProject = null;
       this.sessionCreateOpen = true;
     },
     onUnifiedCreate() { this.onOpenSessionCreate(); },
     onUnifiedCreateInProject({ project } = {}) {
+      this.sessionCreateTaskMode = false;
       if (!project?.id) return;
       this.sessionCreateProject = project;
       this.sessionCreateOpen = true;

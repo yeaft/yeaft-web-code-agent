@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 
 /** Open the catalog's New chat modal for the CLI provider used by MockAgent. */
 export async function openConversationModal(chatPage) {
-  await chatPage.locator('.sidebar-primary-action:not(.sidebar-plugins-entry)').click();
+  await chatPage.locator('.sidebar-primary-action:not(.sidebar-plugins-entry):not(.sidebar-task-create)').click();
   const modal = chatPage.locator('.yeaft-session-create-modal');
   await expect(modal).toBeVisible();
   await modal.getByRole('combobox', { name: 'Provider', exact: true }).click();

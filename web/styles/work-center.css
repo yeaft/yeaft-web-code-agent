@@ -2528,6 +2528,7 @@
   font-size: 13px;
   font-weight: 600;
 }
+.work-center-schedule-field input[type="text"],
 .work-center-schedule-field input[type="number"] {
   min-width: 0;
   width: 100%;

@@ -47,7 +47,7 @@ describe('Plugin Center sidebar navigation', () => {
   it('places the shared Plugins entry after New chat and moves the active marker without changing Session identity', async () => {
     renderList();
     expect(wrapper.get('.sidebar-primary-actions').findAll('button').map(button => button.text()))
-      .toEqual([en['sidebar.sessions.newChat'], en['yeaft.plugins.title']]);
+      .toEqual([en['sidebar.sessions.newChat'], en['scheduledTasks.new'], en['yeaft.plugins.title']]);
     expect(wrapper.get('.sidebar-session-row').classes()).toContain('active');
     await wrapper.get('.sidebar-plugins-entry').trigger('click');
     expect(store.openPluginCenter).toHaveBeenCalledOnce();
@@ -66,7 +66,7 @@ describe('Plugin Center sidebar navigation', () => {
     } } });
     expect(wrapper.findAll('.sidebar-plugins-entry')).toHaveLength(1);
     expect(wrapper.get('.sidebar-bottom').text()).toBe(en['chat.sidebar.settings']);
-    expect(wrapper.get('.sidebar-primary-actions').findAll('button')[1].classes()).toContain('sidebar-plugins-entry');
+    expect(wrapper.get('.sidebar-primary-actions').findAll('button')[2].classes()).toContain('sidebar-plugins-entry');
   });
 
   it('leaves Plugins for both New chat and project Session creation, preserving existing Work Center close events', async () => {

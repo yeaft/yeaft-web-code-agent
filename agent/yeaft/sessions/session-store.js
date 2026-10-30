@@ -30,6 +30,8 @@ import { join } from 'path';
 import { writeAtomic, openLog } from '../storage/index.js';
 import { nextMsgId, isReservedVpId, ReservedVpIdError, validateVpId, InvalidVpIdError } from './ids.js';
 
+import { normalizeScheduledTask, scheduledTaskRevision } from './scheduled-task-definition.js';
+
 export const SESSION_META_FILE = 'session.json';
 export const LEGACY_GROUP_META_FILE = 'group.json';
 const MESSAGES_DIR = 'messages';
@@ -48,12 +50,6 @@ export function openSession(sessionsRoot, sessionId) {
   const dir = join(sessionsRoot, sessionId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  let meta = loadSessionMeta(dir);
-  if (!meta) {
-    // Fresh session — caller must call createSession() next; we return a handle
-    // with meta=null so createSession() can write the initial file.
-  }
-
   const messagesDir = join(dir, MESSAGES_DIR);
   if (!existsSync(messagesDir)) mkdirSync(messagesDir, { recursive: true });
   const log = openLog(messagesDir);
@@ -61,12 +57,21 @@ export function openSession(sessionsRoot, sessionId) {
   return {
     dir,
     id: sessionId,
-    /** Return current meta (reads fresh from memory after last save). */
-    getMeta() { return meta ? structuredClone(meta) : null; },
-    /** Overwrite session.json atomically. */
+    /** Read fresh: coordinators may retain this handle across external CRUD. */
+    getMeta() { return loadSessionMeta(dir); },
+    /**
+     * Save Session metadata atomically. After creation, the scheduler exclusively
+     * owns task definitions/runtime. Preserve its fresh on-disk value even when
+     * a caller retained an older metadata snapshot across a run or task edit.
+     */
     saveMeta(next) {
       validateMeta(next);
-      meta = next;
+      const current = loadSessionMeta(dir);
+      const meta = structuredClone(next);
+      if (current) {
+        if (Object.hasOwn(current, 'task')) meta.task = current.task;
+        else delete meta.task;
+      }
       writeAtomic(join(dir, SESSION_META_FILE), JSON.stringify(meta, null, 2));
     },
     /**
@@ -121,6 +126,7 @@ export function openSession(sessionsRoot, sessionId) {
  */
 export function createSession(sessionsRoot, spec) {
   if (!spec || !spec.id) throw new Error('createSession: spec.id required');
+  const task = spec.task === undefined ? undefined : normalizeScheduledTask(spec.task);
   const h = openSession(sessionsRoot, spec.id);
   if (h.getMeta()) {
     throw new Error(`session ${spec.id} already exists`);
@@ -138,6 +144,7 @@ export function createSession(sessionsRoot, spec) {
   }
   const meta = {
     id: spec.id,
+    ...(task ? { task } : {}),
     name: spec.name || spec.id,
     roster,
     defaultVpId: spec.defaultVpId || null,
@@ -168,6 +175,7 @@ export function loadSessionMeta(dir) {
     if (typeof parsed.announcement !== 'string') parsed.announcement = '';
     if (typeof parsed.workDir !== 'string') parsed.workDir = '';
     if (typeof parsed.workspaceKey !== 'string') parsed.workspaceKey = '';
+    if (parsed.task) parsed.task._revision = scheduledTaskRevision(parsed.task);
     return parsed;
   } catch {
     return null;

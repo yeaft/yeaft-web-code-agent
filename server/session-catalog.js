@@ -88,6 +88,7 @@ export function projectSessionCatalog({
     rows.push({
       catalogKey,
       runtimeProvider: 'yeaft',
+      ...(session.task ? { task: session.task } : {}),
       routeRef: { runtimeProvider: 'yeaft', agentId: session.agentId, sessionId: session.id },
       title: session.name || session.id,
       workDir: session.workDir || '',

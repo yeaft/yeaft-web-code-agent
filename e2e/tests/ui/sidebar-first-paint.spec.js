@@ -55,8 +55,12 @@ for (const surface of [
     const navigation = page.locator('.sidebar-navigation');
     await expect(navigation).toBeVisible();
     await expect(navigation).toHaveAttribute('aria-busy', 'true');
-    await expect(navigation.locator('.sidebar-section-toggle')).toHaveCount(2);
-    await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry)')).toBeDisabled();
+    await expect(navigation.locator('.sidebar-section-toggle')).toHaveCount(3);
+    await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry):not(.sidebar-task-create)')).toBeDisabled();
+    await expect(navigation.locator('.sidebar-task-create')).toBeDisabled();
+    await expect(navigation.locator('.sidebar-section')).toHaveClass([
+      'sidebar-section projects-section', 'sidebar-section tasks-section', 'sidebar-section recents-section',
+    ]);
     await expect(navigation.locator('.sidebar-catalog-loading')).toHaveCount(2);
     await expect(page.locator('.session-tab-solo')).toHaveCount(0);
     await page.evaluate(() => {
@@ -67,7 +71,7 @@ for (const surface of [
     await page.screenshot({ path: testInfo.outputPath('sidebar-loading.png') });
     release();
     await expect(navigation).toHaveAttribute('aria-busy', 'false');
-    await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry)')).toBeEnabled();
+    await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry):not(.sidebar-task-create)')).toBeEnabled();
     expect(await page.evaluate(() => window.__sidebarNavigation === document.querySelector('.sidebar-navigation'))).toBe(true);
     expect(await page.evaluate(() => window.__sidebarHeadings.every((node, index) => node === document.querySelectorAll('.sidebar-section-heading')[index]))).toBe(true);
 

@@ -58,6 +58,12 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 - 将原生 Session 放入 Project，在 Project 与 Recents 之间拖动，并为所有成员 Session 设置共享 Project instruction。
 - 从当前 Session 创建持久 WorkItem；来源 Session 身份由 runtime 强制写入。
 
+### 定时任务
+
+- 侧栏“新建任务”位于“插件”上方；“任务”分区位于“项目”和“最近”之间，可独立折叠。
+- 选择 Agent、目录和 VP，配置 Prompt、一次性或重复计划；打开任务后复用完整 Session 对话与工作台，也可手动执行、修改配置或暂停。
+- 调度由在线 Agent 持久管理；结果写入任务历史，通知可点击打开对应任务。旧版 Agent 需要升级；Connector 事件触发尚未接入。详见[任务与恢复边界](docs/guide/tasks.md)。
+
 ### Provider、工具与上下文
 
 - 原生 adapter 支持 Anthropic Messages 和 OpenAI Responses 两种协议。

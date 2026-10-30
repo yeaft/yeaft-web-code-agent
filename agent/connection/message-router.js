@@ -30,7 +30,7 @@ import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, g
 import { loadConfig } from '../yeaft/config.js';
 import { discoverLlmModels } from '../llm-model-discovery.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
-import { handleYeaftSessionSend, handleYeaftAskUserAnswer, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, refreshLiveSessionConfig, handleYeaftLoadHistory, handleYeaftLoadHistoryOutline, handleYeaftSearchHistory, handleYeaftLoadHistoryWindow, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftProjectContextSync, handleYeaftProjectMutation, handleYeaftCreateSession, handleYeaftCopySession, handleYeaftMergeSessions, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, handleYeaftPluginCatalog, handleYeaftManagedSkill, ensureSessionLoaded, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager, broadcastYeaftVpSnapshotEager, preloadYeaftSkillSlashCommands } from '../yeaft/web-bridge.js';
+import { startYeaftScheduledTasks, handleYeaftScheduledTask, handleYeaftSessionSend, handleYeaftAskUserAnswer, handleYeaftSubAgentPrompt, handleYeaftTaskCancel, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, refreshLiveSessionConfig, handleYeaftLoadHistory, handleYeaftLoadHistoryOutline, handleYeaftSearchHistory, handleYeaftLoadHistoryWindow, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftProjectContextSync, handleYeaftProjectMutation, handleYeaftCreateSession, handleYeaftCopySession, handleYeaftMergeSessions, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftScanWorkdirSessions, handleYeaftRestoreSession, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, handleYeaftMcpList, handleYeaftMcpAdd, handleYeaftMcpRemove, handleYeaftMcpReload, handleYeaftPluginCatalog, handleYeaftManagedSkill, ensureSessionLoaded, broadcastLanguageChange, broadcastYeaftSessionSnapshotEager, broadcastYeaftVpSnapshotEager, preloadYeaftSkillSlashCommands } from '../yeaft/web-bridge.js';
 import { startYeaftStatusRefresh, forceRefreshYeaftStatus } from '../yeaft/status-cache.js';
 import { handleWorkCenterRequest } from '../yeaft/work-center/bridge.js';
 import { handlePersonRequest } from '../yeaft/person/bridge.js';
@@ -210,6 +210,7 @@ export async function handleMessage(msg) {
       // The callee already wraps its FS scan + emit in try/catch and
       // logs via console.warn — no second guard needed here.
       broadcastYeaftSessionSnapshotEager();
+      startYeaftScheduledTasks();
       // Stock VPs are bundled Agent data. Seed + publish them during register so
       // a first-install user can open the create dialog immediately instead of
       // depending on a later Session runtime or modal subscription race.
@@ -847,6 +848,9 @@ export async function handleMessage(msg) {
       handleYeaftRestoreSession(msg);
       break;
     // Phase 2: session_send is just group_chat (N≥1 fan-out already works).
+    case 'yeaft_scheduled_task':
+      handleYeaftScheduledTask(msg);
+      break;
     case 'yeaft_session_send':
       handleYeaftSessionSend(msg);
       break;
