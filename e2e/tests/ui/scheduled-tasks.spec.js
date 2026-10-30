@@ -90,7 +90,7 @@ test('creates a scheduled Session with selected Agent, directory and VP, without
     await expect(modal.getByRole('combobox', { name: 'Provider', exact: true })).toHaveCount(0);
     await expect(modal.getByRole('button', { name: 'Create task', exact: true })).toBeDisabled();
     await select(page, modal, 'Agent', 'task-secondary');
-    await modal.getByPlaceholder('Session name (optional)').fill('Scheduled review with selected VP');
+    await modal.getByPlaceholder('Task name (optional)').fill('Scheduled review with selected VP');
     await modal.locator('.workdir-browse-btn').click();
     const picker = page.locator('.folder-picker-dialog');
     await expect(picker.locator('.folder-picker-list')).toHaveAttribute('aria-busy', 'false');
@@ -258,8 +258,8 @@ test('an older Agent cannot turn New task into an ordinary Session', async ({ pa
   await expect(modal.getByRole('status')).toContainText('Update this Agent to support tasks');
   await modal.getByRole('textbox', { name: 'Prompt', exact: true }).fill('Do not silently create a chat.');
   await expect(modal.getByRole('button', { name: 'Create task', exact: true })).toBeDisabled();
-  await modal.getByPlaceholder('Session name (optional)').fill('Blocked task');
-  await modal.getByPlaceholder('Session name (optional)').press('Enter');
+  await modal.getByPlaceholder('Task name (optional)').fill('Blocked task');
+  await modal.getByPlaceholder('Task name (optional)').press('Enter');
   await shot(page, testInfo, 'task-legacy-agent-blocked.png');
   expect(mockAgent.messages('yeaft_create_session')).toHaveLength(0);
   expect(mockAgent.messages('create_conversation')).toHaveLength(0);
