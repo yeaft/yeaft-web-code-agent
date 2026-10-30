@@ -2928,7 +2928,7 @@ export default {
   "scheduledTasks.status.interrupted": "Interrupted",
   "scheduledTasks.status.skipped": "Skipped",
   "scheduledTasks.model": "Model",
-  "scheduledTasks.effort": "Reasoning effort",
+  "scheduledTasks.effort": "Effort",
   "scheduledTasks.defaultEffort": "Default",
   "scheduledTasks.effortChooseModel": "Select a model to configure reasoning effort.",
   "scheduledTasks.defaultModel": "Agent / VP default",

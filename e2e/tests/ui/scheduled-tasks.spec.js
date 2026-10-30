@@ -94,17 +94,17 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
       { provider: 'test', id: 'reasoner', label: 'Task reasoner', effortOptions: ['low', 'medium', 'high', 'xhigh'] },
       { provider: 'test', id: 'plain', label: 'Plain model' },
     ] } });
-    const effort = modal.getByRole('combobox', { name: 'Reasoning effort', exact: true });
+    const effort = modal.getByRole('combobox', { name: 'Effort', exact: true });
     await expect(effort).toBeDisabled();
     await select(page, modal, 'Model', 'Task reasoner');
     await expect(effort).toBeEnabled();
-    await select(page, modal, 'Reasoning effort', 'X-High');
+    await select(page, modal, 'Effort', 'X-High');
     await select(page, modal, 'Model', 'Plain model');
     await expect(effort).toBeDisabled();
     await expect(effort).toHaveText('Default');
     await select(page, modal, 'Model', 'Task reasoner');
     await expect(effort).toHaveText('Default');
-    await select(page, modal, 'Reasoning effort', 'High');
+    await select(page, modal, 'Effort', 'High');
     await modal.getByPlaceholder('Task name (optional)').fill('Scheduled review with selected VP');
     await modal.locator('.workdir-browse-btn').click();
     const picker = page.locator('.folder-picker-dialog');
@@ -136,11 +136,11 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
       await effort.focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('option', { name: 'X-High', exact: true })).toBeVisible();
-      await page.keyboard.press('End');
+      await page.keyboard.press('ArrowDown');
       await page.keyboard.press('Enter');
       await expect(effort).toBeFocused();
       await expect(effort).toHaveText('X-High');
-      await select(page, modal, 'Reasoning effort', 'High');
+      await select(page, modal, 'Effort', 'High');
       await shot(page, testInfo, `task-create-${theme}-${width}.png`);
     }
     await page.setViewportSize({ width: 1440, height: 900 });

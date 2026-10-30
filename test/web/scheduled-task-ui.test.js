@@ -125,7 +125,7 @@ it('scopes task effort capabilities to the selected Agent and clears incompatibl
     yeaftAvailableModels: models, yeaftStatusByAgent: { a: { availableModels: models }, b: { availableModels: [] } } });
   window.Pinia = { useChatStore: () => chat, useVpStore: () => ({}) };
   wrapper = mount(SessionCreateModal, { props: { taskMode: true }, global: { mocks: { $t: t }, stubs: { ModernSelect: true, FolderPickerDialog: true, VpAvatar: true } } });
-  const effort = () => wrapper.findAllComponents({ name: 'ModernSelect' }).find(item => item.props('ariaLabel') === 'Reasoning effort');
+  const effort = () => wrapper.findAllComponents({ name: 'ModernSelect' }).find(item => item.props('ariaLabel') === 'Effort');
   expect(effort().props('disabled')).toBe(true);
   expect(wrapper.vm.taskSessionConfig).toEqual({});
   await wrapper.setData({ form: { ...wrapper.vm.form, model: 'test/model' } });
