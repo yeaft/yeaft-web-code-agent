@@ -267,6 +267,8 @@ export const yeaftProjectDb = {
         for (const rawSessionId of Array.isArray(row.sessionIds) ? row.sessionIds : []) {
           const sessionId = typeof rawSessionId === 'string' ? rawSessionId.trim() : '';
           if (!sessionId || !sessionExists(sessionId)) continue;
+          // Legacy discovery is not authority over an existing Server membership.
+          if (stmts.getYeaftProjectForSession.get(ownerId, targetAgentId, sessionId)) continue;
           stmts.deleteYeaftProjectSessionMembership.run(ownerId, targetAgentId, sessionId);
           stmts.insertYeaftProjectSessionMembership.run(
             ownerId,

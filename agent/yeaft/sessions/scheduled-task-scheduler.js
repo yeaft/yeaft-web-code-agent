@@ -16,11 +16,13 @@ const POLL_MS = 1000;
  * including fanout, route-forward, pending classifications and model task reentry.
  */
 export class ScheduledTaskScheduler {
-  constructor({ yeaftDir, dispatch, isActive, onChange = () => {}, notify = () => {}, now = Date.now,
+  constructor({ yeaftDir, dispatch, isActive, canDispatch = () => true, onChange = () => {}, notify = () => {}, now = Date.now,
     warn = error => console.warn('[ScheduledTasks]', error?.message || error) }) {
     this.yeaftDir = resolve(yeaftDir);
     this.dispatch = dispatch;
     this.isActive = isActive;
+    this.canDispatch = canDispatch;
+    this.waitingForContext = new Set();
     this.onChange = onChange;
     this.notify = notify;
     this.now = now;
@@ -109,7 +111,7 @@ export class ScheduledTaskScheduler {
       dirty = true;
     }
     // Recurring downtime is skipped, including an occurrence exactly at boot.
-    if (skipMissed && task.trigger.type === 'schedule' && task.trigger.recurrence
+    if (skipMissed && this.canDispatch(row.meta.id) && task.trigger.type === 'schedule' && task.trigger.recurrence
       && task.nextRunAt != null && task.nextRunAt <= this.now()) {
       task.nextRunAt = advanceScheduledTask(task, this.now());
       dirty = true;
@@ -125,6 +127,7 @@ export class ScheduledTaskScheduler {
     clearInterval(this.timer);
     this.timer = null;
     this.runs.clear();
+    this.waitingForContext.clear();
   }
 
   backoff(id, error) {
@@ -132,9 +135,17 @@ export class ScheduledTaskScheduler {
     this.warn(error);
   }
 
+  assertReady(sessionId) {
+    if (!this.canDispatch(sessionId)) {
+      throw Object.assign(new Error('Waiting for authoritative Project context from Server; retry after synchronization'),
+        { code: 'project_context_unavailable' });
+    }
+  }
+
   run(sessionId, trigger = 'manual') {
     const row = this.read(sessionId), task = row.meta.task;
     if (!task) throw new Error('Session has no task');
+    this.assertReady(sessionId);
     if (this.runs.has(sessionId) || task.lastRun?.status === 'running' || this.isActive(sessionId)) throw new Error('Session is busy or task is already running');
     if (trigger === 'schedule' && (!task.enabled || task.trigger.type !== 'schedule'
       || task.nextRunAt == null || task.nextRunAt > this.now())) throw new Error('Task is no longer due');
@@ -150,6 +161,7 @@ export class ScheduledTaskScheduler {
     const active = { id: run.id, identity: row.identity, revision: task._revision, routed: false, terminal: false, error: null, interrupted: false };
     this.runs.set(sessionId, active);
     const guard = () => {
+      this.assertReady(sessionId);
       const fresh = this.read(sessionId);
       if (fresh.identity !== active.identity || fresh.meta.task?.lastRun?.id !== active.id
         || fresh.meta.task?._revision !== active.revision) throw new Error('Task changed before dispatch');
@@ -211,6 +223,14 @@ export class ScheduledTaskScheduler {
         // Retry boot recovery after a transient atomic-write failure.
         if (task?.lastRun?.status === 'running' && !this.runs.has(id)) { this.recover(row, true); continue; }
         if (task?.enabled && task.trigger.type === 'schedule' && task.nextRunAt != null && task.nextRunAt <= this.now()) {
+          if (!this.canDispatch(id)) {
+            if (!this.waitingForContext.has(id)) {
+              this.waitingForContext.add(id);
+              this.warn(new Error(`Session ${id}: waiting for authoritative Project context from Server`));
+            }
+            continue; // Unknown is not 'no Project': do not claim, fail or consume the occurrence.
+          }
+          this.waitingForContext.delete(id);
           const busy = this.runs.has(id) || this.isActive(id);
           // One minute of grace tolerates timer jitter. Older recurring
           // occurrences (or ones blocked by an active Session) are missed, not queued.

@@ -4,8 +4,10 @@ import { sendToServer, parseMessage } from './buffer.js';
 import { startAgentHeartbeat, stopAgentHeartbeat, scheduleReconnect } from './heartbeat.js';
 import { handleMessage } from './message-router.js';
 import { cleanupTerminalsForDisconnect } from '../terminal.js';
+import { invalidateYeaftProjectContexts } from '../yeaft/web-bridge.js';
 
 export function resetConnectionTransport() {
+  invalidateYeaftProjectContexts();
   ctx.sessionKey = null;
   ctx.serverEncryptionRequired = true;
   ctx.serverCapabilities = new Set();
@@ -106,6 +108,7 @@ export function connect(WebSocketImpl = WebSocket) {
   socket.on('close', (code, reason) => {
     if (socket !== ctx.ws) return;
     console.log(`Disconnected from server: ${code} ${reason}`);
+    invalidateYeaftProjectContexts();
     ctx.sessionKey = null;
     ctx.pendingAuthTempId = null;
     stopAgentHeartbeat();

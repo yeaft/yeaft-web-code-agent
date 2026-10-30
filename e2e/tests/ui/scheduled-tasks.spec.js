@@ -199,6 +199,18 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   await expect(page.locator('.scheduled-task-bar')).toContainText('Completed');
   await expect(page.locator('.yeaft-session-input textarea')).toBeVisible();
   await shot(page, testInfo, 'task-manual-run-completed.png');
+  // An active attempt must not lock users out of pausing the next schedule.
+  const active = state.sessions.get(TASK_SESSION_ID);
+  active.task.lastRun = { id: 'ongoing-run', status: 'running', trigger: 'schedule', startedAt: Date.now() };
+  state.publish();
+  await expect(page.getByRole('button', { name: 'Run now', exact: true })).toBeDisabled();
+  await page.locator('.scheduled-task-bar').getByRole('button', { name: 'Configure', exact: true }).click();
+  await settings.locator('.scheduled-task-option-row').filter({ hasText: 'Enabled' }).click();
+  await settings.getByRole('button', { name: 'Save task', exact: true }).click();
+  await expect.poll(() => state.sessions.get(TASK_SESSION_ID).task.enabled).toBe(false);
+  expect(state.sessions.get(TASK_SESSION_ID).task.lastRun.status).toBe('running');
+  await page.locator('.group-settings-close').click();
+  await expect(page.getByRole('button', { name: 'Run now', exact: true })).toBeDisabled();
 });
 
 test('completion notifications open the owning Agent when two Agents share the same Session id', async ({ page, serverUrl, mockAgent }, testInfo) => {

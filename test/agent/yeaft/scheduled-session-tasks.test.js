@@ -243,46 +243,92 @@ it('fences edits during delayed runtime boot and never dispatches an obsolete pr
   scheduler.stop();
 });
 
-it('executes through native Session ingress and waits past terminal output for real runtime quiescence', async () => {
-  setup(); seed();
+it('waits for Server context after restart then executes native ingress and waits for real runtime quiescence', async () => {
+  setup(); seed(task({ trigger: { type: 'schedule', scheduledFor: 500, recurrence: null } }));
   const { vi } = await import('vitest');
   const { default: ctx } = await import('../../../agent/context.js');
   const { Engine } = await import('../../../agent/yeaft/engine.js');
+  const { NullTrace } = await import('../../../agent/yeaft/debug-trace.js');
   const { ConversationStore } = await import('../../../agent/yeaft/conversation/persist.js');
   const { buildRoleMd } = await import('../../../agent/yeaft/vp/vp-crud.js');
   const bridge = await import('../../../agent/yeaft/web-bridge.js');
-  const previous = Object.fromEntries(['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'].map(key => [key, ctx[key]]));
+  const previous = Object.fromEntries(['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired', 'messageBuffer', 'messageBufferBytes'].map(key => [key, ctx[key]]));
   ctx.CONFIG = { yeaftDir: root }; ctx.ws = { readyState: 1, send() {} };
   ctx.serverEncryptionRequired = false; ctx.outboundSendQueue = []; ctx.outboundSendQueueActive = true;
+  ctx.messageBuffer = []; ctx.messageBufferBytes = 0;
   mkdirSync(join(root, 'virtual-persons/alpha'), { recursive: true });
   writeFileSync(join(root, 'virtual-persons/alpha/role.md'), buildRoleMd({ vpId: 'alpha', displayName: 'Alpha', role: 'Test' }));
   const { saveSessionConfig } = await import('../../../agent/yeaft/sessions/session-config.js');
   const config = saveSessionConfig(root, 'session_task', { model: 'test/model', modelEffort: 'high' });
   const store = new ConversationStore(root);
-  bridge.__testSetSession({ yeaftDir: root, config: {}, conversationStore: store });
-  let finish, started = false, terminal = false;
-  const gate = new Promise(resolve => { finish = resolve; });
-  const query = vi.spyOn(Engine.prototype, 'query').mockImplementation(async function* () {
-    started = true;
+  const requests = [];
+  const adapter = { async *stream(params) {
+    requests.push(params);
     yield { type: 'text_delta', text: 'Task response' };
-    terminal = true;
-    yield { type: 'turn_end', terminal: true, stopReason: 'end_turn' };
-    await gate;
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } };
+  bridge.__testSetSession({ yeaftDir: root, config: { maxRetries: 0, maxOutputTokens: 1024 },
+    conversationStore: store, adapter, trace: new NullTrace() });
+  let finish, started = false, terminal = false, queryInput;
+  const gate = new Promise(resolve => { finish = resolve; });
+  const originalQuery = Engine.prototype.query;
+  const query = vi.spyOn(Engine.prototype, 'query').mockImplementation(async function* (input) {
+    queryInput = input;
+    started = true;
+    for await (const event of originalQuery.call(this, input)) {
+      yield event;
+      if (event.type === 'turn_end' && event.terminal) { terminal = true; await gate; }
+    }
   });
   try {
-    bridge.handleYeaftScheduledTask({ op: 'run', sessionId: 'session_task', requestId: 'run-1', _requestClientId: 'browser-1' });
+    bridge.invalidateYeaftProjectContexts(); // Restart: no browser has opened this Session.
     const scheduler = bridge.startYeaftScheduledTasks();
+    const beforeSync = readFileSync(join(root, 'sessions/session_task/session.json'));
+    await scheduler.tick(); await scheduler.tick();
+    expect(started).toBe(false);
+    expect(scheduler.runs.size).toBe(0);
+    expect(readFileSync(join(root, 'sessions/session_task/session.json'))).toEqual(beforeSync);
+    bridge.handleYeaftScheduledTask({ op: 'run', sessionId: 'session_task', requestId: 'not-ready', _requestClientId: 'browser-1' });
+    expect(ctx.outboundSendQueue.at(-1).msg).toMatchObject({ _requestClientId: 'browser-1', event: { ok: false, error: { code: 'project_context_unavailable' } } });
+    const sync = { contexts: [{ sessionId: 'session_task', projectContext: {
+      projectId: 'server-project', projectName: 'Server Project', projectInstruction: 'Obsolete before runtime boot.', sessionIds: [] },
+    }] };
+    const queued = ctx.outboundSendQueue.length;
+    bridge.handleYeaftProjectContextSync(sync);
+    expect(ctx.outboundSendQueue).toHaveLength(queued); // Sync is memory-only, no snapshot loop.
+    expect(bridge.startYeaftScheduledTasks()).toBe(scheduler); // Reconnect never starts another timer.
+    const dispatching = scheduler.tick();
+    sync.contexts[0].projectContext.projectInstruction = 'Always verify recovery evidence.';
+    bridge.handleYeaftProjectContextSync(sync); // Arrives while ingress awaits runtime readiness.
+    await dispatching;
     await vi.waitFor(() => expect(started && terminal).toBe(true));
     await scheduler.tick();
     expect(read().task.lastRun.status).toBe('running');
     expect(store.loadVisibleBySession('session_task', Infinity, Infinity).messages.some(row => row.role === 'user' && row.content === task().prompt)).toBe(true);
-    const ack = ctx.outboundSendQueue.find(item => item.msg.event?.op === 'run_task' && item.msg.event?.requestId === 'run-1').msg;
-    expect(ack).toMatchObject({ _requestClientId: 'browser-1', event: { ok: true, session: { config, task: { revision: read().task._revision } } } });
+    expect(queryInput).toMatchObject({ prompt: expect.stringContaining(task().prompt), projectInstruction: 'Always verify recovery evidence.', projectLabel: 'Server Project (server-project)' });
+    expect(requests[0].system).toContain('Always verify recovery evidence.');
+    expect(read().task).toMatchObject({ nextRunAt: null, _scheduledRuns: 1, lastRun: { trigger: 'schedule' } });
     const snapshot = ctx.outboundSendQueue.find(item => item.msg.event?.type === 'session_list_updated').msg.event.sessions;
     expect(snapshot.find(row => row.id === 'session_task').config).toEqual(config);
     finish(); await bridge.__testDrainVpDrivers(); await scheduler.tick();
     expect(read().task.lastRun.status).toBe('completed');
     expect(ctx.outboundSendQueue.some(item => item.msg.event?.type === 'scheduled_task_notification' && item.msg.event?.status === 'completed')).toBe(true);
+    // Dropped transport invalidates old Project authority. A fresh explicit
+    // 'no Project' from Server is ready and must not fall back to projects.json.
+    bridge.invalidateYeaftProjectContexts();
+    ctx.ws.readyState = 3;
+    bridge.handleYeaftScheduledTask({ op: 'run', sessionId: 'session_task', projectContext: null, requestId: 'offline' });
+    expect(() => scheduler.run('session_task')).toThrow(expect.objectContaining({ code: 'project_context_unavailable' }));
+    ctx.ws.readyState = 1;
+    bridge.invalidateYeaftProjectContexts();
+    started = false;
+    bridge.handleYeaftScheduledTask({ op: 'run', sessionId: 'session_task', projectContext: null, requestId: 'run-1', _requestClientId: 'browser-1' });
+    await vi.waitFor(() => expect(started).toBe(true));
+    await bridge.__testDrainVpDrivers(); await scheduler.tick();
+    expect(queryInput.projectInstruction).toBe('');
+    expect(requests.at(-1).system).not.toContain('Always verify recovery evidence.');
+    const ack = ctx.outboundSendQueue.find(item => item.msg.event?.op === 'run_task' && item.msg.event?.requestId === 'run-1').msg;
+    expect(ack).toMatchObject({ _requestClientId: 'browser-1', event: { ok: true, session: { config, task: { revision: read().task._revision } } } });
   } finally {
     finish(); await bridge.__testDrainVpDrivers();
     bridge.stopYeaftScheduledTasks(); await bridge.__testResetVpState();
@@ -440,9 +486,10 @@ it('correlates task create success and validation failure to the authenticated r
   setup();
   const { default: ctx } = await import('../../../agent/context.js');
   const bridge = await import('../../../agent/yeaft/web-bridge.js');
-  const previous = Object.fromEntries(['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'].map(key => [key, ctx[key]]));
+  const previous = Object.fromEntries(['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired', 'messageBuffer', 'messageBufferBytes'].map(key => [key, ctx[key]]));
   ctx.CONFIG = { yeaftDir: root }; ctx.ws = { readyState: 1, send() {} };
   ctx.serverEncryptionRequired = false; ctx.outboundSendQueue = []; ctx.outboundSendQueueActive = true;
+  ctx.messageBuffer = []; ctx.messageBufferBytes = 0;
   try {
     bridge.handleYeaftCreateSession({ requestId: 'invalid-task', _requestClientId: 'browser-invalid', payload: { name: 'Invalid', task: task({ prompt: '' }) } });
     const failed = ctx.outboundSendQueue.find(item => item.msg.event?.requestId === 'invalid-task').msg;
@@ -477,4 +524,20 @@ it('correlates task create success and validation failure to the authenticated r
     const { closeConversationHistoryIndexes } = await import('../../../agent/yeaft/conversation/history-index.js');
     await closeConversationHistoryIndexes();
   }
+});
+
+it('rechecks Project readiness after delayed runtime boot without bypassing the claim fence', async () => {
+  setup(); seed();
+  const { ScheduledTaskScheduler, SCHEDULED_TASK_DISPATCH_GUARD } = await schedulerModule();
+  let ready = true, bootDone, executions = 0;
+  const boot = new Promise(resolve => { bootDone = resolve; });
+  const scheduler = new ScheduledTaskScheduler({ yeaftDir: root, isActive: () => false, canDispatch: () => ready,
+    dispatch: async msg => { await boot; msg[SCHEDULED_TASK_DISPATCH_GUARD](); executions++; } });
+  try {
+    scheduler.start(); scheduler.run('session_task');
+    ready = false; bootDone(); await Promise.resolve(); await Promise.resolve(); await scheduler.tick();
+    expect(executions).toBe(0);
+    expect(read().task.lastRun).toMatchObject({ status: 'failed', error: expect.stringContaining('authoritative Project context') });
+    expect(() => scheduler.run('session_task')).toThrow(expect.objectContaining({ code: 'project_context_unavailable' }));
+  } finally { scheduler.stop(); }
 });

@@ -120,9 +120,10 @@ async function sendVpSnapshotError(client, msg, error) {
   });
 }
 
-export async function syncProjectContextsToAgents(userId) {
+export async function syncProjectContextsToAgents(userId, targetAgentId = null) {
   try {
-    const sessionsByAgent = groupOnlineYeaftSessions(yeaftSessionDb.getByUser(userId));
+    const sessionsByAgent = groupOnlineYeaftSessions(yeaftSessionDb.getByUser(userId)
+      .filter(row => !targetAgentId || row.agentId === targetAgentId));
     await Promise.all(Object.entries(sessionsByAgent).map(async ([agentId, sessions]) => {
       try {
         const contexts = sessions.map(session => ({
@@ -1738,6 +1739,15 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       if (typeof msg.type === 'string' && (msg.type.startsWith('yeaft_') || msg.type.startsWith('unify_'))) {
         const relayType = msg.type.startsWith('unify_') ? `yeaft_${msg.type.slice('unify_'.length)}` : msg.type;
         const relayAgentId = msg.agentId || client.currentAgent;
+        // Internal authority messages are generated from Server SQLite only.
+        // Generic relay must not turn a browser assertion into trusted context.
+        if (relayType === 'yeaft_project_context_sync') {
+          await sendToWebClient(client, {
+            type: 'error', code: 'server_only_message', message: 'Project context synchronization is Server-only.',
+            requestId: msg.requestId ?? null, agentId: relayAgentId || null,
+          });
+          return true;
+        }
         const isSessionSend = relayType === 'yeaft_session_send' || relayType === 'yeaft_session_chat';
         if (msg.perfTraceId) {
           recordPerfTraceEvent({

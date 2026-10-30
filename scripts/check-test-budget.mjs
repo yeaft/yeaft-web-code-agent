@@ -64,12 +64,13 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +6 spreadsheet boundaries: real XLS/XLSX data, bounded projection, stable view/TSV,
 // shared table interaction, worker lifecycle/security and a real Files/Agent browser flow.
 // Existing CSV edit/error cases are retained and extended, not replaced.
-// +46 reviewed Session-backed task boundaries: 17 durable scheduler/ingress,
-// recovery/race/CAS cases; 6 owner/capability/SQLite relay cases; 8 shared-UX
-// cases; 9 scoped store/protocol/notification cases; 6 real browser flows,
-// including mobile/theme geometry and cross-tab stale edits. Existing Session,
-// Work Center, sidebar and plugin regressions remain intact.
-export const TEST_CASE_LIMIT = 801;
+// +49 reviewed Session-backed task boundaries: 18 durable scheduler/ingress,
+// recovery/race/CAS/Project authority cases; 7 owner/capability/SQLite relay
+// cases; 9 shared-UX cases including active-run pause; 9 scoped store/protocol/
+// notification cases; 6 real browser flows including mobile/theme geometry and
+// cross-tab stale edits. Existing Session, Work Center, sidebar and plugin
+// regressions remain intact.
+export const TEST_CASE_LIMIT = 804;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

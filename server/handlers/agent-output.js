@@ -6,6 +6,7 @@ import { advanceYeaftDebugRequestChunk, consumeYeaftDebugRequest, webClients, pr
 import { CONFIG } from '../config.js';
 import { yeaftAssetStore } from '../yeaft-asset-store.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
+import { syncProjectContextsToAgents } from './client-conversation.js';
 
 
 /** Keep Skill detail read-only and browser-safe, including replies from newer Agents. */
@@ -69,7 +70,7 @@ function reconcileAuthoritativeSessionSnapshot(ownerId, agentId, sessions) {
   return rows;
 }
 
-function syncYeaftSessionMetadata(agentId, agent, event) {
+async function syncYeaftSessionMetadata(agentId, agent, event) {
   if (!event || typeof event !== 'object') return event;
   const ownerId = agent?.ownerId || null;
 
@@ -80,13 +81,18 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
       .map(session => [session.id, { ...session }]));
     try {
       if (ownerId) {
+        // A catalogued Session's assignment (including no Project) is already
+        // Server-owned. Legacy discovery may only seed previously unknown rows.
+        const knownIds = new Set(yeaftSessionDb.getByAgent(agentId)
+          .filter(row => row.userId === ownerId).map(row => row.id));
         reconcileAuthoritativeSessionSnapshot(ownerId, agentId, rows);
         yeaftProjectDb.importLegacyProjects(
           ownerId,
           agentId,
           event.projects,
-          sessionId => rows.some(row => row?.id === sessionId),
+          sessionId => !knownIds.has(sessionId) && rows.some(row => row?.id === sessionId),
         );
+        await syncProjectContextsToAgents(ownerId, agentId);
       }
     } catch (e) {
       console.warn(`[Server] yeaft session persist failed for agent ${agentId}:`, e?.message || e);
@@ -99,7 +105,10 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
   const sessionId = event.sessionId;
   if (event.ok && op === 'list' && Array.isArray(event.sessions)) {
     try {
-      if (ownerId) reconcileAuthoritativeSessionSnapshot(ownerId, agentId, event.sessions);
+      if (ownerId) {
+        reconcileAuthoritativeSessionSnapshot(ownerId, agentId, event.sessions);
+        await syncProjectContextsToAgents(ownerId, agentId);
+      }
     } catch (e) {
       console.warn(`[Server] yeaft session list persist failed for agent ${agentId}:`, e?.message || e);
     }
@@ -115,6 +124,7 @@ function syncYeaftSessionMetadata(agentId, agent, event) {
       yeaftSessionDb.upsertFromSnapshot(ownerId, agentId, { ...existing, ...event.session });
       agent.yeaftSessions ??= new Map();
       agent.yeaftSessions.set(event.session.id, { ...existing, ...event.session });
+      if (op === 'create') await syncProjectContextsToAgents(ownerId, agentId);
     } catch (e) {
       console.warn(`[Server] task Session persist failed for agent ${agentId}:`, e?.message || e);
     }
@@ -642,7 +652,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
     case 'session_output': {
       if (isRetiredDreamEvent(msg.event)) break;
       const data = hydrateInlinePreviewData(msg.data);
-      let event = syncYeaftSessionMetadata(agentId, agent, msg.event);
+      let event = await syncYeaftSessionMetadata(agentId, agent, msg.event);
       if ((event?.type === 'session_list_updated' || event?.type === 'session_crud_result') && agent.ownerId) {
         event = {
           ...event,
@@ -1001,7 +1011,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // Use one batch read (`getByAgent`) and a Set lookup instead of an
       // N+1 `get(id)` per row — relays this size hot path on every
       // snapshot per connected client.
-      const syncedEvent = syncYeaftSessionMetadata(agentId, agent, msg);
+      const syncedEvent = await syncYeaftSessionMetadata(agentId, agent, msg);
       const decoratedSessions = syncedEvent.sessions;
       await broadcastSessionCatalog(agent.ownerId);
       // Relay verbatim to web (agentId stamped so the web sessions store
@@ -1079,7 +1089,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // probes too: entering Yeaft asks each connected agent for its opened
       // sessions, and that response must carry persisted server-side pin
       // state before it hits the web store.
-      const syncedMsg = syncYeaftSessionMetadata(agentId, agent, msg);
+      const syncedMsg = await syncYeaftSessionMetadata(agentId, agent, msg);
       const outboundMsg = agent.ownerId
         ? { ...syncedMsg, projects: yeaftProjectDb.listForAgent(agent.ownerId, agentId), projectsAuthoritative: true }
         : { ...syncedMsg, projects: [], projectsAuthoritative: true };

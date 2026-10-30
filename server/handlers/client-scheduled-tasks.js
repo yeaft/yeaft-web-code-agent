@@ -1,5 +1,5 @@
 import { agents } from '../context.js';
-import { yeaftSessionDb } from '../database.js';
+import { yeaftProjectDb, yeaftSessionDb } from '../database.js';
 import { forwardToAgent, resolveAgentAccessError, sendToWebClient } from '../ws-utils.js';
 
 const CREATE_TYPES = new Set(['yeaft_create_session', 'yeaft_create_group', 'unify_create_group', 'unify_create_session']);
@@ -103,7 +103,11 @@ export async function handleClientScheduledTasks(clientId, client, msg) {
         }
         outbound.expectedRevision = msg.expectedRevision;
         outbound.task = projectTaskInput(msg.task);
-      } else if (Object.hasOwn(msg, 'task')) throw new Error('run does not accept task configuration');
+      } else {
+        if (Object.hasOwn(msg, 'task')) throw new Error('run does not accept task configuration');
+        // Never relay a browser-supplied Project; this authority comes only from SQLite.
+        outbound.projectContext = yeaftProjectDb.contextForSession(client.userId, agentId, sessionId);
+      }
     }
   } catch (error) {
     return reject('invalid_task', error.message);

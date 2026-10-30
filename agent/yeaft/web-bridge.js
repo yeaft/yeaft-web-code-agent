@@ -3715,6 +3715,15 @@ export { sendSessionSnapshotBroadcast as broadcastYeaftSessionSnapshotEager };
 
 let scheduledTaskScheduler = null;
 
+/** Server authority is connection-scoped; cached context must not survive reconnect. */
+export function invalidateYeaftProjectContexts() {
+  projectContextBySession.clear();
+}
+
+function scheduledSessionReady(sessionId) {
+  return ctx.ws?.readyState === 1 && projectContextBySession.has(sessionId);
+}
+
 /** Start once per Agent data root, not per browser subscription or reconnect. */
 export function startYeaftScheduledTasks() {
   const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -3723,8 +3732,18 @@ export function startYeaftScheduledTasks() {
     scheduledTaskScheduler?.stop();
     scheduledTaskScheduler = new ScheduledTaskScheduler({
       yeaftDir,
-      dispatch: msg => handleYeaftSessionSend({ ...msg,
-        projectContext: projectContextBySession.get(msg.sessionId) || null }),
+      canDispatch: scheduledSessionReady,
+      dispatch: msg => {
+        const guard = msg[SCHEDULED_TASK_DISPATCH_GUARD];
+        const input = { ...msg, projectContext: projectContextBySession.get(msg.sessionId) };
+        input[SCHEDULED_TASK_DISPATCH_GUARD] = () => {
+          guard(); // Includes readiness plus the persisted claim/config/identity checks.
+          // Runtime boot may have spanned a Project edit or reconnect. Use the
+          // latest authority at ingress, never the pre-boot context or legacy cache.
+          input.projectContext = projectContextBySession.get(msg.sessionId);
+        };
+        return handleYeaftSessionSend(input);
+      },
       isActive: sessionHasActiveWork,
       onChange: sendSessionSnapshotBroadcast,
       notify: event => sendSessionEvent(event, { sessionId: event.sessionId }),
@@ -3747,6 +3766,9 @@ export function handleYeaftScheduledTask(msg = {}) {
     if (!['update', 'run'].includes(msg.op)) throw new Error('Invalid scheduled task operation');
     if (msg.op === 'run' && msg.task !== undefined) throw new Error('task is only accepted for update');
     if (!validateSessionId(msg.sessionId).ok) throw new Error('Invalid Session id');
+    if (msg.op === 'run' && Object.hasOwn(msg, 'projectContext')) {
+      handleYeaftProjectContextSync({ contexts: [{ sessionId: msg.sessionId, projectContext: msg.projectContext }] });
+    }
     const scheduler = startYeaftScheduledTasks();
     if (!scheduler) throw new Error('No Yeaft directory configured');
     const result = msg.op === 'update' ? scheduler.update(msg.sessionId, msg.task, msg.expectedRevision) : scheduler.run(msg.sessionId);
@@ -3798,6 +3820,7 @@ export function handleYeaftProjectContextSync(msg) {
     const sessionId = typeof row?.sessionId === 'string' ? row.sessionId.trim() : '';
     if (!sessionId) continue;
     const projectContext = normalizeProjectContext(row.projectContext, sessionId);
+    if (!projectContext && row.projectContext !== null) continue;
     projectContextBySession.set(sessionId, projectContext || {
       projectId: null,
       projectName: null,
@@ -5080,6 +5103,23 @@ async function runYeaftSessionSend(msg) {
   const sessionId = (typeof msg.sessionId === 'string' && msg.sessionId.trim())
     ? msg.sessionId.trim()
     : 'grp_default';
+  // Cache authority before the first await: an accepted send from the previous
+  // transport must not repopulate stale context after disconnect invalidation.
+  const hasInboundProjectContext = Object.prototype.hasOwnProperty.call(msg, 'projectContext');
+  const inboundProjectContext = normalizeProjectContext(msg.projectContext, sessionId);
+  if (hasInboundProjectContext) {
+    projectContextBySession.set(sessionId, inboundProjectContext || {
+      projectId: null,
+      projectName: null,
+      projectInstruction: '',
+      sessionIds: [],
+    });
+  } else {
+    // An old Server does not know this field. Drop any context cached from a
+    // newer Server before falling back to this Agent's legacy projects.json.
+    projectContextBySession.delete(sessionId);
+  }
+
   const perfTraceId = typeof msg.perfTraceId === 'string' && msg.perfTraceId.trim()
     ? msg.perfTraceId.trim()
     : null;
@@ -5298,21 +5338,6 @@ async function dispatchAcceptedSessionSend({
       failedFileCount: Array.isArray(attachmentBundle.failed) ? attachmentBundle.failed.length : 0,
     },
   });
-
-  const hasInboundProjectContext = Object.prototype.hasOwnProperty.call(msg, 'projectContext');
-  const inboundProjectContext = normalizeProjectContext(msg.projectContext, sessionId);
-  if (hasInboundProjectContext) {
-    projectContextBySession.set(sessionId, inboundProjectContext || {
-      projectId: null,
-      projectName: null,
-      projectInstruction: '',
-      sessionIds: [],
-    });
-  } else {
-    // An old Server does not know this field. Drop any context cached from a
-    // newer Server before falling back to this Agent's legacy projects.json.
-    projectContextBySession.delete(sessionId);
-  }
 
   // Ingest user text. The coordinator persists, applies mention/fanout
   // rules, and calls deliver() (== enqueueForVp) for each chosen VP —
