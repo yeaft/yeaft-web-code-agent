@@ -585,7 +585,8 @@ async function quietAction(page, button) {
     await page.keyboard.press('Tab');
     await page.keyboard.press('Shift+Tab');
     await expect(button).toBeFocused();
-    expect(await button.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('solid');
+    expect(await button.evaluate(element => ({ style: getComputedStyle(element).outlineStyle,
+      width: getComputedStyle(element).outlineWidth }))).toEqual({ style: 'solid', width: '2px' });
   }
   await page.mouse.move(0, 0);
 }
@@ -593,6 +594,10 @@ async function quietAction(page, button) {
 test('task and Settings controls share blue switches, quiet actions and a content-sized desktop layout', async ({ page, serverUrl, mockAgent }, testInfo) => {
   test.setTimeout(120000);
   scheduledTaskAgent(mockAgent);
+  mockAgent._messageHandlers.push(request => {
+    if (request.type === 'get_llm_config') mockAgent.send({ type: 'llm_config', requestId: request.requestId,
+      _requestClientId: request._requestClientId, agentConfig: { quickSends: [{ id: 'check', name: 'Check', model: 'test/review' }], availableModels: [] } });
+  });
   await boot(page, serverUrl, mockAgent);
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
@@ -605,6 +610,10 @@ test('task and Settings controls share blue switches, quiet actions and a conten
       knob: getComputedStyle(element.querySelector('.sp-setting-switch-knob')).backgroundColor,
     }));
     expect(expected.track).toBe(theme === 'light' ? 'rgb(74, 124, 201)' : 'rgb(124, 166, 232)');
+    const dangerColor = await page.evaluate(() => {
+      const marker = document.createElement('span'); marker.style.color = 'var(--error)';
+      document.body.append(marker); const color = getComputedStyle(marker).color; marker.remove(); return color;
+    });
     await page.locator('.settings-nav-item').filter({ hasText: 'Security' }).click();
     const security = page.locator('.settings-pane:visible');
     await quietAction(page, security.locator('.sp-btn:not(.sp-btn-danger)').first());
@@ -625,6 +634,13 @@ test('task and Settings controls share blue switches, quiet actions and a conten
     }))).toEqual(expected);
     // Do not invoke real maintenance actions. Inspect enabled/disabled styling only.
     await quietAction(page, agentSettings.locator('.btn-secondary').first());
+    await agentSettings.locator('.agent-settings-nav-item').last().click();
+    const quickRemove = agentSettings.locator('.quick-send-remove').first();
+    await expect(quickRemove).toBeVisible();
+    await expect(agentSettings.locator('.quick-send-settings')).toHaveAttribute('aria-busy', 'false');
+    await quickRemove.hover();
+    await expect.poll(() => quickRemove.evaluate(element => getComputedStyle(element).color))
+      .toBe(dangerColor);
     await agentSettings.locator('.agent-settings-close').click();
     await page.evaluate(() => window.Pinia.useChatStore().setDigitalPersonUiEnabled(false));
 
@@ -692,7 +708,19 @@ test('task and Settings controls share blue switches, quiet actions and a conten
     await select(page, taskSettings, 'Repeat', 'Every month');
     const selectedDay = taskSettings.locator('.task-month-days-grid [aria-pressed="true"]').first();
     expect(await selectedDay.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+    const advanced = taskSettings.locator('.task-schedule-advanced');
+    await advanced.locator('summary').click();
+    const dateInput = advanced.locator('.schedule-date-picker__trigger').first();
+    await expect(dateInput).toBeVisible();
+    expect(await dateInput.evaluate(element => ({ border: getComputedStyle(element).borderWidth,
+      background: getComputedStyle(element).backgroundColor }))).toMatchObject({ border: '1px' });
+    expect(await dateInput.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+    await advanced.locator('summary').click();
     await shot(page, testInfo, `quiet-task-settings-monthly-${theme}.png`);
+    await page.locator('.task-settings-modal').getByRole('tab', { name: 'Session', exact: true }).click();
+    const sessionPane = page.locator('.group-settings-section-session');
+    await sessionPane.locator('.group-settings-input').first().fill('Edited task title');
+    await quietAction(page, sessionPane.locator('.group-settings-primary').first());
     await page.locator('.task-settings-modal .group-settings-close').click();
   }
 });

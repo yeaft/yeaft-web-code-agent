@@ -8,8 +8,8 @@
     .scheduled-task-stale, .scheduled-task-existing-schedule)
 :is(.btn-primary, .btn-secondary, .btn-ghost, .sp-btn, .sp-btn-create,
     .search-btn-primary, .search-btn-secondary, .search-link-btn,
-    .vp-crud-link-btn, .group-settings-link-btn, .group-settings-delete-btn,
-    .agent-settings-danger-button):not(:where([aria-pressed], .user-shortcuts-record)) {
+    .vp-crud-link-btn, .group-settings-link-btn, .group-settings-primary, .group-settings-delete-btn,
+    .agent-settings-danger-button):not(:where([aria-pressed], .user-shortcuts-record, .schedule-date-picker__trigger)) {
   border-color: transparent;
   background: transparent;
   color: var(--text-primary);
@@ -24,8 +24,8 @@
     .scheduled-task-stale, .scheduled-task-existing-schedule)
 :is(.btn-primary, .btn-secondary, .btn-ghost, .sp-btn, .sp-btn-create,
     .search-btn-primary, .search-btn-secondary, .search-link-btn,
-    .vp-crud-link-btn, .group-settings-link-btn, .group-settings-delete-btn,
-    .agent-settings-danger-button):not(:where([aria-pressed], .user-shortcuts-record)):hover:not(:disabled) {
+    .vp-crud-link-btn, .group-settings-link-btn, .group-settings-primary, .group-settings-delete-btn,
+    .agent-settings-danger-button):not(:where([aria-pressed], .user-shortcuts-record, .schedule-date-picker__trigger)):hover:not(:disabled) {
   border-color: transparent;
   background: var(--sidebar-hover);
   opacity: 1;
@@ -36,7 +36,7 @@
     .group-settings-modal, .person-settings-modal .person-settings-footer,
     .yeaft-session-create-modal.task-mode .resume-modal-footer,
     .scheduled-task-settings-footer, .scheduled-task-bar)
-:is(.btn-primary, .sp-btn-primary, .search-btn-primary) { font-weight: 600; }
+:is(.btn-primary, .sp-btn-primary, .search-btn-primary, .group-settings-primary) { font-weight: 600; }
 
 /* Removing a box must not remove the warning attached to destructive actions.
  * Keep the same scope specificity as the action layer above. */
@@ -53,7 +53,7 @@
     .scheduled-task-settings-footer, .scheduled-task-bar,
     .scheduled-task-stale, .scheduled-task-existing-schedule)
 :is(.sp-btn-danger, .mcp-btn-danger, .is-danger,
-    .group-settings-delete-btn, .agent-settings-danger-button):hover:not(:disabled) {
+    .group-settings-delete-btn, .agent-settings-danger-button, .quick-send-remove):hover:not(:disabled) {
   color: var(--error);
   background: var(--error-bg);
 }
@@ -63,8 +63,8 @@
     .yeaft-session-create-modal.task-mode)
 :is(.btn-primary, .btn-secondary, .btn-ghost, .sp-btn, .sp-btn-create,
     .search-btn-primary, .search-btn-secondary, .search-link-btn,
-    .vp-crud-link-btn, .group-settings-link-btn, .group-settings-delete-btn,
-    .agent-settings-danger-button):not(:where([aria-pressed], .user-shortcuts-record)):focus-visible {
+    .vp-crud-link-btn, .group-settings-link-btn, .group-settings-primary, .group-settings-delete-btn,
+    .agent-settings-danger-button):not(:where([aria-pressed], .user-shortcuts-record, .schedule-date-picker__trigger)):focus-visible {
   outline: 2px solid var(--settings-control-active);
   outline-offset: 2px;
 }
