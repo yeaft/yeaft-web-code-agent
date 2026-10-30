@@ -81,16 +81,14 @@ async function syncYeaftSessionMetadata(agentId, agent, event) {
       .map(session => [session.id, { ...session }]));
     try {
       if (ownerId) {
-        // A catalogued Session's assignment (including no Project) is already
-        // Server-owned. Legacy discovery may only seed previously unknown rows.
-        const knownIds = new Set(yeaftSessionDb.getByAgent(agentId)
-          .filter(row => row.userId === ownerId).map(row => row.id));
+        // Catalog discovery can precede the one-time legacy Project import.
+        // Existing memberships are protected by importLegacyProjects itself.
         reconcileAuthoritativeSessionSnapshot(ownerId, agentId, rows);
         yeaftProjectDb.importLegacyProjects(
           ownerId,
           agentId,
           event.projects,
-          sessionId => !knownIds.has(sessionId) && rows.some(row => row?.id === sessionId),
+          sessionId => rows.some(row => row?.id === sessionId),
         );
         await syncProjectContextsToAgents(ownerId, agentId);
       }

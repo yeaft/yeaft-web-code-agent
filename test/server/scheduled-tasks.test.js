@@ -249,21 +249,25 @@ describe('Session-backed scheduled tasks', () => {
     agents.set('agent-b', { ownerId: owner, ws: { readyState: 1 } });
     sessions.upsertFromSnapshot(owner, 'agent-b', { id: 'task-session', task });
     sessions.upsertFromSnapshot(owner, 'agent-a', { id: 'no-project' });
+    // Catalog rows can already exist before this Agent's first legacy import.
+    sessions.upsertFromSnapshot(owner, 'agent-a', { id: 'normal-session' });
     const projectA = projects.create(owner, 'A');
     const projectB = projects.create(owner, 'B');
     projects.updateInstruction(owner, projectA.id, 'Agent A authority');
     projects.updateInstruction(owner, projectB.id, 'Agent B authority');
     projects.moveSession(owner, { agentId: 'agent-a', sessionId: 'task-session', projectId: projectA.id });
     projects.moveSession(owner, { agentId: 'agent-b', sessionId: 'task-session', projectId: projectB.id });
-    const snapshot = { type: 'session_list_updated', sessions: [{ id: 'task-session', task }, { id: 'no-project' }],
-      projects: [{ id: 'legacy', name: 'Stale legacy', sessionIds: ['task-session', 'no-project'] }] };
+    const snapshot = { type: 'session_list_updated', sessions: [{ id: 'task-session', task }, { id: 'no-project' }, { id: 'normal-session' }],
+      projects: [{ id: 'legacy', name: 'Legacy', sessionIds: ['task-session', 'normal-session'] }] };
     await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: snapshot });
     expect(forwardToAgent).toHaveBeenCalledTimes(1);
     expect(forwardToAgent).toHaveBeenLastCalledWith('agent-a', { type: 'yeaft_project_context_sync', contexts: expect.arrayContaining([
       { sessionId: 'task-session', projectContext: projects.contextForSession(owner, 'agent-a', 'task-session') },
       { sessionId: 'no-project', projectContext: { projectId: null, projectName: null, projectInstruction: '', sessionIds: [] } },
+      { sessionId: 'normal-session', projectContext: projects.contextForSession(owner, 'agent-a', 'normal-session') },
     ]) });
-    expect(forwardToAgent.mock.calls[0][1].contexts).toHaveLength(2);
+    expect(forwardToAgent.mock.calls[0][1].contexts).toHaveLength(3);
+    expect(projects.contextForSession(owner, 'agent-a', 'normal-session').projectName).toBe('Legacy');
     expect(forwardToAgent.mock.calls[0][1].contexts.find(row => row.sessionId === 'task-session').projectContext.projectInstruction).toBe('Agent A authority');
     expect(projects.contextForSession(owner, 'agent-b', 'task-session').projectInstruction).toBe('Agent B authority');
     projects.updateInstruction(owner, projectA.id, 'Updated while Agent disconnected');
