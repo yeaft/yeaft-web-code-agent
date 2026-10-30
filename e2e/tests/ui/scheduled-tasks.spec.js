@@ -463,7 +463,7 @@ test('task form prioritizes required prompt and saves weekly or multiple monthly
     }
   }
   await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'zh-CN'; });
-  await expect(prompt).toHaveAttribute('aria-label', '提示词');
+  await expect(modal.locator('.scheduled-task-prompt textarea')).toHaveAttribute('aria-label', '提示词');
   for (const [width, height] of [[1280, 720], [320, 844]]) {
     await page.setViewportSize({ width, height });
     await noOverflow(page, ['.task-mode', '.scheduled-task-editor', '.task-month-days-grid']);

@@ -42,9 +42,12 @@ export default {
   },
   emits: ['update:modelValue', 'valid'],
   watch: {
-    result: { immediate: true, handler(value) { this.$emit('valid', !value.error); } },
+    result: { immediate: true, handler(value) {
+      this.$emit('valid', !value.error);
+      if (this.compact && ['futureTime', 'invalidDateTime', 'invalidTimeZone', 'invalidEndDate', 'invalidRunCount', 'tooFar', 'supportedRange'].includes(value.error)) this.advancedOpen = true;
+    } },
   },
-  data() { return { now: Date.now(), timer: null }; },
+  data() { return { now: Date.now(), timer: null, advancedOpen: false }; },
   mounted() { this.timer = setInterval(() => { this.now = Date.now(); }, 30000); },
   beforeUnmount() { clearInterval(this.timer); },
   computed: {
@@ -124,7 +127,7 @@ export default {
         <input type="number" min="1" max="31" :value="modelValue.dayOfMonth" :disabled="disabled" @input="patch('dayOfMonth', Number($event.target.value))">
         <small class="work-center-field-help">{{ $t('workCenter.scheduling.shortMonth') }}</small>
       </label>
-      <details v-if="compact" class="task-schedule-advanced">
+      <details v-if="compact" class="task-schedule-advanced" :open="advancedOpen" @toggle="advancedOpen = $event.target.open">
         <summary>{{ $t('scheduledTasks.moreScheduleOptions') }}</summary>
         <div class="work-center-schedule-fields">
           <template v-if="modelValue.frequency !== 'once'">${dateField}</template>

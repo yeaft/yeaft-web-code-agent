@@ -259,4 +259,11 @@ it('allows weekly multiple days and gates monthly multiple dates on additive Age
   expect(wrapper.props('modelValue').daysOfMonth).toEqual([15, 31]);
   await wrapper.setProps({ disabled: true });
   expect(wrapper.findAll('.task-month-days-grid button').every(button => button.attributes('disabled') !== undefined)).toBe(true);
+  vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2040, 1, 1, 17));
+  await wrapper.setProps({ disabled: false, modelValue: { ...draft, frequency: 'daily', time: '09:00' } });
+  wrapper.vm.now = Date.now();
+  await Vue.nextTick();
+  expect(wrapper.vm.result.error).toBe('futureTime');
+  expect(wrapper.get('.task-schedule-advanced').attributes('open')).toBeDefined();
+
 });
