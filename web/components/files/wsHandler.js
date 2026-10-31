@@ -141,7 +141,7 @@ export function createWsHandler({
           const previewError = msg.errorCode === 'FILE_PREVIEW_TOO_LARGE'
             ? t('files.previewTooLarge', {
                 size: ((msg.errorDetails?.sizeBytes || 0) / 1024 / 1024).toFixed(1),
-                limit: ((msg.errorDetails?.limitBytes || 20 * 1024 * 1024) / 1024 / 1024).toFixed(0),
+                limit: ((msg.errorDetails?.limitBytes || 100 * 1024 * 1024) / 1024 / 1024).toFixed(0),
               })
             : msg.error;
           responseTab.loadError = previewError;

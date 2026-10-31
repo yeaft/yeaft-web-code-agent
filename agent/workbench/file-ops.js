@@ -8,7 +8,7 @@ import { resolveAndValidatePath, BINARY_EXTENSIONS, VIDEO_EXTENSIONS } from './u
 import { resolveWorkItemPath } from './work-item-path.js';
 import { sendWorkbenchResult } from './request-routing.js';
 
-export const MAX_WORKBENCH_PREVIEW_BYTES = 20 * 1024 * 1024;
+export const MAX_WORKBENCH_PREVIEW_BYTES = 100 * 1024 * 1024;
 export const WORKBENCH_FILE_CHUNK_BYTES = 1024 * 1024;
 export const WORKBENCH_VIDEO_CHUNK_BYTES = 1024 * 1024;
 
@@ -26,7 +26,7 @@ export function isBinaryFileContent(buffer) {
 
 function assertPreviewSize(size) {
   if (size <= MAX_WORKBENCH_PREVIEW_BYTES) return;
-  const error = new Error(`File is too large to transfer (${(size / 1024 / 1024).toFixed(1)} MB). The file limit is 20 MB.`);
+  const error = new Error(`File is too large to transfer (${(size / 1024 / 1024).toFixed(1)} MB). The file limit is 100 MB.`);
   error.code = 'FILE_PREVIEW_TOO_LARGE';
   error.details = { sizeBytes: size, limitBytes: MAX_WORKBENCH_PREVIEW_BYTES };
   throw error;

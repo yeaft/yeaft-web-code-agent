@@ -2,7 +2,8 @@ import { MAX_PREVIEW_FILE_BYTES } from './preview-files.js';
 
 const MAX_CHUNK_BYTES = 1024 * 1024;
 const MAX_ASSEMBLIES = 64;
-const MAX_ASSEMBLY_BYTES = 64 * 1024 * 1024;
+// Keep aggregate buffering bounded while allowing one maximum-size transfer.
+const MAX_ASSEMBLY_BYTES = 128 * 1024 * 1024;
 const ASSEMBLY_TTL_MS = 2 * 60 * 1000;
 const assemblies = new Map();
 let assemblyBytes = 0;
@@ -47,7 +48,7 @@ export function appendFileContentChunk(agentId, msg) {
   const totalBytes = Number(msg?.totalBytes);
   if (!agentId || !requestId
       || !Number.isSafeInteger(chunkIndex) || chunkIndex < 0
-      || !Number.isSafeInteger(chunkCount) || chunkCount < 2 || chunkCount > 20
+      || !Number.isSafeInteger(chunkCount) || chunkCount < 2 || chunkCount > Math.ceil(MAX_PREVIEW_FILE_BYTES / MAX_CHUNK_BYTES)
       || !Number.isSafeInteger(totalBytes) || totalBytes <= MAX_CHUNK_BYTES
       || totalBytes > MAX_PREVIEW_FILE_BYTES
       || chunkIndex >= chunkCount) return { status: 'invalid' };

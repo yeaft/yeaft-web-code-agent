@@ -1790,7 +1790,7 @@ export default {
   'files.previewTooLarge': '该文件大小为 {size} MB，超过 {limit} MB 的预览与下载上限。',
   'files.binaryFile': '二进制文件',
   'files.previewUnavailable': '此文件暂不支持预览，请下载后使用本地应用打开。',
-  'files.downloadLimit': '非视频文件预览与下载上限为 20 MiB，下载仍需拥有文件访问权限。',
+  'files.downloadLimit': '非视频文件预览与下载上限为 100 MiB，下载仍需拥有文件访问权限。',
   'files.audioPreviewLoadFailed': '音频无法播放，当前浏览器可能不支持该音频格式或编码。',
   'files.audioPreviewHint': '播放取决于浏览器支持的音频编码，也可下载原文件在本地打开。',
   'files.pdfPreviewTitle': 'PDF 预览：{name}',

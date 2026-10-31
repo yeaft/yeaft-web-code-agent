@@ -104,7 +104,7 @@ function cacheBinaryPreview(msg, suppliedBuffer = null, pending = null) {
     ...msg,
     binary: false,
     content: '',
-    error: 'File exceeds the 20 MB transfer limit.',
+    error: 'File exceeds the 100 MB transfer limit.',
     errorCode: 'FILE_PREVIEW_TOO_LARGE',
     errorDetails: { sizeBytes: buffer.length, limitBytes: MAX_PREVIEW_FILE_BYTES },
   };

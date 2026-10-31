@@ -165,10 +165,12 @@ describe('stable Workbench preview URLs', () => {
 });
 
 describe('Agent non-text reads', () => {
-  it('preserves audio/binary bytes, accepts UTF-8 text and rejects binary over 20 MiB', async () => {
+  it('preserves audio/binary bytes, accepts UTF-8 text and rejects binary over 100 MiB', async () => {
     const root = mkdtempSync(join(tmpdir(), 'yeaft-binary-read-'));
     const send = vi.fn();
     const previousSend = agentCtx.sendToServer;
+    const previousServerCapabilities = agentCtx.serverCapabilities;
+    const previousAgentCapabilities = agentCtx.agentCapabilities;
     agentCtx.sendToServer = send;
     const read = async (name, buffer) => {
       writeFileSync(join(root, name), buffer);
@@ -187,10 +189,49 @@ describe('Agent non-text reads', () => {
       expect(await read('split', split)).toMatchObject({ content: split.toString('utf8') });
       const oversized = join(root, 'huge.custom');
       writeFileSync(oversized, Buffer.from([0]));
-      truncateSync(oversized, 20 * 1024 * 1024 + 1);
+      truncateSync(oversized, 100 * 1024 * 1024 + 1);
       await handleReadFile({ conversationId: 'binary-test', filePath: oversized, workDir: root });
-      expect(send.mock.lastCall[0]).toMatchObject({ errorCode: 'FILE_PREVIEW_TOO_LARGE', errorDetails: { limitBytes: 20 * 1024 * 1024 } });
+      expect(send.mock.lastCall[0]).toMatchObject({ errorCode: 'FILE_PREVIEW_TOO_LARGE', errorDetails: { limitBytes: 100 * 1024 * 1024 } });
       expect(send.mock.lastCall[0].binary).toBeUndefined();
-    } finally { agentCtx.sendToServer = previousSend; rmSync(root, { recursive: true, force: true }); }
-  });
+
+      // Exercise the real Agent -> chunk assembly -> cache refill -> HTTP download
+      // at the inclusive limit (also crosses the old 20-chunk and 64 MiB limits).
+      const maximum = join(root, 'maximum.zip');
+      writeFileSync(maximum, Buffer.from([0x61]));
+      truncateSync(maximum, 100 * 1024 * 1024);
+      state.workDir = root;
+      token = createWorkbenchPreview('file-1', source, maximum);
+      agentCtx.serverCapabilities = new Set(['workbench_file_content_chunks']);
+      agentCtx.agentCapabilities = ['workbench_file_content_chunks'];
+      let chunks = 0;
+      agentCtx.sendToServer = msg => {
+        expect(msg.type).toBe('file_content_chunk');
+        expect(msg.chunkCount).toBe(100);
+        chunks += 1;
+        return handleAgentFileTerminal('agent-1', {}, msg);
+      };
+      const refill = readWorkbenchPreview('file-1', token);
+      await handleReadFile(state.outbound.at(-1));
+      const file = await refill;
+      expect(chunks).toBe(100);
+      expect(file.buffer.length).toBe(100 * 1024 * 1024);
+      expect(file.buffer[0]).toBe(0x61);
+      expect(file.buffer.at(-1)).toBe(0);
+      const digest = createHash('sha256').update(file.buffer).digest('hex');
+      const download = await request(app).get(`${url()}&download=1`).buffer(true).parse((res, callback) => {
+        const hash = createHash('sha256');
+        let size = 0;
+        res.on('data', chunk => { size += chunk.length; hash.update(chunk); });
+        res.on('end', () => callback(null, { size, digest: hash.digest('hex') }));
+        res.on('error', callback);
+      }).expect(200);
+      expect(download.headers['content-disposition']).toContain('attachment;');
+      expect(download.body).toEqual({ size: 100 * 1024 * 1024, digest });
+    } finally {
+      agentCtx.sendToServer = previousSend;
+      agentCtx.serverCapabilities = previousServerCapabilities;
+      agentCtx.agentCapabilities = previousAgentCapabilities;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
