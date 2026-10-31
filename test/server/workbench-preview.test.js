@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdtempSync, mkdirSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import agentCtx from '../../agent/context.js';
@@ -194,6 +194,12 @@ describe('Agent non-text reads', () => {
       expect(send.mock.lastCall[0]).toMatchObject({ errorCode: 'FILE_PREVIEW_TOO_LARGE', errorDetails: { limitBytes: 100 * 1024 * 1024 } });
       expect(send.mock.lastCall[0].binary).toBeUndefined();
 
+      const automaticImage = join(root, 'automatic.png');
+      writeFileSync(automaticImage, Buffer.from([0]));
+      truncateSync(automaticImage, 20 * 1024 * 1024 + 1);
+      await handleReadFile({ conversationId: 'binary-test', filePath: automaticImage, workDir: root, responseImagePreview: true });
+      expect(send.mock.lastCall[0]).toMatchObject({ errorCode: 'FILE_PREVIEW_TOO_LARGE', errorDetails: { limitBytes: 20 * 1024 * 1024 } });
+
       // Exercise the real Agent -> chunk assembly -> cache refill -> HTTP download
       // at the inclusive limit (also crosses the old 20-chunk and 64 MiB limits).
       const maximum = join(root, 'maximum.zip');
@@ -217,7 +223,10 @@ describe('Agent non-text reads', () => {
       expect(file.buffer.length).toBe(100 * 1024 * 1024);
       expect(file.buffer[0]).toBe(0x61);
       expect(file.buffer.at(-1)).toBe(0);
-      const digest = createHash('sha256').update(file.buffer).digest('hex');
+      const sourceHash = createHash('sha256');
+      for await (const chunk of createReadStream(maximum)) sourceHash.update(chunk);
+      const digest = sourceHash.digest('hex');
+      expect(createHash('sha256').update(file.buffer).digest('hex')).toBe(digest);
       const download = await request(app).get(`${url()}&download=1`).buffer(true).parse((res, callback) => {
         const hash = createHash('sha256');
         let size = 0;

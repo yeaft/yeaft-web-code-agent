@@ -9,6 +9,7 @@ import { resolveWorkItemPath } from './work-item-path.js';
 import { sendWorkbenchResult } from './request-routing.js';
 
 export const MAX_WORKBENCH_PREVIEW_BYTES = 100 * 1024 * 1024;
+const MAX_RESPONSE_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024;
 export const WORKBENCH_FILE_CHUNK_BYTES = 1024 * 1024;
 export const WORKBENCH_VIDEO_CHUNK_BYTES = 1024 * 1024;
 
@@ -24,11 +25,11 @@ export function isBinaryFileContent(buffer) {
   }
 }
 
-function assertPreviewSize(size) {
-  if (size <= MAX_WORKBENCH_PREVIEW_BYTES) return;
-  const error = new Error(`File is too large to transfer (${(size / 1024 / 1024).toFixed(1)} MB). The file limit is 100 MB.`);
+function assertPreviewSize(size, limitBytes) {
+  if (size <= limitBytes) return;
+  const error = new Error(`File is too large to transfer (${(size / 1024 / 1024).toFixed(1)} MB). The file limit is ${limitBytes / 1024 / 1024} MB.`);
   error.code = 'FILE_PREVIEW_TOO_LARGE';
-  error.details = { sizeBytes: size, limitBytes: MAX_WORKBENCH_PREVIEW_BYTES };
+  error.details = { sizeBytes: size, limitBytes };
   throw error;
 }
 
@@ -219,10 +220,12 @@ export async function handleReadFile(msg) {
       error.code = 'VIDEO_STREAM_REQUIRED';
       throw error;
     }
+    // Automatic response images retain their smaller preview budget.
+    const limitBytes = msg.responseImagePreview ? MAX_RESPONSE_IMAGE_PREVIEW_BYTES : MAX_WORKBENCH_PREVIEW_BYTES;
     let mimeType = BINARY_EXTENSIONS[ext];
     const fileStat = await stat(resolved);
     if (!fileStat.isFile()) throw new Error('Path is not a regular file.');
-    if (mimeType) assertPreviewSize(fileStat.size);
+    if (mimeType) assertPreviewSize(fileStat.size, limitBytes);
     // Keep the existing text-file size behavior. Unknown binary files are
     // classified from a bounded prefix before allocating their full contents.
     if (!mimeType) {
@@ -238,14 +241,14 @@ export async function handleReadFile(msg) {
         catch { invalidUtf8 = true; }
         if (invalidUtf8 || prefix.some(byte => byte === 0 || (byte < 32 && ![9, 10, 12, 13].includes(byte)))) {
           mimeType = 'application/octet-stream';
-          assertPreviewSize(fileStat.size);
+          assertPreviewSize(fileStat.size, limitBytes);
         }
       } finally { await handle.close(); }
     }
     const buffer = await readFile(resolved);
     if (!mimeType && isBinaryFileContent(buffer)) mimeType = 'application/octet-stream';
     if (mimeType) {
-      assertPreviewSize(buffer.length);
+      assertPreviewSize(buffer.length, limitBytes);
       console.log('[Agent] Sending binary file_content:', { filePath: resolved, size: buffer.length, mimeType, conversationId });
       await sendBinaryFile(msg, {
         conversationId,
