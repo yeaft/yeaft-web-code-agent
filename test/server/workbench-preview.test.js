@@ -172,9 +172,9 @@ describe('Agent non-text reads', () => {
     const previousServerCapabilities = agentCtx.serverCapabilities;
     const previousAgentCapabilities = agentCtx.agentCapabilities;
     agentCtx.sendToServer = send;
-    const read = async (name, buffer) => {
+    const read = async (name, buffer, options = {}) => {
       writeFileSync(join(root, name), buffer);
-      await handleReadFile({ conversationId: 'binary-test', filePath: join(root, name), workDir: root, requestId: name });
+      await handleReadFile({ conversationId: 'binary-test', filePath: join(root, name), workDir: root, requestId: name, ...options });
       return send.mock.lastCall[0];
     };
     try {
@@ -184,6 +184,7 @@ describe('Agent non-text reads', () => {
       expect(await read('unknown.custom', Buffer.from([65, 0, 66]))).toMatchObject({ binary: true, content: 'QQBC', mimeType: 'application/octet-stream' });
       expect(await read('invalid-utf8', Buffer.from([255, 254, 65]))).toMatchObject({ binary: true, mimeType: 'application/octet-stream' });
       expect(await read('README', Buffer.from('Unicode 中文\r\ntext\t👍'))).toMatchObject({ content: 'Unicode 中文\r\ntext\t👍' });
+      expect(await read('download.txt', Buffer.from('Unicode 中文\r\ntext\t👍'), { download: true })).toMatchObject({ binary: true, mimeType: 'application/octet-stream', content: Buffer.from('Unicode 中文\r\ntext\t👍').toString('base64') });
       // A UTF-8 character crossing the prefix boundary must not become binary.
       const split = Buffer.from('a'.repeat(8191) + '中文');
       expect(await read('split', split)).toMatchObject({ content: split.toString('utf8') });
@@ -202,9 +203,8 @@ describe('Agent non-text reads', () => {
 
       // Exercise the real Agent -> chunk assembly -> cache refill -> HTTP download
       // at the inclusive limit (also crosses the old 20-chunk and 64 MiB limits).
-      const maximum = join(root, 'maximum.zip');
-      writeFileSync(maximum, Buffer.from([0x61]));
-      truncateSync(maximum, 100 * 1024 * 1024);
+      const maximum = join(root, 'maximum.txt');
+      writeFileSync(maximum, Buffer.alloc(100 * 1024 * 1024, 0x61));
       state.workDir = root;
       token = createWorkbenchPreview('file-1', source, maximum);
       agentCtx.serverCapabilities = new Set(['workbench_file_content_chunks']);
@@ -222,7 +222,7 @@ describe('Agent non-text reads', () => {
       expect(chunks).toBe(100);
       expect(file.buffer.length).toBe(100 * 1024 * 1024);
       expect(file.buffer[0]).toBe(0x61);
-      expect(file.buffer.at(-1)).toBe(0);
+      expect(file.buffer.at(-1)).toBe(0x61);
       const sourceHash = createHash('sha256');
       for await (const chunk of createReadStream(maximum)) sourceHash.update(chunk);
       const digest = sourceHash.digest('hex');

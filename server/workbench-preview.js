@@ -105,7 +105,7 @@ async function refill(source, token, { client, resolved }) {
       });
       if (!requestId) return reject(failure(503, 'Preview read unavailable'));
       Promise.resolve(forwardToAgent(source.agentId, {
-        type: 'read_file', filePath: source.filePath, workDir: resolved.workDir,
+        type: 'read_file', filePath: source.filePath, workDir: resolved.workDir, download: true,
         ...(source.responseImagePreview === true ? { responseImagePreview: true } : {}),
         // Missing purpose identifies an old workspace-bound capability, not a
         // new explicit file selection. PDF/Office refills must remain supported.

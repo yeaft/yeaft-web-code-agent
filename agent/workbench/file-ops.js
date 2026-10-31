@@ -222,7 +222,8 @@ export async function handleReadFile(msg) {
     }
     // Automatic response images retain their smaller preview budget.
     const limitBytes = msg.responseImagePreview ? MAX_RESPONSE_IMAGE_PREVIEW_BYTES : MAX_WORKBENCH_PREVIEW_BYTES;
-    let mimeType = BINARY_EXTENSIONS[ext];
+    // Downloads use byte-preserving chunks even for large UTF-8 text files.
+    let mimeType = BINARY_EXTENSIONS[ext] || (msg.download === true ? 'application/octet-stream' : undefined);
     const fileStat = await stat(resolved);
     if (!fileStat.isFile()) throw new Error('Path is not a regular file.');
     if (mimeType) assertPreviewSize(fileStat.size, limitBytes);
