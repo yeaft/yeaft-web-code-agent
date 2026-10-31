@@ -1792,7 +1792,7 @@ export default {
   'files.previewTooLarge': 'This file is {size} MB and exceeds the {limit} MB preview and download limit.',
   'files.binaryFile': 'Binary file',
   'files.previewUnavailable': 'Preview is not available for this file. Download it to open in a local application.',
-  'files.downloadLimit': 'Non-video preview and download limit: 20 MiB. Downloads still require file access.',
+  'files.downloadLimit': 'Non-video preview and download limit: 100 MiB. Downloads still require file access.',
   'files.audioPreviewLoadFailed': 'The audio could not be played. Its format or codec may not be supported by this browser.',
   'files.audioPreviewHint': 'Playback depends on your browser’s audio codec support. You can also download the original file.',
   'files.pdfPreviewTitle': 'PDF preview: {name}',

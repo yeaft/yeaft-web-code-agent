@@ -1,6 +1,6 @@
 import { previewFiles } from './context.js';
 
-export const MAX_PREVIEW_FILE_BYTES = 20 * 1024 * 1024;
+export const MAX_PREVIEW_FILE_BYTES = 100 * 1024 * 1024;
 export const PREVIEW_FILE_TTL_MS = 10 * 60 * 1000;
 export const MAX_PREVIEW_CACHE_BYTES = 128 * 1024 * 1024;
 export const MAX_PREVIEW_CACHE_FILES = 256;

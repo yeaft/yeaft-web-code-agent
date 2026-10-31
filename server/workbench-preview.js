@@ -99,13 +99,13 @@ async function refill(source, token, { client, resolved }) {
           if (msg.error) return reject(failure(msg.errorCode === 'ENOENT' ? 404 : 502, msg.error));
           if (!msg.binary || msg.filePath !== source.filePath) return reject(failure(502, 'Invalid preview response'));
           const buffer = msg.buffer || Buffer.from(msg.content || '', 'base64');
-          if (buffer.length > MAX_PREVIEW_FILE_BYTES) return reject(failure(413, 'File exceeds the 20 MB transfer limit'));
+          if (buffer.length > MAX_PREVIEW_FILE_BYTES) return reject(failure(413, 'File exceeds the 100 MB transfer limit'));
           resolve({ buffer, mimeType: msg.mimeType, filename: source.filePath.split(/[\\/]/).pop(), token });
         },
       });
       if (!requestId) return reject(failure(503, 'Preview read unavailable'));
       Promise.resolve(forwardToAgent(source.agentId, {
-        type: 'read_file', filePath: source.filePath, workDir: resolved.workDir,
+        type: 'read_file', filePath: source.filePath, workDir: resolved.workDir, download: true,
         ...(source.responseImagePreview === true ? { responseImagePreview: true } : {}),
         // Missing purpose identifies an old workspace-bound capability, not a
         // new explicit file selection. PDF/Office refills must remain supported.
