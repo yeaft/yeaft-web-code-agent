@@ -77,7 +77,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // quiet hover/focus/disabled actions and stable full-height columns across themes.
 // +1 task effort capability boundary: Agent-scoped catalog, model changes,
 // incompatible override reset and disabled inheritance/unsupported models.
-export const TEST_CASE_LIMIT = 814;
+// +5 mobile composer keyboard regressions: 4 component ownership/send-gate cases
+// and 1 browser newline/button/desktop/rotation flow. Existing task and Person
+// mobile send flows now exercise explicit buttons; prior coverage is retained.
+export const TEST_CASE_LIMIT = 819;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

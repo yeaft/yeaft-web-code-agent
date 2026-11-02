@@ -368,6 +368,9 @@ test('completion notifications open the owning Agent when two Agents share the s
     }
     await page.locator('.yeaft-session-input textarea').fill('Follow up with the notified task');
     await page.locator('.yeaft-session-input textarea').press('Enter');
+    await expect(page.locator('.yeaft-session-input textarea')).toHaveValue('Follow up with the notified task\n');
+    expect(other.messages('yeaft_session_send')).toHaveLength(0);
+    await page.locator('.yeaft-session-input .send-btn:not(.stop-btn)').click();
     const sent = await other.waitForMessage('yeaft_session_send');
     expect(sent).toMatchObject({ sessionId: TASK_SESSION_ID, text: 'Follow up with the notified task' });
     expect(mockAgent.messages('yeaft_session_send')).toHaveLength(0);

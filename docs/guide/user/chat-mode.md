@@ -26,7 +26,8 @@ In the modal:
 ## Sending messages
 
 - Type in the bottom input box
-- **Enter** sends, **Shift+Enter** newline
+- On desktop, **Enter** sends and **Shift+Enter** inserts a newline
+- On mobile (including touch-only landscape/tablets), **Enter** inserts a newline; tap the **send button** to send
 - The send button turns into a **stop** button mid-execution — interrupt any time
 - **Draft auto-save** — switching sessions doesn't lose your draft
 
@@ -56,7 +57,7 @@ Typing `/` opens an auto-complete menu:
 | `/skills` | List loaded skills |
 | `/btw` | Side-question without interrupting the current task |
 
-Arrow keys navigate, **Tab** / **Enter** selects.
+Arrow keys navigate, **Tab** / **Enter** selects on desktop. On mobile, tap a suggestion; **Enter** still inserts a newline.
 
 ## Compact vs Clear
 

@@ -26,7 +26,8 @@ Claude Code Chat 是 Yeaft 最早支持的会话后端 — 把本地的 Claude C
 ## 发送消息
 
 - 底部输入框输入文本
-- **Enter** 发送，**Shift+Enter** 换行
+- 桌面端 **Enter** 发送，**Shift+Enter** 换行
+- 移动端（包括触屏横屏和平板）**Enter** 换行，点击**发送按钮**才发送
 - 发送按钮在执行中变成**停止**按钮，可以随时中止当前 turn
 - **草稿自动保存** — 切换会话不会丢未发的草稿
 
@@ -56,7 +57,7 @@ Claude Code Chat 是 Yeaft 最早支持的会话后端 — 把本地的 Claude C
 | `/skills` | 列已加载 skill |
 | `/btw` | 不打断当前任务的侧边追问 |
 
-方向键导航补全菜单，**Tab** / **Enter** 选中执行。
+桌面端方向键导航补全菜单，**Tab** / **Enter** 选中执行；移动端点击选项，**Enter** 仍然换行。
 
 ## Compact 与 Clear 的区别
 

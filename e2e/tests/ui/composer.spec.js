@@ -1,6 +1,8 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
 
+test.use({ serverEnv: { SERVE_DIST: process.env.COMPOSER_UI_PRODUCTION || 'false' } });
+
 async function openYeaftComposer(page, serverUrl) {
   await page.goto(serverUrl);
   await page.waitForSelector('.chat-page', { timeout: 10000 });
@@ -54,6 +56,72 @@ async function openYeaftComposer(page, serverUrl) {
 }
 
 test.describe('Yeaft composer menus', () => {
+  test('mobile Enter inserts newlines; only the send action submits, while desktop keeps shortcuts', async ({ page, serverUrl, browser }, testInfo) => {
+    test.setTimeout(60000);
+    await page.setViewportSize({ width: 320, height: 800 });
+    await openYeaftComposer(page, serverUrl);
+    await page.evaluate(() => {
+      window.__keyboardWire = [];
+      window.Pinia.useChatStore().sendWsMessage = msg => { window.__keyboardWire.push(msg); };
+    });
+    const composer = page.locator('.yeaft-session-input');
+    const input = composer.locator('textarea');
+    const sends = () => page.evaluate(() => (window.__keyboardWire || []).filter(msg => msg.type === 'yeaft_session_send'));
+    await expect(input).toHaveAttribute('enterkeyhint', 'enter');
+    // Test autocomplete before the send flow blurs the mobile input.
+    await input.fill('/');
+    await expect(composer.locator('.slash-autocomplete')).toBeVisible();
+    await input.press('Enter');
+    await expect(input).toHaveValue('/\n');
+    expect(await sends()).toHaveLength(0);
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      await input.fill('First line');
+      await input.press('Enter');
+      await input.press('Shift+Enter');
+      await page.keyboard.insertText('Second line');
+      await expect(input).toHaveValue('First line\n\nSecond line');
+      expect(await sends()).toHaveLength(theme === 'light' ? 0 : 1);
+      await input.evaluate(el => {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }));
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true }));
+      });
+      expect(await sends()).toHaveLength(theme === 'light' ? 0 : 1);
+      await page.screenshot({ path: testInfo.outputPath(`mobile-newlines-${theme}.png`) });
+      await composer.getByRole('button', { name: 'Send', exact: true }).click();
+      await expect(input).toHaveValue('');
+      expect((await sends()).at(-1).text).toBe('First line\n\nSecond line');
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await input.fill('Desktop first');
+    await input.press('Shift+Enter');
+    await page.keyboard.insertText('Desktop second');
+    await expect(input).toHaveValue('Desktop first\nDesktop second');
+    await input.press('Enter');
+    expect((await sends()).at(-1).text).toBe('Desktop first\nDesktop second');
+    await expect(input).toHaveValue('');
+
+    // Wide phone/tablet landscape is touch-only even beyond the mobile breakpoint.
+    const touchContext = await browser.newContext({ viewport: { width: 1024, height: 600 }, hasTouch: true, isMobile: true });
+    try {
+      const touchPage = await touchContext.newPage();
+      await touchPage.addInitScript(() => localStorage.setItem('yeaft-session-status-visible', '0'));
+      await openYeaftComposer(touchPage, serverUrl);
+      await touchPage.evaluate(() => {
+        window.__keyboardWire = [];
+        window.Pinia.useChatStore().sendWsMessage = msg => { window.__keyboardWire.push(msg); };
+      });
+      expect(await touchPage.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)).toBe(true);
+      const touchComposer = touchPage.locator('.yeaft-session-input');
+      const touchInput = touchComposer.locator('textarea');
+      await touchInput.fill('Landscape first'); await touchInput.press('Enter');
+      await touchPage.keyboard.insertText('Landscape second');
+      await expect(touchInput).toHaveValue('Landscape first\nLandscape second');
+      expect(await touchPage.evaluate(() => window.__keyboardWire.filter(msg => msg.type === 'yeaft_session_send'))).toHaveLength(0);
+      await touchComposer.locator('.send-btn').click();
+      expect(await touchPage.evaluate(() => window.__keyboardWire.find(msg => msg.type === 'yeaft_session_send').text)).toBe('Landscape first\nLandscape second');
+    } finally { await touchContext.close(); }
+  });
   test('Session shares accessible attachment cards, drag/drop, clipboard and file-only send', async ({ page, serverUrl }) => {
     await page.setViewportSize({ width: 320, height: 800 });
     await openYeaftComposer(page, serverUrl);
@@ -80,11 +148,11 @@ test.describe('Yeaft composer menus', () => {
     });
     await composer.locator('[data-message-composer]').dispatchEvent('drop', { dataTransfer: dropped });
     await expect(composer.locator('.attachment-item')).toHaveCount(3);
-    await expect(composer.locator('.send-btn')).toBeEnabled();
+    await expect(composer.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
     await composer.locator('.attachment-remove').nth(1).click();
     await expect(composer.locator('.attachment-item')).toHaveCount(2);
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await composer.locator('.send-btn').click();
+    await composer.getByRole('button', { name: 'Send', exact: true }).click();
     const wire = await page.evaluate(() => window.__attachmentWire.find(msg => msg.type === 'yeaft_session_send'));
     // Session's existing transport supplies the attachment-only fallback text.
     expect(wire.text).toBe('(attached files)');

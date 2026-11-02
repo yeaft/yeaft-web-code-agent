@@ -894,11 +894,6 @@ export default {
     onWorkItemMessageInput() {
       this.saveComposerDraft();
     },
-    onWorkItemMessageKeydown(event) {
-      if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
-      event.preventDefault();
-      this.sendSelectedWorkItemMessage();
-    },
     boardFilters() {
       const now = Date.now();
       const updatedFrom = this.boardUpdatedRange === 'day' ? now - 24 * 60 * 60 * 1000
@@ -2336,8 +2331,8 @@ export default {
                               :can-send="composerCanSend"
                               :sending="workItemMessageSending"
                               :send-label="$t('workCenter.sendToTarget', { target: composerTargetLabel })"
+                              keyboard-send
                               @input="onWorkItemMessageInput"
-                              @keydown="onWorkItemMessageKeydown"
                               @paste="onWorkItemMessagePaste"
                               @send="sendSelectedWorkItemMessage"
                             >

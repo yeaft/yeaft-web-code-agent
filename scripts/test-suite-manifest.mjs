@@ -96,6 +96,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/auth-bootstrap.test.js",
   "test/web/auth-fetch.test.js",
   "test/web/client-browser-panel.test.js",
+  "test/web/composer-keyboard.test.js",
   "test/web/digital-person-ui.test.js",
   "test/web/digital-person.test.js",
   "test/web/file-tabs-read-recovery.test.js",

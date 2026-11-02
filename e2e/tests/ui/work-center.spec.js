@@ -583,9 +583,16 @@ test.describe('Work Center responsive UI', () => {
     await expect(composer).toBeFocused();
     await expectWorkCenterTarget(target, 'coordinator', 'Send to Coordinator');
     await composer.fill('Use a new worktree; do not touch the existing diff.');
+    const beforeNewline = mockAgent.messages('work_center_request').filter(request => request.op === 'post_work_item_message').length;
+    await composer.press('Enter');
+    await chatPage.keyboard.insertText('Keep the review separate.');
+    await expect(composer).toHaveValue('Use a new worktree; do not touch the existing diff.\nKeep the review separate.');
+    expect(mockAgent.messages('work_center_request').filter(request => request.op === 'post_work_item_message')).toHaveLength(beforeNewline);
     const coordinatorReply = respondToWorkCenterOp(mockAgent, 'post_work_item_message', { accepted: true });
     await conversation.locator('.send-btn').click();
-    expect((await coordinatorReply).payload.target).toEqual({ kind: 'coordinator' });
+    const coordinatorRequest = await coordinatorReply;
+    expect(coordinatorRequest.payload.target).toEqual({ kind: 'coordinator' });
+    expect(coordinatorRequest.payload.text).toBe('Use a new worktree; do not touch the existing diff.\nKeep the review separate.');
     await expect(composer).toHaveValue('');
 
     await ensureActionsOpen(chatPage);
