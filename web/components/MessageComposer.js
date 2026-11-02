@@ -1,4 +1,5 @@
 import { formatFileSize, hasAttachmentFileId } from '../utils/composer-attachments.js';
+import { usesMobileComposerKeyboard } from '../utils/composer-keyboard.js';
 
 export default {
   name: 'MessageComposer',
@@ -36,9 +37,12 @@ export default {
       || (props.attachmentsEnabled && props.attachments.some(row => row.uploading || row.uploadError || !hasAttachmentFileId(row))));
     const send = () => { if (!sendDisabled.value) emit('send'); };
     const onKeydown = event => {
+      // Do not forward mobile Enter to autocomplete or legacy parent send
+      // handlers either: the browser/IME owns newline insertion, including repeat.
+      if (event.key === 'Enter' && usesMobileComposerKeyboard()) return;
       emit('keydown', event);
       if (!props.keyboardSend || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
-      // Session's shared shortcut: Enter sends; Shift+Enter inserts a newline.
+      // Desktop shortcut: Enter sends; Shift+Enter inserts a newline.
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         if (!event.repeat) send();
@@ -198,6 +202,7 @@ export default {
           :value="modelValue"
           :id="inputId || null"
           :rows="rows"
+          enterkeyhint="enter"
           :class="{ 'is-scrollable': textareaScrollable }"
           :placeholder="placeholder"
           :disabled="disabled || sending"

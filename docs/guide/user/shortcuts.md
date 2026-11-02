@@ -14,11 +14,13 @@ Quick reference for keyboard shortcuts in the Yeaft Web UI.
 
 | Shortcut | Action |
 | --- | --- |
-| **Enter** | Send |
+| **Enter** | Send on desktop; new line on mobile |
 | **Shift+Enter** | New line |
 | **/** | Open slash command autocomplete (Claude Code only) |
 | **Ctrl+V** (Cmd+V) | Paste text or image (image becomes an attachment) |
 | **↑** | Recall last sent message (draft restore) |
+
+On mobile, including touch-only landscape/tablets, use the **send button** to send. Enter remains a newline even when an autocomplete menu is open.
 
 ## Autocomplete menu
 
@@ -26,7 +28,7 @@ Quick reference for keyboard shortcuts in the Yeaft Web UI.
 | --- | --- |
 | **↑** / **↓** | Navigate options |
 | **Tab** | Select & confirm |
-| **Enter** | Select & confirm |
+| **Enter** | Select & confirm (desktop only) |
 | **Esc** | Close menu |
 
 ## Image preview overlay

@@ -14,6 +14,11 @@ const projectPersonConversation = runInNewContext(readFileSync(resolve('web/util
 
 const conversationRecords = new WeakMap();
 
+async function submitPersonDraft(page, scenario) {
+  if (scenario.width <= 768) await page.locator('.person-composer .send-btn:not(.stop-btn)').click();
+  else await page.locator('#person-input').press('Enter');
+}
+
 // Real browser entry + WebSocket framing with an explicit mock Person runtime.
 // This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
@@ -390,7 +395,14 @@ for (const scenario of responseScenarios) {
     const zh = scenario.theme === 'dark';
     if (zh) await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
     const input = page.locator('#person-input');
-    await input.fill('First question'); await input.press('Enter');
+    await input.fill('First question');
+    if (scenario.width <= 768) {
+      await input.press('Enter');
+      await expect(input).toHaveValue('First question\n');
+      expect(mock.requests.filter(row => row.op === 'send')).toHaveLength(0);
+      await input.press('Backspace');
+    }
+    await submitPersonDraft(page, scenario);
     await expect(page.locator('.stop-btn')).toBeVisible();
     await expect(input).toBeEnabled();
     await expect(page.locator('.person-delivery[data-delivery-state="received"]')).toHaveCount(1);
@@ -402,8 +414,14 @@ for (const scenario of responseScenarios) {
     await page.locator('.person-composer input[type="file"]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('Additional evidence') });
     await input.fill('Second question');
     await expect(page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true })).toBeEnabled();
-    await input.press('Enter');
+    await submitPersonDraft(page, scenario);
     await expect(page.locator('.person-delivery[data-delivery-state="queued"]')).toHaveCount(1);
+    // Clicking Send intentionally moves focus; explicitly resume typing before
+    // checking that streamed receipts/replies preserve the user's focus.
+    if (scenario.width <= 768) {
+      await expect(input).not.toBeFocused();
+      await input.focus();
+    }
     await expect(input).toBeFocused();
     expect(mock.requests.filter(row => row.op === 'send')[1].payload.attachments).toEqual([{ fileId: 'busy-notes' }]);
     mock.receive('user-2');
@@ -417,7 +435,7 @@ for (const scenario of responseScenarios) {
     mock.pause();
     const snapshots = mock.requests.filter(row => row.op === 'snapshot').length;
     await expect.poll(() => mock.requests.filter(row => row.op === 'snapshot').length).toBeGreaterThan(snapshots);
-    await input.fill('While paused'); await input.press('Enter');
+    await input.fill('While paused'); await submitPersonDraft(page, scenario);
     await expect(page.locator('.person-delivery[data-delivery-state="queued"]')).toHaveCount(1);
     await expect(input).toBeEnabled();
     await expect(page.locator('.stop-btn')).toBeVisible();
@@ -442,7 +460,7 @@ for (const scenario of responseScenarios) {
     const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
     await openResponseConversation(page, serverUrl, scenario);
     const input = page.locator('#person-input');
-    await input.fill('A short answer, please'); await input.press('Enter');
+    await input.fill('A short answer, please'); await submitPersonDraft(page, scenario);
     mock.reply('short-answer', 'Short verified answer.', 'person-a', undefined, { replyKind: 'final' });
     await expect(page.locator(replySelector('short-answer'))).toContainText('Short verified answer.');
     const tail = page.locator('.person-response-tail');
@@ -630,7 +648,7 @@ for (const scenario of responseScenarios) {
     await openResponseConversation(page, serverUrl, scenario);
     const pane = page.locator('.person-messages');
     await page.locator('#person-input').fill('Continue after history');
-    await page.locator('#person-input').press('Enter');
+    await submitPersonDraft(page, scenario);
     mock.reply('new-tail', 'A new tail before history.\n\n'.repeat(50));
     await expect(pane.locator(replySelector('new-tail'))).toBeAttached();
     await pane.hover(); await page.mouse.wheel(0, -100000);
