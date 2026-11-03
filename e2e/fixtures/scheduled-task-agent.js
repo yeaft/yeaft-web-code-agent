@@ -21,7 +21,7 @@ export function scheduledTaskAgent(agent, { sessions = [taskSession(), {
 }], marker = agent.agentName, capabilities = TASK_CAPABILITIES } = {}) {
   const state = {
     sessions: new Map(sessions.map(session => [session.id, structuredClone(session)])),
-    requests: [], updateError: '', holdUpdates: false, heldUpdates: [], createdCount: 0,
+    requests: [], updateError: '', runError: '', holdUpdates: false, heldUpdates: [], createdCount: 0,
     publish() {
       agent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [...state.sessions.values()] } });
     },
@@ -91,6 +91,7 @@ export function scheduledTaskAgent(agent, { sessions = [taskSession(), {
       if (state.holdUpdates) state.heldUpdates.push(request);
       else state.replyUpdate(request);
     } else if (request.type === 'yeaft_scheduled_task' && request.op === 'run') {
+      if (state.runError) { state.reply(request, 'run_task', null, state.runError); return; }
       const previous = state.sessions.get(request.sessionId);
       const session = { ...previous, task: { ...previous.task,
         lastRun: { id: 'manual-run-1', status: 'completed', finishedAt: Date.now() } } };
