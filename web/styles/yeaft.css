@@ -155,6 +155,8 @@
 
 /* Topbar — folder + Session title + actions */
 
+.yeaft-conversation-header { flex: 0 0 auto; }
+
 .yeaft-topbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
@@ -4701,16 +4703,6 @@
   }
 }
 
-/* Keep the complete mobile action set on its own compact row. */
-@media (max-width: 480px) {
-  .yeaft-topbar-context { grid-column: 2 / -1; }
-  .yeaft-topbar-right {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    gap: 4px;
-  }
-}
-
 @media (hover: none) {
   .yeaft-vp-timeline-row .yeaft-vp-timeline-edit { opacity: 0.7; }
 }
@@ -4748,9 +4740,123 @@
 .scheduled-task-state.is-paused::before { background: var(--text-muted); }
 .scheduled-task-bar-actions { display: flex; gap: var(--work-center-space-2); }
 .scheduled-task-bar > .scheduled-task-error { flex-basis: 100%; }
-@media (max-width: 480px) {
-  .scheduled-task-bar { padding: 12px 16px; gap: var(--work-center-space-3); }
-  .scheduled-task-summary { flex-basis: 100%; }
-  .scheduled-task-bar-actions { width: 100%; }
-  .scheduled-task-bar-actions .btn { flex: 1; }
+.scheduled-task-mobile-details, .scheduled-task-run-icon { display: none; }
+
+/* Mobile prioritizes the conversation: one action row, optional task details. */
+@media (max-width: 768px) {
+  .yeaft-conversation-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    padding: 2px 8px;
+    background: var(--bg-main);
+    position: relative;
+    z-index: 20;
+  }
+  .yeaft-conversation-header .yeaft-topbar {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    gap: 4px;
+    padding: 0;
+    position: static;
+  }
+  .yeaft-conversation-header .yeaft-topbar-context { display: none; }
+  .yeaft-conversation-header .yeaft-topbar-sidebar-toggle {
+    width: 44px;
+    height: 44px;
+    margin: 0;
+  }
+  .yeaft-conversation-header .yeaft-topbar-right {
+    flex: 1 1 0;
+    min-width: 0;
+    gap: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    z-index: auto;
+  }
+  .yeaft-conversation-header .yeaft-topbar-right::-webkit-scrollbar { display: none; }
+  .yeaft-conversation-header .yeaft-session-actions > button {
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+  }
+  .yeaft-conversation-header .scheduled-task-bar {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 0;
+    padding: 0;
+    background: transparent;
+  }
+  .yeaft-conversation-header .scheduled-task-summary,
+  .yeaft-conversation-header .scheduled-task-bar .scheduled-task-desktop-configure,
+  .yeaft-conversation-header .scheduled-task-desktop-error,
+  .yeaft-conversation-header .scheduled-task-run-label { display: none; }
+  .yeaft-conversation-header .scheduled-task-bar-actions { gap: 0; }
+  .scheduled-task-mobile-details { display: block; }
+  .scheduled-task-mobile-toggle,
+  .yeaft-conversation-header .scheduled-task-bar .scheduled-task-run {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    box-sizing: border-box;
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    list-style: none;
+  }
+  .scheduled-task-mobile-toggle::-webkit-details-marker { display: none; }
+  .scheduled-task-run-icon { display: block; }
+  .scheduled-task-mobile-toggle:hover,
+  .scheduled-task-mobile-details[open] > summary,
+  .yeaft-conversation-header .scheduled-task-run:hover:not(:disabled) {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+  .scheduled-task-mobile-toggle:focus-visible {
+    outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
+    outline-offset: calc(-1 * var(--sidebar-focus-ring-width));
+  }
+  .scheduled-task-mobile-state {
+    position: absolute;
+    right: 7px;
+    top: 7px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--status-online);
+  }
+  .is-paused > .scheduled-task-mobile-state { background: var(--text-muted); }
+  .has-error > .scheduled-task-mobile-state { background: var(--error); }
+  .scheduled-task-mobile-panel {
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    width: min(320px, calc(100vw - 16px));
+    box-sizing: border-box;
+    max-height: min(360px, calc(100dvh - 60px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--response-radius);
+    background: var(--bg-main);
+    box-shadow: var(--modal-shadow);
+    color: var(--text-primary);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    z-index: 1;
+  }
+  .scheduled-task-mobile-panel .btn { width: 100%; margin-top: 8px; }
 }

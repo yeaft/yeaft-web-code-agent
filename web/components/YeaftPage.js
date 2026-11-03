@@ -148,7 +148,8 @@ export default {
       <div v-else class="yeaft-main" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
         <!-- Center column: topbar + (settings | empty-hero | MessageList) + ChatInput. -->
         <div class="yeaft-main-center">
-        <!-- Conversation Header -->
+        <!-- Task controls share the mobile action row; desktop retains its summary. -->
+        <div class="yeaft-conversation-header">
         <div class="yeaft-topbar">
         <!-- task-341: sidebar-toggle moved from topbar into V2 sidebar header. -->
         <!-- task-fix-mobile-group-settings: re-add a mobile-only ☰ here so
@@ -200,6 +201,7 @@ export default {
         </div>
 
         <ScheduledTaskBar v-if="topbarGroup?.task" :key="(topbarGroup.agentId || store.currentAgent) + ':' + topbarGroup.id" :session="topbarGroup" :agent-id="topbarGroup.agentId || store.currentAgent" @configure="openSessionSettings({ sessionId: topbarGroup.id, agentId: topbarGroup.agentId || store.currentAgent, section: 'task' })" />
+        </div>
 
         <YeaftConversationOutline
           v-if="historySearchOpen && !showOnboardingGuide"
