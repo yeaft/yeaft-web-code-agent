@@ -11,7 +11,7 @@ export default {
     disabled: { type: Boolean, default: false },
     label: { type: String, required: true },
   },
-  emits: ['update:modelValue', 'change'],
+  emits: ['update:modelValue', 'change', 'cancel'],
   data() { return { dragging: false }; },
   watch: {
     disabled(value) { if (value) this.finishDrag(false); },
@@ -62,7 +62,7 @@ export default {
       document.body.style.userSelect = drag.userSelect;
       if (this.$el.hasPointerCapture(drag.id)) this.$el.releasePointerCapture(drag.id);
       if (commit && !this.disabled && drag.ratio !== drag.initial) this.$emit('change', drag.ratio);
-      else this.$emit('update:modelValue', drag.initial);
+      else this.$emit('cancel');
     },
     cancelDrag() { this.finishDrag(false); },
     onKeydown(event) {

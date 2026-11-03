@@ -202,8 +202,9 @@ export default {
   setup() {
     const userPreferences = useUserPreferences();
     const sectionRatioPreview = Vue.ref(null);
-    Vue.watch(() => userPreferences.preferences.value.sidebarProjectsRatio, () => { sectionRatioPreview.value = null; });
-    Vue.watch(userPreferences.ready, () => { sectionRatioPreview.value = null; });
+    // A drag owns only its preview. Refreshes update the authoritative value
+    // underneath; commit saves the drag, while cancel exposes the latest value.
+    Vue.watch(userPreferences.ready, () => { sectionRatioPreview.value = null; }, { flush: 'sync' });
     Vue.onMounted(() => {
       window.addEventListener('focus', userPreferences.refresh);
       document.addEventListener('visibilitychange', refreshWhenVisible);
@@ -1018,7 +1019,7 @@ export default {
         </slot>
       </div>
 
-      <div class="sidebar-session-results" :class="{ 'sections-resizable': !isSectionCollapsed('projects') && !isSectionCollapsed('recents'), 'projects-collapsed': isSectionCollapsed('projects'), 'recents-collapsed': isSectionCollapsed('recents') }" :style="{ '--sidebar-projects-track': sectionRatio + 'fr', '--sidebar-recents-track': (1 - sectionRatio) + 'fr' }">
+      <div class="sidebar-session-results" :class="{ 'sections-resizable': !isSectionCollapsed('projects') && !isSectionCollapsed('recents'), 'projects-collapsed': isSectionCollapsed('projects'), 'recents-collapsed': isSectionCollapsed('recents') }" :style="{ '--sidebar-projects-track': (sectionRatio * 100) + 'fr', '--sidebar-recents-track': ((1 - sectionRatio) * 100) + 'fr' }">
         <section class="sidebar-section projects-section" :class="{ 'is-collapsed': isSectionCollapsed('projects') }">
           <div class="sidebar-section-heading">
             <button type="button" class="sidebar-section-toggle" @click="toggleSection('projects')" :aria-expanded="String(!isSectionCollapsed('projects'))">
@@ -1125,7 +1126,7 @@ export default {
 
         <SidebarSectionResizeHandle v-if="!isSectionCollapsed('projects') && !isSectionCollapsed('recents')"
           :model-value="sectionRatio" :disabled="!preferencesReady" :label="$t('sidebar.sectionResize.label')"
-          @update:model-value="sectionRatioPreview = $event" @change="saveSectionRatio" />
+          @update:model-value="sectionRatioPreview = $event" @change="saveSectionRatio" @cancel="sectionRatioPreview = null" />
         <section class="sidebar-section recents-section" :class="{ 'drag-over': dragTargetProjectId === '__recents__', 'is-collapsed': isSectionCollapsed('recents') }" @dragover="dragOverRecents" @dragleave="clearGroupDragTarget('__recents__', $event)" @drop="dropOnRecents">
           <div class="sidebar-section-heading">
             <button type="button" class="sidebar-section-toggle" @click="toggleSection('recents')" :aria-expanded="String(!isSectionCollapsed('recents'))">

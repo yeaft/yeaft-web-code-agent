@@ -57,6 +57,28 @@ for (const theme of ['light', 'dark']) {
       await other.locator('.sidebar-section-resize-handle').focus();
       await other.keyboard.press('ArrowUp');
       await expect.poll(async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json()).sidebarProjectsRatio).toBeCloseTo(0.68, 2);
+      let pendingRead;
+      let readArrived;
+      const arrived = new Promise(resolve => { readArrived = resolve; });
+      await page.route('**/api/user/preferences', async route => {
+        if (route.request().method() !== 'GET') return route.continue();
+        pendingRead = route;
+        readArrived();
+      }, { times: 1 });
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await arrived;
+      const dragBox = await handle.boundingBox();
+      await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2 - 60, { steps: 3 });
+      const readCompleted = page.waitForResponse(response => response.url().endsWith('/api/user/preferences') && response.request().method() === 'GET');
+      await pendingRead.continue();
+      await (await readCompleted).finished();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      // Cancel must reveal the latest server value, not the drag's old start value.
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+      await expect(handle).toHaveAttribute('aria-valuenow', '68');
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
       await expect(handle).toHaveAttribute('aria-valuenow', '68');
       expect(await readRatio(page)).toBeCloseTo(0.68, 2);
@@ -95,11 +117,25 @@ for (const theme of ['light', 'dark']) {
     await expect(page.locator('.sidebar-navigation')).toBeVisible();
     await expect(handle).not.toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('sidebar-mobile.png') });
-    await page.setViewportSize({ width: 1400, height: 460 });
-    await expect(handle).toBeVisible();
-    const bounds = await page.locator('.sidebar-session-results').boundingBox();
-    const recentBounds = await page.locator('.recents-section').boundingBox();
-    expect(recentBounds.y + recentBounds.height).toBeLessThanOrEqual(bounds.y + bounds.height + 1);
-    await page.screenshot({ path: testInfo.outputPath('sidebar-short.png') });
+    for (const height of [460, 350, 300]) {
+      await page.setViewportSize({ width: 1400, height });
+      await expect(handle).toBeVisible();
+      for (const key of ['Home', 'End']) {
+        await handle.focus();
+        await page.keyboard.press(key);
+        const geometry = await page.locator('.sidebar-session-results').evaluate(el => {
+          const projects = el.querySelector('.projects-section').getBoundingClientRect();
+          const recents = el.querySelector('.recents-section').getBoundingClientRect();
+          const bounds = el.getBoundingClientRect();
+          el.scrollTop = el.scrollHeight;
+          return { height: el.clientHeight, filled: projects.height + recents.height + 10,
+            overflow: recents.bottom - bounds.bottom, reachable: el.scrollTop > 0 };
+        });
+        if (geometry.height >= 106) expect(geometry.filled).toBeCloseTo(geometry.height, 0);
+        else expect(geometry.reachable).toBe(true);
+        if (geometry.height >= 106) expect(geometry.overflow).toBeLessThanOrEqual(1);
+      }
+      await page.screenshot({ path: testInfo.outputPath('sidebar-short-' + height + '.png') });
+    }
   });
 }

@@ -2,8 +2,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import { mount } from '@vue/test-utils';
-import { createUserPreferencesState } from '../../web/utils/user-preferences.js';
+import { createUserPreferencesState, useUserPreferences } from '../../web/utils/user-preferences.js';
 import SidebarSectionResizeHandle from '../../web/components/SidebarSectionResizeHandle.js';
+import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
 
 const ok = ratio => ({ ok: true, json: async () => ({ sidebarProjectsRatio: ratio }) });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -88,12 +89,42 @@ describe('server-owned sidebar user preferences', () => {
     expect(state.error.value).toBeNull();
   });
 
+  it('exposes the latest cross-device value when a drag is cancelled after a pending refresh', async () => {
+    vi.stubGlobal('Vue', Vue);
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const pending = deferred();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(ok(0.5)).mockReturnValueOnce(pending.promise).mockResolvedValue(ok(0.68)));
+    const auth = Vue.reactive({ isAuthenticated: true, userId: 'integrated-owner', authGeneration: 1 });
+    vi.stubGlobal('Pinia', { useAuthStore: () => auth });
+    const state = useUserPreferences();
+    states.push(state);
+    localStorage.removeItem('yeaft-sidebar-section-collapse');
+    const wrapper = mount(UnifiedSessionList, { global: { mocks: { $t: key => key } } });
+    try {
+      await tick();
+      const handle = wrapper.findComponent(SidebarSectionResizeHandle);
+      window.dispatchEvent(new Event('focus'));
+      handle.vm.$emit('update:modelValue', 0.6);
+      await tick();
+      pending.resolve(ok(0.68));
+      await tick();
+      // Do not jump the handle out from under an active drag.
+      expect(handle.props('modelValue')).toBe(0.6);
+      handle.vm.$emit('cancel');
+      await tick();
+      expect(handle.props('modelValue')).toBe(0.68);
+      window.dispatchEvent(new Event('focus'));
+      await tick();
+      expect(handle.props('modelValue')).toBe(0.68);
+    } finally { wrapper.unmount(); }
+  });
+
   it('supports keyboard limits/reset and pointer preview, commit, cancel and cleanup', async () => {
     vi.stubGlobal('Vue', Vue);
     let resizeCallback;
     vi.stubGlobal('ResizeObserver', class { constructor(cb) { resizeCallback = cb; } observe() {} disconnect() {} });
     const wrapper = mount(SidebarSectionResizeHandle, {
-      props: { label: 'Resize', modelValue: 0.5, 'onUpdate:modelValue': ratio => wrapper.setProps({ modelValue: ratio }) },
+      props: { label: 'Resize', modelValue: 0.5, 'onUpdate:modelValue': ratio => wrapper.setProps({ modelValue: ratio }), onCancel: () => wrapper.setProps({ modelValue: 0.7 }) },
     });
     const el = wrapper.element;
     el.setPointerCapture = vi.fn(); el.hasPointerCapture = () => false;
@@ -117,6 +148,7 @@ describe('server-owned sidebar user preferences', () => {
       wrapper.vm.startDrag({ isPrimary: true, button: 0, pointerId: 0, clientY: 100, preventDefault() {} });
       wrapper.vm.finishDrag();
       expect(wrapper.emitted('change')).toHaveLength(beforeClick);
+      expect(wrapper.emitted('cancel')).toHaveLength(1);
       wrapper.vm.startDrag({ isPrimary: true, button: 0, pointerId: 1, clientY: 100, preventDefault() {} });
       wrapper.vm.moveDrag({ pointerId: 1, clientY: 198 });
       // pointerup may arrive before Vue has delivered the new modelValue prop.

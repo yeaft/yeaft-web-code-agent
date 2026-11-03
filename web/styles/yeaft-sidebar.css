@@ -85,7 +85,7 @@
 .sidebar-preferences-error { flex: 0 0 auto; padding: 4px 12px; color: var(--text-muted); font-size: 12px; }
 .sidebar-preferences-error .btn-ghost { font: inherit; }
 @media (min-width: 769px) {
-  .sections-resizable { display: grid; grid-template-rows: minmax(48px, var(--sidebar-projects-track, 0.5fr)) 10px minmax(48px, var(--sidebar-recents-track, 0.5fr)); }
+  .sections-resizable { display: grid; overflow-y: auto; grid-template-rows: minmax(48px, var(--sidebar-projects-track, 50fr)) 10px minmax(48px, var(--sidebar-recents-track, 50fr)); }
   .sections-resizable > .projects-section { max-height: none; }
   .sections-resizable > .sidebar-section { min-height: 0; }
   .recents-collapsed > .projects-section:not(.is-collapsed) { flex: 1 1 0px; max-height: none; }
