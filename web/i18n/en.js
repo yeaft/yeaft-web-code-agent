@@ -665,6 +665,9 @@ export default {
   'sidebar.projects.instructionsPlaceholder': 'Add shared coding conventions, constraints, or workflow guidance...',
   'sidebar.recents.title': 'Recents',
   'sidebar.recents.empty': 'No chats found',
+  'sidebar.sectionResize.label': 'Resize Projects and Recents (arrow keys to adjust, double-click to reset)',
+  'sidebar.sectionResize.loadError': 'Could not load sidebar layout.',
+  'sidebar.sectionResize.saveError': 'Could not save sidebar layout. Previous ratio restored; drag to retry.',
 
   // ============ Yeaft Page ============
   'yeaft.back': 'Back',

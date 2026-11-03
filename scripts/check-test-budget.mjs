@@ -80,7 +80,13 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +5 mobile composer keyboard regressions: 4 component ownership/send-gate cases
 // and 1 browser newline/button/desktop/rotation flow. Existing task and Person
 // mobile send flows now exercise explicit buttons; prior coverage is retained.
-export const TEST_CASE_LIMIT = 819;
+// +14 reviewed user-level sidebar ratio boundaries: 8 Server ownership/validation/
+// persistence cases, 4 frontend lifecycle/queue/rollback/input cases and 2 actual
+// browser light/dark drag/keyboard/cross-device/mobile/short-height flows.
+// Existing first-paint, task and plugin sidebar coverage is retained.
+// +1 review regression: parent/child drag cancellation during cross-device refresh;
+// short-height extreme-ratio geometry extends the existing browser cases.
+export const TEST_CASE_LIMIT = 834;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

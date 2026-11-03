@@ -1,4 +1,6 @@
 import { confirmDialog, promptDialog } from '../utils/dialog.js';
+import { useUserPreferences } from '../utils/user-preferences.js';
+import SidebarSectionResizeHandle from './SidebarSectionResizeHandle.js';
 
 function timestampValue(value) {
   const parsed = typeof value === 'number' ? value : Date.parse(value || '');
@@ -196,6 +198,35 @@ function sessionRowsTemplate(section, rows) {
 
 export default {
   name: 'UnifiedSessionList',
+  components: { SidebarSectionResizeHandle },
+  setup() {
+    const userPreferences = useUserPreferences();
+    const sectionRatioPreview = Vue.ref(null);
+    // A drag owns only its preview. Refreshes update the authoritative value
+    // underneath; commit saves the drag, while cancel exposes the latest value.
+    Vue.watch(userPreferences.ready, () => { sectionRatioPreview.value = null; }, { flush: 'sync' });
+    Vue.onMounted(() => {
+      window.addEventListener('focus', userPreferences.refresh);
+      document.addEventListener('visibilitychange', refreshWhenVisible);
+    });
+    Vue.onBeforeUnmount(() => {
+      window.removeEventListener('focus', userPreferences.refresh);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    });
+    function refreshWhenVisible() {
+      if (document.visibilityState === 'visible') void userPreferences.refresh();
+    }
+    function saveSectionRatio(ratio) {
+      sectionRatioPreview.value = null;
+      void userPreferences.saveSidebarProjectsRatio(ratio);
+    }
+    return {
+      sectionRatioPreview, saveSectionRatio,
+      sectionRatio: Vue.computed(() => sectionRatioPreview.value ?? userPreferences.preferences.value.sidebarProjectsRatio),
+      preferencesReady: userPreferences.ready, preferencesError: userPreferences.error,
+      refreshPreferences: userPreferences.refresh,
+    };
+  },
   emits: ['select', 'create', 'create-task', 'create-in-project', 'action', 'project-action', 'close-work-center'],
   props: {
     sessions: { type: Array, default: () => [] },
@@ -988,7 +1019,7 @@ export default {
         </slot>
       </div>
 
-      <div class="sidebar-session-results">
+      <div class="sidebar-session-results" :class="{ 'sections-resizable': !isSectionCollapsed('projects') && !isSectionCollapsed('recents'), 'projects-collapsed': isSectionCollapsed('projects'), 'recents-collapsed': isSectionCollapsed('recents') }" :style="{ '--sidebar-projects-track': (sectionRatio * 100) + 'fr', '--sidebar-recents-track': ((1 - sectionRatio) * 100) + 'fr' }">
         <section class="sidebar-section projects-section" :class="{ 'is-collapsed': isSectionCollapsed('projects') }">
           <div class="sidebar-section-heading">
             <button type="button" class="sidebar-section-toggle" @click="toggleSection('projects')" :aria-expanded="String(!isSectionCollapsed('projects'))">
@@ -1093,6 +1124,9 @@ export default {
           </div>
         </section>
 
+        <SidebarSectionResizeHandle v-if="!isSectionCollapsed('projects') && !isSectionCollapsed('recents')"
+          :model-value="sectionRatio" :disabled="!preferencesReady" :label="$t('sidebar.sectionResize.label')"
+          @update:model-value="sectionRatioPreview = $event" @change="saveSectionRatio" @cancel="sectionRatioPreview = null" />
         <section class="sidebar-section recents-section" :class="{ 'drag-over': dragTargetProjectId === '__recents__', 'is-collapsed': isSectionCollapsed('recents') }" @dragover="dragOverRecents" @dragleave="clearGroupDragTarget('__recents__', $event)" @drop="dropOnRecents">
           <div class="sidebar-section-heading">
             <button type="button" class="sidebar-section-toggle" @click="toggleSection('recents')" :aria-expanded="String(!isSectionCollapsed('recents'))">
@@ -1112,6 +1146,10 @@ export default {
         </section>
       </div>
 
+      <div v-if="preferencesError" class="sidebar-preferences-error" role="status">
+        <span>{{ $t('sidebar.sectionResize.' + preferencesError + 'Error') }}</span>
+        <button v-if="preferencesError === 'load'" type="button" class="btn-ghost" @click="refreshPreferences">{{ $t('common.retry') }}</button>
+      </div>
       <Teleport to="body">
         <div v-if="floatingMenu" ref="floatingMenu" class="session-menu session-menu-floating" :style="floatingMenuStyle">
           <template v-if="floatingMenu.kind === 'project'">

@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { hashPassword } from '../auth.js';
-import { userDb, sessionDb } from '../database.js';
+import { userDb, userPreferencesDb, sessionDb } from '../database.js';
 import {
   activeSessions, pendingVerifications, pendingTotpVerifications, pendingTotpSetup,
   revokedTokens
@@ -80,6 +80,44 @@ export function registerUserRoutes(app, {
     } catch (err) {
       console.error('Get profile error:', err);
       res.status(500).json({ error: 'Failed to get profile' });
+    }
+  });
+
+  app.get('/api/user/preferences', requireAuth, (req, res) => {
+    try {
+      const user = loadCurrentUser(req);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      res.set('Cache-Control', 'private, no-store').json(userPreferencesDb.get(user.id));
+    } catch (err) {
+      console.error('Get preferences error:', err);
+      res.status(500).json({ error: 'Failed to get preferences' });
+    }
+  });
+
+  app.patch('/api/user/preferences', requireAuth, (req, res) => {
+    try {
+      const user = loadCurrentUser(req);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const body = req.body;
+      if (!body || typeof body !== 'object' || Array.isArray(body)
+        || Object.keys(body).some(key => key !== 'sidebarProjectsRatio')
+        || typeof body.sidebarProjectsRatio !== 'number'
+        || !Number.isFinite(body.sidebarProjectsRatio)
+        || body.sidebarProjectsRatio < 0.15 || body.sidebarProjectsRatio > 0.85) {
+        return res.status(400).json({
+          error: 'Expected only sidebarProjectsRatio, a finite number between 0.15 and 0.85',
+        });
+      }
+
+      res.set('Cache-Control', 'private, no-store').json(userPreferencesDb.update(user.id, body.sidebarProjectsRatio));
+    } catch (err) {
+      console.error('Update preferences error:', err);
+      res.status(500).json({ error: 'Failed to update preferences' });
     }
   });
 
