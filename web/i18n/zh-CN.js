@@ -665,6 +665,9 @@ export default {
   'sidebar.projects.instructionsPlaceholder': '输入共享的编码规范、约束或工作流说明…',
   'sidebar.recents.title': '最近',
   'sidebar.recents.empty': '暂无聊天',
+  'sidebar.sectionResize.label': '调整项目与最近区域高度（方向键调整，双击重置）',
+  'sidebar.sectionResize.loadError': '无法加载侧栏布局。',
+  'sidebar.sectionResize.saveError': '侧栏布局保存失败，已恢复原比例；可重新拖动保存。',
 
   // ============ Yeaft 页面 ============
   'yeaft.back': '返回',

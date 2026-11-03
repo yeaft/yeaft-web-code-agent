@@ -38,6 +38,12 @@ db.exec(`
     deletion_id TEXT UNIQUE
   );
 
+  CREATE TABLE IF NOT EXISTS user_preferences (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    sidebar_projects_ratio REAL NOT NULL DEFAULT 0.5
+      CHECK (sidebar_projects_ratio >= 0.15 AND sidebar_projects_ratio <= 0.85)
+  );
+
   -- Finalized deletion survives removal of the users row. This prevents a
   -- configured credential from becoming authoritative again on restart.
   CREATE TABLE IF NOT EXISTS user_deletion_tombstones (
@@ -898,6 +904,17 @@ export const stmts = {
 
   updateUserAadOid: db.prepare(`
     UPDATE users SET aad_oid = ? WHERE id = ?
+  `),
+
+  getUserPreferences: db.prepare(`
+    SELECT sidebar_projects_ratio FROM user_preferences WHERE user_id = ?
+  `),
+
+  upsertUserPreferences: db.prepare(`
+    INSERT INTO user_preferences (user_id, sidebar_projects_ratio)
+    VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      sidebar_projects_ratio = excluded.sidebar_projects_ratio
   `),
 
   // Invitation 操作

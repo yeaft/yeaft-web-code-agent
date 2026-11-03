@@ -20,6 +20,12 @@ When enabled, native Yeaft Session Composers add a small mode selector beside th
 
 Defaults: terminal `Alt/Option+T`, files `Alt/Option+O`, Git workbench `Alt/Option+G`, new Session `Alt/Option+N`, close an open workbench `Alt/Option+W`, and quick-send slots `Alt/Option+1…5`. Known browser/application conflicts such as `Ctrl+T` and `Ctrl+F` are rejected; operating systems and extensions may reserve additional combinations. Global actions stay available while the message Composer is focused, and avoid editors, terminals, dialogs and other text fields. Quick-send bindings only operate in the Composer and ignore IME composition and key repeat.
 
+### Sidebar layout
+
+On desktop, drag the divider between **Projects** and **Recents** to adjust their height ratio (15–85%). Arrow keys adjust it by 2 percentage points, Shift + arrow keys by 10; Home/End select the limits and double-click restores 50/50. Each area scrolls independently. Collapsing either area gives the remaining space to the other without changing the saved ratio.
+
+The ratio is saved to your user preferences on the Server, not this browser or an Agent. Other devices restore it at sign-in/page load, and open pages refresh it when focused or made visible again. Simultaneous changes use the last saved value. Failed saves restore the previous ratio and display an error. Mobile keeps its existing content-based layout without the divider.
+
 ## Account
 
 - **Username** — login name (read-only)
