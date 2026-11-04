@@ -936,6 +936,7 @@ export default {
       scheduleMobileViewportSync();
     });
     Vue.onUnmounted(() => {
+      store.yeaftConversationCovered = false;
       window.removeEventListener('resize', onResize);
       removeMediaChangeListener(mobileMedia);
       removeMediaChangeListener(narrowDetailMedia);
@@ -1397,6 +1398,12 @@ export default {
     const groupSettingsAgentId = Vue.ref(null);
     const groupSettingsSection = Vue.ref('session');
     const groupSettingsEditVpId = Vue.ref('');
+    // These surfaces are local to the page, but notification intake also needs
+    // to know when the selected conversation is not actually being read.
+    Vue.watch(() => !!(showSettings.value || showAgentSettings.value || sessionCreateOpen.value
+      || groupSettingsOpen.value || showOnboardingGuide.value), covered => {
+      store.yeaftConversationCovered = covered;
+    }, { immediate: true, flush: 'sync' });
     const openSessionSettings = (payload = {}) => {
       // Accept both { sessionId } (new) and { groupId } (legacy) — child
       // components were renamed in the msg.groupId→msg.sessionId sweep but

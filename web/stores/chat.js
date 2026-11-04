@@ -711,6 +711,8 @@ export const useChatStore = defineStore('chat', {
     yeaftUnreadSessionKeys: {},
     scheduledTaskNotifications: [],
     scheduledTaskNotificationOwnerId: null,
+    // Page-local settings/modal state projected for task read receipts only.
+    yeaftConversationCovered: false,
     theme: localStorage.getItem('theme') || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
     themeFollowSystem: !localStorage.getItem('theme'),
     locale: localStorage.getItem('locale') || 'zh-CN',
@@ -4871,6 +4873,12 @@ export const useChatStore = defineStore('chat', {
     openScheduledTaskNotification(item) { return scheduledTaskHelpers.openScheduledTaskNotification(this, item); },
     dismissScheduledTaskNotification(id) { return scheduledTaskHelpers.dismissScheduledTaskNotification(this, id); },
     bindScheduledTaskNotificationOwner(ownerId) { scheduledTaskHelpers.bindScheduledTaskNotificationOwner(this, ownerId); },
+    markVisibleScheduledTaskSessionRead() {
+      const route = this.activeSessionRoute;
+      if (!scheduledTaskHelpers.isScheduledTaskSessionVisible(this, route?.sessionId, route?.agentId)) return false;
+      return scheduledTaskHelpers.markScheduledTaskSessionRead(this, route.sessionId, route.agentId,
+        getSessionsStore()?.sessionById?.(route.sessionId, route.agentId)?.task?.lastRun);
+    },
     handleYeaftOutput(msg) {
       if (!msg) return;
       const taskAuth = useAuthStore();
@@ -6711,6 +6719,10 @@ export const useChatStore = defineStore('chat', {
         if (activeKey) localStorage.setItem('lastViewedYeaftSession', activeKey);
         else localStorage.removeItem('lastViewedYeaftSession');
       } catch (_) {}
+      if (scheduledTaskHelpers.isScheduledTaskSessionVisible(this, next, targetAgentId)) {
+        scheduledTaskHelpers.markScheduledTaskSessionRead(this, next, targetAgentId,
+          getSessionsStore()?.sessionById?.(next, targetAgentId)?.task?.lastRun);
+      }
       this.syncActiveYeaftHistoryLoad();
       if (next && targetAgentId && !repeatedSelection) {
         this.requestYeaftSessionBootstrap({

@@ -356,6 +356,28 @@ test('completion notifications open the owning Agent when two Agents share the s
     await other.connect();
     const second = scheduledTaskAgent(other, { marker: 'Agent B', sessions: [taskSession()] });
     await expect(taskRow(page)).toHaveCount(2);
+    // Visiting from the sidebar, without clicking the notice, acknowledges all
+    // queued runs for this Agent + Session and survives inventory rehydration.
+    const completedRuns = ['sidebar-run-1', 'sidebar-run-2'];
+    for (const runId of completedRuns) second.notify({ runId });
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.length)).toBe(2);
+    second.sessions.get(TASK_SESSION_ID).task.lastRun = { id: completedRuns[1], status: 'completed', finishedAt: Date.now() };
+    second.publish();
+    const secondRow = taskRow(page).filter({ has: page.locator('.sidebar-session-unread') });
+    await expect(secondRow).toHaveCount(1);
+    await secondRow.click();
+    await expect(page.locator('.assistant-turn')).toContainText('Agent B: persistent conversation');
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('.sidebar-navigation')).toHaveAttribute('aria-busy', 'false');
+    await expect(page.locator('.assistant-turn')).toContainText('Agent B: persistent conversation');
+    await showSidebar(page);
+    await page.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
+    for (const runId of completedRuns) second.notify({ runId });
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(`yeaft-task-receipts:${window.Pinia.useChatStore().scheduledTaskNotificationOwnerId}`) || '[]')
+      .filter(id => id.includes('sidebar-run-')).length)).toBe(2);
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    // A genuinely new completion while away is still delivered normally.
     second.notify({ status: 'failed', error: 'Workspace check needs attention.' });
     const notice = page.locator('.scheduled-task-notification-open');
     await expect(notice).toContainText('Daily workspace review');
@@ -369,6 +391,43 @@ test('completion notifications open the owning Agent when two Agents share the s
     await expect(page.locator('.assistant-turn')).toContainText(`Agent B: persistent conversation for ${TASK_SESSION_ID}`);
     await expect(page.locator('.assistant-turn')).not.toContainText('Agent A: persistent conversation');
     expect(other.messages('yeaft_load_history').some(request => request.sessionId === TASK_SESSION_ID && request.limit !== 0)).toBe(true);
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    second.notify({ runId: 'visible-run' });
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(`yeaft-task-receipts:${window.Pinia.useChatStore().scheduledTaskNotificationOwnerId}`) || '[]')
+      .some(id => id.includes('visible-run')))).toBe(true);
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    // Results remain unread while the actual conversation is covered. Returning
+    // to it acknowledges them without another click or inventory/completion.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const surface of ['pluginCenterOpen', 'workCenterOpen', 'workbenchMaximized']) {
+      await page.evaluate(surface => {
+        const store = window.Pinia.useChatStore();
+        if (surface === 'pluginCenterOpen') store.openPluginCenter();
+        else if (surface === 'workCenterOpen') store.enterWorkCenter();
+        else { store.workbenchExpanded = true; store.workbenchMaximized = true; }
+      }, surface);
+      await expect(page.locator('.yeaft-main')).toBeHidden();
+      second.notify({ runId: `covered-${surface}` });
+      await expect(page.locator('.scheduled-task-notification')).toHaveCount(1);
+      await page.evaluate(surface => {
+        const store = window.Pinia.useChatStore();
+        if (surface === 'pluginCenterOpen') store.closePluginCenter();
+        else if (surface === 'workCenterOpen') store.leaveWorkCenter();
+        else { store.workbenchMaximized = false; store.workbenchExpanded = false; }
+      }, surface);
+      await expect(page.locator('.yeaft-main')).toBeVisible();
+      await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    }
+    // Global Settings removes MessageList while retaining the selected route.
+    await showSidebar(page);
+    await page.locator('.yeaft-sidebar .sidebar-bottom .sidebar-nav-item').click();
+    await expect(page.locator('.settings-dialog')).toBeVisible();
+    await expect(page.locator('.yeaft-session-input textarea')).toHaveCount(0);
+    second.notify({ runId: 'covered-settings' });
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(1);
+    await page.locator('.settings-close').click();
+    await expect(page.locator('.yeaft-session-input textarea')).toBeVisible();
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
     for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'dark']]) {
       if (theme === 'dark' && width === 1440) {
         await page.evaluate(() => localStorage.setItem('theme', 'dark'));
@@ -484,7 +543,8 @@ test('redesigned task surfaces retain usable geometry, scrolling and keyboard co
   const prompt = 'Review the complete workspace and preserve ownership boundaries.\n'.repeat(60);
   const state = scheduledTaskAgent(mockAgent, { sessions: [taskSession({ name: 'Daily workspace review',
     task: { ...taskSession().task, prompt, nextRunAt: Date.now() + 86400000, trigger: { type: 'schedule', scheduledFor: Date.now() + 86400000,
-      recurrence: { frequency: 'daily', timeZone: 'UTC' } } } })] });
+      recurrence: { frequency: 'daily', timeZone: 'UTC' } } } }),
+    taskSession({ id: 'background-task-session', name: 'Background workspace review' })] });
   await boot(page, serverUrl, mockAgent);
   for (const theme of ['light', 'dark']) {
     if (theme === 'dark') {
@@ -573,7 +633,10 @@ test('redesigned task surfaces retain usable geometry, scrolling and keyboard co
         await expect(mobileToggle).toBeHidden();
       }
       await shot(page, testInfo, `compact-task-header-${theme}-${width}.png`);
-      state.notify({ runId: `visual-${theme}-${width}`, status: 'failed', error: 'Long task result needs attention: ' + 'verification evidence '.repeat(8) });
+      // The visible task is already read; keep notification geometry coverage
+      // using an actual different Task Session that is not being viewed.
+      state.notify({ sessionId: 'background-task-session', taskName: 'Background workspace review',
+        runId: `visual-${theme}-${width}`, status: 'failed', error: 'Long task result needs attention: ' + 'verification evidence '.repeat(8) });
       await expect(page.locator('.scheduled-task-notification-open')).toBeVisible();
       await noOverflow(page, ['.yeaft-main-center', '.scheduled-task-bar', '.yeaft-session-input', '.scheduled-task-notifications']);
       await shot(page, testInfo, `redesign-task-notifications-${theme}-${width}.png`);

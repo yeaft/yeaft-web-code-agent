@@ -65,12 +65,40 @@ export function runScheduledTask(store, { agentId, sessionId } = {}) {
   return store.sessionCrudRequest('run_task', { sessionId }, { agentId });
 }
 
-/** Accept only an Agent-stamped run completion, never the active UI Session. */
+/** Reading a Session acknowledges all of its queued runs, not other Agents' Sessions. */
+export function markScheduledTaskSessionRead(store, sessionId, agentId, lastRun = null) {
+  if (!sessionId || !agentId) return false;
+  if (typeof lastRun?.id === 'string' && lastRun.id && TERMINAL_STATUSES.has(lastRun.status)) {
+    recordReceipt(store, JSON.stringify([agentId, sessionId, lastRun.id]));
+  }
+  const items = (store.scheduledTaskNotifications || [])
+    .filter(item => item.agentId === agentId && item.sessionId === sessionId);
+  for (const item of items) dismissScheduledTaskNotification(store, item.id);
+  return items.length > 0;
+}
+
+export function isScheduledTaskSessionVisible(store, sessionId, agentId) {
+  const route = store.activeSessionRoute;
+  return !!sessionId && !!agentId && store.currentView === 'yeaft' && !store.workCenterOpen
+    && !store.pluginCenterOpen && !store.digitalPersonOpen && !store.yeaftConversationCovered
+    && !(store.workbenchExpanded && store.workbenchMaximized)
+    && globalThis.document?.visibilityState !== 'hidden'
+    && route?.runtimeProvider === 'yeaft'
+    && route.agentId === agentId && route.sessionId === sessionId;
+}
+
+/** Accept only an Agent-stamped run completion; the active UI never supplies its identity. */
 export function acceptScheduledTaskNotification(store, event, agentId) {
   if (typeof agentId !== 'string' || !agentId || typeof event?.sessionId !== 'string' || !event.sessionId
       || typeof event.runId !== 'string' || !event.runId || !TERMINAL_STATUSES.has(event.status)) return false;
   const id = JSON.stringify([agentId, event.sessionId, event.runId]);
-  if (receipts(store).seen.has(id) || store.scheduledTaskNotifications?.some(item => item.id === id)) return false;
+  if (receipts(store).seen.has(id)) return false;
+  if (isScheduledTaskSessionVisible(store, event.sessionId, agentId)) {
+    recordReceipt(store, id);
+    markScheduledTaskSessionRead(store, event.sessionId, agentId);
+    return false;
+  }
+  if (store.scheduledTaskNotifications?.some(item => item.id === id)) return false;
   const item = {
     id, agentId, sessionId: event.sessionId, runId: event.runId,
     taskName: typeof event.taskName === 'string' ? event.taskName : event.sessionId,
@@ -117,6 +145,6 @@ export function openScheduledTaskNotification(store, item) {
   if (!descriptor || !store.openCatalogSession(descriptor)) return false;
   if (store.workCenterOpen) store.leaveWorkCenter?.();
   if (store.digitalPersonOpen) store.leaveDigitalPerson?.();
-  dismissScheduledTaskNotification(store, item.id);
+  markScheduledTaskSessionRead(store, item.sessionId, item.agentId);
   return true;
 }

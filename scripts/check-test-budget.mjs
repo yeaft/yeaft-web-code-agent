@@ -86,7 +86,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // Existing first-paint, task and plugin sidebar coverage is retained.
 // +1 review regression: parent/child drag cancellation during cross-device refresh;
 // short-height extreme-ratio geometry extends the existing browser cases.
-export const TEST_CASE_LIMIT = 834;
+// +2 Task Session read boundaries: selection receipts across hydration/new runs,
+// and exact foreground visibility versus other Agents/covered/background views.
+// Real sidebar/read/reload behavior extends the existing notification browser case.
+export const TEST_CASE_LIMIT = 836;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
