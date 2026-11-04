@@ -675,7 +675,7 @@ export const useSessionsStore = defineStore('sessions', {
         ...prev,
         name: payload.name || prev.name,
         roster: Array.isArray(payload.roster) ? payload.roster.slice() : prev.roster,
-        defaultVpId: payload.defaultVpId != null ? payload.defaultVpId : prev.defaultVpId,
+        defaultVpId: Object.hasOwn(payload, 'defaultVpId') ? payload.defaultVpId : prev.defaultVpId,
         announcement: typeof payload.announcement === 'string' ? payload.announcement : prev.announcement,
       };
       reconcileRetiredBareActiveSession(this);

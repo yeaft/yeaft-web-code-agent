@@ -679,7 +679,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
               id: event.sessionId,
               name: event.name != null ? event.name : (existing.name || event.sessionId),
               roster: Array.isArray(event.roster) ? event.roster : (existing.roster || []),
-              defaultVpId: event.defaultVpId != null ? event.defaultVpId : (existing.defaultVpId || null),
+              defaultVpId: Object.hasOwn(event, 'defaultVpId') ? event.defaultVpId : (existing.defaultVpId || null),
               workDir: existing.workDir || '',
               config: existing.config || {},
               ...(existing.task ? { task: existing.task } : {}),
@@ -1047,7 +1047,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
               roster: Array.isArray(msg.roster)
                 ? msg.roster
                 : (existing?.roster || []),
-              defaultVpId: msg.defaultVpId != null
+              defaultVpId: Object.hasOwn(msg, 'defaultVpId')
                 ? msg.defaultVpId
                 : (existing?.defaultVpId || null),
               workDir: existing?.workDir || '',

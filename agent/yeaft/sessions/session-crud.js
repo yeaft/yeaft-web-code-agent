@@ -11,8 +11,8 @@
  *
  * Plus the D1 bootstrap helper:
  *   ensureDefaultSessionIfEmpty(yeaftDir, {libDir}) — if NO session exists on
- *   disk, seed `session_default` with roster = every VP in the library, and
- *   defaultVpId = `omni` when present, otherwise the alphabetically first vpId.
+ *   disk, seed `session_default` with only `omni` when present, otherwise
+ *   the alphabetically first VP. Existing Session rosters remain untouched.
  *   No-op when ≥1 session present.
  *
  * Hard constraints (PM):
@@ -462,8 +462,9 @@ function scanSortedVpIds(libDir) {
 /**
  * (B) D1 seed — called at boot (or when multi-VP is first enabled). Idempotent:
  * returns `{seeded:false}` if any session already exists on disk (including
- * `session_default`). When empty, seeds with roster = full VP library, sorted
- * alphabetically; defaultVpId = `omni` when present, otherwise roster[0].
+ * `session_default`). When empty, seeds a single-member roster with `omni`
+ * when present, otherwise the alphabetically first VP. Library presentation
+ * changes never rebuild an existing Session's roster.
  *
  * When the VP library is also empty, we still seed an empty-roster session so
  * the UI has somewhere to land — but defaultVpId is null and downstream
@@ -487,7 +488,7 @@ export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
   const defaultVpId = preferDefaultVp(vps);
   const { group, created } = seedDefaultSession(yeaftDir, {
     name: options.name || 'Default',
-    roster: vps,
+    roster: defaultVpId ? [defaultVpId] : [],
     defaultVpId,
   });
   const meta = group.getMeta();
@@ -496,7 +497,7 @@ export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
     seeded: created,
     sessionId: group.id,
     defaultVpId,
-    rosterSize: vps.length,
+    rosterSize: meta?.roster?.length || 0,
   };
 }
 

@@ -1,5 +1,10 @@
+/** Stable identities, not a whitelist for storage, execution, or Session members. */
+export const RECOMMENDED_VP_IDS = Object.freeze([
+  'omni', 'software-omni', 'writing-omni', 'short-video-omni', 'quant-omni',
+]);
+
 const DOMAIN_DEFINITIONS = [
-  { id: 'general', labelKey: 'yeaft.vp.domain.general', vpIds: ['omni'] },
+  { id: 'assistants', labelKey: 'yeaft.vp.domain.assistants', vpIds: RECOMMENDED_VP_IDS },
   { id: 'productDesign', labelKey: 'yeaft.vp.domain.productDesign', vpIds: ['steve', 'dieter', 'norman'] },
   {
     id: 'softwareSystems',
@@ -30,7 +35,7 @@ const DOMAIN_DEFINITIONS = [
   {
     id: 'artsCulture',
     labelKey: 'yeaft.vp.domain.artsCulture',
-    vpIds: ['luxun', 'sudongpo', 'borges', 'kubrick', 'miyazaki'],
+    vpIds: ['luxun', 'sudongpo', 'borges', 'haiyan', 'liufang', 'zhaona', 'kubrick', 'miyazaki'],
   },
   { id: 'other', labelKey: 'yeaft.vp.domain.other', vpIds: [] },
   { id: 'custom', labelKey: 'yeaft.vp.domain.custom', vpIds: [] },
@@ -45,6 +50,37 @@ export const VP_DOMAIN_DEFINITIONS = Object.freeze(DOMAIN_DEFINITIONS.map(domain
 const VP_DOMAIN_BY_ID = new Map();
 for (const domain of VP_DOMAIN_DEFINITIONS) {
   for (const vpId of domain.vpIds) VP_DOMAIN_BY_ID.set(vpId, domain.id);
+}
+
+/** Older Agents omit isStock, so known shipped identities remain compatible. */
+export function isLegacyVp(vp) {
+  return !!(vp?.vpId && !RECOMMENDED_VP_IDS.includes(vp.vpId)
+    && (vp.isStock === true || VP_DOMAIN_BY_ID.has(vp.vpId)));
+}
+
+/**
+ * Select only presentation candidates. Never use this to rebuild a saved roster.
+ * Existing members are pinned even when metadata is missing; hiding a library
+ * entry must not silently remove it from an old Session or an in-progress draft.
+ *
+ * @param {object[]} vps complete library for the target Agent
+ * @param {{includeIds?: string[], showLegacy?: boolean}} [options]
+ * @returns {object[]}
+ */
+export function selectVpCatalog(vps, { includeIds = [], showLegacy = false } = {}) {
+  const pinned = new Set((Array.isArray(includeIds) ? includeIds : []).filter(id => typeof id === 'string' && id));
+  const byId = new Map();
+  for (const vp of Array.isArray(vps) ? vps : []) {
+    if (!vp?.vpId || vp.vpId === 'user' || byId.has(vp.vpId)) continue;
+    if (showLegacy || pinned.has(vp.vpId) || !isLegacyVp(vp)) byId.set(vp.vpId, vp);
+  }
+  for (const vpId of pinned) {
+    if (vpId !== 'user' && !byId.has(vpId)) byId.set(vpId, { vpId });
+  }
+  return [
+    ...RECOMMENDED_VP_IDS.map(id => byId.get(id)).filter(Boolean),
+    ...[...byId.values()].filter(vp => !RECOMMENDED_VP_IDS.includes(vp.vpId)),
+  ];
 }
 
 /**
