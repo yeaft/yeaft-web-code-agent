@@ -71,11 +71,15 @@ for (const surface of [
     }));
     expect(new Set(bounds.map(box => box.y)).size).toBe(1);
     for (const [index, box] of bounds.entries()) {
-      expect(box.width).toBeGreaterThanOrEqual(44);
-      expect(box.height).toBe(44);
+      expect(box.width).toBe(34);
+      expect(box.height).toBe(34);
       if (index) expect(box.x).toBeGreaterThanOrEqual(bounds[index - 1].x + bounds[index - 1].width);
     }
-    expect(await navigation.locator('.sidebar-primary-actions').evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(54);
+    expect(await actions.locator('svg').evaluateAll(icons => icons.every(icon => {
+      const { width, height } = icon.getBoundingClientRect();
+      return width === 18 && height === 18;
+    }))).toBe(true);
+    expect(await navigation.locator('.sidebar-primary-actions').evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(44);
     await expect(navigation.locator('.sidebar-section')).toHaveClass([
       'sidebar-section projects-section', 'sidebar-section recents-section',
     ]);

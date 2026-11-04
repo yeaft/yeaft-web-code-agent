@@ -52,13 +52,13 @@
    SessionSidebarShell token so Chat and Yeaft stay identical. */
 /* Codex-style unified navigation: Projects group Yeaft Sessions; Recents keeps all providers. */
 .sidebar-primary-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--work-center-space-1); padding: 6px var(--work-center-space-2) var(--work-center-space-1); }
-.sidebar-primary-action { display: inline-flex; flex: 0 0 44px; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.sidebar-primary-action { display: inline-flex; flex: 0 0 34px; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
 .sidebar-primary-action:hover:not(:disabled), .sidebar-primary-action.active { color: var(--text-primary); }
 .sidebar-primary-action:hover:not(:disabled), .sidebar-project-header:hover, .sidebar-project-header.drag-over, .recents-section.drag-over { background: var(--sidebar-hover); }
 .sidebar-primary-action:disabled { cursor: not-allowed; color: var(--text-muted); }
 .sidebar-catalog-loading { display: flex; align-items: center; gap: 8px; }
 .sidebar-primary-action:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
-.sidebar-primary-action-icon { display: block; width: 20px; height: 20px; flex: 0 0 auto; color: inherit; }
+.sidebar-primary-action-icon { display: block; width: 18px; height: 18px; flex: 0 0 auto; color: inherit; }
 .sidebar-project-add-button { opacity: 0; pointer-events: none; transition: opacity 0.15s ease; }
 .sidebar-project-add-button .sidebar-project-add-icon { width: 16px; height: 16px; }
 .sidebar-section-heading > .sidebar-project-add-button:disabled { opacity: 0; pointer-events: none; }
