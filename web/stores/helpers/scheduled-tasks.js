@@ -80,7 +80,7 @@ export function markScheduledTaskSessionRead(store, sessionId, agentId, lastRun 
 export function isScheduledTaskSessionVisible(store, sessionId, agentId) {
   const route = store.activeSessionRoute;
   return !!sessionId && !!agentId && store.currentView === 'yeaft' && !store.workCenterOpen
-    && !store.pluginCenterOpen && !store.digitalPersonOpen
+    && !store.pluginCenterOpen && !store.digitalPersonOpen && !store.yeaftConversationCovered
     && !(store.workbenchExpanded && store.workbenchMaximized)
     && globalThis.document?.visibilityState !== 'hidden'
     && route?.runtimeProvider === 'yeaft'

@@ -160,7 +160,7 @@ describe('Session-backed task store integration', () => {
     expect(tasks.acceptScheduledTaskNotification(harness(), completed, 'a')).toBe(false);
     expect(tasks.acceptScheduledTaskNotification(store, completed, 'b')).toBe(true);
     const wrapper = mount(ScheduledTaskNotifications, { props: { store }, global: { mocks: { $t: key => key } } });
-    for (const surface of ['workCenterOpen', 'pluginCenterOpen', 'digitalPersonOpen']) {
+    for (const surface of ['workCenterOpen', 'pluginCenterOpen', 'digitalPersonOpen', 'yeaftConversationCovered']) {
       store[surface] = true;
       await Vue.nextTick();
       expect(tasks.acceptScheduledTaskNotification(store, { ...completed, runId: surface }, 'a')).toBe(true);

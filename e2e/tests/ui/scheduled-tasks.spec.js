@@ -418,6 +418,16 @@ test('completion notifications open the owning Agent when two Agents share the s
       await expect(page.locator('.yeaft-main')).toBeVisible();
       await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
     }
+    // Global Settings removes MessageList while retaining the selected route.
+    await showSidebar(page);
+    await page.locator('.yeaft-sidebar .sidebar-bottom .sidebar-nav-item').click();
+    await expect(page.locator('.settings-dialog')).toBeVisible();
+    await expect(page.locator('.yeaft-session-input textarea')).toHaveCount(0);
+    second.notify({ runId: 'covered-settings' });
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(1);
+    await page.locator('.settings-close').click();
+    await expect(page.locator('.yeaft-session-input textarea')).toBeVisible();
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
     for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'dark']]) {
       if (theme === 'dark' && width === 1440) {
         await page.evaluate(() => localStorage.setItem('theme', 'dark'));
