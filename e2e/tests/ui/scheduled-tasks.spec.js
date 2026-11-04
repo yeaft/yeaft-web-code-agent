@@ -285,9 +285,16 @@ test('task rows share pin, drag, Project menu, rename and removal behavior with 
   await expect(renamed).toBeVisible();
   expect(state.sessions.get(TASK_SESSION_ID).task.enabled).toBe(true);
   // The badge remains visible with clipped titles and keyboard focus.
+  let previousWidth = 1440;
   for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'light'], [320, 'dark']]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    if (previousWidth > 768 && width <= 768) {
+      // Wait for the responsive watcher to collapse the desktop sidebar
+      // before deciding whether showSidebar needs to toggle it open.
+      await expect(page.locator('.yeaft-sidebar')).toHaveClass(/collapsed/);
+    }
+    previousWidth = width;
     await showSidebar(page);
     await page.mouse.move(0, 0);
     await renamed.focus();
