@@ -3089,6 +3089,7 @@ export const useChatStore = defineStore('chat', {
       const previousAgentId = this.currentAgent;
       this.currentAgent = agentId;
       if (agentInfo) this.currentAgentInfo = agentInfo;
+      window.Pinia?.useVpStore?.()?.activateAgent?.(agentId);
       return this.activateYeaftAgentCatalog(agentId, previousAgentId);
     },
     resolveYeaftSessionAgentId(sessionId) {
@@ -5282,6 +5283,7 @@ export const useChatStore = defineStore('chat', {
             this.cacheYeaftAgentStatus(statusAgentId, event, { allowBootstrapCatalog: readyIsVisible });
           }
           if (readyIsVisible) {
+            window.Pinia?.useVpStore?.()?.activateAgent?.(statusAgentId);
             this.yeaftModel = event.model;
             this.yeaftModelEffort = event.modelEffort || null;
             this.yeaftSessionReady = true;

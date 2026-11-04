@@ -1414,7 +1414,7 @@ export default {
       const section = editVpId ? 'members' : ((payload && payload.section) || 'session');
       if (!sessionId) return;
       groupSettingsId.value = sessionId;
-      groupSettingsAgentId.value = (payload && payload.agentId) || null;
+      groupSettingsAgentId.value = (payload && payload.agentId) || store.currentAgent || null;
       groupSettingsSection.value = section;
       groupSettingsEditVpId.value = editVpId;
       groupSettingsOpen.value = true;

@@ -23,19 +23,31 @@ function clearPluginBrowserState() {
   }
 }
 
+function clearVpBrowserState() {
+  try { globalThis.Pinia?.useVpStore?.()?.clearSnapshots?.(); } catch {}
+  try {
+    const chat = globalThis.Pinia?.useChatStore?.();
+    if (chat) chat._yeaftVpSubscribedAgentKey = null;
+  } catch {}
+}
+
 let activeYeaftHistoryOwnerId = null;
 
 function bindYeaftHistoryOwner(ownerId) {
   clearPluginBrowserState();
   const nextOwnerId = String(ownerId || '').trim() || null;
   try { globalThis.Pinia?.useChatStore?.()?.bindScheduledTaskNotificationOwner?.(nextOwnerId); } catch {}
-  if (activeYeaftHistoryOwnerId !== nextOwnerId) clearYeaftHistoryMemory();
+  if (activeYeaftHistoryOwnerId !== nextOwnerId) {
+    clearYeaftHistoryMemory();
+    clearVpBrowserState();
+  }
   activeYeaftHistoryOwnerId = nextOwnerId;
 }
 
 function clearYeaftHistoryOwner() {
   try { globalThis.Pinia?.useChatStore?.()?.bindScheduledTaskNotificationOwner?.(null); } catch {}
   clearPluginBrowserState();
+  clearVpBrowserState();
   clearYeaftHistoryMemory();
   activeYeaftHistoryOwnerId = null;
 }
@@ -797,7 +809,10 @@ export const useAuthStore = defineStore('auth', {
         const previousUserId = this.userId;
         this.userId = profile?.userId || null;
         bindWorkCenterBrowserOwner(this.userId);
-        if (previousUserId !== this.userId) clearYeaftHistoryMemory();
+        if (previousUserId !== this.userId) {
+          clearYeaftHistoryMemory();
+          clearVpBrowserState();
+        }
         activeYeaftHistoryOwnerId = this.userId;
         return true;
       } catch (err) {

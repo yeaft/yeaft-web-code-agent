@@ -22,7 +22,7 @@
  *   select (vp) — the VP record the user chose.
  *   hover-index (idx) — on mouseenter; parent mirrors into selectedIndex.
  */
-import { orderVpsByDomain, segmentVpsByDomain } from '../utils/vp-domains.js';
+import { orderVpsByDomain, segmentVpsByDomain, selectVpCatalog } from '../utils/vp-domains.js';
 
 /** Max results shown in the dropdown (aligned with existing expert autocomplete). */
 export const VP_MENTION_MAX_RESULTS = 12;
@@ -110,8 +110,8 @@ export function buildVpMentionSections(vps) {
  * given the full library and the active group (if any).
  *
  * Rules:
- *   - No active group (single-agent / no group context): return the full
- *     library. This preserves the legacy single-agent autocomplete.
+ *   - No active group: recommend scenario/custom VPs for an empty query;
+ *     an explicit query still searches the complete library, including legacy VPs.
  *   - Active group: return ONLY the VPs that are on the group's roster.
  *     Off-roster VPs are hidden entirely — you can't @-mention someone
  *     who isn't in the conversation, and the dropdown shouldn't tempt
@@ -127,11 +127,12 @@ export function buildVpMentionSections(vps) {
  *
  * @param {object[]|null|undefined} vpList — the full VP library (typically vpStore.vpList).
  * @param {{ roster?: string[] }|null|undefined} group — the active group's record.
+ * @param {string} [query] explicit lookup can find a legacy VP outside a Session.
  * @returns {object[]} the candidate list (NOT yet filtered by query).
  */
-export function selectMentionCandidates(vpList, group) {
+export function selectMentionCandidates(vpList, group, query = '') {
   const full = Array.isArray(vpList) ? vpList : [];
-  if (!group) return full;
+  if (!group) return query ? full : selectVpCatalog(full);
   const roster = Array.isArray(group.roster) ? group.roster : [];
   if (roster.length === 0) return [];
   const allowed = new Set(roster);

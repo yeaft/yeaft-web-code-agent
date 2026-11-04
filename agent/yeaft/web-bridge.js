@@ -77,6 +77,7 @@ import { hydrateYeaftStatusFromSession } from './status-cache.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
 import { scanVpLibrary } from './vp/vp-store.js';
+import { validateVpId, isReservedVpId } from './sessions/ids.js';
 import { createRouter } from './routing/router.js';
 import {
   SessionCrudError,
@@ -3878,6 +3879,15 @@ export function handleYeaftCreateSession(msg) {
   const envelope = payload.task !== undefined ? { requestId, requestClientId: msg?._requestClientId } : undefined;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
+    // Validate new user-selected members at the request boundary. Existing
+    // Sessions/forks retain their historical roster even if metadata is absent.
+    for (const vpId of Array.isArray(payload.roster) ? payload.roster : []) {
+      const valid = validateVpId(vpId);
+      if (!valid.ok || isReservedVpId(vpId)) {
+        throw new SessionCrudError(isReservedVpId(vpId) ? 'reserved' : valid.reason, null, `Invalid VP: ${vpId}`);
+      }
+      if (!readConfiguredVp(vpId)) throw new SessionCrudError('vp_not_found', null, `VP not found: ${vpId}`);
+    }
     const group = createSessionFromSpec(yeaftDir, payload, configuredVpPaths());
     recordAgentSessionCreated();
     group.config = loadSessionConfig(yeaftDir, group.id);

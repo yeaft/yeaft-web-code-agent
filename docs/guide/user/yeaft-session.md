@@ -32,9 +32,27 @@ Legacy browser-local section state is not imported into user preferences. The in
 5. Create the Session.
 6. After creation, choose model/effort in the composer and edit the announcement in Session settings, then send a message.
 
-When the roster is omitted and the Agent's VP library contains `omni`, the runtime can use **Omni**, the all-purpose assistant (Chinese name: **全能助手**), as the default generalist. Its internal ID remains `omni`, so existing references keep working. An explicitly non-empty roster is never silently replaced.
+When the roster is omitted and the Agent's VP library contains `omni`, the runtime can use the **All-purpose Assistant** (Chinese name: **全能助手**) as the default generalist. A fresh automatically created default Session includes only that assistant, not the entire library. Internal IDs stay stable, and an explicitly non-empty roster is never silently replaced.
 
-The assistant helps with questions, research, writing, translation, learning, planning, data analysis, and coding tasks—not just clarification or handoffs. It chooses direct answers, tools, or collaboration to suit the task while respecting project ownership and authorization. At Agent startup, exact historical stock souls and their matching old name, role, and description are upgraded; user-edited souls and custom metadata are preserved.
+### Choose an assistant for the work
+
+Session creation, member settings, and the VP library initially show five primary assistants and custom VPs:
+
+| Assistant | Stable ID | Typical work |
+| --- | --- | --- |
+| All-purpose Assistant | `omni` | Everyday questions, learning, research, creation, and cross-domain tasks |
+| Software Assistant | `software-omni` | Build, debug, review, and improve software from user need through operation |
+| Writing Assistant | `writing-omni` | Create and edit text for its reader, purpose, and author's voice |
+| Short Video Assistant | `short-video-omni` | Ideas, shootable scripts, production briefs, and evidence-based improvements |
+| Investment Research Assistant | `quant-omni` | Reproducible investment analysis that accounts for costs and risk |
+
+A specialty is a starting point, not a limit on what you can ask. Each assistant owns the requested outcome end to end, handles simple work directly, and uses Skills, tools, or collaboration only when useful—not a mandatory expert team or fixed long workflow. Research, creative, and software goals do not automatically authorize trading, publishing, spending, or changes to live systems.
+
+### Legacy VPs and existing Sessions
+
+Legacy roles are not deleted. Expand **Show legacy VPs** to inspect or add them. Existing members, the default VP, `@` routing, and historical speaker identities remain intact. Changing a Session's name, model, working directory, or announcement does not rebuild its roster. Only an explicit member removal makes that VP leave the Session; it can be added back through the legacy entry. Settings retain a saved member's ID even when its library metadata is temporarily missing.
+
+At Agent startup, only souls that exactly match recorded shipped versions are upgraded. Custom bodies and bodies paired with custom prompt/instruction frontmatter are not automatically upgraded. Names, roles, descriptions, and aliases change only when each field exactly matches a recorded official value; user renames, extended alias lists, and unknown frontmatter are preserved. The five assistants retain their prior IDs and aliases.
 
 ## Fork the current Session
 

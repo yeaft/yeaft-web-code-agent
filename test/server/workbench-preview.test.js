@@ -138,7 +138,10 @@ describe('stable Workbench preview URLs', () => {
   });
 
   it('rejects tampering, wrong file ids, and missing tokens without contacting the Agent', async () => {
-    await request(app).get(`/api/preview/file-1?token=${token.slice(0, 20)}X${token.slice(21)}`).expect(403);
+    // A fixed replacement can equal the random original byte and leave a valid
+    // token, causing an unintended Agent read and cascading timeout failures.
+    const tampered = `${token.slice(0, 20)}${token[20] === 'A' ? 'B' : 'A'}${token.slice(21)}`;
+    await request(app).get(`/api/preview/file-1?token=${tampered}`).expect(403);
     await request(app).get(`/api/preview/other?token=${token}`).expect(403);
     cachePreviewFile('file-1', { buffer: bytes, token });
     await request(app).get('/api/preview/file-1').expect(403);
