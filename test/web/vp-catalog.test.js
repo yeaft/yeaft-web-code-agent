@@ -22,9 +22,11 @@ globalThis.Pinia = { defineStore: (id, options) => () => {
 } };
 const { useVpStore } = await import('../../web/stores/vp.js');
 const { useSessionsStore } = await import('../../web/stores/sessions.js');
+const { useChatStore } = await import('../../web/stores/chat.js');
 const { default: VpCrudPanel } = await import('../../web/components/VpCrudPanel.js');
 const { default: SessionCreateModal } = await import('../../web/components/SessionCreateModal.js');
 const { default: SessionSettingsModal } = await import('../../web/components/SessionSettingsModal.js');
+const { default: ChatInput } = await import('../../web/components/ChatInput.js');
 
 const ids = list => list.map(vp => vp.vpId);
 const library = () => [
@@ -43,17 +45,19 @@ beforeEach(() => {
   vp.beginSnapshot('a', 'initial');
   vp.applySnapshot({ vps: library() }, 'a', 'initial');
   sessions.applySnapshot([{ id: 'legacy', name: 'Old team', roster: ['linus', 'martin'], defaultVpId: 'linus', workDir: '/repo', announcement: 'Keep facts' }], 'a');
-  chat = Vue.reactive({ currentAgent: 'a', agents: [{ id: 'a', online: true }, { id: 'b', online: true }],
+  chat = Vue.reactive({ currentView: 'yeaft', yeaftActiveSessionFilter: 'legacy', inputDrafts: {},
+    currentAgent: 'a', agents: [{ id: 'a', online: true }, { id: 'b', online: true }],
     sendWsMessage: vi.fn(() => true), sessionCrudRequest: vi.fn(async () => ({ ok: true })),
     createYeaftSession: vi.fn(async () => ({ ok: true, session: { id: 'created' } })), setActiveSessionFilter: vi.fn(),
   });
   window.Pinia = { useChatStore: () => chat, useVpStore, useSessionsStore };
+  vi.stubGlobal('Pinia', { ...globalThis.Pinia, ...window.Pinia, useAuthStore: () => ({}) });
 });
 afterEach(() => {
   wrapper?.unmount(); wrapper = null;
   document.body.innerHTML = '';
   delete window.Pinia;
-  vi.restoreAllMocks(); vi.unstubAllGlobals();
+  vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 function render(component, props = {}) {
   wrapper = mount(component, { props, attachTo: document.body, global: globalOptions });
@@ -145,42 +149,211 @@ describe('Scenario VP catalog compatibility', () => {
     expect(member('linus').querySelector('input').checked).toBe(false);
   });
 
-  it('loads the target Agent library, rejects stale snapshots and scopes all member mutations', async () => {
+  it('keeps the active Session identity and @ picker while settings loads another Agent and after closing', async () => {
     sessions.applySnapshot([{ id: 'legacy', name: 'B team', roster: ['grace'], defaultVpId: 'grace' }], 'b');
-    render(SessionSettingsModal, { groupId: 'legacy', agentId: 'b', initialSection: 'members' });
-    expect(chat.sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'yeaft_vp_subscribe', agentId: 'b', requestId: expect.any(String) }));
-    expect(member('linus')).toBeUndefined();
-    const requestId = vp.snapshotRequestId;
-    expect(vp.applySnapshot({ vps: library() }, 'a', 'initial')).toBe(false);
-    expect(vp.applySnapshot({ vps: [{ vpId: 'grace', displayName: 'B Grace' }, { vpId: 'omni' }] }, 'b', requestId)).toBe(true);
-    await Vue.nextTick();
-    expect(member('grace').textContent).toContain('B Grace');
-    expect(member('linus')).toBeUndefined();
-    await wrapper.vm.toggleMember('omni', true);
-    expect(chat.sessionCrudRequest).toHaveBeenLastCalledWith('add_member', { sessionId: 'legacy', vpId: 'omni' }, { agentId: 'b' });
-    await wrapper.setProps({ agentId: 'a' });
-    expect(vp.snapshotAgentId).toBe('a');
-    expect(vp.applySnapshot({ vps: [{ vpId: 'grace', displayName: 'Stale B' }] }, 'b', requestId)).toBe(false);
-    vp.applySnapshot({ vps: library() }, 'a', vp.snapshotRequestId);
-    await Vue.nextTick();
-    expect(member('linus').querySelector('input').checked).toBe(true);
-    expect(sessions.sessionById('legacy', 'b').roster).toEqual(['grace']);
+    const composer = mount(ChatInput, { global: { ...globalOptions, stubs: { ...globalOptions.stubs,
+      MessageComposer: { template: '<div><slot name="overlays" /></div>' },
+    } } });
+    try {
+      composer.vm.inputText = '@'; composer.vm.handleInput(); await Vue.nextTick();
+      expect(ids(composer.vm.mentionVpCandidates)).toEqual(['linus', 'martin']);
+      expect(composer.text()).toContain('linus');
+      render(SessionSettingsModal, { groupId: 'legacy', agentId: 'b', initialSection: 'members' });
+      expect(chat.sendWsMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'yeaft_vp_subscribe', agentId: 'b', requestId: expect.any(String) }));
+      const requestId = vp.snapshotForAgent('b').snapshotRequestId;
+      expect(vp.snapshotAgentId).toBe('a');
+      expect(vp.applySnapshot({ vps: library() }, 'a', 'initial')).toBe(true);
+      expect(vp.applySnapshot({ vps: [{ vpId: 'grace', displayName: 'B Grace', description: 'B role' }, { vpId: 'omni' }] }, 'b', requestId)).toBe(true);
+      await Vue.nextTick();
+      expect(member('grace').textContent).toContain('B Grace');
+      expect(member('grace').textContent).toContain('B role');
+      expect(member('linus')).toBeUndefined();
+      expect(vp.vpLabel('linus')).toBe('linus');
+      expect(vp.vps.grace.displayName).not.toBe('B Grace');
+      expect(ids(composer.vm.mentionVpCandidates)).toEqual(['linus', 'martin']);
+      expect(composer.text()).not.toContain('B Grace');
+      await wrapper.vm.toggleMember('omni', true);
+      expect(chat.sessionCrudRequest).toHaveBeenLastCalledWith('add_member', { sessionId: 'legacy', vpId: 'omni' }, { agentId: 'b' });
+      wrapper.vm.requestClose();
+      expect(wrapper.emitted('close')).toHaveLength(1);
+      wrapper.unmount(); wrapper = null;
+      expect(vp.applySnapshot({ vps: library().map(record => record.vpId === 'linus' ? { ...record, displayName: 'A Linus updated' } : record) }, 'a', 'initial')).toBe(true);
+      await Vue.nextTick();
+      expect(vp.vpLabel('linus')).toBe('A Linus updated');
+      expect(composer.text()).toContain('A Linus updated');
+      expect(ids(composer.vm.mentionVpCandidates)).toEqual(['linus', 'martin']);
+    } finally { composer.unmount(); }
   });
 
-  it('surfaces retryable library errors without replacing a saved roster', async () => {
+  it('surfaces retryable target library timeouts and rejects stale/wrong-Agent errors without poisoning the active roster', async () => {
     vi.useFakeTimers();
-    vp.beginSnapshot('b', 'pending');
-    render(SessionSettingsModal, { groupId: 'legacy', agentId: 'a', initialSection: 'members' });
-    const requestId = vp.snapshotRequestId;
+    sessions.applySnapshot([{ id: 'legacy', roster: ['grace'], defaultVpId: 'grace' }], 'b');
+    render(SessionSettingsModal, { groupId: 'legacy', agentId: 'b', initialSection: 'members' });
+    const requestId = vp.snapshotForAgent('b').snapshotRequestId;
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(vp.snapshotStatus).toBe('error');
+    expect(vp.snapshotForAgent('b').snapshotStatus).toBe('error');
+    expect(vp.snapshotStatus).toBe('ready');
     expect(document.querySelector('[role="alert"]').textContent).toContain(en['yeaft.session.create.rosterError']);
     document.querySelector('[role="alert"] button').click(); await Vue.nextTick();
-    expect(vp.snapshotRequestId).not.toBe(requestId);
-    expect(vp.snapshotStatus).toBe('loading');
+    const retryId = vp.snapshotForAgent('b').snapshotRequestId;
+    expect(retryId).not.toBe(requestId);
+    expect(vp.snapshotForAgent('b').snapshotStatus).toBe('loading');
+    expect(vp.failSnapshot('b', requestId, 'late timeout')).toBe(false);
+    expect(vp.failSnapshot('a', retryId, 'wrong Agent')).toBe(false);
+    expect(vp.failSnapshot('b', null, 'uncorrelated')).toBe(false);
+    expect(vp.applySnapshot({ vps: [{ vpId: 'stale' }] }, 'b', requestId)).toBe(false);
+    expect(vp.applySnapshot({ vps: [{ vpId: 'grace', displayName: 'Legacy B Grace' }] }, 'b')).toBe(true);
+    await Vue.nextTick();
+    expect(member('grace').textContent).toContain('Legacy B Grace');
+    expect(vp.snapshotStatus).toBe('ready');
+    expect(vp.snapshotAgentId).toBe('a');
+    expect(vp.vps.linus).toBeTruthy();
     expect(sessions.sessionById('legacy', 'a').roster).toEqual(['linus', 'martin']);
     expect(chat.sessionCrudRequest).not.toHaveBeenCalled();
-    wrapper.unmount(); wrapper = null; vi.useRealTimers();
+  });
+
+  it('routes live updates/removals to the target cache and keeps it available on settings retarget', async () => {
+    sessions.applySnapshot([{ id: 'legacy', roster: ['grace'], defaultVpId: 'grace' }], 'b');
+    render(SessionSettingsModal, { groupId: 'legacy', agentId: 'b', initialSection: 'members' });
+    const requestId = vp.snapshotForAgent('b').snapshotRequestId;
+    vp.applySnapshot({ vps: [{ vpId: 'grace', displayName: 'B Grace' }, { vpId: 'omni' }] }, 'b', requestId);
+    vp.upsert({ vpId: 'grace', displayName: 'B Grace live' }, 'persona.edit', 'b');
+    vp.remove('omni', 'file.removed', 'b');
+    await Vue.nextTick();
+    expect(member('grace').textContent).toContain('B Grace live');
+    expect(member('omni')).toBeUndefined();
+    expect(vp.vps.omni).toBeTruthy();
+    expect(vp.lastChange).toBeNull();
+    vp.upsert({ vpId: 'linus', displayName: 'A Linus live' }, 'persona.edit', 'a');
+    await wrapper.setProps({ agentId: 'a' });
+    expect(member('linus').textContent).toContain('A Linus live');
+    expect(vp.snapshotAgentId).toBe('a');
+    expect(vp.applySnapshot({ vps: [{ vpId: 'grace', displayName: 'Background B' }] }, 'b', requestId)).toBe(true);
+    await Vue.nextTick();
+    expect(member('grace')).toBeUndefined();
+    expect(vp.vps.linus.displayName).toBe('A Linus live');
+    await wrapper.setProps({ agentId: 'b' });
+    expect(member('grace').textContent).toContain('Background B');
+    expect(chat.sendWsMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps create-Agent requests local and scopes websocket failures and retries', async () => {
+    render(SessionCreateModal, { initialAgentId: 'a' });
+    await wrapper.setData({ form: { ...wrapper.vm.form, agentId: 'b' }, vpRosterOpen: true });
+    const requestId = vp.snapshotForAgent('b').snapshotRequestId;
+    expect(vp.snapshotAgentId).toBe('a');
+    expect(vp.vps.linus).toBeTruthy();
+    expect(vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'B Omni' }] }, 'b', requestId)).toBe(true);
+    await Vue.nextTick();
+    expect(document.querySelector('.yeaft-roster-name').textContent).toBe('B Omni');
+    expect(vp.vpLabel('omni')).toBe('omni');
+    chat.sendWsMessage.mockReturnValueOnce(false);
+    wrapper.vm.retryVpSnapshot(); await Vue.nextTick();
+    expect(vp.snapshotForAgent('b').snapshotStatus).toBe('error');
+    expect(document.querySelector('[role="alert"]').textContent).toContain(en['yeaft.session.create.rosterError']);
+    expect(vp.snapshotStatus).toBe('ready');
+    expect(vp.applySnapshot({ vps: [{ vpId: 'stale' }] }, 'b', requestId)).toBe(false);
+    wrapper.vm.retryVpSnapshot();
+    const retryId = vp.snapshotForAgent('b').snapshotRequestId;
+    expect(vp.failSnapshot('b', requestId, 'late failure')).toBe(false);
+    expect(vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'B Omni refreshed' }] }, 'b', retryId)).toBe(true);
+    await Vue.nextTick();
+    expect(wrapper.vm.form.vpIds).toEqual(['omni']);
+    await wrapper.setData({ form: { ...wrapper.vm.form, agentId: 'a' } });
+    expect(wrapper.vm.vpLabelFor('omni')).toBe('omni');
+    expect(vp.snapshotAgentId).toBe('a');
+  });
+
+  it('submits the entire pinned selection and default after partial hydration, validation failure and retry', async () => {
+    render(SessionCreateModal, { initialAgentId: 'a' });
+    await wrapper.setData({ vpRosterOpen: true });
+    wrapper.vm.toggleVp('linus', true);
+    wrapper.vm.form.defaultVpId = 'linus';
+    vp.applySnapshot({ vps: [{ vpId: 'omni' }] }, 'a', 'initial');
+    await Vue.nextTick();
+    expect(document.querySelector('input[value="linus"]').checked).toBe(true);
+    chat.createYeaftSession.mockResolvedValueOnce({ ok: false, error: { code: 'vp_not_found', message: 'linus is unavailable' } });
+    await wrapper.vm.onSubmit();
+    expect(chat.createYeaftSession).toHaveBeenLastCalledWith(expect.objectContaining({ vpIds: ['omni', 'linus'], defaultVpId: 'linus' }));
+    expect(wrapper.vm.submitError).toBeTruthy();
+    expect(wrapper.vm.form.vpIds).toEqual(['omni', 'linus']);
+    expect(wrapper.vm.form.defaultVpId).toBe('linus');
+    wrapper.vm.retryVpSnapshot();
+    expect(wrapper.vm.canSubmit).toBe(false);
+    expect(wrapper.vm.form.vpIds).toEqual(['omni', 'linus']);
+    vp.applySnapshot({ vps: library() }, 'a', vp.snapshotForAgent('a').snapshotRequestId);
+    await Vue.nextTick();
+    expect(document.querySelector('input[value="linus"]').checked).toBe(true);
+    expect(wrapper.vm.form.defaultVpId).toBe('linus');
+    await wrapper.vm.onSubmit();
+    expect(chat.createYeaftSession).toHaveBeenLastCalledWith(expect.objectContaining({ vpIds: ['omni', 'linus'], defaultVpId: 'linus' }));
+  });
+
+  it('never reseeds an existing create selection when live removal makes its metadata unavailable', async () => {
+    render(SessionCreateModal, { initialAgentId: 'a' });
+    await wrapper.setData({ vpRosterOpen: true, form: { ...wrapper.vm.form, vpIds: ['omni', 'linus'], defaultVpId: 'linus' } });
+    // Even before a user toggle marks the picker touched, hydration cannot change
+    // a selection already represented by checked rows.
+    expect(wrapper.vm.vpPickerTouched).toBe(false);
+    vp.remove('linus', 'file.removed', 'a');
+    await Vue.nextTick();
+    expect(document.querySelector('input[value="linus"]').checked).toBe(true);
+    expect(wrapper.vm.form.vpIds).toEqual(['omni', 'linus']);
+    expect(wrapper.vm.form.defaultVpId).toBe('linus');
+    await wrapper.vm.onSubmit();
+    expect(chat.createYeaftSession).toHaveBeenLastCalledWith(expect.objectContaining({ vpIds: ['omni', 'linus'], defaultVpId: 'linus' }));
+    wrapper.vm.toggleVp('linus', false);
+    expect(wrapper.vm.form.vpIds).toEqual(['omni']);
+    expect(wrapper.vm.form.defaultVpId).toBe('omni');
+  });
+
+  it('never projects a modal snapshot into an uninitialized active view and isolates same-Agent correlated refreshes', () => {
+    vp.beginSnapshot(null, null);
+    vp.beginSnapshot('b', 'target-b', { target: true });
+    expect(vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'B Omni' }] }, 'b', 'target-b')).toBe(true);
+    expect(vp.vpList).toEqual([]);
+    expect(vp.snapshotAgentId).toBeNull();
+    expect(vp.applySnapshot({ vps: library() }, 'a')).toBe(true);
+    vp.beginSnapshot('a', 'refresh-a', { target: true });
+    expect(vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'A refreshed' }] }, 'a', 'refresh-a')).toBe(true);
+    expect(vp.snapshotAgentId).toBe('a');
+    expect(vp.vps.linus).toBeTruthy();
+    expect(vp.vpLabel('omni', 'a')).toBe('A refreshed');
+    vp.beginSnapshot('a', 'retry-a', { target: true });
+    expect(vp.applySnapshot({ vps: [{ vpId: 'stale' }] }, 'a', 'refresh-a')).toBe(false);
+    expect(vp.failSnapshot('a', 'refresh-a', 'late failure')).toBe(false);
+    expect(vp.snapshotStatus).toBe('ready');
+    expect(vp.vps.linus).toBeTruthy();
+    vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'A retried' }] }, 'a', 'retry-a');
+    vp.upsert({ vpId: 'omni', displayName: 'A live' }, 'manual.reload', 'a');
+    expect(vp.vpLabel('omni')).toBe('A live');
+    expect(vp.vpLabel('omni', 'a')).toBe('A live');
+  });
+
+  it('promotes only an actually activated Agent library and continues receiving scoped wire updates', async () => {
+    const realChat = useChatStore();
+    realChat.currentAgent = 'a';
+    render(SessionCreateModal, { initialAgentId: 'b' });
+    const requestId = vp.snapshotForAgent('b').snapshotRequestId;
+    realChat.handleYeaftOutput({ agentId: 'b', requestId,
+      event: { type: 'vp_snapshot', vps: [{ vpId: 'omni', displayName: 'B Omni' }] } });
+    expect(vp.snapshotAgentId).toBe('a');
+    expect(vp.vps.linus).toBeTruthy();
+    realChat.activateYeaftAgent('b');
+    expect(vp.snapshotAgentId).toBe('b');
+    expect(vp.vpLabel('omni')).toBe('B Omni');
+    expect(vp.vps.linus).toBeUndefined();
+    realChat.handleYeaftOutput({ agentId: 'b', event: { type: 'vp_updated', vp: { vpId: 'omni', displayName: 'B live' } } });
+    expect(vp.vpLabel('omni')).toBe('B live');
+    realChat.activateYeaftAgent('a');
+    expect(vp.snapshotAgentId).toBe('a');
+    expect(vp.vps.linus).toBeTruthy();
+    realChat.handleYeaftOutput({ agentId: 'b', event: { type: 'vp_removed', vpId: 'omni' } });
+    expect(vp.vps.omni).toBeTruthy();
+    expect(vp.vpListForAgent('b')).toEqual([]);
+    realChat.handleYeaftOutput({ agentId: 'a', event: { type: 'vp_snapshot', vps: library() } });
+    expect(vp.snapshotAgentId).toBe('a');
+    expect(vp.vps.linus).toBeTruthy();
   });
 
   it('keeps prompt detail and legacy expansion available in the VP library', async () => {

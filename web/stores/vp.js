@@ -147,6 +147,9 @@ export const useVpStore = defineStore('vp', {
     snapshotAgentId: null,
     snapshotRequestId: null,
     snapshotError: '',
+    // Modal requests have independent Agent scopes; they must never take over
+    // the flat collection used by the visible Session's identity and @ picker.
+    targetSnapshots: {},
     /**
      * fix-session-restore-modal-unify: which agent the last snapshot came
      * from. Multi-agent deployments need this so callers (e.g.
@@ -176,6 +179,14 @@ export const useVpStore = defineStore('vp', {
       return state.vpOrder.length;
     },
     vpById: (state) => (id) => state.vps[id] || null,
+    snapshotForAgent: (state) => (agentId) => state.targetSnapshots[agentId]
+      || (agentId && state.snapshotAgentId === agentId ? state : null),
+    vpListForAgent() {
+      return (agentId) => {
+        const scope = this.snapshotForAgent(agentId);
+        return scope ? scope.vpOrder.map(id => scope.vps[id]).filter(Boolean) : [];
+      };
+    },
     // task-fix (5-bugs): bilingual display. Locale is read reactively from
     // the chat store (which is itself Pinia-reactive). zh-* locales prefer
     // displayNameZh; others fall back to displayName, then vpId.
@@ -186,14 +197,20 @@ export const useVpStore = defineStore('vp', {
     // `state.vps` (the only declared reactive dep) and the VP list label
     // would not update until the next vp_snapshot arrived. Reading from
     // `chatStore.locale` (a Pinia state field) re-establishes reactivity.
-    vpLabel: (state) => (id) => {
-      const v = state.vps[id];
-      if (!v) return id;
-      const locale = currentVpLocale();
-      if (locale.startsWith('zh') && v.displayNameZh) return v.displayNameZh;
-      return v.displayName || v.vpId || id;
+    vpLabel() {
+      return (id, agentId = null) => {
+        const v = (agentId ? this.snapshotForAgent(agentId) : this)?.vps[id];
+        if (!v) return id;
+        const locale = currentVpLocale();
+        if (locale.startsWith('zh') && v.displayNameZh) return v.displayNameZh;
+        return v.displayName || v.vpId || id;
+      };
     },
-    vpDescription: (state) => (id) => localizedVpDescription(state.vps[id], currentVpLocale()),
+    vpDescription() {
+      return (id, agentId = null) => localizedVpDescription(
+        (agentId ? this.snapshotForAgent(agentId) : this)?.vps[id], currentVpLocale(),
+      );
+    },
     vpInitial: (state) => (id) => {
       const v = state.vps[id];
       const preferZh = currentVpLocale().startsWith('zh');
@@ -214,7 +231,7 @@ export const useVpStore = defineStore('vp', {
 
   actions: {
     /**
-     * Apply a full vp_snapshot payload. Replaces entire collection.
+     * Apply a full vp_snapshot to its correlated/Agent scope(s).
      *
      * @param {object} payload — the vp_snapshot event ({ vps[], emptyLibrary })
      * @param {string|null} [agentId] — fix-session-restore-modal-unify:
@@ -223,95 +240,117 @@ export const useVpStore = defineStore('vp', {
      *   *different* agent than the one currently being targeted.
      */
     applySnapshot(payload, agentId = null, requestId = null) {
-      const activeAgentId = this.snapshotAgentId || null;
-      if (activeAgentId && agentId && agentId !== activeAgentId) return false;
-      // New Agents echo requestId. Old Agents omit it; accept that response only
-      // when its envelope still belongs to the active Agent scope.
-      if (requestId && this.snapshotRequestId && requestId !== this.snapshotRequestId) return false;
-      const arr = (payload && Array.isArray(payload.vps)) ? payload.vps : [];
-      this._setActiveSnapshot({
-        vps: arr,
-        emptyLibrary: !!(payload && payload.emptyLibrary),
-        agentId: agentId || activeAgentId || null,
-        requestId: requestId || this.snapshotRequestId || null,
-        receivedAt: Date.now(),
-      });
-      return true;
+      const scopes = this._snapshotScopes(agentId, requestId);
+      for (const scope of scopes) {
+        scope.vps = {};
+        scope.vpOrder = [];
+        for (const vp of (Array.isArray(payload?.vps) ? payload.vps : [])) this._upsertInternal(vp, scope);
+        scope.emptyLibrary = !!payload?.emptyLibrary;
+        scope.lastSnapshotAt = Date.now();
+        scope.lastVpSnapshotAgentId = agentId || scope.snapshotAgentId || null;
+        scope.snapshotStatus = 'ready';
+        scope.snapshotAgentId = agentId || scope.snapshotAgentId || null;
+        scope.snapshotRequestId = requestId || scope.snapshotRequestId || null;
+        scope.snapshotError = '';
+      }
+      return scopes.length > 0;
     },
 
-    beginSnapshot(agentId, requestId) {
-      // The flat collection is the active Agent view. Clear it on every scope
-      // transition so stale rows can neither render nor become a submit roster.
-      this.vps = {};
-      this.vpOrder = [];
-      this.emptyLibrary = false;
-      this.lastVpSnapshotAgentId = null;
-      this.snapshotStatus = 'loading';
-      this.snapshotAgentId = agentId || null;
-      this.snapshotRequestId = requestId || null;
-      this.snapshotError = '';
+    /** target requests are modal-local; the default resets the visible view. */
+    beginSnapshot(agentId, requestId, { target = false } = {}) {
+      const scope = {
+        vps: {}, vpOrder: [], emptyLibrary: false, lastSnapshotAt: 0,
+        lastVpSnapshotAgentId: null, lastChange: null,
+        snapshotStatus: 'loading', snapshotAgentId: agentId || null,
+        snapshotRequestId: requestId || null, snapshotError: '',
+      };
+      if (target) {
+        if (agentId) this.targetSnapshots[agentId] = scope;
+      } else {
+        Object.assign(this, scope);
+      }
+    },
+
+    /** Only actual Session/Agent activation may change the visible projection. */
+    activateAgent(agentId) {
+      if (!agentId || this.snapshotAgentId === agentId) return;
+      const fields = ['vps', 'vpOrder', 'emptyLibrary', 'lastSnapshotAt', 'lastChange',
+        'lastVpSnapshotAgentId', 'snapshotStatus', 'snapshotAgentId', 'snapshotRequestId', 'snapshotError'];
+      if (this.snapshotAgentId && !this.targetSnapshots[this.snapshotAgentId]) {
+        this.targetSnapshots[this.snapshotAgentId] = Object.fromEntries(fields.map(key => [key, this[key]]));
+      }
+      const cached = this.targetSnapshots[agentId];
+      if (cached) {
+        for (const key of fields) this[key] = cached[key];
+      } else {
+        this.beginSnapshot(agentId, null);
+      }
     },
 
     failSnapshot(agentId, requestId, error = '') {
-      if (!this.snapshotRequestId || !requestId || requestId !== this.snapshotRequestId) return false;
-      if (agentId && this.snapshotAgentId && agentId !== this.snapshotAgentId) return false;
-      this.snapshotStatus = 'error';
-      this.snapshotAgentId = agentId || this.snapshotAgentId || null;
-      this.snapshotRequestId = requestId || this.snapshotRequestId || null;
-      this.snapshotError = String(error || 'VP library request failed');
-      return true;
+      // Errors must be correlated; an unsolicited/legacy error cannot fail an
+      // unrelated request. Legacy snapshots still route by stamped Agent below.
+      if (!requestId) return false;
+      const scopes = this._snapshotScopes(agentId, requestId)
+        .filter(scope => scope.snapshotRequestId === requestId);
+      for (const scope of scopes) {
+        scope.snapshotStatus = 'error';
+        scope.snapshotError = String(error || 'VP library request failed');
+      }
+      return scopes.length > 0;
     },
 
-    _setActiveSnapshot({ vps, emptyLibrary, agentId, requestId, receivedAt }) {
-      this.vps = {};
-      this.vpOrder = [];
-      for (const vp of vps || []) this._upsertInternal(vp);
-      this.emptyLibrary = !!emptyLibrary;
-      this.lastSnapshotAt = receivedAt || Date.now();
-      this.lastVpSnapshotAgentId = agentId || null;
-      this.snapshotStatus = 'ready';
-      this.snapshotAgentId = agentId || null;
-      this.snapshotRequestId = requestId || null;
-      this.snapshotError = '';
+    /** Route snapshots by request + Agent, and legacy/live events by Agent. */
+    _snapshotScopes(agentId, requestId = null) {
+      const targets = Object.values(this.targetSnapshots);
+      return [this, ...targets].filter(scope => {
+        const isActive = scope === this;
+        if (agentId && scope.snapshotAgentId && agentId !== scope.snapshotAgentId) return false;
+        // Correlated responses can only satisfy the scope that issued them,
+        // including after a retry supersedes an older modal request.
+        if (requestId && requestId !== scope.snapshotRequestId) return false;
+        // A modal response cannot initialize an unscoped visible collection.
+        if (isActive && !scope.snapshotAgentId && targets.some(target =>
+          (agentId && target.snapshotAgentId === agentId)
+          || (requestId && target.snapshotRequestId === requestId))) return false;
+        // Without an Agent stamp or matching request, only the legacy active
+        // view is identifiable. Never broadcast ambiguous events to all caches.
+        if (!isActive && !agentId && (!requestId || requestId !== scope.snapshotRequestId)) return false;
+        return true;
+      });
     },
 
     /** Insert or merge a single VP record (live-diff — 334h). */
     upsert(vp, reason = null, agentId = null) {
-      if (agentId && this.snapshotAgentId && agentId !== this.snapshotAgentId) return false;
-      this._upsertInternal(vp);
-      if (vp && vp.vpId) {
-        this.lastChange = {
-          vpId: vp.vpId,
-          kind: 'updated',
-          reason: reason || null,
-          at: Date.now(),
+      const scopes = this._snapshotScopes(agentId);
+      for (const scope of scopes) {
+        this._upsertInternal(vp, scope);
+        if (vp && vp.vpId) scope.lastChange = {
+          vpId: vp.vpId, kind: 'updated', reason: reason || null, at: Date.now(),
         };
       }
-      return true;
+      return scopes.length > 0;
     },
 
     /** Remove a VP by id (live-diff — 334h). */
     remove(vpId, reason = null, agentId = null) {
-      if (agentId && this.snapshotAgentId && agentId !== this.snapshotAgentId) return false;
       if (!vpId) return false;
-      delete this.vps[vpId];
-      this.vpOrder = this.vpOrder.filter(id => id !== vpId);
-      this.lastChange = {
-        vpId,
-        kind: 'removed',
-        reason: reason || 'file.removed',
-        at: Date.now(),
-      };
-      return true;
+      const scopes = this._snapshotScopes(agentId);
+      for (const scope of scopes) {
+        delete scope.vps[vpId];
+        scope.vpOrder = scope.vpOrder.filter(id => id !== vpId);
+        scope.lastChange = { vpId, kind: 'removed', reason: reason || 'file.removed', at: Date.now() };
+      }
+      return scopes.length > 0;
     },
 
-    _upsertInternal(vp) {
+    _upsertInternal(vp, scope = this) {
       if (!vp || !vp.vpId) return;
-      const existed = !!this.vps[vp.vpId];
-      this.vps[vp.vpId] = { ...(this.vps[vp.vpId] || {}), ...vp };
-      if (!existed) this.vpOrder.push(vp.vpId);
+      const existed = !!scope.vps[vp.vpId];
+      scope.vps[vp.vpId] = { ...(scope.vps[vp.vpId] || {}), ...vp };
+      if (!existed) scope.vpOrder.push(vp.vpId);
       // emptyLibrary auto-clears once anything is inserted.
-      if (this.emptyLibrary) this.emptyLibrary = false;
+      if (scope.emptyLibrary) scope.emptyLibrary = false;
     },
 
   },

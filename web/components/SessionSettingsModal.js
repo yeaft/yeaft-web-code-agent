@@ -126,13 +126,20 @@ export default {
     defaultVpId() {
       return this.group ? (this.group.defaultVpId || null) : null;
     },
+    vpSnapshot() {
+      const store = this.vpStore;
+      return store?.snapshotForAgent ? store.snapshotForAgent(this.targetAgentId) : store;
+    },
     vpLibraryReady() {
-      const s = this.vpStore;
+      const s = this.vpSnapshot;
       return !!(s && s.snapshotStatus === 'ready'
         && s.snapshotAgentId === this.targetAgentId
         && s.lastVpSnapshotAgentId === this.targetAgentId);
     },
-    vpList() { return this.vpLibraryReady ? (this.vpStore?.vpList || []) : []; },
+    vpList() {
+      if (!this.vpLibraryReady) return [];
+      return this.vpStore?.vpListForAgent?.(this.targetAgentId) || this.vpStore?.vpList || [];
+    },
     vpDomainSections() {
       return buildVpDomainSections(selectVpCatalog(this.vpList, {
         includeIds: [...this.roster, this.highlightedVpId].filter(Boolean), showLegacy: this.showLegacyVps,
@@ -144,11 +151,11 @@ export default {
         || this.vpList.some(vp => vp.vpId === vpId && isLegacyVp(vp)));
     },
     vpLibraryError() {
-      const s = this.vpStore;
+      const s = this.vpSnapshot;
       return s?.snapshotStatus === 'error' && s.snapshotAgentId === this.targetAgentId;
     },
     vpLibraryEmpty() {
-      const s = this.vpStore;
+      const s = this.vpSnapshot;
       if (!s || !this.vpLibraryReady) return false;
       if (s.emptyLibrary === true) return true;
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
@@ -245,7 +252,7 @@ export default {
       const vp = this.vpStore;
       if (!target || !vp) return;
       const requestId = `vp_snapshot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      vp.beginSnapshot?.(target, requestId);
+      vp.beginSnapshot?.(target, requestId, { target: true });
       if (!this.chat?.sendWsMessage
         || this.chat.sendWsMessage({ type: 'yeaft_vp_subscribe', agentId: target, requestId }) === false) {
         vp.failSnapshot?.(target, requestId, 'WebSocket is not connected.');
@@ -253,7 +260,8 @@ export default {
       }
       this.vpSnapshotTimer = setTimeout(() => {
         this.vpSnapshotTimer = null;
-        if (vp.snapshotStatus === 'loading' && vp.snapshotRequestId === requestId) {
+        const scope = vp.snapshotForAgent?.(target);
+        if (scope?.snapshotStatus === 'loading' && scope.snapshotRequestId === requestId) {
           vp.failSnapshot?.(target, requestId, 'VP library request timed out.');
         }
       }, 10_000);
@@ -346,11 +354,11 @@ export default {
     isMember(vpId) { return this.roster.includes(vpId); },
     vpLabelFor(vpId) {
       const fn = this.vpStore?.vpLabel;
-      return this.vpLibraryReady && typeof fn === 'function' ? fn(vpId) : vpId;
+      return this.vpLibraryReady && typeof fn === 'function' ? fn(vpId, this.targetAgentId) : vpId;
     },
     vpDescriptionFor(vpId) {
       const fn = this.vpStore?.vpDescription;
-      return this.vpLibraryReady && typeof fn === 'function' ? fn(vpId) : '';
+      return this.vpLibraryReady && typeof fn === 'function' ? fn(vpId, this.targetAgentId) : '';
     },
     vpTextColorFor(vpId) {
       const fn = this.vpStore?.vpTextColor;

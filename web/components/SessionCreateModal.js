@@ -469,14 +469,21 @@ export default {
       return null;
     },
     isYeaftProvider() { return this.form.provider === 'yeaft'; },
+    vpSnapshot() {
+      const store = this.vpStore;
+      return store?.snapshotForAgent ? store.snapshotForAgent(this.form.agentId) : store;
+    },
     vpLibraryReady() {
-      const s = this.vpStore;
+      const s = this.vpSnapshot;
       return !!(s
         && s.snapshotStatus === 'ready'
         && s.snapshotAgentId === this.form.agentId
         && s.lastVpSnapshotAgentId === this.form.agentId);
     },
-    vpList() { return this.vpLibraryReady ? (this.vpStore?.vpList || []) : []; },
+    vpList() {
+      if (!this.vpLibraryReady) return [];
+      return this.vpStore?.vpListForAgent?.(this.form.agentId) || this.vpStore?.vpList || [];
+    },
     vpDomainSections() {
       return buildVpDomainSections(selectVpCatalog(this.vpList, {
         includeIds: this.form.vpIds, showLegacy: this.showLegacyVps,
@@ -487,13 +494,13 @@ export default {
       return (this.vpList || []).map(vp => vp && vp.vpId).filter(Boolean).join(',');
     },
     vpLibraryEmpty() {
-      const s = this.vpStore;
+      const s = this.vpSnapshot;
       if (!s || !this.vpLibraryReady) return false;
       if (s.emptyLibrary === true) return true;
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
     },
     vpLibraryError() {
-      const s = this.vpStore;
+      const s = this.vpSnapshot;
       if (!s || s.snapshotStatus !== 'error') return false;
       return !s.snapshotAgentId || s.snapshotAgentId === this.form.agentId;
     },
@@ -881,24 +888,22 @@ export default {
       const vp = this.vpStore;
       if (!chat || typeof chat.sendWsMessage !== 'function' || !target) {
         const requestId = `vp_snapshot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        vp?.beginSnapshot?.(target, requestId);
+        vp?.beginSnapshot?.(target, requestId, { target: true });
         vp?.failSnapshot?.(target, requestId, 'No online Agent is available.');
         return false;
       }
-      // The only reusable roster is the current ready scope. Historical source
-      // metadata is insufficient: after A→B, `lastVpSnapshotAgentId === A` may
-      // still be true while B owns the pending request.
+      const scope = vp?.snapshotForAgent ? vp.snapshotForAgent(target) : vp;
       const reusable = !force
-        && vp?.snapshotStatus === 'ready'
-        && vp.snapshotAgentId === target
-        && vp.lastVpSnapshotAgentId === target;
+        && scope?.snapshotStatus === 'ready'
+        && scope.snapshotAgentId === target
+        && scope.lastVpSnapshotAgentId === target;
       if (reusable) {
         if (this.vpSnapshotTimer) clearTimeout(this.vpSnapshotTimer);
         this.vpSnapshotTimer = null;
         return true;
       }
       const requestId = `vp_snapshot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      vp?.beginSnapshot?.(target, requestId);
+      vp?.beginSnapshot?.(target, requestId, { target: true });
       const sent = chat.sendWsMessage({ type: 'yeaft_vp_subscribe', agentId: target, requestId });
       if (sent === false) {
         vp?.failSnapshot?.(target, requestId, 'WebSocket is not connected.');
@@ -907,7 +912,8 @@ export default {
       if (this.vpSnapshotTimer) clearTimeout(this.vpSnapshotTimer);
       this.vpSnapshotTimer = setTimeout(() => {
         this.vpSnapshotTimer = null;
-        if (vp?.snapshotStatus === 'loading' && vp.snapshotRequestId === requestId) {
+        const scope = vp?.snapshotForAgent?.(target);
+        if (scope?.snapshotStatus === 'loading' && scope.snapshotRequestId === requestId) {
           vp.failSnapshot(target, requestId, 'VP library request timed out.');
         }
       }, 10_000);
@@ -1056,14 +1062,10 @@ export default {
       const ids = list.map(vp => vp && vp.vpId).filter(Boolean);
       if (ids.length === 0) return;
       const currentIds = Array.isArray(this.form.vpIds) ? this.form.vpIds : [];
-      const currentValid = currentIds.filter(id => ids.includes(id));
-      const currentDefaultValid = this.form.defaultVpId && currentValid.includes(this.form.defaultVpId);
-      if (currentValid.length > 0 && currentDefaultValid) {
-        if (currentValid.length !== currentIds.length) this.form.vpIds = currentValid;
-        return;
-      }
-
-      const pick = ids.includes(OMNI_VP_ID) ? OMNI_VP_ID : (currentValid[0] || ids[0]);
+      // Hydration/retry/live removal is not user intent to change the roster.
+      // Seed only an empty, untouched picker; keep existing selections intact.
+      if (currentIds.length > 0) return;
+      const pick = ids.includes(OMNI_VP_ID) ? OMNI_VP_ID : ids[0];
       this.form.vpIds = [pick];
       this.form.defaultVpId = pick;
     },
@@ -1081,11 +1083,11 @@ export default {
     },
     vpLabelFor(vpId) {
       const fn = this.vpStore?.vpLabel;
-      return typeof fn === 'function' ? fn(vpId) : vpId;
+      return typeof fn === 'function' ? fn(vpId, this.form.agentId) : vpId;
     },
     vpDescriptionFor(vpId) {
       const fn = this.vpStore?.vpDescription;
-      return typeof fn === 'function' ? fn(vpId) : '';
+      return typeof fn === 'function' ? fn(vpId, this.form.agentId) : '';
     },
     vpTextColorFor(vpId) {
       const fn = this.vpStore?.vpTextColor;
@@ -1213,18 +1215,11 @@ export default {
           this.submitError = this.$t('yeaft.session.error.unknown', { message: 'store unavailable' });
           return;
         }
-        // Defensive: only submit vpIds that exist in the current VP
-        // library. Guards against the picker carrying a stale id (e.g.
-        // user deleted a VP in another tab between selection and submit).
-        const known = new Set((this.vpList || []).map(vp => vp && vp.vpId).filter(Boolean));
-        const submittedVpIds = this.form.vpIds.filter(id => known.has(id));
-        if (submittedVpIds.length === 0) {
-          this.submitError = this.$t('yeaft.session.error.unknown', { message: 'no valid VP selected' });
-          return;
-        }
-        const defaultVpId = (this.form.defaultVpId && submittedVpIds.includes(this.form.defaultVpId))
-          ? this.form.defaultVpId
-          : submittedVpIds[0];
+        // The Agent owns VP validation. A partial snapshot or a live removal
+        // must not silently drop a checked member or replace the chosen default.
+        // Preserve the full selection so validation errors remain actionable.
+        const submittedVpIds = [...this.form.vpIds];
+        const defaultVpId = this.form.defaultVpId || submittedVpIds[0];
         // Auto-derive name when the user left it blank — the server
         // rejects empty names with `invalid_name`, and the user said
         // they shouldn't have to fill it. Prefer the workDir basename
