@@ -230,6 +230,13 @@ export const useVpStore = defineStore('vp', {
   },
 
   actions: {
+    /** Discard private current/target libraries at authentication boundaries. */
+    clearSnapshots() {
+      this.beginSnapshot(null, null);
+      this.snapshotStatus = 'idle';
+      this.targetSnapshots = {};
+    },
+
     /**
      * Apply a full vp_snapshot to its correlated/Agent scope(s).
      *

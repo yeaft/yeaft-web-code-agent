@@ -95,11 +95,11 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +8 reviewed sidebar control boundaries: 3 project chat/task mode and ownership
 // cases; 5 browser hover/focus/vertical disclosure, touch/narrow-screen and both
 // sidebar creation surfaces. Existing cross-device layout cases remain intact.
-// +35 VP scenario/compatibility boundaries: 17 exact-stock migration and user-data
-// preservation cases, 14 rendered catalog/Agent-snapshot cases, 2 durable Session
+// +36 VP scenario/compatibility boundaries: 17 exact-stock migration and user-data
+// preservation cases, 15 rendered catalog/Agent-snapshot/auth cases, 2 durable Session
 // roster/history cases, 1 Server null-default persistence case and 1 real relay/
 // browser lifecycle across themes/sizes. Historical defaults/tests are retained.
-export const TEST_CASE_LIMIT = 881;
+export const TEST_CASE_LIMIT = 882;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

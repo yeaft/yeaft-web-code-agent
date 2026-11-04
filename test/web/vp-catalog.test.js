@@ -23,6 +23,7 @@ globalThis.Pinia = { defineStore: (id, options) => () => {
 const { useVpStore } = await import('../../web/stores/vp.js');
 const { useSessionsStore } = await import('../../web/stores/sessions.js');
 const { useChatStore } = await import('../../web/stores/chat.js');
+const { useAuthStore } = await import('../../web/stores/auth.js');
 const { default: VpCrudPanel } = await import('../../web/components/VpCrudPanel.js');
 const { default: SessionCreateModal } = await import('../../web/components/SessionCreateModal.js');
 const { default: SessionSettingsModal } = await import('../../web/components/SessionSettingsModal.js');
@@ -354,6 +355,23 @@ describe('Scenario VP catalog compatibility', () => {
     realChat.handleYeaftOutput({ agentId: 'a', event: { type: 'vp_snapshot', vps: library() } });
     expect(vp.snapshotAgentId).toBe('a');
     expect(vp.vps.linus).toBeTruthy();
+  });
+
+  it('discards active and background private libraries on auth reset and rejects their late correlated replies', () => {
+    const auth = useAuthStore();
+    vp.beginSnapshot('b', 'private-b', { target: true });
+    vp.applySnapshot({ vps: [{ vpId: 'private-b', displayName: 'Private B identity' }] }, 'b', 'private-b');
+    chat._yeaftVpSubscribedAgentKey = 'a';
+    expect(vp.vps.linus).toBeTruthy();
+    expect(vp.vpListForAgent('b')).toHaveLength(1);
+    auth.reset();
+    expect(vp.vpList).toEqual([]);
+    expect(vp.targetSnapshots).toEqual({});
+    expect(vp.snapshotStatus).toBe('idle');
+    expect(chat._yeaftVpSubscribedAgentKey).toBeNull();
+    expect(vp.applySnapshot({ vps: [{ vpId: 'private-b' }] }, 'b', 'private-b')).toBe(false);
+    expect(vp.applySnapshot({ vps: library() }, 'a', 'initial')).toBe(false);
+    expect(vp.vpList).toEqual([]);
   });
 
   it('keeps prompt detail and legacy expansion available in the VP library', async () => {
