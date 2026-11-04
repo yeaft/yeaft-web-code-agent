@@ -29,18 +29,24 @@ for (const theme of ['light', 'dark']) {
     // must keep the same focused toggle through the new overflow measurement.
     await handle.dblclick();
     await expect(handle).toHaveAttribute('aria-valuenow', '50');
-    await page.setViewportSize({ width: 1400, height: 880 });
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    const borderlineCount = await page.evaluate(agentId => {
-      const available = document.querySelector('.recents-section').clientHeight;
-      const count = Math.floor((available - 48) / 35) + 1;
-      window.Pinia.useChatStore().sessionCatalog = Array.from({ length: count }, (_, index) => ({
+    await page.setViewportSize({ width: 1400, height: 1200 });
+    await page.evaluate(agentId => {
+      window.Pinia.useChatStore().sessionCatalog = Array.from({ length: 10 }, (_, index) => ({
         catalogKey: 'borderline-' + index, runtimeProvider: 'yeaft', title: 'Recent session ' + index,
         routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'borderline-' + index }, availability: 'online',
       }));
-      return count;
     }, mockAgent.agentId);
-    await expect(page.locator('.recents-section .session-item')).toHaveCount(borderlineCount);
+    await expect(page.locator('.recents-section .session-item')).toHaveCount(10);
+    await expect(compactToggle).toHaveCount(0);
+    // Derive a four-pixel overflow from real row geometry, rather than a fixed
+    // viewport / row-height estimate that breaks when header spacing changes.
+    const borderlineHeight = await page.locator('.recents-section').evaluate(el => {
+      const last = el.querySelector('.session-item:last-child');
+      const contentHeight = last.getBoundingClientRect().bottom - el.getBoundingClientRect().top
+        + parseFloat(getComputedStyle(last).marginBottom) + parseFloat(getComputedStyle(el).paddingBottom);
+      return Math.round(innerHeight + 2 * (contentHeight - 4 - el.clientHeight));
+    });
+    await page.setViewportSize({ width: 1400, height: borderlineHeight });
     await expect(compactToggle).toBeVisible();
     await compactToggle.click();
     await expect(shortcuts).toHaveClass(/is-compact/);
@@ -80,6 +86,11 @@ for (const theme of ['light', 'dark']) {
     await expect(shortcuts).toHaveClass(/is-compact/);
     await expect(compactToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(compactToggle).toBeFocused();
+    expect(await page.locator('.session-sidebar-shell').evaluate(el => {
+      const header = el.querySelector('.sidebar-header-row');
+      const controlsBottom = Math.max(...[...header.children].map(child => child.getBoundingClientRect().bottom));
+      return el.querySelector('.sidebar-primary-action').getBoundingClientRect().top - controlsBottom;
+    })).toBe(11);
     expect(await shortcuts.evaluate(el => el.getBoundingClientRect().height)).toBe(expandedHeight - 68);
     expect(await page.locator('.sidebar-session-results').evaluate(el => el.clientHeight)).toBe(expandedResultsHeight + 68);
     expect(await shortcuts.locator('button').evaluateAll(buttons => {

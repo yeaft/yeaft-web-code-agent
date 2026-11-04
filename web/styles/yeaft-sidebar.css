@@ -51,7 +51,7 @@
 /* Mobile slide-away behavior. Width is owned exclusively by the shared
    SessionSidebarShell token so Chat and Yeaft stay identical. */
 /* Codex-style unified navigation: Projects group Yeaft Sessions; Recents keeps all providers. */
-.sidebar-primary-actions { display: flex; flex: 0 0 auto; flex-direction: column; padding: 6px var(--work-center-space-2) var(--work-center-space-1); }
+.sidebar-primary-actions { display: flex; flex: 0 0 auto; flex-direction: column; padding: 3px var(--work-center-space-2) var(--work-center-space-1); }
 .sidebar-primary-action { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; line-height: 20px; cursor: pointer; text-align: left; }
 .sidebar-primary-actions.is-compact { flex-direction: row; align-items: center; gap: var(--work-center-space-1); }
 .sidebar-primary-actions.is-compact > .sidebar-primary-action { flex: 0 0 34px; justify-content: center; width: 34px; height: 34px; padding: 0; }
