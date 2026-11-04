@@ -4729,16 +4729,37 @@
 .scheduled-task-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 400; }
 .scheduled-task-state::before { content: ''; width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: var(--status-online); }
 .scheduled-task-state.is-paused::before { background: var(--text-muted); }
-.scheduled-task-summary { display: grid; min-width: 0; padding: 2px 8px; gap: var(--work-center-space-3); }
-.scheduled-task-runtime { display: grid; gap: var(--work-center-space-2); margin: 0; font-size: 12px; line-height: 1.55; }
+.scheduled-task-summary { display: grid; min-width: 0; padding: 0 8px; gap: var(--work-center-space-2); }
+.scheduled-task-runtime { display: grid; gap: var(--work-center-space-1); margin: 0; font-size: 12px; line-height: 1.55; }
 .scheduled-task-runtime > div { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1fr); gap: var(--work-center-space-2); }
 .scheduled-task-runtime dt { color: var(--text-muted); }
 .scheduled-task-runtime dd { display: grid; margin: 0; min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
 .scheduled-task-runtime dd time { font-size: 11px; }
-.scheduled-task-bar-actions { display: flex; flex-wrap: wrap; gap: var(--work-center-space-2); }
-.scheduled-task-bar-actions .btn { flex: 1 1 auto; justify-content: center; min-width: 0; white-space: normal; }
-.scheduled-task-run { display: inline-flex; align-items: center; gap: var(--work-center-space-2); }
+.scheduled-task-bar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--work-center-space-1); }
+.scheduled-task-bar-actions .btn-ghost {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: var(--work-center-space-1);
+  min-width: 0;
+  min-height: 28px;
+  padding: var(--work-center-space-1) var(--work-center-space-2);
+  border: 0;
+  border-radius: var(--agent-setup-control-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.scheduled-task-bar-actions .btn-ghost:hover:not(:disabled) { color: var(--text-primary); }
 .scheduled-task-run svg { flex: 0 0 auto; }
+@media (max-width: 1024px), (pointer: coarse) {
+  .scheduled-task-bar-actions .btn-ghost { min-width: 44px; min-height: 44px; }
+}
 
 /* Mobile prioritizes conversation space and pins status + Workbench access. */
 @media (max-width: 768px) {

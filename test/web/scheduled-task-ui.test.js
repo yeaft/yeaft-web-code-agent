@@ -209,23 +209,23 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   const chat = Vue.reactive({ scheduledTaskProtocolSupported: true, agents, connectionState: 'connected', runScheduledTask: vi.fn(async () => ({ ok: false, error: { message: 'Execution failed' } })), isYeaftSessionProcessing: () => false });
   window.Pinia = { useChatStore: () => chat };
   wrapper = mount(ScheduledTaskBar, { props: { agentId: 'a', session: { id: 'task', task } }, global: { mocks: { $t: t } } });
-  await wrapper.get('.btn-primary').trigger('click');
+  await wrapper.get('.scheduled-task-run').trigger('click');
   await flushPromises();
   expect(chat.runScheduledTask).toHaveBeenCalledWith({ agentId: 'a', sessionId: 'task' });
   expect(wrapper.get('[role="alert"]').text()).toBe('Execution failed');
   expect(wrapper.find('details').exists()).toBe(false);
   expect(wrapper.findAll('[role="alert"]')).toHaveLength(1);
-  await wrapper.get('.btn-secondary').trigger('click');
+  await wrapper.get('.scheduled-task-configure').trigger('click');
   expect(wrapper.emitted('configure')).toHaveLength(1);
   await wrapper.setProps({ session: { id: 'task', task: { ...task, lastRun: { status: 'running' } } } });
-  expect(wrapper.get('.btn-primary').attributes('disabled')).toBeDefined();
+  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
   await wrapper.setProps({ session: { id: 'task', task } });
   chat.agents = [{ ...agents[0], online: false }];
   await Vue.nextTick();
   expect(wrapper.text()).toContain(en['scheduledTasks.offline']);
   chat.agents = [{ ...agents[0], capabilities: [] }];
   await Vue.nextTick();
-  expect(wrapper.get('.btn-primary').attributes('disabled')).toBeDefined();
+  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
   expect(wrapper.text()).toContain(en['scheduledTasks.upgrade']);
   chat.scheduledTaskProtocolSupported = false;
   await Vue.nextTick();
@@ -234,7 +234,7 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   chat.runScheduledTask.mockClear();
   await wrapper.vm.run();
   expect(chat.runScheduledTask).not.toHaveBeenCalled();
-  expect(wrapper.get('.btn-primary').attributes('disabled')).toBeDefined();
+  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
 });
 
 it('renders inline below the announcement and before the VP roster without a popover', async () => {
@@ -247,8 +247,12 @@ it('renders inline below the announcement and before the VP roster without a pop
   expect(sections[1].classes()).toContain('scheduled-task-bar');
   expect(sections[2].attributes('aria-label')).toBe(en['yeaft.sessionStatus.vps']);
   expect(sections[1].text()).toContain(en['scheduledTasks.never']);
-  expect(sections[1].text()).toContain(en['scheduledTasks.runOnceHelp']);
+  expect(sections[1].text()).not.toContain(en['scheduledTasks.runOnceHelp']);
+  const run = sections[1].get('.scheduled-task-run');
+  expect(run.attributes('title')).toBe(en['scheduledTasks.runOnceHelp']);
+  expect(run.attributes('aria-description')).toBe(en['scheduledTasks.runOnceHelp']);
   expect(sections[1].findAll('button')).toHaveLength(2);
+  expect(sections[1].findAll('button').every(button => button.classes().includes('btn-ghost'))).toBe(true);
   const modal = document.createElement('div');
   modal.className = 'group-settings-overlay';
   document.body.append(modal);

@@ -685,8 +685,29 @@ test('task status panel preserves schedules, pinned header access, scrolling and
       await expect(task).toContainText('Next run');
       await expect(task).toContainText('Last run');
       await expect(task.locator('.scheduled-task-runtime > div').filter({ hasText: 'Next run' }).locator('time')).toBeVisible();
-      await expect(task).toContainText('Runs once without changing the schedule.');
+      await expect(task).not.toContainText('Runs once without changing the schedule.');
+      await expect(run).toHaveAttribute('title', 'Runs once without changing the schedule.');
+      await expect(run).toHaveAccessibleDescription('Runs once without changing the schedule.');
       await expect(run).toHaveText('Run once');
+      for (const button of [configure, run]) {
+        expect(await button.evaluate(element => {
+          const style = getComputedStyle(element);
+          return { fontSize: style.fontSize, fontWeight: style.fontWeight, flexGrow: style.flexGrow,
+            height: element.getBoundingClientRect().height };
+        })).toEqual({ fontSize: '12px', fontWeight: '400', flexGrow: '0', height: width <= 1024 ? 44 : 28 });
+      }
+      const actionBounds = await task.locator('.scheduled-task-bar-actions').boundingBox();
+      const configureBounds = await configure.boundingBox();
+      const runBounds = await run.boundingBox();
+      expect(configureBounds.width + runBounds.width).toBeLessThan(actionBounds.width - 20);
+      expect(Math.abs(configureBounds.y - runBounds.y)).toBeLessThan(1);
+      expect(Math.abs(runBounds.x + runBounds.width - actionBounds.x - actionBounds.width)).toBeLessThan(1);
+      expect((await task.boundingBox()).height).toBeLessThan(width <= 1024 ? 150 : 135);
+      await configure.focus();
+      await expect(configure).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(run).toBeFocused();
+      expect(await run.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('solid');
       await expect(task.locator('.scheduled-task-run')).toHaveAccessibleName('Run once');
       await expect(configure).toBeVisible();
       if (width <= 768) {
@@ -697,7 +718,21 @@ test('task status panel preserves schedules, pinned header access, scrolling and
         await touchTargets(task, 'button');
       }
       await noOverflow(page, ['.yeaft-session-status-pane', '.scheduled-task-bar']);
+      await run.blur();
+      await page.mouse.move(0, 0);
       await shot(page, testInfo, `task-status-${theme}-${width}.png`);
+      await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'zh-CN'; });
+      await expect(task.locator('.scheduled-task-configure')).toHaveText('配置');
+      await expect(task.locator('.scheduled-task-run')).toHaveText('额外执行一次');
+      await expect(task.locator('.scheduled-task-run')).toHaveAccessibleDescription('仅额外执行本次，不改变原有计划。');
+      await noOverflow(page, ['.scheduled-task-bar', '.scheduled-task-bar-actions']);
+      const chineseActions = await task.locator('.scheduled-task-bar-actions button').evaluateAll(buttons =>
+        buttons.map(button => { const rect = button.getBoundingClientRect(); return { y: rect.y, width: rect.width }; }));
+      expect(Math.abs(chineseActions[0].y - chineseActions[1].y)).toBeLessThan(1);
+      expect(chineseActions[0].width + chineseActions[1].width).toBeLessThan(actionBounds.width - 20);
+      await shot(page, testInfo, `task-status-zh-${theme}-${width}.png`);
+      await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'en'; });
+      await expect(run).toHaveText('Run once');
       // A pending manual request cannot be submitted twice, and never changes
       // the recurring trigger or other saved configuration.
       holdRuns = true;

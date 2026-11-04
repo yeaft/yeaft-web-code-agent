@@ -62,13 +62,12 @@ export default {
         </dl>
         <p v-if="unavailable && unavailable !== 'scheduledTasks.running'" class="scheduled-task-help" role="status">{{ $t(unavailable) }}</p>
         <div class="scheduled-task-bar-actions">
-          <button type="button" class="btn btn-secondary" @click="$emit('configure')">{{ $t('scheduledTasks.configure') }}</button>
-          <button type="button" class="btn btn-primary scheduled-task-run" :disabled="busy || !!unavailable" :aria-label="$t(busy ? 'scheduledTasks.starting' : 'scheduledTasks.runOnce')" :title="$t(unavailable || (busy ? 'scheduledTasks.starting' : 'scheduledTasks.runOnce'))" :aria-busy="busy" @click="run">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>
+          <button type="button" class="btn-ghost scheduled-task-configure" @click="$emit('configure')">{{ $t('scheduledTasks.configure') }}</button>
+          <button type="button" class="btn-ghost scheduled-task-run" :disabled="busy || !!unavailable" :aria-label="$t(busy ? 'scheduledTasks.starting' : 'scheduledTasks.runOnce')" :aria-description="$t('scheduledTasks.runOnceHelp')" :title="$t(unavailable || (busy ? 'scheduledTasks.starting' : 'scheduledTasks.runOnceHelp'))" :aria-busy="busy" @click="run">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>
             <span>{{ $t(busy ? 'scheduledTasks.starting' : 'scheduledTasks.runOnce') }}</span>
           </button>
         </div>
-        <p class="scheduled-task-help">{{ $t('scheduledTasks.runOnceHelp') }}</p>
         <p v-if="taskError" class="scheduled-task-error" role="alert">{{ taskError }}</p>
       </div>
     </section>
