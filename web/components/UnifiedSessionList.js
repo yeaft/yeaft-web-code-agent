@@ -244,6 +244,8 @@ export default {
   data() {
     return {
       actionGeneration: 0,
+      actionsCompact: false,
+      sessionListOverflows: false,
       collapsedProjects: {},
       collapsedSections: readCollapsedSections(),
       openMenuKey: null,
@@ -276,8 +278,18 @@ export default {
     document.addEventListener('keydown', this.closeMenusFromKeyboard);
     window.addEventListener('resize', this.positionFloatingMenu);
     window.addEventListener('scroll', this.positionFloatingMenu, true);
+    this.actionsResizeObserver = new ResizeObserver(this.scheduleOverflowCheck);
+    for (const element of [this.$el, this.$refs.sessionResults, ...this.$refs.sessionResults.querySelectorAll('.sidebar-section')]) {
+      this.actionsResizeObserver.observe(element);
+    }
+    this.scheduleOverflowCheck();
+  },
+  updated() {
+    this.scheduleOverflowCheck();
   },
   beforeUnmount() {
+    this.actionsResizeObserver?.disconnect();
+    cancelAnimationFrame(this.overflowCheckFrame);
     document.removeEventListener('pointerdown', this.closeMenusFromDocument, true);
     document.removeEventListener('keydown', this.closeMenusFromKeyboard);
     window.removeEventListener('resize', this.positionFloatingMenu);
@@ -350,6 +362,24 @@ export default {
     },
   },
   methods: {
+    scheduleOverflowCheck() {
+      if (this.overflowCheckFrame) return;
+      this.overflowCheckFrame = requestAnimationFrame(() => {
+        this.overflowCheckFrame = null;
+        this.measureSessionOverflow();
+      });
+    },
+    measureSessionOverflow() {
+      const results = this.$refs.sessionResults;
+      // A closed desktop rail / mobile drawer has no useful geometry. Keep
+      // the last measurement until ResizeObserver sees it become visible.
+      if (!results?.clientHeight || !results.clientWidth) return;
+      const sections = [...results.querySelectorAll('.sidebar-section:not(.is-collapsed)')];
+      this.sessionListOverflows = [results, ...sections].some(element => element.scrollHeight > element.clientHeight + 1);
+    },
+    toggleCompactActions() {
+      this.actionsCompact = !this.actionsCompact;
+    },
     closeMenus() {
       this.openMenuKey = null;
       this.openProjectMenuKey = null;
@@ -995,15 +1025,17 @@ export default {
   },
   template: `
     <nav class="sidebar-navigation" :aria-busy="loading" :aria-label="$t('sidebar.surface.sessions')">
-      <div class="sidebar-primary-actions">
+      <div class="sidebar-primary-actions" :class="{ 'is-compact': actionsCompact }">
         <button type="button" class="btn-ghost sidebar-primary-action" :disabled="loading" @click="createSession" :title="$t('sidebar.sessions.newChat')" :aria-label="$t('sidebar.sessions.newChat')">
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path class="sidebar-primary-action-frame" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
             <path class="sidebar-primary-action-pen" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852Z"/>
           </svg>
+          <span v-if="!actionsCompact">{{ $t('sidebar.sessions.newChat') }}</span>
         </button>
         <button type="button" class="btn-ghost sidebar-primary-action sidebar-task-create" :disabled="loading" @click="createTask" :title="$t('scheduledTasks.new')" :aria-label="$t('scheduledTasks.new')">
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span v-if="!actionsCompact">{{ $t('scheduledTasks.new') }}</span>
         </button>
         <slot name="after-create">
           <button v-if="resolvedProjectStore?.openPluginCenter" type="button"
@@ -1013,11 +1045,12 @@ export default {
                   :aria-current="resolvedProjectStore.pluginCenterOpen ? 'page' : undefined"
                   :disabled="!(resolvedProjectStore.pluginCenterAgents || agents).some(agent => agent?.online || resolvedProjectStore.pluginConfigByAgent?.[agent.id]?.loaded)" @click="openPlugins">
             <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 5V4a2.5 2.5 0 0 1 5 0v1h3a2 2 0 0 1 2 2v3h1a2.5 2.5 0 0 1 0 5h-1v4a2 2 0 0 1-2 2h-3v-1a2.5 2.5 0 0 0-5 0v1H5a2 2 0 0 1-2-2v-4h1a2.5 2.5 0 0 0 0-5H3V7a2 2 0 0 1 2-2Z"/></svg>
+            <span v-if="!actionsCompact">{{ $t('yeaft.plugins.title') }}</span>
           </button>
         </slot>
       </div>
 
-      <div class="sidebar-session-results" :class="{ 'sections-resizable': !isSectionCollapsed('projects') && !isSectionCollapsed('recents'), 'projects-collapsed': isSectionCollapsed('projects'), 'recents-collapsed': isSectionCollapsed('recents') }" :style="{ '--sidebar-projects-track': (sectionRatio * 100) + 'fr', '--sidebar-recents-track': ((1 - sectionRatio) * 100) + 'fr' }">
+      <div ref="sessionResults" class="sidebar-session-results" :class="{ 'sections-resizable': !isSectionCollapsed('projects') && !isSectionCollapsed('recents'), 'projects-collapsed': isSectionCollapsed('projects'), 'recents-collapsed': isSectionCollapsed('recents') }" :style="{ '--sidebar-projects-track': (sectionRatio * 100) + 'fr', '--sidebar-recents-track': ((1 - sectionRatio) * 100) + 'fr' }">
         <section class="sidebar-section projects-section" :class="{ 'is-collapsed': isSectionCollapsed('projects') }">
           <div class="sidebar-section-heading">
             <button type="button" class="sidebar-section-toggle" @click="toggleSection('projects')" :aria-expanded="String(!isSectionCollapsed('projects'))">
@@ -1144,6 +1177,13 @@ export default {
         </section>
       </div>
 
+      <button v-if="actionsCompact || sessionListOverflows" type="button"
+              class="btn-ghost sidebar-actions-toggle" :aria-expanded="!actionsCompact"
+              :title="$t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse')"
+              @click="toggleCompactActions">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :d="actionsCompact ? 'm8 7 4-4 4 4M8 17l4 4 4-4' : 'm8 3 4 4 4-4M8 21l4-4 4 4'"/></svg>
+        <span>{{ $t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse') }}</span>
+      </button>
       <div v-if="preferencesError" class="sidebar-preferences-error" role="status">
         <span>{{ $t('sidebar.sectionResize.' + preferencesError + 'Error') }}</span>
         <button v-if="preferencesError === 'load'" type="button" class="btn-ghost" @click="refreshPreferences">{{ $t('common.retry') }}</button>

@@ -44,16 +44,35 @@ function renderList(extraProps = {}) {
 }
 
 describe('Plugin Center sidebar navigation', () => {
-  it('places the shared Plugins entry after New chat and moves the active marker without changing Session identity', async () => {
+  it('keeps labeled shortcuts by default, offers reversible compact mode on overflow and preserves Session identity', async () => {
     renderList();
     const buttons = wrapper.get('.sidebar-primary-actions').findAll('button');
     const names = [en['sidebar.sessions.newChat'], en['scheduledTasks.new'], en['yeaft.plugins.title']];
     expect(buttons.map(button => button.attributes('aria-label'))).toEqual(names);
     expect(buttons.map(button => button.attributes('title'))).toEqual(names);
+    expect(buttons.map(button => button.text())).toEqual(names);
+    expect(wrapper.find('.sidebar-actions-toggle').exists()).toBe(false);
+    const results = wrapper.get('.sidebar-session-results').element;
+    const recents = wrapper.get('.recents-section').element;
+    Object.defineProperties(results, { clientHeight: { configurable: true, value: 300 }, clientWidth: { configurable: true, value: 260 } });
+    Object.defineProperties(recents, { clientHeight: { configurable: true, value: 100 }, scrollHeight: { configurable: true, value: 180 } });
+    wrapper.vm.measureSessionOverflow();
+    await Vue.nextTick();
+    expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-expanded')).toBe('true');
+    await wrapper.get('.sidebar-actions-toggle').trigger('click');
+    expect(wrapper.get('.sidebar-primary-actions').classes()).toContain('is-compact');
     for (const button of buttons) {
       expect(button.text()).toBe('');
       expect(button.findAll('svg[aria-hidden="true"]')).toHaveLength(1);
     }
+    Object.defineProperty(recents, 'scrollHeight', { configurable: true, value: 100 });
+    wrapper.vm.measureSessionOverflow();
+    await Vue.nextTick();
+    // Compact mode must retain its restore control even when all rows now fit.
+    expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-expanded')).toBe('false');
+    await wrapper.get('.sidebar-actions-toggle').trigger('click');
+    expect(buttons.map(button => button.text())).toEqual(names);
+    expect(wrapper.find('.sidebar-actions-toggle').exists()).toBe(false);
     expect(wrapper.get('.sidebar-session-row').classes()).toContain('active');
     await wrapper.get('.sidebar-plugins-entry').trigger('click');
     expect(store.openPluginCenter).toHaveBeenCalledOnce();

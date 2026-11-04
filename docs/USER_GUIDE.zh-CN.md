@@ -10,6 +10,10 @@
 - [快速开始](./guide/getting-started.md)
 - [选择代码 Agent 路径](./guide/user/choose-backend.md)
 
+## 侧栏快捷入口
+
+「新建聊天 / 新建任务 / 插件」默认逐行显示图标和文字。Session 列表需要滚动时，列表底部会出现「收起快捷入口」；点击后改为一行小图标，为列表腾出空间。收起状态始终保留「展开快捷入口」，再次点击即可恢复文字布局；不会因空间变化自动切换。状态仅保留在当前侧栏，刷新页面恢复展开。
+
 ## 原生 Yeaft
 
 - [Session 与 Project](./guide/user/yeaft-session.md)

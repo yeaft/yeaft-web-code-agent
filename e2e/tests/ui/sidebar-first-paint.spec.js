@@ -63,23 +63,21 @@ for (const surface of [
     for (const [index, name] of ['New chat', 'New task', 'Plugins'].entries()) {
       await expect(actions.nth(index)).toHaveAccessibleName(name);
       await expect(actions.nth(index)).toHaveAttribute('title', name);
-      await expect(actions.nth(index)).toHaveText('');
+      await expect(actions.nth(index)).toHaveText(name);
     }
     const bounds = await actions.evaluateAll(buttons => buttons.map(button => {
-      const { x, y, width, height } = button.getBoundingClientRect();
-      return { x, y, width, height };
+      const { y, height } = button.getBoundingClientRect();
+      return { y, height };
     }));
-    expect(new Set(bounds.map(box => box.y)).size).toBe(1);
     for (const [index, box] of bounds.entries()) {
-      expect(box.width).toBe(34);
       expect(box.height).toBe(34);
-      if (index) expect(box.x).toBeGreaterThanOrEqual(bounds[index - 1].x + bounds[index - 1].width);
+      if (index) expect(box.y).toBeGreaterThanOrEqual(bounds[index - 1].y + bounds[index - 1].height);
     }
     expect(await actions.locator('svg').evaluateAll(icons => icons.every(icon => {
       const { width, height } = icon.getBoundingClientRect();
       return width === 18 && height === 18;
     }))).toBe(true);
-    expect(await navigation.locator('.sidebar-primary-actions').evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(44);
+    await expect(navigation.locator('.sidebar-actions-toggle')).toHaveCount(0);
     await expect(navigation.locator('.sidebar-section')).toHaveClass([
       'sidebar-section projects-section', 'sidebar-section recents-section',
     ]);
