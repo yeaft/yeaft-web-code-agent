@@ -357,6 +357,33 @@ describe('Scenario VP catalog compatibility', () => {
     expect(vp.vps.linus).toBeTruthy();
   });
 
+  it('keeps active and cached list ordering coherent across Agent switches, removals and new custom VPs', () => {
+    vp.applySnapshot({ vps: [{ vpId: 'omni' }, { vpId: 'remove-me' }] }, 'a', 'initial');
+    vp.beginSnapshot('b', 'b-list', { target: true });
+    vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'B Omni' }] }, 'b', 'b-list');
+    vp.activateAgent('b'); vp.activateAgent('a');
+    vp.remove('remove-me', 'file.removed', 'a');
+    vp.upsert({ vpId: 'new-custom', displayName: 'New custom' }, 'file.added', 'a');
+    expect(ids(vp.vpList)).toEqual(['omni', 'new-custom']);
+    expect(ids(vp.vpListForAgent('a'))).toEqual(['omni', 'new-custom']);
+    vp.activateAgent('b'); vp.activateAgent('a');
+    expect(ids(vp.vpList)).toEqual(['omni', 'new-custom']);
+    expect(vp.vpLabel('new-custom')).toBe('New custom');
+  });
+
+  it('fails closed for double-unstamped legacy frames with multiple Agent scopes but accepts a unique scope', () => {
+    expect(vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'Unique A' }] })).toBe(true);
+    vp.beginSnapshot('b', 'pending-b', { target: true });
+    expect(vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'Ambiguous B' }] })).toBe(false);
+    expect(vp.upsert({ vpId: 'omni', displayName: 'Ambiguous live' })).toBe(false);
+    expect(vp.remove('omni')).toBe(false);
+    expect(vp.vpLabel('omni')).toBe('Unique A');
+    expect(vp.snapshotForAgent('b').snapshotStatus).toBe('loading');
+    expect(vp.applySnapshot({ vps: [{ vpId: 'omni', displayName: 'Stamped B' }] }, 'b')).toBe(true);
+    expect(vp.vpLabel('omni')).toBe('Unique A');
+    expect(vp.vpLabel('omni', 'b')).toBe('Stamped B');
+  });
+
   it('discards active and background private libraries on auth reset and rejects their late correlated replies', () => {
     const auth = useAuthStore();
     vp.beginSnapshot('b', 'private-b', { target: true });
@@ -371,6 +398,8 @@ describe('Scenario VP catalog compatibility', () => {
     expect(chat._yeaftVpSubscribedAgentKey).toBeNull();
     expect(vp.applySnapshot({ vps: [{ vpId: 'private-b' }] }, 'b', 'private-b')).toBe(false);
     expect(vp.applySnapshot({ vps: library() }, 'a', 'initial')).toBe(false);
+    expect(vp.applySnapshot({ vps: [{ vpId: 'late-private' }] })).toBe(false);
+    expect(vp.upsert({ vpId: 'late-private' }, null, 'a')).toBe(false);
     expect(vp.vpList).toEqual([]);
     auth.userId = 'owner-a'; auth.token = 'owner-token'; auth.isAuthenticated = true;
     vp.beginSnapshot('a', 'new-owner-library');

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -25,6 +25,37 @@ afterEach(async () => {
 });
 
 describe('VP catalog and durable Session compatibility', () => {
+  it('rejects missing new members at the real Agent create boundary without altering old Sessions or partial writes', async () => {
+    const root = temp('yeaft-vp-create-boundary-');
+    const { default: ctx } = await import('../../../agent/context.js');
+    const bridge = await import('../../../agent/yeaft/web-bridge.js');
+    const keys = ['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired', 'messageBuffer', 'messageBufferBytes'];
+    const previous = Object.fromEntries(keys.map(key => [key, ctx[key]]));
+    ctx.CONFIG = { yeaftDir: root }; ctx.ws = { readyState: 1, send() {} };
+    ctx.serverEncryptionRequired = false; ctx.outboundSendQueue = []; ctx.outboundSendQueueActive = true;
+    ctx.messageBuffer = []; ctx.messageBufferBytes = 0;
+    const result = requestId => ctx.outboundSendQueue.find(item => item.msg.event?.requestId === requestId)?.msg.event;
+    try {
+      bridge.handleYeaftCreateSession({ requestId: 'missing-vp', payload: { name: 'Missing', roster: ['missing-custom'], defaultVpId: 'missing-custom' } });
+      expect(result('missing-vp')).toMatchObject({ ok: false, error: { code: 'vp_not_found', message: expect.stringContaining('missing-custom') } });
+      expect(existsSync(join(root, 'sessions-manifest.json'))).toBe(false);
+      expect(existsSync(join(root, 'sessions'))).toBe(false);
+      seedDefaultVps(join(root, 'virtual-persons'));
+      bridge.handleYeaftCreateSession({ requestId: 'partial-vp', payload: { name: 'Partial', roster: ['linus', 'missing-custom'], defaultVpId: 'linus' } });
+      expect(result('partial-vp')).toMatchObject({ ok: false, error: { code: 'vp_not_found' } });
+      expect(existsSync(join(root, 'sessions'))).toBe(false);
+      bridge.handleYeaftCreateSession({ requestId: 'valid-vp', payload: { name: 'Legacy chosen', roster: ['linus', 'martin'], defaultVpId: 'linus' } });
+      expect(result('valid-vp')).toMatchObject({ ok: true, session: { roster: ['linus', 'martin'], defaultVpId: 'linus' } });
+      const metadata = join(root, 'sessions', result('valid-vp').session.id, 'session.json');
+      const before = readFileSync(metadata, 'utf8');
+      rmSync(join(root, 'virtual-persons', 'linus'), { recursive: true });
+      bridge.handleYeaftCreateSession({ requestId: 'deleted-vp', payload: { name: 'Deleted', roster: ['linus'], defaultVpId: 'linus' } });
+      expect(result('deleted-vp')).toMatchObject({ ok: false, error: { code: 'vp_not_found' } });
+      expect(readFileSync(metadata, 'utf8')).toBe(before);
+      expect(snapshotSessions(root)).toHaveLength(1);
+    } finally { Object.assign(ctx, previous); }
+  });
+
   it('starts fresh with one generalist but never rebuilds an existing legacy roster on restart', () => {
     const yeaftDir = temp('yeaft-vp-session-');
     const libDir = join(yeaftDir, 'virtual-persons');

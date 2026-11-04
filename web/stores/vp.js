@@ -147,6 +147,7 @@ export const useVpStore = defineStore('vp', {
     snapshotAgentId: null,
     snapshotRequestId: null,
     snapshotError: '',
+    snapshotsEnabled: true,
     // Modal requests have independent Agent scopes; they must never take over
     // the flat collection used by the visible Session's identity and @ picker.
     targetSnapshots: {},
@@ -235,6 +236,7 @@ export const useVpStore = defineStore('vp', {
       this.beginSnapshot(null, null);
       this.snapshotStatus = 'idle';
       this.targetSnapshots = {};
+      this.snapshotsEnabled = false;
     },
 
     /**
@@ -265,6 +267,7 @@ export const useVpStore = defineStore('vp', {
 
     /** target requests are modal-local; the default resets the visible view. */
     beginSnapshot(agentId, requestId, { target = false } = {}) {
+      this.snapshotsEnabled = true;
       const scope = {
         vps: {}, vpOrder: [], emptyLibrary: false, lastSnapshotAt: 0,
         lastVpSnapshotAgentId: null, lastChange: null,
@@ -280,15 +283,20 @@ export const useVpStore = defineStore('vp', {
 
     /** Only actual Session/Agent activation may change the visible projection. */
     activateAgent(agentId) {
-      if (!agentId || this.snapshotAgentId === agentId) return;
+      if (!agentId) return;
+      this.snapshotsEnabled = true;
+      if (this.snapshotAgentId === agentId) return;
       const fields = ['vps', 'vpOrder', 'emptyLibrary', 'lastSnapshotAt', 'lastChange',
         'lastVpSnapshotAgentId', 'snapshotStatus', 'snapshotAgentId', 'snapshotRequestId', 'snapshotError'];
-      if (this.snapshotAgentId && !this.targetSnapshots[this.snapshotAgentId]) {
-        this.targetSnapshots[this.snapshotAgentId] = Object.fromEntries(fields.map(key => [key, this[key]]));
+      const copyScope = scope => Object.fromEntries(fields.map(key => [key,
+        key === 'vps' ? { ...scope.vps } : key === 'vpOrder' ? [...scope.vpOrder] : scope[key],
+      ]));
+      if (this.snapshotAgentId) {
+        this.targetSnapshots[this.snapshotAgentId] = copyScope(this);
       }
       const cached = this.targetSnapshots[agentId];
       if (cached) {
-        for (const key of fields) this[key] = cached[key];
+        Object.assign(this, copyScope(cached));
       } else {
         this.beginSnapshot(agentId, null);
       }
@@ -309,7 +317,13 @@ export const useVpStore = defineStore('vp', {
 
     /** Route snapshots by request + Agent, and legacy/live events by Agent. */
     _snapshotScopes(agentId, requestId = null) {
+      if (!this.snapshotsEnabled) return [];
       const targets = Object.values(this.targetSnapshots);
+      if (!agentId && !requestId) {
+        const agents = new Set([this.snapshotAgentId, ...targets.map(scope => scope.snapshotAgentId)].filter(Boolean));
+        // Double-unstamped legacy frames are safe only in a unique-Agent scope.
+        if (agents.size > 1 || (!this.snapshotAgentId && targets.length > 0)) return [];
+      }
       return [this, ...targets].filter(scope => {
         const isActive = scope === this;
         if (agentId && scope.snapshotAgentId && agentId !== scope.snapshotAgentId) return false;

@@ -133,7 +133,7 @@ describe('Yeaft Plugin Skill detail relay', () => {
 });
 
 describe('Yeaft legacy Session roster deltas', () => {
-  it('persists an explicit null default after the last removal without changing omitted defaults or another Agent', async () => {
+  it.each(['legacy', 'envelope'])('persists an explicit null default through %s roster deltas without changing other Agents', async format => {
     CONFIG.skipAuth = false;
     const owner = userDb.getOrCreate('roster-delta-owner');
     const agent = { ownerId: owner.id, conversations: new Map() };
@@ -144,18 +144,19 @@ describe('Yeaft legacy Session roster deltas', () => {
         roster: ['linus', 'martin'], defaultVpId: 'linus', workDir: '/repo',
         announcement: 'Keep guidance', config: { model: 'test/model' }, createdAt: 1 });
     }
-    await handleAgentOutput('roster-a', agent, { type: 'session_roster_changed',
-      sessionId: 'legacy-team', roster: ['martin'] });
+    const emit = event => handleAgentOutput('roster-a', agent,
+      format === 'envelope' ? { type: 'yeaft_output', event } : event);
+    await emit({ type: 'session_roster_changed', sessionId: 'legacy-team', roster: ['martin'] });
     expect(sessions.getForAgent(owner.id, 'roster-a', 'legacy-team'))
       .toMatchObject({ roster: ['martin'], defaultVpId: 'linus', announcement: 'Keep guidance' });
-    await handleAgentOutput('roster-a', agent, { type: 'session_roster_changed',
-      sessionId: 'legacy-team', roster: [], defaultVpId: null });
+    await emit({ type: 'session_roster_changed', sessionId: 'legacy-team', roster: [], defaultVpId: null });
     expect(sessions.getForAgent(owner.id, 'roster-a', 'legacy-team'))
       .toMatchObject({ roster: [], defaultVpId: null, workDir: '/repo', config: { model: 'test/model' } });
     expect(sessions.getForAgent(owner.id, 'roster-b', 'legacy-team'))
       .toMatchObject({ roster: ['linus', 'martin'], defaultVpId: 'linus' });
-    expect(client.sent.at(-1)).toMatchObject({ type: 'session_roster_changed',
-      agentId: 'roster-a', roster: [], defaultVpId: null });
+    expect(client.sent.at(-1)).toMatchObject(format === 'envelope'
+      ? { type: 'yeaft_output', agentId: 'roster-a', event: { type: 'session_roster_changed', roster: [], defaultVpId: null } }
+      : { type: 'session_roster_changed', agentId: 'roster-a', roster: [], defaultVpId: null });
   });
 });
 
