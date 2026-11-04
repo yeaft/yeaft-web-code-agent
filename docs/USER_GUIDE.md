@@ -12,7 +12,9 @@ This stable URL is a compact index of the current product documentation.
 
 ## Sidebar shortcuts
 
-**New chat / New task / Plugins** show icons and labels on separate rows by default. When the Session list needs scrolling, a compact icon appears at the lower-right of the shortcuts, beside the last entry. Click it to switch to a row of small icons and make more room for Sessions. The expand icon stays immediately after that row; layouts never switch automatically. This preference is stored on the Server per signed-in user and shared across desktops. Reloading, signing in again, or returning focus to a window loads the latest choice. Failed saves are disclosed and restore the previous settings.
+**New chat / New task / Plugins** show icons and labels on separate rows by default. When the Session list needs scrolling, hover over the shortcuts to reveal an upward collapse arrow at the far right. Click it to switch to a row of small icons and make more room for Sessions. A downward expand arrow stays at the far right of the compact row; layouts never switch automatically. This preference is stored on the Server per signed-in user and shared across desktops. Reloading, signing in again, or returning focus to a window loads the latest choice. Failed saves are disclosed and restore the previous settings.
+
+Shortcuts and the **Projects / Recents** sections use matching vertical arrows: up to collapse, down to expand. Section actions and shortcut disclosure controls appear on hover or keyboard focus, and remain visible on touch devices. Each project folder also offers separate **New chat / New task** icons on hover or focus; the created chat or task belongs to that project.
 
 ## Native Yeaft
 

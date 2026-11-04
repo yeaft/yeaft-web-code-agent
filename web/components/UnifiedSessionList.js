@@ -621,12 +621,12 @@ export default {
       if (this.workCenterOpen) this.$emit('close-work-center');
       this.$emit('create');
     },
-    createSessionInProject(project) {
+    createSessionInProject(project, { taskMode = false } = {}) {
       if (!this.canEditProject(project)) return;
       this.closeMenus();
       this.resolvedProjectStore?.closePluginCenter?.();
       if (this.workCenterOpen) this.$emit('close-work-center');
-      this.$emit('create-in-project', { project });
+      this.$emit('create-in-project', { project, taskMode });
     },
     selectRow(row, event, options = {}) {
       if (this.loading) return;
@@ -1130,7 +1130,13 @@ export default {
                 <span v-if="isProjectUnread(project)" class="sidebar-session-unread sidebar-project-unread" :aria-label="$t('sidebar.sessions.unread')"></span>
               </button>
               <button v-if="canEditProject(project)" type="button" class="sidebar-project-session-create" @click.stop="createSessionInProject(project)" :title="$t('sidebar.projects.newSession', { name: project.name })" :aria-label="$t('sidebar.projects.newSession', { name: project.name })">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                  <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852Z"/>
+                </svg>
+              </button>
+              <button v-if="canEditProject(project)" type="button" class="sidebar-project-session-create sidebar-project-task-create" @click.stop="createSessionInProject(project, { taskMode: true })" :title="$t('sidebar.projects.newTask', { name: project.name })" :aria-label="$t('sidebar.projects.newTask', { name: project.name })">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
               </button>
               <button v-if="canEditProject(project)" type="button" class="session-dots-btn" :class="{ 'menu-open': openProjectMenuKey === projectKey(project) }" @click.stop="toggleProjectMenu(project, $event)" :aria-label="$t('sidebar.projects.menu')">
                 <svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>

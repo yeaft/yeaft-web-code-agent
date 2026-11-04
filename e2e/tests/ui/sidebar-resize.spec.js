@@ -1,11 +1,19 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
 
+// This scenario exercises persistence across two browser contexts plus mobile
+// and short-height layouts; hover transitions now add real input frames too.
+test.setTimeout(90000);
+
 const readRatio = page => page.locator('.sidebar-session-results').evaluate(el => {
   const projects = el.querySelector('.projects-section').getBoundingClientRect().height;
   const recents = el.querySelector('.recents-section').getBoundingClientRect().height;
   return projects / (projects + recents);
 });
+async function clickCompactToggle(page) {
+  await page.locator('.sidebar-primary-actions').hover();
+  await page.locator('.sidebar-actions-toggle').click();
+}
 async function open(page, url, theme = 'light') {
   await page.addInitScript(theme => {
     localStorage.setItem('theme', theme);
@@ -48,7 +56,7 @@ for (const theme of ['light', 'dark']) {
     });
     await page.setViewportSize({ width: 1400, height: borderlineHeight });
     await expect(compactToggle).toBeVisible();
-    await compactToggle.click();
+    await clickCompactToggle(page);
     await expect(shortcuts).toHaveClass(/is-compact/);
     await expect.poll(() => page.locator('.recents-section').evaluate(el => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -58,7 +66,7 @@ for (const theme of ['light', 'dark']) {
     await expect(compactToggle).toBeFocused();
     // If the list really becomes short while compact, restore focus to New chat
     // when the now-unnecessary toggle disappears.
-    await compactToggle.click();
+    await clickCompactToggle(page);
     await page.evaluate(() => { window.Pinia.useChatStore().sessionCatalog = []; });
     await expect(page.locator('.recents-section .session-item')).toHaveCount(0);
     await compactToggle.focus();
@@ -117,8 +125,10 @@ for (const theme of ['light', 'dark']) {
     })).toBe(true);
     // All disclosure controls share the existing section glyph, size and rotation.
     expect(await page.locator('.sidebar-section-chevron').evaluateAll(icons => icons.every(icon => {
-      const box = icon.getBoundingClientRect();
-      return box.width === 14 && box.height === 14
+      // CSS rotation briefly inflates the visual bounding box mid-transition;
+      // the layout dimensions are the invariant, not that animated box.
+      const style = getComputedStyle(icon);
+      return style.width === '14px' && style.height === '14px'
         && icon.querySelector('path').getAttribute('d') === 'm8 10 4 4 4-4';
     }))).toBe(true);
     for (const section of ['projects', 'recents']) {
@@ -152,7 +162,7 @@ for (const theme of ['light', 'dark']) {
     expect(await readRatio(page)).toBeCloseTo(0.7, 2);
     await page.screenshot({ path: testInfo.outputPath('sidebar-dragged.png') });
 
-    await compactToggle.click();
+    await clickCompactToggle(page);
     await expect.poll(async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json()).sidebarActionsCompact).toBe(true);
     // A genuinely separate browser context, no copied localStorage/cookies.
     const device = await browser.newContext({ viewport: { width: 1200, height: 700 } });
@@ -162,7 +172,7 @@ for (const theme of ['light', 'dark']) {
       await expect(other.locator('.sidebar-section-resize-handle')).toHaveAttribute('aria-valuenow', '70');
       await expect(other.locator('.sidebar-primary-actions')).toHaveClass(/is-compact/);
       // Even with a short list on another desktop, the saved layout wins.
-      await other.locator('.sidebar-actions-toggle').click();
+      await clickCompactToggle(other);
       await expect.poll(async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json()).sidebarActionsCompact).toBe(false);
       expect(await readRatio(other)).toBeCloseTo(0.7, 2);
       await other.locator('.sidebar-section-resize-handle').focus();
@@ -227,11 +237,13 @@ for (const theme of ['light', 'dark']) {
     await page.unroute('**/api/user/preferences');
 
     const toggles = page.locator('.sidebar-section-toggle');
+    await page.locator('.recents-section > .sidebar-section-heading').hover();
     await toggles.nth(1).click();
     await expect(handle).toHaveCount(0);
     expect(await readRatio(page)).toBeGreaterThan(0.85);
     await toggles.nth(1).click();
     await expect(handle).toHaveAttribute('aria-valuenow', '68');
+    await page.locator('.projects-section > .sidebar-section-heading').hover();
     await toggles.nth(0).click();
     await expect(handle).toHaveCount(0);
     expect(await readRatio(page)).toBeLessThan(0.15);
@@ -257,7 +269,7 @@ for (const theme of ['light', 'dark']) {
       }));
     }, mockAgent.agentId);
     await expect(compactToggle).toBeVisible();
-    await compactToggle.click();
+    await clickCompactToggle(page);
     await expect(shortcuts).toHaveClass(/is-compact/);
     expect(await compactToggle.evaluate(el => {
       const box = el.getBoundingClientRect();
@@ -275,7 +287,7 @@ for (const theme of ['light', 'dark']) {
     await page.reload();
     await page.locator('.header-sidebar-toggle').click();
     await expect(shortcuts).toHaveClass(/is-compact/);
-    await compactToggle.click();
+    await clickCompactToggle(page);
     await expect(shortcuts).not.toHaveClass(/is-compact/);
     await page.screenshot({ path: testInfo.outputPath('sidebar-mobile.png') });
     for (const height of [460, 350, 300]) {

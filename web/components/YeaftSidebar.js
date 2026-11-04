@@ -423,9 +423,9 @@ export default {
       this.sessionCreateOpen = true;
     },
     onUnifiedCreate() { this.onOpenSessionCreate(); },
-    onUnifiedCreateInProject({ project } = {}) {
-      this.sessionCreateTaskMode = false;
+    onUnifiedCreateInProject({ project, taskMode = false } = {}) {
       if (!project?.id) return;
+      this.sessionCreateTaskMode = taskMode === true;
       this.sessionCreateProject = project;
       this.sessionCreateOpen = true;
     },

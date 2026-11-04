@@ -492,9 +492,9 @@ export default {
       this.unifiedSessionCreateProvider = ['yeaft', 'copilot', 'claude-code'].includes(provider) ? provider : 'yeaft';
       this.unifiedSessionCreateOpen = true;
     },
-    onUnifiedCreateInProject({ project } = {}) {
-      this.unifiedSessionCreateTaskMode = false;
+    onUnifiedCreateInProject({ project, taskMode = false } = {}) {
       if (!project?.id) return;
+      this.unifiedSessionCreateTaskMode = taskMode === true;
       this.unifiedSessionCreateProject = project;
       this.unifiedSessionCreateProvider = 'yeaft';
       this.unifiedSessionCreateOpen = true;
