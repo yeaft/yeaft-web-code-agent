@@ -116,6 +116,7 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     for (const [index, name] of ['Projects', 'Recents'].entries()) {
       await expect(page.locator('.sidebar-section-toggle').nth(index)).toHaveAccessibleName(name);
     }
+    await page.locator('.recents-section > .sidebar-section-heading').hover();
     await page.locator('.recents-section .sidebar-recents-task-create').click();
     const modal = page.locator('.yeaft-session-create-modal.task-mode');
     await expect(modal).toBeVisible();
@@ -205,6 +206,7 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     await expect(page.locator('.tasks-section')).toHaveCount(0);
     for (const section of ['projects', 'recents']) {
       const toggle = page.locator(`.${section}-section .sidebar-section-toggle`);
+      await page.locator(`.${section}-section > .sidebar-section-heading`).hover();
       await toggle.click();
       await expect(toggle).toHaveAttribute('aria-expanded', 'false');
       await toggle.click();
