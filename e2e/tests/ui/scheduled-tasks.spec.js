@@ -607,7 +607,7 @@ test('task status panel preserves schedules, pinned header access, scrolling and
       await page.reload();
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     }
-    for (const width of [320, 390, 1440]) {
+    for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
       // MatchMedia changes arrive after setViewportSize. Wait for the rendered
       // sidebar projection, not a transient desktop-visible row on mobile.
@@ -685,7 +685,9 @@ test('task status panel preserves schedules, pinned header access, scrolling and
       await expect(task).toContainText('Next run');
       await expect(task).toContainText('Last run');
       await expect(task.locator('.scheduled-task-runtime > div').filter({ hasText: 'Next run' }).locator('time')).toBeVisible();
-      await expect(task).toContainText('Runs once without changing the schedule.');
+      await expect(task).not.toContainText('Runs once without changing the schedule.');
+      await expect(run).toHaveAttribute('title', 'Runs once without changing the schedule.');
+      await expect(run).toHaveAccessibleDescription('Runs once without changing the schedule.');
       await expect(run).toHaveText('Run once');
       await expect(task.locator('.scheduled-task-run')).toHaveAccessibleName('Run once');
       await expect(configure).toBeVisible();
@@ -697,6 +699,37 @@ test('task status panel preserves schedules, pinned header access, scrolling and
         await touchTargets(task, 'button');
       }
       await noOverflow(page, ['.yeaft-session-status-pane', '.scheduled-task-bar']);
+      for (const locale of ['en', 'zh-CN']) {
+        await page.evaluate(locale => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = locale; }, locale);
+        const actions = task.locator('.scheduled-task-bar-actions');
+        await expect(actions.locator('button').first()).toHaveText(locale === 'en' ? 'Configure' : '配置');
+        const geometry = await actions.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          return { width: bounds.width, controls: [...element.querySelectorAll('button')].map(button => {
+            const rect = button.getBoundingClientRect();
+            const style = getComputedStyle(button);
+            return { width: rect.width, height: rect.height, fontSize: style.fontSize,
+              fontWeight: style.fontWeight, background: style.backgroundColor, color: style.color };
+          }) };
+        });
+        for (const control of geometry.controls) {
+          expect(control.fontSize).toBe('12px');
+          expect(control.fontWeight).toBe('400');
+          expect(control.background).toBe('rgba(0, 0, 0, 0)');
+          expect(control.width).toBeLessThan(geometry.width / 2);
+          expect(control.height).toBe(width <= 768 ? 44 : 28);
+        }
+        await noOverflow(page, ['.scheduled-task-bar', '.scheduled-task-bar-actions']);
+        await task.screenshot({ path: resolve('.yeaft/verification/mobile-redesign', `task-compact-${locale}-${theme}-${width}.png`), animations: 'disabled' });
+      }
+      await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'en'; });
+      await configure.focus();
+      await page.keyboard.press('Tab');
+      await expect(run).toBeFocused();
+      await expect(run).toHaveCSS('outline-style', 'solid');
+      await page.keyboard.press('Shift+Tab');
+      await expect(configure).toBeFocused();
+      await expect(configure).toHaveCSS('outline-style', 'solid');
       await shot(page, testInfo, `task-status-${theme}-${width}.png`);
       // A pending manual request cannot be submitted twice, and never changes
       // the recurring trigger or other saved configuration.

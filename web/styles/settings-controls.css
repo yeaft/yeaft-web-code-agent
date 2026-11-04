@@ -4,7 +4,7 @@
 :is(.settings-dialog, .agent-settings-dialog, .work-center-settings-card,
     .group-settings-modal, .person-settings-modal .person-settings-footer,
     .yeaft-session-create-modal.task-mode .resume-modal-footer,
-    .scheduled-task-settings-footer, .scheduled-task-bar,
+    .scheduled-task-settings-footer,
     .scheduled-task-stale, .scheduled-task-existing-schedule)
 :is(.btn-primary, .btn-secondary, .btn-ghost, .sp-btn, .sp-btn-create,
     .search-btn-primary, .search-btn-secondary, .search-link-btn,
@@ -20,7 +20,7 @@
 :is(.settings-dialog, .agent-settings-dialog, .work-center-settings-card,
     .group-settings-modal, .person-settings-modal .person-settings-footer,
     .yeaft-session-create-modal.task-mode .resume-modal-footer,
-    .scheduled-task-settings-footer, .scheduled-task-bar,
+    .scheduled-task-settings-footer,
     .scheduled-task-stale, .scheduled-task-existing-schedule)
 :is(.btn-primary, .btn-secondary, .btn-ghost, .sp-btn, .sp-btn-create,
     .search-btn-primary, .search-btn-secondary, .search-link-btn,
@@ -35,7 +35,7 @@
 :is(.settings-dialog, .agent-settings-dialog, .work-center-settings-card,
     .group-settings-modal, .person-settings-modal .person-settings-footer,
     .yeaft-session-create-modal.task-mode .resume-modal-footer,
-    .scheduled-task-settings-footer, .scheduled-task-bar)
+    .scheduled-task-settings-footer)
 :is(.btn-primary, .sp-btn-primary, .search-btn-primary, .group-settings-primary) { font-weight: 600; }
 
 /* Removing a box must not remove the warning attached to destructive actions.
@@ -43,14 +43,14 @@
 :is(.settings-dialog, .agent-settings-dialog, .work-center-settings-card,
     .group-settings-modal, .person-settings-modal .person-settings-footer,
     .yeaft-session-create-modal.task-mode .resume-modal-footer,
-    .scheduled-task-settings-footer, .scheduled-task-bar,
+    .scheduled-task-settings-footer,
     .scheduled-task-stale, .scheduled-task-existing-schedule)
 :is(.sp-btn-danger, .mcp-btn-danger, .is-danger,
     .group-settings-delete-btn, .agent-settings-danger-button) { color: var(--error); }
 :is(.settings-dialog, .agent-settings-dialog, .work-center-settings-card,
     .group-settings-modal, .person-settings-modal .person-settings-footer,
     .yeaft-session-create-modal.task-mode .resume-modal-footer,
-    .scheduled-task-settings-footer, .scheduled-task-bar,
+    .scheduled-task-settings-footer,
     .scheduled-task-stale, .scheduled-task-existing-schedule)
 :is(.sp-btn-danger, .mcp-btn-danger, .is-danger,
     .group-settings-delete-btn, .agent-settings-danger-button, .quick-send-remove):hover:not(:disabled) {
