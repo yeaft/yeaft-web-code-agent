@@ -260,6 +260,9 @@ function replaceRoleBody(source, body) {
 function simpleFrontmatterFields(source) {
   const match = source.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/);
   if (!match) return null;
+  // User-owned behavioral metadata blocks every automatic write, including
+  // missing-field insertion. Do not combine a new stock shell with that prompt.
+  if (/(?:^|[{},])[ \t]*['"]?[\w.-]*(?:prompt|instruction)[\w.-]*['"]?[ \t]*:/im.test(match[2])) return null;
   const lines = match[2].split(/\r?\n/);
   const fields = new Map();
   let current = null;
@@ -290,16 +293,17 @@ function simpleFrontmatterFields(source) {
     if (!bullet || !current?.list || !singleLineScalar(bullet[1])) return null;
     current.end = index + 1;
   }
+  // These stock metadata fields are scalars. A list under `role:` must never
+  // be split by the legacy insertion path that adds a line after that key.
+  for (const key of ['id', 'name', 'nameZh', 'role', 'roleZh', 'description', 'descriptionZh', 'area', 'modelHint']) {
+    if (fields.get(key)?.list) return null;
+  }
   return { match, lines, fields };
 }
 
 export function backfillLocalizedPersonaBody(source, vp) {
   const frontmatter = simpleFrontmatterFields(source);
   if (!frontmatter) return null;
-  // Match raw instruction-like keys, including quoted/nested/flow spellings.
-  // Unsupported YAML is already excluded above; even an empty key is owned.
-  if (/(?:^|[{},])[ \t]*['"]?[\w.-]*(?:prompt|instruction)[\w.-]*['"]?[ \t]*:/im.test(frontmatter.match[2])) return null;
-
   const body = roleBodyOf(source).trim();
   const nextBody = typeof vp.persona === 'string' ? vp.persona.trim() : '';
   if (!body || !nextBody || body === nextBody) return null;

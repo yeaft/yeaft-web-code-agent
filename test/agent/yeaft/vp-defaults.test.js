@@ -200,16 +200,20 @@ describe('stock VP scenario defaults', () => {
       'behavior:\n  - - nested sequence',
     ];
     for (const prompt of customPrompts) {
-      for (const vp of PRIMARY_VPS) {
-        const source = buildRoleMd(shippedPayload(vp))
-          .replace('---\n\n', `${prompt}\n---\n\n`);
-        writeRole(vp, source);
-        sources.set(vp.vpId, source);
+      for (const completeMetadata of [true, false]) {
+        for (const vp of PRIMARY_VPS) {
+          const old = shippedPayload(vp);
+          const base = completeMetadata ? buildRoleMd(old)
+            : `---\nid: ${vp.vpId}\nname: ${old.displayName}\nrole: ${old.role}\n---\n\n${old.persona.trim()}\n`;
+          const source = base.replace('---\n\n', `${prompt}\n---\n\n`);
+          writeRole(vp, source);
+          sources.set(vp.vpId, source);
+        }
+        const result = topUpDefaultVps(libDir);
+        expect(result.errors).toEqual([]);
+        expect(result.personaBackfilled).toEqual([]);
+        for (const vp of PRIMARY_VPS) expect(readRole(vp)).toBe(sources.get(vp.vpId));
       }
-      const result = topUpDefaultVps(libDir);
-      expect(result.errors).toEqual([]);
-      expect(result.personaBackfilled).toEqual([]);
-      for (const vp of PRIMARY_VPS) expect(readRole(vp)).toBe(sources.get(vp.vpId));
     }
   });
 
@@ -222,6 +226,18 @@ describe('stock VP scenario defaults', () => {
     }
     expect(topUpDefaultVps(libDir).personaBackfilled).toEqual([]);
     for (const vp of PRIMARY_VPS) expect(readRole(vp)).toBe(sources.get(vp.vpId));
+  });
+
+  it('never splits user lists under scalar metadata when backfilling missing fields', () => {
+    const vp = PRIMARY_VPS.find(vp => vp.vpId === 'software-omni');
+    const old = shippedPayload(vp);
+    for (const key of ['role', 'name', 'description', 'roleZh']) {
+      const source = `---\nid: ${vp.vpId}\n${key}:\n  - My private value\n---\n\n${old.persona.trim()}\n`;
+      writeRole(vp, source);
+      expect(topUpDefaultVps(libDir).personaBackfilled).not.toContain(vp.vpId);
+      expect(readRole(vp)).toBe(source);
+      expect(parseRoleMd(readRole(vp)).meta[key]).toEqual(['My private value']);
+    }
   });
 
   it.each(['multiline description', 'multiline trait', 'duplicate field'])('preserves ambiguous user frontmatter: %s', kind => {
