@@ -84,7 +84,7 @@ export default {
           </div>
           <div>
             <dt>{{ $t('scheduledTasks.nextRun') }}</dt>
-            <dd><time v-if="task.enabled && nextRunAt">{{ formatTime(nextRunAt) }}</time><span v-else>{{ $t(task.trigger?.type === 'manual' ? 'scheduledTasks.trigger.manual' : !task.enabled ? 'scheduledTasks.paused' : 'scheduledTasks.none') }}</span></dd>
+            <dd><time v-if="task.enabled && nextRunAt">{{ formatTime(nextRunAt) }}</time><span v-else>{{ $t(!task.enabled ? 'scheduledTasks.paused' : task.trigger?.type === 'manual' ? 'scheduledTasks.trigger.manual' : 'scheduledTasks.none') }}</span></dd>
           </div>
         </dl>
         <p v-if="unavailable && unavailable !== 'scheduledTasks.running'" class="scheduled-task-help" role="status">{{ $t(unavailable) }}</p>

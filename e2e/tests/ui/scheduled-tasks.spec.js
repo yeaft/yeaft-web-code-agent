@@ -399,7 +399,7 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   await expect(page.locator('.scheduled-task-runtime [role="status"]')).toHaveText('Interrupted');
   await expect(stop).toHaveAccessibleName('Stop run');
   await expect(stop).toBeDisabled();
-  await expect(page.locator('.scheduled-task-runtime')).toContainText('Manual');
+  await expect(page.locator('.scheduled-task-runtime')).toContainText('Paused');
   for (const key of ['prompt', 'trigger', 'enabled', 'notify', 'revision', 'nextRunAt']) {
     expect(state.sessions.get(TASK_SESSION_ID).task[key]).toEqual(savedTask[key]);
   }

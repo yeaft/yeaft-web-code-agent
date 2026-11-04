@@ -318,6 +318,9 @@ it('prevents duplicate manual requests, preserves paused schedules and renders p
   expect(wrapper.find('.scheduled-task-state').exists()).toBe(false);
   expect(wrapper.get('.scheduled-task-runtime').text()).toContain(en['scheduledTasks.paused']);
   expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
+  await wrapper.setProps({ session: { id: 'task', task: { ...task, enabled: false } } });
+  expect(wrapper.get('.scheduled-task-runtime').text()).toContain(en['scheduledTasks.paused']);
+  await wrapper.setProps({ session: { id: 'task', task: scheduled } });
   expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeUndefined();
   await wrapper.get('.scheduled-task-run').trigger('click');
   expect(wrapper.get('.scheduled-task-run').attributes('aria-label')).toBe(en['scheduledTasks.starting']);
