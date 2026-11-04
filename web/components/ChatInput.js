@@ -285,12 +285,12 @@ export default {
     //   (IM layout gate). Consolidate into a `sessionsStore.activeGroupIdResolved`
     //   getter and migrate all call sites in a follow-up PR.
     const mentionVpCandidates = Vue.computed(() => {
-      if (!sessionsStore) return vpStore.vpList || [];
+      if (!sessionsStore) return selectMentionCandidates(vpStore.vpList, null, vpMentionQuery.value);
       const activeSessionId = store.yeaftActiveSessionFilter || sessionsStore.activeSessionId || null;
       const activeSession = typeof sessionsStore.sessionById === 'function'
         ? sessionsStore.sessionById(activeSessionId, store.currentAgent || null)
         : sessionsStore.sessions?.[activeSessionId];
-      return selectMentionCandidates(vpStore.vpList, activeSession);
+      return selectMentionCandidates(vpStore.vpList, activeSession, vpMentionQuery.value);
     });
     const filteredVpMentions = Vue.computed(() => (
       filterVpMentions(mentionVpCandidates.value, vpMentionQuery.value)

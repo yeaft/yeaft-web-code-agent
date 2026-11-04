@@ -1047,7 +1047,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
               roster: Array.isArray(msg.roster)
                 ? msg.roster
                 : (existing?.roster || []),
-              defaultVpId: msg.defaultVpId != null
+              defaultVpId: Object.hasOwn(msg, 'defaultVpId')
                 ? msg.defaultVpId
                 : (existing?.defaultVpId || null),
               workDir: existing?.workDir || '',

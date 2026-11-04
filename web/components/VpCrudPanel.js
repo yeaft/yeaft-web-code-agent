@@ -14,7 +14,7 @@ import { confirmDialog } from '../utils/dialog.js';
  *   Host may pass initialEditVpId to jump directly into the edit form.
  */
 import { useVpStore } from '../stores/vp.js';
-import { buildVpDomainSections } from '../utils/vp-domains.js';
+import { buildVpDomainSections, isLegacyVp, selectVpCatalog } from '../utils/vp-domains.js';
 import { validateVpId, i18nKeyForReason, isIdReasonCode } from '../utils/vp-id-validator.js';
 
 export default {
@@ -34,7 +34,15 @@ export default {
         </div>
 
         <template v-else>
+          <p class="vp-catalog-help">{{ $t('yeaft.vp.catalog.help') }}</p>
           <div class="vp-crud-list-toolbar">
+            <button
+              v-if="hasLegacyVps"
+              type="button"
+              class="btn-ghost vp-catalog-legacy-toggle"
+              :aria-expanded="showLegacyVps"
+              @click="showLegacyVps = !showLegacyVps"
+            >{{ $t(showLegacyVps ? 'yeaft.vp.catalog.hideLegacy' : 'yeaft.vp.catalog.showLegacy') }}</button>
             <button class="sp-btn sp-btn-primary" type="button" @click="startCreate">
               {{ $t('yeaft.vp.crud.addNew') }}
             </button>
@@ -286,6 +294,7 @@ export default {
   data() {
     return {
       view: 'list',          // 'list' | 'form' | 'detail'
+      showLegacyVps: false,
       editing: null,         // null for create, vp object for edit
       busy: false,
       idStatus: 'idle',      // 'idle' | 'ok' | 'error'
@@ -301,7 +310,10 @@ export default {
   computed: {
     vpStore() { return useVpStore(); },
     vpList() { return this.vpStore.vpList; },
-    vpDomainSections() { return buildVpDomainSections(this.vpList); },
+    vpDomainSections() {
+      return buildVpDomainSections(selectVpCatalog(this.vpList, { showLegacy: this.showLegacyVps }));
+    },
+    hasLegacyVps() { return this.vpList.some(isLegacyVp); },
     canSubmit() {
       if (this.busy) return false;
       if (this.editing) return true;

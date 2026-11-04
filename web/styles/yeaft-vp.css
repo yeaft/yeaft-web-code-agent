@@ -400,6 +400,31 @@
   margin-bottom: 12px;
 }
 
+.vp-catalog-help {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.vp-catalog-legacy-toggle {
+  flex-shrink: 0;
+  align-self: flex-start;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.vp-crud-list-toolbar {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vp-crud-list-toolbar > .vp-catalog-legacy-toggle { margin-right: auto; }
+
 .vp-crud-empty {
   text-align: center;
   padding: 48px 0 32px;

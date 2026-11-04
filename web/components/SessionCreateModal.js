@@ -33,7 +33,7 @@ import FolderPickerDialog from './FolderPickerDialog.js';
 import VpAvatar from './VpAvatar.js';
 import ModernSelect from './ModernSelect.js';
 import { getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
-import { buildVpDomainSections } from '../utils/vp-domains.js';
+import { buildVpDomainSections, isLegacyVp, selectVpCatalog } from '../utils/vp-domains.js';
 import { getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
 import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
 
@@ -179,6 +179,14 @@ const creationControls = `
                       </li>
                     </ul>
                   </section>
+                  <button
+                    v-if="hasLegacyVps"
+                    type="button"
+                    class="btn-ghost vp-catalog-legacy-toggle"
+                    :aria-expanded="showLegacyVps"
+                    :disabled="busy"
+                    @click="showLegacyVps = !showLegacyVps"
+                  >{{ $t(showLegacyVps ? 'yeaft.vp.catalog.hideLegacy' : 'yeaft.vp.catalog.showLegacy') }}</button>
                 </div>
               </template>
             </div>
@@ -437,6 +445,7 @@ export default {
       restoring: null,
       restoreError: '',
       vpSnapshotTimer: null,
+      showLegacyVps: false,
     };
   },
   computed: {
@@ -468,7 +477,12 @@ export default {
         && s.lastVpSnapshotAgentId === this.form.agentId);
     },
     vpList() { return this.vpLibraryReady ? (this.vpStore?.vpList || []) : []; },
-    vpDomainSections() { return buildVpDomainSections(this.vpList); },
+    vpDomainSections() {
+      return buildVpDomainSections(selectVpCatalog(this.vpList, {
+        includeIds: this.form.vpIds, showLegacy: this.showLegacyVps,
+      }));
+    },
+    hasLegacyVps() { return this.vpList.some(isLegacyVp); },
     vpListSignature() {
       return (this.vpList || []).map(vp => vp && vp.vpId).filter(Boolean).join(',');
     },
@@ -688,6 +702,7 @@ export default {
       this.applyDefaultSelection();
       this.scheduleVpRosterLayout();
     },
+    showLegacyVps() { this.scheduleVpRosterLayout(); },
     // The agent list arrives over the WebSocket, so on a cold page load it
     // can be empty at mount() — leaving form.agentId null. A <select>
     // bound to a null model still *visually* shows its first <option>

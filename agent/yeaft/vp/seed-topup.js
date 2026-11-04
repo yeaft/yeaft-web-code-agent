@@ -169,7 +169,7 @@ function insertFrontmatterLine(source, key, value) {
   const valTrim = String(value || '').trim();
   if (!valTrim) return null;
   const fmMatch = source.match(/^(---\r?\n)([\s\S]*?)(\r?\n---\r?\n?)/);
-  if (!fmMatch) return null;
+  if (!fmMatch || !simpleFrontmatterFields(source)) return null;
   const [full, open, yaml, close] = fmMatch;
   // Anchored at start-of-line so `nameZh` is never mistaken for `name`.
   const keyPattern = new RegExp(`^${key}:\\s*`, 'm');
@@ -251,7 +251,54 @@ function replaceRoleBody(source, body) {
   return `${match[1]}${String(body || '').trim()}\n`;
 }
 
+/**
+ * Recognize only the flat, single-line scalar / bullet-list grammar written by
+ * buildRoleMd. The runtime reader is intentionally permissive, so its parsed
+ * values alone cannot prove ownership (a key may be inside a multiline quote).
+ * Unknown structures or ambiguous keys make automatic migration ineligible.
+ */
+function simpleFrontmatterFields(source) {
+  const match = source.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/);
+  if (!match) return null;
+  const lines = match[2].split(/\r?\n/);
+  const fields = new Map();
+  let current = null;
+  const singleLineScalar = raw => {
+    const value = raw.trim();
+    if (value.startsWith("'")) return /^'(?:[^']|'')*'$/.test(value);
+    if (value.startsWith('"')) return /^"(?:[^"\\]|\\.)*"$/.test(value);
+    // Flow collections, tags, anchors, blocks and inline comments are outside
+    // this narrow migration grammar. Do not guess at their parsed meaning.
+    return !/^[\[\]{}|>!&*#]/.test(value) && !/[ \t]#/.test(value);
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim() || /^\s*#/.test(line)) {
+      if (current?.list) current.canonicalList = false;
+      continue;
+    }
+    const keyValue = line.match(/^([\w-]+):[ \t]*(.*)$/);
+    if (keyValue) {
+      if (fields.has(keyValue[1])) return null;
+      current = { start: index, end: index + 1, list: !keyValue[2].trim(), canonicalList: true };
+      if (!current.list && !singleLineScalar(keyValue[2])) return null;
+      fields.set(keyValue[1], current);
+      continue;
+    }
+    const bullet = line.match(/^[ \t]+-[ \t]+(.+)$/);
+    if (!bullet || !current?.list || !singleLineScalar(bullet[1])) return null;
+    current.end = index + 1;
+  }
+  return { match, lines, fields };
+}
+
 export function backfillLocalizedPersonaBody(source, vp) {
+  const frontmatter = simpleFrontmatterFields(source);
+  if (!frontmatter) return null;
+  // Match raw instruction-like keys, including quoted/nested/flow spellings.
+  // Unsupported YAML is already excluded above; even an empty key is owned.
+  if (/(?:^|[{},])[ \t]*['"]?[\w.-]*(?:prompt|instruction)[\w.-]*['"]?[ \t]*:/im.test(frontmatter.match[2])) return null;
+
   const body = roleBodyOf(source).trim();
   const nextBody = typeof vp.persona === 'string' ? vp.persona.trim() : '';
   if (!body || !nextBody || body === nextBody) return null;
@@ -259,35 +306,55 @@ export function backfillLocalizedPersonaBody(source, vp) {
   const acceptedOldBodies = [
     vp.legacyPersonaEn,
     vp.legacyPersona,
-    vp.personaEn,
-    ...(Array.isArray(vp.legacyPersonas) ? vp.legacyPersonas : []),
+    // Scenario assistants declare a complete history. Their new English-only
+    // text is not a shipped historical body and may be a deliberate user edit.
+    ...(Array.isArray(vp.legacyPersonas) ? vp.legacyPersonas : [vp.personaEn]),
   ]
     .filter(value => typeof value === 'string' && value.trim())
     .map(value => value.trim());
 
   if (!acceptedOldBodies.includes(body)) return null;
-  return replaceRoleBody(upgradeStockMetadata(source, vp), nextBody);
+  return replaceRoleBody(upgradeStockMetadata(source, vp, frontmatter), nextBody);
 }
 
-/** Upgrade only known stock values alongside an exact historical body match. */
-function upgradeStockMetadata(source, vp) {
+/** Upgrade only complete, unambiguous fields equal to explicit stock history. */
+function upgradeStockMetadata(source, vp, { match, lines, fields }) {
   if (!vp.legacyMetadata) return source;
+  const history = Array.isArray(vp.legacyMetadata) ? vp.legacyMetadata : [vp.legacyMetadata];
   const { meta } = parseRoleMd(source);
   const values = {
+    name: vp.displayName,
     nameZh: vp.displayNameZh,
     role: vp.role,
     roleZh: vp.roleZh,
     description: vp.description,
     descriptionZh: vp.descriptionZh,
+    aliases: vp.aliases,
   };
-  return source.replace(/^(---\r?\n)([\s\S]*?)(\r?\n---)/, (_match, open, yaml, close) => {
-    for (const [key, value] of Object.entries(values)) {
-      if (meta[key] !== vp.legacyMetadata[key] || !value) continue;
-      const quoted = `'${value.replace(/'/g, "''")}'`;
-      yaml = yaml.replace(new RegExp(`^${key}:[^\\r\\n]*`, 'm'), () => `${key}: ${quoted}`);
-    }
-    return open + yaml + close;
-  });
+  const quote = value => `'${value.replace(/'/g, "''")}'`;
+  const edits = [];
+  for (const [key, value] of Object.entries(values)) {
+    const field = fields.get(key);
+    if (!field || !value || (field.list && !field.canonicalList)) continue;
+    const known = history.some(old => Object.prototype.hasOwnProperty.call(old, key)
+      && (Array.isArray(meta[key])
+        ? Array.isArray(old[key]) && JSON.stringify(meta[key]) === JSON.stringify(old[key])
+        : meta[key] === old[key]));
+    if (!known) continue;
+    edits.push({ ...field, replacement: Array.isArray(value)
+      ? [`${key}:`, ...value.map(alias => `  - ${quote(alias)}`)]
+      : [`${key}: ${quote(value)}`] });
+  }
+  // Replace only proven field spans, not the whole YAML: unknown fields and
+  // even mixed line endings outside those spans stay byte-identical.
+  const starts = [0, ...[...match[2].matchAll(/\n/g)].map(line => line.index + 1)];
+  const nl = match[1].endsWith('\r\n') ? '\r\n' : '\n';
+  let yaml = match[2];
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    const end = starts[edit.end - 1] + lines[edit.end - 1].length;
+    yaml = yaml.slice(0, starts[edit.start]) + edit.replacement.join(nl) + yaml.slice(end);
+  }
+  return match[1] + yaml + match[3] + source.slice(match[0].length);
 }
 
 /**
