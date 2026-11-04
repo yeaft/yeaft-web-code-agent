@@ -108,8 +108,11 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     for (const [index, name] of ['New chat', 'New task', 'Plugins'].entries()) {
       await expect(page.locator('.sidebar-primary-actions > button').nth(index)).toHaveAccessibleName(name);
     }
-    await expect(page.locator('.sidebar-section-toggle')).toHaveText(['Projects', 'Recents']);
-    await page.locator('.sidebar-task-create').click();
+    await expect(page.locator('.sidebar-section-title')).toHaveText(['Projects', 'Recents']);
+    for (const [index, name] of ['Projects', 'Recents'].entries()) {
+      await expect(page.locator('.sidebar-section-toggle').nth(index)).toHaveAccessibleName(name);
+    }
+    await page.locator('.recents-section .sidebar-recents-task-create').click();
     const modal = page.locator('.yeaft-session-create-modal.task-mode');
     await expect(modal).toBeVisible();
     await expect(modal.getByRole('combobox', { name: 'Provider', exact: true })).toHaveCount(0);

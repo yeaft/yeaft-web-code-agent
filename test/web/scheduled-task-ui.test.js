@@ -61,6 +61,21 @@ it('lists task Sessions in recents or their owning Project with a badge and shar
   expect(JSON.parse(localStorage.getItem('yeaft-sidebar-section-collapse'))).toEqual({ projects: false, recents: true });
   await wrapper.get('.sidebar-task-create').trigger('click');
   expect(wrapper.emitted('create-task')).toHaveLength(1);
+  const heading = wrapper.get('.recents-section .sidebar-section-heading');
+  expect(heading.findAll('button').map(button => button.attributes('aria-label')))
+    .toEqual(['New chat', 'New task', 'Recents']);
+  expect(heading.findAll('button').at(-1).classes()).toContain('sidebar-section-toggle');
+  expect(wrapper.get('.projects-section .sidebar-section-heading').findAll('button').map(button => button.attributes('aria-label')))
+    .toEqual(['New project', 'Projects']);
+  // The added shortcut uses exactly the existing task creation contract, even
+  // while Recents is collapsed, and stays disabled during catalog hydration.
+  await wrapper.get('.sidebar-recents-task-create').trigger('click');
+  expect(wrapper.emitted('create-task')).toHaveLength(2);
+  expect(wrapper.get('.sidebar-recents-task-create circle').attributes('r')).toBe('9');
+  await wrapper.setProps({ loading: true });
+  expect(wrapper.get('.sidebar-recents-task-create').attributes('disabled')).toBeDefined();
+  await wrapper.get('.sidebar-recents-task-create').trigger('click');
+  expect(wrapper.emitted('create-task')).toHaveLength(2);
 });
 
 it('creates task Sessions with the existing roster and folder contract and rejects unsupported Agents', async () => {
