@@ -632,6 +632,8 @@ export default {
   'sidebar.provider.claude': 'Claude',
   'sidebar.sessions.new': 'New session',
   'sidebar.sessions.newChat': 'New chat',
+  'sidebar.actions.collapse': 'Compact shortcuts',
+  'sidebar.actions.expand': 'Expand shortcuts',
   'sidebar.sessions.emptyProvider': 'No sessions for this provider',
   'sidebar.sessions.menu': 'Session menu',
   'sidebar.sessions.unread': 'Unread',

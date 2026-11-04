@@ -10,6 +10,10 @@ This stable URL is a compact index of the current product documentation.
 - [Getting started](./guide/getting-started.md)
 - [Choose a code agent path](./guide/user/choose-backend.md)
 
+## Sidebar shortcuts
+
+**New chat / New task / Plugins** show icons and labels on separate rows by default. When the Session list needs scrolling, **Compact shortcuts** appears beneath it. Click it to switch to a row of small icons and make more room for Sessions. **Expand shortcuts** remains available in compact mode; layouts never switch automatically. The choice lasts for the current sidebar only; refreshing restores labels.
+
 ## Native Yeaft
 
 - [Sessions and Projects](./guide/user/yeaft-session.md)

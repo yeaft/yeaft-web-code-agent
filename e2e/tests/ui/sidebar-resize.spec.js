@@ -21,6 +21,45 @@ for (const theme of ['light', 'dark']) {
     await open(page, serverUrl, theme);
     const handle = page.locator('.sidebar-section-resize-handle');
     await expect(handle).toHaveAttribute('aria-disabled', 'false');
+    const shortcuts = page.locator('.sidebar-primary-actions');
+    const compactToggle = page.locator('.sidebar-actions-toggle');
+    await expect(shortcuts).not.toHaveClass(/is-compact/);
+    await expect(compactToggle).toHaveCount(0);
+    // A borderline list fits only after compacting. Expanding it by keyboard
+    // must keep the same focused toggle through the new overflow measurement.
+    await handle.dblclick();
+    await expect(handle).toHaveAttribute('aria-valuenow', '50');
+    await page.setViewportSize({ width: 1400, height: 880 });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const borderlineCount = await page.evaluate(agentId => {
+      const available = document.querySelector('.recents-section').clientHeight;
+      const count = Math.floor((available - 48) / 35) + 1;
+      window.Pinia.useChatStore().sessionCatalog = Array.from({ length: count }, (_, index) => ({
+        catalogKey: 'borderline-' + index, runtimeProvider: 'yeaft', title: 'Recent session ' + index,
+        routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'borderline-' + index }, availability: 'online',
+      }));
+      return count;
+    }, mockAgent.agentId);
+    await expect(page.locator('.recents-section .session-item')).toHaveCount(borderlineCount);
+    await expect(compactToggle).toBeVisible();
+    await compactToggle.click();
+    await expect(shortcuts).toHaveClass(/is-compact/);
+    await expect.poll(() => page.locator('.recents-section').evaluate(el => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await compactToggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(shortcuts).not.toHaveClass(/is-compact/);
+    await expect(compactToggle).toBeFocused();
+    // If the list really becomes short while compact, restore focus to New chat
+    // when the now-unnecessary toggle disappears.
+    await compactToggle.click();
+    await page.evaluate(() => { window.Pinia.useChatStore().sessionCatalog = []; });
+    await expect(page.locator('.recents-section .session-item')).toHaveCount(0);
+    await compactToggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(compactToggle).toHaveCount(0);
+    await expect(shortcuts.locator('button').first()).toBeFocused();
+    await page.setViewportSize({ width: 1400, height: 900 });
     // Layout stress fixture only: preference reads/writes below use the real Server DB.
     await page.evaluate(agentId => {
       const store = window.Pinia.useChatStore();
@@ -32,6 +71,30 @@ for (const theme of ['light', 'dark']) {
     }, mockAgent.agentId);
     await expect(page.locator('.sidebar-project')).toHaveCount(30);
     await expect(page.locator('.recents-section .session-item')).toHaveCount(40);
+    await expect(compactToggle).toBeVisible();
+    await expect(compactToggle).toHaveAttribute('aria-expanded', 'true');
+    const expandedHeight = await shortcuts.evaluate(el => el.getBoundingClientRect().height);
+    const expandedResultsHeight = await page.locator('.sidebar-session-results').evaluate(el => el.clientHeight);
+    await compactToggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(shortcuts).toHaveClass(/is-compact/);
+    await expect(compactToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(compactToggle).toBeFocused();
+    expect(await shortcuts.evaluate(el => el.getBoundingClientRect().height)).toBe(expandedHeight - 68);
+    expect(await page.locator('.sidebar-session-results').evaluate(el => el.clientHeight)).toBe(expandedResultsHeight + 68);
+    expect(await shortcuts.locator('button').evaluateAll(buttons => {
+      const boxes = buttons.map(button => button.getBoundingClientRect());
+      return boxes.every(box => box.y === boxes[0].y && box.width === 34 && box.height === 34)
+        && buttons.every(button => !button.textContent.trim());
+    })).toBe(true);
+    expect(await shortcuts.locator('svg').evaluateAll(icons => icons.every(icon => {
+      const box = icon.getBoundingClientRect(); return box.width === 18 && box.height === 18;
+    }))).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('sidebar-compact.png') });
+    await page.keyboard.press('Space');
+    await expect(shortcuts).not.toHaveClass(/is-compact/);
+    await expect(shortcuts.locator('button')).toHaveText(['New chat', 'New task', 'Plugins']);
+    await expect(compactToggle).toHaveAttribute('aria-expanded', 'true');
     for (const selector of ['.projects-section', '.recents-section']) {
       expect(await page.locator(selector).evaluate(el => { el.scrollTop = 100; return el.scrollHeight > el.clientHeight && el.scrollTop > 0; })).toBe(true);
     }
@@ -116,6 +179,22 @@ for (const theme of ['light', 'dark']) {
     await page.locator('.header-sidebar-toggle').click();
     await expect(page.locator('.sidebar-navigation')).toBeVisible();
     await expect(handle).not.toBeVisible();
+    // Reload above deliberately cleared the store-only stress fixture.
+    await page.evaluate(agentId => {
+      window.Pinia.useChatStore().sessionCatalog = Array.from({ length: 40 }, (_, index) => ({
+        catalogKey: 'mobile-session-' + index, runtimeProvider: 'yeaft', title: 'Recent session ' + index,
+        routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'mobile-session-' + index }, availability: 'online',
+      }));
+    }, mockAgent.agentId);
+    await expect(compactToggle).toBeVisible();
+    await compactToggle.click();
+    await expect(shortcuts).toHaveClass(/is-compact/);
+    expect(await compactToggle.evaluate(el => {
+      const box = el.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight;
+    })).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('sidebar-mobile-compact.png') });
+    await compactToggle.click();
+    await expect(shortcuts).not.toHaveClass(/is-compact/);
     await page.screenshot({ path: testInfo.outputPath('sidebar-mobile.png') });
     for (const height of [460, 350, 300]) {
       await page.setViewportSize({ width: 1400, height });
