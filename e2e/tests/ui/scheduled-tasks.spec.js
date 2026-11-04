@@ -51,10 +51,14 @@ async function showTaskStatus(page) {
 }
 
 async function closeMobileTaskStatus(page) {
-  if (await page.evaluate(() => innerWidth <= 1024)
-      && await page.locator('.yeaft-session-status-pane').isVisible()) {
+  if (!await page.evaluate(() => innerWidth <= 1024)) return;
+  const pane = page.locator('.yeaft-session-status-pane');
+  // CSS updates immediately on resize; wait for Vue's media-query projection
+  // before deciding whether the panel still needs closing.
+  await expect(pane).toHaveClass(/mobile-session-status/);
+  if (await pane.isVisible()) {
     await page.locator('.yeaft-session-status-close').click();
-    await expect(page.locator('.yeaft-session-status-pane')).toBeHidden();
+    await expect(pane).toBeHidden();
   }
 }
 
