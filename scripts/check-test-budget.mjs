@@ -102,7 +102,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // preservation cases, 17 rendered catalog/Agent-snapshot/auth cases, 3 durable Session/
 // Agent-create cases, 2 Server null-default envelope cases and 1 real relay/browser
 // lifecycle across themes/sizes. Historical defaults/tests are retained.
-export const TEST_CASE_LIMIT = 888;
+// +2 folder/section preference boundaries: per-key optimistic queue/rollback/auth
+// fencing and component restore/focus/create behavior. Server migration/merge and
+// real cross-client persistence extend existing cases without replacing coverage.
+export const TEST_CASE_LIMIT = 890;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

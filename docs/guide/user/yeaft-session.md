@@ -17,6 +17,12 @@ A Session stores and exposes:
 
 Session metadata and history live under the owning Agent's Yeaft directory. `workDir` is execution context and the root for project-tier instructions, Skills, and MCP discovery; it is not the Session data directory.
 
+## Sidebar display preferences
+
+Project folders and the Projects/Recents sections remember their expanded or collapsed state per user on the Server, alongside shortcut layout and section height ratio. Reloading, signing in again, focusing the window, or making the page visible reads the latest preferences; changes are not pushed live to other windows. Folders are saved separately by stable Project ID, so renaming a folder does not reset it and changes to different folders on separate clients do not overwrite each other. Failed saves show a message and restore confirmed state rather than appearing synchronized.
+
+Legacy browser-local section state is not imported into user preferences. The initial default is expanded; subsequent visits use Server-saved state.
+
 ## Create a Session
 
 1. Choose **New chat** in the unified sidebar and select **Yeaft** as the runtime.

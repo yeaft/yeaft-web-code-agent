@@ -2,12 +2,28 @@ const instances = new WeakMap();
 export const DEFAULT_SIDEBAR_PROJECTS_RATIO = 0.5;
 export const MIN_SIDEBAR_PROJECTS_RATIO = 0.15;
 export const MAX_SIDEBAR_PROJECTS_RATIO = 0.85;
-const defaultPreferences = () => ({ sidebarProjectsRatio: DEFAULT_SIDEBAR_PROJECTS_RATIO, sidebarActionsCompact: false });
+const defaultPreferences = () => ({
+  sidebarProjectsRatio: DEFAULT_SIDEBAR_PROJECTS_RATIO, sidebarActionsCompact: false,
+  sidebarCollapsedProjects: {}, sidebarCollapsedSections: {},
+});
+const collapseFields = ['sidebarCollapsedProjects', 'sidebarCollapsedSections'];
+const patchFieldKeys = patch => Object.entries(patch).flatMap(([field, value]) =>
+  collapseFields.includes(field) ? Object.keys(value).map(key => `${field}:${key}`) : [field]);
+const validProjectKey = key => typeof key === 'string' && key.length > 0 && key.length <= 200
+  && !['__proto__', 'constructor', 'prototype'].includes(key);
+
+function normalizeCollapseMap(value, sections = false) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([key, collapsed]) =>
+    typeof collapsed === 'boolean' && (sections ? ['projects', 'recents'].includes(key) : validProjectKey(key))));
+}
 
 function normalizePreferences(value) {
   return {
     sidebarProjectsRatio: clampSidebarProjectsRatio(value.sidebarProjectsRatio),
     sidebarActionsCompact: value.sidebarActionsCompact === true,
+    sidebarCollapsedProjects: normalizeCollapseMap(value.sidebarCollapsedProjects),
+    sidebarCollapsedSections: normalizeCollapseMap(value.sidebarCollapsedSections, true),
   };
 }
 
@@ -33,7 +49,16 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   const pendingPatches = new Map();
   const failedFields = new Set();
   const showConfirmed = () => {
-    preferences.value = Object.assign({}, confirmed, ...pendingPatches.values());
+    const visible = { ...confirmed };
+    for (const patch of pendingPatches.values()) {
+      const preferencesBeforePatch = { ...visible };
+      Object.assign(visible, patch);
+      // Each click owns only one folder/section, not the snapshot of its map.
+      for (const field of collapseFields) {
+        visible[field] = { ...preferencesBeforePatch[field], ...patch[field] };
+      }
+    }
+    preferences.value = visible;
   };
   let controller = null;
   let loading = null;
@@ -91,12 +116,12 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         const result = await response.json();
         if (generation !== expectedGeneration) return false;
         confirmed = normalizePreferences(result);
-        for (const field of Object.keys(patch)) failedFields.delete(field);
+        for (const field of patchFieldKeys(patch)) failedFields.delete(field);
         error.value = failedFields.size ? 'save' : null;
         return true;
       } catch {
         if (generation === expectedGeneration) {
-          for (const field of Object.keys(patch)) failedFields.add(field);
+          for (const field of patchFieldKeys(patch)) failedFields.add(field);
           error.value = 'save';
         }
         return false;
@@ -119,6 +144,16 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   function saveSidebarActionsCompact(value) {
     if (typeof value !== 'boolean') return Promise.resolve(false);
     return savePatch({ sidebarActionsCompact: value });
+  }
+
+  function saveSidebarProjectCollapsed(projectId, collapsed) {
+    if (!validProjectKey(projectId) || typeof collapsed !== 'boolean') return Promise.resolve(false);
+    return savePatch({ sidebarCollapsedProjects: { [projectId]: collapsed } });
+  }
+
+  function saveSidebarSectionCollapsed(section, collapsed) {
+    if (!['projects', 'recents'].includes(section) || typeof collapsed !== 'boolean') return Promise.resolve(false);
+    return savePatch({ sidebarCollapsedSections: { [section]: collapsed } });
   }
 
   scope.run(() => Vue.watch(
@@ -144,6 +179,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   return {
     preferences: Vue.readonly(preferences), ready: Vue.readonly(ready), error: Vue.readonly(error),
     refresh, saveSidebarProjectsRatio, saveSidebarActionsCompact,
+    saveSidebarProjectCollapsed, saveSidebarSectionCollapsed,
     dispose() { generation++; controller?.abort(); scope.stop(); },
   };
 }
