@@ -181,6 +181,13 @@ export class ScheduledTaskScheduler {
   }
 
   observe(sessionId, event) {
+    // Stop can arrive before boot/classification creates any VP turn controller
+    // or terminal event. Retire those claims once their ingress has drained.
+    if (event.type === 'yeaft_aborted' && event.all) {
+      for (const [id, active] of this.runs) {
+        if (!sessionId || id === sessionId) active.interrupted = true;
+      }
+    }
     const active = this.runs.get(sessionId);
     if (!active) return;
     if (event.type === 'error') active.error = event.message || event.error?.message || String(event.error || 'Execution failed');

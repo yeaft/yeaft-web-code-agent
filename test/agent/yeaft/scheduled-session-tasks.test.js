@@ -294,7 +294,7 @@ it('fences edits during delayed runtime boot and never dispatches an obsolete pr
   scheduler.stop();
 });
 
-it('waits for Server context after restart then executes native ingress and waits for real runtime quiescence', async () => {
+it('fences stopped cold ingress by Session, preserves the plan, then executes after Server sync through real quiescence', async () => {
   setup(); seed(task({ trigger: { type: 'schedule', scheduledFor: 500, recurrence: null } }));
   const { vi } = await import('vitest');
   const { default: ctx } = await import('../../../agent/context.js');
@@ -318,22 +318,29 @@ it('waits for Server context after restart then executes native ingress and wait
     yield { type: 'text_delta', text: 'Task response' };
     yield { type: 'stop', stopReason: 'end_turn' };
   } };
-  bridge.__testSetSession({ yeaftDir: root, config: { maxRetries: 0, maxOutputTokens: 1024 },
-    conversationStore: store, adapter, trace: new NullTrace() });
+  const runtime = { yeaftDir: root, config: { maxRetries: 0, maxOutputTokens: 1024 },
+    conversationStore: store, adapter, trace: new NullTrace(), status: { skills: 0, mcpServers: [], tools: 0 } };
+  let bootDone, booting = false;
+  const boot = new Promise(resolve => { bootDone = resolve; });
+  bridge.__testSetSession(null);
+  bridge.__testHooks.setRuntimeFactoriesForTest({ loadSession: async () => { booting = true; await boot; return runtime; } });
+  const sends = [], queryInputs = [];
   let finish, started = false, terminal = false, queryInput;
   const gate = new Promise(resolve => { finish = resolve; });
   const originalQuery = Engine.prototype.query;
   const query = vi.spyOn(Engine.prototype, 'query').mockImplementation(async function* (input) {
-    queryInput = input;
-    started = true;
+    queryInputs.push(input);
+    const isScheduledPrompt = input.prompt.includes(task().prompt);
+    if (isScheduledPrompt) { queryInput = input; started = true; }
     for await (const event of originalQuery.call(this, input)) {
       yield event;
-      if (event.type === 'turn_end' && event.terminal) { terminal = true; await gate; }
+      if (isScheduledPrompt && event.type === 'turn_end' && event.terminal) { terminal = true; await gate; }
     }
   });
   try {
     bridge.invalidateYeaftProjectContexts(); // Restart: no browser has opened this Session.
     const scheduler = bridge.startYeaftScheduledTasks();
+    clearInterval(scheduler.timer); // Drive ticks explicitly; boot/runtime assertions may exceed a polling interval.
     const beforeSync = readFileSync(join(root, 'sessions/session_task/session.json'));
     await scheduler.tick(); await scheduler.tick();
     expect(started).toBe(false);
@@ -348,6 +355,36 @@ it('waits for Server context after restart then executes native ingress and wait
     bridge.handleYeaftProjectContextSync(sync);
     expect(ctx.outboundSendQueue).toHaveLength(queued); // Sync is memory-only, no snapshot loop.
     expect(bridge.startYeaftScheduledTasks()).toBe(scheduler); // Reconnect never starts another timer.
+    const plan = read().task;
+    scheduler.run('session_task'); // Manual preview claims running before cold boot finishes.
+    expect(booting).toBe(true);
+    expect(read().task.lastRun.status).toBe('running');
+    expect(bridge.__testHooks.sessionHasActiveWork('session_task')).toBe(true);
+    sends.push(bridge.handleYeaftSessionSend({ sessionId: 'session_task', id: 'also-cancelled', text: 'Old pending input', projectContext: null }));
+    seed(task(), 'session_other');
+    sends.push(bridge.handleYeaftSessionSend({ sessionId: 'session_other', id: 'other', text: 'Other Session input', projectContext: null }));
+    bridge.handleYeaftAbortAll({ sessionId: 'session_task' });
+    // New input shares the still-pending activity epoch, but not its cancellation.
+    sends.push(bridge.handleYeaftSessionSend({ sessionId: 'session_task', id: 'fresh', text: 'Fresh input after Stop', projectContext: null }));
+    expect(queryInputs).toEqual([]);
+    bootDone(); await Promise.all(sends); await bridge.__testDrainVpDrivers(); await scheduler.tick();
+    expect(queryInputs).toHaveLength(2);
+    expect(queryInputs.map(input => input.sessionId).sort()).toEqual(['session_other', 'session_task']);
+    expect(queryInputs.some(input => input.prompt.includes('Fresh input after Stop'))).toBe(true);
+    expect(store.loadVisibleBySession('session_task', Infinity, Infinity).messages.filter(row => row.role === 'user').map(row => row.content))
+      .toEqual(['Fresh input after Stop']);
+    expect(read().task).toEqual({ ...plan, lastRun: expect.objectContaining({ status: 'interrupted', trigger: 'manual', finishedAt: expect.any(Number) }) });
+    expect(bridge.__testHooks.sessionHasActiveWork('session_task')).toBe(false);
+    expect(ctx.outboundSendQueue.some(item => item.msg.event?.type === 'scheduled_task_notification' && item.msg.event?.status === 'interrupted')).toBe(true);
+    // Legacy unscoped Stop must also cancel ingress and retire its scheduler claim.
+    scheduler.run('session_task');
+    const globallyStopped = scheduler.runs.get('session_task');
+    bridge.handleYeaftAbortAll();
+    await vi.waitFor(() => expect(globallyStopped.routed).toBe(true));
+    await scheduler.tick();
+    expect(queryInputs).toHaveLength(2);
+    expect(read().task).toEqual({ ...plan, lastRun: expect.objectContaining({ status: 'interrupted', trigger: 'manual' }) });
+    bridge.handleYeaftProjectContextSync(sync);
     const dispatching = scheduler.tick();
     sync.contexts[0].projectContext.projectInstruction = 'Always verify recovery evidence.';
     bridge.handleYeaftProjectContextSync(sync); // Arrives while ingress awaits runtime readiness.
@@ -357,8 +394,8 @@ it('waits for Server context after restart then executes native ingress and wait
     expect(read().task.lastRun.status).toBe('running');
     expect(store.loadVisibleBySession('session_task', Infinity, Infinity).messages.some(row => row.role === 'user' && row.content === task().prompt)).toBe(true);
     expect(queryInput).toMatchObject({ prompt: expect.stringContaining(task().prompt), projectInstruction: 'Always verify recovery evidence.', projectLabel: 'Server Project (server-project)' });
-    expect(requests[0].system).toContain('Always verify recovery evidence.');
-    expect(requests[0]).toMatchObject({ model: 'test/model', effort: 'high', effortSource: 'user' });
+    expect(requests.at(-1).system).toContain('Always verify recovery evidence.');
+    expect(requests.at(-1)).toMatchObject({ model: 'test/model', effort: 'high', effortSource: 'user' });
     expect(read().task).toMatchObject({ nextRunAt: null, _scheduledRuns: 1, lastRun: { trigger: 'schedule' } });
     const snapshot = ctx.outboundSendQueue.find(item => item.msg.event?.type === 'session_list_updated').msg.event.sessions;
     expect(snapshot.find(row => row.id === 'session_task').config).toEqual(config);
@@ -382,8 +419,9 @@ it('waits for Server context after restart then executes native ingress and wait
     const ack = ctx.outboundSendQueue.find(item => item.msg.event?.op === 'run_task' && item.msg.event?.requestId === 'run-1').msg;
     expect(ack).toMatchObject({ _requestClientId: 'browser-1', event: { ok: true, session: { config, task: { revision: read().task._revision } } } });
   } finally {
-    finish(); await bridge.__testDrainVpDrivers();
+    bootDone(); finish(); await Promise.allSettled(sends); await bridge.__testDrainVpDrivers();
     bridge.stopYeaftScheduledTasks(); await bridge.__testResetVpState();
+    bridge.__testHooks.resetRuntimeFactoriesForTest();
     bridge.__testHooks.resetVpStatusBroker(); bridge.__testSetSession(null);
     query.mockRestore(); Object.assign(ctx, previous);
     const { closeConversationHistoryIndexes } = await import('../../../agent/yeaft/conversation/history-index.js');

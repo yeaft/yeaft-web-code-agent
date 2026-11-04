@@ -510,6 +510,36 @@ const vpAborts = new Map();
  */
 const sessionCopyEpochs = new Map();
 const modelReentryActivity = new Map();
+// Pending ingress has no VP AbortController yet. Keep per-request tokens so
+// Stop fences existing boot/classification awaits, not later inputs in the
+// same activity epoch (or inputs belonging to another Session).
+const pendingSessionIngress = new Map();
+
+function beginSessionIngress(sessionId) {
+  let pending = pendingSessionIngress.get(sessionId);
+  if (!pending) {
+    pending = new Set();
+    pendingSessionIngress.set(sessionId, pending);
+  }
+  const ingress = {
+    cancelled: false,
+    release() {
+      pending.delete(ingress);
+      if (pending.size === 0 && pendingSessionIngress.get(sessionId) === pending) {
+        pendingSessionIngress.delete(sessionId);
+      }
+    },
+  };
+  pending.add(ingress);
+  return ingress;
+}
+
+function cancelSessionIngress(sessionId = null) {
+  for (const [id, pending] of pendingSessionIngress) {
+    if (sessionId && id !== sessionId) continue;
+    for (const ingress of pending) ingress.cancelled = true;
+  }
+}
 
 function hasSessionRuntimeWork(sessionId) {
   const prefix = `${sessionId}::`;
@@ -2273,14 +2303,16 @@ function scheduleTaskResultReentry(event) {
 
 async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
   const releaseActivity = beginSessionActivity(sessionId);
+  const ingress = beginSessionIngress(sessionId);
   try {
-    return await routeActiveEnvelopeToVpThread(sessionId, vpId, envelope);
+    return await routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress);
   } finally {
+    ingress.release();
     releaseActivity();
   }
 }
 
-async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope) {
+async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress) {
   const routeStart = perfNowMs();
   const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
   const runningThreads = getRunningThreads(sessionId, vpId);
@@ -2313,6 +2345,7 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope) {
       // promise would leave it visible in history without ever starting a turn.
       console.warn('[Yeaft] VP thread classification failed; starting a new thread:', err?.message || err);
     }
+    if (ingress.cancelled) return null;
     const targetIsRunning = decision
       ? runningThreads.some((t) => t.threadId === decision.targetThreadId)
       : false;
@@ -5214,22 +5247,25 @@ async function runYeaftSessionSend(msg) {
   traceDuration('session_send.open_session', openSessionStart, { ok: !!sessionHandle });
 
   const releaseActivity = beginSessionActivity(sessionId);
+  const ingress = beginSessionIngress(sessionId);
   try {
     return await dispatchAcceptedSessionSend({
-      msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart,
+      msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress,
       tracePerf, traceDuration, turnConfig, sessionHandle, sessionRoot, sessionMetaForRuntime,
     });
   } finally {
+    ingress.release();
     releaseActivity();
   }
 }
 
 async function dispatchAcceptedSessionSend({
-  msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart,
+  msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress,
   tracePerf, traceDuration, turnConfig, sessionHandle, sessionRoot, sessionMetaForRuntime,
 }) {
   const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
+  if (ingress.cancelled) return;
   // Runtime boot may await I/O. Re-read the claim immediately before ingress
   // so edits, disable, archive or deletion during boot cannot execute stale work.
   msg[SCHEDULED_TASK_DISPATCH_GUARD]?.();
@@ -6742,6 +6778,7 @@ export function handleYeaftAbortThread(_msg = {}) {
 export function handleYeaftAbortAll(msg = {}) {
   const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const aborted = [];
+  cancelSessionIngress(sessionId);
   if (!sessionId && currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }

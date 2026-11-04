@@ -14,9 +14,9 @@ import { sessionsRoot, snapshotSessions } from '../../../agent/yeaft/sessions/se
 import { buildRoleMd } from '../../../agent/yeaft/vp/vp-crud.js';
 import { TaskManager } from '../../../agent/yeaft/tasks/manager.js';
 import {
-  __testHooks, __testDrainVpDrivers, __testResetVpState, __testSetSession,
+  __testHooks, __testDrainVpDrivers, __testResetVpState, __testSetSession, __testSetThreadClassifier,
   __testEnqueueForVp, __testGetVpThreads, __testWaitForRoutePromises,
-  handleYeaftCopySession, handleYeaftMergeSessions, installYeaftRuntimeBridge,
+  handleYeaftCopySession, handleYeaftMergeSessions, handleYeaftAbortAll, installYeaftRuntimeBridge,
 } from '../../../agent/yeaft/web-bridge.js';
 
 // Native ingress, classification, fan-out, drivers, tasks, CRUD and durable
@@ -433,7 +433,7 @@ it('rejects invalid/incomplete or active message boundaries while permitting com
   expectSourceRunning();
 });
 
-it('fails closed for untracked legacy activity and guards merge using actual ingress rather than broker state', async () => {
+it('guards merge using actual ingress rather than broker state and cancels classification-pending input on Stop', async () => {
   completedTurn();
   seedSession('session_other');
   const source = rows(id), before = inventory();
@@ -457,4 +457,27 @@ it('fails closed for untracked legacy activity and guards merge using actual ing
   await waitCalls(1);
   expectFork(copy('tracked-ingress'), source);
   expectSourceRunning();
+
+  const classification = deferred();
+  let classifying = false;
+  __testSetThreadClassifier(async () => {
+    classifying = true;
+    await classification.promise;
+    return { decision: 'unrelated', title: 'Cancelled classification' };
+  });
+  const stopped = send('stop-during-classification');
+  await Promise.resolve();
+  expect(classifying).toBe(true);
+  handleYeaftAbortAll({ sessionId: id });
+  expect(calls[0].signal.aborted).toBe(true);
+  classification.resolve();
+  await stopped;
+  calls[0].gate.resolve();
+  await __testDrainVpDrivers();
+  expect(calls).toHaveLength(1);
+  expect(contents(id)).not.toContain('@alpha stop-during-classification');
+  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
+  await send('after-stop');
+  await waitCalls(2);
+  expect(calls[1].signal.aborted).toBe(false);
 });
