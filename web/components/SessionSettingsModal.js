@@ -30,7 +30,7 @@ import {
   trackOverlayPointerDown,
   trackOverlayPointerUp,
 } from '../utils/overlay-dismiss.js';
-import { buildVpDomainSections } from '../utils/vp-domains.js';
+import { buildVpDomainSections, isLegacyVp, selectVpCatalog } from '../utils/vp-domains.js';
 
 const SESSION_SETTINGS_SECTION = 'session';
 const LEGACY_SESSION_SETTINGS_SECTIONS = new Set(['announcement', 'rename', 'danger']);
@@ -76,6 +76,8 @@ export default {
       membersBusy: false,
       membersError: '',
       highlightedVpId: this.initialEditVpId || '',
+      showLegacyVps: false,
+      vpSnapshotTimer: null,
       // Delete confirm flag.
       deleteConfirmText: '',
       deleteBusy: false,
@@ -124,11 +126,37 @@ export default {
     defaultVpId() {
       return this.group ? (this.group.defaultVpId || null) : null;
     },
-    vpList() { return this.vpStore?.vpList || []; },
-    vpDomainSections() { return buildVpDomainSections(this.vpList); },
+    vpSnapshot() {
+      const store = this.vpStore;
+      return store?.snapshotForAgent ? store.snapshotForAgent(this.targetAgentId) : store;
+    },
+    vpLibraryReady() {
+      const s = this.vpSnapshot;
+      return !!(s && s.snapshotStatus === 'ready'
+        && s.snapshotAgentId === this.targetAgentId
+        && s.lastVpSnapshotAgentId === this.targetAgentId);
+    },
+    vpList() {
+      if (!this.vpLibraryReady) return [];
+      return this.vpStore?.vpListForAgent?.(this.targetAgentId) || this.vpStore?.vpList || [];
+    },
+    vpDomainSections() {
+      return buildVpDomainSections(selectVpCatalog(this.vpList, {
+        includeIds: [...this.roster, this.highlightedVpId].filter(Boolean), showLegacy: this.showLegacyVps,
+      }));
+    },
+    hasLegacyVps() { return this.vpList.some(isLegacyVp); },
+    hasLegacyMembers() {
+      return this.roster.some(vpId => isLegacyVp({ vpId })
+        || this.vpList.some(vp => vp.vpId === vpId && isLegacyVp(vp)));
+    },
+    vpLibraryError() {
+      const s = this.vpSnapshot;
+      return s?.snapshotStatus === 'error' && s.snapshotAgentId === this.targetAgentId;
+    },
     vpLibraryEmpty() {
-      const s = this.vpStore;
-      if (!s) return false;
+      const s = this.vpSnapshot;
+      if (!s || !this.vpLibraryReady) return false;
       if (s.emptyLibrary === true) return true;
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
     },
@@ -159,6 +187,13 @@ export default {
       this.membersError = '';
       this.deleteError = '';
       this.deleteConfirmText = '';
+    },
+    targetAgentId() {
+      this.showLegacyVps = false;
+      this.subscribeVps();
+      this.announcementDraft = this.announcement;
+      this.renameDraft = this.groupDisplayName;
+      this.workDirDraft = this.workDir;
     },
     initialEditVpId(next) {
       this.highlightedVpId = next || '';
@@ -196,16 +231,7 @@ export default {
   },
   mounted() {
     window.addEventListener('keydown', this.onEsc);
-    // Lazy-load VP library so the Members section doesn't render an
-    // infinite "Loading..." for users who never opened the library.
-    try {
-      if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
-        const chat = this.chat;
-        if (chat && typeof chat.sendWsMessage === 'function') {
-          chat.sendWsMessage({ type: 'yeaft_vp_subscribe' });
-        }
-      }
-    } catch (_) { /* test env */ }
+    this.subscribeVps();
     // Seed initial draft for whatever the entry section is.
     if (this.section === SESSION_SETTINGS_SECTION) {
       this.announcementDraft = this.announcement;
@@ -215,8 +241,31 @@ export default {
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
+    if (this.vpSnapshotTimer) clearTimeout(this.vpSnapshotTimer);
   },
   methods: {
+    subscribeVps({ force = false } = {}) {
+      if (this.vpSnapshotTimer) clearTimeout(this.vpSnapshotTimer);
+      this.vpSnapshotTimer = null;
+      if (!force && this.vpLibraryReady) return;
+      const target = this.targetAgentId;
+      const vp = this.vpStore;
+      if (!target || !vp) return;
+      const requestId = `vp_snapshot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      vp.beginSnapshot?.(target, requestId, { target: true });
+      if (!this.chat?.sendWsMessage
+        || this.chat.sendWsMessage({ type: 'yeaft_vp_subscribe', agentId: target, requestId }) === false) {
+        vp.failSnapshot?.(target, requestId, 'WebSocket is not connected.');
+        return;
+      }
+      this.vpSnapshotTimer = setTimeout(() => {
+        this.vpSnapshotTimer = null;
+        const scope = vp.snapshotForAgent?.(target);
+        if (scope?.snapshotStatus === 'loading' && scope.snapshotRequestId === requestId) {
+          vp.failSnapshot?.(target, requestId, 'VP library request timed out.');
+        }
+      }, 10_000);
+    },
     folderPickerInitialDir() { return this.workDirDraft || this.workDir || this.defaultWorkDir; },
     folderPickerSetWorkDir(path) { this.workDirDraft = path; },
     trackOverlayPointerDown,
@@ -305,11 +354,11 @@ export default {
     isMember(vpId) { return this.roster.includes(vpId); },
     vpLabelFor(vpId) {
       const fn = this.vpStore?.vpLabel;
-      return typeof fn === 'function' ? fn(vpId) : vpId;
+      return this.vpLibraryReady && typeof fn === 'function' ? fn(vpId, this.targetAgentId) : vpId;
     },
     vpDescriptionFor(vpId) {
       const fn = this.vpStore?.vpDescription;
-      return typeof fn === 'function' ? fn(vpId) : '';
+      return this.vpLibraryReady && typeof fn === 'function' ? fn(vpId, this.targetAgentId) : '';
     },
     vpTextColorFor(vpId) {
       const fn = this.vpStore?.vpTextColor;
@@ -538,11 +587,16 @@ export default {
                 >{{ $t('yeaft.session.members.openLibrary') }}</button>
               </div>
               <p class="group-settings-help">{{ $t('yeaft.session.members.defaultHint') }}</p>
-              <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-settings-empty">
-                {{ $t('yeaft.session.members.empty') }}
+              <p v-if="hasLegacyMembers" class="vp-catalog-help">{{ $t('yeaft.vp.catalog.legacyMembers') }}</p>
+              <div v-if="vpLibraryError" class="group-settings-empty" role="alert">
+                <span>{{ $t('yeaft.session.create.rosterError') }}</span>
+                <button type="button" class="btn-secondary" @click="subscribeVps({ force: true })">{{ $t('yeaft.session.create.rosterRetry') }}</button>
               </div>
-              <div v-else-if="vpList.length === 0" class="group-settings-empty">
+              <div v-else-if="!vpLibraryReady" class="group-settings-empty">
                 {{ $t('yeaft.session.members.loading') }}
+              </div>
+              <div v-else-if="vpList.length === 0 && roster.length === 0 && vpLibraryEmpty" class="group-settings-empty">
+                {{ $t('yeaft.session.members.empty') }}
               </div>
               <div v-else class="group-settings-roster" role="group" aria-labelledby="session-settings-members-heading">
                 <section
@@ -592,6 +646,14 @@ export default {
                   </ul>
                 </section>
               </div>
+              <button
+                v-if="vpLibraryReady && hasLegacyVps"
+                type="button"
+                class="btn-ghost vp-catalog-legacy-toggle"
+                :aria-expanded="showLegacyVps"
+                :disabled="membersBusy"
+                @click="showLegacyVps = !showLegacyVps"
+              >{{ $t(showLegacyVps ? 'yeaft.vp.catalog.hideLegacy' : 'yeaft.vp.catalog.showLegacy') }}</button>
               <p v-if="membersError" class="group-settings-error" role="alert">{{ membersError }}</p>
             </div>
 
