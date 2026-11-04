@@ -669,7 +669,7 @@ export default {
   'sidebar.recents.empty': '暂无聊天',
   'sidebar.sectionResize.label': '调整项目与最近区域高度（方向键调整，双击重置）',
   'sidebar.sectionResize.loadError': '无法加载侧栏布局。',
-  'sidebar.sectionResize.saveError': '侧栏布局保存失败，已恢复原比例；可重新拖动保存。',
+  'sidebar.sectionResize.saveError': '侧栏布局保存失败，已恢复之前的设置，请重试。',
 
   // ============ Yeaft 页面 ============
   'yeaft.back': '返回',

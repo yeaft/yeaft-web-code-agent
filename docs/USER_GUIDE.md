@@ -12,7 +12,7 @@ This stable URL is a compact index of the current product documentation.
 
 ## Sidebar shortcuts
 
-**New chat / New task / Plugins** show icons and labels on separate rows by default. When the Session list needs scrolling, **Compact shortcuts** appears beneath it. Click it to switch to a row of small icons and make more room for Sessions. **Expand shortcuts** remains available in compact mode; layouts never switch automatically. The choice lasts for the current sidebar only; refreshing restores labels.
+**New chat / New task / Plugins** show icons and labels on separate rows by default. When the Session list needs scrolling, a compact icon appears at the lower-right of the shortcuts, beside the last entry. Click it to switch to a row of small icons and make more room for Sessions. The expand icon stays immediately after that row; layouts never switch automatically. This preference is stored on the Server per signed-in user and shared across desktops. Reloading, signing in again, or returning focus to a window loads the latest choice. Failed saves are disclosed and restore the previous settings.
 
 ## Native Yeaft
 
