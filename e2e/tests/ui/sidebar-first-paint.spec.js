@@ -58,6 +58,24 @@ for (const surface of [
     await expect(navigation.locator('.sidebar-section-toggle')).toHaveCount(2);
     await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry):not(.sidebar-task-create)')).toBeDisabled();
     await expect(navigation.locator('.sidebar-task-create')).toBeDisabled();
+    const actions = navigation.locator('.sidebar-primary-actions > button');
+    await expect(actions).toHaveCount(3);
+    for (const [index, name] of ['New chat', 'New task', 'Plugins'].entries()) {
+      await expect(actions.nth(index)).toHaveAccessibleName(name);
+      await expect(actions.nth(index)).toHaveAttribute('title', name);
+      await expect(actions.nth(index)).toHaveText('');
+    }
+    const bounds = await actions.evaluateAll(buttons => buttons.map(button => {
+      const { x, y, width, height } = button.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+    expect(new Set(bounds.map(box => box.y)).size).toBe(1);
+    for (const [index, box] of bounds.entries()) {
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBe(44);
+      if (index) expect(box.x).toBeGreaterThanOrEqual(bounds[index - 1].x + bounds[index - 1].width);
+    }
+    expect(await navigation.locator('.sidebar-primary-actions').evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(54);
     await expect(navigation.locator('.sidebar-section')).toHaveClass([
       'sidebar-section projects-section', 'sidebar-section recents-section',
     ]);
@@ -72,6 +90,12 @@ for (const surface of [
     release();
     await expect(navigation).toHaveAttribute('aria-busy', 'false');
     await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry):not(.sidebar-task-create)')).toBeEnabled();
+    await actions.nth(0).focus();
+    expect(await actions.nth(0).evaluate(el => getComputedStyle(el).outlineStyle)).not.toBe('none');
+    await page.keyboard.press('Tab');
+    await expect(actions.nth(1)).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(actions.nth(2)).toBeFocused();
     expect(await page.evaluate(() => window.__sidebarNavigation === document.querySelector('.sidebar-navigation'))).toBe(true);
     expect(await page.evaluate(() => window.__sidebarHeadings.every((node, index) => node === document.querySelectorAll('.sidebar-section-heading')[index]))).toBe(true);
 

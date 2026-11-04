@@ -996,25 +996,23 @@ export default {
   template: `
     <nav class="sidebar-navigation" :aria-busy="loading" :aria-label="$t('sidebar.surface.sessions')">
       <div class="sidebar-primary-actions">
-        <button type="button" class="sidebar-primary-action" :disabled="loading" @click="createSession" :title="$t('sidebar.sessions.newChat')" :aria-label="$t('sidebar.sessions.newChat')">
+        <button type="button" class="btn-ghost sidebar-primary-action" :disabled="loading" @click="createSession" :title="$t('sidebar.sessions.newChat')" :aria-label="$t('sidebar.sessions.newChat')">
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path class="sidebar-primary-action-frame" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
             <path class="sidebar-primary-action-pen" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852Z"/>
           </svg>
-          <span>{{ $t('sidebar.sessions.newChat') }}</span>
         </button>
-        <button type="button" class="sidebar-primary-action sidebar-task-create" :disabled="loading" @click="createTask" :aria-label="$t('scheduledTasks.new')">
+        <button type="button" class="btn-ghost sidebar-primary-action sidebar-task-create" :disabled="loading" @click="createTask" :title="$t('scheduledTasks.new')" :aria-label="$t('scheduledTasks.new')">
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>{{ $t('scheduledTasks.new') }}</span>
         </button>
         <slot name="after-create">
           <button v-if="resolvedProjectStore?.openPluginCenter" type="button"
-                  class="sidebar-primary-action sidebar-plugins-entry"
+                  class="btn-ghost sidebar-primary-action sidebar-plugins-entry"
                   :class="{ active: resolvedProjectStore.pluginCenterOpen }"
+                  :title="$t('yeaft.plugins.title')" :aria-label="$t('yeaft.plugins.title')"
                   :aria-current="resolvedProjectStore.pluginCenterOpen ? 'page' : undefined"
                   :disabled="!(resolvedProjectStore.pluginCenterAgents || agents).some(agent => agent?.online || resolvedProjectStore.pluginConfigByAgent?.[agent.id]?.loaded)" @click="openPlugins">
-            <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M14 3.5a3 3 0 0 0-4.24 4.24L3.5 14l6.5 6.5 6.26-6.26A3 3 0 0 0 20.5 10L17 13.5l-2.5-2.5L18 7.5A3 3 0 0 0 14 3.5z"/></svg>
-            <span>{{ $t('yeaft.plugins.title') }}</span>
+            <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 5V4a2.5 2.5 0 0 1 5 0v1h3a2 2 0 0 1 2 2v3h1a2.5 2.5 0 0 1 0 5h-1v4a2 2 0 0 1-2 2h-3v-1a2.5 2.5 0 0 0-5 0v1H5a2 2 0 0 1-2-2v-4h1a2.5 2.5 0 0 0 0-5H3V7a2 2 0 0 1 2-2Z"/></svg>
           </button>
         </slot>
       </div>

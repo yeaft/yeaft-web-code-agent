@@ -46,8 +46,14 @@ function renderList(extraProps = {}) {
 describe('Plugin Center sidebar navigation', () => {
   it('places the shared Plugins entry after New chat and moves the active marker without changing Session identity', async () => {
     renderList();
-    expect(wrapper.get('.sidebar-primary-actions').findAll('button').map(button => button.text()))
-      .toEqual([en['sidebar.sessions.newChat'], en['scheduledTasks.new'], en['yeaft.plugins.title']]);
+    const buttons = wrapper.get('.sidebar-primary-actions').findAll('button');
+    const names = [en['sidebar.sessions.newChat'], en['scheduledTasks.new'], en['yeaft.plugins.title']];
+    expect(buttons.map(button => button.attributes('aria-label'))).toEqual(names);
+    expect(buttons.map(button => button.attributes('title'))).toEqual(names);
+    for (const button of buttons) {
+      expect(button.text()).toBe('');
+      expect(button.findAll('svg[aria-hidden="true"]')).toHaveLength(1);
+    }
     expect(wrapper.get('.sidebar-session-row').classes()).toContain('active');
     await wrapper.get('.sidebar-plugins-entry').trigger('click');
     expect(store.openPluginCenter).toHaveBeenCalledOnce();
