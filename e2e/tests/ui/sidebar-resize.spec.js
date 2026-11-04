@@ -294,19 +294,19 @@ for (const theme of ['light', 'dark']) {
     // currently visible member list. Preference persistence is real SQLite.
     await page.setViewportSize({ width: 1400, height: 900 });
     const seedFolders = async client => {
-      await client.evaluate(() => {
+      await client.evaluate(theme => {
         window.Pinia.useChatStore().sessionProjects = [
-          { id: 'persist-folder-a', name: 'Folder A', members: [] },
-          { id: 'persist-folder-b', name: 'Folder B', members: [] },
+          { id: 'persist-folder-a-' + theme, name: 'Folder A', members: [] },
+          { id: 'persist-folder-b-' + theme, name: 'Folder B', members: [] },
         ];
-      });
+      }, theme);
     };
     await seedFolders(page);
     const folderToggle = (client, name) => client.locator('.sidebar-project').filter({ hasText: name }).locator('.sidebar-project-toggle');
     const preferences = async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json());
     await expect(folderToggle(page, 'Folder A')).toHaveAttribute('aria-expanded', 'true');
     await folderToggle(page, 'Folder A').click();
-    await expect.poll(async () => (await preferences()).sidebarCollapsedProjects['persist-folder-a']).toBe(true);
+    await expect.poll(async () => (await preferences()).sidebarCollapsedProjects['persist-folder-a-' + theme]).toBe(true);
     await page.reload();
     await expect(handle).toHaveAttribute('aria-disabled', 'false');
     await seedFolders(page);
@@ -321,11 +321,11 @@ for (const theme of ['light', 'dark']) {
       await expect(folderToggle(client, 'Folder A')).toHaveAttribute('aria-expanded', 'false');
       // Independent clients change different folders: no full-map overwrite.
       await folderToggle(client, 'Folder A').click();
-      await expect.poll(async () => (await preferences()).sidebarCollapsedProjects['persist-folder-a']).toBe(false);
+      await expect.poll(async () => (await preferences()).sidebarCollapsedProjects['persist-folder-a-' + theme]).toBe(false);
       await seedFolders(page);
       await folderToggle(page, 'Folder B').click();
-      await expect.poll(async () => (await preferences()).sidebarCollapsedProjects).toEqual({
-        'persist-folder-a': false, 'persist-folder-b': true,
+      await expect.poll(async () => (await preferences()).sidebarCollapsedProjects).toMatchObject({
+        ['persist-folder-a-' + theme]: false, ['persist-folder-b-' + theme]: true,
       });
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
       await expect(folderToggle(page, 'Folder A')).toHaveAttribute('aria-expanded', 'true');
