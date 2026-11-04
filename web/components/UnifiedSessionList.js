@@ -245,6 +245,7 @@ export default {
     return {
       actionGeneration: 0,
       actionsCompact: false,
+      actionsTogglePending: false,
       sessionListOverflows: false,
       collapsedProjects: {},
       collapsedSections: readCollapsedSections(),
@@ -376,8 +377,17 @@ export default {
       if (!results?.clientHeight || !results.clientWidth) return;
       const sections = [...results.querySelectorAll('.sidebar-section:not(.is-collapsed)')];
       this.sessionListOverflows = [results, ...sections].some(element => element.scrollHeight > element.clientHeight + 1);
+      if (this.actionsTogglePending) {
+        // Keep the focused toggle mounted while the new layout is measured.
+        // If it genuinely disappears, move focus to a stable, visible action.
+        if (!this.actionsCompact && !this.sessionListOverflows && document.activeElement === this.$refs.actionsToggle) {
+          this.$el.querySelector('.sidebar-primary-action:not(:disabled)')?.focus({ preventScroll: true });
+        }
+        this.actionsTogglePending = false;
+      }
     },
     toggleCompactActions() {
+      this.actionsTogglePending = true;
       this.actionsCompact = !this.actionsCompact;
     },
     closeMenus() {
@@ -1177,7 +1187,7 @@ export default {
         </section>
       </div>
 
-      <button v-if="actionsCompact || sessionListOverflows" type="button"
+      <button v-if="actionsCompact || sessionListOverflows || actionsTogglePending" ref="actionsToggle" type="button"
               class="btn-ghost sidebar-actions-toggle" :aria-expanded="!actionsCompact"
               :title="$t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse')"
               @click="toggleCompactActions">

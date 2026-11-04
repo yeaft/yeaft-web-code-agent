@@ -72,6 +72,8 @@ describe('Plugin Center sidebar navigation', () => {
     expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-expanded')).toBe('false');
     await wrapper.get('.sidebar-actions-toggle').trigger('click');
     expect(buttons.map(button => button.text())).toEqual(names);
+    wrapper.vm.measureSessionOverflow();
+    await Vue.nextTick();
     expect(wrapper.find('.sidebar-actions-toggle').exists()).toBe(false);
     expect(wrapper.get('.sidebar-session-row').classes()).toContain('active');
     await wrapper.get('.sidebar-plugins-entry').trigger('click');

@@ -25,6 +25,41 @@ for (const theme of ['light', 'dark']) {
     const compactToggle = page.locator('.sidebar-actions-toggle');
     await expect(shortcuts).not.toHaveClass(/is-compact/);
     await expect(compactToggle).toHaveCount(0);
+    // A borderline list fits only after compacting. Expanding it by keyboard
+    // must keep the same focused toggle through the new overflow measurement.
+    await handle.dblclick();
+    await expect(handle).toHaveAttribute('aria-valuenow', '50');
+    await page.setViewportSize({ width: 1400, height: 880 });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const borderlineCount = await page.evaluate(agentId => {
+      const available = document.querySelector('.recents-section').clientHeight;
+      const count = Math.floor((available - 48) / 35) + 1;
+      window.Pinia.useChatStore().sessionCatalog = Array.from({ length: count }, (_, index) => ({
+        catalogKey: 'borderline-' + index, runtimeProvider: 'yeaft', title: 'Recent session ' + index,
+        routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'borderline-' + index }, availability: 'online',
+      }));
+      return count;
+    }, mockAgent.agentId);
+    await expect(page.locator('.recents-section .session-item')).toHaveCount(borderlineCount);
+    await expect(compactToggle).toBeVisible();
+    await compactToggle.click();
+    await expect(shortcuts).toHaveClass(/is-compact/);
+    await expect.poll(() => page.locator('.recents-section').evaluate(el => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await compactToggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(shortcuts).not.toHaveClass(/is-compact/);
+    await expect(compactToggle).toBeFocused();
+    // If the list really becomes short while compact, restore focus to New chat
+    // when the now-unnecessary toggle disappears.
+    await compactToggle.click();
+    await page.evaluate(() => { window.Pinia.useChatStore().sessionCatalog = []; });
+    await expect(page.locator('.recents-section .session-item')).toHaveCount(0);
+    await compactToggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(compactToggle).toHaveCount(0);
+    await expect(shortcuts.locator('button').first()).toBeFocused();
+    await page.setViewportSize({ width: 1400, height: 900 });
     // Layout stress fixture only: preference reads/writes below use the real Server DB.
     await page.evaluate(agentId => {
       const store = window.Pinia.useChatStore();
