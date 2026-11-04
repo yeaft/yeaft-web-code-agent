@@ -95,7 +95,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +8 reviewed sidebar control boundaries: 3 project chat/task mode and ownership
 // cases; 5 browser hover/focus/vertical disclosure, touch/narrow-screen and both
 // sidebar creation surfaces. Existing cross-device layout cases remain intact.
-export const TEST_CASE_LIMIT = 846;
+// +2 folder/section preference boundaries: per-key optimistic queue/rollback/auth
+// fencing and component restore/focus/create behavior. Server migration/merge and
+// real cross-client persistence extend existing cases without replacing coverage.
+export const TEST_CASE_LIMIT = 848;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

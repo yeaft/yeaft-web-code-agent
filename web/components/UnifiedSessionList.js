@@ -32,32 +32,6 @@ function projectIdentityKey(project) {
   return project?.id || '';
 }
 
-const SIDEBAR_SECTION_COLLAPSE_KEY = 'yeaft-sidebar-section-collapse';
-
-function readCollapsedSections() {
-  try {
-    if (typeof localStorage === 'undefined') return { projects: false, recents: false };
-    const parsed = JSON.parse(localStorage.getItem(SIDEBAR_SECTION_COLLAPSE_KEY) || '{}');
-    return {
-      projects: parsed?.projects === true,
-      recents: parsed?.recents === true,
-    };
-  } catch {
-    return { projects: false, recents: false };
-  }
-}
-
-function writeCollapsedSections(value) {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(SIDEBAR_SECTION_COLLAPSE_KEY, JSON.stringify({
-        projects: value?.projects === true,
-        recents: value?.recents === true,
-      }));
-    }
-  } catch { /* browser storage is best-effort UI state */ }
-}
-
 export function reorderProjectRows(rows, movedId, targetId, position = 'before') {
   const ordered = Array.isArray(rows) ? [...rows] : [];
   const fromIndex = ordered.findIndex(row => projectIdentityKey(row) === movedId);
@@ -222,6 +196,10 @@ export default {
     }
     return {
       sectionRatioPreview, saveSectionRatio,
+      collapsedProjects: Vue.computed(() => userPreferences.preferences.value.sidebarCollapsedProjects),
+      collapsedSections: Vue.computed(() => userPreferences.preferences.value.sidebarCollapsedSections),
+      saveProjectCollapsed: userPreferences.saveSidebarProjectCollapsed,
+      saveSectionCollapsed: userPreferences.saveSidebarSectionCollapsed,
       actionsCompact: Vue.computed(() => userPreferences.preferences.value.sidebarActionsCompact),
       saveActionsCompact: userPreferences.saveSidebarActionsCompact,
       sectionRatio: Vue.computed(() => sectionRatioPreview.value ?? userPreferences.preferences.value.sidebarProjectsRatio),
@@ -248,8 +226,6 @@ export default {
       actionGeneration: 0,
       actionsTogglePending: false,
       sessionListOverflows: false,
-      collapsedProjects: {},
-      collapsedSections: readCollapsedSections(),
       openMenuKey: null,
       openProjectMenuKey: null,
       suppressedActionsKey: null,
@@ -576,23 +552,17 @@ export default {
       return this.collapsedSections?.[section] === true;
     },
     toggleSection(section) {
-      if (!['projects', 'recents'].includes(section)) return;
-      this.collapsedSections = {
-        ...this.collapsedSections,
-        [section]: !this.isSectionCollapsed(section),
-      };
-      writeCollapsedSections(this.collapsedSections);
+      if (!this.preferencesReady || !['projects', 'recents'].includes(section)) return;
+      void this.saveSectionCollapsed(section, !this.isSectionCollapsed(section));
       this.closeMenus();
     },
     isProjectCollapsed(project) {
       return this.collapsedProjects[projectIdentityKey(project)] === true;
     },
     toggleProject(project) {
+      if (!this.preferencesReady) return;
       const key = projectIdentityKey(project);
-      this.collapsedProjects = {
-        ...this.collapsedProjects,
-        [key]: !this.collapsedProjects[key],
-      };
+      void this.saveProjectCollapsed(key, !this.isProjectCollapsed(project));
       this.closeMenus();
     },
     providerLabel(row) {
@@ -713,8 +683,7 @@ export default {
       if (this.loading) return;
       if (this.projectCreateSubmitting) return;
       if (this.isSectionCollapsed('projects')) {
-        this.collapsedSections = { ...this.collapsedSections, projects: false };
-        writeCollapsedSections(this.collapsedSections);
+        void this.saveSectionCollapsed('projects', false);
       }
       this.projectCreateOpen = true;
       this.projectCreateName = '';
@@ -1086,7 +1055,7 @@ export default {
                 <path class="sidebar-project-add-mark" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/>
               </svg>
             </button>
-            <button type="button" class="sidebar-section-toggle" @click="toggleSection('projects')" :aria-expanded="String(!isSectionCollapsed('projects'))" :aria-label="$t('sidebar.projects.title')" :title="$t(isSectionCollapsed('projects') ? 'sidebar.sections.expand' : 'sidebar.sections.collapse', { name: $t('sidebar.projects.title') })">
+            <button type="button" class="sidebar-section-toggle" :disabled="!preferencesReady" @click="toggleSection('projects')" :aria-expanded="String(!isSectionCollapsed('projects'))" :aria-label="$t('sidebar.projects.title')" :title="$t(isSectionCollapsed('projects') ? 'sidebar.sections.expand' : 'sidebar.sections.collapse', { name: $t('sidebar.projects.title') })">
               <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('projects') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
             </button>
           </div>
@@ -1122,7 +1091,7 @@ export default {
               @drop="dropOnProjectHeader(project, $event)"
               @dragend="finishAllDrag"
             >
-              <button type="button" class="sidebar-project-toggle" @click="toggleProject(project)" :aria-expanded="String(!isProjectCollapsed(project))">
+              <button type="button" class="sidebar-project-toggle" :disabled="!preferencesReady" @click="toggleProject(project)" :aria-expanded="String(!isProjectCollapsed(project))">
                 <svg v-if="isProjectCollapsed(project)" class="sidebar-project-icon sidebar-project-icon-closed" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 7.5a2 2 0 0 1 2-2h4l1.8 2H15.5a2 2 0 0 1 2 2V18h-15z"/></svg>
                 <svg v-else class="sidebar-project-icon sidebar-project-icon-open" viewBox="0 0 20 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2.5 9V7a2 2 0 0 1 2-2h4l1.8 2h5.2a2 2 0 0 1 2 2v1M3.5 10h15l-2 8h-15z"/></svg>
                 <span class="sidebar-project-name">{{ project.name }}</span>
@@ -1203,7 +1172,7 @@ export default {
             <button type="button" class="sidebar-tool-button sidebar-recents-task-create" :disabled="loading" @click="createTask" :title="$t('scheduledTasks.new')" :aria-label="$t('scheduledTasks.new')">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
             </button>
-            <button type="button" class="sidebar-section-toggle" @click="toggleSection('recents')" :aria-expanded="String(!isSectionCollapsed('recents'))" :aria-label="$t('sidebar.recents.title')" :title="$t(isSectionCollapsed('recents') ? 'sidebar.sections.expand' : 'sidebar.sections.collapse', { name: $t('sidebar.recents.title') })">
+            <button type="button" class="sidebar-section-toggle" :disabled="!preferencesReady" @click="toggleSection('recents')" :aria-expanded="String(!isSectionCollapsed('recents'))" :aria-label="$t('sidebar.recents.title')" :title="$t(isSectionCollapsed('recents') ? 'sidebar.sections.expand' : 'sidebar.sections.collapse', { name: $t('sidebar.recents.title') })">
               <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('recents') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
             </button>
           </div>

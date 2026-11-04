@@ -290,6 +290,62 @@ for (const theme of ['light', 'dark']) {
     await clickCompactToggle(page);
     await expect(shortcuts).not.toHaveClass(/is-compact/);
     await page.screenshot({ path: testInfo.outputPath('sidebar-mobile.png') });
+    // Folder identity uses the server Project ID, never its mutable name or
+    // currently visible member list. Preference persistence is real SQLite.
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const seedFolders = async client => {
+      await client.evaluate(() => {
+        window.Pinia.useChatStore().sessionProjects = [
+          { id: 'persist-folder-a', name: 'Folder A', members: [] },
+          { id: 'persist-folder-b', name: 'Folder B', members: [] },
+        ];
+      });
+    };
+    await seedFolders(page);
+    const folderToggle = (client, name) => client.locator('.sidebar-project').filter({ hasText: name }).locator('.sidebar-project-toggle');
+    const preferences = async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json());
+    await expect(folderToggle(page, 'Folder A')).toHaveAttribute('aria-expanded', 'true');
+    await folderToggle(page, 'Folder A').click();
+    await expect.poll(async () => (await preferences()).sidebarCollapsedProjects['persist-folder-a']).toBe(true);
+    await page.reload();
+    await expect(handle).toHaveAttribute('aria-disabled', 'false');
+    await seedFolders(page);
+    await expect(folderToggle(page, 'Folder A')).toHaveAttribute('aria-expanded', 'false');
+    await expect(folderToggle(page, 'Folder B')).toHaveAttribute('aria-expanded', 'true');
+    const folderDevice = await browser.newContext({ viewport: { width: 1200, height: 750 } });
+    try {
+      const client = await folderDevice.newPage();
+      await open(client, serverUrl, theme);
+      await expect(client.locator('.sidebar-section-resize-handle')).toHaveAttribute('aria-disabled', 'false');
+      await seedFolders(client);
+      await expect(folderToggle(client, 'Folder A')).toHaveAttribute('aria-expanded', 'false');
+      // Independent clients change different folders: no full-map overwrite.
+      await folderToggle(client, 'Folder A').click();
+      await expect.poll(async () => (await preferences()).sidebarCollapsedProjects['persist-folder-a']).toBe(false);
+      await seedFolders(page);
+      await folderToggle(page, 'Folder B').click();
+      await expect.poll(async () => (await preferences()).sidebarCollapsedProjects).toEqual({
+        'persist-folder-a': false, 'persist-folder-b': true,
+      });
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await expect(folderToggle(page, 'Folder A')).toHaveAttribute('aria-expanded', 'true');
+      await page.route('**/api/user/preferences', route => route.request().method() === 'PATCH'
+        ? route.fulfill({ status: 503, body: '{}' }) : route.continue());
+      await folderToggle(page, 'Folder A').click();
+      await expect(page.locator('.sidebar-preferences-error')).toBeVisible();
+      await expect(folderToggle(page, 'Folder A')).toHaveAttribute('aria-expanded', 'true');
+      await page.unroute('**/api/user/preferences');
+      await page.locator('.recents-section > .sidebar-section-heading').hover();
+      await page.locator('.recents-section > .sidebar-section-heading > .sidebar-section-toggle').click();
+      await expect.poll(async () => (await preferences()).sidebarCollapsedSections.recents).toBe(true);
+      await client.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await expect(client.locator('.recents-section')).toHaveClass(/is-collapsed/);
+      // Restore this section before the geometry regression below.
+      await page.locator('.recents-section > .sidebar-section-heading').hover();
+      await page.locator('.recents-section > .sidebar-section-heading > .sidebar-section-toggle').click();
+      await expect(handle).toHaveAttribute('aria-disabled', 'false');
+      await page.screenshot({ path: testInfo.outputPath('sidebar-folder-persistence.png') });
+    } finally { await folderDevice.close(); }
     for (const height of [460, 350, 300]) {
       await page.setViewportSize({ width: 1400, height });
       await expect(handle).toBeVisible();

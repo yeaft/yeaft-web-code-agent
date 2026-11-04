@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import { mount, flushPromises } from '@vue/test-utils';
+import { useUserPreferences } from '../../web/utils/user-preferences.js';
 import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
 globalThis.Pinia = { defineStore: () => () => ({}) };
 const { default: SessionCreateModal } = await import('../../web/components/SessionCreateModal.js');
@@ -24,6 +25,14 @@ afterEach(() => { vi.restoreAllMocks(); delete window.Pinia; wrapper?.unmount();
 it('lists task Sessions in recents or their owning Project with a badge and shared actions', async () => {
   // Old Tasks-collapse state must not hide tasks in either current section.
   localStorage.setItem('yeaft-sidebar-section-collapse', JSON.stringify({ tasks: true }));
+  let saved = { sidebarProjectsRatio: 0.5, sidebarActionsCompact: false, sidebarCollapsedSections: {} };
+  vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
+    if (options?.method === 'PATCH') saved = { ...saved, ...JSON.parse(options.body) };
+    return { ok: true, json: async () => saved };
+  }));
+  vi.stubGlobal('Pinia', { useAuthStore: () => auth });
+  const auth = Vue.reactive({ isAuthenticated: true, userId: 'task-sidebar-owner', authGeneration: 1 });
+  const preferences = useUserPreferences();
   const taskRow = row('task', { task });
   const otherTask = row('task', { catalogKey: 'yeaft:b:task', task, routeRef: { runtimeProvider: 'yeaft', agentId: 'b', sessionId: 'task' } });
   const project = { id: 'p', name: 'Project', members: [{ agentId: 'a', sessionId: 'task' }] };
@@ -31,6 +40,7 @@ it('lists task Sessions in recents or their owning Project with a badge and shar
   wrapper = mount(UnifiedSessionList, { attachTo: document.body, props: { agents: [...agents, { id: 'b', online: true }],
     sessions: [taskRow, otherTask, row('chat')], projects: [project],
     projectStore: { mutateProject }, isSessionUnread: item => item.catalogKey === taskRow.catalogKey }, global: { mocks: { $t: t } } });
+  await flushPromises();
   expect(wrapper.find('.tasks-section').exists()).toBe(false);
   expect(wrapper.get('.projects-section').findAll('.sidebar-session-row')).toHaveLength(1);
   expect(wrapper.get('.recents-section').findAll('.sidebar-session-row')).toHaveLength(2);
@@ -57,7 +67,9 @@ it('lists task Sessions in recents or their owning Project with a badge and shar
   expect(wrapper.get('.recents-section').findAll('.sidebar-session-row')).toHaveLength(3);
   await wrapper.get('.recents-section .sidebar-section-toggle').trigger('click');
   expect(wrapper.find('.recents-section .sidebar-session-row').exists()).toBe(false);
-  expect(JSON.parse(localStorage.getItem('yeaft-sidebar-section-collapse'))).toEqual({ projects: false, recents: true });
+  await flushPromises();
+  expect(saved.sidebarCollapsedSections).toEqual({ recents: true });
+  expect(JSON.parse(localStorage.getItem('yeaft-sidebar-section-collapse'))).toEqual({ tasks: true });
   await wrapper.get('.sidebar-task-create').trigger('click');
   expect(wrapper.emitted('create-task')).toHaveLength(1);
   const heading = wrapper.get('.recents-section .sidebar-section-heading');
@@ -75,6 +87,7 @@ it('lists task Sessions in recents or their owning Project with a badge and shar
   expect(wrapper.get('.sidebar-recents-task-create').attributes('disabled')).toBeDefined();
   await wrapper.get('.sidebar-recents-task-create').trigger('click');
   expect(wrapper.emitted('create-task')).toHaveLength(2);
+  preferences.dispose();
 });
 
 it('creates task Sessions with the existing roster and folder contract and rejects unsupported Agents', async () => {
