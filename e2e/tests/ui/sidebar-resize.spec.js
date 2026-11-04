@@ -79,6 +79,13 @@ for (const theme of ['light', 'dark']) {
     await expect(page.locator('.recents-section .session-item')).toHaveCount(40);
     await expect(compactToggle).toBeVisible();
     await expect(compactToggle).toHaveAttribute('aria-expanded', 'true');
+    // The control belongs beside the last shortcut, never at the footer.
+    expect(await compactToggle.evaluate(el => {
+      const area = el.closest('.sidebar-primary-actions').getBoundingClientRect();
+      const last = el.previousElementSibling.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      return box.top === last.top && box.bottom <= area.bottom && box.left >= last.left;
+    })).toBe(true);
     const expandedHeight = await shortcuts.evaluate(el => el.getBoundingClientRect().height);
     const expandedResultsHeight = await page.locator('.sidebar-session-results').evaluate(el => el.clientHeight);
     await compactToggle.focus();
@@ -101,10 +108,15 @@ for (const theme of ['light', 'dark']) {
     expect(await shortcuts.locator('svg').evaluateAll(icons => icons.every(icon => {
       const box = icon.getBoundingClientRect(); return box.width === 18 && box.height === 18;
     }))).toBe(true);
+    expect(await compactToggle.evaluate(el => {
+      const previous = el.previousElementSibling.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      return box.top === previous.top && box.left >= previous.right;
+    })).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('sidebar-compact.png') });
     await page.keyboard.press('Space');
     await expect(shortcuts).not.toHaveClass(/is-compact/);
-    await expect(shortcuts.locator('button')).toHaveText(['New chat', 'New task', 'Plugins']);
+    await expect(shortcuts.locator('.sidebar-primary-action')).toHaveText(['New chat', 'New task', 'Plugins']);
     await expect(compactToggle).toHaveAttribute('aria-expanded', 'true');
     for (const selector of ['.projects-section', '.recents-section']) {
       expect(await page.locator(selector).evaluate(el => { el.scrollTop = 100; return el.scrollHeight > el.clientHeight && el.scrollTop > 0; })).toBe(true);
@@ -121,12 +133,18 @@ for (const theme of ['light', 'dark']) {
     expect(await readRatio(page)).toBeCloseTo(0.7, 2);
     await page.screenshot({ path: testInfo.outputPath('sidebar-dragged.png') });
 
+    await compactToggle.click();
+    await expect.poll(async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json()).sidebarActionsCompact).toBe(true);
     // A genuinely separate browser context, no copied localStorage/cookies.
     const device = await browser.newContext({ viewport: { width: 1200, height: 700 } });
     try {
       const other = await device.newPage();
       await open(other, serverUrl, theme);
       await expect(other.locator('.sidebar-section-resize-handle')).toHaveAttribute('aria-valuenow', '70');
+      await expect(other.locator('.sidebar-primary-actions')).toHaveClass(/is-compact/);
+      // Even with a short list on another desktop, the saved layout wins.
+      await other.locator('.sidebar-actions-toggle').click();
+      await expect.poll(async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json()).sidebarActionsCompact).toBe(false);
       expect(await readRatio(other)).toBeCloseTo(0.7, 2);
       await other.locator('.sidebar-section-resize-handle').focus();
       await other.keyboard.press('ArrowUp');
@@ -153,10 +171,32 @@ for (const theme of ['light', 'dark']) {
       await page.keyboard.press('Escape');
       await page.mouse.up();
       await expect(handle).toHaveAttribute('aria-valuenow', '68');
+      await expect(shortcuts).not.toHaveClass(/is-compact/);
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
       await expect(handle).toHaveAttribute('aria-valuenow', '68');
       expect(await readRatio(page)).toBeCloseTo(0.68, 2);
     } finally { await device.close(); }
+
+    // A second Web client can refresh the catalog; restore only the layout
+    // stress data after closing it (preferences still use the real Server DB).
+    await page.evaluate(agentId => {
+      const store = window.Pinia.useChatStore();
+      store.sessionProjects = Array.from({ length: 30 }, (_, index) => ({ id: 'layout-project-' + index, name: 'Long project title ' + index, members: [] }));
+      store.sessionCatalog = Array.from({ length: 40 }, (_, index) => ({
+        catalogKey: 'layout-session-' + index, runtimeProvider: 'yeaft', title: 'Recent session ' + index,
+        routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'layout-session-' + index }, availability: 'online',
+      }));
+    }, mockAgent.agentId);
+    await expect(compactToggle).toBeVisible();
+    // A failed compact save is disclosed and rolled back too.
+    await page.route('**/api/user/preferences', route => route.request().method() === 'PATCH'
+      ? route.fulfill({ status: 503, body: '{}' }) : route.continue());
+    await compactToggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.sidebar-preferences-error')).toBeVisible();
+    await expect(shortcuts).not.toHaveClass(/is-compact/);
+    await expect(compactToggle).toBeFocused();
+    await page.unroute('**/api/user/preferences');
 
     // A failed write must be disclosed and rolled back, not look synchronized.
     await page.route('**/api/user/preferences', route => route.request().method() === 'PATCH'
@@ -203,7 +243,11 @@ for (const theme of ['light', 'dark']) {
     expect(await compactToggle.evaluate(el => {
       const box = el.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight;
     })).toBe(true);
+    await expect.poll(async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json()).sidebarActionsCompact).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('sidebar-mobile-compact.png') });
+    await page.reload();
+    await page.locator('.header-sidebar-toggle').click();
+    await expect(shortcuts).toHaveClass(/is-compact/);
     await compactToggle.click();
     await expect(shortcuts).not.toHaveClass(/is-compact/);
     await page.screenshot({ path: testInfo.outputPath('sidebar-mobile.png') });

@@ -105,16 +105,20 @@ export function registerUserRoutes(app, {
 
       const body = req.body;
       if (!body || typeof body !== 'object' || Array.isArray(body)
-        || Object.keys(body).some(key => key !== 'sidebarProjectsRatio')
-        || typeof body.sidebarProjectsRatio !== 'number'
-        || !Number.isFinite(body.sidebarProjectsRatio)
-        || body.sidebarProjectsRatio < 0.15 || body.sidebarProjectsRatio > 0.85) {
+        || Object.keys(body).length === 0
+        || Object.keys(body).some(key => key !== 'sidebarProjectsRatio' && key !== 'sidebarActionsCompact')
+        || (Object.hasOwn(body, 'sidebarProjectsRatio') && (
+          typeof body.sidebarProjectsRatio !== 'number'
+          || !Number.isFinite(body.sidebarProjectsRatio)
+          || body.sidebarProjectsRatio < 0.15 || body.sidebarProjectsRatio > 0.85
+        ))
+        || (Object.hasOwn(body, 'sidebarActionsCompact') && typeof body.sidebarActionsCompact !== 'boolean')) {
         return res.status(400).json({
-          error: 'Expected only sidebarProjectsRatio, a finite number between 0.15 and 0.85',
+          error: 'Expected a nonempty patch with only sidebarProjectsRatio (finite number between 0.15 and 0.85) and/or sidebarActionsCompact (boolean)',
         });
       }
 
-      res.set('Cache-Control', 'private, no-store').json(userPreferencesDb.update(user.id, body.sidebarProjectsRatio));
+      res.set('Cache-Control', 'private, no-store').json(userPreferencesDb.update(user.id, body));
     } catch (err) {
       console.error('Update preferences error:', err);
       res.status(500).json({ error: 'Failed to update preferences' });

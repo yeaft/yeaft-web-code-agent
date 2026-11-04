@@ -6,7 +6,7 @@ import { createUserPreferencesState, useUserPreferences } from '../../web/utils/
 import SidebarSectionResizeHandle from '../../web/components/SidebarSectionResizeHandle.js';
 import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
 
-const ok = ratio => ({ ok: true, json: async () => ({ sidebarProjectsRatio: ratio }) });
+const ok = (ratio, compact = false) => ({ ok: true, json: async () => ({ sidebarProjectsRatio: ratio, sidebarActionsCompact: compact }) });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const tick = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); await Vue.nextTick(); };
 const states = [];
@@ -87,6 +87,56 @@ describe('server-owned sidebar user preferences', () => {
     expect(await state.saveSidebarProjectsRatio(1)).toBe(true);
     expect(state.preferences.value.sidebarProjectsRatio).toBe(0.85);
     expect(state.error.value).toBeNull();
+  });
+
+  it('loads compact mode, sends field-only patches and keeps later optimistic changes across queued responses', async () => {
+    const write = deferred();
+    const request = vi.fn().mockResolvedValueOnce(ok(0.65, true)).mockReturnValueOnce(write.promise)
+      .mockResolvedValueOnce(ok(0.7, false)).mockResolvedValueOnce(ok(0.4, true));
+    const { state } = stateFor(request);
+    await tick();
+    expect(state.preferences.value).toEqual({ sidebarProjectsRatio: 0.65, sidebarActionsCompact: true });
+    const ratio = state.saveSidebarProjectsRatio(0.7);
+    const compact = state.saveSidebarActionsCompact(false);
+    await tick();
+    expect(state.preferences.value).toEqual({ sidebarProjectsRatio: 0.7, sidebarActionsCompact: false });
+    write.resolve(ok(0.7, true));
+    expect(await ratio).toBe(true);
+    expect(state.preferences.value.sidebarActionsCompact).toBe(false);
+    expect(await compact).toBe(true);
+    expect(request.mock.calls[2][1].body).toBe('{"sidebarActionsCompact":false}');
+    await state.refresh();
+    expect(state.preferences.value).toEqual({ sidebarProjectsRatio: 0.4, sidebarActionsCompact: true });
+    expect(await state.saveSidebarActionsCompact('true')).toBe(false);
+  });
+
+  it('rolls back only failed compact changes without erasing a queued ratio save and fences both on account switch', async () => {
+    const failed = deferred();
+    const oldWrite = deferred();
+    const request = vi.fn().mockResolvedValueOnce(ok(0.5, true)).mockReturnValueOnce(failed.promise)
+      .mockResolvedValueOnce(ok(0.6, true)).mockReturnValueOnce(oldWrite.promise).mockResolvedValueOnce(ok(0.3));
+    const { state, auth } = stateFor(request);
+    await tick();
+    const compact = state.saveSidebarActionsCompact(false);
+    const ratio = state.saveSidebarProjectsRatio(0.6);
+    await tick();
+    failed.resolve({ ok: false });
+    expect(await compact).toBe(false);
+    expect(state.preferences.value.sidebarActionsCompact).toBe(true);
+    expect(state.preferences.value.sidebarProjectsRatio).toBe(0.6);
+    expect(await ratio).toBe(true);
+    // Saving a different field cannot silently dismiss the failed layout save.
+    expect(state.error.value).toBe('save');
+    const old = state.saveSidebarActionsCompact(false);
+    const queued = state.saveSidebarActionsCompact(true);
+    await tick();
+    auth.userId = 'owner-b'; auth.token = 'token-b';
+    await tick();
+    oldWrite.resolve(ok(0.6, false));
+    expect(await old).toBe(false);
+    expect(await queued).toBe(false);
+    expect(state.preferences.value).toEqual({ sidebarProjectsRatio: 0.3, sidebarActionsCompact: false });
+    expect(request).toHaveBeenCalledTimes(5);
   });
 
   it('exposes the latest cross-device value when a drag is cancelled after a pending refresh', async () => {

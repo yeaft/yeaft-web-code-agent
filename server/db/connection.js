@@ -41,7 +41,9 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS user_preferences (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     sidebar_projects_ratio REAL NOT NULL DEFAULT 0.5
-      CHECK (sidebar_projects_ratio >= 0.15 AND sidebar_projects_ratio <= 0.85)
+      CHECK (sidebar_projects_ratio >= 0.15 AND sidebar_projects_ratio <= 0.85),
+    sidebar_actions_compact INTEGER NOT NULL DEFAULT 0
+      CHECK (sidebar_actions_compact IN (0, 1))
   );
 
   -- Finalized deletion survives removal of the users row. This prevents a
@@ -337,6 +339,8 @@ db.exec(`
 
 // 数据库迁移 - 添加缺失的列
 const migrations = [
+  `ALTER TABLE user_preferences ADD COLUMN sidebar_actions_compact INTEGER NOT NULL DEFAULT 0
+    CHECK (sidebar_actions_compact IN (0, 1))`,
   `ALTER TABLE sessions ADD COLUMN user_id TEXT REFERENCES users(id)`,
   `ALTER TABLE users ADD COLUMN totp_secret TEXT`,
   `ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0`,
@@ -907,14 +911,16 @@ export const stmts = {
   `),
 
   getUserPreferences: db.prepare(`
-    SELECT sidebar_projects_ratio FROM user_preferences WHERE user_id = ?
+    SELECT sidebar_projects_ratio, sidebar_actions_compact FROM user_preferences WHERE user_id = ?
   `),
 
   upsertUserPreferences: db.prepare(`
-    INSERT INTO user_preferences (user_id, sidebar_projects_ratio)
-    VALUES (?, ?)
+    INSERT INTO user_preferences (user_id, sidebar_projects_ratio, sidebar_actions_compact)
+    VALUES (?, COALESCE(?, 0.5), COALESCE(?, 0))
     ON CONFLICT(user_id) DO UPDATE SET
-      sidebar_projects_ratio = excluded.sidebar_projects_ratio
+      sidebar_projects_ratio = COALESCE(?, user_preferences.sidebar_projects_ratio),
+      sidebar_actions_compact = COALESCE(?, user_preferences.sidebar_actions_compact)
+    RETURNING sidebar_projects_ratio, sidebar_actions_compact
   `),
 
   // Invitation 操作

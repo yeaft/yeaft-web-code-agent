@@ -222,6 +222,8 @@ export default {
     }
     return {
       sectionRatioPreview, saveSectionRatio,
+      actionsCompact: Vue.computed(() => userPreferences.preferences.value.sidebarActionsCompact),
+      saveActionsCompact: userPreferences.saveSidebarActionsCompact,
       sectionRatio: Vue.computed(() => sectionRatioPreview.value ?? userPreferences.preferences.value.sidebarProjectsRatio),
       preferencesReady: userPreferences.ready, preferencesError: userPreferences.error,
       refreshPreferences: userPreferences.refresh,
@@ -244,7 +246,6 @@ export default {
   data() {
     return {
       actionGeneration: 0,
-      actionsCompact: false,
       actionsTogglePending: false,
       sessionListOverflows: false,
       collapsedProjects: {},
@@ -297,6 +298,14 @@ export default {
     window.removeEventListener('scroll', this.positionFloatingMenu, true);
   },
   watch: {
+    actionsCompact(value) {
+      // A server refresh or failed save may remove the overflow-only control.
+      // Keep it mounted until focus has a stable destination in the new layout.
+      if (!value && document.activeElement === this.$refs.actionsToggle) {
+        this.actionsTogglePending = true;
+      }
+      this.scheduleOverflowCheck();
+    },
     loading(value) {
       if (!value) return;
       this.actionGeneration += 1;
@@ -388,7 +397,7 @@ export default {
     },
     toggleCompactActions() {
       this.actionsTogglePending = true;
-      this.actionsCompact = !this.actionsCompact;
+      void this.saveActionsCompact(!this.actionsCompact);
     },
     closeMenus() {
       this.openMenuKey = null;
@@ -1058,6 +1067,14 @@ export default {
             <span v-if="!actionsCompact">{{ $t('yeaft.plugins.title') }}</span>
           </button>
         </slot>
+        <button v-if="actionsCompact || sessionListOverflows || actionsTogglePending" ref="actionsToggle" type="button"
+                class="btn-ghost sidebar-actions-toggle" :aria-expanded="!actionsCompact"
+                :disabled="!preferencesReady"
+                :aria-label="$t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse')"
+                :title="$t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse')"
+                @click="toggleCompactActions">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :d="actionsCompact ? 'm7 7 5 5 5-5m-10 5 5 5 5-5' : 'm7 12 5-5 5 5m-10 5 5-5 5 5'"/></svg>
+        </button>
       </div>
 
       <div ref="sessionResults" class="sidebar-session-results" :class="{ 'sections-resizable': !isSectionCollapsed('projects') && !isSectionCollapsed('recents'), 'projects-collapsed': isSectionCollapsed('projects'), 'recents-collapsed': isSectionCollapsed('recents') }" :style="{ '--sidebar-projects-track': (sectionRatio * 100) + 'fr', '--sidebar-recents-track': ((1 - sectionRatio) * 100) + 'fr' }">
@@ -1187,13 +1204,6 @@ export default {
         </section>
       </div>
 
-      <button v-if="actionsCompact || sessionListOverflows || actionsTogglePending" ref="actionsToggle" type="button"
-              class="btn-ghost sidebar-actions-toggle" :aria-expanded="!actionsCompact"
-              :title="$t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse')"
-              @click="toggleCompactActions">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :d="actionsCompact ? 'm8 7 4-4 4 4M8 17l4 4 4-4' : 'm8 3 4 4 4-4M8 21l4-4 4 4'"/></svg>
-        <span>{{ $t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse') }}</span>
-      </button>
       <div v-if="preferencesError" class="sidebar-preferences-error" role="status">
         <span>{{ $t('sidebar.sectionResize.' + preferencesError + 'Error') }}</span>
         <button v-if="preferencesError === 'load'" type="button" class="btn-ghost" @click="refreshPreferences">{{ $t('common.retry') }}</button>

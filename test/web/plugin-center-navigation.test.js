@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
+import { useUserPreferences } from '../../web/utils/user-preferences.js';
 import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
 import en from '../../web/i18n/en.js';
 
@@ -17,12 +18,17 @@ const row = { catalogKey: 'yeaft:agent-a:session-a', runtimeProvider: 'yeaft', r
 const agents = [{ id: 'agent-a', online: true, capabilities: ['work_center'] }];
 let wrapper;
 let store;
+let preferences;
 const localize = key => en[key] || key;
 const globalOptions = { mocks: { $t: localize } };
 
 beforeEach(() => {
   vi.stubGlobal('Vue', Vue);
-  vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ version: '' }) })));
+  let saved = { sidebarProjectsRatio: 0.5, sidebarActionsCompact: false };
+  vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
+    if (options?.method === 'PATCH') saved = { ...saved, ...JSON.parse(options.body) };
+    return { ok: true, json: async () => ({ ...saved, version: '' }) };
+  }));
   localStorage.clear();
   store = Vue.reactive({
     agents, sessionProjects: [], sessionCatalog: [row], sessionCatalogLoaded: true,
@@ -32,9 +38,11 @@ beforeEach(() => {
     closeSessionSidebar: vi.fn(() => { store.sessionSidebarOpen = false; }),
     openCatalogSession: vi.fn(),
   });
-  vi.stubGlobal('Pinia', { useChatStore: () => store });
+  const auth = Vue.reactive({ isAuthenticated: true, userId: 'sidebar-owner', authGeneration: 1 });
+  vi.stubGlobal('Pinia', { useChatStore: () => store, useAuthStore: () => auth });
+  preferences = useUserPreferences();
 });
-afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals(); });
+afterEach(() => { wrapper?.unmount(); preferences?.dispose(); vi.unstubAllGlobals(); });
 
 function renderList(extraProps = {}) {
   wrapper = mount(UnifiedSessionList, { props: {
@@ -46,6 +54,7 @@ function renderList(extraProps = {}) {
 describe('Plugin Center sidebar navigation', () => {
   it('keeps labeled shortcuts by default, offers reversible compact mode on overflow and preserves Session identity', async () => {
     renderList();
+    await flushPromises();
     const buttons = wrapper.get('.sidebar-primary-actions').findAll('button');
     const names = [en['sidebar.sessions.newChat'], en['scheduledTasks.new'], en['yeaft.plugins.title']];
     expect(buttons.map(button => button.attributes('aria-label'))).toEqual(names);
@@ -59,7 +68,10 @@ describe('Plugin Center sidebar navigation', () => {
     wrapper.vm.measureSessionOverflow();
     await Vue.nextTick();
     expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('.sidebar-primary-actions > .sidebar-actions-toggle').text()).toBe('');
+    expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-label')).toBe(en['sidebar.actions.collapse']);
     await wrapper.get('.sidebar-actions-toggle').trigger('click');
+    await flushPromises();
     expect(wrapper.get('.sidebar-primary-actions').classes()).toContain('is-compact');
     for (const button of buttons) {
       expect(button.text()).toBe('');
@@ -71,6 +83,7 @@ describe('Plugin Center sidebar navigation', () => {
     // Compact mode must retain its restore control even when all rows now fit.
     expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-expanded')).toBe('false');
     await wrapper.get('.sidebar-actions-toggle').trigger('click');
+    await flushPromises();
     expect(buttons.map(button => button.text())).toEqual(names);
     wrapper.vm.measureSessionOverflow();
     await Vue.nextTick();

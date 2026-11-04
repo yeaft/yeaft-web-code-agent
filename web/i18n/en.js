@@ -669,7 +669,7 @@ export default {
   'sidebar.recents.empty': 'No chats found',
   'sidebar.sectionResize.label': 'Resize Projects and Recents (arrow keys to adjust, double-click to reset)',
   'sidebar.sectionResize.loadError': 'Could not load sidebar layout.',
-  'sidebar.sectionResize.saveError': 'Could not save sidebar layout. Previous ratio restored; drag to retry.',
+  'sidebar.sectionResize.saveError': 'Could not save sidebar layout. Previous settings restored; please try again.',
 
   // ============ Yeaft Page ============
   'yeaft.back': 'Back',

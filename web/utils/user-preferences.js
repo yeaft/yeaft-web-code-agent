@@ -2,6 +2,14 @@ const instances = new WeakMap();
 export const DEFAULT_SIDEBAR_PROJECTS_RATIO = 0.5;
 export const MIN_SIDEBAR_PROJECTS_RATIO = 0.15;
 export const MAX_SIDEBAR_PROJECTS_RATIO = 0.85;
+const defaultPreferences = () => ({ sidebarProjectsRatio: DEFAULT_SIDEBAR_PROJECTS_RATIO, sidebarActionsCompact: false });
+
+function normalizePreferences(value) {
+  return {
+    sidebarProjectsRatio: clampSidebarProjectsRatio(value.sidebarProjectsRatio),
+    sidebarActionsCompact: value.sidebarActionsCompact === true,
+  };
+}
 
 export function clampSidebarProjectsRatio(value) {
   return Number.isFinite(value)
@@ -14,13 +22,19 @@ export function clampSidebarProjectsRatio(value) {
  * Writes are serialized so a slow earlier drag cannot overwrite a later choice.
  */
 export function createUserPreferencesState(auth, { request = (...args) => fetch(...args) } = {}) {
-  const preferences = Vue.ref({ sidebarProjectsRatio: DEFAULT_SIDEBAR_PROJECTS_RATIO });
+  const preferences = Vue.ref(defaultPreferences());
   const ready = Vue.ref(false);
   const error = Vue.ref(null);
   const scope = Vue.effectScope(true);
   let generation = 0;
   let revision = 0;
-  let confirmed = DEFAULT_SIDEBAR_PROJECTS_RATIO;
+  let confirmed = defaultPreferences();
+  // Reapply later local choices over each server response while writes drain.
+  const pendingPatches = new Map();
+  const failedFields = new Set();
+  const showConfirmed = () => {
+    preferences.value = Object.assign({}, confirmed, ...pendingPatches.values());
+  };
   let controller = null;
   let loading = null;
   let queue = Promise.resolve();
@@ -46,8 +60,9 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         if (!response.ok) throw new Error('load');
         const value = await response.json();
         if (generation !== expectedGeneration || revision !== expectedRevision) return;
-        confirmed = clampSidebarProjectsRatio(value.sidebarProjectsRatio);
-        preferences.value = { sidebarProjectsRatio: confirmed };
+        confirmed = normalizePreferences(value);
+        failedFields.clear();
+        showConfirmed();
         ready.value = true;
         error.value = null;
       } catch {
@@ -58,38 +73,52 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
     try { await work; } finally { if (loading === work) loading = null; }
   }
 
-  function saveSidebarProjectsRatio(value) {
+  function savePatch(patch) {
     if (!authenticated() || !ready.value) return Promise.resolve(false);
-    const ratio = clampSidebarProjectsRatio(value);
     const expectedGeneration = generation;
     const expectedRevision = ++revision;
-    preferences.value = { sidebarProjectsRatio: ratio };
+    pendingPatches.set(expectedRevision, patch);
+    showConfirmed();
     error.value = null;
     pendingWrites++;
     const work = queue.then(async () => {
       if (generation !== expectedGeneration) return false;
       try {
         const response = await request('/api/user/preferences', {
-          ...options(), method: 'PATCH', body: JSON.stringify({ sidebarProjectsRatio: ratio }),
+          ...options(), method: 'PATCH', body: JSON.stringify(patch),
         });
         if (!response.ok) throw new Error('save');
         const result = await response.json();
         if (generation !== expectedGeneration) return false;
-        confirmed = clampSidebarProjectsRatio(result.sidebarProjectsRatio);
-        if (revision === expectedRevision) preferences.value = { sidebarProjectsRatio: confirmed };
+        confirmed = normalizePreferences(result);
+        for (const field of Object.keys(patch)) failedFields.delete(field);
+        error.value = failedFields.size ? 'save' : null;
         return true;
       } catch {
-        if (generation === expectedGeneration && revision === expectedRevision) {
-          preferences.value = { sidebarProjectsRatio: confirmed };
+        if (generation === expectedGeneration) {
+          for (const field of Object.keys(patch)) failedFields.add(field);
           error.value = 'save';
         }
         return false;
       } finally {
-        if (generation === expectedGeneration) pendingWrites--;
+        if (generation === expectedGeneration) {
+          pendingWrites--;
+          pendingPatches.delete(expectedRevision);
+          showConfirmed();
+        }
       }
     });
     queue = work;
     return work;
+  }
+
+  function saveSidebarProjectsRatio(value) {
+    return savePatch({ sidebarProjectsRatio: clampSidebarProjectsRatio(value) });
+  }
+
+  function saveSidebarActionsCompact(value) {
+    if (typeof value !== 'boolean') return Promise.resolve(false);
+    return savePatch({ sidebarActionsCompact: value });
   }
 
   scope.run(() => Vue.watch(
@@ -102,8 +131,10 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
       loading = null;
       queue = Promise.resolve();
       pendingWrites = 0;
-      confirmed = DEFAULT_SIDEBAR_PROJECTS_RATIO;
-      preferences.value = { sidebarProjectsRatio: confirmed };
+      pendingPatches.clear();
+      failedFields.clear();
+      confirmed = defaultPreferences();
+      showConfirmed();
       ready.value = false;
       error.value = null;
       void refresh();
@@ -112,7 +143,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   ));
   return {
     preferences: Vue.readonly(preferences), ready: Vue.readonly(ready), error: Vue.readonly(error),
-    refresh, saveSidebarProjectsRatio,
+    refresh, saveSidebarProjectsRatio, saveSidebarActionsCompact,
     dispose() { generation++; controller?.abort(); scope.stop(); },
   };
 }
