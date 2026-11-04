@@ -80,7 +80,7 @@ async function openTask(page) {
 }
 
 async function shot(page, testInfo, name) {
-  const directory = resolve('.yeaft/verification/mobile-redesign');
+  const directory = resolve('.yeaft/verification/task-header-controls');
   await mkdir(directory, { recursive: true });
   const path = resolve(directory, name);
   await page.screenshot({ path, fullPage: true, animations: 'disabled' });
@@ -375,7 +375,7 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   active.task.lastRun = { id: 'ongoing-run', status: 'running', trigger: 'schedule', startedAt: Date.now() };
   state.publish();
   await expect(page.getByRole('button', { name: 'Run once', exact: true })).toBeDisabled();
-  await expect(page.locator('.scheduled-task-state')).toHaveText('Running');
+  await expect(page.locator('.scheduled-task-runtime [role="status"]')).toHaveText('Running');
   await configureTask(page);
   await settings.locator('.scheduled-task-option-row').filter({ hasText: 'Enabled' }).click();
   await settings.getByRole('button', { name: 'Save task', exact: true }).click();
@@ -383,13 +383,56 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   expect(state.sessions.get(TASK_SESSION_ID).task.lastRun.status).toBe('running');
   await page.locator('.group-settings-close').click();
   await expect(page.getByRole('button', { name: 'Run once', exact: true })).toBeDisabled();
-  await expect(page.locator('.scheduled-task-state')).toHaveText('Running');
-  state.sessions.get(TASK_SESSION_ID).task.lastRun.status = 'completed';
-  state.publish();
-  await expect(page.locator('.scheduled-task-state')).toHaveText('Paused');
+  await expect(page.locator('.scheduled-task-runtime [role="status"]')).toHaveText('Running');
+  const savedTask = structuredClone(state.sessions.get(TASK_SESSION_ID).task);
+  state.holdStops = true;
+  const stop = page.locator('.scheduled-task-stop');
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect.poll(() => state.heldStops.length).toBe(1);
+  await expect(stop).toHaveAccessibleName('Stopping…');
+  await expect(stop).toBeDisabled();
+  await stop.evaluate(element => element.click());
+  expect(state.heldStops).toHaveLength(1);
+  expect(state.heldStops[0]).toMatchObject({ type: 'yeaft_abort_all', sessionId: TASK_SESSION_ID });
+  state.replyStop(state.heldStops.shift());
+  await expect(page.locator('.scheduled-task-runtime [role="status"]')).toHaveText('Interrupted');
+  await expect(stop).toHaveAccessibleName('Stop run');
+  await expect(stop).toBeDisabled();
+  await expect(page.locator('.scheduled-task-runtime')).toContainText('Paused');
+  for (const key of ['prompt', 'trigger', 'enabled', 'notify', 'revision', 'nextRunAt']) {
+    expect(state.sessions.get(TASK_SESSION_ID).task[key]).toEqual(savedTask[key]);
+  }
   await expect(page.getByRole('button', { name: 'Run once', exact: true })).toBeEnabled();
   await expect(page.locator('.scheduled-task-bar')).toContainText('Last run');
   await expect(page.locator('.scheduled-task-bar')).toContainText('Next run');
+  // Ordinary conversation work in a Task Session uses runtime-only processing.
+  // Keep the real store projection active until the delayed Agent ack arrives.
+  const stopsBefore = state.requests.filter(request => request.type === 'yeaft_abort_all').length;
+  await page.evaluate(({ agentId, sessionId }) => {
+    const store = window.Pinia.useChatStore();
+    store.activeVpTurns = { ...store.activeVpTurns,
+      'runtime-only-task-turn': { agentId, sessionId, vpId: 'omni' } };
+  }, { agentId: mockAgent.agentId, sessionId: TASK_SESSION_ID });
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect.poll(() => state.heldStops.length).toBe(1);
+  await expect(stop).toBeDisabled();
+  await expect(page.locator('.scheduled-task-run')).toBeDisabled();
+  await page.evaluate(({ agentId, sessionId }) => {
+    const store = window.Pinia.useChatStore();
+    store.vpStatuses = { ...store.vpStatuses,
+      'late-task-status': { agentId, sessionId, vpId: 'omni', state: 'thinking' } };
+  }, { agentId: mockAgent.agentId, sessionId: TASK_SESSION_ID });
+  await stop.evaluate(element => element.click());
+  await page.locator('.scheduled-task-run').evaluate(element => element.click());
+  await expect(stop).toHaveAccessibleName('Stopping…');
+  expect(state.requests.filter(request => request.type === 'yeaft_abort_all')).toHaveLength(stopsBefore + 1);
+  expect(state.heldStops).toHaveLength(1);
+  state.replyStop(state.heldStops.shift());
+  await expect(stop).toHaveAccessibleName('Stop run');
+  await expect(stop).toBeDisabled();
+  await expect(page.locator('.scheduled-task-run')).toBeEnabled();
 });
 
 test('completion notifications open the owning Agent when two Agents share the same Session id', async ({ page, serverUrl, mockAgent }, testInfo) => {
@@ -587,7 +630,7 @@ async function scrollWithoutFooterOverlap(page, scrollerSelector, footerSelector
 }
 
 test('task status panel preserves schedules, pinned header access, scrolling and forms across themes and viewports', async ({ page, serverUrl, mockAgent }, testInfo) => {
-  test.setTimeout(120000);
+  test.setTimeout(180000);
   const prompt = 'Review the complete workspace and preserve ownership boundaries.\n'.repeat(60);
   const state = scheduledTaskAgent(mockAgent, { sessions: [taskSession({ name: 'Daily workspace review',
     task: { ...taskSession().task, prompt, nextRunAt: Date.now() + 86400000, trigger: { type: 'schedule', scheduledFor: Date.now() + 86400000,
@@ -607,7 +650,7 @@ test('task status panel preserves schedules, pinned header access, scrolling and
       await page.reload();
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     }
-    for (const width of [320, 390, 1440]) {
+    for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
       // MatchMedia changes arrive after setViewportSize. Wait for the rendered
       // sidebar projection, not a transient desktop-visible row on mobile.
@@ -636,8 +679,8 @@ test('task status panel preserves schedules, pinned header access, scrolling and
       const header = page.locator('.yeaft-conversation-header');
       const pane = page.locator('.yeaft-session-status-pane');
       const task = pane.locator('.scheduled-task-bar');
-      const run = task.getByRole('button', { name: 'Run once', exact: true });
-      const configure = task.getByRole('button', { name: 'Configure', exact: true });
+      const run = task.locator('.scheduled-task-run');
+      const configure = task.locator('.scheduled-task-configure');
       const savedTask = structuredClone(state.sessions.get(TASK_SESSION_ID).task);
       await expect(header.locator('.scheduled-task-bar, .scheduled-task-run')).toHaveCount(0);
       await expect(header.getByRole('button', { name: /^(Configure|Run once)$/ })).toHaveCount(0);
@@ -681,13 +724,47 @@ test('task status panel preserves schedules, pinned header access, scrolling and
         return { immediatelyAfterAnnouncement: announcement.nextElementSibling === task,
           beforeVps: !!(task.compareDocumentPosition(vps) & Node.DOCUMENT_POSITION_FOLLOWING) };
       })).toEqual({ immediatelyAfterAnnouncement: true, beforeVps: true });
-      await expect(task).toContainText('Enabled');
+      await expect(task.locator('.scheduled-task-state')).toHaveCount(0);
+      await expect(task).not.toContainText('Enabled');
       await expect(task).toContainText('Next run');
       await expect(task).toContainText('Last run');
       await expect(task.locator('.scheduled-task-runtime > div').filter({ hasText: 'Next run' }).locator('time')).toBeVisible();
-      await expect(task).toContainText('Runs once without changing the schedule.');
-      await expect(run).toHaveText('Run once');
-      await expect(task.locator('.scheduled-task-run')).toHaveAccessibleName('Run once');
+      await expect(task).not.toContainText('Runs once without changing the schedule.');
+      await expect(run).toHaveAttribute('title', 'Runs once without changing the schedule.');
+      await expect(run).toHaveAccessibleDescription('Runs once without changing the schedule.');
+      await expect(run).toHaveText('');
+      const stop = task.locator('.scheduled-task-stop');
+      await expect(stop).toBeDisabled();
+      const actions = task.locator('header .scheduled-task-bar-actions');
+      await expect(actions.locator('button')).toHaveCount(3);
+      await expect(actions).toHaveText('');
+      const headerBounds = await task.locator('header').boundingBox();
+      const actionBounds = await actions.boundingBox();
+      for (const button of [run, stop, configure]) {
+        expect(await button.evaluate(element => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return { fontSize: style.fontSize, fontWeight: style.fontWeight, flexGrow: style.flexGrow,
+            width: rect.width, height: rect.height, iconWidth: element.querySelector('svg').getBoundingClientRect().width };
+        })).toEqual({ fontSize: '12px', fontWeight: '400', flexGrow: '0', width: width <= 1024 ? 44 : 28,
+          height: width <= 1024 ? 44 : 28, iconWidth: 14 });
+      }
+      const buttonBounds = await actions.locator('button').evaluateAll(buttons => buttons.map(button => {
+        const rect = button.getBoundingClientRect(); return { x: rect.x, y: rect.y, right: rect.right };
+      }));
+      expect(buttonBounds[0].x).toBeLessThan(buttonBounds[1].x);
+      expect(buttonBounds[1].x).toBeLessThan(buttonBounds[2].x);
+      expect(new Set(buttonBounds.map(bounds => bounds.y)).size).toBe(1);
+      expect(Math.abs(buttonBounds[2].right - actionBounds.x - actionBounds.width)).toBeLessThan(1);
+      expect(actionBounds.x).toBeGreaterThan(headerBounds.x + 40);
+      expect(actionBounds.y + actionBounds.height / 2).toBeCloseTo(headerBounds.y + (headerBounds.height - 6) / 2, 0);
+      expect((await task.boundingBox()).height).toBeLessThan(width <= 1024 ? 125 : 110);
+      await run.focus();
+      await expect(run).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(configure).toBeFocused();
+      expect(await configure.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('solid');
+      await expect(run).toHaveAccessibleName('Run once');
       await expect(configure).toBeVisible();
       if (width <= 768) {
         expect(await pane.evaluate(element => {
@@ -697,7 +774,21 @@ test('task status panel preserves schedules, pinned header access, scrolling and
         await touchTargets(task, 'button');
       }
       await noOverflow(page, ['.yeaft-session-status-pane', '.scheduled-task-bar']);
+      await page.evaluate(() => document.activeElement?.blur());
+      await page.mouse.move(0, 0);
       await shot(page, testInfo, `task-status-${theme}-${width}.png`);
+      await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'zh-CN'; });
+      await expect(configure).toHaveAccessibleName('配置');
+      await expect(run).toHaveAccessibleName('额外执行一次');
+      await expect(stop).toHaveAccessibleName('停止执行');
+      await expect(run).toHaveAccessibleDescription('仅额外执行本次，不改变原有计划。');
+      await expect(stop).toHaveAccessibleDescription('仅停止当前执行，不改变原有计划。');
+      await noOverflow(page, ['.scheduled-task-bar', '.scheduled-task-bar-actions']);
+      await expect(actions).toHaveText('');
+      expect((await actions.boundingBox()).width).toBe(actionBounds.width);
+      await shot(page, testInfo, `task-status-zh-${theme}-${width}.png`);
+      await page.evaluate(() => { document.querySelector('#app').__vue_app__.config.globalProperties.$locale.value = 'en'; });
+      await expect(run).toHaveAccessibleName('Run once');
       // A pending manual request cannot be submitted twice, and never changes
       // the recurring trigger or other saved configuration.
       holdRuns = true;

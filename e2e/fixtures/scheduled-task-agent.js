@@ -21,7 +21,7 @@ export function scheduledTaskAgent(agent, { sessions = [taskSession(), {
 }], marker = agent.agentName, capabilities = TASK_CAPABILITIES } = {}) {
   const state = {
     sessions: new Map(sessions.map(session => [session.id, structuredClone(session)])),
-    requests: [], updateError: '', runError: '', holdUpdates: false, heldUpdates: [], createdCount: 0,
+    requests: [], updateError: '', runError: '', holdUpdates: false, heldUpdates: [], holdStops: false, heldStops: [], createdCount: 0,
     publish() {
       agent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [...state.sessions.values()] } });
     },
@@ -49,6 +49,15 @@ export function scheduledTaskAgent(agent, { sessions = [taskSession(), {
         state.reply(request, 'update_task', session);
         state.publish();
       }
+    },
+    replyStop(request) {
+      const session = state.sessions.get(request.sessionId);
+      if (session?.task.lastRun?.status === 'running') {
+        session.task.lastRun = { ...session.task.lastRun, status: 'interrupted', finishedAt: Date.now() };
+      }
+      agent.send({ type: 'yeaft_output', sessionId: request.sessionId,
+        event: { type: 'yeaft_aborted', sessionId: request.sessionId, all: true, aborted: ['task-turn'] } });
+      state.publish();
     },
     notify({ sessionId = TASK_SESSION_ID, runId = 'task-run-1', status = 'completed', taskName = 'Daily workspace review', error } = {}) {
       agent.send({ type: 'yeaft_output', event: { type: 'scheduled_task_notification',
@@ -98,6 +107,9 @@ export function scheduledTaskAgent(agent, { sessions = [taskSession(), {
       state.sessions.set(session.id, session);
       state.reply(request, 'run_task', session);
       state.publish();
+    } else if (request.type === 'yeaft_abort_all') {
+      if (state.holdStops) state.heldStops.push(request);
+      else state.replyStop(request);
     } else if (request.type === 'yeaft_load_history' && request.limit !== 0) {
       agent.send({ type: 'yeaft_history_chunk', sessionId: request.sessionId, requestId: request.requestId,
         _requestClientId: request._requestClientId, mode: request.mode || 'recent', messages: [{
