@@ -92,6 +92,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 per-user shortcut layout regressions: mixed-field queued optimistic writes,
 // and failed compact-save rollback with queued ratio / account-switch fencing.
 // Migration, auth isolation and cross-desktop geometry extend existing cases.
+// +2 reviewed Task status boundaries: inline region/Escape modal ownership and
+// pending manual-request deduplication with paused schedule preservation.
+// Header geometry and close/reopen busy retention extend existing browser cases.
 // +8 reviewed sidebar control boundaries: 3 project chat/task mode and ownership
 // cases; 5 browser hover/focus/vertical disclosure, touch/narrow-screen and both
 // sidebar creation surfaces. Existing cross-device layout cases remain intact.
@@ -102,7 +105,7 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 folder/section preference boundaries: per-key optimistic queue/rollback/auth
 // fencing and component restore/focus/create behavior. Server migration/merge and
 // real cross-client persistence extend existing cases without replacing coverage.
-export const TEST_CASE_LIMIT = 888;
+export const TEST_CASE_LIMIT = 890;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

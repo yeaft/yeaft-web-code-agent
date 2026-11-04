@@ -146,8 +146,18 @@ export default {
     announcementText: { type: String, default: '' },
     stoppingTasksById: { type: Object, default: () => ({}) },
   },
+  methods: {
+    onEscape(event) {
+      // A settings dialog can retain focus on its opener. Let the topmost
+      // modal's window handler own Escape instead of closing the pane below it.
+      if (document.querySelector('.group-settings-overlay, .modal-overlay')) return;
+      event.stopPropagation();
+      event.preventDefault();
+      this.$emit('close');
+    },
+  },
   template: `
-    <aside class="yeaft-vp-timeline yeaft-session-status-pane" :aria-label="$t('yeaft.sessionStatus.aria')">
+    <aside class="yeaft-vp-timeline yeaft-session-status-pane" :aria-label="$t('yeaft.sessionStatus.aria')" @keydown.esc="onEscape">
       <div
         class="yeaft-vp-timeline-resize-handle"
         @mousedown.prevent="$emit('start-resize', $event)"
@@ -204,6 +214,8 @@ export default {
           </span>
         </button>
       </section>
+
+      <slot name="scheduled-task"></slot>
 
       <section class="yeaft-session-status-section" :aria-label="$t('yeaft.sessionStatus.vps')">
         <header class="yeaft-session-status-section-header">

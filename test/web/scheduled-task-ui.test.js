@@ -11,6 +11,7 @@ import WorkCenterScheduleEditor from '../../web/components/WorkCenterScheduleEdi
 import en from '../../web/i18n/en.js';
 import ScheduledTaskEditor from '../../web/components/ScheduledTaskEditor.js';
 import ScheduledTaskBar from '../../web/components/ScheduledTaskBar.js';
+import VpTimelinePane from '../../web/components/VpTimelinePane.js';
 import ScheduledTaskSettings from '../../web/components/ScheduledTaskSettings.js';
 import ScheduledTaskNotifications from '../../web/components/ScheduledTaskNotifications.js';
 
@@ -211,19 +212,10 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   await wrapper.get('.btn-primary').trigger('click');
   await flushPromises();
   expect(chat.runScheduledTask).toHaveBeenCalledWith({ agentId: 'a', sessionId: 'task' });
-  expect(wrapper.get('.scheduled-task-desktop-error').text()).toBe('Execution failed');
-  expect(wrapper.get('.scheduled-task-mobile-panel [role="alert"]').text()).toBe('Execution failed');
-  const details = wrapper.get('details');
-  expect(details.element.open).toBe(true);
-  expect(wrapper.get('summary').attributes('aria-label')).toContain('Failed');
-  await wrapper.get('summary').trigger('keydown', { key: 'Escape' });
-  expect(details.element.open).toBe(false);
-  details.element.open = true;
-  document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
-  expect(details.element.open).toBe(false);
-  details.element.open = true;
-  await wrapper.get('.scheduled-task-mobile-panel .btn-secondary').trigger('click');
-  expect(details.element.open).toBe(false);
+  expect(wrapper.get('[role="alert"]').text()).toBe('Execution failed');
+  expect(wrapper.find('details').exists()).toBe(false);
+  expect(wrapper.findAll('[role="alert"]')).toHaveLength(1);
+  await wrapper.get('.btn-secondary').trigger('click');
   expect(wrapper.emitted('configure')).toHaveLength(1);
   await wrapper.setProps({ session: { id: 'task', task: { ...task, lastRun: { status: 'running' } } } });
   expect(wrapper.get('.btn-primary').attributes('disabled')).toBeDefined();
@@ -243,6 +235,49 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   await wrapper.vm.run();
   expect(chat.runScheduledTask).not.toHaveBeenCalled();
   expect(wrapper.get('.btn-primary').attributes('disabled')).toBeDefined();
+});
+
+it('renders inline below the announcement and before the VP roster without a popover', async () => {
+  window.Pinia = { useChatStore: () => ({ scheduledTaskProtocolSupported: true, agents }) };
+  wrapper = mount(VpTimelinePane, { props: { rows: [] }, slots: {
+    'scheduled-task': () => Vue.h(ScheduledTaskBar, { agentId: 'a', session: { id: 'task', task } }),
+  }, global: { mocks: { $t: t } } });
+  const sections = wrapper.findAll('.yeaft-session-status-section');
+  expect(sections[0].classes()).toContain('yeaft-session-status-announcement');
+  expect(sections[1].classes()).toContain('scheduled-task-bar');
+  expect(sections[2].attributes('aria-label')).toBe(en['yeaft.sessionStatus.vps']);
+  expect(sections[1].text()).toContain(en['scheduledTasks.never']);
+  expect(sections[1].text()).toContain(en['scheduledTasks.runOnceHelp']);
+  expect(sections[1].findAll('button')).toHaveLength(2);
+  const modal = document.createElement('div');
+  modal.className = 'group-settings-overlay';
+  document.body.append(modal);
+  await wrapper.get('.scheduled-task-run').trigger('keydown', { key: 'Escape' });
+  expect(wrapper.emitted('close')).toBeUndefined();
+  modal.remove();
+  await wrapper.get('.scheduled-task-run').trigger('keydown', { key: 'Escape' });
+  expect(wrapper.emitted('close')).toHaveLength(1);
+});
+
+it('prevents duplicate manual requests, preserves paused schedules and renders pending/errors inline', async () => {
+  let finish;
+  const runScheduledTask = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+  window.Pinia = { useChatStore: () => ({ scheduledTaskProtocolSupported: true, agents, runScheduledTask }) };
+  const scheduled = { ...task, enabled: false, trigger: { type: 'schedule', scheduledFor: 2000000000000 }, nextRunAt: 2000000000000 };
+  const original = JSON.stringify(scheduled);
+  wrapper = mount(ScheduledTaskBar, { props: { agentId: 'a', session: { id: 'task', task: scheduled } }, global: { mocks: { $t: t } } });
+  expect(wrapper.get('.scheduled-task-state').text()).toBe(en['scheduledTasks.paused']);
+  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeUndefined();
+  await wrapper.get('.scheduled-task-run').trigger('click');
+  expect(wrapper.get('.scheduled-task-run').text()).toBe(en['scheduledTasks.starting']);
+  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
+  await wrapper.vm.run();
+  expect(runScheduledTask).toHaveBeenCalledExactlyOnceWith({ agentId: 'a', sessionId: 'task' });
+  finish({ ok: false, error: 'Manual execution refused' });
+  await flushPromises();
+  expect(wrapper.get('[role="alert"]').text()).toBe('Manual execution refused');
+  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeUndefined();
+  expect(JSON.stringify(scheduled)).toBe(original);
 });
 
 it('saves only editable task fields and renders update errors without replacing Session settings', async () => {

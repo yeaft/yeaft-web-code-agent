@@ -148,7 +148,7 @@ export default {
       <div v-else class="yeaft-main" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
         <!-- Center column: topbar + (settings | empty-hero | MessageList) + ChatInput. -->
         <div class="yeaft-main-center">
-        <!-- Task controls share the mobile action row; desktop retains its summary. -->
+        <!-- Conversation actions only; Task controls live in Session status. -->
         <div class="yeaft-conversation-header">
         <div class="yeaft-topbar">
         <!-- task-341: sidebar-toggle moved from topbar into V2 sidebar header. -->
@@ -176,6 +176,7 @@ export default {
           </div>
 
           <YeaftSessionActions
+            ref="sessionActions"
             v-if="!showOnboardingGuide"
             class="yeaft-topbar-right"
             :show-fork="!!forkSessionRow"
@@ -200,7 +201,6 @@ export default {
           />
         </div>
 
-        <ScheduledTaskBar v-if="topbarGroup?.task" :key="(topbarGroup.agentId || store.currentAgent) + ':' + topbarGroup.id" :session="topbarGroup" :agent-id="topbarGroup.agentId || store.currentAgent" @configure="openSessionSettings({ sessionId: topbarGroup.id, agentId: topbarGroup.agentId || store.currentAgent, section: 'task' })" />
         </div>
 
         <YeaftConversationOutline
@@ -428,7 +428,9 @@ export default {
       <!-- Session status pane: announcement + VP roster + background tasks.
            It sits to the right of the conversation and to the left of debug. -->
       <VpTimelinePane
-        v-if="!store.workCenterOpen && !store.pluginCenterOpen && showVpTimeline"
+        ref="sessionStatusPane"
+        v-if="!store.workCenterOpen && !store.pluginCenterOpen && !showOnboardingGuide"
+        v-show="showVpTimeline"
         :rows="vpTimelineRows"
         :tasks="sessionStatusTasksForActiveSession"
         :announcement-text="sessionStatusAnnouncementText"
@@ -441,8 +443,12 @@ export default {
         @cancel-vp-turn="onCancelVpFromTimeline"
         @edit-announcement="openAnnouncementSettings"
         @cancel-task="onCancelTaskFromTimeline"
-        @close="closeSessionStatus"
-      />
+        @close="dismissSessionStatus"
+      >
+        <template #scheduled-task>
+          <ScheduledTaskBar v-if="topbarGroup?.task" :key="(topbarGroup.agentId || store.currentAgent) + ':' + topbarGroup.id" :session="topbarGroup" :agent-id="topbarGroup.agentId || store.currentAgent" @configure="openSessionSettings({ sessionId: topbarGroup.id, agentId: topbarGroup.agentId || store.currentAgent, section: 'task' })" />
+        </template>
+      </VpTimelinePane>
 
       <!-- Right Detail Panel — only rendered when debug mode is on. The
            legacy "tasks memory" placeholder + collapse-toggle were retired
@@ -745,6 +751,7 @@ export default {
         localStorage.setItem(SESSION_STATUS_VISIBLE_KEY, sessionStatusVisible.value ? '1' : '0');
       } catch (_) {}
     };
+    const sessionStatusPane = Vue.ref(null);
     const toggleSessionStatus = () => {
       const nextVisible = !sessionStatusVisible.value;
       if (nextVisible) {
@@ -752,8 +759,16 @@ export default {
         store.closeYeaftDebugPanel();
       }
       setSessionStatusVisible(nextVisible);
+      if (nextVisible && isNarrowDetail.value) {
+        Vue.nextTick(() => sessionStatusPane.value?.$el?.querySelector('.yeaft-session-status-close')?.focus());
+      }
     };
+    const sessionActions = Vue.ref(null);
     const closeSessionStatus = () => setSessionStatusVisible(false);
+    const dismissSessionStatus = () => {
+      closeSessionStatus();
+      Vue.nextTick(() => sessionActions.value?.$el?.querySelector('.yeaft-session-status-toggle')?.focus());
+    };
     const toggleWorkbench = () => {
       if (!store.workbenchExpanded) closeSessionStatus();
       store.toggleWorkbench();
@@ -1716,6 +1731,9 @@ export default {
       sessionStatusTasksForActiveSession,
       sessionStatusAnnouncementText,
       sessionStatusVisible,
+      sessionActions,
+      sessionStatusPane,
+      dismissSessionStatus,
       toggleSessionStatus,
       closeSessionStatus,
       toggleWorkbench,

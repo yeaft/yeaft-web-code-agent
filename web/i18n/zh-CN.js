@@ -2920,6 +2920,8 @@ export default {
   "scheduledTasks.never": "尚未执行",
   "scheduledTasks.none": "未安排",
   "scheduledTasks.run": "立即执行",
+  "scheduledTasks.runOnce": "额外执行一次",
+  "scheduledTasks.runOnceHelp": "仅额外执行本次，不改变原有计划。",
   "scheduledTasks.starting": "启动中…",
   "scheduledTasks.save": "保存任务",
   "scheduledTasks.saving": "保存中…",

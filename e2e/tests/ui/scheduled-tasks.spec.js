@@ -39,10 +39,31 @@ async function select(page, scope, label, option) {
   }
 }
 
-async function configureTask(page) {
-  if (await page.locator('.scheduled-task-mobile-toggle').isVisible()) {
-    await page.locator('.scheduled-task-mobile-toggle').click();
+function sessionStatusToggle(page) {
+  return page.locator('.yeaft-session-status-toggle');
+}
+
+async function showTaskStatus(page) {
+  if (!await page.locator('.yeaft-session-status-pane').isVisible()) {
+    await sessionStatusToggle(page).click();
   }
+  await expect(page.locator('.yeaft-session-status-pane .scheduled-task-bar')).toBeVisible();
+}
+
+async function closeMobileTaskStatus(page) {
+  if (!await page.evaluate(() => innerWidth <= 1024)) return;
+  const pane = page.locator('.yeaft-session-status-pane');
+  // CSS updates immediately on resize; wait for Vue's media-query projection
+  // before deciding whether the panel still needs closing.
+  await expect(pane).toHaveClass(/mobile-session-status/);
+  if (await pane.isVisible()) {
+    await page.locator('.yeaft-session-status-close').click();
+    await expect(pane).toBeHidden();
+  }
+}
+
+async function configureTask(page) {
+  await showTaskStatus(page);
   await page.locator('.scheduled-task-bar').getByRole('button', { name: 'Configure', exact: true }).click();
 }
 
@@ -53,7 +74,8 @@ function taskRow(page, name = 'Daily workspace review') {
 async function openTask(page) {
   await showSidebar(page);
   await taskRow(page).click();
-  await expect(page.locator('.scheduled-task-bar')).toBeVisible();
+  await expect(sessionStatusToggle(page)).toBeVisible();
+  await closeMobileTaskStatus(page);
   await expect(page.locator('.yeaft-session-input textarea')).toBeVisible();
 }
 
@@ -144,6 +166,9 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
       expect(Math.abs(modelBounds.y - effortBounds.y)).toBeLessThan(2);
       expect(effortBounds.x).toBeGreaterThan(modelBounds.x + modelBounds.width);
       await noOverflow(page, ['.yeaft-session-create-modal', '.scheduled-task-create-body', '.scheduled-task-editor', '.task-model-fields']);
+      // Keep the pointer outside the teleported menu: a delayed mouseenter
+      // must not replace the keyboard's active option when the menu appears.
+      await page.mouse.move(0, 0);
       await effort.focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('option', { name: 'X-High', exact: true })).toBeVisible();
@@ -171,6 +196,7 @@ test('creates a task Session in recents with selected Agent, directory and VP', 
     expect(created.payload.task.trigger.scheduledFor).toBeGreaterThan(Date.now());
     expect(mockAgent.messages('yeaft_create_session')).toHaveLength(0);
     expect(other.messages('create_conversation')).toHaveLength(0);
+    await showTaskStatus(page);
     await expect(page.locator('.scheduled-task-bar')).toContainText('Next run');
     await showSidebar(page);
     await expect(taskRow(page, 'Scheduled review with selected VP')).toHaveCount(1);
@@ -268,9 +294,16 @@ test('task rows share pin, drag, Project menu, rename and removal behavior with 
   await expect(renamed).toBeVisible();
   expect(state.sessions.get(TASK_SESSION_ID).task.enabled).toBe(true);
   // The badge remains visible with clipped titles and keyboard focus.
+  let previousWidth = 1440;
   for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'light'], [320, 'dark']]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    if (previousWidth > 768 && width <= 768) {
+      // Wait for the responsive watcher to collapse the desktop sidebar
+      // before deciding whether showSidebar needs to toggle it open.
+      await expect(page.locator('.yeaft-sidebar')).toHaveClass(/collapsed/);
+    }
+    previousWidth = width;
     await showSidebar(page);
     await page.mouse.move(0, 0);
     await renamed.focus();
@@ -329,7 +362,7 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   expect(state.sessions.get(TASK_SESSION_ID).task.revision).not.toBe(initialRevision);
   expect(state.sessions.get(TASK_SESSION_ID).task.lastRun).toBeNull();
   await page.locator('.group-settings-close').click();
-  await page.getByRole('button', { name: 'Run now', exact: true }).click();
+  await page.getByRole('button', { name: 'Run once', exact: true }).click();
   await expect.poll(() => state.requests.filter(request => request.type === 'yeaft_scheduled_task' && request.op === 'run').length).toBe(1);
   const runRequest = state.requests.find(request => request.type === 'yeaft_scheduled_task' && request.op === 'run');
   expect(runRequest).toMatchObject({ sessionId: TASK_SESSION_ID, requestId: expect.any(String) });
@@ -341,14 +374,22 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   const active = state.sessions.get(TASK_SESSION_ID);
   active.task.lastRun = { id: 'ongoing-run', status: 'running', trigger: 'schedule', startedAt: Date.now() };
   state.publish();
-  await expect(page.getByRole('button', { name: 'Run now', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Run once', exact: true })).toBeDisabled();
+  await expect(page.locator('.scheduled-task-state')).toHaveText('Running');
   await configureTask(page);
   await settings.locator('.scheduled-task-option-row').filter({ hasText: 'Enabled' }).click();
   await settings.getByRole('button', { name: 'Save task', exact: true }).click();
   await expect.poll(() => state.sessions.get(TASK_SESSION_ID).task.enabled).toBe(false);
   expect(state.sessions.get(TASK_SESSION_ID).task.lastRun.status).toBe('running');
   await page.locator('.group-settings-close').click();
-  await expect(page.getByRole('button', { name: 'Run now', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Run once', exact: true })).toBeDisabled();
+  await expect(page.locator('.scheduled-task-state')).toHaveText('Running');
+  state.sessions.get(TASK_SESSION_ID).task.lastRun.status = 'completed';
+  state.publish();
+  await expect(page.locator('.scheduled-task-state')).toHaveText('Paused');
+  await expect(page.getByRole('button', { name: 'Run once', exact: true })).toBeEnabled();
+  await expect(page.locator('.scheduled-task-bar')).toContainText('Last run');
+  await expect(page.locator('.scheduled-task-bar')).toContainText('Next run');
 });
 
 test('completion notifications open the owning Agent when two Agents share the same Session id', async ({ page, serverUrl, mockAgent }, testInfo) => {
@@ -437,16 +478,18 @@ test('completion notifications open the owning Agent when two Agents share the s
       if (theme === 'dark' && width === 1440) {
         await page.evaluate(() => localStorage.setItem('theme', 'dark'));
         await page.reload();
-        await expect(page.locator('.scheduled-task-bar')).toBeVisible();
+        await expect(page.locator('.yeaft-session-input textarea')).toBeVisible();
       }
       await page.setViewportSize({ width, height: 900 });
+      await closeMobileTaskStatus(page);
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-      await noOverflow(page, ['.yeaft-main-center', '.scheduled-task-bar', '.yeaft-session-input']);
+      await noOverflow(page, ['.yeaft-main-center', '.yeaft-session-input']);
       await shot(page, testInfo, `task-conversation-${theme}-${width}.png`);
       await configureTask(page);
       await noOverflow(page, ['.group-settings-modal', '.scheduled-task-settings']);
       await shot(page, testInfo, `task-settings-${theme}-${width}.png`);
       await page.locator('.group-settings-close').click();
+      await closeMobileTaskStatus(page);
     }
     await page.locator('.yeaft-session-input textarea').fill('Follow up with the notified task');
     await page.locator('.yeaft-session-input textarea').press('Enter');
@@ -488,7 +531,7 @@ test('another tab pausing a task fences a dirty draft until reload and never sil
   const secondTab = await context.newPage();
   await boot(secondTab, serverUrl, mockAgent);
   await openTask(secondTab);
-  await secondTab.locator('.scheduled-task-bar').getByRole('button', { name: 'Configure', exact: true }).click();
+  await configureTask(secondTab);
   const secondSettings = secondTab.locator('.scheduled-task-settings');
   await secondSettings.locator('.scheduled-task-option-row').filter({ hasText: 'Enabled' }).click();
   await expect(secondSettings.getByRole('switch', { name: 'Enabled', exact: true })).not.toBeChecked();
@@ -543,13 +586,20 @@ async function scrollWithoutFooterOverlap(page, scrollerSelector, footerSelector
   if (await page.evaluate(() => innerWidth <= 900)) expect.soft(result).toMatchObject({ scrollable: true, scrolled: true });
 }
 
-test('redesigned task surfaces retain usable geometry, scrolling and keyboard controls across mobile themes and desktop', async ({ page, serverUrl, mockAgent }, testInfo) => {
+test('task status panel preserves schedules, pinned header access, scrolling and forms across themes and viewports', async ({ page, serverUrl, mockAgent }, testInfo) => {
   test.setTimeout(120000);
   const prompt = 'Review the complete workspace and preserve ownership boundaries.\n'.repeat(60);
   const state = scheduledTaskAgent(mockAgent, { sessions: [taskSession({ name: 'Daily workspace review',
     task: { ...taskSession().task, prompt, nextRunAt: Date.now() + 86400000, trigger: { type: 'schedule', scheduledFor: Date.now() + 86400000,
       recurrence: { frequency: 'daily', timeZone: 'UTC' } } } }),
     taskSession({ id: 'background-task-session', name: 'Background workspace review' })] });
+  const handleTaskRequest = mockAgent._messageHandlers.at(-1);
+  let holdRuns = false;
+  const heldRuns = [];
+  mockAgent._messageHandlers[mockAgent._messageHandlers.length - 1] = request => {
+    if (holdRuns && request.type === 'yeaft_scheduled_task' && request.op === 'run') heldRuns.push(request);
+    else handleTaskRequest(request);
+  };
   await boot(page, serverUrl, mockAgent);
   for (const theme of ['light', 'dark']) {
     if (theme === 'dark') {
@@ -584,82 +634,168 @@ test('redesigned task surfaces retain usable geometry, scrolling and keyboard co
       await expect(create).not.toBeVisible();
       await openTask(page);
       const header = page.locator('.yeaft-conversation-header');
-      const mobileToggle = page.locator('.scheduled-task-mobile-toggle');
+      const pane = page.locator('.yeaft-session-status-pane');
+      const task = pane.locator('.scheduled-task-bar');
+      const run = task.getByRole('button', { name: 'Run once', exact: true });
+      const configure = task.getByRole('button', { name: 'Configure', exact: true });
+      const savedTask = structuredClone(state.sessions.get(TASK_SESSION_ID).task);
+      await expect(header.locator('.scheduled-task-bar, .scheduled-task-run')).toHaveCount(0);
+      await expect(header.getByRole('button', { name: /^(Configure|Run once)$/ })).toHaveCount(0);
       if (width <= 768) {
         await expect(page.locator('.yeaft-topbar-context')).toBeHidden();
         expect((await header.boundingBox()).height).toBeLessThanOrEqual(48);
-        const toggleBounds = await mobileToggle.boundingBox();
-        const runBounds = await page.locator('.scheduled-task-run').boundingBox();
-        expect(Math.abs(toggleBounds.y - runBounds.y)).toBeLessThan(1);
-        expect(Math.abs(toggleBounds.y - (await page.locator('.yeaft-topbar-sidebar-toggle').boundingBox()).y)).toBeLessThan(1);
-        await touchTargets(header, 'button, summary');
-        await expect(page.locator('.scheduled-task-desktop-configure')).toBeHidden();
-        expect((await page.locator('.scheduled-task-run-icon').boundingBox()).width).toBe(18);
         expect((await page.locator('.yeaft-conversation-body').boundingBox()).height).toBeGreaterThan(400);
-        // Every original action remains reachable without wrapping the header.
+        await touchTargets(header, 'button');
+        // Both pinned actions must be clickable without scrolling the header.
+        const status = sessionStatusToggle(page);
+        const workbench = header.getByRole('button', { name: 'Workbench', exact: true });
+        for (const button of [status, workbench]) {
+          const bounds = await button.boundingBox();
+          expect(bounds.x).toBeGreaterThanOrEqual(0);
+          expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+          await expect(button).toBeInViewport({ ratio: 1 });
+          await button.click({ trial: true });
+        }
+        await workbench.click();
+        await expect(workbench).toHaveAttribute('aria-expanded', 'true');
+        await page.locator('.workbench-panel-close').click();
+        await expect(workbench).toHaveAttribute('aria-expanded', 'false');
+        // Other existing actions remain reachable in the horizontal action strip.
         await page.locator('.yeaft-page-reload-btn').focus();
         await expect(page.locator('.yeaft-page-reload-btn')).toBeInViewport();
         await page.locator('.yeaft-search-btn').click();
         await expect(page.locator('.yeaft-conversation-outline')).toBeVisible();
         await page.keyboard.press('Escape');
         await expect(page.locator('.yeaft-conversation-outline')).toBeHidden();
-        await mobileToggle.click();
-        await expect(page.locator('.scheduled-task-mobile-panel')).toContainText('Next run');
-        expect((await header.boundingBox()).height).toBeLessThanOrEqual(48);
-        await noOverflow(page, ['.scheduled-task-mobile-panel']);
-        await shot(page, testInfo, `compact-task-details-${theme}-${width}.png`);
-        await page.keyboard.press('Escape');
-        await expect(mobileToggle).toBeFocused();
-        await expect(page.locator('.scheduled-task-mobile-panel')).toBeHidden();
-        await mobileToggle.click();
-        await page.locator('.yeaft-session-input textarea').click();
-        await expect(page.locator('.scheduled-task-mobile-panel')).toBeHidden();
-        await page.locator('.yeaft-session-input textarea').blur();
-        // Failed manual requests must reveal readable feedback, not just a dot.
-        state.runError = 'Cannot start task: ' + 'verification failure details '.repeat(40);
-        await page.locator('.scheduled-task-run').click();
-        await expect(page.locator('.scheduled-task-mobile-panel [role="alert"]')).toHaveText(state.runError);
-        await page.setViewportSize({ width, height: 280 });
-        expect((await header.boundingBox()).height).toBeLessThanOrEqual(48);
-        await expect(page.locator('.scheduled-task-mobile-panel')).toBeInViewport();
-        await page.locator('.scheduled-task-mobile-panel .btn-secondary').scrollIntoViewIfNeeded();
-        await expect(page.locator('.scheduled-task-mobile-panel .btn-secondary')).toBeInViewport();
-        await noOverflow(page, ['.scheduled-task-mobile-panel']);
-        await shot(page, testInfo, `compact-task-short-error-${theme}-${width}.png`);
-        await page.keyboard.press('Escape');
-        await page.setViewportSize({ width, height: 844 });
-        state.runError = '';
-        await page.locator('.scheduled-task-run').click();
-        await expect(page.locator('.scheduled-task-mobile-toggle')).not.toHaveClass(/has-error/);
-        await expect.poll(() => state.sessions.get(TASK_SESSION_ID).task.lastRun?.status).toBe('completed');
       } else {
         await expect(page.locator('.yeaft-topbar-context')).toBeVisible();
-        await expect(page.locator('.scheduled-task-summary')).toBeVisible();
-        await expect(mobileToggle).toBeHidden();
       }
-      await shot(page, testInfo, `compact-task-header-${theme}-${width}.png`);
+      await shot(page, testInfo, `task-free-header-${theme}-${width}.png`);
+      await showTaskStatus(page);
+      await expect(pane.locator('.yeaft-session-status-scheduled-task.scheduled-task-bar')).toHaveCount(1);
+      await expect(task.locator('details')).toHaveCount(0);
+      expect(await pane.evaluate(element => {
+        const announcement = element.querySelector('.yeaft-session-status-announcement');
+        const task = element.querySelector('.yeaft-session-status-scheduled-task');
+        const vps = element.querySelector('section[aria-label="VPs"]');
+        return { immediatelyAfterAnnouncement: announcement.nextElementSibling === task,
+          beforeVps: !!(task.compareDocumentPosition(vps) & Node.DOCUMENT_POSITION_FOLLOWING) };
+      })).toEqual({ immediatelyAfterAnnouncement: true, beforeVps: true });
+      await expect(task).toContainText('Enabled');
+      await expect(task).toContainText('Next run');
+      await expect(task).toContainText('Last run');
+      await expect(task.locator('.scheduled-task-runtime > div').filter({ hasText: 'Next run' }).locator('time')).toBeVisible();
+      await expect(task).toContainText('Runs once without changing the schedule.');
+      await expect(run).toHaveText('Run once');
+      await expect(task.locator('.scheduled-task-run')).toHaveAccessibleName('Run once');
+      await expect(configure).toBeVisible();
+      if (width <= 768) {
+        expect(await pane.evaluate(element => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        })).toEqual({ x: 0, y: 0, width, height: 844 });
+        await touchTargets(task, 'button');
+      }
+      await noOverflow(page, ['.yeaft-session-status-pane', '.scheduled-task-bar']);
+      await shot(page, testInfo, `task-status-${theme}-${width}.png`);
+      // A pending manual request cannot be submitted twice, and never changes
+      // the recurring trigger or other saved configuration.
+      holdRuns = true;
+      const runCount = state.requests.filter(request => request.type === 'yeaft_scheduled_task' && request.op === 'run').length;
+      await run.click();
+      await expect.poll(() => heldRuns.length).toBe(1);
+      await expect(task.locator('.scheduled-task-run')).toBeDisabled();
+      await expect(task.locator('.scheduled-task-run')).toHaveAttribute('aria-busy', 'true');
+      if (width <= 768) {
+        await page.locator('.yeaft-session-status-close').click();
+        await expect(sessionStatusToggle(page)).toBeFocused();
+      } else {
+        await sessionStatusToggle(page).click();
+      }
+      await showTaskStatus(page);
+      if (width <= 768) await expect(page.locator('.yeaft-session-status-close')).toBeFocused();
+      await expect(task.locator('.scheduled-task-run')).toBeDisabled();
+      await expect(task.locator('.scheduled-task-run')).toHaveAttribute('aria-busy', 'true');
+      await task.locator('.scheduled-task-run').evaluate(element => { element.click(); });
+      expect(heldRuns).toHaveLength(1);
+      state.runError = 'Cannot start task: ' + 'verification failure details '.repeat(40);
+      holdRuns = false;
+      handleTaskRequest(heldRuns.shift());
+      await expect(task.getByRole('alert')).toHaveText(state.runError);
+      await expect(run).toBeEnabled();
+      if (width <= 768) {
+        await page.setViewportSize({ width, height: 280 });
+        await expect(pane).toBeInViewport({ ratio: 1 });
+        expect(await pane.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+        await task.getByRole('alert').evaluate(element => { element.scrollIntoView({ block: 'end' }); });
+        expect(await pane.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+        await expect(pane.locator('.scheduled-task-error')).toBeInViewport();
+        await configure.scrollIntoViewIfNeeded();
+        await expect(configure).toBeInViewport();
+        await run.scrollIntoViewIfNeeded();
+        await expect(run).toBeInViewport();
+        await noOverflow(page, ['.yeaft-session-status-pane', '.scheduled-task-bar']);
+        await shot(page, testInfo, `task-status-short-error-${theme}-${width}.png`);
+        await page.setViewportSize({ width, height: 844 });
+      }
+      state.runError = '';
+      await run.click();
+      await expect(task.getByRole('alert')).toHaveCount(0);
+      await expect(task).toContainText('Completed');
+      await expect(task.locator('.scheduled-task-runtime > div').filter({ hasText: 'Last run' }).locator('time')).toBeVisible();
+      await expect.poll(() => state.requests.filter(request => request.type === 'yeaft_scheduled_task' && request.op === 'run').length).toBe(runCount + 2);
+      const afterRun = state.sessions.get(TASK_SESSION_ID).task;
+      for (const key of ['prompt', 'trigger', 'enabled', 'notify', 'nextRunAt', 'revision']) {
+        expect(afterRun[key]).toEqual(savedTask[key]);
+      }
+      const runRequest = state.requests.filter(request => request.type === 'yeaft_scheduled_task' && request.op === 'run').at(-1);
+      expect(runRequest).toMatchObject({ sessionId: TASK_SESSION_ID, requestId: expect.any(String) });
+      expect(runRequest).not.toHaveProperty('task');
+      await page.evaluate(agentId => { window.Pinia.useChatStore().agents.find(agent => agent.id === agentId).online = false; }, mockAgent.agentId);
+      await expect(run).toBeDisabled();
+      await expect(task.locator('.scheduled-task-help[role="status"]')).toContainText('Agent offline');
+      expect(state.requests.filter(request => request.type === 'yeaft_scheduled_task' && request.op === 'run')).toHaveLength(runCount + 2);
+      await page.evaluate(agentId => { window.Pinia.useChatStore().agents.find(agent => agent.id === agentId).online = true; }, mockAgent.agentId);
+      await expect(run).toBeEnabled();
+      await closeMobileTaskStatus(page);
       // The visible task is already read; keep notification geometry coverage
       // using an actual different Task Session that is not being viewed.
       state.notify({ sessionId: 'background-task-session', taskName: 'Background workspace review',
         runId: `visual-${theme}-${width}`, status: 'failed', error: 'Long task result needs attention: ' + 'verification evidence '.repeat(8) });
       await expect(page.locator('.scheduled-task-notification-open')).toBeVisible();
-      await noOverflow(page, ['.yeaft-main-center', '.scheduled-task-bar', '.yeaft-session-input', '.scheduled-task-notifications']);
+      await noOverflow(page, ['.yeaft-main-center', '.yeaft-session-input', '.scheduled-task-notifications']);
       await shot(page, testInfo, `redesign-task-notifications-${theme}-${width}.png`);
       if (width < 641) {
-        await touchTargets(page.locator('.scheduled-task-bar'), 'button');
         await touchTargets(page.locator('.scheduled-task-notifications'), 'button');
       }
       await page.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
-      await configureTask(page);
+      await showTaskStatus(page);
+      await configure.focus();
+      await page.keyboard.press('Enter');
       const settings = page.locator('.task-settings-modal');
+      await expect(settings).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(settings).toBeHidden();
+      await expect(pane).toBeVisible();
+      await configureTask(page);
       await expect(settings.locator('.task-settings-nav')).toBeVisible();
       await noOverflow(page, ['.task-settings-modal', '.scheduled-task-settings', '.scheduled-task-settings-scroll']);
       await shot(page, testInfo, `redesign-settings-top-${theme}-${width}.png`);
       await scrollWithoutFooterOverlap(page, '.scheduled-task-settings-scroll', '.scheduled-task-settings-footer');
       await shot(page, testInfo, `redesign-settings-schedule-${theme}-${width}.png`);
       if (width < 641) await touchTargets(settings, 'button');
+      const editedPrompt = `Configured ${theme} ${width}: ` + prompt;
+      await settings.getByRole('textbox', { name: 'Prompt', exact: true }).fill(editedPrompt);
+      await settings.getByRole('button', { name: 'Save task', exact: true }).click();
+      await expect.poll(() => state.sessions.get(TASK_SESSION_ID).task.prompt).toBe(editedPrompt.trim());
+      expect(state.sessions.get(TASK_SESSION_ID).task.trigger).toEqual(savedTask.trigger);
+      const update = state.requests.filter(request => request.type === 'yeaft_scheduled_task' && request.op === 'update').at(-1);
+      expect(update.task.trigger).toEqual(savedTask.trigger);
+      expect(update.task).not.toHaveProperty('lastRun');
       const tabs = settings.getByRole('tab');
+      await expect(settings.locator('.group-settings-close')).toBeEnabled();
       await settings.locator('.group-settings-close').focus();
+      await expect(settings.locator('.group-settings-close')).toBeFocused();
       await page.keyboard.press('Tab');
       await expect(tabs.first()).toBeFocused();
       await page.keyboard.press('Enter');
@@ -669,6 +805,21 @@ test('redesigned task surfaces retain usable geometry, scrolling and keyboard co
       await page.keyboard.press('Enter');
       await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
       await settings.locator('.group-settings-close').click();
+      await closeMobileTaskStatus(page);
+      if (width === 1440) {
+        // Closing the desktop panel remains a persisted user preference, not
+        // something selecting a Task silently overrides.
+        await sessionStatusToggle(page).click();
+        await openTask(page);
+        await expect(pane).toBeHidden();
+        await page.reload();
+        await expect(sessionStatusToggle(page)).toHaveAttribute('aria-expanded', 'false');
+        await expect(pane).toBeHidden();
+        await showTaskStatus(page);
+        await page.reload();
+        await expect(sessionStatusToggle(page)).toHaveAttribute('aria-expanded', 'true');
+        await expect(pane.locator('.scheduled-task-bar')).toBeVisible();
+      }
     }
   }
 });
