@@ -406,6 +406,33 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   await expect(page.getByRole('button', { name: 'Run once', exact: true })).toBeEnabled();
   await expect(page.locator('.scheduled-task-bar')).toContainText('Last run');
   await expect(page.locator('.scheduled-task-bar')).toContainText('Next run');
+  // Ordinary conversation work in a Task Session uses runtime-only processing.
+  // Keep the real store projection active until the delayed Agent ack arrives.
+  const stopsBefore = state.requests.filter(request => request.type === 'yeaft_abort_all').length;
+  await page.evaluate(({ agentId, sessionId }) => {
+    const store = window.Pinia.useChatStore();
+    store.activeVpTurns = { ...store.activeVpTurns,
+      'runtime-only-task-turn': { agentId, sessionId, vpId: 'omni' } };
+  }, { agentId: mockAgent.agentId, sessionId: TASK_SESSION_ID });
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect.poll(() => state.heldStops.length).toBe(1);
+  await expect(stop).toBeDisabled();
+  await expect(page.locator('.scheduled-task-run')).toBeDisabled();
+  await page.evaluate(({ agentId, sessionId }) => {
+    const store = window.Pinia.useChatStore();
+    store.vpStatuses = { ...store.vpStatuses,
+      'late-task-status': { agentId, sessionId, vpId: 'omni', state: 'thinking' } };
+  }, { agentId: mockAgent.agentId, sessionId: TASK_SESSION_ID });
+  await stop.evaluate(element => element.click());
+  await page.locator('.scheduled-task-run').evaluate(element => element.click());
+  await expect(stop).toHaveAccessibleName('Stopping…');
+  expect(state.requests.filter(request => request.type === 'yeaft_abort_all')).toHaveLength(stopsBefore + 1);
+  expect(state.heldStops).toHaveLength(1);
+  state.replyStop(state.heldStops.shift());
+  await expect(stop).toHaveAccessibleName('Stop run');
+  await expect(stop).toBeDisabled();
+  await expect(page.locator('.scheduled-task-run')).toBeEnabled();
 });
 
 test('completion notifications open the owning Agent when two Agents share the same Session id', async ({ page, serverUrl, mockAgent }, testInfo) => {
