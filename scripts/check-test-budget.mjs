@@ -92,7 +92,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 per-user shortcut layout regressions: mixed-field queued optimistic writes,
 // and failed compact-save rollback with queued ratio / account-switch fencing.
 // Migration, auth isolation and cross-desktop geometry extend existing cases.
-export const TEST_CASE_LIMIT = 838;
+// +2 reviewed Task status boundaries: inline region/Escape modal ownership and
+// pending manual-request deduplication with paused schedule preservation.
+// Header geometry and close/reopen busy retention extend existing browser cases.
+export const TEST_CASE_LIMIT = 840;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
