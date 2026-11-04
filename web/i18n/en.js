@@ -2915,6 +2915,8 @@ export default {
   "scheduledTasks.never": "Not run yet",
   "scheduledTasks.none": "Not scheduled",
   "scheduledTasks.run": "Run now",
+  "scheduledTasks.runOnce": "Run once",
+  "scheduledTasks.runOnceHelp": "Runs once without changing the schedule.",
   "scheduledTasks.starting": "Starting…",
   "scheduledTasks.save": "Save task",
   "scheduledTasks.saving": "Saving…",
