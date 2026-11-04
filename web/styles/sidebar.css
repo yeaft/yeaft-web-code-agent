@@ -97,7 +97,7 @@
 }
 
 .sidebar-top {
-  padding: 12px 12px 8px;
+  padding: 12px 12px var(--work-center-space-1);
 }
 
 /* Sidebar Header Row — Copilot style */
@@ -105,7 +105,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 0 8px;
+  padding: var(--work-center-space-1) 0;
 }
 
 .sidebar-brand {

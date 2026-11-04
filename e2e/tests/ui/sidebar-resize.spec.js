@@ -80,6 +80,11 @@ for (const theme of ['light', 'dark']) {
     await expect(shortcuts).toHaveClass(/is-compact/);
     await expect(compactToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(compactToggle).toBeFocused();
+    expect(await page.locator('.session-sidebar-shell').evaluate(el => {
+      const header = el.querySelector('.sidebar-header-row');
+      const controlsBottom = Math.max(...[...header.children].map(child => child.getBoundingClientRect().bottom));
+      return el.querySelector('.sidebar-primary-action').getBoundingClientRect().top - controlsBottom;
+    })).toBe(11);
     expect(await shortcuts.evaluate(el => el.getBoundingClientRect().height)).toBe(expandedHeight - 68);
     expect(await page.locator('.sidebar-session-results').evaluate(el => el.clientHeight)).toBe(expandedResultsHeight + 68);
     expect(await shortcuts.locator('button').evaluateAll(buttons => {

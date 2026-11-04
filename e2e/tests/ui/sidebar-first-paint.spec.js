@@ -78,6 +78,11 @@ for (const surface of [
       return width === 18 && height === 18;
     }))).toBe(true);
     await expect(navigation.locator('.sidebar-actions-toggle')).toHaveCount(0);
+    expect(await page.locator('.session-sidebar-shell').evaluate(el => {
+      const header = el.querySelector('.sidebar-header-row');
+      const controlsBottom = Math.max(...[...header.children].map(child => child.getBoundingClientRect().bottom));
+      return el.querySelector('.sidebar-primary-action').getBoundingClientRect().top - controlsBottom;
+    })).toBe(11);
     await expect(navigation.locator('.sidebar-section')).toHaveClass([
       'sidebar-section projects-section', 'sidebar-section recents-section',
     ]);
