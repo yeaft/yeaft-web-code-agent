@@ -154,6 +154,7 @@ export const E2E_TEST_FILES = Object.freeze([
   "e2e/tests/ui/scheduled-tasks.spec.js",
   "e2e/tests/ui/session-fork-merge.spec.js",
   "e2e/tests/ui/session-structured-response.spec.js",
+  "e2e/tests/ui/sidebar-controls.spec.js",
   "e2e/tests/ui/sidebar-first-paint.spec.js",
   "e2e/tests/ui/sidebar-legacy-server.spec.js",
   "e2e/tests/ui/sidebar-resize.spec.js",

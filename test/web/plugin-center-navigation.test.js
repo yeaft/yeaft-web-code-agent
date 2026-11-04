@@ -11,6 +11,7 @@ const stores = {};
 globalThis.Pinia = { defineStore: (id, options) => { stores[id] = options; return () => ({}); } };
 await import('../../web/stores/chat.js');
 const { default: YeaftSidebar } = await import('../../web/components/YeaftSidebar.js');
+const { default: ChatPage } = await import('../../web/components/ChatPage.js');
 const actions = stores.chat.actions;
 
 const route = { runtimeProvider: 'yeaft', agentId: 'agent-a', sessionId: 'session-a' };
@@ -122,7 +123,7 @@ describe('Plugin Center sidebar navigation', () => {
     expect(store.pluginCenterOpen).toBe(false);
     expect(wrapper.emitted('create')).toHaveLength(1);
     store.pluginCenterOpen = true;
-    await wrapper.get('.sidebar-project-session-create').trigger('click');
+    await wrapper.get('.sidebar-project-session-create:not(.sidebar-project-task-create)').trigger('click');
     expect(store.pluginCenterOpen).toBe(false);
     expect(wrapper.emitted('create-in-project')[0][0].project.id).toBe('project-a');
     expect(wrapper.emitted('close-work-center')).toHaveLength(2);
@@ -131,6 +132,57 @@ describe('Plugin Center sidebar navigation', () => {
     await wrapper.get('.sidebar-primary-action').trigger('click');
     expect(store.pluginCenterOpen).toBe(true);
     expect(wrapper.emitted('create')).toHaveLength(1);
+  });
+
+  it('offers distinct project chat/task creation, preserves ownership and blocks unavailable projects', async () => {
+    const project = { id: 'project-a', name: 'Project A', legacyAgentId: 'agent-a' };
+    store.pluginCenterOpen = true;
+    renderList({ workCenterOpen: true, projects: [project] });
+    const chatButton = () => wrapper.get('.sidebar-project-session-create:not(.sidebar-project-task-create)');
+    const taskButton = () => wrapper.get('.sidebar-project-task-create');
+    expect(chatButton().findAll('path')).toHaveLength(2);
+    expect(taskButton().get('circle').attributes('r')).toBe('9');
+    expect(taskButton().attributes('aria-label')).toBe(en['sidebar.projects.newTask']);
+    await taskButton().trigger('click');
+    expect(store.pluginCenterOpen).toBe(false);
+    expect(wrapper.emitted('create-in-project').at(-1)).toEqual([{ project, taskMode: true }]);
+    expect(wrapper.emitted('close-work-center')).toHaveLength(1);
+    await chatButton().trigger('click');
+    expect(wrapper.emitted('create-in-project').at(-1)).toEqual([{ project, taskMode: false }]);
+    await wrapper.setProps({ loading: true });
+    expect(wrapper.find('.sidebar-project-session-create').exists()).toBe(false);
+    wrapper.vm.createSessionInProject(project, { taskMode: true });
+    expect(wrapper.emitted('create-in-project')).toHaveLength(2);
+    await wrapper.setProps({ loading: false, agents: [{ ...agents[0], online: false }] });
+    expect(wrapper.find('.sidebar-project-task-create').exists()).toBe(false);
+    wrapper.vm.createSessionInProject(project, { taskMode: true });
+    expect(wrapper.emitted('create-in-project')).toHaveLength(2);
+  });
+
+  it.each([
+    ['CLI', ChatPage, 'unifiedSessionCreate', 'onUnifiedSessionCreated'],
+    ['native', YeaftSidebar, 'sessionCreate', 'onSessionCreated'],
+  ])('opens project task mode from the %s sidebar and assigns the created Session to that project', async (_label, component, prefix, createdMethod) => {
+    const project = { id: 'project-a', name: 'Project A', legacyAgentId: 'agent-a' };
+    const mutateProject = vi.fn(async () => ({ ok: true }));
+    const context = {
+      store: { mutateProject }, chatStore: { mutateProject },
+      [`${prefix}Open`]: false, [`${prefix}Project`]: null, [`${prefix}TaskMode`]: false,
+      closeUnifiedSessionCreate: component.methods.closeUnifiedSessionCreate,
+      closeSessionCreate: component.methods.closeSessionCreate,
+    };
+    component.methods.onUnifiedCreateInProject.call(context, { project, taskMode: true });
+    expect(context[`${prefix}Open`]).toBe(true);
+    expect(context[`${prefix}Project`]).toEqual(project);
+    expect(context[`${prefix}TaskMode`]).toBe(true);
+    await component.methods[createdMethod].call(context, { id: 'task-a', agentId: 'agent-b' });
+    expect(mutateProject).toHaveBeenCalledWith('move_session', { sessionId: 'task-a', projectId: 'project-a' }, 'agent-b');
+    expect(context[`${prefix}Open`]).toBe(false);
+    expect(context[`${prefix}Project`]).toBeNull();
+    // Chat creation after a task must explicitly clear task mode.
+    component.methods.onUnifiedCreateInProject.call(context, { project });
+    expect(context[`${prefix}TaskMode`]).toBe(false);
+    expect(context[`${prefix}Open`]).toBe(true);
   });
 
   it('closes Plugins and the mobile drawer before repeated current Session navigation for native and both CLI providers', () => {
