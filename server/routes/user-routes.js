@@ -51,6 +51,26 @@ function ensureAgentSecret(user) {
   return userDb.resetAgentSecret(user.id);
 }
 
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object') return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+const preferenceFields = new Set([
+  'sidebarProjectsRatio', 'sidebarActionsCompact', 'sidebarCollapsedProjects', 'sidebarCollapsedSections',
+]);
+const unsafeMapKeys = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isCollapseMap(value, sections = false) {
+  if (!isPlainObject(value)) return false;
+  const entries = Object.entries(value);
+  return (sections || entries.length <= 1000) && entries.every(([key, collapsed]) => (
+    typeof collapsed === 'boolean' && !unsafeMapKeys.has(key)
+    && (sections ? key === 'projects' || key === 'recents' : key.length > 0 && key.length <= 200)
+  ));
+}
+
 /**
  * Register user profile, agent secret, and admin user management routes.
  */
@@ -104,17 +124,22 @@ export function registerUserRoutes(app, {
       }
 
       const body = req.body;
-      if (!body || typeof body !== 'object' || Array.isArray(body)
+      if (!isPlainObject(body)
         || Object.keys(body).length === 0
-        || Object.keys(body).some(key => key !== 'sidebarProjectsRatio' && key !== 'sidebarActionsCompact')
+        || Object.keys(body).some(key => !preferenceFields.has(key))
         || (Object.hasOwn(body, 'sidebarProjectsRatio') && (
           typeof body.sidebarProjectsRatio !== 'number'
           || !Number.isFinite(body.sidebarProjectsRatio)
           || body.sidebarProjectsRatio < 0.15 || body.sidebarProjectsRatio > 0.85
         ))
-        || (Object.hasOwn(body, 'sidebarActionsCompact') && typeof body.sidebarActionsCompact !== 'boolean')) {
+        || (Object.hasOwn(body, 'sidebarActionsCompact') && typeof body.sidebarActionsCompact !== 'boolean')
+        || (Object.hasOwn(body, 'sidebarCollapsedProjects') && !isCollapseMap(body.sidebarCollapsedProjects))
+        || (Object.hasOwn(body, 'sidebarCollapsedSections') && !isCollapseMap(body.sidebarCollapsedSections, true))) {
         return res.status(400).json({
-          error: 'Expected a nonempty patch with only sidebarProjectsRatio (finite number between 0.15 and 0.85) and/or sidebarActionsCompact (boolean)',
+          error: 'Expected a nonempty patch with only sidebarProjectsRatio (finite number between 0.15 and 0.85), '
+            + 'sidebarActionsCompact (boolean), sidebarCollapsedProjects (boolean map, up to 1000 nonempty project IDs '
+            + 'of at most 200 characters, excluding __proto__/constructor/prototype), and/or '
+            + 'sidebarCollapsedSections (boolean map with only projects/recents)',
         });
       }
 

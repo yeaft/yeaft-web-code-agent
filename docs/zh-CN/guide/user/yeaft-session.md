@@ -17,6 +17,12 @@
 
 Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是 execution context，也是 project-tier instructions、Skills 与 MCP discovery 的根；它不是 Session 数据目录。
 
+## 侧栏显示偏好
+
+Project 文件夹及“项目／最近”分区的展开、收起状态按用户保存在 Server，与快捷入口布局和分区高度比例一起跨客户端复用。刷新、重新登录、窗口重新获得焦点或页面恢复可见时读取最新偏好；不会实时推送到其他窗口。不同文件夹分别保存，重命名不会重置状态，其他客户端修改不同文件夹不会互相覆盖。保存失败会显示提示并恢复已确认的状态，不会假装已经同步。
+
+旧浏览器本地保存的分区状态不作为用户级偏好的来源；首次使用默认展开，之后以 Server 中保存的状态为准。
+
 ## 创建 Session
 
 1. 在统一侧栏选择 **新建聊天**，runtime 选择 **Yeaft**。
