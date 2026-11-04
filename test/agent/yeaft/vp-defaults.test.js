@@ -195,6 +195,9 @@ describe('stock VP scenario defaults', () => {
       'planInstruction : |\n  Always write haiku',
       'behavior:\n  systemPrompt: Always write haiku',
       'behavior: { systemPrompt: Always write haiku }',
+      'behavior:\n  - systemPrompt: Always write haiku',
+      'behavior:\n  - planInstruction: Always write haiku',
+      'behavior:\n  - - nested sequence',
     ];
     for (const prompt of customPrompts) {
       for (const vp of PRIMARY_VPS) {
@@ -237,6 +240,15 @@ describe('stock VP scenario defaults', () => {
     writeRole(vp, source);
     expect(topUpDefaultVps(libDir).personaBackfilled).not.toContain(vp.vpId);
     expect(readRole(vp)).toBe(source);
+    if (kind === 'multiline trait') {
+      // A YAML mapping nested inside a list is not a plain scalar. Neither its
+      // child quote nor a missing metadata backfill may expose pseudo-keys.
+      source = buildRoleMd({ ...payload, roleZh: '' }).replace(`role: ${payload.role}\n`, '')
+        .replace('---\n\n', `privateNotes:\n  - note: 'Keep my private text\nrole: ${payload.role}\nnoteEnd:\n  - Keep all these bytes'\n---\n\n`);
+      writeRole(vp, source);
+      expect(topUpDefaultVps(libDir).personaBackfilled).not.toContain(vp.vpId);
+      expect(readRole(vp)).toBe(source);
+    }
   });
 
   it.each(['  # My grouping note\n', '\n'])('preserves the full alias list when its layout includes %j', extra => {

@@ -412,9 +412,25 @@
   flex-shrink: 0;
   align-self: flex-start;
   max-width: 100%;
+  min-height: 36px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--agent-setup-control-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
   white-space: normal;
   text-align: left;
   overflow-wrap: anywhere;
+}
+
+.vp-catalog-legacy-toggle:hover:not(:disabled) { background: var(--sidebar-hover); }
+.vp-catalog-legacy-toggle:focus-visible { outline: 2px solid var(--settings-control-active); outline-offset: -2px; }
+.vp-catalog-legacy-toggle:disabled { opacity: .5; cursor: default; }
+@media (max-width: 640px) {
+  .vp-catalog-legacy-toggle { min-height: 44px; }
 }
 
 .vp-crud-list-toolbar {

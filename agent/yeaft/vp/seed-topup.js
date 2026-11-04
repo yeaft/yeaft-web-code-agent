@@ -269,7 +269,8 @@ function simpleFrontmatterFields(source) {
     if (value.startsWith('"')) return /^"(?:[^"\\]|\\.)*"$/.test(value);
     // Flow collections, tags, anchors, blocks and inline comments are outside
     // this narrow migration grammar. Do not guess at their parsed meaning.
-    return !/^[\[\]{}|>!&*#]/.test(value) && !/[ \t]#/.test(value);
+    return !/^[\[\]{}|>!&*#]/.test(value)
+      && !/(?:^[-?:](?:\s|$)|:(?:\s|$)|[ \t]#)/.test(value);
   };
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
