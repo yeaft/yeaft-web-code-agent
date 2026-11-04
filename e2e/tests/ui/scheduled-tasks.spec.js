@@ -396,6 +396,28 @@ test('completion notifications open the owning Agent when two Agents share the s
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(`yeaft-task-receipts:${window.Pinia.useChatStore().scheduledTaskNotificationOwnerId}`) || '[]')
       .some(id => id.includes('visible-run')))).toBe(true);
     await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    // Results remain unread while the actual conversation is covered. Returning
+    // to it acknowledges them without another click or inventory/completion.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const surface of ['pluginCenterOpen', 'workCenterOpen', 'workbenchMaximized']) {
+      await page.evaluate(surface => {
+        const store = window.Pinia.useChatStore();
+        if (surface === 'pluginCenterOpen') store.openPluginCenter();
+        else if (surface === 'workCenterOpen') store.enterWorkCenter();
+        else { store.workbenchExpanded = true; store.workbenchMaximized = true; }
+      }, surface);
+      await expect(page.locator('.yeaft-main')).toBeHidden();
+      second.notify({ runId: `covered-${surface}` });
+      await expect(page.locator('.scheduled-task-notification')).toHaveCount(1);
+      await page.evaluate(surface => {
+        const store = window.Pinia.useChatStore();
+        if (surface === 'pluginCenterOpen') store.closePluginCenter();
+        else if (surface === 'workCenterOpen') store.leaveWorkCenter();
+        else { store.workbenchMaximized = false; store.workbenchExpanded = false; }
+      }, surface);
+      await expect(page.locator('.yeaft-main')).toBeVisible();
+      await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    }
     for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'dark']]) {
       if (theme === 'dark' && width === 1440) {
         await page.evaluate(() => localStorage.setItem('theme', 'dark'));
@@ -511,7 +533,8 @@ test('redesigned task surfaces retain usable geometry, scrolling and keyboard co
   const prompt = 'Review the complete workspace and preserve ownership boundaries.\n'.repeat(60);
   const state = scheduledTaskAgent(mockAgent, { sessions: [taskSession({ name: 'Daily workspace review',
     task: { ...taskSession().task, prompt, nextRunAt: Date.now() + 86400000, trigger: { type: 'schedule', scheduledFor: Date.now() + 86400000,
-      recurrence: { frequency: 'daily', timeZone: 'UTC' } } } })] });
+      recurrence: { frequency: 'daily', timeZone: 'UTC' } } } }),
+    taskSession({ id: 'background-task-session', name: 'Background workspace review' })] });
   await boot(page, serverUrl, mockAgent);
   for (const theme of ['light', 'dark']) {
     if (theme === 'dark') {
@@ -600,7 +623,10 @@ test('redesigned task surfaces retain usable geometry, scrolling and keyboard co
         await expect(mobileToggle).toBeHidden();
       }
       await shot(page, testInfo, `compact-task-header-${theme}-${width}.png`);
-      state.notify({ runId: `visual-${theme}-${width}`, status: 'failed', error: 'Long task result needs attention: ' + 'verification evidence '.repeat(8) });
+      // The visible task is already read; keep notification geometry coverage
+      // using an actual different Task Session that is not being viewed.
+      state.notify({ sessionId: 'background-task-session', taskName: 'Background workspace review',
+        runId: `visual-${theme}-${width}`, status: 'failed', error: 'Long task result needs attention: ' + 'verification evidence '.repeat(8) });
       await expect(page.locator('.scheduled-task-notification-open')).toBeVisible();
       await noOverflow(page, ['.yeaft-main-center', '.scheduled-task-bar', '.yeaft-session-input', '.scheduled-task-notifications']);
       await shot(page, testInfo, `redesign-task-notifications-${theme}-${width}.png`);

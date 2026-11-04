@@ -1,3 +1,5 @@
+import { isScheduledTaskSessionVisible } from '../stores/helpers/scheduled-tasks.js';
+
 export default {
   name: 'ScheduledTaskNotifications',
   props: { store: { type: Object, required: true } },
@@ -5,6 +7,18 @@ export default {
   computed: {
     items() { return this.store.scheduledTaskNotifications || []; },
     visibleItems() { return this.expanded ? [...this.items].reverse() : this.items.slice(-1); },
+    visibleSessionKey() {
+      const route = this.store.activeSessionRoute;
+      return isScheduledTaskSessionVisible(this.store, route?.sessionId, route?.agentId)
+        ? JSON.stringify([route.agentId, route.sessionId]) : null;
+    },
+  },
+  watch: {
+    // Batched UI transitions must settle before acknowledging the destination:
+    // closing Plugins as part of switching Sessions must not read the old one.
+    visibleSessionKey: { immediate: true, flush: 'post', handler(key) {
+      if (key) this.store.markVisibleScheduledTaskSessionRead?.();
+    } },
   },
   methods: {
     statusLabel(status) {

@@ -464,6 +464,7 @@ export function setupVisibilityHandler(store) {
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      store.markVisibleScheduledTaskSessionRead?.();
       console.log('[Visibility] Page became visible, checking connection...');
 
       if (!store.ws || store.ws.readyState !== WebSocket.OPEN) {

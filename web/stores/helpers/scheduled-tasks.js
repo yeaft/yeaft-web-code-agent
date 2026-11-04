@@ -77,10 +77,11 @@ export function markScheduledTaskSessionRead(store, sessionId, agentId, lastRun 
   return items.length > 0;
 }
 
-function isTaskSessionVisible(store, sessionId, agentId) {
+export function isScheduledTaskSessionVisible(store, sessionId, agentId) {
   const route = store.activeSessionRoute;
-  return store.currentView === 'yeaft' && !store.workCenterOpen
+  return !!sessionId && !!agentId && store.currentView === 'yeaft' && !store.workCenterOpen
     && !store.pluginCenterOpen && !store.digitalPersonOpen
+    && !(store.workbenchExpanded && store.workbenchMaximized)
     && globalThis.document?.visibilityState !== 'hidden'
     && route?.runtimeProvider === 'yeaft'
     && route.agentId === agentId && route.sessionId === sessionId;
@@ -92,7 +93,7 @@ export function acceptScheduledTaskNotification(store, event, agentId) {
       || typeof event.runId !== 'string' || !event.runId || !TERMINAL_STATUSES.has(event.status)) return false;
   const id = JSON.stringify([agentId, event.sessionId, event.runId]);
   if (receipts(store).seen.has(id)) return false;
-  if (isTaskSessionVisible(store, event.sessionId, agentId)) {
+  if (isScheduledTaskSessionVisible(store, event.sessionId, agentId)) {
     recordReceipt(store, id);
     markScheduledTaskSessionRead(store, event.sessionId, agentId);
     return false;

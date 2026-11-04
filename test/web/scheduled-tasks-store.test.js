@@ -1,10 +1,15 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as tasks from '../../web/stores/helpers/scheduled-tasks.js';
+import * as Vue from 'vue';
+import { mount } from '@vue/test-utils';
+import ScheduledTaskNotifications from '../../web/components/ScheduledTaskNotifications.js';
+
 
 const options = {};
 globalThis.Pinia = { defineStore: (id, value) => { options[id] = value; return () => ({}); } };
 const { useChatStore } = await import('../../web/stores/chat.js');
+const { setupVisibilityHandler } = await import('../../web/stores/helpers/websocket.js');
 await import('../../web/stores/sessions.js');
 
 function harness() {
@@ -112,7 +117,8 @@ describe('Session-backed task store integration', () => {
   it('acknowledges every queued run on Session selection, including repeats, without muting future runs or other Agents', () => {
     const store = harness();
     Object.assign(store, {
-      currentView: 'yeaft', currentAgent: 'a', yeaftActiveSessionFilter: 'same',
+      currentView: 'chat', currentAgent: 'a', yeaftActiveSessionFilter: 'same',
+      activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'a', sessionId: 'same' },
       messagesMap: {}, yeaftConversationIdsByAgent: {},
       activateYeaftAgent: vi.fn(), markYeaftSessionRead: vi.fn(),
       syncActiveYeaftHistoryLoad: vi.fn(), requestYeaftSessionBootstrap: vi.fn(),
@@ -121,6 +127,7 @@ describe('Session-backed task store integration', () => {
     tasks.acceptScheduledTaskNotification(store, completed, 'b');
     // Exercise the real activation path: selecting an already-active Session
     // must acknowledge before history de-duplication, even without an unread dot.
+    store.currentView = 'yeaft';
     options.chat.actions.setActiveSessionFilter.call(store, 'same', { agentId: 'a' });
     expect(store.scheduledTaskNotifications.map(row => row.agentId)).toEqual(['b']);
     expect(store.requestYeaftSessionBootstrap).not.toHaveBeenCalled();
@@ -138,31 +145,53 @@ describe('Session-backed task store integration', () => {
     expect(tasks.acceptScheduledTaskNotification(reloaded, { ...completed, runId: 'ongoing' }, 'a')).toBe(true);
   });
 
-  it('silently receipts results only for the exact visible Task Session, not a covered or background conversation', () => {
+  it('silently receipts results only for the exact visible Task Session, including return from covered and background views', async () => {
     const desktopNotice = vi.fn();
     desktopNotice.permission = 'granted';
     vi.stubGlobal('Notification', desktopNotice);
-    const store = harness();
+    const store = Vue.reactive(harness());
     Object.assign(store, { currentView: 'yeaft',
-      activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'a', sessionId: 'same' } });
+      activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'a', sessionId: 'same' },
+      markVisibleScheduledTaskSessionRead: options.chat.actions.markVisibleScheduledTaskSessionRead });
     expect(tasks.acceptScheduledTaskNotification(store, completed, 'a')).toBe(false);
     expect(store.scheduledTaskNotifications).toEqual([]);
     expect(store.markYeaftSessionUnread).not.toHaveBeenCalled();
     expect(desktopNotice).not.toHaveBeenCalled();
     expect(tasks.acceptScheduledTaskNotification(harness(), completed, 'a')).toBe(false);
     expect(tasks.acceptScheduledTaskNotification(store, completed, 'b')).toBe(true);
+    const wrapper = mount(ScheduledTaskNotifications, { props: { store }, global: { mocks: { $t: key => key } } });
     for (const surface of ['workCenterOpen', 'pluginCenterOpen', 'digitalPersonOpen']) {
       store[surface] = true;
+      await Vue.nextTick();
       expect(tasks.acceptScheduledTaskNotification(store, { ...completed, runId: surface }, 'a')).toBe(true);
       store[surface] = false;
+      await Vue.nextTick();
+      expect(store.scheduledTaskNotifications.map(row => row.agentId)).toEqual(['b']);
     }
-    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    store.workbenchExpanded = store.workbenchMaximized = true;
+    await Vue.nextTick();
+    expect(tasks.acceptScheduledTaskNotification(store, { ...completed, runId: 'maximized' }, 'a')).toBe(true);
+    store.workbenchMaximized = false;
+    await Vue.nextTick();
+    expect(store.scheduledTaskNotifications.map(row => row.agentId)).toEqual(['b']);
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     expect(tasks.acceptScheduledTaskNotification(store, { ...completed, runId: 'background' }, 'a')).toBe(true);
     const backgroundStore = { ...store, currentAgent: 'a', yeaftActiveSessionFilter: 'same',
       messagesMap: {}, activateYeaftAgent: vi.fn(), markYeaftSessionRead: vi.fn(),
       syncActiveYeaftHistoryLoad: vi.fn() };
     options.chat.actions.setActiveSessionFilter.call(backgroundStore, 'same', { agentId: 'a' });
-    expect(backgroundStore.scheduledTaskNotifications).toHaveLength(5);
+    expect(backgroundStore.scheduledTaskNotifications).toHaveLength(2);
+    const listen = vi.spyOn(document, 'addEventListener');
+    setupVisibilityHandler(store);
+    const resume = listen.mock.calls.find(([type]) => type === 'visibilitychange')[1];
+    vi.useFakeTimers();
+    try {
+      store.sendWsMessage = vi.fn();
+      visibility.mockReturnValue('visible');
+      resume();
+      expect(store.scheduledTaskNotifications.map(row => row.agentId)).toEqual(['b']);
+      expect(store.sendWsMessage).toHaveBeenCalledWith({ type: 'ping' });
+    } finally { vi.useRealTimers(); wrapper.unmount(); }
   });
 
   it('recovers the latest terminal result on hydration, persists only receipts, and clears private notices on owner changes', () => {
