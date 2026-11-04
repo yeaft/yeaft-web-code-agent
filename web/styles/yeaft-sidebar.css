@@ -64,7 +64,19 @@
 .sidebar-primary-action:disabled .sidebar-primary-action-icon { color: inherit; }
 .sidebar-actions-toggle { position: absolute; right: var(--work-center-space-2); bottom: var(--work-center-space-1); display: flex; flex: 0 0 34px; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-secondary); cursor: pointer; }
 .sidebar-primary-actions.is-compact > .sidebar-actions-toggle { position: static; margin-left: auto; }
-.sidebar-actions-toggle .sidebar-section-chevron { opacity: 1; pointer-events: auto; }
+/* Reserve action space while hidden so hovering never shifts titles or rows.
+   Opacity (rather than visibility) keeps keyboard navigation available. */
+.sidebar-primary-actions > .sidebar-actions-toggle,
+.sidebar-section-heading > .sidebar-tool-button,
+.sidebar-section-heading > .sidebar-section-toggle { opacity: 0; pointer-events: none; transition: opacity 0.12s ease; }
+.sidebar-primary-actions:hover > .sidebar-actions-toggle,
+.sidebar-primary-actions:focus-within > .sidebar-actions-toggle,
+.sidebar-section-heading:hover > .sidebar-tool-button,
+.sidebar-section-heading:hover > .sidebar-section-toggle,
+.sidebar-section-heading:focus-within > .sidebar-tool-button,
+.sidebar-section-heading:focus-within > .sidebar-section-toggle { opacity: 1; pointer-events: auto; }
+.sidebar-section-heading:hover > .sidebar-tool-button:disabled,
+.sidebar-section-heading:focus-within > .sidebar-tool-button:disabled { opacity: 0.45; }
 .sidebar-actions-toggle:disabled { cursor: not-allowed; color: var(--text-muted); }
 .sidebar-actions-toggle:hover { background: var(--sidebar-hover); color: var(--text-primary); }
 .sidebar-actions-toggle:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
@@ -81,8 +93,8 @@
 .sidebar-section-toggle { display: flex; align-items: center; justify-content: center; flex: 0 0 34px; width: 34px; min-height: var(--sidebar-section-toggle-height); padding: 0; border: 0; border-radius: var(--sidebar-section-toggle-radius); background: transparent; color: var(--text-secondary); cursor: pointer; }
 .sidebar-section-toggle:hover { background: var(--sidebar-hover); color: var(--text-primary); }
 .sidebar-section-toggle:focus-visible { outline: var(--sidebar-focus-ring-width) solid var(--accent-blue); outline-offset: var(--sidebar-focus-ring-offset); }
-.sidebar-section-chevron { width: var(--sidebar-section-chevron-size); height: var(--sidebar-section-chevron-size); flex: 0 0 auto; transition: transform 0.15s ease; }
-.sidebar-section-chevron.collapsed { transform: rotate(-90deg); }
+.sidebar-section-chevron { width: var(--sidebar-section-chevron-size); height: var(--sidebar-section-chevron-size); flex: 0 0 auto; transform: rotate(180deg); transition: transform 0.15s ease; }
+.sidebar-section-chevron.collapsed { transform: rotate(0deg); }
 .sidebar-section.is-collapsed { flex: 0 0 auto; max-height: none; overflow: visible; padding-bottom: 0; }
 .sidebar-section-resize-handle { display: none; }
 .sidebar-preferences-error { flex: 0 0 auto; padding: 4px 12px; color: var(--text-muted); font-size: 12px; }
@@ -116,12 +128,17 @@
 .sidebar-project-session-create:hover { background: var(--sidebar-hover); color: var(--text-primary); }
 .sidebar-project-header > .session-dots-btn { opacity: 0; }
 .sidebar-project-header:hover > .sidebar-project-session-create,
-.sidebar-project-header > .sidebar-project-session-create:focus-visible { opacity: 1; pointer-events: auto; }
+.sidebar-project-header:focus-within > .sidebar-project-session-create { opacity: 1; pointer-events: auto; }
 .sidebar-project-header:hover > .session-dots-btn,
-.sidebar-project-header > .session-dots-btn.menu-open,
-.sidebar-project-header > .session-dots-btn:focus-visible { opacity: 1; }
-@media (pointer: coarse) {
+.sidebar-project-header:focus-within > .session-dots-btn,
+.sidebar-project-header > .session-dots-btn.menu-open { opacity: 1; }
+/* Touch clients have no hover; keep the same actions directly discoverable. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-primary-actions > .sidebar-actions-toggle,
+  .sidebar-section-heading > .sidebar-tool-button,
+  .sidebar-section-heading > .sidebar-section-toggle,
   .sidebar-project-header > .sidebar-project-session-create { opacity: 1; pointer-events: auto; }
+  .sidebar-section-heading > .sidebar-tool-button:disabled { opacity: 0.45; }
   .sidebar-project-header > .session-dots-btn { opacity: 1; }
 }
 .sidebar-project-create { display: flex; align-items: center; gap: 4px; min-height: 36px; margin: 2px 4px 6px; padding: 3px 4px 3px 8px; border-radius: 8px; background: var(--bg-input-wrapper); }
