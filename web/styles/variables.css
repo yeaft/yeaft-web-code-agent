@@ -136,7 +136,7 @@ select option:checked {
   --image-preview-focus-ring-offset: 2px;
   --image-preview-mobile-gutter: 16px;
   --image-preview-mobile-reserved-height: 112px;
-  --sidebar-section-heading-padding: 0 6px 0 4px;
+  --sidebar-section-heading-padding: 0 0 0 4px;
   --sidebar-section-toggle-gap: 5px;
   --sidebar-section-toggle-height: 34px;
   --sidebar-section-toggle-padding: 0 6px;
@@ -417,7 +417,7 @@ select option:checked {
   --image-preview-focus-ring-offset: 2px;
   --image-preview-mobile-gutter: 16px;
   --image-preview-mobile-reserved-height: 112px;
-  --sidebar-section-heading-padding: 0 6px 0 4px;
+  --sidebar-section-heading-padding: 0 0 0 4px;
   --sidebar-section-toggle-gap: 5px;
   --sidebar-section-toggle-height: 34px;
   --sidebar-section-toggle-padding: 0 6px;

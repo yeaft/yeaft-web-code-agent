@@ -1073,21 +1073,21 @@ export default {
                 :aria-label="$t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse')"
                 :title="$t(actionsCompact ? 'sidebar.actions.expand' : 'sidebar.actions.collapse')"
                 @click="toggleCompactActions">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :d="actionsCompact ? 'm7 7 5 5 5-5m-10 5 5 5 5-5' : 'm7 12 5-5 5 5m-10 5 5-5 5 5'"/></svg>
+          <svg class="sidebar-section-chevron" :class="{ collapsed: actionsCompact }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
         </button>
       </div>
 
       <div ref="sessionResults" class="sidebar-session-results" :class="{ 'sections-resizable': !isSectionCollapsed('projects') && !isSectionCollapsed('recents'), 'projects-collapsed': isSectionCollapsed('projects'), 'recents-collapsed': isSectionCollapsed('recents') }" :style="{ '--sidebar-projects-track': (sectionRatio * 100) + 'fr', '--sidebar-recents-track': ((1 - sectionRatio) * 100) + 'fr' }">
         <section class="sidebar-section projects-section" :class="{ 'is-collapsed': isSectionCollapsed('projects') }">
           <div class="sidebar-section-heading">
-            <button type="button" class="sidebar-section-toggle" @click="toggleSection('projects')" :aria-expanded="String(!isSectionCollapsed('projects'))">
-              <span>{{ $t('sidebar.projects.title') }}</span>
-              <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('projects') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
-            </button>
+            <span class="sidebar-section-title">{{ $t('sidebar.projects.title') }}</span>
             <button type="button" class="sidebar-tool-button sidebar-project-add-button" @click="createProject" :disabled="loading || projectCreateOpen" :title="$t('sidebar.projects.new')" :aria-label="$t('sidebar.projects.new')">
               <svg class="sidebar-project-add-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path class="sidebar-project-add-mark" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/>
               </svg>
+            </button>
+            <button type="button" class="sidebar-section-toggle" @click="toggleSection('projects')" :aria-expanded="String(!isSectionCollapsed('projects'))" :aria-label="$t('sidebar.projects.title')" :title="$t(isSectionCollapsed('projects') ? 'sidebar.sections.expand' : 'sidebar.sections.collapse', { name: $t('sidebar.projects.title') })">
+              <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('projects') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
             </button>
           </div>
 
@@ -1187,15 +1187,18 @@ export default {
           @update:model-value="sectionRatioPreview = $event" @change="saveSectionRatio" @cancel="sectionRatioPreview = null" />
         <section class="sidebar-section recents-section" :class="{ 'drag-over': dragTargetProjectId === '__recents__', 'is-collapsed': isSectionCollapsed('recents') }" @dragover="dragOverRecents" @dragleave="clearGroupDragTarget('__recents__', $event)" @drop="dropOnRecents">
           <div class="sidebar-section-heading">
-            <button type="button" class="sidebar-section-toggle" @click="toggleSection('recents')" :aria-expanded="String(!isSectionCollapsed('recents'))">
-              <span>{{ $t('sidebar.recents.title') }}</span>
-              <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('recents') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
-            </button>
+            <span class="sidebar-section-title">{{ $t('sidebar.recents.title') }}</span>
             <button type="button" class="sidebar-tool-button sidebar-recents-create" :disabled="loading" @click="createSession" :title="$t('sidebar.sessions.newChat')" :aria-label="$t('sidebar.sessions.newChat')">
               <svg class="sidebar-recents-create-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path class="sidebar-recents-create-frame" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                 <path class="sidebar-recents-create-pen" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852Z"/>
               </svg>
+            </button>
+            <button type="button" class="sidebar-tool-button sidebar-recents-task-create" :disabled="loading" @click="createTask" :title="$t('scheduledTasks.new')" :aria-label="$t('scheduledTasks.new')">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </button>
+            <button type="button" class="sidebar-section-toggle" @click="toggleSection('recents')" :aria-expanded="String(!isSectionCollapsed('recents'))" :aria-label="$t('sidebar.recents.title')" :title="$t(isSectionCollapsed('recents') ? 'sidebar.sections.expand' : 'sidebar.sections.collapse', { name: $t('sidebar.recents.title') })">
+              <svg class="sidebar-section-chevron" :class="{ collapsed: isSectionCollapsed('recents') }" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 10 4 4 4-4"/></svg>
             </button>
           </div>
           ${sessionRowsTemplate('recents', 'recentRows')}
