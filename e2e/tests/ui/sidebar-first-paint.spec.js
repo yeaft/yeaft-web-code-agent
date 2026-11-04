@@ -91,9 +91,9 @@ for (const surface of [
     await expect(navigation).toHaveAttribute('aria-busy', 'false');
     await expect(navigation.locator('.sidebar-primary-action:not(.sidebar-plugins-entry):not(.sidebar-task-create)')).toBeEnabled();
     await actions.nth(0).focus();
-    expect(await actions.nth(0).evaluate(el => getComputedStyle(el).outlineStyle)).not.toBe('none');
     await page.keyboard.press('Tab');
     await expect(actions.nth(1)).toBeFocused();
+    expect(await actions.nth(1).evaluate(el => getComputedStyle(el).outlineStyle)).not.toBe('none');
     await page.keyboard.press('Tab');
     await expect(actions.nth(2)).toBeFocused();
     expect(await page.evaluate(() => window.__sidebarNavigation === document.querySelector('.sidebar-navigation'))).toBe(true);
