@@ -177,6 +177,17 @@ for (const theme of ['light', 'dark']) {
       expect(await readRatio(page)).toBeCloseTo(0.68, 2);
     } finally { await device.close(); }
 
+    // A second Web client can refresh the catalog; restore only the layout
+    // stress data after closing it (preferences still use the real Server DB).
+    await page.evaluate(agentId => {
+      const store = window.Pinia.useChatStore();
+      store.sessionProjects = Array.from({ length: 30 }, (_, index) => ({ id: 'layout-project-' + index, name: 'Long project title ' + index, members: [] }));
+      store.sessionCatalog = Array.from({ length: 40 }, (_, index) => ({
+        catalogKey: 'layout-session-' + index, runtimeProvider: 'yeaft', title: 'Recent session ' + index,
+        routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'layout-session-' + index }, availability: 'online',
+      }));
+    }, mockAgent.agentId);
+    await expect(compactToggle).toBeVisible();
     // A failed compact save is disclosed and rolled back too.
     await page.route('**/api/user/preferences', route => route.request().method() === 'PATCH'
       ? route.fulfill({ status: 503, body: '{}' }) : route.continue());

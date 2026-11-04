@@ -125,6 +125,8 @@ describe('server-owned sidebar user preferences', () => {
     expect(state.preferences.value.sidebarActionsCompact).toBe(true);
     expect(state.preferences.value.sidebarProjectsRatio).toBe(0.6);
     expect(await ratio).toBe(true);
+    // Saving a different field cannot silently dismiss the failed layout save.
+    expect(state.error.value).toBe('save');
     const old = state.saveSidebarActionsCompact(false);
     const queued = state.saveSidebarActionsCompact(true);
     await tick();

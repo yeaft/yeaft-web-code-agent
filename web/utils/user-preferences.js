@@ -31,6 +31,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
   let confirmed = defaultPreferences();
   // Reapply later local choices over each server response while writes drain.
   const pendingPatches = new Map();
+  const failedFields = new Set();
   const showConfirmed = () => {
     preferences.value = Object.assign({}, confirmed, ...pendingPatches.values());
   };
@@ -60,6 +61,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         const value = await response.json();
         if (generation !== expectedGeneration || revision !== expectedRevision) return;
         confirmed = normalizePreferences(value);
+        failedFields.clear();
         showConfirmed();
         ready.value = true;
         error.value = null;
@@ -89,10 +91,14 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
         const result = await response.json();
         if (generation !== expectedGeneration) return false;
         confirmed = normalizePreferences(result);
-        if (revision === expectedRevision) error.value = null;
+        for (const field of Object.keys(patch)) failedFields.delete(field);
+        error.value = failedFields.size ? 'save' : null;
         return true;
       } catch {
-        if (generation === expectedGeneration) error.value = 'save';
+        if (generation === expectedGeneration) {
+          for (const field of Object.keys(patch)) failedFields.add(field);
+          error.value = 'save';
+        }
         return false;
       } finally {
         if (generation === expectedGeneration) {
@@ -126,6 +132,7 @@ export function createUserPreferencesState(auth, { request = (...args) => fetch(
       queue = Promise.resolve();
       pendingWrites = 0;
       pendingPatches.clear();
+      failedFields.clear();
       confirmed = defaultPreferences();
       showConfirmed();
       ready.value = false;

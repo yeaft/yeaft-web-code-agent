@@ -89,7 +89,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 Task Session read boundaries: selection receipts across hydration/new runs,
 // and exact foreground visibility versus other Agents/covered/background views.
 // Real sidebar/read/reload behavior extends the existing notification browser case.
-export const TEST_CASE_LIMIT = 836;
+// +2 per-user shortcut layout regressions: mixed-field queued optimistic writes,
+// and failed compact-save rollback with queued ratio / account-switch fencing.
+// Migration, auth isolation and cross-desktop geometry extend existing cases.
+export const TEST_CASE_LIMIT = 838;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
