@@ -221,7 +221,7 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
   expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeUndefined();
   await wrapper.get('.scheduled-task-stop').trigger('click');
-  expect(chat.cancelYeaftSession).toHaveBeenCalledExactlyOnceWith('task', { agentId: 'a' });
+  expect(chat.cancelYeaftSession).toHaveBeenCalledExactlyOnceWith('task', { agentId: 'a', waitForAck: true });
   expect(wrapper.get('.scheduled-task-stop').attributes('aria-label')).toBe(en['scheduledTasks.stopping']);
   expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
   await wrapper.vm.stop();
@@ -243,6 +243,22 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
   await wrapper.vm.stop();
   expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(2);
+  chat.agents = agents;
+  chat.cancelYeaftSession.mockReturnValue(true);
+  chat.runtimeRunning = true;
+  chat.isYeaftSessionProcessing = () => chat.runtimeRunning;
+  await wrapper.setProps({ session: { id: 'task', task } });
+  await wrapper.get('.scheduled-task-stop').trigger('click');
+  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
+  // Late active status while waiting must not unlock either action.
+  chat.runtimeRunning = true;
+  await Vue.nextTick();
+  await wrapper.vm.stop();
+  expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(3);
+  expect(wrapper.vm.stopping).toBe(true);
+  chat.runtimeRunning = false; // Authoritative abort ack clears runtime.
+  await Vue.nextTick();
+  expect(wrapper.vm.stopping).toBe(false);
   await wrapper.setProps({ session: { id: 'task', task } });
   chat.agents = [{ ...agents[0], online: false }];
   await Vue.nextTick();

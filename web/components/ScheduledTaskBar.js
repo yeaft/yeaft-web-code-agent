@@ -52,7 +52,7 @@ export default {
       this.error = '';
       try {
         // Reuse the Session-scoped stop path; never pause or rewrite the schedule.
-        const sent = this.chat.cancelYeaftSession(this.session.id, { agentId: this.agentId });
+        const sent = this.chat.cancelYeaftSession(this.session.id, { agentId: this.agentId, waitForAck: true });
         if (sent === false) throw new Error(this.$t('scheduledTasks.failed'));
       } catch (error) {
         this.error = error?.message || this.$t('scheduledTasks.failed');
