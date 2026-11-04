@@ -634,6 +634,8 @@ export default {
   'sidebar.sessions.newChat': 'New chat',
   'sidebar.actions.collapse': 'Compact shortcuts',
   'sidebar.actions.expand': 'Expand shortcuts',
+  'sidebar.sections.collapse': 'Collapse {name}',
+  'sidebar.sections.expand': 'Expand {name}',
   'sidebar.sessions.emptyProvider': 'No sessions for this provider',
   'sidebar.sessions.menu': 'Session menu',
   'sidebar.sessions.unread': 'Unread',

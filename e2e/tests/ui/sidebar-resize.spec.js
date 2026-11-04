@@ -105,14 +105,33 @@ for (const theme of ['light', 'dark']) {
       return boxes.every(box => box.y === boxes[0].y && box.width === 34 && box.height === 34)
         && buttons.every(button => !button.textContent.trim());
     })).toBe(true);
-    expect(await shortcuts.locator('svg').evaluateAll(icons => icons.every(icon => {
+    expect(await shortcuts.locator('.sidebar-primary-action-icon').evaluateAll(icons => icons.every(icon => {
       const box = icon.getBoundingClientRect(); return box.width === 18 && box.height === 18;
     }))).toBe(true);
     expect(await compactToggle.evaluate(el => {
       const previous = el.previousElementSibling.getBoundingClientRect();
       const box = el.getBoundingClientRect();
-      return box.top === previous.top && box.left >= previous.right;
+      const area = el.parentElement;
+      return box.top === previous.top && box.left > previous.right
+        && Math.abs(area.getBoundingClientRect().right - parseFloat(getComputedStyle(area).paddingRight) - box.right) < 1;
     })).toBe(true);
+    // All disclosure controls share the existing section glyph, size and rotation.
+    expect(await page.locator('.sidebar-section-chevron').evaluateAll(icons => icons.every(icon => {
+      const box = icon.getBoundingClientRect();
+      return box.width === 14 && box.height === 14
+        && icon.querySelector('path').getAttribute('d') === 'm8 10 4 4 4-4';
+    }))).toBe(true);
+    for (const section of ['projects', 'recents']) {
+      const heading = page.locator(`.${section}-section > .sidebar-section-heading`);
+      expect(await heading.evaluate(el => {
+        const toggle = el.lastElementChild;
+        const box = toggle.getBoundingClientRect();
+        const previous = toggle.previousElementSibling.getBoundingClientRect();
+        return toggle.classList.contains('sidebar-section-toggle') && box.left >= previous.right
+          && Math.abs(el.getBoundingClientRect().right - box.right) < 1;
+      })).toBe(true);
+      await expect(heading.locator('.sidebar-section-chevron')).toBeVisible();
+    }
     await page.screenshot({ path: testInfo.outputPath('sidebar-compact.png') });
     await page.keyboard.press('Space');
     await expect(shortcuts).not.toHaveClass(/is-compact/);
@@ -241,8 +260,16 @@ for (const theme of ['light', 'dark']) {
     await compactToggle.click();
     await expect(shortcuts).toHaveClass(/is-compact/);
     expect(await compactToggle.evaluate(el => {
-      const box = el.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight;
+      const box = el.getBoundingClientRect();
+      const area = el.parentElement;
+      return box.top >= 0 && box.bottom <= innerHeight
+        && Math.abs(area.getBoundingClientRect().right - parseFloat(getComputedStyle(area).paddingRight) - box.right) < 1;
     })).toBe(true);
+    await expect(page.locator('.recents-section .sidebar-recents-task-create')).toBeVisible();
+    expect(await page.locator('.sidebar-section-heading').evaluateAll(headings => headings.every(el => {
+      const box = el.getBoundingClientRect();
+      return el.scrollWidth <= el.clientWidth && box.right <= innerWidth;
+    }))).toBe(true);
     await expect.poll(async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json()).sidebarActionsCompact).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('sidebar-mobile-compact.png') });
     await page.reload();

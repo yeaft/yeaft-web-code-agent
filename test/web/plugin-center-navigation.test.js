@@ -70,6 +70,11 @@ describe('Plugin Center sidebar navigation', () => {
     expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-expanded')).toBe('true');
     expect(wrapper.get('.sidebar-primary-actions > .sidebar-actions-toggle').text()).toBe('');
     expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-label')).toBe(en['sidebar.actions.collapse']);
+    const chevrons = () => wrapper.findAll('.sidebar-section-chevron');
+    expect(chevrons()).toHaveLength(3);
+    expect(chevrons().every(icon => icon.get('path').attributes('d') === 'm8 10 4 4 4-4'
+      && icon.get('path').attributes('stroke-width') === '2')).toBe(true);
+    expect(wrapper.get('.sidebar-actions-toggle .sidebar-section-chevron').classes()).not.toContain('collapsed');
     await wrapper.get('.sidebar-actions-toggle').trigger('click');
     await flushPromises();
     expect(wrapper.get('.sidebar-primary-actions').classes()).toContain('is-compact');
@@ -82,6 +87,7 @@ describe('Plugin Center sidebar navigation', () => {
     await Vue.nextTick();
     // Compact mode must retain its restore control even when all rows now fit.
     expect(wrapper.get('.sidebar-actions-toggle').attributes('aria-expanded')).toBe('false');
+    expect(wrapper.get('.sidebar-actions-toggle .sidebar-section-chevron').classes()).toContain('collapsed');
     await wrapper.get('.sidebar-actions-toggle').trigger('click');
     await flushPromises();
     expect(buttons.map(button => button.text())).toEqual(names);

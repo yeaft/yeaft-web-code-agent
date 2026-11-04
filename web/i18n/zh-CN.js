@@ -634,6 +634,8 @@ export default {
   'sidebar.sessions.newChat': '新建聊天',
   'sidebar.actions.collapse': '收起快捷入口',
   'sidebar.actions.expand': '展开快捷入口',
+  'sidebar.sections.collapse': '收起{name}',
+  'sidebar.sections.expand': '展开{name}',
   'sidebar.sessions.emptyProvider': '此 Provider 暂无会话',
   'sidebar.sessions.menu': '会话菜单',
   'sidebar.sessions.unread': '未读',
