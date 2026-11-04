@@ -206,7 +206,7 @@ it('reuses schedule validation, emits only supported triggers and preserves an u
 });
 
 it('runs the real Agent-scoped Session, reports failures, disables busy/offline/old Agents, and opens settings', async () => {
-  const chat = Vue.reactive({ scheduledTaskProtocolSupported: true, agents, connectionState: 'connected', runScheduledTask: vi.fn(async () => ({ ok: false, error: { message: 'Execution failed' } })), isYeaftSessionProcessing: () => false });
+  const chat = Vue.reactive({ scheduledTaskProtocolSupported: true, agents, connectionState: 'connected', runScheduledTask: vi.fn(async () => ({ ok: false, error: { message: 'Execution failed' } })), isYeaftSessionProcessing: () => false, cancelYeaftSession: vi.fn(() => true) });
   window.Pinia = { useChatStore: () => chat };
   wrapper = mount(ScheduledTaskBar, { props: { agentId: 'a', session: { id: 'task', task } }, global: { mocks: { $t: t } } });
   await wrapper.get('.scheduled-task-run').trigger('click');
@@ -219,6 +219,30 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   expect(wrapper.emitted('configure')).toHaveLength(1);
   await wrapper.setProps({ session: { id: 'task', task: { ...task, lastRun: { status: 'running' } } } });
   expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeUndefined();
+  await wrapper.get('.scheduled-task-stop').trigger('click');
+  expect(chat.cancelYeaftSession).toHaveBeenCalledExactlyOnceWith('task', { agentId: 'a' });
+  expect(wrapper.get('.scheduled-task-stop').attributes('aria-label')).toBe(en['scheduledTasks.stopping']);
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
+  await wrapper.vm.stop();
+  expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(1);
+  expect(wrapper.get('.scheduled-task-runtime [role="status"]').text()).toBe('Running');
+  await wrapper.setProps({ session: { id: 'task', task } });
+  expect(wrapper.vm.stopping).toBe(false);
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
+  await wrapper.vm.stop();
+  expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(1);
+  // Failed transport must allow retry, and offline must never send a stop.
+  await wrapper.setProps({ session: { id: 'task', task: { ...task, lastRun: { status: 'running' } } } });
+  chat.cancelYeaftSession.mockReturnValue(false);
+  await wrapper.get('.scheduled-task-stop').trigger('click');
+  expect(wrapper.get('[role="alert"]').text()).toBe(en['scheduledTasks.failed']);
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeUndefined();
+  chat.agents = [{ ...agents[0], online: false }];
+  await Vue.nextTick();
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
+  await wrapper.vm.stop();
+  expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(2);
   await wrapper.setProps({ session: { id: 'task', task } });
   chat.agents = [{ ...agents[0], online: false }];
   await Vue.nextTick();
@@ -251,7 +275,12 @@ it('renders inline below the announcement and before the VP roster without a pop
   const run = sections[1].get('.scheduled-task-run');
   expect(run.attributes('title')).toBe(en['scheduledTasks.runOnceHelp']);
   expect(run.attributes('aria-description')).toBe(en['scheduledTasks.runOnceHelp']);
-  expect(sections[1].findAll('button')).toHaveLength(2);
+  expect(sections[1].findAll('button')).toHaveLength(3);
+  expect(sections[1].find('.scheduled-task-state').exists()).toBe(false);
+  const actions = sections[1].get('header .scheduled-task-bar-actions');
+  expect(actions.findAll('button').map(button => button.attributes('aria-label')))
+    .toEqual(['Run once', 'Stop run', 'Configure']);
+  expect(actions.text()).toBe('');
   expect(sections[1].findAll('button').every(button => button.classes().includes('btn-ghost'))).toBe(true);
   const modal = document.createElement('div');
   modal.className = 'group-settings-overlay';
@@ -270,10 +299,12 @@ it('prevents duplicate manual requests, preserves paused schedules and renders p
   const scheduled = { ...task, enabled: false, trigger: { type: 'schedule', scheduledFor: 2000000000000 }, nextRunAt: 2000000000000 };
   const original = JSON.stringify(scheduled);
   wrapper = mount(ScheduledTaskBar, { props: { agentId: 'a', session: { id: 'task', task: scheduled } }, global: { mocks: { $t: t } } });
-  expect(wrapper.get('.scheduled-task-state').text()).toBe(en['scheduledTasks.paused']);
+  expect(wrapper.find('.scheduled-task-state').exists()).toBe(false);
+  expect(wrapper.get('.scheduled-task-runtime').text()).toContain(en['scheduledTasks.paused']);
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
   expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeUndefined();
   await wrapper.get('.scheduled-task-run').trigger('click');
-  expect(wrapper.get('.scheduled-task-run').text()).toBe(en['scheduledTasks.starting']);
+  expect(wrapper.get('.scheduled-task-run').attributes('aria-label')).toBe(en['scheduledTasks.starting']);
   expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
   await wrapper.vm.run();
   expect(runScheduledTask).toHaveBeenCalledExactlyOnceWith({ agentId: 'a', sessionId: 'task' });

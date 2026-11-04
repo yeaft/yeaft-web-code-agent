@@ -45,6 +45,18 @@ describe('Session-backed task store integration', () => {
     expect(store.sessionCrudRequest).toHaveBeenLastCalledWith('update_task', { sessionId: 'same', task: { enabled: false }, expectedRevision: 'revision-1' }, { agentId: 'a' });
     await tasks.runScheduledTask(store, { agentId: 'a', sessionId: 'same' });
     expect(store.sessionCrudRequest).toHaveBeenLastCalledWith('run_task', { sessionId: 'same' }, { agentId: 'a' });
+    // Explicit ownership must win over the currently selected same-id Session.
+    const stopStore = { ...store, currentAgent: 'b', sendWsMessage: vi.fn(() => true),
+      activeVpTurns: { a: { agentId: 'a', sessionId: 'same' }, b: { agentId: 'b', sessionId: 'same' } },
+      vpStatuses: { a: { agentId: 'a', sessionId: 'same' }, b: { agentId: 'b', sessionId: 'same' } },
+      clearYeaftSessionProcessingIfIdle: vi.fn() };
+    expect(options.chat.actions.cancelYeaftSession.call(stopStore, 'same', { agentId: 'a' })).toBe(true);
+    expect(stopStore.sendWsMessage).toHaveBeenCalledWith({ type: 'yeaft_abort_all', agentId: 'a', sessionId: 'same' });
+    expect(stopStore.activeVpTurns).toEqual({ b: { agentId: 'b', sessionId: 'same' } });
+    expect(stopStore.vpStatuses).toEqual({ b: { agentId: 'b', sessionId: 'same' } });
+    stopStore.sendWsMessage.mockReturnValue(false);
+    expect(options.chat.actions.cancelYeaftSession.call(stopStore, 'same', { agentId: 'b' })).toBe(false);
+    expect(stopStore.activeVpTurns.b).toBeDefined();
     await expect(tasks.runScheduledTask(store, { agentId: 'b', sessionId: 'same' })).resolves.toMatchObject({ ok: false, error: { code: 'scheduled_tasks_unsupported' } });
     store.agents[0].online = false;
     await expect(tasks.runScheduledTask(store, { agentId: 'a', sessionId: 'same' })).resolves.toMatchObject({ ok: false, error: { code: 'agent_offline' } });

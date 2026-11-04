@@ -8119,14 +8119,15 @@ export const useChatStore = defineStore('chat', {
       if (activeConversationId) delete this.processingConversations[activeConversationId];
       clearYeaftAgentRuntimeState(this, this.currentAgent);
     },
-    cancelYeaftSession(sessionId) {
-      const targetAgentId = resolveAgentIdForSession(this, sessionId);
-      if (!targetAgentId || !sessionId) return;
-      this.sendWsMessage({
+    cancelYeaftSession(sessionId, { agentId = null } = {}) {
+      const targetAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!targetAgentId || !sessionId) return false;
+      const sent = this.sendWsMessage({
         type: 'yeaft_abort_all',
         agentId: targetAgentId,
         sessionId,
       });
+      if (sent === false) return false;
       this.activeVpTurns = Object.fromEntries(
         Object.entries(this.activeVpTurns || {}).filter(([, info]) => (
           !matchesYeaftRuntimeIdentity(info, sessionId, targetAgentId)
@@ -8144,6 +8145,7 @@ export const useChatStore = defineStore('chat', {
         agentId: targetAgentId,
         ignoreStatuses: true,
       });
+      return true;
     },
     /**
      * Per-VP stop: abort a single VP turn by turnId without affecting siblings.
