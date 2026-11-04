@@ -356,6 +356,28 @@ test('completion notifications open the owning Agent when two Agents share the s
     await other.connect();
     const second = scheduledTaskAgent(other, { marker: 'Agent B', sessions: [taskSession()] });
     await expect(taskRow(page)).toHaveCount(2);
+    // Visiting from the sidebar, without clicking the notice, acknowledges all
+    // queued runs for this Agent + Session and survives inventory rehydration.
+    const completedRuns = ['sidebar-run-1', 'sidebar-run-2'];
+    for (const runId of completedRuns) second.notify({ runId });
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.length)).toBe(2);
+    second.sessions.get(TASK_SESSION_ID).task.lastRun = { id: completedRuns[1], status: 'completed', finishedAt: Date.now() };
+    second.publish();
+    const secondRow = taskRow(page).filter({ has: page.locator('.sidebar-session-unread') });
+    await expect(secondRow).toHaveCount(1);
+    await secondRow.click();
+    await expect(page.locator('.assistant-turn')).toContainText('Agent B: persistent conversation');
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('.sidebar-navigation')).toHaveAttribute('aria-busy', 'false');
+    await expect(page.locator('.assistant-turn')).toContainText('Agent B: persistent conversation');
+    await showSidebar(page);
+    await page.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
+    for (const runId of completedRuns) second.notify({ runId });
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(`yeaft-task-receipts:${window.Pinia.useChatStore().scheduledTaskNotificationOwnerId}`) || '[]')
+      .filter(id => id.includes('sidebar-run-')).length)).toBe(2);
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    // A genuinely new completion while away is still delivered normally.
     second.notify({ status: 'failed', error: 'Workspace check needs attention.' });
     const notice = page.locator('.scheduled-task-notification-open');
     await expect(notice).toContainText('Daily workspace review');
@@ -369,6 +391,11 @@ test('completion notifications open the owning Agent when two Agents share the s
     await expect(page.locator('.assistant-turn')).toContainText(`Agent B: persistent conversation for ${TASK_SESSION_ID}`);
     await expect(page.locator('.assistant-turn')).not.toContainText('Agent A: persistent conversation');
     expect(other.messages('yeaft_load_history').some(request => request.sessionId === TASK_SESSION_ID && request.limit !== 0)).toBe(true);
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    second.notify({ runId: 'visible-run' });
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(`yeaft-task-receipts:${window.Pinia.useChatStore().scheduledTaskNotificationOwnerId}`) || '[]')
+      .some(id => id.includes('visible-run')))).toBe(true);
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
     for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [320, 'dark']]) {
       if (theme === 'dark' && width === 1440) {
         await page.evaluate(() => localStorage.setItem('theme', 'dark'));

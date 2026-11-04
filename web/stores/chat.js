@@ -6711,6 +6711,11 @@ export const useChatStore = defineStore('chat', {
         if (activeKey) localStorage.setItem('lastViewedYeaftSession', activeKey);
         else localStorage.removeItem('lastViewedYeaftSession');
       } catch (_) {}
+      if (this.currentView === 'yeaft' && !this.workCenterOpen && !this.pluginCenterOpen && !this.digitalPersonOpen
+          && globalThis.document?.visibilityState !== 'hidden') {
+        scheduledTaskHelpers.markScheduledTaskSessionRead(this, next, targetAgentId,
+          getSessionsStore()?.sessionById?.(next, targetAgentId)?.task?.lastRun);
+      }
       this.syncActiveYeaftHistoryLoad();
       if (next && targetAgentId && !repeatedSelection) {
         this.requestYeaftSessionBootstrap({

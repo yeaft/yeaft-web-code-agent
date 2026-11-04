@@ -18,7 +18,7 @@ function harness() {
   tasks.bindScheduledTaskNotificationOwner(store, 'owner');
   return store;
 }
-afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const completed = { sessionId: 'same', runId: 'run', status: 'completed', taskName: 'Daily review' };
 
@@ -107,6 +107,62 @@ describe('Session-backed task store integration', () => {
     expect(store.openCatalogSession).toHaveBeenCalledWith(store.sidebarSessionCatalog[0]);
     expect(store.scheduledTaskNotifications.map(row => row.agentId)).toEqual(['b']);
     expect(tasks.acceptScheduledTaskNotification(store, completed, 'a')).toBe(false);
+  });
+
+  it('acknowledges every queued run on Session selection, including repeats, without muting future runs or other Agents', () => {
+    const store = harness();
+    Object.assign(store, {
+      currentView: 'yeaft', currentAgent: 'a', yeaftActiveSessionFilter: 'same',
+      messagesMap: {}, yeaftConversationIdsByAgent: {},
+      activateYeaftAgent: vi.fn(), markYeaftSessionRead: vi.fn(),
+      syncActiveYeaftHistoryLoad: vi.fn(), requestYeaftSessionBootstrap: vi.fn(),
+    });
+    for (const runId of ['run', 'run-2']) tasks.acceptScheduledTaskNotification(store, { ...completed, runId }, 'a');
+    tasks.acceptScheduledTaskNotification(store, completed, 'b');
+    // Exercise the real activation path: selecting an already-active Session
+    // must acknowledge before history de-duplication, even without an unread dot.
+    options.chat.actions.setActiveSessionFilter.call(store, 'same', { agentId: 'a' });
+    expect(store.scheduledTaskNotifications.map(row => row.agentId)).toEqual(['b']);
+    expect(store.requestYeaftSessionBootstrap).not.toHaveBeenCalled();
+    const reloaded = harness();
+    for (const runId of ['run', 'run-2']) {
+      expect(tasks.acceptScheduledTaskNotification(reloaded, { ...completed, runId }, 'a')).toBe(false);
+    }
+    expect(tasks.acceptScheduledTaskNotification(reloaded, { ...completed, runId: 'new-run' }, 'a')).toBe(true);
+    expect(tasks.acceptScheduledTaskNotification(reloaded, completed, 'b')).toBe(true);
+    // A terminal inventory result is acknowledged even if its completion event
+    // has not arrived yet; a currently running attempt is not acknowledged.
+    tasks.markScheduledTaskSessionRead(reloaded, 'same', 'a', { id: 'inventory-run', status: 'failed' });
+    expect(tasks.acceptScheduledTaskNotification(reloaded, { ...completed, runId: 'inventory-run' }, 'a')).toBe(false);
+    tasks.markScheduledTaskSessionRead(reloaded, 'same', 'a', { id: 'ongoing', status: 'running' });
+    expect(tasks.acceptScheduledTaskNotification(reloaded, { ...completed, runId: 'ongoing' }, 'a')).toBe(true);
+  });
+
+  it('silently receipts results only for the exact visible Task Session, not a covered or background conversation', () => {
+    const desktopNotice = vi.fn();
+    desktopNotice.permission = 'granted';
+    vi.stubGlobal('Notification', desktopNotice);
+    const store = harness();
+    Object.assign(store, { currentView: 'yeaft',
+      activeSessionRoute: { runtimeProvider: 'yeaft', agentId: 'a', sessionId: 'same' } });
+    expect(tasks.acceptScheduledTaskNotification(store, completed, 'a')).toBe(false);
+    expect(store.scheduledTaskNotifications).toEqual([]);
+    expect(store.markYeaftSessionUnread).not.toHaveBeenCalled();
+    expect(desktopNotice).not.toHaveBeenCalled();
+    expect(tasks.acceptScheduledTaskNotification(harness(), completed, 'a')).toBe(false);
+    expect(tasks.acceptScheduledTaskNotification(store, completed, 'b')).toBe(true);
+    for (const surface of ['workCenterOpen', 'pluginCenterOpen', 'digitalPersonOpen']) {
+      store[surface] = true;
+      expect(tasks.acceptScheduledTaskNotification(store, { ...completed, runId: surface }, 'a')).toBe(true);
+      store[surface] = false;
+    }
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    expect(tasks.acceptScheduledTaskNotification(store, { ...completed, runId: 'background' }, 'a')).toBe(true);
+    const backgroundStore = { ...store, currentAgent: 'a', yeaftActiveSessionFilter: 'same',
+      messagesMap: {}, activateYeaftAgent: vi.fn(), markYeaftSessionRead: vi.fn(),
+      syncActiveYeaftHistoryLoad: vi.fn() };
+    options.chat.actions.setActiveSessionFilter.call(backgroundStore, 'same', { agentId: 'a' });
+    expect(backgroundStore.scheduledTaskNotifications).toHaveLength(5);
   });
 
   it('recovers the latest terminal result on hydration, persists only receipts, and clears private notices on owner changes', () => {
