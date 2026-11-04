@@ -809,7 +809,10 @@ export const useAuthStore = defineStore('auth', {
         const previousUserId = this.userId;
         this.userId = profile?.userId || null;
         bindWorkCenterBrowserOwner(this.userId);
-        if (previousUserId !== this.userId) clearYeaftHistoryMemory();
+        if (previousUserId !== this.userId) {
+          clearYeaftHistoryMemory();
+          clearVpBrowserState();
+        }
         activeYeaftHistoryOwnerId = this.userId;
         return true;
       } catch (err) {

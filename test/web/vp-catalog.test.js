@@ -372,6 +372,17 @@ describe('Scenario VP catalog compatibility', () => {
     expect(vp.applySnapshot({ vps: [{ vpId: 'private-b' }] }, 'b', 'private-b')).toBe(false);
     expect(vp.applySnapshot({ vps: library() }, 'a', 'initial')).toBe(false);
     expect(vp.vpList).toEqual([]);
+    auth.userId = 'owner-a'; auth.token = 'owner-token'; auth.isAuthenticated = true;
+    vp.beginSnapshot('a', 'new-owner-library');
+    vp.applySnapshot({ vps: library() }, 'a', 'new-owner-library');
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200,
+      headers: { get: () => null }, json: async () => ({ userId: 'owner-b', role: 'pro' }) })));
+    return auth.refreshSession().then(ok => {
+      expect(ok).toBe(true);
+      expect(auth.userId).toBe('owner-b');
+      expect(vp.vpList).toEqual([]);
+      expect(vp.targetSnapshots).toEqual({});
+    });
   });
 
   it('keeps prompt detail and legacy expansion available in the VP library', async () => {
