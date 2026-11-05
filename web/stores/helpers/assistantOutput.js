@@ -3,6 +3,7 @@
 import { resetProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { sameUserMessage } from './dedup.js';
+import { markTurnResponseKinds } from '../../utils/turn-response.js';
 
 function promoteOrInvalidateOutline(store, row, frameAgentId = null) {
   if (!frameAgentId) return false;
@@ -376,31 +377,14 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         && (!store._currentYeaftAgentId || !row?.agentId || row.agentId === store._currentYeaftAgentId)
       ));
       if (activeTurn) {
-        const [turnKey, removed] = activeTurn;
-        const { [turnKey]: _removed, ...rest } = store.activeVpTurns;
-        if (!completedYeaftSessionId && removed?.sessionId) completedYeaftSessionId = removed.sessionId;
-        store.activeVpTurns = rest;
+        const [, turn] = activeTurn;
+        if (!completedYeaftSessionId && turn?.sessionId) completedYeaftSessionId = turn.sessionId;
       }
     }
-    if (completedYeaftSessionId && store._currentYeaftVpId && store.vpStatuses) {
-      const completedTurnId = store._currentYeaftTurnId || null;
-      const nextStatuses = { ...(store.vpStatuses || {}) };
-      let statusMutated = false;
-      for (const [key, status] of Object.entries(nextStatuses)) {
-        if (!status || status.vpId !== store._currentYeaftVpId) continue;
-        if (store._currentYeaftAgentId && status.agentId && status.agentId !== store._currentYeaftAgentId) continue;
-        const statusSessionId = status.sessionId || status.groupId || null;
-        if (statusSessionId !== completedYeaftSessionId) continue;
-        if (completedTurnId && status.turnId && status.turnId !== completedTurnId) continue;
-        nextStatuses[key] = {
-          ...status,
-          state: 'idle',
-          turnId: null,
-          since: Date.now(),
-        };
-        statusMutated = true;
-      }
-      if (statusMutated) store.vpStatuses = nextStatuses;
+    if (completedYeaftSessionId && store._currentYeaftTurnId) {
+      store.completeYeaftTurnRuntime({ agentId: store._currentYeaftAgentId || null,
+        sessionId: completedYeaftSessionId, vpId: store._currentYeaftVpId,
+        turnId: store._currentYeaftTurnId });
     }
     if (completedYeaftSessionId && typeof store.clearYeaftSessionProcessingIfIdle === 'function') {
       store.clearYeaftSessionProcessingIfIdle(completedYeaftSessionId, {
@@ -440,6 +424,27 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       }
     }
     store.finishStreamingForConversation(conversationId);
+    if (completedYeaftSessionId && store._currentYeaftTurnId) {
+      const settled = msgs.find(row => row.type === 'assistant' && row.turnId === store._currentYeaftTurnId
+        && (row.sessionId ?? row.groupId) === completedYeaftSessionId
+        && row.turnEndReason && row.turnEndDetail?.code !== 'runtime_reconciled');
+      const reason = data.stopped ? 'aborted' : data.is_error ? 'errored' : settled?.turnEndReason || 'end_turn';
+      const event = { sessionId: completedYeaftSessionId, vpId: store._currentYeaftVpId,
+        turnId: store._currentYeaftTurnId, reason };
+      markTurnResponseKinds(msgs, event);
+      for (const row of msgs) {
+        if (row.type !== 'assistant' || row.turnId !== event.turnId
+            || (row.sessionId ?? row.groupId) !== event.sessionId
+            || (event.vpId && (row.speakerVpId || row.vpId) !== event.vpId)) continue;
+        row.isStreaming = false;
+        if (row.status && !['pending', 'completed'].includes(row.status)
+            && row.turnEndDetail?.code !== 'runtime_reconciled') continue;
+        row.status = reason === 'end_turn' ? 'completed' : reason;
+        row.turnEndReason = reason;
+        row.turnEndAt = Date.now();
+        if (row.turnEndDetail?.code === 'runtime_reconciled') delete row.turnEndDetail;
+      }
+    }
     const outlinePromoted = frameAgentId && store.promoteCompletedYeaftHistoryOutline?.(
       conversationId,
       store._currentYeaftTurnId || null,
