@@ -108,7 +108,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +5 Responses EOF boundaries: transport classification, successful restart/
 // continuation with one dispatch, bounded/disabled retries, cancellation and
 // post-publication non-replay. Malformed-drain EOF extends existing safety cases.
-export const TEST_CASE_LIMIT = 895;
+// +2 public reply boundaries: shared execution/cognition guidance and byte reserves,
+// plus actual native dispatch/delivery/final-cognition integration. These assert
+// plumbing, not that a scripted model has demonstrated judgment or concise prose.
+export const TEST_CASE_LIMIT = 897;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
