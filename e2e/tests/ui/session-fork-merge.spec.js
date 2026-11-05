@@ -77,6 +77,7 @@ test('turn fork and divergent merge relay through Server, persist history and in
   const store = new ConversationStore(yeaftDir);
   const source = createSessionFromSpec(yeaftDir, { name: 'Initiator', roster: ['omni'], defaultVpId: 'omni', workDir: yeaftDir });
   const acknowledgements = [];
+  let activeCopyBoundary = null;
   const appendTurn = (sessionId, turnId, question, answer, seconds) => {
     const time = `2026-10-27T00:00:0${seconds}.000Z`;
     const user = store.append({ sessionId, role: 'user', content: question, turnId, time });
@@ -97,7 +98,7 @@ test('turn fork and divergent merge relay through Server, persist history and in
     let event;
     try {
       const session = op === 'copy'
-        ? copySession(yeaftDir, request.sessionId, request)
+        ? copySession(yeaftDir, request.sessionId, { ...request, ...(activeCopyBoundary ? { throughBoundary: activeCopyBoundary } : {}) })
         : mergeSessions(yeaftDir, request.sessionId, request.otherSessionId, request);
       event = { type: 'session_crud_result', op, ok: true, requestId: request.requestId,
         sourceSessionId: request.sessionId, otherSessionId: request.otherSessionId, session };
@@ -115,6 +116,7 @@ test('turn fork and divergent merge relay through Server, persist history and in
   mockAgent._messageHandlers.push(handler);
   try {
     appendTurn(source.id, 'prior', 'Prior question', 'Prior completed answer', 1);
+    activeCopyBoundary = store.captureSessionCopyBoundary(source.id);
     appendTurn(source.id, 'current', 'Current question', 'Current unfinished answer', 5);
     mockAgent.send({ type: 'agent_capabilities_updated', capabilities });
     publish();
@@ -188,6 +190,21 @@ test('turn fork and divergent merge relay through Server, persist history and in
     await expect(prior.locator('.fork-turn-action-btn')).toBeEnabled();
     await expect(current.locator('.fork-turn-action-btn')).toHaveCount(0);
     await expect(page.locator('.yeaft-merge-btn')).toBeDisabled();
+    // The top-level copy remains usable while a later turn streams. It must
+    // exclude that entire input/output, just like an explicit historical fork.
+    await fork.click();
+    const wholeRequest = await mockAgent.waitForMessage('yeaft_copy_session');
+    expect(wholeRequest.sessionId).toBe(source.id);
+    expect(wholeRequest).not.toHaveProperty('throughTurnId');
+    await expect.poll(() => acknowledgements.find(event => event.requestId === wholeRequest.requestId)).toMatchObject({ ok: true });
+    const whole = acknowledgements.find(event => event.requestId === wholeRequest.requestId).session;
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.sessionId)).toBe(whole.id);
+    expect(new ConversationStore(yeaftDir).loadAllBySession(whole.id).map(row => row.content)).toEqual(['Prior question', 'Prior completed answer']);
+    await expect.poll(inventory).toContainEqual({ sessionId: whole.id, projectId });
+    expect(await page.evaluate(({ agentId, sessionId }) => window.Pinia.useChatStore().isYeaftSessionProcessing(sessionId, agentId),
+      { agentId: mockAgent.agentId, sessionId: source.id })).toBe(true);
+    await open(source.id);
+    await expect(prior).toBeVisible();
     await prior.hover();
     await prior.locator('.fork-turn-action-btn').click();
     const copyRequest = await mockAgent.waitForMessage('yeaft_copy_session');
@@ -200,6 +217,7 @@ test('turn fork and divergent merge relay through Server, persist history and in
     await expectUnsupported({ type: 'yeaft_merge_sessions', requestId: 'unsupported-merge', sessionId: source.id, otherSessionId: copied.id }, 'session_merge_unsupported');
     await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.sessionId)).toBe(copied.id);
     expect(new ConversationStore(yeaftDir).loadAllBySession(copied.id).map(row => row.content)).toEqual(['Prior question', 'Prior completed answer']);
+    activeCopyBoundary = null; // original turn has now finished before merge
     appendTurn(copied.id, 'branch', 'Branch question', 'Branch completed answer', 3);
     const sourceBefore = new ConversationStore(yeaftDir).loadAllBySession(source.id);
     const copiedBefore = new ConversationStore(yeaftDir).loadAllBySession(copied.id);
@@ -251,7 +269,7 @@ test('turn fork and divergent merge relay through Server, persist history and in
     await open(merged.id);
     await expect(page.locator('.assistant-turn')).toHaveCount(3);
     await expect(page.locator('.assistant-turn')).toHaveText(expected.filter((_, index) => index % 2).map(text => new RegExp(text)));
-    expect(mockAgent.messages('yeaft_copy_session')).toHaveLength(1);
+    expect(mockAgent.messages('yeaft_copy_session')).toHaveLength(2);
     expect(mockAgent.messages('yeaft_merge_sessions')).toHaveLength(1);
   } finally {
     mockAgent._messageHandlers = mockAgent._messageHandlers.filter(candidate => candidate !== handler);

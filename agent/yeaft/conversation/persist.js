@@ -2034,14 +2034,18 @@ export class ConversationStore {
    * copySession 验证前缀未被替换、删改或插入；仅追加新行不会使边界失效。
    *
    * @param {string} sessionId Agent-owned Session identity
+   * @param {{beforeMessageId?: string}} [options] Recovery fence at a known durable human request
    * @returns {object} Opaque serializable boundary for options.throughBoundary
    * @throws {Error} invalid_fork_boundary for a missing Session identity
    */
-  captureSessionCopyBoundary(sessionId) {
+  captureSessionCopyBoundary(sessionId, options = {}) {
     if (typeof sessionId !== 'string' || !sessionId) {
       throw historyError('invalid_fork_boundary', 'Session identity is required');
     }
-    const { rows, streamId } = this.#loadDurableSession(sessionId);
+    const { rows: durableRows, streamId } = this.#loadDurableSession(sessionId);
+    const rows = Object.hasOwn(options, 'beforeMessageId')
+      ? durableRows.slice(0, this.#sessionCopyBeforeMessageCutoff(durableRows, streamId, options.beforeMessageId))
+      : durableRows;
     return {
       version: 1,
       sessionId,
@@ -2050,6 +2054,43 @@ export class ConversationStore {
       lastMessageId: rows.at(-1)?.id ?? null,
       digest: this.#sessionCopyPrefixDigest(rows),
     };
+  }
+
+  #sessionCopyBeforeMessageCutoff(rows, streamId, beforeMessageId) {
+    const fence = typeof beforeMessageId === 'string' ? beforeMessageId.trim() : '';
+    if (!fence) throw historyError('invalid_fork_boundary', 'beforeMessageId must be a nonempty string');
+    const index = rows.findIndex(row => row.id === fence);
+    if (index < 0) throw historyError('fork_boundary_not_found', `Human message not found: ${fence}`);
+    if (!isHumanRequest(rows[index])) throw historyError('invalid_fork_boundary', 'beforeMessageId must identify a durable human request');
+    const user = rows[index];
+    // A multi-VP legacy request can have several persisted human variants.
+    // Fence before the first variant, never before just the running VP.
+    const originStream = row => row.origin?.streamId || streamId;
+    const variant = row => isHumanRequest(row) && user.clientMessageId
+      && row.clientMessageId === user.clientMessageId && originStream(row) === originStream(user);
+    let humanCutoff = user.clientMessageId ? rows.findIndex(variant) : index;
+    // Follow only this request's causal closure, not every turn in the
+    // suffix: a late answer to an older request must not pull the fence back
+    // into (and truncate) that older request. Client/VP identities are scoped
+    // by origin stream: a merged Session may contain independent collisions.
+    const vpTurnKey = row => row.turnId
+      ? JSON.stringify([originStream(row), row.speakerVpId || row.vpId || '', row.turnId]) : null;
+    const clientKey = (row, id) => JSON.stringify([originStream(row), id]);
+    const excludedRows = new Set(rows.filter(row => row === user || variant(row)));
+    let previousSize;
+    do {
+      previousSize = excludedRows.size;
+      const excluded = new Set([...excludedRows].map(row => row.id));
+      const clients = new Set([...excludedRows].filter(row => row.clientMessageId)
+        .map(row => clientKey(row, row.clientMessageId)));
+      const turns = new Set([...excludedRows].map(vpTurnKey).filter(Boolean));
+      for (const row of rows) {
+        if (excluded.has(row.causalRootId) || clients.has(clientKey(row, row.causalRootId))
+            || turns.has(vpTurnKey(row))) excludedRows.add(row);
+      }
+    } while (excludedRows.size > previousSize);
+    humanCutoff = Math.min(humanCutoff, rows.findIndex(row => excludedRows.has(row)));
+    return humanCutoff;
   }
 
   #sessionCopyPrefixDigest(rows) {
@@ -2136,40 +2177,7 @@ export class ConversationStore {
       }
     }
     if (Object.prototype.hasOwnProperty.call(options, 'beforeMessageId')) {
-      const fence = typeof options.beforeMessageId === 'string' ? options.beforeMessageId.trim() : '';
-      if (!fence) throw historyError('invalid_fork_boundary', 'beforeMessageId must be a nonempty string');
-      const index = rows.findIndex(row => row.id === fence);
-      if (index < 0) throw historyError('fork_boundary_not_found', `Human message not found: ${fence}`);
-      if (!isHumanRequest(rows[index])) throw historyError('invalid_fork_boundary', 'beforeMessageId must identify a durable human request');
-      const user = rows[index];
-      // A multi-VP legacy request can have several persisted human variants.
-      // Fence before the first variant, never before just the running VP.
-      const originStream = row => row.origin?.streamId || streamId;
-      const variant = row => isHumanRequest(row) && user.clientMessageId
-        && row.clientMessageId === user.clientMessageId && originStream(row) === originStream(user);
-      let humanCutoff = user.clientMessageId ? rows.findIndex(variant) : index;
-      // Follow only this request's causal closure, not every turn in the
-      // suffix: a late answer to an older request must not pull the fence back
-      // into (and truncate) that older request. Client/VP identities are scoped
-      // by origin stream: a merged Session may contain independent collisions.
-      const vpTurnKey = row => row.turnId
-        ? JSON.stringify([originStream(row), row.speakerVpId || row.vpId || '', row.turnId]) : null;
-      const clientKey = (row, id) => JSON.stringify([originStream(row), id]);
-      const excludedRows = new Set(rows.filter(row => row === user || variant(row)));
-      let previousSize;
-      do {
-        previousSize = excludedRows.size;
-        const excluded = new Set([...excludedRows].map(row => row.id));
-        const clients = new Set([...excludedRows].filter(row => row.clientMessageId)
-          .map(row => clientKey(row, row.clientMessageId)));
-        const turns = new Set([...excludedRows].map(vpTurnKey).filter(Boolean));
-        for (const row of rows) {
-          if (excluded.has(row.causalRootId) || clients.has(clientKey(row, row.causalRootId))
-              || turns.has(vpTurnKey(row))) excludedRows.add(row);
-        }
-      } while (excludedRows.size > previousSize);
-      humanCutoff = Math.min(humanCutoff, rows.findIndex(row => excludedRows.has(row)));
-      cutoff = Math.min(cutoff, humanCutoff);
+      cutoff = Math.min(cutoff, this.#sessionCopyBeforeMessageCutoff(rows, streamId, options.beforeMessageId));
     }
     if (Object.prototype.hasOwnProperty.call(options, 'throughTurnId')) {
       const throughTurnId = typeof options.throughTurnId === 'string'

@@ -18,7 +18,8 @@
 import { delimiter, join, resolve } from 'node:path';
 import { COLLAB_TOOL_POLICY } from './tools/registry.js';
 import { createFullRegistry } from './tools/index.js';
-import { existsSync, lstatSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, unlinkSync } from 'node:fs';
+import { writeAtomic } from './storage/atomic.js';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { Engine } from './engine.js';
@@ -146,7 +147,7 @@ import { isPromptableAgentStatus, isTerminalAgentStatus, STATUS } from './sub-ag
 import { consumeNotificationForAgent } from './sub-agent/notifications.js';
 import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 import { recordAgentSessionCreated, recordAgentTurn } from '../metrics.js';
-import { TASK_RESULT_DELIVERY, isTerminalTaskStatus, taskResultDeliveryFor } from './tasks/store.js';
+import { TaskStore, TASK_RESULT_DELIVERY, isTerminalTaskStatus, taskResultDeliveryFor } from './tasks/store.js';
 import { formatTaskResultForVp } from './tasks/result-format.js';
 
 const LEGACY_SKILL_COMMAND_PREFIX = 'skill:';
@@ -559,26 +560,112 @@ function hasSessionRuntimeWork(sessionId) {
   return false;
 }
 
-function settleSessionCopyEpoch(sessionId) {
-  const epoch = sessionCopyEpochs.get(sessionId);
-  if (epoch && epoch.pending === 0 && !hasSessionRuntimeWork(sessionId)) sessionCopyEpochs.delete(sessionId);
+// Only an opaque prefix token is persisted, never conversation text or runtime
+// state. It survives Agent restart so orphaned task-result reentry can still
+// fork the same safe history. ConversationStore validates it when copying.
+function sessionCopyBoundaryPath(sessionId) {
+  const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
+  return join(sessionsRoot(root), sessionId, 'copy-boundary.json');
 }
 
-function beginSessionActivity(sessionId, { unknownBoundary = false } = {}) {
+function persistSessionCopyBoundary(sessionId, epoch) {
+  if (!epoch.boundary) return;
+  try {
+    writeAtomic(sessionCopyBoundaryPath(sessionId), JSON.stringify({
+      ...JSON.parse(epoch.boundary), taskIds: [...epoch.taskIds],
+    }), { mode: 0o600 });
+  } catch (error) {
+    console.warn('[Yeaft] Session copy boundary persistence failed:', sessionId, error?.code || 'write_failed');
+  }
+}
+
+function clearSessionCopyBoundary(sessionId) {
+  try { unlinkSync(sessionCopyBoundaryPath(sessionId)); } catch (error) {
+    if (error?.code !== 'ENOENT') console.warn('[Yeaft] Session copy boundary cleanup failed:', sessionId, error?.code || 'unlink_failed');
+  }
+}
+
+function settleSessionCopyEpoch(sessionId) {
+  const epoch = sessionCopyEpochs.get(sessionId);
+  if (epoch && epoch.pending === 0 && epoch.awaitingRecovery.size === 0 && !hasSessionRuntimeWork(sessionId)) {
+    sessionCopyEpochs.delete(sessionId);
+    clearSessionCopyBoundary(sessionId);
+  }
+}
+
+// Before runtime boot has awaited, inspect the persisted recovery inventory.
+// Once TaskManager exists, its startup queue owns that inventory (it has already
+// changed running tasks to orphaned). No task metadata is mutated here.
+function sessionCopyRecoveryTasks(sessionId) {
+  if (!ctx.CONFIG?.yeaftDir) return [];
+  const manager = session?.taskManager;
+  const tasks = manager
+    ? (manager.pendingStartupEvents || []).map(event => event.task)
+    : new TaskStore({ yeaftDir: ctx.CONFIG?.yeaftDir }).loadActiveTasks();
+  return tasks.filter(task => task?.sessionId === sessionId && task.ownerVpId
+    && taskResultDeliveryFor(task) === TASK_RESULT_DELIVERY.MODEL_REENTRY);
+}
+
+function recoverSessionCopyTask(sessionId, epoch, task) {
+  if (epoch.unrecoverable || epoch.taskIds.has(task.id)) return;
+  try {
+    const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
+    const token = new ConversationStore(root).captureSessionCopyBoundary(sessionId, {
+      beforeMessageId: task.source?.causalRootId,
+    });
+    if (!epoch.boundary || token.rowCount < JSON.parse(epoch.boundary).rowCount) {
+      epoch.boundary = JSON.stringify(token);
+    }
+    epoch.taskIds.add(task.id);
+  } catch {
+    // One orphan's known root cannot authorize another orphan's unknown input.
+    epoch.boundary = null;
+    epoch.unrecoverable = true;
+  }
+}
+
+function beginSessionActivity(sessionId, { recoveryTask = null, unknownBoundary = false } = {}) {
   settleSessionCopyEpoch(sessionId);
   let epoch = sessionCopyEpochs.get(sessionId);
+  const previousBoundary = epoch?.boundary;
+  const previousTaskCount = epoch?.taskIds.size;
   if (!epoch) {
-    let boundary = null;
-    // Legacy/untracked running work has no trustworthy pre-ingress boundary.
-    if (!unknownBoundary && !hasSessionRuntimeWork(sessionId)) {
+    const recovering = sessionCopyRecoveryTasks(sessionId);
+    if (unknownBoundary && recoveryTask && !recovering.some(task => task.id === recoveryTask.id)) recovering.push(recoveryTask);
+    epoch = { boundary: null, taskIds: new Set(), awaitingRecovery: new Set(recovering.map(task => task.id)), unrecoverable: false, pending: 0 };
+    // A checkpoint is useful only for the tasks that actually owned it. A
+    // leftover file after a completed query must not truncate new idle history.
+    if (recovering.length) {
+      try {
+        const saved = readFileSync(sessionCopyBoundaryPath(sessionId), 'utf8');
+        const token = JSON.parse(saved);
+        if (token?.version === 1 && token.sessionId === sessionId && Array.isArray(token.taskIds)
+            && recovering.some(task => token.taskIds.includes(task.id))) {
+          epoch.boundary = saved;
+          epoch.taskIds = new Set(token.taskIds);
+        }
+      } catch { /* Missing/invalid checkpoint never authorizes unrestricted copy. */ }
+      for (const task of recovering) recoverSessionCopyTask(sessionId, epoch, task);
+    } else if (!unknownBoundary && !hasSessionRuntimeWork(sessionId)) {
       try {
         const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
-        const store = new ConversationStore(root);
-        boundary = JSON.stringify(store.captureSessionCopyBoundary(sessionId));
-      } catch { /* fail closed for running copies if capture was unavailable */ }
+        epoch.boundary = JSON.stringify(new ConversationStore(root).captureSessionCopyBoundary(sessionId));
+      } catch (error) {
+        console.warn('[Yeaft] Session copy boundary capture failed:', sessionId, error?.code || 'capture_failed');
+      }
     }
-    epoch = { boundary, pending: 0 };
     sessionCopyEpochs.set(sessionId, epoch);
+  }
+  if (recoveryTask) {
+    if (unknownBoundary) {
+      recoverSessionCopyTask(sessionId, epoch, recoveryTask);
+      epoch.awaitingRecovery.delete(recoveryTask.id);
+    }
+    else if (epoch.boundary) epoch.taskIds.add(recoveryTask.id);
+  }
+  if (epoch.boundary !== previousBoundary || epoch.taskIds.size !== previousTaskCount) {
+    if (epoch.boundary) persistSessionCopyBoundary(sessionId, epoch);
+    else clearSessionCopyBoundary(sessionId);
   }
   epoch.pending += 1;
   let released = false;
@@ -608,7 +695,10 @@ function trackModelReentryActivity(event) {
     return release || null;
   }
   if (!release) {
-    release = beginSessionActivity(task.sessionId, { unknownBoundary: event.event !== 'started' });
+    release = beginSessionActivity(task.sessionId, {
+      unknownBoundary: event.event !== 'started',
+      recoveryTask: task,
+    });
     modelReentryActivity.set(key, release);
   }
   if (event.event !== 'completed') return null;
@@ -3934,8 +4024,14 @@ export function handleYeaftCreateSession(msg) {
 export function handleYeaftCopySession(msg) {
   const requestId = msg && msg.requestId;
   const sessionId = msg && (msg.sessionId || msg.groupId);
+  let releaseRecovery = null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
+    // Copy can be the first request after reconnect, before any send/runtime
+    // boot. Inspect the same persisted recovery inventory, not only live maps.
+    if (!sessionCopyEpochs.has(sessionId) && sessionCopyRecoveryTasks(sessionId).length) {
+      releaseRecovery = beginSessionActivity(sessionId, { unknownBoundary: true });
+    }
     const source = decorateSessionsWithRuntimeState(snapshotSessions(yeaftDir))
       .find(session => session?.id === sessionId);
     if (!source) throw new SessionCrudError('not_found', sessionId);
@@ -3958,6 +4054,8 @@ export function handleYeaftCopySession(msg) {
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'copy', requestId, ok: false, error: sessionErrorPayload(err) });
+  } finally {
+    releaseRecovery?.();
   }
 }
 
