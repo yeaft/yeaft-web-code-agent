@@ -118,7 +118,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +6 Unix upgrade safety boundaries: canonical install lock, private handoff,
 // fail-open prevention, real shell contention/recovery, version/failure fencing,
 // and opt-in real systemd cgroup survival. Existing tests remain intact.
-export const TEST_CASE_LIMIT = 911;
+// +1 Session fork recovery boundary: real TaskManager restart, durable checkpoint,
+// legacy human-root recovery and unknown-provenance fail-closed behavior.
+// Whole-copy browser coverage extends the existing fork/merge relay case.
+export const TEST_CASE_LIMIT = 912;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

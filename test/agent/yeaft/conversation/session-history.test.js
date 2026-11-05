@@ -56,6 +56,10 @@ describe('durable native Session fork and merge', () => {
     const internal = store.append({ sessionId: 'source', role: 'user', content: 'control', userAuthored: false });
     new ConversationStore(dir).copySession('source', 'fenced', { beforeMessageId: variant.id });
     expect(raw(dir, 'fenced').map(row => row.content)).toEqual(['first', 'first answer', 'second', 'second answer']);
+    const recovered = store.captureSessionCopyBoundary('source', { beforeMessageId: variant.id });
+    expect(recovered).toMatchObject({ sessionId: 'source', rowCount: 4, lastMessageId: 'm0004' });
+    store.copySession('source', 'recovered', { throughBoundary: JSON.parse(JSON.stringify(recovered)) });
+    expect(raw(dir, 'recovered').map(row => row.content)).toEqual(raw(dir, 'fenced').map(row => row.content));
     store.copySession('source', 'earlier', { beforeMessageId: running.id, throughTurnId: first.answer.turnId });
     expect(raw(dir, 'earlier').map(row => row.content)).toEqual(['first', 'first answer']);
     store.copySession('source', 'before-first', { beforeMessageId: first.user.id, throughTurnId: first.answer.turnId });
@@ -64,6 +68,7 @@ describe('durable native Session fork and merge', () => {
       [internal.id, 'invalid_fork_boundary'], [first.answer.id, 'invalid_fork_boundary']]) {
       expect(() => store.copySession('source', 'invalid', { beforeMessageId })).toThrow(expect.objectContaining({ code }));
       expect(existsSync(join(dir, 'sessions', 'invalid'))).toBe(false);
+      expect(() => store.captureSessionCopyBoundary('source', { beforeMessageId })).toThrow(expect.objectContaining({ code }));
     }
     expect(() => store.copySession('source', 'invalid', { beforeMessageId: first.user.id, throughTurnId: 'missing' }))
       .toThrow(expect.objectContaining({ code: 'fork_boundary_not_found' }));
