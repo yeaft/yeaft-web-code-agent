@@ -21,6 +21,7 @@ import {
 } from '../upgrade-command.js';
 import { sendToServer } from './buffer.js';
 import { stopAgentHeartbeat } from './heartbeat.js';
+import { createUnixUpgradeRun, getUnixUpgradeLockPath, launchUnixUpgrade, shellQuote } from '../unix-upgrade.js';
 
 /**
  * Resolve the local service instance id for this running agent. Each agent
@@ -63,8 +64,11 @@ export function isUpgradeAvailable(currentVersion, latestVersion) {
 }
 
 // Shared cleanup logic for restart/upgrade
-function cleanupAndExit(exitCode) {
+function cleanupAndExit(exitCode, { maxCleanupMs = null } = {}) {
   setTimeout(async () => {
+    // The updater waits for this process. Do not let an unbounded async cleanup
+    // outlive the handoff and strand an on-failure service after exit(0).
+    if (maxCleanupMs) setTimeout(() => process.exit(exitCode), maxCleanupMs).unref();
     for (const [, term] of ctx.terminals) {
       if (term.pty) { try { term.pty.kill(); } catch {} }
       if (term.timer) clearTimeout(term.timer);
@@ -282,7 +286,7 @@ export async function handleUpgradeAgent(correlation = {}) {
     }
 
     // 清理并退出，让升级脚本接管
-    cleanupAndExit(0);
+    cleanupAndExit(0, { maxCleanupMs: 20_000 });
   } catch (e) {
     console.error('[Agent] Upgrade failed:', e.message);
     await sendUpgradeAck({ success: false, error: e.message });
@@ -416,11 +420,12 @@ export function buildUnixUpgradeScript({
   safePath,
   instanceId = DEFAULT_INSTANCE_ID,
   isDarwin = platform() === 'darwin',
+  run,
+  lockPath,
+  nodePath = process.execPath,
+  isSystemd = existsSync(join(homedir(), '.config', 'systemd', 'user', `${getServiceName(instanceId)}.service`)),
 }) {
-  const shPath = join(configDir, 'upgrade.sh');
   const serviceName = getServiceName(instanceId);
-  const systemdUnitPath = join(homedir(), '.config', 'systemd', 'user', `${serviceName}.service`);
-  const isSystemd = existsSync(systemdUnitPath);
   const plistPath = getLaunchdPlistPath(instanceId);
   const isLaunchd = isDarwin && existsSync(plistPath);
   const cwd = isGlobalInstall ? undefined : installDir;
@@ -428,16 +433,47 @@ export function buildUnixUpgradeScript({
   const shLines = [
     '#!/bin/bash',
     `PID=${pid}`,
-    `PKG="${pkgName}@${targetVersion}"`,
-    `NPM="${npmPath}"`,
-    `LOGFILE="${join(configDir, 'logs', 'upgrade.log')}"`,
-    `export PATH="${safePath}"`,
+    `PKG=${shellQuote(`${pkgName}@${targetVersion}`)}`,
+    `NPM=${shellQuote(npmPath)}`,
+    `LOGFILE=${shellQuote(join(configDir, 'logs', 'upgrade.log'))}`,
+    `export PATH=${shellQuote(safePath)}`,
     '',
     '# Redirect all output to log file',
-    'exec > "$LOGFILE" 2>&1',
+    'exec >> "$LOGFILE" 2>&1 || exit 1',
     'echo "[Upgrade] Started at $(date)"',
     '',
-    ...(cwd ? [`INSTALL_DIR="${cwd}"`] : []),
+    ...(cwd ? [`INSTALL_DIR=${shellQuote(cwd)}`] : []),
+    ...(run ? [
+      `RUN_DIR=${shellQuote(run.dir)}`,
+      `READY=${shellQuote(run.readyPath)}`,
+      `AUTHORIZED=${shellQuote(run.authorizePath)}`,
+      `ACCEPTED=${shellQuote(run.acceptedPath)}`,
+      `CANCELLED=${shellQuote(run.cancelPath)}`,
+      `ERROR_FILE=${shellQuote(run.errorPath)}`,
+      ...(lockPath ? [
+        `LOCK=${shellQuote(lockPath)}`,
+        'if ! command -v flock >/dev/null || ! exec 9>"$LOCK"; then',
+        '  echo "Cannot acquire installation upgrade lock; Agent remains online" > "$ERROR_FILE"',
+        '  exit 1',
+        'fi',
+        'if ! flock -n 9; then',
+        '  echo "Another Agent is upgrading this shared installation; retry after it finishes" > "$ERROR_FILE"',
+        '  exit 1',
+        'fi',
+      ] : []),
+      'echo "$$" > "$READY" || exit 1',
+      'COUNT=0',
+      'while [ ! -f "$AUTHORIZED" ]; do',
+      '  if [ -f "$CANCELLED" ] || ! kill -0 "$PID" 2>/dev/null || [ "$COUNT" -ge 60 ]; then',
+      '    echo "[Upgrade] Handoff cancelled; installation unchanged"',
+      '    exit 1',
+      '  fi',
+      '  COUNT=$((COUNT+1))',
+      '  sleep 1',
+      'done',
+      '[ ! -f "$CANCELLED" ] || exit 1',
+      'touch "$ACCEPTED" || exit 1',
+    ] : []),
     '',
     '# Wait for current process to exit',
     'COUNT=0',
@@ -445,10 +481,11 @@ export function buildUnixUpgradeScript({
     '  COUNT=$((COUNT+1))',
     '  if [ $COUNT -ge 30 ]; then',
     '    echo "[Upgrade] Timeout waiting for PID $PID to exit"',
-    '    break',
+    '    exit 1',
     '  fi',
     '  sleep 2',
     'done',
+    ...(run ? ['[ ! -f "$CANCELLED" ] || exit 1'] : []),
     '',
   ];
 
@@ -468,7 +505,10 @@ export function buildUnixUpgradeScript({
       'export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$YEAFT_UID/bus}"',
       '',
       '# Stop systemd service to prevent restart loop',
-      `systemctl --user stop "${serviceName}" 2>/dev/null`,
+      `if ! systemctl --user stop "${serviceName}"; then`,
+      '  echo "[Upgrade] Could not stop selected service; refusing to modify installation"',
+      '  exit 1',
+      'fi',
       'sleep 1',
       '',
     );
@@ -487,10 +527,19 @@ export function buildUnixUpgradeScript({
     ? npmArgs.replace(/^npm /, '"$NPM" ')
     : `cd "$INSTALL_DIR" && ${npmArgs.replace(/^npm /, '"$NPM" ')}`;
 
+  // Recheck after acquiring the shared lock. An older queued process must not
+  // replace a package that another instance has already upgraded.
+  const installedManifest = join(installDir, 'node_modules', pkgName, 'package.json');
+  const versionCheck = `try { const fs = require('node:fs'); const v = JSON.parse(fs.readFileSync(process.argv[1])).version; const a = v.split('.').map(Number); const b = process.argv[2].split('.').map(Number); let d = 0; for (let i = 0; i < 3 && !d; i++) d = a[i] - b[i]; process.exit(d >= 0 ? 0 : 1); } catch { process.exit(1); }`;
   shLines.push(
+    `if ${shellQuote(nodePath)} -e ${shellQuote(versionCheck)} ${shellQuote(installedManifest)} ${shellQuote(targetVersion)}; then`,
+    '  echo "[Upgrade] Shared installation already has this version or newer; restarting selected instance only"',
+    '  EXIT_CODE=0',
+    'else',
     'echo "[Upgrade] Installing $PKG..."',
     npmCmd,
     'EXIT_CODE=$?',
+    'fi',
     'if [ $EXIT_CODE -ne 0 ]; then',
     '  echo "[Upgrade] npm install failed with exit code $EXIT_CODE"',
     'else',
@@ -527,8 +576,8 @@ export function buildUnixUpgradeScript({
     );
   }
 
-  // 清理脚本自身
-  shLines.push('', `rm -f "${shPath}"`);
+  // Keep failed handoffs for diagnosis; successful runs remove only their own files.
+  shLines.push('', run ? 'rm -rf -- "$RUN_DIR"' : `rm -f ${shellQuote(join(configDir, 'upgrade.sh'))}`);
 
   return shLines.join('\n');
 }
@@ -538,7 +587,16 @@ async function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, late
   // Create logs/ too: the generated script's `exec > "$LOGFILE" 2>&1` aborts
   // the whole upgrade silently if that directory is missing.
   mkdirSync(join(configDir, 'logs'), { recursive: true });
-  const shPath = join(configDir, 'upgrade.sh');
+  const run = createUnixUpgradeRun(configDir);
+  const isSystemd = platform() === 'linux' && (
+    !!process.env.INVOCATION_ID
+    || existsSync(join(homedir(), '.config', 'systemd', 'user', `${getServiceName(instanceId)}.service`))
+  );
+  // Linux flock is kernel-owned: it releases automatically even when an updater
+  // crashes. Never unlink the shared lock inode while another runner may use it.
+  const lockPath = platform() === 'linux'
+    ? getUnixUpgradeLockPath(installDir, join(getConfigDir(DEFAULT_INSTANCE_ID), 'upgrade-locks'))
+    : null;
 
   const script = buildUnixUpgradeScript({
     pkgName,
@@ -550,14 +608,20 @@ async function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, late
     npmPath,
     safePath,
     instanceId,
+    run,
+    lockPath,
+    isSystemd,
   });
 
-  writeFileSync(shPath, script, { mode: 0o755 });
-  const child = spawn('bash', [shPath], {
-    detached: true,
-    stdio: 'ignore',
+  writeFileSync(run.scriptPath, script, { mode: 0o700 });
+  await launchUnixUpgrade({
+    run,
+    instanceId,
+    isSystemd,
+    env: safeEnv,
+    serviceRunnerPath: fileURLToPath(new URL('../yeaft/systemd-service-runner.js', import.meta.url)),
+    sendUpgradeAck,
+    version: latestVersion,
   });
-  child.unref();
-  console.log(`[Agent] Spawned upgrade script: ${shPath}`);
-  await sendUpgradeAck({ success: true, version: latestVersion, pendingRestart: true });
+  console.log(`[Agent] Upgrade runner ready outside service cgroup: ${run.scriptPath}`);
 }

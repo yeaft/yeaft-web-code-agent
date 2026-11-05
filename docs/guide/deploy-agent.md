@@ -43,6 +43,14 @@ Installation behavior:
 - The Secret is a script argument, never part of the download URL or installer progress output. **The command contains credentials** and may remain in your clipboard, shell history or process arguments. Do not share it; reset the key in Settings if exposed.
 - The installer prints instance-specific management commands. Private installation does not add `yeaft-agent` to system PATH; use the Web UI for instance-safe upgrades (the management wrapper rejects standalone `upgrade`); use the printed absolute-path commands or manage the connected Agent in the Web UI. LLM providers and Claude/Copilot CLI account authentication remain separate, optional setup.
 
+### Linux multi-instance upgrades
+
+A Web UI upgrade first starts a separate systemd user service. The selected Agent exits only after the updater acquires its installation lock and confirms handoff, so `KillMode=mixed` cleanup cannot kill the updater with the old Agent. If the user manager or handoff fails, the Agent stays online and reports an error.
+
+Instances under the same user sharing an npm installation use one kernel lock. A concurrent request reports that the installation is busy; retry after the first upgrade finishes. Linux requires util-linux's `flock`. Only the requesting instance restarts; other instances keep their loaded code until their own restart. Use separate installation directories for fully independent upgrades.
+
+Logs are in `~/.config/yeaft-agent/instances/<instance>/logs/upgrade.log` (or `~/.config/yeaft-agent/logs/upgrade.log` for the default instance). This release cannot retroactively repair an older updater; an instance already stranded during upgrade may need one manual recovery after confirming no updater is still running.
+
 ## Manual npm installation
 
 Linux / macOS (POSIX shell):

@@ -115,7 +115,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // ownership, key/touch/cache/session lifecycle, desktop/light and narrow/dark browser.
 // +3 terminal ownership boundaries: independent result/metadata settlement,
 // scoped orphan reconciliation, and production-browser animation/result styles.
-export const TEST_CASE_LIMIT = 905;
+// +6 Unix upgrade safety boundaries: canonical install lock, private handoff,
+// fail-open prevention, real shell contention/recovery, version/failure fencing,
+// and opt-in real systemd cgroup survival. Existing tests remain intact.
+export const TEST_CASE_LIMIT = 911;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
