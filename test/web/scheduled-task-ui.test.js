@@ -14,6 +14,8 @@ import ScheduledTaskBar from '../../web/components/ScheduledTaskBar.js';
 import VpTimelinePane from '../../web/components/VpTimelinePane.js';
 import ScheduledTaskSettings from '../../web/components/ScheduledTaskSettings.js';
 import ScheduledTaskNotifications from '../../web/components/ScheduledTaskNotifications.js';
+import YeaftSessionActions from '../../web/components/YeaftSessionActions.js';
+import zh from '../../web/i18n/zh-CN.js';
 
 let wrapper;
 const t = key => en[key] || key;
@@ -22,6 +24,34 @@ const task = { prompt: 'Check the build', enabled: true, notify: true, trigger: 
 const row = (id, extra = {}) => ({ catalogKey: `yeaft:a:${id}`, runtimeProvider: 'yeaft', title: id, availability: 'online', routeRef: { runtimeProvider: 'yeaft', agentId: 'a', sessionId: id }, ...extra });
 beforeEach(() => { vi.stubGlobal('Vue', Vue); localStorage.clear(); });
 afterEach(() => { vi.restoreAllMocks(); delete window.Pinia; wrapper?.unmount(); document.body.innerHTML = ''; vi.unstubAllGlobals(); });
+
+it('keeps only mobile page reload in Session actions, with no message replay on either viewport', async () => {
+  for (const messages of [en, zh]) {
+    wrapper = mount(YeaftSessionActions, { props: { canUseWorkbench: true },
+      global: { mocks: { $t: key => messages[key] || key } } });
+    expect(wrapper.find('.yeaft-reload-btn').exists()).toBe(false);
+    expect(wrapper.find(`button[aria-label="${messages['yeaft.reloadMessages']}"]`).exists()).toBe(false);
+    expect(YeaftSessionActions.emits).not.toContain('reload-messages');
+    await wrapper.setProps({ showPageReload: true });
+    expect(wrapper.findAll('.yeaft-reload-btn')).toHaveLength(1);
+    const reload = wrapper.get('.yeaft-page-reload-btn');
+    expect(reload.attributes('type')).toBe('button');
+    expect(reload.attributes('aria-label')).toBe(messages['yeaft.reloadPage']);
+    await reload.trigger('click');
+    expect(wrapper.emitted('reload-page')).toEqual([[]]);
+    expect(wrapper.emitted('reload-messages')).toBeUndefined();
+    await wrapper.get('.yeaft-search-btn').trigger('click');
+    await wrapper.get('.yeaft-session-status-toggle').trigger('click');
+    await wrapper.get('.yeaft-workbench-toggle').trigger('click');
+    for (const event of ['toggle-search', 'toggle-session-status', 'toggle-workbench']) {
+      expect(wrapper.emitted(event)).toEqual([[]]);
+    }
+    await wrapper.setProps({ showPageReload: false });
+    expect(wrapper.find('.yeaft-reload-btn').exists()).toBe(false);
+    wrapper.unmount();
+    wrapper = null;
+  }
+});
 
 it('lists task Sessions in recents or their owning Project with a badge and shared actions', async () => {
   // Old Tasks-collapse state must not hide tasks in either current section.

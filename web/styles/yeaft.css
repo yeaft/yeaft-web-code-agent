@@ -1094,19 +1094,6 @@
   100% { background: transparent; }
 }
 
-.yeaft-reload-btn:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.yeaft-reload-btn.is-loading svg {
-  animation: yeaft-history-refresh-spin 0.8s linear infinite;
-}
-
-@keyframes yeaft-history-refresh-spin {
-  to { transform: rotate(360deg); }
-}
-
 .yeaft-conversation-bootstrap-loading {
   flex: 1;
   min-height: 0;

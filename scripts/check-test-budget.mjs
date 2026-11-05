@@ -121,7 +121,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 Session fork recovery boundaries: real TaskManager restart, durable checkpoint,
 // legacy human-root recovery, unknown provenance, cold-boot input and stale cleanup.
 // Whole-copy browser coverage extends the existing fork/merge relay case.
-export const TEST_CASE_LIMIT = 913;
+// +1 Session toolbar contract: bilingual mobile page reload and no manual
+// message replay on either viewport. Actual reload extends existing browser coverage.
+export const TEST_CASE_LIMIT = 914;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
