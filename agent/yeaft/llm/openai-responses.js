@@ -667,7 +667,11 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       }
       if (!sawTerminalEvent) {
         if (hasToolItems()) {
-          throw new LLMToolInputError('OpenAI tool stream ended before terminal event');
+          // Calls remain buffered until terminal validation, so clean EOF here
+          // is a transport failure, not proof of invalid tool input. Let the
+          // engine apply its bounded retry/continuation policy; known malformed
+          // batches above (and in catch) still fail closed without replay.
+          throw new LLMServerError('OpenAI tool stream ended before terminal event', 0);
         }
         throw new LLMServerError('OpenAI stream ended before terminal event', 0);
       }

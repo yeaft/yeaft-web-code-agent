@@ -105,7 +105,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 folder/section preference boundaries: per-key optimistic queue/rollback/auth
 // fencing and component restore/focus/create behavior. Server migration/merge and
 // real cross-client persistence extend existing cases without replacing coverage.
-export const TEST_CASE_LIMIT = 890;
+// +5 Responses EOF boundaries: transport classification, successful restart/
+// continuation with one dispatch, bounded/disabled retries, cancellation and
+// post-publication non-replay. Malformed-drain EOF extends existing safety cases.
+export const TEST_CASE_LIMIT = 895;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

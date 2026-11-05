@@ -9,6 +9,8 @@ import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { _resetCacheForTests } from '../../../agent/yeaft/llm/credentials/github-copilot.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { collectOutput } from '../../../agent/yeaft/person/provider.js';
 import { createPersonToolHost } from '../../../agent/yeaft/person/native-tools.js';
@@ -96,13 +98,12 @@ describe('Responses rejects the complete tool batch, not individual siblings', (
     }
   });
 
-  it('rejects incomplete terminal batches, unfinished siblings, and tool EOF without replay', async () => {
+  it('rejects incomplete terminal batches and unfinished siblings without replay', async () => {
     const tails = [
       [responsesEnd([], 'incomplete')],
       [responsesEnd([responsesTool('call-0')], 'incomplete')],
       [responsesEnd([{ ...responsesTool('call-0'), status: 'incomplete' }])],
       [{ type: 'response.output_item.added', output_index: 1, item: responsesTool('unfinished', '') }, responsesEnd()],
-      [],
     ];
     for (const tail of tails) {
       vi.stubGlobal('fetch', vi.fn(async () => sse([...responsesSlot(0, '{}'), ...tail])));
@@ -110,6 +111,151 @@ describe('Responses rejects the complete tool batch, not individual siblings', (
     }
     vi.stubGlobal('fetch', vi.fn(async () => json({ status: 'incomplete', output: [responsesTool('call-0')] })));
     assertRejected(await collect(adapter().stream(request)));
+  });
+});
+
+describe('Responses retries transport EOF only before tool publication', () => {
+  const adapter = fixtures[0].create;
+  const partial = [
+    { type: 'response.output_item.added', output_index: 1, item: responsesTool('unfinished', '') },
+    { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"PRIVATE":' },
+  ];
+  const truncated = [...responsesSlot(0, '{}'), ...partial];
+  const retryPolicy = { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 };
+
+  function createEngine(options = {}) {
+    const execute = vi.fn(async () => 'executed once');
+    const registry = new ToolRegistry();
+    registry.register({ name: 'Tool', description: 'test', parameters: { type: 'object', properties: {} }, execute });
+    return { execute, engine: new Engine({ adapter: adapter(), trace: new NullTrace(), toolRegistry: registry,
+      config: { model: 'test-model', maxOutputTokens: 1024, projectDocMaxBytes: 0, llmRetry: retryPolicy }, ...options }) };
+  }
+
+  it('classifies unfinished and buffered complete tool EOF as transport failures without publishing tools or state', async () => {
+    for (const events of [partial, responsesSlot(0, '{}'), truncated, [...truncated, '[DONE]']]) {
+      vi.stubGlobal('fetch', vi.fn(async () => sse(events)));
+      const seen = [];
+      await expect((async () => { for await (const event of adapter().stream(request)) seen.push(event); })())
+        .rejects.toMatchObject({ name: 'LLMServerError', message: 'OpenAI tool stream ended before terminal event' });
+      expect(seen.filter(e => ['tool_call', 'provider_state', 'stop', 'error'].includes(e.type))).toEqual([]);
+    }
+  });
+
+  it('restarts or continues after EOF, discarding the failed batch and executing only the successful request once', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'responses-eof-retry-'));
+    try {
+      const store = new ConversationStore(dir);
+      for (const prefix of ['', 'I will check this.']) {
+        const requests = [];
+        const fetch = vi.fn(async (_url, init) => {
+          requests.push(JSON.parse(init.body));
+          if (requests.length === 1) return sse([
+            ...(prefix ? [{ type: 'response.output_text.delta', delta: prefix }] : []), ...truncated,
+          ]);
+          if (requests.length === 2) return sse(responsesSlot(0, '{}').concat(responsesEnd([responsesTool('call-0')])));
+          return json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Checked.' }] }], usage: {} });
+        });
+        vi.stubGlobal('fetch', fetch);
+        const { engine, execute } = createEngine({ conversationStore: store, yeaftDir: dir });
+        const sessionId = prefix ? 'with-prefix' : 'without-prefix';
+        const seen = await collect(engine.query({ prompt: 'Use Tool', sessionId }));
+        expect(fetch).toHaveBeenCalledTimes(3);
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(execute.mock.calls[0][0]).toEqual({});
+        expect(seen.filter(e => e.type === 'llm_retry')).toEqual([expect.objectContaining({
+          attempt: 1, maxRetries: 2, reason: 'transient_backoff', recoveryMode: prefix ? 'continue' : 'restart',
+        })]);
+        expect(seen.filter(e => e.type === 'tool_call')).toHaveLength(1);
+        expect(seen.filter(e => e.type === 'text_delta').map(e => e.text).join('')).toBe(`${prefix}Checked.`);
+        expect(seen.some(e => e.type === 'error')).toBe(false);
+        expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
+          expect.objectContaining({ stopReason: 'end_turn' }),
+        ]);
+        const persisted = store.loadRecentBySession(sessionId, 50);
+        expect(persisted.flatMap(row => row.toolCalls || [])).toHaveLength(1);
+        expect(persisted.filter(row => row.role === 'tool')).toHaveLength(1);
+        expect(JSON.stringify(requests[1])).not.toContain('PRIVATE');
+        if (prefix) {
+          expect(JSON.stringify(requests[1])).toContain(prefix);
+          expect(persisted.filter(row => row.content === prefix)).toEqual([
+            expect.objectContaining({ role: 'assistant', incomplete: true, stopReason: 'retry' }),
+          ]);
+        } else expect(requests[1].input).toEqual(requests[0].input);
+      }
+    } finally {
+      await closeConversationHistoryIndexes();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('honours disabled, configured and default retry limits, ending with one terminal error and no tool execution', async () => {
+    for (const maxRetries of [0, 2, undefined]) {
+      const fetch = vi.fn(async () => sse(truncated));
+      vi.stubGlobal('fetch', fetch);
+      const { engine, execute } = createEngine({ config: { model: 'test-model', maxOutputTokens: 1024,
+        projectDocMaxBytes: 0, llmRetry: { ...retryPolicy, maxRetries } } });
+      const seen = await collect(engine.query({ prompt: 'Use Tool' }));
+      const retries = maxRetries ?? 3;
+      expect(fetch).toHaveBeenCalledTimes(retries + 1);
+      expect(execute).not.toHaveBeenCalled();
+      expect(seen.filter(e => e.type === 'llm_retry').map(e => [e.attempt, e.maxRetries, e.delayMs]))
+        .toEqual(Array.from({ length: retries }, (_, i) => [i + 1, retries, Math.min(5, 2 ** i)]));
+      expect(seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ retryable: true, error: expect.objectContaining({ name: 'LLMServerError' }) }),
+      ]);
+      expect(seen.filter(e => e.type === 'tool_call' || e.type === 'tool_start')).toEqual([]);
+      expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
+        expect.objectContaining({ stopReason: 'error' }),
+      ]);
+    }
+  });
+
+  it('honours cancellation at EOF and during retry backoff without issuing a new request', async () => {
+    for (const boundary of ['eof', 'backoff']) {
+      const controller = new AbortController();
+      const fetch = vi.fn(async () => {
+        if (boundary === 'backoff') return sse(truncated);
+        let reads = 0;
+        return { ok: true, status: 200, headers: new Headers(), body: { getReader: () => ({
+          read: async () => {
+            if (reads++ === 0) return { done: false, value: new TextEncoder().encode(truncated.map(e => `data: ${JSON.stringify(e)}\n\n`).join('')) };
+            controller.abort();
+            return { done: true };
+          }, cancel() {}, releaseLock() {},
+        }) } };
+      });
+      vi.stubGlobal('fetch', fetch);
+      const { engine, execute } = createEngine();
+      const seen = [];
+      for await (const event of engine.query({ prompt: 'Use Tool', signal: controller.signal })) {
+        seen.push(event);
+        if (event.type === 'llm_retry') controller.abort();
+      }
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(execute).not.toHaveBeenCalled();
+      expect(seen.some(e => e.type === 'error' || e.type === 'tool_call')).toBe(false);
+      expect(seen.filter(e => e.type === 'llm_retry')).toHaveLength(boundary === 'backoff' ? 1 : 0);
+      expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
+        expect.objectContaining({ stopReason: 'aborted' }),
+      ]);
+    }
+  });
+
+  it('does not replay a transport failure after a tool call crossed the adapter boundary', async () => {
+    let requests = 0;
+    const { engine, execute } = createEngine({ adapter: { async *stream() {
+      requests += 1;
+      yield { type: 'tool_call', id: 'published', name: 'Tool', input: {} };
+      throw new LLMServerError('stream ended after tool publication', 0);
+    } } });
+    const seen = await collect(engine.query({ prompt: 'Use Tool' }));
+    expect(requests).toBe(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(seen.filter(e => e.type === 'tool_call')).toHaveLength(1);
+    expect(seen.filter(e => e.type === 'llm_retry')).toEqual([]);
+    expect(seen.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([
+      expect.objectContaining({ stopReason: 'error' }),
+    ]);
   });
 });
 
@@ -279,10 +425,10 @@ for (const fixture of fixtures) {
     });
 
     it('never lets a later network drain failure replay an already malformed tool batch', async () => {
-      for (const malformedEvent of [false, true]) {
+      for (const [malformedEvent, cleanEof] of [[false, false], [true, false], [false, true], [true, true]]) {
         const events = fixture.invalidSse();
         // Remove the terminal boundary: first read contains a complete invalid
-        // batch; the second read fails while the adapter drains for final usage.
+        // batch; the second fails or reaches clean EOF while draining for usage.
         events.splice(fixture.protocol === 'anthropic' ? -2 : -1);
         if (malformedEvent) {
           events.splice(-3, 3, 'malformed-PRIVATE');
@@ -291,6 +437,7 @@ for (const fixture of fixtures) {
         const cancel = vi.fn();
         const reader = { read: async () => {
           if (read++ === 0) return { done: false, value: new TextEncoder().encode(events.map(event => `data: ${typeof event === 'string' ? event : JSON.stringify(event)}\n\n`).join('')) };
+          if (cleanEof) return { done: true };
           throw new TypeError('fetch failed while draining');
         }, cancel, releaseLock() {} };
         vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, headers: new Headers(), body: { getReader: () => reader } })));
