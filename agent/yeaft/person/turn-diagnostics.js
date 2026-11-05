@@ -107,6 +107,10 @@ export function turnView(episode, events) {
         capability.status = (event.outcome ?? event.kind) === 'capability_failed' ? 'failed' : 'completed';
         capability.code = string(event.code) ?? string(event.terminalCode);
         capability.endedAt = event.createdAt;
+        if (capability.id === 'ResponseEnhance' && string(event.sideModel)) capability.modelCall = {
+          model: event.sideModel, elapsedMs: token(event.sideElapsedMs), completed: event.sideCompleted === true,
+          usage: callUsage(event.sideUsage, event.sideCompleted === true),
+        };
         if (event.kind === 'capability_finalized') Object.assign(capability, { afterTerminal: true, accepted: false,
           terminalCode: string(event.terminalCode) });
       }
@@ -117,7 +121,9 @@ export function turnView(episode, events) {
     }
   }
   const items = [...calls.values()].sort((a, b) => a.index - b.index);
+  const sideCalls = items.flatMap(call => call.capabilities.flatMap(capability => capability.id !== 'ResponseEnhance' ? []
+    : [capability.modelCall ?? { model: call.dispatched.model, usage: callUsage(null, false) }]));
   return { id: episode.id, seq: episode.seq, kind: episode.kind, status: episode.status, controlStatus: episode.status === 'running' ? string(episode.controlStatus) : null, createdAt: episode.createdAt,
     endedAt: episode.endedAt, terminalCode: episode.terminalCode, budget: { calls: token(episode.calls), timeoutMs: token(episode.timeoutMs) },
-    models: [...new Set(items.map(call => call.dispatched.model).filter(Boolean))], usage: sumUsage(items, episode.status !== 'running'), calls: items };
+    models: [...new Set([...items.map(call => call.dispatched.model), ...sideCalls.map(call => call.model)].filter(Boolean))], usage: sumUsage([...items, ...sideCalls], episode.status !== 'running'), calls: items };
 }

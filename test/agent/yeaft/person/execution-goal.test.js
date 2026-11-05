@@ -7,6 +7,13 @@ const active = (extra = {}) => ({ objective: 'Deliver an authorized improvement'
 const context = { sourceRefs: new Set(['trigger:e', 'tool:one']), taskState: { tasks: [{ id: 'task-one', status: 'running', currentEpisode: true }], agents: [] } };
 const noTasks = { ...context, taskState: { tasks: [], agents: [] } };
 describe('Goal lifecycle independent of model end_turn', () => {
+  it('a ResponseEnhance opinion can prepare an answer but cannot verify completed work', () => {
+    const goal = new ExecutionGoal();
+    goal.progress('ResponseEnhance', { ok: true, sourceRef: 'tool:one' });
+    const report = active({ status: 'completed', reason: 'Reviewed', acceptanceChecks: [{ check: 'Review agreed', sourceRefs: ['tool:one'] }] });
+    expect(goal.update(report, noTasks)).toMatchObject({ ok: false, code: 'INVALID_TOOL_INPUT' });
+    expect(goal.update({ ...report, kind: 'answer' }, noTasks)).toMatchObject({ ok: true });
+  });
   it('requires disposition even when the model never adopted a goal, without quotas or cognitive calls', () => {
     const goal = new ExecutionGoal();
     expect(goal.endBoundary()).toMatchObject({ continueExecution: true, goal: null });

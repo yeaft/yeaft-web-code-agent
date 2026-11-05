@@ -40,7 +40,7 @@ export default {
     // An explicit array (including an empty one) is authoritative. Older turns
     // attached a single capability directly to the model call.
     const capabilities = call => Array.isArray(call.capabilities) ? call.capabilities : call.capability ? [call.capability] : [];
-    return { list, entries, estimate, known, number, time, statusKey, input, extras, capabilities, loops: usageLoops };
+    return { list, entries, estimate, known, number, time, statusKey, input, extras, capabilities, duration: usageDuration, loops: usageLoops };
   },
   template: `
     <section id="person-turns" class="person-journal person-turn-usage" :aria-label="$t('person.turns')" :aria-busy="page.loading">
@@ -100,7 +100,17 @@ export default {
                   </template>
                 </dl>
                 <p v-if="call.contextSources && (call.contextSources.omittedMessages > 0 || call.contextSources.omittedConcepts > 0)" class="person-muted">{{ $t('person.usage.omitted', { messages: number(call.contextSources.omittedMessages), concepts: number(call.contextSources.omittedConcepts) }) }}</p>
-                <p v-for="(tool, index) in capabilities(call)" :key="tool.callId || index" class="person-call-capability" :data-tool-call-id="tool.callId"><span>{{ tool.id }}</span><span class="person-muted">{{ $t('person.usage.status.' + statusKey(tool.status)) }}<template v-if="tool.code"> · {{ tool.code }}</template></span></p>
+                <template v-for="(tool, index) in capabilities(call)" :key="tool.callId || index">
+                  <p class="person-call-capability" :data-tool-call-id="tool.callId"><span>{{ tool.id }}</span><span class="person-muted">{{ $t('person.usage.status.' + statusKey(tool.status)) }}<template v-if="tool.code"> · {{ tool.code }}</template></span></p>
+                  <div v-if="tool.modelCall" class="person-call-side-model">
+                    <p class="person-muted">{{ $t('person.usage.enhanceCall') }} · {{ tool.modelCall.model }} · {{ duration(tool.modelCall.elapsedMs) }}</p>
+                    <div class="person-turn-totals">
+                      <span>{{ $t('person.usage.' + input(tool.modelCall.usage)) }}: {{ number(tool.modelCall.usage?.[input(tool.modelCall.usage)]) }}</span>
+                      <span>{{ $t('person.usage.outputTokens') }}: {{ number(tool.modelCall.usage?.outputTokens) }}</span>
+                      <span v-if="!tool.modelCall.usage?.complete" class="person-muted">{{ $t('person.usage.partial') }}</span>
+                    </div>
+                  </div>
+                </template>
                 <p v-if="call.code" class="person-muted">{{ call.code }}<template v-if="call.code === 'OUTPUT_TRUNCATED'"> · {{ $t('person.outputTruncatedDetail') }}</template></p>
                 <details class="person-call-diagnostics">
                   <summary>{{ $t('person.usage.diagnostics') }}</summary>

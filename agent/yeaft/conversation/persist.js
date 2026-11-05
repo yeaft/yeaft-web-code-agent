@@ -555,7 +555,7 @@ export function projectVisibleSessionMessages(messages) {
       const identity = askUserToolIdentity(row, toolCall?.id);
       const result = parseAskUserResult(toolCall, identity ? toolResults.get(identity) : null);
       if (result) askUserResults.push(result);
-      visibleToolCalls.push(toolCall);
+      visibleToolCalls.push(toolCall?.name === 'ResponseEnhance' ? { ...toolCall, input: {} } : toolCall);
     }
     const { toolCalls, ...rowWithoutToolCalls } = row;
     const responseKind = projectedResponseKind(rowWithoutToolCalls);

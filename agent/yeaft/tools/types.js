@@ -22,6 +22,7 @@
  * @property {object} [skillManager] — Skill manager
  * @property {object} [trace] — debug trace
  * @property {object} [config] — engine config
+ * @property {(input: object, options?: {signal?: AbortSignal}) => Promise<object>} [responseEnhance] — one tool-free, host-selected model request; host owns routing, cancellation and usage telemetry
  * @property {(input: {query:string, cursor?:number, maxResults?:number}) => Promise<object>|object} [discoverTools] — page through hidden registered tool capabilities and activate returned entries for the next provider loop
  * @property {import('../tasks/manager.js').TaskManager} [taskManager] — Session task manager
  * @property {string} [sessionId] — current Session id

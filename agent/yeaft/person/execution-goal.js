@@ -75,7 +75,11 @@ export class ExecutionGoal {
     }
     if (value.status === 'completed' && value.kind === 'answer' && this.executionRevision && !value.acceptanceChecks.length) return this.rejected('Actual execution occurred. Even an answer must reconcile that work with acceptanceChecks linked to actual observations; answer is not an execution-verification escape hatch.');
     if (value.status === 'completed' && (value.kind !== 'answer' || this.executionRevision)) {
-      if (value.acceptanceChecks.some(check => check.sourceRefs.some(ref => !this.observations.has(ref)))) return this.rejected('Acceptance checks need actual tool observations from this execution, not trigger/history/concept refs. Explain how those observations satisfy acceptance; existence alone is not proof.');
+      const invalid = value.acceptanceChecks.some(check => check.sourceRefs.some(ref => {
+        const observation = this.observations.get(ref);
+        return !observation || (value.kind !== 'answer' && observation.capability === 'ResponseEnhance');
+      }));
+      if (invalid) return this.rejected('Acceptance checks need actual tool observations from this execution, not trigger/history/concept refs or a ResponseEnhance opinion about completed work. Explain how those observations satisfy acceptance; existence alone is not proof.');
     }
     if (value.status === 'abandoned' && !value.sourceRefs.some(ref => this.observations.has(ref))) return this.rejected('Abandonment needs an actual observation supporting the decision, not only an earlier intention.');
     const tasks = [...taskState.tasks, ...taskState.agents];

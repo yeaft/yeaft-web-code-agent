@@ -17,6 +17,7 @@
  * Reference: yeaft-yeaft-implementation-plan.md §3.1, §4 (Phase 2)
  */
 
+import { enhanceResponse } from './llm/response-enhance.js';
 import { randomUUID } from 'crypto';
 import { QueryProgress, progressReminder } from './query-progress.js';
 import { createWebResearchState } from './web-research.js';
@@ -1396,6 +1397,7 @@ export class Engine {
       skillManager: this.#skillManager,
       conversationStore: this.#conversationStore,
       adapter: this.#adapter,
+      responseEnhance: vpCtx?.responseEnhance,
       config: this.#config,
       discoverTools: vpCtx?.discoverTools,
       taskManager: this.#taskManager,
@@ -2530,6 +2532,8 @@ export class Engine {
     let primaryModelAtLastBoundary = currentModel;
     let cumulativeInputTokens = 0;
     let cumulativeOutputTokens = 0;
+    let enhancementCalls = 0;
+    const enhancementUsageEvents = [];
     let maxContextOccupancyRatio = 0;
     let peakContextTokens = 0;
     let peakContextWindow = 0;
@@ -4094,6 +4098,23 @@ export class Engine {
         queryTurnId,
         causalRootId,
         webResearch,
+        responseEnhance: (input, { signal: toolSignal } = {}) => enhanceResponse(input, {
+          adapter: this.#adapter, model: currentModel, config: requestConfig,
+          signal: toolSignal ?? signal, requestIdentity,
+          effort: requestEffortDecision.effective ?? requestEffortDecision.requested ?? undefined,
+          effortSource: requestEffortDecision.source ?? 'auto', effortConstraint,
+          onStart: () => {
+            if (isSubAgent) this.#toolRegistry?.reserveProviderRequest?.();
+            enhancementCalls++;
+            queryProgress.requestStarted();
+          },
+          onUsage: event => {
+            cumulativeInputTokens += (event.inputTokens || 0) + (event.cacheTokensAreIncludedInInput ? 0 : (event.cacheReadTokens || 0) + (event.cacheWriteTokens || 0));
+            cumulativeOutputTokens += event.outputTokens || 0;
+            queryProgress.usageObserved(event);
+            enhancementUsageEvents.push({ ...event, source: 'ResponseEnhance' });
+          },
+        }),
         historyBeforeSeq: Number.isFinite(persistedQueryUser?.seq) ? persistedQueryUser.seq : parseSeqFromId(persistedQueryUser?.id),
         router,
         senderVpId,
@@ -4776,6 +4797,9 @@ export class Engine {
           }));
           queryToolCount += 1;
         }
+        // Surface side-call usage once, separately from main-request context
+        // occupancy, so child token budgets and stream consumers also see it.
+        for (const usage of enhancementUsageEvents.splice(0)) yield usage;
         if (fatalToolError) throw fatalToolError;
       }
 
@@ -4925,7 +4949,7 @@ export class Engine {
     const llmCountMessage = lastPersistedAssistantTextMessage || lastPersistedAssistantMessage;
     if (llmCountMessage && typeof this.#conversationStore?.update === 'function') {
       const updated = this.#conversationStore.update(llmCountMessage, {
-        llmCallCount: turnNumber,
+        llmCallCount: turnNumber + enhancementCalls,
         inputTokens: cumulativeInputTokens,
         outputTokens: cumulativeOutputTokens,
         totalTokens,
@@ -4950,6 +4974,7 @@ export class Engine {
       outputTokens: cumulativeOutputTokens,
       totalTokens,
       loopCount: turnNumber,
+      modelRequestCount: turnNumber + enhancementCalls,
       ...(lastSuccessfulModel ? { model: lastSuccessfulModel } : {}),
       ...(lastSuccessfulEffort ? { effort: lastSuccessfulEffort } : {}),
     };

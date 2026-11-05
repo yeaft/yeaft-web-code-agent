@@ -31,6 +31,7 @@ import readTaskLog from '../tools/read-task-log.js';
 import waitTask from '../tools/wait-task.js';
 import cancelTask from '../tools/cancel-task.js';
 import discoverTools from '../tools/discover-tools.js';
+import responseEnhance from '../tools/response-enhance.js';
 
 // Supported host tools only. Async authority comes from the private Person
 // task host, never a borrowed Session context or generated script.
@@ -41,6 +42,7 @@ const supported = [
   [diskUsage, 'disk-usage', 'filesystem'], [applyPatch, 'apply-patch', 'filesystem'],
   [gitRead, 'git-read', 'git'], [bash, 'bash', 'shell'],
   [webSearch, 'web-search', 'network'], [webFetch, 'web-fetch', 'network'],
+  [responseEnhance, 'response-enhance', 'response'],
   [skill, 'skill', 'native-skill'], [notebookEdit, 'notebook-edit', 'filesystem'],
   [spawnAgent, 'agent', 'orchestration'], [listAgents, 'list-agents', 'orchestration'],
   [waitAgent, 'wait-agent', 'orchestration'], [promptAgent, 'send-message', 'orchestration'],
@@ -52,7 +54,7 @@ const registry = new ToolRegistry().registerAll(supported.map(([tool]) => tool))
 const schemas = new Map(registry.getToolDefs('en').map(schema => [schema.name, schema]));
 const sourceRevision = name => digest(readFileSync(new URL(`../${name}.js`, import.meta.url), 'utf8'));
 const dispatchRevision = sourceRevision('tools/registry');
-const executionRevision = digest(['person/native-tools', 'person/task-host', 'person/child-provider', 'sub-agent/runner', 'sub-agent/execution-control', 'sub-agent/tool-access', 'tasks/manager', 'tasks/store', 'tools/process-runner', 'skills', 'runtime-platform', 'utf8'].map(sourceRevision));
+const executionRevision = digest(['person/native-tools', 'person/task-host', 'person/child-provider', 'sub-agent/runner', 'sub-agent/execution-control', 'sub-agent/tool-access', 'tasks/manager', 'tasks/store', 'tools/process-runner', 'skills', 'runtime-platform', 'utf8', 'llm/response-enhance'].map(sourceRevision));
 export const NATIVE_TOOL_MANIFESTS = supported.map(([tool, file, domain]) => {
   const schema = schemas.get(tool.name);
   const source = { kind: 'native-tool', module: `agent/yeaft/tools/${file}.js`, revision: sourceRevision(`tools/${file}`), dispatchRevision, executionRevision };
@@ -210,6 +212,7 @@ export function createPersonToolHost({ workDir = process.cwd(), yeaftDir, config
         errorEffect: readOnly ? 'none' : 'unknown', outputAvailability: joined ? 'captured' : 'unavailable',
       } : failed ? { code: 'TOOL_FAILED', errorEffect: toolErrorEffect(output), terminal } : {}),
         output, rawBytes: bytes(output), sha256: digest(output), sourceRef,
+        ...(id === 'ResponseEnhance' && scoped?.responseEnhanceCall?.() ? { modelCall: scoped.responseEnhanceCall() } : {}),
         source: { kind: 'external-tool-observation', capability: { id, version: manifest.version, revision: manifest.revision }, implementation: manifest.source },
         replaySafe: readOnly };
       // Archive before rethrowing cancellation: joined after-effects are evidence,

@@ -121,6 +121,7 @@ export default {
   "person.outputTruncatedDetail": "Response cut off at the output token limit; this proposal did not execute a tool or commit cognition. Recovery, if attempted, appears as another loop within the same call budget.",
   "person.usage.requestedEffort": "Requested effort",
   "person.usage.status.rejected": "Proposal rejected",
+  "person.usage.enhanceCall": "Response enhancement · separate model request",
   "person.usage.scope": "Loops, model calls, capability / tool execution and tokens by turn / trigger.",
   "person.usage.stale": "Usage records could not be refreshed. Displayed values may be stale.",
   "person.usage.empty": "No turn records yet.",

@@ -52,6 +52,36 @@ afterEach(async () => {
 });
 
 describe('Person continuous execution with real SQLite authority', () => {
+  it('runs ResponseEnhance through the real private task host and SQLite without publishing the draft or creating a Session', async () => {
+    const enhanced = { status: 'revised', response: '选 A：你当前更需要省下维护时间。', issues: ['原稿回避选择'], evidenceGaps: [] };
+    const run = await setup((params, index) => {
+      if (index === 0) return tools(['enhance', 'ResponseEnhance', { question: '选哪个？', draft: 'private-draft: 各有优缺点。', evidence: 'A 无需运维，B 需要自行维护。' }]);
+      if (index === 1) {
+        expect(params.tools).toEqual([]); expect(params.model).toBe('test/first');
+        return text(JSON.stringify(enhanced));
+      }
+      if (index === 2) {
+        const result = JSON.parse(params.messages.find(message => message.role === 'tool').content);
+        expect(JSON.parse(result.output)).toEqual(enhanced);
+        return tools(['goal', 'Execution__goal', { objective: 'Answer the comparison', acceptance: 'A direct justified answer',
+          kind: 'answer', status: 'completed', reason: 'Compared the supplied constraints', nextStep: '', sourceRefs: [result.sourceRef],
+          acceptanceChecks: [{ check: 'Prepared the answer against the supplied context', sourceRefs: [result.sourceRef] }], waitFor: [], blocker: null }]);
+      }
+      if (index === 3) return text(enhanced.response);
+      const p = final(params); p.reply = null; return text(JSON.stringify(p));
+    });
+    await run.start(); const completed = await run.idle();
+    expect(completed.latestEpisode.status).toBe('completed');
+    const turns = await call(run.service, 'turns');
+    expect(turns.items[0]).toMatchObject({ loopCount: 4, usage: { reportedCalls: 5, inputTokens: 65, outputTokens: 45, totalTokens: 110 } });
+    const side = turns.items[0].calls.flatMap(item => item.capabilities).find(item => item.id === 'ResponseEnhance');
+    expect(side.modelCall).toMatchObject({ model: 'test/first', completed: true, usage: { inputTokens: 13, outputTokens: 9 } });
+    const messages = await call(run.service, 'messages', { limit: 50 });
+    expect(JSON.stringify(messages)).not.toContain('private-draft');
+    expect(JSON.stringify(messages)).toContain(enhanced.response);
+    expect((await traces(run.service)).filter(record => record.kind === 'capability_started' && record.capability.id === 'ResponseEnhance')).toHaveLength(1);
+  });
+
   it('continues after missing/invalid evidence reads, edits/tests in order and commits once without replay', async () => {
     let originalCallId, requests = 0;
     const run = await setup((params, index) => {
