@@ -439,7 +439,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         row.isStreaming = false;
         if (row.status && !['pending', 'completed'].includes(row.status)
             && row.turnEndDetail?.code !== 'runtime_reconciled') continue;
-        row.status = reason === 'end_turn' ? 'completed' : reason;
+        row.status = ['end_turn', 'route_forward'].includes(reason) ? 'completed' : reason;
         row.turnEndReason = reason;
         row.turnEndAt = Date.now();
         if (row.turnEndDetail?.code === 'runtime_reconciled') delete row.turnEndDetail;
