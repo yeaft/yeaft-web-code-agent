@@ -20,6 +20,7 @@ async function open(page, url, theme = 'light') {
     localStorage.setItem('yeaft-preferred-conversation-view', 'chat');
   }, theme);
   await page.goto(url);
+  if (page.viewportSize().width <= 768) await page.locator('.header-sidebar-toggle').tap();
   await expect(page.locator('.sidebar-navigation')).toBeVisible();
 }
 
@@ -256,11 +257,103 @@ for (const theme of ['light', 'dark']) {
     await expect(handle).toHaveAttribute('aria-valuenow', '50');
     expect(await readRatio(page)).toBeCloseTo(0.5, 2);
 
-    // Saved desktop ratio must not force a fixed split or handle on mobile.
+    // A real touch client inherits desktop settings and saves back to the same
+    // account, not localStorage or a viewport-specific copy.
+    await handle.press('ArrowDown');
+    await expect.poll(async () => (await (await page.request.get(serverUrl + '/api/user/preferences')).json()).sidebarProjectsRatio).toBe(0.52);
+    const mobileDevice = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    try {
+      const mobile = await mobileDevice.newPage();
+      await open(mobile, serverUrl, theme);
+      const mobileHandle = mobile.locator('.sidebar-section-resize-handle');
+      await expect(mobileHandle).toHaveAttribute('aria-valuenow', '52');
+      expect(await readRatio(mobile)).toBeCloseTo(0.52, 2);
+      const box = await mobileHandle.boundingBox();
+      expect(box.height).toBeGreaterThanOrEqual(24);
+      const available = await mobile.locator('.sidebar-session-results').evaluate(el =>
+        el.clientHeight - el.querySelector('.sidebar-section-resize-handle').offsetHeight);
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      const touch = await mobile.context().newCDPSession(mobile);
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + available * 0.1 }] });
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await expect.poll(async () => (await (await mobile.request.get(serverUrl + '/api/user/preferences')).json()).sidebarProjectsRatio).toBeCloseTo(0.62, 2);
+      expect(await readRatio(mobile)).toBeCloseTo(0.62, 2);
+      await mobile.evaluate(agentId => {
+        const store = window.Pinia.useChatStore();
+        store.sessionProjects = Array.from({ length: 30 }, (_, index) => ({ id: 'touch-project-' + index, name: 'Touch project ' + index, members: [] }));
+        store.sessionCatalog = Array.from({ length: 40 }, (_, index) => ({
+          catalogKey: 'touch-session-' + index, runtimeProvider: 'yeaft', title: 'Recent session ' + index,
+          routeRef: { runtimeProvider: 'yeaft', agentId, sessionId: 'touch-session-' + index }, availability: 'online',
+        }));
+      }, mockAgent.agentId);
+      await expect(mobile.locator('.sidebar-project')).toHaveCount(30);
+      for (const selector of ['.projects-section', '.recents-section']) {
+        const section = mobile.locator(selector);
+        const bounds = await section.boundingBox();
+        const point = { x: bounds.x + 60, y: bounds.y + bounds.height - 20 };
+        await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+        for (const dy of [20, 40, 60]) await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: point.x, y: point.y - dy }] });
+        await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await expect.poll(() => section.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+        await expect(mobileHandle).toHaveAttribute('aria-valuenow', '62');
+      }
+      await mobile.screenshot({ path: testInfo.outputPath('sidebar-mobile-dragged.png') });
+      // Closing, reopening and reloading must not reset the split.
+      await mobile.locator('.sidebar-overlay').tap({ position: { x: 385, y: 400 } });
+      await mobile.locator('.header-sidebar-toggle').tap();
+      expect(await readRatio(mobile)).toBeCloseTo(0.62, 2);
+      await mobile.reload();
+      await mobile.locator('.header-sidebar-toggle').tap();
+      await expect(mobileHandle).toHaveAttribute('aria-valuenow', '62');
+      for (const width of [320, 768]) {
+        await mobile.setViewportSize({ width, height: 740 });
+        expect(await readRatio(mobile)).toBeCloseTo(0.62, 2);
+        expect(await mobile.locator('.sidebar-navigation').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+      }
+      const cancelBox = await mobileHandle.boundingBox();
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cancelBox.x + 40, y: cancelBox.y + 14 }] });
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cancelBox.x + 40, y: cancelBox.y - 30 }] });
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+      await expect(mobileHandle).toHaveAttribute('aria-valuenow', '62');
+      expect((await (await mobile.request.get(serverUrl + '/api/user/preferences')).json()).sidebarProjectsRatio).toBeCloseTo(0.62, 2);
+      await touch.detach();
+      await mobile.locator('.recents-section > .sidebar-section-heading > .sidebar-section-toggle').tap();
+      await expect(mobileHandle).toHaveCount(0);
+      expect(await readRatio(mobile)).toBeGreaterThan(0.85);
+      await mobile.locator('.recents-section > .sidebar-section-heading > .sidebar-section-toggle').tap();
+      await expect(mobileHandle).toHaveAttribute('aria-valuenow', '62');
+      expect(await readRatio(mobile)).toBeCloseTo(0.62, 2);
+      // In landscape, minimum section heights keep both headings reachable.
+      for (const height of [350, 300]) {
+        await mobile.setViewportSize({ width: 768, height });
+        const geometry = await mobile.locator('.sidebar-session-results').evaluate(el => {
+          const projects = el.querySelector('.projects-section').getBoundingClientRect();
+          const recents = el.querySelector('.recents-section').getBoundingClientRect();
+          const divider = el.querySelector('.sidebar-section-resize-handle').offsetHeight;
+          const bounds = el.getBoundingClientRect();
+          el.scrollTop = el.scrollHeight;
+          return { height: el.clientHeight, filled: projects.height + recents.height + divider,
+            minimum: 96 + divider, overflow: recents.bottom - bounds.bottom, reachable: el.scrollTop > 0 };
+        });
+        if (geometry.height >= geometry.minimum) {
+          expect(geometry.filled).toBeCloseTo(geometry.height, 0);
+          expect(geometry.overflow).toBeLessThanOrEqual(1);
+        } else expect(geometry.reachable).toBe(true);
+      }
+      expect((await (await mobile.request.get(serverUrl + '/api/user/preferences')).json()).sidebarProjectsRatio).toBeCloseTo(0.62, 2);
+    } finally { await mobileDevice.close(); }
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(handle).toHaveAttribute('aria-valuenow', '62');
+    expect(await readRatio(page)).toBeCloseTo(0.62, 2);
+
+    // The narrow drawer also keeps the saved split when compacting shortcuts.
     await page.setViewportSize({ width: 320, height: 740 });
     await page.locator('.header-sidebar-toggle').click();
     await expect(page.locator('.sidebar-navigation')).toBeVisible();
-    await expect(handle).not.toBeVisible();
+    await expect(handle).toBeVisible();
+    expect(await readRatio(page)).toBeCloseTo(0.62, 2);
     // Reload above deliberately cleared the store-only stress fixture.
     await page.evaluate(agentId => {
       window.Pinia.useChatStore().sessionCatalog = Array.from({ length: 40 }, (_, index) => ({

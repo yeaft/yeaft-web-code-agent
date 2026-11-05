@@ -16,6 +16,8 @@ This stable URL is a compact index of the current product documentation.
 
 Shortcuts and the **Projects / Recents** sections use matching vertical arrows: up to collapse, down to expand. Section actions and shortcut disclosure controls appear on hover or keyboard focus, and remain visible on touch devices. Each project folder also offers separate **New chat / New task** icons on hover or focus; the created chat or task belongs to that project.
 
+Drag the divider between **Projects / Recents** vertically to adjust their height ratio, including by touch in the mobile sidebar. Both sections still scroll independently. The ratio is saved on the Server per signed-in user and shared between desktop and mobile. Reloading, reopening the sidebar, or signing in again restores it; other open devices sync when their window regains focus. Collapsing a section preserves the ratio for when it expands again. You can also adjust the divider with arrow keys or double-click to reset to equal heights.
+
 ## Native Yeaft
 
 - [Sessions and Projects](./guide/user/yeaft-session.md)
