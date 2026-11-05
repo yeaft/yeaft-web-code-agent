@@ -4021,8 +4021,14 @@ export function handleYeaftCreateSession(msg) {
 export function handleYeaftCopySession(msg) {
   const requestId = msg && msg.requestId;
   const sessionId = msg && (msg.sessionId || msg.groupId);
+  let releaseRecovery = null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
+    // Copy can be the first request after reconnect, before any send/runtime
+    // boot. Inspect the same persisted recovery inventory, not only live maps.
+    if (!sessionCopyEpochs.has(sessionId) && sessionCopyRecoveryTasks(sessionId).length) {
+      releaseRecovery = beginSessionActivity(sessionId, { unknownBoundary: true });
+    }
     const source = decorateSessionsWithRuntimeState(snapshotSessions(yeaftDir))
       .find(session => session?.id === sessionId);
     if (!source) throw new SessionCrudError('not_found', sessionId);
@@ -4045,6 +4051,8 @@ export function handleYeaftCopySession(msg) {
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'copy', requestId, ok: false, error: sessionErrorPayload(err) });
+  } finally {
+    releaseRecovery?.();
   }
 }
 

@@ -493,6 +493,8 @@ it('fences legacy recovery before cold boot can await and ignores stale checkpoi
     source: { threadId: 'old', causalRootId: legacyUser.id } });
   const boot = deferred();
   __testSetSession(null);
+  expectFork(copy('cold-before-runtime'), prefix);
+  expectFork(copy('cold-before-runtime-historic', { throughTurnId: 'historic' }), prefix);
   __testHooks.setRuntimeFactoriesForTest({ loadSession: async () => {
     await boot.promise;
     return { yeaftDir: root, config: {}, conversationStore: store, taskManager: new TaskManager({ yeaftDir: root }) };
