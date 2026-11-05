@@ -587,7 +587,7 @@ function clearSessionCopyBoundary(sessionId) {
 
 function settleSessionCopyEpoch(sessionId) {
   const epoch = sessionCopyEpochs.get(sessionId);
-  if (epoch && epoch.pending === 0 && !hasSessionRuntimeWork(sessionId)) {
+  if (epoch && epoch.pending === 0 && epoch.awaitingRecovery.size === 0 && !hasSessionRuntimeWork(sessionId)) {
     sessionCopyEpochs.delete(sessionId);
     clearSessionCopyBoundary(sessionId);
   }
@@ -632,7 +632,7 @@ function beginSessionActivity(sessionId, { recoveryTask = null, unknownBoundary 
   if (!epoch) {
     const recovering = sessionCopyRecoveryTasks(sessionId);
     if (unknownBoundary && recoveryTask && !recovering.some(task => task.id === recoveryTask.id)) recovering.push(recoveryTask);
-    epoch = { boundary: null, taskIds: new Set(), unrecoverable: false, pending: 0 };
+    epoch = { boundary: null, taskIds: new Set(), awaitingRecovery: new Set(recovering.map(task => task.id)), unrecoverable: false, pending: 0 };
     // A checkpoint is useful only for the tasks that actually owned it. A
     // leftover file after a completed query must not truncate new idle history.
     if (recovering.length) {
@@ -657,7 +657,10 @@ function beginSessionActivity(sessionId, { recoveryTask = null, unknownBoundary 
     sessionCopyEpochs.set(sessionId, epoch);
   }
   if (recoveryTask) {
-    if (unknownBoundary) recoverSessionCopyTask(sessionId, epoch, recoveryTask);
+    if (unknownBoundary) {
+      recoverSessionCopyTask(sessionId, epoch, recoveryTask);
+      epoch.awaitingRecovery.delete(recoveryTask.id);
+    }
     else if (epoch.boundary) epoch.taskIds.add(recoveryTask.id);
   }
   if (epoch.boundary !== previousBoundary || epoch.taskIds.size !== previousTaskCount) {

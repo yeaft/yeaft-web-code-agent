@@ -421,6 +421,12 @@ it('forks completed history while orphaned tasks resume, restoring checkpoints o
   await __testResetVpState(); // process-local maps are lost, durable files survive
   __testHooks.resetVpStatusBroker();
 
+  // A copy may arrive before the first runtime boot. It must not consume or
+  // delete the checkpoint, including tasks without legacy causal provenance.
+  __testSetSession(null);
+  expectFork(copy('restored-cold-first'), prefix);
+  expectFork(copy('restored-cold-second'), prefix);
+  expect(existsSync(checkpoint)).toBe(true);
   runtime = { yeaftDir: root, config: {}, conversationStore: store, taskManager: new TaskManager({ yeaftDir: root }) };
   __testSetSession(runtime);
   installYeaftRuntimeBridge(runtime);
