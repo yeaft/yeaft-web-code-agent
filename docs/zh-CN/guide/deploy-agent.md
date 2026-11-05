@@ -43,6 +43,14 @@ Windows PowerShell 5.1+ 示例：
 - 命令参数中的 Secret 不会放入脚本下载 URL，也不会作为安装进度输出。**命令本身包含凭据**，可能留在剪贴板、终端历史或进程参数中；不要分享，泄露后请在设置中重置。
 - 安装结束会输出该实例的管理命令。私有安装不向系统 PATH 添加 `yeaft-agent`；升级请使用 Web UI 的实例级安全升级（管理入口会拒绝独立 `upgrade`，避免修改全局包）；请使用输出的绝对路径命令，或在 Web UI 管理已连接 Agent。LLM provider 和 Claude/Copilot CLI 的账号登录仍按需单独配置。
 
+### Linux 多实例升级
+
+Web UI 升级会先启动独立的 systemd 用户级升级服务，确认升级器取得安装锁并完成接管后，所选 Agent 才退出。升级器不会随着原 Agent 的 `KillMode=mixed` 子进程清理一起终止；用户级 systemd 不可用或接管失败时，Agent 保持在线并返回错误。
+
+同一用户下共享 npm 安装目录的实例使用同一把内核锁。另一个实例正在升级时，新请求会返回忙碌提示，请等待后重试；不会让两个 npm 进程同时替换同一份安装。Linux 需要 util-linux 提供的 `flock`。升级仅重启请求的实例，不停止其他实例；共享包的其他实例仍运行已加载的版本，下次自行重启时使用更新后的包。需要完全独立升级时，应使用独立安装目录。
+
+升级日志保存在 `~/.config/yeaft-agent/instances/<实例名>/logs/upgrade.log`（默认实例为 `~/.config/yeaft-agent/logs/upgrade.log`）。旧版本升级器自身无法通过此次发布追溯修复；已经发生升级中断的实例，可能仍需在确认没有升级进程后手动恢复一次。
+
 ## 手动 npm 安装
 
 Linux / macOS（POSIX shell）：

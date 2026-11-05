@@ -113,7 +113,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // plumbing, not that a scripted model has demonstrated judgment or concise prose.
 // +5 bounded history paging regressions: gesture budget, CLI/Yeaft async layout
 // ownership, key/touch/cache/session lifecycle, desktop/light and narrow/dark browser.
-export const TEST_CASE_LIMIT = 902;
+// +6 Unix upgrade safety boundaries: canonical install lock, private handoff,
+// fail-open prevention, real shell contention/recovery, version/failure fencing,
+// and opt-in real systemd cgroup survival. Existing tests remain intact.
+export const TEST_CASE_LIMIT = 908;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
