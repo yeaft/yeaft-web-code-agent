@@ -2,7 +2,7 @@ import NavigationIcon from './NavigationIcon.js';
 export default {
   components: { NavigationIcon },
   name: 'YeaftSessionActions',
-  emits: ['toggle-search', 'reload-messages', 'toggle-session-status', 'toggle-workbench', 'reload-page', 'fork-session', 'merge-session'],
+  emits: ['toggle-search', 'toggle-session-status', 'toggle-workbench', 'reload-page', 'fork-session', 'merge-session'],
   props: {
     mergeDisabled: { type: Boolean, default: false },
     mergeTitle: { type: String, default: '' },
@@ -11,7 +11,6 @@ export default {
     forkState: { type: String, default: 'idle' },
     forkTitle: { type: String, default: '' },
     searchOpen: { type: Boolean, default: false },
-    loadingMoreHistory: { type: Boolean, default: false },
     sessionStatusVisible: { type: Boolean, default: true },
     workbenchVisible: { type: Boolean, default: false },
     canUseWorkbench: { type: Boolean, default: false },
@@ -65,21 +64,10 @@ export default {
         >
           <NavigationIcon name="search" :size="16" />
         </button>
-        <!-- Message refresh — replays current Yeaft session history without a full page reload. -->
-        <button
-          class="yeaft-reload-btn"
-          :class="{ 'is-loading': loadingMoreHistory }"
-          @click="$emit('reload-messages')"
-          :disabled="loadingMoreHistory"
-          :aria-busy="loadingMoreHistory ? 'true' : 'false'"
-          :title="$t('yeaft.reloadMessages')"
-          :aria-label="$t('yeaft.reloadMessages')"
-        >
-          <NavigationIcon name="refresh" :size="16" />
-        </button>
         <!-- Page refresh is a mobile-only escape hatch; desktop keeps the header focused on session actions. -->
         <button
           v-if="showPageReload"
+          type="button"
           class="yeaft-reload-btn yeaft-page-reload-btn"
           @click="$emit('reload-page')"
           :title="$t('yeaft.reloadPage')"

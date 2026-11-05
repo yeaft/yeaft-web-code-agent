@@ -704,6 +704,11 @@ test('task status panel preserves schedules, pinned header access, scrolling and
       const savedTask = structuredClone(state.sessions.get(TASK_SESSION_ID).task);
       await expect(header.locator('.scheduled-task-bar, .scheduled-task-run')).toHaveCount(0);
       await expect(header.getByRole('button', { name: /^(Configure|Run once)$/ })).toHaveCount(0);
+      // Session history recovers automatically; only mobile needs a full-page
+      // escape hatch. Neither viewport should offer manual message replay.
+      await expect(header.getByRole('button', { name: 'Reload messages', exact: true })).toHaveCount(0);
+      await expect(header.locator('.yeaft-reload-btn:not(.yeaft-page-reload-btn)')).toHaveCount(0);
+      await expect(header.locator('.yeaft-page-reload-btn')).toHaveCount(width <= 768 ? 1 : 0);
       if (width <= 768) {
         await expect(page.locator('.yeaft-topbar-context')).toBeHidden();
         expect((await header.boundingBox()).height).toBeLessThanOrEqual(48);
@@ -919,6 +924,15 @@ test('task status panel preserves schedules, pinned header access, scrolling and
       await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
       await settings.locator('.group-settings-close').click();
       await closeMobileTaskStatus(page);
+      if (width <= 768) {
+        const reload = header.getByRole('button', { name: 'Reload page', exact: true });
+        await reload.focus();
+        await expect(reload).toBeFocused();
+        await Promise.all([page.waitForEvent('load'), page.keyboard.press('Enter')]);
+        await expect(page.locator('.yeaft-session-input textarea')).toBeVisible();
+        await expect(header.getByRole('button', { name: 'Reload page', exact: true })).toBeVisible();
+        await expect(header.getByRole('button', { name: 'Reload messages', exact: true })).toHaveCount(0);
+      }
       if (width === 1440) {
         // Closing the desktop panel remains a persisted user preference, not
         // something selecting a Task silently overrides.
