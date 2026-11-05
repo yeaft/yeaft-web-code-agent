@@ -10,6 +10,7 @@ import { OpenAIResponsesAdapter } from '../../../../agent/yeaft/llm/openai-respo
 import { createProviderContext } from '../../../../agent/yeaft/llm/provider-state.js';
 import fileWrite from '../../../../agent/yeaft/tools/file-write.js';
 import { config, finalProposal, goalInput } from './fixtures.js';
+import { PERSON_REPLY_INSTRUCTIONS } from '../../../../agent/yeaft/person/reply-guidance.js';
 
 const dirs = [], runtimes = [];
 
@@ -59,6 +60,26 @@ afterEach(async () => {
 });
 
 describe('Person continuous native execution then one final cognition', () => {
+  it('carries the same public reply guidance through execution, live delivery and one final cognition', async () => {
+    const publishProgress = vi.fn(async (_episode, { reply }) => ({ id: 'public-answer', text: reply }));
+    const run = await setup((params, index) => {
+      expect(params.system).toContain('Be honest. Same Soul.');
+      expect(params.system.split(PERSON_REPLY_INSTRUCTIONS)).toHaveLength(2);
+      if (index === 0) return tools(['goal', 'Execution__goal', goalInput([JSON.parse(params.messages[0].content).trigger.ref])]);
+      if (index === 1) return text('The new evidence does not change my view. Here is the decisive reason.');
+      const p = final(params); p.reply = null;
+      expect(params.tools).toEqual([]);
+      expect(JSON.stringify(params.messages)).toContain('public-answer');
+      return text(JSON.stringify(p));
+    }, { repository: { publishProgress } });
+    await run.start().promise;
+    expect(run.requests).toHaveLength(3);
+    expect(run.requests.slice(0, 2).every(request => request.tools.length > 0)).toBe(true);
+    expect(publishProgress).toHaveBeenCalledTimes(1);
+    expect(run.repository.commit).toHaveBeenCalledTimes(1);
+    expect(run.repository.commit.mock.calls[0][1].reply).toBeNull();
+  });
+
   it('drains truncated/unknown-tool batches before safe correction, preserving usage with no dispatched sibling', async () => {
     const effect = vi.spyOn(fileWrite, 'execute');
     const run = await setup((params, index) => {
