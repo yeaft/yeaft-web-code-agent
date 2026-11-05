@@ -121,6 +121,7 @@ export default {
   "person.outputTruncatedDetail": "回复被输出 token 上限截断；本提案未执行工具、未提交认识。若尝试恢复，会在同一调用预算内显示为下一次 loop。",
   "person.usage.requestedEffort": "请求 effort",
   "person.usage.status.rejected": "提案未通过",
+  "person.usage.enhanceCall": "回答增强 · 独立模型请求",
   "person.usage.scope": "按 turn／触发查看 loop、模型调用、能力／工具执行与 token。",
   "person.usage.stale": "用量记录暂时无法更新，当前显示值可能不是最新。",
   "person.usage.empty": "暂无运行记录。",

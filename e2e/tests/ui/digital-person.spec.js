@@ -88,7 +88,11 @@ async function mockPersonSocket(page, { conversationFlow = false, modelPreferenc
         }
         reply({ items: conversationFlow ? (agentMessages.get(request.agentId) || []) : request.payload.cursor ? [{ id: 'older', role: 'assistant', text: 'Older persisted message', createdAt: 1 }] : [], nextCursor: request.payload.cursor || messageHistoryLoaded ? null : 'older-page' });
       } else if (request.op === 'turns') {
-        reply({ items: [], nextCursor: null });
+        reply({ items: [{ id: 'enhance-turn', seq: 1, kind: 'send', status: 'completed', createdAt: 1, loopCount: 1,
+          usage: { inputTokens: 50, outputTokens: 20, totalTokens: 70, complete: true }, models: ['configured/reviewer'],
+          calls: [{ callId: 'parent', index: 1, status: 'completed', dispatched: { model: 'configured/reviewer' },
+            usage: { inputTokens: 20, outputTokens: 8, complete: true }, capabilities: [{ callId: 'enhance-call', id: 'ResponseEnhance', status: 'completed',
+              modelCall: { model: 'configured/reviewer', elapsedMs: 1250, completed: true, usage: { inputTokens: 30, outputTokens: 12, complete: true } } }] }] }], nextCursor: null });
       } else if (request.op === 'traces') {
         const capabilityRecords = [
           { id: 'script-publication', seq: 19, episodeId: 'script', callId: 'create-call', kind: 'capability_created', capabilityId: 'Script.sum',
@@ -852,6 +856,14 @@ for (const width of [320, 390]) {
           await expect(panel.locator('.person-search-result')).toContainText('durable archive');
         } else if (action === 'inside') {
           await expectInspectorScroller(page);
+          await page.locator('.person-inspector-nav button').nth(2).click();
+          await page.locator('[data-turn-id="enhance-turn"] > summary').click();
+          const side = page.locator('.person-call-side-model');
+          await expect(side).toContainText('configured/reviewer');
+          await expect(side).toContainText('1.3s');
+          await expect(side).toContainText('30');
+          await expect(page.locator('.person-call-step')).toHaveCount(1);
+          await expectPersonFits(page);
           await page.screenshot({ path: testInfo.outputPath(`person-inspector-${width}-${theme}.png`) });
         }
         await page.keyboard.press('Escape');

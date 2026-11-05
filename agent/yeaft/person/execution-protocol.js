@@ -12,7 +12,7 @@ ${PERSON_REPLY_INSTRUCTIONS}`;
 const CAPSULE_BYTES = 4096, EVIDENCE_BYTES = 16384, EVIDENCE_COUNT = 16;
 const OPAQUE_BYTES = 4 * 1024 * 1024;
 const readCapabilities = new Set(['FileRead', 'Glob', 'Grep', 'ListDir', 'DiskUsage', 'GitRead', 'WebSearch', 'WebFetch', 'Skill',
-  'ListAgents', 'ListTasks', 'ReadTaskLog', 'WaitTask', 'WaitAgent', 'Execution.read', 'Recall', 'catalog.search', 'catalog.view']);
+  'ResponseEnhance', 'ListAgents', 'ListTasks', 'ReadTaskLog', 'WaitTask', 'WaitAgent', 'Execution.read', 'Recall', 'catalog.search', 'catalog.view']);
 
 /** Count escaped JSON bytes, while keeping exact UTF-8 head/tail ranges. */
 function excerpt(text, maxBytes) {

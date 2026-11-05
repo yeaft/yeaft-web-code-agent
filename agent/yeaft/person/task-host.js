@@ -24,6 +24,7 @@ export const PERSON_TASK_TOOL_IDS = Object.freeze([
   'ApplyPatch', 'GitRead', 'Bash', 'WebSearch', 'WebFetch', 'Skill', 'NotebookEdit',
   'SpawnAgent', 'ListAgents', 'WaitAgent', 'PromptAgent', 'CloseAgent', 'UpdateAgent',
   'ListTasks', 'ReadTaskLog', 'WaitTask', 'CancelTask',
+  'ResponseEnhance',
   'DiscoverTools', // child Engine schema activation; Person itself uses its catalog
 ]);
 const nativeRegistry = createFullRegistry();

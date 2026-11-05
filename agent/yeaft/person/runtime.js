@@ -1,3 +1,5 @@
+import { enhanceResponse } from '../llm/response-enhance.js';
+import { createPersonChildProvider } from './child-provider.js';
 import { createPersonToolHost, createPersonNativeRegistry, isNativeTool, projectNativeResult } from './native-tools.js';
 import { PersonTaskHost } from './task-host.js';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +12,7 @@ import { executionBehavior } from './behavior.js';
 import { PERSON_ENVELOPE_TOKENS_RESERVED, personFinalContextReserveBytes } from './request-budget.js';
 import { abortable, collectOutput } from './provider.js';
 import { validateCapabilityArguments, validateToolArguments } from './tool-arguments.js';
-import { callUsage, sumUsage } from './turn-diagnostics.js';
+import { addUsage, callUsage, sumUsage } from './turn-diagnostics.js';
 import { bytes, digest, fail, FEEDBACK_INSTRUCTIONS, LIMITS, PersonError, PROPOSAL_INSTRUCTIONS, reportedLineage, safeError, validateProposal, validateSelection } from './contracts.js';
 
 const messageRef = m => `message:${m.id}:${m.revision}`;
@@ -448,8 +450,38 @@ export class PersonRuntime {
       const created = await abortable(this.repository.createdCapabilities(episode), signal);
       let finalizeNativeResult, toolSelection, toolEffortDecision;
       const toolHost = createPersonToolHost({ ...this.toolOptions,
-        getContext: async ctx => this.tasks()?.context({ ...ctx, episode, provider,
-          selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry }),
+        getContext: async ctx => {
+          const scoped = await this.tasks()?.context({ ...ctx, episode, provider,
+            selection: toolSelection, effortDecision: toolEffortDecision, parentToolRegistry: this.parentToolRegistry });
+          let modelCall;
+          return { ...scoped,
+            responseEnhance: async (input, { signal: toolSignal } = {}) => {
+              const child = createPersonChildProvider(provider, toolSelection, this.toolOptions.config);
+              const model = child.config.model;
+              let usage = null, startedAt, completed = false;
+              try {
+                const result = await enhanceResponse(input, { adapter: child.adapter, config: child.config, model,
+                  signal: toolSignal ?? ctx.signal,
+                  requestIdentity: { instanceScope: this.toolOptions.yeaftDir ?? this.namespace, ownerScope: episode.ownerId,
+                    sessionId: `person:${snapshot.person.id}`, vpId: snapshot.person.id, threadId: episode.id },
+                  onStart: () => { startedAt = Date.now(); },
+                  onUsage: event => { usage = addUsage(usage, event, provider.catalog.find(item => item.id === model)?.usageCacheIncluded); },
+                });
+                completed = true;
+                return result;
+              } finally {
+                if (startedAt !== undefined) {
+                  modelCall = { model, usage, completed, elapsedMs: Math.max(0, Date.now() - startedAt) };
+                  if (!job.models.has(model)) job.models.set(model, { model, calls: 0, completedCalls: 0, failedCalls: 0, elapsedMs: 0, usage: null });
+                  const stats = job.models.get(model);
+                  stats.calls++; stats[completed ? 'completedCalls' : 'failedCalls']++; stats.elapsedMs += modelCall.elapsedMs;
+                  stats.usage = sumUsage([...(stats.usage ? [{ usage: stats.usage }] : []), { usage: callUsage(usage, completed) }], true);
+                }
+              }
+            },
+            responseEnhanceCall: () => modelCall,
+          };
+        },
         onResult: result => finalizeNativeResult(result) });
       const capabilities = new PersonCapabilities(this.repository, episode.ownerId, { experience: snapshot.capabilityExperience, triggerKind: episode.kind, created, episode, toolHost, taskHost: this.tasks(), workDir: this.toolOptions.workDir });
       const initialTools = capabilities.executionTools();

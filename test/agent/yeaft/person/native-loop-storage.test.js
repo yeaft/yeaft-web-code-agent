@@ -77,6 +77,22 @@ describe('native tool loop SQLite proof and diagnostics', () => {
     expect(await readdir(root)).toEqual(['person']);
   });
 
+  it('persists separately attributed ResponseEnhance model usage without exposing draft/evidence or counting it as a loop', async () => {
+    const tool = wire('ResponseEnhance', { question: 'private-question', draft: 'private-draft' });
+    const parent = await complete([tool]);
+    const started = invocation(parent, tool, 0); await r.startCapability(episode, started);
+    expect(await finalize(started, { ok: true, output: 'private-enhancement', modelCall: {
+      model: selection.model, completed: true, elapsedMs: 17, usage,
+    } })).toBe(true);
+    await r.finish(episode, 'failed', 'INTERRUPTED');
+    await r.close(); r = repo();
+    const turn = (await r.turns('alice')).items[0];
+    expect(turn).toMatchObject({ loopCount: 1, usage: { inputTokens: 20, outputTokens: 8, inputTotalTokens: 28, totalTokens: 36, reportedCalls: 2, complete: true } });
+    expect(turn.calls).toHaveLength(1);
+    expect(turn.calls[0].capabilities[0]).toMatchObject({ id: 'ResponseEnhance', modelCall: { model: selection.model, elapsedMs: 17, usage: { totalTokens: 18 } } });
+    expect(JSON.stringify(turn)).not.toContain('private-');
+  });
+
   it('rejects wrong ID/name/input/index/parent, duplicate consumption and trace ID collisions', async () => {
     const tools = [wire('Bash', { command: 'first' }), wire('Bash', { command: 'second' })];
     const parent = await complete(tools), original = invocation(parent, tools[0], 0);

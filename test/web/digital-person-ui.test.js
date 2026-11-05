@@ -289,6 +289,14 @@ describe('Digital Person surface', () => {
     expect(wrapper.text()).toContain('FileRead'); expect(wrapper.text()).toContain('Bash');
     expect(wrapper.get('[data-tool-call-id="trace-b"]').text()).toContain('Unknown');
     expect(wrapper.text()).not.toMatch(/PRIVATE_ARGS|legacy-duplicate|provider-a|provider-b/);
+    const enhanced = { ...turn, calls: [{ ...turn.calls[0], capabilities: [{ callId: 'side', id: 'ResponseEnhance', status: 'completed',
+      modelCall: { model: 'configured/reviewer', elapsedMs: 1250, usage: { inputTokens: 30, outputTokens: 12, complete: false } }, args: 'PRIVATE_DRAFT' }] }] };
+    await wrapper.setProps({ page: { items: [enhanced], loaded: true } });
+    expect(wrapper.findAll('.person-call-step')).toHaveLength(1);
+    expect(wrapper.get('.person-call-side-model').text()).toContain('configured/reviewer');
+    expect(wrapper.get('.person-call-side-model').text()).toContain('1.3s');
+    expect(wrapper.get('.person-call-side-model').text()).toContain('30');
+    expect(wrapper.text()).not.toContain('PRIVATE_DRAFT');
     await wrapper.setProps({ page: { items: [personTurn()], loaded: true } });
     expect(wrapper.findAll('.person-call-capability')).toHaveLength(1); // legacy scalar reader
     await wrapper.setProps({ page: { items: [{ ...turn, calls: [{ ...turn.calls[0], capabilities: [] }] }], loaded: true } });

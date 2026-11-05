@@ -80,6 +80,38 @@ describe('Person continuous native execution then one final cognition', () => {
     expect(run.repository.commit.mock.calls[0][1].reply).toBeNull();
   });
 
+  it('enhances once on the selected Person model inside the same loop and accounts the private side call', async () => {
+    const enhanced = { status: 'revised', response: '我选 A：你最在意维护成本，而 A 无需自行运维。', issues: ['原稿只有罗列'], evidenceGaps: [] };
+    const run = await setup((params, index) => {
+      if (index === 0) {
+        expect(params.tools.some(tool => tool.name === 'ResponseEnhance')).toBe(true);
+        return tools(['enhance', 'ResponseEnhance', { question: '哪个好？', draft: '两者各有优缺点。', evidence: 'A 无需运维，B 需要维护。', preferences: '低维护优先。' }]);
+      }
+      if (index === 1) {
+        expect(params.tools).toEqual([]);
+        expect(params.model).toBe('test/second');
+        expect(params.system).toContain('smallest complete answer');
+        return text(JSON.stringify(enhanced));
+      }
+      if (index === 2) {
+        expect(params.tools.length).toBeGreaterThan(0);
+        expect(JSON.stringify(params.messages)).toContain(enhanced.response);
+        const observation = params.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content)).find(value => value.id === 'ResponseEnhance');
+        return tools(['goal', 'Execution__goal', goalInput([observation.sourceRef], { acceptanceChecks: [{ check: 'Prepared a concise answer using the supplied comparison.', sourceRefs: [observation.sourceRef] }] })]);
+      }
+      if (params.tools.length) return text(enhanced.response);
+      const p = final(params); p.reply = null;
+      return text(JSON.stringify(p));
+    }, { config: { ...config, primaryModel: 'test/second' } });
+    const job = run.start(); await job.promise;
+    expect(run.repository.commit).toHaveBeenCalledTimes(1);
+    expect(run.requests).toHaveLength(5);
+    const result = run.traces.find(trace => trace.kind === 'capability_result' && trace.capability.id === 'ResponseEnhance').result;
+    expect(result).toMatchObject({ ok: true, modelCall: { model: 'test/second', completed: true, usage: { inputTokens: 11, outputTokens: 7 } } });
+    expect(job.models.get('test/second')).toMatchObject({ calls: 5, completedCalls: 5, usage: { inputTokens: 55, outputTokens: 35, totalTokens: 90 } });
+    expect(run.traces.filter(trace => trace.kind === 'call_started')).toHaveLength(4);
+  });
+
   it('drains truncated/unknown-tool batches before safe correction, preserving usage with no dispatched sibling', async () => {
     const effect = vi.spyOn(fileWrite, 'execute');
     const run = await setup((params, index) => {

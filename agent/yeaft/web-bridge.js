@@ -4708,7 +4708,9 @@ function handleEngineEvent(event, hctx) {
             type: 'tool_use',
             id: event.id,
             name: event.name,
-            input: event.input,
+            // Drafts/review suggestions stay in native continuation and private
+            // debug, not in ordinary live chat tool detail.
+            input: event.name === 'ResponseEnhance' ? {} : event.input,
           }],
         },
       }, envelope);
@@ -4730,7 +4732,9 @@ function handleEngineEvent(event, hctx) {
 
     case 'tool_end': {
       const images = Array.isArray(event.displayImages) ? event.displayImages : [];
-      const displayOutput = typeof event.output === 'string' ? event.output : JSON.stringify(event.output ?? '');
+      const rawOutput = typeof event.output === 'string' ? event.output : JSON.stringify(event.output ?? '');
+      const displayOutput = event.name === 'ResponseEnhance'
+        ? (event.isError ? 'ResponseEnhance failed; no answer published.' : 'ResponseEnhance completed; no answer published.') : rawOutput;
       for (const [sourceImageIndex, image] of images.entries()) {
         const persistedImage = imageMetadataForPersistence(image);
         try {
@@ -4757,7 +4761,7 @@ function handleEngineEvent(event, hctx) {
         hctx.toolResultsAccum.push({
           role: 'tool',
           toolCallId: event.id,
-          content: displayOutput,
+          content: rawOutput,
           isError: !!event.isError,
         });
       }
