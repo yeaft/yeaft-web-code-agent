@@ -107,6 +107,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/files-response-correlation.test.js",
   "test/web/message-file-preview.test.js",
   "test/web/message-flow-regression.test.js",
+  "test/web/history-pagination.test.js",
   "test/web/plugin-center-ui.test.js",
   "test/web/scheduled-task-ui.test.js",
   "test/web/scheduled-tasks-store.test.js",

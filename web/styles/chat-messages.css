@@ -1185,6 +1185,11 @@
 }
 
 .load-more-hint {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: none;
+  font-family: inherit;
   cursor: pointer;
   opacity: 0.6;
   transition: opacity 0.2s;

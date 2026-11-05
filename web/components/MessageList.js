@@ -30,6 +30,7 @@ import {
   visibleItemsForMessageBlock,
 } from '../utils/message-turn-collapse.js';
 import { navigateToPersistedMessage } from '../utils/message-search-navigation.js';
+import { createHistoryPageBudget, isHistoryScrollInput } from '../utils/history-pagination.js';
 import { formatSessionMessageDateTime } from '../utils/session-message-quote.js';
 import { appendTurnResponseSegment, finalizeTurnResponseSegments, orderResponseImageMessages } from '../utils/turn-response.js';
 import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.js';
@@ -144,7 +145,7 @@ export default {
           <div class="initial-message-loading-text">{{ initialMessagesLoadingText || $t('chat.session.loadingHistory') }}</div>
         </div>
         <div v-else-if="(store.loadingMoreMessages && store.currentView !== 'yeaft') || showYeaftOlderHistoryLoading" class="loading-more">{{ $t('message.loadingMore') }}</div>
-        <div v-else-if="(store.hasMoreMessages && store.currentView !== 'yeaft') || store.yeaftHasMoreHistory || store.hasHiddenYeaftMessages" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
+        <button v-else-if="(store.hasMoreMessages && store.currentView !== 'yeaft') || store.yeaftHasMoreHistory || store.hasHiddenYeaftMessages" type="button" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</button>
         <VirtualTranscript
           :key="virtualTranscriptIdentity"
           ref="virtualTranscriptRef"
@@ -1395,7 +1396,21 @@ export default {
     const activeLongResponseOriginId = Vue.ref('');
     const autoFollowPaused = Vue.ref(false);
     const SCROLL_THRESHOLD = virtualTranscriptDefaults.bottomThreshold;
-    let loadMoreArmed = true;
+    const historyPageBudget = createHistoryPageBudget();
+    let historyLoadGeneration = 0;
+    let historyLoadPending = false;
+    let historyLoadUnwatch = null;
+    let historyContinuationRafId = null;
+
+    const resetHistoryPagination = () => {
+      historyLoadGeneration += 1;
+      historyPageBudget.reset();
+      historyLoadPending = false;
+      historyLoadUnwatch?.();
+      historyLoadUnwatch = null;
+      if (historyContinuationRafId != null) cancelAnimationFrame(historyContinuationRafId);
+      historyContinuationRafId = null;
+    };
 
     const hasStreamingMessage = Vue.computed(() => (
       store.messages.some(m => m.isStreaming)
@@ -1818,19 +1833,10 @@ export default {
       return shouldFollowTranscriptBottom({ scrollTop, scrollHeight, clientHeight, threshold: SCROLL_THRESHOLD });
     };
 
-    const maybeLoadMoreNearTop = (scrollTop, clientHeight = 0, { allowContinuation = false } = {}) => {
-      if (scrollTop > historyPrefetchThreshold(clientHeight)) {
-        loadMoreArmed = true;
-        return;
-      }
-      if (allowContinuation) loadMoreArmed = true;
-      if (!loadMoreArmed || !canLoadMoreMessages()) return;
-      loadMoreArmed = false;
-
-      // Auto-fire load-more when the user scrolls near the top. Chat and
-      // Yeaft share onClickLoadMore() so the click path and scroll path
-      // cannot drift apart.
-      onClickLoadMore();
+    const maybeLoadMoreNearTop = (scrollTop, clientHeight = 0) => {
+      if (scrollTop > historyPrefetchThreshold(clientHeight) || historyLoadPending || !canLoadMoreMessages()) return;
+      if (!historyPageBudget.consume()) return;
+      loadMoreHistoryPage();
     };
 
     const getFirstLoadBlockIdentity = (block) => {
@@ -1862,19 +1868,6 @@ export default {
         || after.firstBlockIdentity !== before.firstBlockIdentity;
     };
 
-    const continueLoadMoreIfStillNearTop = (beforeSnapshot) => {
-      Vue.nextTick(() => {
-        if (!containerRef.value) return;
-        const afterSnapshot = getLoadMoreProgressSnapshot();
-        if (!hasLoadMoreProgress(beforeSnapshot, afterSnapshot)) return;
-        maybeLoadMoreNearTop(
-          containerRef.value.scrollTop || 0,
-          containerRef.value.clientHeight || 0,
-          { allowContinuation: true },
-        );
-      });
-    };
-
     const resumeAutoFollow = () => {
       autoFollowPaused.value = false;
       isAtBottom.value = true;
@@ -1899,35 +1892,46 @@ export default {
       // scrolling must not cancel the user's explicit follow intent.
       isAtBottom.value = !autoFollowPaused.value && atBottom;
       if (!userScrollInteractionActive) lastObservedScrollTop = Number(scrollTop || 0);
-      maybeLoadMoreNearTop(scrollTop || 0, clientHeight || 0);
       scheduleResponseNavigationUpdate();
     };
 
     const preserveScrollAnchorDuringLoad = (loadFn, loadingRef) => {
       const beforeSnapshot = getLoadMoreProgressSnapshot();
+      const generation = historyLoadGeneration;
+      historyLoadPending = true;
       let finished = false;
-      let unwatch = null;
 
       const finishLoadMore = () => {
-        if (finished) return;
+        if (finished || generation !== historyLoadGeneration) return;
         finished = true;
-        if (unwatch) unwatch();
-        // VirtualTranscript owns prepend anchoring by stable block key. Applying
-        // an outer scrollHeight delta here would move the same anchor twice.
-        continueLoadMoreIfStillNearTop(beforeSnapshot);
+        historyLoadUnwatch?.();
+        historyLoadUnwatch = null;
+        // VirtualTranscript owns prepend anchoring by stable block key. Wait for
+        // that layout, then spend only the current user gesture's remaining budget.
+        Vue.nextTick(() => {
+          if (generation !== historyLoadGeneration) return;
+          historyContinuationRafId = requestAnimationFrame(() => {
+            historyContinuationRafId = null;
+            if (generation !== historyLoadGeneration) return;
+            historyLoadPending = false;
+            if (!containerRef.value || !hasLoadMoreProgress(beforeSnapshot, getLoadMoreProgressSnapshot())) {
+              historyPageBudget.stop();
+              return;
+            }
+            maybeLoadMoreNearTop(containerRef.value.scrollTop, containerRef.value.clientHeight);
+          });
+        });
       };
 
       if (loadingRef) {
-        unwatch = Vue.watch(loadingRef, (loading) => {
+        historyLoadUnwatch = Vue.watch(loadingRef, (loading) => {
           if (!loading) finishLoadMore();
         });
       }
 
       loadFn();
 
-      // Covers synchronous test doubles and cached responses that prepend
-      // rows without a visible loading-flag round trip. The normal async
-      // path finishes from the watcher above when loading flips false.
+      // Cached resident rows may expand without a loading-flag round trip.
       Vue.nextTick(() => {
         if (!loadingRef || !loadingRef()) finishLoadMore();
       });
@@ -1952,8 +1956,7 @@ export default {
       return !!store.currentConversation && store.hasMoreMessages && !store.loadingMoreMessages;
     };
 
-    const onClickLoadMore = () => {
-      if (!canLoadMoreMessages()) return;
+    const loadMoreHistoryPage = () => {
       const isYeaft = store.currentView === 'yeaft';
       preserveScrollAnchorDuringLoad(
         isYeaft ? loadMoreYeaft : () => store.loadMoreMessages(),
@@ -1961,8 +1964,24 @@ export default {
       );
     };
 
+    const onClickLoadMore = () => {
+      if (historyLoadPending || !canLoadMoreMessages()) return;
+      pauseAutoFollow();
+      historyPageBudget.start();
+      historyPageBudget.consume();
+      loadMoreHistoryPage();
+    };
+
+    const recordHistoryScrollInput = (direction, newGesture) => {
+      historyPageBudget.recordInput({ direction, newGesture });
+      if (direction < 0 && containerRef.value) {
+        maybeLoadMoreNearTop(containerRef.value.scrollTop, containerRef.value.clientHeight);
+      }
+    };
+
     let userScrollInteractionActive = false;
     let pointerScrollActive = false;
+    let pointerGesturePending = false;
     let userScrollEndTimer = null;
     let lastObservedScrollTop = 0;
     const USER_SCROLL_END_FALLBACK_MS = 250;
@@ -1989,10 +2008,40 @@ export default {
       scheduleUserScrollInteractionEnd();
     };
 
+    const onWheel = (event) => {
+      if (event.defaultPrevented || event.ctrlKey || !event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      if (!isHistoryScrollInput(event.target, containerRef.value, Math.sign(event.deltaY))) return;
+      markUserScrollIntent();
+      recordHistoryScrollInput(Math.sign(event.deltaY));
+    };
+
+    let touchY = null;
+    let touchGesturePending = false;
+    const onTouchStart = (event) => {
+      touchY = event.touches?.length === 1 ? event.touches[0].clientY : null;
+      touchGesturePending = true;
+    };
+    const onTouchMove = (event) => {
+      const nextY = event.touches?.length === 1 ? event.touches[0].clientY : null;
+      if (event.defaultPrevented || nextY == null || touchY == null) {
+        touchY = nextY;
+        return;
+      }
+      const delta = touchY - nextY;
+      touchY = nextY;
+      if (!delta || !isHistoryScrollInput(event.target, containerRef.value, Math.sign(delta))) return;
+      markUserScrollIntent();
+      recordHistoryScrollInput(Math.sign(delta), touchGesturePending);
+      touchGesturePending = false;
+    };
+    const onTouchEnd = () => { touchY = null; };
+
     const onPointerScrollStart = (event) => {
       if (!isTranscriptScrollbarPointer(event, containerRef.value)) return;
       pauseAutoFollow();
       pointerScrollActive = true;
+      historyPageBudget.reset();
+      pointerGesturePending = true;
       userScrollInteractionActive = true;
       virtualTranscriptRef.value?.clearTargetAnchor?.();
       lastObservedScrollTop = Number(containerRef.value?.scrollTop || 0);
@@ -2009,16 +2058,25 @@ export default {
 
     const onScrollKey = (event) => {
       if (!shouldMarkTranscriptKeyScroll(event, containerRef.value)) return;
+      const upward = ['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey);
+      const target = containerRef.value.contains(event.target) ? event.target : containerRef.value;
+      if (!isHistoryScrollInput(target, containerRef.value, upward ? -1 : 1)) return;
       pauseAutoFollow();
       userScrollInteractionActive = true;
       virtualTranscriptRef.value?.clearTargetAnchor?.();
       scheduleUserScrollInteractionEnd();
+      recordHistoryScrollInput(upward ? -1 : 1, !event.repeat);
     };
 
     const onScroll = () => {
       const currentScrollTop = Number(containerRef.value?.scrollTop || 0);
       const wasFollowing = !autoFollowPaused.value;
+      const delta = currentScrollTop - lastObservedScrollTop;
       lastObservedScrollTop = currentScrollTop;
+      if (pointerScrollActive && delta !== 0) {
+        historyPageBudget.recordInput({ direction: Math.sign(delta), newGesture: pointerGesturePending });
+        pointerGesturePending = false;
+      }
       const atBottom = checkIfAtBottom();
       const following = resolveTranscriptUserFollow({
         following: wasFollowing,
@@ -2030,7 +2088,7 @@ export default {
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(following);
       if (userScrollInteractionActive) scheduleUserScrollInteractionEnd();
 
-      if (containerRef.value) {
+      if (userScrollInteractionActive && delta < 0 && containerRef.value) {
         maybeLoadMoreNearTop(
           containerRef.value.scrollTop || 0,
           containerRef.value.clientHeight || 0,
@@ -2056,6 +2114,7 @@ export default {
         );
       }
       clearUserScrollInteraction();
+      resetHistoryPagination();
       resumeAutoFollow();
       Vue.nextTick(scrollToBottom);
     };
@@ -2119,6 +2178,10 @@ export default {
     // that transient id here would discard a user's paused-follow intent and
     // jump them back to the latest message when loading completes.
     Vue.watch(virtualTranscriptIdentity, () => {
+      resetHistoryPagination();
+      clearUserScrollInteraction();
+      pointerScrollActive = false;
+      touchY = null;
       for (const key of Object.keys(assistantTurnActionStates)) delete assistantTurnActionStates[key];
       for (const key of Object.keys(toolExpandStates)) delete toolExpandStates[key];
       for (const key of Object.keys(messageTurnCollapseStates)) delete messageTurnCollapseStates[key];
@@ -2184,8 +2247,11 @@ export default {
       scrollToBottom();
       Vue.nextTick(scheduleResponseNavigationUpdate);
       if (containerRef.value) {
-        containerRef.value.addEventListener('wheel', markUserScrollIntent, { passive: true });
-        containerRef.value.addEventListener('touchmove', markUserScrollIntent, { passive: true });
+        containerRef.value.addEventListener('wheel', onWheel, { passive: true });
+        containerRef.value.addEventListener('touchstart', onTouchStart, { passive: true });
+        containerRef.value.addEventListener('touchmove', onTouchMove, { passive: true });
+        containerRef.value.addEventListener('touchend', onTouchEnd, { passive: true });
+        containerRef.value.addEventListener('touchcancel', onTouchEnd, { passive: true });
         containerRef.value.addEventListener('pointerdown', onPointerScrollStart, { passive: true });
         containerRef.value.addEventListener('scroll', onScroll);
       }
@@ -2196,8 +2262,11 @@ export default {
 
     Vue.onUnmounted(() => {
       if (containerRef.value) {
-        containerRef.value.removeEventListener('wheel', markUserScrollIntent);
-        containerRef.value.removeEventListener('touchmove', markUserScrollIntent);
+        containerRef.value.removeEventListener('wheel', onWheel);
+        containerRef.value.removeEventListener('touchstart', onTouchStart);
+        containerRef.value.removeEventListener('touchmove', onTouchMove);
+        containerRef.value.removeEventListener('touchend', onTouchEnd);
+        containerRef.value.removeEventListener('touchcancel', onTouchEnd);
         containerRef.value.removeEventListener('pointerdown', onPointerScrollStart);
         containerRef.value.removeEventListener('scroll', onScroll);
       }
@@ -2209,6 +2278,7 @@ export default {
       responseNavigationResizeObserver?.disconnect();
       responseNavigationResizeObserver = null;
       observedResponseElements.clear();
+      resetHistoryPagination();
       clearUserScrollInteraction();
       if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
       if (typingHideTimer) { clearTimeout(typingHideTimer); typingHideTimer = null; }
