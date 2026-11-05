@@ -421,7 +421,7 @@ test('task editing preserves failed drafts for retry, then manually runs the sam
   expect(state.sessions.get(TASK_SESSION_ID).task.enabled).toBe(false);
   // Re-enable in settings, then pause during an active run without aborting it.
   await configureTask(page);
-  await settings.locator('.scheduled-task-option-row').filter({ has: settings.getByRole('switch', { name: 'Enabled', exact: true }) }).click();
+  await settings.locator('.scheduled-task-option-row').filter({ has: page.getByRole('switch', { name: 'Enabled', exact: true }) }).click();
   await settings.getByRole('button', { name: 'Save task', exact: true }).click();
   await expect.poll(() => state.sessions.get(TASK_SESSION_ID).task.enabled).toBe(true);
   await page.locator('.group-settings-close').click();
