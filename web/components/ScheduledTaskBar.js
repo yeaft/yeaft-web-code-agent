@@ -25,10 +25,6 @@ export default {
     running() { return this.unavailable === 'scheduledTasks.running' || this.task.running || this.task.status === 'running' || this.task.runtime?.status === 'running' || this.lastRun?.status === 'running'; },
     taskError() { return this.error || this.lastRun?.error || this.task.lastError || ''; },
   },
-  watch: {
-    running(value) { if (!value) this.stopping = false; },
-    stopUnavailable(value) { if (value) this.stopping = false; },
-  },
   methods: {
     formatTime(value) {
       if (!value) return '';
@@ -46,18 +42,22 @@ export default {
       } catch (error) { this.error = error?.message || this.$t('scheduledTasks.failed'); }
       finally { this.busy = false; }
     },
-    stop() {
-      if (this.stopping || !this.running || this.stopUnavailable) return;
+    async stop() {
+      if (this.busy || this.stopping || !this.task.enabled || this.stopUnavailable) return;
       this.stopping = true;
       this.error = '';
       try {
-        // Reuse the Session-scoped stop path; never pause or rewrite the schedule.
-        const sent = this.chat.cancelYeaftSession(this.session.id, { agentId: this.agentId, waitForAck: true });
-        if (sent === false) throw new Error(this.$t('scheduledTasks.failed'));
-      } catch (error) {
-        this.error = error?.message || this.$t('scheduledTasks.failed');
-        this.stopping = false;
-      }
+        // Pause future dispatch only. A partial, revision-checked config edit
+        // preserves the trigger and any execution already in progress.
+        const result = await this.chat.updateScheduledTask({
+          agentId: this.agentId, sessionId: this.session.id,
+          task: { enabled: false }, expectedRevision: this.task.revision,
+        });
+        const error = taskResultError(result);
+        if (error !== null) this.error = result?.error?.code === 'task_conflict'
+          ? this.$t('scheduledTasks.conflict') : (error || this.$t('scheduledTasks.failed'));
+      } catch (error) { this.error = error?.message || this.$t('scheduledTasks.failed'); }
+      finally { this.stopping = false; }
     },
   },
   template: `
@@ -68,7 +68,7 @@ export default {
           <button type="button" class="btn-ghost scheduled-task-run" :disabled="busy || stopping || !!unavailable" :aria-label="$t(busy ? 'scheduledTasks.starting' : 'scheduledTasks.runOnce')" :aria-description="$t('scheduledTasks.runOnceHelp')" :title="$t(unavailable || (busy ? 'scheduledTasks.starting' : 'scheduledTasks.runOnceHelp'))" :aria-busy="busy" @click="run">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>
           </button>
-          <button type="button" class="btn-ghost scheduled-task-stop" :disabled="stopping || !running || !!stopUnavailable" :aria-label="$t(stopping ? 'scheduledTasks.stopping' : 'scheduledTasks.stop')" :aria-description="$t('scheduledTasks.stopHelp')" :title="$t(stopUnavailable || (stopping ? 'scheduledTasks.stopping' : 'scheduledTasks.stopHelp'))" :aria-busy="stopping" @click="stop">
+          <button type="button" class="btn-ghost scheduled-task-stop" :disabled="busy || stopping || !task.enabled || !!stopUnavailable" :aria-label="$t(stopping ? 'scheduledTasks.stopping' : 'scheduledTasks.stop')" :aria-description="$t('scheduledTasks.stopHelp')" :title="$t(stopUnavailable || (stopping ? 'scheduledTasks.stopping' : 'scheduledTasks.stopHelp'))" :aria-busy="stopping" @click="stop">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
           </button>
           <button type="button" class="btn-ghost scheduled-task-configure" :aria-label="$t('scheduledTasks.configure')" :title="$t('scheduledTasks.configure')" @click="$emit('configure')">
