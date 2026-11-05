@@ -185,14 +185,44 @@ async function expectLongTurn(page) {
 }
 
 async function loadAllOlder(page) {
-  // Production request action, real relay and real turn-boundary cursors.
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    await expect.poll(() => page.evaluate(() => Object.values(window.Pinia.useChatStore().yeaftSessionHistoryState).every(state => !state.loading))).toBe(true);
+  // Production request action and real relay. A tool-heavy turn can span many
+  // bounded disk windows, followed by a resident-gap traversal. Do not rely on
+  // MessageList's layout changes to start additional pages for this helper.
+  const readState = () => page.evaluate(() => window.Pinia.useChatStore().activeYeaftHistoryState);
+  const waitForIdle = async () => {
+    await expect.poll(async () => {
+      const state = await readState();
+      return !!state?.loaded && !state.loading;
+    }).toBe(true);
+    return readState();
+  };
+  const nextWork = state => state.serverHasMore !== false
+    ? { kind: 'server', beforeSeq: state.serverOldestFetchedSeq ?? state.oldestSeq }
+    : state.gapQueue[0];
+  let state = await waitForIdle();
+  // Each traversal must retire at least one durable seq per request. Two passes
+  // (server frontier, then resident gaps) give a finite fixture-derived bound.
+  const maxPages = 2 * Math.max(state.latestSeq || 0, state.serverOldestFetchedSeq || 0,
+    ...(state.gapQueue || []).map(gap => gap.beforeSeq));
+  for (let attempt = 0; attempt <= maxPages; attempt += 1) {
+    const detail = JSON.stringify(state);
+    expect(state.error, detail).toBeNull();
+    expect(state.paginationError || null, detail).toBeNull();
+    if (!state.hasMore) return;
+    expect(attempt, `History exceeded ${maxPages} descending pages: ${detail}`).toBeLessThan(maxPages);
+    const before = nextWork(state);
+    expect(Number.isFinite(before?.beforeSeq), detail).toBe(true);
     const started = await page.evaluate(() => window.Pinia.useChatStore().loadMoreYeaftHistory(5));
-    if (!started) return;
-    await expect.poll(() => page.evaluate(() => Object.values(window.Pinia.useChatStore().yeaftSessionHistoryState).every(state => !state.loading))).toBe(true);
+    expect(started, `History request did not start: ${detail}`).toBe(true);
+    state = await waitForIdle();
+    if (state.hasMore) {
+      const after = nextWork(state);
+      if (before.kind === 'gap') expect(after?.kind, JSON.stringify(state)).toBe('gap');
+      if (after?.kind === before.kind) {
+        expect(after.beforeSeq, `History cursor did not advance: ${JSON.stringify(state)}`).toBeLessThan(before.beforeSeq);
+      }
+    }
   }
-  throw new Error('Older history did not finish within ten pages');
 }
 
 async function expectOlderPrompts(page) {
