@@ -158,3 +158,55 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await expect(progress).toHaveCount(0);
   expect(await page.evaluate(() => JSON.stringify(window.Pinia.useChatStore().messagesMap))).not.toContain('query_progress');
 });
+
+test('terminal frames and reconnect snapshots settle sidebar animation and response styling independently', async ({ chatPage: page, mockAgent }, info) => {
+  const session = { id: 'terminal-session', name: 'Terminal status', roster: ['terminal-vp'], defaultVpId: 'terminal-vp' };
+  mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [session] } });
+  await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().sessionCatalog.some(row => row.routeRef.sessionId === id), session.id)).toBe(true);
+  await page.evaluate(id => {
+    const chat = window.Pinia.useChatStore();
+    chat.openCatalogSession(chat.sessionCatalog.find(row => row.routeRef.sessionId === id));
+  }, session.id);
+  const conversationId = `yeaft-${randomUUID()}`;
+  const owner = { sessionId: session.id, vpId: 'terminal-vp', threadId: 'main' };
+  const send = event => mockAgent.send({ type: 'yeaft_output', conversationId, sessionId: session.id, event });
+  const output = (turnId, data) => mockAgent.send({ type: 'yeaft_output', conversationId, ...owner, turnId, data });
+  send({ type: 'session_ready', conversationId, sessionId: session.id, model: 'test-model' });
+  await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().yeaftConversationIdsByAgent[id], mockAgent.agentId)).toBe(conversationId);
+  const broker = createVpStatusBroker({ send });
+  const sidebarRow = page.locator('.session-item').filter({ hasText: session.name });
+  const response = text => page.locator('.assistant-turn').filter({ hasText: text });
+  const start = (turnId, text) => {
+    send({ ...owner, turnId, type: 'vp_turn_start' });
+    broker.transition({ ...owner, turnId, state: 'streaming' });
+    output(turnId, { type: 'assistant', message: { content: text } });
+  };
+  start('metadata-only', 'Metadata completion');
+  await expect(sidebarRow.locator('.processing-dot')).toHaveCount(1);
+  await expect(response('Metadata completion')).toHaveClass(/streaming/);
+  send({ ...owner, type: 'vp_turn_end', turnId: 'metadata-only', reason: 'end_turn' });
+  await expect(sidebarRow.locator('.processing-dot')).toHaveCount(0);
+  await expect(response('Metadata completion')).not.toHaveClass(/streaming/);
+  await expect(response('Metadata completion').locator('.turn-response-result')).toBeVisible();
+  start('result-only', 'Result completion');
+  output('result-only', { type: 'result', result_text: '' });
+  await expect(sidebarRow.locator('.processing-dot')).toHaveCount(0);
+  await expect(response('Result completion').locator('.turn-response-result')).toBeVisible();
+  start('missed-terminal', 'Interrupted without terminal evidence');
+  await expect(sidebarRow.locator('.processing-dot')).toHaveCount(1);
+  // Reconnect's current broker snapshot must drain an orphan even when both
+  // result and metadata were missed. It does not claim that work succeeded.
+  send({ type: 'vp_status_snapshot', sessionId: session.id, statuses: [] });
+  await expect(sidebarRow.locator('.processing-dot')).toHaveCount(0);
+  await expect(response('Interrupted without terminal evidence')).not.toHaveClass(/streaming/);
+  await expect(response('Interrupted without terminal evidence').locator('.turn-response-result')).toHaveCount(0);
+  send({ ...owner, type: 'vp_turn_end', turnId: 'missed-terminal', reason: 'end_turn' });
+  await expect(response('Interrupted without terminal evidence').locator('.turn-response-result')).toBeVisible();
+  for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => { window.Pinia.useChatStore().sessionSidebarOpen = true; });
+    await expect(sidebarRow.locator('.processing-dot')).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath(`session-terminal-${theme}-${width}.png`), fullPage: true });
+  }
+});

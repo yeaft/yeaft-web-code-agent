@@ -205,10 +205,14 @@ it('reuses schedule validation, emits only supported triggers and preserves an u
   expect(wrapper.text()).toContain(en['scheduledTasks.unsupportedTrigger']);
 });
 
-it('runs the real Agent-scoped Session, reports failures, disables busy/offline/old Agents, and opens settings', async () => {
-  const chat = Vue.reactive({ scheduledTaskProtocolSupported: true, agents, connectionState: 'connected', runScheduledTask: vi.fn(async () => ({ ok: false, error: { message: 'Execution failed' } })), isYeaftSessionProcessing: () => false, cancelYeaftSession: vi.fn(() => true) });
+it('runs and pauses the Agent-scoped task schedule with revision, pending and failure guards, never cancelling execution', async () => {
+  const configured = { ...task, revision: 'task-r1', trigger: { type: 'schedule', scheduledFor: Date.now() + 86400000 } };
+  const chat = Vue.reactive({ scheduledTaskProtocolSupported: true, agents, connectionState: 'connected',
+    runScheduledTask: vi.fn(async () => ({ ok: false, error: { message: 'Execution failed' } })),
+    updateScheduledTask: vi.fn(async () => ({ ok: true })),
+    isYeaftSessionProcessing: () => false, cancelYeaftSession: vi.fn() });
   window.Pinia = { useChatStore: () => chat };
-  wrapper = mount(ScheduledTaskBar, { props: { agentId: 'a', session: { id: 'task', task } }, global: { mocks: { $t: t } } });
+  wrapper = mount(ScheduledTaskBar, { props: { agentId: 'a', session: { id: 'task', task: configured } }, global: { mocks: { $t: t } } });
   await wrapper.get('.scheduled-task-run').trigger('click');
   await flushPromises();
   expect(chat.runScheduledTask).toHaveBeenCalledWith({ agentId: 'a', sessionId: 'task' });
@@ -217,55 +221,84 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   expect(wrapper.findAll('[role="alert"]')).toHaveLength(1);
   await wrapper.get('.scheduled-task-configure').trigger('click');
   expect(wrapper.emitted('configure')).toHaveLength(1);
-  await wrapper.setProps({ session: { id: 'task', task: { ...task, lastRun: { status: 'running' } } } });
-  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
+  // Idle but enabled is exactly when users need to stop the next occurrence.
   expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeUndefined();
   await wrapper.get('.scheduled-task-stop').trigger('click');
-  expect(chat.cancelYeaftSession).toHaveBeenCalledExactlyOnceWith('task', { agentId: 'a', waitForAck: true });
+  await flushPromises();
+  expect(chat.updateScheduledTask).toHaveBeenCalledExactlyOnceWith({ agentId: 'a', sessionId: 'task',
+    task: { enabled: false }, expectedRevision: 'task-r1' });
+  expect(chat.cancelYeaftSession).not.toHaveBeenCalled();
+  expect(wrapper.vm.error).toBe('');
+  await wrapper.setProps({ session: { id: 'task', task: { ...configured, enabled: false, revision: 'task-r2' } } });
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
+  expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeUndefined();
+  expect(wrapper.get('.scheduled-task-runtime').text()).toContain('Paused');
+  await wrapper.vm.stop();
+  expect(chat.updateScheduledTask).toHaveBeenCalledTimes(1);
+  // Pausing an enabled schedule is allowed during a run, and waits for its own
+  // persistence ACK, not runtime changes, connectivity changes or broadcasts.
+  const active = { ...configured, revision: 'task-r3', lastRun: { status: 'running' } };
+  await wrapper.setProps({ session: { id: 'task', task: active } });
+  let acknowledge;
+  chat.updateScheduledTask.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+  await wrapper.get('.scheduled-task-stop').trigger('click');
   expect(wrapper.get('.scheduled-task-stop').attributes('aria-label')).toBe(en['scheduledTasks.stopping']);
   expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
-  await wrapper.vm.stop();
-  expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(1);
-  expect(wrapper.get('.scheduled-task-runtime [role="status"]').text()).toBe('Running');
-  await wrapper.setProps({ session: { id: 'task', task } });
-  expect(wrapper.vm.stopping).toBe(false);
-  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
-  await wrapper.vm.stop();
-  expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(1);
-  // Failed transport must allow retry, and offline must never send a stop.
-  await wrapper.setProps({ session: { id: 'task', task: { ...task, lastRun: { status: 'running' } } } });
-  chat.cancelYeaftSession.mockReturnValue(false);
-  await wrapper.get('.scheduled-task-stop').trigger('click');
-  expect(wrapper.get('[role="alert"]').text()).toBe(en['scheduledTasks.failed']);
-  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeUndefined();
-  chat.agents = [{ ...agents[0], online: false }];
-  await Vue.nextTick();
-  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
-  await wrapper.vm.stop();
-  expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(2);
-  chat.agents = agents;
-  chat.cancelYeaftSession.mockReturnValue(true);
-  chat.runtimeRunning = true;
-  chat.isYeaftSessionProcessing = () => chat.runtimeRunning;
-  await wrapper.setProps({ session: { id: 'task', task } });
-  await wrapper.get('.scheduled-task-stop').trigger('click');
   expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
-  // Late active status while waiting must not unlock either action.
-  chat.runtimeRunning = true;
-  await Vue.nextTick();
+  expect(wrapper.get('.scheduled-task-runtime [role="status"]').text()).toBe('Running');
+  const runsBefore = chat.runScheduledTask.mock.calls.length;
   await wrapper.vm.stop();
-  expect(chat.cancelYeaftSession).toHaveBeenCalledTimes(3);
-  expect(wrapper.vm.stopping).toBe(true);
-  chat.runtimeRunning = false; // Authoritative abort ack clears runtime.
+  await wrapper.vm.run();
+  expect(chat.updateScheduledTask).toHaveBeenCalledTimes(2);
+  expect(chat.runScheduledTask).toHaveBeenCalledTimes(runsBefore);
+  await wrapper.setProps({ session: { id: 'task', task: { ...active, enabled: false, lastRun: { status: 'completed' } } } });
+  chat.connectionState = 'disconnected';
   await Vue.nextTick();
+  expect(wrapper.vm.stopping).toBe(true);
+  chat.connectionState = 'connected';
+  acknowledge({ ok: true });
+  await flushPromises();
   expect(wrapper.vm.stopping).toBe(false);
-  await wrapper.setProps({ session: { id: 'task', task } });
+  expect(chat.cancelYeaftSession).not.toHaveBeenCalled();
+  // A disabled schedule stays disabled even when ordinary conversation work is active.
+  chat.isYeaftSessionProcessing = () => true;
+  await Vue.nextTick();
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
+  await wrapper.vm.stop();
+  expect(chat.updateScheduledTask).toHaveBeenCalledTimes(2);
+  chat.isYeaftSessionProcessing = () => false;
+  await wrapper.setProps({ session: { id: 'task', task: configured } });
+  for (const [result, message] of [[false, en['scheduledTasks.failed']],
+    [{ ok: false, error: { code: 'task_conflict' } }, en['scheduledTasks.conflict']],
+    [{ ok: false, error: { message: 'Persistence failed' } }, 'Persistence failed']]) {
+    chat.updateScheduledTask.mockResolvedValueOnce(result);
+    await wrapper.get('.scheduled-task-stop').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toBe(message);
+    expect(wrapper.vm.stopping).toBe(false);
+    expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeUndefined();
+  }
+  chat.updateScheduledTask.mockRejectedValueOnce(new Error('Transport failed'));
+  await wrapper.get('.scheduled-task-stop').trigger('click');
+  await flushPromises();
+  expect(wrapper.get('[role="alert"]').text()).toBe('Transport failed');
+  expect(wrapper.vm.stopping).toBe(false);
+  await wrapper.setData({ busy: true });
+  const updatesBefore = chat.updateScheduledTask.mock.calls.length;
+  await wrapper.vm.stop();
+  expect(chat.updateScheduledTask).toHaveBeenCalledTimes(updatesBefore);
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
+  await wrapper.setData({ busy: false });
   chat.agents = [{ ...agents[0], online: false }];
   await Vue.nextTick();
   expect(wrapper.text()).toContain(en['scheduledTasks.offline']);
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
+  await wrapper.vm.stop();
+  expect(chat.updateScheduledTask).toHaveBeenCalledTimes(updatesBefore);
   chat.agents = [{ ...agents[0], capabilities: [] }];
   await Vue.nextTick();
   expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
+  expect(wrapper.get('.scheduled-task-stop').attributes('disabled')).toBeDefined();
   expect(wrapper.text()).toContain(en['scheduledTasks.upgrade']);
   chat.scheduledTaskProtocolSupported = false;
   await Vue.nextTick();
@@ -273,8 +306,11 @@ it('runs the real Agent-scoped Session, reports failures, disables busy/offline/
   expect(wrapper.text()).not.toContain(en['scheduledTasks.upgrade']);
   chat.runScheduledTask.mockClear();
   await wrapper.vm.run();
+  await wrapper.vm.stop();
   expect(chat.runScheduledTask).not.toHaveBeenCalled();
+  expect(chat.updateScheduledTask).toHaveBeenCalledTimes(updatesBefore);
   expect(wrapper.get('.scheduled-task-run').attributes('disabled')).toBeDefined();
+  expect(chat.cancelYeaftSession).not.toHaveBeenCalled();
 });
 
 it('renders inline below the announcement and before the VP roster without a popover', async () => {
@@ -295,7 +331,7 @@ it('renders inline below the announcement and before the VP roster without a pop
   expect(sections[1].find('.scheduled-task-state').exists()).toBe(false);
   const actions = sections[1].get('header .scheduled-task-bar-actions');
   expect(actions.findAll('button').map(button => button.attributes('aria-label')))
-    .toEqual(['Run once', 'Stop run', 'Configure']);
+    .toEqual(['Run once', 'Pause schedule', 'Configure']);
   expect(actions.text()).toBe('');
   expect(sections[1].findAll('button').every(button => button.classes().includes('btn-ghost'))).toBe(true);
   const modal = document.createElement('div');

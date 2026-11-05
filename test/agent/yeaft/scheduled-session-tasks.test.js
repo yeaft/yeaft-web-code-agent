@@ -123,7 +123,9 @@ it('holds a run across routing and active work, rejects reentry, and preserves e
 it('uses fresh config revisions so stale tabs cannot undo pauses or overwrite trigger edits', async () => {
   setup(); seed();
   const { ScheduledTaskScheduler } = await schedulerModule();
-  const scheduler = new ScheduledTaskScheduler({ yeaftDir: root, dispatch: () => {}, isActive: () => false });
+  const calls = [];
+  let now = Date.now();
+  const scheduler = new ScheduledTaskScheduler({ yeaftDir: root, now: () => now, dispatch: msg => calls.push(msg), isActive: () => false });
   const firstTab = scheduler.snapshot(scheduler.read('session_task').meta).task;
   const secondTab = structuredClone(firstTab);
   const trigger = { type: 'schedule', scheduledFor: Date.now() + 86400000, recurrence: null };
@@ -141,6 +143,21 @@ it('uses fresh config revisions so stale tabs cannot undo pauses or overwrite tr
   const freshEdit = scheduler.update('session_task', { prompt: 'Fresh tab edit' }, paused.revision).task;
   expect(freshEdit).toMatchObject({ prompt: 'Fresh tab edit', enabled: false, trigger });
   expect(freshEdit.revision).not.toBe(paused.revision);
+  // The same minimal header patch blocks the due occurrence without erasing
+  // the schedule; an explicit manual preview still works while disabled.
+  now = trigger.scheduledFor + 1000;
+  await scheduler.tick(); await scheduler.tick();
+  expect(calls).toHaveLength(0);
+  expect(read().task).toMatchObject({ enabled: false, trigger, nextRunAt: trigger.scheduledFor });
+  const preview = scheduler.run('session_task').task;
+  expect(calls).toHaveLength(1);
+  expect(preview).toMatchObject({ enabled: false, trigger, lastRun: { status: 'running', trigger: 'manual' } });
+  scheduler.observe('session_task', { type: 'vp_turn_end', reason: 'end_turn' });
+  await Promise.resolve(); // Dispatch completion settles before scheduler quiescence.
+  await scheduler.tick();
+  expect(read().task).toMatchObject({ enabled: false, trigger, lastRun: { status: 'completed', trigger: 'manual' } });
+  expect(calls).toHaveLength(1);
+  scheduler.stop();
 });
 
 it('derives stable legacy revisions without writes and excludes runtime from config identity', async () => {

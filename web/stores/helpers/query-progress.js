@@ -1,7 +1,7 @@
 import { isRetiredYeaftConversation } from './yeaft-conversation-generation.js';
+import { statusOwnsRunningTurn } from './yeaft-runtime-state.js';
 
 const counters = ['revision', 'modelRequests', 'toolExecutions', 'reusedCalls', 'repeatedCalls', 'failedCalls', 'stagnantBatches'];
-const runningStates = new Set(['typing', 'thinking', 'retrying', 'streaming', 'tool']);
 const isAgentOnline = (store, agentId) => store.agents?.some(agent => agent.id === agentId && agent.online);
 
 /** Agent↔Server disconnects do not change the browser's connection generation. */
@@ -13,15 +13,6 @@ export function invalidateOfflineQueryProgress(store) {
     next[key] = { ...rest, connectionGeneration: -1 };
   }
   store.activeVpTurns = next;
-}
-
-function snapshotOwnsTurn(status, row) {
-  if (status.vpId !== row.vpId || (status.sessionId || status.groupId) !== row.sessionId) return false;
-  // Broker aggregate turnId/threadId name the latest updated thread, which
-  // need not be the running one. An advertised thread list is authoritative.
-  const threads = Array.isArray(status.threads) ? status.threads : [status];
-  return threads.some(thread => thread && (thread.threadId || 'main') === row.threadId
-    && thread.turnId === row.turnId && runningStates.has(thread.state));
 }
 
 /** Ephemeral metadata only. Never retain unknown fields from a wire event. */
@@ -86,7 +77,7 @@ export function reconcileQueryProgressSnapshot(store, msg) {
   const next = { ...store.activeVpTurns };
   for (const [key, row] of Object.entries(next)) {
     if (row.agentId !== msg.agentId || (msg.event.sessionId != null && row.sessionId !== msg.event.sessionId)) continue;
-    const live = statuses.some(status => status && snapshotOwnsTurn(status, row));
+    const live = statuses.some(status => statusOwnsRunningTurn(status, row));
     // Routine snapshots must not erase observations still owned by this live
     // turn. Reconnects can re-authorize ownership, but not restore old counters.
     if (live && row.connectionGeneration === generation && row.conversationId === msg.conversationId) continue;
