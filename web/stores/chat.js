@@ -8076,9 +8076,11 @@ export const useChatStore = defineStore('chat', {
         if (status?.vpId !== vpId || !matchesYeaftRuntimeIdentity(status, sessionId, agentId)) continue;
         if (Array.isArray(status.threads)) {
           const threads = status.threads.map(thread => thread.turnId === turnId
-            ? { ...thread, state: 'idle', status: 'idle', turnId: null } : thread);
+            ? { ...thread, state: thread.state === 'error' ? 'error' : 'idle',
+              status: thread.state === 'error' ? 'error' : 'idle', turnId: null } : thread);
           const live = threads.filter(thread => YEAFT_RUNNING_VP_STATES.has(thread.state));
-          const state = live.length ? status.state : (status.state === 'error' ? 'error' : 'idle');
+          const state = ['tool', 'streaming', 'retrying', 'thinking', 'typing', 'error', 'idle']
+            .find(candidate => threads.some(thread => thread.state === candidate)) || 'idle';
           statuses[key] = { ...status, threads, runningThreadCount: live.length, state,
             turnId: status.turnId === turnId ? null : status.turnId };
         } else if ((!status.turnId || status.turnId === turnId)

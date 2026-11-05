@@ -428,7 +428,15 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       const settled = msgs.find(row => row.type === 'assistant' && row.turnId === store._currentYeaftTurnId
         && (row.sessionId ?? row.groupId) === completedYeaftSessionId
         && row.turnEndReason && row.turnEndDetail?.code !== 'runtime_reconciled');
-      const reason = data.stopped ? 'aborted' : data.is_error ? 'errored' : settled?.turnEndReason || 'end_turn';
+      const brokerError = Object.values(store.vpStatuses || {}).some(status => (
+        status?.agentId === store._currentYeaftAgentId && status.sessionId === completedYeaftSessionId
+        && status.vpId === store._currentYeaftVpId
+        && (Array.isArray(status.threads)
+          ? status.threads.some(thread => thread.state === 'error'
+            && (thread.threadId || 'main') === (store._currentYeaftThreadId || 'main'))
+          : status.state === 'error')
+      ));
+      const reason = data.stopped ? 'aborted' : data.is_error || brokerError ? 'errored' : settled?.turnEndReason || 'end_turn';
       const event = { sessionId: completedYeaftSessionId, vpId: store._currentYeaftVpId,
         turnId: store._currentYeaftTurnId, reason };
       markTurnResponseKinds(msgs, event);
