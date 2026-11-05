@@ -96,19 +96,22 @@
 .sidebar-section-chevron { width: var(--sidebar-section-chevron-size); height: var(--sidebar-section-chevron-size); flex: 0 0 auto; transform: rotate(180deg); transition: transform 0.15s ease; }
 .sidebar-section-chevron.collapsed { transform: rotate(0deg); }
 .sidebar-section.is-collapsed { flex: 0 0 auto; max-height: none; overflow: visible; padding-bottom: 0; }
-.sidebar-section-resize-handle { display: none; }
 .sidebar-preferences-error { flex: 0 0 auto; padding: 4px 12px; color: var(--text-muted); font-size: 12px; }
 .sidebar-preferences-error .btn-ghost { font: inherit; }
-@media (min-width: 769px) {
-  .sections-resizable { display: grid; overflow-y: auto; grid-template-rows: minmax(48px, var(--sidebar-projects-track, 50fr)) 10px minmax(48px, var(--sidebar-recents-track, 50fr)); }
-  .sections-resizable > .projects-section { max-height: none; }
-  .sections-resizable > .sidebar-section { min-height: 0; }
-  .recents-collapsed > .projects-section:not(.is-collapsed) { flex: 1 1 0px; max-height: none; }
-  .sidebar-section-resize-handle { display: flex; flex: 0 0 10px; align-items: center; justify-content: center; margin: 0 12px; cursor: row-resize; touch-action: none; }
-  .sidebar-section-resize-handle > span { width: 32px; height: 2px; border-radius: var(--radius-sm); background: var(--border-color); }
-  .sidebar-section-resize-handle:hover > span, .sidebar-section-resize-handle.is-dragging > span { background: var(--text-secondary); }
-  .sidebar-section-resize-handle:focus-visible { outline: var(--sidebar-focus-ring-width) solid var(--accent-blue); outline-offset: var(--sidebar-focus-ring-offset); border-radius: var(--radius-sm); }
-  .sidebar-section-resize-handle[aria-disabled="true"] { cursor: default; opacity: 0.45; }
+/* Use the same account-owned split on desktop and in the mobile drawer. */
+.sections-resizable { display: grid; overflow-y: auto; grid-template-rows: minmax(48px, var(--sidebar-projects-track, 50fr)) auto minmax(48px, var(--sidebar-recents-track, 50fr)); }
+.sections-resizable > .projects-section { max-height: none; }
+.sections-resizable > .sidebar-section { min-height: 0; }
+.recents-collapsed > .projects-section:not(.is-collapsed) { flex: 1 1 0px; max-height: none; }
+.sidebar-section-resize-handle { display: flex; min-height: 10px; align-items: center; justify-content: center; margin: 0 12px; cursor: row-resize; touch-action: none; }
+.sidebar-section-resize-handle > span { width: 32px; height: 2px; border-radius: var(--radius-sm); background: var(--border-color); }
+.sidebar-section-resize-handle:hover > span, .sidebar-section-resize-handle.is-dragging > span { background: var(--text-secondary); }
+.sidebar-section-resize-handle:focus-visible { outline: var(--sidebar-focus-ring-width) solid var(--accent-blue); outline-offset: var(--sidebar-focus-ring-offset); border-radius: var(--radius-sm); }
+.sidebar-section-resize-handle[aria-disabled="true"] { cursor: default; opacity: 0.45; }
+@media (max-width: 768px), (pointer: coarse) {
+  /* A larger touch target, without enlarging the visible divider. Only the
+     handle captures touch gestures; each section still scrolls normally. */
+  .sidebar-section-resize-handle { min-height: 28px; }
 }
 .sidebar-section-empty { padding: 8px 10px 12px; color: var(--text-muted); font-size: 12px; }
 .sidebar-project, .sidebar-project-header { position: relative; }

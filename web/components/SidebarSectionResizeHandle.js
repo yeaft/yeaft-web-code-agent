@@ -3,7 +3,7 @@ import {
   MIN_SIDEBAR_PROJECTS_RATIO, MAX_SIDEBAR_PROJECTS_RATIO,
 } from '../utils/user-preferences.js';
 
-/** Desktop Projects/Recent divider; the caller owns preview and persistence. */
+/** Pointer/keyboard Projects/Recents divider; the caller owns preview and persistence. */
 export default {
   name: 'SidebarSectionResizeHandle',
   props: {
