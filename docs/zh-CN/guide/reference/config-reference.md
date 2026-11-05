@@ -71,6 +71,8 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 
 工具参数只累积，不会在完整 Anthropic message 结束前执行。无效 JSON、非对象输入、未关闭的 block、提前 EOF 或 `max_tokens` 工具响应会使整批失败；已完成的同批其他工具也不会执行或按完整调用持久化。合法的无参数工具仍可使用 `{}`。取消、有限重试和 fallback 保持有效，不会把截断参数修补成可执行输入。
 
+OpenAI Responses 在未收到 `response.completed` / `response.incomplete` 等原生结束事件前提前 EOF，且尚未交付任何工具调用、也未确认参数或流事件非法时，按传输错误使用 `llmRetry` 的有限退避重试：默认最多重试 3 次（首次请求之外），`maxRetries: 0` 可禁用。截断的工具参数整批丢弃，不修补、不执行；已有可见文本按 continuation 续写。已确认的非法参数、`response.incomplete` 工具批次和已交付工具的请求仍不自动重放。重试期间可取消；耗尽后沿用既有 fallback（如配置）或以错误结束，不会无限重试。
+
 #### Reasoning 连续性与缓存
 
 官方 `https://api.openai.com/v1` 和 `https://api.anthropic.com` 默认启用协议能力；未知代理默认关闭。仅在确认代理和上游完整支持后设置 `capabilities`，不要根据模型名称推断能力。Messages 转 Chat Completions 不等于原生 Anthropic 透传。
