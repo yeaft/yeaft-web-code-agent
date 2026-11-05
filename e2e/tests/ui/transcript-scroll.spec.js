@@ -70,6 +70,12 @@ async function openTranscript(page, mockAgent, { olderHistory = false } = {}) {
       streamId: 'scroll-stream', revision: 1,
       pageKind: request.pageKind, gapStopAtSeq: request.gapStopAtSeq, cacheEpoch: request.cacheEpoch });
   });
+  await openCatalogSession(page, mockAgent);
+  await expect(page.locator('.chat-container')).toContainText('Answer 49');
+  return requests;
+}
+
+async function openCatalogSession(page, mockAgent) {
   mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [
     { id: SESSION, name: SESSION, roster: ['omni'], defaultVpId: 'omni', workDir: '/tmp/test' },
   ] } });
@@ -85,8 +91,47 @@ async function openTranscript(page, mockAgent, { olderHistory = false } = {}) {
     const state = store.yeaftSessionHistoryState[`${agentId}\u001f${sessionId}`];
     return state?.loaded === true && state.loading === false;
   }, { agentId: mockAgent.agentId, sessionId: SESSION }), { timeout: 15000 }).toBe(true);
-  await expect(page.locator('.chat-container')).toContainText('Answer 49');
+}
+
+async function openEndlessHistory(page, mockAgent) {
+  const requests = [];
+  const row = seq => ({ id: `m${seq}`, seq, sessionId: SESSION, turnId: `small-turn-${seq}`,
+    role: 'user', content: `History question ${seq}`, ts: Date.UTC(2026, 8, 17) + seq });
+  mockAgent._messageHandlers.push(request => {
+    if (!['yeaft_load_history', 'yeaft_load_more_history'].includes(request.type)
+      || request.sessionId !== SESSION || request.limit === 0) return;
+    const older = request.type === 'yeaft_load_more_history';
+    if (older) requests.push(request);
+    // One genuinely new, tiny page per request. hasMore never becomes false:
+    // neither a huge fixture nor an exhausted server can mask runaway chaining.
+    const rows = older ? [row(request.beforeSeq - 1)] : Array.from({ length: 40 }, (_, index) => row(1000000 + index));
+    mockAgent.send({ type: 'yeaft_history_chunk', conversationId: CONVERSATION, sessionId: SESSION,
+      requestId: request.requestId, _requestClientId: request._requestClientId, mode: older ? 'older' : 'recent',
+      messages: rows, oldestSeq: rows[0].seq, nextBeforeSeq: rows[0].seq,
+      latestSeq: rows.at(-1).seq, hasMore: true, streamId: 'small-page-stream', revision: 1,
+      pageKind: request.pageKind, gapStopAtSeq: request.gapStopAtSeq, cacheEpoch: request.cacheEpoch });
+  });
+  await openCatalogSession(page, mockAgent);
+  await expect(page.locator('.chat-container')).toContainText('History question 1000039');
   return requests;
+}
+
+async function expectHistoryQuiescent(page, requests, count) {
+  // Observe beyond wheel-idle (250ms), loading round trips and layout frames;
+  // merely seeing the third request once would miss a delayed fourth request.
+  const observations = await page.evaluate(async () => {
+    const values = [];
+    const started = performance.now();
+    do {
+      await new Promise(requestAnimationFrame);
+      values.push(document.querySelector('.chat-container').scrollTop);
+    } while (values.length < 45 || performance.now() - started < 750);
+    return values;
+  });
+  expect(requests, 'history must stop without exhausting hasMore').toHaveLength(count);
+  const settled = observations.slice(-15);
+  expect(Math.max(...settled) - Math.min(...settled), 'prepend scroll compensation must settle').toBeLessThanOrEqual(2);
+  expect(await page.evaluate(() => window.Pinia.useChatStore().yeaftHasMoreHistory)).toBe(true);
 }
 
 // Retain the complete bounded trajectory only on failure, not thousands of ids
@@ -190,6 +235,75 @@ async function appendStreamingTail(page, agentId) {
 for (const { theme, width } of VIEWPORTS) {
   test.describe(`${theme} ${width}px`, () => {
     test.use({ colorScheme: theme });
+
+    test('small history pages stop after one gesture and resume only on explicit upward input or Load more', async ({ chatPage: page, mockAgent }) => {
+      test.setTimeout(30000);
+      await page.setViewportSize({ width, height: 800 });
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      const requests = await openEndlessHistory(page, mockAgent);
+      const container = page.locator('.chat-container');
+      await expectHistoryQuiescent(page, requests, 0);
+
+      // Tool/code output can scroll independently. Reading it near the outer
+      // history boundary must not spend an outer history gesture.
+      await container.evaluate(element => {
+        element.scrollTop = 500;
+        const nested = document.createElement('div');
+        nested.dataset.nestedScrollProbe = 'true';
+        nested.style.cssText = 'position:sticky;top:20px;height:120px;overflow-y:auto;z-index:2';
+        const content = document.createElement('div');
+        content.style.height = '1000px';
+        nested.appendChild(content);
+        element.querySelector('.messages').prepend(nested);
+        nested.scrollTop = 400;
+      });
+      const nested = page.locator('[data-nested-scroll-probe]');
+      await nested.hover();
+      await page.mouse.wheel(0, -100);
+      await expect.poll(() => nested.evaluate(element => element.scrollTop)).toBeLessThan(400);
+      await expectHistoryQuiescent(page, requests, 0);
+      await nested.evaluate(element => element.remove());
+
+      if (width === 320) {
+        // Geometry alone must not grant a history gesture, even at the boundary.
+        await container.evaluate(element => { element.scrollTop = 0; });
+        await page.setViewportSize({ width, height: 760 });
+        await expectHistoryQuiescent(page, requests, 0);
+        await container.evaluate(element => {
+          element.setAttribute('tabindex', '0');
+          element.focus();
+        });
+        await page.keyboard.press('Home');
+      } else {
+        await container.hover();
+        await page.mouse.wheel(0, -20000);
+      }
+      await expect.poll(() => requests.length).toBe(3);
+      await expectHistoryQuiescent(page, requests, 3);
+      await expect(page.locator('.scroll-to-latest')).not.toHaveClass(/is-hidden/);
+      await expect.poll(() => page.evaluate(conversationId => window.Pinia.useChatStore().messagesMap[conversationId]
+        .some(row => row.id === 'm999997'), CONVERSATION)).toBe(true);
+
+      // Scroll notifications, resize and moving away/back must not re-arm an
+      // exhausted gesture. The next wheel occurs after the 250ms idle boundary.
+      await container.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await container.evaluate(element => { element.scrollTop = 0; });
+      await expectHistoryQuiescent(page, requests, 3);
+      await container.hover();
+      await page.mouse.wheel(0, -100);
+      await expect.poll(() => requests.length).toBe(6);
+      await expectHistoryQuiescent(page, requests, 6);
+
+      await container.evaluate(element => { element.scrollTop = 0; });
+      await expectHistoryQuiescent(page, requests, 6);
+      await page.locator('.load-more-hint').click();
+      await expect.poll(() => requests.length).toBe(9);
+      await expectHistoryQuiescent(page, requests, 9);
+      expect(requests.map(request => request.beforeSeq)).toEqual(Array.from({ length: 9 }, (_, index) => 1000000 - index));
+      await page.locator('.scroll-to-latest').click();
+      await expect.poll(() => container.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+      await expectHistoryQuiescent(page, requests, 9);
+    });
 
     test('Latest converges for cached/unmeasured tails, resizing and streaming; upward scroll cancels follow', async ({ chatPage: page, mockAgent }, testInfo) => {
       test.setTimeout(60000);
