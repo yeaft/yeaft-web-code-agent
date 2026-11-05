@@ -113,7 +113,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // plumbing, not that a scripted model has demonstrated judgment or concise prose.
 // +5 bounded history paging regressions: gesture budget, CLI/Yeaft async layout
 // ownership, key/touch/cache/session lifecycle, desktop/light and narrow/dark browser.
-export const TEST_CASE_LIMIT = 902;
+// +3 terminal ownership boundaries: independent result/metadata settlement,
+// scoped orphan reconciliation, and production-browser animation/result styles.
+export const TEST_CASE_LIMIT = 905;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -6324,6 +6324,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     sendSessionOutputFrame({
       type: 'result',
       result_text: '',
+      is_error: true,
     }, envelope);
   } finally {
     // Emit terminal vp_turn_end for the error path (normal + abort + route

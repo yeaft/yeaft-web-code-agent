@@ -9,7 +9,7 @@ import ctx from '../../agent/context.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { __testHooks, __testResetVpState, __testSetSession } from '../../agent/yeaft/web-bridge.js';
+import { __testHooks, __testResetVpState, __testSetSession, __testGetOrCreateVpEngine } from '../../agent/yeaft/web-bridge.js';
 import { NullTrace } from '../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../agent/yeaft/tools/registry.js';
 import { buildTimelineRows } from '../../web/stores/helpers/vp-timeline.js';
@@ -251,7 +251,7 @@ describe('message flow regressions', () => {
     frame(snapshot());
     expect(active().connectionGeneration).toBe(generation);
     expect(active(parallel.turnId).connectionGeneration).toBe(generation);
-    expect(active(finished.turnId).connectionGeneration).toBe(-1);
+    expect(active(finished.turnId)).toBeUndefined();
     expect(visible()).toBeNull();
     frame({ ...event, revision: 2 });
     expect(visible()).toBeNull();
@@ -329,6 +329,27 @@ describe('message flow regressions', () => {
       expect(JSON.stringify(store.messagesMap.conv)).toContain(error.event.message);
       frame({ ...event, revision: 999 });
       expect(visible()).toBeNull();
+      // Exercise runVpTurn's thrown-error catch, not only Engine's error event.
+      // Drop metadata terminal to prove result alone cannot manufacture success.
+      const engine = __testGetOrCreateVpEngine('s', 'v', 'main');
+      const query = vi.spyOn(engine, 'query').mockImplementation(async function* () {
+        yield { type: 'text_delta', text: 'Partial before thrown failure' };
+        throw new Error('Thrown fixture failure');
+      });
+      ctx.outboundSendQueue = [];
+      try {
+        await __testHooks.runVpTurnForTest({ prompt: 'fail safely', sessionId: 's', vpId: 'v', threadId: 'main',
+          turnId: 'thrown-turn', envelope: {}, vpAbort: new AbortController(), baseSnapshot: [] });
+      } finally { query.mockRestore(); }
+      const failureWire = ctx.outboundSendQueue.map(row => row.msg);
+      expect(failureWire.find(row => row.data?.type === 'result')?.data.is_error).toBe(true);
+      for (const msg of failureWire.filter(msg => msg.event?.type !== 'vp_turn_end')) {
+        store.handleYeaftOutput({ ...msg, agentId: 'a' });
+      }
+      const failedRows = store.messagesMap.conv.filter(row => row.type === 'assistant' && row.turnId === 'thrown-turn');
+      expect(failedRows.length).toBeGreaterThan(0);
+      expect(failedRows.every(row => row.status === 'errored' && row.responseKind === 'progress' && !row.isStreaming)).toBe(true);
+      expect(store.isYeaftSessionProcessing('s', 'a')).toBe(false);
     } finally {
       await __testResetVpState();
       __testHooks.resetVpStatusBroker();
@@ -476,6 +497,99 @@ describe('message flow regressions', () => {
       },
     });
     expect(store.yeaftActiveTasksBySession['agent-b\u001fsession-b']).toBeUndefined();
+  });
+
+  it('settles result-only and metadata-only turns without clearing a parallel VP thread', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.sendWsMessage = vi.fn(() => true);
+    store.currentAgent = 'a';
+    store.currentView = 'yeaft';
+    store.yeaftActiveSessionFilter = 's';
+    store.yeaftConversationIdsByAgent = { a: 'conv' };
+    store.yeaftConversationId = 'conv';
+    store.messagesMap = { conv: [] };
+    store.connectionState = 'connected';
+    store.agents = [{ id: 'a', online: true }];
+    const frame = event => store.handleYeaftOutput({ agentId: 'a', conversationId: 'conv', event });
+    const output = (turnId, data) => store.handleYeaftOutput({ agentId: 'a', conversationId: 'conv',
+      sessionId: 's', vpId: 'v', turnId, threadId: turnId === 'two' ? 'parallel' : 'main', data });
+    const broker = createVpStatusBroker({ send: frame });
+    for (const [turnId, threadId] of [['one', 'main'], ['two', 'parallel']]) {
+      frame({ type: 'vp_turn_start', sessionId: 's', vpId: 'v', turnId, threadId });
+      broker.transition({ sessionId: 's', vpId: 'v', turnId, threadId, state: 'streaming' });
+      output(turnId, { type: 'assistant', message: { content: `Response ${turnId}` } });
+    }
+    broker.transition({ sessionId: 's', vpId: 'v', turnId: 'one', threadId: 'main', state: 'tool' });
+    frame({ type: 'vp_turn_end', sessionId: 's', vpId: 'v', turnId: 'one', reason: 'end_turn' });
+    expect(store.messagesMap.conv.find(row => row.turnId === 'one')).toMatchObject({
+      status: 'completed', responseKind: 'result', isStreaming: false,
+    });
+    expect(store.messagesMap.conv.find(row => row.turnId === 'two')).toMatchObject({ status: 'pending', isStreaming: true });
+    expect(store.isYeaftSessionProcessing('s', 'a')).toBe(true);
+    expect(store.vpStatuses['a::s::v']).toMatchObject({ runningThreadCount: 1, state: 'streaming' });
+    // No broker idle or metadata end for the second turn: result is sufficient.
+    output('two', { type: 'result', result_text: '' });
+    expect(store.messagesMap.conv.find(row => row.turnId === 'two')).toMatchObject({
+      status: 'completed', responseKind: 'result', isStreaming: false, turnEndReason: 'end_turn',
+    });
+    expect(store.isYeaftSessionProcessing('s', 'a')).toBe(false);
+    expect(store.vpStatuses['a::s::v']).toMatchObject({ state: 'idle', runningThreadCount: 0 });
+    expect(store.activeVpTurns).toEqual({});
+    frame({ type: 'vp_turn_end', sessionId: 's', vpId: 'v', turnId: 'two', reason: 'aborted' });
+    expect(store.messagesMap.conv.find(row => row.turnId === 'two')).toMatchObject({ status: 'aborted', responseKind: 'progress' });
+    output('two', { type: 'result', result_text: '' });
+    expect(store.messagesMap.conv.find(row => row.turnId === 'two')).toMatchObject({ status: 'aborted', responseKind: 'progress' });
+    frame({ type: 'vp_turn_start', sessionId: 's', vpId: 'v', turnId: 'handoff', threadId: 'main' });
+    output('handoff', { type: 'assistant', message: { content: 'Handed over' } });
+    frame({ type: 'vp_turn_end', sessionId: 's', vpId: 'v', turnId: 'handoff', reason: 'route_forward' });
+    output('handoff', { type: 'result', result_text: '' });
+    expect(store.messagesMap.conv.find(row => row.turnId === 'handoff')).toMatchObject({ status: 'completed', responseKind: 'progress', turnEndReason: 'route_forward' });
+    frame({ type: 'vp_turn_start', sessionId: 's', vpId: 'v', turnId: 'failed', threadId: 'main' });
+    output('failed', { type: 'assistant', message: { content: 'Failed after output' } });
+    broker.transition({ sessionId: 's', vpId: 'v', turnId: 'failed', threadId: 'main', state: 'error' });
+    // Legacy Agent catch frames may lack is_error. Broker error is still evidence.
+    output('failed', { type: 'result', result_text: '' });
+    expect(store.messagesMap.conv.find(row => row.turnId === 'failed')).toMatchObject({ status: 'errored', responseKind: 'progress' });
+    storeFactories.clear();
+  });
+
+  it('uses current scoped broker snapshots to remove orphan turns, not foreign or retired owners', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.sendWsMessage = vi.fn(() => true);
+    store.connectionState = 'connected';
+    store.agents = [{ id: 'a', online: true }, { id: 'b', online: true }];
+    store.currentView = 'yeaft';
+    store.currentAgent = 'a';
+    store.yeaftActiveSessionFilter = 's';
+    store.yeaftConversationId = 'conv';
+    store.yeaftConversationIdsByAgent = { a: 'conv', b: 'conv-b' };
+    store.messagesMap = { conv: [], 'conv-b': [] };
+    const frame = (event, agentId = 'a', conversationId = 'conv') => store.handleYeaftOutput({ agentId, conversationId, event });
+    for (const [agentId, sessionId, turnId, conversationId] of [
+      ['a', 's', 'orphan', 'conv'], ['a', 'other', 'sibling', 'conv'], ['b', 's', 'orphan', 'conv-b'],
+    ]) {
+      frame({ type: 'vp_turn_start', sessionId, vpId: 'v', turnId, threadId: 'main' }, agentId, conversationId);
+      store.messagesMap[conversationId].push({ type: 'assistant', agentId, sessionId, speakerVpId: 'v',
+        turnId, content: 'Pending', status: 'pending', isStreaming: true });
+    }
+    store._yeaftRetiredConversationIdsByAgent = { a: ['old-conv'] };
+    const idle = { type: 'vp_status_snapshot', sessionId: 's', statuses: [] };
+    frame(idle, 'a', 'old-conv');
+    expect(store.isYeaftSessionProcessing('s', 'a')).toBe(true);
+    frame(idle);
+    expect(store.isYeaftSessionProcessing('s', 'a')).toBe(false);
+    expect(store.isYeaftSessionProcessing('other', 'a')).toBe(true);
+    expect(store.isYeaftSessionProcessing('s', 'b')).toBe(true);
+    expect(store.messagesMap.conv[0]).toMatchObject({ isStreaming: false, status: 'aborted', turnEndDetail: { code: 'runtime_reconciled' } });
+    // A snapshot cannot invent success, but a delayed real terminal can prove it.
+    frame({ type: 'vp_turn_end', sessionId: 's', vpId: 'v', turnId: 'orphan', reason: 'end_turn' });
+    expect(store.messagesMap.conv[0]).toMatchObject({ status: 'completed', responseKind: 'result', isStreaming: false });
+    frame({ type: 'vp_status_changed', sessionId: 'other', vpId: 'v', state: 'idle', threads: [] });
+    expect(store.isYeaftSessionProcessing('other', 'a')).toBe(false);
+    expect(store.isYeaftSessionProcessing('s', 'b')).toBe(true);
+    storeFactories.clear();
   });
 
   describe('correlated Session send rejections', () => {
