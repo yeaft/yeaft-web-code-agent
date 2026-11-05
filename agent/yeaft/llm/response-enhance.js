@@ -1,3 +1,5 @@
+import { applyAnthropicThinking } from './anthropic.js';
+import { parseModelRef } from '../models.js';
 import { resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
 
 // A narrow, tool-free second opinion, not another agent or publication pipeline.
@@ -41,6 +43,12 @@ export async function enhanceResponse(input, { adapter, model, config, signal, r
   if (!adapter?.stream || !model) throw new Error('ResponseEnhance model is unavailable');
   const ceiling = Number.isFinite(config?.maxOutputTokens) && config.maxOutputTokens >= 1 ? Math.floor(config.maxOutputTokens) : Infinity;
   const maxTokens = Math.min(8192, ceiling, Math.floor(resolveMaxOutputTokens(model, config)));
+  const effortContext = config?.modelInfo ?? {};
+  const thinkingProbe = { max_tokens: maxTokens };
+  applyAnthropicThinking(thinkingProbe, parseModelRef(model).modelId, effort, effortContext);
+  // Manual thinking can silently expand max_tokens. Keep the enhancement
+  // reserve authoritative, while retaining the child constraint at payload time.
+  const safeEffort = thinkingProbe.max_tokens === maxTokens ? effort : undefined;
   const content = JSON.stringify(input);
   // Bytes conservatively bound text tokens. Never silently omit the question,
   // draft or evidence to fit a smaller model.
@@ -48,7 +56,7 @@ export async function enhanceResponse(input, { adapter, model, config, signal, r
   let text = '', stop = null;
   onStart?.();
   const iterator = adapter.stream({ model, system: RESPONSE_ENHANCE_SYSTEM, messages: [{ role: 'user', content }],
-    tools: [], maxTokens, signal, requestIdentity, onEffortDecision, effort, effortSource, effortConstraint })[Symbol.asyncIterator]();
+    tools: [], maxTokens, signal, requestIdentity, onEffortDecision, effort: safeEffort, effortSource, effortContext, effortConstraint })[Symbol.asyncIterator]();
   const next = async () => {
     if (!signal) return iterator.next();
     signal.throwIfAborted();

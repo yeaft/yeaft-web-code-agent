@@ -121,6 +121,14 @@ describe('ResponseEnhance', () => {
       expect(bodies[1].system).toContain(RESPONSE_ENHANCE_SYSTEM);
       expect(bodies[1].tools ?? []).toEqual([]);
       expect(bodies[1].output_config?.effort).toBe('low');
+      bodies.length = 0;
+      vi.stubEnv('YEAFT_THINKING_V1', '1');
+      const manual = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'fixture' }), trace: new NullTrace(),
+        config: { ...config, model: 'claude-sonnet-4-20250514', modelEffort: 'high' }, toolRegistry: createFullRegistry() });
+      for await (const event of manual.query({ prompt: input.question })) { /* drain */ }
+      expect(bodies).toHaveLength(3);
+      expect(bodies[1].max_tokens).toBe(1024);
+      expect(bodies[1].thinking).toBeUndefined();
     } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
   });
 
