@@ -21,16 +21,25 @@ export default defineTool({
   isReadOnly: () => true,
   isConcurrencySafe: () => false,
   sideEffectScope: 'run',
+  // Own the deadline instead of leaving a provider running after registry's
+  // passive timeout race. Parent cancellation still wins immediately.
+  timeoutMs: 0,
   async execute(input, ctx) {
     ctx?.signal?.throwIfAborted();
     try { validateEnhanceInput(input); }
     catch (error) { return JSON.stringify({ error: error.message, errorEffect: 'none' }); }
     if (typeof ctx?.responseEnhance !== 'function') return JSON.stringify({ error: 'ResponseEnhance is unavailable in this host', errorEffect: 'none' });
-    try { return JSON.stringify(await ctx.responseEnhance(input, { signal: ctx.signal })); }
+    const controller = new AbortController();
+    const abort = () => controller.abort(ctx.signal.reason);
+    ctx.signal?.addEventListener('abort', abort, { once: true });
+    if (ctx.signal?.aborted) abort();
+    const timer = setTimeout(() => controller.abort(new Error('ResponseEnhance request timed out')), 60000);
+    timer.unref?.();
+    try { return JSON.stringify(await ctx.responseEnhance(input, { signal: controller.signal })); }
     catch (error) {
       ctx?.signal?.throwIfAborted();
       // Do not leak provider response bodies, credentials or partial drafts.
       return JSON.stringify({ error: 'ResponseEnhance failed; no answer was published or verified. Use the existing evidence and your own judgment, or retry only if warranted.', errorEffect: 'none' });
-    }
+    } finally { clearTimeout(timer); ctx.signal?.removeEventListener('abort', abort); }
   },
 });

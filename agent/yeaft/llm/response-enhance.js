@@ -35,7 +35,7 @@ function parseResult(text) {
  * supplied adapter retains instance billing; hosts own query/Person telemetry.
  * No transcript, credential loading, alternate provider or publication here.
  */
-export async function enhanceResponse(input, { adapter, model, config, signal, requestIdentity, onUsage, onStart, onEffortDecision } = {}) {
+export async function enhanceResponse(input, { adapter, model, config, signal, requestIdentity, onUsage, onStart, onEffortDecision, effort, effortSource, effortConstraint } = {}) {
   validateEnhanceInput(input);
   signal?.throwIfAborted();
   if (!adapter?.stream || !model) throw new Error('ResponseEnhance model is unavailable');
@@ -48,7 +48,7 @@ export async function enhanceResponse(input, { adapter, model, config, signal, r
   let text = '', stop = null;
   onStart?.();
   const iterator = adapter.stream({ model, system: RESPONSE_ENHANCE_SYSTEM, messages: [{ role: 'user', content }],
-    tools: [], maxTokens, signal, requestIdentity, onEffortDecision })[Symbol.asyncIterator]();
+    tools: [], maxTokens, signal, requestIdentity, onEffortDecision, effort, effortSource, effortConstraint })[Symbol.asyncIterator]();
   const next = async () => {
     if (!signal) return iterator.next();
     signal.throwIfAborted();

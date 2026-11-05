@@ -121,7 +121,8 @@ export function turnView(episode, events) {
     }
   }
   const items = [...calls.values()].sort((a, b) => a.index - b.index);
-  const sideCalls = items.flatMap(call => call.capabilities.flatMap(capability => capability.modelCall ? [capability.modelCall] : []));
+  const sideCalls = items.flatMap(call => call.capabilities.flatMap(capability => capability.id !== 'ResponseEnhance' ? []
+    : [capability.modelCall ?? { model: call.dispatched.model, usage: callUsage(null, false) }]));
   return { id: episode.id, seq: episode.seq, kind: episode.kind, status: episode.status, controlStatus: episode.status === 'running' ? string(episode.controlStatus) : null, createdAt: episode.createdAt,
     endedAt: episode.endedAt, terminalCode: episode.terminalCode, budget: { calls: token(episode.calls), timeoutMs: token(episode.timeoutMs) },
     models: [...new Set([...items.map(call => call.dispatched.model), ...sideCalls.map(call => call.model)].filter(Boolean))], usage: sumUsage([...items, ...sideCalls], episode.status !== 'running'), calls: items };

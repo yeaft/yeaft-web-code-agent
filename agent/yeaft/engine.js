@@ -4101,6 +4101,8 @@ export class Engine {
         responseEnhance: (input, { signal: toolSignal } = {}) => enhanceResponse(input, {
           adapter: this.#adapter, model: currentModel, config: requestConfig,
           signal: toolSignal ?? signal, requestIdentity,
+          effort: requestEffortDecision.effective ?? requestEffortDecision.requested ?? undefined,
+          effortSource: requestEffortDecision.source ?? 'auto', effortConstraint,
           onStart: () => {
             if (isSubAgent) this.#toolRegistry?.reserveProviderRequest?.();
             enhancementCalls++;

@@ -54,7 +54,7 @@ const registry = new ToolRegistry().registerAll(supported.map(([tool]) => tool))
 const schemas = new Map(registry.getToolDefs('en').map(schema => [schema.name, schema]));
 const sourceRevision = name => digest(readFileSync(new URL(`../${name}.js`, import.meta.url), 'utf8'));
 const dispatchRevision = sourceRevision('tools/registry');
-const executionRevision = digest(['person/native-tools', 'person/task-host', 'person/child-provider', 'sub-agent/runner', 'sub-agent/execution-control', 'sub-agent/tool-access', 'tasks/manager', 'tasks/store', 'tools/process-runner', 'skills', 'runtime-platform', 'utf8'].map(sourceRevision));
+const executionRevision = digest(['person/native-tools', 'person/task-host', 'person/child-provider', 'sub-agent/runner', 'sub-agent/execution-control', 'sub-agent/tool-access', 'tasks/manager', 'tasks/store', 'tools/process-runner', 'skills', 'runtime-platform', 'utf8', 'llm/response-enhance'].map(sourceRevision));
 export const NATIVE_TOOL_MANIFESTS = supported.map(([tool, file, domain]) => {
   const schema = schemas.get(tool.name);
   const source = { kind: 'native-tool', module: `agent/yeaft/tools/${file}.js`, revision: sourceRevision(`tools/${file}`), dispatchRevision, executionRevision };

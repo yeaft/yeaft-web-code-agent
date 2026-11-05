@@ -88,6 +88,42 @@ describe('ResponseEnhance', () => {
     await expect(pending).rejects.toThrow('cancelled'); expect(onUsage).toHaveBeenCalledTimes(1);
   });
 
+  it('owns its request deadline, aborts the provider and accepts no late usage after returning', async () => {
+    vi.useFakeTimers();
+    const onUsage = vi.fn(); let requestSignal, release;
+    const adapter = { async *stream(params) { requestSignal = params.signal; await new Promise(resolve => { release = resolve; }); yield { type: 'usage', inputTokens: 99 }; yield* reply(unchanged); } };
+    try {
+      const pending = tool.execute(input, { responseEnhance: (value, options) => enhanceResponse(value, { ...options, adapter, model: config.model, config, onUsage }) });
+      await vi.advanceTimersByTimeAsync(60001);
+      expect(JSON.parse(await pending)).toMatchObject({ errorEffect: 'none' });
+      expect(requestSignal.aborted).toBe(true);
+      release(); await Promise.resolve(); await Promise.resolve();
+      expect(onUsage).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps inherited effort ceilings on the real Anthropic review payload even with thinking feature disabled', async () => {
+    const { AnthropicAdapter } = await import('../../../../agent/yeaft/llm/anthropic.js');
+    const bodies = [];
+    vi.stubEnv('YEAFT_THINKING_V1', '0');
+    vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
+      const body = JSON.parse(options.body); bodies.push(body);
+      const index = bodies.length;
+      const content = index === 1 ? [{ type: 'tool_use', id: 'enhance', name: 'ResponseEnhance', input }]
+        : [{ type: 'text', text: index === 2 ? JSON.stringify(unchanged) : 'A is better for your maintenance constraint.' }];
+      return new Response(JSON.stringify({ id: `m-${index}`, content, stop_reason: index === 1 ? 'tool_use' : 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } }), { headers: { 'content-type': 'application/json' } });
+    }));
+    try {
+      const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'fixture' }), trace: new NullTrace(),
+        config: { ...config, model: 'claude-sonnet-4-6' }, toolRegistry: createFullRegistry() });
+      for await (const event of engine.query({ prompt: input.question, isSubAgent: true, parentEffortDecision: { effective: 'low' } })) { /* drain */ }
+      expect(bodies).toHaveLength(3);
+      expect(bodies[1].system).toContain(RESPONSE_ENHANCE_SYSTEM);
+      expect(bodies[1].tools ?? []).toEqual([]);
+      expect(bodies[1].output_config?.effort).toBe('low');
+    } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  });
+
   it('reserves child LLM calls before review dispatch and cannot bypass a one-request lifetime ceiling', async () => {
     const agent = { budget: { max_llm_calls: 1 }, usage: { llmCalls: 0 }, abortController: new AbortController() };
     const registry = new SubAgentToolRegistry({ agent }).register(tool);
@@ -116,34 +152,34 @@ describe('ResponseEnhance', () => {
     const root = mkdtempSync(join(tmpdir(), 'enhance-engine-'));
     const conversationStore = new ConversationStore(root);
     try {
-    const engine = new Engine({ conversationStore, yeaftDir: root, adapter: { async *stream(params) { requests.push(params); yield* scripted.shift(); } }, trace: new NullTrace(),
-      config: { ...config, model: 'test/default' }, toolRegistry: createFullRegistry() });
-    const events = [];
-    for await (const event of engine.query({ prompt: input.question, sessionId: 'enhance-session', turnConfig: { model: 'test/live' } })) events.push(event);
-    expect(requests).toHaveLength(3);
-    expect(requests[1]).toMatchObject({ model: 'test/live', tools: [] });
-    expect(requests[2].messages.some(message => message.role === 'tool' && message.content.includes(revised.response))).toBe(true);
-    expect(events.filter(event => event.type === 'text_delta').map(event => event.text).join('')).toBe(revised.response);
-    expect(JSON.stringify(events)).not.toContain('PRIVATE-THOUGHT');
-    expect(events.findLast(event => event.type === 'query_progress')).toMatchObject({ inputTokens: 90, outputTokens: 37, modelRequests: 3 });
-    expect(events.find(event => event.type === 'turn_close')).toMatchObject({ inputTokens: 90, outputTokens: 37, totalTokens: 127, modelRequestCount: 3, loopCount: 2 });
-    expect(events.filter(event => event.type === 'usage')).toHaveLength(3);
-    const old = { ws: bridgeCtx.ws, outboundSendQueue: bridgeCtx.outboundSendQueue, outboundSendQueueActive: bridgeCtx.outboundSendQueueActive, serverEncryptionRequired: bridgeCtx.serverEncryptionRequired };
-    try {
-      Object.assign(bridgeCtx, { ws: { readyState: 1, send() {} }, outboundSendQueue: [], outboundSendQueueActive: true, serverEncryptionRequired: false });
-      const hctx = { sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main', skipPartialHistory: true, resetQueryTimer() {},
-        assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [] };
-      for (const event of events.filter(event => ['tool_call', 'tool_start', 'tool_end'].includes(event.type))) __testHandleEngineEvent(event, hctx);
-      expect(JSON.stringify(bridgeCtx.outboundSendQueue)).not.toContain(input.draft);
-      expect(JSON.stringify(bridgeCtx.outboundSendQueue)).not.toContain(revised.response);
-      expect(hctx.toolCallsAccum[0].input).toEqual(input);
-      expect(hctx.toolResultsAccum[0].content).toContain(revised.response);
-    } finally { Object.assign(bridgeCtx, old); }
-    const rows = conversationStore.loadRecentBySession('enhance-session', 20);
-    expect(rows.findLast(row => row.role === 'assistant' && row.content === revised.response)).toMatchObject({ llmCallCount: 3, inputTokens: 90, outputTokens: 37 });
-    const visible = projectVisibleSessionMessages(rows);
-    expect(JSON.stringify(visible)).not.toContain(input.draft);
-    expect(JSON.stringify(rows)).toContain(input.draft); // private transcript for native continuation/debug
+      const engine = new Engine({ conversationStore, yeaftDir: root, adapter: { async *stream(params) { requests.push(params); yield* scripted.shift(); } }, trace: new NullTrace(),
+        config: { ...config, model: 'test/default' }, toolRegistry: createFullRegistry() });
+      const events = [];
+      for await (const event of engine.query({ prompt: input.question, sessionId: 'enhance-session', turnConfig: { model: 'test/live' } })) events.push(event);
+      expect(requests).toHaveLength(3);
+      expect(requests[1]).toMatchObject({ model: 'test/live', tools: [] });
+      expect(requests[2].messages.some(message => message.role === 'tool' && message.content.includes(revised.response))).toBe(true);
+      expect(events.filter(event => event.type === 'text_delta').map(event => event.text).join('')).toBe(revised.response);
+      expect(JSON.stringify(events)).not.toContain('PRIVATE-THOUGHT');
+      expect(events.findLast(event => event.type === 'query_progress')).toMatchObject({ inputTokens: 90, outputTokens: 37, modelRequests: 3 });
+      expect(events.find(event => event.type === 'turn_close')).toMatchObject({ inputTokens: 90, outputTokens: 37, totalTokens: 127, modelRequestCount: 3, loopCount: 2 });
+      expect(events.filter(event => event.type === 'usage')).toHaveLength(3);
+      const old = { ws: bridgeCtx.ws, outboundSendQueue: bridgeCtx.outboundSendQueue, outboundSendQueueActive: bridgeCtx.outboundSendQueueActive, serverEncryptionRequired: bridgeCtx.serverEncryptionRequired };
+      try {
+        Object.assign(bridgeCtx, { ws: { readyState: 1, send() {} }, outboundSendQueue: [], outboundSendQueueActive: true, serverEncryptionRequired: false });
+        const hctx = { sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main', skipPartialHistory: true, resetQueryTimer() {},
+          assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [] };
+        for (const event of events.filter(event => ['tool_call', 'tool_start', 'tool_end'].includes(event.type))) __testHandleEngineEvent(event, hctx);
+        expect(JSON.stringify(bridgeCtx.outboundSendQueue)).not.toContain(input.draft);
+        expect(JSON.stringify(bridgeCtx.outboundSendQueue)).not.toContain(revised.response);
+        expect(hctx.toolCallsAccum[0].input).toEqual(input);
+        expect(hctx.toolResultsAccum[0].content).toContain(revised.response);
+      } finally { Object.assign(bridgeCtx, old); }
+      const rows = conversationStore.loadRecentBySession('enhance-session', 20);
+      expect(rows.findLast(row => row.role === 'assistant' && row.content === revised.response)).toMatchObject({ llmCallCount: 3, inputTokens: 90, outputTokens: 37 });
+      const visible = projectVisibleSessionMessages(rows);
+      expect(JSON.stringify(visible)).not.toContain(input.draft);
+      expect(JSON.stringify(rows)).toContain(input.draft); // private transcript for native continuation/debug
     } finally { await closeConversationHistoryIndexes(); rmSync(root, { recursive: true, force: true }); }
   });
 });
