@@ -133,6 +133,7 @@ afterEach(async () => {
   await __testResetVpState();
   __testHooks.resetVpStatusBroker();
   __testSetSession(null);
+  __testHooks.resetRuntimeFactoriesForTest();
   await closeConversationHistoryIndexes();
   vi.restoreAllMocks();
   Object.assign(ctx, original);
@@ -478,6 +479,53 @@ it('forks completed history while orphaned tasks resume, restoring checkpoints o
   expect(copy('unknown-mixed-historic', { throughTurnId: 'historic' }))
     .toMatchObject({ ok: false, error: { code: 'session_running' } });
   expect(existsSync(checkpoint)).toBe(false);
+});
+
+it('fences legacy recovery before cold boot can await and ignores stale checkpoints without matching tasks', async () => {
+  completedTurn();
+  const prefix = rows(id);
+  const checkpoint = join(sessionsRoot(root), id, 'copy-boundary.json');
+  const legacyUser = store.append({ sessionId: id, role: 'user', content: 'legacy running' });
+  store.append({ sessionId: id, role: 'assistant', content: 'legacy partial', speakerVpId: 'alpha',
+    turnId: 'legacy-boot', causalRootId: legacyUser.id, incomplete: true });
+  const manager = new TaskManager({ yeaftDir: root });
+  manager.startTask({ sessionId: id, ownerVpId: 'alpha', resultDelivery: 'model_reentry',
+    source: { threadId: 'old', causalRootId: legacyUser.id } });
+  const boot = deferred();
+  __testSetSession(null);
+  __testHooks.setRuntimeFactoriesForTest({ loadSession: async () => {
+    await boot.promise;
+    return { yeaftDir: root, config: {}, conversationStore: store, taskManager: new TaskManager({ yeaftDir: root }) };
+  } });
+  const pending = send('cold-boot-input');
+  // No await: TaskManager has not loaded yet. The safe boundary must already
+  // exclude the legacy user's input and partial reply.
+  expectFork(copy('cold-before-first-await'), prefix);
+  expectFork(copy('cold-before-await-historic', { throughTurnId: 'historic' }), prefix);
+  boot.resolve();
+  await pending;
+  await waitCalls(1); // related new input can queue behind the orphan rescue
+  expectFork(copy('cold-after-boot'), prefix);
+  calls[0].gate.resolve();
+  await waitCalls(2);
+  calls[1].gate.resolve();
+  await __testDrainVpDrivers();
+  expect(__testHooks.sessionHasActiveWork(id)).toBe(false);
+
+  // Simulate a crash after a complete transcript append but before checkpoint
+  // cleanup. No task owns this old file, so a new input must use the current
+  // completed head rather than silently omit the last finished request.
+  const finished = rows(id);
+  const stale = store.captureSessionCopyBoundary(id, { beforeMessageId: legacyUser.id });
+  writeFileSync(checkpoint, JSON.stringify({ ...stale, taskIds: ['task-no-longer-running'] }));
+  await __testResetVpState();
+  __testHooks.resetVpStatusBroker();
+  __testSetSession({ yeaftDir: root, config: {}, conversationStore: store, taskManager: new TaskManager({ yeaftDir: root }) });
+  await send('after-stale-checkpoint');
+  await waitCalls(3);
+  expectFork(copy('stale-file-ignored'), finished);
+  expect(JSON.parse(readFileSync(checkpoint, 'utf8')).rowCount).toBe(finished.length);
+  expectSourceRunning();
 });
 
 it('rejects invalid/incomplete or active message boundaries while permitting completed historical message forks', async () => {

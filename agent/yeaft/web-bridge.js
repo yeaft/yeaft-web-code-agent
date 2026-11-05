@@ -147,7 +147,7 @@ import { isPromptableAgentStatus, isTerminalAgentStatus, STATUS } from './sub-ag
 import { consumeNotificationForAgent } from './sub-agent/notifications.js';
 import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 import { recordAgentSessionCreated, recordAgentTurn } from '../metrics.js';
-import { TASK_RESULT_DELIVERY, isTerminalTaskStatus, taskResultDeliveryFor } from './tasks/store.js';
+import { TaskStore, TASK_RESULT_DELIVERY, isTerminalTaskStatus, taskResultDeliveryFor } from './tasks/store.js';
 import { formatTaskResultForVp } from './tasks/result-format.js';
 
 const LEGACY_SKILL_COMMAND_PREFIX = 'skill:';
@@ -568,11 +568,20 @@ function sessionCopyBoundaryPath(sessionId) {
   return join(sessionsRoot(root), sessionId, 'copy-boundary.json');
 }
 
-function persistSessionCopyBoundary(sessionId, boundary) {
+function persistSessionCopyBoundary(sessionId, epoch) {
+  if (!epoch.boundary) return;
   try {
-    writeAtomic(sessionCopyBoundaryPath(sessionId), boundary, { mode: 0o600 });
+    writeAtomic(sessionCopyBoundaryPath(sessionId), JSON.stringify({
+      ...JSON.parse(epoch.boundary), taskIds: [...epoch.taskIds],
+    }), { mode: 0o600 });
   } catch (error) {
     console.warn('[Yeaft] Session copy boundary persistence failed:', sessionId, error?.code || 'write_failed');
+  }
+}
+
+function clearSessionCopyBoundary(sessionId) {
+  try { unlinkSync(sessionCopyBoundaryPath(sessionId)); } catch (error) {
+    if (error?.code !== 'ENOENT') console.warn('[Yeaft] Session copy boundary cleanup failed:', sessionId, error?.code || 'unlink_failed');
   }
 }
 
@@ -580,63 +589,80 @@ function settleSessionCopyEpoch(sessionId) {
   const epoch = sessionCopyEpochs.get(sessionId);
   if (epoch && epoch.pending === 0 && !hasSessionRuntimeWork(sessionId)) {
     sessionCopyEpochs.delete(sessionId);
-    try { unlinkSync(sessionCopyBoundaryPath(sessionId)); } catch (error) {
-      if (error?.code !== 'ENOENT') console.warn('[Yeaft] Session copy boundary cleanup failed:', sessionId, error?.code || 'unlink_failed');
-    }
+    clearSessionCopyBoundary(sessionId);
   }
 }
 
-function beginSessionActivity(sessionId, { unknownBoundary = false, beforeMessageId = null } = {}) {
+// Before runtime boot has awaited, inspect the persisted recovery inventory.
+// Once TaskManager exists, its startup queue owns that inventory (it has already
+// changed running tasks to orphaned). No task metadata is mutated here.
+function sessionCopyRecoveryTasks(sessionId) {
+  if (!ctx.CONFIG?.yeaftDir) return [];
+  const manager = session?.taskManager;
+  const tasks = manager
+    ? (manager.pendingStartupEvents || []).map(event => event.task)
+    : new TaskStore({ yeaftDir: ctx.CONFIG?.yeaftDir }).loadActiveTasks();
+  return tasks.filter(task => task?.sessionId === sessionId && task.ownerVpId
+    && taskResultDeliveryFor(task) === TASK_RESULT_DELIVERY.MODEL_REENTRY);
+}
+
+function recoverSessionCopyTask(sessionId, epoch, task) {
+  if (epoch.unrecoverable || epoch.taskIds.has(task.id)) return;
+  try {
+    const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
+    const token = new ConversationStore(root).captureSessionCopyBoundary(sessionId, {
+      beforeMessageId: task.source?.causalRootId,
+    });
+    if (!epoch.boundary || token.rowCount < JSON.parse(epoch.boundary).rowCount) {
+      epoch.boundary = JSON.stringify(token);
+    }
+    epoch.taskIds.add(task.id);
+  } catch {
+    // One orphan's known root cannot authorize another orphan's unknown input.
+    epoch.boundary = null;
+    epoch.unrecoverable = true;
+  }
+}
+
+function beginSessionActivity(sessionId, { recoveryTask = null, unknownBoundary = false } = {}) {
   settleSessionCopyEpoch(sessionId);
   let epoch = sessionCopyEpochs.get(sessionId);
+  const previousBoundary = epoch?.boundary;
+  const previousTaskCount = epoch?.taskIds.size;
   if (!epoch) {
-    let boundary = null;
-    let restored = false;
-    try {
-      const saved = readFileSync(sessionCopyBoundaryPath(sessionId), 'utf8');
-      const token = JSON.parse(saved);
-      if (token?.version === 1 && token.sessionId === sessionId) {
-        boundary = saved;
-        restored = true;
-      }
-    } catch { /* Missing/invalid checkpoint never authorizes an unrestricted copy. */ }
-    // Legacy/untracked running work has no trustworthy pre-ingress boundary.
-    if (!boundary && !unknownBoundary && !hasSessionRuntimeWork(sessionId)) {
+    const recovering = sessionCopyRecoveryTasks(sessionId);
+    if (unknownBoundary && recoveryTask && !recovering.some(task => task.id === recoveryTask.id)) recovering.push(recoveryTask);
+    epoch = { boundary: null, taskIds: new Set(), unrecoverable: false, pending: 0 };
+    // A checkpoint is useful only for the tasks that actually owned it. A
+    // leftover file after a completed query must not truncate new idle history.
+    if (recovering.length) {
+      try {
+        const saved = readFileSync(sessionCopyBoundaryPath(sessionId), 'utf8');
+        const token = JSON.parse(saved);
+        if (token?.version === 1 && token.sessionId === sessionId && Array.isArray(token.taskIds)
+            && recovering.some(task => token.taskIds.includes(task.id))) {
+          epoch.boundary = saved;
+          epoch.taskIds = new Set(token.taskIds);
+        }
+      } catch { /* Missing/invalid checkpoint never authorizes unrestricted copy. */ }
+      for (const task of recovering) recoverSessionCopyTask(sessionId, epoch, task);
+    } else if (!unknownBoundary && !hasSessionRuntimeWork(sessionId)) {
       try {
         const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
-        const store = new ConversationStore(root);
-        boundary = JSON.stringify(store.captureSessionCopyBoundary(sessionId));
+        epoch.boundary = JSON.stringify(new ConversationStore(root).captureSessionCopyBoundary(sessionId));
       } catch (error) {
         console.warn('[Yeaft] Session copy boundary capture failed:', sessionId, error?.code || 'capture_failed');
       }
     }
-    epoch = { boundary, restored, unrecoverable: false, pending: 0 };
     sessionCopyEpochs.set(sessionId, epoch);
-    if (boundary) persistSessionCopyBoundary(sessionId, boundary);
   }
-  // Legacy model-reentry tasks may predate checkpoints. Their persisted human
-  // causal root is a conservative recovery fence: exclude that whole request,
-  // not merely its newest assistant/tool row. Multiple recovered tasks retain
-  // the earliest prefix. Unknown provenance still fails closed.
-  let recoveredRoot = false;
-  if (beforeMessageId && !epoch.unrecoverable) {
-    try {
-      const root = resolveSessionYeaftDir(ctx.CONFIG?.yeaftDir, sessionId);
-      const token = new ConversationStore(root).captureSessionCopyBoundary(sessionId, { beforeMessageId });
-      recoveredRoot = true;
-      if (!epoch.boundary || token.rowCount < JSON.parse(epoch.boundary).rowCount) {
-        epoch.boundary = JSON.stringify(token);
-        persistSessionCopyBoundary(sessionId, epoch.boundary);
-      }
-    } catch { /* Not a durable human root: do not infer a boundary from output. */ }
+  if (recoveryTask) {
+    if (unknownBoundary) recoverSessionCopyTask(sessionId, epoch, recoveryTask);
+    else if (epoch.boundary) epoch.taskIds.add(recoveryTask.id);
   }
-  if (unknownBoundary && !epoch.restored && !recoveredRoot) {
-    // A boot-time input may already have captured today's head. It is not a
-    // pre-restart fence for an orphan lacking provenance, nor may another
-    // orphan's known root authorize copying this unknown task's input.
-    epoch.boundary = null;
-    epoch.unrecoverable = true;
-    try { unlinkSync(sessionCopyBoundaryPath(sessionId)); } catch { /* fail closed in memory */ }
+  if (epoch.boundary !== previousBoundary || epoch.taskIds.size !== previousTaskCount) {
+    if (epoch.boundary) persistSessionCopyBoundary(sessionId, epoch);
+    else clearSessionCopyBoundary(sessionId);
   }
   epoch.pending += 1;
   let released = false;
@@ -668,7 +694,7 @@ function trackModelReentryActivity(event) {
   if (!release) {
     release = beginSessionActivity(task.sessionId, {
       unknownBoundary: event.event !== 'started',
-      beforeMessageId: task.source?.causalRootId || null,
+      recoveryTask: task,
     });
     modelReentryActivity.set(key, release);
   }
