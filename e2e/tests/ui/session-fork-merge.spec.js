@@ -1,5 +1,5 @@
 import { expect } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
@@ -271,6 +271,40 @@ test('turn fork and divergent merge relay through Server, persist history and in
     await expect(page.locator('.assistant-turn')).toHaveText(expected.filter((_, index) => index % 2).map(text => new RegExp(text)));
     expect(mockAgent.messages('yeaft_copy_session')).toHaveLength(2);
     expect(mockAgent.messages('yeaft_merge_sessions')).toHaveLength(1);
+    // Real duplicate-ID legacy transcript: the browser's whole-copy action must
+    // succeed, retain both answers, and reconstruct both after a page reload.
+    const collision = createSessionFromSpec(yeaftDir, { name: 'Legacy collision', roster: ['omni'] });
+    const segments = join(yeaftDir, 'sessions', collision.id, 'conversation', 'segments');
+    mkdirSync(segments, { recursive: true });
+    const collisionRows = [
+      { id: 'm91001', seq: 1, role: 'user', content: 'Legacy first question', time: '2026-10-27T00:00:01Z' },
+      { id: 'm91002', seq: 2, role: 'assistant', content: 'Legacy first answer', turnId: 'old', speakerVpId: 'omni', causalRootId: 'm91001' },
+      { id: 'm91001', role: 'user', content: 'Legacy second question', time: '2026-10-27T00:00:02Z' },
+      { id: 'm91002', role: 'assistant', content: 'Legacy second answer', turnId: 'new', speakerVpId: 'omni', causalRootId: 'm91001' },
+    ].map(row => ({ ...row, time: row.time || (row.turnId === 'old' ? '2026-10-27T00:00:01Z' : '2026-10-27T00:00:02Z'), sessionId: collision.id }));
+    const segmentPath = join(segments, '000001.jsonl');
+    const originalBytes = collisionRows.map(row => JSON.stringify(row)).join('\n') + '\n';
+    writeFileSync(segmentPath, originalBytes);
+    publish();
+    await open(collision.id);
+    await expect(fork).toBeEnabled();
+    await fork.click();
+    const collisionRequest = await mockAgent.waitForMessage('yeaft_copy_session');
+    expect(collisionRequest.sessionId).toBe(collision.id);
+    await expect.poll(() => acknowledgements.find(event => event.requestId === collisionRequest.requestId)).toMatchObject({ ok: true });
+    const recovered = acknowledgements.find(event => event.requestId === collisionRequest.requestId).session;
+    await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.sessionId)).toBe(recovered.id);
+    const recoveredRows = new ConversationStore(yeaftDir).loadAllBySession(recovered.id);
+    expect(recoveredRows.map(row => row.content)).toEqual(collisionRows.map(row => row.content));
+    expect(new Set(recoveredRows.map(row => row.id)).size).toBe(4);
+    expect(readFileSync(segmentPath, 'utf8')).toBe(originalBytes);
+    await expect(page.locator('.assistant-turn')).toHaveCount(2);
+    await expect(page.locator('.assistant-turn')).toHaveText([/Legacy first answer/, /Legacy second answer/]);
+    await page.reload();
+    await page.waitForFunction(agentId => window.Pinia?.useChatStore?.().agents
+      .some(agent => agent.id === agentId && agent.status === 'ready'), mockAgent.agentId);
+    await open(recovered.id);
+    await expect(page.locator('.assistant-turn')).toHaveText([/Legacy first answer/, /Legacy second answer/]);
   } finally {
     mockAgent._messageHandlers = mockAgent._messageHandlers.filter(candidate => candidate !== handler);
     await closeConversationHistoryIndexes();

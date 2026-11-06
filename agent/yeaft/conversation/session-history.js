@@ -35,7 +35,81 @@ export function historicalReplayRow(row) {
 }
 
 function originKey(origin) {
-  return JSON.stringify([origin.streamId, origin.messageId]);
+  return JSON.stringify([origin.streamId, origin.messageId, origin.rowOccurrence ?? null, origin.copyOccurrence ?? null]);
+}
+
+/** 在完整源上分配稳定 lineage，再应用复制边界；保留旧 occurrence 命名空间。 */
+export function sessionCopyOrigins(rows, sourceSessionId, streamId) {
+  const origins = rows.map(row => messageOrigin(row, sourceSessionId, streamId));
+  const reserved = new Set(origins.map(originKey));
+  const used = new Set();
+  return origins.map(origin => {
+    if (!used.has(originKey(origin))) { used.add(originKey(origin)); return origin; }
+    let occurrence = 2;
+    let candidate;
+    do {
+      candidate = { ...origin, copyOccurrence: [...(origin.copyOccurrence || []), occurrence++] };
+    } while (reserved.has(originKey(candidate)) || used.has(originKey(candidate)));
+    used.add(originKey(candidate));
+    return candidate;
+  });
+}
+
+/**
+ * 按源记录位置分配复制身份，不能用 Map<旧 ID, 新 ID> 覆盖冲突记录。
+ * 无法唯一识别目标的引用从可执行引用字段移到诊断元数据；保留
+ * 原引用及所有目标候选，不阻断复制，也不猜测折叠/因果关系。源行不变。
+ * idMap 只提供唯一旧 ID 的兼容查询，绝不返回任意一个冲突候选。
+ */
+export function materializeSessionCopy(rows, { sourceSessionId, streamId, targetSessionId, firstSeq, sourceRows = rows, origins = sessionCopyOrigins(sourceRows, sourceSessionId, streamId) }) {
+  const ids = rows.map((_, index) => `m${String(firstSeq + index).padStart(4, '0')}`);
+  const occurrences = new Map();
+  sourceRows.forEach((row, index) => {
+    const positions = occurrences.get(row.id) || [];
+    positions.push(index);
+    occurrences.set(row.id, positions);
+  });
+  const idMap = new Map([...occurrences].filter(([, positions]) => positions.length === 1 && positions[0] < rows.length)
+    .map(([id, positions]) => [id, ids[positions[0]]]));
+  const copies = rows.map((row, index) => {
+    const copy = { ...historicalReplayRow(row), id: ids[index], seq: firstSeq + index,
+      sessionId: targetSessionId, origin: origins[index] };
+    // Existing diagnostics also belong to the copied namespace on nested forks.
+    const unresolved = (row.unresolvedMessageReferences || []).map(reference => ({ ...reference,
+      candidateMessageIds: (reference.candidateMessageIds || []).flatMap(id =>
+        occurrences.has(id) ? occurrences.get(id).map(candidate => ids[candidate]).filter(Boolean) : [id]),
+    }));
+    const remap = (id, field, referenceIndex) => {
+      const positions = occurrences.get(id);
+      if (!positions) return id; // External/client identities are not persisted row IDs.
+      // Duplicate bare IDs contain no record-level target identity. Role,
+      // proximity and a matching VP turn cannot prove the intended record
+      // (and may select this very row). Never infer a live reference from them.
+      if (positions.length === 1) return ids[positions[0]] || id;
+      unresolved.push({ field, ...(referenceIndex === undefined ? {} : { index: referenceIndex }),
+        messageId: id, candidateMessageIds: positions.map(position => ids[position]).filter(Boolean),
+        candidateOrigins: positions.map(position => origins[position]) });
+      return undefined;
+    };
+    if (row.causalRootId) {
+      const value = remap(row.causalRootId, 'causalRootId');
+      if (value === undefined) delete copy.causalRootId;
+      else copy.causalRootId = value;
+    }
+    if (row.quote?.messageId) {
+      copy.quote = { ...row.quote };
+      const value = remap(row.quote.messageId, 'quote.messageId');
+      if (value === undefined) delete copy.quote.messageId;
+      else copy.quote.messageId = value;
+    }
+    for (const field of ['foldedMessageIds', 'sourceMessageIds']) {
+      if (Array.isArray(row[field])) copy[field] = row[field]
+        .map((id, referenceIndex) => remap(id, field, referenceIndex)).filter(id => id !== undefined);
+    }
+    if (unresolved.length) copy.unresolvedMessageReferences = unresolved;
+    return copy;
+  });
+  return { rows: copies, idMap };
 }
 
 function stableJson(value) {
@@ -218,6 +292,14 @@ function equivalentRows(left, right, aliases) {
         if (Array.isArray(row[key])) copy[key] = row[key].map(remap);
       }
       if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remap(row.quote.messageId) };
+      if (row.unresolvedMessageReferences) copy.unresolvedMessageReferences = row.unresolvedMessageReferences
+        .map(reference => {
+          if (reference.candidateOrigins) {
+            const { candidateMessageIds, ...identity } = reference;
+            return identity; // Scope-independent evidence includes excluded suffix candidates.
+          }
+          return { ...reference, candidateMessageIds: reference.candidateMessageIds.map(remap) };
+        });
       if (Array.isArray(row.attachments)) copy.attachments = row.attachments.map(att => {
         const { path, ...metadata } = att;
         return metadata;
@@ -326,6 +408,8 @@ export function materializeSessionMerge(plan, targetSessionId, firstSeq) {
         if (Array.isArray(row[key])) copy[key] = row[key].map(remap);
       }
       if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remap(row.quote.messageId) };
+      if (row.unresolvedMessageReferences) copy.unresolvedMessageReferences = row.unresolvedMessageReferences
+        .map(reference => ({ ...reference, candidateMessageIds: reference.candidateMessageIds.map(remap) }));
       if (row.toolCalls) copy.toolCalls = row.toolCalls.map(call => ({ ...call, id: calls.get(toolScope(row, call.id)) }));
       if (turn.links.results.has(index)) copy.toolCallId = callId(turn.links.results.get(index));
       if (calls.has(toolScope(row, row.presentationCallId))) copy.presentationCallId = calls.get(toolScope(row, row.presentationCallId));

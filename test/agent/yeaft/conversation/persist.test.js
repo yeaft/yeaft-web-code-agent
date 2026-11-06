@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { hostname, tmpdir } from 'os';
 import { ConversationStore } from '../../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../../agent/yeaft/conversation/history-index.js';
 
@@ -116,7 +116,7 @@ describe('ConversationStore', () => {
       // It must not create a duplicate in the cloned transcript.
       const legacyDir = join(TEST_DIR, 'sessions', sourceSessionId, 'conversation', 'messages');
       mkdirSync(legacyDir, { recursive: true });
-      writeFileSync(join(legacyDir, `${assistant.id}.md`), `---\nid: ${assistant.id}\nrole: assistant\nsessionId: ${sourceSessionId}\n---\nstale duplicate`);
+      writeFileSync(join(legacyDir, `${user.id}.md`), `---\nid: ${user.id}\nrole: user\ntime: ${user.time}\nsessionId: ${sourceSessionId}\nclientMessageId: client-stable\n---\n\noriginal question`);
 
       const { copiedCount, idMap } = store.copySession(sourceSessionId, targetSessionId);
       expect(copiedCount).toBe(3);
@@ -237,6 +237,30 @@ describe('ConversationStore', () => {
         });
       });
 
+      // Terminate only this test-owned writer while it owns both locks. The
+      // next processes must recover automatically without overlapping ranges.
+      const crashing = spawn(process.execPath, ['--input-type=module', '--eval', `
+        import { DatabaseSync } from 'node:sqlite';
+        import { mkdirSync, writeFileSync } from 'node:fs';
+        import { hostname } from 'node:os';
+        import { join } from 'node:path';
+        const root = process.env.CONVERSATION_ROOT;
+        const db = new DatabaseSync(join(root, 'message-sequence-lock.db'));
+        db.exec('BEGIN IMMEDIATE');
+        const lock = join(root, 'message-sequence.lock');
+        mkdirSync(lock);
+        writeFileSync(join(lock, 'owner.json'), JSON.stringify({pid: process.pid, host: hostname(), token: 'crashed'}));
+        console.log('locked');
+        setInterval(() => {}, 1000);
+      `], { env: { ...process.env, CONVERSATION_ROOT: TEST_DIR }, stdio: ['ignore', 'pipe', 'pipe'] });
+      await new Promise((resolveChild, rejectChild) => {
+        const timer = setTimeout(() => { crashing.kill('SIGKILL'); rejectChild(new Error('Crash fixture did not acquire locks')); }, 5000);
+        crashing.stdout.once('data', () => { clearTimeout(timer); resolveChild(); });
+        crashing.once('error', error => { clearTimeout(timer); rejectChild(error); });
+      });
+      const exited = new Promise(resolveChild => crashing.once('exit', resolveChild));
+      crashing.kill('SIGKILL');
+      await exited;
       await Promise.all([
         runChild('session_process_left'),
         runChild('session_process_right'),
@@ -249,6 +273,65 @@ describe('ConversationStore', () => {
       ].map(row => row.id);
       expect(ids).toHaveLength(600);
       expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    it('bootstraps IDs from actual legacy records rather than matching-byte stale seq indexes', () => {
+      const dir = join(TEST_DIR, 'sessions', 'legacy', 'conversation');
+      mkdirSync(join(dir, 'segments'), { recursive: true });
+      const line = JSON.stringify({ id: 'm9000', seq: 1, role: 'user', content: 'legacy', sessionId: 'legacy' }) + '\n';
+      writeFileSync(join(dir, 'segments', '000001.jsonl'), line);
+      writeFileSync(join(dir, 'index.json'), JSON.stringify({ version: 2, nextSeq: 2, totalMessages: 1,
+        activeSegment: '000001.jsonl', segments: [{ file: '000001.jsonl', firstSeq: 1, lastSeq: 1, count: 1,
+          bytes: Buffer.byteLength(line) }] }));
+      writeFileSync(join(TEST_DIR, 'message-sequence.json'), JSON.stringify({ version: 1, epoch: 'old', nextSeq: 2 }));
+      const next = store.append({ id: 'm9000', seq: 1, role: 'user', content: 'new', sessionId: 'new' });
+      expect(Number(next.id.slice(1))).toBeGreaterThan(9000);
+      expect(next.seq).toBe(Number(next.id.slice(1)));
+      const batch = new ConversationStore(TEST_DIR).appendBatch([{ seq: 1, role: 'user', content: 'batch' }]);
+      expect(batch[0].seq).toBe(Number(batch[0].id.slice(1)));
+      const copy = store.copySession('legacy', 'legacy-copy');
+      expect(Number(copy.idMap.get('m9000').slice(1))).toBeGreaterThan(Number(batch[0].id.slice(1)));
+    });
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('preserves best-effort append on a read-only root without swallowing strict errors', () => {
+      const readonly = join(TEST_DIR, 'readonly');
+      mkdirSync(readonly);
+      const reader = new ConversationStore(readonly);
+      chmodSync(readonly, 0o555);
+      try {
+        expect(reader.append({ role: 'user', content: 'ephemeral' }).id).toMatch(/^m\d+$/);
+        expect(reader.appendBatch([{ role: 'user', content: 'batch' }])[0].id).toMatch(/^m\d+$/);
+        expect(() => reader.append({ role: 'user', content: 'strict' }, { strict: true }))
+          .toThrow(expect.objectContaining({ code: 'EACCES' }));
+      } finally { chmodSync(readonly, 0o755); }
+    });
+
+    it('recovers the global high water from named chat segments after losing the sidecar', () => {
+      const chat = store.append({ role: 'user', content: 'named', chatId: 'named-chat' });
+      rmSync(join(TEST_DIR, 'message-sequence.json'));
+      const recovered = new ConversationStore(TEST_DIR).append({ role: 'user', content: 'session', sessionId: 'after-loss' });
+      expect(Number(recovered.id.slice(1))).toBeGreaterThan(Number(chat.id.slice(1)));
+      const other = store.append({ role: 'user', content: 'default' });
+      expect(new Set([chat.id, recovered.id, other.id]).size).toBe(3);
+    });
+
+    it('fences a live legacy lock and safely recovers a dead writer under the kernel mutex', () => {
+      const first = store.append({ role: 'user', content: 'first' });
+      const sequencePath = join(TEST_DIR, 'message-sequence.json');
+      const before = readFileSync(sequencePath, 'utf8');
+      const lockDir = join(TEST_DIR, 'message-sequence.lock');
+      mkdirSync(lockDir);
+      const owner = JSON.stringify({ pid: process.pid, host: hostname(), token: 'old', startedAt: 1 });
+      writeFileSync(join(lockDir, 'owner.json'), owner);
+      // A large allocation bypasses the warm reservation and must fail closed.
+      expect(() => store.appendBatch(Array.from({ length: 300 }, () => ({ role: 'user', content: 'blocked' }))))
+        .toThrow('Timed out reserving conversation message ids');
+      expect(readFileSync(sequencePath, 'utf8')).toBe(before);
+      expect(readFileSync(join(lockDir, 'owner.json'), 'utf8')).toBe(owner);
+      writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: 2147483647, host: hostname(), token: 'dead' }));
+      const recovered = store.appendBatch(Array.from({ length: 300 }, () => ({ role: 'user', content: 'recovered' })));
+      expect(new Set([first.id, ...recovered.map(row => row.id)]).size).toBe(301);
+      expect(existsSync(lockDir)).toBe(false);
     });
 
     it('preserves a first committed row and stream identity when its index target fails', () => {

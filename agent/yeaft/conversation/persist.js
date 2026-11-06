@@ -17,9 +17,10 @@
  * Reference: yeaft-yeaft-core-systems.md §4.1, yeaft-yeaft-brainstorm-v5.1.md
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync, rmSync } from 'fs';
+import { accessSync, constants, existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync, rmSync } from 'fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { join, basename, resolve } from 'path';
 import { isPermissionError } from '../init.js';
 import { writeAtomic } from '../storage/atomic.js';
@@ -33,7 +34,7 @@ import {
 } from './visible-entry.js';
 import { copyPersistedSessionAttachments, readPersistedAttachmentFile, persistYeaftAttachments, MAX_TOTAL_BYTES } from '../attachments.js';
 import { markConversationDirty } from './history-index-state.js';
-import { historyError, isHumanRequest, messageOrigin, historicalReplayRow, planSessionMerge, materializeSessionMerge } from './session-history.js';
+import { historyError, isHumanRequest, messageOrigin, planSessionMerge, materializeSessionMerge, materializeSessionCopy, sessionCopyOrigins } from './session-history.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -84,6 +85,7 @@ const SEGMENT_TARGET_BYTES = 1024 * 1024;
 const SEGMENT_FIRST_NAME = '000001.jsonl';
 const MESSAGE_SEQUENCE_FILE = 'message-sequence.json';
 const MESSAGE_SEQUENCE_LOCK_DIR = 'message-sequence.lock';
+const MESSAGE_SEQUENCE_MUTEX_FILE = 'message-sequence-lock.db';
 const MESSAGE_SEQUENCE_LOCK_STALE_MS = 30_000;
 const MESSAGE_SEQUENCE_LOCK_ATTEMPTS = 200;
 const MESSAGE_SEQUENCE_LOCK_RETRY_MS = 5;
@@ -142,38 +144,42 @@ function sleepSync(ms) {
   Atomics.wait(buffer, 0, 0, ms);
 }
 
-function processIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+// The SQLite transaction serializes BOTH reservation and abandoned-directory
+// recovery. Kernel locks disappear on process exit; unlike rename-after-check,
+// no contender can replace the observed directory while another reclaims it.
+function withMessageSequenceMutex(root, callback) {
+  const path = join(root, MESSAGE_SEQUENCE_MUTEX_FILE);
+  let db;
   try {
-    process.kill(pid, 0);
-    return true;
+    db = new DatabaseSync(path);
+    db.exec('PRAGMA busy_timeout=1000; BEGIN IMMEDIATE;');
+    return callback();
   } catch (error) {
-    return error?.code === 'EPERM';
+    // SQLite wraps OS permission failures. Only normalize a confirmed read-only
+    // path; busy/corrupt/missing-parent errors remain real failures.
+    if (error?.code === 'ERR_SQLITE_ERROR' && [8, 14].includes(error.errcode & 255)) {
+      try {
+        accessSync(root, constants.W_OK);
+        if (existsSync(path)) accessSync(path, constants.W_OK);
+      } catch (permissionError) {
+        if (isPermissionError(permissionError)) throw permissionError;
+      }
+    }
+    throw error;
+  } finally {
+    try { db?.exec('ROLLBACK;'); } catch {}
+    db?.close();
   }
 }
 
-function readMessageSequenceLock(lockDir) {
+function abandonedMessageSequenceLock(lockDir) {
   const details = statSync(lockDir);
-  try {
-    return { owner: JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')), details };
-  } catch {
-    return { owner: null, details };
+  let owner;
+  try { owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')); } catch {}
+  if (owner?.host === hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
+    try { process.kill(owner.pid, 0); return false; }
+    catch (error) { return error?.code === 'ESRCH'; }
   }
-}
-
-function messageSequenceLockIdentity(owner) {
-  if (!owner) return null;
-  if (typeof owner.token === 'string' && owner.token) return `token:${owner.token}`;
-  return `legacy:${owner.host || ''}:${Number(owner.pid) || 0}:${Number(owner.startedAt) || 0}`;
-}
-
-function messageSequenceLockCanBeTaken(lockDir) {
-  const { owner, details } = readMessageSequenceLock(lockDir);
-  if (owner?.host === hostname()) return !processIsAlive(Number(owner.pid));
-  // Yeaft data roots are local, but a hostname can change after restoring a
-  // machine image. Never steal a live local owner's lock based on age alone;
-  // an unverifiable remote/legacy owner is reclaimable only after the stale
-  // window and only if takeMessageSequenceLock observes the same identity.
   return Date.now() - details.mtimeMs > MESSAGE_SEQUENCE_LOCK_STALE_MS;
 }
 
@@ -203,29 +209,6 @@ function releaseMessageSequenceLock(lockDir, token) {
   return true;
 }
 
-function takeMessageSequenceLock(lockDir) {
-  const observed = readMessageSequenceLock(lockDir).owner;
-  if (!messageSequenceLockCanBeTaken(lockDir)) return false;
-  const observedIdentity = messageSequenceLockIdentity(observed);
-  const claimed = `${lockDir}.stale-${randomUUID()}`;
-  try {
-    renameSync(lockDir, claimed);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return true;
-    return false;
-  }
-  const claimedOwner = readMessageSequenceLock(claimed).owner;
-  const ownerChanged = messageSequenceLockIdentity(claimedOwner) !== observedIdentity;
-  const ownerRevived = claimedOwner?.host === hostname()
-    && processIsAlive(Number(claimedOwner.pid));
-  if (ownerChanged || ownerRevived) {
-    try { renameSync(claimed, lockDir); } catch {}
-    return false;
-  }
-  rmSync(claimed, { recursive: true, force: true });
-  return true;
-}
-
 function acquireMessageSequenceLock(lockDir) {
   for (let attempt = 0; attempt < MESSAGE_SEQUENCE_LOCK_ATTEMPTS; attempt += 1) {
     const token = randomUUID();
@@ -233,8 +216,13 @@ function acquireMessageSequenceLock(lockDir) {
       mkdirSync(lockDir, { mode: 0o700 });
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error;
+      // Caller holds the kernel-backed mutex, including throughout recovery.
+      // All current writers take it before touching the directory/sidecar.
       try {
-        if (takeMessageSequenceLock(lockDir)) continue;
+        if (abandonedMessageSequenceLock(lockDir)) {
+          rmSync(lockDir, { recursive: true });
+          continue;
+        }
       } catch (inspectionError) {
         if (inspectionError?.code === 'ENOENT') continue;
         throw inspectionError;
@@ -255,7 +243,7 @@ function acquireMessageSequenceLock(lockDir) {
       throw error;
     }
   }
-  throw new Error('Timed out reserving conversation message ids');
+  throw historyError('message_sequence_locked', `Timed out reserving conversation message ids: ${lockDir}`);
 }
 
 function latestTodoWriteSnapshot(toolCalls) {
@@ -1119,14 +1107,14 @@ class SegmentStore {
    * Read physical rows without applying reflection tombstones. Session cloning
    * needs the complete durable transcript, including rows hidden by folding.
    */
-  readAllRaw({ includeCold = false } = {}) {
+  readAllRaw({ includeCold = false, appendOrder = false } = {}) {
     if (!this.hasData()) return [];
     const idx = this.loadIndex();
-    return (idx.segments || [])
+    const rows = (idx.segments || [])
       .slice()
-      .sort((a, b) => (a.firstSeq || 0) - (b.firstSeq || 0))
-      .flatMap(segment => this.#readSegment(segment.file, { includeCold }))
-      .sort(compareMessagesBySeq);
+      .sort((a, b) => appendOrder ? a.file.localeCompare(b.file) : (a.firstSeq || 0) - (b.firstSeq || 0))
+      .flatMap(segment => this.#readSegment(segment.file, { includeCold, appendOrder }));
+    return appendOrder ? rows : rows.sort(compareMessagesBySeq);
   }
 
   *scan({ beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, scanStats = null, projection = 'context' } = {}) {
@@ -1353,10 +1341,10 @@ class SegmentStore {
     out.streamId = typeof out.streamId === 'string' && out.streamId ? out.streamId : null;
     out.revision = Number.isFinite(Number(out.revision)) ? Math.max(0, Number(out.revision)) : 0;
     out.segments = Array.isArray(out.segments) ? out.segments.filter(s => s && s.file) : [];
-    out.segments.sort((a, b) => (Number(a.firstSeq) || 0) - (Number(b.firstSeq) || 0));
+    out.segments.sort((a, b) => a.file.localeCompare(b.file));
     const maxSeq = out.segments.reduce((max, seg) => Math.max(max, Number(seg.lastSeq) || 0), 0);
     out.nextSeq = Math.max(Number(out.nextSeq) || 1, maxSeq + 1);
-    out.activeSegment = out.activeSegment || out.segments[out.segments.length - 1]?.file || SEGMENT_FIRST_NAME;
+    out.activeSegment = out.segments[out.segments.length - 1]?.file || out.activeSegment || SEGMENT_FIRST_NAME;
     out.totalMessages = Number(out.totalMessages) || out.segments.reduce((sum, seg) => sum + (Number(seg.count) || 0), 0);
     out.foldedMessageIds = Array.isArray(out.foldedMessageIds)
       ? Array.from(new Set(out.foldedMessageIds.filter(id => typeof id === 'string' && id)))
@@ -1369,7 +1357,7 @@ class SegmentStore {
     if (!existsSync(this.segmentDir)) return idx;
     const files = readdirSync(this.segmentDir).filter(f => f.endsWith('.jsonl')).sort();
     for (const file of files) {
-      const rows = this.#readSegment(file, { includeCold: true });
+      const rows = this.#readSegment(file, { includeCold: true, appendOrder: true });
       if (rows.length === 0) continue;
       const seqs = rows.map(r => parseSeqFromId(r.id)).filter(Number.isFinite);
       const path = join(this.segmentDir, file);
@@ -1399,7 +1387,7 @@ class SegmentStore {
     return true;
   }
 
-  #readSegment(file, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false } = {}) {
+  #readSegment(file, { beforeSeq = Infinity, afterSeq = -Infinity, desc = false, includeCold = false, appendOrder = false } = {}) {
     const path = join(this.segmentDir, file);
     if (!existsSync(path)) return [];
     const raw = readFileSync(path, 'utf8');
@@ -1413,7 +1401,7 @@ class SegmentStore {
       if (!includeCold && msg.cold === true) continue;
       rows.push(msg);
     }
-    rows.sort(compareMessagesBySeq);
+    if (!appendOrder) rows.sort(compareMessagesBySeq);
     return desc ? rows.reverse() : rows;
   }
 }
@@ -1575,6 +1563,7 @@ export class ConversationStore {
       return {
         ...msg,
         id: `m${String(seq).padStart(4, '0')}`,
+        seq,
         time: msg.time || new Date().toISOString(),
         tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
       };
@@ -1583,6 +1572,7 @@ export class ConversationStore {
     const fullMsg = {
       ...msg,
       id,
+      seq,
       time: msg.time || new Date().toISOString(),
       tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
     };
@@ -1637,6 +1627,7 @@ export class ConversationStore {
       return rows.map((msg, index) => ({
         ...msg,
         id: `m${String(firstSeq + index).padStart(4, '0')}`,
+        seq: firstSeq + index,
         time: msg.time || new Date().toISOString(),
         tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
       }));
@@ -1644,6 +1635,7 @@ export class ConversationStore {
     const persisted = rows.map((msg, index) => ({
       ...msg,
       id: `m${String(firstSeq + index).padStart(4, '0')}`,
+      seq: firstSeq + index,
       time: msg.time || new Date().toISOString(),
       tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
     }));
@@ -2042,7 +2034,7 @@ export class ConversationStore {
     if (typeof sessionId !== 'string' || !sessionId) {
       throw historyError('invalid_fork_boundary', 'Session identity is required');
     }
-    const { rows: durableRows, streamId } = this.#loadDurableSession(sessionId);
+    const { rows: durableRows, streamId } = this.#loadDurableSession(sessionId, { allowDuplicateIds: true });
     const rows = Object.hasOwn(options, 'beforeMessageId')
       ? durableRows.slice(0, this.#sessionCopyBeforeMessageCutoff(durableRows, streamId, options.beforeMessageId))
       : durableRows;
@@ -2060,6 +2052,9 @@ export class ConversationStore {
     const fence = typeof beforeMessageId === 'string' ? beforeMessageId.trim() : '';
     if (!fence) throw historyError('invalid_fork_boundary', 'beforeMessageId must be a nonempty string');
     const index = rows.findIndex(row => row.id === fence);
+    if (rows.filter(row => row.id === fence).length > 1) {
+      throw historyError('ambiguous_fork_boundary', 'Message boundary identifies multiple durable rows');
+    }
     if (index < 0) throw historyError('fork_boundary_not_found', `Human message not found: ${fence}`);
     if (!isHumanRequest(rows[index])) throw historyError('invalid_fork_boundary', 'beforeMessageId must identify a durable human request');
     const user = rows[index];
@@ -2142,13 +2137,15 @@ export class ConversationStore {
    * 不会把活动 turn 截短伪装成完整 turn。前缀删改拒绝为 invalid_fork_boundary。
    * 兼容旧 inclusive throughMessageId（null 为空）和 exclusive beforeMessageId；
    * 所有已提供边界均验证，取较早 cutoff。runtime 负责在最早活动输入前捕获。
+   * 重复的旧 ID 按物理记录逐条复制；idMap 仅包含可唯一映射的旧 ID。
+   * 歧义引用保存在目标行 unresolvedMessageReferences 中，不连错、不丢消息。
    * @returns {{ copiedCount: number, idMap: Map<string, string> }}
    */
   copySession(sourceSessionId, targetSessionId, options = {}) {
     if (!sourceSessionId || !targetSessionId || sourceSessionId === targetSessionId) {
       return { copiedCount: 0, idMap: new Map() };
     }
-    const { rows: durableRows, streamId } = this.#loadDurableSession(sourceSessionId);
+    const { rows: durableRows, streamId } = this.#loadDurableSession(sourceSessionId, { allowDuplicateIds: true });
     let rows = durableRows;
     let cutoff = rows.length;
     let capturedCutoff = null;
@@ -2172,6 +2169,9 @@ export class ConversationStore {
         const fence = typeof options.throughMessageId === 'string' ? options.throughMessageId.trim() : '';
         if (!fence) throw historyError('invalid_fork_boundary', 'throughMessageId must be a nonempty string or null');
         const index = rows.findIndex(row => row.id === fence);
+        if (rows.filter(row => row.id === fence).length > 1) {
+          throw historyError('ambiguous_fork_boundary', 'Message boundary identifies multiple durable rows');
+        }
         if (index < 0) throw historyError('fork_boundary_not_found', `Durable message not found: ${fence}`);
         cutoff = Math.min(cutoff, index + 1);
       }
@@ -2223,29 +2223,11 @@ export class ConversationStore {
     if (rows.length === 0) return { copiedCount: 0, idMap: new Map() };
 
     const firstSeq = this.#reserveSeqRange(rows.length);
-    const idMap = new Map(rows.map((row, index) => [
-      row.id,
-      `m${String(firstSeq + index).padStart(4, '0')}`,
-    ]));
-    const remapId = id => idMap.get(id) || id;
     const assetRows = copyPersistedSessionAttachments(rows, { yeaftDir: this.#dir, sourceSessionId, targetSessionId });
-    const copies = assetRows.map(row => {
-      const copy = {
-        ...historicalReplayRow(row),
-        id: idMap.get(row.id),
-        sessionId: targetSessionId,
-        origin: messageOrigin(row, sourceSessionId, streamId),
-      };
-      delete copy.seq;
-      if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remapId(row.quote.messageId) };
-      if (idMap.has(row.causalRootId)) copy.causalRootId = remapId(row.causalRootId);
-      if (Array.isArray(row.foldedMessageIds)) {
-        copy.foldedMessageIds = row.foldedMessageIds.map(remapId);
-      }
-      if (Array.isArray(row.sourceMessageIds)) {
-        copy.sourceMessageIds = row.sourceMessageIds.map(remapId);
-      }
-      return copy;
+    const { rows: copies, idMap } = materializeSessionCopy(assetRows, {
+      sourceSessionId, streamId, targetSessionId, firstSeq,
+      sourceRows: durableRows,
+      origins: sessionCopyOrigins(durableRows, sourceSessionId, streamId),
     });
     const target = this.#segmentStoreForConversationDir(this.#sessionConversationDir(targetSessionId));
     const written = target.appendBatch(copies);
@@ -2256,7 +2238,7 @@ export class ConversationStore {
     // Session irrecoverably incomplete. Verify the physical target rows before
     // the higher-level CRUD operation commits the clone.
     const persistedIds = new Set(target.readAllRaw({ includeCold: true }).map(row => row.id));
-    const expectedIds = [...idMap.values()];
+    const expectedIds = copies.map(row => row.id);
     if (written.length !== rows.length
         || persistedIds.size !== expectedIds.length
         || expectedIds.some(id => !persistedIds.has(id))) {
@@ -2265,10 +2247,12 @@ export class ConversationStore {
     return { copiedCount: written.length, idMap };
   }
 
-  #loadDurableSession(sourceSessionId) {
+  #loadDurableSession(sourceSessionId, { allowDuplicateIds = false } = {}) {
     const primary = this.#segmentStoreForConversationDir(this.#sessionConversationDir(sourceSessionId));
-    const segmentedRows = primary.readAllRaw({ includeCold: true });
-    if (new Set(segmentedRows.map(row => row.id)).size !== segmentedRows.length) {
+    const segmentedRows = primary.readAllRaw({ includeCold: true, appendOrder: true });
+    const segmentIds = new Set(segmentedRows.map(row => row.id));
+    const hasDuplicates = segmentIds.size !== segmentedRows.length;
+    if (hasDuplicates && !allowDuplicateIds) {
       throw historyError('ambiguous_merge_history', 'Duplicate persisted identity within one Session');
     }
     const legacyRows = this.#sessionFileEntries('all', sourceSessionId)
@@ -2279,15 +2263,25 @@ export class ConversationStore {
         }
       })
       .filter(Boolean);
-    // Migration can temporarily leave the same durable row in both the legacy
-    // markdown layout and the segment store. Preserve legacy-only rows, but let
-    // the canonical segment copy win when both contain the same persisted id.
-    const rowsById = new Map();
-    for (const row of [...legacyRows, ...segmentedRows]) {
-      if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id) continue;
-      rowsById.set(row.id, row);
+    // A shadow is collapsible only when its legacy-representable payload is
+    // identical, not merely its ID. Distinct hot/cold/segment rows all survive.
+    const shadowKey = row => serializeMessage({ ...row, time: row.time || '<missing>' });
+    const shadows = new Map();
+    for (const row of segmentedRows) {
+      const key = shadowKey(row);
+      shadows.set(key, (shadows.get(key) || 0) + 1);
     }
-    const rows = [...rowsById.values()].sort(compareMessagesBySeq);
+    const legacy = [];
+    for (const row of legacyRows) {
+      if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id) continue;
+      const key = shadowKey(row);
+      if (shadows.get(key)) { shadows.set(key, shadows.get(key) - 1); continue; }
+      legacy.push(row);
+    }
+    // Legacy-only rows predate the segmented transcript; each block has its
+    // own stable order. Never switch order after an append introduces a clash.
+    const rows = [...legacy.sort(compareMessagesBySeq),
+      ...segmentedRows.filter(row => row?.sessionId === sourceSessionId)];
     return { sessionId: sourceSessionId, streamId: rows.length || primary.hasData() ? primary.metadata().streamId : null, rows };
   }
 
@@ -3785,16 +3779,21 @@ export class ConversationStore {
    * that did not maintain an allocator high-water mark.
    * @returns {number}
    */
-  #scanNextSeq() {
+  #scanNextSeq({ verifyRows = false } = {}) {
     let maxSeq = 0;
-    for (const dir of [this.#chatDir, ...this.#sessionConversationDirs({ primaryOnly: true })]) {
+    for (const dir of [this.#chatDir, ...this.#chatConversationDirs(), ...this.#sessionConversationDirs({ primaryOnly: true })]) {
       const store = this.#segmentStoreForConversationDir(dir);
       if (store.hasData()) {
         const idx = store.loadIndex();
         maxSeq = Math.max(maxSeq, (Number(idx.nextSeq) || 1) - 1);
+        if (verifyRows) {
+          for (const row of store.readAllRaw({ includeCold: true, appendOrder: true })) {
+            maxSeq = Math.max(maxSeq, parseSeqFromId(row.id) || 0, Number(row.seq) || 0);
+          }
+        }
       }
     }
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#chatMessageDirs('messages'), ...this.#chatMessageDirs('cold'), ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       for (const file of readdirSync(dir)) {
         const match = file.match(/^m(\d+)\.md$/);
@@ -3807,17 +3806,19 @@ export class ConversationStore {
   /**
    * Reserve one non-overlapping range of global message ids.
    *
-   * `mkdir` is the cross-process mutex: it is atomic on supported local file
-   * systems and therefore coordinates long-lived stores as well as short-lived
-   * Session-copy stores. The atomic high-water sidecar makes a whole transcript
-   * reservation O(1) once the lock is held, while the disk scan keeps upgrades
-   * and manually restored transcripts safe.
+   * SQLite BEGIN IMMEDIATE owns the cross-process mutex and crash recovery;
+   * the directory lock also fences earlier writers during rolling upgrades. The atomic high-water sidecar makes a whole transcript
+   * reservation cheap after the first verified bootstrap. A legacy/missing
+   * sidecar requires actual transcript ID verification, not only derived seq
+   * indexes. Restore/import is offline-only and must invalidate the sidecar;
+   * neither a cache epoch nor a scan can fence already in-flight writers.
    *
    * @param {number} count
    * @returns {number} first reserved sequence
    */
   #reserveSeqRange(count) {
     const size = Math.max(1, Math.floor(Number(count) || 1));
+    if (!Number.isSafeInteger(size)) throw new Error('Invalid conversation message id reservation');
     const rootKey = resolve(this.#dir);
     const sequencePath = join(this.#dir, MESSAGE_SEQUENCE_FILE);
     const cached = messageSequenceReservations.get(rootKey);
@@ -3827,6 +3828,7 @@ export class ConversationStore {
         const durableNext = Number(recorded?.nextSeq);
         if (Number.isSafeInteger(durableNext)
             && durableNext >= cached.end
+            && recorded.transcriptIdsVerified === true
             && typeof recorded?.epoch === 'string'
             && recorded.epoch === cached.epoch) {
           const firstSeq = cached.next;
@@ -3843,35 +3845,39 @@ export class ConversationStore {
     // monotonic identities, not a promise of contiguous durable rows.
     const durableSize = Math.max(size, MESSAGE_SEQUENCE_RESERVATION_SIZE);
     const lockDir = join(this.#dir, MESSAGE_SEQUENCE_LOCK_DIR);
-    const lockToken = acquireMessageSequenceLock(lockDir);
-
-    try {
-      let recordedNext = null;
-      let epoch = null;
+    return withMessageSequenceMutex(this.#dir, () => {
+      const lockToken = acquireMessageSequenceLock(lockDir);
       try {
-        const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
-        const nextSeq = Number(recorded?.nextSeq);
-        if (Number.isSafeInteger(nextSeq) && nextSeq > 0) {
-          recordedNext = nextSeq;
-          if (typeof recorded.epoch === 'string' && recorded.epoch) epoch = recorded.epoch;
+        let recordedNext = null;
+        let epoch = null;
+        let transcriptIdsVerified = false;
+        try {
+          const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
+          const nextSeq = Number(recorded?.nextSeq);
+          if (Number.isSafeInteger(nextSeq) && nextSeq > 0) {
+            recordedNext = nextSeq;
+            transcriptIdsVerified = recorded.transcriptIdsVerified === true;
+            if (typeof recorded.epoch === 'string' && recorded.epoch) epoch = recorded.epoch;
+          }
+        } catch (error) {
+          if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
         }
-      } catch (error) {
-        if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+        // A syntactically valid sidecar can still be stale after a partial restore
+        // or crash. Never trust it below the durable transcript high-water mark.
+        const scannedNext = this.#scanNextSeq({ verifyRows: !transcriptIdsVerified });
+        const firstSeq = Math.max(recordedNext || 1, scannedNext);
+        if (!Number.isSafeInteger(firstSeq + durableSize)) throw new Error('Conversation message id sequence exhausted');
+        epoch ||= randomUUID();
+        writeAtomic(sequencePath, `${JSON.stringify({ version: 1, epoch, transcriptIdsVerified: true, nextSeq: firstSeq + durableSize })}\n`, { mode: 0o600 });
+        messageSequenceReservations.set(rootKey, {
+          epoch,
+          next: firstSeq + size,
+          end: firstSeq + durableSize,
+        });
+        return firstSeq;
+      } finally {
+        releaseMessageSequenceLock(lockDir, lockToken);
       }
-      // A syntactically valid sidecar can still be stale after a partial restore
-      // or crash. Never trust it below the durable transcript high-water mark.
-      const scannedNext = this.#scanNextSeq();
-      const firstSeq = Math.max(recordedNext || 1, scannedNext);
-      epoch ||= randomUUID();
-      writeAtomic(sequencePath, `${JSON.stringify({ version: 1, epoch, nextSeq: firstSeq + durableSize })}\n`, { mode: 0o600 });
-      messageSequenceReservations.set(rootKey, {
-        epoch,
-        next: firstSeq + size,
-        end: firstSeq + durableSize,
-      });
-      return firstSeq;
-    } finally {
-      releaseMessageSequenceLock(lockDir, lockToken);
-    }
+    });
   }
 }
