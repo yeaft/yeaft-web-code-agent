@@ -564,6 +564,14 @@ describe('durable native Session fork and merge', () => {
     expect(copied[2].unresolvedMessageReferences).toEqual([{ field: 'causalRootId', messageId: 'm0010',
       candidateMessageIds: [copied[1].id, copied[3].id], candidateOrigins: [copied[1].origin, copied[3].origin] }]);
     expect(store.captureSessionCopyBoundary('causal-copy', { beforeMessageId: copied[3].id }).rowCount).toBe(3);
+    seed(dir, 'self-collision', [
+      { id: 'm0001', role: 'user', content: 'human' },
+      { id: 'm0001', role: 'assistant', content: 'answer', turnId: 'vp-turn', speakerVpId: 'omni', causalRootId: 'm0001' },
+    ]);
+    store.copySession('self-collision', 'self-copy');
+    const selfCopy = raw(dir, 'self-copy');
+    expect(selfCopy[1].causalRootId).toBeUndefined();
+    expect(selfCopy[1].unresolvedMessageReferences[0].candidateMessageIds).toEqual(selfCopy.map(row => row.id));
   });
 
   it('refuses incomplete tool history instead of silently sanitizing away source messages', () => {

@@ -57,7 +57,7 @@ export function sessionCopyOrigins(rows, sourceSessionId, streamId) {
 
 /**
  * 按源记录位置分配复制身份，不能用 Map<旧 ID, 新 ID> 覆盖冲突记录。
- * 未能由角色/turn 唯一消歧的引用从可执行引用字段移到诊断元数据；保留
+ * 无法唯一识别目标的引用从可执行引用字段移到诊断元数据；保留
  * 原引用及所有目标候选，不阻断复制，也不猜测折叠/因果关系。源行不变。
  * idMap 只提供唯一旧 ID 的兼容查询，绝不返回任意一个冲突候选。
  */
@@ -82,13 +82,10 @@ export function materializeSessionCopy(rows, { sourceSessionId, streamId, target
     const remap = (id, field, referenceIndex) => {
       const positions = occurrences.get(id);
       if (!positions) return id; // External/client identities are not persisted row IDs.
-      let candidates = positions;
-      if (candidates.length > 1 && row.turnId && field !== 'quote.messageId') {
-        const sameTurn = candidates.filter(position => sourceRows[position].turnId === row.turnId
-          && (sourceRows[position].speakerVpId || sourceRows[position].vpId || '') === (row.speakerVpId || row.vpId || ''));
-        if (sameTurn.length === 1) candidates = sameTurn;
-      }
-      if (candidates.length === 1) return ids[candidates[0]] || id;
+      // Duplicate bare IDs contain no record-level target identity. Role,
+      // proximity and a matching VP turn cannot prove the intended record
+      // (and may select this very row). Never infer a live reference from them.
+      if (positions.length === 1) return ids[positions[0]] || id;
       unresolved.push({ field, ...(referenceIndex === undefined ? {} : { index: referenceIndex }),
         messageId: id, candidateMessageIds: positions.map(position => ids[position]).filter(Boolean),
         candidateOrigins: positions.map(position => origins[position]) });
