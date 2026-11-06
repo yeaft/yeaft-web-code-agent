@@ -233,11 +233,13 @@ describe('durable native Session fork and merge', () => {
     expect(target.every(row => !rows.some(sourceRow => sourceRow.id === row.id))).toBe(true);
     expect(target[1].causalRootId).toBe(target[0].id);
     expect(target[3].causalRootId).toBe(target[0].id);
-    expect(target[5].causalRootId).toBe(target[4].id); // user/tool collision, not last-write-wins
+    expect(target[5].causalRootId).toBeUndefined(); // role alone cannot prove a causal root
     expect(target[2].toolCallId).toBe(target[1].toolCalls[0].id);
     expect(target[5].quote).toEqual({ content: 'quoted text' });
-    expect(target[5].unresolvedMessageReferences).toEqual([{ field: 'quote.messageId', messageId: 'm0104',
-      candidateMessageIds: [target[3].id, target[5].id] }]);
+    expect(target[5].unresolvedMessageReferences).toEqual([
+      { field: 'causalRootId', messageId: 'm0103', candidateMessageIds: [target[2].id, target[4].id] },
+      { field: 'quote.messageId', messageId: 'm0104', candidateMessageIds: [target[3].id, target[5].id] },
+    ]);
     expect(target[6]).toMatchObject({ cold: true, internal: true, foldedMessageIds: [],
       sourceMessageIds: [target[0].id, 'external'] });
     expect(target[6].unresolvedMessageReferences).toHaveLength(2);
@@ -248,7 +250,7 @@ describe('durable native Session fork and merge', () => {
     const probe = store.copySession(copied.id, 'nested-collision-copy');
     const nested = raw(dir, 'nested-collision-copy');
     expect(nested.map(row => row.origin)).toEqual(target.map(row => row.origin));
-    expect(nested[5].unresolvedMessageReferences[0].candidateMessageIds)
+    expect(nested[5].unresolvedMessageReferences[1].candidateMessageIds)
       .toEqual([probe.idMap.get(target[3].id), probe.idMap.get(target[5].id)]);
     // A duplicated bare ID is not a safe message-specific endpoint. Full raw
     // snapshots above are unambiguous and never drop either occurrence.
@@ -262,7 +264,7 @@ describe('durable native Session fork and merge', () => {
     // without false divergence and their candidates must target the final rows.
     expect(store.mergeSessions(copied.id, 'nested-collision-copy', 'diagnostic-merge').sharedTurnCount).toBe(2);
     const merged = raw(dir, 'diagnostic-merge');
-    expect(merged[5].unresolvedMessageReferences[0].candidateMessageIds).toEqual([merged[3].id, merged[5].id]);
+    expect(merged[5].unresolvedMessageReferences[1].candidateMessageIds).toEqual([merged[3].id, merged[5].id]);
     const later = store.append({ role: 'user', content: 'next', sessionId: copied.id });
     expect([...target, ...nested].some(row => row.id === later.id)).toBe(false);
   });
@@ -512,6 +514,42 @@ describe('durable native Session fork and merge', () => {
     writeFileSync(join(conversation, 'messages', 'm0001.md'), markdown('segment distinct'));
     expect(store.copySession('legacy', 'shadow').copiedCount).toBe(2);
     expect(raw(dir, 'shadow').map(row => row.content)).toEqual(['cold distinct', 'segment distinct']);
+  });
+
+  it('preserves pre-existing occurrence namespaces and never guesses a human causal root over an internal input', () => {
+    const dir = root();
+    const origin = { sessionId: 'original', streamId: 'original-stream', messageId: 'm0001' };
+    for (const [label, origins] of [
+      ['mixed', [origin, origin, { ...origin, rowOccurrence: 2 }]],
+      ['nested', [{ ...origin, rowOccurrence: 2 }, { ...origin, rowOccurrence: 2 }]],
+      ['reserved', [origin, origin, { ...origin, copyOccurrence: [2] }]],
+    ]) {
+      seed(dir, label, origins.flatMap((identity, index) => [
+        { id: `m${100 + index * 2}`, role: 'user', content: `${label}-${index}`, time: at(index + 1), origin: identity },
+        { id: `m${101 + index * 2}`, role: 'assistant', content: `${label}-${index} answer`, time: at(index + 1), turnId: `turn-${index}` },
+      ]));
+      const store = new ConversationStore(dir);
+      store.copySession(label, `${label}-prefix`, { throughTurnId: 'turn-1' });
+      store.copySession(label, `${label}-full`);
+      const full = raw(dir, `${label}-full`);
+      expect(new Set(full.map(row => JSON.stringify(row.origin))).size).toBe(full.length);
+      expect(raw(dir, `${label}-prefix`).map(row => row.origin)).toEqual(full.slice(0, 4).map(row => row.origin));
+      store.copySession(`${label}-full`, `${label}-copy`);
+      expect(store.mergeSessions(`${label}-full`, `${label}-copy`, `${label}-merged`).sharedTurnCount).toBe(origins.length);
+    }
+    seed(dir, 'causal', [
+      { id: 'm0001', role: 'user', content: 'first', time: at(1) },
+      { id: 'm0010', role: 'assistant', content: 'task result input', internal: true, turnId: 'input' },
+      { id: 'm0011', role: 'assistant', content: 'task result answer', causalRootId: 'm0010', turnId: 'output' },
+      { id: 'm0010', role: 'user', content: 'unrelated later user', time: at(2) },
+    ]);
+    const store = new ConversationStore(dir);
+    store.copySession('causal', 'causal-copy');
+    const copied = raw(dir, 'causal-copy');
+    expect(copied[2].causalRootId).toBeUndefined();
+    expect(copied[2].unresolvedMessageReferences).toEqual([{ field: 'causalRootId', messageId: 'm0010',
+      candidateMessageIds: [copied[1].id, copied[3].id] }]);
+    expect(store.captureSessionCopyBoundary('causal-copy', { beforeMessageId: copied[3].id }).rowCount).toBe(3);
   });
 
   it('refuses incomplete tool history instead of silently sanitizing away source messages', () => {

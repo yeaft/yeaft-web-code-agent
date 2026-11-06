@@ -35,7 +35,24 @@ export function historicalReplayRow(row) {
 }
 
 function originKey(origin) {
-  return JSON.stringify([origin.streamId, origin.messageId, origin.rowOccurrence ?? null]);
+  return JSON.stringify([origin.streamId, origin.messageId, origin.rowOccurrence ?? null, origin.copyOccurrence ?? null]);
+}
+
+/** 在完整源上分配稳定 lineage，再应用复制边界；保留旧 occurrence 命名空间。 */
+export function sessionCopyOrigins(rows, sourceSessionId, streamId) {
+  const origins = rows.map(row => messageOrigin(row, sourceSessionId, streamId));
+  const reserved = new Set(origins.map(originKey));
+  const used = new Set();
+  return origins.map(origin => {
+    if (!used.has(originKey(origin))) { used.add(originKey(origin)); return origin; }
+    let occurrence = 2;
+    let candidate;
+    do {
+      candidate = { ...origin, copyOccurrence: [...(origin.copyOccurrence || []), occurrence++] };
+    } while (reserved.has(originKey(candidate)) || used.has(originKey(candidate)));
+    used.add(originKey(candidate));
+    return candidate;
+  });
 }
 
 /**
@@ -44,7 +61,7 @@ function originKey(origin) {
  * 原引用及所有目标候选，不阻断复制，也不猜测折叠/因果关系。源行不变。
  * idMap 只提供唯一旧 ID 的兼容查询，绝不返回任意一个冲突候选。
  */
-export function materializeSessionCopy(rows, { sourceSessionId, streamId, targetSessionId, firstSeq }) {
+export function materializeSessionCopy(rows, { sourceSessionId, streamId, targetSessionId, firstSeq, origins = sessionCopyOrigins(rows, sourceSessionId, streamId) }) {
   const ids = rows.map((_, index) => `m${String(firstSeq + index).padStart(4, '0')}`);
   const occurrences = new Map();
   rows.forEach((row, index) => {
@@ -54,15 +71,9 @@ export function materializeSessionCopy(rows, { sourceSessionId, streamId, target
   });
   const idMap = new Map([...occurrences].filter(([, positions]) => positions.length === 1)
     .map(([id, positions]) => [id, ids[positions[0]]]));
-  const seenOrigins = new Map();
   const copies = rows.map((row, index) => {
-    const origin = messageOrigin(row, sourceSessionId, streamId);
-    const key = originKey(origin);
-    const occurrence = (seenOrigins.get(key) || 0) + 1;
-    seenOrigins.set(key, occurrence);
     const copy = { ...historicalReplayRow(row), id: ids[index], seq: firstSeq + index,
-      sessionId: targetSessionId,
-      origin: occurrence > 1 ? { ...origin, rowOccurrence: occurrence } : origin };
+      sessionId: targetSessionId, origin: origins[index] };
     // Existing diagnostics also belong to the copied namespace on nested forks.
     const unresolved = (row.unresolvedMessageReferences || []).map(reference => ({ ...reference,
       candidateMessageIds: (reference.candidateMessageIds || []).flatMap(id =>
@@ -72,9 +83,6 @@ export function materializeSessionCopy(rows, { sourceSessionId, streamId, target
       const positions = occurrences.get(id);
       if (!positions) return id; // External/client identities are not persisted row IDs.
       let candidates = positions;
-      if (candidates.length > 1 && field === 'causalRootId') {
-        candidates = candidates.filter(position => isHumanRequest(rows[position]));
-      }
       if (candidates.length > 1 && row.turnId && field !== 'quote.messageId') {
         const sameTurn = candidates.filter(position => rows[position].turnId === row.turnId
           && (rows[position].speakerVpId || rows[position].vpId || '') === (row.speakerVpId || row.vpId || ''));

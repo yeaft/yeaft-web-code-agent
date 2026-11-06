@@ -34,7 +34,7 @@ import {
 } from './visible-entry.js';
 import { copyPersistedSessionAttachments, readPersistedAttachmentFile, persistYeaftAttachments, MAX_TOTAL_BYTES } from '../attachments.js';
 import { markConversationDirty } from './history-index-state.js';
-import { historyError, isHumanRequest, messageOrigin, planSessionMerge, materializeSessionMerge, materializeSessionCopy } from './session-history.js';
+import { historyError, isHumanRequest, messageOrigin, planSessionMerge, materializeSessionMerge, materializeSessionCopy, sessionCopyOrigins } from './session-history.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -2212,6 +2212,7 @@ export class ConversationStore {
     const assetRows = copyPersistedSessionAttachments(rows, { yeaftDir: this.#dir, sourceSessionId, targetSessionId });
     const { rows: copies, idMap } = materializeSessionCopy(assetRows, {
       sourceSessionId, streamId, targetSessionId, firstSeq,
+      origins: sessionCopyOrigins(durableRows, sourceSessionId, streamId).slice(0, cutoff),
     });
     const target = this.#segmentStoreForConversationDir(this.#sessionConversationDir(targetSessionId));
     const written = target.appendBatch(copies);
