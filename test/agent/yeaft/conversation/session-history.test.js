@@ -199,6 +199,88 @@ describe('durable native Session fork and merge', () => {
     reject({ throughBoundary: boundary });
   });
 
+  it('copies every colliding legacy row in append order with fresh identities, references, assets and stable lineage', () => {
+    const dir = root();
+    const options = { libDir: join(dir, 'no-vp-library') };
+    const source = createSessionFromSpec(dir, { name: 'collision source', roster: ['omni'] }, options);
+    const asset = persistYeaftAttachments([{ name: 'note.txt', data: Buffer.from('keep asset').toString('base64') }],
+      { yeaftDir: dir, sessionId: source.id }).promptAttachments[0];
+    // Legacy copies assigned new IDs but retained old seq values. The writer
+    // later rewound its IDs into that range, so sorting by ID corrupts order.
+    const rows = [
+      { id: 'm0101', seq: 1, role: 'user', content: 'first', time: at(1), attachments: [asset] },
+      { id: 'm0102', seq: 2, role: 'assistant', content: 'call', turnId: 'old', speakerVpId: 'omni', causalRootId: 'm0101',
+        toolCalls: [{ id: 'call', name: 'Read', input: {} }] },
+      { id: 'm0103', seq: 3, role: 'tool', content: 'result', toolCallId: 'call', turnId: 'old', speakerVpId: 'omni' },
+      { id: 'm0104', seq: 4, role: 'assistant', content: 'first answer', turnId: 'old', speakerVpId: 'omni', causalRootId: 'm0101' },
+      { id: 'm0103', role: 'user', content: 'second', time: at(2) },
+      { id: 'm0104', role: 'assistant', content: 'second answer', turnId: 'new', speakerVpId: 'omni', causalRootId: 'm0103',
+        quote: { messageId: 'm0104', content: 'quoted text' } },
+      { id: 'm0105', role: 'user', content: 'fold', _reflection: true, internal: true, cold: true,
+        foldedMessageIds: ['m0103', 'm0104'], sourceMessageIds: ['m0101', 'external'] },
+    ];
+    seed(dir, source.id, rows);
+    const before = raw(dir, source.id);
+    const store = new ConversationStore(dir);
+    const boundary = JSON.parse(JSON.stringify(store.captureSessionCopyBoundary(source.id)));
+    expect(boundary.rowCount).toBe(rows.length);
+    const copied = copySession(dir, source.id, { ...options, throughBoundary: boundary });
+    expect(copied.copiedMessageCount).toBe(rows.length);
+    const target = raw(dir, copied.id);
+    expect(target.map(row => row.content)).toEqual(rows.map(row => row.content));
+    expect(new Set(target.map(row => row.id)).size).toBe(rows.length);
+    expect(target.every(row => row.seq === Number(row.id.slice(1)))).toBe(true);
+    expect(target.every(row => !rows.some(sourceRow => sourceRow.id === row.id))).toBe(true);
+    expect(target[1].causalRootId).toBe(target[0].id);
+    expect(target[3].causalRootId).toBe(target[0].id);
+    expect(target[5].causalRootId).toBe(target[4].id); // user/tool collision, not last-write-wins
+    expect(target[2].toolCallId).toBe(target[1].toolCalls[0].id);
+    expect(target[5].quote).toEqual({ content: 'quoted text' });
+    expect(target[5].unresolvedMessageReferences).toEqual([{ field: 'quote.messageId', messageId: 'm0104',
+      candidateMessageIds: [target[3].id, target[5].id] }]);
+    expect(target[6]).toMatchObject({ cold: true, internal: true, foldedMessageIds: [],
+      sourceMessageIds: [target[0].id, 'external'] });
+    expect(target[6].unresolvedMessageReferences).toHaveLength(2);
+    expect(new Set([target[2], target[4]].map(row => JSON.stringify(row.origin))).size).toBe(2);
+    expect(readFileSync(target[0].attachments[0].path, 'utf8')).toBe('keep asset');
+    expect(target[0].attachments[0].path).toContain(join('sessions', copied.id));
+    expect(raw(dir, source.id)).toEqual(before);
+    const probe = store.copySession(copied.id, 'nested-collision-copy');
+    const nested = raw(dir, 'nested-collision-copy');
+    expect(nested.map(row => row.origin)).toEqual(target.map(row => row.origin));
+    expect(nested[5].unresolvedMessageReferences[0].candidateMessageIds)
+      .toEqual([probe.idMap.get(target[3].id), probe.idMap.get(target[5].id)]);
+    // A duplicated bare ID is not a safe message-specific endpoint. Full raw
+    // snapshots above are unambiguous and never drop either occurrence.
+    expect(() => store.copySession(source.id, 'ambiguous-endpoint', { throughMessageId: 'm0104' }))
+      .toThrow(expect.objectContaining({ code: 'ambiguous_fork_boundary' }));
+    expect(() => store.captureSessionCopyBoundary(source.id, { beforeMessageId: 'm0103' }))
+      .toThrow(expect.objectContaining({ code: 'ambiguous_fork_boundary' }));
+    expect(store.copySession(source.id, 'old-turn-copy', { throughTurnId: 'old' }).copiedCount).toBe(4);
+    const later = store.append({ role: 'user', content: 'next', sessionId: copied.id });
+    expect([...target, ...nested].some(row => row.id === later.id)).toBe(false);
+  });
+
+  it('preserves identical ID/time/content occurrences and gives copied user origins distinct merge identities', () => {
+    const dir = root();
+    seed(dir, 'source', [
+      { id: 'm0001', role: 'user', content: 'same', time: at(1) },
+      { id: 'm0002', role: 'assistant', content: 'answer', time: at(1) },
+      { id: 'm0001', role: 'user', content: 'same', time: at(1) },
+      { id: 'm0002', role: 'assistant', content: 'answer', time: at(1) },
+    ]);
+    const store = new ConversationStore(dir);
+    const result = store.copySession('source', 'copy');
+    expect(result.copiedCount).toBe(4);
+    expect(result.idMap.size).toBe(0); // bare source IDs are deliberately not aliases
+    const copies = raw(dir, 'copy');
+    expect(copies.map(row => row.content)).toEqual(['same', 'answer', 'same', 'answer']);
+    expect(new Set(copies.map(row => JSON.stringify(row.origin))).size).toBe(4);
+    store.copySession('copy', 'nested');
+    expect(store.mergeSessions('copy', 'nested', 'merged')).toMatchObject({ copiedCount: 4, sharedTurnCount: 2 });
+    expect(raw(dir, 'merged').map(row => row.content)).toEqual(copies.map(row => row.content));
+  });
+
   it('deduplicates fork lineage once and preserves atomic interleaved multi-VP requests, references and attachment ownership', () => {
     const dir = root();
     const store = new ConversationStore(dir);

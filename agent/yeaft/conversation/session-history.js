@@ -35,7 +35,71 @@ export function historicalReplayRow(row) {
 }
 
 function originKey(origin) {
-  return JSON.stringify([origin.streamId, origin.messageId]);
+  return JSON.stringify([origin.streamId, origin.messageId, origin.rowOccurrence ?? null]);
+}
+
+/**
+ * 按源记录位置分配复制身份，不能用 Map<旧 ID, 新 ID> 覆盖冲突记录。
+ * 未能由角色/turn 唯一消歧的引用从可执行引用字段移到诊断元数据；保留
+ * 原引用及所有目标候选，不阻断复制，也不猜测折叠/因果关系。源行不变。
+ * idMap 只提供唯一旧 ID 的兼容查询，绝不返回任意一个冲突候选。
+ */
+export function materializeSessionCopy(rows, { sourceSessionId, streamId, targetSessionId, firstSeq }) {
+  const ids = rows.map((_, index) => `m${String(firstSeq + index).padStart(4, '0')}`);
+  const occurrences = new Map();
+  rows.forEach((row, index) => {
+    const positions = occurrences.get(row.id) || [];
+    positions.push(index);
+    occurrences.set(row.id, positions);
+  });
+  const idMap = new Map([...occurrences].filter(([, positions]) => positions.length === 1)
+    .map(([id, positions]) => [id, ids[positions[0]]]));
+  const copies = rows.map((row, index) => {
+    const origin = messageOrigin(row, sourceSessionId, streamId);
+    const copy = { ...historicalReplayRow(row), id: ids[index], seq: firstSeq + index,
+      sessionId: targetSessionId,
+      origin: occurrences.get(row.id).length > 1 ? { ...origin, rowOccurrence: index + 1 } : origin };
+    // Existing diagnostics also belong to the copied namespace on nested forks.
+    const unresolved = (row.unresolvedMessageReferences || []).map(reference => ({ ...reference,
+      candidateMessageIds: (reference.candidateMessageIds || []).flatMap(id =>
+        occurrences.has(id) ? occurrences.get(id).map(candidate => ids[candidate]) : [id]),
+    }));
+    const remap = (id, field, referenceIndex) => {
+      const positions = occurrences.get(id);
+      if (!positions) return id; // External/client identities are not persisted row IDs.
+      let candidates = positions;
+      if (candidates.length > 1 && field === 'causalRootId') {
+        candidates = candidates.filter(position => isHumanRequest(rows[position]));
+      }
+      if (candidates.length > 1 && row.turnId && field !== 'quote.messageId') {
+        const sameTurn = candidates.filter(position => rows[position].turnId === row.turnId
+          && (rows[position].speakerVpId || rows[position].vpId || '') === (row.speakerVpId || row.vpId || ''));
+        if (sameTurn.length === 1) candidates = sameTurn;
+      }
+      if (candidates.length === 1) return ids[candidates[0]];
+      unresolved.push({ field, ...(referenceIndex === undefined ? {} : { index: referenceIndex }),
+        messageId: id, candidateMessageIds: positions.map(position => ids[position]) });
+      return undefined;
+    };
+    if (row.causalRootId) {
+      const value = remap(row.causalRootId, 'causalRootId');
+      if (value === undefined) delete copy.causalRootId;
+      else copy.causalRootId = value;
+    }
+    if (row.quote?.messageId) {
+      copy.quote = { ...row.quote };
+      const value = remap(row.quote.messageId, 'quote.messageId');
+      if (value === undefined) delete copy.quote.messageId;
+      else copy.quote.messageId = value;
+    }
+    for (const field of ['foldedMessageIds', 'sourceMessageIds']) {
+      if (Array.isArray(row[field])) copy[field] = row[field]
+        .map((id, referenceIndex) => remap(id, field, referenceIndex)).filter(id => id !== undefined);
+    }
+    if (unresolved.length) copy.unresolvedMessageReferences = unresolved;
+    return copy;
+  });
+  return { rows: copies, idMap };
 }
 
 function stableJson(value) {

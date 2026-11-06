@@ -127,7 +127,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // cancellation, Engine live route, Person loop/usage, SQLite persistence and
 // real private-host/SQLite integration, child request-budget, non-verifying goal evidence,
 // deadline ownership, inherited-effort payload and crash-recovery unknown usage. No prior cases removed or hidden.
-export const TEST_CASE_LIMIT = 928;
+// +5 identity boundaries: colliding legacy fork records/lineage, identical-time occurrences,
+// stale-seq bootstrap, named-chat recovery and abandoned-lock non-takeover.
+export const TEST_CASE_LIMIT = 933;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

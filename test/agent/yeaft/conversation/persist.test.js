@@ -251,6 +251,50 @@ describe('ConversationStore', () => {
       expect(new Set(ids).size).toBe(ids.length);
     });
 
+    it('bootstraps IDs from actual legacy records rather than matching-byte stale seq indexes', () => {
+      const dir = join(TEST_DIR, 'sessions', 'legacy', 'conversation');
+      mkdirSync(join(dir, 'segments'), { recursive: true });
+      const line = JSON.stringify({ id: 'm9000', seq: 1, role: 'user', content: 'legacy', sessionId: 'legacy' }) + '\n';
+      writeFileSync(join(dir, 'segments', '000001.jsonl'), line);
+      writeFileSync(join(dir, 'index.json'), JSON.stringify({ version: 2, nextSeq: 2, totalMessages: 1,
+        activeSegment: '000001.jsonl', segments: [{ file: '000001.jsonl', firstSeq: 1, lastSeq: 1, count: 1,
+          bytes: Buffer.byteLength(line) }] }));
+      writeFileSync(join(TEST_DIR, 'message-sequence.json'), JSON.stringify({ version: 1, epoch: 'old', nextSeq: 2 }));
+      const next = store.append({ id: 'm9000', seq: 1, role: 'user', content: 'new', sessionId: 'new' });
+      expect(Number(next.id.slice(1))).toBeGreaterThan(9000);
+      expect(next.seq).toBe(Number(next.id.slice(1)));
+      const batch = new ConversationStore(TEST_DIR).appendBatch([{ seq: 1, role: 'user', content: 'batch' }]);
+      expect(batch[0].seq).toBe(Number(batch[0].id.slice(1)));
+      const copy = store.copySession('legacy', 'legacy-copy');
+      expect(Number(copy.idMap.get('m9000').slice(1))).toBeGreaterThan(Number(batch[0].id.slice(1)));
+    });
+
+    it('recovers the global high water from named chat segments after losing the sidecar', () => {
+      const chat = store.append({ role: 'user', content: 'named', chatId: 'named-chat' });
+      rmSync(join(TEST_DIR, 'message-sequence.json'));
+      const recovered = new ConversationStore(TEST_DIR).append({ role: 'user', content: 'session', sessionId: 'after-loss' });
+      expect(Number(recovered.id.slice(1))).toBeGreaterThan(Number(chat.id.slice(1)));
+      const other = store.append({ role: 'user', content: 'default' });
+      expect(new Set([chat.id, recovered.id, other.id]).size).toBe(3);
+    });
+
+    it('never takes over an observed abandoned lock or advances the sidecar while locked', () => {
+      const first = store.append({ role: 'user', content: 'first' });
+      const sequencePath = join(TEST_DIR, 'message-sequence.json');
+      const before = readFileSync(sequencePath, 'utf8');
+      const lockDir = join(TEST_DIR, 'message-sequence.lock');
+      mkdirSync(lockDir);
+      const owner = JSON.stringify({ pid: 2147483647, host: 'old-host', token: 'old', startedAt: 1 });
+      writeFileSync(join(lockDir, 'owner.json'), owner);
+      // A large allocation bypasses the warm reservation and must fail closed.
+      expect(() => store.appendBatch(Array.from({ length: 300 }, () => ({ role: 'user', content: 'blocked' }))))
+        .toThrow('Timed out reserving conversation message ids');
+      expect(readFileSync(sequencePath, 'utf8')).toBe(before);
+      expect(readFileSync(join(lockDir, 'owner.json'), 'utf8')).toBe(owner);
+      rmSync(lockDir, { recursive: true });
+      expect(store.append({ role: 'user', content: 'after offline recovery' }).id).not.toBe(first.id);
+    });
+
     it('preserves a first committed row and stream identity when its index target fails', () => {
       const sessionId = 'session_first_commit_index';
       const before = store.getSessionHistoryMetadata(sessionId);

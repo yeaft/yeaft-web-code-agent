@@ -64,6 +64,8 @@ A supporting Agent can fork while responding: the new Session contains the compl
 
 Choose **Fork from this turn** below a completed AI response to copy the chronological history prefix through that turn, inclusive, without later messages. The new Session inherits the same configuration and Project; the source is never truncated or changed. This requires a supporting Agent. Older responses without a reliable turn ID have no action; ambiguous boundaries or boundaries that split a tool call/result are rejected rather than falling back to a full copy. With parallel VPs, persisted message order is authoritative, so other VP messages before the boundary are included.
 
+Legacy duplicate message IDs do not block a full fork. Every durable record receives a new unique ID and sequence in original append order, without changing the source or deduplicating equal text or timestamps. References are remapped only when their target is uniquely identifiable; ambiguous references are retained in the target row’s `unresolvedMessageReferences` metadata instead of guessing links or hiding the wrong messages. Quoted text and tool call/result pairs remain intact. A message-specific boundary identified only by a duplicated old ID is still rejected; full copies and reliable turn/snapshot boundaries remain supported.
+
 ## Merge two Sessions
 
 Choose **Merge Sessions** from the sidebar menu or conversation header, then select another native Session on the same Agent. Both Sessions must be idle and the Agent must support merging.
