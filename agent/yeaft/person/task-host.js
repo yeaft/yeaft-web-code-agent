@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { TaskManager } from '../tasks/manager.js';
 import { TASK_RESULT_DELIVERY, isTerminalTaskStatus } from '../tasks/store.js';
 import { createFullRegistry } from '../tools/index.js';
+import responseEnhance from '../tools/response-enhance.js';
 import { ToolRegistry, normalizeToolOutput, isToolErrorOutput, toolErrorEffect } from '../tools/registry.js';
 import { SubAgentToolRegistry } from '../sub-agent/execution-control.js';
 import { agentBelongsToScope, getAgentRegistry } from '../tools/agent.js';
@@ -27,7 +28,8 @@ export const PERSON_TASK_TOOL_IDS = Object.freeze([
   'ResponseEnhance',
   'DiscoverTools', // child Engine schema activation; Person itself uses its catalog
 ]);
-const nativeRegistry = createFullRegistry();
+// Response enhancement is a Person-only experiment, never a Session built-in.
+const nativeRegistry = createFullRegistry().register(responseEnhance);
 const liveHosts = new Map();
 const pause = () => new Promise(resolve => setTimeout(resolve, 10));
 const clone = value => JSON.parse(JSON.stringify(value));

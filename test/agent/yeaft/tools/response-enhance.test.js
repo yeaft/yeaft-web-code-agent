@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConversationStore, projectVisibleSessionMessages } from '../../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../../agent/yeaft/conversation/history-index.js';
-import { SubAgentToolRegistry } from '../../../../agent/yeaft/sub-agent/execution-control.js';
+import { createChildToolPolicy, validateToolGrants } from '../../../../agent/yeaft/sub-agent/tool-access.js';
+import { createPersonNativeRegistry } from '../../../../agent/yeaft/person/native-tools.js';
 import bridgeCtx from '../../../../agent/context.js';
 import { __testHandleEngineEvent } from '../../../../agent/yeaft/web-bridge.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -22,8 +23,14 @@ const reply = value => [{ type: 'text_delta', text: JSON.stringify(value) }, { t
 const adapterFor = events => ({ stream: vi.fn(async function* () { yield* events; }) });
 
 describe('ResponseEnhance', () => {
-  it('is optional/visible, plugin governed and returns one private natural-language revision without research or publication', async () => {
-    const registry = createFullRegistry();
+  it('is visible only in the private Person registry, plugin governed and returns one unpublished revision', async () => {
+    const sessionRegistry = createFullRegistry();
+    expect(sessionRegistry.has('ResponseEnhance')).toBe(false);
+    expect(sessionRegistry.getToolDefs().some(tool => tool.name === 'ResponseEnhance')).toBe(false);
+    expect(resolveActiveToolNames({ toolNames: sessionRegistry.getToolNames(), prompt: 'ResponseEnhance 回答增强' }).has('ResponseEnhance')).toBe(false);
+    expect(readFileSync(new URL('../../../../agent/yeaft/templates/core.md', import.meta.url), 'utf8')).not.toContain('ResponseEnhance');
+    await expect(sessionRegistry.execute('ResponseEnhance', input)).rejects.toThrow('Unknown tool');
+    const registry = createPersonNativeRegistry();
     expect(resolveActiveToolNames({ toolNames: registry.getToolNames(), prompt: '你好' }).has('ResponseEnhance')).toBe(true);
     expect(registry.isAllowed('ResponseEnhance', { plugins: { tools: [] } })).toBe(false);
     expect(tool.isReadOnly()).toBe(true);
@@ -102,59 +109,48 @@ describe('ResponseEnhance', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('keeps inherited effort ceilings on the real Anthropic review payload even with thinking feature disabled', async () => {
+  it('keeps explicit effort ceilings and small output limits on a tool-free enhancement payload', async () => {
     const { AnthropicAdapter } = await import('../../../../agent/yeaft/llm/anthropic.js');
     const bodies = [];
     vi.stubEnv('YEAFT_THINKING_V1', '0');
     vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
-      const body = JSON.parse(options.body); bodies.push(body);
-      const index = bodies.length;
-      const content = index === 1 ? [{ type: 'tool_use', id: 'enhance', name: 'ResponseEnhance', input }]
-        : [{ type: 'text', text: index === 2 ? JSON.stringify(unchanged) : 'A is better for your maintenance constraint.' }];
-      return new Response(JSON.stringify({ id: `m-${index}`, content, stop_reason: index === 1 ? 'tool_use' : 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } }), { headers: { 'content-type': 'application/json' } });
+      bodies.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ id: 'enhancement', content: [{ type: 'text', text: JSON.stringify(unchanged) }],
+        stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } }), { headers: { 'content-type': 'application/json' } });
     }));
     try {
-      const engine = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'fixture' }), trace: new NullTrace(),
-        config: { ...config, model: 'claude-sonnet-4-6' }, toolRegistry: createFullRegistry() });
-      for await (const event of engine.query({ prompt: input.question, isSubAgent: true, parentEffortDecision: { effective: 'low' } })) { /* drain */ }
-      expect(bodies).toHaveLength(3);
-      expect(bodies[1].system).toContain(RESPONSE_ENHANCE_SYSTEM);
-      expect(bodies[1].tools ?? []).toEqual([]);
-      expect(bodies[1].output_config?.effort).toBe('low');
-      bodies.length = 0;
+      const adapter = new AnthropicAdapter({ apiKey: 'fixture' });
+      await enhanceResponse(input, { adapter, config, model: 'claude-sonnet-4-6', effort: 'low', effortConstraint: { parentDecision: { effective: 'low' } } });
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0].system).toContain(RESPONSE_ENHANCE_SYSTEM);
+      expect(bodies[0].tools ?? []).toEqual([]);
+      expect(bodies[0].output_config?.effort).toBe('low');
       vi.stubEnv('YEAFT_THINKING_V1', '1');
-      const manual = new Engine({ adapter: new AnthropicAdapter({ apiKey: 'fixture' }), trace: new NullTrace(),
-        config: { ...config, model: 'claude-sonnet-4-20250514', modelEffort: 'high' }, toolRegistry: createFullRegistry() });
-      for await (const event of manual.query({ prompt: input.question })) { /* drain */ }
-      expect(bodies).toHaveLength(3);
+      await enhanceResponse(input, { adapter, config, model: 'claude-sonnet-4-20250514', effort: 'high' });
+      expect(bodies).toHaveLength(2);
       expect(bodies[1].max_tokens).toBe(1024);
       expect(bodies[1].thinking).toBeUndefined();
     } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
   });
 
-  it('reserves child LLM calls before review dispatch and cannot bypass a one-request lifetime ceiling', async () => {
-    const agent = { budget: { max_llm_calls: 1 }, usage: { llmCalls: 0 }, abortController: new AbortController() };
-    const registry = new SubAgentToolRegistry({ agent }).register(tool);
-    const requests = [];
-    const adapter = { async *stream(params) {
-      requests.push(params);
-      if (requests.length === 1) yield* [{ type: 'tool_call', id: 'enhance', name: 'ResponseEnhance', input }, { type: 'stop', stopReason: 'tool_use' }];
-      else yield* [{ type: 'text_delta', text: 'Final report from existing evidence.' }, { type: 'stop', stopReason: 'end_turn' }];
-    } };
-    const engine = new Engine({ adapter, trace: new NullTrace(), config, toolRegistry: registry });
-    const events = [];
-    for await (const event of engine.query({ prompt: input.question, isSubAgent: true })) events.push(event);
-    expect(requests).toHaveLength(2); // main request and the separately reserved no-tool budget report
-    expect(requests.some(params => params.system === RESPONSE_ENHANCE_SYSTEM)).toBe(false);
-    expect(agent.usage).toMatchObject({ llmCalls: 2, reportingLlmCalls: 1 });
-    expect(events.find(event => event.type === 'tool_end')).toMatchObject({ isError: true });
+  it('does not grant the Person response experiment to any child Engine, even by explicit grants', () => {
+    for (const parent of [createFullRegistry(), createPersonNativeRegistry()]) {
+      for (const persona of ['implementer', 'reviewer', 'researcher', 'explorer']) {
+        const policy = createChildToolPolicy(parent, { persona, allowTools: ['ResponseEnhance'] });
+        const child = createPersonNativeRegistry();
+        policy.refresh(child);
+        expect(child.has('ResponseEnhance')).toBe(false);
+        expect(policy.allows(tool)).toBe(false);
+      }
+      expect(validateToolGrants(['ResponseEnhance'], parent).ok).toBe(false);
+    }
   });
 
-  it('uses the live Engine model and resumes the original loop once, with separate usage and no exposed draft/reasoning', async () => {
+  it('keeps ordinary Session discovery/execution side-call-free while redacting legacy enhancement history', async () => {
     const requests = [];
     const scripted = [
-      [{ type: 'tool_call', id: 'enhance', name: 'ResponseEnhance', input }, { type: 'usage', inputTokens: 20, outputTokens: 10 }, { type: 'stop', stopReason: 'tool_use' }],
-      [{ type: 'thinking_delta', text: 'PRIVATE-THOUGHT' }, ...reply(revised)],
+      [{ type: 'tool_call', id: 'discover', name: 'DiscoverTools', input: { query: 'ResponseEnhance', max_results: 24 } }, { type: 'usage', inputTokens: 20, outputTokens: 10 }, { type: 'stop', stopReason: 'tool_use' }],
+      [{ type: 'tool_call', id: 'enhance', name: 'ResponseEnhance', input }, { type: 'usage', inputTokens: 40, outputTokens: 15 }, { type: 'stop', stopReason: 'tool_use' }],
       [{ type: 'text_delta', text: revised.response }, { type: 'usage', inputTokens: 40, outputTokens: 15 }, { type: 'stop', stopReason: 'end_turn' }],
     ];
     const root = mkdtempSync(join(tmpdir(), 'enhance-engine-'));
@@ -165,29 +161,34 @@ describe('ResponseEnhance', () => {
       const events = [];
       for await (const event of engine.query({ prompt: input.question, sessionId: 'enhance-session', turnConfig: { model: 'test/live' } })) events.push(event);
       expect(requests).toHaveLength(3);
-      expect(requests[1]).toMatchObject({ model: 'test/live', tools: [] });
-      expect(requests[2].messages.some(message => message.role === 'tool' && message.content.includes(revised.response))).toBe(true);
+      expect(requests.every(params => !params.tools.some(tool => tool.name === 'ResponseEnhance'))).toBe(true);
+      expect(requests.every(params => params.system !== RESPONSE_ENHANCE_SYSTEM)).toBe(true);
+      const discovery = JSON.parse(requests[1].messages.find(message => message.role === 'tool').content);
+      expect(discovery.tools.some(tool => tool.name === 'ResponseEnhance')).toBe(false);
+      expect(events.find(event => event.type === 'tool_end' && event.name === 'ResponseEnhance')).toMatchObject({ isError: true });
+      expect(requests[2].messages.find(message => message.role === 'tool' && message.toolCallId === 'enhance').content).toContain('ResponseEnhance');
       expect(events.filter(event => event.type === 'text_delta').map(event => event.text).join('')).toBe(revised.response);
-      expect(JSON.stringify(events)).not.toContain('PRIVATE-THOUGHT');
-      expect(events.findLast(event => event.type === 'query_progress')).toMatchObject({ inputTokens: 90, outputTokens: 37, modelRequests: 3 });
-      expect(events.find(event => event.type === 'turn_close')).toMatchObject({ inputTokens: 90, outputTokens: 37, totalTokens: 127, modelRequestCount: 3, loopCount: 2 });
+      expect(events.findLast(event => event.type === 'query_progress')).toMatchObject({ inputTokens: 100, outputTokens: 40, modelRequests: 3 });
+      expect(events.find(event => event.type === 'turn_close')).toMatchObject({ inputTokens: 100, outputTokens: 40, totalTokens: 140, modelRequestCount: 3, loopCount: 3 });
       expect(events.filter(event => event.type === 'usage')).toHaveLength(3);
       const old = { ws: bridgeCtx.ws, outboundSendQueue: bridgeCtx.outboundSendQueue, outboundSendQueueActive: bridgeCtx.outboundSendQueueActive, serverEncryptionRequired: bridgeCtx.serverEncryptionRequired };
       try {
         Object.assign(bridgeCtx, { ws: { readyState: 1, send() {} }, outboundSendQueue: [], outboundSendQueueActive: true, serverEncryptionRequired: false });
         const hctx = { sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main', skipPartialHistory: true, resetQueryTimer() {},
           assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [] };
-        for (const event of events.filter(event => ['tool_call', 'tool_start', 'tool_end'].includes(event.type))) __testHandleEngineEvent(event, hctx);
+        // Pre-fix legacy tool events must stay private even after removal.
+        for (const event of [{ type: 'tool_call', name: 'ResponseEnhance', id: 'old', input },
+          { type: 'tool_end', name: 'ResponseEnhance', toolCallId: 'old', output: JSON.stringify(revised), isError: false }]) __testHandleEngineEvent(event, hctx);
         expect(JSON.stringify(bridgeCtx.outboundSendQueue)).not.toContain(input.draft);
         expect(JSON.stringify(bridgeCtx.outboundSendQueue)).not.toContain(revised.response);
         expect(hctx.toolCallsAccum[0].input).toEqual(input);
         expect(hctx.toolResultsAccum[0].content).toContain(revised.response);
       } finally { Object.assign(bridgeCtx, old); }
       const rows = conversationStore.loadRecentBySession('enhance-session', 20);
-      expect(rows.findLast(row => row.role === 'assistant' && row.content === revised.response)).toMatchObject({ llmCallCount: 3, inputTokens: 90, outputTokens: 37 });
+      expect(rows.findLast(row => row.role === 'assistant' && row.content === revised.response)).toMatchObject({ llmCallCount: 3, inputTokens: 100, outputTokens: 40 });
       const visible = projectVisibleSessionMessages(rows);
       expect(JSON.stringify(visible)).not.toContain(input.draft);
-      expect(JSON.stringify(rows)).toContain(input.draft); // private transcript for native continuation/debug
+      expect(JSON.stringify(rows)).toContain(input.draft); // private old/malformed calls remain diagnosable
     } finally { await closeConversationHistoryIndexes(); rmSync(root, { recursive: true, force: true }); }
   });
 });
