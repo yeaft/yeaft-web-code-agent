@@ -237,8 +237,8 @@ describe('durable native Session fork and merge', () => {
     expect(target[2].toolCallId).toBe(target[1].toolCalls[0].id);
     expect(target[5].quote).toEqual({ content: 'quoted text' });
     expect(target[5].unresolvedMessageReferences).toEqual([
-      { field: 'causalRootId', messageId: 'm0103', candidateMessageIds: [target[2].id, target[4].id] },
-      { field: 'quote.messageId', messageId: 'm0104', candidateMessageIds: [target[3].id, target[5].id] },
+      { field: 'causalRootId', messageId: 'm0103', candidateMessageIds: [target[2].id, target[4].id], candidateOrigins: [target[2].origin, target[4].origin] },
+      { field: 'quote.messageId', messageId: 'm0104', candidateMessageIds: [target[3].id, target[5].id], candidateOrigins: [target[3].origin, target[5].origin] },
     ]);
     expect(target[6]).toMatchObject({ cold: true, internal: true, foldedMessageIds: [],
       sourceMessageIds: [target[0].id, 'external'] });
@@ -285,6 +285,20 @@ describe('durable native Session fork and merge', () => {
     expect(copies.map(row => row.content)).toEqual(['same', 'answer', 'same', 'answer']);
     expect(new Set(copies.map(row => JSON.stringify(row.origin))).size).toBe(4);
     store.copySession('copy', 'nested');
+    // Resolve against all source occurrences even for a complete prefix fork.
+    seed(dir, 'causal-prefix', [
+      { id: 'm0200', role: 'user', content: 'first', time: at(1) },
+      { id: 'm0201', role: 'assistant', content: 'first answer', turnId: 'one', causalRootId: 'm0200' },
+      { id: 'm0200', role: 'user', content: 'second', time: at(2) },
+      { id: 'm0201', role: 'assistant', content: 'second answer', turnId: 'two', causalRootId: 'm0200' },
+    ]);
+    store.copySession('causal-prefix', 'causal-short', { throughTurnId: 'one' });
+    store.copySession('causal-prefix', 'causal-full');
+    expect(raw(dir, 'causal-short')[1].causalRootId).toBeUndefined();
+    expect(raw(dir, 'causal-short')[1].unresolvedMessageReferences[0].candidateOrigins)
+      .toEqual(raw(dir, 'causal-full')[1].unresolvedMessageReferences[0].candidateOrigins);
+    expect(store.mergeSessions('causal-short', 'causal-full', 'causal-joined'))
+      .toMatchObject({ copiedCount: 4, sharedTurnCount: 1 });
     expect(store.mergeSessions('copy', 'nested', 'merged')).toMatchObject({ copiedCount: 4, sharedTurnCount: 2 });
     expect(raw(dir, 'merged').map(row => row.content)).toEqual(copies.map(row => row.content));
   });
@@ -548,7 +562,7 @@ describe('durable native Session fork and merge', () => {
     const copied = raw(dir, 'causal-copy');
     expect(copied[2].causalRootId).toBeUndefined();
     expect(copied[2].unresolvedMessageReferences).toEqual([{ field: 'causalRootId', messageId: 'm0010',
-      candidateMessageIds: [copied[1].id, copied[3].id] }]);
+      candidateMessageIds: [copied[1].id, copied[3].id], candidateOrigins: [copied[1].origin, copied[3].origin] }]);
     expect(store.captureSessionCopyBoundary('causal-copy', { beforeMessageId: copied[3].id }).rowCount).toBe(3);
   });
 

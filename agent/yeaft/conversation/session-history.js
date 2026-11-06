@@ -61,15 +61,15 @@ export function sessionCopyOrigins(rows, sourceSessionId, streamId) {
  * 原引用及所有目标候选，不阻断复制，也不猜测折叠/因果关系。源行不变。
  * idMap 只提供唯一旧 ID 的兼容查询，绝不返回任意一个冲突候选。
  */
-export function materializeSessionCopy(rows, { sourceSessionId, streamId, targetSessionId, firstSeq, origins = sessionCopyOrigins(rows, sourceSessionId, streamId) }) {
+export function materializeSessionCopy(rows, { sourceSessionId, streamId, targetSessionId, firstSeq, sourceRows = rows, origins = sessionCopyOrigins(sourceRows, sourceSessionId, streamId) }) {
   const ids = rows.map((_, index) => `m${String(firstSeq + index).padStart(4, '0')}`);
   const occurrences = new Map();
-  rows.forEach((row, index) => {
+  sourceRows.forEach((row, index) => {
     const positions = occurrences.get(row.id) || [];
     positions.push(index);
     occurrences.set(row.id, positions);
   });
-  const idMap = new Map([...occurrences].filter(([, positions]) => positions.length === 1)
+  const idMap = new Map([...occurrences].filter(([, positions]) => positions.length === 1 && positions[0] < rows.length)
     .map(([id, positions]) => [id, ids[positions[0]]]));
   const copies = rows.map((row, index) => {
     const copy = { ...historicalReplayRow(row), id: ids[index], seq: firstSeq + index,
@@ -77,20 +77,21 @@ export function materializeSessionCopy(rows, { sourceSessionId, streamId, target
     // Existing diagnostics also belong to the copied namespace on nested forks.
     const unresolved = (row.unresolvedMessageReferences || []).map(reference => ({ ...reference,
       candidateMessageIds: (reference.candidateMessageIds || []).flatMap(id =>
-        occurrences.has(id) ? occurrences.get(id).map(candidate => ids[candidate]) : [id]),
+        occurrences.has(id) ? occurrences.get(id).map(candidate => ids[candidate]).filter(Boolean) : [id]),
     }));
     const remap = (id, field, referenceIndex) => {
       const positions = occurrences.get(id);
       if (!positions) return id; // External/client identities are not persisted row IDs.
       let candidates = positions;
       if (candidates.length > 1 && row.turnId && field !== 'quote.messageId') {
-        const sameTurn = candidates.filter(position => rows[position].turnId === row.turnId
-          && (rows[position].speakerVpId || rows[position].vpId || '') === (row.speakerVpId || row.vpId || ''));
+        const sameTurn = candidates.filter(position => sourceRows[position].turnId === row.turnId
+          && (sourceRows[position].speakerVpId || sourceRows[position].vpId || '') === (row.speakerVpId || row.vpId || ''));
         if (sameTurn.length === 1) candidates = sameTurn;
       }
-      if (candidates.length === 1) return ids[candidates[0]];
+      if (candidates.length === 1) return ids[candidates[0]] || id;
       unresolved.push({ field, ...(referenceIndex === undefined ? {} : { index: referenceIndex }),
-        messageId: id, candidateMessageIds: positions.map(position => ids[position]) });
+        messageId: id, candidateMessageIds: positions.map(position => ids[position]).filter(Boolean),
+        candidateOrigins: positions.map(position => origins[position]) });
       return undefined;
     };
     if (row.causalRootId) {
@@ -295,7 +296,13 @@ function equivalentRows(left, right, aliases) {
       }
       if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remap(row.quote.messageId) };
       if (row.unresolvedMessageReferences) copy.unresolvedMessageReferences = row.unresolvedMessageReferences
-        .map(reference => ({ ...reference, candidateMessageIds: reference.candidateMessageIds.map(remap) }));
+        .map(reference => {
+          if (reference.candidateOrigins) {
+            const { candidateMessageIds, ...identity } = reference;
+            return identity; // Scope-independent evidence includes excluded suffix candidates.
+          }
+          return { ...reference, candidateMessageIds: reference.candidateMessageIds.map(remap) };
+        });
       if (Array.isArray(row.attachments)) copy.attachments = row.attachments.map(att => {
         const { path, ...metadata } = att;
         return metadata;

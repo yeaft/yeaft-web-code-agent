@@ -132,7 +132,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 review regressions: stable rewind/snapshot/lineage across segments and
 // distinct legacy hot/cold/segment rows versus proven migration shadows.
 // +1 review regression: existing lineage namespaces and internal non-human causal roots.
-export const TEST_CASE_LIMIT = 936;
+// +1 SQLite mutex permission boundary: best-effort and strict read-only writes.
+export const TEST_CASE_LIMIT = 937;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

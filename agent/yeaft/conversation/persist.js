@@ -17,7 +17,7 @@
  * Reference: yeaft-yeaft-core-systems.md §4.1, yeaft-yeaft-brainstorm-v5.1.md
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync, rmSync } from 'fs';
+import { accessSync, constants, existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync, rmSync } from 'fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -148,13 +148,27 @@ function sleepSync(ms) {
 // recovery. Kernel locks disappear on process exit; unlike rename-after-check,
 // no contender can replace the observed directory while another reclaims it.
 function withMessageSequenceMutex(root, callback) {
-  const db = new DatabaseSync(join(root, MESSAGE_SEQUENCE_MUTEX_FILE));
+  const path = join(root, MESSAGE_SEQUENCE_MUTEX_FILE);
+  let db;
   try {
+    db = new DatabaseSync(path);
     db.exec('PRAGMA busy_timeout=1000; BEGIN IMMEDIATE;');
     return callback();
+  } catch (error) {
+    // SQLite wraps OS permission failures. Only normalize a confirmed read-only
+    // path; busy/corrupt/missing-parent errors remain real failures.
+    if (error?.code === 'ERR_SQLITE_ERROR' && [8, 14].includes(error.errcode & 255)) {
+      try {
+        accessSync(root, constants.W_OK);
+        if (existsSync(path)) accessSync(path, constants.W_OK);
+      } catch (permissionError) {
+        if (isPermissionError(permissionError)) throw permissionError;
+      }
+    }
+    throw error;
   } finally {
-    try { db.exec('ROLLBACK;'); } catch {}
-    db.close();
+    try { db?.exec('ROLLBACK;'); } catch {}
+    db?.close();
   }
 }
 
@@ -2212,7 +2226,8 @@ export class ConversationStore {
     const assetRows = copyPersistedSessionAttachments(rows, { yeaftDir: this.#dir, sourceSessionId, targetSessionId });
     const { rows: copies, idMap } = materializeSessionCopy(assetRows, {
       sourceSessionId, streamId, targetSessionId, firstSeq,
-      origins: sessionCopyOrigins(durableRows, sourceSessionId, streamId).slice(0, cutoff),
+      sourceRows: durableRows,
+      origins: sessionCopyOrigins(durableRows, sourceSessionId, streamId),
     });
     const target = this.#segmentStoreForConversationDir(this.#sessionConversationDir(targetSessionId));
     const written = target.appendBatch(copies);

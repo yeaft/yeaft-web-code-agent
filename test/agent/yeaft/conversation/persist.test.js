@@ -293,6 +293,19 @@ describe('ConversationStore', () => {
       expect(Number(copy.idMap.get('m9000').slice(1))).toBeGreaterThan(Number(batch[0].id.slice(1)));
     });
 
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('preserves best-effort append on a read-only root without swallowing strict errors', () => {
+      const readonly = join(TEST_DIR, 'readonly');
+      mkdirSync(readonly);
+      const reader = new ConversationStore(readonly);
+      chmodSync(readonly, 0o555);
+      try {
+        expect(reader.append({ role: 'user', content: 'ephemeral' }).id).toMatch(/^m\d+$/);
+        expect(reader.appendBatch([{ role: 'user', content: 'batch' }])[0].id).toMatch(/^m\d+$/);
+        expect(() => reader.append({ role: 'user', content: 'strict' }, { strict: true }))
+          .toThrow(expect.objectContaining({ code: 'EACCES' }));
+      } finally { chmodSync(readonly, 0o755); }
+    });
+
     it('recovers the global high water from named chat segments after losing the sidecar', () => {
       const chat = store.append({ role: 'user', content: 'named', chatId: 'named-chat' });
       rmSync(join(TEST_DIR, 'message-sequence.json'));
