@@ -127,6 +127,8 @@ describe('Person task host', () => {
     expect(attached.parentEngineDeps.subAgentLogDir.startsWith(h.dataRoot)).toBe(true);
     expect(attached.parentEngineDeps.parentToolRegistry.has('HistorySearch')).toBe(false);
     expect(attached.parentEngineDeps.parentToolRegistry.has('AskUser')).toBe(false);
+    expect(attached.nativeRegistry.has('ResponseEnhance')).toBe(true);
+    expect(adapter.calls.every(params => !params.tools.some(tool => tool.name === 'ResponseEnhance'))).toBe(true);
     const next = await h.attach();
     const prompted = await json(next, 'PromptAgent', { agent_id: one.agentId, message: 'also report follow-up' });
     expect(prompted.success).toBe(true);

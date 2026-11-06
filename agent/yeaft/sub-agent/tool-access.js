@@ -23,6 +23,7 @@ export const RESTRICTED_TOOLS = new Set([
   'RouteForward',
   'AskUser',
   'CreateWorkItem',
+  'ResponseEnhance', // Person's own response experiment, not a child Engine tool
 ]);
 
 function canonicalTool(parentRegistry, name) {

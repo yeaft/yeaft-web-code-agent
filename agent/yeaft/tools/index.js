@@ -26,7 +26,6 @@ import exitWorktree from './exit-worktree.js';
 // --- P0 Core tools ---
 import askUser from './ask-user.js';
 import presentResponse from './present-response.js';
-import responseEnhance from './response-enhance.js';
 import webSearch from './web-search.js';
 import webFetch from './web-fetch.js';
 import historySearch from './history-search.js';
@@ -82,7 +81,8 @@ import imageGeneration from './image-generation.js';
 import viewImage from './view-image.js';
 
 /**
- * All built-in tools, flattened into a single array.
+ * Session built-in tools, flattened into a single array. Person-only
+ * experiments (such as ResponseEnhance) belong to the private Person registry.
  * mcpTools is already an array; the rest are single ToolDef objects.
  * @type {import('./types.js').ToolDef[]}
  */
@@ -95,7 +95,6 @@ export const allTools = [
   // P0 Core
   askUser,
   presentResponse,
-  responseEnhance,
   webSearch,
   webFetch,
   historySearch,
