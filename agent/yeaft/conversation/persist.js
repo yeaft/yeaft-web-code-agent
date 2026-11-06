@@ -20,6 +20,7 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync, appendFileSync, rmSync } from 'fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { join, basename, resolve } from 'path';
 import { isPermissionError } from '../init.js';
 import { writeAtomic } from '../storage/atomic.js';
@@ -33,7 +34,7 @@ import {
 } from './visible-entry.js';
 import { copyPersistedSessionAttachments, readPersistedAttachmentFile, persistYeaftAttachments, MAX_TOTAL_BYTES } from '../attachments.js';
 import { markConversationDirty } from './history-index-state.js';
-import { historyError, isHumanRequest, messageOrigin, historicalReplayRow, planSessionMerge, materializeSessionMerge, materializeSessionCopy } from './session-history.js';
+import { historyError, isHumanRequest, messageOrigin, planSessionMerge, materializeSessionMerge, materializeSessionCopy } from './session-history.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -84,6 +85,8 @@ const SEGMENT_TARGET_BYTES = 1024 * 1024;
 const SEGMENT_FIRST_NAME = '000001.jsonl';
 const MESSAGE_SEQUENCE_FILE = 'message-sequence.json';
 const MESSAGE_SEQUENCE_LOCK_DIR = 'message-sequence.lock';
+const MESSAGE_SEQUENCE_MUTEX_FILE = 'message-sequence-lock.db';
+const MESSAGE_SEQUENCE_LOCK_STALE_MS = 30_000;
 const MESSAGE_SEQUENCE_LOCK_ATTEMPTS = 200;
 const MESSAGE_SEQUENCE_LOCK_RETRY_MS = 5;
 const MESSAGE_SEQUENCE_RESERVATION_SIZE = 256;
@@ -141,6 +144,31 @@ function sleepSync(ms) {
   Atomics.wait(buffer, 0, 0, ms);
 }
 
+// The SQLite transaction serializes BOTH reservation and abandoned-directory
+// recovery. Kernel locks disappear on process exit; unlike rename-after-check,
+// no contender can replace the observed directory while another reclaims it.
+function withMessageSequenceMutex(root, callback) {
+  const db = new DatabaseSync(join(root, MESSAGE_SEQUENCE_MUTEX_FILE));
+  try {
+    db.exec('PRAGMA busy_timeout=1000; BEGIN IMMEDIATE;');
+    return callback();
+  } finally {
+    try { db.exec('ROLLBACK;'); } catch {}
+    db.close();
+  }
+}
+
+function abandonedMessageSequenceLock(lockDir) {
+  const details = statSync(lockDir);
+  let owner;
+  try { owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')); } catch {}
+  if (owner?.host === hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
+    try { process.kill(owner.pid, 0); return false; }
+    catch (error) { return error?.code === 'ESRCH'; }
+  }
+  return Date.now() - details.mtimeMs > MESSAGE_SEQUENCE_LOCK_STALE_MS;
+}
+
 function messageSequenceLockIsOwned(lockDir, token) {
   try {
     const owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'));
@@ -174,9 +202,17 @@ function acquireMessageSequenceLock(lockDir) {
       mkdirSync(lockDir, { mode: 0o700 });
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error;
-      // Never rename an observed stale directory: another contender could
-      // already have replaced it with a live lock. Fail closed on abandoned
-      // locks; recovery must happen offline with all writers stopped.
+      // Caller holds the kernel-backed mutex, including throughout recovery.
+      // All current writers take it before touching the directory/sidecar.
+      try {
+        if (abandonedMessageSequenceLock(lockDir)) {
+          rmSync(lockDir, { recursive: true });
+          continue;
+        }
+      } catch (inspectionError) {
+        if (inspectionError?.code === 'ENOENT') continue;
+        throw inspectionError;
+      }
       sleepSync(MESSAGE_SEQUENCE_LOCK_RETRY_MS);
       continue;
     }
@@ -193,7 +229,7 @@ function acquireMessageSequenceLock(lockDir) {
       throw error;
     }
   }
-  throw new Error('Timed out reserving conversation message ids');
+  throw historyError('message_sequence_locked', `Timed out reserving conversation message ids: ${lockDir}`);
 }
 
 function latestTodoWriteSnapshot(toolCalls) {
@@ -1291,10 +1327,10 @@ class SegmentStore {
     out.streamId = typeof out.streamId === 'string' && out.streamId ? out.streamId : null;
     out.revision = Number.isFinite(Number(out.revision)) ? Math.max(0, Number(out.revision)) : 0;
     out.segments = Array.isArray(out.segments) ? out.segments.filter(s => s && s.file) : [];
-    out.segments.sort((a, b) => (Number(a.firstSeq) || 0) - (Number(b.firstSeq) || 0));
+    out.segments.sort((a, b) => a.file.localeCompare(b.file));
     const maxSeq = out.segments.reduce((max, seg) => Math.max(max, Number(seg.lastSeq) || 0), 0);
     out.nextSeq = Math.max(Number(out.nextSeq) || 1, maxSeq + 1);
-    out.activeSegment = out.activeSegment || out.segments[out.segments.length - 1]?.file || SEGMENT_FIRST_NAME;
+    out.activeSegment = out.segments[out.segments.length - 1]?.file || out.activeSegment || SEGMENT_FIRST_NAME;
     out.totalMessages = Number(out.totalMessages) || out.segments.reduce((sum, seg) => sum + (Number(seg.count) || 0), 0);
     out.foldedMessageIds = Array.isArray(out.foldedMessageIds)
       ? Array.from(new Set(out.foldedMessageIds.filter(id => typeof id === 'string' && id)))
@@ -1307,7 +1343,7 @@ class SegmentStore {
     if (!existsSync(this.segmentDir)) return idx;
     const files = readdirSync(this.segmentDir).filter(f => f.endsWith('.jsonl')).sort();
     for (const file of files) {
-      const rows = this.#readSegment(file, { includeCold: true });
+      const rows = this.#readSegment(file, { includeCold: true, appendOrder: true });
       if (rows.length === 0) continue;
       const seqs = rows.map(r => parseSeqFromId(r.id)).filter(Number.isFinite);
       const path = join(this.segmentDir, file);
@@ -2211,20 +2247,25 @@ export class ConversationStore {
         }
       })
       .filter(Boolean);
-    // Migration can temporarily leave the same durable row in both the legacy
-    // markdown layout and the segment store. Preserve legacy-only rows, but let
-    // the canonical segment copy win when both contain the same persisted id.
-    const legacyById = new Map();
-    for (const row of legacyRows) {
-      if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id || segmentIds.has(row.id)) continue;
-      legacyById.set(row.id, row);
+    // A shadow is collapsible only when its legacy-representable payload is
+    // identical, not merely its ID. Distinct hot/cold/segment rows all survive.
+    const shadowKey = row => serializeMessage({ ...row, time: row.time || '<missing>' });
+    const shadows = new Map();
+    for (const row of segmentedRows) {
+      const key = shadowKey(row);
+      shadows.set(key, (shadows.get(key) || 0) + 1);
     }
-    const rows = [...[...legacyById.values()].sort(compareMessagesBySeq),
+    const legacy = [];
+    for (const row of legacyRows) {
+      if (row?.sessionId !== sourceSessionId || typeof row.id !== 'string' || !row.id) continue;
+      const key = shadowKey(row);
+      if (shadows.get(key)) { shadows.set(key, shadows.get(key) - 1); continue; }
+      legacy.push(row);
+    }
+    // Legacy-only rows predate the segmented transcript; each block has its
+    // own stable order. Never switch order after an append introduces a clash.
+    const rows = [...legacy.sort(compareMessagesBySeq),
       ...segmentedRows.filter(row => row?.sessionId === sourceSessionId)];
-    // Legacy allocator collisions can rewind IDs (and copied seq values). Only
-    // physical append order retains the actual transcript in that case. Healthy
-    // histories keep the existing global-sequence ordering and migration rule.
-    if (!hasDuplicates) rows.sort(compareMessagesBySeq);
     return { sessionId: sourceSessionId, streamId: rows.length || primary.hasData() ? primary.metadata().streamId : null, rows };
   }
 
@@ -3749,9 +3790,8 @@ export class ConversationStore {
   /**
    * Reserve one non-overlapping range of global message ids.
    *
-   * `mkdir` is the cross-process mutex: it is atomic on supported local file
-   * systems and therefore coordinates long-lived stores as well as short-lived
-   * Session-copy stores. The atomic high-water sidecar makes a whole transcript
+   * SQLite BEGIN IMMEDIATE owns the cross-process mutex and crash recovery;
+   * the directory lock also fences earlier writers during rolling upgrades. The atomic high-water sidecar makes a whole transcript
    * reservation cheap after the first verified bootstrap. A legacy/missing
    * sidecar requires actual transcript ID verification, not only derived seq
    * indexes. Restore/import is offline-only and must invalidate the sidecar;
@@ -3789,38 +3829,39 @@ export class ConversationStore {
     // monotonic identities, not a promise of contiguous durable rows.
     const durableSize = Math.max(size, MESSAGE_SEQUENCE_RESERVATION_SIZE);
     const lockDir = join(this.#dir, MESSAGE_SEQUENCE_LOCK_DIR);
-    const lockToken = acquireMessageSequenceLock(lockDir);
-
-    try {
-      let recordedNext = null;
-      let epoch = null;
-      let transcriptIdsVerified = false;
+    return withMessageSequenceMutex(this.#dir, () => {
+      const lockToken = acquireMessageSequenceLock(lockDir);
       try {
-        const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
-        const nextSeq = Number(recorded?.nextSeq);
-        if (Number.isSafeInteger(nextSeq) && nextSeq > 0) {
-          recordedNext = nextSeq;
-          transcriptIdsVerified = recorded.transcriptIdsVerified === true;
-          if (typeof recorded.epoch === 'string' && recorded.epoch) epoch = recorded.epoch;
+        let recordedNext = null;
+        let epoch = null;
+        let transcriptIdsVerified = false;
+        try {
+          const recorded = JSON.parse(readFileSync(sequencePath, 'utf8'));
+          const nextSeq = Number(recorded?.nextSeq);
+          if (Number.isSafeInteger(nextSeq) && nextSeq > 0) {
+            recordedNext = nextSeq;
+            transcriptIdsVerified = recorded.transcriptIdsVerified === true;
+            if (typeof recorded.epoch === 'string' && recorded.epoch) epoch = recorded.epoch;
+          }
+        } catch (error) {
+          if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
         }
-      } catch (error) {
-        if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+        // A syntactically valid sidecar can still be stale after a partial restore
+        // or crash. Never trust it below the durable transcript high-water mark.
+        const scannedNext = this.#scanNextSeq({ verifyRows: !transcriptIdsVerified });
+        const firstSeq = Math.max(recordedNext || 1, scannedNext);
+        if (!Number.isSafeInteger(firstSeq + durableSize)) throw new Error('Conversation message id sequence exhausted');
+        epoch ||= randomUUID();
+        writeAtomic(sequencePath, `${JSON.stringify({ version: 1, epoch, transcriptIdsVerified: true, nextSeq: firstSeq + durableSize })}\n`, { mode: 0o600 });
+        messageSequenceReservations.set(rootKey, {
+          epoch,
+          next: firstSeq + size,
+          end: firstSeq + durableSize,
+        });
+        return firstSeq;
+      } finally {
+        releaseMessageSequenceLock(lockDir, lockToken);
       }
-      // A syntactically valid sidecar can still be stale after a partial restore
-      // or crash. Never trust it below the durable transcript high-water mark.
-      const scannedNext = this.#scanNextSeq({ verifyRows: !transcriptIdsVerified });
-      const firstSeq = Math.max(recordedNext || 1, scannedNext);
-      if (!Number.isSafeInteger(firstSeq + durableSize)) throw new Error('Conversation message id sequence exhausted');
-      epoch ||= randomUUID();
-      writeAtomic(sequencePath, `${JSON.stringify({ version: 1, epoch, transcriptIdsVerified: true, nextSeq: firstSeq + durableSize })}\n`, { mode: 0o600 });
-      messageSequenceReservations.set(rootKey, {
-        epoch,
-        next: firstSeq + size,
-        end: firstSeq + durableSize,
-      });
-      return firstSeq;
-    } finally {
-      releaseMessageSequenceLock(lockDir, lockToken);
-    }
+    });
   }
 }

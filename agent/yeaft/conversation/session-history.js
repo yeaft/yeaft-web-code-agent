@@ -54,11 +54,15 @@ export function materializeSessionCopy(rows, { sourceSessionId, streamId, target
   });
   const idMap = new Map([...occurrences].filter(([, positions]) => positions.length === 1)
     .map(([id, positions]) => [id, ids[positions[0]]]));
+  const seenOrigins = new Map();
   const copies = rows.map((row, index) => {
     const origin = messageOrigin(row, sourceSessionId, streamId);
+    const key = originKey(origin);
+    const occurrence = (seenOrigins.get(key) || 0) + 1;
+    seenOrigins.set(key, occurrence);
     const copy = { ...historicalReplayRow(row), id: ids[index], seq: firstSeq + index,
       sessionId: targetSessionId,
-      origin: occurrences.get(row.id).length > 1 ? { ...origin, rowOccurrence: index + 1 } : origin };
+      origin: occurrence > 1 ? { ...origin, rowOccurrence: occurrence } : origin };
     // Existing diagnostics also belong to the copied namespace on nested forks.
     const unresolved = (row.unresolvedMessageReferences || []).map(reference => ({ ...reference,
       candidateMessageIds: (reference.candidateMessageIds || []).flatMap(id =>
@@ -282,6 +286,8 @@ function equivalentRows(left, right, aliases) {
         if (Array.isArray(row[key])) copy[key] = row[key].map(remap);
       }
       if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remap(row.quote.messageId) };
+      if (row.unresolvedMessageReferences) copy.unresolvedMessageReferences = row.unresolvedMessageReferences
+        .map(reference => ({ ...reference, candidateMessageIds: reference.candidateMessageIds.map(remap) }));
       if (Array.isArray(row.attachments)) copy.attachments = row.attachments.map(att => {
         const { path, ...metadata } = att;
         return metadata;
@@ -390,6 +396,8 @@ export function materializeSessionMerge(plan, targetSessionId, firstSeq) {
         if (Array.isArray(row[key])) copy[key] = row[key].map(remap);
       }
       if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remap(row.quote.messageId) };
+      if (row.unresolvedMessageReferences) copy.unresolvedMessageReferences = row.unresolvedMessageReferences
+        .map(reference => ({ ...reference, candidateMessageIds: reference.candidateMessageIds.map(remap) }));
       if (row.toolCalls) copy.toolCalls = row.toolCalls.map(call => ({ ...call, id: calls.get(toolScope(row, call.id)) }));
       if (turn.links.results.has(index)) copy.toolCallId = callId(turn.links.results.get(index));
       if (calls.has(toolScope(row, row.presentationCallId))) copy.presentationCallId = calls.get(toolScope(row, row.presentationCallId));

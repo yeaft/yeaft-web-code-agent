@@ -129,7 +129,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // deadline ownership, inherited-effort payload and crash-recovery unknown usage. No prior cases removed or hidden.
 // +5 identity boundaries: colliding legacy fork records/lineage, identical-time occurrences,
 // stale-seq bootstrap, named-chat recovery and abandoned-lock non-takeover.
-export const TEST_CASE_LIMIT = 933;
+// +2 review regressions: stable rewind/snapshot/lineage across segments and
+// distinct legacy hot/cold/segment rows versus proven migration shadows.
+export const TEST_CASE_LIMIT = 935;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

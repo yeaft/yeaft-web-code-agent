@@ -114,7 +114,7 @@ describe('durable native Session fork and merge', () => {
     });
     const legacy = join(dir, 'sessions', 'source', 'conversation', 'cold');
     mkdirSync(legacy, { recursive: true });
-    writeFileSync(join(legacy, `${first.answer.id}.md`), `---\nid: ${first.answer.id}\nrole: assistant\nsessionId: source\n---\nstale duplicate`);
+    writeFileSync(join(legacy, `${first.user.id}.md`), `---\nid: ${first.user.id}\nrole: user\ntime: ${first.user.time}\nsessionId: source\n---\n\nfirst`);
     // Legacy-only rows (including cold rows) must use exactly the same capture
     // and copy set, not just the segmented head or the visible projection.
     writeFileSync(join(legacy, 'm0000.md'), '---\nid: m0000\nrole: user\nsessionId: source\n---\nlegacy-only');
@@ -257,6 +257,12 @@ describe('durable native Session fork and merge', () => {
     expect(() => store.captureSessionCopyBoundary(source.id, { beforeMessageId: 'm0103' }))
       .toThrow(expect.objectContaining({ code: 'ambiguous_fork_boundary' }));
     expect(store.copySession(source.id, 'old-turn-copy', { throughTurnId: 'old' }).copiedCount).toBe(4);
+    expect(raw(dir, 'old-turn-copy').map(row => row.origin)).toEqual(target.slice(0, 4).map(row => row.origin));
+    // Diagnostics are namespace references, too: nested copies must still merge
+    // without false divergence and their candidates must target the final rows.
+    expect(store.mergeSessions(copied.id, 'nested-collision-copy', 'diagnostic-merge').sharedTurnCount).toBe(2);
+    const merged = raw(dir, 'diagnostic-merge');
+    expect(merged[5].unresolvedMessageReferences[0].candidateMessageIds).toEqual([merged[3].id, merged[5].id]);
     const later = store.append({ role: 'user', content: 'next', sessionId: copied.id });
     expect([...target, ...nested].some(row => row.id === later.id)).toBe(false);
   });
@@ -460,6 +466,52 @@ describe('durable native Session fork and merge', () => {
       expect(wire.input.filter(item => item.type === 'function_call').map(item => item.call_id))
         .toEqual(wire.input.filter(item => item.type === 'function_call_output').map(item => item.call_id));
     }
+  });
+
+  it('keeps stable physical prefixes through segment rewind, new appends and partial/full copy lineage', () => {
+    const dir = root();
+    seed(dir, 'rewind', [
+      { id: 'm0100', role: 'user', content: 'first', time: at(1) },
+      { id: 'm0101', role: 'assistant', content: 'first answer', turnId: 'first', time: at(1) },
+    ]);
+    const segments = join(dir, 'sessions', 'rewind', 'conversation', 'segments');
+    writeFileSync(join(segments, '000002.jsonl'), [
+      { id: 'm0001', role: 'user', content: 'second', time: at(2) },
+      { id: 'm0002', role: 'assistant', content: 'second answer', turnId: 'second', time: at(2) },
+    ].map(row => JSON.stringify({ ...row, sessionId: 'rewind' })).join('\n') + '\n');
+    const store = new ConversationStore(dir);
+    const boundary = store.captureSessionCopyBoundary('rewind');
+    store.copySession('rewind', 'prefix', { throughTurnId: 'first' });
+    store.append({ role: 'user', content: 'new tail', sessionId: 'rewind' });
+    expect(readFileSync(join(segments, '000001.jsonl'), 'utf8')).not.toContain('new tail');
+    expect(readFileSync(join(segments, '000002.jsonl'), 'utf8')).toContain('new tail');
+    store.copySession('rewind', 'snapshot', { throughBoundary: boundary });
+    expect(raw(dir, 'snapshot').map(row => row.content)).toEqual(['first', 'first answer', 'second', 'second answer']);
+    // Adding the first exact duplicate must not change earlier order/digest.
+    writeFileSync(join(segments, '000003.jsonl'), JSON.stringify({ id: 'm0100', role: 'user', content: 'collision',
+      sessionId: 'rewind', time: at(3) }) + '\n');
+    new ConversationStore(dir).copySession('rewind', 'same-snapshot', { throughBoundary: boundary });
+    store.copySession('rewind', 'full');
+    expect(store.mergeSessions('prefix', 'snapshot', 'shared-prefix')).toMatchObject({ copiedCount: 4, sharedTurnCount: 1 });
+    expect(raw(dir, 'full').slice(0, 2).map(row => row.origin)).toEqual(raw(dir, 'prefix').map(row => row.origin));
+  });
+
+  it('preserves distinct colliding legacy files and segment rows, collapsing only proven migration shadows', () => {
+    const dir = root();
+    const conversation = join(dir, 'sessions', 'legacy', 'conversation');
+    for (const kind of ['cold', 'messages']) mkdirSync(join(conversation, kind), { recursive: true });
+    const markdown = content => `---\nid: m0001\nrole: user\ntime: ${at(1)}\nsessionId: legacy\n---\n\n${content}`;
+    writeFileSync(join(conversation, 'cold', 'm0001.md'), markdown('cold distinct'));
+    writeFileSync(join(conversation, 'messages', 'm0001.md'), markdown('hot distinct'));
+    const store = new ConversationStore(dir);
+    expect(store.copySession('legacy', 'legacy-only').copiedCount).toBe(2);
+    seed(dir, 'legacy', [{ id: 'm0001', role: 'user', time: at(1), content: 'segment distinct' }]);
+    expect(store.copySession('legacy', 'mixed').copiedCount).toBe(3);
+    expect(raw(dir, 'mixed').map(row => row.content)).toEqual(['cold distinct', 'hot distinct', 'segment distinct']);
+    // The shadow may be removed only with matching legacy payload evidence.
+    writeFileSync(join(conversation, 'messages', 'm0001.md'), markdown('segment distinct'));
+    expect(store.copySession('legacy', 'shadow').copiedCount).toBe(2);
+    expect(raw(dir, 'shadow').map(row => row.content)).toEqual(['cold distinct', 'segment distinct']);
   });
 
   it('refuses incomplete tool history instead of silently sanitizing away source messages', () => {
