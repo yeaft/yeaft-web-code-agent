@@ -386,8 +386,8 @@ export default {
     // 获取可用的 slash commands（确保都有 / 前缀）
     // Custom-send contexts (Yeaft) pass their logical conversationId explicitly;
     // `store.currentConversation` can still point at the previous Chat pane until
-    // session_ready migrates the placeholder. Prefer the prop so Yeaft `/` sees
-    // agent-level skill commands immediately.
+    // session_ready migrates the placeholder. Prefer the prop; the resolver
+    // bridges missing catalogues using only the current Agent's Yeaft snapshot.
     const availableCommands = Vue.computed(() => {
       const convId = props.conversationId || store.activeConversationId || store.currentConversation;
       const agentId = store.currentAgent;

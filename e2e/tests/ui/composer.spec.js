@@ -50,6 +50,9 @@ async function openYeaftComposer(page, serverUrl) {
       effortOptions: ['medium', 'high'],
     }];
     store.currentView = 'yeaft';
+    store.handleMessage({ type: 'slash_commands_update', commandSet: 'yeaft', agentId,
+      conversationId, slashCommands: ['yeaft-skills:daily-brief'],
+      slashCommandDescriptions: { 'yeaft-skills:daily-brief': 'Prepare a daily brief' } });
   });
 
   await expect(page.locator('.yeaft-session-input')).toBeVisible();

@@ -133,7 +133,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // distinct legacy hot/cold/segment rows versus proven migration shadows.
 // +1 review regression: existing lineage namespaces and internal non-human causal roots.
 // +1 SQLite mutex permission boundary: best-effort and strict read-only writes.
-export const TEST_CASE_LIMIT = 937;
+// +3 Skill shortcut recovery boundaries: early Agent-isolated snapshot retention,
+// authoritative catalogue migration, and Task/ordinary Session relay/browser recovery.
+export const TEST_CASE_LIMIT = 940;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

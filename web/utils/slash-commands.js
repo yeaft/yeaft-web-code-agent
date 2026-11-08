@@ -41,7 +41,9 @@ export const YEAFT_BUILTIN_DESCRIPTIONS = {
   '/ultra': 'Use ultra reasoning effort for this turn',
 };
 
-export const YEAFT_DEFAULT_SLASH_COMMANDS = Object.keys(YEAFT_BUILTIN_DESCRIPTIONS);
+// Effort is selected in the composer controls. Keep typed legacy effort
+// descriptions compatible, but do not advertise them as Skill shortcuts.
+export const YEAFT_DEFAULT_SLASH_COMMANDS = [];
 
 export function mergeSlashCommands(...lists) {
   const merged = [];
@@ -58,10 +60,20 @@ export function mergeSlashCommands(...lists) {
 export function resolveDynamicSlashCommands(store, conversationId, agentId) {
   const conversationCommands = conversationId ? store?.slashCommandsMap?.[conversationId] : null;
   if (store?.currentView === 'yeaft') {
-    // Only the Yeaft conversation snapshot is valid here. Agent/preload
-    // fallbacks may contain Claude Chat commands and would advertise entries
-    // the Yeaft engine does not implement while its skill scan is still booting.
-    return mergeSlashCommands(conversationCommands);
+    // Background Task output can reveal the real bridge id while the visible
+    // Session still owns its placeholder. A validated pending promotion makes
+    // the replacement snapshot authoritative even if the retained source is [].
+    const canonicalId = agentId ? store?.yeaftConversationIdsByAgent?.[agentId] : null;
+    const canonicalCommands = canonicalId ? store?.slashCommandsMap?.[canonicalId] : null;
+    const promotion = agentId ? store?._yeaftPendingConversationPromotions?.[agentId] : null;
+    if (promotion?.sourceConversationId === conversationId
+        && promotion.targetConversationId === canonicalId && Array.isArray(canonicalCommands)) {
+      return mergeSlashCommands(canonicalCommands);
+    }
+    // An authoritative empty snapshot must clear removed/disabled Skills.
+    if (Array.isArray(conversationCommands)) return mergeSlashCommands(conversationCommands);
+    if (Array.isArray(canonicalCommands)) return mergeSlashCommands(canonicalCommands);
+    return mergeSlashCommands(agentId ? store?.slashCommandsMap?.[`yeaft-agent:${agentId}`] : null);
   }
   return mergeSlashCommands(
     conversationCommands,

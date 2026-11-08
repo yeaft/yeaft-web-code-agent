@@ -16,11 +16,13 @@ Quick reference for keyboard shortcuts in the Yeaft Web UI.
 | --- | --- |
 | **Enter** | Send on desktop; new line on mobile |
 | **Shift+Enter** | New line |
-| **/** | Open slash command autocomplete (Claude Code only) |
+| **/** | Open command autocomplete (CLI Chat) or Skill shortcuts (Yeaft Sessions, including Tasks) |
 | **Ctrl+V** (Cmd+V) | Paste text or image (image becomes an attachment) |
 | **↑** | Recall last sent message (draft restore) |
 
 On mobile, including touch-only landscape/tablets, use the **send button** to send. Enter remains a newline even when an autocomplete menu is open.
+
+Yeaft's `/` menu lists the current Agent's enabled Skills. Select the model and reasoning effort using the composer controls; effort presets are no longer default slash menu entries.
 
 ## Autocomplete menu
 

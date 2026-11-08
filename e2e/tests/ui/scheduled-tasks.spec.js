@@ -101,6 +101,76 @@ async function noOverflow(page, selectors) {
     elements: selectors.map(selector => ({ selector, overflow: false, outside: false })) });
 }
 
+test('Task and ordinary Sessions keep preloaded Skill shortcuts through background promotion and reload', async ({ page, serverUrl, mockAgent }, testInfo) => {
+  scheduledTaskAgent(mockAgent);
+  const skills = ['yeaft-skills:daily-brief', ...Array.from({ length: 24 }, (_, i) => `yeaft-skills:workflow-${String(i).padStart(2, '0')}`)];
+  const descriptions = Object.fromEntries(skills.map(name => [name, 'Read the selected workflow']));
+  const publish = (commands, conversationId = '__preload__') => mockAgent.send({
+    type: 'slash_commands_update', commandSet: 'yeaft', conversationId,
+    slashCommands: commands, slashCommandDescriptions: descriptions,
+  });
+  const ready = sessionId => mockAgent.send({ type: 'yeaft_output', sessionId,
+    conversationId: 'yeaft-skills-bridge', event: { type: 'session_ready',
+      conversationId: 'yeaft-skills-bridge', sessionId, model: 'gpt-5',
+      skills: skills.length, tools: 1, mcpServers: [], availableModels: [],
+    } });
+  await boot(page, serverUrl, mockAgent);
+  // Reproduce preload before Session bootstrap, rather than populating the
+  // command map directly. Both frames travel through the real Server relay.
+  publish(skills);
+  await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore()
+    .slashCommandsMap[`yeaft-agent:${agentId}`]?.length, mockAgent.agentId)).toBe(25);
+  await openTask(page);
+  const composer = page.locator('.yeaft-session-input');
+  const input = composer.locator('textarea');
+  await input.fill('/');
+  await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+  await expect(composer.locator('.slash-group-label')).toHaveText(['Skills']);
+  await expect(composer.locator('.slash-cmd-name').first()).toHaveText('/yeaft-skills:daily-brief');
+  const localId = await page.evaluate(() => window.Pinia.useChatStore().yeaftConversationId);
+  // Another Session reveals the transport identity without switching the Task.
+  ready(CHAT_SESSION_ID);
+  publish(skills, 'yeaft-skills-bridge');
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore()
+    .slashCommandsMap['yeaft-skills-bridge']?.length)).toBe(25);
+  expect(await page.evaluate(() => window.Pinia.useChatStore().yeaftConversationId)).toBe(localId);
+  await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+  ready(TASK_SESSION_ID);
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().yeaftConversationId)).toBe('yeaft-skills-bridge');
+  for (const [theme, width] of [['light', 1440], ['dark', 320]]) {
+    await page.setViewportSize({ width, height: 900 });
+    await closeMobileTaskStatus(page);
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await input.fill('/');
+    await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+    expect(await composer.locator('.slash-cmd-name').allTextContents()).not.toContain('/high');
+    await input.fill('/yeaft-skills:daily');
+    await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(1);
+    await input.press('Tab');
+    await expect(input).toHaveValue('/yeaft-skills:daily-brief ');
+    await input.fill('/');
+    await composer.locator('.slash-autocomplete').evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await expect(composer.locator('.slash-autocomplete-item').last()).toBeInViewport();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`task-skills-${theme}-${width}.png`) });
+  }
+  // Authoritative removal must clear the menu, not revive the preload cache.
+  publish([], 'yeaft-skills-bridge');
+  await expect(composer.locator('.slash-autocomplete')).toBeHidden();
+  publish(skills, 'yeaft-skills-bridge');
+  await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await showSidebar(page);
+  await page.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
+  await input.fill('/');
+  await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+  await page.reload();
+  await expect(page.locator('.yeaft-session-input textarea')).toBeVisible();
+  publish(skills, 'yeaft-skills-bridge');
+  await page.locator('.yeaft-session-input textarea').fill('/');
+  await expect(page.locator('.yeaft-session-input .slash-autocomplete-item')).toHaveCount(25);
+});
+
 test('creates a task Session in recents with selected Agent, directory and VP', async ({ page, serverUrl, mockAgent }, testInfo) => {
   scheduledTaskAgent(mockAgent, { sessions: [], marker: 'Primary' });
   const other = new MockAgent(serverUrl, 'task-secondary');
