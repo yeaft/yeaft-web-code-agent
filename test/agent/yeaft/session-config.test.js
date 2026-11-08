@@ -7,7 +7,7 @@ import { loadConfig } from '../../../agent/yeaft/config.js';
 import { getPluginConfig, updatePluginConfig } from '../../../agent/yeaft/config-api.js';
 import { flushAllAgentPerfTraces } from '../../../agent/yeaft/perf-trace.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
-import { __testResetVpState, __testSetSession, handleYeaftManagedSkill, handleYeaftPluginCatalog } from '../../../agent/yeaft/web-bridge.js';
+import { __testHooks, __testResetVpState, __testSetSession, handleYeaftLoadHistory, handleYeaftManagedSkill, handleYeaftPluginCatalog } from '../../../agent/yeaft/web-bridge.js';
 import { buildPluginCatalog, buildPluginSkillDetail } from '../../../agent/yeaft/plugins.js';
 import { _resetAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
@@ -35,6 +35,46 @@ afterEach(async () => {
   __testSetSession(null);
   _resetAgentRegistry();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+});
+
+describe('Yeaft Skill bootstrap', () => {
+  it('replays enabled Skills for a warm cached project runtime on every browser bootstrap', async () => {
+    const root = makeDir();
+    const workDir = join(root, 'workspace');
+    const handle = createSession(sessionsRoot(root), { id: 'warm-session', name: 'Warm Session', workDir, roster: [] });
+    const meta = handle.getMeta();
+    handle.close();
+    const original = { ws: ctx.ws, encryption: ctx.serverEncryptionRequired,
+      queue: ctx.outboundSendQueue, active: ctx.outboundSendQueueActive };
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ plugins: { skills: ['daily-brief'] } }));
+    ctx.CONFIG = { yeaftDir: root };
+    ctx.ws = { readyState: 1, send() {} };
+    ctx.serverEncryptionRequired = false;
+    ctx.outboundSendQueue = [];
+    ctx.outboundSendQueueActive = true;
+    __testSetSession({ yeaftDir: root, config: { plugins: { skills: ['daily-brief'] } },
+      skillManager: { list: () => [{ name: 'wrong-base', tier: 'user' }] },
+      status: { skills: 1, tools: 0, mcpServers: [] } });
+    __testHooks.setYeaftConversationIdForTest('warm-bridge');
+    __testHooks.seedProjectRuntime(workDir, { skillManager: { list: () => [
+      { name: 'daily-brief', tier: 'user' }, { name: 'disabled', tier: 'user' },
+    ] } });
+    try {
+      for (const requestId of ['initial', 'browser-reload', 'reconnect']) {
+        ctx.outboundSendQueue = [];
+        await handleYeaftLoadHistory({ sessionId: meta.id, requestId, limit: 0 });
+        await vi.waitFor(() => expect(ctx.outboundSendQueue.some(row => row.msg.type === 'slash_commands_update')).toBe(true));
+        const update = ctx.outboundSendQueue.find(row => row.msg.type === 'slash_commands_update').msg;
+        expect(update).toMatchObject({ commandSet: 'yeaft', conversationId: 'warm-bridge', slashCommands: ['yeaft-skills:daily-brief'] });
+        await vi.waitFor(() => expect(ctx.outboundSendQueue.some(row => row.msg.event?.type === 'session_ready')).toBe(true));
+      }
+    } finally {
+      ctx.ws = original.ws;
+      ctx.serverEncryptionRequired = original.encryption;
+      ctx.outboundSendQueue = original.queue;
+      ctx.outboundSendQueueActive = original.active;
+    }
+  });
 });
 
 describe('Yeaft Plugin Skill details', () => {
