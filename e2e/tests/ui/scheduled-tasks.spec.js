@@ -1,5 +1,12 @@
 import { mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import ctx from '../../../agent/context.js';
+import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
+import { sessionsRoot } from '../../../agent/yeaft/sessions/session-crud.js';
+import { __testHooks, __testResetVpState, __testSetSession, handleYeaftLoadHistory } from '../../../agent/yeaft/web-bridge.js';
+import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/scheduled-task-server.js';
 import { MockAgent } from '../../fixtures/mock-agent.js';
@@ -100,6 +107,113 @@ async function noOverflow(page, selectors) {
   }), selectors)).toEqual({ document: false,
     elements: selectors.map(selector => ({ selector, overflow: false, outside: false })) });
 }
+
+test('Task and ordinary Sessions keep preloaded Skill shortcuts through background promotion and reload', async ({ page, serverUrl, mockAgent }, testInfo) => {
+  scheduledTaskAgent(mockAgent);
+  const skills = ['yeaft-skills:daily-brief', ...Array.from({ length: 24 }, (_, i) => `yeaft-skills:workflow-${String(i).padStart(2, '0')}`)];
+  const descriptions = Object.fromEntries(skills.map(name => [name, 'Read the selected workflow']));
+  const publish = (commands, conversationId = '__preload__') => mockAgent.send({
+    type: 'slash_commands_update', commandSet: 'yeaft', conversationId,
+    slashCommands: commands, slashCommandDescriptions: descriptions,
+  });
+  const ready = sessionId => mockAgent.send({ type: 'yeaft_output', sessionId,
+    conversationId: 'yeaft-skills-bridge', event: { type: 'session_ready',
+      conversationId: 'yeaft-skills-bridge', sessionId, model: 'gpt-5',
+      skills: skills.length, tools: 1, mcpServers: [], availableModels: [],
+    } });
+  await boot(page, serverUrl, mockAgent);
+  // Reproduce preload before Session bootstrap, rather than populating the
+  // command map directly. Both frames travel through the real Server relay.
+  publish(skills);
+  await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore()
+    .slashCommandsMap[`yeaft-agent:${agentId}`]?.length, mockAgent.agentId)).toBe(25);
+  await openTask(page);
+  const composer = page.locator('.yeaft-session-input');
+  const input = composer.locator('textarea');
+  await input.fill('/');
+  await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+  await expect(composer.locator('.slash-group-label')).toHaveText(['Skills']);
+  await expect(composer.locator('.slash-cmd-name').first()).toHaveText('/yeaft-skills:daily-brief');
+  const localId = await page.evaluate(() => window.Pinia.useChatStore().yeaftConversationId);
+  // Another Session reveals the transport identity without switching the Task.
+  ready(CHAT_SESSION_ID);
+  publish(skills, 'yeaft-skills-bridge');
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore()
+    .slashCommandsMap['yeaft-skills-bridge']?.length)).toBe(25);
+  expect(await page.evaluate(() => window.Pinia.useChatStore().yeaftConversationId)).toBe(localId);
+  await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+  ready(TASK_SESSION_ID);
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().yeaftConversationId)).toBe('yeaft-skills-bridge');
+  for (const [theme, width] of [['light', 1440], ['dark', 320]]) {
+    await page.setViewportSize({ width, height: 900 });
+    await closeMobileTaskStatus(page);
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await input.fill('/');
+    await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+    expect(await composer.locator('.slash-cmd-name').allTextContents()).not.toContain('/high');
+    await input.fill('/yeaft-skills:daily');
+    await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(1);
+    await input.press('Tab');
+    await expect(input).toHaveValue('/yeaft-skills:daily-brief ');
+    await input.fill('/');
+    await composer.locator('.slash-autocomplete').evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await expect(composer.locator('.slash-autocomplete-item').last()).toBeInViewport();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`task-skills-${theme}-${width}.png`) });
+  }
+  // Authoritative removal must clear the menu, not revive the preload cache.
+  publish([], 'yeaft-skills-bridge');
+  await expect(composer.locator('.slash-autocomplete')).toBeHidden();
+  publish(skills, 'yeaft-skills-bridge');
+  await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await showSidebar(page);
+  await page.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
+  await input.fill('/');
+  await expect(composer.locator('.slash-autocomplete-item')).toHaveCount(25);
+  // Refresh with the real warm Agent metadata producer and a cached project
+  // runtime. Do not manually publish a catalogue after page.reload(): the
+  // production history bootstrap must generate it through the Server relay.
+  const root = mkdtempSync(join(tmpdir(), 'yeaft-skills-browser-'));
+  const original = { CONFIG: ctx.CONFIG, ws: ctx.ws, AGENT_ID: ctx.AGENT_ID,
+    serverEncryptionRequired: ctx.serverEncryptionRequired };
+  const workDir = join(root, 'workspace');
+  const handle = createSession(sessionsRoot(root), { id: CHAT_SESSION_ID, name: 'Ordinary conversation', workDir, roster: [] });
+  handle.close();
+  writeFileSync(join(root, 'config.json'), JSON.stringify({ plugins: { skills: skills.map(name => name.slice('yeaft-skills:'.length)) } }));
+  ctx.CONFIG = { yeaftDir: root };
+  ctx.AGENT_ID = mockAgent.agentId;
+  ctx.serverEncryptionRequired = false;
+  ctx.ws = { readyState: 1, send: data => mockAgent.send(JSON.parse(data)) };
+  __testSetSession({ yeaftDir: root, config: { plugins: { skills: skills.map(name => name.slice('yeaft-skills:'.length)) } },
+    skillManager: { list: () => [] }, status: { skills: 0, tools: 0, mcpServers: [] } });
+  __testHooks.setYeaftConversationIdForTest('yeaft-skills-bridge');
+  __testHooks.seedProjectRuntime(workDir, { skillManager: { list: () => skills.map(command => ({
+    name: command.slice('yeaft-skills:'.length), description: descriptions[command], tier: 'user',
+  })) } });
+  const replayRequests = [];
+  const reloadHandler = request => {
+    if (request.type === 'yeaft_load_history' && request.sessionId === CHAT_SESSION_ID) {
+      replayRequests.push(handleYeaftLoadHistory({ ...request, limit: 0 }));
+    }
+  };
+  mockAgent._messageHandlers.push(reloadHandler);
+  try {
+    await page.reload();
+    await expect(page.locator('.yeaft-session-input textarea')).toBeVisible();
+    await page.locator('.yeaft-session-input textarea').fill('/');
+    await expect(page.locator('.yeaft-session-input .slash-autocomplete-item')).toHaveCount(25);
+    expect(replayRequests.length).toBeGreaterThan(0);
+    await Promise.all(replayRequests);
+  } finally {
+    mockAgent._messageHandlers = mockAgent._messageHandlers.filter(handler => handler !== reloadHandler);
+    await __testResetVpState();
+    __testSetSession(null);
+    await closeConversationHistoryIndexes();
+    Object.assign(ctx, original);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('creates a task Session in recents with selected Agent, directory and VP', async ({ page, serverUrl, mockAgent }, testInfo) => {
   scheduledTaskAgent(mockAgent, { sessions: [], marker: 'Primary' });

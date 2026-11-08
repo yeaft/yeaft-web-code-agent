@@ -374,6 +374,13 @@ function scheduleYeaftLoadHistoryMetadataReplay(sessionId) {
         } catch { /* best-effort project metadata */ }
       }
       if (session !== replaySession) return;
+      // A warm cached project runtime does not activate/broadcast on load.
+      // Every browser bootstrap must receive its Skill catalogue again, even
+      // when no Skill file changed since the previous connection.
+      broadcastSkillSlashCommands({
+        config: replaySession.config,
+        skillManager: projectRuntime?.skillManager || baseRuntime?.skillManager || replaySession.skillManager,
+      });
       const status = mergedStatusForProjectRuntime(projectRuntime, replaySession);
       hydrateYeaftStatusFromSession({ ...replaySession, status }, { reason: 'history_load', emitEvent: true });
       sendSessionEvent({

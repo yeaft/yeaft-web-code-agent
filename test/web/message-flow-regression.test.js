@@ -16,6 +16,8 @@ import { buildTimelineRows } from '../../web/stores/helpers/vp-timeline.js';
 import VpTimelinePane from '../../web/components/VpTimelinePane.js';
 import en from '../../web/i18n/en.js';
 import { normalizeQueryProgress, visibleQueryProgress } from '../../web/stores/helpers/query-progress.js';
+import { resolveDynamicSlashCommands, YEAFT_DEFAULT_SLASH_COMMANDS, DEFAULT_SLASH_COMMANDS } from '../../web/utils/slash-commands.js';
+import { migrateYeaftConversationState } from '../../web/stores/helpers/yeaft-conversation-state.js';
 
 const storeFactories = new Map();
 function defineStore(id, options) {
@@ -773,6 +775,49 @@ describe('message flow regressions', () => {
     }
   });
 
+  it('retains early Yeaft Skill snapshots without mixing Agents or CLI commands', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'agent-a';
+    store.yeaftConversationIdsByAgent = {};
+    const update = (agentId, commands, conversationId) => store.handleMessage({
+      type: 'slash_commands_update', commandSet: 'yeaft', agentId,
+      conversationId, slashCommands: commands,
+    });
+    const skills = () => resolveDynamicSlashCommands(store, 'yeaft-local-agent-a-cold', 'agent-a');
+    try {
+      update('agent-a', ['yeaft-skills:daily-brief'], '__preload__');
+      expect(skills()).toEqual(['yeaft-skills:daily-brief']);
+      update('agent-b', ['yeaft-skills:other'], '__preload__');
+      update('agent-b', [], '__preload__');
+      expect(skills()).toEqual(['yeaft-skills:daily-brief']);
+      store.handleMessage({ type: 'slash_commands_update', agentId: 'agent-a', slashCommands: ['compact', 'model'] });
+      store.slashCommandsMap.__preload__ = ['mcp'];
+      expect(skills()).toEqual(['yeaft-skills:daily-brief']);
+      update('agent-a', [], '__preload__');
+      expect(skills()).toEqual([]);
+      expect(YEAFT_DEFAULT_SLASH_COMMANDS).toEqual([]);
+      expect(DEFAULT_SLASH_COMMANDS).toContain('/compact');
+      store.currentView = 'chat';
+      expect(resolveDynamicSlashCommands(store, null, 'agent-a')).toEqual(['compact', 'model', 'mcp']);
+    } finally { storeFactories.clear(); }
+  });
+
+  it('migrates Skill catalogues without reviving an authoritative empty destination', () => {
+    for (const destination of [undefined, [], ['yeaft-skills:new']]) {
+      const store = { messagesMap: {}, slashCommandsMap: {
+        source: ['yeaft-skills:old'], ...(destination ? { target: destination } : {}),
+      } };
+      migrateYeaftConversationState(store, 'source', 'target', { removeSource: false });
+      expect(store.slashCommandsMap.source).toEqual(['yeaft-skills:old']);
+      expect(store.slashCommandsMap.target).toEqual(destination || ['yeaft-skills:old']);
+      migrateYeaftConversationState(store, 'source', 'target');
+      expect(store.slashCommandsMap.source).toBeUndefined();
+      expect(store.slashCommandsMap.target).toEqual(destination || ['yeaft-skills:old']);
+    }
+  });
+
   it('keeps background Yeaft output routed while promoting the visible local conversation', () => {
     storeFactories.clear();
     runtimeSessionsStore.sessionList = [
@@ -835,6 +880,23 @@ describe('message flow regressions', () => {
       sourceConversationId: localConversationId,
       targetConversationId: bridgeConversationId,
     });
+
+    store.slashCommandsMap[localConversationId] = []; // retained cold-boot snapshot
+    store.handleMessage({
+      type: 'slash_commands_update', commandSet: 'yeaft', agentId: 'agent-a',
+      conversationId: bridgeConversationId, slashCommands: ['yeaft-skills:daily-brief'],
+    });
+    expect(resolveDynamicSlashCommands(store, localConversationId, 'agent-a')).toEqual(['yeaft-skills:daily-brief']);
+    store.handleMessage({
+      type: 'slash_commands_update', commandSet: 'yeaft', agentId: 'agent-a',
+      conversationId: bridgeConversationId, slashCommands: [],
+    });
+    expect(resolveDynamicSlashCommands(store, localConversationId, 'agent-a')).toEqual([]);
+    store.handleMessage({
+      type: 'slash_commands_update', commandSet: 'yeaft', agentId: 'agent-a',
+      conversationId: bridgeConversationId, slashCommands: ['yeaft-skills:daily-brief'],
+    });
+    expect(store.yeaftConversationId).toBe(localConversationId);
 
     // A visible live frame can be the next authoritative event; history is not
     // required to finalize the source cleanup and watchdog transfer.

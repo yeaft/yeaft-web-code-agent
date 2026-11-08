@@ -102,6 +102,9 @@ export function migrateYeaftConversationState(store, sourceConversationId, targe
       ]),
     );
   }
+  // A destination snapshot (including []) is newer and authoritative. Only
+  // carry the source catalogue when the replacement has not received one yet.
+  moveMapEntry(store.slashCommandsMap, sourceConversationId, targetConversationId, { removeSource });
   moveMapEntry(store.processingConversations, sourceConversationId, targetConversationId, { removeSource });
   moveMapEntry(store.executionStatusMap, sourceConversationId, targetConversationId, { removeSource });
   moveMapEntry(store.refreshingSessionMap, sourceConversationId, targetConversationId, { removeSource });

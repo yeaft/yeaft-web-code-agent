@@ -993,6 +993,11 @@ export function handleMessage(store, msg) {
       if (Array.isArray(msg.slashCommands)) {
         const slashCommands = [...new Set(msg.slashCommands)];
         if (msg.commandSet === 'yeaft') {
+          // Keep early preloads even before a bridge identity is known. This
+          // namespace must never share Claude Chat's agent:<id> fallback.
+          if (msg.agentId) {
+            store.slashCommandsMap[`yeaft-agent:${msg.agentId}`] = slashCommands;
+          }
           // Route an authoritative Yeaft snapshot only to the sending Agent's
           // canonical conversation. `__preload__` is shared transport state,
           // not a cache key: using it or the global visible pointer lets Agent B
