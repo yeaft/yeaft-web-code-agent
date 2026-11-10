@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { messageDb, sessionUiMetadataDb, userStatsDb, yeaftProjectDb, yeaftSessionDb } from '../database.js';
+import { messageDb, scheduledTaskReceiptDb, sessionUiMetadataDb, userStatsDb, yeaftProjectDb, yeaftSessionDb } from '../database.js';
 import { transaction } from '../db/connection.js';
 import { broadcastAgentList, broadcastSessionCatalog, forwardToClients, sendToAgent, sendToWebClient } from '../ws-utils.js';
 import { advanceYeaftDebugRequestChunk, consumeYeaftDebugRequest, webClients, previewFiles } from '../context.js';
@@ -744,6 +744,11 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // are non-empty in practice, but we don't want the relay silently
       // eating a legitimate "" or 0 if one ever shows up.
       for (const [cId, c] of outputClients) {
+        // Check at delivery time too: a receipt may arrive while an earlier
+        // client's async send is pending. Never mute later runs or metadata.
+        if (taskNotification && scheduledTaskReceiptDb.has(
+          agent.ownerId, agentId, event.sessionId, event.runId,
+        )) break;
         const ownerMatches = taskNotification || taskResult
           ? !!agent.ownerId && c.userId === agent.ownerId
           : CONFIG.skipAuth || c.userId === agent.ownerId;

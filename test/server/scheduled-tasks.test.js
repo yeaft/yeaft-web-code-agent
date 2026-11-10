@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { execFileSync } from 'node:child_process';
 
 const testDbDir = mkdtempSync(join(tmpdir(), 'yeaft-scheduled-tasks-'));
 vi.stubEnv('SERVER_DATA_DIR', undefined);
@@ -28,12 +29,16 @@ vi.mock('../../server/ws-utils.js', async (importOriginal) => ({
   ...(await importOriginal()), sendToWebClient, forwardToAgent, broadcastSessionCatalog,
   broadcastAgentList: vi.fn(async () => {}),
 }));
-const { default: db, closeDb, userDb, yeaftProjectDb: projects, yeaftSessionDb: sessions } = await import('../../server/database.js');
+const { default: db, closeDb, userDb, yeaftProjectDb: projects, yeaftSessionDb: sessions, scheduledTaskReceiptDb: receipts } = await import('../../server/database.js');
 const { CONFIG } = await import('../../server/config.js');
 const { agents, webClients } = await import('../../server/context.js');
 const { handleClientConversation } = await import('../../server/handlers/client-conversation.js');
 const { handleAgentOutput } = await import('../../server/handlers/agent-output.js');
 const { projectSessionCatalog } = await import('../../server/session-catalog.js');
+const { handleWebConnection } = await import('../../server/ws-client.js');
+const { completeLogin } = await import('../../server/auth/login.js');
+const { generateSessionKey } = await import('../../server/encryption.js');
+const { activeSessions } = await import('../../server/auth/session-store.js');
 const owner = userDb.getOrCreate('scheduled-task-owner').id;
 const foreignOwner = userDb.getOrCreate('scheduled-task-foreign').id;
 const originalSkipAuth = CONFIG.skipAuth;
@@ -66,6 +71,7 @@ afterEach(() => {
   forwardToAgent.mockResolvedValue(true);
   broadcastSessionCatalog.mockClear();
   allow.mockClear();
+  db.prepare('DELETE FROM scheduled_task_receipts WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
   db.prepare('DELETE FROM yeaft_sessions WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
   db.prepare('DELETE FROM yeaft_projects WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
   db.prepare('DELETE FROM yeaft_project_imports WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
@@ -298,5 +304,170 @@ describe('Session-backed scheduled tasks', () => {
     expect(client.sent).toEqual([expect.objectContaining({ type: 'yeaft_output', agentId: 'agent-a', event })]);
     expect(sibling.sent).toHaveLength(1);
     expect(foreign.sent).toEqual([]); expect(anonymous.sent).toEqual([]);
+  });
+});
+
+function receipt(overrides = {}) {
+  return { agentId: 'agent-a', sessionId: 'task-session', runId: 'run-1', ...overrides };
+}
+function readRequest(batch = [receipt()], overrides = {}) {
+  return { type: 'scheduled_task_notifications_read', receipts: batch, requestId: 'read-1', ...overrides };
+}
+
+describe('Account-wide scheduled Task read receipts', () => {
+  it('reads offline, persists idempotently and broadcasts only to all authenticated owner tabs even in skipAuth', async () => {
+    const { client } = fixture();
+    const sibling = { authenticated: true, userId: owner, currentAgent: 'another-agent', sent: [] };
+    const foreign = { authenticated: true, userId: foreignOwner, sent: [] };
+    const anonymous = { authenticated: false, userId: owner, sent: [] };
+    webClients.set('sibling', sibling); webClients.set('foreign', foreign); webClients.set('anonymous', anonymous);
+    agents.clear();
+    CONFIG.skipAuth = true;
+    const before = sessions.getForAgent(owner, 'agent-a', 'task-session');
+    await handleClientConversation('client-a', client, readRequest([receipt({ content: 'must not persist' }), receipt()]), allow);
+    const ack = { type: 'scheduled_task_notifications_read', receipts: [receipt()], requestId: 'read-1' };
+    expect(client.sent).toEqual([ack]); expect(sibling.sent).toEqual([ack]);
+    expect(foreign.sent).toEqual([]); expect(anonymous.sent).toEqual([]);
+    await handleClientConversation('client-a', client, readRequest([receipt()], { requestId: undefined }), allow);
+    expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'invalid_scheduled_task_receipts' });
+    const noRequestId = readRequest(Array(100).fill(receipt())); delete noRequestId.requestId;
+    await handleClientConversation('client-a', client, noRequestId, allow);
+    expect(client.sent.at(-1)).toEqual({ type: 'scheduled_task_notifications_read', receipts: [receipt()] });
+    expect(receipts.getByUser(owner)).toEqual([receipt()]);
+    expect(receipts.getByUser(foreignOwner)).toEqual([]);
+    expect(sessions.getForAgent(owner, 'agent-a', 'task-session')).toEqual(before);
+    expect(forwardToAgent).not.toHaveBeenCalled(); expect(allow).not.toHaveBeenCalled();
+    await handleClientConversation('foreign', foreign, readRequest(), allow);
+    expect(foreign.sent.at(-1)).toMatchObject({ type: 'error', code: 'session_access_denied', requestId: 'read-1' });
+    expect(receipts.getByUser(foreignOwner)).toEqual([]);
+  });
+
+  it('rejects malformed or mixed-ownership batches atomically, without broadcasting or accepting an unauthenticated owner', async () => {
+    const { client } = fixture();
+    sessions.upsertFromSnapshot(foreignOwner, 'foreign-agent', { id: 'foreign-session', task });
+    const malformed = [null, {}, [], Array(101).fill(receipt()), [receipt(), null],
+      [receipt(), receipt({ runId: '' })], [receipt(), receipt({ sessionId: ' task-session' })],
+      [receipt(), receipt({ agentId: 123 })], [receipt(), receipt({ runId: 'x'.repeat(257) })],
+      [receipt(), receipt({ runId: 'run\n1' })], [receipt(), receipt({ runId: 'run 1' })],
+      [receipt(), receipt({ agentId: 'foreign-agent', sessionId: 'foreign-session' })],
+      [receipt(), receipt({ sessionId: 'missing' })]];
+    for (const batch of malformed) {
+      await handleClientConversation('client-a', client, readRequest(batch), allow);
+      expect(client.sent.at(-1)).toMatchObject({ type: 'error', requestId: 'read-1' });
+      expect(receipts.getByUser(owner)).toEqual([]);
+    }
+    await handleClientConversation('client-a', client, readRequest([receipt()], { requestId: 42 }), allow);
+    expect(receipts.getByUser(owner)).toEqual([]);
+    for (const identity of [{ authenticated: false, userId: owner }, { authenticated: true, userId: null },
+      { authenticated: true, userId: 'missing-user' }]) {
+      await handleClientConversation('client-a', { ...client, ...identity }, readRequest(), allow);
+      expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'authentication_required' });
+    }
+    expect(receipts.getByUser(owner)).toEqual([]);
+    expect(client.sent.every(msg => msg.type === 'error')).toBe(true);
+    // Simulate a storage failure halfway through an otherwise valid batch.
+    db.exec(`CREATE TEMP TRIGGER fail_second_receipt BEFORE INSERT ON scheduled_task_receipts
+      WHEN NEW.run_id = 'fail-run' BEGIN SELECT RAISE(ABORT, 'storage failure'); END;`);
+    try {
+      expect(() => receipts.markRead(owner, [receipt(), receipt({ runId: 'fail-run' })])).toThrow('storage failure');
+      expect(receipts.getByUser(owner)).toEqual([]);
+    } finally { db.exec('DROP TRIGGER fail_second_receipt'); }
+  });
+
+  it('survives catalog replacement and a separate process closing/reopening the Server database', () => {
+    fixture();
+    receipts.markRead(owner, [receipt()]);
+    sessions.reconcileFromSnapshot(owner, 'agent-a', []);
+    expect(receipts.has(owner, 'agent-a', 'task-session', 'run-1')).toBe(true);
+    sessions.reconcileFromSnapshot(owner, 'agent-a', [{ id: 'task-session', task: { ...task, lastRun: { id: 'run-2' } } }]);
+    const script = `
+      const { scheduledTaskReceiptDb } = await import('./server/db/scheduled-task-receipt-db.js');
+      const { closeDb } = await import('./server/db/connection.js');
+      const first = scheduledTaskReceiptDb.getByUser(process.env.RECEIPT_OWNER);
+      closeDb();
+      const { DatabaseSync } = await import('node:sqlite');
+      const reopened = new DatabaseSync(process.env.TEST_DB_PATH);
+      const rows = reopened.prepare('SELECT agent_id, session_id, run_id FROM scheduled_task_receipts WHERE user_id = ?').all(process.env.RECEIPT_OWNER);
+      reopened.close();
+      console.log('RECEIPTS:' + JSON.stringify({ first, rows }));
+    `;
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: new URL('../../', import.meta.url), encoding: 'utf8',
+      env: { ...process.env, SERVER_DATA_DIR: '', TEST_DB_DIR: testDbDir,
+        TEST_DB_PATH: join(testDbDir, 'webchat.db'), RECEIPT_OWNER: owner },
+      timeout: 10000,
+    });
+    const result = JSON.parse(output.split('RECEIPTS:')[1].trim());
+    expect(result.first).toEqual([receipt()]);
+    expect(result.rows).toEqual([{ agent_id: 'agent-a', session_id: 'task-session', run_id: 'run-1' }]);
+    expect(receipts.has(owner, 'agent-a', 'task-session', 'run-2')).toBe(false);
+  });
+
+  it('mutes delayed/duplicate completions for exact runs but preserves newer runs, other Agents and runtime metadata', async () => {
+    const { client, agent } = fixture();
+    sessions.upsertFromSnapshot(owner, 'agent-b', { id: 'task-session', task });
+    receipts.markRead(owner, [receipt()]);
+    const event = { type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'run-1', status: 'succeeded' };
+    for (const type of ['yeaft_output', 'yeaft_session_output', 'session_output']) {
+      await handleAgentOutput('agent-a', agent, { type, event });
+    }
+    expect(client.sent).toEqual([]);
+    const newer = { id: 'task-session', task: { ...task, lastRun: { id: 'run-2', status: 'running' } } };
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [newer] } });
+    expect(sessions.getForAgent(owner, 'agent-a', 'task-session').task).toEqual(newer.task);
+    expect(client.sent.at(-1).event.sessions[0].task).toEqual(newer.task);
+    expect(broadcastSessionCatalog).toHaveBeenCalledWith(owner);
+    client.sent = [];
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event });
+    expect(client.sent).toEqual([]);
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { ...event, runId: 'run-2' } });
+    await handleAgentOutput('agent-b', agent, { type: 'yeaft_output', event });
+    expect(client.sent).toEqual([
+      expect.objectContaining({ agentId: 'agent-a', event: { ...event, runId: 'run-2' } }),
+      expect.objectContaining({ agentId: 'agent-b', event }),
+    ]);
+  });
+
+  it('rechecks receipts when an earlier tab delivery yields, without losing a durable receipt on send failure', async () => {
+    const { client, agent } = fixture();
+    const stale = { authenticated: true, userId: owner, sent: [] };
+    const sibling = { authenticated: true, userId: owner, sent: [] };
+    webClients.set('stale', stale); webClients.set('sibling', sibling);
+    sendToWebClient.mockImplementationOnce(async (target, msg) => {
+      target.sent.push(msg);
+      await handleClientConversation('client-a', client, readRequest(), allow);
+    });
+    // The failed stale tab must not block receipt delivery to the sibling.
+    sendToWebClient.mockImplementationOnce(async (target, msg) => { target.sent.push(msg); });
+    sendToWebClient.mockImplementationOnce(async () => { throw new Error('stale socket'); });
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: {
+      type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'run-1', status: 'failed',
+    } });
+    expect(receipts.getByUser(owner)).toEqual([receipt()]);
+    expect(sibling.sent).toEqual([{ type: 'scheduled_task_notifications_read', receipts: [receipt()], requestId: 'read-1' }]);
+    expect(stale.sent).toEqual([]);
+  });
+
+  it('authenticates with all durable owner receipts before any hydration notifications and isolates reconnect handshakes', async () => {
+    fixture();
+    receipts.markRead(owner, [receipt(), receipt({ runId: 'run-older' })]);
+    sessions.upsertFromSnapshot(foreignOwner, 'foreign-agent', { id: 'foreign-session', task });
+    receipts.markRead(foreignOwner, [receipt({ agentId: 'foreign-agent', sessionId: 'foreign-session' })]);
+    vi.useFakeTimers();
+    try {
+      for (const [username, expected] of [['scheduled-task-owner', receipts.getByUser(owner)], ['scheduled-task-foreign', receipts.getByUser(foreignOwner)]]) {
+        const login = completeLogin(username, generateSessionKey(), 'pro');
+        expect(login.success).toBe(true);
+        const socket = { on: vi.fn(), send: vi.fn(), close: vi.fn() };
+        handleWebConnection(socket, new URL(`ws://localhost/?token=${login.token}`));
+        const handshake = JSON.parse(socket.send.mock.calls[0][0]);
+        expect(handshake).toMatchObject({ type: 'auth_result', success: true, scheduledTaskReceiptProtocol: 1, scheduledTaskReceipts: expected });
+        expect(socket.send).toHaveBeenCalledTimes(1);
+        activeSessions.delete(login.token);
+      }
+      const rejected = { on: vi.fn(), send: vi.fn(), close: vi.fn() };
+      handleWebConnection(rejected, new URL('ws://localhost/?token=invalid'));
+      expect(JSON.parse(rejected.send.mock.calls[0][0])).toEqual({ type: 'auth_result', success: false, error: 'Authentication required' });
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 });

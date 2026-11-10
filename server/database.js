@@ -7,6 +7,7 @@ export { sessionDb } from './db/session-db.js';
 export { yeaftSessionDb } from './db/yeaft-session-db.js';
 export { yeaftProjectDb, YeaftProjectDbError } from './db/yeaft-project-db.js';
 export { sessionUiMetadataDb } from './db/session-ui-metadata-db.js';
+export { scheduledTaskReceiptDb } from './db/scheduled-task-receipt-db.js';
 export { messageDb } from './db/message-db.js';
 export { userStatsDb } from './db/user-stats-db.js';
 export { agentInventoryDb } from './db/agent-inventory-db.js';

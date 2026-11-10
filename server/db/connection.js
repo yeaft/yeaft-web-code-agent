@@ -453,6 +453,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_session_ui_metadata_user_sort
     ON session_ui_metadata(user_id, pinned DESC, sort_rank ASC);
 
+  -- Read receipts are Server-owned; Session reconciliation must not remove them.
+  CREATE TABLE IF NOT EXISTS scheduled_task_receipts (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, agent_id, session_id, run_id)
+  );
+
   -- Projects are user-owned organization metadata. Membership keeps the full
   -- Agent + Session identity because Session ids are only unique per Agent.
   CREATE TABLE IF NOT EXISTS yeaft_projects (
@@ -1094,6 +1103,21 @@ export const stmts = {
 
   deleteSessionUiMetadata: db.prepare(`
     DELETE FROM session_ui_metadata WHERE user_id = ? AND catalog_key = ?
+  `),
+
+  insertScheduledTaskReceipt: db.prepare(`
+    INSERT INTO scheduled_task_receipts (user_id, agent_id, session_id, run_id)
+    VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
+  `),
+
+  getScheduledTaskReceipt: db.prepare(`
+    SELECT 1 FROM scheduled_task_receipts
+    WHERE user_id = ? AND agent_id = ? AND session_id = ? AND run_id = ?
+  `),
+
+  getScheduledTaskReceiptsByUser: db.prepare(`
+    SELECT agent_id, session_id, run_id FROM scheduled_task_receipts
+    WHERE user_id = ? ORDER BY agent_id, session_id, run_id
   `),
 
   // Project organization metadata. Projects are server-owned and may contain
