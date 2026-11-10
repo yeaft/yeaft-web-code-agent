@@ -5,7 +5,7 @@
 
 import { acceptPersonResponse } from './digital-person.js';
 import { acceptPluginConfigReply, acceptPluginSkillDetailReply } from './plugin-config.js';
-import { reconcileScheduledTaskNotifications } from './scheduled-tasks.js';
+import { applyScheduledTaskReceipts, bindScheduledTaskNotificationOwner, reconcileScheduledTaskNotifications } from './scheduled-tasks.js';
 import { useAuthStore } from '../auth.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
@@ -302,7 +302,7 @@ export function handleMessage(store, msg) {
   const authStore = useAuthStore();
   // The socket identity gate excludes replaced sockets. Also reject a still-open
   // old-owner socket during the logout/re-authentication transition.
-  if (['work_center_response', 'work_center_event', 'person_response'].includes(msg?.type)
+  if (['work_center_response', 'work_center_event', 'person_response', 'scheduled_task_notifications_read'].includes(msg?.type)
       && Object.hasOwn(msg, '_wsAuthGeneration')
       && (msg._wsAuthGeneration !== authStore.authGeneration
         || msg._wsAuthToken !== (authStore.getActiveToken?.() || authStore.token || null))) return;
@@ -364,6 +364,9 @@ export function handleMessage(store, msg) {
           store.serverEncryptionRequired = false;
         }
         store.scheduledTaskProtocolSupported = msg.scheduledTaskProtocol === 1;
+        bindScheduledTaskNotificationOwner(store, authStore.userId || (authStore.skipAuth ? 'local' : null));
+        store.scheduledTaskReceiptProtocolSupported = msg.scheduledTaskReceiptProtocol === 1;
+        applyScheduledTaskReceipts(store, msg.scheduledTaskReceipts, { reconnect: true });
         if (msg.sessionCatalogProtocol === 1) store.sessionCatalogProtocolSupported = true;
         else if (msg.sessionCatalogProtocol === 0 || msg.sessionCatalogProtocol === false) {
           store.sessionCatalogProtocolSupported = false;
@@ -403,6 +406,10 @@ export function handleMessage(store, msg) {
         });
         authStore.handleAuthFailure?.(undefined, msg._wsAuthToken, msg._wsAuthGeneration);
       }
+      break;
+
+    case 'scheduled_task_notifications_read':
+      if (msg.ok !== false) applyScheduledTaskReceipts(store, msg.receipts);
       break;
 
     case 'agent_list':

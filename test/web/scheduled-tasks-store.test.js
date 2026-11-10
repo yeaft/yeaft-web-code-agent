@@ -233,11 +233,84 @@ describe('Session-backed task store integration', () => {
     expect(reloaded.scheduledTaskNotifications).toEqual([]);
   });
 
-  it('does not dismiss a notification whose task is no longer present in the catalog', () => {
+  it('acknowledges a clicked notification even when its task is no longer present in the catalog', () => {
     const store = harness();
     tasks.acceptScheduledTaskNotification(store, completed, 'b');
     expect(tasks.openScheduledTaskNotification(store, store.scheduledTaskNotifications[0])).toBe(false);
     expect(store.openCatalogSession).not.toHaveBeenCalled();
-    expect(store.scheduledTaskNotifications).toHaveLength(1);
+    expect(store.scheduledTaskNotifications).toHaveLength(0);
+    expect(tasks.acceptScheduledTaskNotification(store, completed, 'b')).toBe(false);
   });
+
+  it('uploads local reads and applies another client receipt without echoing or muting the next run', () => {
+    const first = harness();
+    const second = harness(); // Independent in-memory clients, before either has read.
+    for (const store of [first, second]) {
+      store.scheduledTaskReceiptProtocolSupported = true;
+      store.sendWsMessage = vi.fn(() => true);
+      tasks.acceptScheduledTaskNotification(store, completed, 'a');
+      tasks.acceptScheduledTaskNotification(store, completed, 'b');
+    }
+    tasks.markScheduledTaskSessionRead(first, 'same', 'a');
+    const receipt = { agentId: 'a', sessionId: 'same', runId: 'run' };
+    expect(first.sendWsMessage).toHaveBeenCalledExactlyOnceWith({ type: 'scheduled_task_notifications_read', receipts: [receipt], sessionRead: true, sessions: [{ agentId: 'a', sessionId: 'same' }] });
+    tasks.applyScheduledTaskReceipts(second, [receipt]);
+    expect(second.scheduledTaskNotifications.map(item => item.agentId)).toEqual(['b']);
+    expect(second.sendWsMessage).not.toHaveBeenCalled();
+    expect(tasks.acceptScheduledTaskNotification(second, completed, 'a')).toBe(false);
+    expect(tasks.acceptScheduledTaskNotification(second, { ...completed, runId: 'new-run' }, 'a')).toBe(true);
+    tasks.applyScheduledTaskReceipts(first, [receipt]);
+    expect(JSON.parse(localStorage.getItem('yeaft-task-pending-receipts:owner'))).toEqual([]);
+  });
+
+  it('replays unconfirmed offline reads across reload and retries after reconnect until server acknowledgement', () => {
+    const store = harness();
+    store.scheduledTaskReceiptProtocolSupported = true;
+    store.sendWsMessage = vi.fn(() => false);
+    tasks.markScheduledTaskSessionRead(store, 'same', 'a', { id: 'offline-run', status: 'completed' });
+    const reloaded = harness();
+    reloaded.scheduledTaskReceiptProtocolSupported = true;
+    reloaded.sendWsMessage = vi.fn(() => true);
+    tasks.applyScheduledTaskReceipts(reloaded, [], { reconnect: true });
+    const receipt = { agentId: 'a', sessionId: 'same', runId: 'offline-run' };
+    expect(reloaded.sendWsMessage).toHaveBeenCalledExactlyOnceWith({ type: 'scheduled_task_notifications_read', receipts: [receipt] });
+    tasks.flushScheduledTaskReceipts(reloaded);
+    expect(reloaded.sendWsMessage).toHaveBeenCalledTimes(1);
+    // Sending is not an acknowledgement: transport loss must retry the run.
+    tasks.applyScheduledTaskReceipts(reloaded, [], { reconnect: true });
+    expect(reloaded.sendWsMessage).toHaveBeenCalledTimes(2);
+    tasks.applyScheduledTaskReceipts(reloaded, [receipt]);
+    tasks.applyScheduledTaskReceipts(reloaded, [], { reconnect: true });
+    expect(reloaded.sendWsMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('migrates valid local-only receipts in bounded batches and never uploads to older Servers', () => {
+    const ids = Array.from({ length: 205 }, (_, i) => JSON.stringify(['a', 'same', `old-${i}`]));
+    localStorage.setItem('yeaft-task-receipts:owner', JSON.stringify([...ids, 'invalid']));
+    const store = harness();
+    store.sendWsMessage = vi.fn(() => true);
+    tasks.flushScheduledTaskReceipts(store);
+    expect(store.sendWsMessage).not.toHaveBeenCalled();
+    store.scheduledTaskReceiptProtocolSupported = true;
+    tasks.applyScheduledTaskReceipts(store, [], { reconnect: true });
+    expect(store.sendWsMessage.mock.calls.map(([message]) => message.receipts.length)).toEqual([100, 100, 5]);
+    tasks.bindScheduledTaskNotificationOwner(store, 'other-owner');
+    tasks.applyScheduledTaskReceipts(store, [], { reconnect: true });
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it('server hydration receipts cover more than the old local cache and close desktop notices', () => {
+    const close = vi.fn();
+    const NotificationMock = vi.fn(function () { this.close = close; });
+    NotificationMock.permission = 'granted';
+    vi.stubGlobal('Notification', NotificationMock);
+    const store = harness();
+    tasks.acceptScheduledTaskNotification(store, completed, 'a');
+    const rows = Array.from({ length: 350 }, (_, i) => ({ agentId: 'a', sessionId: 'same', runId: `r-${i}` }));
+    tasks.applyScheduledTaskReceipts(store, [...rows, { agentId: 'a', sessionId: 'same', runId: 'run' }], { reconnect: true });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(store.scheduledTaskNotifications).toEqual([]);
+    expect(tasks.acceptScheduledTaskNotification(store, { ...completed, runId: 'r-0' }, 'a')).toBe(false);
+  });
+
 });

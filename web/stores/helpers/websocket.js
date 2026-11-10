@@ -17,6 +17,7 @@ function clearSidebarSessionCatalog(store) {
   store.sessionCatalogLoaded = false;
   store.sessionCatalogProtocolSupported = null;
   store.scheduledTaskProtocolSupported = false;
+  store.scheduledTaskReceiptProtocolSupported = false;
 }
 
 // Pending ensureConnected resolvers — settled by onopen/timeout
@@ -258,6 +259,7 @@ export function connect(store) {
   store.sessionCatalogLoaded = false;
   store.sessionCatalogProtocolSupported = null;
   store.scheduledTaskProtocolSupported = false;
+  store.scheduledTaskReceiptProtocolSupported = false;
   if (!retainCatalog) {
     clearSidebarSessionCatalog(store);
   }

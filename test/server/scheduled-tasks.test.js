@@ -398,7 +398,9 @@ describe('Account-wide scheduled Task read receipts', () => {
     const event = { type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'run-current', status: 'running' };
     await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event });
     client.sent = [];
-    await handleClientConversation('client-a', client, readRequest([receipt()], { sessionRead: true }), allow);
+    receipts.recordNotificationRun(owner, 'agent-a', { ...event, runId: 'run-1', status: 'completed' });
+    await handleClientConversation('client-a', client, readRequest([], { sessionRead: true,
+      sessions: [{ agentId: 'agent-a', sessionId: 'task-session' }] }), allow);
     expect(client.sent.at(-1).receipts).toEqual([receipt()]);
     expect(receipts.has(owner, 'agent-a', 'task-session', 'run-current')).toBe(false);
     await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { ...event, status: 'completed' } });
@@ -424,7 +426,10 @@ describe('Account-wide scheduled Task read receipts', () => {
         expect(receipts.getByUser(owner)).toEqual([]);
       }
     }
-    for (const overrides of [{ requestId: 42 }, { sessionRead: null }, { sessionRead: 'true' }, { sessionRead: 1 }]) {
+    for (const overrides of [{ requestId: 42 }, { sessionRead: null }, { sessionRead: 'true' }, { sessionRead: 1 },
+      { sessionRead: true, sessions: [{ agentId: 'agent-a', sessionId: 'foreign-session' }] },
+      { sessionRead: true, sessions: [null] }, { sessionRead: true, sessions: {} },
+      { sessionRead: false, sessions: [{ agentId: 'agent-a', sessionId: 'task-session' }] }]) {
       await handleClientConversation('client-a', client, readRequest([receipt()], overrides), allow);
       expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'invalid_scheduled_task_receipts' });
       expect(receipts.getByUser(owner)).toEqual([]);

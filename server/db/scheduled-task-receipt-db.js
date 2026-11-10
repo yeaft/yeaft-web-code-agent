@@ -40,13 +40,15 @@ export const scheduledTaskReceiptDb = {
   },
 
   /** Validate the entire batch and persisted ownership before inserting anything. */
-  markRead(userId, receipts, { sessionRead = false } = {}) {
+  markRead(userId, receipts, { sessionRead = false, sessions = [] } = {}) {
     if (!validScheduledTaskReceiptIdentity(userId)
         || stmts.getUserById.get(userId)?.deletion_state !== 'active') {
       reject('authentication_required', 'An active authenticated user is required');
     }
-    if (!Array.isArray(receipts) || receipts.length === 0 || receipts.length > 100) {
-      reject('invalid_scheduled_task_receipts', 'Expected between 1 and 100 receipts');
+    if (!Array.isArray(receipts) || !Array.isArray(sessions)
+        || receipts.length + sessions.length === 0 || receipts.length + sessions.length > 100
+        || (sessions.length > 0 && sessionRead !== true)) {
+      reject('invalid_scheduled_task_receipts', 'Expected between 1 and 100 explicit Run or Session identities');
     }
     if (typeof sessionRead !== 'boolean') {
       reject('invalid_scheduled_task_receipts', 'sessionRead must be a boolean');
@@ -61,11 +63,18 @@ export const scheduledTaskReceiptDb = {
       const projected = { agentId, sessionId, runId };
       unique.set(JSON.stringify([agentId, sessionId, runId]), projected);
     }
+    const sessionScopes = sessions.map(session => {
+      if (!session || typeof session !== 'object' || Array.isArray(session)
+          || ![session.agentId, session.sessionId].every(validScheduledTaskReceiptIdentity)) {
+        reject('invalid_scheduled_task_receipts', 'Each Session read requires explicit Agent and Session identities');
+      }
+      return { agentId: session.agentId, sessionId: session.sessionId };
+    });
     return transaction(() => {
       // Catalog ownership is authoritative even when the Agent is offline. Do
       // not require lastRun equality: an older run may be read after a new run.
       const catalog = new Map();
-      for (const { agentId, sessionId } of unique.values()) {
+      for (const { agentId, sessionId } of [...unique.values(), ...sessionScopes]) {
         const key = JSON.stringify([agentId, sessionId]);
         if (catalog.has(key)) continue;
         const row = stmts.getYeaftSessionForAgent.get(sessionId, userId, agentId);

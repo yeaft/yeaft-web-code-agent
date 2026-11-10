@@ -679,6 +679,59 @@ test('completion notifications open the owning Agent when two Agents share the s
   } finally { await other.disconnect(); }
 });
 
+test('Task reads synchronize across independent devices and survive clean storage reconnects without muting future runs', async ({ browser, page, serverUrl, mockAgent }) => {
+  const state = scheduledTaskAgent(mockAgent);
+  await boot(page, serverUrl, mockAgent);
+  await showSidebar(page);
+  await page.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
+  for (const runId of ['device-old-1', 'device-old-2']) state.notify({ runId });
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.length)).toBe(2);
+  state.sessions.get(TASK_SESSION_ID).task.lastRun = { id: 'device-running', status: 'running', startedAt: Date.now() };
+  state.publish();
+  // No shared storage/cookies: new device only knows a running latest Run while
+  // the first client still has both old notifications. Server expands the read.
+  const device = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const second = await device.newPage();
+  try {
+    await boot(second, serverUrl, mockAgent);
+    await second.setViewportSize({ width: 390, height: 844 });
+    await second.evaluate(() => document.documentElement.dataset.theme = 'dark');
+    await openTask(second);
+    await expect(second.locator('.scheduled-task-notification')).toHaveCount(0);
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    await showSidebar(second);
+    await second.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
+    // New Run must notify both clients. Reading it by clicking either notice
+    // clears the other client immediately (not only on refresh).
+    state.sessions.get(TASK_SESSION_ID).task.lastRun = { id: 'device-new', status: 'failed', finishedAt: Date.now() };
+    state.publish();
+    state.notify({ runId: 'device-new', status: 'failed' });
+    for (const client of [page, second]) {
+      await expect.poll(() => client.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.length)).toBe(1);
+    }
+    await page.locator('.scheduled-task-notification-open').click();
+    await expect(second.locator('.scheduled-task-notification')).toHaveCount(0);
+    // A brand new browser storage must trust server receipts BEFORE hydration.
+    await second.evaluate(() => {
+      for (const key of Object.keys(localStorage)) if (key.startsWith('yeaft-task-')) localStorage.removeItem(key);
+    });
+    await second.reload();
+    await expect(second.locator('.sidebar-navigation')).toHaveAttribute('aria-busy', 'false');
+    await expect(second.locator('.yeaft-session-input textarea')).toBeVisible();
+    await expect.poll(() => second.evaluate(() => window.Pinia.useChatStore().scheduledTaskReceiptProtocolSupported)).toBe(true);
+    await expect(second.locator('.scheduled-task-notification')).toHaveCount(0);
+    await showSidebar(page);
+    await page.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
+    // Delayed repeats cannot resurrect old notices, but a later Run still can.
+    for (const runId of ['device-old-1', 'device-old-2', 'device-new', 'device-future']) state.notify({ runId });
+    for (const client of [page, second]) {
+      await expect.poll(() => client.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.map(item => item.runId))).toEqual(['device-future']);
+    }
+    await second.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
+    await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+  } finally { await device.close(); }
+});
+
 test('an older Agent cannot turn New task into an ordinary Session', async ({ page, serverUrl, mockAgent }, testInfo) => {
   scheduledTaskAgent(mockAgent, { capabilities: TASK_CAPABILITIES.filter(capability => capability !== 'scheduled_tasks'),
     sessions: [{ id: CHAT_SESSION_ID, name: 'Legacy Agent conversation', roster: ['omni'], defaultVpId: 'omni' }] });
