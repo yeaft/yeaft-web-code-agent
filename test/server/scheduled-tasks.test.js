@@ -431,7 +431,8 @@ describe('Account-wide scheduled Task read receipts', () => {
       { sessionRead: true, sessions: [null] }, { sessionRead: true, sessions: {} },
       { sessionRead: false, sessions: [{ agentId: 'agent-a', sessionId: 'task-session' }] }]) {
       await handleClientConversation('client-a', client, readRequest([receipt()], overrides), allow);
-      expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'invalid_scheduled_task_receipts' });
+      expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: overrides.sessions?.[0]?.sessionId === 'foreign-session'
+        ? 'session_access_denied' : 'invalid_scheduled_task_receipts' });
       expect(receipts.getByUser(owner)).toEqual([]);
     }
     for (const identity of [{ authenticated: false, userId: owner }, { authenticated: true, userId: null },
