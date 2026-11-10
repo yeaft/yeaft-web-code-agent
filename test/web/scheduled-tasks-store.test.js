@@ -284,7 +284,7 @@ describe('Session-backed task store integration', () => {
     expect(reloaded.sendWsMessage).toHaveBeenCalledTimes(2);
   });
 
-  it('migrates valid local-only receipts in bounded batches and never uploads to older Servers', () => {
+  it('migrates exact local receipts independently so an unprovable deleted Run cannot block another, and gates old Servers', () => {
     const ids = Array.from({ length: 205 }, (_, i) => JSON.stringify(['a', 'same', `old-${i}`]));
     localStorage.setItem('yeaft-task-receipts:owner', JSON.stringify([...ids, 'invalid']));
     const store = harness();
@@ -293,10 +293,16 @@ describe('Session-backed task store integration', () => {
     expect(store.sendWsMessage).not.toHaveBeenCalled();
     store.scheduledTaskReceiptProtocolSupported = true;
     tasks.applyScheduledTaskReceipts(store, [], { reconnect: true });
-    expect(store.sendWsMessage.mock.calls.map(([message]) => message.receipts.length)).toEqual([100, 100, 5]);
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(205);
+    expect(store.sendWsMessage.mock.calls.every(([message]) => message.receipts.length === 1)).toBe(true);
+    // Server may reject old-0 after Session deletion; acknowledgement of old-1
+    // still independently settles, with no shared batch to reject.
+    tasks.applyScheduledTaskReceipts(store, [{ agentId: 'a', sessionId: 'same', runId: 'old-1' }]);
+    expect(JSON.parse(localStorage.getItem('yeaft-task-pending-receipts:owner'))).toContain(ids[0]);
+    expect(JSON.parse(localStorage.getItem('yeaft-task-pending-receipts:owner'))).not.toContain(ids[1]);
     tasks.bindScheduledTaskNotificationOwner(store, 'other-owner');
     tasks.applyScheduledTaskReceipts(store, [], { reconnect: true });
-    expect(store.sendWsMessage).toHaveBeenCalledTimes(3);
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(205);
   });
 
   it('server hydration receipts cover more than the old local cache and close desktop notices', () => {

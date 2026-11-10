@@ -55,21 +55,13 @@ function persistReceipts(state) {
 export function flushScheduledTaskReceipts(store) {
   const state = receipts(store);
   if (!state.owner || store.scheduledTaskReceiptProtocolSupported !== true) return;
-  const sessions = new Map();
+  // Legacy/offline reads may outlive their Session. Upload each exact Run
+  // independently: an unprovable old local receipt must never poison a newer
+  // Server-journalled result in the same atomic authorization batch.
   for (const id of state.pending) {
     if (state.sent.has(id)) continue;
-    const row = receiptIdentity(id);
-    const key = JSON.stringify([row.agentId, row.sessionId]);
-    if (!sessions.has(key)) sessions.set(key, []);
-    sessions.get(key).push(id);
-  }
-  // One deleted/legacy Session must not reject another Session's read batch.
-  for (const pending of sessions.values()) {
-    for (let offset = 0; offset < pending.length; offset += 100) {
-      const ids = pending.slice(offset, offset + 100);
-      if (store.sendWsMessage?.({ type: 'scheduled_task_notifications_read', receipts: ids.map(receiptIdentity) }) !== true) return;
-      for (const id of ids) state.sent.add(id);
-    }
+    if (store.sendWsMessage?.({ type: 'scheduled_task_notifications_read', receipts: [receiptIdentity(id)] }) !== true) return;
+    state.sent.add(id);
   }
 }
 
