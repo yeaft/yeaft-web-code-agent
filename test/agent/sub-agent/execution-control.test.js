@@ -3,6 +3,9 @@ import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { buildChildToolRegistry } from '../../../agent/yeaft/sub-agent/runner.js';
 import { SubAgentToolRegistry, resolveSubAgentBudget } from '../../../agent/yeaft/sub-agent/execution-control.js';
+import { buildSpawnedPreamble } from '../../../agent/yeaft/sub-agent/spawned-prompt.js';
+import { buildSystemPrompt } from '../../../agent/yeaft/prompts.js';
+import { getPersona } from '../../../agent/yeaft/personas.js';
 import { diagnoseAgentLiveness } from '../../../agent/yeaft/sub-agent/liveness.js';
 
 function record(budget = {}) {
@@ -46,6 +49,20 @@ describe('sub-agent execution control', () => {
     expect(snapshot.stalled).toBe(false);
     expect(agent.abortController.signal.aborted).toBe(false);
     expect(child.prepareProviderRequest()).toMatchObject({ finalize: true, maxOutputTokens: 4096 });
+  });
+
+  it('keeps bilingual efficiency guidance evidence-based with versioned handoff and continuous review', () => {
+    for (const language of ['en', 'zh']) {
+      const prompt = buildSystemPrompt({ language });
+      expect(prompt).toContain(language === 'zh' ? '独立读取和检查同批提出' : 'Batch independent reads/checks');
+      expect(prompt).toContain(language === 'zh' ? '匹配风险的验证' : 'risk-matched validation');
+      expect(prompt).toContain(language === 'zh' ? '真实性优先' : 'Truthfulness first');
+      const preamble = buildSpawnedPreamble({ language, mission: 'Review the scoped change', presetPrompt: getPersona('reviewer').systemPrompt });
+      expect(preamble).toContain(language === 'zh' ? '源码或数据版本' : 'workspace/source or data revision');
+      expect(preamble).toContain(language === 'zh' ? '连续复审' : 'Continuous review');
+      expect(preamble).toContain(language === 'zh' ? '不免除必要回归' : 'does not waive regression checks');
+      expect(preamble).toContain('base/head');
+    }
   });
 
   it('does not dispatch any new tool after cancellation', async () => {

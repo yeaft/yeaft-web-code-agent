@@ -7,6 +7,9 @@ import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { buildMcpFlattenedTools } from '../../../agent/yeaft/tools/mcp-tools.js';
 import discoverTools from '../../../agent/yeaft/tools/discover-tools.js';
 import presentResponse from '../../../agent/yeaft/tools/present-response.js';
+import waitTask from '../../../agent/yeaft/tools/wait-task.js';
+import readTaskLog from '../../../agent/yeaft/tools/read-task-log.js';
+import { TaskManager } from '../../../agent/yeaft/tasks/manager.js';
 import { withUsageAccounting } from '../../../agent/yeaft/llm/usage-accounting.js';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { flushAgentPerfTrace } from '../../../agent/yeaft/perf-trace.js';
@@ -71,6 +74,66 @@ describe('query progress Engine boundaries', () => {
     expect(missingEvents.filter(e => e.type === 'query_progress').at(-1)).toMatchObject({ failedCalls: 12, toolExecutions: 0,
       toolStats: [{ name: 'Unavailable', executions: 0, failedCalls: 12, blockedCalls: 12 }] });
     expect(missingEvents.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'no_progress' })]);
+  });
+
+  it('reduces duplicate provider bytes without suppressing execution, changing facts or persisting references', async () => {
+    const body = 'FACT_HEAD\n' + 'measured evidence\n'.repeat(900) + '\nFACT_TAIL';
+    let executions = 0;
+    const run = setup(n => n <= 4 ? [call(`read-${n}`, 'Read', { path: '/same' }), stop]
+      : [{ type: 'text_delta', text: 'facts verified' }, { type: 'stop', stopReason: 'end_turn' }]);
+    run.engine.registerTool({ name: 'Read', isReadOnly: () => true,
+      execute: async () => { executions++; return body; } });
+    const events = await consume(run.engine);
+    expect(executions).toBe(4);
+    expect(run.requests).toHaveLength(5);
+    const projected = run.requests.at(-1).messages.filter(m => m.role === 'tool');
+    expect(projected.map(m => m.toolCallId)).toEqual(['read-1', 'read-2', 'read-3', 'read-4']);
+    expect(projected[0].content).toBe(body);
+    expect(projected[3].content).toBe(body);
+    expect(projected[1].content).toContain('retained call "read-1"');
+    expect(projected[2].content).toContain('retained call "read-1"');
+    expect(JSON.stringify(projected).length).toBeLessThan(body.length * 3);
+    expect(run.rows.filter(m => m.role === 'tool').map(m => m.content)).toEqual([body, body, body, body]);
+    expect(events.filter(e => e.type === 'tool_exec').map(e => e.toolOutput)).toEqual([body, body, body, body]);
+    expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+    const again = await consume(run.engine);
+    expect(run.requests.at(-1).messages.some(m => typeof m.content === 'string' && m.content.includes('retained call'))).toBe(false);
+    expect(again.filter(e => e.type === 'error')).toHaveLength(0);
+
+    // Per-tool projection can truncate before history-window sees the body.
+    // Equal prefixes are not complete evidence and must never be referenced.
+    const oversized = 'HEAD\n' + 'x'.repeat(45_000) + '\nUNSEEN_TAIL';
+    const truncated = setup(n => n <= 4 ? [call(`large-${n}`, 'Read', { path: '/large' }), stop]
+      : [{ type: 'text_delta', text: 'truncation is explicit' }, { type: 'stop', stopReason: 'end_turn' }]);
+    truncated.engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async () => oversized });
+    await consume(truncated.engine);
+    const tools = truncated.requests.at(-1).messages.filter(m => m.role === 'tool');
+    expect(tools).toHaveLength(4);
+    expect(tools.every(m => m.content.includes('truncated:'))).toBe(true);
+    expect(tools.every(m => !m.content.includes('retained call'))).toBe(true);
+    expect(truncated.rows.filter(m => m.role === 'tool').every(m => m.content === oversized)).toBe(true);
+  });
+
+  it('delivers real background process completion evidence in the next provider request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'yeaft-wait-log-engine-'));
+    try {
+      const manager = new TaskManager({ yeaftDir: root });
+      const task = manager.startShellTask({ sessionId: 's', cwd: root,
+        command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("console.log('started');setTimeout(()=>console.log('FINAL_EVIDENCE'),30)")}` });
+      const run = setup(n => n === 1
+        ? [call('wait-with-log', 'WaitTask', { taskId: task.id, include_log: true, offset: 0, timeout_ms: 3000 }), stop]
+        : [{ type: 'text_delta', text: 'completed with evidence' }, { type: 'stop', stopReason: 'end_turn' }], { taskManager: manager });
+      run.engine.registerTool(waitTask);
+      run.engine.registerTool(readTaskLog);
+      const events = await consume(run.engine);
+      expect(run.requests).toHaveLength(2); // no extra request just to ask ReadTaskLog
+      const result = JSON.parse(run.requests[1].messages.find(m => m.toolCallId === 'wait-with-log').content);
+      expect(result).toMatchObject({ status: 'succeeded', exitCode: 0, terminal: true, resultConsumed: false });
+      expect(result.log.text).toContain('FINAL_EVIDENCE');
+      expect(result.log.nextOffset).toBe(Buffer.byteLength(result.log.text));
+      expect(events.filter(e => e.type === 'tool_exec').map(e => e.name)).toEqual(['WaitTask']);
+      expect(events.filter(e => e.type === 'turn_end' && e.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it('keeps long fresh investigations free of reflection and isolates child accounting', async () => {

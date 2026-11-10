@@ -689,6 +689,45 @@ function compactCurrentToolResults(messages, messageBudget) {
   return { messages: out, compactedToolResults, compactedToolResultTokensSaved };
 }
 
+/**
+ * Reference only confirmed unchanged reads whose complete original still exists
+ * in this exact request. Run after fitting, so eviction/sampling cannot leave a
+ * dangling reference. The newest batch stays self-contained. No output is cached
+ * and no tool execution, error, argument or durable message is changed.
+ */
+function deduplicateRetainedToolResults(messages, repeatedRefs, fullResults) {
+  const out = messages.slice();
+  let deduplicatedToolResults = 0;
+  let deduplicatedToolResultTokensSaved = 0;
+  if (!(repeatedRefs instanceof Map) || repeatedRefs.size === 0) {
+    return { messages: out, deduplicatedToolResults, deduplicatedToolResultTokensSaved };
+  }
+  const retained = new Map();
+  let latestStart = out.findLastIndex(message => message?.role === 'tool');
+  while (latestStart > 0 && out[latestStart - 1]?.role === 'tool') latestStart -= 1;
+  for (let index = 0; index < out.length; index += 1) {
+    const message = out[index];
+    if (message?.role !== 'tool' || !message.toolCallId) continue;
+    const original = retained.get(repeatedRefs.get(message.toolCallId));
+    if (index < latestStart && original && !message.isError && !original.isError
+        && typeof message.content === 'string' && message.content === original.content
+        && message.content === fullResults.get(original.toolCallId)?.content
+        && message.content === fullResults.get(message.toolCallId)?.content
+        && Buffer.byteLength(message.content, 'utf8') >= 1024) {
+      const content = `[Unchanged read output: byte-identical to retained call ${JSON.stringify(original.toolCallId)} above. The complete returned output remains there; this is a separate observation, not a skipped execution.]`;
+      const saved = estimateContentTokens(message.content) - estimateContentTokens(content);
+      if (saved > 0) {
+        out[index] = { ...message, content };
+        deduplicatedToolResults += 1;
+        deduplicatedToolResultTokensSaved += saved;
+      }
+    }
+    // Only full bodies can serve as future references; never create chains.
+    retained.set(message.toolCallId, out[index]);
+  }
+  return { messages: out, deduplicatedToolResults, deduplicatedToolResultTokensSaved };
+}
+
 const HISTORY_SOURCE_INDEX = Symbol('historySourceIndex');
 
 function withHistorySourceIndexes(messages, offset = 0) {
@@ -1270,7 +1309,8 @@ export function buildHistoryBuckets(snapshot, options = {}) {
  * @param {Array<object>} messages
  * @param {{ contextWindow:number, systemTokens?:number, toolSchemaTokens?:number,
  * outputReserve?:number, historyMessageCount?:number, historyTokenBudget?:number,
- * maxMessageCount?:number, language?:string }} options
+ * maxMessageCount?:number, language?:string,
+ * repeatedToolResultRefs?:Map<string,string> }} options
  * @returns {{messages:Array<object>, meta:object}}
  */
 export function fitProviderRequestToContext(messages, options = {}) {
@@ -1333,7 +1373,10 @@ export function fitProviderRequestToContext(messages, options = {}) {
         language: options.language,
       })
     : [];
-  const fittedMessages = [...history, ...current];
+  const fullResults = new Map(currentSource.filter(message => message?.role === 'tool')
+    .map(message => [message.toolCallId, message]));
+  const deduplicated = deduplicateRetainedToolResults(current, options.repeatedToolResultRefs, fullResults);
+  const fittedMessages = [...history, ...deduplicated.messages];
   return {
     messages: fittedMessages,
     meta: {
@@ -1349,6 +1392,8 @@ export function fitProviderRequestToContext(messages, options = {}) {
       droppedCurrentMessages: currentSource.length - current.length,
       compactedToolResults: compact.compactedToolResults,
       compactedToolResultTokensSaved: compact.compactedToolResultTokensSaved,
+      deduplicatedToolResults: deduplicated.deduplicatedToolResults,
+      deduplicatedToolResultTokensSaved: deduplicated.deduplicatedToolResultTokensSaved,
     },
   };
 }

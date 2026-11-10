@@ -7,6 +7,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { TaskManager } from '../../../../agent/yeaft/tasks/manager.js';
+import waitTask from '../../../../agent/yeaft/tools/wait-task.js';
+import { truncateToolResultIfNeeded } from '../../../../agent/yeaft/tools/registry.js';
 
 function makeTempDir() {
   return mkdtempSync(join(tmpdir(), 'yeaft-tasks-'));
@@ -220,6 +222,50 @@ describe('TaskManager', () => {
       .resolves.toMatchObject({ ok: true, timedOut: false, task: { status: 'failed' } });
   });
 
+  it('optionally delivers final bounded logs with status, preserving cursor and ownership contracts', async () => {
+    const manager = new TaskManager({ yeaftDir: dir });
+    const ctx = { taskManager: manager, sessionId: 'session_log_wait', currentVpId: 'vp_owner' };
+    const task = manager.startTask({ sessionId: ctx.sessionId, ownerVpId: ctx.currentVpId, kind: 'shell' });
+    const read = vi.spyOn(manager, 'readTaskLog');
+    const pending = waitTask.execute({ taskId: task.id, include_log: true, offset: 0, maxBytes: 32 }, ctx);
+    manager.store.appendLog(ctx.sessionId, task.id, 'first output\n');
+    manager.store.appendLog(ctx.sessionId, task.id, 'last output\n');
+    manager.completeTask(ctx.sessionId, task.id, { status: 'failed', exitCode: 7 });
+    const result = JSON.parse(await pending);
+    expect(result).toMatchObject({ status: 'failed', exitCode: 7, terminal: true, resultConsumed: false,
+      log: { text: 'first output\nlast output\n', offset: 0, nextOffset: 25, endOffset: 25, truncated: false, omittedBefore: false } });
+    expect(read).toHaveBeenLastCalledWith(ctx.sessionId, task.id, { offset: 0, maxBytes: 32, tail: false }, ctx.currentVpId);
+    expect(result.next_steps).toContain('NOT an already-read cursor');
+    expect(result.next_steps).toContain('WaitAgent');
+
+    read.mockClear();
+    const legacy = JSON.parse(await waitTask.execute({ taskId: task.id }, ctx));
+    expect(read).not.toHaveBeenCalled();
+    expect(legacy.log).not.toHaveProperty('text');
+    expect(legacy.next_steps).toContain('Status only');
+    expect(legacy.resultConsumed).toBe(false);
+
+    manager.store.appendLog(ctx.sessionId, task.id, 'new evidence');
+    const increment = JSON.parse(await waitTask.execute({ taskId: task.id, include_log: true, offset: result.log.nextOffset, maxBytes: 4 }, ctx));
+    expect(increment.log).toMatchObject({ text: 'new ', offset: 25, nextOffset: 29, endOffset: 37, truncated: true, omittedBefore: false });
+    const tail = JSON.parse(await waitTask.execute({ taskId: task.id, include_log: true, maxBytes: 4 }, ctx));
+    expect(tail.log).toMatchObject({ text: 'ence', offset: 33, nextOffset: 37, omittedBefore: true });
+
+    manager.store.appendLog(ctx.sessionId, task.id, '\u0001'.repeat(10_000));
+    const escaped = await waitTask.execute({ taskId: task.id, include_log: true }, ctx);
+    expect(truncateToolResultIfNeeded(escaped, { toolName: 'WaitTask' })).toBe(escaped);
+    expect(JSON.parse(escaped).log.nextOffset - JSON.parse(escaped).log.offset).toBe(4096);
+    read.mockClear();
+    for (const foreign of [{ ...ctx, currentVpId: 'vp_other' }, { ...ctx, sessionId: 'session_other' }]) {
+      expect(JSON.parse(await waitTask.execute({ taskId: task.id, include_log: true }, foreign)).error).toBeTruthy();
+    }
+    expect(JSON.parse(await waitTask.execute({ taskId: task.id, sessionId: 'session_other', include_log: true }, ctx)).error).toBeTruthy();
+    expect(read).not.toHaveBeenCalled();
+    read.mockImplementation(() => { throw new Error('log read failed'); });
+    expect(JSON.parse(await waitTask.execute({ taskId: task.id, include_log: true }, ctx)))
+      .toMatchObject({ status: 'failed', exitCode: 7, logReadError: 'log read failed' });
+  });
+
   it('times out without changing task state and cleans abort listeners', async () => {
     vi.useFakeTimers();
     try {
@@ -229,18 +275,20 @@ describe('TaskManager', () => {
       await vi.advanceTimersByTimeAsync(25);
       await expect(timedOut).resolves.toMatchObject({ ok: true, timedOut: true, task: { status: 'running' } });
       expect(manager.getTask('session_timeout', task.id).status).toBe('running');
+      const ctx = { taskManager: manager, sessionId: 'session_timeout', currentVpId: 'vp_owner' };
+      const emptyWait = waitTask.execute({ taskId: task.id, timeout_ms: 0, include_log: true }, ctx);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(JSON.parse(await emptyWait)).toMatchObject({ timedOut: true, terminal: false, log: { text: '', nextOffset: 0 } });
       expect(manager.waiters.size).toBe(0);
 
       const controller = new AbortController();
       const remove = vi.spyOn(controller.signal, 'removeEventListener');
-      const aborted = manager.waitForTask('session_timeout', task.id, {
-        timeoutMs: 1000,
-        signal: controller.signal,
-        ownerVpId: 'vp_owner',
-      });
+      const read = vi.spyOn(manager, 'readTaskLog');
+      const aborted = waitTask.execute({ taskId: task.id, include_log: true }, { ...ctx, signal: controller.signal });
       controller.abort();
       await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
       expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+      expect(read).not.toHaveBeenCalled();
       expect(manager.waiters.size).toBe(0);
 
       manager.completeTask('session_timeout', task.id, { status: 'succeeded', exitCode: 0 });

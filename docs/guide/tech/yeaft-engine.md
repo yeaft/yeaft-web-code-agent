@@ -123,6 +123,20 @@ See [Retired H2-AMS implementation](./yeaft-memory.md).
 - Sub-agents have their own output log, liveness counters, optional budgets, and terminal/idle notifications.
 - Terminal notifications are parent re-entry control context, not new user-authored semantic memory.
 
+## 响应时间与证据复用
+
+这些优化不更换用户选择的模型／推理强度，也不减少验证：
+
+- **稳定入口优先**：各 VP 共用的核心规则要求先使用当前权威 skill／命令，检查权限、版本和实时状态。出现缺失、矛盾或过期证据再深入实现；独立检查可以同批提出，有依赖的操作仍有序执行。
+- **已返回正文的无损引用**：同一 query 内，QueryProgress 已确认的成功只读重复结果，只有在最终请求仍保留完整且逐字节相同的原正文时，才可把较旧副本替换为明确引用。最新整个工具批次、错误、混合图片／文档结果保持原样。不改变工具执行、参数、原始 transcript、UI 或 trace；原正文被窗口采样／移除时不生成引用。`tool_result_compact` 性能事件分别记录采样与引用节省的估算 token，不包含正文。
+- **等待与读取合并**：`WaitTask({ taskId, include_log: true, offset, maxBytes })` 等待后通过现有所有权检查读取日志，最多 4096 字节；省略 `offset` 取末尾，传上次 `nextOffset` 读取增量。`log.omittedBefore` 表示前段省略，`log.truncated` 表示仍有后段，`log.endOffset` 不是已读游标。`resultConsumed` 仍为 false，不把片段当作完整结果；更多证据使用 `ReadTaskLog`。默认不带日志的旧行为不变，取消等待不取消任务，子 Agent 结果仍用 `WaitAgent` 收集。
+- **后续回复等待**：未指定 `timeout_ms` 时，`WaitAgent` 对待收集的 `PromptAgent` 回复默认等待 120 秒，正常返回即提前结束，减少 5 秒后纯粹为再次等待的模型往返。普通 SpawnAgent 仍默认 5 秒，显式超时（含零）优先，不改变生命周期、取消和证据 revision。
+- **可核验交接与连续复审**：子 Agent 交付版本、产物与实际验证；父级核验必要证据而非重走完整调查。修复 Findings 后优先继续已有 idle reviewer，确认旧／新 head 后审增量及受影响行为；基线、设计或风险变化或原覆盖不足时扩大审查。独立判断和必要回归不因此省略。
+
+`npm test` 使用一次真实 Vitest 执行的公开 collection 统计预算（含 skip／todo／each），不再全量导入一次后重新执行。测试文件仍串行，browser 清单每次重新收集；缺失／未审核文件、过滤、收集错误、断言失败与超预算均失败。`npm run test:budget` 保留独立的仅收集检查，定向执行仍用 `npm run test:focus -- <files>`。
+
+这些是可验证的机制收益，不代表已证明所有真实任务的端到端加速比例。需要同时比较首次有用结果、完整完成时间、请求／工具数量、正确性、用户纠偏和实际验证；模型输出、外部 API、真实计算和授权等待应分别归因。
+
 ## Work Center integration
 
 Work Center reuses `Engine.query()` through a runner adapter. It does not implement a second LLM/tool loop. The Run freezes Action, VP, model/effort, tool-policy, workspace, and attempt identity. A structured completion tool submits `completed`, `waiting`, `retryable`, or `failed`; a normal model `turn_end` alone cannot advance the Action.

@@ -213,7 +213,9 @@ describe('Person task host', () => {
     store.appendLog(sessionId, agent.taskId, 'previous child evidence');
     const observed = vi.fn();
     const recovered = host({ onCompletion: observed }), context = await recovered.attach();
-    expect((await json(context, 'WaitTask', { taskId: shell.id })).status).toBe('orphaned');
+    const orphaned = await json(context, 'WaitTask', { taskId: shell.id, include_log: true, offset: 0 });
+    expect(orphaned.status).toBe('orphaned');
+    expect(orphaned.log.text).toContain('previous shell evidence');
     expect((await json(context, 'ReadTaskLog', { taskId: shell.id })).text).toContain('previous shell evidence');
     const result = await json(context, 'WaitAgent', { agent_id: agent.id });
     expect(result.status).toBe('failed'); expect(result.error).toContain('control was lost');
