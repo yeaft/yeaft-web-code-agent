@@ -3,6 +3,7 @@
 import { useAuthStore } from '../auth.js';
 import { encrypt, decrypt, isEncrypted } from '../../utils/encryption.js';
 import { clearSessionLoading } from './session.js';
+import { bindScheduledTaskNotificationOwner } from './scheduled-tasks.js';
 import {
   sidebarCatalogAuthIsCurrent,
   sidebarSessionCatalogRows,
@@ -157,6 +158,7 @@ export function connect(store) {
   const authToken = authStore.getActiveToken?.() || authStore.token || null;
   const authGeneration = authStore.authGeneration;
   const authOwnerId = authStore.userId || null;
+  bindScheduledTaskNotificationOwner(store, authOwnerId || (authStore.skipAuth ? 'local' : null));
 
   if (store.ws && store.ws.readyState === WebSocket.CONNECTING
       && store._wsAuthToken === authToken && store._wsAuthGeneration === authGeneration
@@ -181,6 +183,7 @@ export function connect(store) {
     store._sidebarCatalogAuthUnsubscribe = authStore.$subscribe(() => {
       if (!sidebarCatalogAuthIsCurrent(store, authStore)) {
         clearSidebarSessionCatalog(store);
+        bindScheduledTaskNotificationOwner(store, authStore.userId || (authStore.skipAuth ? 'local' : null));
         store.sessionCatalogMutationRequests = {};
       }
     }, { detached: true, flush: 'sync' });

@@ -74,6 +74,7 @@ export function flushScheduledTaskReceipts(store) {
 }
 
 function recordReceipt(store, id, sync = true) {
+  if (!receiptIdentity(id)) return;
   const state = receipts(store);
   if (!state.seen.has(id)) {
     state.seen.add(id);
@@ -180,7 +181,7 @@ export function acceptScheduledTaskNotification(store, event, agentId) {
   if (typeof agentId !== 'string' || !agentId || typeof event?.sessionId !== 'string' || !event.sessionId
       || typeof event.runId !== 'string' || !event.runId || !TERMINAL_STATUSES.has(event.status)) return false;
   const id = JSON.stringify([agentId, event.sessionId, event.runId]);
-  if (receipts(store).seen.has(id)) return false;
+  if (!receiptIdentity(id) || receipts(store).seen.has(id)) return false;
   if (isScheduledTaskSessionVisible(store, event.sessionId, agentId)) {
     recordReceipt(store, id);
     markScheduledTaskSessionRead(store, event.sessionId, agentId);
