@@ -321,7 +321,7 @@ export function connect(store) {
     }
     if (msg) {
       if (msg.type === 'file_content') console.log('[WS.onmessage] Received file_content, path:', msg.filePath, 'contentLen:', msg.content?.length);
-      store.handleMessage({ ...msg, _wsAuthToken: authToken, _wsAuthGeneration: authGeneration });
+      store.handleMessage({ ...msg, _wsAuthToken: authToken, _wsAuthGeneration: authGeneration, _wsAuthOwnerId: authOwnerId });
     } else {
       console.warn('[WS.onmessage] parseWsMessage returned null, raw data length:', event.data?.length);
     }

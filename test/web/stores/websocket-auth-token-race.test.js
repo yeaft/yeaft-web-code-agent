@@ -117,6 +117,34 @@ afterEach(() => {
 });
 
 describe('websocket auth token races', () => {
+  it('accepts Task read broadcasts after same-account JWT renewal but fences old owners and login generations', async () => {
+    const authStore = { ...createRaceAuthStore(), userId: 'owner' };
+    const sockets = installFakeWebSocket();
+    installMemoryLocalStorage();
+    globalThis.location = { protocol: 'https:', host: 'example.test' };
+    globalThis.window = { dispatchEvent: vi.fn() };
+    const { connect, handleMessage } = await loadWebsocketHelpers(authStore);
+    const tasks = await import('../../../web/stores/helpers/scheduled-tasks.js');
+    const store = createStore();
+    store.handleMessage = message => handleMessage(store, message);
+    connect(store);
+    const receipt = { agentId: 'a', sessionId: 'same', runId: 'r1' };
+    const event = { sessionId: 'same', runId: 'r1', status: 'completed' };
+    tasks.acceptScheduledTaskNotification(store, event, 'a');
+    authStore.token = 'renewed-token';
+    sockets[0].onmessage({ data: JSON.stringify({ type: 'scheduled_task_notifications_read', receipts: [receipt] }) });
+    expect(store.scheduledTaskNotifications).toEqual([]);
+    tasks.acceptScheduledTaskNotification(store, { ...event, runId: 'r2' }, 'a');
+    for (const identity of [{ _wsAuthGeneration: 0, _wsAuthOwnerId: 'owner' },
+      { _wsAuthGeneration: 1, _wsAuthOwnerId: 'other-owner' }]) {
+      handleMessage(store, { type: 'scheduled_task_notifications_read', receipts: [{ ...receipt, runId: 'r2' }], ...identity });
+      expect(store.scheduledTaskNotifications).toHaveLength(1);
+    }
+    handleMessage(store, { type: 'scheduled_task_notifications_read', receipts: [{ ...receipt, runId: 'r2' }],
+      _wsAuthGeneration: 1, _wsAuthOwnerId: 'owner', _wsAuthToken: 'old-token' });
+    expect(store.scheduledTaskNotifications).toEqual([]);
+  });
+
   it('ignores 1008 close events from an older token after a newer login wins', async () => {
     const authStore = createRaceAuthStore();
     const sockets = installFakeWebSocket();

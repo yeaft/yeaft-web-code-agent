@@ -139,7 +139,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +13 account-wide Task read boundaries: 8 Server persistence/auth/atomicity/
 // journal/race cases, 4 frontend offline/migration/scope/desktop-notice cases,
 // and 1 independent-browser device/read/reconnect flow. Existing cases retained.
-export const TEST_CASE_LIMIT = 954;
+// +2 independent review regressions: renewable JWT socket ownership and
+// deleted-Session exact-run proof. Snapshot-only/reopen coverage extends cases.
+export const TEST_CASE_LIMIT = 956;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

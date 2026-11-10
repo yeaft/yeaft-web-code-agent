@@ -20,6 +20,7 @@
  */
 
 import { stmts, transaction } from './connection.js';
+import { scheduledTaskReceiptDb } from './scheduled-task-receipt-db.js';
 
 function safeJsonParse(s, fallback) {
   if (s == null || s === '') return fallback;
@@ -79,6 +80,15 @@ export const yeaftSessionDb = {
   upsertFromSnapshot(userId, agentId, session) {
     if (!session || !session.id || !agentId) return;
     const now = Date.now();
+    // Snapshot-only results generate hydration notices too. Journal both the
+    // previous durable terminal result and the incoming one before replacement.
+    const previous = stmts.getYeaftSessionForAgent.get(session.id, userId || null, agentId);
+    for (const task of [safeJsonParse(previous?.task_json, null), session.task]) {
+      scheduledTaskReceiptDb.recordNotificationRun(userId, agentId, {
+        type: 'scheduled_task_notification', sessionId: session.id,
+        runId: task?.lastRun?.id, status: task?.lastRun?.status,
+      });
+    }
     stmts.upsertYeaftSession.run(
       session.id,
       userId || null,

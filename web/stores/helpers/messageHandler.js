@@ -302,10 +302,17 @@ export function handleMessage(store, msg) {
   const authStore = useAuthStore();
   // The socket identity gate excludes replaced sockets. Also reject a still-open
   // old-owner socket during the logout/re-authentication transition.
-  if (['work_center_response', 'work_center_event', 'person_response', 'scheduled_task_notifications_read'].includes(msg?.type)
+  if (['work_center_response', 'work_center_event', 'person_response'].includes(msg?.type)
       && Object.hasOwn(msg, '_wsAuthGeneration')
       && (msg._wsAuthGeneration !== authStore.authGeneration
         || msg._wsAuthToken !== (authStore.getActiveToken?.() || authStore.token || null))) return;
+  // A renewed HTTP token does not change the owner of an existing socket.
+  // Socket replacement is fenced by websocket.js; generation and owner fence
+  // logout/login without rejecting normal same-account JWT renewal.
+  if (msg?.type === 'scheduled_task_notifications_read'
+      && Object.hasOwn(msg, '_wsAuthGeneration')
+      && (msg._wsAuthGeneration !== authStore.authGeneration
+        || msg._wsAuthOwnerId !== (authStore.userId || null))) return;
   if (msg?.type === 'yeaft_debug_history_chunk') {
     const assembled = acceptDebugHistoryChunk(store, msg);
     if (!assembled) return;

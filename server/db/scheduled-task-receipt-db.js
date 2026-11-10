@@ -13,7 +13,7 @@ const terminalRunStatuses = new Set(['completed', 'succeeded', 'failed', 'interr
 
 function catalogTerminalRunId(row) {
   try {
-    const run = JSON.parse(row.task_json)?.lastRun;
+    const run = JSON.parse(row?.task_json)?.lastRun;
     return terminalRunStatuses.has(run?.status) && validScheduledTaskReceiptIdentity(run?.id) ? run.id : null;
   } catch { return null; }
 }
@@ -78,7 +78,15 @@ export const scheduledTaskReceiptDb = {
         const key = JSON.stringify([agentId, sessionId]);
         if (catalog.has(key)) continue;
         const row = stmts.getYeaftSessionForAgent.get(sessionId, userId, agentId);
-        if (!row) reject('session_access_denied', 'Session not found or access denied');
+        if (!row) {
+          // A deleted Session's existing notice can still be clicked/dismissed.
+          // Only Server-stamped exact runs prove ownership, never arbitrary IDs.
+          const runs = [...unique.values()].filter(item => item.agentId === agentId && item.sessionId === sessionId);
+          const explicitScope = sessionScopes.some(item => item.agentId === agentId && item.sessionId === sessionId);
+          if (explicitScope || !runs.length || runs.some(item => !stmts.getScheduledTaskNotificationRun.get(userId, agentId, sessionId, item.runId))) {
+            reject('session_access_denied', 'Session not found or access denied');
+          }
+        }
         catalog.set(key, { agentId, sessionId, row });
       }
       // Expand only to terminal runs already known at this transaction. Never

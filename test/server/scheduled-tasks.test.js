@@ -392,6 +392,11 @@ describe('Account-wide scheduled Task read receipts', () => {
 
   it('does not expand a Session read to a running catalog Run or a nonterminal notification', async () => {
     const { client, agent } = fixture();
+    // A snapshot-only terminal result must be journalled before lastRun moves
+    // to running; it may already be displayed on another hydrated client.
+    sessions.upsertFromSnapshot(owner, 'agent-a', { id: 'task-session', task: {
+      ...task, lastRun: { id: 'snapshot-old', status: 'completed' },
+    } });
     sessions.upsertFromSnapshot(owner, 'agent-a', { id: 'task-session', task: {
       ...task, lastRun: { id: 'run-current', status: 'running' },
     } });
@@ -401,10 +406,32 @@ describe('Account-wide scheduled Task read receipts', () => {
     receipts.recordNotificationRun(owner, 'agent-a', { ...event, runId: 'run-1', status: 'completed' });
     await handleClientConversation('client-a', client, readRequest([], { sessionRead: true,
       sessions: [{ agentId: 'agent-a', sessionId: 'task-session' }] }), allow);
-    expect(client.sent.at(-1).receipts).toEqual([receipt()]);
+    expect(client.sent.at(-1).receipts.map(row => row.runId).sort()).toEqual(['run-1', 'snapshot-old']);
     expect(receipts.has(owner, 'agent-a', 'task-session', 'run-current')).toBe(false);
     await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { ...event, status: 'completed' } });
     expect(client.sent.at(-1)).toMatchObject({ event: { runId: 'run-current', status: 'completed' } });
+  });
+
+  it('acknowledges a deleted Session notice only with exact Server-owned run proof and still rejects forged runs or owners', async () => {
+    const { client, agent } = fixture();
+    const sibling = { authenticated: true, userId: owner, sent: [] };
+    webClients.set('sibling', sibling);
+    const event = { type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'deleted-run', status: 'completed' };
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event });
+    sessions.deleteForAgent(owner, 'agent-a', 'task-session');
+    client.sent = []; sibling.sent = [];
+    await handleClientConversation('client-a', client, readRequest([receipt({ runId: 'deleted-run' })]), allow);
+    expect(client.sent.at(-1)).toMatchObject({ type: 'scheduled_task_notifications_read', receipts: [receipt({ runId: 'deleted-run' })] });
+    expect(sibling.sent).toEqual(client.sent);
+    const count = client.sent.length;
+    for (const request of [readRequest([receipt({ runId: 'forged' })]),
+      readRequest([], { sessionRead: true, sessions: [{ agentId: 'agent-a', sessionId: 'task-session' }] })]) {
+      await handleClientConversation('client-a', client, request, allow);
+      expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'session_access_denied' });
+    }
+    expect(sibling.sent).toHaveLength(count);
+    expect(receipts.has(owner, 'agent-a', 'task-session', 'forged')).toBe(false);
+    expect(() => receipts.markRead(foreignOwner, [receipt({ runId: 'deleted-run' })])).toThrow('Session not found');
   });
 
   it('rejects malformed or mixed-ownership batches atomically, without broadcasting or accepting an unauthenticated owner', async () => {
@@ -488,9 +515,9 @@ describe('Account-wide scheduled Task read receipts', () => {
     });
     const result = JSON.parse(output.split('RECEIPTS:')[1].trim());
     expect(result.first).toEqual([receipt()]);
-    expect(result.expanded).toEqual([receipt(), receipt({ runId: 'run-older' }), receipt({ runId: 'run-2' })]);
+    expect(result.expanded.map(row => row.runId).sort()).toEqual(['run-1', 'run-2', 'run-older']);
     expect(result.rows).toEqual(['run-1', 'run-2', 'run-older'].map(run_id => ({ agent_id: 'agent-a', session_id: 'task-session', run_id })));
-    expect(result.known).toEqual([{ run_id: 'run-older' }]);
+    expect(result.known.map(row => row.run_id).sort()).toEqual(['run-1', 'run-2', 'run-older']);
     expect(receipts.has(owner, 'agent-a', 'task-session', 'run-2')).toBe(true);
     expect(receipts.has(owner, 'agent-a', 'task-session', 'run-future')).toBe(false);
   });

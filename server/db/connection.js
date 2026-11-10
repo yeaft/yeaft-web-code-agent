@@ -856,6 +856,18 @@ export function generateUserId() {
 }
 
 // 准备常用语句
+// Preserve terminal catalog results that can already hydrate a browser notice.
+// This also seeds existing installations before lastRun advances to a new run.
+db.exec(`
+  INSERT OR IGNORE INTO scheduled_task_notification_runs (user_id, agent_id, session_id, run_id)
+  SELECT y.user_id, y.agent_id, y.id, json_extract(y.task_json, '$.lastRun.id')
+  FROM yeaft_sessions y JOIN users u ON u.id = y.user_id
+  WHERE json_valid(y.task_json)
+    AND json_extract(y.task_json, '$.lastRun.status') IN ('completed', 'succeeded', 'failed', 'interrupted')
+    AND json_type(y.task_json, '$.lastRun.id') = 'text'
+    AND length(json_extract(y.task_json, '$.lastRun.id')) BETWEEN 1 AND 256;
+`);
+
 export const stmts = {
   // User 操作
   insertUser: db.prepare(`
@@ -1133,6 +1145,11 @@ export const stmts = {
   insertScheduledTaskNotificationRun: db.prepare(`
     INSERT INTO scheduled_task_notification_runs (user_id, agent_id, session_id, run_id)
     VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
+  `),
+
+  getScheduledTaskNotificationRun: db.prepare(`
+    SELECT 1 FROM scheduled_task_notification_runs
+    WHERE user_id = ? AND agent_id = ? AND session_id = ? AND run_id = ?
   `),
 
   getScheduledTaskNotificationRunsForSession: db.prepare(`

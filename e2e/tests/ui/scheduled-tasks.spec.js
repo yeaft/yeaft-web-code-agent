@@ -686,6 +686,9 @@ test('Task reads synchronize across independent devices and survive clean storag
   await page.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
   for (const runId of ['device-old-1', 'device-old-2']) state.notify({ runId });
   await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.length)).toBe(2);
+  state.sessions.get(TASK_SESSION_ID).task.lastRun = { id: 'snapshot-only', status: 'completed', finishedAt: Date.now() };
+  state.publish();
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.length)).toBe(3);
   state.sessions.get(TASK_SESSION_ID).task.lastRun = { id: 'device-running', status: 'running', startedAt: Date.now() };
   state.publish();
   // No shared storage/cookies: new device only knows a running latest Run while
@@ -709,12 +712,15 @@ test('Task reads synchronize across independent devices and survive clean storag
     for (const client of [page, second]) {
       await expect.poll(() => client.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.length)).toBe(1);
     }
+    // Same-account HTTP JWT renewal leaves the existing socket valid.
+    await second.evaluate(() => { window.Pinia.useAuthStore().token = 'same-account-renewed-token'; });
     await page.locator('.scheduled-task-notification-open').click();
     await expect(second.locator('.scheduled-task-notification')).toHaveCount(0);
     // A brand new browser storage must trust server receipts BEFORE hydration.
     await second.evaluate(() => {
       for (const key of Object.keys(localStorage)) if (key.startsWith('yeaft-task-')) localStorage.removeItem(key);
     });
+    await second.evaluate(() => { window.Pinia.useAuthStore().token = null; });
     await second.reload();
     await expect(second.locator('.sidebar-navigation')).toHaveAttribute('aria-busy', 'false');
     await expect(second.locator('.yeaft-session-input textarea')).toBeVisible();
@@ -723,12 +729,19 @@ test('Task reads synchronize across independent devices and survive clean storag
     await showSidebar(page);
     await page.locator('.sidebar-session-row').filter({ hasText: 'Ordinary conversation' }).click();
     // Delayed repeats cannot resurrect old notices, but a later Run still can.
-    for (const runId of ['device-old-1', 'device-old-2', 'device-new', 'device-future']) state.notify({ runId });
+    for (const runId of ['device-old-1', 'device-old-2', 'snapshot-only', 'device-new', 'device-future']) state.notify({ runId });
     for (const client of [page, second]) {
       await expect.poll(() => client.evaluate(() => window.Pinia.useChatStore().scheduledTaskNotifications.map(item => item.runId))).toEqual(['device-future']);
     }
     await second.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
     await expect(page.locator('.scheduled-task-notification')).toHaveCount(0);
+    state.notify({ runId: 'deleted-result' });
+    for (const client of [page, second]) await expect(client.locator('.scheduled-task-notification-open')).toHaveCount(1);
+    state.sessions.delete(TASK_SESSION_ID);
+    state.publish();
+    await expect(taskRow(page)).toHaveCount(0);
+    await page.locator('.scheduled-task-notification-open').click();
+    await expect(second.locator('.scheduled-task-notification')).toHaveCount(0);
   } finally { await device.close(); }
 });
 
