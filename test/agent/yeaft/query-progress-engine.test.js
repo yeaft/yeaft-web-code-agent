@@ -99,6 +99,19 @@ describe('query progress Engine boundaries', () => {
     const again = await consume(run.engine);
     expect(run.requests.at(-1).messages.some(m => typeof m.content === 'string' && m.content.includes('retained call'))).toBe(false);
     expect(again.filter(e => e.type === 'error')).toHaveLength(0);
+
+    // Per-tool projection can truncate before history-window sees the body.
+    // Equal prefixes are not complete evidence and must never be referenced.
+    const oversized = 'HEAD\n' + 'x'.repeat(45_000) + '\nUNSEEN_TAIL';
+    const truncated = setup(n => n <= 4 ? [call(`large-${n}`, 'Read', { path: '/large' }), stop]
+      : [{ type: 'text_delta', text: 'truncation is explicit' }, { type: 'stop', stopReason: 'end_turn' }]);
+    truncated.engine.registerTool({ name: 'Read', isReadOnly: () => true, execute: async () => oversized });
+    await consume(truncated.engine);
+    const tools = truncated.requests.at(-1).messages.filter(m => m.role === 'tool');
+    expect(tools).toHaveLength(4);
+    expect(tools.every(m => m.content.includes('truncated:'))).toBe(true);
+    expect(tools.every(m => !m.content.includes('retained call'))).toBe(true);
+    expect(truncated.rows.filter(m => m.role === 'tool').every(m => m.content === oversized)).toBe(true);
   });
 
   it('delivers real background process completion evidence in the next provider request', async () => {

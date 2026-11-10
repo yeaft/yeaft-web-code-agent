@@ -41,6 +41,11 @@ export async function runUnitTestsWithBudget({
     const unit = countUnitCases(result, { rootDir, expectedFiles, executed: true });
     if (reason !== 'passed') throw new Error(`Unit test run did not complete successfully: ${reason || 'no end event'}`);
     return reportCaseBudget({ unit, browser }, limit);
+  } catch (error) {
+    // exit() can terminate the process on teardown timeout. Commit failure
+    // before cleanup so an all-green assertion run cannot mask a gate error.
+    process.exitCode = 1;
+    throw error;
   } finally {
     // Use Vitest's own CLI teardown/timeout semantics; never force success.
     await context.exit();

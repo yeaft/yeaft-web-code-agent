@@ -154,6 +154,17 @@ describe('test budget gate', () => {
       await rejectRun('incomplete or filtered');
       await expect(run(process.execPath, [join(process.cwd(), 'scripts/run-test-gate.mjs'), '--exclude=anything'], { cwd: root, timeout: 15000 }))
         .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('does not accept filters/options') });
+      // Vitest exit() force-exits after a stuck teardown. The budget error
+      // must already own the exit code before cleanup can terminate the process.
+      await writeFile(join(root, 'probe.test.js'), "import { it } from 'vitest'; for (let i=0;i<18;i++) it('pass '+i,()=>{});");
+      await writeFile(join(root, 'global.mjs'), `export default function () {
+        return () => { setInterval(() => {}, 1000); return new Promise(() => {}); };
+      }`);
+      await writeFile(join(root, 'vitest.config.mjs'), config.replace(' CONFIG', ', teardownTimeout: 100, globalSetup: ["./global.mjs"]'));
+      const timedOut = await run(process.execPath, ['run.mjs'], { cwd: root, timeout: 15000 }).catch(error => error);
+      expect(timedOut.code).toBe(1);
+      expect(timedOut.stdout).toContain('20/17 cases');
+      expect(timedOut.stderr).toContain('close timed out');
     } finally { await rm(root, { recursive: true, force: true }); }
   }, 30000);
 

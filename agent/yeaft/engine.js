@@ -2465,6 +2465,7 @@ export class Engine {
     const queryValidationFailures = new Map();
     const fileReadObservations = new Map();
     const repeatedToolResultRefs = new Map();
+    const completeReadResultIds = new Set();
     // Success reuse and in-flight sharing must not cross user turns, Sessions,
     // or child Engines. Never copy this ledger into parentEngineDeps.
     const webResearch = createWebResearchState();
@@ -4735,16 +4736,23 @@ export class Engine {
         // persistence so large tool results are not lost outside context.
         // Keep this tape lossless. The request fitter can reference repeated
         // reads only after proving the complete original survived fitting.
-        if (repeatedResultCallId && !isError && modelImages.length === 0) {
-          repeatedToolResultRefs.set(tc.id, repeatedResultCallId);
-          if (repeatedToolResultRefs.size > 1024) {
-            repeatedToolResultRefs.delete(repeatedToolResultRefs.keys().next().value);
-          }
-        }
         const contextOutput = truncateToolResultIfNeeded(output, {
           toolName: tc.name,
           language: this.#config?.language,
         });
+        if (readOnlyTool && !isError && modelImages.length === 0
+            && typeof output === 'string' && contextOutput === output) {
+          completeReadResultIds.add(tc.id);
+          if (completeReadResultIds.size > 1024) {
+            completeReadResultIds.delete(completeReadResultIds.values().next().value);
+          }
+          if (repeatedResultCallId && completeReadResultIds.has(repeatedResultCallId)) {
+            repeatedToolResultRefs.set(tc.id, repeatedResultCallId);
+            if (repeatedToolResultRefs.size > 1024) {
+              repeatedToolResultRefs.delete(repeatedToolResultRefs.keys().next().value);
+            }
+          }
+        }
         const toolMessage = {
           role: 'tool',
           toolCallId: tc.id,
