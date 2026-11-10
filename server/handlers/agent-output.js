@@ -649,6 +649,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
     case 'yeaft_session_output':
     case 'session_output': {
       if (isRetiredDreamEvent(msg.event)) break;
+      // Journal terminal identities before the first await/broadcast, even if
+      // there are no browsers online. Session reads can then clear older runs
+      // that a freshly hydrated client has never received itself.
+      scheduledTaskReceiptDb.recordNotificationRun(agent.ownerId, agentId, msg.event);
       const data = hydrateInlinePreviewData(msg.data);
       let event = await syncYeaftSessionMetadata(agentId, agent, msg.event);
       if ((event?.type === 'session_list_updated' || event?.type === 'session_crud_result') && agent.ownerId) {

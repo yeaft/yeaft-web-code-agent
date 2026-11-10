@@ -15,7 +15,10 @@ export async function handleClientScheduledTaskReceipts(client, msg) {
     if (Object.hasOwn(msg, 'requestId') && !requestId) {
       throw Object.assign(new Error('Invalid requestId'), { code: 'invalid_scheduled_task_receipts' });
     }
-    receipts = scheduledTaskReceiptDb.markRead(client.userId, msg.receipts);
+    if (Object.hasOwn(msg, 'sessionRead') && typeof msg.sessionRead !== 'boolean') {
+      throw Object.assign(new Error('sessionRead must be a boolean'), { code: 'invalid_scheduled_task_receipts' });
+    }
+    receipts = scheduledTaskReceiptDb.markRead(client.userId, msg.receipts, { sessionRead: msg.sessionRead });
   } catch (error) {
     await sendToWebClient(client, {
       type: 'error', code: error.code || 'scheduled_task_receipts_failed',

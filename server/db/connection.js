@@ -462,6 +462,16 @@ db.exec(`
     PRIMARY KEY (user_id, agent_id, session_id, run_id)
   );
 
+  -- Content-free terminal notification identities survive reconnects and
+  -- Session snapshot replacement, just like exact-run read receipts.
+  CREATE TABLE IF NOT EXISTS scheduled_task_notification_runs (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, agent_id, session_id, run_id)
+  );
+
   -- Projects are user-owned organization metadata. Membership keeps the full
   -- Agent + Session identity because Session ids are only unique per Agent.
   CREATE TABLE IF NOT EXISTS yeaft_projects (
@@ -1118,6 +1128,16 @@ export const stmts = {
   getScheduledTaskReceiptsByUser: db.prepare(`
     SELECT agent_id, session_id, run_id FROM scheduled_task_receipts
     WHERE user_id = ? ORDER BY agent_id, session_id, run_id
+  `),
+
+  insertScheduledTaskNotificationRun: db.prepare(`
+    INSERT INTO scheduled_task_notification_runs (user_id, agent_id, session_id, run_id)
+    VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
+  `),
+
+  getScheduledTaskNotificationRunsForSession: db.prepare(`
+    SELECT run_id FROM scheduled_task_notification_runs
+    WHERE user_id = ? AND agent_id = ? AND session_id = ? ORDER BY run_id
   `),
 
   // Project organization metadata. Projects are server-owned and may contain
