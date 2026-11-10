@@ -493,6 +493,9 @@ describe('Account-wide scheduled Task read receipts', () => {
     sessions.reconcileFromSnapshot(owner, 'agent-a', []);
     expect(receipts.has(owner, 'agent-a', 'task-session', 'run-1')).toBe(true);
     sessions.reconcileFromSnapshot(owner, 'agent-a', [{ id: 'task-session', task: { ...task, lastRun: { id: 'run-2', status: 'completed' } } }]);
+    // Emulate an upgrade: the current durable lastRun existed before the new
+    // journal. The fresh process must backfill it before catalog replacement.
+    db.prepare('DELETE FROM scheduled_task_notification_runs WHERE user_id = ? AND run_id = ?').run(owner, 'run-2');
     const script = `
       const { scheduledTaskReceiptDb } = await import('./server/db/scheduled-task-receipt-db.js');
       const { closeDb } = await import('./server/db/connection.js');
