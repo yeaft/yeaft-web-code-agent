@@ -10,34 +10,102 @@ function ownerId(store) {
 }
 
 /** Receipts contain only run identities, scoped to the authenticated browser owner. */
+function receiptIdentity(id) {
+  try {
+    const values = JSON.parse(id);
+    if (Array.isArray(values) && values.length === 3 && values.every(value => typeof value === 'string'
+        && value.length > 0 && value.length <= 256 && value === value.trim() && !/[\s\u0000-\u001f\u007f]/u.test(value))) {
+      const [agentId, sessionId, runId] = values;
+      return { agentId, sessionId, runId };
+    }
+  } catch { /* Ignore malformed legacy browser receipts. */ }
+  return null;
+}
+
 function receipts(store) {
   const owner = ownerId(store);
   let state = receiptState.get(store);
   if (state?.owner === owner) return state;
   let seen = [];
+  let pending = [];
   if (owner) {
     try {
       const saved = JSON.parse(localStorage.getItem(`yeaft-task-receipts:${owner}`) || '[]');
-      if (Array.isArray(saved)) seen = saved.filter(value => typeof value === 'string').slice(-MAX_RECEIPTS);
+      if (Array.isArray(saved)) seen = saved.filter(value => receiptIdentity(value)).slice(-MAX_RECEIPTS);
+      // Old local-only receipts are uploaded once as well. Unacknowledged reads
+      // are not evicted by the bounded display cache, including offline reads.
+      const savedPending = JSON.parse(localStorage.getItem(`yeaft-task-pending-receipts:${owner}`) || 'null');
+      pending = Array.isArray(savedPending) ? savedPending.filter(value => receiptIdentity(value)) : seen;
     } catch { /* Storage is optional; in-memory deduplication still applies. */ }
   }
-  state = { owner, seen: new Set(seen) };
+  state = { owner, seen: new Set([...seen, ...pending]), pending: new Set(pending), sent: new Set(), notices: new Map() };
   receiptState.set(store, state);
   return state;
 }
 
-function recordReceipt(store, id) {
+function persistReceipts(state) {
+  if (!state.owner) return;
+  try {
+    localStorage.setItem(`yeaft-task-receipts:${state.owner}`, JSON.stringify([...state.seen].slice(-MAX_RECEIPTS)));
+    localStorage.setItem(`yeaft-task-pending-receipts:${state.owner}`, JSON.stringify([...state.pending]));
+  } catch { /* Server receipts remain authoritative when browser storage is unavailable. */ }
+}
+
+/** Upload exact runs only; a read must never suppress a future attempt. */
+export function flushScheduledTaskReceipts(store) {
   const state = receipts(store);
-  state.seen.add(id);
-  state.seen = new Set([...state.seen].slice(-MAX_RECEIPTS));
-  if (state.owner) {
-    try { localStorage.setItem(`yeaft-task-receipts:${state.owner}`, JSON.stringify([...state.seen])); } catch {}
+  if (!state.owner || store.scheduledTaskReceiptProtocolSupported !== true) return;
+  // Legacy/offline reads may outlive their Session. Upload each exact Run
+  // independently: an unprovable old local receipt must never poison a newer
+  // Server-journalled result in the same atomic authorization batch.
+  for (const id of state.pending) {
+    if (state.sent.has(id)) continue;
+    if (store.sendWsMessage?.({ type: 'scheduled_task_notifications_read', receipts: [receiptIdentity(id)] }) !== true) return;
+    state.sent.add(id);
   }
+}
+
+function recordReceipt(store, id, sync = true) {
+  if (!receiptIdentity(id)) return;
+  const state = receipts(store);
+  if (!state.seen.has(id)) {
+    state.seen.add(id);
+    state.pending.add(id);
+    persistReceipts(state);
+  }
+  state.notices.get(id)?.close?.();
+  state.notices.delete(id);
+  if (sync) flushScheduledTaskReceipts(store);
+}
+
+/** Server acknowledgements merge without echoing another client's read. */
+export function applyScheduledTaskReceipts(store, rows, { reconnect = false } = {}) {
+  const state = receipts(store);
+  if (reconnect) state.sent.clear();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = JSON.stringify([row?.agentId, row?.sessionId, row?.runId]);
+    if (!receiptIdentity(id)) continue;
+    state.seen.add(id);
+    state.pending.delete(id);
+    state.sent.delete(id);
+    state.notices.get(id)?.close?.();
+    state.notices.delete(id);
+  }
+  const removed = (store.scheduledTaskNotifications || []).filter(item => state.seen.has(item.id));
+  store.scheduledTaskNotifications = (store.scheduledTaskNotifications || []).filter(item => !state.seen.has(item.id));
+  for (const item of removed) {
+    if (!store.scheduledTaskNotifications.some(row => row.agentId === item.agentId && row.sessionId === item.sessionId)) {
+      store.markYeaftSessionRead?.(item.sessionId, item.agentId);
+    }
+  }
+  persistReceipts(state);
+  if (reconnect) flushScheduledTaskReceipts(store);
 }
 
 export function bindScheduledTaskNotificationOwner(store, nextOwnerId) {
   const next = typeof nextOwnerId === 'string' && nextOwnerId ? nextOwnerId : null;
   if (ownerId(store) === next) return;
+  for (const notice of receiptState.get(store)?.notices?.values() || []) notice?.close?.();
   store.scheduledTaskNotificationOwnerId = next;
   store.scheduledTaskNotifications = [];
   receiptState.delete(store);
@@ -69,11 +137,24 @@ export function runScheduledTask(store, { agentId, sessionId } = {}) {
 export function markScheduledTaskSessionRead(store, sessionId, agentId, lastRun = null) {
   if (!sessionId || !agentId) return false;
   if (typeof lastRun?.id === 'string' && lastRun.id && TERMINAL_STATUSES.has(lastRun.status)) {
-    recordReceipt(store, JSON.stringify([agentId, sessionId, lastRun.id]));
+    recordReceipt(store, JSON.stringify([agentId, sessionId, lastRun.id]), false);
   }
   const items = (store.scheduledTaskNotifications || [])
     .filter(item => item.agentId === agentId && item.sessionId === sessionId);
-  for (const item of items) dismissScheduledTaskNotification(store, item.id);
+  for (const item of items) recordReceipt(store, item.id, false);
+  store.scheduledTaskNotifications = (store.scheduledTaskNotifications || []).filter(item => !items.includes(item));
+  // Expand a foreground Session visit to already-known results on the Server,
+  // even when this fresh client only knows lastRun. Never replay this expansion
+  // after disconnect: offline retries contain exact runs, not future results.
+  const ids = items.map(item => item.id);
+  if (typeof lastRun?.id === 'string' && TERMINAL_STATUSES.has(lastRun.status)) ids.push(JSON.stringify([agentId, sessionId, lastRun.id]));
+  const batch = [...new Set(ids)].map(receiptIdentity).filter(Boolean);
+  if (store.scheduledTaskReceiptProtocolSupported === true
+      && store.sendWsMessage?.({ type: 'scheduled_task_notifications_read', receipts: batch,
+        sessionRead: true, sessions: [{ agentId, sessionId }] }) === true) {
+    for (const row of batch) receipts(store).sent.add(JSON.stringify([row.agentId, row.sessionId, row.runId]));
+  }
+  flushScheduledTaskReceipts(store);
   return items.length > 0;
 }
 
@@ -92,7 +173,7 @@ export function acceptScheduledTaskNotification(store, event, agentId) {
   if (typeof agentId !== 'string' || !agentId || typeof event?.sessionId !== 'string' || !event.sessionId
       || typeof event.runId !== 'string' || !event.runId || !TERMINAL_STATUSES.has(event.status)) return false;
   const id = JSON.stringify([agentId, event.sessionId, event.runId]);
-  if (receipts(store).seen.has(id)) return false;
+  if (!receiptIdentity(id) || receipts(store).seen.has(id)) return false;
   if (isScheduledTaskSessionVisible(store, event.sessionId, agentId)) {
     recordReceipt(store, id);
     markScheduledTaskSessionRead(store, event.sessionId, agentId);
@@ -112,6 +193,8 @@ export function acceptScheduledTaskNotification(store, event, agentId) {
   if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     try {
       const notice = new Notification(item.taskName, { tag: id });
+      receipts(store).notices.set(id, notice);
+      notice.onclose = () => receipts(store).notices.delete(id);
       notice.onclick = () => { globalThis.window?.focus?.(); store.openScheduledTaskNotification(item); notice.close(); };
     } catch { /* Browsers without a desktop notification backend use in-app UI. */ }
   }
@@ -140,6 +223,12 @@ export function dismissScheduledTaskNotification(store, id) {
 
 export function openScheduledTaskNotification(store, item) {
   if (!item?.agentId || !item.sessionId) return false;
+  // Clicking acknowledges this run even if its Session cannot be opened.
+  const id = JSON.stringify([item.agentId, item.sessionId, item.runId]);
+  if (receiptIdentity(id)) {
+    recordReceipt(store, id);
+    store.scheduledTaskNotifications = (store.scheduledTaskNotifications || []).filter(row => row.id !== id);
+  }
   const catalogKey = yeaftCatalogKey(item.agentId, item.sessionId);
   const descriptor = store.sidebarSessionCatalog?.find(row => row.catalogKey === catalogKey);
   if (!descriptor || !store.openCatalogSession(descriptor)) return false;

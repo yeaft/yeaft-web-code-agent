@@ -711,6 +711,7 @@ export const useChatStore = defineStore('chat', {
     yeaftUnreadSessionKeys: {},
     scheduledTaskNotifications: [],
     scheduledTaskNotificationOwnerId: null,
+    scheduledTaskReceiptProtocolSupported: false,
     // Page-local settings/modal state projected for task read receipts only.
     yeaftConversationCovered: false,
     theme: localStorage.getItem('theme') || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),

@@ -5,7 +5,7 @@
 
 import { acceptPersonResponse } from './digital-person.js';
 import { acceptPluginConfigReply, acceptPluginSkillDetailReply } from './plugin-config.js';
-import { reconcileScheduledTaskNotifications } from './scheduled-tasks.js';
+import { applyScheduledTaskReceipts, bindScheduledTaskNotificationOwner, reconcileScheduledTaskNotifications } from './scheduled-tasks.js';
 import { useAuthStore } from '../auth.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
@@ -306,6 +306,13 @@ export function handleMessage(store, msg) {
       && Object.hasOwn(msg, '_wsAuthGeneration')
       && (msg._wsAuthGeneration !== authStore.authGeneration
         || msg._wsAuthToken !== (authStore.getActiveToken?.() || authStore.token || null))) return;
+  // A renewed HTTP token does not change the owner of an existing socket.
+  // Socket replacement is fenced by websocket.js; generation and owner fence
+  // logout/login without rejecting normal same-account JWT renewal.
+  if (msg?.type === 'scheduled_task_notifications_read'
+      && Object.hasOwn(msg, '_wsAuthGeneration')
+      && (msg._wsAuthGeneration !== authStore.authGeneration
+        || msg._wsAuthOwnerId !== (authStore.userId || null))) return;
   if (msg?.type === 'yeaft_debug_history_chunk') {
     const assembled = acceptDebugHistoryChunk(store, msg);
     if (!assembled) return;
@@ -364,6 +371,9 @@ export function handleMessage(store, msg) {
           store.serverEncryptionRequired = false;
         }
         store.scheduledTaskProtocolSupported = msg.scheduledTaskProtocol === 1;
+        bindScheduledTaskNotificationOwner(store, authStore.userId || (authStore.skipAuth ? 'local' : null));
+        store.scheduledTaskReceiptProtocolSupported = msg.scheduledTaskReceiptProtocol === 1;
+        applyScheduledTaskReceipts(store, msg.scheduledTaskReceipts, { reconnect: true });
         if (msg.sessionCatalogProtocol === 1) store.sessionCatalogProtocolSupported = true;
         else if (msg.sessionCatalogProtocol === 0 || msg.sessionCatalogProtocol === false) {
           store.sessionCatalogProtocolSupported = false;
@@ -403,6 +413,10 @@ export function handleMessage(store, msg) {
         });
         authStore.handleAuthFailure?.(undefined, msg._wsAuthToken, msg._wsAuthGeneration);
       }
+      break;
+
+    case 'scheduled_task_notifications_read':
+      if (msg.ok !== false) applyScheduledTaskReceipts(store, msg.receipts);
       break;
 
     case 'agent_list':

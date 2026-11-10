@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { execFileSync } from 'node:child_process';
 
 const testDbDir = mkdtempSync(join(tmpdir(), 'yeaft-scheduled-tasks-'));
 vi.stubEnv('SERVER_DATA_DIR', undefined);
@@ -28,12 +29,16 @@ vi.mock('../../server/ws-utils.js', async (importOriginal) => ({
   ...(await importOriginal()), sendToWebClient, forwardToAgent, broadcastSessionCatalog,
   broadcastAgentList: vi.fn(async () => {}),
 }));
-const { default: db, closeDb, userDb, yeaftProjectDb: projects, yeaftSessionDb: sessions } = await import('../../server/database.js');
+const { default: db, closeDb, userDb, yeaftProjectDb: projects, yeaftSessionDb: sessions, scheduledTaskReceiptDb: receipts } = await import('../../server/database.js');
 const { CONFIG } = await import('../../server/config.js');
 const { agents, webClients } = await import('../../server/context.js');
 const { handleClientConversation } = await import('../../server/handlers/client-conversation.js');
 const { handleAgentOutput } = await import('../../server/handlers/agent-output.js');
 const { projectSessionCatalog } = await import('../../server/session-catalog.js');
+const { handleWebConnection } = await import('../../server/ws-client.js');
+const { completeLogin } = await import('../../server/auth/login.js');
+const { generateSessionKey } = await import('../../server/encryption.js');
+const { activeSessions } = await import('../../server/auth/session-store.js');
 const owner = userDb.getOrCreate('scheduled-task-owner').id;
 const foreignOwner = userDb.getOrCreate('scheduled-task-foreign').id;
 const originalSkipAuth = CONFIG.skipAuth;
@@ -66,6 +71,8 @@ afterEach(() => {
   forwardToAgent.mockResolvedValue(true);
   broadcastSessionCatalog.mockClear();
   allow.mockClear();
+  db.prepare('DELETE FROM scheduled_task_receipts WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
+  db.prepare('DELETE FROM scheduled_task_notification_runs WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
   db.prepare('DELETE FROM yeaft_sessions WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
   db.prepare('DELETE FROM yeaft_projects WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
   db.prepare('DELETE FROM yeaft_project_imports WHERE user_id = ? OR user_id = ?').run(owner, foreignOwner);
@@ -298,5 +305,291 @@ describe('Session-backed scheduled tasks', () => {
     expect(client.sent).toEqual([expect.objectContaining({ type: 'yeaft_output', agentId: 'agent-a', event })]);
     expect(sibling.sent).toHaveLength(1);
     expect(foreign.sent).toEqual([]); expect(anonymous.sent).toEqual([]);
+  });
+});
+
+function receipt(overrides = {}) {
+  return { agentId: 'agent-a', sessionId: 'task-session', runId: 'run-1', ...overrides };
+}
+function readRequest(batch = [receipt()], overrides = {}) {
+  return { type: 'scheduled_task_notifications_read', receipts: batch, requestId: 'read-1', ...overrides };
+}
+
+describe('Account-wide scheduled Task read receipts', () => {
+  it('reads offline, persists idempotently and broadcasts only to all authenticated owner tabs even in skipAuth', async () => {
+    const { client } = fixture();
+    const sibling = { authenticated: true, userId: owner, currentAgent: 'another-agent', sent: [] };
+    const foreign = { authenticated: true, userId: foreignOwner, sent: [] };
+    const anonymous = { authenticated: false, userId: owner, sent: [] };
+    webClients.set('sibling', sibling); webClients.set('foreign', foreign); webClients.set('anonymous', anonymous);
+    agents.clear();
+    CONFIG.skipAuth = true;
+    const before = sessions.getForAgent(owner, 'agent-a', 'task-session');
+    await handleClientConversation('client-a', client, readRequest([receipt({ content: 'must not persist' }), receipt()]), allow);
+    const ack = { type: 'scheduled_task_notifications_read', receipts: [receipt()], requestId: 'read-1' };
+    expect(client.sent).toEqual([ack]); expect(sibling.sent).toEqual([ack]);
+    expect(foreign.sent).toEqual([]); expect(anonymous.sent).toEqual([]);
+    await handleClientConversation('client-a', client, readRequest([receipt()], { requestId: undefined }), allow);
+    expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'invalid_scheduled_task_receipts' });
+    const noRequestId = readRequest(Array(100).fill(receipt())); delete noRequestId.requestId;
+    await handleClientConversation('client-a', client, noRequestId, allow);
+    expect(client.sent.at(-1)).toEqual({ type: 'scheduled_task_notifications_read', receipts: [receipt()] });
+    expect(receipts.getByUser(owner)).toEqual([receipt()]);
+    expect(receipts.getByUser(foreignOwner)).toEqual([]);
+    expect(sessions.getForAgent(owner, 'agent-a', 'task-session')).toEqual(before);
+    expect(forwardToAgent).not.toHaveBeenCalled(); expect(allow).not.toHaveBeenCalled();
+    await handleClientConversation('foreign', foreign, readRequest(), allow);
+    expect(foreign.sent.at(-1)).toMatchObject({ type: 'error', code: 'session_access_denied', requestId: 'read-1' });
+    expect(receipts.getByUser(foreignOwner)).toEqual([]);
+  });
+
+  it('expands a fresh client Session read to older sibling notifications and terminal catalog lastRun, but not future runs', async () => {
+    const { client: sibling, agent } = fixture();
+    const event = { type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'run-1', status: 'completed', taskName: 'private title' };
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event });
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { ...event, runId: 'run-2' } });
+    expect(sibling.sent).toHaveLength(2);
+    // Another Agent/Session with matching run ids is not part of this read.
+    sessions.upsertFromSnapshot(owner, 'agent-b', { id: 'task-session', task });
+    receipts.recordNotificationRun(owner, 'agent-b', event);
+    receipts.recordNotificationRun(owner, 'agent-a', { ...event, sessionId: 'other-session' });
+    receipts.recordNotificationRun(foreignOwner, 'agent-a', event);
+    sessions.upsertFromSnapshot(owner, 'agent-a', { id: 'task-session', task: {
+      ...task, lastRun: { id: 'run-3', status: 'completed' },
+    } });
+    const fresh = { authenticated: true, userId: owner, sent: [] };
+    const foreign = { authenticated: true, userId: foreignOwner, sent: [] };
+    const anonymous = { authenticated: false, userId: owner, sent: [] };
+    webClients.set('fresh', fresh); webClients.set('foreign', foreign); webClients.set('anonymous', anonymous);
+    CONFIG.skipAuth = true;
+    agents.clear();
+    const latestOnly = [receipt({ runId: 'run-3' })];
+    // Dismiss/default read remains exact, despite older notifications elsewhere.
+    await handleClientConversation('fresh', fresh, readRequest(latestOnly), allow);
+    expect(receipts.getByUser(owner)).toEqual(latestOnly);
+    expect(fresh.sent.at(-1).receipts).toEqual(latestOnly);
+    sibling.sent = []; fresh.sent = [];
+    await handleClientConversation('fresh', fresh, readRequest(latestOnly, { sessionRead: true }), allow);
+    const expanded = [receipt({ runId: 'run-3' }), receipt(), receipt({ runId: 'run-2' })];
+    const ack = { type: 'scheduled_task_notifications_read', receipts: expanded, requestId: 'read-1' };
+    expect(fresh.sent).toEqual([ack]); expect(sibling.sent).toEqual([ack]);
+    expect(foreign.sent).toEqual([]); expect(anonymous.sent).toEqual([]);
+    expect(receipts.getByUser(owner)).toEqual([receipt(), receipt({ runId: 'run-2' }), receipt({ runId: 'run-3' })]);
+    expect(receipts.getByUser(foreignOwner)).toEqual([]);
+    expect(receipts.has(owner, 'agent-b', 'task-session', 'run-1')).toBe(false);
+    expect(receipts.has(owner, 'agent-a', 'other-session', 'run-1')).toBe(false);
+    // A replay of either older notification is muted; an unseen future run is not.
+    fresh.sent = []; sibling.sent = [];
+    for (const runId of ['run-1', 'run-2', 'run-3', 'run-4']) {
+      await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { ...event, runId } });
+    }
+    expect(fresh.sent).toEqual([expect.objectContaining({ event: { ...event, runId: 'run-4' } })]);
+    expect(sibling.sent).toEqual(fresh.sent);
+    expect(foreign.sent).toEqual([]); expect(anonymous.sent).toEqual([]);
+    const columns = db.prepare('PRAGMA table_info(scheduled_task_notification_runs)').all().map(row => row.name);
+    expect(columns).toEqual(['user_id', 'agent_id', 'session_id', 'run_id']);
+  });
+
+  it('does not expand a Session read to a running catalog Run or a nonterminal notification', async () => {
+    const { client, agent } = fixture();
+    // A snapshot-only terminal result must be journalled before lastRun moves
+    // to running; it may already be displayed on another hydrated client.
+    sessions.upsertFromSnapshot(owner, 'agent-a', { id: 'task-session', task: {
+      ...task, lastRun: { id: 'snapshot-old', status: 'completed' },
+    } });
+    sessions.upsertFromSnapshot(owner, 'agent-a', { id: 'task-session', task: {
+      ...task, lastRun: { id: 'run-current', status: 'running' },
+    } });
+    const event = { type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'run-current', status: 'running' };
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event });
+    client.sent = [];
+    receipts.recordNotificationRun(owner, 'agent-a', { ...event, runId: 'run-1', status: 'completed' });
+    await handleClientConversation('client-a', client, readRequest([], { sessionRead: true,
+      sessions: [{ agentId: 'agent-a', sessionId: 'task-session' }] }), allow);
+    expect(client.sent.at(-1).receipts.map(row => row.runId).sort()).toEqual(['run-1', 'snapshot-old']);
+    expect(receipts.has(owner, 'agent-a', 'task-session', 'run-current')).toBe(false);
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { ...event, status: 'completed' } });
+    expect(client.sent.at(-1)).toMatchObject({ event: { runId: 'run-current', status: 'completed' } });
+  });
+
+  it('acknowledges a deleted Session notice only with exact Server-owned run proof and still rejects forged runs or owners', async () => {
+    const { client, agent } = fixture();
+    const sibling = { authenticated: true, userId: owner, sent: [] };
+    webClients.set('sibling', sibling);
+    const event = { type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'deleted-run', status: 'completed' };
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event });
+    sessions.deleteForAgent(owner, 'agent-a', 'task-session');
+    client.sent = []; sibling.sent = [];
+    await handleClientConversation('client-a', client, readRequest([receipt({ runId: 'deleted-run' })]), allow);
+    expect(client.sent.at(-1)).toMatchObject({ type: 'scheduled_task_notifications_read', receipts: [receipt({ runId: 'deleted-run' })] });
+    expect(sibling.sent).toEqual(client.sent);
+    const count = client.sent.length;
+    for (const request of [readRequest([receipt({ runId: 'forged' })]),
+      readRequest([], { sessionRead: true, sessions: [{ agentId: 'agent-a', sessionId: 'task-session' }] })]) {
+      await handleClientConversation('client-a', client, request, allow);
+      expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'session_access_denied' });
+    }
+    expect(sibling.sent).toHaveLength(count);
+    expect(receipts.has(owner, 'agent-a', 'task-session', 'forged')).toBe(false);
+    expect(() => receipts.markRead(foreignOwner, [receipt({ runId: 'deleted-run' })])).toThrow('Session not found');
+  });
+
+  it('rejects malformed or mixed-ownership batches atomically, without broadcasting or accepting an unauthenticated owner', async () => {
+    const { client } = fixture();
+    sessions.upsertFromSnapshot(foreignOwner, 'foreign-agent', { id: 'foreign-session', task });
+    const malformed = [null, {}, [], Array(101).fill(receipt()), [receipt(), null],
+      [receipt(), receipt({ runId: '' })], [receipt(), receipt({ sessionId: ' task-session' })],
+      [receipt(), receipt({ agentId: 123 })], [receipt(), receipt({ runId: 'x'.repeat(257) })],
+      [receipt(), receipt({ runId: 'run\n1' })], [receipt(), receipt({ runId: 'run 1' })],
+      [receipt(), receipt({ agentId: 'foreign-agent', sessionId: 'foreign-session' })],
+      [receipt(), receipt({ sessionId: 'missing' })]];
+    receipts.recordNotificationRun(owner, 'agent-a', {
+      type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'older-run', status: 'completed',
+    });
+    for (const batch of malformed) {
+      for (const sessionRead of [false, true]) {
+        await handleClientConversation('client-a', client, readRequest(batch, { sessionRead }), allow);
+        expect(client.sent.at(-1)).toMatchObject({ type: 'error', requestId: 'read-1' });
+        expect(receipts.getByUser(owner)).toEqual([]);
+      }
+    }
+    for (const overrides of [{ requestId: 42 }, { sessionRead: null }, { sessionRead: 'true' }, { sessionRead: 1 },
+      { sessionRead: true, sessions: [{ agentId: 'agent-a', sessionId: 'foreign-session' }] },
+      { sessionRead: true, sessions: [null] }, { sessionRead: true, sessions: {} },
+      { sessionRead: false, sessions: [{ agentId: 'agent-a', sessionId: 'task-session' }] }]) {
+      await handleClientConversation('client-a', client, readRequest([receipt()], overrides), allow);
+      expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: overrides.sessions?.[0]?.sessionId === 'foreign-session'
+        ? 'session_access_denied' : 'invalid_scheduled_task_receipts' });
+      expect(receipts.getByUser(owner)).toEqual([]);
+    }
+    for (const identity of [{ authenticated: false, userId: owner }, { authenticated: true, userId: null },
+      { authenticated: true, userId: 'missing-user' }]) {
+      await handleClientConversation('client-a', { ...client, ...identity }, readRequest(), allow);
+      expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'authentication_required' });
+    }
+    expect(receipts.getByUser(owner)).toEqual([]);
+    expect(client.sent.every(msg => msg.type === 'error')).toBe(true);
+    // Simulate a storage failure halfway through an otherwise valid batch.
+    db.exec(`CREATE TEMP TRIGGER fail_second_receipt BEFORE INSERT ON scheduled_task_receipts
+      WHEN NEW.run_id = 'fail-run' BEGIN SELECT RAISE(ABORT, 'storage failure'); END;`);
+    try {
+      expect(() => receipts.markRead(owner, [receipt(), receipt({ runId: 'fail-run' })])).toThrow('storage failure');
+      expect(receipts.getByUser(owner)).toEqual([]);
+      receipts.recordNotificationRun(owner, 'agent-a', {
+        type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'fail-run', status: 'failed',
+      });
+      expect(() => receipts.markRead(owner, [receipt()], { sessionRead: true })).toThrow('storage failure');
+      expect(receipts.getByUser(owner)).toEqual([]);
+    } finally { db.exec('DROP TRIGGER fail_second_receipt'); }
+  });
+
+  it('survives catalog replacement and a separate process closing/reopening the Server database', async () => {
+    const { agent } = fixture();
+    webClients.clear();
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: {
+      type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'run-older', status: 'completed',
+    } });
+    receipts.markRead(owner, [receipt()]);
+    sessions.reconcileFromSnapshot(owner, 'agent-a', []);
+    expect(receipts.has(owner, 'agent-a', 'task-session', 'run-1')).toBe(true);
+    sessions.reconcileFromSnapshot(owner, 'agent-a', [{ id: 'task-session', task: { ...task, lastRun: { id: 'run-2', status: 'completed' } } }]);
+    // Emulate an upgrade: the current durable lastRun existed before the new
+    // journal. The fresh process must backfill it before catalog replacement.
+    db.prepare('DELETE FROM scheduled_task_notification_runs WHERE user_id = ? AND run_id = ?').run(owner, 'run-2');
+    const script = `
+      const { scheduledTaskReceiptDb } = await import('./server/db/scheduled-task-receipt-db.js');
+      const { closeDb } = await import('./server/db/connection.js');
+      const first = scheduledTaskReceiptDb.getByUser(process.env.RECEIPT_OWNER);
+      const expanded = scheduledTaskReceiptDb.markRead(process.env.RECEIPT_OWNER,
+        [{ agentId: 'agent-a', sessionId: 'task-session', runId: 'run-1' }], { sessionRead: true });
+      closeDb();
+      const { DatabaseSync } = await import('node:sqlite');
+      const reopened = new DatabaseSync(process.env.TEST_DB_PATH);
+      const rows = reopened.prepare('SELECT agent_id, session_id, run_id FROM scheduled_task_receipts WHERE user_id = ? ORDER BY run_id').all(process.env.RECEIPT_OWNER);
+      const known = reopened.prepare('SELECT run_id FROM scheduled_task_notification_runs WHERE user_id = ?').all(process.env.RECEIPT_OWNER);
+      reopened.close();
+      console.log('RECEIPTS:' + JSON.stringify({ first, expanded, rows, known }));
+    `;
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: new URL('../../', import.meta.url), encoding: 'utf8',
+      env: { ...process.env, SERVER_DATA_DIR: '', TEST_DB_DIR: testDbDir,
+        TEST_DB_PATH: join(testDbDir, 'webchat.db'), RECEIPT_OWNER: owner },
+      timeout: 10000,
+    });
+    const result = JSON.parse(output.split('RECEIPTS:')[1].trim());
+    expect(result.first).toEqual([receipt()]);
+    expect(result.expanded.map(row => row.runId).sort()).toEqual(['run-1', 'run-2', 'run-older']);
+    expect(result.rows).toEqual(['run-1', 'run-2', 'run-older'].map(run_id => ({ agent_id: 'agent-a', session_id: 'task-session', run_id })));
+    expect(result.known.map(row => row.run_id).sort()).toEqual(['run-1', 'run-2', 'run-older']);
+    expect(receipts.has(owner, 'agent-a', 'task-session', 'run-2')).toBe(true);
+    expect(receipts.has(owner, 'agent-a', 'task-session', 'run-future')).toBe(false);
+  });
+
+  it('mutes delayed/duplicate completions for exact runs but preserves newer runs, other Agents and runtime metadata', async () => {
+    const { client, agent } = fixture();
+    sessions.upsertFromSnapshot(owner, 'agent-b', { id: 'task-session', task });
+    receipts.markRead(owner, [receipt()]);
+    const event = { type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'run-1', status: 'succeeded' };
+    for (const type of ['yeaft_output', 'yeaft_session_output', 'session_output']) {
+      await handleAgentOutput('agent-a', agent, { type, event });
+    }
+    expect(client.sent).toEqual([]);
+    const newer = { id: 'task-session', task: { ...task, lastRun: { id: 'run-2', status: 'running' } } };
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [newer] } });
+    expect(sessions.getForAgent(owner, 'agent-a', 'task-session').task).toEqual(newer.task);
+    expect(client.sent.at(-1).event.sessions[0].task).toEqual(newer.task);
+    expect(broadcastSessionCatalog).toHaveBeenCalledWith(owner);
+    client.sent = [];
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event });
+    expect(client.sent).toEqual([]);
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: { ...event, runId: 'run-2' } });
+    await handleAgentOutput('agent-b', agent, { type: 'yeaft_output', event });
+    expect(client.sent).toEqual([
+      expect.objectContaining({ agentId: 'agent-a', event: { ...event, runId: 'run-2' } }),
+      expect.objectContaining({ agentId: 'agent-b', event }),
+    ]);
+  });
+
+  it('rechecks receipts when an earlier tab delivery yields, without losing a durable receipt on send failure', async () => {
+    const { client, agent } = fixture();
+    const stale = { authenticated: true, userId: owner, sent: [] };
+    const sibling = { authenticated: true, userId: owner, sent: [] };
+    webClients.set('stale', stale); webClients.set('sibling', sibling);
+    sendToWebClient.mockImplementationOnce(async (target, msg) => {
+      target.sent.push(msg);
+      await handleClientConversation('client-a', client, readRequest(), allow);
+    });
+    // The failed stale tab must not block receipt delivery to the sibling.
+    sendToWebClient.mockImplementationOnce(async (target, msg) => { target.sent.push(msg); });
+    sendToWebClient.mockImplementationOnce(async () => { throw new Error('stale socket'); });
+    await handleAgentOutput('agent-a', agent, { type: 'yeaft_output', event: {
+      type: 'scheduled_task_notification', sessionId: 'task-session', runId: 'run-1', status: 'failed',
+    } });
+    expect(receipts.getByUser(owner)).toEqual([receipt()]);
+    expect(sibling.sent).toEqual([{ type: 'scheduled_task_notifications_read', receipts: [receipt()], requestId: 'read-1' }]);
+    expect(stale.sent).toEqual([]);
+  });
+
+  it('authenticates with all durable owner receipts before any hydration notifications and isolates reconnect handshakes', async () => {
+    fixture();
+    receipts.markRead(owner, [receipt(), receipt({ runId: 'run-older' })]);
+    sessions.upsertFromSnapshot(foreignOwner, 'foreign-agent', { id: 'foreign-session', task });
+    receipts.markRead(foreignOwner, [receipt({ agentId: 'foreign-agent', sessionId: 'foreign-session' })]);
+    vi.useFakeTimers();
+    try {
+      for (const [username, expected] of [['scheduled-task-owner', receipts.getByUser(owner)], ['scheduled-task-foreign', receipts.getByUser(foreignOwner)]]) {
+        const login = completeLogin(username, generateSessionKey(), 'pro');
+        expect(login.success).toBe(true);
+        const socket = { on: vi.fn(), send: vi.fn(), close: vi.fn() };
+        handleWebConnection(socket, new URL(`ws://localhost/?token=${login.token}`));
+        const handshake = JSON.parse(socket.send.mock.calls[0][0]);
+        expect(handshake).toMatchObject({ type: 'auth_result', success: true, scheduledTaskReceiptProtocol: 1, scheduledTaskReceipts: expected });
+        expect(socket.send).toHaveBeenCalledTimes(1);
+        activeSessions.delete(login.token);
+      }
+      const rejected = { on: vi.fn(), send: vi.fn(), close: vi.fn() };
+      handleWebConnection(rejected, new URL('ws://localhost/?token=invalid'));
+      expect(JSON.parse(rejected.send.mock.calls[0][0])).toEqual({ type: 'auth_result', success: false, error: 'Authentication required' });
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 });

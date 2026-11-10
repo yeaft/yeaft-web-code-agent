@@ -139,7 +139,12 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +7 harness latency safety cases: retained-only read references, raw Engine
 // evidence, real process wait+log, bounded/owned cursors, follow-up waits,
 // bilingual versioned handoff and single-pass gate failure/collection contracts.
-export const TEST_CASE_LIMIT = 948;
+// +13 account-wide Task read boundaries: 8 Server persistence/auth/atomicity/
+// journal/race cases, 4 frontend offline/migration/scope/desktop-notice cases,
+// and 1 independent-browser device/read/reconnect flow. Existing cases retained.
+// +2 independent review regressions: renewable JWT socket ownership and
+// deleted-Session exact-run proof. Snapshot-only/reopen coverage extends cases.
+export const TEST_CASE_LIMIT = 963;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

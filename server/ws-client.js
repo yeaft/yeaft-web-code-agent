@@ -4,7 +4,7 @@ import { CONFIG } from './config.js';
 import { generateSkipAuthSession } from './auth.js';
 import { authenticateRequest } from './auth/request-auth.js';
 import { encodeKey } from './encryption.js';
-import { userDb } from './database.js';
+import { scheduledTaskReceiptDb, userDb } from './database.js';
 import {
   agents,
   clearAgentSettingsRequestsForClient,
@@ -145,6 +145,8 @@ export function handleWebConnection(ws, url, req = {}) {
       yeaftSessionInventoryComplete: true,
       sessionCatalogProtocol: 1,
       scheduledTaskProtocol: 1,
+      scheduledTaskReceiptProtocol: 1,
+      scheduledTaskReceipts: scheduledTaskReceiptDb.getByUser(userId),
       workbenchRouteProtocol: WORKBENCH_ROUTE_PROTOCOL,
       workCenterWorkbenchProtocol: WORK_CENTER_WORKBENCH_PROTOCOL,
       browserRuntimeProtocol: BROWSER_RUNTIME_PROTOCOL,

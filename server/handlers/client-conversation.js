@@ -23,6 +23,7 @@ import {
 } from '../ws-utils.js';
 import { routeSessionPin } from './session-pin-router.js';
 import { handleClientScheduledTasks } from './client-scheduled-tasks.js';
+import { handleClientScheduledTaskReceipts } from './client-scheduled-task-receipts.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
 import {
   chatCatalogKey,
@@ -305,6 +306,7 @@ function skippedYeaftDreamResult(msg, reason) {
  *        update_conversation_settings, ask_user_answer, btw_question
  */
 export async function handleClientConversation(clientId, client, msg, checkAgentAccess) {
+  if (await handleClientScheduledTaskReceipts(client, msg)) return true;
   if (await handleClientScheduledTasks(clientId, client, msg)) return true;
   switch (msg.type) {
     case 'get_agents':
