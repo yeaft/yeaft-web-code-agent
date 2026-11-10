@@ -2464,6 +2464,7 @@ export class Engine {
     const queryDuplicateSuppressions = new Map();
     const queryValidationFailures = new Map();
     const fileReadObservations = new Map();
+    const repeatedToolResultRefs = new Map();
     // Success reuse and in-flight sharing must not cross user turns, Sessions,
     // or child Engines. Never copy this ledger into parentEngineDeps.
     const webResearch = createWebResearchState();
@@ -2935,6 +2936,7 @@ export class Engine {
           outputReserve: requestMaxOutputTokens,
           historyMessageCount,
           historyTokenBudget: historyBudget,
+          repeatedToolResultRefs,
           language: requestConfig.language,
         };
         let fittedRequest = fitProviderRequestToContext(wireMessages, fitOptions);
@@ -2962,10 +2964,11 @@ export class Engine {
         const deliveredTaskIds = taskDeliveries.filter(({ text }) => includesDelivery(wireMessages, text))
           .map(({ taskId }) => taskId);
         historyMessageCount = fittedRequest.meta.historyMessagesAfter;
-        if (fittedRequest.meta.compactedToolResults > 0) {
+        if (fittedRequest.meta.compactedToolResults > 0
+            || fittedRequest.meta.deduplicatedToolResults > 0) {
           // Compaction invalidates file-read hints, not execution/reuse safety
           // ledgers. The complete result remains in transcript/debug storage.
-          fileReadObservations.clear();
+          if (fittedRequest.meta.compactedToolResults > 0) fileReadObservations.clear();
           recordAgentPerfTrace(requestConfig, {
             traceId: perfTraceId || queryTurnId,
             phase: 'tool_result_compact',
@@ -4730,10 +4733,15 @@ export class Engine {
         // Append only the bounded copy to the model message history. Raw
         // `output` is still used for debug traces, UI events, exec-log, and
         // persistence so large tool results are not lost outside context.
-        const modelOutput = repeatedResultCallId && !isError && modelImages.length === 0
-          ? `[Unchanged read result: already returned by call ${repeatedResultCallId}; reuse it instead of reading again.]\n${output}`
-          : output;
-        const contextOutput = truncateToolResultIfNeeded(modelOutput, {
+        // Keep this tape lossless. The request fitter can reference repeated
+        // reads only after proving the complete original survived fitting.
+        if (repeatedResultCallId && !isError && modelImages.length === 0) {
+          repeatedToolResultRefs.set(tc.id, repeatedResultCallId);
+          if (repeatedToolResultRefs.size > 1024) {
+            repeatedToolResultRefs.delete(repeatedToolResultRefs.keys().next().value);
+          }
+        }
+        const contextOutput = truncateToolResultIfNeeded(output, {
           toolName: tc.name,
           language: this.#config?.language,
         });

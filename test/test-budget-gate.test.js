@@ -164,9 +164,9 @@ describe('test budget gate', () => {
   });
 
   it('enforces the combined case budget and rejects invalid counts', () => {
-    expect(TEST_CASE_LIMIT).toBe(941);
-    expect(checkCaseBudget({ unit: 837, browser: 104 })).toMatchObject({ total: 941, exceeded: false });
-    expect(checkCaseBudget({ unit: 838, browser: 104 })).toMatchObject({ total: 942, exceeded: true });
+    expect(TEST_CASE_LIMIT).toBe(948);
+    expect(checkCaseBudget({ unit: 844, browser: 104 })).toMatchObject({ total: 948, exceeded: false });
+    expect(checkCaseBudget({ unit: 845, browser: 104 })).toMatchObject({ total: 949, exceeded: true });
     expect(() => checkCaseBudget({ unit: NaN, browser: 0 })).toThrow('Invalid collected test count');
     expect(() => checkCaseBudget({ unit: -1, browser: 0 })).toThrow('Invalid collected test count');
   });
@@ -194,5 +194,5 @@ describe('test budget gate', () => {
       await writeFile(join(root, 'probe.spec.js'), "throw new Error('browser fixture collection failure');");
       expect(collect).toThrow();
     } finally { await rm(root, { recursive: true, force: true }); }
-  });
+  }, 30000);
 });

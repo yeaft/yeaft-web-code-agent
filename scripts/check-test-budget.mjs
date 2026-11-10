@@ -136,7 +136,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +4 Skill shortcut recovery boundaries: early Agent-isolated snapshot retention,
 // authoritative catalogue migration, Task/ordinary Session relay/browser recovery,
 // and warm cached project runtime catalogue replay after refresh/reconnect.
-export const TEST_CASE_LIMIT = 941;
+// +7 harness latency safety cases: retained-only read references, raw Engine
+// evidence, real process wait+log, bounded/owned cursors, follow-up waits,
+// bilingual versioned handoff and single-pass gate failure/collection contracts.
+export const TEST_CASE_LIMIT = 948;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

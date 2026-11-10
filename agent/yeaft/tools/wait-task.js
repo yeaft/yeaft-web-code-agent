@@ -7,6 +7,9 @@ import { isTerminalTaskStatus } from '../tasks/store.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
+// Leave room for JSON escaping and status metadata inside the 32 KiB tool
+// projection. Larger logs remain available through ReadTaskLog.
+const MAX_LOG_BYTES = 4096;
 
 export function taskWaitResult(result) {
   if (!result?.ok) return { error: result?.error || 'Unable to wait for task' };
@@ -38,8 +41,8 @@ export function taskWaitResult(result) {
 export default defineTool({
   name: 'WaitTask',
   description: {
-    en: 'Wait for one background task by taskId, up to a bounded timeout. Returns terminal status and a log cursor/reference, never the whole log. This does not cancel or retry the task.',
-    zh: '按 taskId 有界等待一个后台任务。仅返回终态和日志游标/引用，不返回完整日志；不会取消或重试任务。',
+    en: 'Wait for one background task by taskId, up to a bounded timeout. Set include_log to receive status and a bounded log excerpt in one call; otherwise returns status and a log reference only. Use offset for unread output or omit it for the tail. This does not cancel or retry the task; child outcomes still require WaitAgent.',
+    zh: '按 taskId 有界等待一个后台任务。include_log 可一次取得状态和有界日志片段；否则只返回状态和日志引用。用 offset 读取未读输出，省略则取末尾；不会取消或重试任务，子 Agent 结果仍须用 WaitAgent 收集。',
   },
   parameters: {
     type: 'object',
@@ -47,6 +50,9 @@ export default defineTool({
       taskId: { type: 'string', description: { en: 'Task id', zh: '任务 ID' } },
       sessionId: { type: 'string', description: { en: 'Session id (defaults to current Session)', zh: 'Session ID（默认当前 Session）' } },
       timeout_ms: { type: 'number', description: { en: `Wait timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS})`, zh: `等待超时毫秒数（默认 ${DEFAULT_TIMEOUT_MS}，最大 ${MAX_TIMEOUT_MS}）` } },
+      include_log: { type: 'boolean', description: { en: 'Return a bounded log excerpt after waiting (default false)', zh: '等待后附带有界日志片段（默认 false）' } },
+      offset: { type: 'integer', minimum: 0, description: { en: 'Last read nextOffset; omit for the log tail', zh: '上次已读的 nextOffset；省略则取日志末尾' } },
+      maxBytes: { type: 'integer', minimum: 1, maximum: MAX_LOG_BYTES, description: { en: `Maximum excerpt bytes (default and max ${MAX_LOG_BYTES}); use ReadTaskLog for more`, zh: `日志片段字节上限（默认及最大 ${MAX_LOG_BYTES}）；更多内容用 ReadTaskLog` } },
     },
     required: ['taskId'],
   },
@@ -68,6 +74,31 @@ export default defineTool({
       signal: ctx.signal || null,
       ownerVpId: ctx.currentVpId || null,
     });
-    return JSON.stringify(taskWaitResult(result), null, 2);
+    const response = taskWaitResult(result);
+    if (input.include_log === true && result?.ok && result.task && !ctx.signal?.aborted) {
+      try {
+        const hasOffset = Number.isFinite(input.offset);
+        const excerpt = ctx.taskManager.readTaskLog(sessionId, input.taskId, {
+          offset: input.offset,
+          maxBytes: Math.min(MAX_LOG_BYTES, Math.max(1, Number.isFinite(input.maxBytes) ? input.maxBytes : MAX_LOG_BYTES)),
+          tail: !hasOffset,
+        }, ctx.currentVpId || null);
+        if (excerpt) {
+          response.log = {
+            ...excerpt,
+            endOffset: excerpt.bytes,
+            // Store.truncated describes an unread suffix, not an omitted head.
+            omittedBefore: excerpt.offset > (hasOffset ? input.offset : 0),
+          };
+          response.next_steps = 'Only log.offset..log.nextOffset was read; log.endOffset is NOT an already-read cursor. Inspect this evidence and status; use ReadTaskLog for omitted or remaining output, or WaitTask with include_log and offset=log.nextOffset for new output. A timeout does not stop the task; child outcomes still require WaitAgent.';
+        } else {
+          response.logReadError = 'Task log unavailable';
+        }
+      } catch (error) {
+        // A log read failure must not discard the known execution outcome.
+        response.logReadError = error.message || 'Unable to read task log';
+      }
+    }
+    return JSON.stringify(response, null, 2);
   },
 });

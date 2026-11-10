@@ -67,6 +67,51 @@ describe('pressure-driven provider tool-result compaction', () => {
     assertBounded(result);
   });
 
+  it('references only confirmed byte-identical old reads with a full retained original', () => {
+    const body = 'EXACT_HEAD\n' + '证据😀\n'.repeat(1_000) + '\nEXACT_TAIL';
+    const refs = new Map([['repeat-a', 'original'], ['repeat-b', 'original'], ['latest', 'original']]);
+    const source = freezeDeep([
+      { role: 'user', content: 'Keep exact facts and every call argument.' },
+      ...batch(['original'], [body]),
+      ...batch(['repeat-a', 'repeat-b'], [body, body]),
+      ...batch(['latest'], [body]),
+    ]);
+    const result = fit(source, estimateMessagesTokens(source) + 10, { repeatedToolResultRefs: refs });
+    expect(result.meta).toMatchObject({ compactedToolResults: 0, deduplicatedToolResults: 2 });
+    expect(result.meta.deduplicatedToolResultTokensSaved)
+      .toBe(estimateMessagesTokens(source) - estimateMessagesTokens(result.messages));
+    expect(result.messages.find(m => m.toolCallId === 'original').content).toBe(body);
+    expect(result.messages.at(-1).content).toBe(body); // newest batch is lossless
+    for (const id of ['repeat-a', 'repeat-b']) {
+      expect(result.messages.find(m => m.toolCallId === id).content).toContain('retained call "original" above');
+      expect(source.find(m => m.toolCallId === id).content).toBe(body);
+    }
+    assertPairsAndTextUnchanged(source, result.messages);
+    assertBounded(result);
+    expect(fit(source, estimateMessagesTokens(source) + 10).messages).toEqual(source);
+    // Recomputing from the live tape yields the same projection, never chains.
+    expect(fit(source, estimateMessagesTokens(source) + 10, { repeatedToolResultRefs: refs })).toEqual(result);
+
+    const missing = fit(source.slice(3), estimateMessagesTokens(source), { repeatedToolResultRefs: refs });
+    expect(missing.meta.deduplicatedToolResults).toBe(0);
+    const changed = structuredClone(source);
+    changed[4].content = body.replace('EXACT_HEAD', 'CHANGED_HEAD');
+    changed[5].isError = true;
+    expect(fit(changed, estimateMessagesTokens(changed) + 10, { repeatedToolResultRefs: refs }).meta.deduplicatedToolResults).toBe(0);
+    // Both results can acquire the same sampled head/tail. That is not proof
+    // their complete bodies survived and must not permit a reference.
+    const pressured = fit(source, 1_000, { repeatedToolResultRefs: refs });
+    expect(pressured.meta.deduplicatedToolResults).toBe(0);
+    assertBounded(pressured);
+    const multipart = freezeDeep([
+      { role: 'user', content: 'Keep binary evidence.' },
+      ...batch(['original'], [[{ type: 'text', text: body }, { type: 'image', source: { type: 'base64', data: 'abc' } }]]),
+      ...batch(['repeat-a'], [[{ type: 'text', text: body }, { type: 'image', source: { type: 'base64', data: 'abc' } }]]),
+      ...batch(['latest'], ['latest']),
+    ]);
+    expect(fit(multipart, estimateMessagesTokens(multipart) + 10, { repeatedToolResultRefs: refs }).messages).toEqual(multipart);
+  });
+
   it('samples oldest tool text first, preserving head/tail, errors, all arguments, ordinary text and latest result', () => {
     const old = 'OLD_HEAD\n' + 'older output '.repeat(2_000) + '\nOLD_TAIL';
     const latest = 'LATEST_HEAD\n' + 'fresh '.repeat(1_000) + '\nLATEST_TAIL';
