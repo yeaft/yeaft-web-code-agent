@@ -217,7 +217,7 @@ Guidelines:
             threadId: ctx.threadId || 'main',
           },
         });
-        return `Started background task ${task.id}.\nWorking directory: ${cwd}\nStatus: ${task.status}\nLog: ${task.log?.path || ''}\nThe task is detached from this turn. Use WaitTask for bounded waiting, ReadTaskLog for output, ListTasks for active status, or CancelTask when cancellation is intended.`;
+        return `Started background task ${task.id}.\nWorking directory: ${cwd}\nStatus: ${task.status}\nLog: ${task.log?.path || ''}\nThe task is detached from this turn. Use WaitTask with include_log=true for bounded waiting plus output (offset for unread bytes), ReadTaskLog for more output, ListTasks for active status, or CancelTask when cancellation is intended.`;
       } catch (err) {
         throw new Error(err?.message || String(err));
       }

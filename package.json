@@ -9,7 +9,7 @@
     "agent"
   ],
   "scripts": {
-    "test": "npm run test:budget && vitest run --exclude '**/.claude/worktrees/**' --exclude '**/.worktrees/**' --exclude '**/.yeaft/worktrees/**'",
+    "test": "node scripts/run-test-gate.mjs",
     "test:budget": "node scripts/check-test-budget.mjs",
     "test:focus": "vitest run --config vitest.focus.config.js",
     "test:watch": "vitest",

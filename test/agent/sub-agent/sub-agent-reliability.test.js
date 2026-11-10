@@ -84,6 +84,44 @@ describe('wait-agent envelope shape', () => {
     _resetNotifications();
   });
 
+  it('waits through the normal follow-up latency by default but preserves explicit and spawn timeouts', async () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = { sessionId: 'wait-latency', senderVpId: 'vp-test' };
+      const makeAgent = id => ({ id, name: id, status: STATUS.RUNNING, promptReplyPending: true,
+        parentSessionId: ctx.sessionId, parentVpId: 'vp-test', resultRevision: 1,
+        result: '', lastResult: '', usage: {}, liveness: makeLiveness(), abortController: new AbortController() });
+      const agent = makeAgent('follow-up');
+      getAgentRegistry().set(agent.id, agent);
+      let settled = false;
+      const waiting = waitAgent.execute({ agent_id: agent.id }, ctx).then(value => { settled = true; return JSON.parse(value); });
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(settled).toBe(false); // old default would have required another LLM request
+      Object.assign(agent, { status: STATUS.IDLE, result: 'reviewed delta', lastResult: 'reviewed delta' });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(await waiting).toMatchObject({ status: STATUS.IDLE, result: 'reviewed delta', mustCollectReply: false });
+
+      const explicit = makeAgent('explicit');
+      getAgentRegistry().set(explicit.id, explicit);
+      const short = waitAgent.execute({ agent_id: explicit.id, timeout_ms: 5_000 }, ctx);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(JSON.parse(await short)).toMatchObject({ timedOut: true, mustCollectReply: true });
+      expect(JSON.parse(await waitAgent.execute({ agent_id: explicit.id, timeout_ms: 0 }, ctx))).toMatchObject({ timedOut: true });
+      const controller = new AbortController();
+      const aborted = waitAgent.execute({ agent_id: explicit.id }, { ...ctx, signal: controller.signal });
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(JSON.parse(await aborted).error).toBe('Wait cancelled');
+      expect(explicit.abortController.signal.aborted).toBe(false);
+      const spawned = makeAgent('spawned');
+      spawned.promptReplyPending = false;
+      getAgentRegistry().set(spawned.id, spawned);
+      const ordinary = waitAgent.execute({ agent_id: spawned.id }, ctx);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(JSON.parse(await ordinary)).toMatchObject({ timedOut: true, mustCollectReply: false });
+    } finally { vi.useRealTimers(); }
+  });
+
   it('exposes an awaitable driver cleanup and optional host VP ownership', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'child-driver-join-'));
     let observedVpId;

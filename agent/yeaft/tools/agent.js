@@ -246,7 +246,8 @@ Guidelines:
 - Give a clear, focused mission — what "done" looks like
 - Exact spec retries in the same parent query/workspace reuse the existing agent (even renamed or terminal), unless follow-up work superseded its original evidence; that retry is rejected, not respawned. Use a new taskKey for an intentional independent run; taskKey conflicts require a new key, not a changed spec.
 - Use expected_output when the return shape matters
-- Delegate one clear result with the workspace/base and completion evidence. Let the child choose its steps; do simple work directly. Split unrelated goals, not individual reads.
+- Delegate one clear result with the workspace/base and completion evidence. Let the child choose its steps; do simple work directly. Split unrelated goals, not individual reads. Verify the child's evidence instead of repeating its full investigation.
+- For review fixes, continue the same idle reviewer with the previous/new heads, fixes and validation evidence. Review the delta and affected behavior; expand scope if the baseline/design/risk changed. If that reviewer is terminal, pass its review record to a new one.
 - Usually omit budget so the child can finish. Add a budget only when the task actually needs a hard lifetime ceiling; tool exhaustion reserves one tool-free handoff and unfinished work stays budget_exceeded.
 - Persona tools are defaults, not task boundaries: reviewer has GitRead; grant Bash or write tools explicitly via allow_tools only when needed. Bash is not a read-only sandbox; isolate concurrent writable tasks.
 - Use UpdateAgent to adjust a live child's time/tool/LLM ceilings or extra grants after inspecting evidence; counters and context are retained. Do not extend stalled work blindly or respawn the same exhausted mission automatically.
@@ -271,7 +272,8 @@ stops or finalizes work no longer needed.`,
 - 给出清晰聚焦的 mission——"完成"是什么样子
 - 同一父级 query/workspace 内完全相同的规格重试会复用已有 Agent（含改名或已结束任务）；若后续工作已替代原任务证据，则拒绝重试，不自动重建。需要独立执行时使用新的 taskKey；同 key 规格冲突不能通过修改规格重试解决。
 - 当返回结构重要时使用 expected_output
-- 一次只委派一个明确结果，提供工作目录/基线和完成证据，让子 Agent 自主选择步骤；简单工作直接做。拆分不相关目标，不要拆成逐个读取任务。
+- 一次只委派一个明确结果，提供工作目录/基线和完成证据，让子 Agent 自主选择步骤；简单工作直接做。拆分不相关目标，不要拆成逐个读取任务。核验子级证据，不重走完整调查。
+- 修复 Findings 后优先继续同一个 idle reviewer，提供旧／新 head、修复和验证证据，审增量及受影响行为；基线、设计或风险变化时扩大范围。原 reviewer 已终止则向新 reviewer 交接审查记录。
 - 通常省略 budget，让子 Agent 完成工作；仅当任务确实需要硬性累计上限时才设置。不要给多文件 review 人为设置极小额度。工具额度耗尽后保留一次无工具交付机会，未完成仍返回 budget_exceeded。
 - Persona 是默认工具集，不是任务死边界：reviewer 有 GitRead；按需用 allow_tools 显式授予 Bash/写工具。Bash 并非只读沙箱；并行写任务应隔离 workspace。
 - 检查已有证据后，用 UpdateAgent 原地调整活跃子任务的时间/工具/LLM 上限或额外授权，保留计数与上下文；不要盲目扩额停滞任务，也不要自动重启同一个耗尽任务。

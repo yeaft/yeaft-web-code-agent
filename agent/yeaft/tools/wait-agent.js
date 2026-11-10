@@ -38,6 +38,9 @@ import { consumeNotificationForAgent } from '../sub-agent/notifications.js';
 import { describeAgentLifecycle, describeAgentOutcome } from '../sub-agent/outcome.js';
 import { getAgentResultRef } from '../sub-agent/result-reference.js';
 
+const DEFAULT_TIMEOUT_MS = 5000;
+const FOLLOW_UP_TIMEOUT_MS = 120000;
+
 /**
  * Build the status-specific next-step guidance the LLM reads after a wait.
  * Imperative + names actual tools. Always appears as the FIRST field on
@@ -252,8 +255,9 @@ An unchanged reply already collected by WaitAgent returns alreadyCollected=true 
 resultRef instead of repeating result text. PromptAgent starts a new collectable revision,
 even when its reply text is identical. Lifecycle and liveness remain current.
 
-The default wait is a bounded 5000ms poll; callers may request up to 300000ms
-(5 minutes). This caps one WaitAgent call only, not the sub-agent lifetime.`,
+The default wait is 5000ms for ordinary background work and 120000ms while a
+PromptAgent follow-up reply is pending. Explicit timeouts (including zero) win;
+callers may request up to 300000ms. This caps one call, not the sub-agent lifetime.`,
     zh: `等待子 Agent 的下一次状态变更（turn 结束、终止或等待超时）并获取状态信封。
 
 返回 JSON，含明确的 status、最新的 result 文本、liveness 计数器（实际 toolUseCount、provider usageTokens、outputChars、
@@ -277,7 +281,7 @@ WaitAgent 已收集且未变化的回复仅返回 alreadyCollected=true 和 resu
 PromptAgent 会产生新的可收集 revision，即使回复文本相同；生命周期和 liveness 仍实时返回。
 
 普通 SpawnAgent 异步流程仍用 ListAgents 做非阻塞状态检查，并依赖后续 completion
-notification；默认 5000ms、最大 300000ms 仅限制单次 WaitAgent 调用，不限制子 Agent 生命周期。`
+notification；默认 5000ms（待收集 PromptAgent 回复时 120000ms）、最大 300000ms 仅限制单次 WaitAgent 调用，不限制子 Agent 生命周期。`
   },
   parameters: {
     type: 'object',
@@ -294,8 +298,8 @@ notification；默认 5000ms、最大 300000ms 仅限制单次 WaitAgent 调用�
         minimum: 0,
         maximum: 300000,
         description: {
-          en: 'Maximum duration of this wait call, not the sub-agent lifetime (default: 5000, max: 300000)',
-          zh: '本次等待调用的最长时间，不是子 Agent 生命周期（默认 5000，最大 300000）',
+          en: 'Maximum duration of this wait call, not the sub-agent lifetime (default: 5000; pending PromptAgent reply: 120000; max: 300000)',
+          zh: '本次等待调用的最长时间，不是子 Agent 生命周期（默认 5000；待收集 PromptAgent 回复时 120000；最大 300000）',
         },
       },
     },
@@ -307,11 +311,11 @@ notification；默认 5000ms、最大 300000ms 仅限制单次 WaitAgent 调用�
   cacheWithinQuery: false,
   duplicateCallPolicy: () => 'allow',
   async execute(input, ctx) {
-    const { agent_id, timeout_ms = 5000 } = input;
+    const { agent_id, timeout_ms } = input;
     if (!agent_id) {
       return JSON.stringify({ next_steps: errorNextSteps(), error: 'agent_id is required' });
     }
-    if (typeof timeout_ms !== 'number' || !Number.isFinite(timeout_ms) || timeout_ms < 0 || timeout_ms > 300000) {
+    if (timeout_ms !== undefined && (typeof timeout_ms !== 'number' || !Number.isFinite(timeout_ms) || timeout_ms < 0 || timeout_ms > 300000)) {
       return JSON.stringify({ next_steps: errorNextSteps(), error: 'timeout_ms must be a number between 0 and 300000' });
     }
 
@@ -340,7 +344,8 @@ notification；默认 5000ms、最大 300000ms 仅限制单次 WaitAgent 调用�
     }
 
     // Block until next interesting state change, capped at timeout_ms.
-    const deadline = Date.now() + timeout_ms;
+    const timeoutMs = timeout_ms ?? (agent.promptReplyPending === true ? FOLLOW_UP_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (isTerminalAgentStatus(agent.status)) {
         consumeNotificationForAgent(agent.id);
