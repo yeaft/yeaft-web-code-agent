@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { relative, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -155,8 +155,19 @@ export function validateCoreTestFiles({ rootDir = process.cwd(), files = null } 
   return { missing, unexpected, count: discovered.size };
 }
 
+/** Require the current collection, not a count/cache, to cover the reviewed files. */
+export function assertCollectedTestFiles(files, { rootDir = process.cwd(), expectedFiles, label }) {
+  const collected = files.map(file => normalizeTestPath(relative(rootDir, resolve(rootDir, file))));
+  const expected = new Set(expectedFiles);
+  const missing = expectedFiles.filter(file => !collected.includes(file));
+  const unexpected = collected.filter(file => !expected.has(file));
+  if (missing.length || unexpected.length || new Set(collected).size !== collected.length) {
+    throw new Error(`${label} collection incomplete or filtered: missing [${missing.join(', ')}], unexpected [${unexpected.join(', ')}], duplicate files: ${new Set(collected).size !== collected.length}`);
+  }
+}
+
 /** Count logical browser cases once, even when several projects run them. */
-export function countBrowserCases(report) {
+export function countBrowserCases(report, { rootDir = process.cwd(), expectedFiles } = {}) {
   if (report.errors?.length) throw new Error(`Browser collection failed: ${report.errors.map(error => error.message).join('; ')}`);
   let count = 0;
   function visit(suites) {
@@ -166,6 +177,32 @@ export function countBrowserCases(report) {
     }
   }
   visit(report.suites || []);
+  if (expectedFiles) {
+    if (!report.config?.rootDir || report.config.shard) throw new Error('Browser collection incomplete or filtered');
+    assertCollectedTestFiles((report.suites || []).map(suite => resolve(report.config.rootDir, suite.file)), {
+      rootDir, expectedFiles, label: 'Browser',
+    });
+    if (!count) throw new Error('Browser collection incomplete');
+  }
+  return count;
+}
+
+/** Public Vitest collections include skip/todo and expanded each cases. */
+export function countUnitCases(result, { rootDir = process.cwd(), expectedFiles, executed = false } = {}) {
+  const errors = [...result.unhandledErrors];
+  let count = 0;
+  for (const module of result.testModules) {
+    errors.push(...module.errors());
+    for (const suite of module.children.allSuites()) errors.push(...suite.errors());
+    if (executed && !module.ok()) errors.push(new Error(`Tests failed or incomplete: ${module.moduleId}`));
+    for (const test of module.children.allTests()) {
+      count++;
+      if (executed && test.result().state === 'pending') errors.push(new Error(`Test did not finish: ${test.fullName}`));
+    }
+  }
+  if (errors.length) throw new Error(`Unit collection/execution failed: ${errors.map(error => error?.message || String(error)).join('; ')}`);
+  if (expectedFiles) assertCollectedTestFiles(result.testModules.map(module => module.moduleId), { rootDir, expectedFiles, label: 'Unit' });
+  if (!count) throw new Error('Unit collection incomplete');
   return count;
 }
 
@@ -190,26 +227,35 @@ export async function closeUnitCollector(context, timeoutMs = 5000) {
   }
 }
 
+/** Reject run/collection filters even when they leave every file in the list. */
+export function assertUnfilteredUnitRun(context, specifications) {
+  for (const config of [context.config, ...context.projects.map(project => project.config)]) {
+    if (config.testNamePattern || config.changed || config.related?.length || config.project?.length
+      || config.filters?.length || config.shard || config.tagsFilter?.length || config.bail
+      || config.experimental?.preParse || config.allowOnly === true
+      || config.dangerouslyIgnoreUnhandledErrors || config.onUnhandledError) {
+      throw new Error('Unit collection/execution must not be filtered or ignore errors');
+    }
+  }
+  if (specifications.some(specification => specification.testNamePattern || specification.testLines?.length
+    || specification.testIds?.length || specification.testTagsFilter?.length)) {
+    throw new Error('Unit collection/execution must not use filtered specifications');
+  }
+}
+
 /** Vitest CLI list drops skip/todo. The public collection API retains them. */
-export async function collectUnitCases({ rootDir = process.cwd(), configFile = 'vitest.focus.config.js' } = {}) {
+export async function collectUnitCases({ rootDir = process.cwd(), configFile = 'vitest.focus.config.js', expectedFiles } = {}) {
   const { createVitest } = await import('vitest/node');
   const context = await createVitest('test', {
-    root: rootDir, config: resolve(rootDir, configFile), watch: false, reporters: [],
+    root: rootDir, config: resolve(rootDir, configFile), watch: false, reporters: [], allowOnly: false,
   });
   try {
-    await context.init();
+    await context.standalone();
     const specifications = await context.globTestSpecifications();
+    assertUnfilteredUnitRun(context, specifications);
+    if (expectedFiles) assertCollectedTestFiles(specifications.map(specification => specification.moduleId), { rootDir, expectedFiles, label: 'Unit' });
     const result = await context.collectTests(specifications);
-    const errors = [...result.unhandledErrors];
-    let count = 0;
-    for (const module of result.testModules) {
-      errors.push(...module.errors());
-      for (const suite of module.children.allSuites()) errors.push(...suite.errors());
-      for (const test of module.children.allTests()) count++;
-    }
-    if (errors.length) throw new Error(`Unit collection failed: ${errors.map(error => error?.message || String(error)).join('; ')}`);
-    if (result.testModules.length !== specifications.length || !count) throw new Error('Unit collection incomplete');
-    return count;
+    return countUnitCases(result, { rootDir, expectedFiles: expectedFiles || specifications.map(specification => normalizeTestPath(relative(rootDir, specification.moduleId))) });
   } finally {
     if (!await closeUnitCollector(context)) {
       console.warn('Unit collection teardown timed out; exiting isolated collector after validated collection.');
@@ -217,21 +263,28 @@ export async function collectUnitCases({ rootDir = process.cwd(), configFile = '
   }
 }
 
+/** Browser list is always fresh and unfiltered, regardless of configured grep. */
+export function collectBrowserCases({ rootDir = process.cwd(), configFile = 'e2e/playwright.config.js', expectedFiles = E2E_TEST_FILES } = {}) {
+  const require = createRequire(import.meta.url);
+  const wrapper = resolve(dirname(fileURLToPath(import.meta.url)), 'test-budget-playwright.config.mjs');
+  const browserReport = execFileSync(process.execPath, [require.resolve('@playwright/test/cli'), 'test', `--config=${wrapper}`,
+    '--list', '--reporter=json', '--forbid-only'], {
+    cwd: rootDir, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 60000,
+    env: { ...process.env, YEAFT_BUDGET_PLAYWRIGHT_CONFIG: resolve(rootDir, configFile) },
+  });
+  return countBrowserCases(JSON.parse(browserReport), { rootDir, expectedFiles });
+}
+
 /** Bound the isolated collector so import side effects cannot hang the gate. */
 export function collectTestCaseCounts({ rootDir = process.cwd() } = {}) {
-  const require = createRequire(import.meta.url);
-  const playwrightCli = require.resolve('@playwright/test/cli');
   const outputDir = mkdtempSync(resolve(tmpdir(), 'yeaft-test-budget-'));
   const outputFile = resolve(outputDir, 'tests.json');
   try {
-    execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--collect-unit', outputFile], {
+    execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--collect-unit', outputFile, 'vitest.focus.config.js', '--reviewed'], {
       cwd: rootDir, stdio: 'pipe', timeout: 180000,
     });
     const unit = JSON.parse(readFileSync(outputFile, 'utf8'));
-    const browserReport = execFileSync(process.execPath, [playwrightCli, 'test', '--config=e2e/playwright.config.js', '--list', '--reporter=json'], {
-      cwd: rootDir, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 60000,
-    });
-    return { unit, browser: countBrowserCases(JSON.parse(browserReport)) };
+    return { unit, browser: collectBrowserCases({ rootDir }) };
   } finally {
     rmSync(outputDir, { recursive: true, force: true });
   }
@@ -241,19 +294,28 @@ export function isMainModule(moduleUrl, entryPath = process.argv[1]) {
   return Boolean(entryPath) && moduleUrl === pathToFileURL(resolve(entryPath)).href;
 }
 
-function main() {
-  const result = validateCoreTestFiles();
-  if (result.missing.length) console.error(`Missing reviewed test files:\n- ${result.missing.join('\n- ')}`);
-  if (result.unexpected.length) console.error(`Unreviewed test files:\n- ${result.unexpected.join('\n- ')}`);
+export function assertReviewedTestFiles({ rootDir = process.cwd() } = {}) {
+  const result = validateCoreTestFiles({ rootDir });
   if (result.missing.length || result.unexpected.length) {
-    process.exitCode = 1;
-    return;
+    throw new Error(`Missing reviewed test files: [${result.missing.join(', ')}]; Unreviewed test files: [${result.unexpected.join(', ')}]`);
   }
+}
 
-  const budget = checkCaseBudget(collectTestCaseCounts());
+export function reportCaseBudget(counts, limit = TEST_CASE_LIMIT) {
+  const budget = checkCaseBudget(counts, limit);
   console.log(`Suite: ${CORE_TEST_FILES.length} Vitest files / ${budget.unit} cases + ${E2E_TEST_FILES.length} browser files / ${budget.browser} cases = ${budget.total}/${budget.limit} cases`);
   if (budget.exceeded) {
-    console.error('Test budget exceeded. Remove redundant cases or explicitly review a small budget increase for new critical coverage. Do not hide cases with skip or exclude.');
+    throw new Error('Test budget exceeded. Remove redundant cases or explicitly review a small budget increase for new critical coverage. Do not hide cases with skip or exclude.');
+  }
+  return budget;
+}
+
+function main() {
+  try {
+    assertReviewedTestFiles();
+    reportCaseBudget(collectTestCaseCounts());
+  } catch (error) {
+    console.error(error.message);
     process.exitCode = 1;
   }
 }
@@ -261,7 +323,10 @@ function main() {
 if (isMainModule(import.meta.url)) {
   if (process.argv[2] === '--collect-unit') {
     try {
-      writeFileSync(process.argv[3], JSON.stringify(await collectUnitCases({ configFile: process.argv[4] || 'vitest.focus.config.js' })));
+      writeFileSync(process.argv[3], JSON.stringify(await collectUnitCases({
+        configFile: process.argv[4] || 'vitest.focus.config.js',
+        expectedFiles: process.argv[5] === '--reviewed' ? CORE_TEST_FILES : undefined,
+      })));
       // Some collected modules open DB workers at import time. No test body ran;
       // exit the isolated process instead of waiting on those unrelated handles.
       process.exit(0);
