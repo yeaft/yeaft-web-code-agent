@@ -1,5 +1,8 @@
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/test-server.js';
+import { scheduledTaskAgent } from '../../fixtures/scheduled-task-agent.js';
+
+test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.SERVE_DIST || 'false' } });
 
 for (const scenario of [
   { theme: 'light', width: 1440, height: 900 },
@@ -7,6 +10,7 @@ for (const scenario of [
 ]) {
   test(`LLM draft survives delayed config broadcasts and saves only explicitly (${scenario.theme}, ${scenario.width}px)`, async ({ page, serverUrl, mockAgent }, testInfo) => {
     test.setTimeout(90000);
+    scheduledTaskAgent(mockAgent);
     let savedConfig = {
       providers: [{ name: 'fixture', baseUrl: 'https://example.test', apiKey: 'fixture-key',
         protocol: 'openai-responses', models: ['model-a'] }],
