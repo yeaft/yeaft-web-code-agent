@@ -62,7 +62,7 @@ describe('Person native child provider boundary', () => {
     const events = await collect(engine.query({ prompt: 'Read README.md.', messages: [], isSubAgent: true, scenario: 'sub_agent',
       parentEffortDecision: { effective: 'high' }, vpPersona: { vpId: 'child', displayName: 'Child', subAgent: { agentId: 'child' } } }));
     expect(execute).toHaveBeenCalledOnce(); expect(calls).toHaveLength(2);
-    for (const params of calls) expect(params).toMatchObject({ model: MODEL, maxTokens: 4096, effort: 'low' });
+    for (const params of calls) expect(params).toMatchObject({ model: MODEL, maxTokens: 4096, effort: 'medium' });
     expect(calls[0].tools.some(tool => tool.name === 'FileRead')).toBe(true);
     expect(calls[1].messages.some(message => message.role === 'tool')).toBe(true);
     expect(events.filter(event => event.type === 'text_delta').map(event => event.text).join('')).toBe(textEvents[0].text);

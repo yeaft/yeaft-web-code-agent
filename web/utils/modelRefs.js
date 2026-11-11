@@ -19,10 +19,7 @@ export function resolveSessionModelRef(session, fallbackModel = '') {
 }
 
 const EFFORT_RANK = Object.freeze({
-  minimal: 0,
-  low: 1,
   medium: 2,
-  high: 3,
   xhigh: 4,
   max: 5,
   ultra: 6,
@@ -41,22 +38,28 @@ function normalizeEffortList(options) {
 }
 
 export function getSelectableModelEfforts(options) {
-  // The Agent catalog owns supported tiers, including low/minimal when offered.
+  // Older Agent catalogs may still advertise retired tiers; never show them.
   return normalizeEffortList(options).filter(effort => Object.hasOwn(EFFORT_RANK, effort));
 }
 
 export function getDefaultModelEffort(options) {
-  const values = normalizeEffortList(options);
+  const values = getSelectableModelEfforts(options);
   if (!values.length) return '';
   if (values.length === 1) return values[0];
   if (values.includes('ultra') && values.includes('max')) return 'max';
   return values[values.length - 2];
 }
 
+export function normalizeModelEffort(effort) {
+  if (effort === 'minimal' || effort === 'low') return 'medium';
+  if (effort === 'high') return 'xhigh';
+  return Object.hasOwn(EFFORT_RANK, effort) ? effort : '';
+}
+
 export function resolveSessionModelEffort(session, fallbackEffort = '') {
   const sessionEffort = session?.config?.modelEffort;
-  if (typeof sessionEffort === 'string' && sessionEffort.trim()) return sessionEffort.trim();
-  return typeof fallbackEffort === 'string' && fallbackEffort.trim() ? fallbackEffort.trim() : '';
+  if (typeof sessionEffort === 'string' && sessionEffort.trim()) return normalizeModelEffort(sessionEffort.trim());
+  return typeof fallbackEffort === 'string' ? normalizeModelEffort(fallbackEffort.trim()) : '';
 }
 
 export function buildModelSelectionRows(models) {
@@ -66,14 +69,12 @@ export function buildModelSelectionRows(models) {
     if (!modelRef) continue;
     const label = model.label || model.id || modelRef;
     const efforts = getSelectableModelEfforts(model?.effortOptions);
-    // Revealing lower tiers must not lower an existing model-menu default.
-    const defaultEfforts = efforts.filter(effort => EFFORT_RANK[effort] >= EFFORT_RANK.medium);
     rows.push({
       model,
       modelRef,
       label,
       efforts,
-      defaultEffort: getDefaultModelEffort(defaultEfforts.length ? defaultEfforts : efforts) || null,
+      defaultEffort: getDefaultModelEffort(efforts) || null,
     });
   }
   return rows;

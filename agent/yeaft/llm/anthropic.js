@@ -44,6 +44,7 @@ function thinkingV1Enabled() {
 
 /** Apply the native payload rules; bounded callers also use this for budget preflight. */
 export function applyAnthropicThinking(body, model, effort, effortContext = {}) {
+  effort = normalizeEffort(effort);
   const context = { ...effortContext, protocol: 'anthropic' };
   const cap = getThinkingCapability(model, context);
   if (!cap.supportsThinking) return;
@@ -312,7 +313,7 @@ export class AnthropicAdapter extends LLMAdapter {
   }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'medium'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
   async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs }) {

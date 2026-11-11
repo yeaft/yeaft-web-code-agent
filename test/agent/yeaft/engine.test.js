@@ -1175,7 +1175,7 @@ RELEASE_BODY`;
             output.push(event);
             if (name === 'abort' && event.type === 'provider_activity') ctrl.abort();
           }
-          expect(policies[0]).toEqual({ effort: 'high', streamIdleTimeoutMs: 10 });
+          expect(policies[0]).toEqual({ effort: 'xhigh', streamIdleTimeoutMs: 10 });
           const persisted = conversationStore.loadRecentBySession(sessionId, 50);
           if (name === 'complete') {
             expect(requests).toBe(2); // one tool batch and one tool-result continuation

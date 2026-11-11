@@ -59,8 +59,9 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
     fail('MODEL_UNAVAILABLE');
   }
   const model = entry.id;
-  const efforts = (entry.efforts || []).filter(effort => normalizeEffort(effort));
-  const effort = selected.effort ?? null;
+  const efforts = [...new Set((entry.efforts || []).map(normalizeEffort).filter(Boolean))];
+  const effort = normalizeEffort(selected.effort);
+  if (selected.effort != null && !effort) fail('MODEL_SELECTION');
   if (effort !== null && !efforts.includes(effort)) fail('MODEL_SELECTION');
   const config = structuredClone(instanceConfig);
   const { modelId, providerName } = parseModelRef(model);
@@ -101,7 +102,7 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
       const parent = params.effortConstraint.parentDecision;
       const inherited = normalizeEffort(parent?.effective) || 'medium';
       const cap = normalizeEffort(parent?.cap);
-      const ceiling = Math.min(rank(effectiveEffort), rank(inherited), rank('high'), cap ? rank(cap) : Infinity);
+      const ceiling = Math.min(rank(effectiveEffort), rank(inherited), rank('medium'), cap ? rank(cap) : Infinity);
       effectiveEffort = EFFORT_LEVELS.filter(value => efforts.includes(value) && rank(value) <= ceiling).at(-1) || null;
     }
     if (effectiveEffort && (effortContext.protocol || inferProtocolFromModelId(modelId)) === 'anthropic') {

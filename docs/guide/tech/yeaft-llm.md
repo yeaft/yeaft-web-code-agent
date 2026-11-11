@@ -71,8 +71,9 @@ export class LLMAdapter {
 - Supports thinking blocks (with signature)
 - Supports prompt caching (`cache_control`)
 - Supports fine-grained tool_use
-- Effort follows the effective API, not a model-ID allowlist: `anthropic` exposes `low / medium / high / xhigh / max` and defaults to adaptive thinking with `output_config.effort`; `openai-responses` exposes `minimal / low / medium / high / xhigh / max / ultra` and sends `reasoning.effort`. New models and gateway aliases do not require a Yeaft update to show effort. Protocol resolution remains model override → provider override → ID inference → Responses default.
-- These are the tiers Yeaft exposes for each API, not a guarantee that every upstream model or gateway accepts all of them. Unsupported combinations fail explicitly upstream rather than silently switching tiers. A model entry can narrow them with `effortOptions: ["low", "high"]` or disable effort with `supportsEffort: false`. For legacy Anthropic models requiring manual thinking, explicitly set `thinkingProtocol: "anthropic"` and optionally `maxBudgetTokens`; manual budgets are no longer guessed from model names. Explicit Session choices do not require the automatic-thinking feature flag. Automatic-scenario gating, the Work Center policy subset and inherited child effort ceilings remain unchanged.
+- Effort 档位由最终生效的 API 决定，不依赖模型 ID 白名单：`anthropic` 提供 `medium / xhigh / max`，默认采用 adaptive thinking 并发送 `output_config.effort`；`openai-responses` 提供 `medium / xhigh / max / ultra` 并发送 `reasoning.effort`。新模型与网关别名无需更新 Yeaft 即可选择 effort。协议优先级仍是模型覆盖 → provider 覆盖 → ID 推断 → Responses 默认。
+- 这些是 Yeaft 提供的档位，不保证每个上游模型或网关全部接受；不支持的组合由上游明确报错，不静默降档。模型可用 `effortOptions: ["medium", "xhigh"]` 限档，或用 `supportsEffort: false` 禁用。旧 Anthropic 手动思考需显式配置 `thinkingProtocol: "anthropic"`，可另设 `maxBudgetTokens`，不再根据模型名猜测手动预算。Session 显式选择不依赖自动思考功能开关。
+- 旧配置中的 `minimal` / `low` 在读取和发送时归一为 `medium`，`high` 归一为 `xhigh`；不会改写历史记录。自动轻量场景使用 `medium`，Work Center 策略保留 `medium / xhigh`，子 Agent 仍不突破原有上限（现取 `medium`），不随档位合并提高预算。
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
 - Targets OpenAI Responses API `/v1/responses` (**not** legacy chat completions)

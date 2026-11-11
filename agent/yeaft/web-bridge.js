@@ -25,7 +25,7 @@ import { DEFAULT_YEAFT_DIR } from './init.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
 import { loadAgentMCPConfig, loadConfig, loadMCPConfig } from './config.js';
-import { resolveMaxOutputTokens } from './models.js';
+import { normalizeEffort, resolveMaxOutputTokens } from './models.js';
 import {
   createManagedProjectSkill,
   createManagedSkill,
@@ -5226,12 +5226,13 @@ export function validateQuickSend(value, config) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('quickSend must be an object');
   }
-  const { model, effort, maxOutputTokens } = value;
+  const { model, maxOutputTokens } = value;
+  const effort = normalizeEffort(value.effort);
   const entry = typeof model === 'string' && model.includes('/')
     ? config?.availableModels?.find(candidate => candidate.ref === model)
     : null;
   if (!entry) throw new Error('quickSend.model must name an available provider/model');
-  if (effort !== null && (typeof effort !== 'string' || !entry.effortOptions?.includes(effort))) {
+  if (value.effort !== null && (!effort || !entry.effortOptions?.includes(effort))) {
     throw new Error('quickSend.effort is not supported by the selected model');
   }
   if (maxOutputTokens !== null && (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1

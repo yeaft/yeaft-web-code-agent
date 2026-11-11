@@ -68,8 +68,7 @@ function thinkingV1Enabled() {
 
 /**
  * Translate a normalised effort into the OpenAI Responses `reasoning.effort`
- * field. Model capability filtering happens at the call site because `max` is
- * supported by GPT-5.6 but not by older OpenAI reasoning models.
+ * field. API and explicit capability filtering happens at the call site.
  */
 function effortForResponses(effort) {
   return mapEffortToOpenAIReasoning(effort);
@@ -302,7 +301,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   // ─── Streaming ──────────────────────────────────────────
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'minimal'|'low'|'medium'|'high'|'xhigh'|'max'|'ultra', effortSource?: 'user'|'auto', effortContext?: object, extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void, onRequestStart?: () => void }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'medium'|'xhigh'|'max'|'ultra', effortSource?: 'user'|'auto', effortContext?: object, extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void, onRequestStart?: () => void }} params
    *
    * NOTE on `extraBody`: any keys you spread here are merged verbatim into
    * the wire body and — because the verbatim debug feature is intentionally

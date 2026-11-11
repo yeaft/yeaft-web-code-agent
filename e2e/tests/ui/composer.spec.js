@@ -90,7 +90,7 @@ test.describe('Yeaft composer menus', () => {
       mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: selectedModel,
         catalogEpoch: 'fable-effort-e2e', catalogRevision: 1, catalogRefreshedAt: Date.now(), availableModels: catalog } });
       mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [
-        { id: sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config: { model: selectedModel } },
+        { id: sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config: { model: selectedModel, modelEffort: 'high' } },
       ] } });
       await expect.poll(() => page.evaluate(sessionId => window.Pinia.useChatStore().sidebarSessionCatalog
         .some(row => row.routeRef.sessionId === sessionId), sessionId)).toBe(true);
@@ -101,15 +101,20 @@ test.describe('Yeaft composer menus', () => {
       }, { agentId: mockAgent.agentId, sessionId });
       await expect(page.locator('.yeaft-session-input')).toBeVisible();
       const effort = page.locator('.yeaft-composer-effort');
+      await expect(effort).toContainText('X-High');
+      await page.evaluate(() => {
+        const models = window.Pinia.useChatStore().yeaftAvailableModels;
+        for (const model of models) model.effortOptions = ['minimal', 'low', 'high', ...model.effortOptions];
+      });
       for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
         await page.setViewportSize({ width, height: 800 });
         await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
         await effort.click();
         const menu = page.locator('.yeaft-composer-effort-dropdown');
-        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Low', 'Medium', 'High', 'X-High', 'Max']);
-        await menu.getByRole('menuitemradio', { name: 'Low', exact: true }).click();
-        await expect(effort).toContainText('Low');
-        await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('low');
+        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Medium', 'X-High', 'Max']);
+        await menu.getByRole('menuitemradio', { name: 'Medium', exact: true }).click();
+        await expect(effort).toContainText('Medium');
+        await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('medium');
         await effort.click();
         await menu.getByRole('menuitemradio', { name: 'X-High', exact: true }).click();
         await expect(effort).toContainText('X-High');
@@ -124,7 +129,7 @@ test.describe('Yeaft composer menus', () => {
         await page.locator('.yeaft-composer-model').click();
         await page.locator('.yeaft-composer-model-dropdown').getByRole('menuitemradio', { name: 'other-api-model proxy', exact: true }).click();
         await effort.click();
-        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Minimal', 'Low', 'Medium', 'High', 'X-High', 'Max', 'Ultra']);
+        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Medium', 'X-High', 'Max', 'Ultra']);
         await menu.getByRole('menuitemradio', { name: 'Ultra', exact: true }).click();
         await expect.poll(() => loadSessionConfig(root, sessionId)).toEqual({ model: 'proxy/other-api-model', modelEffort: 'ultra' });
         await page.screenshot({ path: testInfo.outputPath(`api-effort-${theme}.png`) });

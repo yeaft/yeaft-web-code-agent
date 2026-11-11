@@ -26,7 +26,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const original = Object.fromEntries(['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'].map(key => [key, ctx[key]]));
 let root, store, calls, runtime, capture;
 const id = 'session_source';
-const config = { model: 'gpt-4.1', modelEffort: 'low' };
+const config = { model: 'gpt-4.1', modelEffort: 'medium' };
 
 function seedSession(sessionId = id) {
   const handle = createSession(sessionsRoot(root), { id: sessionId, name: sessionId, roster: ['alpha', 'beta'], defaultVpId: 'alpha', announcement: 'Keep source context' });

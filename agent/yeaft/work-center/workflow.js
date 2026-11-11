@@ -1,3 +1,4 @@
+import { normalizeEffort } from '../models.js';
 import { sessionMessageQuotePrompt } from '../session-message-quote.js';
 import { isDynamicWorkItem } from './execution-mode.js';
 import { renderSessionContextSnapshot } from './session-context.js';
@@ -22,7 +23,7 @@ export const BUILT_IN_ACTION_TYPES = Object.freeze([
 const STAGE_TYPES = new Set(BUILT_IN_ACTION_TYPES);
 const ASSIGNMENT_MODES = new Set(['auto', 'pool', 'fixed', 'planned']);
 const MODEL_MODES = new Set(['inherit', 'primary', 'fast', 'specific', 'tag']);
-const MODEL_EFFORTS = new Set(['medium', 'high', 'xhigh']);
+const MODEL_EFFORTS = new Set(['medium', 'xhigh']);
 const WORKSPACE_MODES = new Set(['shared', 'read', 'isolated-write', 'integrate']);
 const ACTION_CONTEXT_QUOTE_MAX_BYTES = 8 * 1024;
 
@@ -47,7 +48,7 @@ function normalizeModelTags(value) {
 function defaultActionModelTag(type) {
   if (ULTIMATE_ACTION_TYPES.has(type)) return { tag: 'ultimate', effort: 'xhigh' };
   if (FAST_ACTION_TYPES.has(type)) return { tag: 'fast', effort: 'medium' };
-  return { tag: 'balanced', effort: 'high' };
+  return { tag: 'balanced', effort: 'xhigh' };
 }
 
 const DEFAULT_STAGE_INSTRUCTIONS = Object.freeze({
@@ -126,7 +127,7 @@ const DEFAULT_SOFTWARE_CHANGE_STAGES = Object.freeze([
   {
     id: 'implement', name: 'Implement', type: 'implement',
     assignmentPolicy: { mode: 'auto', capability: 'implement', candidateVpIds: [], fixedVpId: null, separateFromStageTypes: [] },
-    modelPolicy: { mode: 'tag', tag: 'balanced', effort: 'high' },
+    modelPolicy: { mode: 'tag', tag: 'balanced', effort: 'xhigh' },
     maxAttempts: 2,
   },
   {
@@ -209,7 +210,8 @@ export function normalizeModelPolicy(value) {
   const tag = typeof source.tag === 'string' && source.tag.trim()
     ? canonicalActionId(source.tag)
     : null;
-  const effort = MODEL_EFFORTS.has(source.effort) ? source.effort : null;
+  const normalizedEffort = normalizeEffort(source.effort);
+  const effort = MODEL_EFFORTS.has(normalizedEffort) ? normalizedEffort : null;
   if (mode === 'specific' && !model) throw new Error('Specific Work Center model policy requires a model');
   if (mode === 'tag' && !tag) throw new Error('Tagged Work Center model policy requires a tag');
   return { mode, model, tag, effort };
@@ -336,7 +338,7 @@ export function defaultWorkCenterSettings() {
     defaultWorkDir: '',
     globalInstructions: '',
     modelTags: { ...DEFAULT_WORK_CENTER_MODEL_TAGS },
-    modelPolicy: normalizeModelPolicy({ mode: 'tag', tag: 'balanced', effort: 'high' }),
+    modelPolicy: normalizeModelPolicy({ mode: 'tag', tag: 'balanced', effort: 'xhigh' }),
     coordinatorModelPolicy: normalizeModelPolicy({ mode: 'tag', tag: 'ultimate', effort: 'xhigh' }),
     actionModelPolicies: normalizeActionModelPolicies(),
     actionInstructions: normalizeActionInstructions(),
@@ -378,7 +380,7 @@ export function normalizeWorkCenterSettings(value) {
     modelTags: normalizeModelTags(source.modelTags),
     modelPolicy: normalizeModelPolicy(source.modelPolicy || migratedModelPolicy),
     coordinatorModelPolicy: normalizeModelPolicy(
-      source.coordinatorModelPolicy || { ...(source.modelPolicy || migratedModelPolicy), effort: 'high' },
+      source.coordinatorModelPolicy || { ...(source.modelPolicy || migratedModelPolicy), effort: 'xhigh' },
     ),
     actionModelPolicies: normalizeActionModelPolicies(source.actionModelPolicies, source.modelPolicy || migratedModelPolicy),
     actionInstructions: normalizeActionInstructions(source.actionInstructions || migratedInstructions),

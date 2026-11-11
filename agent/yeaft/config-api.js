@@ -39,6 +39,10 @@ function quickSendModels(config) {
   });
 }
 
+function publicQuickSends(value) {
+  return (Array.isArray(value) ? value : []).map(item => ({ ...item, effort: normalizeEffort(item.effort) }));
+}
+
 /** Validate inside mutateAgentConfig's lock, against the resulting provider catalog. */
 function validateQuickSends(value, config) {
   if (!Array.isArray(value) || value.length > 5) throw new Error('quickSends must be an array of at most 5 items');
@@ -56,8 +60,8 @@ function validateQuickSends(value, config) {
     const candidates = matches.length ? matches : models.filter(model => model.id === ref);
     if (candidates.length !== 1) throw new Error(`Quick send model must exist and be unambiguous: ${ref}`);
     const model = candidates[0];
-    const effort = item.effort ?? null;
-    if (effort !== null && (!normalizeEffort(effort) || !model.effortOptions.includes(effort))) {
+    const effort = normalizeEffort(item.effort);
+    if (item.effort != null && (!effort || !model.effortOptions.includes(effort))) {
       throw new Error(`Quick send effort is not available for ${model.ref}`);
     }
     const maxOutputTokens = item.maxOutputTokens ?? null;
@@ -106,7 +110,7 @@ function readLocalLlmConfig(dir) {
     fastModel: json.fastModel || null,
     language: json.language || 'en',
     debug: json.debug === true,
-    quickSends: Array.isArray(json.quickSends) ? json.quickSends : [],
+    quickSends: publicQuickSends(json.quickSends),
     availableModels: quickSendModels(json),
     needsSetup: providers.length === 0 || providers.every(p => p.apiKey === 'proxy' || p.apiKey === '' || (!p.apiKey && !p.credentialProvider)),
   };
@@ -229,7 +233,7 @@ export function updateLlmConfig(update, dir) {
         fastModel: existing.fastModel || null,
         language: existing.language || 'en',
         debug: existing.debug === true,
-        quickSends: Array.isArray(existing.quickSends) ? existing.quickSends : [],
+        quickSends: publicQuickSends(existing.quickSends),
         availableModels: quickSendModels(existing),
       };
       return {

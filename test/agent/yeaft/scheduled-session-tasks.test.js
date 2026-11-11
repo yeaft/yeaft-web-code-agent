@@ -412,7 +412,7 @@ it('fences stopped cold ingress by Session, preserves the plan, then executes af
     expect(store.loadVisibleBySession('session_task', Infinity, Infinity).messages.some(row => row.role === 'user' && row.content === task().prompt)).toBe(true);
     expect(queryInput).toMatchObject({ prompt: expect.stringContaining(task().prompt), projectInstruction: 'Always verify recovery evidence.', projectLabel: 'Server Project (server-project)' });
     expect(requests.at(-1).system).toContain('Always verify recovery evidence.');
-    expect(requests.at(-1)).toMatchObject({ model: 'test/model', effort: 'high', effortSource: 'user' });
+    expect(requests.at(-1)).toMatchObject({ model: 'test/model', effort: 'xhigh', effortSource: 'user' });
     expect(read().task).toMatchObject({ nextRunAt: null, _scheduledRuns: 1, lastRun: { trigger: 'schedule' } });
     const snapshot = ctx.outboundSendQueue.find(item => item.msg.event?.type === 'session_list_updated').msg.event.sessions;
     expect(snapshot.find(row => row.id === 'session_task').config).toEqual(config);
@@ -606,7 +606,7 @@ it('correlates task create success and validation failure to the authenticated r
     const created = ctx.outboundSendQueue.find(item => item.msg.event?.requestId === 'new-task').msg;
     expect(created).toMatchObject({ requestId: 'new-task', _requestClientId: 'browser-valid', event: { op: 'create', ok: true, session: { task: { prompt: task().prompt } } } });
     const { id, task: createdTask, config } = created.event.session;
-    expect(config).toEqual({ model: 'test/model', modelEffort: 'high' });
+    expect(config).toEqual({ model: 'test/model', modelEffort: 'xhigh' });
     expect(createdTask.revision).toBe(read(id).task._revision);
     expect(createdTask).not.toHaveProperty('_revision');
     bridge.handleYeaftScheduledTask({ op: 'update', sessionId: id, task: { enabled: false }, expectedRevision: createdTask.revision, requestId: 'edit-task', _requestClientId: 'browser-valid' });

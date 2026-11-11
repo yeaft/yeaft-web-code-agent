@@ -466,7 +466,7 @@ describe('durable native Session fork and merge', () => {
         else for await (const event of anthropic.stream(params)) expect(event).toBeDefined();
         const wire = JSON.parse(fetch.mock.calls.at(-1)[1].body);
         expect(wire.thinking).toMatchObject({ type: 'adaptive' });
-        expect(wire.output_config.effort).toBe('high');
+        expect(wire.output_config.effort).toBe('xhigh');
         expect(wire.messages.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text', text: 'next request' }] });
         expect(JSON.stringify(wire)).not.toContain('PRIVATE');
         const blocks = wire.messages.flatMap(message => message.content);
