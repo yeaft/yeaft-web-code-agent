@@ -97,10 +97,11 @@ describe('Anthropic evolving Messages protocol', () => {
       .mockImplementation(() => Promise.resolve(json({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' })));
     vi.stubGlobal('fetch', fetch);
     const adapter = new AnthropicAdapter({ apiKey: 'synthetic' });
-    const initial = await collect(adapter.stream(params));
+    const request = { ...params, tools: [{ name: 'Read', description: 'Read evidence', parameters: { type: 'object' } }] };
+    const initial = await collect(adapter.stream(request));
     const providerState = initial.find(event => event.type === 'provider_state').providerState;
     expect(providerState.requestPrefix?.digest).toMatch(/^sha256:/);
-    const next = { ...params, messages: [...params.messages, { role: 'assistant', content: '',
+    const next = { ...request, messages: [...request.messages, { role: 'assistant', content: '',
       toolCalls: [{ id: 'read', name: 'Read', input: {} }], providerState }, { role: 'tool', toolCallId: 'read', content: 'result' },
     { role: 'system', content: [{ type: 'text', text: 'New runtime instruction.' },
       { type: 'tool_addition', tool: { type: 'tool_definition', definition: { name: 'Grep', input_schema: { type: 'object' } } } }] }] };

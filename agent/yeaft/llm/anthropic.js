@@ -343,11 +343,11 @@ export class AnthropicAdapter extends LLMAdapter {
     body.messages = translatedMessages;
     body.system = system;
     applyAnthropicCaching(body, context, onProviderDiagnostics);
+    applyThinkingDisplay(body, context);
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
-    applyThinkingDisplay(body, context);
     const wireBody = toWellFormedJson(body);
     validateAnthropicRequestPrefixes(wireBody, replayed);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
@@ -818,11 +818,11 @@ export class AnthropicAdapter extends LLMAdapter {
     body.messages = translatedMessages;
     body.system = system;
     applyAnthropicCaching(body, context, onProviderDiagnostics);
+    applyThinkingDisplay(body, context);
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
-    applyThinkingDisplay(body, context);
     const wireBody = toWellFormedJson(body);
     validateAnthropicRequestPrefixes(wireBody, replayed);
 
