@@ -3025,11 +3025,12 @@ export class Engine {
         // rows; current-turn rows are paid here together with system, schemas,
         // and the model-specific output reserve. This runs on every tool-loop
         // request and again with tighter headroom after a provider overflow.
-        const requestMaxOutputTokens = Math.max(1, Math.min(
+        let requestMaxOutputTokens = Math.max(1, Math.min(
           requestConfig.maxOutputTokens || resolveMaxOutputTokens(currentModel, requestConfig),
           resolveMaxOutputTokens(currentModel, requestConfig),
           executionPolicy?.maxOutputTokens || Infinity,
         ));
+        const configuredOutputReserve = requestMaxOutputTokens;
         const toolSchemaTokens = requestToolDefs.length > 0
           ? approxTokens(JSON.stringify(requestToolDefs)) : 0;
         const fitOptions = {
@@ -3046,13 +3047,29 @@ export class Engine {
           if (!signedAnthropicPrefix) return fitProviderRequestToContext(candidate, fitOptions);
           // Never let emergency trimming, result deduplication or pair repair
           // rewrite a signed prefix (nor drop active signed assistant rows).
-          const staticTokens = fitOptions.systemTokens + toolSchemaTokens + requestMaxOutputTokens;
-          const estimatedTokens = staticTokens + estimateHistoryMessagesTokens(candidate);
-          if (estimatedTokens > fitOptions.contextWindow) {
+          let inputTokens = fitOptions.systemTokens + toolSchemaTokens + estimateHistoryMessagesTokens(candidate);
+          if (signedAnthropicPrefix.inputTokens > 0) {
+            // The previous request is byte-stable. Anchor it to provider usage
+            // (including cache), then estimate only the appended response/results.
+            // Gateways and non-English text can be far above the chars/4 estimate.
+            const scale = Math.max(1, signedAnthropicPrefix.inputTokens / Math.max(1, signedAnthropicPrefix.inputEstimate));
+            const appended = candidate.slice(signedAnthropicPrefix.messages.length);
+            const responseTokens = Math.max(signedAnthropicPrefix.outputTokens,
+              appended[0] ? Math.ceil(estimateMessageTokens(appended[0]) * scale) : 0);
+            inputTokens = Math.max(inputTokens, signedAnthropicPrefix.inputTokens + responseTokens
+              + Math.ceil(estimateHistoryMessagesTokens(appended.slice(1)) * scale));
+          }
+          // max_tokens is an upper bound, not part of the signed prefix. Spend
+          // less on this response before rejecting an otherwise valid continuation.
+          requestMaxOutputTokens = Math.min(configuredOutputReserve, fitOptions.contextWindow - inputTokens);
+          if (requestMaxOutputTokens < Math.min(configuredOutputReserve, 1024)) {
             throw new ProviderStateError('active Anthropic signed context cannot fit without changing its prefix; start a new turn with a smaller context');
           }
+          const staticTokens = fitOptions.systemTokens + toolSchemaTokens + requestMaxOutputTokens;
+          const estimatedTokens = inputTokens + requestMaxOutputTokens;
           return { messages: candidate, meta: {
             contextWindow: fitOptions.contextWindow, staticTokens, estimatedTokens,
+            estimatedInputTokens: inputTokens, configuredOutputReserve, outputReserve: requestMaxOutputTokens,
             historyMessagesAfter: historyMessageCount, droppedHistoryMessages: 0,
             droppedCurrentMessages: 0, compactedToolResults: 0, deduplicatedToolResults: 0,
           } };
@@ -3093,6 +3110,14 @@ export class Engine {
         const deliveredTaskIds = taskDeliveries.filter(({ text }) => includesDelivery(wireMessages, text))
           .map(({ taskId }) => taskId);
         historyMessageCount = fittedRequest.meta.historyMessagesAfter;
+        if (requestMaxOutputTokens < configuredOutputReserve) {
+          this.#trace.log?.('request_output_reserve', {
+            sessionId: runtimeSessionId, turnId: queryTurnId, model: currentModel,
+            contextWindow: fittedRequest.meta.contextWindow,
+            estimatedInputTokens: fittedRequest.meta.estimatedInputTokens,
+            configuredOutputReserve, outputReserve: requestMaxOutputTokens,
+          });
+        }
         if (fittedRequest.meta.compactedToolResults > 0
             || fittedRequest.meta.deduplicatedToolResults > 0) {
           // Compaction invalidates file-read hints, not execution/reuse safety
@@ -3139,6 +3164,7 @@ export class Engine {
           currentSystem: currentSystemInstructions, currentTools: structuredClone(toolDefs),
           messages: structuredClone(wireMessages), historyMessageCount,
           conversationCursor: conversationMessages.length + (pendingContinuationForRequest ? 1 : 0),
+          inputEstimate: requestInputBreakdown.totalEstimatedTokens,
         };
 
         // Capture only the provider route before the visible boundary. The
@@ -3883,7 +3909,9 @@ export class Engine {
       // Claude signatures alone do not imply support for inline system/tools.
       if (requestPrefixSnapshot && (signedAnthropicPrefix || (boundProviderState?.protocol === 'anthropic'
           && boundProviderState.requestPrefix))) {
-        signedAnthropicPrefix = requestPrefixSnapshot;
+        signedAnthropicPrefix = { ...requestPrefixSnapshot,
+          inputTokens: turnInputTokens, outputTokens: turnOutputTokens,
+        };
       }
       // New private reasoning is persisted only with verified provider ownership;
       // never downgrade it to the origin-free legacy thinkingBlocks format.

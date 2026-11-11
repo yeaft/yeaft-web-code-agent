@@ -69,6 +69,13 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
 
 import { ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts, validateAnthropicRequestPrefixes, supportsAnthropicPreservedThinking } from './provider-state.js';
 
+/** Signed continuations cannot recover by compacting after wire settings grow. */
+function validateSignedOutputBudget(body, replayed, maxTokens) {
+  if (replayed.some(({ state }) => state.requestPrefix) && body.max_tokens > maxTokens) {
+    throw new ProviderStateError('signed Anthropic output settings exceed the remaining context budget; lower thinking/output settings or start a new turn');
+  }
+}
+
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const API_VERSION = '2023-06-01';
 
@@ -351,6 +358,7 @@ export class AnthropicAdapter extends LLMAdapter {
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
+    validateSignedOutputBudget(body, replayed, maxTokens);
     const wireBody = toWellFormedJson(body);
     validateAnthropicRequestPrefixes(wireBody, replayed);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
@@ -827,6 +835,7 @@ export class AnthropicAdapter extends LLMAdapter {
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
+    validateSignedOutputBudget(body, replayed, maxTokens);
     const wireBody = toWellFormedJson(body);
     validateAnthropicRequestPrefixes(wireBody, replayed);
 

@@ -24,6 +24,16 @@
 
 不再按工具循环次数运行 T1 reflection，也不再启动 T2 reflection 或将其结果带入下一轮。执行期 compact 是确定性的 tool-result 投影，不额外调用模型、不生成反思内容、不折叠或覆盖 transcript。图片和文档不按字节切割；仅压缩文本不足以适配时，仍使用已有整块附件/工具协议单元的有界降级。请求诊断中的 `tool_result_compact` 记录数量与预算，不复制敏感结果正文。
 
+## Anthropic 签名前缀的例外
+
+支持 preserved thinking 的 Anthropic 模型一旦在当前 query 内建立签名前缀，后续请求必须保持原有 system、tools 和消息前缀不变；不能再对这些工具结果做 compact、去重或丢弃。运行中指令与工具变更仍通过追加消息传递。
+
+此时 `max_tokens` 只是输出上限，不属于签名前缀。Engine 先按剩余窗口缩小本次输出额度，而不是因为配置的最大输出额度过大就终止。预算以最近成功请求的实际 input（按 provider 语义计入 cache）为下界，再计入助手响应及新增工具结果；新增内容的估算按该请求实际 input / 文本估算比值校准。没有实际 usage 时回退到文本估算。`request_output_reserve` trace 只记录窗口、输入预算和输出额度，不复制正文。
+
+适配器在最终 wire body 规范化之后再次校验签名 continuation 的输出上限。如果 manual thinking 或 `extraBody` 把额度重新抬高，则在 fetch 前显式失败，不默默降低用户指定的 thinking budget，也不发送越界请求；stream 和 side call 采用同一保护。
+
+若剩余额度不足 1024 tokens（用户或执行策略配置的上限本来更小则沿用更小值），仍显式终止并要求缩小上下文后开始新 turn。不删除签名、不改写 transcript、不重放已经执行的工具，也不在 query 中生成摘要。该兜底推迟的是不必要的提前失败，不承诺单个 turn 可无限增长。
+
 ## 响应后 compact
 
 provider 报告的单次请求上下文占用达到模型 `contextWindow` 的 80% 时，Engine 在 `turn_close` 已交付后才启动异步 compact：

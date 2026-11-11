@@ -105,11 +105,16 @@ describe('Anthropic evolving Messages protocol', () => {
       toolCalls: [{ id: 'read', name: 'Read', input: {} }], providerState }, { role: 'tool', toolCallId: 'read', content: 'result' },
     { role: 'system', content: [{ type: 'text', text: 'New runtime instruction.' },
       { type: 'tool_addition', tool: { type: 'tool_definition', definition: { name: 'Grep', input_schema: { type: 'object' } } } }] }] };
-    await collect(adapter.stream(next));
+    // A lower output ceiling is not signed; changing only max_tokens is safe.
+    await collect(adapter.stream({ ...next, maxTokens: 2048 }));
     const wire = JSON.parse(fetch.mock.calls[1][1].body);
+    expect(wire.max_tokens).toBe(2048);
     expect(wire.messages[1].content).toEqual(signed);
     expect(wire.messages.at(-1)).toEqual(next.messages.at(-1));
     expect(fetch.mock.calls[1][1].headers['anthropic-beta']).toBe('inline-tools-2026-09-15');
+    await expect(adapter.call({ ...next, maxTokens: 2048, effort: 'xhigh', effortSource: 'user',
+      effortContext: { thinkingProtocol: 'anthropic' } })).rejects.toThrow(/output settings exceed/);
+    await expect(adapter.call({ ...next, maxTokens: 2048, extraBody: { max_tokens: 3000 } })).rejects.toThrow(/output settings exceed/);
     await expect(adapter.call({ ...next, system: 'changed prefix' })).rejects.toThrow(/prefix changed/);
     expect(fetch).toHaveBeenCalledTimes(2);
     await expect(adapter.call({ ...params, model: 'claude-sonnet-4', messages: [{ role: 'system', content: 'new' }] })).rejects.toThrow(/does not support mid-conversation/);
