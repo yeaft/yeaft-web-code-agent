@@ -9,6 +9,14 @@ Yeaft is **not bound** to any single LLM vendor — through the adapter layer in
 3. **Hot-reloadable** — edit `config.json`, no Agent restart needed
 4. **Credential abstraction** — static apiKey OR dynamic credential provider (e.g. GitHub OAuth)
 
+## Web configuration drafts
+
+LLM configuration is read on demand: when the editor opens, or when the composer first connects or genuinely reconnects. Routine Agent status snapshots do not trigger reads, and there is no periodic LLM configuration polling. Configuration changes saved through the UI are synchronized to clients on the same account.
+
+The LLM form in Agent settings submits only when you click **Save**. Background configuration responses, reconnect reads, and other clients' updates do not overwrite unsaved input. Changes made while a save is pending remain unsaved and require another explicit save. Failed or timed-out saves also retain the draft.
+
+Drafts live only in the open editor, not in persistent browser storage. Closing the form, switching Agents, or reloading the page discards unsaved changes; save explicitly first.
+
 ## Module Layout
 
 ```
@@ -63,6 +71,7 @@ export class LLMAdapter {
 - Supports thinking blocks (with signature)
 - Supports prompt caching (`cache_control`)
 - Supports fine-grained tool_use
+- Claude Fable 5 / 5.1 / 5.2 automatically expose `low`, `medium`, `high`, `xhigh`, and `max` effort. Explicit Session choices use adaptive thinking with `output_config.effort`, not manual token budgets. The model API default is `high`; available tiers follow the Agent-provided catalog, so an older Agent must be updated for the selector to appear. See [Anthropic effort](https://platform.claude.com/docs/en/build-with-claude/effort).
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
 - Targets OpenAI Responses API `/v1/responses` (**not** legacy chat completions)
