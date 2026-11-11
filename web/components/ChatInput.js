@@ -473,13 +473,15 @@ export default {
     });
     const canQuickSend = Vue.computed(() => canSend.value && store.connectionState === 'connected'
       && store.agents?.some(agent => agent.id === store.currentAgent && agent.online));
-    // Watch scalar sources, not a freshly allocated tuple. Heartbeat snapshots
-    // replace agents without changing readiness and must not re-read full config.
+    // Watch scalar sources, not a freshly allocated tuple. Routine snapshots
+    // must not re-read full config. onopen alone is too early after reconnect:
+    // wait for authentication and this socket's authoritative Agent inventory.
     Vue.watch([() => props.quickSendEnabled,
-      () => store.currentAgent, () => store.connectionState,
+      () => store.currentAgent,
+      () => store.connectionState === 'connected' && store.authenticated === true && store._hasHandledAgentList === true,
       () => store.agents?.find(agent => agent.id === store.currentAgent)?.online],
-    ([enabled, agentId, connection, online]) => {
-      if (enabled && agentId && connection === 'connected' && online) {
+    ([enabled, agentId, ready, online]) => {
+      if (enabled && agentId && ready && online) {
         store.sendWsMessage({ type: 'get_llm_config', agentId });
       }
     }, { immediate: true });

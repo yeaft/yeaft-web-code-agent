@@ -177,6 +177,7 @@ describe('Agent LLM editing draft ownership', () => {
   it('reads config on real readiness edges, not routine Agent list replacement, elapsed time or config broadcasts', async () => {
     vi.useFakeTimers();
     const store = Vue.reactive({ currentAgent: 'agent-a', connectionState: 'connected',
+      authenticated: true, _hasHandledAgentList: true,
       agents: [{ id: 'agent-a', online: true }], inputDrafts: {}, llmConfig: {}, sendWsMessage: vi.fn() });
     globalThis.Pinia = { useChatStore: () => store, useAuthStore: () => auth,
       useVpStore: () => ({ vpList: [] }) };
@@ -192,9 +193,14 @@ describe('Agent LLM editing draft ownership', () => {
     store.llmConfig['agent-a'] = config('changed');
     await Vue.nextTick();
     expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
-    store.connectionState = 'reconnecting'; await Vue.nextTick();
+    store.connectionState = 'reconnecting'; store.authenticated = false; store._hasHandledAgentList = false;
+    await Vue.nextTick();
     expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
     store.connectionState = 'connected'; await Vue.nextTick();
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
+    store.authenticated = true; await Vue.nextTick();
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
+    store._hasHandledAgentList = true; await Vue.nextTick();
     expect(store.sendWsMessage).toHaveBeenCalledTimes(2);
     store.agents = [{ id: 'agent-a', online: false }]; await Vue.nextTick();
     expect(store.sendWsMessage).toHaveBeenCalledTimes(2);

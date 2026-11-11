@@ -98,10 +98,34 @@ for (const scenario of [
     await expect(save).toBeEnabled();
     await expect(name).toHaveValue('newer unsaved provider');
     await expect(form.locator('.llm-dirty-hint')).toBeVisible();
-    // A reconnect/read (same Agent) must not adopt the older saved snapshot.
-    await page.evaluate(agentId => window.Pinia.useChatStore().sendWsMessage({ type: 'get_llm_config', agentId }), mockAgent.agentId);
-    await expect.poll(() => reads.length).toBeGreaterThan(startReads);
+    // Exercise the real socket/auth/encryption/inventory lifecycle, not an
+    // explicit read pretending to be reconnect. The open editor stays dirty.
+    const beforeReconnect = reads.length;
+    savedConfig = { ...savedConfig, debug: true };
+    await page.evaluate(() => {
+      const store = window.Pinia.useChatStore();
+      window.__llmConnectionGeneration = store.chatHistoryConnectionGeneration;
+      window.__llmReadStates = [];
+      const send = store.sendWsMessage.bind(store);
+      store.sendWsMessage = message => {
+        if (message.type === 'get_llm_config') window.__llmReadStates.push({
+          authenticated: store.authenticated, inventory: store._hasHandledAgentList,
+        });
+        return send(message);
+      };
+      store.ws.close(4000, 'LLM regression reconnect');
+    });
+    await page.waitForFunction(() => {
+      const store = window.Pinia.useChatStore();
+      return store.chatHistoryConnectionGeneration > window.__llmConnectionGeneration
+        && store.authenticated && store._hasHandledAgentList && store.connectionState === 'connected';
+    });
+    await expect.poll(() => reads.length).toBe(beforeReconnect + 1);
+    expect(await page.evaluate(() => window.__llmReadStates)).toEqual([{ authenticated: true, inventory: true }]);
+    mockAgent.send({ type: 'proxy_ports_update', ports: [] });
     await expect(name).toHaveValue('newer unsaved provider');
+    await expect(models).toHaveValue('model-a,\npartially-written-model, ');
+    expect(reads).toHaveLength(beforeReconnect + 1);
     expect(writes).toHaveLength(1);
 
     await save.click();
