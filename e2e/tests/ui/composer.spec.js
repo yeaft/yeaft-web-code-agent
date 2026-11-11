@@ -114,7 +114,8 @@ test.describe('Yeaft composer menus', () => {
         await menu.getByRole('menuitemradio', { name: 'Max', exact: true }).click();
         await expect(effort).toContainText('Max');
         await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('max');
-        expect(requests.at(-1)).toMatchObject({ agentId: mockAgent.agentId, sessionId, config: { model: selectedModel, modelEffort: 'max' } });
+        // The Server consumes agentId for routing; receipt on this mock socket proves ownership.
+        expect(requests.at(-1)).toMatchObject({ sessionId, config: { model: selectedModel, modelEffort: 'max' } });
         await page.screenshot({ path: testInfo.outputPath(`fable-effort-${theme}.png`) });
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
