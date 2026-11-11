@@ -1727,7 +1727,7 @@ describe('native Session response publication', () => {
     await closeConversationHistoryIndexes();
     dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true }));
   });
-  function fixture() {
+  function fixture({ adapter: providerAdapter, config = {} } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-presentation-')); dirs.push(dir);
     const store = new ConversationStore(dir);
     const requests = [];
@@ -1739,13 +1739,86 @@ describe('native Session response publication', () => {
       if (!events) throw new Error('Unexpected provider request');
       yield* events;
     } };
-    const engine = new Engine({ adapter, trace: new NullTrace(), config: { model: 'test-model', maxOutputTokens: 1024, maxRetries: 0 }, conversationStore: store, yeaftDir: dir, vpId: 'vp-a', toolRegistry: createFullRegistry() });
+    const engine = new Engine({ adapter: providerAdapter || adapter, trace: new NullTrace(), config: { model: 'test-model', maxOutputTokens: 1024, maxRetries: 0, ...config }, conversationStore: store, yeaftDir: dir, vpId: 'vp-a', toolRegistry: createFullRegistry() });
     return { engine, store, dir, requests, responses };
   }
   const query = { prompt: 'Show the verified result', sessionId: 'session-a', vpTurnId: 'turn-a', threadId: 'main' };
   const call = (id = 'publish-a', payload = input) => ({ type: 'tool_call', id, name: 'PresentResponse', input: payload });
   const stop = stopReason => ({ type: 'stop', stopReason });
   async function collect(engine, params = query, callback = () => {}) { const events = []; for await (const event of engine.query(params)) { events.push(event); callback(event); } return events; }
+
+  it.each([
+    ['claude-sonnet-4', 'high', 'enabled'],
+    ['claude-opus-4.6', 'high', 'adaptive'],
+    ['claude-opus-4.8', 'high', 'adaptive'],
+    ['claude-opus-4.8', undefined, undefined],
+  ])('continues %s publications with native tool results, not an assistant prefill', async (model, effort, thinkingType) => {
+    const progress = { ...input, phase: 'progress', summary: 'Checks are running.' };
+    const native = [
+      ...(thinkingType ? [
+        { type: 'thinking', thinking: 'Check the evidence.', signature: 'opaque-presentation-signature' },
+        { type: 'redacted_thinking', data: 'opaque-redacted-thinking' },
+      ] : []),
+      { type: 'tool_use', id: 'publish-progress', name: 'PresentResponse', input: progress },
+      { type: 'tool_use', id: 'publish-final', name: 'PresentResponse', input },
+    ];
+    const requests = [];
+    const fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      requests.push(body);
+      // Match the native API's prefill rejection rather than allowing a mock
+      // provider to accept an invalid post-publication request.
+      if (body.messages.at(-1)?.role === 'assistant') {
+        return new Response(JSON.stringify({ error: { type: 'invalid_request_error', message: 'Assistant prefill is not supported.' } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ id: `response-${requests.length}`, model,
+        content: requests.length === 1 ? native : requests.length === 2 ? [] : [{ type: 'text', text: 'Previous checks confirmed.' }],
+        stop_reason: requests.length === 1 ? 'tool_use' : 'end_turn',
+      }), { headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const f = fixture({ adapter: new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
+        baseUrl: 'https://anthropic-gateway.invalid', apiKey: 'synthetic', models: [model] }] }),
+        config: { model: `gateway/${model}`, modelEffort: effort, projectDocMaxBytes: 0 } });
+      const events = await collect(f.engine);
+      expect(events.filter(event => event.type === 'error')).toEqual([]);
+      expect(requests).toHaveLength(2); // phase=final does not end the query.
+      expect(requests[0].thinking?.type).toBe(thinkingType);
+      const continuation = requests[1];
+      expect(continuation.thinking).toEqual(requests[0].thinking);
+      expect(continuation.messages).toEqual([
+        ...requests[0].messages,
+        { role: 'assistant', content: native },
+        { role: 'user', content: [
+          expect.objectContaining({ type: 'tool_result', tool_use_id: 'publish-progress', is_error: false }),
+          expect.objectContaining({ type: 'tool_result', tool_use_id: 'publish-final', is_error: false }),
+        ] },
+      ]);
+      for (const result of continuation.messages.at(-1).content) expect(JSON.parse(result.content).accepted).toBe(true);
+      expect(events.filter(event => event.type === 'response_presentation')).toHaveLength(2);
+      expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+        expect.objectContaining({ stopReason: 'end_turn', terminal: true }),
+      ]);
+      const history = f.store.loadAllBySession(query.sessionId);
+      const publications = history.filter(row => row.presentation);
+      expect(publications.map(row => [row.content, row.presentation.phase, row.responseKind])).toEqual([
+        [progress.summary, 'progress', 'progress'], [input.summary, 'final', 'progress'],
+      ]);
+      // Later turns still receive delivered summaries as ordinary history,
+      // never rich UI metadata or a replay of the publication side effect.
+      const next = await collect(f.engine, { ...query, prompt: 'What did the checks show?', vpTurnId: 'turn-b', messages: history });
+      expect(next.filter(event => event.type === 'error')).toEqual([]);
+      expect(next.filter(event => event.type === 'response_presentation')).toEqual([]);
+      expect(requests).toHaveLength(3);
+      for (const summary of [progress.summary, input.summary]) {
+        expect(requests[2].messages.some(row => row.role === 'assistant' && JSON.stringify(row.content).includes(summary))).toBe(true);
+      }
+      expect(requests[2].messages.at(-1)).toMatchObject({ role: 'user', content: 'What did the checks show?' });
+      expect(JSON.stringify(requests[2].messages)).not.toMatch(/presentationCallId|"presentation"/);
+      expect(f.store.loadAllBySession(query.sessionId).filter(row => row.presentation)).toHaveLength(2);
+    } finally { vi.unstubAllGlobals(); }
+  });
 
   it('fences cancellation before publication and keeps delivered snapshots as progress on failed turns', async () => {
     const f = fixture(); const controller = new AbortController();

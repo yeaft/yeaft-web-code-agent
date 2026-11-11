@@ -69,6 +69,8 @@ The tool validates the whole response before publishing. Invalid types, excessiv
 
 `phase: "progress"` communicates partial results. `phase: "final"` expresses delivery intent, **not task success or automatic turn termination**. Native Sessions retain their engine terminal boundary; Persons still commit through the cognitive proposal with `next:null`. Cancellation or failure preserves already-delivered content without treating the run as successful. After publishing a complete response, the model does not need to repeat the same answer in prose.
 
+Native Sessions retain the published summary and metadata in durable history and the UI, without appending a host-generated assistant summary to the active tool loop. The model continues from normal tool results; later user turns can still read delivered summaries. This preserves Anthropic's original thinking/tool-use blocks followed by `user/tool_result`, instead of creating an unsupported assistant prefill. See [Anthropic's thinking and prefill restrictions](https://platform.claude.com/docs/en/build-with-claude/thinking#response-prefill-and-forced-tool-use).
+
 ## Example
 
 Native tool arguments and Person capability `args` use the same structure:
