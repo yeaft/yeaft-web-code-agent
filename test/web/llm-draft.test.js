@@ -76,6 +76,14 @@ describe('Agent LLM editing draft ownership', () => {
     expect(wrapper.vm.saving).toBe(false);
     expect(saveButton().attributes('disabled')).toBeDefined();
     expect(wrapper.emitted('saved')).toHaveLength(1);
+    const model = { id: 'claude-legacy', thinkingProtocol: 'anthropic', maxBudgetTokens: 6000,
+      supportsEffort: false, effortOptions: ['low'] };
+    store.llmConfig['agent-a'] = config('managed-refresh', { providers: [{ name: 'github-copilot', managed: 'github-copilot', models: [model] }] });
+    await Vue.nextTick();
+    wrapper.vm.applyDiscoveredProvider({ provider: { name: 'github-copilot' }, providerModels: [{ id: 'claude-legacy', protocol: 'anthropic' }] });
+    await Vue.nextTick();
+    await saveButton().trigger('click');
+    expect(pendingRequest(store).config.providers[0].models[0]).toMatchObject(model);
   });
 
   it('keeps edits made during saving dirty and open, and saves them on the next explicit click', async () => {

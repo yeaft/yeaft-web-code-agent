@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildModelSelectionRows, getSelectableModelEfforts } from '../../../web/utils/modelRefs.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
-import { getLlmConfig } from '../../../agent/yeaft/config-api.js';
+import { getLlmConfig, updateLlmConfig } from '../../../agent/yeaft/config-api.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
@@ -111,5 +111,38 @@ describe('API effort catalog and dispatch', () => {
     expect(requests.at(-1)).not.toHaveProperty('thinking');
     await router.call({ model: 'proxy/opaque-new-model', effort: 'ultra', effortSource: 'user', system: '', messages: [] });
     expect(requests.at(-1)).not.toHaveProperty('output_config');
+  });
+
+  it('retains managed Copilot manual, restricted and disabled effort across save, reload and dispatch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-managed-effort-'));
+    roots.push(root);
+    const managed = { name: 'github-copilot', models: [
+      { id: 'claude-legacy', thinkingProtocol: 'anthropic', maxBudgetTokens: 6000 },
+      { id: 'claude-restricted', effortOptions: ['low'] },
+      { id: 'claude-disabled', supportsEffort: false },
+    ] };
+    const saved = updateLlmConfig({ providers: [managed] }, root);
+    expect(saved.error).toBeUndefined();
+    for (const [index, original] of managed.models.entries()) expect(saved.providers[0].models[index]).toMatchObject(original);
+    const config = loadConfig({ dir: root });
+    const [manual, restricted, disabled] = config.availableModels;
+    expect(manual).toMatchObject({ effortProtocol: 'anthropic', maxBudgetTokens: 6000, effortOptions: ['low', 'medium', 'high', 'max'] });
+    expect(restricted.effortOptions).toEqual(['low']);
+    expect(disabled.supportsEffort).toBe(false);
+    const requests = [];
+    installFetch(requests);
+    // Use the normalized managed models on a synthetic static-key gateway;
+    // no live Copilot authentication, credentials or paid API are accessed.
+    const router = new AdapterRouter({ providers: [{ name: 'fixture', apiKey: 'synthetic', baseUrl: 'https://proxy.invalid', models: config.providers[0].models }] });
+    for (const [model, effort] of [[manual, 'max'], [restricted, 'low'], [disabled, 'high']]) {
+      const params = { model: `fixture/${model.id}`, effort, effortSource: 'user', system: '', messages: [], maxTokens: 4096 };
+      await router.call(params);
+      for await (const _event of router.stream(params)) { /* drain */ }
+      for (const body of requests.slice(-2)) {
+        if (model === manual) expect(body).toMatchObject({ max_tokens: 7024, thinking: { type: 'enabled', budget_tokens: 6000 } });
+        else if (model === restricted) assertWire(body, 'anthropic', 'low');
+        else expect(body).not.toHaveProperty('thinking');
+      }
+    }
   });
 });

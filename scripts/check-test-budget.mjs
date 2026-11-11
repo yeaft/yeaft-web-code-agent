@@ -155,7 +155,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // when native state is disabled or unsupported. Stop-sequence extends existing Person case.
 // +4 PresentResponse wire regressions: manual/adaptive thinking (including
 // prefix-enforced models) and no-thinking preserve native tool pairs and publications.
-export const TEST_CASE_LIMIT = 1009;
+// +1 managed-provider effort persistence/dispatch regression after API-based effort.
+export const TEST_CASE_LIMIT = 1010;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

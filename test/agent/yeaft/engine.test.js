@@ -1779,7 +1779,8 @@ describe('native Session response publication', () => {
     vi.stubGlobal('fetch', fetch);
     try {
       const f = fixture({ adapter: new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
-        baseUrl: 'https://anthropic-gateway.invalid', apiKey: 'synthetic', models: [model] }] }),
+        baseUrl: 'https://anthropic-gateway.invalid', apiKey: 'synthetic',
+        models: [thinkingType === 'enabled' ? { id: model, thinkingProtocol: 'anthropic' } : model] }] }),
         config: { model: `gateway/${model}`, modelEffort: effort, projectDocMaxBytes: 0 } });
       const events = await collect(f.engine);
       expect(events.filter(event => event.type === 'error')).toEqual([]);
