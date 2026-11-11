@@ -47,7 +47,10 @@ describe('Anthropic evolving Messages protocol', () => {
       vi.stubGlobal('fetch', fetch);
       const expected = { protocol: 'anthropic', responseId: 'msg', model: params.model, stopReason: reason,
         stopSequence: message.stop_sequence, stopDetails: message.stop_details, inputTransformations: message.input_transformations };
-      const output = await collect(adapter.stream(params));
+      const rawExchange = vi.fn();
+      const output = await collect(adapter.stream({ ...params, onRawExchange: rawExchange }));
+      expect(rawExchange).toHaveBeenCalledOnce();
+      expect(rawExchange.mock.calls[0][0].rawResponse.body).toEqual(message);
       expect(output.find(event => event.type === 'stop')).toMatchObject({ stopReason: reason, stopDetails: message.stop_details });
       expect(output.find(event => event.type === 'provider_metadata')?.metadata).toMatchObject(expected);
       expect(await adapter.call(params)).toMatchObject({ stopReason: reason, providerMetadata: expected });

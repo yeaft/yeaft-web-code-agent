@@ -395,6 +395,11 @@ export class AnthropicAdapter extends LLMAdapter {
     // when streaming was requested. Seal exactly the same native blocks.
     if ((response.headers?.get('content-type') || '').includes('application/json')) {
       const result = await response.json();
+      // Diagnostics must survive refused/truncated responses and local state
+      // validation failures too, not only the successful publication path.
+      if (onRawExchange) {
+        try { onRawExchange({ rawRequest, rawResponse: { status: response.status, headers: safeHeaders(response), body: result } }); } catch { /* diagnostic only */ }
+      }
       // Account for consumed tokens even when the completed response cannot
       // safely publish tools. Budget consumers may abort on this usage event.
       yield { type: 'usage', reportedTokenFields: reportedUsageFields(result.usage, 'anthropic'), usageIncomplete: !hasUsageCounts(result.usage), inputTokens: result.usage?.input_tokens || 0, outputTokens: result.usage?.output_tokens || 0,
@@ -431,9 +436,6 @@ export class AnthropicAdapter extends LLMAdapter {
       }
       if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
       yield stopEvent(result);
-      if (onRawExchange) {
-        try { onRawExchange({ rawRequest, rawResponse: { status: response.status, headers: safeHeaders(response), body: result } }); } catch { /* diagnostic only */ }
-      }
       return;
     }
 
