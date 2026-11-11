@@ -144,7 +144,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // and 1 independent-browser device/read/reconnect flow. Existing cases retained.
 // +2 independent review regressions: renewable JWT socket ownership and
 // deleted-Session exact-run proof. Snapshot-only/reopen coverage extends cases.
-export const TEST_CASE_LIMIT = 963;
+// +10 LLM draft/request ownership regressions: delayed/shared updates, exact save snapshots,
+// continued typing, failure/timeout, Agent lifecycle, clean refresh, readiness-only reads, and desktop/mobile browser flows.
+export const TEST_CASE_LIMIT = 973;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
