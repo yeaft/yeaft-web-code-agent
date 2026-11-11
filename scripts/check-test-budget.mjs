@@ -153,7 +153,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // and +1 bridge terminal propagation regression. Existing cases retained.
 // +2 independent review regressions: paused server operations cannot replay
 // when native state is disabled or unsupported. Stop-sequence extends existing Person case.
-export const TEST_CASE_LIMIT = 1005;
+// +4 PresentResponse wire regressions: manual/adaptive thinking (including
+// prefix-enforced models) and no-thinking preserve native tool pairs and publications.
+export const TEST_CASE_LIMIT = 1009;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
