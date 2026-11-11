@@ -151,7 +151,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +23 Anthropic protocol and continuity boundaries: 14 Engine completion/prefix,
 // 4 gateway/origin/prefix, 5 stream/metadata/trace cases; +3 model capability
 // and +1 bridge terminal propagation regression. Existing cases retained.
-export const TEST_CASE_LIMIT = 1003;
+// +2 independent review regressions: paused server operations cannot replay
+// when native state is disabled or unsupported. Stop-sequence extends existing Person case.
+export const TEST_CASE_LIMIT = 1005;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -4008,6 +4008,15 @@ export class Engine {
         break;
       }
       if (stopReason === 'pause_turn') {
+        // A paused server/MCP operation is not safe to resubmit as a new user
+        // request. Without the full native response there is nothing to resume.
+        if (!boundProviderState || boundProviderState.protocol !== 'anthropic'
+            || !Array.isArray(boundProviderState.items) || boundProviderState.items.length === 0) {
+          yield { type: 'error', error: 'The provider paused but its exact response cannot be replayed. Automatic continuation was stopped to avoid repeating server-side operations.',
+            code: 'provider_pause_not_replayable', retryable: false, threadId };
+          yield { type: 'turn_end', turnNumber, stopReason, threadId, terminal: true };
+          break;
+        }
         if (pauseContinueTurns < MAX_PAUSE_CONTINUE_TURNS) {
           pauseContinueTurns++;
           // Anthropic resumes the exact assistant response (including bound

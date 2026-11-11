@@ -152,7 +152,7 @@ describe('Person continuous native execution then one final cognition', () => {
           { type: 'tool_use', id: 'native-b', name: 'FileWrite', input: { file_path: 'wire-b', content: 'b' } },
         ] : index === 1 ? [{ type: 'redacted_thinking', data: 'PRIVATE-REDACTED' }, { type: 'tool_use', id: 'native-goal', name: 'Execution__goal', input: goal }]
           : [{ type: 'text', text: index === 2 ? 'Two actual files written.' : JSON.stringify(final({ messages: [{ content: body.messages[0].content }] })) }];
-        return json({ id: `msg-${index}`, content, stop_reason: index < 2 ? 'tool_use' : 'end_turn', usage: { input_tokens: 10, output_tokens: 8 } });
+        return json({ id: `msg-${index}`, content, stop_reason: index < 2 ? 'tool_use' : 'stop_sequence', usage: { input_tokens: 10, output_tokens: 8 } });
       }
       const output = index === 0 ? [
         { type: 'reasoning', id: 'r', encrypted_content: 'PRIVATE-ENCRYPTED', summary: [] },
@@ -173,6 +173,7 @@ describe('Person continuous native execution then one final cognition', () => {
     expect(JSON.stringify(wire[1])).toContain(protocol === 'anthropic' ? 'PRIVATE-REASONING' : 'PRIVATE-ENCRYPTED');
     expect(JSON.stringify(run.traces)).not.toContain('PRIVATE');
     if (protocol === 'anthropic') {
+      expect(run.traces.filter(trace => trace.kind === 'call_output').slice(-2).every(trace => trace.output.stopReason === 'stop_sequence')).toBe(true);
       for (const body of wire.slice(1)) {
         expect(body.system).toEqual(wire[0].system);
         expect(body.tools).toEqual(wire[0].tools);

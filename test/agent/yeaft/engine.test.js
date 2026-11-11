@@ -206,7 +206,10 @@ describe('Engine', () => {
       try {
         const store = new ConversationStore(yeaftDir);
         for (let index = 0; index < 4; index++) mockAdapter.pushResponse([
-          { type: 'text_delta', text: `paused-${index}` }, { type: 'stop', stopReason: 'pause_turn' },
+          { type: 'text_delta', text: `paused-${index}` },
+          { type: 'provider_state', providerState: { version: 1, protocol: 'anthropic',
+            items: [{ type: 'text', text: `paused-${index}` }], projectionDigest: providerProjectionDigest({ content: `paused-${index}` }) } },
+          { type: 'stop', stopReason: 'pause_turn' },
         ]);
         const engine = new Engine({ adapter: mockAdapter, trace, conversationStore: store, yeaftDir,
           config: { model: 'test-model', maxOutputTokens: 1024 } });
@@ -223,6 +226,33 @@ describe('Engine', () => {
         await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }
+    });
+
+    it.each(['disabled-native-state', 'unsupported-native-block'])('never reissues a paused server operation when state is %s', async mode => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-paused-unreplayable-'));
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          requests.push(JSON.parse(init.body));
+          return new Response(JSON.stringify({ id: 'paused', model: 'claude-opus-5.5', stop_reason: 'pause_turn',
+            content: [{ type: 'server_tool_use', id: 'server-op', name: 'web_search', input: { query: 'question' } },
+              mode === 'disabled-native-state' ? { type: 'web_search_tool_result', tool_use_id: 'server-op', content: [] }
+                : { type: 'future_tool_result', tool_use_id: 'server-op', content: [] }], usage: { input_tokens: 10, output_tokens: 2 } }),
+          { headers: { 'content-type': 'application/json' } });
+        });
+        const adapter = new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic', baseUrl: 'https://gateway.invalid',
+          apiKey: 'fixture', models: ['claude-opus-5.5'], ...(mode === 'disabled-native-state' ? { capabilities: { nativeReasoningState: false } } : {}) }] });
+        const engine = new Engine({ adapter, trace, yeaftDir: dir, conversationStore: new ConversationStore(dir),
+          config: { model: 'gateway/claude-opus-5.5', maxOutputTokens: 1024 } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'perform authorized operation', sessionId: 'pause-unreplayable' })) events.push(event);
+        expect(requests).toHaveLength(1);
+        expect(events).toContainEqual(expect.objectContaining({ type: 'error', code: 'provider_pause_not_replayable', retryable: false }));
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: 'pause_turn', terminal: true }),
+        ]);
+      } finally { globalThis.fetch = originalFetch; await closeConversationHistoryIndexes(); rmSync(dir, { recursive: true, force: true }); }
     });
 
     it.each(['refusal', 'model_context_window_exceeded', 'unknown', 'future_provider_reason'])('fails visibly for %s before running tools or marking results', async stopReason => {
