@@ -71,6 +71,7 @@ export class LLMAdapter {
 - Supports thinking blocks (with signature)
 - Supports prompt caching (`cache_control`)
 - Supports fine-grained tool_use
+- Claude Fable 5 / 5.1 / 5.2 automatically expose `low`, `medium`, `high`, `xhigh`, and `max` effort. Explicit Session choices use adaptive thinking with `output_config.effort`, not manual token budgets. The model API default is `high`; available tiers follow the Agent-provided catalog, so an older Agent must be updated for the selector to appear. See [Anthropic effort](https://platform.claude.com/docs/en/build-with-claude/effort).
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
 - Targets OpenAI Responses API `/v1/responses` (**not** legacy chat completions)

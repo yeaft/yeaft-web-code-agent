@@ -41,7 +41,8 @@ function normalizeEffortList(options) {
 }
 
 export function getSelectableModelEfforts(options) {
-  return normalizeEffortList(options).filter(effort => (EFFORT_RANK[effort] ?? -1) >= EFFORT_RANK.medium);
+  // The Agent catalog owns supported tiers, including low/minimal when offered.
+  return normalizeEffortList(options).filter(effort => Object.hasOwn(EFFORT_RANK, effort));
 }
 
 export function getDefaultModelEffort(options) {
@@ -65,12 +66,14 @@ export function buildModelSelectionRows(models) {
     if (!modelRef) continue;
     const label = model.label || model.id || modelRef;
     const efforts = getSelectableModelEfforts(model?.effortOptions);
+    // Revealing lower tiers must not lower an existing model-menu default.
+    const defaultEfforts = efforts.filter(effort => EFFORT_RANK[effort] >= EFFORT_RANK.medium);
     rows.push({
       model,
       modelRef,
       label,
       efforts,
-      defaultEffort: getDefaultModelEffort(efforts) || null,
+      defaultEffort: getDefaultModelEffort(defaultEfforts.length ? defaultEfforts : efforts) || null,
     });
   }
   return rows;

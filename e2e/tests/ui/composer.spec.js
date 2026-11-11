@@ -1,7 +1,12 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadConfig } from '../../../agent/yeaft/config.js';
+import { loadSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 
-test.use({ serverEnv: { SERVE_DIST: process.env.COMPOSER_UI_PRODUCTION || 'false' } });
+test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.COMPOSER_UI_PRODUCTION || 'false' } });
 
 async function openYeaftComposer(page, serverUrl) {
   await page.goto(serverUrl);
@@ -59,6 +64,66 @@ async function openYeaftComposer(page, serverUrl) {
 }
 
 test.describe('Yeaft composer menus', () => {
+  test('Fable catalog exposes five effort tiers and persists the selected Session effort', async ({ chatPage: page, mockAgent }, testInfo) => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-browser-fable-'));
+    const sessionId = 'fable-effort-session';
+    const selectedModel = 'proxy/claude-fable-5.2';
+    mkdirSync(join(root, 'sessions', sessionId), { recursive: true });
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      providers: [{ name: 'proxy', apiKey: 'fixture', baseUrl: 'https://proxy.invalid', models: ['claude-fable-5.2'] }],
+      primaryModel: selectedModel,
+    }));
+    const catalog = loadConfig({ dir: root }).availableModels;
+    const requests = [];
+    mockAgent._messageHandlers.push(request => {
+      if (request.type === 'yeaft_load_history' && request.sessionId === sessionId && request.limit !== 0) {
+        mockAgent.send({ type: 'yeaft_history_chunk', sessionId, requestId: request.requestId,
+          mode: 'recent', messages: [], oldestSeq: null, latestSeq: null, hasMore: false });
+      }
+      if (request.type !== 'yeaft_update_session_config') return;
+      requests.push(request);
+      const config = saveSessionConfig(root, request.sessionId, request.config);
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'session_crud_result', op: 'update_config',
+        requestId: request.requestId, sessionId: request.sessionId, ok: true, config } });
+    });
+    try {
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: selectedModel,
+        catalogEpoch: 'fable-effort-e2e', catalogRevision: 1, catalogRefreshedAt: Date.now(), availableModels: catalog } });
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [
+        { id: sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config: { model: selectedModel } },
+      ] } });
+      await expect.poll(() => page.evaluate(sessionId => window.Pinia.useChatStore().sidebarSessionCatalog
+        .some(row => row.routeRef.sessionId === sessionId), sessionId)).toBe(true);
+      await page.evaluate(({ agentId, sessionId }) => {
+        const chat = window.Pinia.useChatStore();
+        chat.openCatalogSession(chat.sidebarSessionCatalog.find(row => row.routeRef.agentId === agentId && row.routeRef.sessionId === sessionId));
+        chat.closeSessionSidebar();
+      }, { agentId: mockAgent.agentId, sessionId });
+      await expect(page.locator('.yeaft-session-input')).toBeVisible();
+      const effort = page.locator('.yeaft-composer-effort');
+      for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
+        await page.setViewportSize({ width, height: 800 });
+        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+        await effort.click();
+        const menu = page.locator('.yeaft-composer-effort-dropdown');
+        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Low', 'Medium', 'High', 'X-High', 'Max']);
+        await menu.getByRole('menuitemradio', { name: 'Low', exact: true }).click();
+        await expect(effort).toContainText('Low');
+        await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('low');
+        await effort.click();
+        await menu.getByRole('menuitemradio', { name: 'X-High', exact: true }).click();
+        await expect(effort).toContainText('X-High');
+        await expect.poll(() => loadSessionConfig(root, sessionId)).toEqual({ model: selectedModel, modelEffort: 'xhigh' });
+        await effort.click();
+        await menu.getByRole('menuitemradio', { name: 'Max', exact: true }).click();
+        await expect(effort).toContainText('Max');
+        await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('max');
+        // The Server consumes agentId for routing; receipt on this mock socket proves ownership.
+        expect(requests.at(-1)).toMatchObject({ sessionId, config: { model: selectedModel, modelEffort: 'max' } });
+        await page.screenshot({ path: testInfo.outputPath(`fable-effort-${theme}.png`) });
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test('mobile Enter inserts newlines; only the send action submits, while desktop keeps shortcuts', async ({ page, serverUrl, browser }, testInfo) => {
     test.setTimeout(60000);
     await page.setViewportSize({ width: 320, height: 800 });
