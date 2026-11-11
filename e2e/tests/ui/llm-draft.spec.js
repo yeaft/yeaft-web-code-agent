@@ -29,8 +29,12 @@ for (const scenario of [
     await page.waitForFunction(agentId => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === agentId && agent.online), mockAgent.agentId);
     await page.evaluate(({ agentId, theme }) => {
       document.documentElement.dataset.theme = theme;
-      window.Pinia.useChatStore().currentAgent = agentId;
+      const store = window.Pinia.useChatStore();
+      store.enterYeaft(agentId);
+      window.__llmAgentFrames = 0;
+      window.Vue.watch(() => store.agents, () => { window.__llmAgentFrames += 1; });
     }, { agentId: mockAgent.agentId, theme: scenario.theme });
+    await expect(page.locator('.yeaft-session-input')).toBeVisible();
     if (!await page.locator('.agent-dropdown-trigger:visible').isVisible()) {
       await page.locator('.yeaft-topbar-sidebar-toggle:visible, .header-sidebar-toggle:visible').first().click();
     }
@@ -52,6 +56,12 @@ for (const scenario of [
     await models.fill('model-a,\npartially-written-model, ');
     await models.focus();
     const startReads = reads.length;
+    for (let index = 0; index < 3; index++) {
+      const before = await page.evaluate(() => window.__llmAgentFrames);
+      mockAgent.send({ type: 'proxy_ports_update', ports: [] });
+      await expect.poll(() => page.evaluate(() => window.__llmAgentFrames)).toBeGreaterThan(before);
+    }
+    expect(reads).toHaveLength(startReads);
     // Deliver the background response after the reported 10+ second window.
     // The real Server relay and message handler update the shared store.
     await page.waitForTimeout(16000);
@@ -65,7 +75,7 @@ for (const scenario of [
     await expect(models).toBeFocused();
     await expect(save).toBeEnabled();
     expect(writes).toHaveLength(0);
-    expect(reads.length).toBeGreaterThanOrEqual(startReads);
+    expect(reads).toHaveLength(startReads);
 
     sendConfig('background-error', { error: 'background read temporarily unavailable' });
     await expect.poll(() => page.evaluate(agentId => window.Pinia.useChatStore().llmConfig[agentId]?.error, mockAgent.agentId))

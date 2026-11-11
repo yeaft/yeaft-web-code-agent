@@ -6,6 +6,9 @@ import LlmTab from '../../web/components/LlmTab.js';
 import en from '../../web/i18n/en.js';
 
 globalThis.Vue = Vue;
+const auth = Vue.reactive({ isAuthenticated: false });
+globalThis.Pinia = { defineStore: () => () => auth };
+const { default: ChatInput } = await import('../../web/components/ChatInput.js');
 let wrapper;
 afterEach(() => { wrapper?.unmount(); vi.useRealTimers(); });
 
@@ -169,5 +172,40 @@ describe('Agent LLM editing draft ownership', () => {
     expect(wrapper.vm.localPrimaryModel).toBe('test/model-b');
     expect(wrapper.vm.localDebug).toBe(true);
     expect(wrapper.vm.isDirty).toBe(false);
+  });
+
+  it('reads config on real readiness edges, not routine Agent list replacement, elapsed time or config broadcasts', async () => {
+    vi.useFakeTimers();
+    const store = Vue.reactive({ currentAgent: 'agent-a', connectionState: 'connected',
+      agents: [{ id: 'agent-a', online: true }], inputDrafts: {}, llmConfig: {}, sendWsMessage: vi.fn() });
+    globalThis.Pinia = { useChatStore: () => store, useAuthStore: () => auth,
+      useVpStore: () => ({ vpList: [] }) };
+    wrapper = mount(ChatInput, { props: { quickSendEnabled: true, sendFn: vi.fn() },
+      global: { mocks: { $t: key => key }, stubs: { MessageComposer: { template: '<div />' } } } });
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
+    expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'get_llm_config', agentId: 'agent-a' });
+    for (let i = 0; i < 10; i++) {
+      store.agents = [{ id: 'agent-a', online: true, latency: i, status: 'ready' }, { id: 'other', online: i % 2 === 0 }];
+      await Vue.nextTick();
+    }
+    await vi.advanceTimersByTimeAsync(60000);
+    store.llmConfig['agent-a'] = config('changed');
+    await Vue.nextTick();
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
+    store.connectionState = 'reconnecting'; await Vue.nextTick();
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
+    store.connectionState = 'connected'; await Vue.nextTick();
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(2);
+    store.agents = [{ id: 'agent-a', online: false }]; await Vue.nextTick();
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(2);
+    store.agents = [{ id: 'agent-a', online: true }]; await Vue.nextTick();
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(3);
+    await wrapper.setProps({ quickSendEnabled: false });
+    store.agents = [{ id: 'agent-b', online: true }]; store.currentAgent = 'agent-b';
+    await Vue.nextTick();
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(3);
+    await wrapper.setProps({ quickSendEnabled: true });
+    expect(store.sendWsMessage).toHaveBeenCalledTimes(4);
+    expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'get_llm_config', agentId: 'agent-b' });
   });
 });
