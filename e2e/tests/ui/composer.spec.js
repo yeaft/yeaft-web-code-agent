@@ -87,7 +87,8 @@ test.describe('Yeaft composer menus', () => {
         requestId: request.requestId, sessionId: request.sessionId, ok: true, config } });
     });
     try {
-      mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: selectedModel, availableModels: catalog } });
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: selectedModel,
+        catalogEpoch: 'fable-effort-e2e', catalogRevision: 1, catalogRefreshedAt: Date.now(), availableModels: catalog } });
       mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [
         { id: sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config: { model: selectedModel } },
       ] } });
