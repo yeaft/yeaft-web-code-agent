@@ -5002,7 +5002,7 @@ export class Engine {
         if (fatalToolError) throw fatalToolError;
       }
 
-      // Complete the result batch before adding assistant publications so both
+      // Complete the result batch before publishing UI snapshots so both
       // persisted history and provider requests retain contiguous tool pairs.
       for (const [callId, presentation] of pendingPresentations) {
         if (signal?.aborted || this.#currentQueryTurnId !== queryTurnId) break;
@@ -5033,9 +5033,11 @@ export class Engine {
         queryProgress.finalizeOutcome(callId, false);
         publishedResponses.set(callId, record);
         lastPersistedAssistantTextMessage = record;
-        // Metadata is transcript/UI-only. Providers receive the summary as a
-        // regular assistant string, never a generic unknown content block.
-        conversationMessages.push({ role: 'assistant', content: message.content, _persistedMessageId: record.id });
+        // Keep this host-generated publication on the durable/UI transcript,
+        // not the active model tape. The tool result already acknowledges it.
+        // An assistant summary here becomes a prefill on the next Anthropic
+        // request (invalid with thinking, and on Claude 4.6+ even without it).
+        // Later turns still read the persisted summary as normal history.
         fullResponseText += presentation.summary;
         // Do not yield an acknowledgement between the cancellation fence/write
         // and the publication: a consumer can abort at every yielded event.

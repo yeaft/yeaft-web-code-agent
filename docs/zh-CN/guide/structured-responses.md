@@ -77,6 +77,8 @@ iframe 仅授予 `sandbox="allow-scripts allow-same-origin"`，使用 `referrerp
 
 不强制工具只能在最后调用。先展示有依据的部分结果，可以继续检查；完整结果发布后，不需要再重复输出相同长文。
 
+原生 Session 将展示摘要和元数据保留在持久历史与界面中，但不向当前工具循环额外插入一条宿主生成的 `assistant` 摘要。模型通过正常的工具结果继续执行；后续用户 turn 仍可读取已交付摘要。Anthropic 请求因此保留原始 thinking／tool-use 与对应的 `user/tool_result`，不会因展示摘要变成不受支持的 assistant prefill。参见 [Anthropic thinking 与 prefill 限制](https://platform.claude.com/docs/en/build-with-claude/thinking#response-prefill-and-forced-tool-use)。
+
 ## 协议示例
 
 原生 Session 工具参数，以及数字人能力的 `args`，使用相同结构：
