@@ -196,7 +196,7 @@ export async function collectOutput(adapter, params, onEffort = () => {}) {
     }
     if (toolCalls.some(call => call.malformed || !params.tools.some(tool => tool.name === call.name))) fail('INVALID_TOOL_INPUT');
     if (stopReason === 'max_tokens') fail('OUTPUT_TRUNCATED');
-    if (!['end_turn', 'tool_use'].includes(stopReason) || (stopReason === 'tool_use') !== Boolean(toolCalls.length)) fail('INVALID_PROPOSAL');
+    if (!['end_turn', 'stop_sequence', 'tool_use'].includes(stopReason) || (stopReason === 'tool_use') !== Boolean(toolCalls.length)) fail('INVALID_PROPOSAL');
     const result = { text: output, bytes: size, usage, stopReason, ...(toolCalls.length ? { toolCalls } : {}) };
     const state = bindProviderState(providerState, { content: output, toolCalls });
     // Wire continuation only; non-enumerable so repository payloads/public output

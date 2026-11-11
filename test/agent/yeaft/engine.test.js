@@ -7,6 +7,7 @@ import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { providerProjectionDigest } from '../../../agent/yeaft/llm/provider-state.js';
 import { buildMcpFlattenedTools } from '../../../agent/yeaft/tools/mcp-tools.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import { createFullRegistry } from '../../../agent/yeaft/tools/index.js';
@@ -143,6 +144,431 @@ describe('Engine', () => {
       } finally {
         await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('provider completion semantics', () => {
+    it('resumes pause_turn with exact assistant state and durable safe merged metadata, without a synthetic user', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-pause-'));
+      try {
+        const store = new ConversationStore(yeaftDir);
+        const endTrace = vi.spyOn(trace, 'endTurn');
+        const nativeState = {
+          version: 1, protocol: 'anthropic', responseId: 'response-paused',
+          items: [{ type: 'text', text: 'Still working.' }, { type: 'redacted_thinking', data: 'PRIVATE' }],
+          projectionDigest: providerProjectionDigest({ content: 'Still working.' }),
+        };
+        mockAdapter.pushResponse([
+          { type: 'provider_metadata', metadata: { protocol: 'anthropic', responseId: 'response-paused', model: 'claude-test',
+            inputTransformations: [{ type: 'context_management', removed: 2 }], thinking: 'PRIVATE',
+            contentBlocks: [{ type: 'reasoning', text: 'PRIVATE' }, { type: 'server_tool_use', id: 'server-1' }] } },
+          { type: 'text_delta', text: 'Still working.' },
+          { type: 'provider_state', providerState: nativeState },
+          { type: 'provider_metadata', metadata: { protocol: 'anthropic', stopReason: 'pause_turn',
+            inputTransformations: [{ type: 'context_management', removed: 3 }],
+            stopDetails: { type: 'server_tool_paused', reasoning: 'PRIVATE' } } },
+          { type: 'stop', stopReason: 'pause_turn' },
+        ]);
+        mockAdapter.pushResponse([{ type: 'text_delta', text: 'Finished.' }, { type: 'stop', stopReason: 'end_turn' }]);
+        const engine = new Engine({ adapter: mockAdapter, trace, conversationStore: store, yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024 } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'finish the work', sessionId: 'pause-session' })) events.push(event);
+        expect(mockAdapter.callLog).toHaveLength(2);
+        const resumeMessages = mockAdapter.callLog[1].messages;
+        expect(resumeMessages.map(row => row.role)).toEqual(['user', 'assistant']);
+        expect(resumeMessages[1]).toMatchObject({ content: 'Still working.', providerState: nativeState });
+        expect(events.filter(event => event.type === 'turn_end')).toEqual([
+          expect.objectContaining({ stopReason: 'pause_turn_continue' }),
+          expect.objectContaining({ stopReason: 'end_turn', terminal: true }),
+        ]);
+        expect(events.some(event => event.type === 'provider_metadata')).toBe(false);
+        const rows = new ConversationStore(yeaftDir).loadRecentBySession('pause-session', 20);
+        expect(rows.filter(row => row.role === 'user')).toHaveLength(1);
+        const paused = rows.find(row => row.stopReason === 'pause_turn');
+        expect(paused).toMatchObject({ incomplete: true, responseKind: 'progress', providerState: nativeState,
+          providerMetadata: { protocol: 'anthropic', responseId: 'response-paused', model: 'claude-test', stopReason: 'pause_turn',
+            stopDetails: { type: 'server_tool_paused' }, contentBlocks: [{ type: 'server_tool_use', id: 'server-1' }],
+            inputTransformations: [{ type: 'context_management', removed: 2 }, { type: 'context_management', removed: 3 }] } });
+        expect(JSON.stringify(paused.providerMetadata)).not.toContain('PRIVATE');
+        expect(endTrace.mock.calls[0][1].providerMetadata).toEqual(paused.providerMetadata);
+        expect(events.find(event => event.type === 'loop').providerMetadata).toEqual(paused.providerMetadata);
+        expect(rows.at(-1)).toMatchObject({ content: 'Finished.', responseKind: 'result' });
+      } finally {
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
+    it('bounds repeated pause_turn without tools, invented Continue messages or a false result', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-pause-limit-'));
+      try {
+        const store = new ConversationStore(yeaftDir);
+        for (let index = 0; index < 4; index++) mockAdapter.pushResponse([
+          { type: 'text_delta', text: `paused-${index}` },
+          { type: 'provider_state', providerState: { version: 1, protocol: 'anthropic',
+            items: [{ type: 'text', text: `paused-${index}` }], projectionDigest: providerProjectionDigest({ content: `paused-${index}` }) } },
+          { type: 'stop', stopReason: 'pause_turn' },
+        ]);
+        const engine = new Engine({ adapter: mockAdapter, trace, conversationStore: store, yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024 } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'continue work', sessionId: 'pause-limit-session' })) events.push(event);
+        expect(mockAdapter.callLog).toHaveLength(4);
+        expect(mockAdapter.callLog.every(call => call.messages.filter(row => row.role === 'user').length === 1)).toBe(true);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: 'pause_turn', terminal: true }),
+        ]);
+        expect(events).toContainEqual(expect.objectContaining({ type: 'error', code: 'provider_pause_limit', retryable: false }));
+        expect(store.loadRecentBySession('pause-limit-session', 20).filter(row => row.responseKind === 'result')).toEqual([]);
+      } finally {
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['disabled-native-state', 'unsupported-native-block'])('never reissues a paused server operation when state is %s', async mode => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-paused-unreplayable-'));
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          requests.push(JSON.parse(init.body));
+          return new Response(JSON.stringify({ id: 'paused', model: 'claude-opus-5.5', stop_reason: 'pause_turn',
+            content: [{ type: 'server_tool_use', id: 'server-op', name: 'web_search', input: { query: 'question' } },
+              mode === 'disabled-native-state' ? { type: 'web_search_tool_result', tool_use_id: 'server-op', content: [] }
+                : { type: 'future_tool_result', tool_use_id: 'server-op', content: [] }], usage: { input_tokens: 10, output_tokens: 2 } }),
+          { headers: { 'content-type': 'application/json' } });
+        });
+        const adapter = new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic', baseUrl: 'https://gateway.invalid',
+          apiKey: 'fixture', models: ['claude-opus-5.5'], ...(mode === 'disabled-native-state' ? { capabilities: { nativeReasoningState: false } } : {}) }] });
+        const engine = new Engine({ adapter, trace, yeaftDir: dir, conversationStore: new ConversationStore(dir),
+          config: { model: 'gateway/claude-opus-5.5', maxOutputTokens: 1024 } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'perform authorized operation', sessionId: 'pause-unreplayable' })) events.push(event);
+        expect(requests).toHaveLength(1);
+        expect(events).toContainEqual(expect.objectContaining({ type: 'error', code: 'provider_pause_not_replayable', retryable: false }));
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: 'pause_turn', terminal: true }),
+        ]);
+      } finally { globalThis.fetch = originalFetch; await closeConversationHistoryIndexes(); rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it.each(['refusal', 'model_context_window_exceeded', 'unknown', 'future_provider_reason'])('fails visibly for %s before running tools or marking results', async stopReason => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-provider-terminal-'));
+      try {
+        const store = new ConversationStore(yeaftDir);
+        const execute = vi.fn(async () => 'must not run');
+        const finishRequest = vi.fn();
+        const failRequest = vi.fn();
+        mockAdapter.pushResponse([
+          { type: 'provider_metadata', metadata: { protocol: 'anthropic', inputTransformations: [{ type: 'trim', removed: 1 }] } },
+          { type: 'text_delta', text: 'Incomplete response.' },
+          { type: 'tool_call', id: 'unsafe-call', name: 'side_effect', input: {} },
+          { type: 'stop', stopReason, stopDetails: { type: 'provider_limit' } },
+        ]);
+        const engine = new Engine({ adapter: mockAdapter, trace, conversationStore: store, yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024 } });
+        engine.registerTool({ name: 'side_effect', description: 'side effect', parameters: {}, execute });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'do the work', sessionId: 'terminal-session',
+          prepareProviderRequest: () => ({ id: 'request' }), finishProviderRequest: finishRequest, failProviderRequest: failRequest })) events.push(event);
+        const expectedReason = stopReason === 'future_provider_reason' ? 'unknown' : stopReason;
+        expect(execute).not.toHaveBeenCalled();
+        expect(finishRequest).not.toHaveBeenCalled();
+        expect(failRequest).toHaveBeenCalledWith({ id: 'request' }, expect.objectContaining({ code: expectedReason }));
+        expect(mockAdapter.callLog).toHaveLength(1);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: expectedReason, terminal: true }),
+        ]);
+        expect(events).toContainEqual(expect.objectContaining({ type: 'error', code: expectedReason, retryable: false }));
+        const rows = store.loadRecentBySession('terminal-session', 20);
+        expect(rows.filter(row => row.role === 'user')).toHaveLength(1);
+        expect(rows.at(-1)).toMatchObject({ role: 'assistant', responseKind: 'progress', incomplete: true, stopReason: expectedReason,
+          providerMetadata: { stopReason, stopDetails: { type: 'provider_limit' }, inputTransformations: [{ type: 'trim', removed: 1 }] } });
+        expect(rows.flatMap(row => row.toolCalls || [])).toEqual([]);
+      } finally {
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
+    it('treats stop_sequence as completed with the exact stop sequence preserved', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-stop-sequence-'));
+      try {
+        const store = new ConversationStore(yeaftDir);
+        mockAdapter.pushResponse([
+          { type: 'text_delta', text: 'Answer before the delimiter.' },
+          { type: 'stop', stopReason: 'stop_sequence', stopSequence: '<END>', stopDetails: { type: 'matched' } },
+        ]);
+        const engine = new Engine({ adapter: mockAdapter, trace, conversationStore: store, yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024 } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'answer until the delimiter', sessionId: 'sequence-session' })) events.push(event);
+        expect(mockAdapter.callLog).toHaveLength(1);
+        expect(events).not.toContainEqual(expect.objectContaining({ type: 'error' }));
+        expect(events.filter(event => event.type === 'turn_end')).toEqual([
+          expect.objectContaining({ stopReason: 'stop_sequence', terminal: true }),
+        ]);
+        expect(store.loadRecentBySession('sequence-session', 20).at(-1)).toMatchObject({ responseKind: 'result', stopReason: 'stop_sequence',
+          providerMetadata: { stopSequence: '<END>', stopDetails: { type: 'matched' } } });
+      } finally {
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not silently succeed without a provider stop and retains transformations on partial failure', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-engine-metadata-failure-'));
+      try {
+        const store = new ConversationStore(yeaftDir);
+        const endTrace = vi.spyOn(trace, 'endTurn');
+        mockAdapter.pushResponse([
+          { type: 'provider_metadata', metadata: { protocol: 'anthropic', responseId: 'partial-response', inputTransformations: [{ type: 'trim' }] } },
+          { type: 'text_delta', text: 'Partial response' },
+          { type: 'error', error: new Error('stream failed'), retryable: false },
+        ]);
+        mockAdapter.pushResponse([{ type: 'text_delta', text: 'No stop event' }]);
+        const engine = new Engine({ adapter: mockAdapter, trace, conversationStore: store, yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024 } });
+        for await (const _event of engine.query({ prompt: 'first attempt', sessionId: 'metadata-failure-session' })) { /* consume */ }
+        const partial = store.loadRecentBySession('metadata-failure-session', 20).find(row => row.role === 'assistant');
+        expect(partial).toMatchObject({ incomplete: true, responseKind: 'progress', providerMetadata: {
+          protocol: 'anthropic', responseId: 'partial-response', inputTransformations: [{ type: 'trim' }],
+        } });
+        expect(endTrace.mock.calls[0][1].providerMetadata).toEqual(partial.providerMetadata);
+        const events = [];
+        for await (const event of engine.query({ prompt: 'second attempt', sessionId: 'missing-stop-session' })) events.push(event);
+        expect(events).toContainEqual(expect.objectContaining({ type: 'error', code: 'unknown' }));
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: 'unknown', terminal: true }),
+        ]);
+      } finally {
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('active signed Anthropic prefixes', () => {
+    const response = (id, tool, input = {}, model = 'claude-opus-4.8') => {
+      const blocks = [{ type: 'thinking', thinking: `private-${id}`, signature: `signature-${id}` },
+        tool ? { type: 'tool_use', id, name: tool, input } : { type: 'text', text: 'Finished safely.' }];
+      const events = [{ type: 'message_start', message: { id, model, role: 'assistant', content: [] } },
+        ...blocks.flatMap((content_block, index) => [{ type: 'content_block_start', index, content_block }, { type: 'content_block_stop', index }]),
+        { type: 'message_delta', delta: { stop_reason: tool ? 'tool_use' : 'end_turn' } }, { type: 'message_stop' }];
+      return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+    };
+    const router = model => new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
+      baseUrl: 'https://anthropic-gateway.invalid', apiKey: 'fixture-key', models: [model] }] });
+
+    it('keeps real gateway prefixes byte-stable through discovery, instruction reloads, archiving and permission removal', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-prefix-'));
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      const registry = new ToolRegistry();
+      const history = [{ role: 'user', content: 'original historical instruction' }, { role: 'assistant', content: 'historical answer' }];
+      const originalResult = 'UNCHANGED_TOOL_RESULT '.repeat(1000);
+      let skillText = 'FIRST_SKILL_INSTRUCTION';
+      const skillManager = { findRelevant: () => [{ name: 'live-skill' }], list: () => [{ name: 'live-skill' }],
+        getPromptContent: () => skillText };
+      const read = vi.fn(async () => {
+        history[0].content = 'MUTATED_HISTORY_MUST_NOT_REACH_WIRE';
+        skillText = 'SECOND_SKILL_INSTRUCTION';
+        writeFileSync(join(dir, 'CLAUDE.md'), 'SECOND_PROJECT_INSTRUCTION');
+        const future = new Date(Date.now() + 2000);
+        utimesSync(join(dir, 'CLAUDE.md'), future, future);
+        return originalResult;
+      });
+      const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, language: 'en',
+        archive: { turnAgeMin: -1, lengthMin: 10 } };
+      let engine;
+      registry.register(defineTool({ name: 'FileRead', description: 'Read evidence', parameters: { type: 'object' }, readOnly: true, execute: read }));
+      registry.register(defineTool({ name: 'DiscoverTools', description: 'Discover available tools', parameters: { type: 'object' },
+        execute: async (_, ctx) => JSON.stringify(ctx.discoverTools({ query: 'disk', maxResults: 1 })) }));
+      registry.register(defineTool({ name: 'DiskUsage', description: 'Inspect disk use', parameters: { type: 'object' }, readOnly: true,
+        execute: async () => {
+          engine.refreshConfig({ ...config, plugins: { tools: ['DiscoverTools', 'DiskUsage'], skills: ['live-skill'], mcpServers: [] } });
+          return 'Disk evidence obtained; FileRead permission withdrawn.';
+        } }));
+      try {
+        writeFileSync(join(dir, 'CLAUDE.md'), 'FIRST_PROJECT_INSTRUCTION');
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          requests.push({ body: JSON.parse(init.body), headers: init.headers });
+          const index = requests.length - 1;
+          return response(`signed-${index}`, ['FileRead', 'DiscoverTools', 'DiskUsage', 'FileRead'][index]);
+        });
+        engine = new Engine({ adapter: router('claude-opus-4.8'), trace, config, toolRegistry: registry,
+          skillManager, yeaftDir: dir, conversationStore: new ConversationStore(dir) });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'complete the requested operation', sessionId: 'signed-session', workDir: dir, messages: history })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(requests).toHaveLength(5);
+        expect(read).toHaveBeenCalledTimes(1);
+        const first = requests[0].body;
+        expect(first.tools.map(tool => tool.name)).not.toContain('DiskUsage');
+        for (const { body } of requests.slice(1)) {
+          expect(body.system).toBe(first.system);
+          expect(body.tools).toEqual(first.tools);
+          expect(body.messages.slice(0, first.messages.length)).toEqual(first.messages);
+          expect(JSON.stringify(body)).not.toContain('MUTATED_HISTORY_MUST_NOT_REACH_WIRE');
+          expect(JSON.stringify(body)).not.toContain('[archived:');
+          expect(body.messages.find(message => message.content?.[0]?.type === 'tool_result').content[0].content).toBe(originalResult);
+        }
+        expect(first.system).toContain('FIRST_SKILL_INSTRUCTION');
+        expect(first.system).toContain('FIRST_PROJECT_INSTRUCTION');
+        const updatedInstruction = requests[1].body.messages.find(message => message.role === 'system');
+        expect(updatedInstruction.content[0].text).toContain('SECOND_SKILL_INSTRUCTION');
+        expect(updatedInstruction.content[0].text).toContain('SECOND_PROJECT_INSTRUCTION');
+        const additions = requests[2].body.messages.filter(message => message.role === 'system').flatMap(message => message.content);
+        expect(additions).toContainEqual({ type: 'tool_addition', tool: { type: 'tool_definition', definition: {
+          name: 'DiskUsage', description: 'Inspect disk use', input_schema: { type: 'object' },
+        } } });
+        const removals = requests[3].body.messages.filter(message => message.role === 'system').flatMap(message => message.content);
+        expect(removals).toContainEqual({ type: 'tool_removal', tool: { type: 'tool_reference', name: 'FileRead' } });
+        expect(requests[2].headers['anthropic-beta']).toContain('inline-tools-2026-09-15');
+        expect(events).toContainEqual(expect.objectContaining({ type: 'tool_end', id: 'signed-3', name: 'FileRead', isError: true }));
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: 'end_turn', terminal: true }),
+        ]);
+      } finally {
+        globalThis.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['claude-sonnet-4', 'claude-opus-4.6'])('keeps legacy %s tool updates top-level despite signed thinking', async model => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-legacy-prefix-'));
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      const registry = new ToolRegistry();
+      let skillText = 'FIRST_LEGACY_INSTRUCTION';
+      const skillManager = { findRelevant: () => [{ name: 'live-skill' }], list: () => [{ name: 'live-skill' }],
+        getPromptContent: () => skillText };
+      registry.register(defineTool({ name: 'DiscoverTools', description: 'Discover tools', parameters: { type: 'object' },
+        execute: async (_, ctx) => {
+          skillText = 'UPDATED_LEGACY_INSTRUCTION';
+          return JSON.stringify(ctx.discoverTools({ query: 'disk', maxResults: 1 }));
+        } }));
+      const execute = vi.fn(async () => 'disk evidence');
+      registry.register(defineTool({ name: 'DiskUsage', description: 'Inspect disk use', parameters: { type: 'object' }, readOnly: true, execute }));
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          requests.push({ body: JSON.parse(init.body), headers: init.headers });
+          return response(`legacy-${requests.length}`, ['DiscoverTools', 'DiskUsage'][requests.length - 1], {}, model);
+        });
+        const store = new ConversationStore(dir);
+        const engine = new Engine({ adapter: router(model), trace, toolRegistry: registry, skillManager,
+          yeaftDir: dir, conversationStore: store,
+          config: { model: `gateway/${model}`, maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'perform the requested operation', sessionId: 'legacy-session' })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(requests).toHaveLength(3);
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(requests[0].body.tools.map(tool => tool.name)).not.toContain('DiskUsage');
+        expect(requests[1].body.tools.map(tool => tool.name)).toContain('DiskUsage');
+        expect(requests[1].body.system).toContain('UPDATED_LEGACY_INSTRUCTION');
+        expect(requests.every(({ body, headers }) => !body.messages.some(row => row.role === 'system')
+          && !headers['anthropic-beta']?.includes('inline-tools-2026-09-15'))).toBe(true);
+        const state = store.loadAllBySession('legacy-session').find(row => row.role === 'assistant').providerState;
+        expect(state.items).toContainEqual(expect.objectContaining({ type: 'thinking', signature: 'signature-legacy-1' }));
+        expect(state.requestPrefix).toBeUndefined();
+      } finally {
+        globalThis.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('appends background schemas and late completion evidence without rewriting a signed tool result', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-background-'));
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      const registry = new ToolRegistry();
+      let tasks = [];
+      let engine;
+      registry.register(defineTool({ name: 'Bash', description: 'Start work', parameters: { type: 'object' },
+        execute: async (_, ctx) => {
+          tasks = [{ id: 'bg-task', kind: 'bash', status: 'running' }];
+          ctx.registerAsyncTask('bg-task');
+          return 'original pending result';
+        } }));
+      registry.register(defineTool({ name: 'WaitTask', description: 'Wait for work', parameters: { type: 'object' },
+        execute: async () => {
+          tasks = [];
+          expect(engine.notifyAsyncTaskCompleted('bg-task', 'LATE_COMPLETION_EVIDENCE')).toBe(true);
+          return 'completion delivered';
+        } }));
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          requests.push({ body: JSON.parse(init.body), headers: init.headers });
+          return response(`background-${requests.length}`, ['Bash', 'WaitTask'][requests.length - 1]);
+        });
+        const store = new ConversationStore(dir);
+        engine = new Engine({ adapter: router('claude-opus-4.8'), trace, toolRegistry: registry, yeaftDir: dir,
+          conversationStore: store, taskManager: { listActiveTasks: () => tasks },
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'perform the requested operation', sessionId: 'signed-background' })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(requests).toHaveLength(3);
+        expect(requests[0].body.tools.map(tool => tool.name)).toEqual(['Bash']);
+        expect(requests[1].body.tools).toEqual(requests[0].body.tools);
+        expect(requests[1].body.messages.flatMap(message => message.role === 'system' ? message.content : [])).toContainEqual({
+          type: 'tool_addition', tool: { type: 'tool_definition', definition: {
+            name: 'WaitTask', description: 'Wait for work', input_schema: { type: 'object' },
+          } },
+        });
+        expect(requests[2].body.messages.slice(0, requests[1].body.messages.length)).toEqual(requests[1].body.messages);
+        expect(requests[2].body.messages.find(message => message.content?.[0]?.type === 'tool_result').content[0].content)
+          .toBe('original pending result');
+        expect(requests[2].body.messages).toContainEqual({ role: 'user',
+          content: '[system note] Async task completion:\nLATE_COMPLETION_EVIDENCE' });
+        expect(requests[2].body.messages.flatMap(message => message.role === 'system' ? message.content : [])).toContainEqual({
+          type: 'tool_removal', tool: { type: 'tool_reference', name: 'WaitTask' },
+        });
+        expect(store.loadAllBySession('signed-background').find(row => row.role === 'tool' && row.toolCallId === 'background-1').content)
+          .toContain('LATE_COMPLETION_EVIDENCE');
+      } finally {
+        globalThis.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['preflight', 'provider'])('fails visibly rather than compacting active signed context on %s overflow', async overflow => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-overflow-'));
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 };
+      let engine;
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          requests.push(JSON.parse(init.body));
+          if (requests.length > 1) return new Response('prompt is too long', { status: 400 });
+          return response('overflow-tool', 'echo');
+        });
+        engine = new Engine({ adapter: router('claude-opus-4.8'), trace, config, yeaftDir: dir });
+        engine.registerTool({ name: 'echo', description: 'echo', parameters: { type: 'object' }, execute: async () => {
+          if (overflow === 'preflight') engine.refreshConfig({ ...config, modelInfo: { contextWindow: 2048 } });
+          return 'new tool evidence '.repeat(2000);
+        } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'obtain evidence', sessionId: 'signed-overflow' })) events.push(event);
+        expect(requests).toHaveLength(overflow === 'preflight' ? 1 : 2);
+        expect(events.filter(event => event.type === 'llm_retry')).toEqual([]);
+        expect(events.find(event => event.type === 'error')).toMatchObject({ retryable: false, error: overflow === 'preflight' ? {
+          code: 'PROVIDER_STATE_INVALID', message: expect.stringContaining('signed context cannot fit'),
+        } : { name: 'LLMContextError' } });
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: 'error', terminal: true }),
+        ]);
+      } finally {
+        globalThis.fetch = originalFetch;
+        rmSync(dir, { recursive: true, force: true });
       }
     });
   });
@@ -1327,7 +1753,7 @@ describe('native Session response publication', () => {
     const events = await collect(f.engine, { ...query, signal: controller.signal }, event => { if (event.type === 'tool_exec') controller.abort(); });
     expect(events.filter(event => event.type === 'response_presentation')).toEqual([]);
     expect(f.store.loadAllBySession('session-a').filter(row => row.presentation)).toEqual([]);
-    const g = fixture(); g.responses.push([call(), stop('tool_use')], [stop('error')]);
+    const g = fixture(); g.responses.push([call(), stop('tool_use')], [{ type: 'error', error: new Error('provider failed'), retryable: false }]);
     const failed = await collect(g.engine);
     expect(failed.filter(event => event.type === 'response_presentation')).toHaveLength(1);
     expect(g.store.loadAllBySession('session-a').find(row => row.presentation)).toMatchObject({ incomplete: true, stopReason: 'error', responseKind: 'progress' });

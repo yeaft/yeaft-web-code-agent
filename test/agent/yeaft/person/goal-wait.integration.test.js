@@ -43,7 +43,10 @@ it('honors pending wait immediately without model polling, pauses safely, then c
       return tool('wait', 'Execution__goal', goal('waiting', { waitFor: [taskId] }));
     }
     if (index === 2) {
-      expect(params.messages.at(-1).content).toContain('execution-results-ready');
+      // Goal snapshots are append-only after results, not rebuilt ahead of the
+      // signed tape. Both the resumed evidence instruction and live goal remain.
+      expect(params.messages.some(message => message.content.includes('execution-results-ready'))).toBe(true);
+      expect(JSON.parse(params.messages.at(-1).content).executionGoal.status).toBe('active');
       expect(await readFile(join(dir, 'artifact'), 'utf8')).toBe('verified');
       return tool('collect', 'ReadTaskLog', { taskId, offset: 0 });
     }

@@ -85,3 +85,24 @@ it('forwards only scoped progress metadata without touching timers, text batchin
   __testHandleEngineEvent({ ...enhanced, revision: revision + 1 }, hctx);
   expect(ctx.outboundSendQueue).toHaveLength(count);
 });
+
+it('settles provider refusals, context truncation and exhausted pauses as errors, not successful results', () => {
+  ctx.ws = { readyState: 1, send() {} };
+  ctx.serverEncryptionRequired = false;
+  ctx.outboundSendQueue = [];
+  ctx.outboundSendQueueActive = true;
+  for (const stopReason of ['refusal', 'model_context_window_exceeded', 'unknown', 'pause_turn']) {
+    const hctx = { sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main', skipPartialHistory: true,
+      assistantTextParts: [], presentations: [], stopQueryTimer: vi.fn(), markEngineTerminal: vi.fn() };
+    __testHandleEngineEvent({ type: 'turn_end', terminal: true, stopReason }, hctx);
+    expect(hctx.markEngineTerminal).toHaveBeenCalledWith('error', null);
+    expect(hctx.stopQueryTimer).toHaveBeenCalledOnce();
+  }
+  const publication = { presentation: { phase: 'final' }, responseKind: 'progress' };
+  const hctx = { sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main', skipPartialHistory: true,
+    assistantTextParts: [], presentationTextPartsCount: 0, presentations: [publication], markEngineTerminal: vi.fn() };
+  __testHandleEngineEvent({ type: 'turn_end', terminal: true, stopReason: 'stop_sequence' }, hctx);
+  expect(publication).toMatchObject({ responseKind: 'result', stopReason: 'stop_sequence' });
+  expect(publication.incomplete).not.toBe(true);
+  expect(hctx.markEngineTerminal).not.toHaveBeenCalled();
+});

@@ -131,10 +131,15 @@ describe('Person continuous native execution then one final cognition', () => {
   });
 
   it.each(['anthropic', 'openai-responses'])('passes native %s wire results continuously and keeps opaque reasoning only in episode RAM', async protocol => {
-    const context = createProviderContext({ protocol, model: protocol === 'anthropic' ? 'claude-sonnet-4' : 'gpt-5', providerId: 'fixture', credentialScopeId: 'owned-account' });
-    const wire = [], json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
+    const context = createProviderContext({ protocol, model: protocol === 'anthropic' ? 'claude-opus-5-5' : 'gpt-5', providerId: 'fixture', credentialScopeId: 'owned-account' });
+    const wire = [], headers = [], json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
     vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
-      const body = JSON.parse(options.body); wire.push(body);
+      const body = JSON.parse(options.body); wire.push(body); headers.push(options.headers);
+      if (protocol === 'anthropic') for (let i = 0; i < body.messages.length; i++) {
+        if (body.messages[i].role !== 'system') continue;
+        expect(body.messages[i - 1]?.role).toBe('user');
+        expect(body.messages[i + 1]?.role ?? 'assistant').toBe('assistant');
+      }
       const index = wire.length - 1;
       const refs = protocol === 'anthropic'
         ? body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []).filter(block => block.type === 'tool_result').map(block => JSON.parse(block.content).sourceRef).filter(Boolean)
@@ -145,9 +150,9 @@ describe('Person continuous native execution then one final cognition', () => {
           { type: 'thinking', thinking: 'PRIVATE-REASONING', signature: 'signed' },
           { type: 'tool_use', id: 'native-a', name: 'FileWrite', input: { file_path: 'wire-a', content: 'a' } },
           { type: 'tool_use', id: 'native-b', name: 'FileWrite', input: { file_path: 'wire-b', content: 'b' } },
-        ] : index === 1 ? [{ type: 'tool_use', id: 'native-goal', name: 'Execution__goal', input: goal }]
+        ] : index === 1 ? [{ type: 'redacted_thinking', data: 'PRIVATE-REDACTED' }, { type: 'tool_use', id: 'native-goal', name: 'Execution__goal', input: goal }]
           : [{ type: 'text', text: index === 2 ? 'Two actual files written.' : JSON.stringify(final({ messages: [{ content: body.messages[0].content }] })) }];
-        return json({ id: `msg-${index}`, content, stop_reason: index < 2 ? 'tool_use' : 'end_turn', usage: { input_tokens: 10, output_tokens: 8 } });
+        return json({ id: `msg-${index}`, content, stop_reason: index < 2 ? 'tool_use' : 'stop_sequence', usage: { input_tokens: 10, output_tokens: 8 } });
       }
       const output = index === 0 ? [
         { type: 'reasoning', id: 'r', encrypted_content: 'PRIVATE-ENCRYPTED', summary: [] },
@@ -168,6 +173,19 @@ describe('Person continuous native execution then one final cognition', () => {
     expect(JSON.stringify(wire[1])).toContain(protocol === 'anthropic' ? 'PRIVATE-REASONING' : 'PRIVATE-ENCRYPTED');
     expect(JSON.stringify(run.traces)).not.toContain('PRIVATE');
     if (protocol === 'anthropic') {
+      expect(run.traces.filter(trace => trace.kind === 'call_output').slice(-2).every(trace => trace.output.stopReason === 'stop_sequence')).toBe(true);
+      for (const body of wire.slice(1)) {
+        expect(body.system).toEqual(wire[0].system);
+        expect(body.tools).toEqual(wire[0].tools);
+        // Cache markers may move; the signed content itself cannot change.
+        const userText = message => typeof message.content === 'string' ? message.content : message.content.map(block => block.text).join('');
+        expect(userText(body.messages[0])).toBe(userText(wire[0].messages[0]));
+        expect(JSON.stringify(body)).toContain('PRIVATE-REASONING');
+      }
+      const updates = wire[3].messages.find(message => message.role === 'system');
+      expect(updates.content.some(block => block.type === 'tool_removal')).toBe(true);
+      expect(updates.content[0].text).toContain('strict JSON');
+      expect(headers[3]['anthropic-beta']).toBe('inline-tools-2026-09-15');
       const results = wire[1].messages.filter(m => m.role === 'user' && Array.isArray(m.content) && m.content[0].type === 'tool_result');
       expect(results).toHaveLength(1); expect(results[0].content.map(block => block.tool_use_id)).toEqual(['native-a', 'native-b']);
     } else expect(wire[1].input.filter(item => item.type === 'function_call_output').map(item => item.call_id)).toEqual(['native-a', 'native-b']);

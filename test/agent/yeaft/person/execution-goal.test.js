@@ -78,12 +78,19 @@ describe('Goal lifecycle independent of model end_turn', () => {
     expect(() => validateToolArguments(blocked, EXECUTION_GOAL_TOOL.parameters)).not.toThrow();
     expect(new ExecutionGoal().update(active({ kind: 'exploration', status: 'resting', reason: 'No useful new direction' }), noTasks).ok).toBe(true);
   });
-  it('keeps one current bounded goal without mutating original messages', () => {
+  it('appends only the current changed goal after observations without mutating original messages', () => {
     const transcript = new ExecutionTranscript([{ role: 'user', content: 'original' }]);
     transcript.setGoal({ ...active(), revision: 1 });
     transcript.setGoal({ ...active({ nextStep: 'Validate modified file' }), revision: 2 });
     const request = transcript.request({ system: 's', tools: [], maxBytes: 4000 });
     expect(JSON.parse(request.messages[1].content).executionGoal.revision).toBe(2);
+    expect(transcript.request({ system: 's', tools: [], maxBytes: 4000 }).messages).toEqual(request.messages);
+    transcript.response({ text: 'Actual public observation.' });
+    transcript.setGoal({ ...active({ nextStep: 'Validate result' }), revision: 3 });
+    const next = transcript.request({ system: 's', tools: [], maxBytes: 4000 });
+    expect(next.messages.slice(0, request.messages.length)).toEqual(request.messages);
+    expect(next.messages.at(-2).content).toBe('Actual public observation.');
+    expect(JSON.parse(next.messages.at(-1).content).executionGoal.revision).toBe(3);
     expect(transcript.initial).toEqual([{ role: 'user', content: 'original' }]);
   });
 });

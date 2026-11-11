@@ -130,6 +130,14 @@ This lets the same provider (like GitHub Copilot) run two protocols without spli
 
 `normalizeModelEntry()` unifies both into the object form.
 
+## Native Anthropic continuity
+
+Anthropic-compatible gateways preserve original signed thinking and redacted blocks with tool responses. Static keys automatically use an opaque credential fingerprint; Copilot uses the source GitHub credential so access-token refresh does not change ownership. Provider, endpoint, model, credential and instance/owner/Session/VP/thread fences still apply. Custom endpoints do not automatically opt into caching or eager streaming; translation routes can disable native replay explicitly.
+
+New thinking state is bound to the finalized wire prefix. Active Session tool loops keep already-sent messages/results immutable. On supported models, changed runtime instructions and tools are appended as native system messages and inline tool additions/removals, rather than rewriting the top-level system/tools. Unsupported models or a context that cannot fit fail visibly. No active thinking is silently removed and server-side `drop_block` is not enabled automatically.
+
+Original stop reasons, refusal details, stop sequences, input transformations, citations and known fallback/server-tool blocks are retained. Public diagnostics contain identifiers/status/citations, not server-tool arguments/results. `pause_turn` continues with the exact assistant response, at most three times; refusal, context exhaustion and unknown stop reasons do not become successful results or dispatch tools. Official Claude 5+ routes request summarized thinking by default; an explicit `extraBody.thinking.display` remains authoritative. Summaries are not raw internal reasoning.
+
 ## Credential Providers
 
 A provider's `apiKey` and `credentialProvider` are **mutually exclusive**:

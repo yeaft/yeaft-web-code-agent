@@ -71,6 +71,9 @@ export class LLMAdapter {
 - 支持 thinking blocks（带 signature）
 - 支持 prompt caching（`cache_control`）
 - 支持 fine-grained tool_use
+- 保留原始停止原因、`stop_details`、`stop_sequence`、`input_transformations`、引用与已知 fallback / 服务端工具 blocks；公开诊断只含状态、标识和引用，不复制服务端工具参数或结果。
+- `pause_turn` 有界自动续接，不插入虚构用户输入；拒绝、上下文耗尽或未知停止原因不会冒充正常完成，也不会派发其中的工具。
+- 官方 Claude 5+ 路由默认请求可读的 `summarized` thinking 摘要；显式 `extraBody.thinking.display` 保持优先。摘要不是原始内部思考。
 - Claude Fable 5 / 5.1 / 5.2 自动识别 `low`、`medium`、`high`、`xhigh`、`max` 五档 effort。Session 显式选择档位后，通过 adaptive thinking 和 `output_config.effort` 发送，不使用手动 token budget。模型 API 默认为 `high`；可选档位来自 Agent 模型目录，因此旧版 Agent 需要更新后才会显示选择器。参见 [Anthropic effort 文档](https://platform.claude.com/docs/en/build-with-claude/effort)。
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
@@ -129,6 +132,24 @@ router 解析 `<provider-name>` 找到 provider 配置，用 `<model-id>` 调对
 - **对象**：`{ id: "claude-sonnet-4.5", protocol: "anthropic" }` — per-model 覆盖
 
 `normalizeModelEntry()` 把两种 shape 统一成对象形式。
+
+## 原生 continuation 与 preserved thinking
+
+Anthropic-compatible 网关的签名 thinking / redacted thinking 随同原始 assistant blocks 保存和重放；不要求网关使用官方域名，也不要求为普通静态 `apiKey` 手工设置 `nativeReasoningState` 或 `credentialScopeId`。静态凭据只保存 SHA-256 指纹；Copilot 使用本次交换所用 GitHub 源凭据的指纹，短期 API token 刷新不会改变 scope，切换源凭据则拒绝重放。provider、endpoint、model 和 instance / owner / Session / VP / thread 仍逐项隔离。
+
+未知网关不会因此自动启用 prompt caching、eager input streaming 等可选 wire 字段。`capabilities.translation: true` 或 `capabilities.nativeReasoningState: false` 仍可明确禁用原生重放；如果响应已经包含签名 thinking 和工具调用，会报可诊断错误，而不是丢掉 thinking 后继续执行工具。Router 的 orphan 修复也不能悄悄删除这样的工具 turn。
+
+[Claude preserved-thinking 官方文档](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking) 要求保持顶层 `system`、`tools` 和 thinking 前的消息 prefix；`cache_control` 标记、effort、输出预算不属于该 prefix。不能在保留后续签名的同时重写之前的工具结果、删改旧消息或在 thinking 链中挖空。客户端 compact 应建立明确的新上下文边界，而不是让仍在执行中的工具 turn 丢失 reasoning。
+
+`provider-state.js` 提供内容不可见的 prefix 边界，供适配器使用：
+
+- `createProviderState({ context, identity, items, responseId, requestBody })`：`requestBody` 必须是实际发送的、规范化后的请求；对 Anthropic thinking 保存 `requestPrefix` 摘要及 thinking 链指纹，不保存一份 prompt。
+- `validateAnthropicRequestPrefixes(body, entries)`：在最终请求构造完成、fetch 之前调用。每个 entry 是 `{ state, messageIndex }`，index 指向**翻译后的 wire assistant 消息**，不是 UnifiedMessage index。签名自身仍由 replay 的 origin / owner / projection fence 校验；此 helper 校验对应请求的 prefix。允许移动 cache marker 和移除最旧的 thinking，不允许修改工具 input 中恰好同名的业务字段。
+- 历史 envelope 没有 `requestPrefix` 时保持旧格式可读；新响应应始终绑定实际 wire 请求。prefix 校验失败不会自动选择服务端 `drop_block`，也不会隐式删除签名。
+
+原始 blocks 中已知的 `fallback`、`server_tool_use`、`mcp_tool_use`、server / MCP tool result 和 `container_upload` 可原样保留，但不投影成客户端工具调用或正文。只接受明确列出的类型及必要字段，不因类型名以 `_tool_result` 结尾就接受未知 blocks，也不会因此允许无签名 thinking。
+
+官方提供 `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` 作为临时恢复方式，需要 `thinking-binding-controls-2026-08-01` beta header；它可能提高输出 token 和延迟，不能作为掩盖每轮 prefix 编辑的默认开关。若实现这种显式降级，应按 Session 持久化选择，在重启和后续请求中保持一致，并记录、计数响应 `input_transformations` 中的 `prefix_binding_mismatch`。不得让它绕过 provider / endpoint / model / credential / owner 的本地 origin fence。另一种客户端删除失效 block 及所有后续 thinking 的恢复同样需要持久化且不可恢复已删 blocks；当前未自动实现两种降级，更不会在活动工具 turn 中静默删 thinking。活动 Session 工具循环使用 append-only provider tape，已经发送的历史和工具结果不再被重复归档或缩短；超出窗口时明确停止，而不是重写签名 prefix。支持的模型通过追加原生 `role: "system"` 消息更新运行指令，通过 `tool_addition` / `tool_removal`（`inline-tools-2026-09-15` beta）更新工具。顶层 system/tools 不变，撤回的工具也不会因固定顶层定义而重新获得执行权限。不支持该协议的模型明确报错，不静默丢弃更新。普通新 turn 仍使用确定性历史窗口建立新的上下文边界。
 
 ## Credential Providers
 

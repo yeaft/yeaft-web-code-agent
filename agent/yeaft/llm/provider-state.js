@@ -48,8 +48,14 @@ function validOrigin(origin) {
   return origin && ['providerId', 'endpointFingerprint', 'model', 'credentialScopeId'].every(key => nonempty(origin[key]));
 }
 
-/** Endpoint recognition is exact, never inferred from a Claude/GPT model name.
- * Unknown/translation endpoints opt in via the existing provider/model config.
+/** Opaque credential identity; never persist the credential itself. */
+export function createCredentialScopeId(credential, kind = 'static-api-key') {
+  return nonempty(credential) ? hash([kind, credential]) : undefined;
+}
+
+/** Protocol selects the native block format, not a hostname allowlist.
+ * Optional wire features still require a recognized endpoint or explicit opt-in.
+ * Translation routes can explicitly disable native replay.
  */
 export function createProviderContext({ protocol, baseUrl, providerId, credentialScopeId, staticApiKey, model, capabilities = {} }) {
   let endpoint;
@@ -60,14 +66,12 @@ export function createProviderContext({ protocol, baseUrl, providerId, credentia
   } catch { endpoint = ''; }
   const native = protocol === 'anthropic' ? endpoint === 'https://api.anthropic.com'
     : endpoint === 'https://api.openai.com/v1';
-  // Official static-key routes work with existing configs. Persist only a
-  // full cryptographic fingerprint, stable across restart and changed on key
-  // rotation. Dynamic credentials and unknown proxies still require an explicit
-  // account scope: an expiring access token is not a stable account identity.
-  if (!nonempty(credentialScopeId) && native && nonempty(staticApiKey)) {
-    credentialScopeId = hash(['static-api-key', staticApiKey]);
-  }
-  const enabled = key => capabilities.translation !== true && (capabilities[key] ?? native) === true;
+  // A static gateway credential fences accounts just as an official key does.
+  // Dynamic providers pass the scope of the source credential used for exchange,
+  // not a rotating access token or a provider name shared by every account.
+  if (!nonempty(credentialScopeId)) credentialScopeId = createCredentialScopeId(staticApiKey);
+  const enabled = key => capabilities.translation !== true
+    && (capabilities[key] ?? (key === 'nativeReasoningState' && protocol === 'anthropic' ? Boolean(endpoint) : native)) === true;
   return {
     protocol,
     origin: { providerId: providerId || protocol, endpointFingerprint: hash(endpoint), model, credentialScopeId },
@@ -77,8 +81,42 @@ export function createProviderContext({ protocol, baseUrl, providerId, credentia
       parallelToolCalls: enabled('parallelToolCalls'),
       eagerInputStreaming: protocol === 'anthropic' && enabled('eagerInputStreaming'),
     },
-    diagnostics: { capabilitySource: capabilities.translation ? 'translation-disabled' : native ? 'native-endpoint' : 'custom-endpoint-unverified' },
+    diagnostics: { capabilitySource: capabilities.translation ? 'translation-disabled' : native ? 'native-endpoint' : 'custom-endpoint-protocol' },
   };
+}
+
+/** Models with documented prefix binding and native runtime instruction updates.
+ * Do not apply modern-only wire requirements to legacy extended-thinking routes.
+ */
+export function supportsAnthropicPreservedThinking(model) {
+  const id = String(model || '').toLowerCase().split('/').at(-1)
+    .replace(/^(?:(?:us|eu|apac|global)\.)?anthropic\./, '');
+  const suffix = '(?:[-@]\\d{8})?(?:-v\\d+(?::\\d+)?)?(?:-latest)?$';
+  return new RegExp('^claude-(?:fable|mythos)-5(?:[-.][12])?' + suffix).test(id)
+    || new RegExp('^claude-opus-(?:5(?:[.-]5)?|4[.-]8)' + suffix).test(id)
+    || new RegExp('^claude-(?:sonnet|haiku)-5[.-]5' + suffix).test(id);
+}
+
+// These are replay-only server content, never client tool calls. Keep the list
+// explicit: accepting arbitrary *_tool_result or unknown blocks would also let
+// malformed/unsigned reasoning hide inside a supposedly replayable envelope.
+const ANTHROPIC_TOOL_USES = new Set(['tool_use', 'server_tool_use', 'mcp_tool_use']);
+const ANTHROPIC_SERVER_RESULTS = new Set([
+  'web_search_tool_result', 'web_fetch_tool_result', 'code_execution_tool_result',
+  'bash_code_execution_tool_result', 'text_editor_code_execution_tool_result',
+  'tool_search_tool_result', 'mcp_tool_result',
+]);
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+function opaqueAnthropicBlock(item) {
+  if (item.type === 'fallback') return nonempty(item.model);
+  if (['server_tool_use', 'mcp_tool_use'].includes(item.type)) {
+    return nonempty(item.id) && nonempty(item.name) && record(item.input);
+  }
+  if (ANTHROPIC_SERVER_RESULTS.has(item.type)) {
+    return nonempty(item.tool_use_id) && (typeof item.content === 'string'
+      || (item.content !== null && typeof item.content === 'object'));
+  }
+  return item.type === 'container_upload' && nonempty(item.file_id);
 }
 
 function projectItems(protocol, items) {
@@ -100,6 +138,7 @@ function projectItems(protocol, items) {
     } else if (protocol === 'anthropic') {
       if (item.type === 'thinking' && typeof item.thinking === 'string' && nonempty(item.signature)) continue;
       if (item.type === 'redacted_thinking' && nonempty(item.data)) continue;
+      if (opaqueAnthropicBlock(item)) continue;
       if (item.type === 'text' && typeof item.text === 'string') projection.content += item.text;
       else if (item.type === 'tool_use' && nonempty(item.id) && nonempty(item.name) && item.input && typeof item.input === 'object') {
         projection.toolCalls.push({ id: item.id, name: item.name, input: item.input });
@@ -109,12 +148,15 @@ function projectItems(protocol, items) {
   return projection;
 }
 
-export function createProviderState({ context, identity, items, responseId }) {
+export function createProviderState({ context, identity, items, responseId, requestBody }) {
   if (!context?.capabilities?.nativeReasoningState || !validOrigin(context.origin) || !requestOwner(identity)) {
     if (context?.protocol === 'anthropic' && Array.isArray(items)
-      && items.some(item => item?.type === 'tool_use')
+      && items.some(item => ANTHROPIC_TOOL_USES.has(item?.type))
       && items.some(item => ['thinking', 'redacted_thinking'].includes(item?.type))) {
-      throw new ProviderStateError('signed tool turn requires nativeReasoningState, credentialScopeId and request identity; configure the verified native route and start a new context');
+      const missing = [!context?.capabilities?.nativeReasoningState && 'nativeReasoningState (disabled by route policy)',
+        !validOrigin(context?.origin) && 'credentialScopeId (configure a route credential)',
+        !requestOwner(identity) && 'request identity (instance/owner/session/VP/thread)'].filter(Boolean).join(', ');
+      throw new ProviderStateError(`signed tool turn requires ${missing}; preserve the signed response and correct the route before retrying`);
     }
     return null;
   }
@@ -125,18 +167,81 @@ export function createProviderState({ context, identity, items, responseId }) {
   if (providerStateBytes(state) > MAX_PROVIDER_STATE_BYTES) throw new ProviderStateError('state exceeds byte budget');
   try { state.projectionDigest = providerProjectionDigest(projectItems(state.protocol, state.items)); }
   catch (error) {
-    if (state.protocol === 'anthropic' && items.some(item => item?.type === 'tool_use')
+    if (state.protocol === 'anthropic' && items.some(item => ANTHROPIC_TOOL_USES.has(item?.type))
       && items.some(item => ['thinking', 'redacted_thinking'].includes(item?.type))) throw error;
     return null; // unsupported/partial optional Responses state is not replayable
+  }
+  if (state.protocol === 'anthropic' && requestBody && hasThinking(items)
+      && supportsAnthropicPreservedThinking(requestBody.model)) {
+    state.requestPrefix = anthropicRequestPrefix(requestBody);
   }
   // Replay checks the final envelope, including its projection digest.
   if (providerStateBytes(state) > MAX_PROVIDER_STATE_BYTES) throw new ProviderStateError('state exceeds byte budget');
   return state;
 }
 
+const hasThinking = items => items.some(item => ['thinking', 'redacted_thinking'].includes(item?.type));
+const withoutCacheMarker = block => {
+  if (!block || typeof block !== 'object') return block;
+  const { cache_control, ...rest } = block;
+  return rest;
+};
+
+// Only strip protocol cache markers, not identically named keys in tool inputs.
+function anthropicRequestPrefix(body, messageCount = body?.messages?.length) {
+  if (!Array.isArray(body?.messages) || !Number.isSafeInteger(messageCount)
+    || messageCount < 0 || messageCount > body.messages.length) {
+    throw new ProviderStateError('invalid Anthropic request prefix');
+  }
+  const thinkingChain = [];
+  const messages = body.messages.slice(0, messageCount).map(message => ({ ...message,
+    content: Array.isArray(message.content) ? message.content.filter(block => {
+      if (!['thinking', 'redacted_thinking'].includes(block?.type)) return true;
+      thinkingChain.push(hash(stable(block)));
+      return false;
+    }).map(withoutCacheMarker) : typeof message.content === 'string'
+      ? [{ type: 'text', text: message.content }] : message.content,
+  }));
+  return { version: 1, digest: hash(stable({
+    // Adding a cache breakpoint converts shorthand text into a block array.
+    // Canonicalize that equivalent representation, not arbitrary business data.
+    system: Array.isArray(body.system) ? body.system.map(withoutCacheMarker)
+      : typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : body.system,
+    tools: Array.isArray(body.tools) ? body.tools.map(withoutCacheMarker) : [],
+    messages,
+  })), thinkingChain };
+}
+
+/** Validate finalized Anthropic wire prefixes after translation, caching and extraBody.
+ * Entries refer to the actual wire assistant index, not a UnifiedMessage index.
+ * No prompt content is persisted; legacy states without prefix metadata remain readable.
+ * This deliberately fails closed, never rewriting or silently dropping signed blocks.
+ * @param {object} body finalized wire request (system, tools, messages)
+ * @param {{state: object, messageIndex: number}[]} entries replayed native states
+ */
+export function validateAnthropicRequestPrefixes(body, entries) {
+  for (const { state, messageIndex } of entries) {
+    if (state?.protocol !== 'anthropic' || !state.requestPrefix) continue;
+    const expected = state.requestPrefix;
+    if (expected.version !== 1 || !Array.isArray(expected.thinkingChain)
+      || body?.messages?.[messageIndex]?.role !== 'assistant') {
+      throw new ProviderStateError('invalid Anthropic request prefix metadata');
+    }
+    const actual = anthropicRequestPrefix(body, messageIndex);
+    // Removing only the oldest reasoning is allowed; a gap or reintroduced block
+    // is not. Message edits remain fenced by the independent content digest.
+    const offset = expected.thinkingChain.length - actual.thinkingChain.length;
+    if (expected.digest !== actual.digest || offset < 0
+      || actual.thinkingChain.some((value, index) => value !== expected.thinkingChain[offset + index])) {
+      throw new ProviderStateError('Anthropic request prefix changed; keep system, tools and earlier messages unchanged or start a new context');
+    }
+  }
+}
+
 function signedToolState(state, message) {
-  return state?.protocol === 'anthropic' && message?.toolCalls?.length > 0
-    && (!Array.isArray(state.items) || state.items.some(item => ['thinking', 'redacted_thinking'].includes(item?.type)));
+  return state?.protocol === 'anthropic'
+    && (message?.toolCalls?.length > 0 || state.items?.some?.(item => ANTHROPIC_TOOL_USES.has(item?.type)))
+    && (!Array.isArray(state.items) || hasThinking(state.items));
 }
 
 export function bindProviderState(state, message) {

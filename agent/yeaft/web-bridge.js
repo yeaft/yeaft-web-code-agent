@@ -4858,10 +4858,10 @@ function handleEngineEvent(event, hctx) {
         for (const row of publications) {
           row.responseKind = 'progress';
           row.stopReason = event.stopReason;
-          if (event.stopReason !== 'end_turn') row.incomplete = true;
+          if (!['end_turn', 'stop_sequence'].includes(event.stopReason)) row.incomplete = true;
         }
         const last = publications.at(-1);
-        if (event.stopReason === 'end_turn' && last?.presentation.phase === 'final'
+        if (['end_turn', 'stop_sequence'].includes(event.stopReason) && last?.presentation.phase === 'final'
             && hctx.presentationTextPartsCount === (hctx.assistantTextParts || []).length) last.responseKind = 'result';
         if (publications.length && !hctx.skipPartialHistory) {
           const prompts = hctx.includeInitialPrompt ? [hctx.prompt, ...(hctx.appendedUserPrompts || [])] : (hctx.appendedUserPrompts || []);
@@ -4881,7 +4881,8 @@ function handleEngineEvent(event, hctx) {
         }
         break;
       }
-      if (event.stopReason === 'error' || event.stopReason === 'no_progress') {
+      if (event.stopReason === 'error' || event.stopReason === 'no_progress'
+          || (event.terminal && ['refusal', 'model_context_window_exceeded', 'unknown', 'pause_turn'].includes(event.stopReason))) {
         if (typeof hctx.markEngineTerminal === 'function') {
           hctx.markEngineTerminal('error', hctx.lastEngineErrorDetail || event.detail || null);
         }

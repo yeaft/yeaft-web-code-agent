@@ -47,10 +47,13 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  * @typedef {{ type: 'provider_activity' }} ProviderActivityEvent Content-free progress on a non-empty hidden delta; watchdog only, never UI/history.
  * @typedef {{ type: 'provider_state', providerState: object, providerStateBytes: number }} ProviderStateEvent Internal only; never forward to UI/search.
  * @typedef {{ type: 'usage', inputTokens: number, outputTokens: number, reasoningTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number, cacheTokensAreIncludedInInput?: boolean, reportedTokenFields?: string[], usageIncomplete?: boolean }} UsageEvent
- * @typedef {{ type: 'stop', stopReason: 'end_turn' | 'tool_use' | 'max_tokens' }} StopEvent
+ * @typedef {'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' | 'refusal' | 'pause_turn' | 'model_context_window_exceeded' | 'unknown'} StopReason
+ * @typedef {{ protocol?: string, responseId?: string, model?: string, stopReason?: string|null, stopDetails?: object|null, stopSequence?: string|null, inputTransformations?: object|Array<object>, container?: object|null, contentBlocks?: Array<object> }} ProviderMetadata Safe protocol bookkeeping only; no private reasoning, signatures or native response items.
+ * @typedef {{ type: 'provider_metadata', metadata: ProviderMetadata }} ProviderMetadataEvent Internal metadata updates merged on the assistant history row and trace, not forwarded as visible content.
+ * @typedef {{ type: 'stop', stopReason: StopReason, stopDetails?: object|null, stopSequence?: string|null }} StopEvent pause_turn requests bounded continuation of the exact assistant response; refusal/context overflow/unknown are not successful completions.
  * @typedef {{ type: 'error', error: Error, retryable: boolean }} ErrorEvent
  *
- * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ThinkingBlockEndEvent | ProviderActivityEvent | ProviderStateEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
+ * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ThinkingBlockEndEvent | ProviderActivityEvent | ProviderStateEvent | ProviderMetadataEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
  */
 
 // ─── Unified Message Types ─────────────────────────────────────
@@ -60,7 +63,7 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  *
  * @typedef {{ role: 'system', content: string }} SystemMessage
  * @typedef {{ role: 'user', content: string|Array<object> }} UserMessage
- * @typedef {{ role: 'assistant', content: string, toolCalls?: UnifiedToolCall[], thinkingBlocks?: ThinkingBlock[] }} AssistantMessage
+ * @typedef {{ role: 'assistant', content: string, toolCalls?: UnifiedToolCall[], thinkingBlocks?: ThinkingBlock[], providerState?: object, providerMetadata?: ProviderMetadata }} AssistantMessage
  * @typedef {{ role: 'tool', toolCallId: string, content: string|Array<object>, isError?: boolean }} ToolMessage
  *
  * @typedef {SystemMessage | UserMessage | AssistantMessage | ToolMessage} UnifiedMessage

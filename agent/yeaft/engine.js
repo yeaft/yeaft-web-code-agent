@@ -56,7 +56,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 const MAIN_THREAD_ID = 'main';
 
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
-import { bindProviderState } from './llm/provider-state.js';
+import { bindProviderState, ProviderStateError } from './llm/provider-state.js';
 import {
   POST_COMPACT_CONTEXT_RATIO,
   generatePostCompact,
@@ -98,6 +98,64 @@ import {
 
 /** Maximum auto-continue turns when stopReason is 'max_tokens'. */
 const MAX_CONTINUE_TURNS = 3;
+/** Provider-side work may pause without yielding a completed assistant turn. */
+const MAX_PAUSE_CONTINUE_TURNS = 3;
+const PROVIDER_STOP_REASONS = new Set([
+  'end_turn', 'tool_use', 'max_tokens', 'stop_sequence', 'refusal',
+  'pause_turn', 'model_context_window_exceeded', 'unknown',
+]);
+const COMPLETED_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
+const FAILED_PROVIDER_STOPS = new Set(['refusal', 'model_context_window_exceeded', 'unknown']);
+
+/**
+ * Provider metadata is public protocol bookkeeping, never a second channel for
+ * private reasoning/state. Keep only the documented metadata envelope and strip
+ * reasoning-bearing fields even when nested in provider extensions.
+ */
+function safeProviderMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const privateKey = /^(?:thinking|reasoning|redacted_thinking|signature|encrypted_content|providerState|apiKey|authorization|accessToken)$/i;
+  const seen = new WeakSet();
+  const clean = value => {
+    if (value == null || typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+    if (typeof value !== 'object' || seen.has(value)) return undefined;
+    if (['thinking', 'redacted_thinking', 'reasoning'].includes(value.type)) return undefined;
+    seen.add(value);
+    const result = Array.isArray(value)
+      ? value.map(clean).filter(item => item !== undefined)
+      : Object.fromEntries(Object.entries(value)
+        .filter(([key]) => !privateKey.test(key))
+        .map(([key, item]) => [key, clean(item)])
+        .filter(([, item]) => item !== undefined));
+    seen.delete(value);
+    return result;
+  };
+  const result = {};
+  for (const key of ['protocol', 'responseId', 'model', 'stopReason', 'stopDetails', 'stopSequence', 'inputTransformations', 'container', 'contentBlocks']) {
+    if (!Object.prototype.hasOwnProperty.call(metadata, key)) continue;
+    const value = clean(metadata[key]);
+    if (['protocol', 'responseId', 'model', 'stopReason', 'stopSequence'].includes(key)
+      && value !== null && typeof value !== 'string') continue;
+    if (value !== undefined) result[key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function mergeProviderMetadata(previous, incoming) {
+  const safe = safeProviderMetadata(incoming);
+  if (!safe) return previous;
+  if (Array.isArray(previous?.inputTransformations) && Array.isArray(safe.inputTransformations)) {
+    const transformations = new Map([...previous.inputTransformations, ...safe.inputTransformations]
+      .map(value => [JSON.stringify(value), value]));
+    safe.inputTransformations = [...transformations.values()];
+  } else if (previous?.inputTransformations && safe.inputTransformations
+    && !Array.isArray(previous.inputTransformations) && !Array.isArray(safe.inputTransformations)
+    && typeof previous.inputTransformations === 'object' && typeof safe.inputTransformations === 'object') {
+    safe.inputTransformations = { ...previous.inputTransformations, ...safe.inputTransformations };
+  }
+  return { ...previous, ...safe };
+}
 
 /**
  * Keep one provider tool batch from opening an unbounded number of filesystem,
@@ -355,6 +413,8 @@ export function mapDebugMessage(m) {
   }
   if (m.toolCallId) out.toolCallId = m.toolCallId;
   if (m.isError != null) out.isError = m.isError;
+  const metadata = safeProviderMetadata(m.providerMetadata);
+  if (metadata) out.providerMetadata = metadata;
   return out;
 }
 
@@ -1573,6 +1633,8 @@ export class Engine {
     if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) record.toolCalls = message.toolCalls;
     if (Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0) record.thinkingBlocks = message.thinkingBlocks;
     if (message.providerState) record.providerState = message.providerState;
+    const metadata = safeProviderMetadata(message.providerMetadata);
+    if (metadata) record.providerMetadata = metadata;
     if (message.isError) record.isError = true;
     if (message.imageAssetAnchor) record.imageAssetAnchor = true;
     if (message._reflection) record._reflection = true;
@@ -1609,7 +1671,7 @@ export class Engine {
       : message.content != null;
     const hasToolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
     const hasThinking = Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length > 0;
-    if (!hasContent && !hasToolCalls && !hasThinking && !message.providerState && message.role !== 'tool') return null;
+    if (!hasContent && !hasToolCalls && !hasThinking && !message.providerState && !safeProviderMetadata(message.providerMetadata) && message.role !== 'tool') return null;
     return this.#conversationStore.append(this.#conversationRecord(message, context), { strict: context.strict === true });
   }
 
@@ -1848,7 +1910,7 @@ export class Engine {
     } finally {
       // A delivery intent is not a successful terminal state. Persist failures
       // (including consumers closing the generator) for reconnect/history replay.
-      if (!terminalEmitted || terminalStopReason !== 'end_turn') {
+      if (!terminalEmitted || !COMPLETED_STOP_REASONS.has(terminalStopReason)) {
         for (const message of publications) {
           try { this.#conversationStore?.update?.(message, {
             responseKind: 'progress', incomplete: true,
@@ -2515,8 +2577,13 @@ export class Engine {
     }
 
     let toolDefs = this.#getToolDefs(effectiveCollabToolPolicy, activeToolNames);
+    // Once Anthropic signs a response, its complete request prefix is immutable.
+    // Keep a provider-only tape plus its live-conversation cursor; asynchronous
+    // tool updates must arrive as new notes, never edits to previously sent rows.
+    let signedAnthropicPrefix = null;
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
+    let pauseContinueTurns = 0;
     let toolLoopTurns = 0; // task-327b: tool-use turns for long-loop auto-bump
     let fullResponseText = '';
     let displayImageAnchorMessage = null;
@@ -2673,9 +2740,11 @@ export class Engine {
       let responseText = '';
       let incompleteAssistantPersisted = false;
       const persistIncompleteAssistantOnce = (reason) => {
-        if (incompleteAssistantPersisted || !responseText) return null;
+        if (incompleteAssistantPersisted || (!responseText && !providerMetadata)) return null;
         incompleteAssistantPersisted = true;
-        return this.#persistConversationMessage({ role: 'assistant', content: responseText, responseKind: 'progress' }, {
+        return this.#persistConversationMessage({ role: 'assistant', content: responseText, responseKind: 'progress',
+          ...(providerMetadata ? { providerMetadata } : {}),
+        }, {
           sessionId: runtimeSessionId,
           turnId: vpTurnId || queryTurnId,
           model: currentModel,
@@ -2687,8 +2756,9 @@ export class Engine {
       const toolCalls = [];
       const thinkingBlocks = []; // Legacy adapter compatibility only.
       let providerState = null;
+      let providerMetadata = null;
       let requestEffortDecision = snapshotEffortDecision();
-      let stopReason = 'end_turn';
+      let stopReason = 'unknown';
       const totalUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheInputDeltaTokens: 0 };
       // Raw provider exchange is diagnostic source data, not model context or
       // ordinary history. The legacy telemetry byte setting must not destroy it;
@@ -2801,6 +2871,7 @@ export class Engine {
       if (progressReporting) systemPrompt += `\n\n${progressReminder('report', queryProgress.snapshot().reason)}`;
       let requestDebugMessages = [];
       let requestInputBreakdown = null;
+      let requestPrefixSnapshot = null;
 
       try {
         // Resolve effort per provider request so a saved Session effort takes
@@ -2862,7 +2933,7 @@ export class Engine {
         // Retry continuation is part of the active turn. Like the opening user
         // row and tool-loop traffic, it must not consume the 32K history budget.
         const historyBudget = Math.max(0, requestConfig.messageTokenBudget || 32768);
-        const buckets = useMessageHistory ? buildHistoryBuckets(conversationMessages, {
+        const buckets = useMessageHistory && !signedAnthropicPrefix ? buildHistoryBuckets(conversationMessages, {
           prompt,
           relatedTurns: relatedHistoryTurns,
           recentTurnCap: Math.max(10, requestConfig.yeaft?.recentTurnsLimit ?? 10),
@@ -2876,15 +2947,17 @@ export class Engine {
           language: requestConfig.language,
         }) : null;
         let historyMessageCount;
-        const requestHistory = buckets?.messages || (() => {
-          const historical = trimSnapshotForBudget(conversationMessages.slice(0, turnStartIdx), {
-            messageTokenBudget: historyBudget,
-            keepToolTurns: 0,
-            language: requestConfig.language,
-          });
-          historyMessageCount = historical.length;
-          return [...historical, ...conversationMessages.slice(turnStartIdx)];
-        })();
+        const requestHistory = signedAnthropicPrefix
+          ? [...signedAnthropicPrefix.messages, ...conversationMessages.slice(signedAnthropicPrefix.conversationCursor)]
+          : buckets?.messages || (() => {
+            const historical = trimSnapshotForBudget(conversationMessages.slice(0, turnStartIdx), {
+              messageTokenBudget: historyBudget,
+              keepToolTurns: 0,
+              language: requestConfig.language,
+            });
+            historyMessageCount = historical.length;
+            return [...historical, ...conversationMessages.slice(turnStartIdx)];
+          })();
         if (buckets) {
           historyMessageCount = requestHistory.length - (buckets.meta?.current?.messageCount || 0);
         }
@@ -2902,7 +2975,36 @@ export class Engine {
           return modelMessage;
         });
 
-        if (scenario !== 'work-item' && this.#yeaftDir && (this.#config?.archive?.toolResults !== false)) {
+        const currentSystemInstructions = systemPrompt;
+        let requestToolDefs = toolDefs;
+        let runtimeInstructionUpdate = null;
+        if (signedAnthropicPrefix) {
+          historyMessageCount = signedAnthropicPrefix.historyMessageCount;
+          const changes = [];
+          if (systemPrompt !== signedAnthropicPrefix.currentSystem) {
+            // Supply the complete current instruction, including removals, not
+            // just a suffix that could leave withdrawn Skill/policy text active.
+            changes.push({ type: 'text', text: 'Updated runtime instructions. This replaces the earlier runtime instruction snapshot from this point onward:\n\n' + systemPrompt });
+          }
+          const priorTools = new Map(signedAnthropicPrefix.currentTools.map(tool => [tool.name, tool]));
+          const nextTools = new Map(toolDefs.map(tool => [tool.name, tool]));
+          for (const name of priorTools.keys()) {
+            if (!nextTools.has(name)) changes.push({ type: 'tool_removal', tool: { type: 'tool_reference', name } });
+          }
+          for (const tool of toolDefs) {
+            if (JSON.stringify(priorTools.get(tool.name)) === JSON.stringify(tool)) continue;
+            changes.push({ type: 'tool_addition', tool: { type: 'tool_definition', definition: {
+              name: tool.name, description: tool.description, input_schema: tool.parameters,
+            } } });
+          }
+          if (changes.length > 0) runtimeInstructionUpdate = { role: 'system', content: changes };
+          // The adapter must preserve native system rows and gate inline tools
+          // by model support. It must never silently discard this instruction.
+          requestToolDefs = signedAnthropicPrefix.tools;
+          systemPrompt = signedAnthropicPrefix.system;
+        }
+
+        if (!signedAnthropicPrefix && scenario !== 'work-item' && this.#yeaftDir && (this.#config?.archive?.toolResults !== false)) {
           try {
             const swept = await archiveToolResults({
               root: `${this.#yeaftDir}/memory`,
@@ -2928,8 +3030,8 @@ export class Engine {
           resolveMaxOutputTokens(currentModel, requestConfig),
           executionPolicy?.maxOutputTokens || Infinity,
         ));
-        const toolSchemaTokens = toolDefs.length > 0
-          ? approxTokens(JSON.stringify(toolDefs)) : 0;
+        const toolSchemaTokens = requestToolDefs.length > 0
+          ? approxTokens(JSON.stringify(requestToolDefs)) : 0;
         const fitOptions = {
           contextWindow: Math.max(1, Math.floor(currentContextWindow * providerContextScale)),
           systemTokens: estimateMessagesTokens(systemPrompt, []),
@@ -2940,7 +3042,22 @@ export class Engine {
           repeatedToolResultRefs,
           language: requestConfig.language,
         };
-        let fittedRequest = fitProviderRequestToContext(wireMessages, fitOptions);
+        const fitRequest = candidate => {
+          if (!signedAnthropicPrefix) return fitProviderRequestToContext(candidate, fitOptions);
+          // Never let emergency trimming, result deduplication or pair repair
+          // rewrite a signed prefix (nor drop active signed assistant rows).
+          const staticTokens = fitOptions.systemTokens + toolSchemaTokens + requestMaxOutputTokens;
+          const estimatedTokens = staticTokens + estimateHistoryMessagesTokens(candidate);
+          if (estimatedTokens > fitOptions.contextWindow) {
+            throw new ProviderStateError('active Anthropic signed context cannot fit without changing its prefix; start a new turn with a smaller context');
+          }
+          return { messages: candidate, meta: {
+            contextWindow: fitOptions.contextWindow, staticTokens, estimatedTokens,
+            historyMessagesAfter: historyMessageCount, droppedHistoryMessages: 0,
+            droppedCurrentMessages: 0, compactedToolResults: 0, deduplicatedToolResults: 0,
+          } };
+        };
+        let fittedRequest = fitRequest(wireMessages);
         // A task can complete on an old tool row. Sampling or evicting that row
         // must not acknowledge unseen evidence. Re-inject only missing pending
         // deliveries as fresh provider-only notes, then check the final copy.
@@ -2957,10 +3074,21 @@ export class Engine {
         ));
         const missingDeliveries = taskDeliveries.filter(({ text }) => !includesDelivery(fittedRequest.messages, text));
         if (missingDeliveries.length > 0) {
-          fittedRequest = fitProviderRequestToContext([...wireMessages, ...missingDeliveries.map(({ text }) => ({
+          wireMessages = [...wireMessages, ...missingDeliveries.map(({ text }) => ({
             role: 'user', content: `[system note] Async task completion:\n${text}`,
-          }))], fitOptions);
+          }))];
         }
+        if (runtimeInstructionUpdate) {
+          const previous = wireMessages.at(-1);
+          const pausedServerResult = previous?.providerMetadata?.stopReason === 'pause_turn'
+            && previous.providerState?.items?.some(item => /_tool_result$/.test(item.type));
+          const onlyText = runtimeInstructionUpdate.content.every(block => block.type === 'text');
+          if (!['user', 'tool'].includes(previous?.role) && !(pausedServerResult && onlyText)) {
+            throw new ProviderStateError('runtime instructions or tools changed at an unsupported Anthropic system-message position; start a new context');
+          }
+          wireMessages.push(runtimeInstructionUpdate);
+        }
+        if (missingDeliveries.length > 0 || runtimeInstructionUpdate) fittedRequest = fitRequest(wireMessages);
         wireMessages = fittedRequest.messages;
         const deliveredTaskIds = taskDeliveries.filter(({ text }) => includesDelivery(wireMessages, text))
           .map(({ taskId }) => taskId);
@@ -3004,8 +3132,14 @@ export class Engine {
           systemPrompt,
           messages: wireMessages,
           historyMessageCount: Math.min(historyMessageCount, wireMessages.length),
-          toolDefs,
+          toolDefs: requestToolDefs,
         });
+        requestPrefixSnapshot = {
+          system: systemPrompt, tools: structuredClone(requestToolDefs),
+          currentSystem: currentSystemInstructions, currentTools: structuredClone(toolDefs),
+          messages: structuredClone(wireMessages), historyMessageCount,
+          conversationCursor: conversationMessages.length + (pendingContinuationForRequest ? 1 : 0),
+        };
 
         // Capture only the provider route before the visible boundary. The
         // returned async iterable must not make a request or write durable
@@ -3059,7 +3193,7 @@ export class Engine {
           model: currentModel,
           system: systemPrompt,
           messages: wireMessages,
-          tools: toolDefs.length > 0 ? toolDefs : undefined,
+          tools: requestToolDefs.length > 0 ? requestToolDefs : undefined,
           maxTokens: requestMaxOutputTokens,
           effort: resolvedEffort,
           effortConstraint,
@@ -3135,6 +3269,9 @@ export class Engine {
             case 'provider_state':
               providerState = event.providerState;
               break;
+            case 'provider_metadata':
+              providerMetadata = mergeProviderMetadata(providerMetadata, event.metadata);
+              break;
             case 'thinking_delta':
               if (typeof event.text !== 'string' || event.text.length === 0) break;
               yield event;
@@ -3191,8 +3328,15 @@ export class Engine {
             }
             case 'stop':
               sawProviderStop = true;
-              stopReason = event.stopReason;
-              yield event;
+              stopReason = PROVIDER_STOP_REASONS.has(event.stopReason) ? event.stopReason : 'unknown';
+              providerMetadata = mergeProviderMetadata(providerMetadata, {
+                stopReason: event.stopReason || 'unknown',
+                ...(event.stopDetails !== undefined ? { stopDetails: event.stopDetails } : {}),
+                ...(event.stopSequence !== undefined ? { stopSequence: event.stopSequence } : {}),
+              });
+              yield { ...event, stopReason,
+                ...(providerMetadata?.stopDetails !== undefined ? { stopDetails: providerMetadata.stopDetails } : {}),
+              };
               break;
             case 'error': {
               const adapterError = event.error instanceof Error
@@ -3227,20 +3371,33 @@ export class Engine {
         // the request containing these task results completed successfully.
         // Retryable errors, aborts, idle timeouts, and truncated streams keep
         // escrow so retry or final rescue can deliver the payload.
+        if (!sawProviderStop && activeProviderRequest) {
+          const error = new Error('Provider stream ended without a stop event; completion was not confirmed.');
+          error.code = 'unknown';
+          error.retryable = false;
+          failProviderRequest?.(activeProviderRequest, error);
+          activeProviderRequest = null;
+        }
         if (sawProviderStop) {
           this.#confirmAsyncTaskResults(requestAsyncTaskIds);
           const completedProviderRequest = activeProviderRequest;
           activeProviderRequest = null;
-          finishProviderRequest?.(completedProviderRequest, {
+          if (FAILED_PROVIDER_STOPS.has(stopReason)) {
+            const error = new Error(`Provider response ended with ${stopReason}; completion was not confirmed.`);
+            error.code = stopReason;
+            error.retryable = false;
+            failProviderRequest?.(completedProviderRequest, error);
+          } else finishProviderRequest?.(completedProviderRequest, {
             responseText,
             stopReason,
             toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
             thinkingBlocks,
+            ...(providerMetadata ? { providerMetadata } : {}),
           });
         }
         traceRequest('llm.request_complete', {
           durationMs: perfNowMs() - requestPerfStart,
-          ok: true,
+          ok: !FAILED_PROVIDER_STOPS.has(stopReason),
           detail: {
             model: currentModel,
             stopReason,
@@ -3303,6 +3460,7 @@ export class Engine {
             cacheReadTokens: totalUsage.cacheReadTokens,
             cacheWriteTokens: totalUsage.cacheWriteTokens,
             stopReason: attemptStopReason,
+            ...(providerMetadata ? { providerMetadata } : {}),
             latencyMs,
             responseText,
             systemPrompt,
@@ -3331,6 +3489,7 @@ export class Engine {
             content: responseText,
             incomplete: true,
             responseKind: 'progress',
+            ...(providerMetadata ? { providerMetadata } : {}),
           };
           const persistedPartial = persistIncompleteAssistantOnce('retry');
           if (persistedPartial) {
@@ -3406,7 +3565,7 @@ export class Engine {
         // leave ambiguous execution ownership, so only pre-tool failures are
         // eligible for transparent retry or model fallback.
         const canReplayProviderRequest = toolCalls.length === 0 && !executionPolicy?.finalize && !progressReporting;
-        if (earlyIsContextOverflow && canReplayProviderRequest
+        if (earlyIsContextOverflow && canReplayProviderRequest && !signedAnthropicPrefix
           && contextOverflowRecoveryAttempts < 3) {
           contextOverflowRecoveryAttempts += 1;
           providerContextScale *= 0.75;
@@ -3569,6 +3728,7 @@ export class Engine {
           cacheReadTokens: totalUsage.cacheReadTokens,
           cacheWriteTokens: totalUsage.cacheWriteTokens,
           stopReason: 'error',
+          ...(providerMetadata ? { providerMetadata } : {}),
           latencyMs,
           responseText,
           // fix-vp-multi-thread (bug 4): persist the snapshot on the
@@ -3675,6 +3835,7 @@ export class Engine {
         cacheReadTokens: totalUsage.cacheReadTokens,
         cacheWriteTokens: totalUsage.cacheWriteTokens,
         stopReason,
+        ...(providerMetadata ? { providerMetadata } : {}),
         latencyMs,
         responseText,
         // fix-vp-multi-thread (bug 4): persist the full per-loop
@@ -3706,16 +3867,24 @@ export class Engine {
       // The complete exchange is already owned by the per-loop debug trace.
       // Keeping it on model history retains every previous request and makes
       // subsequent debug snapshots grow with cumulative request bodies.
-      const assistantMsg = { role: 'assistant', content: responseText, responseKind: 'progress' };
-      if (toolCalls.length > 0) {
+      const assistantMsg = { role: 'assistant', content: responseText, responseKind: 'progress',
+        ...(providerMetadata ? { providerMetadata } : {}),
+      };
+      if (toolCalls.length > 0 && !FAILED_PROVIDER_STOPS.has(stopReason)) {
         assistantMsg.toolCalls = toolCalls.map(tc => ({
           id: tc.id,
           name: tc.name,
           input: tc.input,
         }));
       }
-      const boundProviderState = bindProviderState(providerState, assistantMsg);
+      const boundProviderState = FAILED_PROVIDER_STOPS.has(stopReason) ? null : bindProviderState(providerState, assistantMsg);
       if (boundProviderState) assistantMsg.providerState = boundProviderState;
+      // Only prefix-enforced models need an append-only request tape. Legacy
+      // Claude signatures alone do not imply support for inline system/tools.
+      if (requestPrefixSnapshot && (signedAnthropicPrefix || (boundProviderState?.protocol === 'anthropic'
+          && boundProviderState.requestPrefix))) {
+        signedAnthropicPrefix = requestPrefixSnapshot;
+      }
       // New private reasoning is persisted only with verified provider ownership;
       // never downgrade it to the origin-free legacy thinkingBlocks format.
       if (vpPersona && vpPersona.vpId) {
@@ -3749,6 +3918,8 @@ export class Engine {
         sessionId: runtimeSessionId,
         turnId: vpTurnId || queryTurnId,
         model: currentModel,
+        stopReason,
+        incomplete: FAILED_PROVIDER_STOPS.has(stopReason) || stopReason === 'pause_turn',
         executionOrigin,
       });
       if (persistedAssistantMessage) {
@@ -3797,6 +3968,7 @@ export class Engine {
         latencyMs,
         ttfbMs,
         stopReason,
+        ...(providerMetadata ? { providerMetadata } : {}),
         // feat-debug-timestamp: epoch ms when this loop completed
         // (request end). The panel uses this to print HH:MM:SS per
         // loop; falls back to turn.openedAt + cumulative latency
@@ -3820,6 +3992,41 @@ export class Engine {
       if (signal?.aborted && (toolCalls.length === 0 || executionPolicy?.finalize || progressReporting)) {
         yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
         yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId, terminal: true };
+        break;
+      }
+      // These are protocol outcomes, not successful answers or tool dispatch
+      // permission. Handle before reporting, async waits, user-append recovery,
+      // and duplicate/max-token continuation so none can mask the real reason.
+      if (FAILED_PROVIDER_STOPS.has(stopReason)) {
+        const message = stopReason === 'refusal'
+          ? 'The model refused this request. No tools were executed; revise the request before retrying.'
+          : stopReason === 'model_context_window_exceeded'
+            ? 'The model reached its context window. No tools were executed; start a new turn with a smaller context.'
+            : 'The provider returned an unknown or missing stop reason. Completion was not confirmed and no tools were executed.';
+        yield { type: 'error', error: message, code: stopReason, retryable: false, threadId };
+        yield { type: 'turn_end', turnNumber, stopReason, threadId, terminal: true };
+        break;
+      }
+      if (stopReason === 'pause_turn') {
+        // A paused server/MCP operation is not safe to resubmit as a new user
+        // request. Without the full native response there is nothing to resume.
+        if (!boundProviderState || boundProviderState.protocol !== 'anthropic'
+            || !Array.isArray(boundProviderState.items) || boundProviderState.items.length === 0) {
+          yield { type: 'error', error: 'The provider paused but its exact response cannot be replayed. Automatic continuation was stopped to avoid repeating server-side operations.',
+            code: 'provider_pause_not_replayable', retryable: false, threadId };
+          yield { type: 'turn_end', turnNumber, stopReason, threadId, terminal: true };
+          break;
+        }
+        if (pauseContinueTurns < MAX_PAUSE_CONTINUE_TURNS) {
+          pauseContinueTurns++;
+          // Anthropic resumes the exact assistant response (including bound
+          // native state), not a newly invented user request such as Continue.
+          yield { type: 'turn_end', turnNumber, stopReason: 'pause_turn_continue', threadId };
+          continue;
+        }
+        yield { type: 'error', error: 'The provider repeatedly paused its response; automatic continuation limit reached. The task is not confirmed complete.',
+          code: 'provider_pause_limit', retryable: false, threadId };
+        yield { type: 'turn_end', turnNumber, stopReason, threadId, terminal: true };
         break;
       }
       if (executionPolicy?.finalize || progressReporting) {
@@ -4064,7 +4271,7 @@ export class Engine {
         if (pendingSubAgentNotifs.length > 0) {
           acknowledgePendingNotifications(notifScope, pendingSubAgentNotifs.map(n => n.id));
         }
-        if (stopReason === 'end_turn'
+        if (COMPLETED_STOP_REASONS.has(stopReason) && responseText.trim()
             && lastPersistedAssistantTextMessage
             && (!lastPersistedAssistantTextMessage.presentation || lastPersistedAssistantTextMessage.presentation.phase === 'final')
             && typeof this.#conversationStore?.update === 'function') {
