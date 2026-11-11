@@ -1182,9 +1182,7 @@ export default {
     const topbarRawEffort = Vue.computed(() => resolveSessionModelEffort(topbarGroup.value, store.yeaftModelEffort || ''));
 
     const topbarEffort = Vue.computed(() => {
-      const options = Array.isArray(topbarModelMeta.value?.effortOptions)
-        ? topbarModelMeta.value.effortOptions.filter(Boolean)
-        : [];
+      const options = selectableEffortsForModel(topbarModelMeta.value);
       if (!options.length) return null;
       return options.includes(topbarRawEffort.value)
         ? topbarRawEffort.value

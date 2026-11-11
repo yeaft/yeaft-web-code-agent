@@ -335,7 +335,7 @@ export function parseModelRef(ref) {
 
 /**
  * Valid effort levels accepted by Yeaft adapters.
- * @typedef {'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'} Effort
+ * @typedef {'medium' | 'xhigh' | 'max' | 'ultra'} Effort
  */
 
 /**
@@ -344,9 +344,8 @@ export function parseModelRef(ref) {
  * A configured maxBudgetTokens can cap them at the request boundary.
  */
 export const ANTHROPIC_THINKING_BUDGETS = {
-  low: 4096,
   medium: 8192,
-  high: 16384,
+  xhigh: 16384,
   max: 32000,
 };
 
@@ -356,15 +355,12 @@ export const ANTHROPIC_THINKING_BUDGETS = {
  * translation. Unsupported values are dropped; the adapter MUST NOT error.
  *
  * @param {Effort} effort
- * @returns {'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null}
+ * @returns {'medium' | 'xhigh' | 'max' | 'ultra' | null}
  */
 export function mapEffortToOpenAIReasoning(effort) {
   if (!effort) return null;
   switch (effort) {
-    case 'minimal': return 'minimal';
-    case 'low': return 'low';
     case 'medium': return 'medium';
-    case 'high': return 'high';
     case 'xhigh': return 'xhigh';
     case 'max': return 'max';
     case 'ultra': return 'ultra';
@@ -374,9 +370,9 @@ export function mapEffortToOpenAIReasoning(effort) {
 
 // Effort is an API contract, not a model-name allowlist. Compatible gateways
 // can expose new IDs/aliases without requiring a Yeaft release.
-export const OPENAI_REASONING_EFFORT_OPTIONS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
-export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = Object.freeze(['low', 'medium', 'high', 'max']);
+export const OPENAI_REASONING_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max', 'ultra']);
+export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max']);
+export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max']);
 
 export function normalizeEffortOptions(options) {
   if (!Array.isArray(options)) return null;
@@ -426,7 +422,7 @@ export function getThinkingCapability(model, context = {}) {
   const overrides = normalizeEffortOptions(context.effortOptions);
   const effortOptions = overrides ? apiOptions.filter(value => overrides.includes(value)) : [...apiOptions];
   if (!effortOptions.length) return disabled;
-  const defaultEffort = normalizeEffort(context.defaultEffort) || (thinkingProtocol === 'anthropic-adaptive' ? 'high' : null);
+  const defaultEffort = normalizeEffort(context.defaultEffort) || (thinkingProtocol === 'anthropic-adaptive' ? 'xhigh' : null);
   return {
     supportsThinking: true,
     thinkingProtocol,
@@ -451,7 +447,10 @@ export function modelSupportsEffort(model, context = {}) {
  * @returns {Effort | null}
  */
 export function normalizeEffort(effort) {
-  if (effort === 'minimal' || effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh' || effort === 'max' || effort === 'ultra') {
+  // Read legacy selections without retaining retired tiers in new requests.
+  if (effort === 'minimal' || effort === 'low') return 'medium';
+  if (effort === 'high') return 'xhigh';
+  if (effort === 'medium' || effort === 'xhigh' || effort === 'max' || effort === 'ultra') {
     return effort;
   }
   return null;

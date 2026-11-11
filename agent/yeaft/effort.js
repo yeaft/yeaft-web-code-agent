@@ -26,7 +26,7 @@ import {
 
 /**
  * Number of tool-loop turns past which a query is considered "complex"
- * and gets an auto-bump from 'high' to 'max'. Tuned to catch genuine
+ * and gets an auto-bump from the scenario default to 'max'. Tuned to catch genuine
  * multi-hop work (code refactor across many files, sub-agent coordination)
  * without punishing normal 2–3 tool chat turns.
  */
@@ -42,25 +42,25 @@ export const LONG_LOOP_TURN_THRESHOLD = 8;
  *   dream         → max    (memory maintenance — same rationale)
  *   sub_agent     → max    (coordinator spawns + merges)
  *   long_loop     → max    (auto-bumped when toolLoopTurns >= threshold)
- *   recall        → low    (keyword/tag pre-filter — cheap classifier)
- *   light         → low    (side-queries: summary title, extract pass1)
+ *   recall        → medium    (keyword/tag pre-filter — cheap classifier)
+ *   light         → medium    (side-queries: summary title, extract pass1)
  *
- * Unknown scenarios fall through to 'high'.
+ * Unknown scenarios fall through to 'max'.
  */
 export const SCENARIO_EFFORT = Object.freeze({
   chat: 'max',
   dream: 'max',
   sub_agent: 'max',
   long_loop: 'max',
-  recall: 'low',
-  light: 'low',
+  recall: 'medium',
+  light: 'medium',
 });
 
 /**
  * Pick the effort level for a given query context.
  *
  * Decision order:
- *   1. If userEffort is a valid Effort ('minimal'|'low'|'medium'|'high'|'xhigh'|'max'|'ultra'),
+ *   1. If userEffort is a valid Effort ('medium'|'xhigh'|'max'|'ultra'),
  *      return it unchanged. This is the explicit override path —
  *      `/max` prefix, Settings slider, or API caller.
  *   2. If toolLoopTurns >= LONG_LOOP_TURN_THRESHOLD, upgrade the
@@ -73,7 +73,7 @@ export const SCENARIO_EFFORT = Object.freeze({
  *   already consumed in the current `query()` call.
  * @param {unknown} [ctx.userEffort=null] — User-supplied override.
  *   Invalid values are ignored (fall through to scenario path).
- * @returns {'minimal'|'low'|'medium'|'high'|'xhigh'|'max'|'ultra'} Resolved effort. Never null —
+ * @returns {'medium'|'xhigh'|'max'|'ultra'} Resolved effort. Never null —
  *   the adapter/router is responsible for dropping it when the
  *   feature flag is off or the model doesn't support thinking.
  */
@@ -96,8 +96,8 @@ export function pickEffort({ scenario = 'chat', toolLoopTurns = 0, userEffort = 
 }
 
 /**
- * Parse a user prompt for `/ultra`, `/max`, `/xhigh`, `/high`, `/medium`, `/low` prefix
- * commands. Returns `{ effort, cleanedPrompt }` where cleanedPrompt has
+ * Parse `/ultra`, `/max`, `/xhigh`, `/medium` effort commands. Legacy
+ * `/high` and `/low` aliases normalize to current tiers. Returns `{ effort, cleanedPrompt }` where cleanedPrompt has
  * the prefix (plus one trailing space) stripped.
  *
  * Red line: only ONE leading prefix is honoured — stacking (`/max /high
@@ -107,19 +107,19 @@ export function pickEffort({ scenario = 'chat', toolLoopTurns = 0, userEffort = 
  * via `!` or `/skill:` instead to avoid collision.
  *
  * @param {string} prompt
- * @returns {{ effort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'|null, cleanedPrompt: string }}
+ * @returns {{ effort: 'medium'|'xhigh'|'max'|'ultra'|null, cleanedPrompt: string }}
  */
 export function parseEffortPrefix(prompt) {
   if (typeof prompt !== 'string') return { effort: null, cleanedPrompt: prompt };
   const m = prompt.match(/^\/(ultra|max|xhigh|high|medium|low)(\s+|$)/);
   if (!m) return { effort: null, cleanedPrompt: prompt };
-  const effort = m[1];
+  const effort = normalizeEffort(m[1]);
   const cleanedPrompt = prompt.slice(m[0].length);
   return { effort, cleanedPrompt };
 }
 
 // Ordinal levels, not lexical sorting or cross-model token-budget equivalence.
-export const EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+export const EFFORT_LEVELS = Object.freeze(['medium', 'xhigh', 'max', 'ultra']);
 const effortRank = value => EFFORT_LEVELS.indexOf(normalizeEffort(value));
 const atMost = (value, ceiling) => effortRank(value) >= 0 && effortRank(value) <= effortRank(ceiling);
 
@@ -162,7 +162,9 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   // an inherited lower ceiling when it delegates again.
   let parentTarget = parent.effective || 'medium';
   if (parent.cap && atMost(parent.cap, parentTarget)) parentTarget = parent.cap;
-  const target = atMost(parentTarget, 'high') ? parentTarget : 'high';
+  // Keep the existing child ceiling below the retired high tier; do not
+  // increase child cost to xhigh when the public tiers are consolidated.
+  const target = 'medium';
   const context = capabilityContext(protocol, effortContext);
   const capability = getThinkingCapability(model, context);
   const base = {
@@ -184,7 +186,14 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
 function manualEffortForBudget(model, budget) {
   if (!Number.isFinite(budget) || budget <= 0) return null;
   // Round upward: a nonstandard budget must never masquerade as a lower tier.
-  return ['low', 'medium', 'high', 'max'].find(level => budget <= thinkingBudgetForEffort(model, level)) || 'ultra';
+  return ['medium', 'xhigh', 'max'].find(level => budget <= thinkingBudgetForEffort(model, level)) || 'ultra';
+}
+
+/** Normalize retired tiers after extraBody, without mutating caller-owned objects. */
+export function normalizeEffortPayload(body, protocol) {
+  const key = protocol === 'anthropic' ? 'output_config' : 'reasoning';
+  const effort = normalizeEffort(body[key]?.effort);
+  if (effort && effort !== body[key].effort) body[key] = { ...body[key], effort };
 }
 
 /**

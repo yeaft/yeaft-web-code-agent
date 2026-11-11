@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildModelSelectionRows, getSelectableModelEfforts } from '../../../web/utils/modelRefs.js';
+import { buildModelSelectionRows, getSelectableModelEfforts, resolveSessionModelEffort } from '../../../web/utils/modelRefs.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
 import { getLlmConfig, updateLlmConfig } from '../../../agent/yeaft/config-api.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
@@ -16,8 +16,8 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 const options = {
-  anthropic: ['low', 'medium', 'high', 'xhigh', 'max'],
-  'openai-responses': ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  anthropic: ['medium', 'xhigh', 'max'],
+  'openai-responses': ['medium', 'xhigh', 'max', 'ultra'],
 };
 function installFetch(requests) {
   vi.stubGlobal('fetch', vi.fn(async (url, init) => {
@@ -60,6 +60,21 @@ describe('API effort catalog and dispatch', () => {
         for await (const _event of adapter.stream(params)) { /* drain */ }
         for (const body of requests.slice(-2)) assertWire(body, protocol, effort);
       }
+      for (const [legacy, current] of [['minimal', 'medium'], ['low', 'medium'], ['high', 'xhigh']]) {
+        const native = protocol === 'anthropic'
+          ? { thinking: { type: 'adaptive' }, output_config: { effort: legacy, format: { type: 'json_schema' } } }
+          : { reasoning: { effort: legacy, summary: 'auto' } };
+        const before = structuredClone(native), decisions = [];
+        const params = { model: 'brand-new-alias', system: '', messages: [], extraBody: native, onEffortDecision: d => decisions.push(d) };
+        await adapter.call(params);
+        for await (const _event of adapter.stream(params)) { /* drain */ }
+        for (const body of requests.slice(-2)) {
+          if (protocol === 'anthropic') expect(body.output_config).toEqual({ effort: current, format: { type: 'json_schema' } });
+          else expect(body.reasoning).toEqual({ effort: current, summary: 'auto' });
+        }
+        expect(decisions.map(d => d.effective)).toEqual([current, current]);
+        expect(native).toEqual(before);
+      }
     }
   });
 
@@ -80,12 +95,20 @@ describe('API effort catalog and dispatch', () => {
     const config = loadConfig({ dir: root });
     const apiCatalog = getLlmConfig(root).availableModels;
     expect(apiCatalog.map(m => [m.ref, m.effortOptions || []])).toEqual(config.availableModels.map(m => [m.ref, m.effortOptions || []]));
-    expect(getSelectableModelEfforts(['minimal', 'low', 'medium', 'low', 'unknown'])).toEqual(['minimal', 'low', 'medium']);
+    expect(getSelectableModelEfforts(['minimal', 'low', 'medium', 'low', 'unknown'])).toEqual(['medium']);
     for (const [effortOptions, defaultEffort] of [
-      [['low', 'high'], 'high'], [['low', 'medium'], 'medium'],
-      [['minimal', 'low', 'medium'], 'medium'], [['low'], 'low'],
+      [['medium', 'xhigh'], 'medium'], [['medium', 'max'], 'medium'],
+      [['medium', 'xhigh', 'max'], 'xhigh'], [['max'], 'max'],
     ]) expect(buildModelSelectionRows([{ id: 'sparse', effortOptions }])[0]).toMatchObject({ efforts: effortOptions, defaultEffort });
+    expect(buildModelSelectionRows([{ id: 'old', effortOptions: ['low', 'high'] }])[0]).toMatchObject({ efforts: [], defaultEffort: null });
     mkdirSync(join(root, 'sessions', 'api-session'), { recursive: true });
+    for (const [legacy, current] of [['minimal', 'medium'], ['low', 'medium'], ['high', 'xhigh']]) {
+      writeFileSync(join(root, 'sessions', 'api-session', 'config.json'), JSON.stringify({ modelEffort: legacy }));
+      expect(loadSessionConfig(root, 'api-session').modelEffort).toBe(current);
+      expect(resolveSessionConfig(config, { modelEffort: legacy }).modelEffort).toBe(current);
+      expect(resolveSessionModelEffort({ config: { modelEffort: legacy } })).toBe(current);
+      expect(saveSessionConfig(root, 'api-session', { modelEffort: legacy }).modelEffort).toBe(current);
+    }
     const requests = [];
     installFetch(requests);
     const router = new AdapterRouter({ providers: config.providers });
@@ -123,11 +146,11 @@ describe('API effort catalog and dispatch', () => {
     ] };
     const saved = updateLlmConfig({ providers: [managed] }, root);
     expect(saved.error).toBeUndefined();
-    for (const [index, original] of managed.models.entries()) expect(saved.providers[0].models[index]).toMatchObject(original);
+    for (const [index, original] of managed.models.entries()) expect(saved.providers[0].models[index]).toMatchObject(index === 1 ? { ...original, effortOptions: ['medium'] } : original);
     const config = loadConfig({ dir: root });
     const [manual, restricted, disabled] = config.availableModels;
-    expect(manual).toMatchObject({ effortProtocol: 'anthropic', maxBudgetTokens: 6000, effortOptions: ['low', 'medium', 'high', 'max'] });
-    expect(restricted.effortOptions).toEqual(['low']);
+    expect(manual).toMatchObject({ effortProtocol: 'anthropic', maxBudgetTokens: 6000, effortOptions: ['medium', 'xhigh', 'max'] });
+    expect(restricted.effortOptions).toEqual(['medium']);
     expect(disabled.supportsEffort).toBe(false);
     const requests = [];
     installFetch(requests);
@@ -140,7 +163,7 @@ describe('API effort catalog and dispatch', () => {
       for await (const _event of router.stream(params)) { /* drain */ }
       for (const body of requests.slice(-2)) {
         if (model === manual) expect(body).toMatchObject({ max_tokens: 7024, thinking: { type: 'enabled', budget_tokens: 6000 } });
-        else if (model === restricted) assertWire(body, 'anthropic', 'low');
+        else if (model === restricted) assertWire(body, 'anthropic', 'medium');
         else expect(body).not.toHaveProperty('thinking');
       }
     }

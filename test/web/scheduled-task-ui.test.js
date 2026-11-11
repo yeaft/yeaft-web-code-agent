@@ -158,13 +158,13 @@ it('creates task Sessions with the existing roster and folder contract and rejec
   await wrapper.vm.onSubmit();
   expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model' }, task }));
   expect(wrapper.vm.taskEffortOptions).toEqual([
-    { value: '', label: 'Default' }, { value: 'low', label: 'Low' },
-    { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'xhigh', label: 'X-High' },
+    { value: '', label: 'Default' },
+    { value: 'medium', label: 'Medium' }, { value: 'xhigh', label: 'X-High' },
   ]);
   chat.yeaftStatusByAgent.a.availableModels[0].effortOptions.unshift('minimal');
   await Vue.nextTick();
-  expect(wrapper.vm.taskEffortOptions).toContainEqual({ value: 'minimal', label: 'Minimal' });
-  for (const modelEffort of ['minimal', 'low', 'xhigh']) {
+  expect(wrapper.vm.taskEffortOptions).not.toContainEqual({ value: 'minimal', label: 'Minimal' });
+  for (const modelEffort of ['medium', 'xhigh']) {
     await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort } });
     await wrapper.vm.onSubmit();
     expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model', modelEffort }, task }));
@@ -181,7 +181,7 @@ it('creates task Sessions with the existing roster and folder contract and rejec
 it('scopes task effort capabilities to the selected Agent and clears incompatible overrides', async () => {
   const models = [
     { provider: 'test', id: 'model', effortOptions: ['low', 'medium', 'high', 'xhigh'] },
-    { provider: 'other', id: 'model', effortOptions: ['medium', 'high'] },
+    { provider: 'other', id: 'model', effortOptions: ['medium'] },
     { provider: 'test', id: 'plain' },
   ];
   const chat = Vue.reactive({ scheduledTaskProtocolSupported: true,
@@ -197,9 +197,8 @@ it('scopes task effort capabilities to the selected Agent and clears incompatibl
   await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort: 'xhigh' } });
   await wrapper.setData({ form: { ...wrapper.vm.form, model: 'other/model' } });
   expect(wrapper.vm.form.modelEffort).toBe('');
-  await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort: 'high' } });
-  await wrapper.setData({ form: { ...wrapper.vm.form, model: 'test/model' } });
-  expect(wrapper.vm.form.modelEffort).toBe('high');
+  await wrapper.setData({ form: { ...wrapper.vm.form, model: 'test/model', modelEffort: 'xhigh' } });
+  expect(wrapper.vm.form.modelEffort).toBe('xhigh');
   chat.yeaftStatusByAgent.a.availableModels[0].effortOptions = ['medium'];
   await Vue.nextTick();
   expect(wrapper.vm.form.modelEffort).toBe('');

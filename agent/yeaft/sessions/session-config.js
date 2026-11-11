@@ -10,7 +10,7 @@
  * Public v1 schema:
  *   {
  *     "model": "my-proxy/claude-sonnet-4-20250514",  // optional
- *     "modelEffort": "high"                          // optional
+ *     "modelEffort": "xhigh"                          // optional
  *   }
  *
  * Missing file or `{}` means no Session-level override. Managed provider
@@ -22,13 +22,13 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { writeAtomic } from '../storage/index.js';
 import { isGitHubCopilotProvider } from '../llm/known-providers.js';
+import { normalizeEffort } from '../models.js';
 import { sessionsRoot } from './session-crud.js';
 
 const CONFIG_FILE = 'config.json';
 const MODEL_SOURCE_EXPLICIT = 'explicit';
 const WRITABLE_KEYS = new Set(['model', 'modelEffort']);
 const STORED_KEYS = new Set([...WRITABLE_KEYS, 'modelSource']);
-const ALLOWED_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 export class SessionConfigError extends Error {
   constructor(code, message) {
@@ -47,7 +47,7 @@ export function sessionConfigPath(yeaftDir, sessionId) {
 function publicConfig(stored) {
   const out = {};
   for (const key of WRITABLE_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(stored || {}, key)) out[key] = stored[key];
+    if (Object.prototype.hasOwnProperty.call(stored || {}, key)) out[key] = key === 'modelEffort' ? normalizeEffort(stored[key]) : stored[key];
   }
   return out;
 }
@@ -98,8 +98,8 @@ export function validateSessionConfig(cfg) {
     }
   }
   if ('modelEffort' in cfg && cfg.modelEffort !== null && cfg.modelEffort !== undefined && cfg.modelEffort !== '') {
-    if (typeof cfg.modelEffort !== 'string' || !ALLOWED_EFFORTS.has(cfg.modelEffort.trim())) {
-      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be minimal, low, medium, high, xhigh, max, or ultra');
+    if (typeof cfg.modelEffort !== 'string' || !normalizeEffort(cfg.modelEffort.trim())) {
+      throw new SessionConfigError('invalid_model_effort', 'modelEffort must be medium, xhigh, max, or ultra');
     }
   }
 }
@@ -120,7 +120,7 @@ export function saveSessionConfig(yeaftDir, sessionId, partial) {
       if (key === 'model') delete next.modelSource;
       continue;
     }
-    next[key] = typeof value === 'string' ? value.trim() : value;
+    next[key] = key === 'modelEffort' ? normalizeEffort(value.trim()) : typeof value === 'string' ? value.trim() : value;
     if (key === 'model') next.modelSource = MODEL_SOURCE_EXPLICIT;
   }
   persistStoredSessionConfig(yeaftDir, sessionId, next);
@@ -254,8 +254,7 @@ export function resolveSessionConfig(userConfig, sessionConfig) {
       base.primaryModel = model;
     }
   }
-  if (overrides.modelEffort && typeof overrides.modelEffort === 'string' && ALLOWED_EFFORTS.has(overrides.modelEffort)) {
-    base.modelEffort = overrides.modelEffort;
-  }
+  const effort = normalizeEffort(overrides.modelEffort) || normalizeEffort(base.modelEffort);
+  if (effort) base.modelEffort = effort;
   return base;
 }

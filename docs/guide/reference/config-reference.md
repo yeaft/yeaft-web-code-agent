@@ -96,7 +96,7 @@ Private state persists with the instance transcript but is excluded from ordinar
 
 Sending cache fields requests caching; only provider cache usage establishes a hit. Caching usually reduces billed input and latency, not HTTP request count. `reasoningTokens`, when reported upstream, is a subset of output tokens and is not added again to totals.
 
-Child agents inherit a snapshot of the actual parent request effort that produced SpawnAgent/PromptAgent, capped at `high`. Unknown parent defaults conservatively use `medium`; different models select a supported tier no higher than the ceiling or fail explicitly. `/max`, config boosts, `extraBody`, and disabling the thinking feature flag cannot bypass the final payload cap.
+Child agents inherit a snapshot of the actual parent request effort that produced SpawnAgent/PromptAgent, capped at `medium` (the highest retained tier below the previous `high` ceiling). Unknown parent defaults conservatively use `medium`; different models select a supported tier no higher than the ceiling or fail explicitly. `/max`, config boosts, `extraBody`, and disabling the thinking feature flag cannot bypass the final payload cap.
 
 Safe read-only tools run in shared segments without a uniform four-call cap; writes, unknown tools and control tools retain exclusive barriers. Read paths preload applicable project rules, but writes in the same model response still cannot use rule scopes the model has not seen. `projectDocMaxBytes: 0` continues to disable rule loading.
 

@@ -1,3 +1,4 @@
+import { normalizeModelEffort } from '../utils/modelRefs.js';
 import {
   clearOverlayPointerGesture,
   shouldDismissFromOverlayClick,
@@ -7,7 +8,7 @@ import {
 
 const ACTION_TYPES = ['triage', 'research', 'design', 'diagnose', 'implement', 'migrate', 'test', 'review', 'integrate', 'document', 'operate', 'deliver', 'write', 'create_vp', 'custom'];
 const MODEL_TAGS = ['fast', 'balanced', 'ultimate'];
-const ALLOWED_EFFORTS = new Set(['medium', 'high', 'xhigh']);
+const ALLOWED_EFFORTS = new Set(['medium', 'xhigh']);
 const DEFAULT_MODEL_TAGS = Object.freeze({
   fast: 'gpt-5.6-luna',
   balanced: 'gpt-5.6-sol',
@@ -51,7 +52,7 @@ function defaultSettingsDraft() {
     defaultWorkDir: '',
     globalInstructions: '',
     modelTags: { ...DEFAULT_MODEL_TAGS },
-    modelPolicy: { mode: 'tag', model: null, tag: 'balanced', effort: 'high' },
+    modelPolicy: { mode: 'tag', model: null, tag: 'balanced', effort: 'xhigh' },
     coordinatorModelPolicy: { mode: 'tag', model: null, tag: 'ultimate', effort: 'xhigh' },
     actionModelPolicies: Object.fromEntries(ACTION_TYPES.map(type => [type, {
       mode: 'tag',
@@ -61,7 +62,7 @@ function defaultSettingsDraft() {
         : ['document', 'deliver', 'write'].includes(type) ? 'fast' : 'balanced',
       effort: ['triage', 'research', 'design', 'diagnose', 'review'].includes(type)
         ? 'xhigh'
-        : ['document', 'deliver', 'write'].includes(type) ? 'medium' : 'high',
+        : ['document', 'deliver', 'write'].includes(type) ? 'medium' : 'xhigh',
     }])),
     actionInstructions: Object.fromEntries(ACTION_TYPES.map(type => [type, ''])),
     workflows: [{
@@ -130,7 +131,7 @@ export function normalizeSettingsDraft(value, defaultStageInstructions = {}) {
       mode: 'tag',
       model: null,
       tag: 'balanced',
-      effort: 'high',
+      effort: 'xhigh',
       ...(migratedModelPolicy || {}),
       ...(source.modelPolicy || {}),
     },
@@ -403,6 +404,7 @@ export default {
     },
     normalizeStageEffort(stage) {
       const options = this.effortOptionsForStage(stage);
+      stage.modelPolicy.effort = normalizeModelEffort(stage.modelPolicy.effort) || null;
       if (!stage.modelPolicy.effort || options.includes(stage.modelPolicy.effort)) return;
       stage.modelPolicy.effort = null;
     },

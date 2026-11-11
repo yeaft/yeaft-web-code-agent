@@ -928,7 +928,7 @@ export class WorkItemCoordinator {
           };
           const coordinatorPolicy = settings?.coordinatorModelPolicy || {
             ...(settings?.modelPolicy || {}),
-            effort: settings?.actionModelPolicies?.triage?.effort || settings?.modelPolicy?.effort || 'high',
+            effort: settings?.actionModelPolicies?.triage?.effort || settings?.modelPolicy?.effort || 'xhigh',
           };
           resolved = resolveWorkItemModel(
             runtime.config,

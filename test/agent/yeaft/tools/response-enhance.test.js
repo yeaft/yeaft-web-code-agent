@@ -124,7 +124,7 @@ describe('ResponseEnhance', () => {
       expect(bodies).toHaveLength(1);
       expect(bodies[0].system).toContain(RESPONSE_ENHANCE_SYSTEM);
       expect(bodies[0].tools ?? []).toEqual([]);
-      expect(bodies[0].output_config?.effort).toBe('low');
+      expect(bodies[0].output_config?.effort).toBe('medium');
       vi.stubEnv('YEAFT_THINKING_V1', '1');
       await enhanceResponse(input, { adapter, config: { ...config, modelInfo: { protocol: 'anthropic', thinkingProtocol: 'anthropic' } },
         model: 'legacy-alias', effort: 'high' });

@@ -45,6 +45,18 @@ describe('Person native child provider boundary', () => {
       }
     }
     expect(calls).toHaveLength(0);
+    for (const selected of [null, 'high', 'xhigh']) {
+      const stream = vi.fn();
+      const provider = { adapter: { stream }, catalog: [{ ...catalog()[0], efforts: ['high'] }] };
+      const child = createPersonChildProvider(provider, { model: MODEL, effort: selected }, nativeConfig());
+      const params = { model: MODEL, effortConstraint: { parentDecision: { effective: 'max' } } };
+      expect(() => child.adapter.stream(params)).toThrow(expect.objectContaining({ code: 'MODEL_SELECTION' }));
+      await expect(child.adapter.call(params)).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+      expect(stream).not.toHaveBeenCalled();
+    }
+    const child = setup({ selection: { model: MODEL, effort: null } });
+    await collect(child.adapter.stream({ model: MODEL, effortConstraint: { parentDecision: { effective: 'max' } } }));
+    expect(child.calls[0].effort).toBe('medium');
   });
 
   it('runs the real Engine tool loop using only the selected model and ordinary child text', async () => {
@@ -62,7 +74,7 @@ describe('Person native child provider boundary', () => {
     const events = await collect(engine.query({ prompt: 'Read README.md.', messages: [], isSubAgent: true, scenario: 'sub_agent',
       parentEffortDecision: { effective: 'high' }, vpPersona: { vpId: 'child', displayName: 'Child', subAgent: { agentId: 'child' } } }));
     expect(execute).toHaveBeenCalledOnce(); expect(calls).toHaveLength(2);
-    for (const params of calls) expect(params).toMatchObject({ model: MODEL, maxTokens: 4096, effort: 'low' });
+    for (const params of calls) expect(params).toMatchObject({ model: MODEL, maxTokens: 4096, effort: 'medium' });
     expect(calls[0].tools.some(tool => tool.name === 'FileRead')).toBe(true);
     expect(calls[1].messages.some(message => message.role === 'tool')).toBe(true);
     expect(events.filter(event => event.type === 'text_delta').map(event => event.text).join('')).toBe(textEvents[0].text);

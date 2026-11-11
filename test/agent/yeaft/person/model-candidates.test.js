@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { createPersonService } from './fixture-adapter.js';
 import { createPersonProvider } from '../../../../agent/yeaft/person/provider.js';
-import { config } from './fixtures.js';
+import { DatabaseSync } from 'node:sqlite';
+import { config, finalProposal } from './fixtures.js';
 
 const services = [], directories = [];
 const call = (s, op, payload = {}, ownerId = 'alice') => s.request({ ownerId, op, payload });
@@ -57,6 +58,29 @@ describe('owner-scoped model candidates', () => {
     expect((await call(restarted, 'snapshot')).person.settings.modelCandidates).toEqual(['test/model11']);
     expect(await call(restarted, 'settings', { modelCandidates: [] })).toMatchObject({ settings: { modelCandidates: [] } });
     expect(JSON.stringify(native)).toBe(before);
+    // Recover a non-default model across the effort tier migration, without
+    // rewriting the old history or silently choosing the Agent default.
+    await call(restarted, 'settings', { modelCandidates: ['test/model0', 'test/model11'] });
+    await restarted.close();
+    for (const [legacy, current] of [['minimal', 'medium'], ['low', 'medium'], ['high', 'xhigh']]) {
+      const db = new DatabaseSync(join(dir, 'person', 'person.db'));
+      db.prepare("UPDATE states SET record = json_set(record, '$.lastSelection', json(?)) WHERE ownerId = 'alice'")
+        .run(JSON.stringify({ model: 'test/model11', effort: legacy }));
+      db.close();
+      const requests = [];
+      const migrated = create(dir, { config: native, effortEnabled: true, adapter: { async *stream(params) {
+        requests.push({ model: params.model, effort: params.effort });
+        const context = JSON.parse(params.messages[0].content);
+        const proposal = finalProposal(context.state.version);
+        proposal.concepts = []; proposal.state.focusConceptIds = [];
+        yield { type: 'text_delta', text: JSON.stringify(proposal) };
+        yield { type: 'stop', stopReason: 'end_turn' };
+      } } });
+      await call(migrated, 'send', { text: 'Keep my model choice', clientMessageId: `legacy-${legacy}` });
+      expect((await idle(migrated)).latestEpisode.status).toBe('completed');
+      expect(requests[0]).toEqual({ model: 'test/model11', effort: current });
+      await migrated.close();
+    }
     const limited = create(await directory(), { config: native, adapter: {}, allowedModels: ['test/model11'] });
     await call(limited, 'open');
     expect((await call(limited, 'status')).models.map(m => m.id)).toEqual(['test/model11']);

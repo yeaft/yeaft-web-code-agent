@@ -74,8 +74,8 @@ export class LLMAdapter {
 - 保留原始停止原因、`stop_details`、`stop_sequence`、`input_transformations`、引用与已知 fallback / 服务端工具 blocks；公开诊断只含状态、标识和引用，不复制服务端工具参数或结果。
 - `pause_turn` 有界自动续接，不插入虚构用户输入；拒绝、上下文耗尽或未知停止原因不会冒充正常完成，也不会派发其中的工具。
 - 官方 Claude 5+ 路由默认请求可读的 `summarized` thinking 摘要；显式 `extraBody.thinking.display` 保持优先。摘要不是原始内部思考。
-- Effort 按最终生效的 API 类型提供，不按 model ID 白名单：`anthropic` 为 `low / medium / high / xhigh / max`，默认用 adaptive thinking + `output_config.effort`；`openai-responses` 为 `minimal / low / medium / high / xhigh / max / ultra`，发送 `reasoning.effort`。新增模型和网关别名不需要更新 Yeaft 才能选择 effort。协议仍按 model override → provider override → ID 推断 → Responses 默认解析。
-- 这些是 Yeaft 对相应 API 暴露的档位，不保证每个上游模型/网关全部接受；不支持的组合仍由上游明确报错，不偷偷改为其他档位。可以在模型对象显式设置 `effortOptions: ["low", "high"]` 缩小范围，或 `supportsEffort: false` 禁用。旧版 Anthropic 模型只支持手动 thinking 时，显式设置 `thinkingProtocol: "anthropic"`，可配合 `maxBudgetTokens`；不会再从模型名猜测手动预算。Session 显式选择不依赖自动 thinking feature flag；自动场景的开关、Work Center 的策略档位子集和子 Agent 的 effort 上限保持不变。
+- Effort 按最终生效的 API 类型提供，不按 model ID 白名单：`anthropic` 为 `medium / xhigh / max`，默认用 adaptive thinking + `output_config.effort`；`openai-responses` 为 `medium / xhigh / max / ultra`，发送 `reasoning.effort`。新增模型和网关别名不需要更新 Yeaft 才能选择 effort。协议仍按 model override → provider override → ID 推断 → Responses 默认解析。
+- 这些是 Yeaft 对相应 API 暴露的档位，不保证每个上游模型/网关全部接受；不支持的组合仍由上游明确报错，不偷偷改为其他档位。可以在模型对象显式设置 `effortOptions: ["medium", "xhigh"]` 缩小范围，或 `supportsEffort: false` 禁用。旧版 Anthropic 模型只支持手动 thinking 时，显式设置 `thinkingProtocol: "anthropic"`，可配合 `maxBudgetTokens`；不会再从模型名猜测手动预算。Session 显式选择不依赖自动 thinking feature flag；自动场景开关保持不变；旧 `minimal` / `low` 在读取和请求边界归一为 `medium`，`high` 归一为 `xhigh`，不改写历史记录。Work Center 保留 `medium / xhigh` 策略，子 Agent 上限收敛为 `medium`，无法表示时明确失败，不放宽到 `xhigh`。
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
 - 对 OpenAI Responses API `/v1/responses`（**不是**老的 chat completions）

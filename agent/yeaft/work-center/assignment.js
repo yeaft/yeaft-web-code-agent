@@ -197,7 +197,7 @@ export function resolveWorkItemModel(config, vp, rawPolicy, modelTags = {}) {
   }
   if (policy.mode === 'tag' && available?.ref) model = available.ref;
   const effortOptions = Array.isArray(available?.effortOptions) ? available.effortOptions : [];
-  const effortOrder = ['medium', 'high', 'xhigh'];
+  const effortOrder = ['medium', 'xhigh'];
   const requestedIndex = effortOrder.indexOf(policy.effort);
   const effort = !policy.effort || effortOptions.length === 0
     ? null

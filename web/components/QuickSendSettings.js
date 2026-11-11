@@ -1,10 +1,10 @@
 import ModernSelect from './ModernSelect.js';
-import { modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
+import { getSelectableModelEfforts, normalizeModelEffort, modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
 
 const MAX_QUICK_SENDS = 5;
 const cloneEntries = entries => (Array.isArray(entries) ? entries : []).map(item => ({
   id: item.id, name: item.name, model: item.model,
-  effort: item.effort ?? null, maxOutputTokens: item.maxOutputTokens ?? null,
+  effort: normalizeModelEffort(item.effort) || null, maxOutputTokens: item.maxOutputTokens ?? null,
 }));
 
 export default {
@@ -93,7 +93,7 @@ export default {
       }
     },
     modelFor(item) { return this.models.find(model => modelOptionMatchesRef(model, item.model)); },
-    effortsFor(item) { return this.modelFor(item)?.effortOptions || []; },
+    effortsFor(item) { return getSelectableModelEfforts(this.modelFor(item)?.effortOptions); },
     add() {
       if (this.disabled || this.draft.length >= MAX_QUICK_SENDS) return;
       this.draft.push({ id: globalThis.crypto?.randomUUID?.() || `qs-${Date.now()}-${Math.random().toString(36).slice(2)}`,
