@@ -1,3 +1,5 @@
+import { normalizeEffortOptions } from '../models.js';
+
 export const GITHUB_COPILOT_PROVIDER_NAME = 'github-copilot';
 export const GITHUB_COPILOT_BASE_URL = 'https://api.githubcopilot.com';
 export const GITHUB_COPILOT_CREDENTIAL_PROVIDER = 'github-copilot';
@@ -81,6 +83,15 @@ function requestPolicyOverrides(entry) {
   }
   if (Number.isFinite(entry?.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
     out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
+  }
+  if (typeof entry?.supportsEffort === 'boolean') out.supportsEffort = entry.supportsEffort;
+  if (['anthropic', 'anthropic-adaptive', 'openai-reasoning', 'none'].includes(entry?.thinkingProtocol)) {
+    out.thinkingProtocol = entry.thinkingProtocol;
+  }
+  const effortOptions = normalizeEffortOptions(entry?.effortOptions);
+  if (effortOptions) out.effortOptions = effortOptions;
+  if (Number.isFinite(entry?.maxBudgetTokens) && entry.maxBudgetTokens > 0) {
+    out.maxBudgetTokens = Math.floor(entry.maxBudgetTokens);
   }
   return out;
 }

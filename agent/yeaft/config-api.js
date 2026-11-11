@@ -24,17 +24,18 @@ import { getWorkCenterFeatureState } from './work-center/feature.js';
 function quickSendModels(config) {
   return (Array.isArray(config.providers) ? config.providers : []).flatMap(raw => {
     const provider = normalizeKnownProviderForRuntime(raw);
-    return normalizeProviderModels(provider).map(model => ({
-      id: model.id,
-      ref: provider.name ? `${provider.name}/${model.id}` : model.id,
-      provider: provider.name,
-      label: model.id,
-      effortOptions: getModelEffortOptions(model.id, {
-        ...model,
-        protocol: model.protocol || provider.protocol || inferProtocolFromModelId(model.id) || 'openai-responses',
-      }),
-      maxOutput: resolveMaxOutputTokens(model.id, { modelInfo: model }),
-    }));
+    return normalizeProviderModels(provider).map(model => {
+      const protocol = model.protocol || provider.protocol || inferProtocolFromModelId(model.id) || 'openai-responses';
+      return {
+        id: model.id,
+        ref: provider.name ? `${provider.name}/${model.id}` : model.id,
+        provider: provider.name,
+        label: model.id,
+        protocol,
+        effortOptions: getModelEffortOptions(model.id, { ...model, protocol }),
+        maxOutput: resolveMaxOutputTokens(model.id, { modelInfo: model }),
+      };
+    });
   });
 }
 

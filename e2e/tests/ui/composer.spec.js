@@ -64,13 +64,13 @@ async function openYeaftComposer(page, serverUrl) {
 }
 
 test.describe('Yeaft composer menus', () => {
-  test('Fable catalog exposes five effort tiers and persists the selected Session effort', async ({ chatPage: page, mockAgent }, testInfo) => {
+  test('unknown model aliases expose API effort tiers and persist the selected Session effort', async ({ chatPage: page, mockAgent }, testInfo) => {
     const root = mkdtempSync(join(tmpdir(), 'yeaft-browser-fable-'));
     const sessionId = 'fable-effort-session';
-    const selectedModel = 'proxy/claude-fable-5.2';
+    const selectedModel = 'proxy/private-model';
     mkdirSync(join(root, 'sessions', sessionId), { recursive: true });
     writeFileSync(join(root, 'config.json'), JSON.stringify({
-      providers: [{ name: 'proxy', apiKey: 'fixture', baseUrl: 'https://proxy.invalid', models: ['claude-fable-5.2'] }],
+      providers: [{ name: 'proxy', apiKey: 'fixture', baseUrl: 'https://proxy.invalid', protocol: 'anthropic', models: ['private-model', { id: 'other-api-model', protocol: 'openai-responses' }] }],
       primaryModel: selectedModel,
     }));
     const catalog = loadConfig({ dir: root }).availableModels;
@@ -120,7 +120,16 @@ test.describe('Yeaft composer menus', () => {
         await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('max');
         // The Server consumes agentId for routing; receipt on this mock socket proves ownership.
         expect(requests.at(-1)).toMatchObject({ sessionId, config: { model: selectedModel, modelEffort: 'max' } });
-        await page.screenshot({ path: testInfo.outputPath(`fable-effort-${theme}.png`) });
+        // An opaque model using the other API gets that API's full scale.
+        await page.locator('.yeaft-composer-model').click();
+        await page.locator('.yeaft-composer-model-dropdown').getByRole('menuitemradio', { name: 'other-api-model proxy', exact: true }).click();
+        await effort.click();
+        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Minimal', 'Low', 'Medium', 'High', 'X-High', 'Max', 'Ultra']);
+        await menu.getByRole('menuitemradio', { name: 'Ultra', exact: true }).click();
+        await expect.poll(() => loadSessionConfig(root, sessionId)).toEqual({ model: 'proxy/other-api-model', modelEffort: 'ultra' });
+        await page.screenshot({ path: testInfo.outputPath(`api-effort-${theme}.png`) });
+        await page.locator('.yeaft-composer-model').click();
+        await page.locator('.yeaft-composer-model-dropdown').getByRole('menuitemradio', { name: 'private-model proxy', exact: true }).click();
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });

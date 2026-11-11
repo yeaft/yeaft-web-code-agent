@@ -92,16 +92,6 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
   const resolvedModels = available.map(m => {
     // Use the same model/config resolution as the native Engine, without a Person-only token ceiling.
     const maxOutput = Math.floor(resolveMaxOutputTokens(m.id, { ...config, modelInfo: m }));
-    const effortContext = { ...m, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
-    const efforts = effortEnabled ? (m.effortOptions || []).filter(e => {
-      if (!normalizeEffort(e)) return false;
-      // Manual thinking can silently expand native max_tokens. Use the exact
-      // adapter rules to admit only combinations that fit this model's reserve;
-      // adaptive and Responses effort do not require a larger output budget.
-      const body = { max_tokens: maxOutput };
-      applyAnthropicThinking(body, m.id, e, effortContext);
-      return body.max_tokens === maxOutput;
-    }) : [];
     // Match the router's first owning row and managed-provider protocol normalization.
     const routeIndex = routingProviders.findIndex(p => (!m.ref?.includes('/') || m.ref === `${p.name}/${m.id}`) &&
       p.models?.some(item => normalizeModelEntry(item)?.id === m.id));
@@ -111,6 +101,16 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     const rawModel = rawProvider?.models?.find(item => item && typeof item === 'object' && item.id === m.id);
     const explicitImages = m.supportsImages ?? rawModel?.supportsImages ?? rawProvider?.supportsImages;
     const protocol = routedModel?.protocol || routedProvider?.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
+    const effortContext = { ...m, protocol, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
+    const efforts = effortEnabled ? (m.effortOptions || []).filter(e => {
+      if (!normalizeEffort(e)) return false;
+      // Manual thinking can silently expand native max_tokens. Use the exact
+      // adapter rules to admit only combinations that fit this model's reserve;
+      // adaptive and Responses effort do not require a larger output budget.
+      const body = { max_tokens: maxOutput };
+      if (protocol === 'anthropic') applyAnthropicThinking(body, m.id, e, effortContext);
+      return body.max_tokens === maxOutput;
+    }) : [];
     const imageBudget = !routedProvider || explicitImages === false ? null : imageInputBudget(m.id, protocol);
     return { id: m.ref || m.id, efforts, maxOutput, usageCacheIncluded: protocol === 'anthropic' ? false : undefined, supportsImages: imageBudget !== null, imageBudget,
       contextWindow: Math.floor(resolveContextWindow(m.id, { ...config, modelInfo: m })) };

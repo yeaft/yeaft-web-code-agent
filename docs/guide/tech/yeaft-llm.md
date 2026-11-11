@@ -71,7 +71,8 @@ export class LLMAdapter {
 - Supports thinking blocks (with signature)
 - Supports prompt caching (`cache_control`)
 - Supports fine-grained tool_use
-- Claude Fable 5 / 5.1 / 5.2 automatically expose `low`, `medium`, `high`, `xhigh`, and `max` effort. Explicit Session choices use adaptive thinking with `output_config.effort`, not manual token budgets. The model API default is `high`; available tiers follow the Agent-provided catalog, so an older Agent must be updated for the selector to appear. See [Anthropic effort](https://platform.claude.com/docs/en/build-with-claude/effort).
+- Effort follows the effective API, not a model-ID allowlist: `anthropic` exposes `low / medium / high / xhigh / max` and defaults to adaptive thinking with `output_config.effort`; `openai-responses` exposes `minimal / low / medium / high / xhigh / max / ultra` and sends `reasoning.effort`. New models and gateway aliases do not require a Yeaft update to show effort. Protocol resolution remains model override → provider override → ID inference → Responses default.
+- These are the tiers Yeaft exposes for each API, not a guarantee that every upstream model or gateway accepts all of them. Unsupported combinations fail explicitly upstream rather than silently switching tiers. A model entry can narrow them with `effortOptions: ["low", "high"]` or disable effort with `supportsEffort: false`. For legacy Anthropic models requiring manual thinking, explicitly set `thinkingProtocol: "anthropic"` and optionally `maxBudgetTokens`; manual budgets are no longer guessed from model names. Explicit Session choices do not require the automatic-thinking feature flag. Automatic-scenario gating, the Work Center policy subset and inherited child effort ceilings remain unchanged.
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
 - Targets OpenAI Responses API `/v1/responses` (**not** legacy chat completions)

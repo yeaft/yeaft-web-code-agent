@@ -599,6 +599,9 @@ export function loadConfig(overrides = {}) {
           if (m.contextWindow !== undefined) entry.contextWindow = m.contextWindow;
           if (m.maxOutput !== undefined) entry.maxOutput = m.maxOutput;
           const protocol = m.protocol || p.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
+          entry.protocol = protocol;
+          if (m.supportsEffort === false || m.thinkingProtocol === 'none') entry.supportsEffort = false;
+          if (m.maxBudgetTokens !== undefined) entry.maxBudgetTokens = m.maxBudgetTokens;
           const effortContext = {
             protocol,
             supportsEffort: m.supportsEffort,

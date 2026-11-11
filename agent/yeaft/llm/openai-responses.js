@@ -326,14 +326,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     const translatedTools = this.#translateTools(tools);
     if (translatedTools) body.tools = translatedTools;
 
-    // Inject Responses-API thinking-mode field. Mirrors anthropic.js gating:
-    // feature flag must be on, effort must be a known value, and the model's
-    // registry entry must declare thinkingProtocol === 'openai-reasoning'.
-    // Unknown / unsupported models silently drop the field.
+    // The adapter's wire API owns effort, including for unknown model aliases.
+    // Explicit capability overrides may disable or narrow the available tiers.
     const normEffort = normalizeEffort(effort);
     if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
-      const cap = getThinkingCapability(model, effortContext);
-      const supportedEfforts = getModelEffortOptions(model, effortContext);
+      const cap = getThinkingCapability(model, { ...effortContext, protocol: 'openai-responses' });
+      const supportedEfforts = getModelEffortOptions(model, { ...effortContext, protocol: 'openai-responses' });
       if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning' && supportedEfforts.includes(normEffort)) {
         const wireEffort = effortForResponses(normEffort);
         if (wireEffort) body.reasoning = { effort: wireEffort };
@@ -730,8 +728,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     // Mirror stream()'s thinking injection for non-streaming side queries.
     const normEffort = normalizeEffort(effort);
     if ((thinkingV1Enabled() || effortSource === 'user') && normEffort) {
-      const cap = getThinkingCapability(model, effortContext);
-      const supportedEfforts = getModelEffortOptions(model, effortContext);
+      const cap = getThinkingCapability(model, { ...effortContext, protocol: 'openai-responses' });
+      const supportedEfforts = getModelEffortOptions(model, { ...effortContext, protocol: 'openai-responses' });
       if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning' && supportedEfforts.includes(normEffort)) {
         const wireEffort = effortForResponses(normEffort);
         if (wireEffort) body.reasoning = { effort: wireEffort };

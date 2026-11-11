@@ -44,9 +44,10 @@ function thinkingV1Enabled() {
 
 /** Apply the native payload rules; bounded callers also use this for budget preflight. */
 export function applyAnthropicThinking(body, model, effort, effortContext = {}) {
-  const cap = getThinkingCapability(model, effortContext);
+  const context = { ...effortContext, protocol: 'anthropic' };
+  const cap = getThinkingCapability(model, context);
   if (!cap.supportsThinking) return;
-  if (!getModelEffortOptions(model, effortContext).includes(effort)) return;
+  if (!getModelEffortOptions(model, context).includes(effort)) return;
 
   if (cap.thinkingProtocol === 'anthropic-adaptive') {
     body.thinking = { type: 'adaptive' };
@@ -55,7 +56,7 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
   }
 
   if (cap.thinkingProtocol === 'anthropic') {
-    const budget = thinkingBudgetForEffort(model, effort);
+    const budget = Math.min(thinkingBudgetForEffort(model, effort) || 0, cap.maxBudgetTokens);
     if (budget && budget > 0) {
       // Anthropic manual thinking requires max_tokens > budget_tokens.
       const minMax = budget + 1024;

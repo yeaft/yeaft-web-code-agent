@@ -12,6 +12,12 @@ function cloneRequestPolicy(provider) {
   if (provider.capabilities && typeof provider.capabilities === 'object' && !Array.isArray(provider.capabilities)) {
     policy.capabilities = { ...provider.capabilities };
   }
+  if (typeof provider.supportsEffort === 'boolean') policy.supportsEffort = provider.supportsEffort;
+  if (['anthropic', 'anthropic-adaptive', 'openai-reasoning', 'none'].includes(provider.thinkingProtocol)) {
+    policy.thinkingProtocol = provider.thinkingProtocol;
+  }
+  if (Array.isArray(provider.effortOptions)) policy.effortOptions = [...provider.effortOptions];
+  if (Number.isFinite(provider.maxBudgetTokens) && provider.maxBudgetTokens > 0) policy.maxBudgetTokens = provider.maxBudgetTokens;
   return policy;
 }
 

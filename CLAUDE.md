@@ -114,6 +114,7 @@ Query 的重要契约：
 - 协议解析顺序：model override → provider override → model-id inference → `openai-responses` 默认。
 - 静态凭据为 `apiKey`，动态凭据为 `credentialProvider`（包括 GitHub Copilot）。
 - 模型能力来自显式配置、`models.dev` cache 和 `models.js`；模型级 `maxOutput` 与 runtime 顶层 `maxOutputTokens` 是不同字段，窗口大小不在 UI / prompt 中另行硬编码。
+- Effort 档位按最终生效的 `anthropic` / `openai-responses` API 提供，不由模型 ID 白名单决定；显式 `effortOptions` / `supportsEffort:false` 可缩小或禁用，旧 Anthropic 手动预算需显式 `thinkingProtocol:"anthropic"`。
 - Session 的 `model` / `modelEffort` override 写入自己的 `config.json`，不改变 Agent 默认模型。
 
 ### 历史上下文、Skills 与工具

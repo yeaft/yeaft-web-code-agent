@@ -126,7 +126,8 @@ describe('ResponseEnhance', () => {
       expect(bodies[0].tools ?? []).toEqual([]);
       expect(bodies[0].output_config?.effort).toBe('low');
       vi.stubEnv('YEAFT_THINKING_V1', '1');
-      await enhanceResponse(input, { adapter, config, model: 'claude-sonnet-4-20250514', effort: 'high' });
+      await enhanceResponse(input, { adapter, config: { ...config, modelInfo: { protocol: 'anthropic', thinkingProtocol: 'anthropic' } },
+        model: 'legacy-alias', effort: 'high' });
       expect(bodies).toHaveLength(2);
       expect(bodies[1].max_tokens).toBe(1024);
       expect(bodies[1].thinking).toBeUndefined();

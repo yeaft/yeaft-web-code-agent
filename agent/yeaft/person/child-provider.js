@@ -1,4 +1,5 @@
 import { EFFORT_LEVELS } from '../effort.js';
+import { inferProtocolFromModelId } from '../llm/router.js';
 import { applyAnthropicThinking } from '../llm/anthropic.js';
 import { normalizeEffort, parseModelRef } from '../models.js';
 import { fail } from './contracts.js';
@@ -103,7 +104,7 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
       const ceiling = Math.min(rank(effectiveEffort), rank(inherited), rank('high'), cap ? rank(cap) : Infinity);
       effectiveEffort = EFFORT_LEVELS.filter(value => efforts.includes(value) && rank(value) <= ceiling).at(-1) || null;
     }
-    if (effectiveEffort) {
+    if (effectiveEffort && (effortContext.protocol || inferProtocolFromModelId(modelId)) === 'anthropic') {
       const body = { max_tokens: maxTokens };
       applyAnthropicThinking(body, modelId, effectiveEffort, effortContext);
       if (body.max_tokens !== maxTokens) effectiveEffort = null;
