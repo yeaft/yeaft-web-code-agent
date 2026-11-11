@@ -64,7 +64,7 @@ async function openYeaftComposer(page, serverUrl) {
 }
 
 test.describe('Yeaft composer menus', () => {
-  test('Fable catalog exposes five effort tiers and persists the selected Session effort', async ({ page, serverUrl, mockAgent }, testInfo) => {
+  test('Fable catalog exposes five effort tiers and persists the selected Session effort', async ({ chatPage: page, mockAgent }, testInfo) => {
     const root = mkdtempSync(join(tmpdir(), 'yeaft-browser-fable-'));
     const sessionId = 'fable-effort-session';
     const selectedModel = 'proxy/claude-fable-5.2';
@@ -76,6 +76,10 @@ test.describe('Yeaft composer menus', () => {
     const catalog = loadConfig({ dir: root }).availableModels;
     const requests = [];
     mockAgent._messageHandlers.push(request => {
+      if (request.type === 'yeaft_load_history' && request.sessionId === sessionId && request.limit !== 0) {
+        mockAgent.send({ type: 'yeaft_history_chunk', sessionId, requestId: request.requestId,
+          mode: 'recent', messages: [], oldestSeq: null, latestSeq: null, hasMore: false });
+      }
       if (request.type !== 'yeaft_update_session_config') return;
       requests.push(request);
       const config = saveSessionConfig(root, request.sessionId, request.config);
@@ -83,19 +87,18 @@ test.describe('Yeaft composer menus', () => {
         requestId: request.requestId, sessionId: request.sessionId, ok: true, config } });
     });
     try {
-      await openYeaftComposer(page, serverUrl);
-      await page.evaluate(({ agentId, sessionId, selectedModel, catalog }) => {
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: selectedModel, availableModels: catalog } });
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [
+        { id: sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config: { model: selectedModel } },
+      ] } });
+      await expect.poll(() => page.evaluate(sessionId => window.Pinia.useChatStore().sidebarSessionCatalog
+        .some(row => row.routeRef.sessionId === sessionId), sessionId)).toBe(true);
+      await page.evaluate(({ agentId, sessionId }) => {
         const chat = window.Pinia.useChatStore();
-        const sessions = window.Pinia.useSessionsStore();
-        const agent = { id: agentId, name: 'Fable agent', online: true, status: 'ready', capabilities: [] };
-        sessions.applySnapshot([{ id: sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config: { model: selectedModel } }], agentId);
-        sessions.setActive(sessionId, agentId);
-        chat.agents = [agent]; chat.currentAgent = agentId; chat.currentAgentInfo = agent;
-        chat.yeaftActiveSessionFilter = sessionId;
-        chat.yeaftSessionAgentById = { ...chat.yeaftSessionAgentById, [sessionId]: agentId };
-        chat.yeaftModel = selectedModel; chat.yeaftModelEffort = '';
-        chat.yeaftAvailableModels = catalog;
-      }, { agentId: mockAgent.agentId, sessionId, selectedModel, catalog });
+        chat.openCatalogSession(chat.sidebarSessionCatalog.find(row => row.routeRef.agentId === agentId && row.routeRef.sessionId === sessionId));
+        chat.closeSessionSidebar();
+      }, { agentId: mockAgent.agentId, sessionId });
+      await expect(page.locator('.yeaft-session-input')).toBeVisible();
       const effort = page.locator('.yeaft-composer-effort');
       for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
         await page.setViewportSize({ width, height: 800 });

@@ -66,12 +66,14 @@ export function buildModelSelectionRows(models) {
     if (!modelRef) continue;
     const label = model.label || model.id || modelRef;
     const efforts = getSelectableModelEfforts(model?.effortOptions);
+    // Revealing lower tiers must not lower an existing model-menu default.
+    const defaultEfforts = efforts.filter(effort => EFFORT_RANK[effort] >= EFFORT_RANK.medium);
     rows.push({
       model,
       modelRef,
       label,
       efforts,
-      defaultEffort: getDefaultModelEffort(efforts) || null,
+      defaultEffort: getDefaultModelEffort(defaultEfforts.length ? defaultEfforts : efforts) || null,
     });
   }
   return rows;

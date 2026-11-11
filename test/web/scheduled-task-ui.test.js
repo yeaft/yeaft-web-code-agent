@@ -158,12 +158,17 @@ it('creates task Sessions with the existing roster and folder contract and rejec
   await wrapper.vm.onSubmit();
   expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model' }, task }));
   expect(wrapper.vm.taskEffortOptions).toEqual([
-    { value: '', label: 'Default' }, { value: 'medium', label: 'Medium' },
-    { value: 'high', label: 'High' }, { value: 'xhigh', label: 'X-High' },
+    { value: '', label: 'Default' }, { value: 'low', label: 'Low' },
+    { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'xhigh', label: 'X-High' },
   ]);
-  await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort: 'xhigh' } });
-  await wrapper.vm.onSubmit();
-  expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model', modelEffort: 'xhigh' }, task }));
+  chat.yeaftStatusByAgent.a.availableModels[0].effortOptions.unshift('minimal');
+  await Vue.nextTick();
+  expect(wrapper.vm.taskEffortOptions).toContainEqual({ value: 'minimal', label: 'Minimal' });
+  for (const modelEffort of ['minimal', 'low', 'xhigh']) {
+    await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort } });
+    await wrapper.vm.onSubmit();
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model', modelEffort }, task }));
+  }
   await wrapper.setData({ form: { ...wrapper.vm.form, modelEffort: '' } });
   await wrapper.vm.onSubmit();
   expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ config: { model: 'test/model' }, task }));

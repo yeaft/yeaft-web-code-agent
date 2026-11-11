@@ -48,6 +48,12 @@ describe('Claude Fable effort', () => {
     expect(getLlmConfig(root).availableModels[0].effortOptions).toEqual(efforts);
     expect(buildModelSelectionRows(config.availableModels)[0].efforts).toEqual(efforts);
     expect(getSelectableModelEfforts(['minimal', 'low', 'medium', 'low', 'unknown'])).toEqual(['minimal', 'low', 'medium']);
+    for (const [effortOptions, defaultEffort] of [
+      [['low', 'high'], 'high'], [['low', 'medium'], 'medium'],
+      [['minimal', 'low', 'medium'], 'medium'], [['low'], 'low'],
+    ]) {
+      expect(buildModelSelectionRows([{ id: 'sparse', effortOptions }])[0]).toMatchObject({ efforts: effortOptions, defaultEffort });
+    }
     mkdirSync(join(root, 'sessions', 'fable-session'), { recursive: true });
     const requests = [];
     vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
