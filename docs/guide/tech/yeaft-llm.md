@@ -9,6 +9,12 @@ Yeaft is **not bound** to any single LLM vendor — through the adapter layer in
 3. **Hot-reloadable** — edit `config.json`, no Agent restart needed
 4. **Credential abstraction** — static apiKey OR dynamic credential provider (e.g. GitHub OAuth)
 
+## Web configuration drafts
+
+The LLM form in Agent settings submits only when you click **Save**. Background configuration responses, reconnect reads, and other clients' updates do not overwrite unsaved input. Changes made while a save is pending remain unsaved and require another explicit save. Failed or timed-out saves also retain the draft.
+
+Drafts live only in the open editor, not in persistent browser storage. Closing the form, switching Agents, or reloading the page discards unsaved changes; save explicitly first.
+
 ## Module Layout
 
 ```

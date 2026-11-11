@@ -266,6 +266,7 @@ export default {
       localFastModel: null,
       localDebug: false,
       isDirty: false,
+      draftRevision: 0,
       saving: false,
       openDropdown: null,
       showApiKey: {},
@@ -329,6 +330,7 @@ export default {
           this.localFastModel = null;
           this.localDebug = false;
           this.isDirty = false;
+          this.draftRevision = 0;
           this.modelDiscoveryWarning = null;
           this.modelDiscoveryError = null;
           this.saveRefreshWarning = null;
@@ -346,7 +348,7 @@ export default {
     currentConfig: {
       handler(config) {
         if (config && config.loaded) {
-          this.loadFromConfig(config);
+          this.receiveConfig(config);
         }
       },
       deep: true
@@ -429,10 +431,6 @@ export default {
         clearTimeout(this._saveTimeout);
         this._saveTimeout = null;
       }
-      if (this._saveUnwatch) {
-        this._saveUnwatch();
-        this._saveUnwatch = null;
-      }
       this._pendingSave = null;
       this.saving = false;
     },
@@ -500,7 +498,35 @@ export default {
       }, 5000);
     },
 
+    receiveConfig(config) {
+      const pending = this._pendingSave;
+      if (pending && pending.agentId === this.effectiveAgentId && config.requestId === pending.requestId) {
+        this.cancelPendingSave();
+        if (config.error) {
+          this.$emit('message', config.error, true);
+          return;
+        }
+        // A save acknowledges its submitted snapshot, not edits made afterwards.
+        // Only that exact, unchanged draft may adopt the normalized response.
+        if (this.draftRevision === pending.draftRevision) {
+          this.isDirty = false;
+          this.loadFromConfig(config);
+        }
+        this.saveRefreshWarning = config.statusRefreshError
+          ? this.$t('settings.llm.savedRefreshWarning', { error: config.statusRefreshError })
+          : null;
+        this.$emit('message', this.saveRefreshWarning || this.$t('settings.llm.saved'), !!config.statusRefreshError);
+        // Hosts may close the editor on 'saved'; keep any newer unsaved draft open.
+        if (!this.isDirty) this.$emit('saved', { warning: this.saveRefreshWarning });
+        return;
+      }
+      this.loadFromConfig(config);
+    },
+
     loadFromConfig(config) {
+      // Shared config also receives reconnects, quick-send reads and other
+      // clients' updates. None of those responses owns this editing draft.
+      if (this.isDirty || this.saving) return;
       if (this._loadTimeout) {
         clearTimeout(this._loadTimeout);
         this._loadTimeout = null;
@@ -698,6 +724,7 @@ export default {
     },
 
     markDirty() {
+      this.draftRevision += 1;
       this.isDirty = true;
     },
 
@@ -772,7 +799,7 @@ export default {
       const requestId = `llm-save-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       this.cancelPendingSave();
       this.saving = true;
-      this._pendingSave = { agentId, requestId };
+      this._pendingSave = { agentId, requestId, draftRevision: this.draftRevision };
       this.chatStore.sendWsMessage({
         type: 'update_llm_config',
         agentId,
@@ -786,27 +813,6 @@ export default {
         this.cancelPendingSave();
         this.$emit('message', this.$t('settings.llm.saveFailed'), true);
       }, 10000);
-
-      this._saveUnwatch = this.$watch('currentConfig', (config) => {
-        if (!config?.loaded
-          || config.requestId !== requestId
-          || this.effectiveAgentId !== agentId
-          || this._pendingSave?.agentId !== agentId
-          || this._pendingSave?.requestId !== requestId) return;
-        this.cancelPendingSave();
-        if (config.error) {
-          this.$emit('message', config.error, true);
-          return;
-        }
-        this.isDirty = false;
-        this.saveRefreshWarning = config.statusRefreshError
-          ? this.$t('settings.llm.savedRefreshWarning', { error: config.statusRefreshError })
-          : null;
-        this.$emit('message', this.saveRefreshWarning || this.$t('settings.llm.saved'), !!config.statusRefreshError);
-        // A warning is a partial success. Tell the host to keep the modal open
-        // so the user can actually read it instead of closing immediately.
-        this.$emit('saved', { warning: this.saveRefreshWarning });
-      }, { deep: true });
     }
   },
 
