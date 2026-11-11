@@ -54,7 +54,7 @@ export function normalizeModelEntry(entry) {
     if (typeof entry.protocol === 'string' && entry.protocol) {
       out.protocol = entry.protocol;
     }
-    if (entry.supportsEffort === true) out.supportsEffort = true;
+    if (typeof entry.supportsEffort === 'boolean') out.supportsEffort = entry.supportsEffort;
     if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol) {
       out.thinkingProtocol = entry.thinkingProtocol;
     }
@@ -108,7 +108,7 @@ function thinkingV1Enabled() {
  * Strips `effort` from the outgoing params when:
  *   - feature flag is off (thinkingV1 == off)
  *   - effort value is unknown
- *   - model capability is `thinkingProtocol: 'none'` (silently drop)
+ *   - the effective API or explicit capability override excludes this tier
  *
  * Adapter-level guards also enforce these rules; this is defense in depth
  * so a no-op path stays consistently a no-op regardless of adapter.

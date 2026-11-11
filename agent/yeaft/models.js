@@ -2,8 +2,8 @@
  * models.js — Model ID registry for Yeaft
  *
  * Maps model IDs (e.g. "gpt-5", "claude-sonnet-4-20250514") to the *adapter*
- * metadata Yeaft needs to dispatch requests: which protocol (anthropic vs
- * openai-responses), which base URL, which thinking/reasoning capabilities.
+ * metadata Yeaft needs to dispatch requests: protocol and base URL. Effort
+ * options are resolved separately from the effective API, never model IDs.
  *
  * Yeaft does not provide its own models. The "model" field is always a
  * model ID from an external provider. This registry lets Yeaft auto-detect
@@ -27,20 +27,9 @@ import { lookupModelLimitSync } from './llm/models-dev.js';
  * @property {'anthropic' | 'openai' | 'deepseek' | 'google'} provider — Which provider this model belongs to.
  *   These ids are intentionally aligned with the top-level keys in the models.dev
  *   catalog so they can be used as a `providerHint` to {@link lookupModelLimitSync}.
- * @property {'anthropic' | 'chat-completions'} adapter — Which wire protocol to use
+ * @property {'anthropic' | 'openai-responses'} adapter — Which wire protocol to use
  * @property {string} baseUrl — Official API endpoint base URL
  * @property {string} displayName — Human-readable model name
- * @property {boolean} [supportsThinking] — task-327a: model supports thinking/reasoning effort.
- * @property {'anthropic' | 'anthropic-adaptive' | 'openai-reasoning' | 'none'} [thinkingProtocol] — task-327a:
- *   'anthropic' → thinking:{type:'enabled', budget_tokens:N}
- *   'anthropic-adaptive' → thinking:{type:'adaptive'} + output_config:{effort}
- *   'openai-reasoning' → reasoning:{effort:'minimal'|'low'|'medium'|'high'|'xhigh'|'max'|'ultra'}
- *   'none' (default) → parameter silently dropped by router
- * @property {'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null} [defaultEffort] — adapter-level default
- *   when caller doesn't specify effort (null = no default / decision-tree decides).
- * @property {number} [maxBudgetTokens] — task-327a: for anthropic protocol, the cap used when
- *   effort='max' (e.g. Opus 4 = 64K, Sonnet 4 = 32K). For openai-reasoning this field is unused
- *   because the provider only exposes 3 enum levels.
  */
 
 /** @type {Map<string, ModelInfo>} */
@@ -51,53 +40,30 @@ export const MODEL_REGISTRY = new Map([
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     displayName: 'Claude Sonnet 4',
-    // task-327a: extended thinking supported; budget caps at 32K on Sonnet.
-    supportsThinking: true,
-    thinkingProtocol: 'anthropic',
-    defaultEffort: null,
-    maxBudgetTokens: 32000,
   }],
   ['claude-opus-4-20250514', {
     provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     displayName: 'Claude Opus 4',
-    // task-327a: PM decision — Opus max budget = 64K.
-    supportsThinking: true,
-    thinkingProtocol: 'anthropic',
-    defaultEffort: null,
-    maxBudgetTokens: 64000,
   }],
   ['claude-opus-4-8', {
     provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     displayName: 'Claude Opus 4.8',
-    supportsThinking: true,
-    thinkingProtocol: 'anthropic-adaptive',
-    defaultEffort: 'high',
-    effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
-    maxBudgetTokens: 64000,
   }],
   ['claude-opus-4.8', {
     provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     displayName: 'Claude Opus 4.8',
-    supportsThinking: true,
-    thinkingProtocol: 'anthropic-adaptive',
-    defaultEffort: 'high',
-    effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
-    maxBudgetTokens: 64000,
   }],
   ['claude-haiku-3-20250414', {
     provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     displayName: 'Claude Haiku 3',
-    // task-327a: Haiku 3 does not support extended thinking — effort is dropped.
-    supportsThinking: false,
-    thinkingProtocol: 'none',
   }],
 
   // ── OpenAI ─────────────────────────────────────────────────────
@@ -106,10 +72,6 @@ export const MODEL_REGISTRY = new Map([
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'GPT-5',
-    // GPT-5 supports Responses reasoning.effort, including xhigh on current OpenAI APIs. No 'max'.
-    supportsThinking: true,
-    thinkingProtocol: 'openai-reasoning',
-    defaultEffort: null,
   }],
   ['gpt-5-mini', {
     provider: 'openai',
@@ -134,19 +96,12 @@ export const MODEL_REGISTRY = new Map([
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'GPT-5.4',
-    supportsThinking: true,
-    thinkingProtocol: 'openai-reasoning',
-    defaultEffort: null,
   }],
   ['gpt-5.5', {
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'GPT-5.5',
-    supportsThinking: true,
-    thinkingProtocol: 'openai-reasoning',
-    defaultEffort: null,
-    effortOptions: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   }],
   ['gpt-4.1', {
     provider: 'openai',
@@ -171,19 +126,12 @@ export const MODEL_REGISTRY = new Map([
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'o3',
-    // task-327a: o-series reasoning models use reasoning.effort.
-    supportsThinking: true,
-    thinkingProtocol: 'openai-reasoning',
-    defaultEffort: null,
   }],
   ['o4-mini', {
     provider: 'openai',
     adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'o4-mini',
-    supportsThinking: true,
-    thinkingProtocol: 'openai-reasoning',
-    defaultEffort: null,
   }],
 
   // ── DeepSeek ───────────────────────────────────────────────────
@@ -392,22 +340,19 @@ export function parseModelRef(ref) {
 
 /**
  * Budget-token map for the Anthropic extended-thinking protocol.
- * 'max' is model-specific (override via ModelInfo.maxBudgetTokens).
- *
- * These numbers are adapter defaults — `thinkingBudgetForEffort()` below
- * consults the registry entry first before falling back to this table.
+ * Explicit thinkingProtocol:'anthropic' selects these legacy manual budgets.
+ * A configured maxBudgetTokens can cap them at the request boundary.
  */
 export const ANTHROPIC_THINKING_BUDGETS = {
   low: 4096,
   medium: 8192,
   high: 16384,
-  // 'max' resolves per-model; default fallback if model has no maxBudgetTokens.
   max: 32000,
 };
 
 /**
  * Map a Yeaft effort level to the OpenAI reasoning.effort enum. Supported
- * values are model-dependent; capability filtering happens before this wire
+ * values are API/explicit-config dependent; filtering happens before this wire
  * translation. Unsupported values are dropped; the adapter MUST NOT error.
  *
  * @param {Effort} effort
@@ -427,157 +372,22 @@ export function mapEffortToOpenAIReasoning(effort) {
   }
 }
 
-export const OPENAI_REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
-export const OPENAI_MAX_REASONING_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'];
-export const OPENAI_ULTRA_REASONING_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = ['low', 'medium', 'high'];
-export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'];
-export const ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'];
-// DeepSeek reasoning models (deepseek-reasoner / deepseek-r1 / deepseek-v4-pro)
-// expose a graded effort scale. DeepSeek V4 documents "high" and "max" as the
-// effective levels: "xhigh" is mapped to "max" server-side and "low"/"medium"
-// are mapped to "high". There is no "minimal" tier. We keep the full user-facing
-// scale (including xhigh/max) so the UI can select the highest level; the wire
-// path differs by protocol:
-//   - OpenAI-compatible surface → `reasoning.effort` (relay/proxy adapts to
-//     DeepSeek's wire format; xhigh/max pass through and the provider maps them).
-//   - Anthropic-compatible surface → `output_config.effort` (DeepSeek's Anthropic
-//     compatibility table explicitly supports `output_config` effort).
-export const DEEPSEEK_REASONING_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'];
-
-const VALID_EFFORT_OPTIONS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
-
-/**
- * GPT models expose the provider-specific `ultra` tier starting at 5.5.
- * Numeric comparison matters here: 5.10 is newer than 5.5.
- */
-export function modelSupportsUltraEffort(model) {
-  const id = parseModelRef(model).modelId.toLowerCase();
-  const match = id.match(/^gpt-(\d+)(?:\.(\d+))?(?=$|[-.]|\[)/);
-  if (!match) return false;
-  const major = Number(match[1]);
-  const minor = Number(match[2] || 0);
-  return major > 5 || (major === 5 && minor >= 5);
-}
-
-function fenceUltraEffortOptions(model, options) {
-  if (!Array.isArray(options) || modelSupportsUltraEffort(model)) return options;
-  return options.filter(effort => effort !== 'ultra');
-}
+// Effort is an API contract, not a model-name allowlist. Compatible gateways
+// can expose new IDs/aliases without requiring a Yeaft release.
+export const OPENAI_REASONING_EFFORT_OPTIONS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = Object.freeze(['low', 'medium', 'high', 'max']);
 
 export function normalizeEffortOptions(options) {
   if (!Array.isArray(options)) return null;
-  const out = [];
-  for (const raw of options) {
-    const effort = normalizeEffort(raw);
-    if (effort && VALID_EFFORT_OPTIONS.has(effort) && !out.includes(effort)) {
-      out.push(effort);
-    }
-  }
+  const out = [...new Set(options.map(normalizeEffort).filter(Boolean))];
   return out.length ? out : null;
-}
-
-// Provider refs and Bedrock's vendor/region prefixes do not change a model's
-// thinking protocol. Only strip known Anthropic prefixes, not arbitrary vendors.
-function thinkingModelId(model) {
-  return parseModelRef(model).modelId.toLowerCase()
-    .replace(/^(?:(?:us|eu|apac|global)\.)?anthropic\./, '');
-}
-
-// Match documented versions plus platform snapshot/latest aliases, not future
-// generations or arbitrary family names. Mythos Preview does not support xhigh.
-// https://platform.claude.com/docs/en/build-with-claude/thinking
-// https://platform.claude.com/docs/en/build-with-claude/effort
-const ANTHROPIC_MODEL_ALIAS_SUFFIX = '(?:[-@]\\d{8})?(?:-v\\d+(?::\\d+)?)?(?:-latest)?';
-const FABLE_MYTHOS_ADAPTIVE_MODEL = new RegExp(`^claude-(?:fable|mythos)-5(?:[-.][12])?${ANTHROPIC_MODEL_ALIAS_SUFFIX}$`);
-const MYTHOS_PREVIEW_MODEL = new RegExp(`^claude-mythos-preview${ANTHROPIC_MODEL_ALIAS_SUFFIX}$`);
-
-function inferThinkingCapability(model) {
-  const id = thinkingModelId(model);
-  if (!id) return null;
-
-  const fableOrMythos = FABLE_MYTHOS_ADAPTIVE_MODEL.test(id);
-  const mythosPreview = MYTHOS_PREVIEW_MODEL.test(id);
-  if (fableOrMythos || mythosPreview) {
-    return {
-      supportsThinking: true,
-      thinkingProtocol: 'anthropic-adaptive',
-      defaultEffort: 'high',
-      maxBudgetTokens: null,
-      effortOptions: mythosPreview ? ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS : ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS,
-    };
-  }
-
-  // Provider suffixes are variants of the same GPT model family.
-  if (modelSupportsUltraEffort(model)) {
-    return {
-      supportsThinking: true,
-      thinkingProtocol: 'openai-reasoning',
-      defaultEffort: null,
-      maxBudgetTokens: null,
-      effortOptions: OPENAI_ULTRA_REASONING_EFFORT_OPTIONS,
-    };
-  }
-
-  if (/^(gpt-5|o1|o3|o4|chatgpt-|codex-)/.test(id)) {
-    return { supportsThinking: true, thinkingProtocol: 'openai-reasoning', defaultEffort: null, maxBudgetTokens: null };
-  }
-
-  // Claude Opus 4.7/4.8 and general Claude 5+ families (Fable/Mythos
-  // documented versions are resolved above),
-  // use adaptive thinking with all five output_config.effort levels.
-  if (/^claude-opus-4[-.]?(7|8)($|-|\.)/.test(id) || /^claude-(opus|sonnet|haiku)-([5-9]|[1-9]\d)($|-|\.)/.test(id)) {
-    return {
-      supportsThinking: true,
-      thinkingProtocol: 'anthropic-adaptive',
-      defaultEffort: 'high',
-      maxBudgetTokens: null,
-      effortOptions: ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS,
-    };
-  }
-
-  // Claude Opus 4.6 and Sonnet 4.6 use adaptive effort too, but official
-  // Anthropic docs do not list xhigh for them. Keep max, reject xhigh.
-  if (/^claude-(opus|sonnet)-4[-.]?6($|-|\.)/.test(id)) {
-    return {
-      supportsThinking: true,
-      thinkingProtocol: 'anthropic-adaptive',
-      defaultEffort: 'high',
-      maxBudgetTokens: null,
-      effortOptions: ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS,
-    };
-  }
-
-  // Anthropic extended thinking is available on Claude 3.7+ and Claude 4.x.
-  // Be conservative: older Claude 3/3.5/Haiku entries stay unsupported unless
-  // explicitly listed in the registry. Older Claude 4.x entries keep manual budgets.
-  if (/^claude-(opus|sonnet|haiku)-4($|-|\.)/.test(id) || /^claude-(sonnet-3-7|3-7-sonnet)($|-|\.)/.test(id)) {
-    const maxBudgetTokens = id.includes('opus') ? 64000 : 32000;
-    return { supportsThinking: true, thinkingProtocol: 'anthropic', defaultEffort: null, maxBudgetTokens };
-  }
-
-  // DeepSeek providers/proxies commonly expose reasoning controls through an
-  // OpenAI-Responses-compatible surface. The router/config layer still gates
-  // this by effective protocol; direct adapter calls use this family fallback.
-  if (/^deepseek/.test(id)) {
-    return {
-      supportsThinking: true,
-      thinkingProtocol: 'openai-reasoning',
-      defaultEffort: null,
-      maxBudgetTokens: null,
-      effortOptions: DEEPSEEK_REASONING_EFFORT_OPTIONS,
-    };
-  }
-
-  return null;
 }
 
 /**
  * Resolve the Anthropic thinking budget_tokens value for a given (model, effort).
  *
- * Priority:
- *   1. Registry ModelInfo.maxBudgetTokens when effort === 'max'
- *   2. ANTHROPIC_THINKING_BUDGETS[effort]
+ * API-level defaults; model IDs do not change manual budgets.
  *
  * @param {string} model
  * @param {Effort} effort
@@ -585,91 +395,49 @@ function inferThinkingCapability(model) {
  */
 export function thinkingBudgetForEffort(model, effort) {
   if (!effort) return null;
-  if (effort === 'max') {
-    const info = MODEL_REGISTRY.get(model);
-    if (info?.maxBudgetTokens) return info.maxBudgetTokens;
-    return ANTHROPIC_THINKING_BUDGETS.max;
-  }
   return ANTHROPIC_THINKING_BUDGETS[effort] ?? null;
 }
 
 /**
- * Get the thinking capability for a model. Models not in the registry or
- * explicitly marked supportsThinking:false return a noop capability — the
- * router uses this to silently drop the `effort` parameter for unsupported
- * models (red line: never error on unsupported).
- *
+ * Resolve effort from the effective wire API. Callers with a resolved route must
+ * supply protocol; model IDs are only a legacy fallback for choosing that API.
+ * Explicit capability overrides can narrow/disable effort or opt into Anthropic
+ * manual budgets, but registry/model-family metadata never gates API effort.
  * @param {string} model
- * @returns {{ supportsThinking: boolean, thinkingProtocol: 'anthropic' | 'anthropic-adaptive' | 'openai-reasoning' | 'none', defaultEffort: Effort | null, maxBudgetTokens: number | null, effortOptions: Effort[] }}
+ * @param {{protocol?: string, supportsEffort?: boolean, effortOptions?: string[],
+ *   thinkingProtocol?: string, defaultEffort?: string, maxBudgetTokens?: number}} context
  */
 export function getThinkingCapability(model, context = {}) {
-  const modelId = thinkingModelId(model);
-  const info = MODEL_REGISTRY.get(modelId);
-  const familyInferred = inferThinkingCapability(model);
-  const nativeProtocol = info?.thinkingProtocol || familyInferred?.thinkingProtocol;
-  const overrideOptions = fenceUltraEffortOptions(model, normalizeEffortOptions(context.effortOptions));
-  const overrideProtocol = context.thinkingProtocol || (
-    context.protocol === 'anthropic'
-      ? (nativeProtocol?.startsWith('anthropic') ? nativeProtocol : /^deepseek/i.test(modelId) ? 'anthropic-adaptive' : 'anthropic')
-      : context.protocol === 'openai-responses' ? 'openai-reasoning' : null
+  const modelId = parseModelRef(model).modelId.toLowerCase();
+  const protocol = context.protocol || (
+    context.thinkingProtocol?.startsWith('anthropic') ||
+    MODEL_REGISTRY.get(modelId)?.adapter === 'anthropic' ||
+    modelId.startsWith('claude') || modelId.includes('/claude') || modelId.includes('.claude')
+      ? 'anthropic' : 'openai-responses'
   );
-  const hasExplicitThinking = info && Object.prototype.hasOwnProperty.call(info, 'supportsThinking');
-  if (context.supportsEffort === true || overrideOptions) {
-    return {
-      supportsThinking: true,
-      thinkingProtocol: overrideProtocol || info?.thinkingProtocol || familyInferred?.thinkingProtocol || 'openai-reasoning',
-      defaultEffort: context.defaultEffort ?? info?.defaultEffort ?? familyInferred?.defaultEffort ?? null,
-      maxBudgetTokens: context.maxBudgetTokens ?? info?.maxBudgetTokens ?? familyInferred?.maxBudgetTokens ?? null,
-      effortOptions: overrideOptions || info?.effortOptions || familyInferred?.effortOptions || null,
-    };
-  }
-  let inferred = hasExplicitThinking ? null : familyInferred;
-  if (context.protocol === 'openai-responses' && !inferred && /^deepseek/i.test(parseModelRef(model).modelId)) {
-    inferred = {
-      supportsThinking: true,
-      thinkingProtocol: 'openai-reasoning',
-      defaultEffort: null,
-      maxBudgetTokens: null,
-      effortOptions: DEEPSEEK_REASONING_EFFORT_OPTIONS,
-    };
-  }
-  if (context.protocol === 'anthropic' && inferred?.thinkingProtocol === 'openai-reasoning') {
-    if (/^deepseek/i.test(modelId)) {
-      inferred = {
-        ...inferred,
-        thinkingProtocol: 'anthropic-adaptive',
-        effortOptions: ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS,
-      };
-    } else {
-      inferred = null;
-    }
-  }
-  if ((!info || !info.supportsThinking) && !inferred) {
-    return {
-      supportsThinking: false,
-      thinkingProtocol: 'none',
-      defaultEffort: null,
-      maxBudgetTokens: null,
-      effortOptions: [],
-    };
-  }
+  const disabled = { supportsThinking: false, thinkingProtocol: 'none', defaultEffort: null, maxBudgetTokens: null, effortOptions: [] };
+  if (context.supportsEffort === false || context.thinkingProtocol === 'none') return disabled;
+  if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;
+  const manual = protocol === 'anthropic' && context.thinkingProtocol === 'anthropic';
+  const thinkingProtocol = protocol === 'openai-responses' ? 'openai-reasoning'
+    : manual ? 'anthropic' : 'anthropic-adaptive';
+  const apiOptions = protocol === 'openai-responses' ? OPENAI_REASONING_EFFORT_OPTIONS
+    : manual ? ANTHROPIC_MANUAL_EFFORT_OPTIONS : ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS;
+  const overrides = normalizeEffortOptions(context.effortOptions);
+  const effortOptions = overrides ? apiOptions.filter(value => overrides.includes(value)) : [...apiOptions];
+  if (!effortOptions.length) return disabled;
+  const defaultEffort = normalizeEffort(context.defaultEffort) || (thinkingProtocol === 'anthropic-adaptive' ? 'high' : null);
   return {
-    supportsThinking: Boolean(info?.supportsThinking ?? inferred?.supportsThinking),
-    thinkingProtocol: info?.thinkingProtocol || inferred?.thinkingProtocol || 'none',
-    defaultEffort: info?.defaultEffort ?? inferred?.defaultEffort ?? null,
-    maxBudgetTokens: info?.maxBudgetTokens ?? inferred?.maxBudgetTokens ?? null,
-    effortOptions: fenceUltraEffortOptions(model, info?.effortOptions || inferred?.effortOptions || null),
+    supportsThinking: true,
+    thinkingProtocol,
+    defaultEffort: effortOptions.includes(defaultEffort) ? defaultEffort : null,
+    maxBudgetTokens: manual ? context.maxBudgetTokens ?? ANTHROPIC_THINKING_BUDGETS.max : null,
+    effortOptions,
   };
 }
 
 export function getModelEffortOptions(model, context = {}) {
-  const cap = getThinkingCapability(model, context);
-  if (!cap.supportsThinking || cap.thinkingProtocol === 'none') return [];
-  if (Array.isArray(cap.effortOptions)) return cap.effortOptions.slice();
-  if (cap.thinkingProtocol === 'openai-reasoning') return OPENAI_REASONING_EFFORT_OPTIONS.slice();
-  if (cap.thinkingProtocol === 'anthropic-adaptive') return ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS.slice();
-  if (cap.thinkingProtocol === 'anthropic') return ANTHROPIC_MANUAL_EFFORT_OPTIONS.slice();
-  return [];
+  return getThinkingCapability(model, context).effortOptions.slice();
 }
 
 export function modelSupportsEffort(model, context = {}) {
@@ -735,7 +503,7 @@ export function normalizeProviderModels(provider) {
       if (typeof entry.protocol === 'string' && entry.protocol.trim()) {
         norm.protocol = entry.protocol.trim();
       }
-      if (entry.supportsEffort === true) norm.supportsEffort = true;
+      if (typeof entry.supportsEffort === 'boolean') norm.supportsEffort = entry.supportsEffort;
       if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol.trim()) {
         norm.thinkingProtocol = entry.thinkingProtocol.trim();
       }
@@ -768,8 +536,15 @@ export function serializeModelForPersistence(entry) {
   const capabilities = entry.capabilities && typeof entry.capabilities === 'object' ? { ...entry.capabilities } : undefined;
   const streamIdleTimeoutMs = Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0
     ? Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs)) : undefined;
-  if (ctx === undefined && max === undefined && proto === undefined && capabilities === undefined && streamIdleTimeoutMs === undefined) return entry.id;
-  const obj = { id: entry.id };
+  const effort = {};
+  if (typeof entry.supportsEffort === 'boolean') effort.supportsEffort = entry.supportsEffort;
+  if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol.trim()) effort.thinkingProtocol = entry.thinkingProtocol.trim();
+  const effortOptions = normalizeEffortOptions(entry.effortOptions);
+  if (effortOptions) effort.effortOptions = effortOptions;
+  const maxBudget = coercePositiveInt(entry.maxBudgetTokens);
+  if (maxBudget !== undefined) effort.maxBudgetTokens = maxBudget;
+  if (ctx === undefined && max === undefined && proto === undefined && capabilities === undefined && streamIdleTimeoutMs === undefined && !Object.keys(effort).length) return entry.id;
+  const obj = { id: entry.id, ...effort };
   if (capabilities !== undefined) obj.capabilities = capabilities;
   if (streamIdleTimeoutMs !== undefined) obj.streamIdleTimeoutMs = streamIdleTimeoutMs;
   if (ctx !== undefined) obj.contextWindow = ctx;

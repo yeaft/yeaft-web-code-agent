@@ -1,3 +1,4 @@
+import { inferProtocolFromModelId } from './router.js';
 import { applyAnthropicThinking } from './anthropic.js';
 import { parseModelRef } from '../models.js';
 import { resolveContextWindow, resolveMaxOutputTokens } from '../models.js';
@@ -45,7 +46,10 @@ export async function enhanceResponse(input, { adapter, model, config, signal, r
   const maxTokens = Math.min(8192, ceiling, Math.floor(resolveMaxOutputTokens(model, config)));
   const effortContext = config?.modelInfo ?? {};
   const thinkingProbe = { max_tokens: maxTokens };
-  applyAnthropicThinking(thinkingProbe, parseModelRef(model).modelId, effort, effortContext);
+  const modelId = parseModelRef(model).modelId;
+  if ((effortContext.protocol || inferProtocolFromModelId(modelId)) === 'anthropic') {
+    applyAnthropicThinking(thinkingProbe, modelId, effort, effortContext);
+  }
   // Manual thinking can silently expand max_tokens. Keep the enhancement
   // reserve authoritative, while retaining the child constraint at payload time.
   const safeEffort = thinkingProbe.max_tokens === maxTokens ? effort : undefined;
