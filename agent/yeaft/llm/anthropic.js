@@ -65,10 +65,65 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
   }
 }
 
-import { ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts } from './provider-state.js';
+import { ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts, validateAnthropicRequestPrefixes, supportsAnthropicPreservedThinking } from './provider-state.js';
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const API_VERSION = '2023-06-01';
+
+// Preserve provider completion semantics instead of treating future reasons as
+// successful end_turn. The Engine handles paused/truncated/refused terminals.
+function responseMetadata(message = {}) {
+  const metadata = { protocol: 'anthropic' };
+  for (const [wire, local] of Object.entries({ id: 'responseId', model: 'model', stop_reason: 'stopReason',
+    stop_sequence: 'stopSequence', stop_details: 'stopDetails', input_transformations: 'inputTransformations', container: 'container' })) {
+    if (message[wire] !== undefined) metadata[local] = structuredClone(message[wire]);
+  }
+  return metadata;
+}
+
+// Public diagnostics contain identifiers/citations, not server-tool arguments or
+// results. The exact native blocks live only in owner-fenced providerState.
+function contentMetadata(items = []) {
+  return items.flatMap((block, index) => {
+    if (block?.type === 'text' && block.citations?.length) return [{ type: 'text', index, citations: block.citations }];
+    if (block?.type === 'fallback') return [{ type: 'fallback', index, model: block.model }];
+    if (['server_tool_use', 'mcp_tool_use'].includes(block?.type)) return [{ type: block.type, index, id: block.id, name: block.name }];
+    if (typeof block?.type === 'string' && block.type.endsWith('_tool_result')) return [{ type: block.type, index, toolUseId: block.tool_use_id }];
+    return [];
+  });
+}
+
+function stopEvent(message) {
+  return { type: 'stop', stopReason: message.stop_reason || 'unknown',
+    ...(message.stop_details !== undefined ? { stopDetails: message.stop_details } : {}),
+    ...(message.stop_sequence !== undefined ? { stopSequence: message.stop_sequence } : {}) };
+}
+
+function truncatedToolResponse(reason) {
+  return reason === 'max_tokens' || reason === 'model_context_window_exceeded';
+}
+
+// New Claude models omit the readable summary by default. Request only the
+// public summary (never raw reasoning) on the official route; compatible
+// gateways keep their existing payload unless the user configures extraBody.
+function applyThinkingDisplay(body, context) {
+  if (context?.diagnostics?.capabilitySource !== 'native-endpoint'
+      || !/^claude-(opus|sonnet|haiku|fable|mythos)-[5-9]/i.test(body.model)) return;
+  if (!body.thinking) body.thinking = { type: 'adaptive' };
+  if (body.thinking.type === 'adaptive' && body.thinking.display === undefined) body.thinking.display = 'summarized';
+}
+
+/** Native inline updates preserve a signed prefix without restoring withdrawn tools.
+ * These features are model-specific; never silently drop runtime instruction rows.
+ */
+function midConversationHeaders(body) {
+  const rows = body.messages?.filter(message => message.role === 'system') || [];
+  if (!rows.length) return {};
+  if (!supportsAnthropicPreservedThinking(body.model)) throw new ProviderStateError('model does not support mid-conversation instructions; start a new context for changed instructions or tools');
+  const inlineTools = rows.some(row => Array.isArray(row.content)
+    && row.content.some(block => ['tool_addition', 'tool_removal'].includes(block?.type)));
+  return inlineTools ? { 'anthropic-beta': 'inline-tools-2026-09-15' } : {};
+}
 
 function hasNonEmptyText(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -160,16 +215,24 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {import('./adapter.js').UnifiedMessage[]} messages
    * @returns {object[]}
    */
-  #translateMessages(messages, context, identity) {
+  #translateMessages(messages, context, identity, replayed = []) {
     const result = [];
     for (const msg of messages) {
-      if (msg.role === 'system') continue; // system goes separately
+      if (msg.role === 'system') {
+        const content = translateUserContent(msg.content);
+        if (content) result.push({ role: 'system', content });
+        continue;
+      }
       if (msg.role === 'user') {
         const content = translateUserContent(msg.content);
         if (content) result.push({ role: 'user', content });
       } else if (msg.role === 'assistant') {
         const native = replayProviderState(msg, context, identity);
-        if (native) { result.push({ role: 'assistant', content: native }); continue; }
+        if (native) {
+          replayed.push({ state: msg.providerState, messageIndex: result.length });
+          result.push({ role: 'assistant', content: native });
+          continue;
+        }
         const content = [];
         // Legacy records remain readable, but have no trustworthy wire origin.
         // Never replay their signatures into an arbitrary current account/model.
@@ -255,7 +318,8 @@ export class AnthropicAdapter extends LLMAdapter {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, model });
-    const translatedMessages = this.#translateMessages(messages, context, requestIdentity);
+    const replayed = [];
+    const translatedMessages = this.#translateMessages(messages, context, requestIdentity, replayed);
     const body = {
       model,
       max_tokens: maxTokens,
@@ -283,11 +347,13 @@ export class AnthropicAdapter extends LLMAdapter {
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
+    applyThinkingDisplay(body, context);
     const wireBody = toWellFormedJson(body);
+    validateAnthropicRequestPrefixes(wireBody, replayed);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
 
     const url = `${this.#baseUrl}/v1/messages`;
-    const headers = this.#headers();
+    const headers = { ...this.#headers(), ...midConversationHeaders(wireBody) };
 
     // Expose the raw request (auth-redacted) for the debug panel. The body
     // is captured verbatim — never truncated — so "copy request" matches
@@ -335,12 +401,20 @@ export class AnthropicAdapter extends LLMAdapter {
         cacheReadTokens: result.usage?.cache_read_input_tokens || 0, cacheWriteTokens: result.usage?.cache_creation_input_tokens || 0,
         ...reasoningUsage(result.usage, 'anthropic') };
       if (signal?.aborted) throw new LLMAbortError();
+      yield { type: 'provider_metadata', metadata: { ...responseMetadata(result),
+        contentBlocks: contentMetadata(result.content) } };
+      if (result.stop_reason === 'model_context_window_exceeded' || result.stop_reason === 'refusal'
+          || !['end_turn', 'stop_sequence', 'max_tokens', 'pause_turn', 'tool_use'].includes(result.stop_reason)) {
+        for (const block of result.content || []) if (block.type === 'text') yield { type: 'text_delta', text: block.text };
+        yield stopEvent(result);
+        return;
+      }
       try {
         for (const block of result.content || []) {
           if (block.type !== 'tool_use') continue;
           requireToolInputObject(block.input);
-          if (result.stop_reason === 'max_tokens') {
-            throw new LLMToolInputError('Anthropic tool response was truncated at max_tokens');
+          if (truncatedToolResponse(result.stop_reason)) {
+            throw new LLMToolInputError(`Anthropic tool response was truncated at ${result.stop_reason}`);
           }
         }
       } catch (error) {
@@ -348,7 +422,7 @@ export class AnthropicAdapter extends LLMAdapter {
         yield { type: 'error', error, retryable: false };
         return;
       }
-      const state = createProviderState({ context, identity: requestIdentity, items: result.content, responseId: result.id });
+      const state = createProviderState({ context, identity: requestIdentity, items: result.content, responseId: result.id, requestBody: wireBody });
       for (const block of result.content || []) {
         if (block.type === 'text') yield { type: 'text_delta', text: block.text };
         if (block.type === 'tool_use') yield { type: 'tool_call', id: block.id, name: block.name, input: block.input };
@@ -356,7 +430,7 @@ export class AnthropicAdapter extends LLMAdapter {
         if (block.type === 'redacted_thinking') yield { type: 'thinking_block_end', redacted: true, data: block.data };
       }
       if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
-      yield { type: 'stop', stopReason: this.#mapStopReason(result.stop_reason) };
+      yield stopEvent(result);
       if (onRawExchange) {
         try { onRawExchange({ rawRequest, rawResponse: { status: response.status, headers: safeHeaders(response), body: result } }); } catch { /* diagnostic only */ }
       }
@@ -396,6 +470,7 @@ export class AnthropicAdapter extends LLMAdapter {
     let sawMessageStart = false;
     let cumulativeOutputTokens = 0;
     let toolInputError = null;
+    let finalStop = null;
     let malformedStream = false;
     const hasToolBlocks = () => toolInputError !== null || [...blockByIndex.values()].some(block => block.kind === 'tool_use')
       || [...completedBlocks.values()].some(block => block.type === 'tool_use');
@@ -478,6 +553,10 @@ export class AnthropicAdapter extends LLMAdapter {
                 data: typeof block.data === 'string' ? block.data : '',
                 signature: typeof block.signature === 'string' ? block.signature : '',
               });
+            } else if (block && typeof block.type === 'string') {
+              // Server-tool results and fallback boundaries are opaque native
+              // blocks, not client-side tool calls. Keep their order for replay.
+              blockByIndex.set(idx, { kind: 'opaque', native: block, input: '' });
             }
           } else if (type === 'content_block_delta') {
             const delta = event.delta;
@@ -487,6 +566,10 @@ export class AnthropicAdapter extends LLMAdapter {
               if (st?.kind === 'text') st.text += delta.text || '';
               if (typeof delta.text === 'string' && delta.text.length > 0) {
                 yield { type: 'text_delta', text: delta.text };
+              }
+            } else if (delta?.type === 'citations_delta') {
+              if (st?.kind === 'text' && delta.citation && typeof delta.citation === 'object') {
+                st.native = { ...st.native, citations: [...(st.native.citations || []), structuredClone(delta.citation)] };
               }
             } else if (delta?.type === 'thinking_delta') {
               // Forward delta for live UI; ALSO accumulate for round-trip.
@@ -501,7 +584,10 @@ export class AnthropicAdapter extends LLMAdapter {
                 st.signature += delta.signature || '';
               }
             } else if (delta?.type === 'input_json_delta') {
-              if (st?.kind !== 'tool_use' || typeof delta.partial_json !== 'string') {
+              if (st?.kind === 'opaque' && ['server_tool_use', 'mcp_tool_use'].includes(st.native.type) && typeof delta.partial_json === 'string') {
+                st.input += delta.partial_json;
+                yield { type: 'provider_activity' };
+              } else if (st?.kind !== 'tool_use' || typeof delta.partial_json !== 'string') {
                 toolInputError = new LLMToolInputError('Anthropic returned invalid or incomplete tool input');
               } else if (delta.partial_json.length > 0) {
                 st.input += delta.partial_json;
@@ -546,6 +632,14 @@ export class AnthropicAdapter extends LLMAdapter {
                 };
               }
             }
+            if (st?.kind === 'opaque') {
+              let native = st.native;
+              if (st.input) {
+                try { native = { ...native, input: requireToolInputObject(JSON.parse(st.input)) }; }
+                catch { throw new LLMServerError('Anthropic returned invalid server-tool input', 0); }
+              }
+              completedBlocks.set(idx, native);
+            }
             if (st?.kind === 'text') completedBlocks.set(idx, { ...st.native, text: st.text });
             if (st?.kind === 'thinking') completedBlocks.set(idx, { ...st.native, thinking: st.thinking, signature: st.signature });
             if (st?.kind === 'redacted_thinking') completedBlocks.set(idx, { type: 'redacted_thinking', data: st.data });
@@ -576,35 +670,44 @@ export class AnthropicAdapter extends LLMAdapter {
               };
             } else yield { type: 'usage', reportedTokenFields: [], usageIncomplete: true };
             if (signal?.aborted) throw new LLMAbortError();
+            yield { type: 'provider_metadata', metadata: responseMetadata({ ...event, ...event.delta }) };
             const stopReason = event.delta?.stop_reason;
             if (stopReason === 'max_tokens' && hasToolBlocks()) {
-              toolInputError = new LLMToolInputError('Anthropic tool response was truncated at max_tokens');
+              toolInputError = new LLMToolInputError(`Anthropic tool response was truncated at ${stopReason}`);
             }
-            if (stopReason && !toolInputError) {
-              // Only message_stop seals native state. EOF after message_delta
-              // must not silently complete a signed tool turn without its state.
-              yield { type: 'stop', stopReason: this.#mapStopReason(stopReason) };
-            }
+            // Only message_stop seals native state AND completion. A trailing
+            // metadata-only message_delta must not erase the terminal reason.
+            if (stopReason) finalStop = stopEvent(event.delta);
           } else if (type === 'message_stop') {
             if (malformedStream) {
               if (hasToolBlocks()) throw new LLMToolInputError('Anthropic returned a malformed tool stream');
               throw new LLMServerError('Anthropic returned a malformed stream event', 0);
+            }
+            if (finalStop?.stopReason === 'model_context_window_exceeded' || finalStop?.stopReason === 'refusal'
+                || (finalStop && !['end_turn', 'stop_sequence', 'max_tokens', 'pause_turn', 'tool_use'].includes(finalStop.stopReason))) {
+              sawStop = true;
+              yield finalStop;
+              continue;
             }
             if (toolInputError) throw toolInputError;
             requireClosedBlocks();
             sawStop = true;
             if (!stateFailed) {
               const items = [...completedBlocks].sort(([a], [b]) => a - b).map(([, block]) => block);
-              const state = createProviderState({ context, identity: requestIdentity, responseId, items });
+              const state = createProviderState({ context, identity: requestIdentity, responseId, items, requestBody: wireBody });
               for (const block of items) {
                 if (signal?.aborted) throw new LLMAbortError();
                 if (block.type === 'tool_use') yield { type: 'tool_call', id: block.id, name: block.name, input: block.input };
               }
               if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
+              const publicBlocks = contentMetadata(items);
+              if (publicBlocks.length) yield { type: 'provider_metadata', metadata: { protocol: 'anthropic', contentBlocks: publicBlocks } };
+              yield finalStop || { type: 'stop', stopReason: 'unknown' };
             }
           } else if (type === 'message_start') {
             sawMessageStart = true;
             responseId = event.message?.id;
+            yield { type: 'provider_metadata', metadata: responseMetadata(event.message) };
             // Usage from message_start
             if (event.message?.usage) {
               cumulativeOutputTokens = Math.max(
@@ -638,7 +741,8 @@ export class AnthropicAdapter extends LLMAdapter {
         }
       }
       if (signal?.aborted) throw new LLMAbortError();
-      if (toolInputError) throw toolInputError;
+      const failedStop = finalStop && !['end_turn', 'stop_sequence', 'max_tokens', 'pause_turn', 'tool_use'].includes(finalStop.stopReason);
+      if (toolInputError && !failedStop) throw toolInputError;
       if (malformedStream) {
         if (hasToolBlocks()) throw new LLMToolInputError('Anthropic returned a malformed tool stream');
         throw new LLMServerError('Anthropic returned a malformed stream event', 0);
@@ -647,7 +751,7 @@ export class AnthropicAdapter extends LLMAdapter {
         if (hasToolBlocks()) throw new LLMToolInputError('Anthropic tool stream ended before stop event');
         throw new LLMServerError('Anthropic stream ended before stop event', 0);
       }
-      requireClosedBlocks();
+      if (!failedStop) requireClosedBlocks();
     } catch (err) {
       // Once malformed input is known, a later drain failure cannot make the
       // same rejected request eligible for transport retry. Abort still wins.
@@ -693,7 +797,8 @@ export class AnthropicAdapter extends LLMAdapter {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, model });
-    const translatedMessages = this.#translateMessages(messages, context, requestIdentity);
+    const replayed = [];
+    const translatedMessages = this.#translateMessages(messages, context, requestIdentity, replayed);
     const body = {
       model,
       max_tokens: maxTokens,
@@ -715,14 +820,16 @@ export class AnthropicAdapter extends LLMAdapter {
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
+    applyThinkingDisplay(body, context);
     const wireBody = toWellFormedJson(body);
+    validateAnthropicRequestPrefixes(wireBody, replayed);
 
     let response;
     try {
       onRequestStart?.();
       response = await fetch(`${this.#baseUrl}/v1/messages`, {
         method: 'POST',
-        headers: this.#headers(),
+        headers: { ...this.#headers(), ...midConversationHeaders(wireBody) },
         body: JSON.stringify(wireBody),
         signal,
       });
@@ -739,7 +846,7 @@ export class AnthropicAdapter extends LLMAdapter {
     for (const block of result.content || []) {
       if (block.type !== 'tool_use') continue;
       requireToolInputObject(block.input);
-      if (result.stop_reason === 'max_tokens') throw new LLMToolInputError('Anthropic tool response was truncated at max_tokens');
+      if (truncatedToolResponse(result.stop_reason)) throw new LLMToolInputError(`Anthropic tool response was truncated at ${result.stop_reason}`);
     }
     const text = result.content
       ?.filter(b => b.type === 'text')
@@ -748,8 +855,10 @@ export class AnthropicAdapter extends LLMAdapter {
 
     return {
       text,
-      providerState: createProviderState({ context, identity: requestIdentity, items: result.content, responseId: result.id }),
-      stopReason: this.#mapStopReason(result.stop_reason),
+      providerState: createProviderState({ context, identity: requestIdentity, items: result.content, responseId: result.id, requestBody: wireBody }),
+      stopReason: result.stop_reason || 'unknown',
+      providerMetadata: { ...responseMetadata(result),
+        contentBlocks: contentMetadata(result.content) },
       usage: {
         ...reasoningUsage(result.usage, 'anthropic'),
         inputTokens: result.usage?.input_tokens || 0,
@@ -760,17 +869,4 @@ export class AnthropicAdapter extends LLMAdapter {
     };
   }
 
-  /**
-   * Map Anthropic stop_reason to unified format.
-   * @param {string} reason
-   * @returns {'end_turn' | 'tool_use' | 'max_tokens'}
-   */
-  #mapStopReason(reason) {
-    switch (reason) {
-      case 'end_turn': return 'end_turn';
-      case 'tool_use': return 'tool_use';
-      case 'max_tokens': return 'max_tokens';
-      default: return 'end_turn';
-    }
-  }
 }

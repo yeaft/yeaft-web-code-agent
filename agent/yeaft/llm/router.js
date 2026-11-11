@@ -30,7 +30,7 @@ import {
   isGitHubCopilotProvider,
   normalizeKnownProviderForRuntime,
 } from './known-providers.js';
-import { createProviderContext } from './provider-state.js';
+import { ProviderStateError, createCredentialScopeId, createProviderContext } from './provider-state.js';
 import { pairSanitize } from '../pair-sanitize.js';
 
 /**
@@ -181,6 +181,19 @@ export function sanitizeMessagesForWire(params) {
   if (!params || !Array.isArray(params.messages)) return params;
   const cleaned = pairSanitize(params.messages);
   if (sliceUnchanged(params.messages, cleaned)) return params;
+  // Pair repair may discard an entire textless assistant. Do not silently lose
+  // active signed reasoning before the adapter's projection/ownership checks.
+  for (const message of params.messages) {
+    if (!message?.toolCalls?.length) continue;
+    const signed = message.providerState?.protocol === 'anthropic'
+      ? message.providerState.items?.some?.(item => ['thinking', 'redacted_thinking'].includes(item?.type))
+      : !message.providerState && message.thinkingBlocks?.length;
+    if (!signed) continue;
+    if (!cleaned.some(candidate => (message.providerState ? candidate?.providerState === message.providerState
+      : candidate?.thinkingBlocks === message.thinkingBlocks) && candidate.toolCalls?.length === message.toolCalls.length)) {
+      throw new ProviderStateError('pair repair would change a signed tool turn; restore its tool results or start a new context');
+    }
+  }
   console.warn(
     `[router] dropped tool_use/tool_result orphans before wire send: ` +
     `${params.messages.length} → ${cleaned.length} messages`
@@ -477,7 +490,7 @@ export class AdapterRouter extends LLMAdapter {
     // config.json) — completely unchanged from before. Opt-in path: when
     // provider.credentialProvider is set, ask the credential registry for
     // a live token. Throws with a clear hint if no token is available.
-    const apiKey = await this.#resolveApiKey(provider);
+    const { apiKey, credentialScopeId } = await this.#resolveCredentials(provider);
 
     // Cache key includes a short fingerprint of the apiKey so that when a
     // credential provider rotates the token (e.g. Copilot 30-min refresh)
@@ -492,7 +505,7 @@ export class AdapterRouter extends LLMAdapter {
     const cacheKey = `${provider.name}::${protocol}::${authModeKey}::${apiKeyFp}`;
     const adapterCache = snapshot?.adapterCache || this.#adapterCache;
     const cached = adapterCache.get(cacheKey);
-    if (cached) return { adapter: cached, modelId: entry.id, protocol, entry };
+    if (cached) return { adapter: cached, modelId: entry.id, protocol, entry, credentialScopeId };
 
     // Token rotation eviction: when a credential provider hands us a NEW
     // fingerprint for the same (provider, protocol) pair, drop the stale
@@ -532,29 +545,31 @@ export class AdapterRouter extends LLMAdapter {
     }
 
     adapterCache.set(cacheKey, adapter);
-    return { adapter, modelId: entry.id, protocol, entry };
+    return { adapter, modelId: entry.id, protocol, entry, credentialScopeId };
   }
 
-  /**
-   * Resolve the apiKey for a provider. If `credentialProvider` is set,
-   * delegate to the registry; otherwise return the static `apiKey` from
-   * config (unchanged from before this feature).
-   *
-   * Kept as a separate method so the credential registry is imported
-   * lazily — providers that don't use a credential provider never pay
-   * the import cost or touch `child_process` / disk.
-   *
+  /** Resolve transport credentials and their matching replay identity together.
+   * Static routes do no extra I/O. Copilot scope follows the source credential,
+   * so exchanging/refreshing an access token cannot change continuation ownership.
    * @param {object} provider
-   * @returns {Promise<string>}
+   * @returns {Promise<{apiKey: string, credentialScopeId?: string}>}
    */
-  async #resolveApiKey(provider) {
+  async #resolveCredentials(provider) {
     const name = provider && provider.credentialProvider;
-    if (name === 'github-copilot' && provider?.githubToken) {
-      const { exchangeToken } = await import('./credentials/github-copilot.js');
-      const exchanged = await exchangeToken(provider.githubToken);
-      return exchanged.token;
+    if (name === GITHUB_COPILOT_CREDENTIAL_PROVIDER) {
+      const { resolveRawToken, exchangeToken } = await import('./credentials/github-copilot.js');
+      const raw = provider.githubToken || (await resolveRawToken())?.token;
+      if (!raw) throw new Error('github-copilot credential provider could not resolve a token. Sign in or configure a GitHub token.');
+      let apiKey;
+      try {
+        apiKey = (await exchangeToken(raw)).apiToken;
+      } catch (error) {
+        if (provider.githubToken) throw error;
+        apiKey = raw; // Preserve the managed provider's existing fallback.
+      }
+      return { apiKey, credentialScopeId: provider.credentialScopeId || createCredentialScopeId(raw, name) };
     }
-    if (!name) return provider?.apiKey || '';
+    if (!name) return { apiKey: provider?.apiKey || '', credentialScopeId: provider?.credentialScopeId };
     const { getCredentialProvider, CREDENTIAL_PROVIDER_NAMES } = await import('./credentials/index.js');
     const cp = getCredentialProvider(name);
     if (!cp) {
@@ -564,7 +579,9 @@ export class AdapterRouter extends LLMAdapter {
         `Remove the field to use the static apiKey.`
       );
     }
-    return cp.getApiKey();
+    const apiKey = await cp.getApiKey();
+    // Unknown dynamic schemes cannot assert account continuity across rotation.
+    return { apiKey, credentialScopeId: provider.credentialScopeId || createCredentialScopeId(apiKey, name) };
   }
 
   /**
@@ -650,7 +667,7 @@ export class AdapterRouter extends LLMAdapter {
       const resolved = await this.#resolveAdapter(params.model, dispatchSnapshot);
       const provider = this.#getProviderForModel(params.model, dispatchSnapshot);
       const providerContext = createProviderContext({ protocol: resolved.protocol, baseUrl: provider?.baseUrl,
-        providerId: provider?.name, credentialScopeId: provider?.credentialScopeId,
+        providerId: provider?.name, credentialScopeId: resolved.credentialScopeId,
         staticApiKey: provider?.credentialProvider ? undefined : provider?.apiKey, model: resolved.modelId,
         capabilities: { ...provider?.capabilities, ...resolved.entry?.capabilities },
       });
@@ -693,7 +710,7 @@ export class AdapterRouter extends LLMAdapter {
       const resolved = await this.#resolveAdapter(params.model, dispatchSnapshot);
       const provider = this.#getProviderForModel(params.model, dispatchSnapshot);
       const providerContext = createProviderContext({ protocol: resolved.protocol, baseUrl: provider?.baseUrl,
-        providerId: provider?.name, credentialScopeId: provider?.credentialScopeId,
+        providerId: provider?.name, credentialScopeId: resolved.credentialScopeId,
         staticApiKey: provider?.credentialProvider ? undefined : provider?.apiKey, model: resolved.modelId,
         capabilities: { ...provider?.capabilities, ...resolved.entry?.capabilities },
       });

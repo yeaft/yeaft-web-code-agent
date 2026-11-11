@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ExecutionTranscript } from '../../../../agent/yeaft/person/execution-protocol.js';
 import { executionEvidencePage } from '../../../../agent/yeaft/person/execution-evidence.js';
 import { digest } from '../../../../agent/yeaft/person/contracts.js';
+import { createProviderContext, createProviderState, bindProviderState } from '../../../../agent/yeaft/llm/provider-state.js';
 
 const initial = [{ role: 'user', content: 'Implement the authorized artifact, verify it, then report actual results.' }];
 const request = (transcript, maxBytes = 12000, tools = []) => transcript.request({ system: 'Same Person/Soul.', tools, maxBytes });
@@ -118,11 +119,70 @@ describe('ExecutionTranscript request-only actual evidence', () => {
     }
   });
 
-  it('fails closed if the newest complete group cannot fit without editing it', () => {
+  it('never edits a newest group or any active signed prefix; resets older models only at a completed boundary', () => {
     const transcript = new ExecutionTranscript(initial);
     const latest = call(transcript, 'FileRead', { file_path: 'huge' }, { output: 'x'.repeat(20000), replaySafe: true });
     const before = structuredClone(latest);
     expect(() => request(transcript, 1000)).toThrow(expect.objectContaining({ code: 'CONTEXT_LIMIT' }));
     expect(latest).toEqual(before);
+
+    const seed = model => {
+      const signed = new ExecutionTranscript([{ role: 'user', content: JSON.stringify({ state: { version: 0 } }) }]);
+      call(signed, 'FileRead', {}, { output: 'earlier exact result '.repeat(100) });
+      const producing = request(signed, 12000);
+      const identity = { instanceScope: 'i', ownerScope: 'o', sessionId: 's', vpId: 'v', threadId: 't' };
+      const context = createProviderContext({ protocol: 'anthropic', model, staticApiKey: 'fixture' });
+      const toolCalls = [{ id: 'signed-call', name: 'FileRead', input: {} }];
+      const state = createProviderState({ context, identity, requestBody: { ...producing, model },
+        items: [{ type: 'thinking', thinking: 'PRIVATE', signature: 'exact-signature' }, { type: 'tool_use', ...toolCalls[0] }] });
+      const group = signed.response({ text: '', toolCalls, continuationState: bindProviderState(state, { content: '', toolCalls }) });
+      signed.result(group, 'signed-call', 'trace-signed', { id: 'FileRead', args: {} }, { output: 'actual result' });
+      return { signed, producing, state };
+    };
+    const { signed, producing, state } = seed('claude-opus-5-5');
+    expect(state.requestPrefix).toBeDefined();
+    expect(() => signed.newContext()).toThrow(/tool turn/);
+    signed.setGoal({ revision: 1, status: 'active' });
+    signed.userInput([{ role: 'user', content: 'new owner input' }], ['message:live:2']);
+    signed.latestUserInstruction({ id: 'live', text: 'new owner input' });
+    const full = request(signed, 12000);
+    expect(full.messages.slice(0, producing.messages.length)).toEqual(producing.messages);
+    expect(full.messages.findIndex(message => message.content.includes?.('executionGoal'))).toBeGreaterThan(full.messages.findIndex(message => message.toolCallId === 'signed-call'));
+    expect(full.messages.find(message => message.providerState)?.providerState).toEqual(state);
+    expect(() => request(signed, full.contextBytes - 100)).toThrow(expect.objectContaining({ code: 'CONTEXT_LIMIT' }));
+    signed.response({ text: 'Execution actually closed.' });
+    signed.prepareInstructionChange();
+    signed.instruct('Final cognition.', { cognition: true });
+    signed.setGoal({ revision: 2, status: 'completed' });
+    const final = signed.request({ system: 'Final cognitive instructions', tools: [], maxBytes: 12000 });
+    expect(final.messages.some(message => message.providerState)).toBe(true);
+    expect(final.messages.at(-1)).toMatchObject({ role: 'system' });
+    expect(final.messages.at(-2).role).toBe('user');
+    expect(JSON.stringify(final.messages.at(-2))).toContain('executionGoal');
+    expect(final.messages.some(message => message.toolCallId === 'signed-call')).toBe(true);
+    expect(final.renderedSourceRefs).toContain('message:live:2');
+    // Retry after a rejected response: no assistant sealed the pending update.
+    signed.instruct('Correct only the rejected cognitive output.', { cognition: true });
+    const retry = signed.request({ system: 'Final cognitive instructions', tools: [], maxBytes: 12000 });
+    expect(retry.messages.filter(message => message.role === 'system')).toHaveLength(1);
+    expect(retry.messages.at(-1).role).toBe('system');
+    expect(retry.messages.at(-2).content).toContain('rejected cognitive output');
+    // A live input can instead supersede that same unsealed cognition boundary.
+    signed.userInput([{ role: 'user', content: 'new instruction after rejected cognition' }]);
+    const resumed = request(signed);
+    expect(resumed.messages.some(message => message.role === 'system')).toBe(false);
+    expect(resumed.messages.some(message => message.providerState)).toBe(true);
+
+    const { signed: legacy, state: legacyState } = seed('claude-sonnet-4');
+    expect(legacyState.requestPrefix).toBeUndefined();
+    expect(legacy.signedPrefix).toBeNull();
+    expect(() => legacy.prepareInstructionChange()).toThrow(/tool turn/);
+    expect(JSON.stringify(request(legacy).messages)).not.toContain('new-context');
+    legacy.response({ text: 'Execution actually closed.' });
+    legacy.prepareInstructionChange();
+    const reset = legacy.request({ system: 'Final cognitive instructions', tools: [], maxBytes: 12000 });
+    expect(reset.messages.some(message => message.providerState)).toBe(false);
+    expect(JSON.stringify(reset.messages)).toContain('new-context');
+    expect(reset.messages.some(message => message.toolCallId === 'signed-call')).toBe(true);
   });
 });

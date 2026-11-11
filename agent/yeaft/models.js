@@ -477,9 +477,36 @@ export function normalizeEffortOptions(options) {
   return out.length ? out : null;
 }
 
+// Provider refs and Bedrock's vendor/region prefixes do not change a model's
+// thinking protocol. Only strip known Anthropic prefixes, not arbitrary vendors.
+function thinkingModelId(model) {
+  return parseModelRef(model).modelId.toLowerCase()
+    .replace(/^(?:(?:us|eu|apac|global)\.)?anthropic\./, '');
+}
+
+// Match documented versions plus platform snapshot/latest aliases, not future
+// generations or arbitrary family names. Mythos Preview does not support xhigh.
+// https://platform.claude.com/docs/en/build-with-claude/thinking
+// https://platform.claude.com/docs/en/build-with-claude/effort
+const ANTHROPIC_MODEL_ALIAS_SUFFIX = '(?:[-@]\\d{8})?(?:-v\\d+(?::\\d+)?)?(?:-latest)?';
+const FABLE_MYTHOS_ADAPTIVE_MODEL = new RegExp(`^claude-(?:fable|mythos)-5(?:[-.][12])?${ANTHROPIC_MODEL_ALIAS_SUFFIX}$`);
+const MYTHOS_PREVIEW_MODEL = new RegExp(`^claude-mythos-preview${ANTHROPIC_MODEL_ALIAS_SUFFIX}$`);
+
 function inferThinkingCapability(model) {
-  const id = parseModelRef(model).modelId.toLowerCase();
+  const id = thinkingModelId(model);
   if (!id) return null;
+
+  const fableOrMythos = FABLE_MYTHOS_ADAPTIVE_MODEL.test(id);
+  const mythosPreview = MYTHOS_PREVIEW_MODEL.test(id);
+  if (fableOrMythos || mythosPreview) {
+    return {
+      supportsThinking: true,
+      thinkingProtocol: 'anthropic-adaptive',
+      defaultEffort: 'high',
+      maxBudgetTokens: null,
+      effortOptions: mythosPreview ? ANTHROPIC_ADAPTIVE_MAX_EFFORT_OPTIONS : ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS,
+    };
+  }
 
   // Provider suffixes are variants of the same GPT model family.
   if (modelSupportsUltraEffort(model)) {
@@ -523,7 +550,7 @@ function inferThinkingCapability(model) {
   // Anthropic extended thinking is available on Claude 3.7+ and Claude 4.x.
   // Be conservative: older Claude 3/3.5/Haiku entries stay unsupported unless
   // explicitly listed in the registry. Older Claude 4.x entries keep manual budgets.
-  if (/^claude-/.test(id) && (/(^|-)3-7($|-|\.)/.test(id) || /(^|-)4($|-|\.)/.test(id))) {
+  if (/^claude-(opus|sonnet|haiku)-4($|-|\.)/.test(id) || /^claude-(sonnet-3-7|3-7-sonnet)($|-|\.)/.test(id)) {
     const maxBudgetTokens = id.includes('opus') ? 64000 : 32000;
     return { supportsThinking: true, thinkingProtocol: 'anthropic', defaultEffort: null, maxBudgetTokens };
   }
@@ -575,16 +602,17 @@ export function thinkingBudgetForEffort(model, effort) {
  * @returns {{ supportsThinking: boolean, thinkingProtocol: 'anthropic' | 'anthropic-adaptive' | 'openai-reasoning' | 'none', defaultEffort: Effort | null, maxBudgetTokens: number | null, effortOptions: Effort[] }}
  */
 export function getThinkingCapability(model, context = {}) {
-  const info = MODEL_REGISTRY.get(model);
-  const modelId = parseModelRef(model).modelId;
+  const modelId = thinkingModelId(model);
+  const info = MODEL_REGISTRY.get(modelId);
+  const familyInferred = inferThinkingCapability(model);
+  const nativeProtocol = info?.thinkingProtocol || familyInferred?.thinkingProtocol;
   const overrideOptions = fenceUltraEffortOptions(model, normalizeEffortOptions(context.effortOptions));
   const overrideProtocol = context.thinkingProtocol || (
     context.protocol === 'anthropic'
-      ? (/^deepseek/i.test(modelId) ? 'anthropic-adaptive' : 'anthropic')
+      ? (nativeProtocol?.startsWith('anthropic') ? nativeProtocol : /^deepseek/i.test(modelId) ? 'anthropic-adaptive' : 'anthropic')
       : context.protocol === 'openai-responses' ? 'openai-reasoning' : null
   );
   const hasExplicitThinking = info && Object.prototype.hasOwnProperty.call(info, 'supportsThinking');
-  const familyInferred = inferThinkingCapability(model);
   if (context.supportsEffort === true || overrideOptions) {
     return {
       supportsThinking: true,

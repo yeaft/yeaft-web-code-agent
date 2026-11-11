@@ -679,6 +679,7 @@ function serializeMessage(msg) {
   // bytes that don't need to be human-readable. Without this round-trip
   // the next Anthropic request 400s with "content[].thinking in the
   // thinking mode must be passed back to the API".
+  if (msg.providerMetadata) fm.push(`providerMetadataB64: ${Buffer.from(JSON.stringify(msg.providerMetadata)).toString('base64')}`);
   if (msg.providerState) fm.push(`providerStateB64: ${Buffer.from(JSON.stringify(msg.providerState)).toString('base64')}`);
   if (!msg.providerState && msg.thinkingBlocks && msg.thinkingBlocks.length > 0) {
     fm.push(`thinkingBlocks:`);
@@ -828,6 +829,10 @@ export function parseMessage(raw) {
   }
 
   // task-327d: parse thinkingBlocks (mirror of toolCalls parser above)
+  const metadataMatch = frontmatter.match(/^providerMetadataB64: (.+)$/m);
+  if (metadataMatch) {
+    try { msg.providerMetadata = JSON.parse(Buffer.from(metadataMatch[1], 'base64').toString('utf8')); } catch { /* legacy invalid row */ }
+  }
   const stateMatch = frontmatter.match(/^providerStateB64: (.+)$/m);
   if (stateMatch) {
     try { msg.providerState = JSON.parse(Buffer.from(stateMatch[1], 'base64').toString('utf8')); } catch { /* legacy invalid row */ }

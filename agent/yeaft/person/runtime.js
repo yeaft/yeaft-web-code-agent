@@ -522,6 +522,7 @@ ${executionBehavior(episode.kind, episode.scheduling)}`;
         const rendered = liveInputMessages(messages, files, model);
         liveImageCount += messages.reduce((count, message) => count + (message.attachments ?? []).filter(ref => files.some(file => file.id === ref.id && file.kind === 'image')).length, 0);
         const refs = messages.map(messageRef);
+        if (phase === 'cognition') transcript.prepareInstructionChange();
         transcript.userInput(rendered, refs);
         transcript.latestUserInstruction(messages.at(-1));
         snapshot.latestUserInstruction = messages.at(-1);
@@ -612,11 +613,13 @@ ${executionBehavior(episode.kind, episode.scheduling)}`;
               contextSources: { ...context.manifest.contextSources,
                 recall: request.recallPages.at(-1) ?? { kind: null, count: 0 }, recallPages: request.recallPages },
               contextBytes: request.contextBytes, imageTokensReserved: imageCount * (model.imageBudget?.tokensPerImage ?? 0), contextBudgetBytes, contextWindowTokens: model.contextWindow, outputTokensReserved: maxTokens, omittedExecutionGroups: request.omittedExecutionGroups },
-            request: { system, messages: archiveExecutionMessages(request.messages), maxTokens, tools },
+            request: { system: request.system, messages: archiveExecutionMessages(request.messages), maxTokens, tools: request.tools },
           }));
           let output, observedEffortDecision;
           try {
-            const observingAdapter = { stream: params => provider.adapter.stream({ ...params,
+            // Admission validates against the current logical tool set (including
+            // tools:[] cognition), while native inline updates pin wire schemas.
+            const observingAdapter = { stream: params => provider.adapter.stream({ ...params, tools: request.tools,
               onEffortDecision: decision => { observedEffortDecision = { ...decision }; params.onEffortDecision?.(decision); },
             }) };
             output = await currentBoundary('model', null, () => {
@@ -627,7 +630,7 @@ ${executionBehavior(episode.kind, episode.scheduling)}`;
               job.currentCall = { model: selection.model, startedAt: Date.now(), usage: null };
               return collectOutput(observingAdapter, { model: selection.model, effort: selection.effort ?? undefined, effortSource: 'auto',
                 usageCacheIncluded: provider.catalog.find(model => model.id === selection.model)?.usageCacheIncluded,
-                system, messages: request.messages, tools, maxTokens, signal,
+                system: request.system, messages: request.messages, tools, maxTokens, signal,
                 requestIdentity: { instanceScope: this.toolOptions.yeaftDir ?? this.namespace, ownerScope: episode.ownerId,
                   sessionId: `person:${snapshot.person.id}`, vpId: snapshot.person.id, threadId: episode.id },
                 onUsage: usage => { if (job.currentCall) job.currentCall.usage = usage; },
@@ -666,7 +669,9 @@ ${executionBehavior(episode.kind, episode.scheduling)}`;
             }
           };
           if (await pendingInput()) {
-            if (output.toolCalls?.length) await skipTail(transcript.response({ ...output, text: '' }), 0);
+            // Keep the accepted native projection exact, even when stale public
+            // text is not published. Signed reasoning belongs to this tool turn.
+            if (output.toolCalls?.length) await skipTail(transcript.response(output), 0);
             needsReceive = true;
             continue;
           }
@@ -717,6 +722,7 @@ ${executionBehavior(episode.kind, episode.scheduling)}`;
           }
           if (!output.toolCalls?.length) {
             phase = 'cognition';
+            transcript.prepareInstructionChange();
             transcript.instruct(JSON.stringify({ phase: 'final-cognition', baseStateVersion: episode.baseStateVersion,
               ...(delivery ? { executionDelivery: { messageId: delivery.id, alreadyPublished: true } } : {}),
               sourceRefs: [...sourceRefs], executionGoal: executionGoal.view(), instruction: 'Execution has ended. Distill once into the final strict cognitive JSON; next:null. Preserve actual results and unfinished blockers. executionGoal records actual public goal disposition: stalled is a failure to progress, never a completed goal or external blocker. Preserve a specific unfinished continuation only when still relevant; clear resolved/abandoned continuation. The native public result is already delivered when executionDelivery is present; use reply:null unless a substantive correction or additional delivery is needed. Tool observations never establish user-reported lineage.' }), { cognition: true });

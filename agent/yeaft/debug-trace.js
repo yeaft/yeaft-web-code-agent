@@ -163,6 +163,7 @@ function normalizeUsage(usage = {}, fallback = {}) {
   return {
     inputTokens,
     outputTokens,
+    ...(Number.isFinite(usage?.reasoningTokens) ? { reasoningTokens: usage.reasoningTokens } : {}),
     cacheReadTokens,
     cacheWriteTokens,
     totalInputTokens,
@@ -681,6 +682,7 @@ function expandTrace(trace) {
       latencyMs: loop.latencyMs || 0,
       ttfbMs: loop.ttfbMs || null,
       stopReason: loop.stopReason || null,
+      ...(loop.providerMetadata ? { providerMetadata: cloneJsonValue(loop.providerMetadata) } : {}),
       at: loop.at || null,
       rawRequest: null,
       rawResponse: loop.rawResponse ?? null,
@@ -1029,6 +1031,7 @@ export class DebugTrace {
       latencyMs: Number(info.latencyMs || 0),
       ttfbMs: Number.isFinite(Number(info.ttfbMs)) ? Number(info.ttfbMs) : null,
       stopReason: info.stopReason || null,
+      ...(info.providerMetadata ? { providerMetadata: cloneJsonValue(info.providerMetadata) } : {}),
       at: Date.now(),
       rawResponse: typeof info.rawResponse === 'string'
         ? info.rawResponse
@@ -1044,7 +1047,7 @@ export class DebugTrace {
     trace.loops.sort((a, b) => (a.loopNumber || 0) - (b.loopNumber || 0) || String(a.turnRowId || '').localeCompare(String(b.turnRowId || '')));
     trace.closedAt = loop.at;
     trace.updatedAt = loop.at;
-    trace.active = info.stopReason ? !['end_turn', 'error', 'aborted'].includes(String(info.stopReason)) : false;
+    trace.active = info.stopReason ? !['end_turn', 'stop_sequence', 'refusal', 'model_context_window_exceeded', 'unknown', 'error', 'aborted'].includes(String(info.stopReason)) : false;
     trace._lastSnapshot = snapshot;
     this.#appendTraceRecord(trace, 'loop', loop, { writeMeta: !trace.active });
   }
