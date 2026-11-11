@@ -63,6 +63,7 @@ export class LLMAdapter {
 - 支持 thinking blocks（带 signature）
 - 支持 prompt caching（`cache_control`）
 - 支持 fine-grained tool_use
+- Claude Fable 5 / 5.1 / 5.2 自动识别 `low`、`medium`、`high`、`xhigh`、`max` 五档 effort。Session 显式选择档位后，通过 adaptive thinking 和 `output_config.effort` 发送，不使用手动 token budget。模型 API 默认为 `high`；可选档位来自 Agent 模型目录，因此旧版 Agent 需要更新后才会显示选择器。参见 [Anthropic effort 文档](https://platform.claude.com/docs/en/build-with-claude/effort)。
 
 ### OpenAIResponsesAdapter (`openai-responses.js`)
 - 对 OpenAI Responses API `/v1/responses`（**不是**老的 chat completions）

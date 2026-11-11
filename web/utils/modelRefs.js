@@ -41,7 +41,8 @@ function normalizeEffortList(options) {
 }
 
 export function getSelectableModelEfforts(options) {
-  return normalizeEffortList(options).filter(effort => (EFFORT_RANK[effort] ?? -1) >= EFFORT_RANK.medium);
+  // The Agent catalog owns supported tiers, including low/minimal when offered.
+  return normalizeEffortList(options).filter(effort => Object.hasOwn(EFFORT_RANK, effort));
 }
 
 export function getDefaultModelEffort(options) {

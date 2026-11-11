@@ -1,7 +1,12 @@
 import { test } from '../../fixtures/test-server.js';
 import { expect } from '@playwright/test';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadConfig } from '../../../agent/yeaft/config.js';
+import { loadSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 
-test.use({ serverEnv: { SERVE_DIST: process.env.COMPOSER_UI_PRODUCTION || 'false' } });
+test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.COMPOSER_UI_PRODUCTION || 'false' } });
 
 async function openYeaftComposer(page, serverUrl) {
   await page.goto(serverUrl);
@@ -59,6 +64,61 @@ async function openYeaftComposer(page, serverUrl) {
 }
 
 test.describe('Yeaft composer menus', () => {
+  test('Fable catalog exposes five effort tiers and persists the selected Session effort', async ({ page, serverUrl, mockAgent }, testInfo) => {
+    const root = mkdtempSync(join(tmpdir(), 'yeaft-browser-fable-'));
+    const sessionId = 'fable-effort-session';
+    const selectedModel = 'proxy/claude-fable-5.2';
+    mkdirSync(join(root, 'sessions', sessionId), { recursive: true });
+    writeFileSync(join(root, 'config.json'), JSON.stringify({
+      providers: [{ name: 'proxy', apiKey: 'fixture', baseUrl: 'https://proxy.invalid', models: ['claude-fable-5.2'] }],
+      primaryModel: selectedModel,
+    }));
+    const catalog = loadConfig({ dir: root }).availableModels;
+    const requests = [];
+    mockAgent._messageHandlers.push(request => {
+      if (request.type !== 'yeaft_update_session_config') return;
+      requests.push(request);
+      const config = saveSessionConfig(root, request.sessionId, request.config);
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'session_crud_result', op: 'update_config',
+        requestId: request.requestId, sessionId: request.sessionId, ok: true, config } });
+    });
+    try {
+      await openYeaftComposer(page, serverUrl);
+      await page.evaluate(({ agentId, sessionId, selectedModel, catalog }) => {
+        const chat = window.Pinia.useChatStore();
+        const sessions = window.Pinia.useSessionsStore();
+        const agent = { id: agentId, name: 'Fable agent', online: true, status: 'ready', capabilities: [] };
+        sessions.applySnapshot([{ id: sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config: { model: selectedModel } }], agentId);
+        sessions.setActive(sessionId, agentId);
+        chat.agents = [agent]; chat.currentAgent = agentId; chat.currentAgentInfo = agent;
+        chat.yeaftActiveSessionFilter = sessionId;
+        chat.yeaftSessionAgentById = { ...chat.yeaftSessionAgentById, [sessionId]: agentId };
+        chat.yeaftModel = selectedModel; chat.yeaftModelEffort = '';
+        chat.yeaftAvailableModels = catalog;
+      }, { agentId: mockAgent.agentId, sessionId, selectedModel, catalog });
+      const effort = page.locator('.yeaft-composer-effort');
+      for (const [theme, width] of [['light', 1280], ['dark', 320]]) {
+        await page.setViewportSize({ width, height: 800 });
+        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+        await effort.click();
+        const menu = page.locator('.yeaft-composer-effort-dropdown');
+        await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Low', 'Medium', 'High', 'X-High', 'Max']);
+        await menu.getByRole('menuitemradio', { name: 'Low', exact: true }).click();
+        await expect(effort).toContainText('Low');
+        await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('low');
+        await effort.click();
+        await menu.getByRole('menuitemradio', { name: 'X-High', exact: true }).click();
+        await expect(effort).toContainText('X-High');
+        await expect.poll(() => loadSessionConfig(root, sessionId)).toEqual({ model: selectedModel, modelEffort: 'xhigh' });
+        await effort.click();
+        await menu.getByRole('menuitemradio', { name: 'Max', exact: true }).click();
+        await expect(effort).toContainText('Max');
+        await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('max');
+        expect(requests.at(-1)).toMatchObject({ agentId: mockAgent.agentId, sessionId, config: { model: selectedModel, modelEffort: 'max' } });
+        await page.screenshot({ path: testInfo.outputPath(`fable-effort-${theme}.png`) });
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test('mobile Enter inserts newlines; only the send action submits, while desktop keeps shortcuts', async ({ page, serverUrl, browser }, testInfo) => {
     test.setTimeout(60000);
     await page.setViewportSize({ width: 320, height: 800 });

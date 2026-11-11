@@ -11,6 +11,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/yeaft/conversation/persist.test.js",
   "test/agent/yeaft/conversation/session-history.test.js",
   "test/agent/yeaft/engine.test.js",
+  "test/agent/yeaft/fable-effort.test.js",
   "test/agent/yeaft/llm-adapter-errors.test.js",
   "test/agent/yeaft/llm-auth-headers.test.js",
   "test/agent/yeaft/person-bridge.test.js",
