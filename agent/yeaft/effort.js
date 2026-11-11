@@ -189,6 +189,13 @@ function manualEffortForBudget(model, budget) {
   return ['medium', 'xhigh', 'max'].find(level => budget <= thinkingBudgetForEffort(model, level)) || 'ultra';
 }
 
+/** Normalize retired tiers after extraBody, without mutating caller-owned objects. */
+export function normalizeEffortPayload(body, protocol) {
+  const key = protocol === 'anthropic' ? 'output_config' : 'reasoning';
+  const effort = normalizeEffort(body[key]?.effort);
+  if (effort && effort !== body[key].effort) body[key] = { ...body[key], effort };
+}
+
 /**
  * Read the FINAL wire payload. requested is observability only, not effective.
  * Call after all extraBody/feature-flag/mapping changes, before serialization.

@@ -1,3 +1,4 @@
+import { normalizeEffort } from '../models.js';
 import { enhanceResponse } from '../llm/response-enhance.js';
 import { createPersonChildProvider } from './child-provider.js';
 import { createPersonToolHost, createPersonNativeRegistry, isNativeTool, projectNativeResult } from './native-tools.js';
@@ -438,7 +439,15 @@ export class PersonRuntime {
       signal.throwIfAborted();
       let selection = { ...provider.defaultSelection, reason: 'configured-default', origin: 'bootstrap' };
       if (episode.defaultModel == null && snapshot.state.lastSelection) {
-        try { validateSelection(snapshot.state.lastSelection, provider.catalog); selection = { ...snapshot.state.lastSelection, reason: 'last-accepted-choice', origin: 'persisted' }; }
+        try {
+          const restored = { ...snapshot.state.lastSelection };
+          if (restored.effort != null) {
+            restored.effort = normalizeEffort(restored.effort);
+            if (!restored.effort) fail('MODEL_SELECTION');
+          }
+          validateSelection(restored, provider.catalog);
+          selection = { ...restored, reason: 'last-accepted-choice', origin: 'persisted' };
+        }
         catch { await this.repository.append(episode, 'selection_rejected', { requested: snapshot.state.lastSelection, code: 'MODEL_SELECTION', fallback: 'configured-default' }); }
       }
       const imageCapable = model => model?.supportsImages && Number.isSafeInteger(model.imageBudget?.tokensPerImage) && model.imageBudget.tokensPerImage > 0;

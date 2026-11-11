@@ -45,6 +45,18 @@ describe('Person native child provider boundary', () => {
       }
     }
     expect(calls).toHaveLength(0);
+    for (const selected of [null, 'high', 'xhigh']) {
+      const stream = vi.fn();
+      const provider = { adapter: { stream }, catalog: [{ ...catalog()[0], efforts: ['high'] }] };
+      const child = createPersonChildProvider(provider, { model: MODEL, effort: selected }, nativeConfig());
+      const params = { model: MODEL, effortConstraint: { parentDecision: { effective: 'max' } } };
+      expect(() => child.adapter.stream(params)).toThrow(expect.objectContaining({ code: 'MODEL_SELECTION' }));
+      await expect(child.adapter.call(params)).rejects.toMatchObject({ code: 'MODEL_SELECTION' });
+      expect(stream).not.toHaveBeenCalled();
+    }
+    const child = setup({ selection: { model: MODEL, effort: null } });
+    await collect(child.adapter.stream({ model: MODEL, effortConstraint: { parentDecision: { effective: 'max' } } }));
+    expect(child.calls[0].effort).toBe('medium');
   });
 
   it('runs the real Engine tool loop using only the selected model and ordinary child text', async () => {

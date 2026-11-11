@@ -100,7 +100,7 @@ OpenAI Responses 在未收到 `response.completed` / `response.incomplete` 等�
 
 发送缓存字段只表示请求了缓存；以 provider 返回的 cache usage 判断命中。缓存通常减少计费输入和延迟，不减少 HTTP 请求数。`reasoningTokens` 仅在上游提供时记录，是 output tokens 的子集，不重复计入总量。
 
-子 Agent 使用生成 SpawnAgent/PromptAgent 工具调用的父请求实际 effort 快照，最高 `high`；未知父默认保守 `medium`，不同模型选择不高于上限的支持档位，无法表示时显式报错。`/max`、配置 boost、`extraBody` 和关闭 thinking feature flag 均不能绕过最终 payload 上限。
+子 Agent 使用生成 SpawnAgent/PromptAgent 工具调用的父请求实际 effort 快照，最高 `medium`（不因移除 `high` 放宽到 `xhigh`）；未知父默认保守 `medium`，不同模型选择不高于上限的支持档位，无法表示时显式报错。`/max`、配置 boost、`extraBody` 和关闭 thinking feature flag 均不能绕过最终 payload 上限。
 
 安全只读工具按共享段并发，不再统一限制为四个；写入、未知工具及控制工具保持独占 barrier。读取路径时提前补载对应项目规则，但同一模型响应里的写入仍不能使用尚未进入模型上下文的规则 scope。`projectDocMaxBytes: 0` 仍禁用规则加载。
 

@@ -25,7 +25,7 @@
  *   - tool_result.toolCallId ← → function_call_output.call_id (direct passthrough)
  */
 
-import { enforceSubAgentEffortPayload, captureEffortDecision } from '../effort.js';
+import { normalizeEffortPayload, enforceSubAgentEffortPayload, captureEffortDecision } from '../effort.js';
 import {
   LLMAdapter,
   LLMRateLimitError,
@@ -340,6 +340,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     if (extraBody) Object.assign(body, extraBody);
     body.model = model; // Origin binding must describe the actual dispatched model.
     applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
+    normalizeEffortPayload(body, 'openai-responses');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'openai-responses', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'openai-responses', effortContext, requested: effort, source: effortSource || 'scenario' });
@@ -738,6 +739,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     if (extraBody) Object.assign(body, extraBody);
     body.model = model; // Origin binding must describe the actual dispatched model.
     applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
+    normalizeEffortPayload(body, 'openai-responses');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'openai-responses', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'openai-responses', effortContext, requested: effort, source: effortSource || 'scenario' });

@@ -32,7 +32,7 @@ const pinModels = (models, model) => Object.fromEntries(Object.keys(models || {}
  * dispatch. Output maxTokens is floored and capped; invalid/nonpositive values
  * use the configured cap. Engine scenario/prefix effort cannot override the
  * selection. An inherited native child ceiling may only LOWER it to a catalog
- * effort; no representable safe effort means omission, not escalation. Manual
+ * effort; no representable safe effort fails before dispatch, never escalation. Manual
  * thinking that would expand maxTokens is likewise omitted. The admitted effort
  * is sent as an explicit user selection (even with YEAFT_THINKING_V1 off); effort
  * capability context is copied from bounded model metadata, not caller overrides.
@@ -98,17 +98,21 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
     const maxTokens = Number.isFinite(params.maxTokens) && params.maxTokens >= 1
       ? Math.min(Math.floor(params.maxTokens), maxOutputTokens) : maxOutputTokens;
     let effectiveEffort = effort;
-    if (effectiveEffort && params.effortConstraint) {
+    if (params.effortConstraint && efforts.length) {
       const parent = params.effortConstraint.parentDecision;
       const inherited = normalizeEffort(parent?.effective) || 'medium';
       const cap = normalizeEffort(parent?.cap);
-      const ceiling = Math.min(rank(effectiveEffort), rank(inherited), rank('medium'), cap ? rank(cap) : Infinity);
+      const ceiling = Math.min(effectiveEffort ? rank(effectiveEffort) : Infinity, rank(inherited), rank('medium'), cap ? rank(cap) : Infinity);
       effectiveEffort = EFFORT_LEVELS.filter(value => efforts.includes(value) && rank(value) <= ceiling).at(-1) || null;
+      if (!effectiveEffort) fail('MODEL_SELECTION');
     }
     if (effectiveEffort && (effortContext.protocol || inferProtocolFromModelId(modelId)) === 'anthropic') {
       const body = { max_tokens: maxTokens };
       applyAnthropicThinking(body, modelId, effectiveEffort, effortContext);
-      if (body.max_tokens !== maxTokens) effectiveEffort = null;
+      if (body.max_tokens !== maxTokens) {
+        if (params.effortConstraint) fail('MODEL_SELECTION');
+        effectiveEffort = null;
+      }
     }
     return { ...params, model, maxTokens, effort: effectiveEffort ?? undefined,
       effortContext: { ...effortContext, effortOptions: [...efforts] },

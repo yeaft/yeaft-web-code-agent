@@ -26,7 +26,7 @@ import {
   createBoundedTextAccumulator,
   toWellFormedJson,
 } from './adapter.js';
-import { enforceSubAgentEffortPayload, captureEffortDecision } from '../effort.js';
+import { normalizeEffortPayload, enforceSubAgentEffortPayload, captureEffortDecision } from '../effort.js';
 import {
   normalizeEffort,
   thinkingBudgetForEffort,
@@ -346,6 +346,7 @@ export class AnthropicAdapter extends LLMAdapter {
     body.system = system;
     applyAnthropicCaching(body, context, onProviderDiagnostics);
     applyThinkingDisplay(body, context);
+    normalizeEffortPayload(body, 'anthropic');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
@@ -821,6 +822,7 @@ export class AnthropicAdapter extends LLMAdapter {
     body.system = system;
     applyAnthropicCaching(body, context, onProviderDiagnostics);
     applyThinkingDisplay(body, context);
+    normalizeEffortPayload(body, 'anthropic');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });

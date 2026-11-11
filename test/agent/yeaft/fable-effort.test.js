@@ -60,6 +60,21 @@ describe('API effort catalog and dispatch', () => {
         for await (const _event of adapter.stream(params)) { /* drain */ }
         for (const body of requests.slice(-2)) assertWire(body, protocol, effort);
       }
+      for (const [legacy, current] of [['minimal', 'medium'], ['low', 'medium'], ['high', 'xhigh']]) {
+        const native = protocol === 'anthropic'
+          ? { thinking: { type: 'adaptive' }, output_config: { effort: legacy, format: { type: 'json_schema' } } }
+          : { reasoning: { effort: legacy, summary: 'auto' } };
+        const before = structuredClone(native), decisions = [];
+        const params = { model: 'brand-new-alias', system: '', messages: [], extraBody: native, onEffortDecision: d => decisions.push(d) };
+        await adapter.call(params);
+        for await (const _event of adapter.stream(params)) { /* drain */ }
+        for (const body of requests.slice(-2)) {
+          if (protocol === 'anthropic') expect(body.output_config).toEqual({ effort: current, format: { type: 'json_schema' } });
+          else expect(body.reasoning).toEqual({ effort: current, summary: 'auto' });
+        }
+        expect(decisions.map(d => d.effective)).toEqual([current, current]);
+        expect(native).toEqual(before);
+      }
     }
   });
 
