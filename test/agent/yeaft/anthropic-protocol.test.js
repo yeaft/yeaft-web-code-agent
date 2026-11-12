@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
+import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { createProviderContext } from '../../../agent/yeaft/llm/provider-state.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,6 +17,74 @@ const collect = async generator => { const events = []; for await (const event o
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Anthropic evolving Messages protocol', () => {
+  it.each(['stream', 'call'])('defaults known Claude thinking summaries across Messages routes in %s', async method => {
+    const fetch = vi.fn(async () => json({ content: [{ type: 'text', text: 'answer' }], stop_reason: 'end_turn' }));
+    vi.stubGlobal('fetch', fetch);
+    const invoke = async (adapter, request) => method === 'stream' ? collect(adapter.stream(request)) : adapter.call(request);
+    const readBody = () => JSON.parse(fetch.mock.calls.at(-1)[1].body);
+    for (const baseUrl of ['https://api.anthropic.com', 'http://localhost:11041', 'http://localhost:12138']) {
+      const adapter = new AnthropicAdapter({ apiKey: 'synthetic', baseUrl });
+      for (const model of ['claude-opus-5-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4.7',
+        'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2', 'claude-mythos-5.1',
+        'claude-mythos-preview', 'gateway/claude-opus-5-5-20261101', 'us.anthropic.claude-opus-5-5-v1:0',
+        'anthropic/claude-opus-5-5-latest']) {
+        // Resolve context for this route, rather than reusing the official params context.
+        const request = { ...params, providerContext: undefined, model };
+        if (/^claude-opus-4[.-][78]/.test(model)) {
+          await invoke(adapter, request);
+          expect(readBody()).not.toHaveProperty('thinking');
+          request.extraBody = { thinking: { type: 'adaptive' } };
+        }
+        await invoke(adapter, request);
+        expect(readBody().thinking, `${baseUrl}/${model}`).toEqual({ type: 'adaptive', display: 'summarized' });
+      }
+      for (const thinking of [{ type: 'adaptive' }, { type: 'enabled', budget_tokens: 2048 }]) {
+        const extraBody = { thinking: Object.freeze(thinking) };
+        await invoke(adapter, { ...params, providerContext: undefined, extraBody });
+        expect(readBody().thinking).toEqual({ ...thinking, display: 'summarized' });
+        expect(extraBody.thinking).not.toHaveProperty('display');
+      }
+      for (const thinking of [{ type: 'adaptive', display: 'omitted' }, { type: 'adaptive', display: 'updates' },
+        { type: 'enabled', budget_tokens: 2048, display: 'omitted' }, { type: 'disabled' }, { type: 'between_tools' }]) {
+        await invoke(adapter, { ...params, providerContext: undefined, extraBody: { thinking } });
+        expect(readBody().thinking).toEqual(thinking);
+      }
+      for (const model of ['deepseek-v4-pro', 'unknown-adaptive', 'claude-opus-4-6', 'claude-sonnet-4-5',
+        'not-claude-opus-5-5', 'claude-opus-5-50', 'claude-opus-5-5-custom', 'claude-opus-6']) {
+        await invoke(adapter, { ...params, model, providerContext: undefined, effort: 'xhigh', effortSource: 'user' });
+        expect(readBody().thinking).toEqual({ type: 'adaptive' });
+      }
+      for (const model of ['claude-opus-4-7', 'claude-opus-4-8', params.model]) {
+        for (const manual of [false, true]) {
+          await invoke(adapter, { ...params, model, providerContext: undefined, maxTokens: 32768,
+            effortContext: manual ? { thinkingProtocol: 'anthropic' } : {},
+            effortConstraint: { parentDecision: { effective: 'xhigh' } } });
+          expect(readBody().thinking).toMatchObject({ type: manual ? 'enabled' : 'adaptive', display: 'summarized' });
+        }
+      }
+      for (const effortContext of [{ supportsEffort: false }, { thinkingProtocol: 'none' }]) {
+        for (const effortConstraint of [undefined, { parentDecision: { effective: 'xhigh' } }]) {
+          await invoke(adapter, { ...params, providerContext: undefined, effortContext, effortConstraint });
+          expect(readBody()).not.toHaveProperty('thinking');
+        }
+      }
+      for (const display of ['summarized', 'omitted']) {
+        for (const manual of [false, true]) {
+          await invoke(adapter, { ...params, providerContext: undefined, maxTokens: 32768,
+            extraBody: { thinking: { type: 'adaptive', ...(display === 'omitted' ? { display } : {}) }, output_config: { effort: 'max' } },
+            effortContext: manual ? { thinkingProtocol: 'anthropic' } : {},
+            effortConstraint: { parentDecision: { effective: 'xhigh' } } });
+          expect(readBody().thinking).toMatchObject({ type: manual ? 'enabled' : 'adaptive', display });
+          if (manual) expect(readBody().thinking.budget_tokens).toBe(8192);
+          else expect(readBody().output_config.effort).toBe('medium');
+        }
+      }
+    }
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'synthetic', baseUrl: 'http://localhost:11041/v1' });
+    await invoke(adapter, { ...params, providerContext: undefined, effort: 'xhigh', effortSource: 'user' });
+    expect(readBody()).not.toHaveProperty('thinking');
+    expect(readBody().reasoning.effort).toBe('xhigh');
+  });
   it('persists metadata and reasoning usage in real debug trace and legacy readers', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'anthropic-trace-'));
     const trace = new DebugTrace(dir);

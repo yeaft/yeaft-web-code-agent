@@ -115,14 +115,25 @@ function truncatedToolResponse(reason) {
   return reason === 'max_tokens' || reason === 'model_context_window_exceeded';
 }
 
-// New Claude models omit the readable summary by default. Request only the
-// public summary (never raw reasoning) on the official route; compatible
-// gateways keep their existing payload unless the user configures extraBody.
-function applyThinkingDisplay(body, context) {
-  if (context?.diagnostics?.capabilitySource !== 'native-endpoint'
-      || !/^claude-(opus|sonnet|haiku|fable|mythos)-[5-9]/i.test(body.model)) return;
-  if (!body.thinking) body.thinking = { type: 'adaptive' };
-  if (body.thinking.type === 'adaptive' && body.thinking.display === undefined) body.thinking.display = 'summarized';
+// These Claude models omit readable thinking by default. Match the effective
+// Messages protocol and known model IDs, not the gateway hostname or the generic
+// adaptive-thinking capability (also used by non-Claude models). Only request
+// public summaries; explicit display/mode choices remain authoritative.
+function applyThinkingDisplay(body, context, effortContext) {
+  if (context?.protocol !== 'anthropic'
+      || !getThinkingCapability(body.model, { ...effortContext, protocol: 'anthropic' }).supportsThinking) return;
+  const id = String(body.model || '').toLowerCase().split('/').at(-1)
+    .replace(/^(?:(?:us|eu|apac|global)\.)?anthropic\./, '');
+  const suffix = '(?:[-@]\\d{8})?(?:-v\\d+(?::\\d+)?)?(?:-latest)?$';
+  const model = '^(?:claude-opus-(?:5(?:[.-]5)?|4[.-][78])|claude-sonnet-5(?:[.-]5)?'
+    + '|claude-haiku-5[.-]5|claude-(?:fable|mythos)-5(?:[.-][12])?|claude-mythos-preview)';
+  if (!new RegExp(model + suffix).test(id)) return;
+  // Opus 4.7/4.8 default to thinking off; displaying it must not enable it.
+  if (!body.thinking && /^claude-opus-4[.-][78]/.test(id)) return;
+  const thinking = body.thinking ?? { type: 'adaptive' };
+  if (['adaptive', 'enabled'].includes(thinking.type) && thinking.display === undefined) {
+    body.thinking = { ...thinking, display: 'summarized' };
+  }
 }
 
 /** Native inline updates preserve a signed prefix without restoring withdrawn tools.
@@ -355,11 +366,12 @@ export class AnthropicAdapter extends LLMAdapter {
     body.messages = translatedMessages;
     body.system = system;
     applyAnthropicCaching(body, context, onProviderDiagnostics);
-    applyThinkingDisplay(body, context);
     normalizeEffortPayload(body, 'anthropic');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
+    // Effort caps may enable/rebuild thinking; default display on the final mode.
+    applyThinkingDisplay(body, context, effortContext);
     onEffortDecision?.(effortDecision);
     validateSignedOutputBudget(body, replayed, contextOutputLimit);
     const wireBody = toWellFormedJson(body);
@@ -832,11 +844,12 @@ export class AnthropicAdapter extends LLMAdapter {
     body.messages = translatedMessages;
     body.system = system;
     applyAnthropicCaching(body, context, onProviderDiagnostics);
-    applyThinkingDisplay(body, context);
     normalizeEffortPayload(body, 'anthropic');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
+    // Effort caps may enable/rebuild thinking; default display on the final mode.
+    applyThinkingDisplay(body, context, effortContext);
     onEffortDecision?.(effortDecision);
     validateSignedOutputBudget(body, replayed, contextOutputLimit);
     const wireBody = toWellFormedJson(body);

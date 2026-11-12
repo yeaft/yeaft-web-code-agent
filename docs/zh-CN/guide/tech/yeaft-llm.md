@@ -138,6 +138,8 @@ router 解析 `<provider-name>` 找到 provider 配置，用 `<model-id>` 调对
 
 Anthropic-compatible 网关的签名 thinking / redacted thinking 随同原始 assistant blocks 保存和重放；不要求网关使用官方域名，也不要求为普通静态 `apiKey` 手工设置 `nativeReasoningState` 或 `credentialScopeId`。静态凭据只保存 SHA-256 指纹；Copilot 使用本次交换所用 GitHub 源凭据的指纹，短期 API token 刷新不会改变 scope，切换源凭据则拒绝重放。provider、endpoint、model 和 instance / owner / Session / VP / thread 仍逐项隔离。
 
+当有效协议为 Anthropic Messages API 时，对已知默认省略 thinking 摘要的 Claude 型号（Claude 5 / 5.5、Fable / Mythos 5–5.2、Mythos Preview，以及已启用 thinking 的 Opus 4.7 / 4.8），官方和兼容代理路由都默认补 `thinking.display: "summarized"`，不依赖上游域名。未知型号和 OpenAI Responses 不变；显式 `extraBody.thinking.display`（包括 `omitted`）优先，子 Agent 限制 effort 时也保留该设置，`disabled` / `between_tools` 不补 display。摘要不等于原始内部推理，也不保证在固定超时前一定有进展。
+
 未知网关不会因此自动启用 prompt caching、eager input streaming 等可选 wire 字段。`capabilities.translation: true` 或 `capabilities.nativeReasoningState: false` 仍可明确禁用原生重放；如果响应已经包含签名 thinking 和工具调用，会报可诊断错误，而不是丢掉 thinking 后继续执行工具。Router 的 orphan 修复也不能悄悄删除这样的工具 turn。
 
 [Claude preserved-thinking 官方文档](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking) 要求保持顶层 `system`、`tools` 和 thinking 前的消息 prefix；`cache_control` 标记、effort、输出预算不属于该 prefix。不能在保留后续签名的同时重写之前的工具结果、删改旧消息或在 thinking 链中挖空。客户端 compact 应建立明确的新上下文边界，而不是让仍在执行中的工具 turn 丢失 reasoning。
