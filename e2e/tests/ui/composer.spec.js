@@ -75,6 +75,8 @@ test.describe('Yeaft composer menus', () => {
     }));
     const catalog = loadConfig({ dir: root }).availableModels;
     const requests = [];
+    let holdNextResult = false;
+    let releaseResult = null;
     mockAgent._messageHandlers.push(request => {
       if (request.type === 'yeaft_load_history' && request.sessionId === sessionId && request.limit !== 0) {
         mockAgent.send({ type: 'yeaft_history_chunk', sessionId, requestId: request.requestId,
@@ -83,8 +85,10 @@ test.describe('Yeaft composer menus', () => {
       if (request.type !== 'yeaft_update_session_config') return;
       requests.push(request);
       const config = saveSessionConfig(root, request.sessionId, request.config);
-      mockAgent.send({ type: 'yeaft_output', event: { type: 'session_crud_result', op: 'update_config',
+      const reply = () => mockAgent.send({ type: 'yeaft_output', event: { type: 'session_crud_result', op: 'update_config',
         requestId: request.requestId, sessionId: request.sessionId, ok: true, config } });
+      if (holdNextResult) { holdNextResult = false; releaseResult = reply; }
+      else reply();
     });
     try {
       mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: selectedModel,
@@ -112,8 +116,14 @@ test.describe('Yeaft composer menus', () => {
         await effort.click();
         const menu = page.locator('.yeaft-composer-effort-dropdown');
         await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Medium', 'X-High', 'Max']);
+        holdNextResult = true;
         await menu.getByRole('menuitemradio', { name: 'Medium', exact: true }).click();
-        await expect(effort).toContainText('Medium');
+        await expect(effort).toContainText('Medium', { timeout: 500 });
+        await expect(page.locator('.yeaft-composer-model-controls')).toHaveAttribute('aria-busy', 'true');
+        await expect.poll(() => typeof releaseResult).toBe('function');
+        releaseResult();
+        releaseResult = null;
+        await expect(page.locator('.yeaft-composer-model-controls')).toHaveAttribute('aria-busy', 'false');
         await expect.poll(() => loadSessionConfig(root, sessionId).modelEffort).toBe('medium');
         await effort.click();
         await menu.getByRole('menuitemradio', { name: 'X-High', exact: true }).click();
@@ -127,7 +137,15 @@ test.describe('Yeaft composer menus', () => {
         expect(requests.at(-1)).toMatchObject({ sessionId, config: { model: selectedModel, modelEffort: 'max' } });
         // An opaque model using the other API gets that API's full scale.
         await page.locator('.yeaft-composer-model').click();
+        holdNextResult = true;
         await page.locator('.yeaft-composer-model-dropdown').getByRole('menuitemradio', { name: 'other-api-model proxy', exact: true }).click();
+        await expect(page.locator('.yeaft-composer-model')).toContainText('other-api-model', { timeout: 500 });
+        await expect(effort).toContainText('X-High', { timeout: 500 });
+        await expect.poll(() => typeof releaseResult).toBe('function');
+        releaseResult();
+        releaseResult = null;
+        await expect(page.locator('.yeaft-composer-model-controls')).toHaveAttribute('aria-busy', 'false');
+        await expect.poll(() => loadSessionConfig(root, sessionId)).toEqual({ model: 'proxy/other-api-model', modelEffort: 'xhigh' });
         await effort.click();
         await expect(menu.locator('.yeaft-model-option-label')).toHaveText(['Medium', 'X-High', 'Max', 'Ultra']);
         await menu.getByRole('menuitemradio', { name: 'Ultra', exact: true }).click();

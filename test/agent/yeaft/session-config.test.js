@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,12 +8,13 @@ import { loadConfig } from '../../../agent/yeaft/config.js';
 import { getPluginConfig, updatePluginConfig } from '../../../agent/yeaft/config-api.js';
 import { flushAllAgentPerfTraces } from '../../../agent/yeaft/perf-trace.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
-import { __testHooks, __testResetVpState, __testSetSession, handleYeaftLoadHistory, handleYeaftManagedSkill, handleYeaftPluginCatalog } from '../../../agent/yeaft/web-bridge.js';
+import { __testHooks, __testResetVpState, __testSetSession, handleYeaftLoadHistory, handleYeaftManagedSkill, handleYeaftPluginCatalog, handleYeaftUpdateSessionConfig } from '../../../agent/yeaft/web-bridge.js';
 import { buildPluginCatalog, buildPluginSkillDetail } from '../../../agent/yeaft/plugins.js';
 import { _resetAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createSession } from '../../../agent/yeaft/sessions/session-store.js';
-import { sessionsRoot } from '../../../agent/yeaft/sessions/session-crud.js';
+import { sessionsRoot, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 
 const roots = [];
 const originalConfig = ctx.CONFIG;
@@ -322,28 +324,141 @@ describe('Yeaft session-scoped model config', () => {
     }
   });
 
-  it('keeps model and effort isolated per Session', () => {
+  it('bounds a model/effort edit to the target metadata/config and never repairs unrelated inventory or logs', () => {
     const root = makeDir();
-    const userConfig = {
-      model: 'proxy/gpt-5',
-      primaryModel: 'proxy/gpt-5',
-      modelEffort: 'medium',
-      providers: [{ name: 'proxy', models: ['gpt-5', 'claude-opus-4.8'] }],
-    };
-
-    mkdirSync(join(root, 'sessions', 'session-a'), { recursive: true });
-    mkdirSync(join(root, 'sessions', 'session-b'), { recursive: true });
-    saveSessionConfig(root, 'session-a', { model: 'github-copilot/gpt-5.5', modelEffort: 'ultra' });
-    saveSessionConfig(root, 'session-b', { model: 'github-copilot/claude-opus-4.8', modelEffort: 'max' });
-
-    const configA = resolveSessionConfig(userConfig, loadSessionConfig(root, 'session-a'));
-    const configB = resolveSessionConfig(userConfig, loadSessionConfig(root, 'session-b'));
-
-    expect(configA.model).toBe('github-copilot/gpt-5.5');
-    expect(configA.primaryModel).toBe('github-copilot/gpt-5.5');
-    expect(configA.modelEffort).toBe('ultra');
-    expect(configB.model).toBe('github-copilot/claude-opus-4.8');
-    expect(configB.primaryModel).toBe('github-copilot/claude-opus-4.8');
-    expect(configB.modelEffort).toBe('max');
+    const sessionId = 'session_model_target';
+    const target = join(root, 'sessions', sessionId);
+    createSession(sessionsRoot(root), { id: sessionId, roster: ['omni'] }).close();
+    const metadata = join(target, 'session.json');
+    const before = JSON.parse(readFileSync(metadata, 'utf8'));
+    writeFileSync(metadata, JSON.stringify({ ...before, metadataUpdatedAt: '2000-01-01T00:00:00.000Z' }));
+    const logIndex = join(target, 'messages', 'index.json');
+    writeFileSync(logIndex, 'DO_NOT_REBUILD_TARGET_LOG');
+    // Manifest contents and all sibling data are deliberately unusable. A
+    // settings edit must not load, bootstrap or repair any of them.
+    writeFileSync(join(root, 'sessions-manifest.json'), 'DO_NOT_READ_MANIFEST');
+    const sibling = join(root, 'sessions', 'session_broken_sibling');
+    mkdirSync(join(sibling, 'messages'), { recursive: true });
+    writeFileSync(join(sibling, 'messages', '000001.jsonl'), '{"id":"m1","text":"unrelated"}\n');
+    const keys = ['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'];
+    const previous = Object.fromEntries(keys.map(key => [key, ctx[key]]));
+    ctx.CONFIG = { yeaftDir: root };
+    ctx.ws = { readyState: 1, send() {} };
+    ctx.outboundSendQueue = [];
+    ctx.outboundSendQueueActive = true;
+    ctx.serverEncryptionRequired = false;
+    __testSetSession({ yeaftDir: root, config: { dir: root, model: 'test/old', modelEffort: 'medium' } });
+    const reads = [];
+    const originalRead = fs.readFileSync;
+    const read = vi.spyOn(fs, 'readFileSync').mockImplementation((path, ...args) => {
+      reads.push(String(path));
+      return originalRead(path, ...args);
+    });
+    const readdir = vi.spyOn(fs, 'readdirSync');
+    syncBuiltinESMExports();
+    try {
+      handleYeaftUpdateSessionConfig({ sessionId, requestId: 'target-edit', _requestClientId: 'browser-1',
+        config: { model: 'test/new', modelEffort: 'xhigh' } });
+      expect(reads.every(path => [metadata, join(target, 'config.json')].includes(path))).toBe(true);
+      expect(reads.length).toBeLessThanOrEqual(4);
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+      readdir.mockRestore();
+      syncBuiltinESMExports();
+    }
+    try {
+      expect(ctx.outboundSendQueue).toHaveLength(1);
+      const frame = ctx.outboundSendQueue[0].msg;
+      expect(frame).not.toHaveProperty('_requestClientId'); // Existing owner broadcast reaches every tab.
+      expect(frame.event).toMatchObject({ type: 'session_crud_result', op: 'update_config', ok: true,
+        requestId: 'target-edit', sessionId, config: { model: 'test/new', modelEffort: 'xhigh' },
+        session: { ...before, config: { model: 'test/new', modelEffort: 'xhigh' }, metadataUpdatedAt: expect.any(String) } });
+      expect(frame.event.session.metadataUpdatedAt).not.toBe('2000-01-01T00:00:00.000Z');
+      expect(loadSessionConfig(root, sessionId)).toEqual(frame.event.config);
+      expect(JSON.parse(readFileSync(metadata, 'utf8'))).toMatchObject({ metadataUpdatedAt: frame.event.session.metadataUpdatedAt });
+      expect(readFileSync(logIndex, 'utf8')).toBe('DO_NOT_REBUILD_TARGET_LOG');
+      expect(existsSync(join(sibling, 'session.json'))).toBe(false);
+      expect(existsSync(join(sibling, 'messages', 'index.json'))).toBe(false);
+      for (const id of ['../escape', '..\\escape', 'session_missing']) {
+        expect(() => updateSessionConfig(root, id, { model: 'test/nope' })).toThrow();
+      }
+      expect(() => updateSessionConfig(root, sessionId, { unknown: true })).toThrow('unknown config key');
+      expect(loadSessionConfig(root, sessionId)).toEqual(frame.event.config);
+      expect(updateSessionConfig(root, sessionId, { model: null, modelEffort: '' })).toEqual({});
+    } finally {
+      Object.assign(ctx, previous);
+    }
   });
+
+  it('publishes persisted config to cached engines at the next provider boundary without aborting a running stream', async () => {
+    const root = makeDir();
+    const sessionId = 'session_live_model';
+    const otherId = 'session_other_model';
+    for (const id of [sessionId, otherId]) createSession(sessionsRoot(root), { id, roster: ['omni'] }).close();
+    const otherConfig = { model: 'test/other', modelEffort: 'max' };
+    saveSessionConfig(root, otherId, otherConfig);
+    const keys = ['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'];
+    const previous = Object.fromEntries(keys.map(key => [key, ctx[key]]));
+    ctx.CONFIG = { yeaftDir: root };
+    ctx.ws = { readyState: 1, send() {} };
+    ctx.outboundSendQueue = [];
+    ctx.outboundSendQueueActive = true;
+    ctx.serverEncryptionRequired = false;
+    const requests = [];
+    const adapter = { async *stream(params) {
+      requests.push(params);
+      if (requests.length === 1) {
+        // Refresh while the provider request is in flight, not between queries.
+        handleYeaftUpdateSessionConfig({ sessionId, requestId: 'live-edit', config: { model: 'test/new', modelEffort: 'ultra' } });
+        expect(params).toMatchObject({ model: 'test/old', effort: 'medium' });
+        expect(params.signal.aborted).toBe(false);
+        yield { type: 'text_delta', text: 'old stream completed' };
+        yield { type: 'tool_call', id: 'loop', name: 'echo', input: {} };
+        yield { type: 'stop', stopReason: 'tool_use' };
+      } else {
+        yield { type: 'text_delta', text: 'new loop completed' };
+        yield { type: 'stop', stopReason: 'end_turn' };
+      }
+    } };
+    const config = { dir: root, model: 'test/old', primaryModel: 'test/old', modelEffort: 'medium', maxOutputTokens: 1024 };
+    __testSetSession({ yeaftDir: root, config, adapter, trace: new NullTrace() });
+    const getEngine = __testHooks.getOrCreateVpEngineForTest;
+    const engine = getEngine(sessionId, 'omni');
+    const backgroundThread = getEngine(sessionId, 'omni', 'background');
+    const otherEngine = getEngine(otherId, 'omni');
+    const targetRefresh = vi.spyOn(engine, 'refreshConfig');
+    const backgroundRefresh = vi.spyOn(backgroundThread, 'refreshConfig');
+    const otherRefresh = vi.spyOn(otherEngine, 'refreshConfig');
+    const running = __testHooks.seedRunningVpTurn({ sessionId, vpId: 'omni' });
+    const coordinator = __testHooks.seedSessionContext(sessionId, { id: sessionId, roster: ['omni'], defaultVpId: 'omni' });
+    engine.registerTool({ name: 'echo', description: 'Continue test loop', parameters: { type: 'object' }, execute: async () => 'ok' });
+    try {
+      const events = [];
+      for await (const event of engine.query({ prompt: 'Run two provider loops', sessionId, signal: running.ctrl.signal })) events.push(event);
+      expect(requests.map(({ model, effort }) => ({ model, effort }))).toEqual([
+        { model: 'test/old', effort: 'medium' }, { model: 'test/new', effort: 'ultra' },
+      ]);
+      expect(running.ctrl.signal.aborted).toBe(false);
+      expect(events.filter(event => event.type === 'error')).toEqual([]);
+      expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
+      expect(targetRefresh).toHaveBeenCalledTimes(1);
+      expect(backgroundRefresh).toHaveBeenCalledTimes(1);
+      expect(otherRefresh).not.toHaveBeenCalled();
+      expect(loadSessionConfig(root, otherId)).toEqual(otherConfig);
+      expect(resolveSessionConfig(config, loadSessionConfig(root, otherId)))
+        .toMatchObject({ model: 'test/other', primaryModel: 'test/other', modelEffort: 'max' });
+      expect(loadSessionConfig(root, sessionId)).toEqual({ model: 'test/new', modelEffort: 'ultra' });
+      expect(__testHooks.getOrCreateSessionContextForTest(sessionId)).toBe(coordinator);
+      expect(getEngine(sessionId, 'omni')).toBe(engine);
+      expect(targetRefresh).toHaveBeenCalledTimes(1); // Published cache key agrees with the persisted config.
+      // Resetting to inheritance also keeps cached Engines and active controls.
+      handleYeaftUpdateSessionConfig({ sessionId, config: { model: null, modelEffort: null } });
+      expect(targetRefresh).toHaveBeenLastCalledWith(expect.objectContaining(config));
+      expect(running.ctrl.signal.aborted).toBe(false);
+    } finally {
+      Object.assign(ctx, previous);
+    }
+  });
+
 });

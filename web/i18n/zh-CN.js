@@ -825,6 +825,7 @@ export default {
   'yeaft.switchModel': '切换模型',
   'yeaft.modelMenu.title': '模型和 LLM 设置',
   'yeaft.modelMenu.label': '模型',
+  'yeaft.modelMenu.saveFailed': '模型或推理强度应用失败，已恢复上次确认的选择。',
   'yeaft.modelMenu.effort': '推理强度',
   'yeaft.modelMenu.effort.openaiReasoning': '推理强度',
   'yeaft.modelMenu.effort.anthropicBudget': '思考预算',

@@ -133,6 +133,31 @@ describe('Yeaft Plugin Skill detail relay', () => {
 });
 
 describe('Yeaft legacy Session roster deltas', () => {
+  it('persists config-only Session deltas without a full snapshot and broadcasts only to the owner', async () => {
+    CONFIG.skipAuth = false;
+    const owner = userDb.getOrCreate('model-config-owner');
+    const agent = { ownerId: owner.id, conversations: new Map() };
+    const client = { authenticated: true, userId: owner.id, sent: [] };
+    const sibling = { authenticated: true, userId: owner.id, sent: [] };
+    const foreign = { authenticated: true, userId: 'foreign-config-owner', sent: [] };
+    webClients.set('model-client', client);
+    webClients.set('model-sibling', sibling);
+    webClients.set('model-foreign', foreign);
+    sessions.upsertFromSnapshot(owner.id, 'config-agent', { id: 's', name: 'Session', config: { model: 'old' }, createdAt: 1 });
+    sessions.upsertFromSnapshot(owner.id, 'other-agent', { id: 's', name: 'Other', config: { model: 'other' }, createdAt: 1 });
+    for (const type of ['yeaft_output', 'session_crud_result']) {
+      const config = { model: 'proxy/new-model', modelEffort: type === 'yeaft_output' ? 'xhigh' : 'medium' };
+      const event = { type: 'session_crud_result', op: 'update_config', sessionId: 's', requestId: type,
+        ok: true, config, session: { id: 's', name: 'Session', roster: [], config } };
+      await handleAgentOutput('config-agent', agent, type === 'yeaft_output' ? { type, event } : event);
+      expect(sessions.getForAgent(owner.id, 'config-agent', 's').config).toEqual(config);
+      expect(sessions.getForAgent(owner.id, 'other-agent', 's').config).toEqual({ model: 'other' });
+      expect(agent.yeaftSessions.get('s').config).toEqual(config);
+      expect(client.sent.at(-1)).toMatchObject(type === 'yeaft_output' ? { event: { config } } : { config });
+      expect(sibling.sent.at(-1)).toMatchObject(type === 'yeaft_output' ? { event: { config } } : { config });
+      expect(foreign.sent).toEqual([]);
+    }
+  });
   it.each(['legacy', 'envelope'])('persists an explicit null default through %s roster deltas without changing other Agents', async format => {
     CONFIG.skipAuth = false;
     const owner = userDb.getOrCreate('roster-delta-owner');

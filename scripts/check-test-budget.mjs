@@ -163,7 +163,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // beyond a tighter remaining window, and stream/call exact-ceiling compatibility.
 // +3 usage-anchor regressions: missing SSE/JSON usage and partial input reports
 // cannot erase the known prefix lower bound across a third request.
-export const TEST_CASE_LIMIT = 1025;
+// +3 model-apply boundaries: bounded target-only persistence, immediate preview/
+// ordered acknowledgement/send ownership, and owner-scoped Server delta hydration.
+// Live Engine refresh and browser latency assertions extend existing cases.
+export const TEST_CASE_LIMIT = 1028;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

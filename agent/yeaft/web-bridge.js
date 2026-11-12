@@ -4206,7 +4206,7 @@ export function handleYeaftUpdateSession(msg) {
  * config; `Engine.refreshConfig()` applies it at the next LLM loop boundary.
  * The current stream and its AbortController are untouched.
  *
- * Payload: { sessionId, requestId, config: { model?: string|null } }
+ * Payload: { sessionId, requestId, config: { model?: string|null, modelEffort?: string|null } }
  *  - `model: ''` or `null` clears the selected Session model (falls back to user default).
  */
 export function handleYeaftUpdateSessionConfig(msg) {
@@ -4236,8 +4236,12 @@ export function handleYeaftUpdateSessionConfig(msg) {
     // Do not invalidate the Session coordinator or abort active VP turns.
     // The next adapter loop sees this config; the stream already underway
     // completes with the values captured for that request.
-    sendSessionCrudResult({ op: 'update_config', requestId, ok: true, sessionId, config: savedConfig });
-    sendSessionSnapshotBroadcast();
+    // CRUD results are owner broadcasts, not requester-only replies. Publish
+    // the changed row for catalog persistence and other tabs without a global
+    // snapshot (which also repairs unrelated Sessions and their audit logs).
+    const updatedSession = loadSessionMeta(join(sessionsRoot(yeaftDir), sessionId));
+    sendSessionCrudResult({ op: 'update_config', requestId, ok: true, sessionId, config: savedConfig,
+      session: { ...updatedSession, config: savedConfig } });
   } catch (err) {
     sendSessionCrudResult({ op: 'update_config', requestId, ok: false, error: sessionErrorPayload(err) });
   }
@@ -8626,6 +8630,7 @@ export const __testHooks = {
   routePromiseEntryCountForTest() {
     return routePromisesByMsgId.size;
   },
+  getOrCreateVpEngineForTest: getOrCreateVpEngine,
   getOrCreateSessionContextForTest(sessionId, sessionHandle) {
     return getOrCreateSessionContext(sessionId, sessionHandle);
   },
