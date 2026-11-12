@@ -27,6 +27,30 @@ const STATE_PRIORITY = ['tool', 'streaming', 'retrying', 'thinking', 'typing', '
 const MAX_RETAINED_THREADS_PER_VP = 20;
 const COMPLETED_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * Retain only bounded, already user-visible diagnostics, never Error objects,
+ * stacks, causes or provider payloads. Callers must supply the sanitized visible
+ * message (in particular for content-policy failures), not a raw provider body.
+ */
+export function normalizeVpErrorDetail(detail) {
+  if (!detail || typeof detail !== 'object') return null;
+  const out = {};
+  for (const [key, limit] of Object.entries({ message: 2000, code: 128, reason: 128,
+    errorName: 128, reasonCode: 128, provider: 128, model: 256 })) {
+    if (typeof detail[key] === 'string' && detail[key].trim()) out[key] = detail[key].slice(0, limit);
+  }
+  for (const key of ['retryable', 'retryExhausted', 'credentialRefreshable']) {
+    if (typeof detail[key] === 'boolean') out[key] = detail[key];
+  }
+  for (const key of ['retryAttempts', 'maxRetries']) {
+    if (Number.isSafeInteger(detail[key]) && detail[key] >= 0) out[key] = detail[key];
+  }
+  if (Number.isInteger(detail.statusCode) && detail.statusCode >= 100 && detail.statusCode <= 599) {
+    out.statusCode = detail.statusCode;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function createVpStatusBroker({ send, now = Date.now } = {}) {
   if (typeof send !== 'function') {
     throw new TypeError('createVpStatusBroker: `send` callback is required');
@@ -34,6 +58,9 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
 
   /** @type {Map<string, any>} */
   const threads = new Map();
+  // Date.now() can tie across concurrent thread transitions. Keep selection
+  // deterministic without changing the public wall-clock timestamps.
+  let sequence = 0;
 
   const vpKeyOf = (sessionId, vpId) => `${sessionId || ''}::${vpId}`;
   const threadKeyOf = (sessionId, vpId, threadId) => `${sessionId || ''}::${vpId}::${threadId || 'main'}`;
@@ -43,7 +70,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     for (const row of threads.values()) {
       if ((row.sessionId || null) === (sessionId || null) && row.vpId === vpId) rows.push(row);
     }
-    rows.sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0));
+    rows.sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0) || b.sequence - a.sequence);
 
     let state = 'idle';
     for (const candidate of STATE_PRIORITY) {
@@ -60,13 +87,17 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
 
     const runningThreadCount = rows.filter(r => isVpStatusRunning(r.state)).length;
     const latest = rows[0] || null;
+    // An idle sibling can be newer than the failure. Error identity must come
+    // from the selected error row, not whichever thread happened to settle last.
+    const source = state === 'error' ? rows.find(r => r.state === 'error') : latest;
     return {
       sessionId: sessionId || null,
       vpId,
       state,
-      since: latest ? latest.since : now(),
-      turnId: latest ? latest.turnId || null : null,
-      threadId: latest ? latest.threadId || 'main' : null,
+      since: source ? source.since : now(),
+      turnId: source ? source.turnId || null : null,
+      threadId: source ? source.threadId || 'main' : null,
+      ...(state === 'error' && source?.errorDetail ? { errorDetail: { ...source.errorDetail } } : {}),
       runningThreadCount,
       threads: rows.map(r => ({
         threadId: r.threadId,
@@ -78,6 +109,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
         createdAt: r.createdAt || r.since,
         updatedAt: r.updatedAt || r.since,
         messageCount: r.messageCount || 0,
+        ...(r.state === 'error' && r.errorDetail ? { errorDetail: { ...r.errorDetail } } : {}),
       })),
     };
   }
@@ -94,7 +126,8 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     }
     const remaining = rows
       .filter(([key]) => threads.has(key))
-      .sort((a, b) => (b[1].updatedAt || b[1].since || 0) - (a[1].updatedAt || a[1].since || 0));
+      .sort((a, b) => (b[1].updatedAt || b[1].since || 0) - (a[1].updatedAt || a[1].since || 0)
+        || b[1].sequence - a[1].sequence);
     for (const [key, row] of remaining.slice(MAX_RETAINED_THREADS_PER_VP)) {
       if (!isVpStatusRunning(row.state)) threads.delete(key);
     }
@@ -105,7 +138,12 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     send({ type: 'vp_status_changed', ...aggregateFor(sessionId, vpId) });
   }
 
-  function transition({ sessionId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount } = {}) {
+  /**
+   * errorDetail is a safe visible diagnostic owned by this thread/turn. Omitting
+   * it on an otherwise identical error preserves the diagnostic; a new turn,
+   * explicit null or any non-error state clears it. Returned wire rows are copies.
+   */
+  function transition({ sessionId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount, errorDetail } = {}) {
     if (!vpId) return false;
     if (!VALID_STATES.has(state)) {
       throw new RangeError(`vp-status-broker: invalid state '${state}'`);
@@ -113,7 +151,13 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     const tid = threadId || 'main';
     const key = threadKeyOf(sessionId, vpId, tid);
     const prev = threads.get(key);
-    if (prev && prev.state === state && prev.turnId === turnId && (!title || prev.title === title)) {
+    const nextErrorDetail = state === 'error'
+      ? (errorDetail === undefined && prev?.state === 'error' && prev.turnId === turnId
+          ? prev.errorDetail || null : normalizeVpErrorDetail(errorDetail))
+      : null;
+    if (prev && prev.state === state && prev.turnId === turnId && (!title || prev.title === title)
+        && (!Number.isFinite(messageCount) || prev.messageCount === messageCount)
+        && JSON.stringify(prev.errorDetail || null) === JSON.stringify(nextErrorDetail)) {
       return false;
     }
     const ts = now();
@@ -125,8 +169,10 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       state,
       since: prev && prev.state === state ? prev.since : ts,
       updatedAt: ts,
+      sequence: ++sequence,
       createdAt: prev?.createdAt || ts,
       turnId,
+      errorDetail: nextErrorDetail,
       title: title || prev?.title || '',
       messageCount: Number.isFinite(messageCount) ? messageCount : (prev?.messageCount || 0),
     };

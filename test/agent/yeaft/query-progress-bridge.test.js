@@ -1,6 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import ctx from '../../../agent/context.js';
-import { __testHandleEngineEvent } from '../../../agent/yeaft/web-bridge.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { __testHandleEngineEvent, __testHooks, __testResetVpState, __testSetSession, __testGetOrCreateVpEngine } from '../../../agent/yeaft/web-bridge.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 
 const original = { ws: ctx.ws, queue: ctx.outboundSendQueue, active: ctx.outboundSendQueueActive, encryption: ctx.serverEncryptionRequired };
 afterEach(() => {
@@ -8,6 +13,7 @@ afterEach(() => {
   ctx.outboundSendQueue = original.queue;
   ctx.outboundSendQueueActive = original.active;
   ctx.serverEncryptionRequired = original.encryption;
+  __testHooks.resetVpStatusBroker();
   vi.useRealTimers();
 });
 
@@ -105,4 +111,94 @@ it('settles provider refusals, context truncation and exhausted pauses as errors
   expect(publication).toMatchObject({ responseKind: 'result', stopReason: 'stop_sequence' });
   expect(publication.incomplete).not.toBe(true);
   expect(hctx.markEngineTerminal).not.toHaveBeenCalled();
+});
+
+it('retains the sanitized visible engine error and retry metadata in the correct thread status', () => {
+  ctx.ws = { readyState: 1, send() {} };
+  ctx.serverEncryptionRequired = false;
+  ctx.outboundSendQueue = [];
+  ctx.outboundSendQueueActive = true;
+  const hctx = { sessionId: 's', vpId: 'v', turnId: 'failed-turn', threadId: 'failed-thread',
+    assistantTextParts: [], toolCallsAccum: [], toolResultsAccum: [], markEngineTerminal: vi.fn(), resetQueryTimer: vi.fn() };
+  __testHandleEngineEvent({ type: 'error', reason: 'stream_idle_timeout', code: 'timeout',
+    error: new Error('Stream idle timeout'), retryExhausted: true, retryAttempts: 2, maxRetries: 2 }, hctx);
+  let status = ctx.outboundSendQueue.map(row => row.msg.event).find(event => event?.type === 'vp_status_changed');
+  expect(status).toMatchObject({ state: 'error', threadId: 'failed-thread', turnId: 'failed-turn',
+    errorDetail: { message: 'Stream idle timeout after 2 fresh request retries', code: 'timeout',
+      reason: 'stream_idle_timeout', retryExhausted: true, retryAttempts: 2, maxRetries: 2 } });
+  expect(status.threads[0].errorDetail).toEqual(status.errorDetail);
+  ctx.outboundSendQueue = [];
+  __testHandleEngineEvent({ type: 'error', reason: 'content_policy_denied', retryable: false,
+    retryExhausted: true, retryAttempts: 1, maxRetries: 1,
+    error: Object.assign(new Error('PRIVATE provider body'), { name: 'LLMPolicyError', statusCode: 422,
+      reasonCode: 'content_policy_denied', provider: 'provider', model: 'model', raw: 'PRIVATE' }) }, hctx);
+  const wire = ctx.outboundSendQueue.map(row => row.msg);
+  status = wire.find(row => row.event?.type === 'vp_status_changed').event;
+  const visibleError = wire.find(row => row.event?.type === 'error').event;
+  expect(status.errorDetail.message).toBe(visibleError.message);
+  expect(status.errorDetail).toMatchObject({ errorName: 'LLMPolicyError', statusCode: 422,
+    reasonCode: 'content_policy_denied', provider: 'provider', model: 'model', retryable: false,
+    retryExhausted: true, retryAttempts: 1, maxRetries: 1 });
+  expect(status.errorDetail.message).toContain('Continue and ask the VP');
+  expect(JSON.stringify(wire)).not.toContain('PRIVATE');
+  __testHandleEngineEvent({ type: 'turn_end', terminal: true, stopReason: 'error' }, hctx);
+  expect(hctx.markEngineTerminal).toHaveBeenCalledWith('error', hctx.lastEngineErrorDetail);
+  ctx.outboundSendQueue = [];
+  __testHandleEngineEvent({ type: 'text_delta', text: 'Recovered' }, { ...hctx, turnId: 'new-turn' });
+  status = ctx.outboundSendQueue.map(row => row.msg.event).find(event => event?.type === 'vp_status_changed');
+  expect(status).toMatchObject({ state: 'streaming', turnId: 'new-turn' });
+  expect(status).not.toHaveProperty('errorDetail');
+  expect(status.threads[0]).not.toHaveProperty('errorDetail');
+});
+
+it('retains bounded thrown-error diagnostics and sanitizes content-policy failures at the turn boundary', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'yeaft-error-wire-'));
+  const savedConfig = ctx.CONFIG;
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await __testResetVpState();
+    ctx.CONFIG = { yeaftDir: root };
+    ctx.ws = { readyState: 1, send() {} };
+    ctx.outboundSendQueueActive = true;
+    ctx.serverEncryptionRequired = false;
+    __testSetSession({ yeaftDir: root, config: { model: 'test-model', maxOutputTokens: 1024 },
+      trace: new NullTrace(), toolRegistry: new ToolRegistry(),
+      conversationStore: { append: row => row, loadRecentBySession: () => [] },
+      adapter: { async *stream() { yield { type: 'stop', stopReason: 'end_turn' }; } } });
+    __testHooks.setYeaftConversationIdForTest('error-conversation');
+    const engine = __testGetOrCreateVpEngine('s', 'v', 'main');
+    const failed = Object.assign(new Error('Failure '.repeat(400)), { code: 'request_failed', statusCode: 503,
+      stack: 'PRIVATE stack', cause: { payload: 'PRIVATE' }, response: 'PRIVATE' });
+    const query = vi.spyOn(engine, 'query').mockImplementation(async function* () { throw failed; });
+    try {
+      ctx.outboundSendQueue = [];
+      await __testHooks.runVpTurnForTest({ prompt: 'fail safely', sessionId: 's', vpId: 'v', threadId: 'main',
+        turnId: 'thrown-turn', envelope: {}, vpAbort: new AbortController(), baseSnapshot: [] });
+      let wire = ctx.outboundSendQueue.map(row => row.msg);
+      let status = wire.find(row => row.event?.type === 'vp_status_changed' && row.event.state === 'error').event;
+      expect(status).toMatchObject({ sessionId: 's', vpId: 'v', threadId: 'main', turnId: 'thrown-turn',
+        errorDetail: { code: 'request_failed', errorName: 'Error', statusCode: 503, message: failed.message.slice(0, 2000) } });
+      expect(status.threads[0].errorDetail).toEqual(status.errorDetail);
+      expect(wire.find(row => row.event?.type === 'vp_turn_end').event.detail).toEqual(status.errorDetail);
+      expect(wire.some(row => row.event?.state === 'idle')).toBe(false);
+      expect(JSON.stringify(wire)).not.toContain('PRIVATE');
+      Object.assign(failed, { message: 'PRIVATE provider body', reasonCode: 'content_policy_denied', statusCode: 422 });
+      ctx.outboundSendQueue = [];
+      await __testHooks.runVpTurnForTest({ prompt: 'policy failure', sessionId: 's', vpId: 'v', threadId: 'main',
+        turnId: 'policy-turn', envelope: {}, vpAbort: new AbortController(), baseSnapshot: [] });
+      wire = ctx.outboundSendQueue.map(row => row.msg);
+      status = wire.find(row => row.event?.type === 'vp_status_changed' && row.event.state === 'error').event;
+      expect(status.errorDetail.message).toContain('Continue and ask the VP');
+      expect(status.errorDetail.reasonCode).toBe('content_policy_denied');
+      expect(JSON.stringify(wire)).not.toContain('PRIVATE');
+      expect(wire.find(row => row.event?.type === 'vp_status_changed' && row.event.state === 'thinking').event)
+        .not.toHaveProperty('errorDetail');
+    } finally { query.mockRestore(); }
+  } finally {
+    await __testResetVpState();
+    __testSetSession(null);
+    ctx.CONFIG = savedConfig;
+    log.mockRestore();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
