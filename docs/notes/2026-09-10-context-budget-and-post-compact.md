@@ -30,7 +30,7 @@
 
 此时 `max_tokens` 只是输出上限，不属于签名前缀。Engine 先按剩余窗口缩小本次输出额度，而不是因为配置的最大输出额度过大就终止。预算以最近成功请求的实际 input（按 provider 语义计入 cache）为下界，再计入助手响应及新增工具结果；新增内容的估算按该请求实际 input / 文本估算比值校准。没有实际 usage 时回退到文本估算。`request_output_reserve` trace 只记录窗口、输入预算和输出额度，不复制正文。
 
-适配器在最终 wire body 规范化之后再次校验签名 continuation 的输出上限。如果 manual thinking 或 `extraBody` 把额度重新抬高，则在 fetch 前显式失败，不默默降低用户指定的 thinking budget，也不发送越界请求；stream 和 side call 采用同一保护。
+Engine 将配置输出目标 `maxTokens` 与剩余上下文硬上限 `contextOutputLimit` 分开传递。适配器在最终 wire body 规范化之后再次校验签名 continuation 的实际输出额度：manual thinking 或 `extraBody` 可以高于配置目标，但不能超过剩余上下文；等于硬上限仍可发送，超过则在 fetch 前显式失败，不默默降低用户指定的 thinking budget，也不发送越界请求；stream 和 side call 采用同一保护。
 
 若剩余额度不足 1024 tokens（用户或执行策略配置的上限本来更小则沿用更小值），仍显式终止并要求缩小上下文后开始新 turn。不删除签名、不改写 transcript、不重放已经执行的工具，也不在 query 中生成摘要。该兜底推迟的是不必要的提前失败，不承诺单个 turn 可无限增长。
 

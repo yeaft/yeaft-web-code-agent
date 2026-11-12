@@ -112,13 +112,45 @@ describe('Anthropic evolving Messages protocol', () => {
     expect(wire.messages[1].content).toEqual(signed);
     expect(wire.messages.at(-1)).toEqual(next.messages.at(-1));
     expect(fetch.mock.calls[1][1].headers['anthropic-beta']).toBe('inline-tools-2026-09-15');
-    await expect(adapter.call({ ...next, maxTokens: 2048, effort: 'xhigh', effortSource: 'user',
+    await expect(adapter.call({ ...next, maxTokens: 2048, contextOutputLimit: 2048, effort: 'xhigh', effortSource: 'user',
       effortContext: { thinkingProtocol: 'anthropic' } })).rejects.toThrow(/output settings exceed/);
-    await expect(adapter.call({ ...next, maxTokens: 2048, extraBody: { max_tokens: 3000 } })).rejects.toThrow(/output settings exceed/);
+    await expect(adapter.call({ ...next, maxTokens: 2048, contextOutputLimit: 2048, extraBody: { max_tokens: 3000 } })).rejects.toThrow(/output settings exceed/);
     await expect(adapter.call({ ...next, system: 'changed prefix' })).rejects.toThrow(/prefix changed/);
     expect(fetch).toHaveBeenCalledTimes(2);
     await expect(adapter.call({ ...params, model: 'claude-sonnet-4', messages: [{ role: 'system', content: 'new' }] })).rejects.toThrow(/does not support mid-conversation/);
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['stream', 'call'])('separates configured output from the actual context ceiling in %s', async method => {
+    const signed = [{ type: 'thinking', thinking: '', signature: 'opaque-signature' },
+      { type: 'tool_use', id: 'read', name: 'Read', input: {} }];
+    const fetch = vi.fn().mockResolvedValueOnce(json({ id: 'signed', content: signed, stop_reason: 'tool_use' }))
+      .mockImplementation(() => Promise.resolve(json({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' })));
+    vi.stubGlobal('fetch', fetch);
+    const adapter = new AnthropicAdapter({ apiKey: 'synthetic' });
+    const invoke = async request => {
+      if (method === 'call') return adapter.call(request);
+      const events = await collect(adapter.stream(request));
+      return { providerState: events.find(event => event.type === 'provider_state')?.providerState };
+    };
+    const { providerState } = await invoke(params);
+    const next = { ...params, maxTokens: 16384, messages: [...params.messages, { role: 'assistant', content: '',
+      toolCalls: [{ id: 'read', name: 'Read', input: {} }], providerState }, { role: 'tool', toolCallId: 'read', content: 'result' }] };
+    for (const settings of [
+      { effort: 'xhigh', effortSource: 'user', effortContext: { thinkingProtocol: 'anthropic' } },
+      { extraBody: { max_tokens: 17408 } },
+    ]) {
+      // Omitted ceilings preserve compatibility; the exact boundary is allowed.
+      for (const contextOutputLimit of [undefined, 17408, 200000]) {
+        await invoke({ ...next, contextOutputLimit, ...settings });
+        const body = JSON.parse(fetch.mock.calls.at(-1)[1].body);
+        expect(body.max_tokens).toBe(17408);
+        expect(body.messages[1].content).toEqual(signed);
+      }
+      const dispatched = fetch.mock.calls.length;
+      await expect(invoke({ ...next, contextOutputLimit: 17407, ...settings })).rejects.toThrow(/output settings exceed/);
+      expect(fetch).toHaveBeenCalledTimes(dispatched);
+    }
   });
 
   it('never publishes client tools cut off by a full context window', async () => {

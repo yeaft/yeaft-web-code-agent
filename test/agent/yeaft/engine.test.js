@@ -539,14 +539,16 @@ describe('Engine', () => {
       }
     });
 
-    it.each(['estimated', 'cached-usage', 'included-cache', 'repeated', 'exhausted', 'manual', 'extra-body'])('budgets signed output without editing the prefix: %s', async mode => {
+    it.each(['estimated', 'cached-usage', 'included-cache', 'repeated', 'exhausted', 'manual', 'extra-body', 'manual-room', 'manual-edge', 'extra-body-room'])('budgets signed output without editing the prefix: %s', async mode => {
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-reserve-'));
       const originalFetch = globalThis.fetch;
       const requests = [];
       const loops = [];
+      const hasRoom = mode.endsWith('-room');
+      const manual = mode.startsWith('manual');
       const result = 'SIGNED_TOOL_EVIDENCE '.repeat(1000);
-      const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 20000, projectDocMaxBytes: 0,
-        modelInfo: { contextWindow: 40000, maxOutput: 20000 } };
+      const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: hasRoom || mode === 'manual-edge' ? 16384 : 20000, projectDocMaxBytes: 0,
+        modelInfo: { contextWindow: hasRoom ? 200000 : mode === 'manual-edge' ? 47500 : 40000, maxOutput: 64000 } };
       let engine;
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
@@ -561,14 +563,14 @@ describe('Engine', () => {
         const store = new ConversationStore(dir);
         const adapter = new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
           baseUrl: 'https://gateway.example/v1', apiKey: 'synthetic', models: [{ id: 'claude-opus-4.8',
-            ...(mode === 'manual' ? { thinkingProtocol: 'anthropic' } : {}),
+            ...(manual ? { thinkingProtocol: 'anthropic' } : {}),
           }] }] });
-        if (['included-cache', 'extra-body'].includes(mode)) {
+        if (['included-cache', 'extra-body', 'extra-body-room'].includes(mode)) {
           const capture = adapter.captureRequest.bind(adapter);
           adapter.captureRequest = () => {
             const snapshot = capture();
             return { captureStream: async function* (params) {
-              const request = mode === 'extra-body' ? { ...params, extraBody: { max_tokens: 20000 } } : params;
+              const request = mode.startsWith('extra-body') ? { ...params, extraBody: { max_tokens: 20000 } } : params;
               for await (const event of snapshot.captureStream(request)) yield event.type === 'usage' && mode === 'included-cache'
                 ? { ...event, cacheTokensAreIncludedInInput: true } : event;
             } };
@@ -585,11 +587,12 @@ describe('Engine', () => {
           events.push(event);
           if (event.type === 'loop') loops.push(event);
         }
-        expect(requests[0].max_tokens).toBe(20000);
-        const failed = ['exhausted', 'manual', 'extra-body'].includes(mode);
+        expect(requests[0].max_tokens).toBe(manual ? Math.max(config.maxOutputTokens, 17408)
+          : mode.startsWith('extra-body') ? 20000 : config.maxOutputTokens);
+        const failed = ['exhausted', 'manual', 'manual-edge', 'extra-body'].includes(mode);
         if (failed) {
           expect(requests).toHaveLength(1);
-          if (mode === 'manual') expect(requests[0].thinking).toMatchObject({ type: 'enabled', budget_tokens: 16384 });
+          if (manual) expect(requests[0].thinking).toMatchObject({ type: 'enabled', budget_tokens: 16384 });
           expect(events.find(event => event.type === 'error').error.code).toBe('PROVIDER_STATE_INVALID');
         } else {
           expect(events.filter(event => event.type === 'error')).toEqual([]);
@@ -600,6 +603,11 @@ describe('Engine', () => {
             expect(body.tools).toEqual(requests[0].tools);
             expect(body.messages.slice(0, requests[index - 1].messages.length)).toEqual(requests[index - 1].messages);
             expect(body.max_tokens).toBeGreaterThanOrEqual(1024);
+            if (hasRoom) {
+              expect(body.max_tokens).toBe(manual ? 17408 : 20000);
+              expect(body.thinking).toEqual(requests[0].thinking);
+              continue;
+            }
             expect(body.max_tokens).toBeLessThan(20000);
             const limit = mode === 'estimated' ? 22000 - loops[index].requestInputBreakdown.totalEstimatedTokens : 10000;
             expect(body.max_tokens).toBeLessThanOrEqual(limit);

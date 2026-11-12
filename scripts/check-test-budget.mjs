@@ -159,7 +159,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +7 signed-output budget regressions: estimate fallback, cache-exclusive and
 // cache-inclusive usage, repeated continuation, exhausted windows, manual thinking
 // and extraBody settings that must not exceed the final wire output ceiling.
-export const TEST_CASE_LIMIT = 1017;
+// +5 review regressions: manual/extraBody widening with room, manual widening
+// beyond a tighter remaining window, and stream/call exact-ceiling compatibility.
+export const TEST_CASE_LIMIT = 1022;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

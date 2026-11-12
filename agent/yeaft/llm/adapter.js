@@ -56,6 +56,10 @@ import { utf8PrefixWithinBytes } from '../utf8.js';
  * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ThinkingBlockEndEvent | ProviderActivityEvent | ProviderStateEvent | ProviderMetadataEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
  */
 
+// contextOutputLimit is the remaining context space for output (not the configured
+// maxTokens target). Anthropic uses it to preflight signed continuations after
+// thinking and extraBody normalization; omitted callers retain native widening.
+
 // ─── Unified Message Types ─────────────────────────────────────
 
 /**
@@ -667,7 +671,7 @@ export class LLMAdapter {
   /**
    * Stream a model response with tool support (the query loop call).
    *
-   * @param {{ model: string, system: string, messages: UnifiedMessage[], tools?: UnifiedToolDef[], maxTokens?: number, signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: UnifiedMessage[], tools?: UnifiedToolDef[], maxTokens?: number, contextOutputLimit?: number, signal?: AbortSignal }} params
    * @returns {AsyncGenerator<StreamEvent>}
    */
   async *stream(params) { // eslint-disable-line no-unused-vars
@@ -692,7 +696,7 @@ export class LLMAdapter {
   /**
    * Make a single model call without tools (for side queries like summarization).
    *
-   * @param {{ model: string, system: string, messages: UnifiedMessage[], maxTokens?: number, signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: UnifiedMessage[], maxTokens?: number, contextOutputLimit?: number, signal?: AbortSignal }} params
    * @returns {Promise<{ text: string, stopReason?: 'end_turn'|'tool_use'|'max_tokens', usage: { inputTokens: number, outputTokens: number } }>}
    */
   async call(params) { // eslint-disable-line no-unused-vars

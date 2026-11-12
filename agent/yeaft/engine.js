@@ -3031,6 +3031,7 @@ export class Engine {
           executionPolicy?.maxOutputTokens || Infinity,
         ));
         const configuredOutputReserve = requestMaxOutputTokens;
+        let contextOutputLimit;
         const toolSchemaTokens = requestToolDefs.length > 0
           ? approxTokens(JSON.stringify(requestToolDefs)) : 0;
         const fitOptions = {
@@ -3061,7 +3062,10 @@ export class Engine {
           }
           // max_tokens is an upper bound, not part of the signed prefix. Spend
           // less on this response before rejecting an otherwise valid continuation.
-          requestMaxOutputTokens = Math.min(configuredOutputReserve, fitOptions.contextWindow - inputTokens);
+          // Keep the context ceiling separate from the configured output target.
+          // Manual thinking can legitimately widen that target when space allows.
+          contextOutputLimit = Math.floor(fitOptions.contextWindow - inputTokens);
+          requestMaxOutputTokens = Math.min(configuredOutputReserve, contextOutputLimit);
           if (requestMaxOutputTokens < Math.min(configuredOutputReserve, 1024)) {
             throw new ProviderStateError('active Anthropic signed context cannot fit without changing its prefix; start a new turn with a smaller context');
           }
@@ -3221,6 +3225,7 @@ export class Engine {
           messages: wireMessages,
           tools: requestToolDefs.length > 0 ? requestToolDefs : undefined,
           maxTokens: requestMaxOutputTokens,
+          contextOutputLimit,
           effort: resolvedEffort,
           effortConstraint,
           requestIdentity,
