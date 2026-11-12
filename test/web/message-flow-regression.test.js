@@ -115,6 +115,7 @@ describe('message flow regressions', () => {
       await pane.setProps({ rows: rows('s') });
       await pane.get('.yeaft-vp-error-toggle').trigger('click');
       expect(pane.findAll('.yeaft-vp-error-detail')).toHaveLength(2);
+      expect(pane.get('.yeaft-vp-timeline-row-status').text()).toBe('using tool…');
       expect(pane.text()).toContain('failed-turn');
       expect(pane.text()).toContain('second-failure');
       broker.transition({ ...owner, state: 'thinking', turnId: 'new-turn' });

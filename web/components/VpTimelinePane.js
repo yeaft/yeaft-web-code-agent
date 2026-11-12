@@ -243,7 +243,7 @@ export default {
                   <span class="yeaft-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
                   <span v-if="row.description" class="yeaft-vp-timeline-row-description">{{ row.description }}</span>
                 </span>
-                <span v-if="!row.errors?.length" class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
+                <span v-if="row.status !== 'error'" class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
                 <span
                   v-if="row.runningThreadCount > 1"
                   class="yeaft-vp-timeline-thread-count"
