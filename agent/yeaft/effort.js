@@ -254,12 +254,14 @@ export function enforceSubAgentEffortPayload(body, { model, protocol, effortCont
   const wireEffort = protocol === 'openai-responses' ? body.reasoning?.effort : body.output_config?.effort;
   const effective = options.includes(wireEffort) && atMost(wireEffort, decision.effective)
     ? wireEffort : decision.effective;
+  // Display controls observability, not effort; retain it when enforcing the cap.
+  const display = body.thinking?.display;
   if (protocol === 'openai-responses') {
     body.reasoning = { ...(body.reasoning && typeof body.reasoning === 'object' && !Array.isArray(body.reasoning) ? body.reasoning : {}), effort: effective };
     delete body.thinking;
     removeEffortField(body, 'output_config');
   } else if (decision.wireMode === 'adaptive') {
-    body.thinking = { type: 'adaptive' };
+    body.thinking = { type: 'adaptive', ...(display !== undefined ? { display } : {}) };
     body.output_config = { ...(body.output_config && typeof body.output_config === 'object' && !Array.isArray(body.output_config) ? body.output_config : {}), effort: effective };
     removeEffortField(body, 'reasoning');
   } else {
@@ -271,7 +273,7 @@ export function enforceSubAgentEffortPayload(body, { model, protocol, effortCont
     if (Number.isInteger(supplied) && supplied >= 1024) budget = Math.min(budget, supplied);
     if (Number.isFinite(body.max_tokens)) budget = Math.min(budget, Math.floor(body.max_tokens) - 1);
     if (budget < 1024) throw effortError(model, decision.cap, 'max_tokens must allow at least 1024 thinking tokens');
-    body.thinking = { type: 'enabled', budget_tokens: budget };
+    body.thinking = { type: 'enabled', budget_tokens: budget, ...(display !== undefined ? { display } : {}) };
     removeEffortField(body, 'output_config');
     removeEffortField(body, 'reasoning');
     return snapshotEffortDecision({ ...decision, effective: manualEffortForBudget(model, budget), budgetTokens: budget });
