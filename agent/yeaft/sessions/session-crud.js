@@ -50,7 +50,7 @@ import { randomBytes } from 'crypto';
 import { homedir } from 'os';
 import { isAbsolute, join, resolve } from 'path';
 import {
-  openSession, createSession, loadSessionMeta,
+  openSession, createSession, loadSessionMeta, saveSessionMeta,
 } from './session-store.js';
 import { normalizeScheduledTask, publicScheduledTask } from './scheduled-task-definition.js';
 import { addVp as rosterAdd, removeVp as rosterRemove, setDefaultVp } from './roster.js';
@@ -785,18 +785,28 @@ export function updateSessionWorkDir(yeaftDir, sessionId, workDir) {
  * Returns the persisted config object so the caller can broadcast it.
  *
  * Throws SessionConfigError on validation failure (unknown key, bad type).
- * Group must exist (we call requireSession to assert).
+ * The Session must exist. Steady-state updates touch only its config and
+ * metadata: opening a Session handle would scan/repair its legacy audit log,
+ * and resolving through the manifest would inspect every Session's metadata.
  */
 export function updateSessionConfig(yeaftDir, sessionId, partial) {
-  const handle = requireSession(yeaftDir, sessionId);
-  try {
-    const saved = saveSessionConfig(yeaftDir, sessionId, partial || {});
-    const meta = handle.getMeta();
-    handle.saveMeta({ ...meta, metadataUpdatedAt: new Date().toISOString() });
-    return saved;
-  } finally {
-    handle.close();
+  // Keep legacy simple IDs readable, but never let a wire ID escape sessions/.
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(sessionId)) {
+    throw new SessionCrudError('invalid_session_id', sessionId);
   }
+  const dir = join(sessionsRoot(yeaftDir), sessionId);
+  let meta = loadSessionMeta(dir);
+  if (!meta && !hasSessionManifest(yeaftDir)) {
+    // One-time compatibility bootstrap may still move this Session from a
+    // registered project directory. Ordinary edits never bootstrap or repair
+    // the inventory once the manifest exists.
+    resolveSessionYeaftDir(yeaftDir, sessionId);
+    meta = loadSessionMeta(dir);
+  }
+  if (!meta) throw new SessionCrudError('not_found', sessionId);
+  const saved = saveSessionConfig(yeaftDir, sessionId, partial || {});
+  saveSessionMeta(dir, { ...meta, metadataUpdatedAt: new Date().toISOString() });
+  return saved;
 }
 
 /**

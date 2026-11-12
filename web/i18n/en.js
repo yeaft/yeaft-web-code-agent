@@ -825,6 +825,7 @@ export default {
   'yeaft.switchModel': 'Switch model',
   'yeaft.modelMenu.title': 'Model and LLM settings',
   'yeaft.modelMenu.label': 'Model',
+  'yeaft.modelMenu.saveFailed': 'Could not apply the model or effort. The last confirmed selection has been restored.',
   'yeaft.modelMenu.effort': 'Effort',
   'yeaft.modelMenu.effort.openaiReasoning': 'Reasoning effort',
   'yeaft.modelMenu.effort.anthropicBudget': 'Thinking budget',

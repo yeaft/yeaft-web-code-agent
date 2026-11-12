@@ -45,6 +45,7 @@ export function getSelectableModelEfforts(options) {
 export function getDefaultModelEffort(options) {
   const values = getSelectableModelEfforts(options);
   if (!values.length) return '';
+  if (values.includes('xhigh')) return 'xhigh';
   if (values.length === 1) return values[0];
   if (values.includes('ultra') && values.includes('max')) return 'max';
   return values[values.length - 2];

@@ -433,7 +433,7 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     // unknown field. New agents flip `serverEncryptionRequired = false`
     // and stop calling encrypt() on the send path.
     acceptPlaintext: true,
-    serverCapabilities: ['workbench_file_content_chunks'],
+    serverCapabilities: ['workbench_file_content_chunks', 'yeaft_session_config_delta'],
     ...(upgradeAvailable && { upgradeAvailable })
   }));
 

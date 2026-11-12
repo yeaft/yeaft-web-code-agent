@@ -115,7 +115,7 @@ async function syncYeaftSessionMetadata(agentId, agent, event) {
   // Task state is Agent-authored. Persist successful CRUD rows as well as full
   // snapshots so reloads after an acknowledgement cannot show stale run state.
   if (event.ok && ownerId && event.session?.id
-      && (['update_task', 'run_task'].includes(op)
+      && (['update_config', 'update_task', 'run_task'].includes(op)
         || (event.session.task && op !== 'copy' && op !== 'merge'))) {
     try {
       const existing = yeaftSessionDb.getForAgent(ownerId, agentId, event.session.id);
@@ -667,7 +667,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
       const taskNotification = event?.type === 'scheduled_task_notification';
       const taskResult = event?.type === 'session_crud_result'
         && (['update_task', 'run_task'].includes(event.op) || event.session?.task);
-      let catalogChanged = !!(taskResult && event.ok && event.session?.id);
+      const configResult = event?.type === 'session_crud_result' && event.op === 'update_config';
+      let catalogChanged = !!((taskResult || configResult) && event.ok && event.session?.id);
       if (event?.type === 'yeaft_status') {
         agent.yeaftStatus = event;
         await broadcastAgentList();
@@ -1103,7 +1104,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // CRUD acknowledgements are not authoritative catalog snapshots. The
       // agent emits session_list_updated after mutations; broadcast only after
       // that reconciliation so create/rename cannot briefly project stale data.
-      const catalogChanged = outboundMsg?.op === 'list';
+      const catalogChanged = outboundMsg?.op === 'list'
+        || (outboundMsg?.op === 'update_config' && outboundMsg.ok && outboundMsg.session?.id);
       if (catalogChanged) await broadcastSessionCatalog(agent.ownerId);
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
