@@ -340,13 +340,14 @@ describe('Yeaft session-scoped model config', () => {
     const sibling = join(root, 'sessions', 'session_broken_sibling');
     mkdirSync(join(sibling, 'messages'), { recursive: true });
     writeFileSync(join(sibling, 'messages', '000001.jsonl'), '{"id":"m1","text":"unrelated"}\n');
-    const keys = ['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'];
+    const keys = ['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired', 'serverCapabilities'];
     const previous = Object.fromEntries(keys.map(key => [key, ctx[key]]));
     ctx.CONFIG = { yeaftDir: root };
     ctx.ws = { readyState: 1, send() {} };
     ctx.outboundSendQueue = [];
     ctx.outboundSendQueueActive = true;
     ctx.serverEncryptionRequired = false;
+    ctx.serverCapabilities = new Set(['yeaft_session_config_delta']);
     __testSetSession({ yeaftDir: root, config: { dir: root, model: 'test/old', modelEffort: 'medium' } });
     const reads = [];
     const originalRead = fs.readFileSync;
@@ -386,6 +387,14 @@ describe('Yeaft session-scoped model config', () => {
       expect(() => updateSessionConfig(root, sessionId, { unknown: true })).toThrow('unknown config key');
       expect(loadSessionConfig(root, sessionId)).toEqual(frame.event.config);
       expect(updateSessionConfig(root, sessionId, { model: null, modelEffort: '' })).toEqual({});
+      // A rolling-upgrade peer without delta support still gets the old full
+      // snapshot after the correlated ACK, so its shadow catalog stays current.
+      ctx.serverCapabilities = new Set();
+      ctx.outboundSendQueue = [];
+      handleYeaftUpdateSessionConfig({ sessionId, requestId: 'old-server', config: { model: 'test/legacy', modelEffort: 'xhigh' } });
+      expect(ctx.outboundSendQueue.map(row => row.msg.event.type)).toEqual(['session_crud_result', 'session_list_updated']);
+      expect(ctx.outboundSendQueue[1].msg.event.sessions.find(row => row.id === sessionId).config)
+        .toEqual({ model: 'test/legacy', modelEffort: 'xhigh' });
     } finally {
       Object.assign(ctx, previous);
     }
@@ -398,7 +407,7 @@ describe('Yeaft session-scoped model config', () => {
     for (const id of [sessionId, otherId]) createSession(sessionsRoot(root), { id, roster: ['omni'] }).close();
     const otherConfig = { model: 'test/other', modelEffort: 'max' };
     saveSessionConfig(root, otherId, otherConfig);
-    const keys = ['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired'];
+    const keys = ['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired', 'serverCapabilities'];
     const previous = Object.fromEntries(keys.map(key => [key, ctx[key]]));
     ctx.CONFIG = { yeaftDir: root };
     ctx.ws = { readyState: 1, send() {} };

@@ -628,6 +628,7 @@ export const useChatStore = defineStore('chat', {
     browserRuntimeServerEnabled: false,
     yeaftSessionHydrateRequestId: null,
     yeaftSessionHydrateSlices: [],
+    yeaftSessionHydrateConfigDeltas: null, // request-scoped live config deltas replayed at inventory commit
     yeaftSessionHydrateError: null,
     _yeaftSessionInventorySocketQuarantined: false,
     sessionKey: null, // Uint8Array for encryption
@@ -3115,6 +3116,7 @@ export const useChatStore = defineStore('chat', {
       const requestId = `session_inventory_${crypto.randomUUID()}`;
       this.yeaftSessionHydrateRequestId = requestId;
       this.yeaftSessionHydrateSlices = [];
+      this.yeaftSessionHydrateConfigDeltas = null;
       this._hasHandledAgentList = false;
       this._hasHandledYeaftSessionHydrate = false;
       this.yeaftSessionHydrateError = null;
@@ -3127,6 +3129,7 @@ export const useChatStore = defineStore('chat', {
       if (!sent) {
         this.yeaftSessionHydrateRequestId = null;
         this.yeaftSessionHydrateSlices = [];
+        this.yeaftSessionHydrateConfigDeltas = null;
         this.yeaftSessionHydrateError = 'session_inventory_send_failed';
         return null;
       }
@@ -3134,6 +3137,7 @@ export const useChatStore = defineStore('chat', {
         if (this.yeaftSessionHydrateRequestId !== requestId) return;
         this.yeaftSessionHydrateRequestId = null;
         this.yeaftSessionHydrateSlices = [];
+        this.yeaftSessionHydrateConfigDeltas = null;
         this.yeaftSessionHydrateError = 'session_inventory_timeout';
         if (this.yeaftSessionInventoryCompleteSupported !== true) {
           this._yeaftSessionInventorySocketQuarantined = true;
@@ -6036,6 +6040,7 @@ export const useChatStore = defineStore('chat', {
           if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
             this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
+          handlerHelpers.bufferYeaftSessionConfigDelta(this, event, msg.agentId || null);
           if (gs) gs.applyCrudResult(event, msg.agentId || null, {
             // The initiating branch action owns navigation so it can render a
             // visible success state before entering the new Session. Other
@@ -6766,7 +6771,15 @@ export const useChatStore = defineStore('chat', {
         if (!this._sessionModelSwitchQueue) this._sessionModelSwitchQueue = new Map();
         const previous = this._sessionModelSwitchQueue.get(key);
         const apply = async () => {
-          if (previous) await previous.catch(() => {});
+          const prior = previous ? await previous.catch(() => null) : null;
+          // A real transport/Agent disconnect retires the whole queued chain,
+          // even if the Agent reconnects before this microtask gets to run.
+          if (['agent_offline', 'connection_changed', 'stale_request'].includes(prior?.error?.code)) {
+            return { ok: false, error: prior.error };
+          }
+          if (!this.agents.some(agent => agent.id === agentId && agent.online)) {
+            return { ok: false, error: { code: 'agent_offline' } };
+          }
           if (authGeneration !== Number(useAuthStore().authGeneration || 0)
               || connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)) {
             return { ok: false, error: { code: 'stale_request' } };

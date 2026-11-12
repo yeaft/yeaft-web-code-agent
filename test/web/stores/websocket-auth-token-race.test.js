@@ -376,6 +376,29 @@ describe('sidebar Session catalog lifecycle', () => {
     open(null);
     expect(store.sidebarSessionCatalog).toHaveLength(3);
     expect(store.sidebarSessionCatalogLoading).toBe(true);
+    // Live config ACKs win over buffered old inventory in both initiating and
+    // sibling tabs; even a later stale slice cannot undo confirmed selection.
+    sessions.applyCrudResult = vi.fn();
+    store.yeaftSessionHydrateRequestId = 'config-inventory';
+    deliver({ type: 'yeaft_session_hydrate', requestId: 'config-inventory', agentId: 'agent-a',
+      sessions: [{ id: 'same', name: 'A', config: { model: 'old' } }] });
+    for (const [agentId, model] of [['agent-a', 'new'], ['agent-b', 'other-agent']]) {
+      deliver({ type: 'yeaft_output', agentId, event: { type: 'session_crud_result', op: 'update_config',
+        requestId: `${agentId}-unowned-ack`, sessionId: 'same', ok: true, config: { model, modelEffort: 'xhigh' } } });
+    }
+    deliver({ type: 'yeaft_session_hydrate', requestId: 'config-inventory', agentId: 'agent-a',
+      sessions: [{ id: 'same', name: 'A', config: { model: 'old' } }] });
+    deliver({ type: 'yeaft_session_hydrate', requestId: 'config-inventory', agentId: 'agent-b',
+      sessions: [{ id: 'same', name: 'B', config: { model: 'old-b' } }] });
+    deliver({ type: 'yeaft_session_hydrate_complete', requestId: 'config-inventory', ok: true });
+    expect(sessions.applySnapshot).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'same', name: 'A', config: { model: 'new', modelEffort: 'xhigh' } }),
+    ], 'agent-a', expect.any(Object));
+    expect(sessions.applySnapshot).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'same', name: 'B', config: { model: 'other-agent', modelEffort: 'xhigh' } }),
+    ], 'agent-b', expect.any(Object));
+    expect(store.yeaftSessionHydrateConfigDeltas).toBeNull();
+    open(null);
     // A second reconnect while the replacement inventory is still pending
     // must not drop the retained legacy projection either.
     open(null);

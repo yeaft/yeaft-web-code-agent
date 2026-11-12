@@ -86,7 +86,8 @@ test.describe('Yeaft composer menus', () => {
       requests.push(request);
       const config = saveSessionConfig(root, request.sessionId, request.config);
       const reply = () => mockAgent.send({ type: 'yeaft_output', event: { type: 'session_crud_result', op: 'update_config',
-        requestId: request.requestId, sessionId: request.sessionId, ok: true, config } });
+        requestId: request.requestId, sessionId: request.sessionId, ok: true, config,
+        session: { id: request.sessionId, name: 'Fable effort', roster: ['omni'], defaultVpId: 'omni', config } } });
       if (holdNextResult) { holdNextResult = false; releaseResult = reply; }
       else reply();
     });

@@ -4242,6 +4242,9 @@ export function handleYeaftUpdateSessionConfig(msg) {
     const updatedSession = loadSessionMeta(join(sessionsRoot(yeaftDir), sessionId));
     sendSessionCrudResult({ op: 'update_config', requestId, ok: true, sessionId, config: savedConfig,
       session: { ...updatedSession, config: savedConfig } });
+    // Older Servers persist ordinary Session config only from full snapshots.
+    // Keep rolling upgrades correct; modern peers negotiate the bounded delta.
+    if (!ctx.serverCapabilities?.has?.('yeaft_session_config_delta')) sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'update_config', requestId, ok: false, error: sessionErrorPayload(err) });
   }

@@ -69,6 +69,8 @@ describe('message flow regressions', () => {
     const store = useChatStore();
     store.currentAgent = 'a';
     store.yeaftSessionAgentById = { s: 'a' };
+    store.agents = [{ id: 'a', online: true }];
+    store._hasHandledAgentList = true;
     store.yeaftModel = 'default/model';
     store.yeaftModelEffort = 'max';
     const pending = [];
@@ -115,6 +117,21 @@ describe('message flow regressions', () => {
     await confirmed;
     await sendAfterAck;
     expect(store.sendWsMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'yeaft_session_send', sessionId: 's', agentId: 'a' }));
+
+    const disconnecting = store.switchYeaftModel('proxy/disconnecting', 's', 'xhigh');
+    const queuedOffline = store.switchYeaftModel('proxy/queued-offline', 's', 'medium');
+    const sentCount = pending.length;
+    store.agents = [{ id: 'a', online: false }];
+    pending.at(-1).resolve({ ok: false, error: { code: 'agent_offline' } });
+    // Even an immediate reconnect cannot resurrect the old queued selection.
+    store.agents = [{ id: 'a', online: true }];
+    await disconnecting;
+    expect(await queuedOffline).toMatchObject({ ok: false, error: { code: 'agent_offline' } });
+    expect(pending).toHaveLength(sentCount);
+    expect(store.sessionModelSelectionFor('s')).toBeNull();
+    store.agents = [{ id: 'a', online: false }];
+    expect(await store.switchYeaftModel('proxy/offline', 's', 'xhigh')).toMatchObject({ ok: false, error: { code: 'agent_offline' } });
+    expect(pending).toHaveLength(sentCount);
   });
   it('shows exact turn tokens and independent accessible failure drilldown with bounded metadata', async () => {
     const base = { type: 'query_progress', sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main',
