@@ -64,6 +64,72 @@ const { useChatStore } = await import('../../web/stores/chat.js');
 const { timelineQueryProgress } = await import('../../web/components/YeaftPage.js');
 
 describe('message flow regressions', () => {
+  it('retains scoped VP errors across navigation and snapshots with accessible plain-text disclosure', async () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'a';
+    store.yeaftAgentId = 'a';
+    store.yeaftConversationId = 'conv';
+    store.yeaftConversationIdsByAgent = { a: 'conv', b: 'conv-b' };
+    store.connectionState = 'connected';
+    store.sendWsMessage = vi.fn(() => true);
+    const frame = event => store.handleYeaftOutput({ agentId: 'a', conversationId: 'conv', event });
+    const broker = createVpStatusBroker({ send: frame, now: () => 1000 });
+    const owner = { sessionId: 's', vpId: 'v', turnId: 'failed-turn', threadId: 'main' };
+    const message = '<script>alert(1)</script>\nProvider timed out';
+    broker.transition({ ...owner, state: 'error', errorDetail: { message, code: 'TIMEOUT', reason: 'retry_exhausted', stack: 'PRIVATE' } });
+    const rows = sessionId => buildTimelineRows({ vpList: [{ vpId: 'v' }], connectionState: 'connected',
+      vpStatuses: Object.fromEntries(Object.values(store.vpStatuses).filter(row => row.agentId === 'a' && row.sessionId === sessionId).map(row => [row.vpId, row])) });
+    expect(rows('other')[0].errors).toEqual([]);
+    const expected = rows('s')[0].errors;
+    expect(expected).toEqual([expect.objectContaining({ turnId: owner.turnId, threadId: owner.threadId, at: 1000, message })]);
+    vi.stubGlobal('Vue', Vue);
+    const pane = mount(VpTimelinePane, { props: { rows: rows('s') },
+      global: { config: { globalProperties: { $t: (key, args = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (_, name) => args[name] ?? '') } } } });
+    try {
+      expect(pane.find('.yeaft-vp-error-details').exists()).toBe(false);
+      expect(pane.find('button button').exists()).toBe(false);
+      await pane.get('.yeaft-vp-error-toggle').trigger('click');
+      expect(pane.get('.yeaft-vp-error-toggle').attributes('aria-expanded')).toBe('true');
+      expect(pane.get('.yeaft-vp-error-message').text()).toBe(message);
+      expect(pane.find('script').exists()).toBe(false);
+      expect(pane.emitted('mention-vp')).toBeUndefined();
+      expect(pane.text()).not.toContain('PRIVATE');
+      await pane.setProps({ rows: rows('other') });
+      expect(pane.find('.yeaft-vp-error-toggle').exists()).toBe(false);
+      for (const sessionId of ['s', null]) {
+        store.vpStatuses = {};
+        broker.broadcastSnapshot({ sessionId });
+        expect(rows('s')[0].errors).toEqual(expected);
+      }
+      await pane.setProps({ rows: rows('s') });
+      expect(pane.find('.yeaft-vp-error-details').exists()).toBe(false);
+      await pane.get('.yeaft-vp-error-toggle').trigger('click');
+      expect(pane.get('.yeaft-vp-error-message').text()).toBe(message);
+      // A newer idle sibling cannot steal error ownership. Multiple failures
+      // remain separately inspectable even while another thread is active.
+      broker.settleIdle({ sessionId: 's', vpId: 'v', threadId: 'idle-sibling' });
+      broker.transition({ ...owner, turnId: 'second-failure', threadId: 'parallel', state: 'error', errorDetail: { message: 'Second failure' } });
+      broker.transition({ ...owner, threadId: 'running', turnId: 'running', state: 'tool' });
+      await pane.setProps({ rows: rows('s') });
+      await pane.get('.yeaft-vp-error-toggle').trigger('click');
+      expect(pane.findAll('.yeaft-vp-error-detail')).toHaveLength(2);
+      expect(pane.get('.yeaft-vp-timeline-row-status').text()).toBe('using tool…');
+      expect(pane.text()).toContain('failed-turn');
+      expect(pane.text()).toContain('second-failure');
+      broker.transition({ ...owner, state: 'thinking', turnId: 'new-turn' });
+      broker.settleIdle({ sessionId: 's', vpId: 'v', threadId: 'parallel' });
+      await pane.setProps({ rows: rows('s') });
+      expect(pane.find('.yeaft-vp-error-toggle').exists()).toBe(false);
+      // Older Agents retain the error state but cannot provide lost details.
+      frame({ type: 'vp_status_changed', ...owner, state: 'error', threads: [] });
+      await pane.setProps({ rows: rows('s') });
+      await pane.get('.yeaft-vp-error-toggle').trigger('click');
+      expect(pane.text()).toContain('did not retain error details');
+    } finally { pane.unmount(); vi.unstubAllGlobals(); }
+  });
+
   it('previews model/effort immediately, serializes rapid changes, rolls back failures and fences owners', async () => {
     storeFactories.clear();
     const store = useChatStore();

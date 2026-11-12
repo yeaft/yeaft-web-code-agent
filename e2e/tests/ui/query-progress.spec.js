@@ -210,3 +210,79 @@ test('terminal frames and reconnect snapshots settle sidebar animation and respo
     await page.screenshot({ path: info.outputPath(`session-terminal-${theme}-${width}.png`), fullPage: true });
   }
 });
+
+test('VP error disclosure survives Session navigation and snapshot-only reconnect, including legacy Agents', async ({ chatPage: page, mockAgent }, info) => {
+  const sessions = [
+    { id: 'error-session', name: 'Failed turn Session', roster: ['error-vp'], defaultVpId: 'error-vp' },
+    { id: 'other-session', name: 'Another Session', roster: ['error-vp'], defaultVpId: 'error-vp' },
+  ];
+  const conversationId = `yeaft-${randomUUID()}`;
+  const send = event => mockAgent.send({ type: 'yeaft_output', conversationId, event });
+  mockAgent._messageHandlers.push(request => {
+    if (request.type !== 'yeaft_load_history' || request.limit === 0) return;
+    mockAgent.send({ type: 'yeaft_history_chunk', sessionId: request.sessionId, requestId: request.requestId,
+      mode: 'recent', messages: [], oldestSeq: 0, latestSeq: 0, hasMore: false });
+  });
+  mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions } });
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().sessionCatalog.filter(row => row.routeRef.sessionId === 'error-session').length)).toBe(1);
+  const open = async id => {
+    await page.evaluate(id => {
+      const chat = window.Pinia.useChatStore();
+      chat.openCatalogSession(chat.sessionCatalog.find(row => row.routeRef.sessionId === id));
+      chat.closeSessionSidebar();
+    }, id);
+  };
+  await open(sessions[0].id);
+  send({ type: 'session_ready', conversationId, sessionId: sessions[0].id, model: 'test-model' });
+  await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().yeaftConversationIdsByAgent[id], mockAgent.agentId)).toBe(conversationId);
+  const broker = createVpStatusBroker({ send });
+  const owner = { sessionId: sessions[0].id, vpId: 'error-vp', threadId: 'main', turnId: 'failed-turn' };
+  const message = 'Provider request failed\n' + '<script>UNTRUSTED_ERROR</script> ' + 'LongProviderDiagnostic'.repeat(100);
+  broker.transition({ ...owner, state: 'error', errorDetail: { message, code: 'PROVIDER_FAILED', statusCode: 503 } });
+  const toggle = page.locator('.yeaft-vp-error-toggle');
+  const details = page.locator('.yeaft-vp-error-details');
+  await expect(toggle).toBeVisible();
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(details).toContainText('Provider request failed');
+  await expect(details).toContainText('failed-turn');
+  await expect(details.locator('script')).toHaveCount(0);
+  expect(await page.locator('.chat-composer textarea').inputValue()).not.toContain('@error-vp');
+  await open(sessions[1].id);
+  await expect(toggle).toHaveCount(0);
+  await open(sessions[0].id);
+  await expect(toggle).toBeVisible();
+  await expect(details).toHaveCount(0);
+  await toggle.click();
+  await expect(details).toContainText('PROVIDER_FAILED');
+  await page.screenshot({ path: info.outputPath('vp-error-desktop-light.png'), fullPage: true });
+  // No replay of the original live error. Restore from the broker snapshot only.
+  await mockAgent.disconnect();
+  await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().agents.some(agent => agent.id === id && agent.online), mockAgent.agentId)).toBe(false);
+  await mockAgent.connect();
+  await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().agents.some(agent => agent.id === id && agent.online), mockAgent.agentId)).toBe(true);
+  await page.evaluate(() => { window.Pinia.useChatStore().vpStatuses = {}; });
+  await expect(toggle).toHaveCount(0);
+  broker.broadcastSnapshot({ sessionId: owner.sessionId });
+  await expect(toggle).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.getByRole('button', { name: 'Show Session status', exact: true }).click();
+  await toggle.click();
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await expect(details).toContainText('PROVIDER_FAILED');
+    expect(await details.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    expect(await details.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`vp-error-${theme}-320.png`), fullPage: true });
+  }
+  await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
+  await expect(toggle).toContainText('出错');
+  await expect(details).toContainText('错误码');
+  broker.transition({ ...owner, state: 'thinking', turnId: 'recovery-turn' });
+  await expect(toggle).toHaveCount(0);
+  await expect(details).toHaveCount(0);
+  broker.transition({ ...owner, state: 'error', turnId: 'legacy-failure' });
+  await toggle.click();
+  await expect(details).toContainText('此 Agent 未保留错误详情');
+});

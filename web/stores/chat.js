@@ -107,6 +107,7 @@ import {
 } from './helpers/yeaft-history-cache.js';
 import { planNextYeaftHistoryPage } from './helpers/yeaft-history-pagination.js';
 import { applyQueryProgress, reconcileQueryProgressSnapshot } from './helpers/query-progress.js';
+import { normalizeTimelineErrorDetail } from './helpers/vp-timeline.js';
 import { YEAFT_RUNNING_VP_STATES, statusOwnsRunningTurn, stopOrphanedTurnMessages } from './helpers/yeaft-runtime-state.js';
 
 const { defineStore } = Pinia;
@@ -6331,6 +6332,7 @@ export const useChatStore = defineStore('chat', {
           const nextStatus = {
             agentId,
             state: event.state,
+            errorDetail: event.state === 'error' ? normalizeTimelineErrorDetail(event.errorDetail) : null,
             since: event.since || Date.now(),
             turnId: event.turnId || null,
             threadId: event.threadId || 'main',
@@ -6385,6 +6387,7 @@ export const useChatStore = defineStore('chat', {
               next[k] = {
                 agentId: msg.agentId || null,
                 state: row.state,
+                errorDetail: row.state === 'error' ? normalizeTimelineErrorDetail(row.errorDetail) : null,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
                 threadId: row.threadId || 'main',
@@ -6413,6 +6416,7 @@ export const useChatStore = defineStore('chat', {
               merged[k] = {
                 agentId: msg.agentId || null,
                 state: row.state,
+                errorDetail: row.state === 'error' ? normalizeTimelineErrorDetail(row.errorDetail) : null,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
                 threadId: row.threadId || 'main',

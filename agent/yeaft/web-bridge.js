@@ -137,7 +137,7 @@ import { imageMetadataForPersistence } from './image-assets.js';
 import { sliceLastNTurns } from './turn-utils.js';
 import { pairSanitize } from './pair-sanitize.js';
 import { filterSnapshotForVp } from './snapshot-filter.js';
-import { createVpStatusBroker, isVpStatusRunning } from './vp-status-broker.js';
+import { createVpStatusBroker, isVpStatusRunning, normalizeVpErrorDetail } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
 import { listMcpServers, upsertMcpServer, removeMcpServer } from './config-api.js';
 import { buildMcpFlattenedTools } from './tools/mcp-tools.js';
@@ -4445,7 +4445,7 @@ export function installYeaftRuntimeBridge(s) {
  * @param {object} hctx
  * @param {string} state
  */
-function maybeTransitionVpStatus(hctx, state) {
+function maybeTransitionVpStatus(hctx, state, errorDetail = null) {
   if (!hctx || !hctx.vpId) return;
   try {
     if (hctx.thread) {
@@ -4460,11 +4460,14 @@ function maybeTransitionVpStatus(hctx, state) {
       threadId: hctx.threadId || 'main',
       title: hctx.thread?.title || '',
       messageCount: hctx.thread?.messageIds?.length || 0,
+      errorDetail,
     });
   } catch (err) {
     console.warn(`[Yeaft] vp-status ${state} transition failed:`, err?.message || err);
   }
 }
+
+const CONTENT_POLICY_ERROR_MESSAGE = 'Provider blocked this request for content-safety reasons after one safe recovery attempt. Continue and ask the VP to avoid repeating sensitive payloads, credentials, tokens, or exploit samples.';
 
 const STREAM_TEXT_BATCH_MAX_CHARS = 200;
 const STREAM_TEXT_BATCH_MAX_MS = 200;
@@ -5145,25 +5148,34 @@ function handleEngineEvent(event, hctx) {
       // Engine retry exhaustion is an event terminal, not a thrown exception.
       // Move the broker out of its running-only `retrying` state here so
       // reconnect snapshots cannot resurrect a finished Session as active.
-      maybeTransitionVpStatus(hctx, 'error');
       const errMsg = (typeof event.error === 'string' ? event.error : event.error?.message) || 'Unknown error';
       const retryAttempts = Number.isFinite(event.retryAttempts) ? event.retryAttempts : 0;
       const exhaustedIdle = event.reason === 'stream_idle_timeout' && event.retryExhausted;
       const contentPolicyDenied = event.reason === 'content_policy_denied'
         || event.error?.reasonCode === 'content_policy_denied';
       const visibleErrMsg = contentPolicyDenied
-        ? 'Provider blocked this request for content-safety reasons after one safe recovery attempt. Continue and ask the VP to avoid repeating sensitive payloads, credentials, tokens, or exploit samples.'
+        ? CONTENT_POLICY_ERROR_MESSAGE
         : exhaustedIdle && retryAttempts > 0
           ? `${errMsg} after ${retryAttempts} fresh request retries`
           : errMsg;
-      hctx.lastEngineErrorDetail = {
+      hctx.lastEngineErrorDetail = normalizeVpErrorDetail({
         message: visibleErrMsg,
         ...(event.code ? { code: event.code } : {}),
         ...(event.reason ? { reason: event.reason } : {}),
         ...(event.retryExhausted !== undefined ? { retryExhausted: !!event.retryExhausted } : {}),
         ...(Number.isFinite(event.retryAttempts) ? { retryAttempts: event.retryAttempts } : {}),
         ...(Number.isFinite(event.maxRetries) ? { maxRetries: event.maxRetries } : {}),
-      };
+      });
+      maybeTransitionVpStatus(hctx, 'error', {
+        ...hctx.lastEngineErrorDetail,
+        errorName: event.error?.name,
+        statusCode: event.error?.statusCode,
+        reasonCode: event.error?.reasonCode,
+        provider: event.error?.provider,
+        model: event.error?.model,
+        credentialRefreshable: event.error?.credentialRefreshable === true,
+        retryable: !!event.retryable,
+      });
       sendSessionEvent({
         type: 'error',
         message: visibleErrMsg,
@@ -6400,22 +6412,25 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
     }
     console.error('[Yeaft] query error:', err);
     turnEndReason = 'errored';
-    turnEndDetail = { message: err?.message || String(err) };
+    const visibleErrMsg = err?.reasonCode === 'content_policy_denied' || err?.reason === 'content_policy_denied'
+      ? CONTENT_POLICY_ERROR_MESSAGE
+      : (typeof err?.message === 'string' ? err.message : typeof err === 'string' ? err : 'Unknown error');
+    turnEndDetail = normalizeVpErrorDetail({ message: visibleErrMsg, code: err?.code, reason: err?.reason,
+      errorName: err?.name, statusCode: err?.statusCode, reasonCode: err?.reasonCode,
+      provider: err?.provider, model: err?.model, retryable: err?.retryable,
+      credentialRefreshable: err?.credentialRefreshable, retryExhausted: err?.retryExhausted,
+      retryAttempts: err?.retryAttempts, maxRetries: err?.maxRetries });
 
-    // vp-status: surface a transient `error` state so the row's status
-    // label flips red for the brief window before the outer finally
-    // settles it to idle. Without this, an LLM/tool failure would look
-    // identical to a normal turn end in the timeline — the user has
-    // no way to tell from the row that something went wrong.
+    // Keep only the visible, bounded diagnostic until this thread starts again.
     try {
-      getVpStatusBroker().transition({ sessionId, vpId, threadId, title: thread?.title || '', state: 'error', turnId, messageCount: thread?.messageIds?.length || 0 });
+      getVpStatusBroker().transition({ sessionId, vpId, threadId, title: thread?.title || '', state: 'error', turnId, messageCount: thread?.messageIds?.length || 0, errorDetail: turnEndDetail });
     } catch (brokerErr) {
       console.warn('[Yeaft] vp-status error transition failed:', brokerErr?.message || brokerErr);
     }
 
     flushStreamTextBatch(handlerCtx, envelope, { resetImmediate: true });
 
-    if (isPermissionErrorMsg(err.message)) {
+    if (isPermissionErrorMsg(visibleErrMsg)) {
       if (!_permissionDiagnosticSent) {
         _permissionDiagnosticSent = true;
         sendSessionOutputFrame({
@@ -6434,7 +6449,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         message: {
           content: [{
             type: 'text',
-            text: `⚠️ Session error: ${err.message}`,
+            text: `⚠️ Session error: ${visibleErrMsg}`,
           }],
         },
       }, envelope);
