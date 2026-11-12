@@ -65,6 +65,13 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   const vpKeyOf = (sessionId, vpId) => `${sessionId || ''}::${vpId}`;
   const threadKeyOf = (sessionId, vpId, threadId) => `${sessionId || ''}::${vpId}::${threadId || 'main'}`;
 
+  // Identity and error time are broker-owned, not caller-provided diagnostics.
+  // Project them inside the detail so consumers need not infer its owner from
+  // the aggregate's currently selected/running thread.
+  function errorDetailFor(row) {
+    return { ...row.errorDetail, at: row.errorAt, turnId: row.turnId || null, threadId: row.threadId };
+  }
+
   function aggregateFor(sessionId, vpId) {
     const rows = [];
     for (const row of threads.values()) {
@@ -97,7 +104,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       since: source ? source.since : now(),
       turnId: source ? source.turnId || null : null,
       threadId: source ? source.threadId || 'main' : null,
-      ...(state === 'error' && source?.errorDetail ? { errorDetail: { ...source.errorDetail } } : {}),
+      ...(state === 'error' && source?.errorDetail ? { errorDetail: errorDetailFor(source) } : {}),
       runningThreadCount,
       threads: rows.map(r => ({
         threadId: r.threadId,
@@ -109,7 +116,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
         createdAt: r.createdAt || r.since,
         updatedAt: r.updatedAt || r.since,
         messageCount: r.messageCount || 0,
-        ...(r.state === 'error' && r.errorDetail ? { errorDetail: { ...r.errorDetail } } : {}),
+        ...(r.state === 'error' && r.errorDetail ? { errorDetail: errorDetailFor(r) } : {}),
       })),
     };
   }
@@ -141,7 +148,9 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   /**
    * errorDetail is a safe visible diagnostic owned by this thread/turn. Omitting
    * it on an otherwise identical error preserves the diagnostic; a new turn,
-   * explicit null or any non-error state clears it. Returned wire rows are copies.
+   * explicit null or any non-error state clears it. The detail carries broker-owned
+   * at (epoch milliseconds), turnId and threadId; at remains stable for the same
+   * failed turn across metadata updates/corrections. Returned wire rows are copies.
    */
   function transition({ sessionId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount, errorDetail } = {}) {
     if (!vpId) return false;
@@ -173,6 +182,9 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       createdAt: prev?.createdAt || ts,
       turnId,
       errorDetail: nextErrorDetail,
+      errorAt: state === 'error'
+        ? (prev?.state === 'error' && prev.turnId === turnId && prev.errorAt != null ? prev.errorAt : ts)
+        : null,
       title: title || prev?.title || '',
       messageCount: Number.isFinite(messageCount) ? messageCount : (prev?.messageCount || 0),
     };

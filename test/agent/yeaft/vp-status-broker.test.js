@@ -14,6 +14,9 @@ describe('VP error status replay', () => {
     const { broker, send, owner } = fixture();
     const errorDetail = { message: 'Provider request failed', code: 'request_failed' };
     broker.transition({ ...owner, errorDetail });
+    const retainedDetail = { ...errorDetail, at: 1001, turnId: 'failed-turn', threadId: 'failed' };
+    expect(send.mock.lastCall[0].errorDetail).toEqual(retainedDetail);
+    expect(send.mock.lastCall[0].threads[0].errorDetail).toEqual(retainedDetail);
     broker.transition({ ...owner, sessionId: 'other', errorDetail: { message: 'Other Session failure' } });
     broker.transition({ ...owner, vpId: 'other-vp', errorDetail: { message: 'Other VP failure' } });
     broker.transition({ ...owner, threadId: 'parallel', turnId: 'parallel-turn', state: 'thinking' });
@@ -26,6 +29,8 @@ describe('VP error status replay', () => {
     status = send.mock.lastCall[0].statuses.find(row => row.vpId === 'v');
     expect(send.mock.lastCall[0].statuses).toHaveLength(2);
     expect(status).toMatchObject({ state: 'error', turnId: 'failed-turn', threadId: 'failed', runningThreadCount: 0, errorDetail });
+    expect(status.errorDetail).toEqual(retainedDetail);
+    expect(status.threads.find(row => row.threadId === 'failed').errorDetail).toEqual(retainedDetail);
     expect(JSON.stringify(send.mock.lastCall[0])).not.toContain('Other Session failure');
     // Recovering one thread does not clear unrelated failed owners.
     broker.transition({ ...owner, state: 'typing', turnId: 'next-turn' });
@@ -42,7 +47,7 @@ describe('VP error status replay', () => {
     concurrent.transition({ ...owner, threadId: 'newer-failure', turnId: 'newer-turn', errorDetail: { message: 'Newer error' } });
     concurrent.settleIdle({ sessionId: 's', vpId: 'v', threadId: 'idle-sibling' });
     expect(concurrent.snapshot('s')[0]).toMatchObject({ state: 'error', threadId: 'newer-failure',
-      turnId: 'newer-turn', errorDetail: { message: 'Newer error' } });
+      turnId: 'newer-turn', errorDetail: { message: 'Newer error', at: 1000, threadId: 'newer-failure', turnId: 'newer-turn' } });
   });
 
   it('bounds and allowlists scalar details without retaining raw errors or mutable references', () => {
@@ -51,13 +56,15 @@ describe('VP error status replay', () => {
       message: 'm'.repeat(3000), code: 'c'.repeat(200), reason: 'r'.repeat(200), errorName: 'e'.repeat(200),
       reasonCode: 'x'.repeat(200), provider: 'p'.repeat(200), model: 'y'.repeat(300),
       retryable: false, retryExhausted: true, credentialRefreshable: false, retryAttempts: 2, maxRetries: 3, statusCode: 422,
+      at: 'PRIVATE', turnId: 'PRIVATE', threadId: 'PRIVATE',
       stack: 'PRIVATE', cause: { message: 'PRIVATE' }, request: { secret: 'PRIVATE' }, response: 'PRIVATE', raw: 'PRIVATE',
     };
     broker.transition({ ...owner, errorDetail });
     const detail = broker.snapshot('s')[0].errorDetail;
     expect(detail).toEqual({ message: 'm'.repeat(2000), code: 'c'.repeat(128), reason: 'r'.repeat(128),
       errorName: 'e'.repeat(128), reasonCode: 'x'.repeat(128), provider: 'p'.repeat(128), model: 'y'.repeat(256),
-      retryable: false, retryExhausted: true, credentialRefreshable: false, retryAttempts: 2, maxRetries: 3, statusCode: 422 });
+      retryable: false, retryExhausted: true, credentialRefreshable: false, retryAttempts: 2, maxRetries: 3, statusCode: 422,
+      at: 1001, turnId: 'failed-turn', threadId: 'failed' });
     expect(JSON.stringify(send.mock.lastCall)).not.toContain('PRIVATE');
     errorDetail.message = 'mutated input';
     detail.message = 'mutated snapshot';
@@ -78,7 +85,10 @@ describe('VP error status replay', () => {
     expect(broker.transition(owner)).toBe(false);
     expect(send).toHaveBeenCalledTimes(count);
     expect(broker.transition({ ...owner, errorDetail: { message: 'Corrected failure', code: 'failure' } })).toBe(true);
+    const correctedDetail = broker.snapshot('s')[0].errorDetail;
+    expect(correctedDetail).toMatchObject({ at: 1001, turnId: 'failed-turn', threadId: 'failed' });
     expect(broker.transition({ ...owner, messageCount: 5 })).toBe(true);
+    expect(broker.snapshot('s')[0].errorDetail).toEqual(correctedDetail);
     expect(broker.snapshot('s')[0].threads[0]).toMatchObject({ messageCount: 5, errorDetail: { message: 'Corrected failure' } });
     expect(broker.transition({ ...owner, turnId: 'new-failed-turn' })).toBe(true);
     expect(broker.snapshot('s')[0]).not.toHaveProperty('errorDetail');

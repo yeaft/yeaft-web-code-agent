@@ -125,7 +125,8 @@ it('retains the sanitized visible engine error and retry metadata in the correct
   let status = ctx.outboundSendQueue.map(row => row.msg.event).find(event => event?.type === 'vp_status_changed');
   expect(status).toMatchObject({ state: 'error', threadId: 'failed-thread', turnId: 'failed-turn',
     errorDetail: { message: 'Stream idle timeout after 2 fresh request retries', code: 'timeout',
-      reason: 'stream_idle_timeout', retryExhausted: true, retryAttempts: 2, maxRetries: 2 } });
+      reason: 'stream_idle_timeout', retryExhausted: true, retryAttempts: 2, maxRetries: 2,
+      at: expect.any(Number), turnId: 'failed-turn', threadId: 'failed-thread' } });
   expect(status.threads[0].errorDetail).toEqual(status.errorDetail);
   ctx.outboundSendQueue = [];
   __testHandleEngineEvent({ type: 'error', reason: 'content_policy_denied', retryable: false,
@@ -177,9 +178,10 @@ it('retains bounded thrown-error diagnostics and sanitizes content-policy failur
       let wire = ctx.outboundSendQueue.map(row => row.msg);
       let status = wire.find(row => row.event?.type === 'vp_status_changed' && row.event.state === 'error').event;
       expect(status).toMatchObject({ sessionId: 's', vpId: 'v', threadId: 'main', turnId: 'thrown-turn',
-        errorDetail: { code: 'request_failed', errorName: 'Error', statusCode: 503, message: failed.message.slice(0, 2000) } });
+        errorDetail: { code: 'request_failed', errorName: 'Error', statusCode: 503, message: failed.message.slice(0, 2000),
+          at: expect.any(Number), turnId: 'thrown-turn', threadId: 'main' } });
       expect(status.threads[0].errorDetail).toEqual(status.errorDetail);
-      expect(wire.find(row => row.event?.type === 'vp_turn_end').event.detail).toEqual(status.errorDetail);
+      expect(status.errorDetail).toMatchObject(wire.find(row => row.event?.type === 'vp_turn_end').event.detail);
       expect(wire.some(row => row.event?.state === 'idle')).toBe(false);
       expect(JSON.stringify(wire)).not.toContain('PRIVATE');
       Object.assign(failed, { message: 'PRIVATE provider body', reasonCode: 'content_policy_denied', statusCode: 422 });
