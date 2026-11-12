@@ -28,7 +28,7 @@
 
 支持 preserved thinking 的 Anthropic 模型一旦在当前 query 内建立签名前缀，后续请求必须保持原有 system、tools 和消息前缀不变；不能再对这些工具结果做 compact、去重或丢弃。运行中指令与工具变更仍通过追加消息传递。
 
-此时 `max_tokens` 只是输出上限，不属于签名前缀。Engine 先按剩余窗口缩小本次输出额度，而不是因为配置的最大输出额度过大就终止。预算以最近成功请求的实际 input（按 provider 语义计入 cache）为下界，再计入助手响应及新增工具结果；新增内容的估算按该请求实际 input / 文本估算比值校准。没有实际 usage 时回退到文本估算。`request_output_reserve` trace 只记录窗口、输入预算和输出额度，不复制正文。
+此时 `max_tokens` 只是输出上限，不属于签名前缀。Engine 先按剩余窗口缩小本次输出额度，而不是因为配置的最大输出额度过大就终止。预算以最近成功请求的实际 input（按 provider 语义计入 cache）为下界，再计入助手响应及新增工具结果；新增内容的估算按该请求实际 input / 文本估算比值校准。首次没有实际 usage 时回退到文本估算；后续响应缺失或仅报告部分 usage 时，保留已经校准的输入下界并继续计入新增内容，不将已知前缀重置为零或较小的 uncached input。`request_output_reserve` trace 只记录窗口、输入预算和输出额度，不复制正文。
 
 Engine 将配置输出目标 `maxTokens` 与剩余上下文硬上限 `contextOutputLimit` 分开传递。适配器在最终 wire body 规范化之后再次校验签名 continuation 的实际输出额度：manual thinking 或 `extraBody` 可以高于配置目标，但不能超过剩余上下文；等于硬上限仍可发送，超过则在 fetch 前显式失败，不默默降低用户指定的 thinking budget，也不发送越界请求；stream 和 side call 采用同一保护。
 

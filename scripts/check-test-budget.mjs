@@ -161,7 +161,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // and extraBody settings that must not exceed the final wire output ceiling.
 // +5 review regressions: manual/extraBody widening with room, manual widening
 // beyond a tighter remaining window, and stream/call exact-ceiling compatibility.
-export const TEST_CASE_LIMIT = 1022;
+// +3 usage-anchor regressions: missing SSE/JSON usage and partial input reports
+// cannot erase the known prefix lower bound across a third request.
+export const TEST_CASE_LIMIT = 1025;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

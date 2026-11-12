@@ -3169,6 +3169,9 @@ export class Engine {
           messages: structuredClone(wireMessages), historyMessageCount,
           conversationCursor: conversationMessages.length + (pendingContinuationForRequest ? 1 : 0),
           inputEstimate: requestInputBreakdown.totalEstimatedTokens,
+          // A later gateway response may omit usage or report only uncached
+          // input. Preserve the calibrated floor already paid by this prefix.
+          inputTokenFloor: fittedRequest.meta.estimatedInputTokens || 0,
         };
 
         // Capture only the provider route before the visible boundary. The
@@ -3915,7 +3918,7 @@ export class Engine {
       if (requestPrefixSnapshot && (signedAnthropicPrefix || (boundProviderState?.protocol === 'anthropic'
           && boundProviderState.requestPrefix))) {
         signedAnthropicPrefix = { ...requestPrefixSnapshot,
-          inputTokens: turnInputTokens, outputTokens: turnOutputTokens,
+          inputTokens: Math.max(turnInputTokens, requestPrefixSnapshot.inputTokenFloor), outputTokens: turnOutputTokens,
         };
       }
       // New private reasoning is persisted only with verified provider ownership;

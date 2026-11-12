@@ -539,7 +539,7 @@ describe('Engine', () => {
       }
     });
 
-    it.each(['estimated', 'cached-usage', 'included-cache', 'repeated', 'exhausted', 'manual', 'extra-body', 'manual-room', 'manual-edge', 'extra-body-room'])('budgets signed output without editing the prefix: %s', async mode => {
+    it.each(['estimated', 'cached-usage', 'included-cache', 'repeated', 'exhausted', 'manual', 'extra-body', 'manual-room', 'manual-edge', 'extra-body-room', 'usage-gap', 'partial-usage', 'usage-gap-json'])('budgets signed output without editing the prefix: %s', async mode => {
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-reserve-'));
       const originalFetch = globalThis.fetch;
       const requests = [];
@@ -554,11 +554,18 @@ describe('Engine', () => {
         globalThis.fetch = vi.fn(async (_url, init) => {
           requests.push(JSON.parse(init.body));
           const index = requests.length;
-          const usage = mode === 'estimated' ? undefined : mode === 'included-cache'
+          const usageGap = ['usage-gap', 'partial-usage', 'usage-gap-json'].includes(mode);
+          const usage = mode === 'estimated' || (usageGap && index === 2 && mode !== 'partial-usage') ? undefined
+            : mode === 'partial-usage' && index === 2 ? { input_tokens: 5000, output_tokens: 100 } : mode === 'included-cache'
             ? { input_tokens: 30000, cache_read_input_tokens: 20000, output_tokens: 100 }
             : { input_tokens: 5000, cache_read_input_tokens: 20000, cache_creation_input_tokens: 5000, output_tokens: 100 };
-          return response(`reserve-${index}`, index === 1 || (mode === 'repeated' && index === 2) ? 'echo' : undefined,
-            {}, 'claude-opus-4.8', usage);
+          const tool = index === 1 || ((mode === 'repeated' || usageGap) && index === 2) ? 'echo' : undefined;
+          if (mode === 'usage-gap-json') return new Response(JSON.stringify({ id: `reserve-${index}`, model: 'claude-opus-4.8',
+            content: [{ type: 'thinking', thinking: `private-${index}`, signature: `sig-${index}` },
+              tool ? { type: 'tool_use', id: `reserve-${index}`, name: tool, input: {} } : { type: 'text', text: 'Finished safely.' }],
+            stop_reason: tool ? 'tool_use' : 'end_turn', ...(usage ? { usage } : {}),
+          }), { headers: { 'content-type': 'application/json' } });
+          return response(`reserve-${index}`, tool, {}, 'claude-opus-4.8', usage);
         });
         const store = new ConversationStore(dir);
         const adapter = new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
@@ -589,6 +596,7 @@ describe('Engine', () => {
         }
         expect(requests[0].max_tokens).toBe(manual ? Math.max(config.maxOutputTokens, 17408)
           : mode.startsWith('extra-body') ? 20000 : config.maxOutputTokens);
+        const repeated = ['repeated', 'usage-gap', 'partial-usage', 'usage-gap-json'].includes(mode);
         const failed = ['exhausted', 'manual', 'manual-edge', 'extra-body'].includes(mode);
         if (failed) {
           expect(requests).toHaveLength(1);
@@ -596,7 +604,7 @@ describe('Engine', () => {
           expect(events.find(event => event.type === 'error').error.code).toBe('PROVIDER_STATE_INVALID');
         } else {
           expect(events.filter(event => event.type === 'error')).toEqual([]);
-          expect(requests).toHaveLength(mode === 'repeated' ? 3 : 2);
+          expect(requests).toHaveLength(repeated ? 3 : 2);
           for (let index = 1; index < requests.length; index += 1) {
             const body = requests[index];
             expect(body.system).toBe(requests[0].system);
@@ -611,6 +619,7 @@ describe('Engine', () => {
             expect(body.max_tokens).toBeLessThan(20000);
             const limit = mode === 'estimated' ? 22000 - loops[index].requestInputBreakdown.totalEstimatedTokens : 10000;
             expect(body.max_tokens).toBeLessThanOrEqual(limit);
+            if (repeated && index > 1) expect(body.max_tokens).toBeLessThanOrEqual(requests[index - 1].max_tokens);
           }
           if (mode === 'estimated') {
             expect(requests[1].messages.at(-1).content[0].content).toBe(result);
@@ -618,7 +627,7 @@ describe('Engine', () => {
           }
         }
         expect(events.filter(event => event.type === 'llm_retry')).toEqual([]);
-        expect(events.filter(event => event.type === 'tool_end')).toHaveLength(mode === 'repeated' ? 2 : 1);
+        expect(events.filter(event => event.type === 'tool_end')).toHaveLength(repeated ? 2 : 1);
         expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
           expect.objectContaining({ stopReason: failed ? 'error' : 'end_turn', terminal: true }),
         ]);
