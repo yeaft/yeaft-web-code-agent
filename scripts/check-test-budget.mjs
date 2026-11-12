@@ -156,7 +156,14 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +4 PresentResponse wire regressions: manual/adaptive thinking (including
 // prefix-enforced models) and no-thinking preserve native tool pairs and publications.
 // +1 managed-provider effort persistence/dispatch regression after API-based effort.
-export const TEST_CASE_LIMIT = 1010;
+// +7 signed-output budget regressions: estimate fallback, cache-exclusive and
+// cache-inclusive usage, repeated continuation, exhausted windows, manual thinking
+// and extraBody settings that must not exceed the final wire output ceiling.
+// +5 review regressions: manual/extraBody widening with room, manual widening
+// beyond a tighter remaining window, and stream/call exact-ceiling compatibility.
+// +3 usage-anchor regressions: missing SSE/JSON usage and partial input reports
+// cannot erase the known prefix lower bound across a third request.
+export const TEST_CASE_LIMIT = 1025;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

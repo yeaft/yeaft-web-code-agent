@@ -352,10 +352,10 @@ describe('Engine', () => {
   });
 
   describe('active signed Anthropic prefixes', () => {
-    const response = (id, tool, input = {}, model = 'claude-opus-4.8') => {
+    const response = (id, tool, input = {}, model = 'claude-opus-4.8', usage) => {
       const blocks = [{ type: 'thinking', thinking: `private-${id}`, signature: `signature-${id}` },
         tool ? { type: 'tool_use', id, name: tool, input } : { type: 'text', text: 'Finished safely.' }];
-      const events = [{ type: 'message_start', message: { id, model, role: 'assistant', content: [] } },
+      const events = [{ type: 'message_start', message: { id, model, role: 'assistant', content: [], ...(usage ? { usage } : {}) } },
         ...blocks.flatMap((content_block, index) => [{ type: 'content_block_start', index, content_block }, { type: 'content_block_stop', index }]),
         { type: 'message_delta', delta: { stop_reason: tool ? 'tool_use' : 'end_turn' } }, { type: 'message_stop' }];
       return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
@@ -532,6 +532,105 @@ describe('Engine', () => {
         });
         expect(store.loadAllBySession('signed-background').find(row => row.role === 'tool' && row.toolCallId === 'background-1').content)
           .toContain('LATE_COMPLETION_EVIDENCE');
+      } finally {
+        globalThis.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['estimated', 'cached-usage', 'included-cache', 'repeated', 'exhausted', 'manual', 'extra-body', 'manual-room', 'manual-edge', 'extra-body-room', 'usage-gap', 'partial-usage', 'usage-gap-json'])('budgets signed output without editing the prefix: %s', async mode => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-reserve-'));
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      const loops = [];
+      const hasRoom = mode.endsWith('-room');
+      const manual = mode.startsWith('manual');
+      const result = 'SIGNED_TOOL_EVIDENCE '.repeat(1000);
+      const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: hasRoom || mode === 'manual-edge' ? 16384 : 20000, projectDocMaxBytes: 0,
+        modelInfo: { contextWindow: hasRoom ? 200000 : mode === 'manual-edge' ? 47500 : 40000, maxOutput: 64000 } };
+      let engine;
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          requests.push(JSON.parse(init.body));
+          const index = requests.length;
+          const usageGap = ['usage-gap', 'partial-usage', 'usage-gap-json'].includes(mode);
+          const usage = mode === 'estimated' || (usageGap && index === 2 && mode !== 'partial-usage') ? undefined
+            : mode === 'partial-usage' && index === 2 ? { input_tokens: 5000, output_tokens: 100 } : mode === 'included-cache'
+            ? { input_tokens: 30000, cache_read_input_tokens: 20000, output_tokens: 100 }
+            : { input_tokens: 5000, cache_read_input_tokens: 20000, cache_creation_input_tokens: 5000, output_tokens: 100 };
+          const tool = index === 1 || ((mode === 'repeated' || usageGap) && index === 2) ? 'echo' : undefined;
+          if (mode === 'usage-gap-json') return new Response(JSON.stringify({ id: `reserve-${index}`, model: 'claude-opus-4.8',
+            content: [{ type: 'thinking', thinking: `private-${index}`, signature: `sig-${index}` },
+              tool ? { type: 'tool_use', id: `reserve-${index}`, name: tool, input: {} } : { type: 'text', text: 'Finished safely.' }],
+            stop_reason: tool ? 'tool_use' : 'end_turn', ...(usage ? { usage } : {}),
+          }), { headers: { 'content-type': 'application/json' } });
+          return response(`reserve-${index}`, tool, {}, 'claude-opus-4.8', usage);
+        });
+        const store = new ConversationStore(dir);
+        const adapter = new AdapterRouter({ providers: [{ name: 'gateway', protocol: 'anthropic',
+          baseUrl: 'https://gateway.example/v1', apiKey: 'synthetic', models: [{ id: 'claude-opus-4.8',
+            ...(manual ? { thinkingProtocol: 'anthropic' } : {}),
+          }] }] });
+        if (['included-cache', 'extra-body', 'extra-body-room'].includes(mode)) {
+          const capture = adapter.captureRequest.bind(adapter);
+          adapter.captureRequest = () => {
+            const snapshot = capture();
+            return { captureStream: async function* (params) {
+              const request = mode.startsWith('extra-body') ? { ...params, extraBody: { max_tokens: 20000 } } : params;
+              for await (const event of snapshot.captureStream(request)) yield event.type === 'usage' && mode === 'included-cache'
+                ? { ...event, cacheTokensAreIncludedInInput: true } : event;
+            } };
+          };
+        }
+        engine = new Engine({ adapter, trace, config, yeaftDir: dir, conversationStore: store });
+        engine.registerTool({ name: 'echo', description: 'Read evidence', parameters: { type: 'object' }, execute: async () => {
+          if (mode === 'estimated') engine.refreshConfig({ ...config, modelInfo: { ...config.modelInfo, contextWindow: 22000 } });
+          if (mode === 'exhausted') engine.refreshConfig({ ...config, modelInfo: { ...config.modelInfo, contextWindow: 30500 } });
+          return mode === 'estimated' ? result : 'short evidence';
+        } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'obtain evidence', sessionId: 'signed-reserve', userEffort: 'xhigh' })) {
+          events.push(event);
+          if (event.type === 'loop') loops.push(event);
+        }
+        expect(requests[0].max_tokens).toBe(manual ? Math.max(config.maxOutputTokens, 17408)
+          : mode.startsWith('extra-body') ? 20000 : config.maxOutputTokens);
+        const repeated = ['repeated', 'usage-gap', 'partial-usage', 'usage-gap-json'].includes(mode);
+        const failed = ['exhausted', 'manual', 'manual-edge', 'extra-body'].includes(mode);
+        if (failed) {
+          expect(requests).toHaveLength(1);
+          if (manual) expect(requests[0].thinking).toMatchObject({ type: 'enabled', budget_tokens: 16384 });
+          expect(events.find(event => event.type === 'error').error.code).toBe('PROVIDER_STATE_INVALID');
+        } else {
+          expect(events.filter(event => event.type === 'error')).toEqual([]);
+          expect(requests).toHaveLength(repeated ? 3 : 2);
+          for (let index = 1; index < requests.length; index += 1) {
+            const body = requests[index];
+            expect(body.system).toBe(requests[0].system);
+            expect(body.tools).toEqual(requests[0].tools);
+            expect(body.messages.slice(0, requests[index - 1].messages.length)).toEqual(requests[index - 1].messages);
+            expect(body.max_tokens).toBeGreaterThanOrEqual(1024);
+            if (hasRoom) {
+              expect(body.max_tokens).toBe(manual ? 17408 : 20000);
+              expect(body.thinking).toEqual(requests[0].thinking);
+              continue;
+            }
+            expect(body.max_tokens).toBeLessThan(20000);
+            const limit = mode === 'estimated' ? 22000 - loops[index].requestInputBreakdown.totalEstimatedTokens : 10000;
+            expect(body.max_tokens).toBeLessThanOrEqual(limit);
+            if (repeated && index > 1) expect(body.max_tokens).toBeLessThanOrEqual(requests[index - 1].max_tokens);
+          }
+          if (mode === 'estimated') {
+            expect(requests[1].messages.at(-1).content[0].content).toBe(result);
+            expect(store.loadAllBySession('signed-reserve').find(row => row.role === 'tool').content).toBe(result);
+          }
+        }
+        expect(events.filter(event => event.type === 'llm_retry')).toEqual([]);
+        expect(events.filter(event => event.type === 'tool_end')).toHaveLength(repeated ? 2 : 1);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: failed ? 'error' : 'end_turn', terminal: true }),
+        ]);
       } finally {
         globalThis.fetch = originalFetch;
         await closeConversationHistoryIndexes();

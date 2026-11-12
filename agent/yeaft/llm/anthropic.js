@@ -69,6 +69,16 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
 
 import { ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts, validateAnthropicRequestPrefixes, supportsAnthropicPreservedThinking } from './provider-state.js';
 
+/** Signed continuations cannot recover by compacting after wire settings grow. */
+function validateSignedOutputBudget(body, replayed, contextOutputLimit) {
+  // maxTokens is a configured target, not a context ceiling: manual thinking
+  // has always been allowed to widen it. Only Engine knows the remaining space.
+  if (Number.isFinite(contextOutputLimit) && replayed.some(({ state }) => state.requestPrefix)
+      && body.max_tokens > contextOutputLimit) {
+    throw new ProviderStateError('signed Anthropic output settings exceed the remaining context budget; lower thinking/output settings or start a new turn');
+  }
+}
+
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const API_VERSION = '2023-06-01';
 
@@ -313,10 +323,10 @@ export class AnthropicAdapter extends LLMAdapter {
   }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'medium'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, contextOutputLimit?: number, effort?: 'medium'|'xhigh'|'max', effortSource?: 'user'|'auto', effortContext?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, model });
@@ -351,6 +361,7 @@ export class AnthropicAdapter extends LLMAdapter {
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
+    validateSignedOutputBudget(body, replayed, contextOutputLimit);
     const wireBody = toWellFormedJson(body);
     validateAnthropicRequestPrefixes(wireBody, replayed);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
@@ -798,7 +809,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * models silently drop the param. max_tokens auto-widens to budget+1024
    * when needed.
    */
-  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
+  async call({ model, system, messages, maxTokens = 4096, contextOutputLimit, effort, effortSource, effortContext, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, model });
@@ -827,6 +838,7 @@ export class AnthropicAdapter extends LLMAdapter {
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'anthropic', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
+    validateSignedOutputBudget(body, replayed, contextOutputLimit);
     const wireBody = toWellFormedJson(body);
     validateAnthropicRequestPrefixes(wireBody, replayed);
 
