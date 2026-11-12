@@ -126,6 +126,10 @@ VP 文本里的 `@mention` 不会触发 runtime handoff。VP-to-VP 转交必须�
 
 ## Session history 与状态
 
+VP 执行出错后，点击 Session status 中该 VP 的“出错”可展开错误详情，包括错误消息、错误码和对应的 turn／线程。切换 Session 再返回，或浏览器重连时，详情随 Agent 状态快照恢复，不依赖之前的临时提示；多个失败线程分别展示。错误文本按纯文本显示，长内容可滚动、选择复制。
+
+详情属于 Agent 当前运行状态，不是长期错误日志；对应线程开始新一轮执行或清理后不再展示，Agent 重启前的错误不保证恢复。旧版 Agent 未提供详情时会明确提示，需要更新 Web 和 Agent 后查看后续错误。
+
 Yeaft 页面提供：
 
 - 分页、virtualized conversation timeline；

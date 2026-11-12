@@ -3499,6 +3499,27 @@
   border-radius: 4px;
 }
 .yeaft-vp-timeline-row-body:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.yeaft-vp-error-toggle.btn-ghost {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  min-height: 24px;
+  border: 0;
+  border-radius: var(--response-radius);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: var(--error);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.yeaft-vp-error-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.yeaft-vp-error-details { min-width: 0; max-height: 320px; overflow: auto; font-size: 12px; line-height: 1.5; }
+.yeaft-vp-error-detail + .yeaft-vp-error-detail { margin-top: 12px; }
+.yeaft-vp-error-message { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-primary); user-select: text; }
+.yeaft-vp-error-metadata { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin: 0; overflow-wrap: anywhere; }
+.yeaft-vp-error-metadata dt { color: var(--text-muted); }
+.yeaft-vp-error-metadata dd { margin: 0; color: var(--text-secondary); user-select: text; }
 .yeaft-query-progress {
   min-width: 0;
   width: 100%;

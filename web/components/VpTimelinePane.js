@@ -243,12 +243,18 @@ export default {
                   <span class="yeaft-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
                   <span v-if="row.description" class="yeaft-vp-timeline-row-description">{{ row.description }}</span>
                 </span>
-                <span class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
+                <span v-if="!row.errors?.length" class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
                 <span
                   v-if="row.runningThreadCount > 1"
                   class="yeaft-vp-timeline-thread-count"
                   :title="threadCountTitle(row)"
                 >{{ row.runningThreadCount }} threads</span>
+              </button>
+              <button v-if="row.errors?.length" type="button" class="btn-ghost yeaft-vp-error-toggle"
+                :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: row.displayName })"
+                :aria-expanded="isErrorExpanded(row)"
+                @click="toggleError(row)">
+                {{ $t('yeaft.vpTimeline.status.error') }} <span aria-hidden="true">{{ isErrorExpanded(row) ? '▾' : '▸' }}</span>
               </button>
               <span class="yeaft-vp-timeline-row-actions">
                 <button
@@ -279,6 +285,21 @@ export default {
                 </button>
               </span>
             </div>
+            <section v-if="row.errors?.length && isErrorExpanded(row)" class="yeaft-vp-error-details"
+              :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: row.displayName })">
+              <article v-for="(error, index) in row.errors" :key="index" class="yeaft-vp-error-detail">
+                <p class="yeaft-vp-error-message">{{ error.message || $t('yeaft.vpTimeline.errorUnavailable') }}</p>
+                <dl class="yeaft-vp-error-metadata">
+                  <template v-if="error.code || error.reasonCode"><dt>{{ $t('yeaft.vpTimeline.errorCode') }}</dt><dd>{{ error.code || error.reasonCode }}</dd></template>
+                  <template v-if="error.reason"><dt>{{ $t('yeaft.vpTimeline.errorReason') }}</dt><dd>{{ error.reason }}</dd></template>
+                  <template v-if="error.statusCode"><dt>HTTP</dt><dd>{{ error.statusCode }}</dd></template>
+                  <template v-if="error.provider || error.model"><dt>{{ $t('yeaft.vpTimeline.errorModel') }}</dt><dd>{{ [error.provider, error.model].filter(Boolean).join(' / ') }}</dd></template>
+                  <template v-if="error.at"><dt>{{ $t('yeaft.vpTimeline.errorTime') }}</dt><dd>{{ formatErrorTime(error.at) }}</dd></template>
+                  <template v-if="error.turnId"><dt>Turn</dt><dd>{{ error.turnId }}</dd></template>
+                  <template v-if="error.threadId"><dt>{{ $t('yeaft.vpTimeline.errorThread') }}</dt><dd>{{ error.threadId }}</dd></template>
+                </dl>
+              </article>
+            </section>
             <div v-if="row.queryProgress" class="yeaft-query-progress" :class="'is-' + row.queryProgress.stage">
               <div class="yeaft-query-progress-tokens" :aria-label="$t('yeaft.queryProgress.tokenScope')">
                 <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.inputTokens') }}</span><strong>{{ formatTokenCount(row.queryProgress.inputTokens) }}</strong></span>
@@ -430,6 +451,19 @@ export default {
       return text.slice(0, 95) + '…';
     });
 
+    const expandedErrors = Vue.ref({});
+    const errorKey = row => JSON.stringify([row.agentId, row.sessionId, row.vpId,
+      (row.errors || []).map(error => [error.turnId, error.threadId, error.at])]);
+    const isErrorExpanded = row => !!expandedErrors.value[errorKey(row)];
+    const toggleError = row => {
+      const key = errorKey(row);
+      expandedErrors.value = { ...expandedErrors.value, [key]: !isErrorExpanded(row) };
+    };
+    Vue.watch(() => props.rows.filter(row => row.errors?.length).map(errorKey), keys => {
+      expandedErrors.value = Object.fromEntries(Object.entries(expandedErrors.value).filter(([key]) => keys.includes(key)));
+    });
+    const formatErrorTime = value => new Date(value).toLocaleString();
+
     const expandedProgress = Vue.ref({});
     const progressKey = (row) => JSON.stringify([row.vpId, row.queryProgress?.sessionId, row.queryProgress?.turnId, row.queryProgress?.threadId]);
     const isProgressExpanded = (row, section) => !!expandedProgress.value[progressKey(row)]?.[section];
@@ -566,6 +600,9 @@ export default {
       hasAnnouncement,
       announcementPreview,
       statusLabel,
+      isErrorExpanded,
+      toggleError,
+      formatErrorTime,
       isActiveStatus,
       threadCountTitle,
       vpTextColorFor,
