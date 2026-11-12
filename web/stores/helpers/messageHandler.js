@@ -166,6 +166,18 @@ function bufferYeaftSessionInventorySlice(store, msg) {
   }];
 }
 
+/** Preserve live config acknowledgements across an older in-flight inventory. */
+export function bufferYeaftSessionConfigDelta(store, event, agentId) {
+  const requestId = store.yeaftSessionHydrateRequestId;
+  if (!requestId || !agentId || !event?.ok || event.op !== 'update_config' || !event.sessionId) return;
+  if (store.yeaftSessionHydrateConfigDeltas?.requestId !== requestId) {
+    store.yeaftSessionHydrateConfigDeltas = { requestId, agents: {} };
+  }
+  const agents = store.yeaftSessionHydrateConfigDeltas.agents;
+  if (!agents[agentId]) agents[agentId] = {};
+  agents[agentId][event.sessionId] = { ...event.session, id: event.sessionId, config: event.config || {} };
+}
+
 function preferredYeaftSessionInventoryIdentity(store) {
   const sessions = sessionsStore();
   let persistedIdentity = null;
@@ -197,9 +209,14 @@ function commitBufferedYeaftSessionInventory(store) {
   } else if (typeof sessions?.resetInventory === 'function') {
     sessions.resetInventory();
   }
-  const slices = Array.isArray(store.yeaftSessionHydrateSlices)
-    ? store.yeaftSessionHydrateSlices
-    : [];
+  const deltas = store.yeaftSessionHydrateConfigDeltas?.requestId === store.yeaftSessionHydrateRequestId
+    ? store.yeaftSessionHydrateConfigDeltas.agents : {};
+  const slices = (Array.isArray(store.yeaftSessionHydrateSlices) ? store.yeaftSessionHydrateSlices : [])
+    .map(slice => {
+      const updates = deltas[slice.agentId] || {};
+      return { ...slice, sessions: (slice.sessions || []).map(row => updates[row.id]
+        ? { ...row, ...updates[row.id] } : row) };
+    });
   const orderedSlices = preferred.agentId
     ? [
         ...slices.filter(slice => slice.agentId === preferred.agentId),
@@ -214,6 +231,7 @@ function commitBufferedYeaftSessionInventory(store) {
     reconcileScheduledTaskNotifications(store, slice.sessions, slice.agentId);
   });
   store.yeaftSessionHydrateSlices = [];
+  store.yeaftSessionHydrateConfigDeltas = null;
 }
 
 function scheduleLegacyYeaftSessionInventoryComplete(store) {
@@ -388,6 +406,7 @@ export function handleMessage(store, msg) {
         store.browserRuntimeServerEnabled = msg.browserRuntimeEnabled === true;
         window.dispatchEvent(new CustomEvent('browser-runtime-message', { detail: msg }));
         store.yeaftSessionHydrateSlices = [];
+        store.yeaftSessionHydrateConfigDeltas = null;
         store._hasHandledYeaftSessionHydrate = false;
         store.yeaftSessionHydrateError = null;
 
@@ -451,6 +470,7 @@ export function handleMessage(store, msg) {
       store._legacyYeaftSessionHydrateTimer = null;
       if (msg.ok !== false) commitBufferedYeaftSessionInventory(store);
       else store.yeaftSessionHydrateSlices = [];
+      store.yeaftSessionHydrateConfigDeltas = null;
       store.yeaftSessionHydrateRequestId = null;
       store._hasHandledYeaftSessionHydrate = msg.ok !== false;
       store.yeaftSessionHydrateError = msg.ok === false

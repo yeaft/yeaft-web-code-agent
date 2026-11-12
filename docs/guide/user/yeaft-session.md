@@ -32,6 +32,8 @@ Legacy browser-local section state is not imported into user preferences. The in
 5. Create the Session.
 6. After creation, choose model/effort in the composer and edit the announcement in Session settings, then send a message.
 
+模型与推理强度选择会立即预览，并等待 Agent 确认保存；保存失败会恢复已确认值并提示。连续切换按 Session 顺序应用，其他 Session 不受影响；若立即发送消息，会先等待所选模型确认，不会悄悄使用旧模型。切换模型时优先默认使用 `xhigh`，没有此档位时只从该模型支持的档位选择；已保存的 Session 强度不会被刷新覆盖。运行中的请求不被中断，新设置从下一次模型请求开始使用。
+
 When the roster is omitted and the Agent's VP library contains `omni`, the runtime can use the **All-purpose Assistant** (Chinese name: **全能助手**) as the default generalist. A fresh automatically created default Session includes only that assistant, not the entire library. Internal IDs stay stable, and an explicitly non-empty roster is never silently replaced.
 
 ### Choose an assistant for the work

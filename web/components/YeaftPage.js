@@ -335,7 +335,7 @@ export default {
           @quote-consumed="messageQuote = null"
         >
           <template #actions-end-before>
-            <div class="yeaft-composer-model-controls">
+            <div class="yeaft-composer-model-controls" :aria-busy="store.sessionModelSelectionFor(topbarGroup?.id, store.currentAgent) ? 'true' : 'false'">
               <div
                 class="yeaft-composer-choice yeaft-composer-model-choice"
                 :class="{ 'is-open': composerMenuOpen === 'model' }"
@@ -1165,7 +1165,12 @@ export default {
       return text;
     });
 
-    const topbarModel = Vue.computed(() => resolveSessionModelRef(topbarGroup.value, store.yeaftModel || ''));
+    const topbarModelSession = Vue.computed(() => {
+      const group = topbarGroup.value;
+      const preview = store.sessionModelSelectionFor(group?.id, store.currentAgent);
+      return preview ? { ...group, config: { ...group?.config, ...preview } } : group;
+    });
+    const topbarModel = Vue.computed(() => resolveSessionModelRef(topbarModelSession.value, store.yeaftModel || ''));
 
     const topbarModelMeta = Vue.computed(() => {
       const id = topbarModel.value;
@@ -1179,7 +1184,7 @@ export default {
 
     const selectableEffortsForModel = (model) => getSelectableModelEfforts(model?.effortOptions);
 
-    const topbarRawEffort = Vue.computed(() => resolveSessionModelEffort(topbarGroup.value, store.yeaftModelEffort || ''));
+    const topbarRawEffort = Vue.computed(() => resolveSessionModelEffort(topbarModelSession.value, store.yeaftModelEffort || ''));
 
     const topbarEffort = Vue.computed(() => {
       const options = selectableEffortsForModel(topbarModelMeta.value);
@@ -1224,17 +1229,27 @@ export default {
       }, 0);
     };
 
+    const applyModelSelection = async (modelId, sessionId, effort) => {
+      try {
+        const result = await store.switchYeaftModel(modelId, sessionId, effort);
+        if (result?.ok === false && !result.superseded) {
+          await alertDialog($t('yeaft.modelMenu.saveFailed'));
+        }
+      } catch (_) {
+        await alertDialog($t('yeaft.modelMenu.saveFailed'));
+      }
+    };
     const selectModel = (modelId, effort = null) => {
       if (!modelId) return;
       const sessionId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(modelId, sessionId, effort);
+      void applyModelSelection(modelId, sessionId, effort);
       closeComposerMenu();
     };
 
     const selectEffort = (effort) => {
       if (!topbarEffortOptions.value.includes(effort) || !topbarModel.value) return;
       const sessionId = topbarGroup.value?.id || null;
-      store.switchYeaftModel(topbarModel.value, sessionId, effort);
+      void applyModelSelection(topbarModel.value, sessionId, effort);
       closeComposerMenu();
     };
 

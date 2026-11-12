@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { describe, expect, it, afterEach } from 'vitest';
 import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
 import { repairSessionStore } from '../../../agent/yeaft/sessions/recovery.js';
-import { migrateRegisteredWorkDirSessions, registerSessionWorkDir } from '../../../agent/yeaft/sessions/session-crud.js';
+import { migrateRegisteredWorkDirSessions, registerSessionWorkDir, updateSessionConfig } from '../../../agent/yeaft/sessions/session-crud.js';
 
 const roots = [];
 
@@ -42,6 +42,18 @@ describe('Session disk recovery', () => {
     const manifest = JSON.parse(readFileSync(join(root, 'sessions-manifest.json'), 'utf8'));
     expect(manifest.sessions.find(row => row.id === sessionId)?.path)
       .toBe(join(root, 'sessions', sessionId));
+
+    // A cold config edit retains the one-time registered-Session bootstrap;
+    // the no-inventory/no-log fast path applies after this compatibility step.
+    const coldRoot = tempRoot();
+    registerSessionWorkDir(coldRoot, sessionId, workDir);
+    expect(updateSessionConfig(coldRoot, sessionId, { model: 'test/new', modelEffort: 'ultra' }))
+      .toEqual({ model: 'test/new', modelEffort: 'ultra' });
+    expect(readFileSync(join(coldRoot, 'sessions', sessionId, 'conversation', 'segments', '000001.jsonl'), 'utf8'))
+      .toContain('preserve me');
+    expect(JSON.parse(readFileSync(join(coldRoot, 'sessions', sessionId, 'config.json'), 'utf8')))
+      .toMatchObject({ model: 'test/new', modelEffort: 'ultra', modelSource: 'explicit' });
+    expect(existsSync(join(coldRoot, 'memory', 'group', sessionId))).toBe(false);
   });
 
   it('rebuilds a stale coordinator audit index without duplicating or inventing rows', () => {

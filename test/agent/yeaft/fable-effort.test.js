@@ -97,8 +97,10 @@ describe('API effort catalog and dispatch', () => {
     expect(apiCatalog.map(m => [m.ref, m.effortOptions || []])).toEqual(config.availableModels.map(m => [m.ref, m.effortOptions || []]));
     expect(getSelectableModelEfforts(['minimal', 'low', 'medium', 'low', 'unknown'])).toEqual(['medium']);
     for (const [effortOptions, defaultEffort] of [
-      [['medium', 'xhigh'], 'medium'], [['medium', 'max'], 'medium'],
+      [['medium', 'xhigh'], 'xhigh'], [['medium', 'max'], 'medium'],
       [['medium', 'xhigh', 'max'], 'xhigh'], [['max'], 'max'],
+      [['medium', 'xhigh', 'max', 'ultra'], 'xhigh'],
+      [['ultra', 'max', 'xhigh', 'medium'], 'xhigh'],
     ]) expect(buildModelSelectionRows([{ id: 'sparse', effortOptions }])[0]).toMatchObject({ efforts: effortOptions, defaultEffort });
     expect(buildModelSelectionRows([{ id: 'old', effortOptions: ['low', 'high'] }])[0]).toMatchObject({ efforts: [], defaultEffort: null });
     mkdirSync(join(root, 'sessions', 'api-session'), { recursive: true });

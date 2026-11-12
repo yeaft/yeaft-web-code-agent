@@ -64,16 +64,7 @@ export function openSession(sessionsRoot, sessionId) {
      * owns task definitions/runtime. Preserve its fresh on-disk value even when
      * a caller retained an older metadata snapshot across a run or task edit.
      */
-    saveMeta(next) {
-      validateMeta(next);
-      const current = loadSessionMeta(dir);
-      const meta = structuredClone(next);
-      if (current) {
-        if (Object.hasOwn(current, 'task')) meta.task = current.task;
-        else delete meta.task;
-      }
-      writeAtomic(join(dir, SESSION_META_FILE), JSON.stringify(meta, null, 2));
-    },
+    saveMeta(next) { saveSessionMeta(dir, next); },
     /**
      * Append a message to the session log. Assigns an id if absent.
      * Returns the stored record (with id + ts).
@@ -156,6 +147,18 @@ export function createSession(sessionsRoot, spec) {
   };
   h.saveMeta(meta);
   return h;
+}
+
+/** Save metadata without opening or repairing the legacy messages log. */
+export function saveSessionMeta(dir, next) {
+  validateMeta(next);
+  const current = loadSessionMeta(dir);
+  const meta = structuredClone(next);
+  if (current) {
+    if (Object.hasOwn(current, 'task')) meta.task = current.task;
+    else delete meta.task;
+  }
+  writeAtomic(join(dir, SESSION_META_FILE), JSON.stringify(meta, null, 2));
 }
 
 /**

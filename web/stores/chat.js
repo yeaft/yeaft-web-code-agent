@@ -629,6 +629,7 @@ export const useChatStore = defineStore('chat', {
     browserRuntimeServerEnabled: false,
     yeaftSessionHydrateRequestId: null,
     yeaftSessionHydrateSlices: [],
+    yeaftSessionHydrateConfigDeltas: null, // request-scoped live config deltas replayed at inventory commit
     yeaftSessionHydrateError: null,
     _yeaftSessionInventorySocketQuarantined: false,
     sessionKey: null, // Uint8Array for encryption
@@ -1050,6 +1051,7 @@ export const useChatStore = defineStore('chat', {
     yeaftSessionAgentById: {},      // Legacy bare-session owner cache; activeSessionKey wins when ids collide.
     yeaftModel: null,              // agent/default Yeaft 模型名；Session override lives in sessions[].config.model
     yeaftModelEffort: null,        // agent/default effort；Session override lives in sessions[].config.modelEffort
+    yeaftSessionModelSelections: {}, // Agent/Session-scoped previews until persistence is acknowledged
     yeaftSessionReady: false,     // Session 是否已初始化
     yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     yeaftAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
@@ -3115,6 +3117,7 @@ export const useChatStore = defineStore('chat', {
       const requestId = `session_inventory_${crypto.randomUUID()}`;
       this.yeaftSessionHydrateRequestId = requestId;
       this.yeaftSessionHydrateSlices = [];
+      this.yeaftSessionHydrateConfigDeltas = null;
       this._hasHandledAgentList = false;
       this._hasHandledYeaftSessionHydrate = false;
       this.yeaftSessionHydrateError = null;
@@ -3127,6 +3130,7 @@ export const useChatStore = defineStore('chat', {
       if (!sent) {
         this.yeaftSessionHydrateRequestId = null;
         this.yeaftSessionHydrateSlices = [];
+        this.yeaftSessionHydrateConfigDeltas = null;
         this.yeaftSessionHydrateError = 'session_inventory_send_failed';
         return null;
       }
@@ -3134,6 +3138,7 @@ export const useChatStore = defineStore('chat', {
         if (this.yeaftSessionHydrateRequestId !== requestId) return;
         this.yeaftSessionHydrateRequestId = null;
         this.yeaftSessionHydrateSlices = [];
+        this.yeaftSessionHydrateConfigDeltas = null;
         this.yeaftSessionHydrateError = 'session_inventory_timeout';
         if (this.yeaftSessionInventoryCompleteSupported !== true) {
           this._yeaftSessionInventorySocketQuarantined = true;
@@ -3644,6 +3649,17 @@ export const useChatStore = defineStore('chat', {
       // agent that has no such session on disk → "Session not found".
       const targetAgentId = resolveAgentIdForSession(this, groupId);
       if (!groupId || !targetAgentId) return false;
+      const modelChange = this._sessionModelSwitchQueue?.get(yeaftSessionIdentityKey(targetAgentId, groupId));
+      if (modelChange) {
+        const authGeneration = Number(useAuthStore().authGeneration || 0);
+        const connectionGeneration = Number(this.chatHistoryConnectionGeneration || 0);
+        return modelChange.then(result => {
+          if (!result?.ok || authGeneration !== Number(useAuthStore().authGeneration || 0)
+              || connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)
+              || targetAgentId !== resolveAgentIdForSession(this, groupId)) return false;
+          return this.sendYeaftSessionMessage({ groupId, text, mentions, attachments, quote, quickSend });
+        }).catch(() => false);
+      }
       // Presets originate from the visible Agent. Reject a stale cross-Agent send
       // rather than applying another instance's model catalog to this Session.
       if (quickSend && (targetAgentId !== this.currentAgent || this.connectionState !== 'connected'
@@ -5994,6 +6010,12 @@ export const useChatStore = defineStore('chat', {
           // Branch acknowledgements are broadcast for inventory updates. Only
           // the initiating tab may focus it, and another Agent must not settle
           // this tab's request even if it echoes the same request id.
+          if (pending && (event.op === 'update_config' || pending.op === 'update_config') && (
+            pending.op !== event.op || pending.agentId !== msg.agentId
+            || (event.sessionId && event.sessionId !== pending.sessionId)
+            || pending.connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)
+            || pending.authGeneration !== Number(useAuthStore().authGeneration || 0)
+          )) break;
           const isTaskResult = event.op === 'update_task' || event.op === 'run_task';
           const isPendingTask = pending?.op === 'update_task' || pending?.op === 'run_task';
           if (pending && (isTaskResult || isPendingTask) && (pending.op !== event.op
@@ -6019,6 +6041,7 @@ export const useChatStore = defineStore('chat', {
           if (isBranchResult && event.projectsAuthoritative === true && Array.isArray(event.projects)) {
             this.applySessionCatalogSnapshot(this.sessionCatalog, event.projects, null, { authoritative: false });
           }
+          handlerHelpers.bufferYeaftSessionConfigDelta(this, event, msg.agentId || null);
           if (gs) gs.applyCrudResult(event, msg.agentId || null, {
             // The initiating branch action owns navigation so it can render a
             // visible success state before entering the new Session. Other
@@ -6589,7 +6612,7 @@ export const useChatStore = defineStore('chat', {
           },
         });
         const sent = this.sendWsMessage(msg);
-        if (['copy', 'merge', 'update_task', 'run_task'].includes(op) && !sent) {
+        if (['copy', 'merge', 'update_config', 'update_task', 'run_task'].includes(op) && !sent) {
           if (timer) clearTimeout(timer);
           this._sessionCrudPending.delete(requestId);
           if (gs?.pending) delete gs.pending[requestId];
@@ -6727,20 +6750,57 @@ export const useChatStore = defineStore('chat', {
     },
     // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
     // clearYeaftJumpTarget actions removed.
+    sessionModelSelectionFor(sessionId, agentId = this.currentAgent) {
+      const key = yeaftSessionIdentityKey(agentId, sessionId);
+      const selection = this.yeaftSessionModelSelections[key];
+      return selection?.authGeneration === Number(useAuthStore().authGeneration || 0)
+        && selection.connectionGeneration === Number(this.chatHistoryConnectionGeneration || 0)
+        ? selection.config : null;
+    },
     async switchYeaftModel(modelId, groupId = null, modelEffort = undefined) {
       if (!modelId || !this.currentAgent) return;
       const targetSessionId = groupId || null;
       if (targetSessionId) {
+        const agentId = resolveAgentIdForSession(this, targetSessionId);
+        const key = yeaftSessionIdentityKey(agentId, targetSessionId);
         const config = { model: modelId };
         if (modelEffort !== undefined) config.modelEffort = modelEffort || null;
-        const res = await this.sessionCrudRequest('update_config', {
-          sessionId: targetSessionId,
-          config,
-        }, { agentId: resolveAgentIdForSession(this, targetSessionId) });
-        // The sessions store applies the returned config. Do not mutate the
-        // agent/default model here; a Session-scoped switch must not leak into
-        // other Sessions that are still using the default fallback.
-        return res;
+        const token = `${Date.now()}_${Math.random()}`;
+        const authGeneration = Number(useAuthStore().authGeneration || 0);
+        const connectionGeneration = Number(this.chatHistoryConnectionGeneration || 0);
+        this.yeaftSessionModelSelections[key] = { config, token, authGeneration, connectionGeneration };
+        // Preview immediately, but never mutate the acknowledged Session config.
+        // Serialize rapid selections per Session so an older ack cannot overwrite
+        // the latest choice. Other Sessions/Agents remain independent.
+        if (!this._sessionModelSwitchQueue) this._sessionModelSwitchQueue = new Map();
+        const previous = this._sessionModelSwitchQueue.get(key);
+        const apply = async () => {
+          const prior = previous ? await previous.catch(() => null) : null;
+          // A real transport/Agent disconnect retires the whole queued chain,
+          // even if the Agent reconnects before this microtask gets to run.
+          if (['agent_offline', 'connection_changed', 'stale_request'].includes(prior?.error?.code)) {
+            return { ok: false, error: prior.error };
+          }
+          if (!this.agents.some(agent => agent.id === agentId && agent.online)) {
+            return { ok: false, error: { code: 'agent_offline' } };
+          }
+          if (authGeneration !== Number(useAuthStore().authGeneration || 0)
+              || connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)) {
+            return { ok: false, error: { code: 'stale_request' } };
+          }
+          return this.sessionCrudRequest('update_config', {
+            sessionId: targetSessionId, config,
+          }, { agentId });
+        };
+        const pending = apply();
+        this._sessionModelSwitchQueue.set(key, pending);
+        try {
+          const res = await pending;
+          return { ...res, superseded: this.yeaftSessionModelSelections[key]?.token !== token };
+        } finally {
+          if (this.yeaftSessionModelSelections[key]?.token === token) delete this.yeaftSessionModelSelections[key];
+          if (this._sessionModelSwitchQueue.get(key) === pending) this._sessionModelSwitchQueue.delete(key);
+        }
       }
       this.sendWsMessage({
         type: 'yeaft_model_switch',

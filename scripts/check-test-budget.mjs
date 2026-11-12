@@ -166,7 +166,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +7 VP error-detail boundaries: bounded broker retention/ownership/dedup (3),
 // visible engine/thrown-error bridge propagation (2), scoped accessible UI (1),
 // and real relay/browser navigation/snapshot/mobile/legacy recovery (1).
-export const TEST_CASE_LIMIT = 1032;
+// +3 model-apply boundaries: bounded target-only persistence, immediate preview/
+// ordered acknowledgement/send ownership, and owner-scoped Server delta hydration.
+// Live Engine refresh and browser latency assertions extend existing cases.
+export const TEST_CASE_LIMIT = 1035;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
