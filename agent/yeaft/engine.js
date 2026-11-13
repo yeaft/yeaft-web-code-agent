@@ -3132,7 +3132,8 @@ export class Engine {
         // for an immutable signed prefix to fill the entire model window.
         const fittedInputTokens = fittedRequest.meta.estimatedInputTokens
           ?? fittedRequest.meta.estimatedTokens - requestMaxOutputTokens;
-        if (successfulRequestsSinceRollover > 0 && !pendingServerOperation
+        if ((signedAnthropicPrefix || rolloverSeed)
+            && successfulRequestsSinceRollover > 0 && !pendingServerOperation
             && (fittedInputTokens >= fitOptions.contextWindow * 0.85
               || fittedRequest.meta.droppedCurrentMessages > 0)) {
           throw new ProviderContextBudgetError('active context reached the rollover threshold');
@@ -3616,7 +3617,7 @@ export class Engine {
 
         const contextNeedsRollover = err instanceof ProviderContextBudgetError
           || err instanceof LLMContextError;
-        if (contextNeedsRollover && toolCalls.length === 0
+        if (contextNeedsRollover && (signedAnthropicPrefix || rolloverSeed) && toolCalls.length === 0
             && successfulRequestsSinceRollover > 0 && !pendingServerOperation) {
           endAttemptTrace('context_rollover');
           if (responseText) prepareRetryContinuation();
