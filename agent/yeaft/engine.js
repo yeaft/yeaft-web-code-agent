@@ -42,6 +42,7 @@ import {
   estimateMessagesTokens as estimateHistoryMessagesTokens,
   buildHistoryBuckets,
   fitProviderRequestToContext,
+  compactPendingToolResults,
 } from './history-window.js';
 import { recallConversationTurns } from './conversation/history-index.js';
 import { parseSeqFromId } from './conversation/persist.js';
@@ -2760,6 +2761,7 @@ export class Engine {
       let requestEffortDecision = snapshotEffortDecision();
       let stopReason = 'unknown';
       const totalUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheInputDeltaTokens: 0 };
+      let completeInputUsage = false;
       // Raw provider exchange is diagnostic source data, not model context or
       // ordinary history. The legacy telemetry byte setting must not destroy it;
       // explicit debug detail transport is chunked instead.
@@ -3046,20 +3048,23 @@ export class Engine {
         };
         const fitRequest = candidate => {
           if (!signedAnthropicPrefix) return fitProviderRequestToContext(candidate, fitOptions);
-          // Never let emergency trimming, result deduplication or pair repair
-          // rewrite a signed prefix (nor drop active signed assistant rows).
-          let inputTokens = fitOptions.systemTokens + toolSchemaTokens + estimateHistoryMessagesTokens(candidate);
-          if (signedAnthropicPrefix.inputTokens > 0) {
-            // The previous request is byte-stable. Anchor it to provider usage
-            // (including cache), then estimate only the appended response/results.
-            // Gateways and non-English text can be far above the chars/4 estimate.
-            const scale = Math.max(1, signedAnthropicPrefix.inputTokens / Math.max(1, signedAnthropicPrefix.inputEstimate));
-            const appended = candidate.slice(signedAnthropicPrefix.messages.length);
-            const responseTokens = Math.max(signedAnthropicPrefix.outputTokens,
-              appended[0] ? Math.ceil(estimateMessageTokens(appended[0]) * scale) : 0);
-            inputTokens = Math.max(inputTokens, signedAnthropicPrefix.inputTokens + responseTokens
-              + Math.ceil(estimateHistoryMessagesTokens(appended.slice(1)) * scale));
-          }
+          // The previous request is byte-stable. Its usage (including cache)
+          // replaces its estimate, not merely a lower bound that can never fall.
+          // Missing/partial usage retains the calibrated floor in the snapshot.
+          const scale = Math.max(1, signedAnthropicPrefix.inputTokens / Math.max(1, signedAnthropicPrefix.inputEstimate));
+          const prefixLength = signedAnthropicPrefix.messages.length;
+          const appended = candidate.slice(prefixLength);
+          const responseTokens = Math.max(signedAnthropicPrefix.outputTokens,
+            appended[0] ? Math.ceil(estimateMessageTokens(appended[0]) * scale) : 0);
+          const fixedInputTokens = signedAnthropicPrefix.inputTokens + responseTokens;
+          const minimumOutputReserve = Math.min(configuredOutputReserve, 1024);
+          // Reduce output headroom before sacrificing fresh evidence. If even
+          // the minimum response cannot fit, sample only the unsent tool tail.
+          // Neither the frozen request nor its signed assistant can be edited.
+          const compact = compactPendingToolResults(appended.slice(1), Math.max(0,
+            Math.floor((fitOptions.contextWindow - fixedInputTokens - minimumOutputReserve) / scale)));
+          const inputTokens = fixedInputTokens + Math.ceil(estimateHistoryMessagesTokens(compact.messages) * scale);
+          const fittedMessages = [...candidate.slice(0, prefixLength + Math.min(1, appended.length)), ...compact.messages];
           // max_tokens is an upper bound, not part of the signed prefix. Spend
           // less on this response before rejecting an otherwise valid continuation.
           // Keep the context ceiling separate from the configured output target.
@@ -3071,11 +3076,12 @@ export class Engine {
           }
           const staticTokens = fitOptions.systemTokens + toolSchemaTokens + requestMaxOutputTokens;
           const estimatedTokens = inputTokens + requestMaxOutputTokens;
-          return { messages: candidate, meta: {
+          return { messages: fittedMessages, meta: {
             contextWindow: fitOptions.contextWindow, staticTokens, estimatedTokens,
             estimatedInputTokens: inputTokens, configuredOutputReserve, outputReserve: requestMaxOutputTokens,
             historyMessagesAfter: historyMessageCount, droppedHistoryMessages: 0,
-            droppedCurrentMessages: 0, compactedToolResults: 0, deduplicatedToolResults: 0,
+            droppedCurrentMessages: 0, compactedToolResults: compact.compactedToolResults,
+            compactedToolResultTokensSaved: compact.compactedToolResultTokensSaved, deduplicatedToolResults: 0,
           } };
         };
         let fittedRequest = fitRequest(wireMessages);
@@ -3171,7 +3177,7 @@ export class Engine {
           inputEstimate: requestInputBreakdown.totalEstimatedTokens,
           // A later gateway response may omit usage or report only uncached
           // input. Preserve the calibrated floor already paid by this prefix.
-          inputTokenFloor: fittedRequest.meta.estimatedInputTokens || 0,
+          inputTokenFloor: fittedRequest.meta.estimatedInputTokens ?? requestInputBreakdown.totalEstimatedTokens,
         };
 
         // Capture only the provider route before the visible boundary. The
@@ -3340,6 +3346,14 @@ export class Engine {
               yield event;
               break;
             case 'usage': {
+              // Zero defaults and output-only stream deltas do not prove that
+              // input/cache counters were reported. Only a complete snapshot
+              // may correct a conservative prefix estimate downwards.
+              const fields = event.reportedTokenFields || [];
+              if (fields.includes('inputTokens') && (event.cacheTokensAreIncludedInInput === true
+                || (fields.includes('cacheReadTokens') && fields.includes('cacheWriteTokens')))) {
+                completeInputUsage = true;
+              }
               const inputTokens = event.inputTokens || 0;
               const outputTokens = event.outputTokens || 0;
               const cacheReadTokens = event.cacheReadTokens || 0;
@@ -3918,7 +3932,8 @@ export class Engine {
       if (requestPrefixSnapshot && (signedAnthropicPrefix || (boundProviderState?.protocol === 'anthropic'
           && boundProviderState.requestPrefix))) {
         signedAnthropicPrefix = { ...requestPrefixSnapshot,
-          inputTokens: Math.max(turnInputTokens, requestPrefixSnapshot.inputTokenFloor), outputTokens: turnOutputTokens,
+          inputTokens: completeInputUsage ? turnInputTokens
+            : Math.max(turnInputTokens, requestPrefixSnapshot.inputTokenFloor), outputTokens: turnOutputTokens,
         };
       }
       // New private reasoning is persisted only with verified provider ownership;

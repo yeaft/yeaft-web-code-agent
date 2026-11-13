@@ -123,6 +123,15 @@ See [Retired H2-AMS implementation](./yeaft-memory.md).
 - Sub-agents have their own output log, liveness counters, optional budgets, and terminal/idle notifications.
 - Terminal notifications are parent re-entry control context, not new user-authored semantic memory.
 
+## 活跃签名上下文的预算与压缩
+
+Anthropic 保留 thinking 的工具循环会冻结已经发送的 system、工具定义和消息前缀。后续请求不能通过删旧消息、修改签名 assistant 或重新采样已发送结果来腾空间，否则续传校验会失败。
+
+- 完整报告的 input usage（含明确的 cache 计数或 cache 已计入 input 的标记）可校正前缀估算，包括向下修正。缺失／部分 usage 不能把未知 cache 当作零，继续保留上次请求的校准预算下界。
+- 只估算冻结前缀之后新增加的响应和工具结果；先缩小输出预留。如果连最低输出空间都不足，只在 provider 请求副本中采样最新签名 assistant **之后、尚未发送**的工具结果文本。保留首尾与省略标记、错误字段、工具关联、图片／文档和消息顺序；原始 transcript 与调试记录不变。
+- 请求成功后，实际发送的采样副本成为新的冻结前缀，后续不能重写。这里不调用摘要 LLM，也不改变响应结束后为未来历史窗口生成 post compact 的时序。
+- 不可变前缀本身已满、不可采样的二进制内容过大，或 provider 仍拒绝时，继续明确失败，不放宽模型窗口、不伪造任务完成，也不重放工具副作用。跨越这种边界需要独立的安全换轮／rollover 协议，不属于本地文本采样。
+
 ## 响应时间与证据复用
 
 这些优化不更换用户选择的模型／推理强度，也不减少验证：
