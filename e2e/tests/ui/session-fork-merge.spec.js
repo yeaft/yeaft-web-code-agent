@@ -52,7 +52,8 @@ async function setup(page, mockAgent) {
     chat.activeVpTurns['busy-turn'] = { turnId: 'busy-turn', sessionId: 'busy', agentId };
   }, { agentId: mockAgent.agentId, id: A });
   await expect(page.locator('.assistant-turn').filter({ hasText: 'Prior completed answer' })).toBeVisible();
-  await expect(page.locator('.yeaft-merge-btn')).toBeVisible();
+  await expect(page.locator('.yeaft-session-actions .yeaft-fork-btn')).toBeVisible();
+  await expect(page.locator('.yeaft-session-actions .yeaft-merge-btn')).toHaveCount(0);
 }
 
 async function result(page, mockAgent, overrides = {}) {
@@ -67,8 +68,20 @@ async function result(page, mockAgent, overrides = {}) {
   }, { agentId: mockAgent.agentId, overrides });
 }
 
+async function openSessionMenu(page) {
+  await page.evaluate(() => { window.Pinia.useChatStore().sessionSidebarOpen = true; });
+  const row = page.locator('.sidebar-session-row.active');
+  // Selection suppresses quick actions until the pointer leaves the row.
+  await row.hover();
+  await page.mouse.move(640, 0);
+  await row.hover();
+  await row.locator('.session-dots-btn').click();
+  return page.locator('.session-menu-floating');
+}
+
 async function openMerge(page) {
-  await page.getByRole('button', { name: 'Merge Sessions', exact: true }).click();
+  const menu = await openSessionMenu(page);
+  await menu.getByRole('button', { name: 'Merge Sessions', exact: true }).click();
   return page.getByRole('dialog', { name: 'Merge Sessions', exact: true });
 }
 
@@ -179,7 +192,7 @@ test('turn fork and divergent merge relay through Server, persist history and in
       chat.activeVpTurns.current = { turnId: 'current', sessionId, agentId };
       chat.agents.find(agent => agent.id === agentId).capabilities = ['work_center', 'session_fork_from_turn'];
     }, { agentId: mockAgent.agentId, sessionId: source.id });
-    const fork = page.locator('.yeaft-session-actions .yeaft-fork-btn:not(.yeaft-merge-btn)');
+    const fork = page.locator('.yeaft-session-actions .yeaft-fork-btn');
     const prior = page.locator('.assistant-turn').filter({ hasText: 'Prior completed answer' });
     const current = page.locator('.assistant-turn').filter({ hasText: 'Current unfinished answer' });
     await expect(fork).toBeDisabled();
@@ -189,11 +202,21 @@ test('turn fork and divergent merge relay through Server, persist history and in
     await expect(fork).toBeEnabled();
     await expect(prior.locator('.fork-turn-action-btn')).toBeEnabled();
     await expect(current.locator('.fork-turn-action-btn')).toHaveCount(0);
-    await expect(page.locator('.yeaft-merge-btn')).toBeDisabled();
+    await expect(page.locator('.yeaft-session-actions .yeaft-merge-btn')).toHaveCount(0);
     // The top-level copy remains usable while a later turn streams. It must
     // exclude that entire input/output, just like an explicit historical fork.
     await fork.click();
     const wholeRequest = await mockAgent.waitForMessage('yeaft_copy_session');
+    // The header keeps Fork but no longer exposes Merge, in either theme or layout.
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+      for (const width of [320, 1280]) {
+        await page.setViewportSize({ width, height: 800 });
+        await expect(page.locator('.yeaft-session-actions .yeaft-merge-btn')).toHaveCount(0);
+        await expect(page.locator('.yeaft-session-actions .yeaft-fork-btn')).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+    }
     expect(wholeRequest.sessionId).toBe(source.id);
     expect(wholeRequest).not.toHaveProperty('throughTurnId');
     await expect.poll(() => acknowledgements.find(event => event.requestId === wholeRequest.requestId)).toMatchObject({ ok: true });
@@ -376,7 +399,9 @@ test('merge empty, unsupported and closed or stale operations never steal naviga
     const chat = window.Pinia.useChatStore();
     chat.agents.find(agent => agent.id === agentId).capabilities = ['work_center'];
   }, mockAgent.agentId);
-  await expect(page.locator('.yeaft-merge-btn')).toBeDisabled();
+  const menu = await openSessionMenu(page);
+  await expect(menu.getByRole('button', { name: 'Merge Sessions', exact: true })).toBeDisabled();
+  await page.locator('.sidebar-session-row.active .session-dots-btn').click();
   await page.evaluate(({ agentId, caps }) => {
     const chat = window.Pinia.useChatStore();
     chat.agents.find(agent => agent.id === agentId).capabilities = caps;
@@ -386,7 +411,8 @@ test('merge empty, unsupported and closed or stale operations never steal naviga
   await expect(dialog.getByRole('status')).toContainText('No other idle');
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
-  await expect(page.locator('.yeaft-merge-btn')).toBeFocused();
+  await expect(page.locator('.sidebar-session-row.active .session-dots-btn')).toBeFocused();
+  await expect(page.locator('.yeaft-session-actions .yeaft-merge-btn')).toHaveCount(0);
   await page.evaluate(() => { delete window.Pinia.useChatStore().activeVpTurns.other; });
   dialog = await openMerge(page);
   const select = dialog.locator('select');

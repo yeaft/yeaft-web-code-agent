@@ -25,10 +25,31 @@ const row = (id, extra = {}) => ({ catalogKey: `yeaft:a:${id}`, runtimeProvider:
 beforeEach(() => { vi.stubGlobal('Vue', Vue); localStorage.clear(); });
 afterEach(() => { vi.restoreAllMocks(); delete window.Pinia; wrapper?.unmount(); document.body.innerHTML = ''; vi.unstubAllGlobals(); });
 
-it('keeps only mobile page reload in Session actions, with no message replay on either viewport', async () => {
+it('keeps Fork and mobile page reload in Session actions, without Merge or message replay', async () => {
   for (const messages of [en, zh]) {
-    wrapper = mount(YeaftSessionActions, { props: { canUseWorkbench: true },
+    wrapper = mount(YeaftSessionActions, { props: { canUseWorkbench: true, showFork: true },
       global: { mocks: { $t: key => messages[key] || key } } });
+    expect(wrapper.find('.yeaft-merge-btn').exists()).toBe(false);
+    expect(wrapper.find(`button[aria-label="${messages['yeaft.session.merge']}"]`).exists()).toBe(false);
+    expect(YeaftSessionActions.emits).not.toContain('merge-session');
+    const fork = wrapper.get('.yeaft-fork-btn');
+    expect(fork.attributes('aria-label')).toBe(messages['yeaft.session.copy']);
+    await fork.trigger('click');
+    expect(wrapper.emitted('fork-session')).toEqual([[]]);
+    await wrapper.setProps({ forkDisabled: true });
+    expect(fork.attributes('disabled')).toBeDefined();
+    await fork.trigger('click');
+    expect(wrapper.emitted('fork-session')).toHaveLength(1);
+    await wrapper.setProps({ forkDisabled: false, forkState: 'copying' });
+    expect(fork.attributes('disabled')).toBeDefined();
+    expect(fork.attributes('aria-busy')).toBe('true');
+    expect(wrapper.get('[role="status"]').text()).toBe(messages['yeaft.session.copying']);
+    await wrapper.setProps({ forkState: 'success' });
+    expect(wrapper.find('.yeaft-fork-success-icon').exists()).toBe(true);
+    expect(wrapper.get('[role="status"]').text()).toBe(messages['yeaft.session.copyComplete']);
+    await wrapper.setProps({ showFork: false });
+    expect(wrapper.find('.yeaft-fork-btn').exists()).toBe(false);
+    expect(wrapper.find('.yeaft-merge-btn').exists()).toBe(false);
     expect(wrapper.find('.yeaft-reload-btn').exists()).toBe(false);
     expect(wrapper.find(`button[aria-label="${messages['yeaft.reloadMessages']}"]`).exists()).toBe(false);
     expect(YeaftSessionActions.emits).not.toContain('reload-messages');
