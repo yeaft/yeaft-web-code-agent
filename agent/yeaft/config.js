@@ -12,7 +12,7 @@
  *   "fastModel": "my-proxy/claude-haiku-3-20250414",
  *   "language": "en",
  *   "debug": false,
- *   "maxContextTokens": 200000,
+ *   "maxContextTokens": 1000000,
  *   "messageTokenBudget": 32768
  * }
  *
@@ -23,7 +23,7 @@ import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
+import { getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens, DEFAULT_CONTEXT_WINDOW } from './models.js';
 import { inferProtocolFromModelId } from './llm/router.js';
 import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 import { createDenyAllPluginConfig, normalizePluginConfig } from './plugins.js';
@@ -36,7 +36,7 @@ const DEFAULTS = {
   language: 'en',
   debug: false,
   dir: DEFAULT_YEAFT_DIR,
-  maxContextTokens: 200000,
+  maxContextTokens: DEFAULT_CONTEXT_WINDOW,
   maxOutputTokens: 16384,
   messageTokenBudget: 32768,
   maxContinueTurns: 3,

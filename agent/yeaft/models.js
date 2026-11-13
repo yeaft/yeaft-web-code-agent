@@ -14,7 +14,7 @@
  * resolved at runtime from the models.dev community catalog
  * (`agent/yeaft/llm/models-dev.js`), with a per-provider config override
  * (`~/.yeaft/config.json: providers[].models[].contextWindow`) and a
- * conservative DEFAULT as the final rung. See {@link resolveContextWindow}
+ * DEFAULT as the final rung. See {@link resolveContextWindow}
  * and {@link resolveMaxOutputTokens} for the full ladder.
  *
  * Unknown model IDs return null — caller falls back to env-based detection.
@@ -177,15 +177,15 @@ export function resolveModel(modelName) {
 }
 
 /**
- * Default context window when no upstream source has a value. 200K is a
- * conservative middle-ground — most modern production models (Claude,
- * GPT-5, Gemini) have ≥ 128K.
+ * Default context window when no upstream source has a value. Use 1M for
+ * unknown models; explicit per-model limits and catalog metadata still win,
+ * including smaller windows. Gateways can override each model in config.json.
  *
  * Single source of truth: callers (engine.js pre-flight guard,
  * tools/registry.js per-result cap) MUST use this constant or
- * {@link resolveContextWindow} instead of hardcoding 200_000.
+ * {@link resolveContextWindow} instead of hardcoding a fallback.
  */
-export const DEFAULT_CONTEXT_WINDOW = 200_000;
+export const DEFAULT_CONTEXT_WINDOW = 1_000_000;
 
 /**
  * Default per-call output cap when no upstream source has a value. This is

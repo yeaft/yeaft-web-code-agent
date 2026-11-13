@@ -95,10 +95,7 @@ export class AmsRegistry {
    * @returns {import('./budget.js').BudgetSplit}
    */
   _budget() {
-    const ctx = Number.isFinite(this.config?.maxContextTokens)
-      ? this.config.maxContextTokens
-      : 200_000;
-    return computeBudget(ctx);
+    return computeBudget(this.config?.maxContextTokens);
   }
 
   /**

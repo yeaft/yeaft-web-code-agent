@@ -1470,7 +1470,7 @@ export class Engine {
       // task-704b: per-tool-result hard cap derives from this. Threaded
       // from the live model (resolveModel(currentModel)) every turn so
       // fallbackModel switches see the new window. Falls back to
-      // config.maxContextTokens, then 200K, in registry.js.
+      // config.maxContextTokens, then the shared default, in registry.js.
       contextWindow: vpCtx?.contextWindow,
       // ViewImage (task-333b PR-B rev-3 P1-A): expose size cap + allowlist
       // via tool ctx so hosts can override via ~/.yeaft/config.json without

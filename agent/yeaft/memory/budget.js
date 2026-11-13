@@ -11,7 +11,7 @@
  * memory. FTS still ranks those segments to select the relevant content scopes.
  *
  * Concrete budgets for common models:
- *   200K context → 6K total (hard cap)
+ *     1M context → 6K total (hard cap)
  *   128K context → 6K total (hard cap)
  *    64K context → 3.2K total
  *
@@ -19,6 +19,8 @@
  * budget enforcement. The engine has a real tokenizer for prompt
  * assembly; budget here is a guard rail, not the source of truth.
  */
+
+import { DEFAULT_CONTEXT_WINDOW } from '../models.js';
 
 export const ABSOLUTE_CAP = 6_000;
 export const MODEL_FRACTION = 0.05;
@@ -44,7 +46,7 @@ export const DEFAULT_RATIO = {
  */
 export function computeBudget(modelMaxContext, ratio = {}) {
   const ctx = Number.isFinite(modelMaxContext) && modelMaxContext > 0
-    ? modelMaxContext : 200_000;
+    ? modelMaxContext : DEFAULT_CONTEXT_WINDOW;
   const total = Math.min(ABSOLUTE_CAP, Math.floor(ctx * MODEL_FRACTION));
 
   const r = { ...DEFAULT_RATIO, ...ratio };

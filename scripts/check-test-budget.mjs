@@ -176,7 +176,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 grouped regressions: >200K signed Opus/Fable Engine requests and
 // capability resolution: qualified 1M Opus/Fable, explicit limits,
 // canonical provider hints and literal/nested catalog IDs.
-export const TEST_CASE_LIMIT = 1042;
+// +1 grouped 1M-default regression: runtime/config initializer parity and
+// non-migration of existing explicit smaller limits.
+export const TEST_CASE_LIMIT = 1043;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

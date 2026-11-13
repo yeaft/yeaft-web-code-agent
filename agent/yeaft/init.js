@@ -16,6 +16,7 @@ import { mutateAgentConfig } from './config-store.js';
 // Idempotent via the `.yeaft-migration.done` sentinel file.
 import { migrateSessions } from './migrate/sessions.js';
 import { bundledYeaftSkillsDirs } from './skills.js';
+import { DEFAULT_CONTEXT_WINDOW } from './models.js';
 
 /**
  * Check if an error is a permission error (EACCES or EPERM).
@@ -109,7 +110,7 @@ const DEFAULT_CONFIG_JSON = `{
   "fastModel": "my-proxy/claude-sonnet-4-20250514",
   "language": "en",
   "debug": false,
-  "maxContextTokens": 200000,
+  "maxContextTokens": ${DEFAULT_CONTEXT_WINDOW},
   "messageTokenBudget": 32768
 }
 `;
