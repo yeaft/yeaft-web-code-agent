@@ -663,18 +663,12 @@ function compactToolContentToBudget(content, tokenBudget) {
   return fitted;
 }
 
-function compactCurrentToolResults(messages, messageBudget) {
+function compactToolResults(messages, messageBudget, endIndex) {
   const out = messages.slice();
   let excess = estimateMessagesTokens(out) - messageBudget;
   let compactedToolResults = 0;
   let compactedToolResultTokensSaved = 0;
-  // Protect the complete newest tool batch, not merely its last result. All
-  // parallel results are evidence for the next assistant continuation.
-  let latestEnd = out.length - 1;
-  while (latestEnd >= 0 && out[latestEnd]?.role !== 'tool') latestEnd -= 1;
-  let latestStart = latestEnd;
-  while (latestStart > 0 && out[latestStart - 1]?.role === 'tool') latestStart -= 1;
-  for (let index = 0; index < latestStart && excess > 0; index += 1) {
+  for (let index = 0; index < endIndex && excess > 0; index += 1) {
     const message = out[index];
     if (message?.role !== 'tool') continue;
     const before = estimateContentTokens(message.content);
@@ -687,6 +681,28 @@ function compactCurrentToolResults(messages, messageBudget) {
     compactedToolResultTokensSaved += saved;
   }
   return { messages: out, compactedToolResults, compactedToolResultTokensSaved };
+}
+
+function compactCurrentToolResults(messages, messageBudget) {
+  // The ordinary fitter protects the complete newest batch. Signed-prefix
+  // continuations instead select only the not-yet-sent tail below.
+  let latestEnd = messages.length - 1;
+  while (latestEnd >= 0 && messages[latestEnd]?.role !== 'tool') latestEnd -= 1;
+  let latestStart = latestEnd;
+  while (latestStart > 0 && messages[latestStart - 1]?.role === 'tool') latestStart -= 1;
+  return compactToolResults(messages, messageBudget, latestStart);
+}
+
+/**
+ * Sample only tool text in an unsent tail selected by the caller. Never delete,
+ * reorder or repair rows: signed assistant blocks and all call metadata remain
+ * exact. Returns a provider-only copy; the source/transcript stays untouched.
+ * Binary/unsafe JSON may still exceed the budget; callers must check the fit.
+ * @param {Array<object>} messages - Rows strictly after the signed assistant.
+ * @param {number} messageBudget
+ */
+export function compactPendingToolResults(messages, messageBudget) {
+  return compactToolResults(messages, messageBudget, messages.length);
 }
 
 /**

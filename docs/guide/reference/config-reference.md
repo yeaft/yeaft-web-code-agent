@@ -18,7 +18,7 @@ This chapter is the **field-by-field** reference for an Agent instance's Yeaft `
 | `fallbackModel` | `string` | `null` | Model used when the primary fails with a retryable error |
 | `language` | `'en' \| 'zh'` | `'en'` | System prompt language |
 | `debug` | `boolean` | `false` | Verbose-log raw LLM req/resp + engine events to stdout |
-| `maxContextTokens` | `number` | model registry → `200000` | Provider context-window reference used for request guards |
+| `maxContextTokens` | `number` | model registry → `1000000` | Provider context-window reference used for request guards |
 | `maxOutputTokens` | `number` | model registry → `16384` | Per-call output token cap |
 | `messageTokenBudget` | `number` | `32768` | Deterministic provider-request history-window budget; does not modify transcript |
 | `maxContinueTurns` | `number` | `3` | Auto-continue turns after `max_tokens` stop |

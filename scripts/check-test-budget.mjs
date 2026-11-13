@@ -171,7 +171,14 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // Live Engine refresh and browser latency assertions extend existing cases.
 // +2 Messages thinking-display regressions: stream/call route/model/config matrix
 // and final child effort-cap behavior, without adding cases per matrix row.
-export const TEST_CASE_LIMIT = 1037;
+// +3 signed-tail boundaries: SSE/JSON usage calibration with immutable sampled
+// prefixes and durable originals (2), and structured/multimodal unsent sampling (1).
+// +2 grouped regressions: >200K signed Opus/Fable Engine requests and
+// capability resolution: qualified 1M Opus/Fable, explicit limits,
+// canonical provider hints and literal/nested catalog IDs.
+// +1 grouped 1M-default regression: runtime/config initializer parity and
+// non-migration of existing explicit smaller limits.
+export const TEST_CASE_LIMIT = 1043;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

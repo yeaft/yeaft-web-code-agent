@@ -209,7 +209,7 @@ the selected Agent instance's resolved `config.json` (default instance: `~/.yeaf
   "primaryModel": "my-proxy/claude-sonnet-4-20250514",
   "fastModel": "my-proxy/claude-haiku-3-20250414",
   "language": "en",
-  "maxContextTokens": 200000,
+  "maxContextTokens": 1000000,
   "messageTokenBudget": 32768
 }
 ```

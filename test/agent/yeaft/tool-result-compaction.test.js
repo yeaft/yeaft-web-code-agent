@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compactPendingToolResults,
   estimateContentTokens,
   estimateMessagesTokens,
   fitProviderRequestToContext,
@@ -49,6 +50,28 @@ function assertPairsAndTextUnchanged(before, after) {
 }
 
 describe('pressure-driven provider tool-result compaction', () => {
+  it('samples only selected unsent tool text without deleting rows or changing structured/binary facts', () => {
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'binary'.repeat(30) } };
+    const messages = [
+      { role: 'assistant', content: 'must remain exact', providerState: { signed: true } },
+      { role: 'tool', toolCallId: 'first', content: JSON.stringify({ stdout: 'PENDING '.repeat(2000), exitCode: 7, error: 'failed' }), isError: true },
+      { role: 'tool', toolCallId: 'second', content: [{ type: 'text', text: 'MULTIPART '.repeat(2000) }, image] },
+      { role: 'user', content: 'new input remains exact' },
+    ];
+    const source = structuredClone(messages);
+    const fitted = compactPendingToolResults(messages, 1800);
+    expect(fitted.compactedToolResults).toBe(2);
+    expect(fitted.messages.map(row => [row.role, row.toolCallId])).toEqual(messages.map(row => [row.role, row.toolCallId]));
+    expect(fitted.messages[0]).toBe(messages[0]);
+    expect(fitted.messages[3]).toBe(messages[3]);
+    expect(JSON.parse(fitted.messages[1].content)).toMatchObject({ exitCode: 7, error: 'failed' });
+    expect(fitted.messages[1].isError).toBe(true);
+    expect(fitted.messages[2].content[1]).toBe(image);
+    expect(fitted.messages[2].content[0].text).toContain('[tool result compacted for context budget; middle omitted]');
+    expect(messages).toEqual(source);
+    expect(estimateMessagesTokens(fitted.messages)).toBeLessThanOrEqual(1800);
+  });
+
   it('leaves even large results lossless under low pressure and budgets history after the current turn', () => {
     const history = [
       { role: 'user', content: 'Past question' },

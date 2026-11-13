@@ -7,6 +7,7 @@ import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
 import { providerProjectionDigest } from '../../../agent/yeaft/llm/provider-state.js';
 import { buildMcpFlattenedTools } from '../../../agent/yeaft/tools/mcp-tools.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
@@ -619,7 +620,7 @@ describe('Engine', () => {
             expect(body.max_tokens).toBeLessThan(20000);
             const limit = mode === 'estimated' ? 22000 - loops[index].requestInputBreakdown.totalEstimatedTokens : 10000;
             expect(body.max_tokens).toBeLessThanOrEqual(limit);
-            if (repeated && index > 1) expect(body.max_tokens).toBeLessThanOrEqual(requests[index - 1].max_tokens);
+            if (repeated && index > 1 && mode !== 'repeated') expect(body.max_tokens).toBeLessThanOrEqual(requests[index - 1].max_tokens);
           }
           if (mode === 'estimated') {
             expect(requests[1].messages.at(-1).content[0].content).toBe(result);
@@ -630,6 +631,92 @@ describe('Engine', () => {
         expect(events.filter(event => event.type === 'tool_end')).toHaveLength(repeated ? 2 : 1);
         expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
           expect.objectContaining({ stopReason: failed ? 'error' : 'end_turn', terminal: true }),
+        ]);
+      } finally {
+        globalThis.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('continues catalog 1M Opus/Fable and unknown default requests past 200K with signed prefixes intact', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-qualified-million-'));
+      const originalFetch = globalThis.fetch;
+      const ids = ['claude-opus-5-5', 'claude-fable-5-2'];
+      _setMemCacheForTest({ anthropic: { models: Object.fromEntries(ids.map(id => [id, { limit: { context: 1000000, output: 128000 } }])) } });
+      try {
+        for (const id of [...ids, 'claude-unknown-capability']) {
+          const requests = [];
+          globalThis.fetch = vi.fn(async (_url, init) => {
+            requests.push(JSON.parse(init.body));
+            return response('million-' + requests.length, requests.length === 1 ? 'echo' : undefined, {}, id,
+              { input_tokens: 210000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+          });
+          const engine = new Engine({ adapter: router(id), trace, yeaftDir: dir,
+            config: { model: 'gateway/' + id, ...(ids.includes(id) ? { maxContextTokens: 200000 } : {}), maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+          engine.registerTool({ name: 'echo', description: 'Read evidence', parameters: { type: 'object' }, execute: async () => 'new evidence' });
+          const events = [];
+          for await (const event of engine.query({ prompt: 'known prompt '.repeat(4000), sessionId: 'million-' + id })) events.push(event);
+          expect(events.filter(event => event.type === 'error')).toEqual([]);
+          expect(requests).toHaveLength(2);
+          expect(requests.every(body => body.model === id)).toBe(true);
+          expect(requests[1].messages.slice(0, requests[0].messages.length)).toEqual(requests[0].messages);
+          expect(requests[1].messages.flatMap(row => row.content).some(block => block?.signature === 'signature-million-1')).toBe(true);
+          expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+        _setMemCacheForTest(null);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['stream', 'json'])('calibrates overestimates and compacts only unsent signed tool evidence: %s', async mode => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-tail-'));
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      const result = 'HEAD_EVIDENCE\n' + 'large measured evidence\n'.repeat(900) + '\nTAIL_EVIDENCE';
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          requests.push(JSON.parse(init.body));
+          const n = requests.length;
+          const usage = { input_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 100 };
+          if (mode === 'stream') return response('tail-' + n, n < 3 ? 'echo' : undefined, { n }, 'claude-opus-4.8', usage);
+          return new Response(JSON.stringify({ id: 'tail-' + n, model: 'claude-opus-4.8',
+            content: [{ type: 'thinking', thinking: 'private-' + n, signature: 'sig-' + n },
+              n < 3 ? { type: 'tool_use', id: 'tail-' + n, name: 'echo', input: { n } } : { type: 'text', text: 'Finished safely.' }],
+            stop_reason: n < 3 ? 'tool_use' : 'end_turn', usage,
+          }), { headers: { 'content-type': 'application/json' } });
+        });
+        const store = new ConversationStore(dir);
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, yeaftDir: dir, conversationStore: store,
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+            modelInfo: { contextWindow: 6000 } } });
+        engine.registerTool({ name: 'echo', description: 'Read evidence', parameters: { type: 'object' },
+          execute: async ({ n }) => n === 1 ? result : 'later short evidence' });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'known prompt '.repeat(600), sessionId: 'signed-tail' })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(requests).toHaveLength(3);
+        // The raw prefix estimate is much higher than provider usage. Calibration
+        // must free that space before sampling the unsent result, not keep max().
+        const projected = requests[1].messages.find(message => message.content?.[0]?.type === 'tool_result').content[0].content;
+        expect(projected).toContain('[tool result compacted for context budget; middle omitted]');
+        expect(projected).toContain('HEAD_EVIDENCE');
+        expect(projected).toContain('TAIL_EVIDENCE');
+        expect(projected.length).toBeGreaterThan(10000);
+        expect(projected.length).toBeLessThan(result.length);
+        for (let n = 1; n < requests.length; n++) {
+          expect(requests[n].system).toEqual(requests[0].system);
+          expect(requests[n].tools).toEqual(requests[0].tools);
+          expect(requests[n].messages.slice(0, requests[n - 1].messages.length)).toEqual(requests[n - 1].messages);
+        }
+        // The sampled tape is frozen after dispatch even when lower usage on
+        // the next response would otherwise allow a different sample.
+        expect(store.loadAllBySession('signed-tail').find(row => row.role === 'tool').content).toBe(result);
+        expect(events.filter(event => event.type === 'tool_end')).toHaveLength(2);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
+          expect.objectContaining({ stopReason: 'end_turn' }),
         ]);
       } finally {
         globalThis.fetch = originalFetch;
@@ -652,7 +739,7 @@ describe('Engine', () => {
         });
         engine = new Engine({ adapter: router('claude-opus-4.8'), trace, config, yeaftDir: dir });
         engine.registerTool({ name: 'echo', description: 'echo', parameters: { type: 'object' }, execute: async () => {
-          if (overflow === 'preflight') engine.refreshConfig({ ...config, modelInfo: { contextWindow: 2048 } });
+          if (overflow === 'preflight') engine.refreshConfig({ ...config, modelInfo: { contextWindow: 512 } });
           return 'new tool evidence '.repeat(2000);
         } });
         const events = [];

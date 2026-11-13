@@ -64,7 +64,7 @@ That's enough — the engine will run.
   "fastModel": "my-proxy/claude-haiku-3-20250414",
   "language": "en",
   "debug": false,
-  "maxContextTokens": 200000,
+  "maxContextTokens": 1000000,
   "messageTokenBudget": 32768
 }
 ```
@@ -78,7 +78,7 @@ That's enough — the engine will run.
 | `fastModel` | `string` | — | `primaryModel` | Lightweight model for active internal tasks such as classification |
 | `language` | `'en' \| 'zh'` | — | `'en'` | System prompt language |
 | `debug` | `boolean` | — | `false` | Log raw LLM request/response to console |
-| `maxContextTokens` | `number` | — | `200000` | Provider context-window reference used for request guards |
+| `maxContextTokens` | `number` | — | `1000000` | Provider context-window reference used for request guards |
 | `messageTokenBudget` | `number` | — | `32768` | Deterministic provider-request history-window budget; does not modify transcript |
 
 ## Provider Object

@@ -473,7 +473,7 @@ process.on('SIGTERM', async () => {
   // Prime the models.dev community catalog so the Yeaft engine's *synchronous*
   // hot path (engine.js / config.js / cli.js all read context-window inline)
   // can resolve real per-model limits without bubbling async up through every
-  // call site. Failure here is non-fatal: stale disk cache → DEFAULT 200K
+  // call site. Failure here is non-fatal: stale disk cache → DEFAULT 1M
   // fall-through keeps the agent boot-able offline.
   try {
     const { fetchModelsDev } = await import('./yeaft/llm/models-dev.js');

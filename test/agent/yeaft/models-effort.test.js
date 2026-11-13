@@ -1,16 +1,76 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadConfig } from '../../../agent/yeaft/config.js';
+import { initYeaftDir } from '../../../agent/yeaft/init.js';
 import {
   getModelEffortOptions, getThinkingCapability, modelSupportsEffort,
+  DEFAULT_CONTEXT_WINDOW, getModelInfo, resolveContextWindow, resolveMaxOutputTokens,
   normalizeEffort, normalizeProviderModels, serializeModelForPersistence,
 } from '../../../agent/yeaft/models.js';
 import { applyAnthropicThinking } from '../../../agent/yeaft/llm/anthropic.js';
 import { filterEffortForModel, normalizeModelEntry } from '../../../agent/yeaft/llm/router.js';
 import { captureEffortDecision, enforceSubAgentEffortPayload } from '../../../agent/yeaft/effort.js';
 
+import { _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
+
 const anthropicOptions = ['medium', 'xhigh', 'max'];
 const openaiOptions = ['medium', 'xhigh', 'max', 'ultra'];
 
 describe('API-based effort capability', () => {
+  it('uses the 1M fallback across runtime and initialized config while preserving existing explicit limits', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-default-context-'));
+    _setMemCacheForTest(null);
+    try {
+      expect(DEFAULT_CONTEXT_WINDOW).toBe(1000000);
+      expect(loadConfig({ dir }).maxContextTokens).toBe(1000000);
+      expect(resolveContextWindow('unknown-model')).toBe(1000000);
+      expect(resolveContextWindow('unknown-model', { maxContextTokens: 200000 })).toBe(200000);
+      expect(resolveContextWindow('unknown-model', { modelInfo: { contextWindow: 64000 } })).toBe(64000);
+      initYeaftDir(dir);
+      const configFile = join(dir, 'config.json');
+      const seeded = JSON.parse(readFileSync(configFile, 'utf8'));
+      expect(seeded.maxContextTokens).toBe(1000000);
+      expect(loadConfig({ dir }).maxContextTokens).toBe(1000000);
+      seeded.maxContextTokens = 200000;
+      const existing = JSON.stringify(seeded);
+      writeFileSync(configFile, existing);
+      initYeaftDir(dir);
+      expect(readFileSync(configFile, 'utf8')).toBe(existing);
+      const config = loadConfig({ dir });
+      expect(config.maxContextTokens).toBe(200000);
+      expect(resolveContextWindow('unknown-model', config)).toBe(200000);
+    } finally { _setMemCacheForTest(null); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('resolves qualified Opus/Fable limits above 200K without weakening overrides or namespaced IDs', () => {
+    const model = (context, output = 128000) => ({ limit: { context, output } });
+    _setMemCacheForTest({
+      anthropic: { models: { 'claude-opus-5-5': model(1000000), 'claude-fable-5-2': model(1000000),
+        'claude-opus-4-8': model(1000000) } },
+      relay: { models: { 'claude-opus-4-8': model(200000, 16000), 'vendor/model': model(333000),
+        'model': model(999000), 'literal/claude-opus-5-5': model(128000, 8000) } },
+    });
+    try {
+      for (const id of ['claude-opus-5-5', 'claude-fable-5-2', 'claude-opus-4-8']) {
+        expect(resolveContextWindow('codex-proxy/' + id, { maxContextTokens: 200000 })).toBe(1000000);
+        expect(resolveMaxOutputTokens('codex-proxy/' + id, { maxOutputTokens: 16384 })).toBe(128000);
+        expect(getModelInfo('codex-proxy/' + id)).toMatchObject({ id: 'codex-proxy/' + id, contextWindow: 1000000, maxOutput: 128000 });
+        const override = { modelInfo: { contextWindow: 64000, maxOutput: 4096 } };
+        expect(resolveContextWindow('codex-proxy/' + id, override)).toBe(64000);
+        expect(resolveMaxOutputTokens('codex-proxy/' + id, override)).toBe(4096);
+      }
+      // A genuine catalog ID with slashes wins over its bare-name fallback.
+      expect(resolveContextWindow('literal/claude-opus-5-5')).toBe(128000);
+      expect(resolveMaxOutputTokens('literal/claude-opus-5-5')).toBe(8000);
+      expect(resolveContextWindow('gateway/vendor/model')).toBe(333000);
+      expect(resolveContextWindow('gateway/unknown', { maxContextTokens: 123000 })).toBe(123000);
+      expect(resolveContextWindow('gateway/unknown')).toBe(1000000);
+      expect(resolveContextWindow('claude-opus-5-50')).toBe(1000000);
+    } finally { _setMemCacheForTest(null); }
+  });
+
   it('uses the effective API for future models, opaque aliases and IDs from the other vendor', () => {
     for (const model of ['new-model', 'proxy/private-alias', 'gpt-4.1', 'gpt-5.5', 'claude-haiku-3-20250414', 'claude-fable-50', 'anthropic.claude-mythos-preview']) {
       for (const [protocol, thinkingProtocol, effortOptions] of [
