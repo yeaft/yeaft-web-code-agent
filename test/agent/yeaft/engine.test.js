@@ -544,6 +544,7 @@ describe('Engine', () => {
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-reserve-'));
       const originalFetch = globalThis.fetch;
       const requests = [];
+      const summaries = [];
       const loops = [];
       const hasRoom = mode.endsWith('-room');
       const manual = mode.startsWith('manual');
@@ -553,7 +554,12 @@ describe('Engine', () => {
       let engine;
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
-          requests.push(JSON.parse(init.body));
+          const body = JSON.parse(init.body);
+          if (body.stream !== true) {
+            if (body.system.startsWith('Summarize the supplied')) summaries.push(body);
+            return new Response(JSON.stringify({ content: [{ type: 'text', text: 'Evidence obtained. Continue with the answer; echo already ran.' }], stop_reason: 'end_turn' }), { headers: { 'content-type': 'application/json' } });
+          }
+          requests.push(body);
           const index = requests.length;
           const usageGap = ['usage-gap', 'partial-usage', 'usage-gap-json'].includes(mode);
           const usage = mode === 'estimated' || (usageGap && index === 2 && mode !== 'partial-usage') ? undefined
@@ -598,11 +604,15 @@ describe('Engine', () => {
         expect(requests[0].max_tokens).toBe(manual ? Math.max(config.maxOutputTokens, 17408)
           : mode.startsWith('extra-body') ? 20000 : config.maxOutputTokens);
         const repeated = ['repeated', 'usage-gap', 'partial-usage', 'usage-gap-json'].includes(mode);
-        const failed = ['exhausted', 'manual', 'manual-edge', 'extra-body'].includes(mode);
-        if (failed) {
-          expect(requests).toHaveLength(1);
+        const rolled = ['exhausted', 'manual', 'manual-edge', 'extra-body'].includes(mode);
+        if (rolled) {
+          expect(requests).toHaveLength(2);
+          expect(summaries).toHaveLength(1);
+          expect(JSON.stringify(requests[1])).not.toContain('sig-');
+          expect(requests[1].messages).toHaveLength(1);
+          expect(requests[1].messages[0].content).toContain('Context rollover');
           if (manual) expect(requests[0].thinking).toMatchObject({ type: 'enabled', budget_tokens: 16384 });
-          expect(events.find(event => event.type === 'error').error.code).toBe('PROVIDER_STATE_INVALID');
+          expect(events.filter(event => event.type === 'error')).toEqual([]);
         } else {
           expect(events.filter(event => event.type === 'error')).toEqual([]);
           expect(requests).toHaveLength(repeated ? 3 : 2);
@@ -627,10 +637,10 @@ describe('Engine', () => {
             expect(store.loadAllBySession('signed-reserve').find(row => row.role === 'tool').content).toBe(result);
           }
         }
-        expect(events.filter(event => event.type === 'llm_retry')).toEqual([]);
+        expect(events.filter(event => event.type === 'llm_retry')).toHaveLength(rolled ? 1 : 0);
         expect(events.filter(event => event.type === 'tool_end')).toHaveLength(repeated ? 2 : 1);
         expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
-          expect.objectContaining({ stopReason: failed ? 'error' : 'end_turn', terminal: true }),
+          expect.objectContaining({ stopReason: 'end_turn', terminal: true }),
         ]);
       } finally {
         globalThis.fetch = originalFetch;
@@ -725,35 +735,70 @@ describe('Engine', () => {
       }
     });
 
-    it.each(['preflight', 'provider'])('fails visibly rather than compacting active signed context on %s overflow', async overflow => {
-      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-overflow-'));
+    it.each(['preflight', 'threshold', 'provider', 'failure', 'abort', 'identity', 'repeat'])('rolls signed context into a fresh conversation without tool replay: %s', async mode => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
       const originalFetch = globalThis.fetch;
-      const requests = [];
-      const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 };
-      let engine;
+      const requests = [], summaries = [];
+      const config = { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0,
+        modelInfo: { contextWindow: 40000 } };
+      const control = new AbortController();
+      let executions = 0;
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
-          requests.push(JSON.parse(init.body));
-          if (requests.length > 1) return new Response('prompt is too long', { status: 400 });
-          return response('overflow-tool', 'echo');
+          const body = JSON.parse(init.body);
+          if (body.stream !== true) {
+            if (body.system.startsWith('Summarize the supplied')) summaries.push(body);
+            expect(body.tools).toBeUndefined();
+            expect(JSON.stringify(body)).not.toContain('signature-');
+            expect(body.messages[0].content).toContain('COMPLETE_EVIDENCE');
+            if (body.system.startsWith('Summarize the supplied') && mode === 'abort') { control.abort(); throw new DOMException('cancelled', 'AbortError'); }
+            if (body.system.startsWith('Summarize the supplied') && mode === 'failure') return new Response(JSON.stringify({ content: [], stop_reason: 'end_turn' }), { headers: { 'content-type': 'application/json' } });
+            return new Response(JSON.stringify({ content: [{ type: 'text', text: 'COMPLETE_EVIDENCE. Echo completed successfully, do not repeat it. Continue unfinished answer.' }], stop_reason: 'end_turn' }), { headers: { 'content-type': 'application/json' } });
+          }
+          requests.push(body);
+          if (mode === 'provider' && requests.length === 2) return new Response('prompt is too long', { status: 400 });
+          const tool = requests.length === 1 || (mode === 'repeat' && requests.length === 2) ? 'echo' : undefined;
+          return response('roll-' + requests.length, tool, { n: requests.length }, 'claude-opus-4.8', {
+            input_tokens: mode === 'provider' || mode === 'identity' ? 1000 : mode === 'threshold' ? 34300 : 39500,
+            output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+          });
         });
-        engine = new Engine({ adapter: router('claude-opus-4.8'), trace, config, yeaftDir: dir });
+        const store = new ConversationStore(dir);
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, config, yeaftDir: dir, conversationStore: store });
         engine.registerTool({ name: 'echo', description: 'echo', parameters: { type: 'object' }, execute: async () => {
-          if (overflow === 'preflight') engine.refreshConfig({ ...config, modelInfo: { contextWindow: 512 } });
-          return 'new tool evidence '.repeat(2000);
+          executions++;
+          if (mode === 'identity') engine.refreshConfig({ ...config, model: 'gateway/claude-sonnet-4.6' });
+          return 'COMPLETE_EVIDENCE: completed side effect ' + executions;
         } });
         const events = [];
-        for await (const event of engine.query({ prompt: 'obtain evidence', sessionId: 'signed-overflow' })) events.push(event);
-        expect(requests).toHaveLength(overflow === 'preflight' ? 1 : 2);
-        expect(events.filter(event => event.type === 'llm_retry')).toEqual([]);
-        expect(events.find(event => event.type === 'error')).toMatchObject({ retryable: false, error: overflow === 'preflight' ? {
-          code: 'PROVIDER_STATE_INVALID', message: expect.stringContaining('signed context cannot fit'),
-        } : { name: 'LLMContextError' } });
+        for await (const event of engine.query({ prompt: 'obtain evidence and finish', sessionId: 'signed-rollover', signal: control.signal })) events.push(event);
+        const fails = mode === 'failure' || mode === 'identity';
+        expect(executions).toBe(mode === 'repeat' ? 2 : 1);
+        if (mode === 'identity') {
+          expect(summaries).toHaveLength(0);
+          expect(events.find(event => event.type === 'error').error.message).toMatch(/origin changed/);
+        } else {
+          expect(summaries).toHaveLength(mode === 'repeat' ? 2 : 1);
+          if (mode === 'failure') expect(events.find(event => event.type === 'error').error.code).toBe('CONTEXT_COMPACTION_FAILED');
+          else if (mode !== 'abort') {
+            expect(events.filter(event => event.type === 'error')).toEqual([]);
+            const fresh = requests.at(-1);
+            expect(fresh.messages).toHaveLength(1);
+            expect(fresh.messages[0].role).toBe('user');
+            expect(fresh.messages[0].content).toContain('COMPLETE_EVIDENCE');
+            expect(JSON.stringify(fresh)).not.toContain('signature-');
+          }
+        }
+        const rows = store.loadAllBySession('signed-rollover');
+        expect(rows.filter(row => row.role === 'user' && row.userAuthored !== false)).toHaveLength(1);
+        expect(rows.filter(row => row.role === 'tool')).toHaveLength(executions);
+        expect(rows.some(row => row.providerState?.items?.some(item => item.signature))).toBe(true);
         expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
-          expect.objectContaining({ stopReason: 'error', terminal: true }),
+          expect.objectContaining({ stopReason: mode === 'abort' ? 'aborted' : fails ? 'error' : 'end_turn', terminal: true }),
         ]);
       } finally {
         globalThis.fetch = originalFetch;
+        await closeConversationHistoryIndexes();
         rmSync(dir, { recursive: true, force: true });
       }
     });

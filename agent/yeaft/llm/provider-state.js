@@ -14,6 +14,16 @@ export class ProviderStateError extends Error {
   }
 }
 
+/** Recoverable capacity failure, distinct from invalid ownership/signatures. */
+export class ProviderContextBudgetError extends ProviderStateError {
+  constructor(reason) {
+    super(reason);
+    this.name = 'ProviderContextBudgetError';
+    this.message = `Provider context budget requires compaction: ${reason}`;
+    this.code = 'PROVIDER_CONTEXT_BUDGET';
+  }
+}
+
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
   if (!value || typeof value !== 'object') return value;

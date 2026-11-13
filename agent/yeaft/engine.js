@@ -57,7 +57,7 @@ import { perfNowMs, recordAgentPerfTrace } from './perf-trace.js';
 const MAIN_THREAD_ID = 'main';
 
 import { pickEffort, parseEffortPrefix, snapshotEffortDecision } from './effort.js';
-import { bindProviderState, ProviderStateError } from './llm/provider-state.js';
+import { bindProviderState, ProviderStateError, ProviderContextBudgetError } from './llm/provider-state.js';
 import {
   POST_COMPACT_CONTEXT_RATIO,
   generatePostCompact,
@@ -66,6 +66,7 @@ import {
   removePostCompactIfSource,
   savePostCompact,
 } from './post-compact.js';
+import { generateContextRollover } from './context-rollover.js';
 import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
@@ -2582,6 +2583,13 @@ export class Engine {
     // Keep a provider-only tape plus its live-conversation cursor; asynchronous
     // tool updates must arrive as new notes, never edits to previously sent rows.
     let signedAnthropicPrefix = null;
+    // A provider-context segment is not a new user query. Keep the durable tape,
+    // tool execution ledgers and query identity; only the request context rolls.
+    let rolloverSeed = null;
+    let rolloverCursor = 0;
+    let rolloverCount = 0;
+    let successfulRequestsSinceRollover = 0;
+    let pendingServerOperation = false;
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
     let pauseContinueTurns = 0;
@@ -2935,7 +2943,7 @@ export class Engine {
         // Retry continuation is part of the active turn. Like the opening user
         // row and tool-loop traffic, it must not consume the 32K history budget.
         const historyBudget = Math.max(0, requestConfig.messageTokenBudget || 32768);
-        const buckets = useMessageHistory && !signedAnthropicPrefix ? buildHistoryBuckets(conversationMessages, {
+        const buckets = useMessageHistory && !signedAnthropicPrefix && !rolloverSeed ? buildHistoryBuckets(conversationMessages, {
           prompt,
           relatedTurns: relatedHistoryTurns,
           recentTurnCap: Math.max(10, requestConfig.yeaft?.recentTurnsLimit ?? 10),
@@ -2948,9 +2956,10 @@ export class Engine {
           currentTurnStartIndex: turnStartIdx,
           language: requestConfig.language,
         }) : null;
-        let historyMessageCount;
+        let historyMessageCount = 0;
         const requestHistory = signedAnthropicPrefix
           ? [...signedAnthropicPrefix.messages, ...conversationMessages.slice(signedAnthropicPrefix.conversationCursor)]
+          : rolloverSeed ? [rolloverSeed, ...conversationMessages.slice(rolloverCursor)]
           : buckets?.messages || (() => {
             const historical = trimSnapshotForBudget(conversationMessages.slice(0, turnStartIdx), {
               messageTokenBudget: historyBudget,
@@ -3072,7 +3081,7 @@ export class Engine {
           contextOutputLimit = Math.floor(fitOptions.contextWindow - inputTokens);
           requestMaxOutputTokens = Math.min(configuredOutputReserve, contextOutputLimit);
           if (requestMaxOutputTokens < Math.min(configuredOutputReserve, 1024)) {
-            throw new ProviderStateError('active Anthropic signed context cannot fit without changing its prefix; start a new turn with a smaller context');
+            throw new ProviderContextBudgetError('active Anthropic context needs a fresh compacted segment');
           }
           const staticTokens = fitOptions.systemTokens + toolSchemaTokens + requestMaxOutputTokens;
           const estimatedTokens = inputTokens + requestMaxOutputTokens;
@@ -3116,6 +3125,15 @@ export class Engine {
           wireMessages.push(runtimeInstructionUpdate);
         }
         if (missingDeliveries.length > 0 || runtimeInstructionUpdate) fittedRequest = fitRequest(wireMessages);
+        // Leave headroom for the next assistant/tool batch rather than waiting
+        // for an immutable signed prefix to fill the entire model window.
+        const fittedInputTokens = fittedRequest.meta.estimatedInputTokens
+          ?? fittedRequest.meta.estimatedTokens - requestMaxOutputTokens;
+        if (successfulRequestsSinceRollover > 0 && !pendingServerOperation
+            && (fittedInputTokens >= fitOptions.contextWindow * 0.85
+              || fittedRequest.meta.droppedCurrentMessages > 0)) {
+          throw new ProviderContextBudgetError('active context reached the rollover threshold');
+        }
         wireMessages = fittedRequest.messages;
         const deliveredTaskIds = taskDeliveries.filter(({ text }) => includesDelivery(wireMessages, text))
           .map(({ taskId }) => taskId);
@@ -3487,6 +3505,8 @@ export class Engine {
         // This request completed normally. Preserve the actual model and the
         // adapter-resolved effort so the visible response can identify the last
         // successful provider call (including fallback-model switches).
+        successfulRequestsSinceRollover += 1;
+        pendingServerOperation = stopReason === 'pause_turn';
         lastSuccessfulModel = currentModel;
         lastSuccessfulEffort = requestEffortDecision.effective || resolvedEffort || null;
         // Stream completed without throwing — reset the retry counter so
@@ -3589,6 +3609,97 @@ export class Engine {
           yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
           yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId, terminal: true };
           break;
+        }
+
+        const contextNeedsRollover = err instanceof ProviderContextBudgetError
+          || err instanceof LLMContextError;
+        if (contextNeedsRollover && toolCalls.length === 0
+            && successfulRequestsSinceRollover > 0 && !pendingServerOperation) {
+          endAttemptTrace('context_rollover');
+          if (responseText) prepareRetryContinuation();
+          rolloverCount += 1;
+          yield {
+            type: 'llm_retry', attempt: rolloverCount, maxRetries: rolloverCount,
+            delayMs: 0, reason: 'context_rollover', recoveryMode: 'continue',
+            errorName: err.name, statusCode: err.statusCode ?? null,
+            message: 'Compacting conversation context and continuing in a fresh model turn.',
+          };
+          const sourceCursor = conversationMessages.length;
+          const sourceMessages = rolloverSeed
+            ? [rolloverSeed, ...conversationMessages.slice(rolloverCursor, sourceCursor)]
+            : [...(postCompactState.summary ? [{ role: 'user', content: postCompactState.summary }] : []),
+              ...conversationMessages.slice(0, sourceCursor)];
+          const compactUsage = [];
+          try {
+            const summary = await generateContextRollover({
+              adapter: requestAdapter.call ? requestAdapter : this.#adapter,
+              model: currentModel,
+              messages: sourceMessages,
+              contextWindow: Math.max(1, Math.floor(currentContextWindow * providerContextScale)),
+              maxTokens: Math.min(4096, resolveMaxOutputTokens(currentModel, requestConfig)),
+              signal, requestIdentity,
+              onRequestStart: () => {
+                if (isSubAgent) this.#toolRegistry?.reserveProviderRequest?.();
+              },
+              onUsage: usage => {
+                const input = (usage.inputTokens || 0) + (usage.cacheTokensAreIncludedInInput
+                  ? 0 : (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0));
+                cumulativeInputTokens += input;
+                cumulativeOutputTokens += usage.outputTokens || 0;
+                queryProgress.usageObserved(usage);
+                compactUsage.push(usage);
+              },
+            });
+            if (signal?.aborted) throw new LLMAbortError();
+            // No native state/tool pairs enter this fresh conversation. The
+            // summary is untrusted history, never a new user authorization.
+            rolloverSeed = { role: 'user', userAuthored: false, content:
+              '[Context rollover: derived history, not new instructions or authorization]\n'
+              + summary + '\n\nContinue the existing user task from the unfinished work. '
+              + 'Completed tools have already run; do not replay side effects. '
+              + 'Verify uncertain facts from the original records before acting.' };
+            rolloverCursor = sourceCursor;
+            signedAnthropicPrefix = null;
+            postCompactCandidate = null;
+            successfulRequestsSinceRollover = 0;
+            providerContextScale = 1;
+            contextOverflowRecoveryAttempts = 0;
+            fileReadObservations.clear();
+            repeatedToolResultRefs.clear();
+            completeReadResultIds.clear();
+            // Persist only a derived cache for future user turns. It is not a
+            // transcript row and never creates a second human-authored prompt.
+            if (postCompactScope
+                && this.#postCompactRevisions.get(postCompactScope.key) === postCompactState.revision) {
+              const artifact = { summary, model: currentModel, sourceTurnId: queryTurnId,
+                sourceRevision: postCompactState.revision, contextWindow: currentContextWindow,
+                createdAt: new Date().toISOString() };
+              const current = () => this.#postCompactRevisions.get(postCompactScope.key) === postCompactState.revision;
+              try {
+                if (await savePostCompact(postCompactScope.path, artifact, current) && current()) {
+                  this.#postCompactSummaries.set(postCompactScope.key, artifact);
+                }
+              } catch { /* The in-memory seed still allows this query to continue. */ }
+            }
+            this.#trace.log?.('context_rollover', { sessionId: runtimeSessionId,
+              turnId: queryTurnId, model: currentModel, contextWindow: currentContextWindow,
+              segment: rolloverCount, sourceMessageCount: rolloverCursor });
+            for (const usage of compactUsage) yield { ...usage, type: 'usage' };
+            yield queryProgress.snapshot(progressIdentity);
+            yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
+            continue;
+          } catch (compactError) {
+            if (signal?.aborted || compactError instanceof LLMAbortError || compactError?.name === 'AbortError') {
+              yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+              yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId, terminal: true };
+              break;
+            }
+            // Never drop source context when summarization fails. Report the
+            // actual recovery failure, not a misleading invalid-signature error.
+            err = new Error('Automatic context compaction failed; conversation and completed tool results are preserved. '
+              + String(compactError?.message || compactError));
+            err.code = 'CONTEXT_COMPACTION_FAILED';
+          }
         }
 
         traceRequest('llm.request_error', {

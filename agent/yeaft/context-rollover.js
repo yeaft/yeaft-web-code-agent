@@ -120,12 +120,13 @@ function* chunks(parts, limit, signal) {
  *
  * @param {{ adapter: {call: Function}, model: string, messages: object[],
  * contextWindow: number, maxTokens?: number, signal?: AbortSignal,
- * requestIdentity?: object, userAppend?: string, maxCalls?: number }} options
+ * requestIdentity?: object, userAppend?: string, maxCalls?: number,
+ * onRequestStart?: Function, onUsage?: Function }} options
  * @returns {Promise<string>} Untrusted summary, never a new system instruction.
  */
 export async function generateContextRollover({
   adapter, model, messages, contextWindow, maxTokens = 4096,
-  signal, requestIdentity, userAppend, maxCalls = 4096,
+  signal, requestIdentity, userAppend, maxCalls = 4096, onRequestStart, onUsage,
 }) {
   checkAbort(signal);
   if (!adapter || typeof adapter.call !== 'function' || !Array.isArray(messages)) {
@@ -148,7 +149,7 @@ export async function generateContextRollover({
       model, system: SYSTEM,
       messages: [{ role: 'user', content: INPUT_LABEL + source }],
       maxTokens: outputLimit, contextOutputLimit: outputLimit,
-      signal, requestIdentity,
+      signal, requestIdentity, ...(onRequestStart ? { onRequestStart } : {}),
     });
     checkAbort(signal);
     const text = typeof response?.text === 'string' ? response.text.trim() : '';

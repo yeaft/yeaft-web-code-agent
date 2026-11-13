@@ -178,7 +178,11 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // canonical provider hints and literal/nested catalog IDs.
 // +1 grouped 1M-default regression: runtime/config initializer parity and
 // non-migration of existing explicit smaller limits.
-export const TEST_CASE_LIMIT = 1043;
+// +11 reviewed context rollover boundaries: nested model catalog precedence and
+// exact Fable fallback (2), bounded/private/abort/failure summaries (4), and
+// threshold/repeated rollover, cancellation, failure and identity fences (5 net).
+// Prior signed-budget assertions now verify safe fresh-context recovery.
+export const TEST_CASE_LIMIT = 1054;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
