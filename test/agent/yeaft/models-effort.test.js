@@ -71,6 +71,60 @@ describe('API-based effort capability', () => {
     } finally { _setMemCacheForTest(null); }
   });
 
+  it('resolves nested aliases longest-first while preserving small catalog limits and wire IDs', () => {
+    const model = (context, output) => ({ limit: { context, output } });
+    _setMemCacheForTest({
+      anthropic: { models: {
+        'claude-fable-5-2': model(1000000, 128000),
+        'claude-opus-5-5': model(1000000, 96000),
+        'claude-haiku-3-20250414': model(200000, 8192),
+      } },
+      relay: { models: {
+        'literal/sandbox/claude-fable-5-2': model(64000, 4096),
+        'vendor/claude-fable-5-2': model(128000, 8000),
+      } },
+    });
+    try {
+      for (const [id, context, output] of [
+        ['loki/sandbox/claude-fable-5-2', 1000000, 128000],
+        ['codex-proxy/claude-opus-5-5', 1000000, 96000],
+        ['loki/sandbox/claude-haiku-3-20250414', 200000, 8192],
+        ['literal/sandbox/claude-fable-5-2', 64000, 4096],
+        ['loki/sandbox/vendor/claude-fable-5-2', 128000, 8000],
+      ]) {
+        expect(resolveContextWindow(id, { maxContextTokens: 200000 })).toBe(context);
+        expect(resolveMaxOutputTokens(id, { maxOutputTokens: 16384 })).toBe(output);
+        expect(getModelInfo(id)).toMatchObject({ id, contextWindow: context, maxOutput: output });
+        const override = { contextWindow: 32000, maxOutput: 2048 };
+        expect(resolveContextWindow(id, { modelInfo: override })).toBe(32000);
+        expect(resolveMaxOutputTokens(id, { modelInfo: override })).toBe(2048);
+        expect(getModelInfo(id, override)).toMatchObject({ id, ...override });
+      }
+    } finally { _setMemCacheForTest(null); }
+  });
+
+  it('uses only the exact Fable 5.2 context fallback without catalog metadata', () => {
+    _setMemCacheForTest(null);
+    try {
+      const config = { maxContextTokens: 200000, maxOutputTokens: 4096 };
+      for (const id of ['claude-fable-5-2', 'loki/sandbox/claude-fable-5-2']) {
+        expect(resolveContextWindow(id, config)).toBe(1000000);
+        expect(resolveMaxOutputTokens(id, config)).toBe(4096);
+        expect(getModelInfo(id)).toEqual({ id, contextWindow: 1000000 });
+        expect(resolveContextWindow(id, { ...config, modelInfo: { contextWindow: 64000 } })).toBe(64000);
+      }
+      for (const id of ['loki/sandbox/claude-fable-5-20', 'loki/sandbox/claude-fable-5-2-preview',
+        'codex-proxy/claude-opus-5-5', 'loki/sandbox/claude-haiku-3-20250414', 'unknown']) {
+        expect(resolveContextWindow(id, config)).toBe(200000);
+        expect(resolveMaxOutputTokens(id, config)).toBe(4096);
+      }
+      // Even smaller catalog metadata beats the known-capability fallback.
+      _setMemCacheForTest({ relay: { models: { 'claude-fable-5-2': { limit: { context: 128000, output: 8000 } } } } });
+      expect(resolveContextWindow('loki/sandbox/claude-fable-5-2', config)).toBe(128000);
+      expect(resolveMaxOutputTokens('loki/sandbox/claude-fable-5-2', config)).toBe(8000);
+    } finally { _setMemCacheForTest(null); }
+  });
+
   it('uses the effective API for future models, opaque aliases and IDs from the other vendor', () => {
     for (const model of ['new-model', 'proxy/private-alias', 'gpt-4.1', 'gpt-5.5', 'claude-haiku-3-20250414', 'claude-fable-50', 'anthropic.claude-mythos-preview']) {
       for (const [protocol, thinkingProtocol, effortOptions] of [
