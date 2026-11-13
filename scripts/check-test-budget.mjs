@@ -181,8 +181,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +11 reviewed context rollover boundaries: nested model catalog precedence and
 // exact Fable fallback (2), bounded/private/abort/failure summaries (4), and
 // threshold/repeated rollover, cancellation, failure and identity fences (5 net).
+// +3 review regressions: reserved child reporting, per-call usage cancellation,
+// and latest user append preserved verbatim.
 // Prior signed-budget assertions now verify safe fresh-context recovery.
-export const TEST_CASE_LIMIT = 1054;
+export const TEST_CASE_LIMIT = 1057;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

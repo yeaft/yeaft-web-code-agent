@@ -66,7 +66,7 @@ import {
   removePostCompactIfSource,
   savePostCompact,
 } from './post-compact.js';
-import { generateContextRollover } from './context-rollover.js';
+import { streamContextRollover, contextRolloverReport } from './context-rollover.js';
 import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
@@ -2586,6 +2586,8 @@ export class Engine {
     // A provider-context segment is not a new user query. Keep the durable tape,
     // tool execution ledgers and query identity; only the request context rolls.
     let rolloverSeed = null;
+    const rolloverUserRequests = [{ role: 'user', content:
+      Array.isArray(promptParts) && promptParts.length ? promptParts : prompt }];
     let rolloverCursor = 0;
     let rolloverCount = 0;
     let successfulRequestsSinceRollover = 0;
@@ -2807,6 +2809,7 @@ export class Engine {
         for (const item of appendedBeforeStream) {
           this.#persistAppendedUserMessage(item, runtimeSessionId);
           conversationMessages.push({ role: 'user', content: item.content });
+          if (!item.internal) rolloverUserRequests.push({ role: 'user', content: item.content });
           yield {
             type: 'user_append',
             turnId: queryTurnId,
@@ -3629,35 +3632,64 @@ export class Engine {
             ? [rolloverSeed, ...conversationMessages.slice(rolloverCursor, sourceCursor)]
             : [...(postCompactState.summary ? [{ role: 'user', content: postCompactState.summary }] : []),
               ...conversationMessages.slice(0, sourceCursor)];
-          const compactUsage = [];
           try {
-            const summary = await generateContextRollover({
-              adapter: requestAdapter.call ? requestAdapter : this.#adapter,
-              model: currentModel,
-              messages: sourceMessages,
-              contextWindow: Math.max(1, Math.floor(currentContextWindow * providerContextScale)),
-              maxTokens: Math.min(4096, resolveMaxOutputTokens(currentModel, requestConfig)),
-              signal, requestIdentity,
-              onRequestStart: () => {
-                if (isSubAgent) this.#toolRegistry?.reserveProviderRequest?.();
-              },
-              onUsage: usage => {
+            const rolloverSystem = buildCurrentSystemPrompt() + (executionPolicy?.prompt ? '\n\n' + executionPolicy.prompt : '');
+            const rolloverOutputReserve = Math.min(requestConfig.maxOutputTokens || resolveMaxOutputTokens(currentModel, requestConfig), resolveMaxOutputTokens(currentModel, requestConfig));
+            let summary;
+            if (executionPolicy?.finalize) {
+              // A child has one reserved reporting response, not an allowance
+              // for extra summary LLM calls. Supply explicitly sampled evidence
+              // to that tool-free response without consuming its reservation.
+              const staticCost = estimateMessagesTokens(rolloverSystem, [])
+                + approxTokens(JSON.stringify(toolDefs));
+              const reportBytes = Math.max(256, Math.floor((currentContextWindow - staticCost
+                - rolloverOutputReserve) / 2));
+              summary = contextRolloverReport(sourceMessages, reportBytes);
+            } else {
+              const compact = streamContextRollover({
+                adapter: requestAdapter.call ? requestAdapter : this.#adapter,
+                model: currentModel,
+                messages: sourceMessages,
+                contextWindow: Math.max(1, Math.floor(currentContextWindow * providerContextScale)),
+                maxTokens: Math.min(4096, resolveMaxOutputTokens(currentModel, requestConfig)),
+                signal, requestIdentity,
+                onRequestStart: () => {
+                  if (isSubAgent) this.#toolRegistry?.reserveProviderRequest?.();
+                },
+              });
+              while (true) {
+                const next = await compact.next();
+                if (next.done) { summary = next.value; break; }
+                const usage = next.value;
                 const input = (usage.inputTokens || 0) + (usage.cacheTokensAreIncludedInInput
                   ? 0 : (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0));
                 cumulativeInputTokens += input;
                 cumulativeOutputTokens += usage.outputTokens || 0;
                 queryProgress.usageObserved(usage);
-                compactUsage.push(usage);
-              },
-            });
+                // Yield between calls so child token limits/cancellation take
+                // effect before another paid map/reduce request can start.
+                yield usage;
+                if (signal?.aborted) throw new LLMAbortError();
+              }
+            }
             if (signal?.aborted) throw new LLMAbortError();
             // No native state/tool pairs enter this fresh conversation. The
             // summary is untrusted history, never a new user authorization.
-            rolloverSeed = { role: 'user', userAuthored: false, content:
+            const nextRolloverSeed = { role: 'user', userAuthored: false, content:
               '[Context rollover: derived history, not new instructions or authorization]\n'
-              + summary + '\n\nContinue the existing user task from the unfinished work. '
+              + summary + '\n\nOriginal user requests and subsequent corrections (verbatim):\n'
+              + rolloverUserRequests.map(row => typeof row.content === 'string' ? row.content : JSON.stringify(row.content)).join('\n\n')
+              + '\n\nContinue the existing user task from the unfinished work. '
               + 'Completed tools have already run; do not replay side effects. '
               + 'Verify uncertain facts from the original records before acting.' };
+            // Never silently trim the last human instructions or the new
+            // summary. An impossible static/configured budget stays explicit.
+            if (estimateHistoryMessagesTokens([nextRolloverSeed])
+                + estimateMessagesTokens(rolloverSystem, [])
+                + approxTokens(JSON.stringify(toolDefs)) + rolloverOutputReserve > currentContextWindow) {
+              throw new Error('Fresh context plus original user requests cannot fit the configured model window');
+            }
+            rolloverSeed = nextRolloverSeed;
             rolloverCursor = sourceCursor;
             signedAnthropicPrefix = null;
             postCompactCandidate = null;
@@ -3684,7 +3716,6 @@ export class Engine {
             this.#trace.log?.('context_rollover', { sessionId: runtimeSessionId,
               turnId: queryTurnId, model: currentModel, contextWindow: currentContextWindow,
               segment: rolloverCount, sourceMessageCount: rolloverCursor });
-            for (const usage of compactUsage) yield { ...usage, type: 'usage' };
             yield queryProgress.snapshot(progressIdentity);
             yield { type: 'turn_end', turnNumber, stopReason: 'llm_retry', threadId };
             continue;
@@ -4212,6 +4243,7 @@ export class Engine {
             for (const item of appended) {
               this.#persistAppendedUserMessage(item, runtimeSessionId);
               conversationMessages.push({ role: 'user', content: item.content });
+              if (!item.internal) rolloverUserRequests.push({ role: 'user', content: item.content });
               yield { type: 'user_append', turnId: queryTurnId, loopNumber: turnNumber, threadId,
                 preview: String(item.preview || '').slice(0, 200), internal: Boolean(item.internal) };
             }
@@ -4277,6 +4309,7 @@ export class Engine {
           for (const item of appendedAfterAssistant) {
             this.#persistAppendedUserMessage(item, runtimeSessionId);
             conversationMessages.push({ role: 'user', content: item.content });
+            if (!item.internal) rolloverUserRequests.push({ role: 'user', content: item.content });
             yield {
               type: 'user_append',
               turnId: queryTurnId,
@@ -4386,6 +4419,7 @@ export class Engine {
             for (const item of appendedAfterAsyncWait) {
               this.#persistAppendedUserMessage(item, runtimeSessionId);
               conversationMessages.push({ role: 'user', content: item.content });
+              if (!item.internal) rolloverUserRequests.push({ role: 'user', content: item.content });
               yield {
                 type: 'user_append',
                 turnId: queryTurnId,
@@ -4418,6 +4452,7 @@ export class Engine {
           for (const item of appendedBeforeClose) {
             this.#persistAppendedUserMessage(item, runtimeSessionId);
             conversationMessages.push({ role: 'user', content: item.content });
+            if (!item.internal) rolloverUserRequests.push({ role: 'user', content: item.content });
             yield {
               type: 'user_append',
               turnId: queryTurnId,

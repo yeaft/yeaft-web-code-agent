@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { rmSync, mkdtempSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { SubAgentToolRegistry } from '../../../agent/yeaft/sub-agent/execution-control.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
@@ -735,7 +736,39 @@ describe('Engine', () => {
       }
     });
 
-    it.each(['preflight', 'threshold', 'provider', 'failure', 'abort', 'identity', 'repeat'])('rolls signed context into a fresh conversation without tool replay: %s', async mode => {
+    it('keeps the reserved child report available when signed context is full', async () => {
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      const child = { budget: { max_llm_calls: 1 }, usage: { llmCalls: 0 }, execution: { toolCalls: 0, recentCalls: [] } };
+      const registry = new SubAgentToolRegistry({ agent: child });
+      registry.register(defineTool({ name: 'echo', description: 'Read evidence', parameters: { type: 'object' },
+        execute: async () => 'COMPLETE_EVIDENCE: performed once' }));
+      try {
+        globalThis.fetch = vi.fn(async (_url, init) => {
+          const body = JSON.parse(init.body);
+          expect(body.stream).toBe(true); // no extra summary requests
+          requests.push(body);
+          return response('child-' + requests.length, requests.length === 1 ? 'echo' : undefined, {}, 'claude-opus-4.8', {
+            input_tokens: 39500, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+          });
+        });
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, toolRegistry: registry, yeaftDir: tmpdir(),
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0, modelInfo: { contextWindow: 40000 } } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Investigate; DO NOT DEPLOY', sessionId: 'child-rollover', isSubAgent: true, vpPersona: { vpId: 'child', subAgent: true } })) events.push(event);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(requests).toHaveLength(2);
+        expect(requests[1].tools).toBeUndefined();
+        expect(requests[1].messages).toHaveLength(1);
+        expect(requests[1].messages[0].content).toContain('COMPLETE_EVIDENCE');
+        expect(requests[1].messages[0].content).toContain('DO NOT DEPLOY');
+        expect(JSON.stringify(requests[1])).not.toContain('signature-');
+        expect(child.usage).toMatchObject({ llmCalls: 2, reportingLlmCalls: 1 });
+        expect(child.execution.toolCalls).toBe(1);
+      } finally { globalThis.fetch = originalFetch; }
+    });
+
+    it.each(['preflight', 'threshold', 'provider', 'failure', 'abort', 'identity', 'repeat', 'usage-abort', 'append'])('rolls signed context into a fresh conversation without tool replay: %s', async mode => {
       const dir = mkdtempSync(join(tmpdir(), 'yeaft-signed-rollover-'));
       const originalFetch = globalThis.fetch;
       const requests = [], summaries = [];
@@ -743,6 +776,7 @@ describe('Engine', () => {
         modelInfo: { contextWindow: 40000 } };
       const control = new AbortController();
       let executions = 0;
+      const inbox = [];
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
           const body = JSON.parse(init.body);
@@ -753,7 +787,7 @@ describe('Engine', () => {
             expect(body.messages[0].content).toContain('COMPLETE_EVIDENCE');
             if (body.system.startsWith('Summarize the supplied') && mode === 'abort') { control.abort(); throw new DOMException('cancelled', 'AbortError'); }
             if (body.system.startsWith('Summarize the supplied') && mode === 'failure') return new Response(JSON.stringify({ content: [], stop_reason: 'end_turn' }), { headers: { 'content-type': 'application/json' } });
-            return new Response(JSON.stringify({ content: [{ type: 'text', text: 'COMPLETE_EVIDENCE. Echo completed successfully, do not repeat it. Continue unfinished answer.' }], stop_reason: 'end_turn' }), { headers: { 'content-type': 'application/json' } });
+            return new Response(JSON.stringify({ content: [{ type: 'text', text: 'COMPLETE_EVIDENCE. Echo completed successfully, do not repeat it. Continue unfinished answer.' }], stop_reason: 'end_turn', usage: { input_tokens: 1234, output_tokens: 20 } }), { headers: { 'content-type': 'application/json' } });
           }
           requests.push(body);
           if (mode === 'provider' && requests.length === 2) return new Response('prompt is too long', { status: 400 });
@@ -767,11 +801,17 @@ describe('Engine', () => {
         const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, config, yeaftDir: dir, conversationStore: store });
         engine.registerTool({ name: 'echo', description: 'echo', parameters: { type: 'object' }, execute: async () => {
           executions++;
+          if (mode === 'append') inbox.push({ content: 'LATEST_CORRECTION: DO NOT DEPLOY', internal: false });
           if (mode === 'identity') engine.refreshConfig({ ...config, model: 'gateway/claude-sonnet-4.6' });
           return 'COMPLETE_EVIDENCE: completed side effect ' + executions;
         } });
         const events = [];
-        for await (const event of engine.query({ prompt: 'obtain evidence and finish', sessionId: 'signed-rollover', signal: control.signal })) events.push(event);
+        for await (const event of engine.query({ prompt: 'obtain evidence and finish', sessionId: 'signed-rollover', signal: control.signal,
+          drainPendingUserMessages: () => inbox.splice(0),
+        })) {
+          events.push(event);
+          if (mode === 'usage-abort' && event.type === 'usage' && event.inputTokens === 1234) control.abort();
+        }
         const fails = mode === 'failure' || mode === 'identity';
         expect(executions).toBe(mode === 'repeat' ? 2 : 1);
         if (mode === 'identity') {
@@ -780,21 +820,23 @@ describe('Engine', () => {
         } else {
           expect(summaries).toHaveLength(mode === 'repeat' ? 2 : 1);
           if (mode === 'failure') expect(events.find(event => event.type === 'error').error.code).toBe('CONTEXT_COMPACTION_FAILED');
-          else if (mode !== 'abort') {
+          else if (mode !== 'abort' && mode !== 'usage-abort') {
             expect(events.filter(event => event.type === 'error')).toEqual([]);
             const fresh = requests.at(-1);
             expect(fresh.messages).toHaveLength(1);
             expect(fresh.messages[0].role).toBe('user');
             expect(fresh.messages[0].content).toContain('COMPLETE_EVIDENCE');
+            expect(fresh.messages[0].content).toContain('obtain evidence and finish');
+            if (mode === 'append') expect(fresh.messages[0].content).toContain('LATEST_CORRECTION: DO NOT DEPLOY');
             expect(JSON.stringify(fresh)).not.toContain('signature-');
           }
         }
         const rows = store.loadAllBySession('signed-rollover');
-        expect(rows.filter(row => row.role === 'user' && row.userAuthored !== false)).toHaveLength(1);
+        expect(rows.filter(row => row.role === 'user' && row.userAuthored !== false)).toHaveLength(mode === 'append' ? 2 : 1);
         expect(rows.filter(row => row.role === 'tool')).toHaveLength(executions);
         expect(rows.some(row => row.providerState?.items?.some(item => item.signature))).toBe(true);
         expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([
-          expect.objectContaining({ stopReason: mode === 'abort' ? 'aborted' : fails ? 'error' : 'end_turn', terminal: true }),
+          expect.objectContaining({ stopReason: mode === 'abort' || mode === 'usage-abort' ? 'aborted' : fails ? 'error' : 'end_turn', terminal: true }),
         ]);
       } finally {
         globalThis.fetch = originalFetch;

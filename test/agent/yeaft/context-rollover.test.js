@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateContextRollover } from '../../../agent/yeaft/context-rollover.js';
+import { generateContextRollover, streamContextRollover } from '../../../agent/yeaft/context-rollover.js';
 
 const byteLength = text => Buffer.byteLength(text, 'utf8');
 
@@ -18,7 +18,7 @@ function mockAdapter(contextWindow, respond = () => 'Intent: preserve request. C
       expect(request.messages).toHaveLength(1);
       expect(request.messages[0].role).toBe('user');
       expect(typeof request.messages[0].content).toBe('string');
-      return { text: await respond(request, requests.length) };
+      return { text: await respond(request, requests.length), stopReason: 'end_turn' };
     },
   };
 }
@@ -59,9 +59,9 @@ describe('bounded active-context rollover', () => {
     expect(JSON.stringify(messages)).toBe(before);
   });
 
-  it('maps all oversized UTF-8 history in bounded chunks and hierarchically reduces even oversized adapter output', async () => {
+  it('maps all oversized UTF-8 history in bounded chunks and hierarchically reduces without losing source text', async () => {
     const window = 8192;
-    const adapter = mockAdapter(window, () => 'summary '.repeat(10000));
+    const adapter = mockAdapter(window, () => 'summary '.repeat(40));
     const first = 'EARLIEST task-1 已完成\n';
     const middle = 'MIDDLE task-2 失败\n';
     const last = 'LATEST task-3 待处理\n';
@@ -100,6 +100,10 @@ describe('bounded active-context rollover', () => {
   });
 
   it('fails closed on empty/failing summarizers, impossible static budgets and call exhaustion', async () => {
+    const oversized = mockAdapter(8192, () => 'summary '.repeat(10000));
+    await expect(generateContextRollover(options(oversized))).rejects.toThrow('safe size budget');
+    const refused = { call: async () => ({ text: 'do not help', stopReason: 'refusal' }) };
+    await expect(generateContextRollover(options(refused))).rejects.toThrow('did not complete');
     const empty = mockAdapter(8192, () => ' \n ');
     await expect(generateContextRollover(options(empty))).rejects.toThrow('empty text');
     const failed = mockAdapter(8192, () => { throw new Error('provider unavailable'); });
