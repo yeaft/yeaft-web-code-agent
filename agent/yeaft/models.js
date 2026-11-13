@@ -10,12 +10,11 @@
  * the correct adapter and endpoint from just the model ID, so users only
  * need to set YEAFT_MODEL=gpt-5 without configuring adapter/baseUrl separately.
  *
- * **Token limits (contextWindow / maxOutput) are NOT stored here.** They are
- * resolved at runtime from the models.dev community catalog
- * (`agent/yeaft/llm/models-dev.js`), with a per-provider config override
- * (`~/.yeaft/config.json: providers[].models[].contextWindow`) and a
- * DEFAULT as the final rung. See {@link resolveContextWindow}
- * and {@link resolveMaxOutputTokens} for the full ladder.
+ * Token limits (contextWindow / maxOutput) are resolved at runtime from the
+ * models.dev community catalog (`agent/yeaft/llm/models-dev.js`), with a
+ * per-provider config override, narrowly scoped known-capability fallbacks
+ * when the catalog has no entry, and a DEFAULT as the final rung.
+ * See {@link resolveContextWindow} and {@link resolveMaxOutputTokens}.
  *
  * Unknown model IDs return null — caller falls back to env-based detection.
  */
@@ -197,20 +196,26 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 
 /**
  * Look up a model capability without mistaking a local provider label for part
- * of its catalog ID. Preserve literal namespaced IDs first; remove only one
- * configured prefix so gateway/vendor/model remains vendor/model. Do not
- * change the requested wire model, catalog collision policy or explicit limits.
+ * of its catalog ID. Try the literal ID, then progressively shorter slash
+ * suffixes so gateway/vendor/model prefers vendor/model over model. Only if
+ * no catalog entry matches, use a known capability for the exact final ID.
+ * Never change wire IDs, catalog collision policy or explicit limits.
  * @param {string} modelName
  * @returns {{ context?: number, output?: number } | null}
  */
 function lookupRuntimeModelLimit(modelName) {
-  const literal = lookupModelLimitSync(modelName, MODEL_REGISTRY.get(modelName)?.provider || null);
-  if (literal) return literal;
   if (typeof modelName !== 'string') return null;
-  const slash = modelName.indexOf('/');
-  if (slash < 1) return null;
-  const bare = modelName.slice(slash + 1);
-  return lookupModelLimitSync(bare, MODEL_REGISTRY.get(bare)?.provider || null);
+  let candidate = modelName;
+  while (candidate) {
+    const limit = lookupModelLimitSync(candidate, MODEL_REGISTRY.get(candidate)?.provider || null);
+    if (limit) return limit;
+    const slash = candidate.indexOf('/');
+    if (slash < 1) break;
+    candidate = candidate.slice(slash + 1);
+  }
+  // Fable 5.2 is known to have a 1M window even before the catalog warms.
+  // Exact version only; do not infer output limits or widen other Claude IDs.
+  return candidate === 'claude-fable-5-2' ? { context: 1_000_000 } : null;
 }
 
 /**
@@ -224,8 +229,9 @@ function lookupRuntimeModelLimit(modelName) {
  *   2. {@link lookupModelLimitSync} against the warmed models.dev snapshot,
  *      hinted by the MODEL_REGISTRY provider when available so collisions
  *      across providers resolve to the right entry.
- *   3. `config.maxContextTokens` — global ceiling from config / CLI.
- *   4. {@link DEFAULT_CONTEXT_WINDOW}.
+ *   3. Known Fable 5.2 context capability, only when no catalog entry matches.
+ *   4. `config.maxContextTokens` - global ceiling from config / CLI.
+ *   5. {@link DEFAULT_CONTEXT_WINDOW}.
  *
  * Used by the per-tool-result cap and the pre-flight token guard so the
  * defense layers always see the same number, regardless of which seam
@@ -240,18 +246,18 @@ export function resolveContextWindow(modelName, config) {
   const overrideCtx = config?.modelInfo?.contextWindow;
   if (Number.isFinite(overrideCtx) && overrideCtx > 0) return overrideCtx;
 
-  // Rung 2: models.dev snapshot (warmed at agent boot).
+  // Rungs 2-3: models.dev snapshot, then the narrow known-capability fallback.
   const limit = lookupRuntimeModelLimit(modelName);
   if (limit && Number.isFinite(limit.context) && limit.context > 0) {
     return limit.context;
   }
 
-  // Rung 3: global config ceiling.
+  // Rung 4: global config ceiling.
   const cfg = config && Number.isFinite(config.maxContextTokens) && config.maxContextTokens > 0
     ? config.maxContextTokens : null;
   if (cfg !== null) return cfg;
 
-  // Rung 4: default.
+  // Rung 5: default.
   return DEFAULT_CONTEXT_WINDOW;
 }
 
@@ -576,7 +582,8 @@ export function serializeModelForPersistence(entry) {
  *   2. models.dev snapshot (`limit.{context,output}`) via the synchronous
  *      reader, hinted by the MODEL_REGISTRY provider when known so cross-
  *      provider id collisions resolve to the right entry.
- *   3. undefined if neither has any info
+ *   3. Known Fable 5.2 context capability when no catalog entry matches
+ *   4. undefined if none has any info
  *
  * Returns a normalized shape: `{ id, contextWindow?, maxOutput?, provider?, adapter?, baseUrl?, displayName? }`.
  *

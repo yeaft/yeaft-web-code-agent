@@ -67,7 +67,7 @@ export function applyAnthropicThinking(body, model, effort, effortContext = {}) 
   }
 }
 
-import { ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts, validateAnthropicRequestPrefixes, supportsAnthropicPreservedThinking } from './provider-state.js';
+import { ProviderContextBudgetError, ProviderStateError, createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyAnthropicCaching, reasoningUsage, reportedUsageFields, hasUsageCounts, validateAnthropicRequestPrefixes, supportsAnthropicPreservedThinking } from './provider-state.js';
 
 /** Signed continuations cannot recover by compacting after wire settings grow. */
 function validateSignedOutputBudget(body, replayed, contextOutputLimit) {
@@ -75,7 +75,7 @@ function validateSignedOutputBudget(body, replayed, contextOutputLimit) {
   // has always been allowed to widen it. Only Engine knows the remaining space.
   if (Number.isFinite(contextOutputLimit) && replayed.some(({ state }) => state.requestPrefix)
       && body.max_tokens > contextOutputLimit) {
-    throw new ProviderStateError('signed Anthropic output settings exceed the remaining context budget; lower thinking/output settings or start a new turn');
+    throw new ProviderContextBudgetError('signed Anthropic output settings exceed the remaining context budget; lower thinking/output settings or start a new turn');
   }
 }
 

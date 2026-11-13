@@ -647,6 +647,7 @@ export class AdapterRouter extends LLMAdapter {
     const dispatchSnapshot = this.#captureDispatchSnapshot();
     return {
       captureStream: params => this.#streamWithSnapshot(params, dispatchSnapshot),
+      call: params => this.#callWithSnapshot(params, dispatchSnapshot),
     };
   }
 
@@ -703,8 +704,11 @@ export class AdapterRouter extends LLMAdapter {
    * @param {import('./adapter.js').CallParams} params
    * @returns {Promise<{ text: string, stopReason?: 'end_turn'|'tool_use'|'max_tokens', usage: { inputTokens: number, outputTokens: number } }>}
    */
-  async call(params) {
-    const dispatchSnapshot = this.#captureDispatchSnapshot();
+  call(params) {
+    return this.#callWithSnapshot(params, this.#captureDispatchSnapshot());
+  }
+
+  async #callWithSnapshot(params, dispatchSnapshot) {
     let refreshedCredential = false;
     while (true) {
       const resolved = await this.#resolveAdapter(params.model, dispatchSnapshot);
