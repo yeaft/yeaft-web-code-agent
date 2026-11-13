@@ -614,6 +614,8 @@ export default {
       this.selectRow(row, event);
     },
     async runAction(action, row) {
+      // Merge removes its menu item; let the dialog return focus to a stable trigger.
+      if (action === 'merge') this.floatingMenuTrigger?.focus();
       this.closeMenus();
       const normalizedAction = action === 'delete' ? 'remove' : action;
       if (!this.canRunAction(row, normalizedAction)) return;

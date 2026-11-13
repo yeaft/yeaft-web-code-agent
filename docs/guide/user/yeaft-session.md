@@ -70,7 +70,7 @@ Legacy duplicate message IDs do not block a full fork. Every durable record rece
 
 ## Merge two Sessions
 
-Choose **Merge Sessions** from the sidebar menu or conversation header, then select another native Session on the same Agent. Both Sessions must be idle and the Agent must support merging.
+Choose **Merge Sessions** from the Session's sidebar menu, then select another native Session on the same Agent. The conversation header keeps **Fork Session** but does not show Merge. Both Sessions must be idle and the Agent must support merging.
 
 Merging opens a new Session and leaves both sources unchanged. The new Session inherits the initiating source's working directory, announcement, default VP, model settings and Project, with a union of both VP rosters. Shared history is retained once; remaining whole request turns are ordered by the user's sent time. Without shared history, all turns are time-ordered. Identical prompt text alone is never treated as shared history; ambiguous divergence is rejected rather than guessed. Tool calls and results stay together.
 
