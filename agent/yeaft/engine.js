@@ -3637,16 +3637,16 @@ export class Engine {
             const rolloverSystem = buildCurrentSystemPrompt() + (executionPolicy?.prompt ? '\n\n' + executionPolicy.prompt : '');
             const rolloverOutputReserve = Math.min(requestConfig.maxOutputTokens || resolveMaxOutputTokens(currentModel, requestConfig), resolveMaxOutputTokens(currentModel, requestConfig));
             let summary;
-            if (executionPolicy?.finalize) {
-              // A child has one reserved reporting response, not an allowance
-              // for extra summary LLM calls. Supply explicitly sampled evidence
-              // to that tool-free response without consuming its reservation.
+            const reportingExcerpt = () => {
               const staticCost = estimateMessagesTokens(rolloverSystem, [])
                 + approxTokens(JSON.stringify(toolDefs));
               const reportBytes = Math.max(256, Math.floor((currentContextWindow - staticCost
                 - rolloverOutputReserve) / 2));
-              summary = contextRolloverReport(sourceMessages, reportBytes);
-            } else {
+              return contextRolloverReport(sourceMessages, reportBytes);
+            };
+            if (executionPolicy?.finalize) {
+              // Keep the sole reserved report instead of buying more summaries.
+              summary = reportingExcerpt();            } else {
               const compact = streamContextRollover({
                 adapter: requestAdapter.call ? requestAdapter : this.#adapter,
                 model: currentModel,
@@ -3659,6 +3659,13 @@ export class Engine {
                 },
               });
               while (true) {
+                // A multi-chunk summary can exhaust the allowance midway.
+                // Recheck before EVERY dispatch, not just at rollover entry.
+                if (isSubAgent && this.#toolRegistry?.prepareProviderRequest?.()?.finalize) {
+                  await compact.return();
+                  summary = reportingExcerpt();
+                  break;
+                }
                 const next = await compact.next();
                 if (next.done) { summary = next.value; break; }
                 const usage = next.value;

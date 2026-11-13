@@ -736,17 +736,20 @@ describe('Engine', () => {
       }
     });
 
-    it('keeps the reserved child report available when signed context is full', async () => {
+    it.each(['already', 'during'])('keeps the reserved child report available when signed context is full: %s', async mode => {
       const originalFetch = globalThis.fetch;
       const requests = [];
-      const child = { budget: { max_llm_calls: 1 }, usage: { llmCalls: 0 }, execution: { toolCalls: 0, recentCalls: [] } };
+      const child = { budget: { max_llm_calls: mode === 'during' ? 3 : 1 }, usage: { llmCalls: 0 }, execution: { toolCalls: 0, recentCalls: [] } };
       const registry = new SubAgentToolRegistry({ agent: child });
       registry.register(defineTool({ name: 'echo', description: 'Read evidence', parameters: { type: 'object' },
-        execute: async () => 'COMPLETE_EVIDENCE: performed once' }));
+        execute: async () => 'COMPLETE_EVIDENCE: performed once ' + (mode === 'during' ? 'history '.repeat(35000) : '') }));
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
           const body = JSON.parse(init.body);
-          expect(body.stream).toBe(true); // no extra summary requests
+          if (body.stream !== true) {
+            expect(mode).toBe('during');
+            return new Response(JSON.stringify({ content: [{ type: 'text', text: 'Completed evidence; report pending.' }], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 10 } }), { headers: { 'content-type': 'application/json' } });
+          }
           requests.push(body);
           return response('child-' + requests.length, requests.length === 1 ? 'echo' : undefined, {}, 'claude-opus-4.8', {
             input_tokens: 39500, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
@@ -755,7 +758,7 @@ describe('Engine', () => {
         const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, toolRegistry: registry, yeaftDir: tmpdir(),
           config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0, modelInfo: { contextWindow: 40000 } } });
         const events = [];
-        for await (const event of engine.query({ prompt: 'Investigate; DO NOT DEPLOY', sessionId: 'child-rollover', isSubAgent: true, vpPersona: { vpId: 'child', subAgent: true } })) events.push(event);
+        for await (const event of engine.query({ prompt: 'Investigate; DO NOT DEPLOY' + (mode === 'during' ? ' original request'.repeat(3000) : ''), sessionId: 'child-rollover', isSubAgent: true, vpPersona: { vpId: 'child', subAgent: true } })) events.push(event);
         expect(events.filter(event => event.type === 'error')).toEqual([]);
         expect(requests).toHaveLength(2);
         expect(requests[1].tools).toBeUndefined();
@@ -763,7 +766,7 @@ describe('Engine', () => {
         expect(requests[1].messages[0].content).toContain('COMPLETE_EVIDENCE');
         expect(requests[1].messages[0].content).toContain('DO NOT DEPLOY');
         expect(JSON.stringify(requests[1])).not.toContain('signature-');
-        expect(child.usage).toMatchObject({ llmCalls: 2, reportingLlmCalls: 1 });
+        expect(child.usage).toMatchObject({ llmCalls: mode === 'during' ? 4 : 2, reportingLlmCalls: 1 });
         expect(child.execution.toolCalls).toBe(1);
       } finally { globalThis.fetch = originalFetch; }
     });
