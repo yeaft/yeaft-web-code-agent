@@ -125,6 +125,8 @@ See [Retired H2-AMS implementation](./yeaft-memory.md).
 
 ## 活跃签名上下文的预算与压缩
 
+模型窗口和输出上限来自显式模型配置、已缓存的模型目录及默认值，不按 Claude 家族统一硬编码。能力查询先保留目录中的完整模型 ID；未命中时，移除一个本地渠道前缀（例如 `codex-proxy/claude-opus-5-5` → `claude-opus-5-5`）再查，避免已知 1M 模型误用 200K 默认窗口。带多层命名空间的 ID 保留剩余部分，不做模糊版本匹配；显式 `contextWindow` / `maxOutput` 仍优先。这里仅影响能力查询，不改变发送给 provider 的模型 ID。
+
 Anthropic 保留 thinking 的工具循环会冻结已经发送的 system、工具定义和消息前缀。后续请求不能通过删旧消息、修改签名 assistant 或重新采样已发送结果来腾空间，否则续传校验会失败。
 
 - 完整报告的 input usage（含明确的 cache 计数或 cache 已计入 input 的标记）可校正前缀估算，包括向下修正。缺失／部分 usage 不能把未知 cache 当作零，继续保留上次请求的校准预算下界。

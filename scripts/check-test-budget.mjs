@@ -173,7 +173,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // and final child effort-cap behavior, without adding cases per matrix row.
 // +3 signed-tail boundaries: SSE/JSON usage calibration with immutable sampled
 // prefixes and durable originals (2), and structured/multimodal unsent sampling (1).
-export const TEST_CASE_LIMIT = 1040;
+// +2 grouped regressions: >200K signed Opus/Fable Engine requests and
+// capability resolution: qualified 1M Opus/Fable, explicit limits,
+// canonical provider hints and literal/nested catalog IDs.
+export const TEST_CASE_LIMIT = 1042;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

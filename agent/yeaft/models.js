@@ -196,6 +196,24 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 
 /**
+ * Look up a model capability without mistaking a local provider label for part
+ * of its catalog ID. Preserve literal namespaced IDs first; remove only one
+ * configured prefix so gateway/vendor/model remains vendor/model. Do not
+ * change the requested wire model, catalog collision policy or explicit limits.
+ * @param {string} modelName
+ * @returns {{ context?: number, output?: number } | null}
+ */
+function lookupRuntimeModelLimit(modelName) {
+  const literal = lookupModelLimitSync(modelName, MODEL_REGISTRY.get(modelName)?.provider || null);
+  if (literal) return literal;
+  if (typeof modelName !== 'string') return null;
+  const slash = modelName.indexOf('/');
+  if (slash < 1) return null;
+  const bare = modelName.slice(slash + 1);
+  return lookupModelLimitSync(bare, MODEL_REGISTRY.get(bare)?.provider || null);
+}
+
+/**
  * Resolve the live context window for a model.
  *
  * Fallback ladder (first match wins):
@@ -223,8 +241,7 @@ export function resolveContextWindow(modelName, config) {
   if (Number.isFinite(overrideCtx) && overrideCtx > 0) return overrideCtx;
 
   // Rung 2: models.dev snapshot (warmed at agent boot).
-  const reg = MODEL_REGISTRY.get(modelName);
-  const limit = lookupModelLimitSync(modelName, reg?.provider || null);
+  const limit = lookupRuntimeModelLimit(modelName);
   if (limit && Number.isFinite(limit.context) && limit.context > 0) {
     return limit.context;
   }
@@ -255,8 +272,7 @@ export function resolveMaxOutputTokens(modelName, config) {
     ?? config?.modelInfo?.maxOutputTokens;
   if (Number.isFinite(overrideOut) && overrideOut > 0) return overrideOut;
 
-  const reg = MODEL_REGISTRY.get(modelName);
-  const limit = lookupModelLimitSync(modelName, reg?.provider || null);
+  const limit = lookupRuntimeModelLimit(modelName);
   if (limit && Number.isFinite(limit.output) && limit.output > 0) {
     return limit.output;
   }
@@ -580,7 +596,7 @@ export function getModelInfo(model, providerConfig) {
   // Pull the models.dev numbers as the second rung. Hint with the registry's
   // provider id when available — same alignment trick the resolveContext-
   // Window ladder uses.
-  const limit = lookupModelLimitSync(model, reg?.provider || null);
+  const limit = lookupRuntimeModelLimit(model);
   const ctx = overrideCtx ?? (limit && Number.isFinite(limit.context) && limit.context > 0 ? limit.context : undefined);
   const max = overrideMax ?? (limit && Number.isFinite(limit.output) && limit.output > 0 ? limit.output : undefined);
 

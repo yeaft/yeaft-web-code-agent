@@ -7,6 +7,7 @@ import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
 import { providerProjectionDigest } from '../../../agent/yeaft/llm/provider-state.js';
 import { buildMcpFlattenedTools } from '../../../agent/yeaft/tools/mcp-tools.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
@@ -634,6 +635,38 @@ describe('Engine', () => {
       } finally {
         globalThis.fetch = originalFetch;
         await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('continues qualified 1M Opus and Fable requests past the 200K fallback with signed prefixes intact', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-qualified-million-'));
+      const originalFetch = globalThis.fetch;
+      const ids = ['claude-opus-5-5', 'claude-fable-5-2'];
+      _setMemCacheForTest({ anthropic: { models: Object.fromEntries(ids.map(id => [id, { limit: { context: 1000000, output: 128000 } }])) } });
+      try {
+        for (const id of ids) {
+          const requests = [];
+          globalThis.fetch = vi.fn(async (_url, init) => {
+            requests.push(JSON.parse(init.body));
+            return response('million-' + requests.length, requests.length === 1 ? 'echo' : undefined, {}, id,
+              { input_tokens: 210000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+          });
+          const engine = new Engine({ adapter: router(id), trace, yeaftDir: dir,
+            config: { model: 'gateway/' + id, maxContextTokens: 200000, maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+          engine.registerTool({ name: 'echo', description: 'Read evidence', parameters: { type: 'object' }, execute: async () => 'new evidence' });
+          const events = [];
+          for await (const event of engine.query({ prompt: 'known prompt '.repeat(4000), sessionId: 'million-' + id })) events.push(event);
+          expect(events.filter(event => event.type === 'error')).toEqual([]);
+          expect(requests).toHaveLength(2);
+          expect(requests.every(body => body.model === id)).toBe(true);
+          expect(requests[1].messages.slice(0, requests[0].messages.length)).toEqual(requests[0].messages);
+          expect(requests[1].messages.flatMap(row => row.content).some(block => block?.signature === 'signature-million-1')).toBe(true);
+          expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toEqual([expect.objectContaining({ stopReason: 'end_turn' })]);
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+        _setMemCacheForTest(null);
         rmSync(dir, { recursive: true, force: true });
       }
     });
