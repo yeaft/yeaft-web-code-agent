@@ -70,6 +70,33 @@ describe('Digital Person surface', () => {
     expect(wrapper.emitted('interaction-blocked').at(-1)).toEqual([false]);
   });
 
+  it('mounts the selected eligible Agent rather than a stale offline/unsupported Person destination', async () => {
+    chat.agents.push({ id: 'unsupported', online: true, capabilities: [] },
+      { id: 'offline', online: false, capabilities: ['digital_person'] });
+    Object.assign(chat.digitalPersonUiEnabledByAgent, { unsupported: true, offline: true });
+    chat.digitalPersonAgentId = 'offline';
+    chat.currentAgent = 'unsupported';
+    chat.activeSessionRoute = { agentId: 'a' };
+    await render();
+    expect(wrapper.vm.agentId).toBe('a');
+    expect(chat.digitalPersonAgentId).toBe('a');
+    expect(requests.every(request => request.agentId === 'a')).toBe(true);
+    await wrapper.get('#person-input').setValue('Keep this Agent draft');
+    chat.agents.find(agent => agent.id === 'a').online = false;
+    chat.agents.push({ id: 'b', online: true, capabilities: ['digital_person'] });
+    await flushPromises();
+    // An open Person never silently changes identity or discards its draft.
+    expect(wrapper.vm.agentId).toBe('a');
+    expect(wrapper.get('#person-input').element.value).toBe('Keep this Agent draft');
+    expect(requests.some(request => request.agentId === 'b')).toBe(false);
+    // Explicit sidebar re-entry while mounted does honor its new fallback.
+    chat.digitalPersonAgentId = 'b';
+    await flushPromises();
+    expect(wrapper.vm.agentId).toBe('b');
+    expect(wrapper.get('#person-input').element.value).toBe('');
+    expect(requests.some(request => request.agentId === 'b')).toBe(true);
+  });
+
   it.each([en, zhCN])('offers labelled mobile actions, restores the visible opener and preserves the draft', async messages => {
     vi.stubGlobal('innerWidth', 320);
     await render(messages);

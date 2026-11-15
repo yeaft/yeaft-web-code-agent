@@ -1,3 +1,5 @@
+import { availableDigitalPersonAgents } from '../utils/digital-person-agent.js';
+
 export default {
   name: 'SidebarDigitalPerson',
   props: {
@@ -10,12 +12,7 @@ export default {
         ? Pinia.useChatStore() : null;
     },
     enabled() {
-      const store = this.store;
-      const agentId = store?.digitalPersonOpen ? store.digitalPersonAgentId : store?.currentAgent;
-      const enabled = agent => agent?.capabilities?.includes('digital_person')
-        && store?.isDigitalPersonUiEnabled?.(agent.id);
-      return agentId ? enabled(store?.agents?.find(agent => agent.id === agentId))
-        : store?.agents?.some(enabled);
+      return availableDigitalPersonAgents(this.store).length > 0;
     },
   },
   methods: { open() { this.store?.enterDigitalPerson(); } },
