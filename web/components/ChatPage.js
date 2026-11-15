@@ -1,3 +1,4 @@
+import DigitalPersonPage from './DigitalPersonPage.js';
 import ScheduledTaskNotifications from './ScheduledTaskNotifications.js';
 import { folderPickerData, folderPickerMethods, folderPickerComputed } from './mixins/folder-picker-mixin.js';
 import FolderPickerDialog from './FolderPickerDialog.js';
@@ -29,19 +30,19 @@ import { collapseSidebar } from '../utils/sidebar-collapse.js';
 
 export default {
   name: 'ChatPage',
-  components: { ScheduledTaskNotifications, FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
+  components: { DigitalPersonPage, ScheduledTaskNotifications, FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
       <!-- Sidebar Overlay -->
-      <div class="sidebar-overlay" v-if="store.sessionSidebarOpen && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
+      <div :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" class="sidebar-overlay" v-if="store.sessionSidebarOpen && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
 
       <!-- Left Sidebar -->
-      <SessionSidebarShell v-show="!store.workCenterOpen" class="sidebar" :collapsed="effectiveSidebarCollapsed">
+      <SessionSidebarShell v-show="!store.workCenterOpen" class="sidebar" :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" :collapsed="effectiveSidebarCollapsed">
         <template #collapsed>
         <!-- Collapsed Icon Bar -->
         <div class="sidebar-collapsed-bar" v-if="effectiveSidebarCollapsed">
-          <button v-if="!store.isSplitMode" class="collapsed-icon-btn" @click="store.toggleSidebar()" :title="$t('chat.sidebar.expand')">
+          <button v-if="!store.isSplitMode || store.digitalPersonOpen" class="collapsed-icon-btn" @click="store.toggleSidebar()" :title="$t('chat.sidebar.expand')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
           </button>
           <button class="collapsed-icon-btn" @click="store.addPanel()" :title="$t('splitScreen.split')">
@@ -49,10 +50,10 @@ export default {
               <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/>
             </svg>
           </button>
+          <SidebarDigitalPerson :collapsed="true" />
           <button class="collapsed-icon-btn" @click="onUnifiedCreate" :disabled="onlineAgentCount === 0" :title="$t('chat.sidebar.newConv')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
           </button>
-          <SidebarDigitalPerson :collapsed="true" />
           <SidebarWorkCenter
             v-if="store.workCenterUiEnabled"
             :agents="store.agents"
@@ -85,7 +86,6 @@ export default {
               @upgrade-all-agents="upgradeAllAgents"
             />
             <div class="sidebar-header-actions">
-              <SidebarDigitalPerson />
               <SidebarWorkCenter
                 v-if="store && store.workCenterUiEnabled"
                 :agents="store.agents"
@@ -145,7 +145,8 @@ export default {
       </SessionSidebarShell>
 
       <ScheduledTaskNotifications :store="store" />
-      <WorkCenterPage v-if="store.workCenterOpen" />
+      <DigitalPersonPage v-if="store.digitalPersonOpen" @toggle-sidebar="store.toggleSessionSidebar()" @interaction-blocked="digitalPersonModalOpen = $event" />
+      <WorkCenterPage v-else-if="store.workCenterOpen" />
       <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" @toggle-sidebar="store.toggleSessionSidebar()" />
 
       <!-- Single-panel Main Chat Area -->
@@ -180,7 +181,7 @@ export default {
       </main>
 
       <!-- Multi-panel mode: SplitPane ×N -->
-      <div v-else-if="!store.workCenterOpen" class="panels-container" :class="'panes-' + store.panels.length">
+      <div v-else-if="!store.workCenterOpen && !store.pluginCenterOpen && !store.digitalPersonOpen" class="panels-container" :class="'panes-' + store.panels.length">
         <SplitPane
           v-for="(panel, idx) in store.panels"
           :key="panel.id"
@@ -349,6 +350,7 @@ export default {
   `,
   data() {
     return {
+      digitalPersonModalOpen: false,
       showAgentDropdown: false,
       showSettingsPanel: false,
       showAgentSettings: false,
@@ -487,6 +489,9 @@ export default {
       this.unifiedSessionCreateTaskMode = true;
     },
     onUnifiedCreate(provider = 'yeaft') {
+      this.store.leaveDigitalPerson();
+      this.store.closePluginCenter();
+      this.store.leaveWorkCenter();
       this.unifiedSessionCreateTaskMode = false;
       this.unifiedSessionCreateProject = null;
       this.unifiedSessionCreateProvider = ['yeaft', 'copilot', 'claude-code'].includes(provider) ? provider : 'yeaft';
@@ -494,6 +499,9 @@ export default {
     },
     onUnifiedCreateInProject({ project, taskMode = false } = {}) {
       if (!project?.id) return;
+      this.store.leaveDigitalPerson();
+      this.store.closePluginCenter();
+      this.store.leaveWorkCenter();
       this.unifiedSessionCreateTaskMode = taskMode === true;
       this.unifiedSessionCreateProject = project;
       this.unifiedSessionCreateProvider = 'yeaft';

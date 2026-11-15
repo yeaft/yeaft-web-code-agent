@@ -1,3 +1,4 @@
+import SidebarDigitalPerson from './SidebarDigitalPerson.js';
 import { confirmDialog, promptDialog } from '../utils/dialog.js';
 import { useUserPreferences } from '../utils/user-preferences.js';
 import SidebarSectionResizeHandle from './SidebarSectionResizeHandle.js';
@@ -172,7 +173,7 @@ function sessionRowsTemplate(section, rows) {
 
 export default {
   name: 'UnifiedSessionList',
-  components: { SidebarSectionResizeHandle },
+  components: { SidebarSectionResizeHandle, SidebarDigitalPerson },
   setup() {
     const userPreferences = useUserPreferences();
     const sectionRatioPreview = Vue.ref(null);
@@ -450,7 +451,7 @@ export default {
       if (this.projectSubmenuOpen) this.$nextTick(this.positionProjectSubmenu);
     },
     isActive(row) {
-      if (this.resolvedProjectStore?.pluginCenterOpen) return false;
+      if (this.resolvedProjectStore?.pluginCenterOpen || this.resolvedProjectStore?.digitalPersonOpen) return false;
       const route = row?.routeRef;
       const active = this.activeRoute;
       return !!route && !!active
@@ -581,12 +582,14 @@ export default {
     },
     createTask() {
       if (this.loading) return;
+      this.resolvedProjectStore?.leaveDigitalPerson?.();
       this.resolvedProjectStore?.closePluginCenter?.();
       if (this.workCenterOpen) this.$emit('close-work-center');
       this.$emit('create-task');
     },
     createSession() {
       if (this.loading) return;
+      this.resolvedProjectStore?.leaveDigitalPerson?.();
       this.resolvedProjectStore?.closePluginCenter?.();
       if (this.workCenterOpen) this.$emit('close-work-center');
       this.$emit('create');
@@ -594,6 +597,7 @@ export default {
     createSessionInProject(project, { taskMode = false } = {}) {
       if (!this.canEditProject(project)) return;
       this.closeMenus();
+      this.resolvedProjectStore?.leaveDigitalPerson?.();
       this.resolvedProjectStore?.closePluginCenter?.();
       if (this.workCenterOpen) this.$emit('close-work-center');
       this.$emit('create-in-project', { project, taskMode });
@@ -1016,6 +1020,7 @@ export default {
   template: `
     <nav class="sidebar-navigation" :aria-busy="loading" :aria-label="$t('sidebar.surface.sessions')">
       <div class="sidebar-primary-actions" :class="{ 'is-compact': actionsCompact }">
+        <SidebarDigitalPerson :compact="actionsCompact" />
         <button type="button" class="btn-ghost sidebar-primary-action" :disabled="loading" @click="createSession" :title="$t('sidebar.sessions.newChat')" :aria-label="$t('sidebar.sessions.newChat')">
           <svg class="sidebar-primary-action-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path class="sidebar-primary-action-frame" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>

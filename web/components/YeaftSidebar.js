@@ -43,7 +43,7 @@ export default {
         <button class="collapsed-icon-btn" @click="$emit('toggle-sidebar')" :title="tr('chat.sidebar.expand', 'Expand')">
           <NavigationIcon name="menu" :size="18" />
         </button>
-        <button class="collapsed-icon-btn" @click="$emit('back')" :title="tr('yeaft.back', 'Back')">
+        <button v-if="!chatStore?.digitalPersonOpen" class="collapsed-icon-btn" @click="$emit('back')" :title="tr('yeaft.back', 'Back')">
           <NavigationIcon name="back" :size="18" />
         </button>
         <SidebarDigitalPerson :collapsed="true" />
@@ -80,7 +80,6 @@ export default {
             @upgrade-all-agents="upgradeAllAgents"
           />
           <div class="sidebar-header-actions">
-            <SidebarDigitalPerson />
             <SidebarWorkCenter
               v-if="chatStore && chatStore.workCenterUiEnabled"
               :agents="chatStore?.agents"
