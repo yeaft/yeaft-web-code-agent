@@ -55,6 +55,21 @@ async function render(messages = en) {
 }
 
 describe('Digital Person surface', () => {
+  it('uses the shared sidebar toggle rather than a back route and reports modal blocking', async () => {
+    await render();
+    expect(wrapper.find('.person-navigation [title="Sessions"]').exists()).toBe(false);
+    await wrapper.get('.header-sidebar-toggle').trigger('click');
+    expect(wrapper.emitted('toggle-sidebar')).toHaveLength(1);
+    expect(chat.leaveDigitalPerson).not.toHaveBeenCalled();
+    expect(wrapper.get('h1').attributes('tabindex')).toBe('-1');
+    await wrapper.get('.person-settings-button').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('interaction-blocked').at(-1)).toEqual([true]);
+    await wrapper.get('.person-settings-modal button[aria-label="Close"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('interaction-blocked').at(-1)).toEqual([false]);
+  });
+
   it.each([en, zhCN])('offers labelled mobile actions, restores the visible opener and preserves the draft', async messages => {
     vi.stubGlobal('innerWidth', 320);
     await render(messages);

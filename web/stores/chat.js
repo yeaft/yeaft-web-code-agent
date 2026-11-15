@@ -1732,10 +1732,12 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
     enterDigitalPerson(agentId = null) {
-      agentId = agentId || this.currentAgent
+      agentId = agentId || (this.digitalPersonOpen ? this.digitalPersonAgentId : this.currentAgent)
         || this.agents.find(agent => this.isDigitalPersonUiEnabled(agent.id) && agent.capabilities?.includes('digital_person'))?.id;
       if (!this.isDigitalPersonUiEnabled(agentId)
         || !this.agents.some(agent => agent.id === agentId && agent.capabilities?.includes('digital_person'))) return false;
+      this.leaveWorkCenter();
+      this.closePluginCenter();
       this.digitalPersonAgentId = agentId;
       this.digitalPersonOpen = true;
       this.closeSessionSidebar();
@@ -1753,6 +1755,7 @@ export const useChatStore = defineStore('chat', {
           : (compatibleAgents[0]?.id || null));
       // Work Center requests carry their own Agent identity. Do not switch the
       // chat Agent: leaving this surface must return to the original Session.
+      this.leaveDigitalPerson();
       this.closePluginCenter();
       this.workCenterAgentId = target;
       this.workCenterOpen = true;
@@ -1785,6 +1788,7 @@ export const useChatStore = defineStore('chat', {
         || agents.find(agent => inspectable(agent))
         || null;
       if (!target) return false;
+      this.leaveDigitalPerson();
       this.leaveWorkCenter();
       this.pluginCenterAgentId = target.id;
       this.pluginCenterOpen = true;
@@ -7670,6 +7674,7 @@ export const useChatStore = defineStore('chat', {
       if (!['yeaft', 'claude-code', 'copilot'].includes(runtimeProvider)) return false;
       // Leave auxiliary surfaces before provider navigation can short-circuit
       // for an already-active Session (including CLI split panes).
+      this.leaveDigitalPerson();
       this.closePluginCenter();
       this.closeSessionSidebar();
       this.activeCatalogKey = descriptor.catalogKey;

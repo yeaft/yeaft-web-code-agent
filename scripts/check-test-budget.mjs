@@ -185,7 +185,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +3 review regressions: reserved child reporting, per-call usage cancellation,
 // and latest user append preserved verbatim.
 // Prior signed-budget assertions now verify safe fresh-context recovery.
-export const TEST_CASE_LIMIT = 1058;
+// +7 shared Digital Person navigation regressions: first/active entry and provider
+// return ordering (2), modal/toggle ownership (1), native/CLI desktop/mobile relay (4).
+// Existing Person inbox, inspector, output and Session navigation cases retained.
+export const TEST_CASE_LIMIT = 1065;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

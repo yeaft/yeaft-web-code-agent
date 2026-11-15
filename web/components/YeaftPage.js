@@ -1,3 +1,4 @@
+import DigitalPersonPage from './DigitalPersonPage.js';
 import ScheduledTaskBar from './ScheduledTaskBar.js';
 import ScheduledTaskNotifications from './ScheduledTaskNotifications.js';
 import NavigationIcon from './NavigationIcon.js';
@@ -118,15 +119,16 @@ export function timelineQueryProgress(store, row, { agentId, sessionId }) {
 
 export default {
   name: 'YeaftPage',
-  components: { ScheduledTaskBar, ScheduledTaskNotifications, NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
+  components: { DigitalPersonPage, ScheduledTaskBar, ScheduledTaskNotifications, NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
   template: `
     <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
-      <div class="yeaft-sidebar-overlay" v-if="store.sessionSidebarOpen && isMobile && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
+      <div :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" class="yeaft-sidebar-overlay" v-if="store.sessionSidebarOpen && isMobile && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
 
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
       <!-- Legacy sidebar event alias; canonical settings dialog uses session terminology. -->
       <YeaftSidebar
+        :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined"
         v-show="!store.workCenterOpen"
         :collapsed="effectiveSidebarCollapsed"
         @select-group="onSelectGroupV2"
@@ -139,7 +141,8 @@ export default {
       />
 
       <ScheduledTaskNotifications :store="store" />
-      <WorkCenterPage v-if="store.workCenterOpen" />
+      <DigitalPersonPage v-if="store.digitalPersonOpen" @toggle-sidebar="store.toggleSessionSidebar()" @interaction-blocked="digitalPersonModalOpen = $event" />
+      <WorkCenterPage v-else-if="store.workCenterOpen" />
       <PluginCenterPage v-else-if="store.pluginCenterOpen" @close="store.closePluginCenter()" @toggle-sidebar="toggleSidebar" />
 
       <!-- Center Conversation. The Session status pane is rendered as a
@@ -418,13 +421,13 @@ export default {
         </div><!-- /.yeaft-main-center -->
       </div>
 
-      <WorkbenchPanel v-if="canUseWorkbench" v-show="!store.workCenterOpen" />
+      <WorkbenchPanel v-if="canUseWorkbench && !store.digitalPersonOpen" v-show="!store.workCenterOpen" />
 
       <!-- Session status pane: announcement + VP roster + background tasks.
            It sits to the right of the conversation and to the left of debug. -->
       <VpTimelinePane
         ref="sessionStatusPane"
-        v-if="!store.workCenterOpen && !store.pluginCenterOpen && !showOnboardingGuide"
+        v-if="!store.workCenterOpen && !store.pluginCenterOpen && !store.digitalPersonOpen && !showOnboardingGuide"
         v-show="showVpTimeline"
         :rows="vpTimelineRows"
         :tasks="sessionStatusTasksForActiveSession"
@@ -451,7 +454,7 @@ export default {
            right-pane content today, and it should not occupy layout space
            unless explicitly opened. -->
       <aside
-        v-if="!store.workCenterOpen && !store.pluginCenterOpen && debugMode"
+        v-if="!store.workCenterOpen && !store.pluginCenterOpen && !store.digitalPersonOpen && debugMode"
         class="yeaft-detail"
         :class="{ resizing: isResizingDetail, 'mobile-debug': isNarrowDetail }"
         :style="detailWidthStyle"
@@ -477,7 +480,7 @@ export default {
            group's member editor directly (the previous flow dumped the
            user into VP-Settings, where there was no add-to-group UI). -->
       <SessionInviteModal
-        v-if="!store.workCenterOpen && !store.pluginCenterOpen && shouldShowInviteModal"
+        v-if="!store.workCenterOpen && !store.pluginCenterOpen && !store.digitalPersonOpen && shouldShowInviteModal"
         :group-name="inviteGroupName"
         @open-library="onInviteOpenLibrary"
         @dismiss="onInviteDismiss"
@@ -507,6 +510,7 @@ export default {
   `,
   setup() {
     const store = Pinia.useChatStore();
+    const digitalPersonModalOpen = Vue.ref(false);
     const authStore = Pinia.useAuthStore();
     // PR-3: VP roster is the source of truth for timeline ordering and
     // locale-aware naming. Read from the dedicated vp store rather than
@@ -1625,6 +1629,7 @@ export default {
     };
 
     return {
+      digitalPersonModalOpen,
       store,
       pageRef,
       effectiveSidebarCollapsed,

@@ -27,11 +27,14 @@ import { createPersonController, digitalPersonGate, personState } from '../store
 
 export default {
   name: 'DigitalPersonPage',
+  emits: ['toggle-sidebar', 'interaction-blocked'],
   components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonActionsSheet, PersonThoughtJournal, PersonDebugLog, PersonResponseLoading },
-  setup() {
+  setup(_props, { emit }) {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
     const state = Vue.reactive(personState());
+    const pageRoot = Vue.ref(null);
+    const pageTitle = Vue.ref(null);
     const enabled = agent => chat.digitalPersonUiEnabledByAgent?.[agent.id] === true;
     const agentId = Vue.ref(chat.agents.find(a => enabled(a) && a.id === chat.digitalPersonAgentId)?.id
       || chat.agents.find(a => enabled(a) && a.id === chat.currentAgent)?.id
@@ -52,6 +55,7 @@ export default {
     const expandedPanel = Vue.ref(false);
     const modalPanel = Vue.computed(() => compactPanel.value || expandedPanel.value);
     const backgroundInert = Vue.computed(() => moreOpen.value || settingsOpen.value || (modalPanel.value && !!panel.value));
+    Vue.watch(backgroundInert, value => emit('interaction-blocked', value), { immediate: true, flush: 'sync' });
     let savedWidth;
     try { savedWidth = Number(localStorage.getItem('person-output-panel-width')); } catch {}
     const panelWidth = Vue.ref(savedWidth >= 280 && savedWidth <= 1200 ? savedWidth : 420);
@@ -120,7 +124,6 @@ export default {
     let responseLayoutObserver = null;
     let responseLayoutFrame = null;
     let disposed = false;
-    const returnButton = Vue.ref(null);
     const gate = Vue.computed(() => digitalPersonGate(chat, agentId.value));
     const scope = () => JSON.stringify([auth.userId, auth.authGeneration, auth.isAuthenticated]);
     const attachmentScope = () => JSON.stringify([scope(), agentId.value]);
@@ -166,13 +169,20 @@ export default {
       if (!agentId.value) agentId.value = chat.agents.find(enabled)?.id || '';
     });
     const resize = () => {
-      compactPanel.value = window.innerWidth <= 900;
-      mobileHeader.value = window.innerWidth <= 600;
+      const width = pageRoot.value?.clientWidth || window.innerWidth;
+      compactPanel.value = width <= 900;
+      mobileHeader.value = width <= 600;
       if (!mobileHeader.value) closeMore();
       Vue.nextTick(scrollInspectorSection);
     };
+    let pageResizeObserver;
     Vue.onMounted(() => {
-      returnButton.value?.focus();
+      pageTitle.value?.focus();
+      resize();
+      if (typeof ResizeObserver !== 'undefined' && pageRoot.value) {
+        pageResizeObserver = new ResizeObserver(resize);
+        pageResizeObserver.observe(pageRoot.value);
+      }
       window.addEventListener('resize', resize);
       document.addEventListener('keydown', panelKeydown);
       document.addEventListener('focusin', keepPanelFocus);
@@ -180,6 +190,8 @@ export default {
     });
     Vue.onBeforeUnmount(() => {
       draftGeneration++; controller.dispose();
+      pageResizeObserver?.disconnect();
+      emit('interaction-blocked', false);
       window.removeEventListener('resize', resize);
       document.removeEventListener('keydown', panelKeydown);
       document.removeEventListener('focusin', keepPanelFocus);
@@ -594,14 +606,6 @@ export default {
       historyLayoutObserver?.disconnect();
       if (navigationFrame !== null) cancelAnimationFrame(navigationFrame);
     });
-    function leave() {
-      chat.leaveDigitalPerson();
-      chat.leaveWorkCenter();
-      chat.closePluginCenter();
-      if (window.innerWidth <= 768) chat.sessionSidebarOpen = true;
-      Vue.nextTick(() => [...document.querySelectorAll('.sidebar-person-trigger')]
-        .find(button => button.getClientRects().length)?.focus());
-    }
     async function selectOutput(item) {
       const reading = controller.selectOutput(item);
       if (panel.value !== 'outputs') await openPanel('outputs');
@@ -628,19 +632,19 @@ export default {
     const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, returnButton, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, leave, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { pageRoot, pageTitle, settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
-    <div class="person-page">
+    <div ref="pageRoot" class="person-page">
       <header class="chat-header person-header" :inert="backgroundInert ? true : undefined">
         <nav class="person-navigation" :aria-label="$t('person.navigation')">
-          <button ref="returnButton" type="button" class="header-action-btn" @click="leave()" :aria-label="$t('yeaft.session.title')" :title="$t('yeaft.session.title')"><NavigationIcon name="back" /></button>
+          <button type="button" class="header-sidebar-toggle" @click="$emit('toggle-sidebar')" :aria-label="$t('chat.sidebar.expand')" :title="$t('chat.sidebar.expand')"><NavigationIcon name="menu" /></button>
           <div class="person-breadcrumb">
             <ModernSelect id="person-agent" class="person-agent-select" menu-class="agent-select-menu" v-model="agentId" :options="agentOptions" :aria-label="$t('person.agent')" :placeholder="$t('person.noAgent')" :empty-text="$t('person.noAgent')" :disabled="!agentOptions.length" :menu-min-width="220" />
           </div>
         </nav>
         <div class="person-identity">
-          <h1 :title="state.person?.name || $t('person.title')">{{ state.person?.name || $t('person.title') }}</h1>
+          <h1 ref="pageTitle" tabindex="-1" :title="state.person?.name || $t('person.title')">{{ state.person?.name || $t('person.title') }}</h1>
         </div>
         <div class="person-header-actions person-desktop-actions">
           <button type="button" class="header-action-btn" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>

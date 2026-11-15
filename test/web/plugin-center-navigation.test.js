@@ -38,6 +38,8 @@ beforeEach(() => {
     closePluginCenter: vi.fn(() => { store.pluginCenterOpen = false; }),
     closeSessionSidebar: vi.fn(() => { store.sessionSidebarOpen = false; }),
     openCatalogSession: vi.fn(),
+    leaveDigitalPerson: actions.leaveDigitalPerson,
+    leaveWorkCenter: vi.fn(() => { store.workCenterOpen = false; }),
   });
   const auth = Vue.reactive({ isAuthenticated: true, userId: 'sidebar-owner', authGeneration: 1 });
   vi.stubGlobal('Pinia', { useChatStore: () => store, useAuthStore: () => auth });
@@ -53,6 +55,57 @@ function renderList(extraProps = {}) {
 }
 
 describe('Plugin Center sidebar navigation', () => {
+  it('puts Digital Person first in both Session sidebars, retains the active route and switches auxiliary surfaces explicitly', async () => {
+    const personAgent = { ...agents[0], capabilities: ['work_center', 'digital_person'] };
+    Object.assign(store, { agents: [personAgent], currentAgent: 'agent-a', digitalPersonAgentId: 'agent-a',
+      digitalPersonUiEnabledByAgent: { 'agent-a': true },
+      isDigitalPersonUiEnabled: actions.isDigitalPersonUiEnabled,
+      enterDigitalPerson: actions.enterDigitalPerson,
+      leaveWorkCenter: vi.fn(() => { store.workCenterOpen = false; }),
+    });
+    renderList({ agents: [personAgent] });
+    await flushPromises();
+    const shortcuts = wrapper.get('.sidebar-primary-actions');
+    expect(shortcuts.findAll('button')[0].classes()).toContain('sidebar-person-trigger');
+    expect(shortcuts.findAll('button')[1].attributes('aria-label')).toBe(en['sidebar.sessions.newChat']);
+    expect(shortcuts.findAll('button')[0].text()).toBe(en['person.title']);
+    store.pluginCenterOpen = true;
+    await shortcuts.get('.sidebar-person-trigger').trigger('click');
+    expect(store.digitalPersonOpen).toBe(true);
+    expect(store.pluginCenterOpen).toBe(false);
+    expect(store.sessionSidebarOpen).toBe(false);
+    expect(store.activeSessionRoute).toEqual(route);
+    expect(shortcuts.get('.sidebar-person-trigger').attributes('aria-current')).toBe('page');
+    expect(wrapper.get('.sidebar-session-row').classes()).not.toContain('active');
+    await shortcuts.findAll('button')[1].trigger('click');
+    expect(store.digitalPersonOpen).toBe(false);
+    expect(wrapper.emitted('create')).toHaveLength(1);
+    wrapper.unmount();
+    wrapper = mount(YeaftSidebar, { global: { ...globalOptions, stubs: {
+      SidebarAgentHeader: true, SidebarWorkCenter: true,
+    } } });
+    expect(wrapper.find('.sidebar-header-actions .sidebar-person-trigger').exists()).toBe(false);
+    expect(wrapper.get('.sidebar-primary-actions').findAll('button')[0].classes()).toContain('sidebar-person-trigger');
+    expect(ChatPage.template).not.toContain('<SidebarDigitalPerson />');
+    store.digitalPersonOpen = true;
+    const createContext = { store };
+    ChatPage.methods.onUnifiedCreate.call(createContext);
+    expect(store.digitalPersonOpen).toBe(false);
+    expect(createContext.unifiedSessionCreateOpen).toBe(true);
+    expect(ChatPage.template).toContain('!store.isSplitMode || store.digitalPersonOpen');
+  });
+
+  it('leaves Digital Person before catalog navigation even for the current native or CLI Session', () => {
+    const context = { ...store, currentView: 'chat', isSessionHistorySyncing: () => false,
+      enterYeaft: vi.fn(), setActiveSessionFilter: vi.fn(), reloadYeaftMessages: vi.fn(), selectConversation: vi.fn(),
+    };
+    for (const runtimeProvider of ['yeaft', 'claude-code', 'copilot']) {
+      context.digitalPersonOpen = true;
+      expect(actions.openCatalogSession.call(context, { ...row, routeRef: { ...route, runtimeProvider } })).toBe(true);
+      expect(context.digitalPersonOpen).toBe(false);
+    }
+  });
+
   it('keeps labeled shortcuts by default, offers reversible compact mode on overflow and preserves Session identity', async () => {
     renderList();
     await flushPromises();
@@ -166,7 +219,7 @@ describe('Plugin Center sidebar navigation', () => {
     const project = { id: 'project-a', name: 'Project A', legacyAgentId: 'agent-a' };
     const mutateProject = vi.fn(async () => ({ ok: true }));
     const context = {
-      store: { mutateProject }, chatStore: { mutateProject },
+      store: { mutateProject, leaveDigitalPerson: vi.fn(), closePluginCenter: vi.fn(), leaveWorkCenter: vi.fn() }, chatStore: { mutateProject },
       [`${prefix}Open`]: false, [`${prefix}Project`]: null, [`${prefix}TaskMode`]: false,
       closeUnifiedSessionCreate: component.methods.closeUnifiedSessionCreate,
       closeSessionCreate: component.methods.closeSessionCreate,
@@ -191,6 +244,7 @@ describe('Plugin Center sidebar navigation', () => {
       pluginCenterOpen: true, sessionSidebarOpen: true, currentView: 'chat',
       currentConversation: 'session-a', panels: [{ id: 'panel-a' }],
       conversations: [], pendingNewConversation: false,
+      leaveDigitalPerson: actions.leaveDigitalPerson,
       closePluginCenter() { this.pluginCenterOpen = false; navigation.push('plugins-closed'); },
       closeSessionSidebar() { this.sessionSidebarOpen = false; navigation.push('drawer-closed'); },
       isSessionHistorySyncing: () => false,

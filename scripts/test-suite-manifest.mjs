@@ -157,6 +157,7 @@ export const E2E_TEST_FILES = Object.freeze([
   "e2e/tests/ui/digital-person-outputs.spec.js",
   "e2e/tests/ui/digital-person-storage.spec.js",
   "e2e/tests/ui/digital-person.spec.js",
+  "e2e/tests/ui/digital-person-sidebar.spec.js",
   "e2e/tests/ui/plugin-center.spec.js",
   "e2e/tests/ui/query-progress.spec.js",
   "e2e/tests/ui/response-media.spec.js",
