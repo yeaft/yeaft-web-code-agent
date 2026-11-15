@@ -188,7 +188,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +7 shared Digital Person navigation regressions: first/active entry and provider
 // return ordering (2), modal/toggle ownership (1), native/CLI desktop/mobile relay (4).
 // Existing Person inbox, inspector, output and Session navigation cases retained.
-export const TEST_CASE_LIMIT = 1065;
+// +4 all-Agent Person entry regressions: rendered availability/priority, initial
+// destination and offline draft ownership, and desktop/mobile real multi-Agent relay.
+export const TEST_CASE_LIMIT = 1069;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -1,5 +1,6 @@
 import { useAuthStore } from './auth.js';
 import { readPersonUiPreferences, writePersonUiPreferences } from './helpers/person-ui-preference.js';
+import { availableDigitalPersonAgents, resolveDigitalPersonAgentId } from '../utils/digital-person-agent.js';
 import {
   currentWorkCenterBrowserOwner,
   isWorkCenterBrowserFenceCurrent,
@@ -1732,10 +1733,8 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
     enterDigitalPerson(agentId = null) {
-      agentId = agentId || (this.digitalPersonOpen ? this.digitalPersonAgentId : this.currentAgent)
-        || this.agents.find(agent => this.isDigitalPersonUiEnabled(agent.id) && agent.capabilities?.includes('digital_person'))?.id;
-      if (!this.isDigitalPersonUiEnabled(agentId)
-        || !this.agents.some(agent => agent.id === agentId && agent.capabilities?.includes('digital_person'))) return false;
+      agentId = agentId || resolveDigitalPersonAgentId(this);
+      if (!availableDigitalPersonAgents(this).some(agent => agent.id === agentId)) return false;
       this.leaveWorkCenter();
       this.closePluginCenter();
       this.digitalPersonAgentId = agentId;

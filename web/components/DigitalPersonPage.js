@@ -24,6 +24,7 @@ import { projectPersonActivity, projectPersonFeedback } from '../utils/person-ac
 import { useAuthStore } from '../stores/auth.js';
 import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
 import { createPersonController, digitalPersonGate, personState } from '../stores/helpers/digital-person.js';
+import { resolveDigitalPersonAgentId } from '../utils/digital-person-agent.js';
 
 export default {
   name: 'DigitalPersonPage',
@@ -36,10 +37,12 @@ export default {
     const pageRoot = Vue.ref(null);
     const pageTitle = Vue.ref(null);
     const enabled = agent => chat.digitalPersonUiEnabledByAgent?.[agent.id] === true;
-    const agentId = Vue.ref(chat.agents.find(a => enabled(a) && a.id === chat.digitalPersonAgentId)?.id
-      || chat.agents.find(a => enabled(a) && a.id === chat.currentAgent)?.id
-      || chat.agents.find(enabled)?.id || '');
+    const agentId = Vue.ref(resolveDigitalPersonAgentId(chat) || '');
     Vue.watch(agentId, value => { chat.digitalPersonAgentId = value; }, { immediate: true });
+    // Clicking the shared entry can select a fallback without remounting this page.
+    Vue.watch(() => chat.digitalPersonAgentId, value => {
+      if (value && value !== agentId.value) agentId.value = value;
+    });
     const draft = Vue.ref('');
     const settingsOpen = Vue.ref(false);
     const mobileHeader = Vue.ref(window.innerWidth <= 600);
@@ -165,8 +168,8 @@ export default {
     // encryption key / plaintext negotiation. Opening synchronously sends with
     // the previous connection's key during reconnect.
     }, { immediate: true });
-    Vue.watch(() => chat.agents.map(agent => agent.id).join(','), () => {
-      if (!agentId.value) agentId.value = chat.agents.find(enabled)?.id || '';
+    Vue.watch(() => resolveDigitalPersonAgentId(chat), value => {
+      if (!agentId.value && value) agentId.value = value;
     });
     const resize = () => {
       const width = pageRoot.value?.clientWidth || window.innerWidth;

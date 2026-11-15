@@ -1,10 +1,97 @@
 import { expect } from '@playwright/test';
 import { test } from '../../fixtures/scheduled-task-server.js';
 import { scheduledTaskAgent, TASK_CAPABILITIES } from '../../fixtures/scheduled-task-agent.js';
+import { MockAgent } from '../../fixtures/mock-agent.js';
 import { clickPersonAction } from '../../helpers/person-actions.js';
 
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 test.setTimeout(60000);
+
+for (const scenario of [{ width: 1400, theme: 'light' }, { width: 320, theme: 'dark' }]) {
+  test(`Digital Person all-Agent sidebar availability and priority ${scenario.width}px ${scenario.theme}`, async ({ page, serverUrl, mockAgent }, testInfo) => {
+    const sessionFor = agent => ({ id: 'ordinary-session', name: `${agent.agentName} conversation`, roster: ['omni'], defaultVpId: 'omni', workDir: '/tmp/test' });
+    scheduledTaskAgent(mockAgent, { sessions: [sessionFor(mockAgent)] }); // Unsupported selected Agent.
+    const first = new MockAgent(serverUrl, 'First Person Agent');
+    const last = new MockAgent(serverUrl, 'Last Person Agent');
+    const connectPerson = async agent => {
+      await agent.connect();
+      scheduledTaskAgent(agent, { sessions: [sessionFor(agent)], capabilities: [...TASK_CAPABILITIES, 'digital_person'] });
+      agent._messageHandlers.push(request => {
+        if (request.type !== 'person_request') return;
+        const data = {
+          status: { configured: true, models: [{ id: 'provider/model' }] }, open: {},
+          snapshot: { person: { id: `person-${agent.agentId}`, name: agent.agentName }, state: { version: 1 }, messages: [], busy: false },
+          messages: { items: [], nextCursor: null }, traces: { items: [], nextCursor: null },
+        };
+        agent.send({ type: 'person_response', requestId: request.requestId, op: request.op, ok: true, data: data[request.op] || {} });
+      });
+    };
+    try {
+      await connectPerson(first);
+      await connectPerson(last);
+      await page.setViewportSize({ width: scenario.width, height: 850 });
+      await page.addInitScript(({ scenario, ids }) => {
+        localStorage.setItem('locale', 'en');
+        localStorage.setItem('theme', scenario.theme);
+        localStorage.setItem('yeaft-preferred-conversation-view', 'yeaft');
+        localStorage.setItem('digital-person-ui-enabled-by-agent', JSON.stringify(Object.fromEntries(ids.map(id => [id, true]))));
+      }, { scenario, ids: [first.agentId, last.agentId] });
+      await page.goto(serverUrl);
+      await expect(page.locator('.sidebar-navigation')).toHaveAttribute('aria-busy', 'false');
+      const revealSidebar = async () => {
+        if (scenario.width <= 768) await page.locator('.person-header .header-sidebar-toggle:visible, .yeaft-topbar-sidebar-toggle:visible, .header-sidebar-toggle:visible').first().click();
+      };
+      await revealSidebar();
+      const selectSession = async agentId => {
+        const agent = [mockAgent, first, last].find(row => row.agentId === agentId);
+        await page.locator('.sidebar-session-row').filter({ hasText: sessionFor(agent).name }).click();
+        await expect(page.locator('.person-page')).toHaveCount(0);
+        await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.agentId)).toBe(agentId);
+        await revealSidebar();
+      };
+      await selectSession(mockAgent.agentId);
+      const trigger = page.locator('.sidebar-primary-actions .sidebar-person-trigger');
+      await expect(trigger).toBeVisible();
+      expect(await trigger.evaluate(button => button === button.parentElement.querySelector('button'))).toBe(true);
+      await trigger.click();
+      await expect(page.locator('#person-input')).toBeEnabled();
+      await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().digitalPersonAgentId)).toBe(first.agentId);
+      // Header selection records the last Person Agent, independently of Session.
+      await page.locator('#person-agent').click();
+      await page.getByRole('option', { name: last.agentName, exact: true }).click();
+      await expect(page.locator('.person-header h1')).toHaveText(last.agentName);
+      await revealSidebar();
+      await selectSession(first.agentId);
+      await trigger.click();
+      await expect(page.locator('.person-header h1')).toHaveText(last.agentName);
+      // Stay on the offline Person until explicit re-entry chooses the Session Agent.
+      await page.locator('#person-input').fill('Keep Last Agent draft while offline');
+      await last.disconnect();
+      await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().agents.find(a => a.id === id)?.online === true, last.agentId)).toBe(false);
+      await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().digitalPersonAgentId)).toBe(last.agentId);
+      await expect(page.locator('#person-input')).toHaveValue('Keep Last Agent draft while offline');
+      await expect(page.locator('#person-input')).toBeDisabled();
+      await revealSidebar();
+      await trigger.click();
+      await expect(page.locator('.person-header h1')).toHaveText(first.agentName);
+      await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().activeSessionRoute?.agentId)).toBe(first.agentId);
+      await revealSidebar();
+      await selectSession(mockAgent.agentId);
+      await trigger.click();
+      await expect(page.locator('.person-header h1')).toHaveText(first.agentName);
+      await revealSidebar();
+      await selectSession(mockAgent.agentId);
+      await first.disconnect();
+      await expect(trigger).toHaveCount(0);
+      expect(mockAgent.messages('person_request')).toEqual([]);
+      expect([...first.messages('person_request'), ...last.messages('person_request')].some(r => ['send', 'think', 'dream', 'cancel'].includes(r.op))).toBe(false);
+      await page.screenshot({ path: testInfo.outputPath(`person-agent-priority-${scenario.width}-${scenario.theme}.png`) });
+    } finally {
+      await first.disconnect();
+      await last.disconnect();
+    }
+  });
+}
 
 for (const scenario of [
   { view: 'chat', width: 1400, theme: 'light' },

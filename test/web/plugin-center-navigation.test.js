@@ -4,6 +4,7 @@ import * as Vue from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { useUserPreferences } from '../../web/utils/user-preferences.js';
 import UnifiedSessionList from '../../web/components/UnifiedSessionList.js';
+import SidebarDigitalPerson from '../../web/components/SidebarDigitalPerson.js';
 import en from '../../web/i18n/en.js';
 
 // Capture real actions without creating a socket or bootstrapping a browser owner.
@@ -93,6 +94,45 @@ describe('Plugin Center sidebar navigation', () => {
     expect(store.digitalPersonOpen).toBe(false);
     expect(createContext.unifiedSessionCreateOpen).toBe(true);
     expect(ChatPage.template).toContain('!store.isSplitMode || store.digitalPersonOpen');
+  });
+
+  it('keeps the Person action across unsupported Sessions and selects last Person, Session, then first eligible Agent', async () => {
+    const candidates = [
+      { id: 'unsupported', online: true, capabilities: [] },
+      { id: 'hidden', online: true, capabilities: ['digital_person'] },
+      { id: 'offline', online: false, capabilities: ['digital_person'] },
+      ...['first', 'session', 'last'].map(id => ({ id, online: true, capabilities: ['digital_person'] })),
+    ];
+    Object.assign(store, { agents: candidates, currentAgent: 'unsupported',
+      activeSessionRoute: { ...route, agentId: 'session' }, digitalPersonAgentId: 'last',
+      digitalPersonUiEnabledByAgent: Object.fromEntries(['offline', 'first', 'session', 'last', 'unsupported'].map(id => [id, true])),
+      enterDigitalPerson: actions.enterDigitalPerson,
+    });
+    wrapper = mount(SidebarDigitalPerson, { global: globalOptions });
+    const click = async expected => {
+      await wrapper.get('button').trigger('click');
+      expect(store.digitalPersonAgentId).toBe(expected);
+      expect(store.currentAgent).toBe('unsupported');
+      expect(store.activeSessionRoute.agentId).toBe('session');
+      actions.leaveDigitalPerson.call(store);
+    };
+    await click('last');
+    store.agents.find(agent => agent.id === 'last').online = false;
+    await click('session');
+    store.digitalPersonUiEnabledByAgent.session = false;
+    await click('first');
+    expect(actions.enterDigitalPerson.call(store, 'offline')).toBe(false);
+    expect(actions.enterDigitalPerson.call(store, 'hidden')).toBe(false);
+    expect(actions.enterDigitalPerson.call(store, 'unsupported')).toBe(false);
+    store.agents.find(agent => agent.id === 'first').online = false;
+    await flushPromises();
+    expect(wrapper.find('button').exists()).toBe(false);
+    expect(actions.enterDigitalPerson.call(store)).toBe(false);
+    // Reconnect restores the action in compact/collapsed sidebars too.
+    store.agents.find(agent => agent.id === 'first').online = true;
+    await wrapper.setProps({ collapsed: true });
+    expect(wrapper.get('button').classes()).toContain('collapsed-icon-btn');
+    await click('first');
   });
 
   it('leaves Digital Person before catalog navigation even for the current native or CLI Session', () => {
