@@ -65,9 +65,11 @@ for (const scenario of [{ width: 1400, theme: 'light' }, { width: 320, theme: 'd
       await trigger.click();
       await expect(page.locator('.person-header h1')).toHaveText(last.agentName);
       // Stay on the offline Person until explicit re-entry chooses the Session Agent.
+      await page.locator('#person-input').fill('Keep Last Agent draft while offline');
       await last.disconnect();
       await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().agents.find(a => a.id === id)?.online === true, last.agentId)).toBe(false);
-      await expect(page.locator('.person-header h1')).toHaveText(last.agentName);
+      await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().digitalPersonAgentId)).toBe(last.agentId);
+      await expect(page.locator('#person-input')).toHaveValue('Keep Last Agent draft while offline');
       await expect(page.locator('#person-input')).toBeDisabled();
       await revealSidebar();
       await trigger.click();
