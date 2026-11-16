@@ -1230,7 +1230,6 @@ export default {
             <div class="project-instruction-header">
               <div>
                 <h3>{{ $t('sidebar.projects.instructionsTitle', { name: projectInstructionProject?.name || '' }) }}</h3>
-                <p>{{ $t('sidebar.projects.instructionsHint') }}</p>
               </div>
               <button type="button" class="modal-close" :disabled="projectInstructionSubmitting" @click="closeProjectInstruction" :aria-label="$t('common.close')">&times;</button>
             </div>

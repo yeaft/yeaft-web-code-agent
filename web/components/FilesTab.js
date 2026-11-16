@@ -438,7 +438,6 @@ export default {
             <FilePreviewFallback v-if="activeFile.previewError" :file="activeFile" :error="activeFile.previewError" @download="downloadActiveFile" />
             <div v-else-if="activeFile.previewLoading || !activeFile.blobUrl" class="preview-loading"><span class="spinner-mini"></span> {{ $t('files.loadingPreview') }}</div>
             <template v-else>
-              <div class="file-preview-note">{{ $t('files.pdfPreviewHint') }}</div>
               <iframe v-if="pdfPreviewSupported" :src="activeFile.blobUrl" :title="$t('files.pdfPreviewTitle', { name: activeFile.name })" class="file-preview-iframe" @error="onPdfPreviewError(activeFile, $event)"></iframe>
               <FilePreviewFallback v-else :file="activeFile" :error="$t('files.pdfPreviewUnsupported')" @download="downloadActiveFile" />
             </template>
@@ -475,7 +474,6 @@ export default {
               <audio v-if="activeFile.blobUrl" :key="activeFile.blobUrl" :src="activeFile.blobUrl" :aria-label="activeFile.name"
                 class="file-preview-audio" controls preload="metadata"
                 @loadedmetadata="onAudioPreviewLoad(activeFile, $event)" @error="onAudioPreviewError(activeFile, $event)"></audio>
-              <span class="file-preview-note">{{ $t('files.audioPreviewHint') }}</span>
             </template>
           </div>
           <!-- 视频预览 -->

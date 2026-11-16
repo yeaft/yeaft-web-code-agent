@@ -109,7 +109,7 @@ export default {
         </select>
         <button type="button" class="btn-ghost table-copy" :disabled="!selection" @click="copySelection">{{ $t('files.tableCopy') }}</button>
       </div>
-      <div class="table-preview-hint">{{ $t('files.tableReadOnly') }} <span v-if="selection">{{ selectionLabel }}</span> <span role="status">{{ copyState ? $t(copyState) : '' }}</span></div>
+      <div v-if="selection || copyState" class="table-preview-hint"><span v-if="selection">{{ selectionLabel }}</span> <span role="status">{{ copyState ? $t(copyState) : '' }}</span></div>
       <div v-if="!rows.length" class="preview-unsupported" role="status">{{ $t('files.tableEmpty') }}</div>
       <template v-else>
         <div ref="scroll" class="csv-preview-scroll" tabindex="0" role="region" :aria-label="$t('files.tablePreviewTitle', { name })" @copy="copy" @keydown="onKeydown" @mouseup="dragging = false" @mouseleave="dragging = false">

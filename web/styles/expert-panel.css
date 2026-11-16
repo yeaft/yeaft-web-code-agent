@@ -406,14 +406,6 @@
   margin: 8px 0 2px;
 }
 
-.expert-prompt-hint {
-  font-size: 10px;
-  color: var(--text-muted);
-  opacity: 0.7;
-  margin: 0 0 4px;
-  font-style: italic;
-}
-
 .expert-prompt-content {
   font-size: 12px;
   line-height: 1.6;

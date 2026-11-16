@@ -44,7 +44,7 @@ export default {
     mapDirectionsUrl,
   },
   template: `<div class="response-map-embed">
-    <div class="response-map-caption"><strong>{{ provider }}</strong><span>{{ $t('richResponse.mapEmbedNotice') }}</span>
+    <div class="response-map-caption"><strong>{{ provider }}</strong>
       <span v-if="block.embed.provider === 'google'">{{ $t('richResponse.googleShareNotice') }}</span>
       <span>{{ $t('richResponse.mapPrivacyNotice') }}</span>
     </div>

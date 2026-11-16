@@ -13,7 +13,6 @@ export default {
   template: `
     <section id="person-debug" class="person-journal person-debug" :aria-label="$t('person.debug')">
       <div class="person-journal-toolbar">
-        <p class="person-muted">{{ $t('person.debugHint') }}</p>
         <button type="button" class="btn-ghost" :disabled="disabled || loading" @click="$emit('refresh')">{{ $t('common.refresh') }}</button>
       </div>
       <p v-if="stale" class="person-notice" role="status">{{ $t('person.recordsStale') }}</p>

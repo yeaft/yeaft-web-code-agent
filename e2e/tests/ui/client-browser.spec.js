@@ -182,15 +182,17 @@ test('Browser URLs remain isolated across Sessions and workspace generations', a
   await page.context().addCookies([{ name: 'client-login', value: 'signed-in-fixture', url: ORIGIN }]);
   await address.fill(`${ORIGIN}/blocked`);
   await address.press('Enter');
-  await expect(page.locator('.browser-embed-notice')).toContainText('Client-side preview only');
+  await expect(page.locator('.browser-embed-notice')).toHaveCount(0);
   for (const [width, theme] of [[320, 'dark'], [1280, 'light']]) {
     await page.setViewportSize({ width, height: 800 });
     await page.evaluate(theme => document.documentElement.setAttribute('data-theme', theme), theme);
-    const notice = page.locator('.browser-embed-notice');
-    await expect(notice).toBeVisible();
-    const box = await notice.boundingBox();
+    const toolbar = page.locator('.browser-toolbar');
+    await expect(toolbar).toBeVisible();
+    const box = await toolbar.boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(width + 1);
+    await expect(page.locator('.browser-external')).toBeVisible();
+    expect(await page.locator('.browser-frame').evaluate(el => el.clientHeight)).toBeGreaterThan(300);
   }
   const popupPromise = page.waitForEvent('popup');
   await page.locator('.browser-external').click();

@@ -87,18 +87,19 @@ describe('client-only Workbench BrowserPanel', () => {
       sandbox: 'allow-scripts allow-forms', referrerpolicy: 'no-referrer',
       title: en['workbench.browserFrameLabel'],
     });
-    expect(wrapper.get('.browser-embed-notice').text()).toBe(en['workbench.browserEmbedNotice']);
+    expect(wrapper.find('.browser-embed-notice').exists()).toBe(false);
     vi.useFakeTimers();
     const firstFrame = wrapper.get('iframe').element;
     await wrapper.get('.browser-actions button').trigger('click');
     expect(wrapper.get('iframe').element).not.toBe(firstFrame);
     expect(wrapper.get('iframe').attributes('src')).toBe('https://example.com/');
     await vi.advanceTimersByTimeAsync(12_000);
-    expect(wrapper.find('[role="status"]').exists()).toBe(false);
-    expect(wrapper.get('.browser-embed-notice').text()).toBe(en['workbench.browserFrameWaiting']);
+    expect(wrapper.get('[role="status"]').text()).toBe(en['workbench.browserFrameWaiting']);
+    expect(wrapper.get('.browser-actions button').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('.browser-external').attributes('href')).toBe('https://example.com/');
     await wrapper.get('iframe').trigger('load');
-    expect(wrapper.get('.browser-embed-notice').text()).toBe(en['workbench.browserEmbedNotice']);
+    expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    expect(wrapper.find('.browser-embed-notice').exists()).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(peerSpy).not.toHaveBeenCalled();
     expect(sendSpy).not.toHaveBeenCalled();

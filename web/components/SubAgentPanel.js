@@ -76,7 +76,6 @@ export default {
         <div v-else class="subagent-empty">
           <div class="subagent-empty-icon">&#x1F4A4;</div>
           <div class="subagent-empty-text">{{ $t('subAgentPanel.empty') }}</div>
-          <div class="subagent-empty-hint">{{ $t('subAgentPanel.emptyHint') }}</div>
         </div>
       </template>
     </div>

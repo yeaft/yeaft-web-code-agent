@@ -1129,7 +1129,6 @@
   font-size: 13px;
 }
 
-
 .work-center-work-item-kicker {
   display: flex;
   min-width: 0;
@@ -2719,34 +2718,16 @@
   gap: 10px;
 }
 
-.work-center-plan-preview {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 10px;
-  background: var(--bg-sidebar);
-}
-
-.work-center-plan-preview-heading,
-.work-center-plan-preview-heading > div,
 .work-center-plan-stages article > div:first-child {
   display: flex;
 }
 
-.work-center-plan-preview-heading {
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.work-center-plan-preview-heading > div,
 .work-center-plan-stages article > div:first-child {
   min-width: 0;
   flex-direction: column;
   gap: 3px;
 }
 
-.work-center-plan-preview small,
 .work-center-policy-stage small,
 .work-center-model-stage small {
   color: var(--text-muted);

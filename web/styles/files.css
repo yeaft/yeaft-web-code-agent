@@ -1862,7 +1862,6 @@
   flex: 0 0 auto;
   padding: 12px 20px 16px;
 }
-.workdir-picker .folder-picker-footer p { margin: 0 0 12px; color: var(--text-secondary); font-size: 12px; }
 .workdir-picker .folder-picker-footer > div { display: flex; justify-content: flex-end; gap: 8px; }
 
 @media (max-width: 480px) {

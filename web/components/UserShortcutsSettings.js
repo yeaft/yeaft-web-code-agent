@@ -38,9 +38,6 @@ export default {
   template: `
     <section class="user-shortcuts-settings" aria-labelledby="user-shortcuts-title">
       <h3 id="user-shortcuts-title">{{ $t('userShortcuts.title') }}</h3>
-      <p class="sp-desc">{{ $t('userShortcuts.scope') }}</p>
-      <p class="sp-desc">{{ $t('userShortcuts.quickSendHelp') }}</p>
-      <p class="sp-desc" id="user-shortcuts-help">{{ $t('userShortcuts.help') }}</p>
       <div v-for="action in actions" :key="action" class="user-shortcuts-row">
         <div class="user-shortcuts-label">
           <span :id="'shortcut-label-' + action">{{ $t('userShortcuts.action.' + action) }}</span>
@@ -49,7 +46,7 @@ export default {
         <div class="user-shortcuts-controls">
           <button type="button" class="btn-secondary user-shortcuts-record" :class="{ recording: recording === action }"
             :disabled="!ownerId" :aria-labelledby="'shortcut-label-' + action + ' shortcut-value-' + action"
-            :aria-pressed="recording === action" aria-describedby="user-shortcuts-help"
+            :aria-pressed="recording === action"
             @click="recording = action; error = null" @keydown="record($event, action)"
             @blur="recording = ''">
             <span :id="'shortcut-value-' + action">{{ recording === action ? $t('userShortcuts.recording') : (preferences.bindings[action] || $t('userShortcuts.unbound')) }}</span>

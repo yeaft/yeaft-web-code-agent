@@ -25,7 +25,6 @@ export default {
   template: `
     <section id="person-thoughts" class="person-journal" :aria-label="$t('person.thoughts')">
       <div class="person-journal-toolbar">
-        <p class="person-muted">{{ $t('person.thoughtsHint') }}</p>
         <button type="button" class="btn-ghost" :disabled="disabled || loading" @click="$emit('refresh')">{{ $t('common.refresh') }}</button>
       </div>
       <p v-if="stale" class="person-notice" role="status">{{ $t('person.recordsStale') }}</p>

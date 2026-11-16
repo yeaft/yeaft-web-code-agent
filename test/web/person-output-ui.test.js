@@ -37,6 +37,7 @@ describe('Digital Person output surface', () => {
     expect(frame.attributes('srcdoc')).toContain("default-src 'none'");
     expect(frame.attributes('srcdoc')).not.toContain('<script>');
     expect(wrapper.get('[download]').attributes('href')).toBe('blob:opaque');
+    expect(wrapper.find('.person-output-safety-note').exists()).toBe(false);
   });
   it('reuses the Workbench browser with opaque origin, no popups/top navigation, and retains dedicated external open', () => {
     preview('link', 'text/html');
@@ -44,6 +45,8 @@ describe('Digital Person output surface', () => {
     expect(wrapper.find('.browser-panel').exists()).toBe(true);
     expect(wrapper.get('iframe').attributes('referrerpolicy')).toBe('no-referrer');
     expect(wrapper.get('.person-output-external').attributes('target')).toBe('_blank');
-    expect(wrapper.text()).toContain(en['person.outputsFrameNotice']);
+    expect(wrapper.find('.person-output-safety-note, .browser-embed-notice').exists()).toBe(false);
+    expect(wrapper.get('.person-output-browser-exit').text()).toBe(en['person.outputsBackToReader']);
+    expect(wrapper.get('input').attributes('aria-label')).toBe(en['workbench.browserAddressLabel']);
   });
 });

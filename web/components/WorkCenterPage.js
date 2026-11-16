@@ -2444,7 +2444,6 @@ export default {
           <header class="work-center-modal-header">
             <div>
               <h2 id="work-center-create-title">{{ tr('workCenter.newWorkItem', 'New work item') }}</h2>
-              <p>{{ tr('workCenter.createHint', 'Describe what you need. The Coordinator will keep creating the next justified Actions until the acceptance criteria are verified.') }}</p>
             </div>
             <button class="modal-close" type="button" @click="closeCreate" :disabled="saving" :aria-label="tr('common.close', 'Close')">×</button>
           </header>
@@ -2456,13 +2455,11 @@ export default {
               </label>
               <label>{{ tr('workCenter.requirement', 'Requirement') }}
                 <textarea ref="createRequirement" v-model="form.requirement" rows="8" required autofocus @paste="onCreateRequirementPaste" :placeholder="tr('workCenter.requirementHint', 'Describe the problem, desired outcome, and any constraints in your own words')"></textarea>
-                <small class="work-center-field-help">{{ tr('workCenter.requirementHelp', 'The Coordinator will refine the goal and acceptance criteria, then create Actions dynamically as evidence arrives.') }}</small>
               </label>
             </section>
             <section class="work-center-form-section work-center-create-attachments">
               <div class="work-center-form-section-heading">
                 <h3>{{ tr('workCenter.attachments', 'Attachments') }}</h3>
-                <p>{{ tr('workCenter.attachmentsHelp', 'Screenshots and files stay bound to this Work Item and are available to every Action.') }}</p>
               </div>
               <label v-if="workItemAttachmentsSupported" class="btn-secondary work-center-attachment-picker">
                 <input type="file" multiple accept="image/png,image/jpeg,image/gif,image/webp,text/*,application/pdf,application/json,application/xml,.pdf,.json,.md,.py,.js,.ts,.css,.html,.xml,.yaml,.yml,.csv" @change="onCreateAttachmentInput">
@@ -2481,7 +2478,6 @@ export default {
             <section class="work-center-form-section work-center-execution-section">
               <div class="work-center-form-section-heading">
                 <h3>{{ tr('workCenter.execution', 'Execution') }}</h3>
-                <p>{{ tr('workCenter.executionHint', 'Choose where and how this work item starts.') }}</p>
               </div>
               <label>{{ tr('workCenter.workDir', 'Working directory') }}
                 <div class="work-center-workdir-picker">
@@ -2491,7 +2487,6 @@ export default {
                     {{ tr('workCenter.chooseFolder', 'Choose folder') }}
                   </button>
                 </div>
-                <small class="work-center-field-help">{{ tr('workCenter.workDirPickerHelp', 'Select an existing folder on the chosen Agent.') }}</small>
               </label>
               <label class="work-center-delivery-field">
                 <span>{{ $t('workCenter.deliveryTarget') }}</span>
@@ -2514,12 +2509,7 @@ export default {
               <WorkCenterScheduleEditor v-if="form.scheduled" v-model="form.scheduleDraft" :disabled="saving" :recurring-supported="recurringSchedulesSupported" />
               <p v-else class="work-center-field-help">{{ $t('workCenter.scheduling.modeHint.' + executionMode) }}</p>
             </section>
-            <section class="work-center-plan-preview">
-              <div class="work-center-plan-preview-heading">
-                <div><strong>{{ tr('workCenter.aiPlan', 'Coordinator-driven execution') }}</strong><small>{{ tr('workCenter.aiPlanHelp', 'The Coordinator chooses the next Actions and executors from current evidence instead of precomputing a workflow graph. Work Center settings control the model and effort.') }}</small></div>
-                <button type="button" class="btn-secondary" @click="settingsOpen = true">{{ tr('workCenter.settings.title', 'Settings') }}</button>
-              </div>
-            </section>
+            <button type="button" class="btn-secondary" @click="settingsOpen = true">{{ tr('workCenter.settings.title', 'Settings') }}</button>
           </div>
           <p v-if="createError" class="work-center-error work-center-create-error" role="alert">{{ createError }}</p>
           <footer class="work-center-modal-footer">

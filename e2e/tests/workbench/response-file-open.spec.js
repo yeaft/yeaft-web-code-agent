@@ -605,7 +605,7 @@ for (const theme of ['light', 'dark']) {
     await expect(page.locator('.file-preview-fallback')).toContainText('Permission denied');
     await expect(page.locator('.file-preview-fallback button')).toBeVisible();
     await open('private/report.pdf', 'application/pdf');
-    await expect(page.locator('.file-preview-note')).toContainText('files.pdfPreviewHint');
+    await expect(page.locator('.file-preview-note')).toHaveCount(0);
     const pdfFrame = page.locator('.file-preview-iframe');
     if (await pdfFrame.count()) await expect(pdfFrame).toHaveAttribute('title', 'files.pdfPreviewTitle');
     expect(external).toEqual([]);

@@ -34,7 +34,6 @@ export default {
         </div>
 
         <template v-else>
-          <p class="vp-catalog-help">{{ $t('yeaft.vp.catalog.help') }}</p>
           <div class="vp-crud-list-toolbar">
             <button
               v-if="hasLegacyVps"

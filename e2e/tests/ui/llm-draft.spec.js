@@ -54,6 +54,9 @@ for (const scenario of [
     const models = card.locator('textarea');
     const save = form.locator('.llm-save-row button');
     await expect(name).toHaveValue('fixture');
+    await expect(form.locator('.llm-hero-copy > p:not(.llm-kicker), .llm-protocol-hint, .llm-model-hint')).toHaveCount(0);
+    await expect(form.locator('.llm-models-hint')).toHaveText('Comma or newline separated.');
+    await expect(form.locator('.llm-section').last()).toContainText('tool payloads');
     await name.fill('unfinished provider');
     await url.fill('https://draft.example.test/part');
     await key.fill('fixture-half-key');

@@ -65,6 +65,12 @@ describe('Digital Person surface', () => {
     await wrapper.get('.person-settings-button').trigger('click');
     await flushPromises();
     expect(wrapper.emitted('interaction-blocked').at(-1)).toEqual([true]);
+    expect(wrapper.find('#person-model-hint, #person-default-model-hint').exists()).toBe(false);
+    for (const element of wrapper.findAll('[aria-describedby]')) {
+      for (const id of element.attributes('aria-describedby').split(/\s+/)) {
+        expect(wrapper.find(`[id="${id}"]`).exists()).toBe(true);
+      }
+    }
     await wrapper.get('.person-settings-modal button[aria-label="Close"]').trigger('click');
     await flushPromises();
     expect(wrapper.emitted('interaction-blocked').at(-1)).toEqual([false]);

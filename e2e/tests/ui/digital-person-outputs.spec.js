@@ -336,7 +336,7 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
   } finally { await runtime.close(); }
 });
 
-test('Output reader keeps only explicitly opened document tabs and stays separate from the inspector', async ({ page, context, serverUrl, mockAgent }) => {
+test('Output reader keeps only explicitly opened document tabs and stays separate from the inspector', async ({ page, context, serverUrl, mockAgent }, testInfo) => {
   test.setTimeout(60000);
   const runtime = await outputRuntime(mockAgent, serverUrl);
   const url = 'https://reader-deliverable.invalid/reference';
@@ -385,6 +385,18 @@ test('Output reader keeps only explicitly opened document tabs and stays separat
     await expect(panel.getByRole('link', { name: 'Download', exact: true })).toHaveCount(0);
     await expect(panel.getByRole('link', { name: 'Open externally', exact: true })).toHaveAttribute('href', url);
     await expect(preview.locator('iframe').contentFrame().getByRole('heading', { name: 'Reader reference', exact: true })).toBeVisible();
+    await expect(panel.locator('.person-output-safety-note, .browser-embed-notice')).toHaveCount(0);
+    for (const [width, theme] of [[1280, 'light'], [320, 'dark']]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+      await expectNoOverflow(page);
+      await expect(panel.getByRole('textbox', { name: 'Browser address', exact: true })).toBeVisible();
+      await expect(panel.getByRole('link', { name: 'Open in new tab', exact: true })).toBeVisible();
+      expect(await preview.locator('iframe').evaluate(el => el.clientHeight)).toBeGreaterThan(300);
+      await page.screenshot({ path: testInfo.outputPath(`reader-no-guidance-${width}-${theme}.png`) });
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+
     await expect(panel.getByRole('tab')).toHaveCount(3);
     await expect(firstTab).toHaveCount(1);
     await expect(secondTab).toHaveCount(1);

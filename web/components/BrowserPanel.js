@@ -153,9 +153,7 @@ export default {
       </div>
       <p v-if="state.error" class="browser-error" role="alert">{{ $t(state.error) }}</p>
       <p v-if="loading" class="browser-status" role="status">{{ $t('workbench.browserFrameLoading') }}</p>
-      <div v-if="frame" class="browser-embed-notice">
-        <p>{{ $t(waiting ? 'workbench.browserFrameWaiting' : 'workbench.browserEmbedNotice') }}</p>
-      </div>
+      <p v-if="waiting" class="browser-status" role="status">{{ $t('workbench.browserFrameWaiting') }}</p>
       <div class="browser-stage">
         <iframe v-if="frame" :key="frame.key" ref="iframe" class="browser-frame"
           :src="frame.url" :title="$t('workbench.browserFrameLabel')"

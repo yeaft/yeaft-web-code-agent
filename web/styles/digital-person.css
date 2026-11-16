@@ -247,7 +247,6 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-output-preview iframe { display: block; width: 100%; height: max(320px, 95%); border: 0; background: var(--bg-main); }
 .person-output-preview > .browser-panel { min-height: 400px; height: calc(100% - 40px); }
 .person-output-preview .browser-frame { height: 100%; }
-.person-output-safety-note { color: var(--text-muted); font-size: 11px; line-height: 1.5; margin-bottom: var(--work-center-space-2); }
 .person-output-code { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 var(--font-mono); color: var(--text-primary); }
 .person-output-progress { color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
 .person-output-progress progress { width: 100%; accent-color: var(--accent-blue); }

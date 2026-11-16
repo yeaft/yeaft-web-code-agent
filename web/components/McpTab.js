@@ -34,7 +34,6 @@ export default {
             {{ loading ? $t('settings.mcp.loading') : $t('settings.mcp.reloadAll') }}
           </button>
         </h3>
-        <p class="settings-section-desc">{{ $t('settings.mcp.description') }}</p>
       </div>
 
       <div class="settings-section" v-if="servers.length">
@@ -76,7 +75,6 @@ export default {
 
       <div class="settings-section">
         <h3 class="settings-section-title">{{ $t('settings.mcp.addServer') }}</h3>
-        <p class="settings-section-desc">{{ $t('settings.mcp.addServerDesc') }}</p>
 
         <div class="mcp-form-row">
           <label class="mcp-form-label">{{ $t('settings.mcp.serverName') }}</label>

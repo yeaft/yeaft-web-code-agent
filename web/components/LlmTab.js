@@ -59,7 +59,6 @@ export default {
           <div class="llm-hero-copy">
             <p class="llm-kicker">{{ $t('settings.llm.configureMenu') }}</p>
             <h2>{{ currentConfig?.needsSetup ? $t('settings.llm.setupTitle') : $t('settings.llm.configureAgent') }}</h2>
-            <p>{{ currentConfig?.needsSetup ? $t('settings.llm.setupDesc') : $t('settings.llm.providersDesc') }}</p>
           </div>
           <button v-if="context === 'yeaft'" class="sp-btn sp-btn-primary llm-hero-action" @click="useGitHubCopilotPreset" :disabled="discoveringModels">
             {{ discoveringModels ? $t('settings.llm.refreshingModels') : $t('settings.llm.useGitHubCopilot') }}
@@ -75,7 +74,6 @@ export default {
           <div class="llm-section-header">
             <div>
               <div class="sp-group-title">{{ $t('settings.llm.providersTitle') }}</div>
-              <p class="sp-desc">{{ $t('settings.llm.providerSectionHint') }}</p>
             </div>
           </div>
           <!-- Provider cards -->
@@ -118,13 +116,11 @@ export default {
                     </div>
                   </div>
                 </div>
-                <small class="llm-field-hint llm-protocol-hint">{{ protocolHint(provider.protocol) }}</small>
               </div>
             </div>
 
             <div v-if="isManagedProvider(provider)" class="llm-managed-provider-note">
               <strong>{{ $t('settings.llm.managedCopilotTitle') }}</strong>
-              <p class="sp-desc">{{ $t('settings.llm.managedCopilotDesc') }}</p>
             </div>
 
             <div v-if="!isManagedProvider(provider)" class="llm-field">
@@ -172,7 +168,6 @@ export default {
         <!-- Model Selection Section -->
         <div class="sp-group llm-section llm-model-section">
           <div class="sp-group-title">{{ $t('settings.llm.modelSelectionTitle') }}</div>
-          <p class="sp-desc">{{ $t('settings.llm.modelSelectionDesc') }}</p>
 
           <div v-if="allModelRefs.length === 0" class="sp-desc">
             {{ $t('settings.llm.noModels') }}
@@ -182,7 +177,6 @@ export default {
             <div class="llm-model-select-row">
               <div class="llm-model-select-field">
                 <label class="llm-field-label">{{ $t('settings.llm.primaryModel') }}</label>
-                <p class="sp-desc llm-model-hint">{{ $t('settings.llm.primaryModelDesc') }}</p>
                 <div class="sp-custom-select" :class="{ open: openDropdown === 'primaryModel' }" v-click-outside="() => closeDropdown('primaryModel')">
                   <button class="sp-custom-select-trigger" @click="toggleDropdown('primaryModel')">
                     <span>{{ localPrimaryModel || $t('settings.llm.selectModel') }}</span>
@@ -202,7 +196,6 @@ export default {
 
               <div class="llm-model-select-field" v-if="context !== 'yeaft'">
                 <label class="llm-field-label">{{ $t('settings.llm.fastModel') }}</label>
-                <p class="sp-desc llm-model-hint">{{ $t('settings.llm.fastModelDesc') }}</p>
                 <div class="sp-custom-select" :class="{ open: openDropdown === 'fastModel' }" v-click-outside="() => closeDropdown('fastModel')">
                   <button class="sp-custom-select-trigger" @click="toggleDropdown('fastModel')">
                     <span>{{ localFastModel || $t('settings.llm.selectModel') }}</span>
@@ -705,12 +698,6 @@ export default {
       if (protocol === 'anthropic') return this.$t('settings.llm.protocolAnthropic');
       if (protocol === 'openai-responses') return this.$t('settings.llm.protocolOpenAIResponses');
       return this.$t('settings.llm.protocolOpenAI');
-    },
-
-    protocolHint(protocol) {
-      if (protocol === 'anthropic') return this.$t('settings.llm.protocolHint.anthropic');
-      if (protocol === 'openai-responses') return this.$t('settings.llm.protocolHint.openaiResponses');
-      return this.$t('settings.llm.protocolHint.openai');
     },
 
     _getModelPresets(protocol) {

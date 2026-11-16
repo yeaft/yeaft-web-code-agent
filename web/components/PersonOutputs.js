@@ -138,12 +138,9 @@ export default {
             <pre v-else-if="preview.kind === 'text'" class="person-output-code"><code>{{ preview.text }}</code></pre>
             <img v-else-if="preview.kind === 'image'" :src="preview.url" :alt="state.selected.title" :class="{ 'is-fit': fit }" :style="fit ? {} : { width: (zoom * 100) + '%', maxWidth: 'none' }">
             <template v-else-if="preview.kind === 'html'">
-              <p class="person-output-safety-note">{{ $t('person.outputsStaticHtml') }}</p>
               <iframe :srcdoc="html" sandbox="" tabindex="-1" referrerpolicy="no-referrer" :title="state.selected.title"></iframe>
             </template>
             <template v-else-if="preview.kind === 'link' && externalUrl">
-              <p class="person-output-safety-note">{{ $t('person.outputsFrameNotice') }}</p>
-              <p class="person-output-safety-note">{{ $t('person.outputsFrameKeyboardNotice') }}</p>
               <BrowserPanel :key="state.selected.id" :route-key="state.selected.id" :initial-url="externalUrl" />
               <button type="button" class="btn-ghost person-output-browser-exit" @click="focusClose">{{ $t('person.outputsBackToReader') }}</button>
             </template>
