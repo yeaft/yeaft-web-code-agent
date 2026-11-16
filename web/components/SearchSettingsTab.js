@@ -27,13 +27,11 @@ export default {
     <div class="search-settings-tab">
       <div class="settings-section">
         <h3 class="settings-section-title">{{ $t('search.settings.backendTitle') }}</h3>
-        <p class="settings-section-desc">{{ $t('search.settings.backendDesc') }}</p>
 
         <label class="search-radio-row">
           <input type="radio" value="tavily" v-model="form.backend" />
           <div class="search-radio-body">
             <div class="search-radio-label">{{ $t('search.settings.backend.tavily') }}</div>
-            <div class="search-radio-hint">{{ $t('search.settings.backend.tavilyHint') }}</div>
           </div>
         </label>
 
@@ -44,7 +42,6 @@ export default {
               {{ $t('search.settings.backend.playwright') }}
               <span class="search-coming-soon">{{ $t('search.settings.comingSoon') }}</span>
             </div>
-            <div class="search-radio-hint">{{ $t('search.settings.backend.playwrightHint') }}</div>
           </div>
         </label>
       </div>

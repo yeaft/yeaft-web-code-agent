@@ -300,12 +300,6 @@
   font-weight: 500;
 }
 
-.subagent-empty-hint {
-  font-size: 12px;
-  color: var(--text-muted);
-  max-width: 200px;
-}
-
 /* ---- Header Badge ---- */
 .subagent-count-badge {
   position: absolute;

@@ -38,6 +38,9 @@ const pendingRequest = store => store.sendWsMessage.mock.calls.at(-1)[0];
 describe('Agent LLM editing draft ownership', () => {
   it('preserves all unsaved fields and raw model text through delayed reads, errors and external saves without auto-saving', async () => {
     const store = await setup();
+    expect(wrapper.find('.llm-hero-copy > p:not(.llm-kicker), .llm-protocol-hint, .llm-model-hint').exists()).toBe(false);
+    expect(wrapper.get('.llm-models-hint').text()).toBe(en['settings.llm.modelsHint']);
+    expect(wrapper.text()).toContain(en['settings.llm.debugDesc']);
     const fields = wrapper.findAll('.llm-provider-card input');
     await fields[0].setValue('half written');
     await fields[1].setValue('https://new.example.test/part');

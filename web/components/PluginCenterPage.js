@@ -328,7 +328,6 @@ export default {
             <template v-if="detail.field === 'skills'">
               <section class="plugin-center-skill-usage" :aria-label="$t('yeaft.plugins.skillUsage')">
                 <h2>{{ $t('yeaft.plugins.skillUsage') }}</h2>
-                <p>{{ $t('yeaft.plugins.skillUsageHelp') }}</p>
                 <pre class="plugin-center-skill-command"><code>{{ skillCommand }}</code></pre>
                 <p v-if="skillDetail?.trigger"><strong>{{ $t('yeaft.plugins.skillTriggerLabel') }}</strong> {{ skillDetail.trigger }}</p>
                 <p v-if="skillDetail?.keywords?.length"><strong>{{ $t('yeaft.plugins.skillKeywords') }}</strong> {{ skillDetail.keywords.join(', ') }}</p>

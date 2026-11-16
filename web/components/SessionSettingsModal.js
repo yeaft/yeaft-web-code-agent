@@ -531,7 +531,6 @@ export default {
 
               <section class="group-settings-card">
                 <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.announcement.heading') }}</h3>
-                <p class="group-settings-help">{{ $t('yeaft.session.settings.announcement.help') }}</p>
                 <textarea
                   class="group-settings-textarea"
                   v-model="announcementDraft"

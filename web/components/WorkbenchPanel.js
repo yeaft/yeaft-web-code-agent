@@ -125,7 +125,6 @@ export default {
           >
             <div class="workbench-launcher-intro">
               <h2 id="workbench-launcher-title">{{ $t('workbench.chooseCapability') }}</h2>
-              <p>{{ $t('workbench.chooseCapabilityHint') }}</p>
             </div>
             <div class="workbench-capability-grid">
               <button
@@ -145,7 +144,6 @@ export default {
                 </span>
                 <span class="workbench-capability-copy">
                   <span class="workbench-capability-name">{{ $t(capability.titleKey) }}</span>
-                  <span class="workbench-capability-description">{{ $t(capability.descriptionKey) }}</span>
                 </span>
                 <span class="workbench-capability-status" :class="{ available: capability.ready }">{{ $t(capability.statusKey) }}</span>
               </button>
@@ -316,10 +314,9 @@ export default {
     const canOpenBrowser = Vue.computed(() => Boolean(activeRouteKey.value));
     const hasBrowser = canOpenBrowser;
 
-    const capabilityCard = (id, titleKey, descriptionKey, available, ready = available) => ({
+    const capabilityCard = (id, titleKey, available, ready = available) => ({
       id,
       titleKey,
-      descriptionKey,
       available,
       ready,
       statusKey: !available ? 'workbench.unavailable'
@@ -327,13 +324,12 @@ export default {
           : 'workbench.enableRequired',
     });
     const capabilityCards = Vue.computed(() => [
-      capabilityCard('terminal', 'workbench.terminal', 'workbench.terminalDescription', hasTerminal.value),
-      capabilityCard('git', 'workbench.git', 'workbench.gitDescription', hasExplorer.value),
-      capabilityCard('files', 'workbench.files', 'workbench.filesDescription', hasExplorer.value),
+      capabilityCard('terminal', 'workbench.terminal', hasTerminal.value),
+      capabilityCard('git', 'workbench.git', hasExplorer.value),
+      capabilityCard('files', 'workbench.files', hasExplorer.value),
       capabilityCard(
         'browser',
         'workbench.browser',
-        'workbench.browserDescription',
         canOpenBrowser.value,
         hasBrowser.value,
       ),

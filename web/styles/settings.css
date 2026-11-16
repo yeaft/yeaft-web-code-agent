@@ -1462,8 +1462,7 @@
 }
 
 .llm-field-hint,
-.llm-models-hint,
-.llm-model-hint {
+.llm-models-hint {
   margin: 6px 0 0;
   color: var(--text-muted);
   font-size: 12px;

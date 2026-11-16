@@ -135,7 +135,7 @@ export default {
   template: `
     <section class="quick-send-settings" :aria-label="$t('quickSend.title')" :aria-busy="loading || saving">
       <header class="quick-send-settings-heading">
-        <div><h4>{{ $t('quickSend.title') }}</h4><p>{{ $t('quickSend.description') }}</p></div>
+        <div><h4>{{ $t('quickSend.title') }}</h4></div>
         <button class="btn-ghost" type="button" :disabled="!online || loading || saving" @click="load">{{ $t('common.refresh') }}</button>
       </header>
       <p v-if="!online" role="status">{{ $t('quickSend.offline') }}</p>

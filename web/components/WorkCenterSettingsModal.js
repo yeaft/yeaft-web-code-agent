@@ -481,7 +481,6 @@ export default {
           <header class="work-center-settings-header">
             <div>
               <h2>{{ $t('workCenter.settings.title') }}</h2>
-              <p>{{ $t('workCenter.settings.subtitle') }}</p>
             </div>
             <button class="work-center-settings-close" type="button" @click="close" :aria-label="$t('common.close')">×</button>
           </header>
@@ -500,7 +499,6 @@ export default {
                 <div class="work-center-settings-section-heading">
                   <div>
                     <h3>{{ $t('workCenter.settings.workflow') }}</h3>
-                    <p>{{ $t('workCenter.settings.aiWorkflowHelp') }}</p>
                   </div>
                 </div>
                 <article class="work-center-policy-stage work-center-global-policy">
@@ -512,7 +510,7 @@ export default {
                   </div>
                 </article>
                 <div class="work-center-settings-section-heading work-center-action-policy-heading">
-                  <div><h3>{{ $t('workCenter.settings.actionPolicies') }}</h3><p>{{ $t('workCenter.settings.actionPoliciesHelp') }}</p></div>
+                  <div><h3>{{ $t('workCenter.settings.actionPolicies') }}</h3></div>
                 </div>
                 <article v-for="type in actionTypes" :key="type" class="work-center-policy-stage">
                   <header><strong>{{ $t('workCenter.action.' + type) }}</strong></header>
@@ -523,14 +521,13 @@ export default {
                               :disabled="settingsUnsupported || draft.actionInstructions[type] === (defaultStageInstructions[type] || '')">{{ $t('workCenter.settings.instructionReset') }}</button>
                     </div>
                     <textarea v-model="draft.actionInstructions[type]" rows="5" :placeholder="$t('workCenter.settings.instructionHint')" :disabled="settingsUnsupported"></textarea>
-                    <small>{{ $t('workCenter.settings.dynamicInstructionHelp') }}</small>
                   </div>
                 </article>
               </template>
 
               <template v-else-if="section === 'models'">
                 <div class="work-center-settings-section-heading">
-                  <div><h3>{{ $t('workCenter.settings.models') }}</h3><p>{{ $t('workCenter.settings.dynamicModelsHelp') }}</p></div>
+                  <div><h3>{{ $t('workCenter.settings.models') }}</h3></div>
                   <button class="btn-secondary" type="button" @click="$emit('open-agent-models')">{{ $t('workCenter.settings.manageProviders') }}</button>
                 </div>
                 <article class="work-center-model-stage">
@@ -575,7 +572,6 @@ export default {
                       <option v-for="effort in effortOptionsForStage({ modelPolicy: draft.coordinatorModelPolicy })" :key="effort" :value="effort">{{ effort }}</option>
                     </select>
                   </label>
-                  <small>{{ $t('workCenter.settings.coordinatorModelHelp') }}</small>
                 </article>
                 <article v-for="type in actionTypes" :key="type" class="work-center-model-stage">
                   <strong>{{ $t('workCenter.action.' + type) }}</strong>

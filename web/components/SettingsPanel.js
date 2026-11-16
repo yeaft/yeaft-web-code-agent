@@ -97,7 +97,6 @@ export default {
 
               <div class="sp-group">
                 <div class="sp-group-title">{{ $t('settings.account.linkedAccounts') }}</div>
-                <p class="sp-desc">{{ $t('settings.account.linkedDesc') }}</p>
                 <div v-if="ssoBoundMessage" class="sp-info">{{ ssoBoundMessage }}</div>
                 <div v-if="ssoConflictMessage" class="sp-error">{{ ssoConflictMessage }}</div>
                 <div v-if="authStore.identitiesLoading" class="sp-desc">{{ $t('common.loading') }}</div>
@@ -172,7 +171,6 @@ export default {
                     <span v-else class="sp-cmd sp-cmd-placeholder">{{ $t('settings.security.agentCmdNeedsSecret') }}</span>
                   </div>
                   <p class="sp-desc">{{ $t('settings.security.agentCmdContainerDesc') }}</p>
-                  <p class="sp-desc">{{ $t('settings.security.agentCmdLlmDesc') }}</p>
                 </div>
               </div>
 
@@ -285,7 +283,6 @@ export default {
                 <div class="sp-row sp-setting-row">
                   <div class="sp-row-left sp-setting-copy">
                     <span id="general-work-center-label" class="sp-label">{{ $t('settings.general.workCenter') }}</span>
-                    <span id="general-work-center-desc" class="sp-desc">{{ $t('settings.general.workCenterDesc') }}</span>
                   </div>
                   <div class="sp-setting-switch-control">
                     <span class="sp-setting-status">
@@ -293,7 +290,7 @@ export default {
                     </span>
                     <button class="sp-setting-switch" :class="{ active: chatStore.workCenterUiEnabled }"
                             type="button" role="switch" :aria-checked="chatStore.workCenterUiEnabled"
-                            aria-labelledby="general-work-center-label" aria-describedby="general-work-center-desc"
+                            aria-labelledby="general-work-center-label"
                             @click="toggleWorkCenter">
                       <span class="sp-setting-switch-knob" aria-hidden="true"></span>
                     </button>

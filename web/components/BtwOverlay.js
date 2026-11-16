@@ -26,7 +26,6 @@ export default {
             </div>
           </template>
         </div>
-        <div class="btw-hint">{{ $t('btw.hint') }}</div>
       </div>
     </div>
   `,

@@ -104,7 +104,7 @@ export default {
                 <div class="agent-settings-row agent-settings-work-center-row">
                   <div>
                     <strong ref="workCenterHeading" tabindex="-1">{{ $t('agentSettings.workCenter.title') }}</strong>
-                    <p>{{ workCenterDescription }}</p>
+                    <p v-if="workCenterDescription">{{ workCenterDescription }}</p>
                     <p v-if="workCenterSettings?.overridden" class="agent-settings-setting-note">
                       {{ $t('agentSettings.workCenter.environmentManaged') }}
                     </p>
@@ -283,9 +283,7 @@ export default {
       if (this.workCenterSettings?.enabled && this.workCenterSettings?.effective === false) {
         return this.$t('agentSettings.workCenter.runtimeUnavailableHint');
       }
-      return this.workCenterEnabled
-        ? this.$t('agentSettings.workCenter.enabledHint')
-        : this.$t('agentSettings.workCenter.disabledHint');
+      return '';
     },
     busy() { return this.restarting || this.upgrading; },
   },

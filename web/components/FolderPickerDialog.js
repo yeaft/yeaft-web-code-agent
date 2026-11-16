@@ -113,7 +113,6 @@ export default {
             </template>
           </div>
           <footer class="folder-picker-footer">
-            <p>{{ $t('modal.folderPicker.navigationHint') }}</p>
             <div>
               <button class="btn btn-secondary" type="button" @click="$emit('close')">{{ $t('common.cancel') }}</button>
               <button class="btn btn-primary" type="button" @click="$emit('confirm')" :disabled="!state.canConfirm">{{ $t('modal.folderPicker.selectCurrent') }}</button>

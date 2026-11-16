@@ -1,6 +1,5 @@
 export const en = {
   'quickSend.title': 'Quick send',
-  'quickSend.description': 'Add up to 5 send buttons for this Agent. Each sends your current message with its model and optional turn overrides.',
   'quickSend.empty': 'No quick sends configured. No extra send buttons are shown.',
   'quickSend.offline': 'This Agent is offline. Reconnect to load or save quick sends.',
   'quickSend.entry': 'Quick send {index}',
@@ -27,7 +26,6 @@ export const en = {
 
 export const zhCN = {
   'quickSend.title': '快捷发送',
-  'quickSend.description': '为此 Agent 添加最多 5 个发送按钮。使用指定模型和可选的单轮参数发送当前消息。',
   'quickSend.empty': '尚未配置快捷发送，不会显示额外的发送按钮。',
   'quickSend.offline': '此 Agent 已离线。重新连接后可加载或保存快捷发送。',
   'quickSend.entry': '快捷发送 {index}',

@@ -46,7 +46,6 @@ const creationControls = `
 
           <header v-if="!taskMode" class="yeaft-session-create-heading">
             <h2>{{ $t(taskMode ? 'scheduledTasks.new' : 'yeaft.session.create.title') }}</h2>
-            <p>{{ $t(taskMode ? 'scheduledTasks.subtitle' : 'yeaft.session.create.subtitle') }}</p>
           </header>
 
           <div class="yeaft-session-create-fields">
@@ -282,7 +281,6 @@ export default {
         <header v-if="taskMode" class="task-create-header">
           <div class="yeaft-session-create-heading">
             <h2>{{ $t('scheduledTasks.new') }}</h2>
-            <p>{{ $t('scheduledTasks.subtitle') }}</p>
           </div>
           <button type="button" class="btn-ghost task-create-close" :disabled="busy" @click="requestClose" :aria-label="$t('yeaft.session.create.close')">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></svg>

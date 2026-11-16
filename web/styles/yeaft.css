@@ -567,14 +567,6 @@
   line-height: 1.4;
 }
 
-.llm-protocol-hint {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
 /* ── Mode Toggle (removed — Yeaft is single-mode as of task-297) ── */
 
 /* Legacy model badge (no longer used, kept for compat) */
@@ -854,7 +846,6 @@
   color: var(--text-muted);
   font-weight: 600;
 }
-
 
 .yeaft-clear-btn,
 .yeaft-search-btn,
@@ -2336,7 +2327,6 @@
   font-style: italic;
 }
 
-
 /* ============================
  * task-334j: VP Mention Autocomplete
  * ============================ */
@@ -3149,7 +3139,6 @@
   cursor: pointer;
 }
 
-
 .session-settings-roster-copy {
   display: flex;
   flex: 1 1 auto;
@@ -3767,7 +3756,6 @@
   background: var(--accent-soft, rgba(99, 102, 241, 0.10));
 }
 
-
 /* ── 2026-05-13 Tool Usage Stats drawer ──────────────────────────── */
 
 .tool-stats-drawer-backdrop {
@@ -4087,7 +4075,6 @@
   text-align: right;
 }
 
-
 /* VP multi-thread summary inside the VP message-block header. */
 .vp-thread-summary {
   display: inline-flex;
@@ -4113,7 +4100,6 @@
 .vp-thread-meta {
   color: var(--text-muted);
 }
-
 
 .yeaft-vp-timeline-thread-count {
   display: inline-flex;

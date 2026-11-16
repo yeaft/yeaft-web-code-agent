@@ -85,7 +85,6 @@ export default {
       <slot name="heading"></slot>
       <label class="scheduled-task-field scheduled-task-prompt">
         <span class="scheduled-task-field-title">{{ $t('scheduledTasks.prompt') }}<span class="task-required">{{ $t('scheduledTasks.required') }}</span></span>
-        <span class="scheduled-task-help">{{ $t('scheduledTasks.promptHint') }}</span>
         <textarea :value="modelValue.prompt" rows="5" required aria-required="true" :disabled="disabled" :aria-label="$t('scheduledTasks.prompt')" :placeholder="$t('scheduledTasks.promptPlaceholder')" @input="patch('prompt', $event.target.value)"></textarea>
       </label>
       </div>
@@ -98,7 +97,6 @@ export default {
         <div class="scheduled-task-trigger-options" role="group" :aria-label="$t('scheduledTasks.triggerLabel')">
           <button v-for="option in triggerOptions" :key="option.value" type="button" class="btn btn-secondary" :aria-pressed="modelValue.trigger?.type === option.value" :disabled="disabled" @click="setTrigger(option.value)">{{ option.label }}</button>
         </div>
-        <p v-if="supportedTrigger" class="scheduled-task-help">{{ $t('scheduledTasks.triggerHint.' + modelValue.trigger.type) }}</p>
       </div>
       <div v-if="preservedPastSchedule" class="scheduled-task-existing-schedule">
         <p>{{ $t('scheduledTasks.existingSchedule') }}: {{ existingScheduleLabel }} · {{ $t('workCenter.scheduling.' + schedule.frequency) }} · {{ schedule.timeZone }}</p>
@@ -112,7 +110,7 @@ export default {
         <label v-for="key in ['enabled', 'notify']" :key="key" class="scheduled-task-option-row">
           <span class="scheduled-task-option-copy">
             <span class="scheduled-task-field-title">{{ $t('scheduledTasks.' + key) }}</span>
-            <span class="scheduled-task-help">{{ $t('scheduledTasks.' + key + 'Hint') }}</span>
+            <span v-if="key === 'enabled'" class="scheduled-task-help">{{ $t('scheduledTasks.enabledHint') }}</span>
           </span>
           <span class="agent-settings-switch">
             <input type="checkbox" role="switch" :aria-label="$t('scheduledTasks.' + key)" :checked="modelValue[key]" :disabled="disabled" @change="patch(key, $event.target.checked)">

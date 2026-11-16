@@ -107,7 +107,6 @@ export default {
         <label v-if="!compact" class="work-center-schedule-field">
           <span>{{ $t('workCenter.scheduling.time') }}</span>
           <input type="text" inputmode="numeric" maxlength="5" placeholder="09:00" autocomplete="off" :value="modelValue.time" :disabled="disabled" :aria-label="$t('workCenter.scheduling.time')" @input="patch('time', normalizeScheduleTime($event.target.value))">
-          <small class="work-center-field-help">{{ $t('workCenter.scheduling.timeHint') }}</small>
         </label>
       </div>
       <fieldset v-if="modelValue.frequency === 'weekly'" class="work-center-schedule-weekdays" :disabled="disabled">

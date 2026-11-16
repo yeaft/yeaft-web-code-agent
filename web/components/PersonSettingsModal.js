@@ -150,17 +150,16 @@ export default {
           <div class="person-model-fields" @change="edited = true">
             <div class="person-settings-intro">
               <h3 id="person-model-heading">{{ $t('person.modelCandidates') }}</h3>
-              <p id="person-model-hint" class="person-settings-help">{{ $t('person.modelCandidatesHint') }}</p>
             </div>
             <label class="person-model-option person-model-default" :class="{ 'is-selected': followingDefault }">
-              <input type="checkbox" v-model="followingDefault" :disabled="controlsDisabled" aria-describedby="person-model-hint">
+              <input type="checkbox" v-model="followingDefault" :disabled="controlsDisabled">
               <span>{{ $t('person.modelsDefault') }}</span>
             </label>
             <p v-if="loading" class="person-settings-state" role="status">{{ $t('person.loading') }}</p>
             <template v-else>
               <p v-if="!models.length" class="person-settings-state" role="status">{{ $t('person.modelsEmpty') }}</p>
               <div v-if="models.length || unavailable.length" class="person-model-list" role="group"
-                aria-labelledby="person-model-heading" aria-describedby="person-model-hint">
+                aria-labelledby="person-model-heading">
                 <label v-for="model in models" :key="model.id" class="person-model-option"
                   :class="{ 'is-selected': candidateIds.includes(model.id) }">
                   <input type="checkbox" :checked="candidateIds.includes(model.id)" :value="model.id" :aria-label="model.id"
@@ -176,7 +175,7 @@ export default {
                 </label>
               </div>
               <p v-if="invalid" role="alert" class="person-settings-error">{{ $t('person.modelsInvalid') }}</p>
-              <p class="person-settings-help person-model-summary">{{ $t(followingDefault && !inheritedKnown ? 'person.candidatesUnknown' : 'person.candidatesSummary', { count: candidateIds.length }) }}</p>
+              <p v-if="followingDefault && !inheritedKnown" class="person-settings-help" role="status">{{ $t('person.candidatesUnknown') }}</p>
             </template>
           </div>
           <div class="person-default-model-field">
@@ -184,12 +183,11 @@ export default {
             <p v-if="agentDefaultModel" class="person-settings-help">{{ $t('person.agentDefaultModel', { model: agentDefaultModel }) }}</p>
             <select id="person-default-model" v-model="preferredDefault" @change="defaultEdited = true"
               :disabled="controlsDisabled || !defaultModelSupported"
-              :aria-invalid="invalidDefault" aria-describedby="person-default-model-hint">
+              :aria-invalid="invalidDefault">
               <option value="">{{ $t('person.defaultModelAutomatic', { model: automaticDefault }) }}</option>
               <option v-for="model in defaultChoices" :key="model.id" :value="model.id">{{ model.id }}</option>
               <option v-if="invalidDefault" :value="preferredDefault" disabled>{{ preferredDefault }}</option>
             </select>
-            <p id="person-default-model-hint" class="person-settings-help">{{ $t('person.defaultModelHint') }}</p>
             <p v-if="!defaultModelSupported" class="person-settings-help" role="status">{{ $t('person.defaultModelUpgrade') }}</p>
             <p v-if="invalidDefault" class="person-settings-error" role="alert">{{ $t('person.defaultModelInvalid') }}</p>
           </div>

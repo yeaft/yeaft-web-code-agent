@@ -748,8 +748,8 @@ test.describe('Work Center responsive UI', () => {
   test('creates from a goal contract and leaves planning to the Coordinator', async ({ chatPage, mockAgent }) => {
     await openWorkCenter(chatPage, mockAgent);
     await openCreateFromSidebar(chatPage);
-    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('Coordinator-driven execution');
-    await expect(chatPage.locator('.work-center-plan-preview')).toContainText('The Coordinator chooses the next Actions and executors from the current evidence');
+    await expect(chatPage.locator('.work-center-plan-preview')).toHaveCount(0);
+    await expect(chatPage.locator('.work-center-modal').getByRole('button', { name: 'Work Center settings', exact: true })).toBeVisible();
     await expect(chatPage.locator('.work-center-plan-stages')).toHaveCount(0);
 
     await chatPage.locator('.work-center-modal').getByRole('textbox', { name: /Requirement/ })

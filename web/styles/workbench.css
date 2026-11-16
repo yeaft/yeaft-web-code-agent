@@ -452,12 +452,6 @@
   font-weight: 600;
 }
 
-.workbench-capability-description {
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
 .workbench-capability-status {
   grid-column: 2;
   width: max-content;
@@ -556,12 +550,6 @@
   font-weight: 600;
 }
 
-.workbench-capability-description {
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
 .workbench-capability-status {
   grid-column: 2;
   width: max-content;
@@ -619,10 +607,6 @@
 
   .workbench-capability-name {
     font-size: 13px;
-  }
-
-  .workbench-capability-description {
-    font-size: 11.5px;
   }
 
   .workbench-capability-status {
@@ -777,19 +761,6 @@
   color: var(--error);
 }
 
-.browser-embed-notice {
-  flex: 0 0 auto;
-  padding: 0 10px 6px;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.browser-embed-notice p {
-  margin: 0;
-}
-
 .browser-actions .browser-external {
   color: var(--accent-blue);
 }
@@ -843,7 +814,6 @@
     flex-basis: 100%;
   }
 }
-
 
 /* ========================================
    Mobile Modal Fullscreen

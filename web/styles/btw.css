@@ -182,16 +182,6 @@
   30%           { opacity: 1; }
 }
 
-/* Hint */
-.btw-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-  opacity: 0.4;
-  text-align: right;
-  margin-top: 8px;
-  flex-shrink: 0;
-}
-
 /* Input wrapper btw mode visual */
 .input-wrapper.btw-active {
   background: var(--bg-input-wrapper);
