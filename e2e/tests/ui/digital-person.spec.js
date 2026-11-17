@@ -246,6 +246,56 @@ async function openResponseConversation(page, serverUrl, scenario) {
   await expect(page.locator('html')).toHaveAttribute('data-theme', scenario.theme);
 }
 
+async function expectFullWidthConversation(page, { width, theme }, testInfo) {
+  await page.setViewportSize({ width, height: 800 });
+  await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+  const expectFullWidth = async () => {
+    await expect.poll(() => page.evaluate(() => {
+      const fillsParent = selector => {
+        const element = document.querySelector(selector);
+        if (!element) return false;
+        const parent = element.parentElement;
+        const style = getComputedStyle(parent);
+        const left = parseFloat(style.paddingLeft), right = parseFloat(style.paddingRight);
+        const bounds = element.getBoundingClientRect(), container = parent.getBoundingClientRect();
+        return Math.abs(bounds.width - (parent.clientWidth - left - right)) <= 1
+          && Math.abs(bounds.left - (container.left + parent.clientLeft + left)) <= 1;
+      };
+      const replies = [...document.querySelectorAll('.person-reply, .person-reply .person-message-text')];
+      const readingWidth = document.querySelector('.person-reading-column').getBoundingClientRect().width;
+      return ['.person-reading-column', '.person-composer .input-wrapper', '.person-inbox-hint'].every(fillsParent)
+        && replies.length > 0 && replies.every(element => Math.abs(element.getBoundingClientRect().width - readingWidth) <= 1);
+    })).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    expect(await page.locator('.person-messages').evaluate(el => el.scrollWidth > el.clientWidth)).toBe(false);
+  };
+  await expectFullWidth();
+  // Session reading-width preferences must not reintroduce a centered Person column.
+  await page.locator('.person-page').evaluate(el => el.style.setProperty('--session-content-width', '50%'));
+  await expectFullWidth();
+  if (width > 768) {
+    for (const action of ['outputs', 'search', 'inside']) {
+      await clickPersonAction(page, action);
+      const panel = page.locator('#person-side-panel');
+      await expect(panel).toHaveAttribute('role', 'complementary');
+      await expectFullWidth();
+      expect(await page.locator('.person-reading-column').evaluate(el => el.clientWidth)).toBeGreaterThan(880);
+      if (action === 'outputs') {
+        const handle = page.getByRole('separator', { name: 'Resize output panel', exact: true });
+        await handle.focus();
+        await handle.press('ArrowLeft');
+        await expectFullWidth();
+        await page.screenshot({ path: testInfo.outputPath(`person-full-width-split-${theme}.png`) });
+      }
+      await panel.getByRole('button', { name: action === 'outputs' ? 'Close reader' : 'Close', exact: true }).click();
+      await expect(panel).toHaveCount(0);
+      await expectFullWidth();
+    }
+  }
+  await page.screenshot({ path: testInfo.outputPath(`person-full-width-${width}-${theme}.png`) });
+  await page.locator('.person-page').evaluate(el => el.style.removeProperty('--session-content-width'));
+}
+
 // Record every animation frame across wire updates, not just the final layout.
 // Reply parts use their article as the stable anchor: appending a later part
 // must not move the focus from the first reply to the new part's own top.
@@ -886,9 +936,20 @@ for (const width of [320, 390]) {
   }
 }
 
-test('Digital Person keeps desktop actions and changes sheets at the 600px breakpoint', async ({ page, serverUrl }) => {
-  await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
-  await openResponseConversation(page, serverUrl, { width: 1280, theme: 'light' });
+test('Digital Person fills its column, keeps desktop actions and changes sheets at the 600px breakpoint', async ({ page, serverUrl }, testInfo) => {
+  test.setTimeout(60000);
+  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+  await openResponseConversation(page, serverUrl, { width: 1920, theme: 'light' });
+  await page.locator('#person-input').fill('Keep the conversation and composer aligned.');
+  await submitPersonDraft(page, { width: 1920 });
+  await expect(page.locator('.person-inbox-hint')).toBeVisible();
+  mock.reply('full-width-answer', '## A clear recommendation\n\nUse the full middle column for the conversation and composer, keeping only the normal edge padding.\n\n- Messages follow the available space.\n- Opening the reader does not bring back a centered narrow column.', 'person-a', undefined, { replyToMessageIds: ['user-1'], replyKind: 'progress' });
+  await expect(page.locator(replySelector('full-width-answer'))).toBeVisible();
+  for (const width of [1920, 320]) {
+    for (const theme of ['light', 'dark']) await expectFullWidthConversation(page, { width, theme }, testInfo);
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   const more = page.locator('.person-more-button');
   await expect(more).not.toBeVisible();
   for (const action of ['search', 'outputs', 'inside']) {
