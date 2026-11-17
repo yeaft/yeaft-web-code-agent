@@ -575,6 +575,65 @@ describe('durable native Session fork and merge', () => {
     expect(selfCopy[1].unresolvedMessageReferences[0].candidateMessageIds).toEqual(selfCopy.map(row => row.id));
   });
 
+  it('keeps explicit concurrent roots and supplements atomic through forks, colliding streams and nested merges', () => {
+    const dir = root();
+    const store = new ConversationStore(dir);
+    const append = (sessionId, row) => store.append({ sessionId, ...row });
+    const human = (content, clientMessageId, userTurnId, seconds, relation = 'new') =>
+      append('source', { role: 'user', content, clientMessageId, userTurnId, relation, time: at(seconds) });
+    const answer = (content, userTurnId, causalRootId, turnId) => append('source', {
+      role: 'assistant', content, userTurnId, causalRootId, turnId, speakerVpId: 'omni',
+    });
+    human('A', 'client-A', 'client-A', 1);
+    answer('A start', 'client-A', 'client-A', 'vp-A');
+    human('B', 'client-B', 'client-B', 3);
+    answer('B start', 'client-B', 'client-B', 'vp-B');
+    const supplement = human('A supplement', 'client-A-extra', 'client-A', 4, 'supplement');
+    // The active engine retains its original causal root, while a later query
+    // can use the supplement as causal root. Both executions belong to A.
+    answer('A continued', 'client-A', 'client-A', 'vp-A');
+    human('A supplement 2', 'client-A-extra-2', 'client-A', 5, 'supplement');
+    answer('A final', 'client-A', supplement.clientMessageId, 'vp-A-followup');
+    answer('B final', 'client-B', 'client-B', 'vp-B');
+    append('other', { role: 'user', content: 'unrelated A', clientMessageId: 'client-A',
+      userTurnId: 'client-A', relation: 'new', time: at(2) });
+    append('other', { role: 'assistant', content: 'unrelated answer', userTurnId: 'client-A',
+      causalRootId: 'client-A', speakerVpId: 'omni', turnId: 'vp-A' });
+    const before = raw(dir, 'source');
+    const otherBefore = raw(dir, 'other');
+    store.copySession('source', 'branch');
+    const fork = raw(dir, 'branch');
+    expect(fork[0].clientMessageId).toBe(fork[0].id);
+    expect(fork.filter(row => row.userTurnId === fork[0].id).map(row => row.content))
+      .toEqual(['A', 'A start', 'A supplement', 'A continued', 'A supplement 2', 'A final']);
+    expect(fork.find(row => row.content === 'A final').causalRootId)
+      .toBe(fork.find(row => row.content === 'A supplement').clientMessageId);
+    expect(store.mergeSessions('source', 'branch', 'shared').sharedTurnCount).toBe(2);
+    expect(store.mergeSessions('source', 'other', 'merged').sharedTurnCount).toBe(0);
+    const merged = raw(dir, 'merged');
+    expect(merged.map(row => row.content)).toEqual([
+      'A', 'A start', 'A supplement', 'A continued', 'A supplement 2', 'A final',
+      'unrelated A', 'unrelated answer', 'B', 'B start', 'B final',
+    ]);
+    const users = merged.filter(row => row.role === 'user' && row.relation === 'new');
+    expect(new Set(users.map(row => row.userTurnId)).size).toBe(3);
+    expect(users.every(row => row.userTurnId === row.clientMessageId && row.userTurnId === row.id)).toBe(true);
+    expect(merged.slice(0, 6).every(row => row.userTurnId === users[0].id)).toBe(true);
+    store.copySession('merged', 'nested');
+    expect(store.mergeSessions('merged', 'nested', 'joined').sharedTurnCount).toBe(3);
+    expect(raw(dir, 'joined').map(row => row.content)).toEqual(merged.map(row => row.content));
+    expect(raw(dir, 'source')).toEqual(before);
+    expect(raw(dir, 'other')).toEqual(otherBefore);
+    expect(raw(dir, 'branch')).toEqual(fork);
+    // Explicit ownership must not turn a reused client identity into a valid
+    // alias, even when both human rows claim the same root.
+    append('source', { role: 'user', content: 'reused supplement identity', clientMessageId: supplement.clientMessageId,
+      userTurnId: 'client-A', relation: 'supplement', time: at(6) });
+    expect(() => store.mergeSessions('source', 'other', 'ambiguous-client'))
+      .toThrow(expect.objectContaining({ code: 'ambiguous_merge_history' }));
+    expect(existsSync(join(dir, 'sessions', 'ambiguous-client'))).toBe(false);
+  });
+
   it('refuses incomplete tool history instead of silently sanitizing away source messages', () => {
     const dir = root();
     const store = new ConversationStore(dir);
