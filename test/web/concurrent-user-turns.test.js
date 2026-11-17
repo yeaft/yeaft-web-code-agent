@@ -141,6 +141,16 @@ describe('concurrent user turn presentation', () => {
       await Vue.nextTick();
       expect(wrapper.vm.splitActive).toBe(false);
       expect(wrapper.vm.historyBlocks.map(block => block.originMessageId)).toEqual(['m1', 'm2']);
+      // A new parallel period closes again, and direct split-to-split Session
+      // navigation applies the default to the new owner exactly once.
+      store.yeaftSessionTurns = store.yeaftSessionTurns.map(turn => ({ ...turn, state: 'running' }));
+      await Vue.nextTick();
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(2);
+      store.workbenchExpanded = true;
+      store.yeaftActiveSessionFilter = 'other-session';
+      await Vue.nextTick();
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(3);
+      expect(store.workbenchExpanded).toBe(false);
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });
 });

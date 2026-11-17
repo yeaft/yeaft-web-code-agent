@@ -95,6 +95,8 @@ describe('Digital Person surface', () => {
     expect(wrapper.findComponent({ name: 'ConcurrentUserTurns' }).exists()).toBe(false);
     expect(wrapper.vm.conversation.map(row => row.episodeId)).toEqual(['a', 'a', 'a', 'b', 'b']);
     expect(wrapper.vm.panel).toBe('thoughts');
+    expect(wrapper.find('.person-inbox-hint').exists()).toBe(false);
+    expect(partitionPersonEpisodes([], [{ id: 'outside-page', status: 'running', inputPreview: 'Root outside latest history' }]).pending[0].label).toBe('Root outside latest history');
     const ordered = orderPersonEpisodeMessages(rows);
     expect(ordered.map(row => row.id)).toEqual(['a-q', 'a-r', 'supplement', 'b-q', 'b-r', 'b-r2']);
     const projected = projectPersonConversation(ordered);

@@ -133,7 +133,8 @@ export function partitionPersonEpisodes(blocks = [], episodes) {
   const at = turn => new Date(turn.blocks.find(block => block.role === 'user')?.createdAt ?? turn.episode.createdAt).getTime();
   pending.sort((a, b) => (at(a) || 0) - (at(b) || 0));
   for (const turn of pending) {
-    const text = turn.blocks.find(block => block.role === 'user')?.text || '';
+    // A long-running turn's initial prompt can be outside the latest page.
+    const text = turn.episode.inputPreview || turn.blocks.find(block => block.role === 'user')?.text || '';
     const label = text.replace(/\s+/g, ' ').trim();
     turn.label = label.length > 36 ? `${label.slice(0, 36)}…` : label;
   }

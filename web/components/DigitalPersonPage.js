@@ -222,8 +222,8 @@ export default {
     const concurrentTurns = Vue.ref(null);
     const splitEpisodes = Vue.ref(false);
     const episodeLayout = Vue.computed(() => partitionPersonEpisodes(conversation.value, state.activeEpisodes));
-    Vue.watch(() => [attachmentScope(), state.person?.id], () => { splitEpisodes.value = false; }, { flush: 'sync' });
-    Vue.watch(() => episodeLayout.value.pending.length, count => {
+    Vue.watch(() => [attachmentScope(), state.person?.id, episodeLayout.value.pending.length], ([scope, personId, count], previous) => {
+      if (previous && (scope !== previous[0] || personId !== previous[1])) splitEpisodes.value = false;
       if (!count) splitEpisodes.value = false;
       else if (count > 1 && !splitEpisodes.value) {
         splitEpisodes.value = true;

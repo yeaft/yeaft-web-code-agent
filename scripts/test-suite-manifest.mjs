@@ -44,6 +44,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/yeaft/person/native-tool-policy.test.js",
   "test/agent/yeaft/person/outputs-path.test.js",
   "test/agent/yeaft/person/outputs.test.js",
+  "test/agent/yeaft/person/parallel-turns.test.js",
   "test/agent/yeaft/person/script-executor.test.js",
   "test/agent/yeaft/person/sqlite-runtime.integration.test.js",
   "test/agent/yeaft/person/sqlite-service.test.js",
