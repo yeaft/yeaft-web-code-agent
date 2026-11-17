@@ -11,7 +11,7 @@
   background: var(--bg-main);
   color: var(--text-primary);
 }
-.person-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: var(--work-center-space-3); padding: var(--work-center-space-3) var(--agent-setup-space-lg); }
+.person-header { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: var(--work-center-space-3); padding: var(--work-center-space-3) var(--agent-setup-space-lg); }
 .person-navigation { display: flex; align-items: center; gap: var(--work-center-space-2); min-width: 0; }
 .person-navigation > button { flex-shrink: 0; }
 .person-identity { min-width: 0; text-align: center; }
@@ -65,7 +65,7 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-activity-row-status, .person-activity-elapsed { color: var(--text-muted); font-size: 11px; }
 .person-activity-row[data-activity-status="failed"] .person-activity-row-status { color: var(--error); }
 .person-activity-limited { margin-top: var(--work-center-space-2); color: var(--text-muted); font-size: 11px; }
-.person-conversation { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.person-conversation { container-type: inline-size; container-name: person-conversation; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .person-transcript { display: flex; position: relative; flex: 1; min-height: 0; min-width: 0; }
 .person-transcript-navigation { position: absolute; bottom: 12px; right: max(12px, env(safe-area-inset-right)); margin: 0; }
 .person-messages { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--work-center-space-4) var(--agent-setup-space-lg); }
@@ -128,7 +128,7 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
   .person-panel-backdrop { position: fixed; inset: 0; z-index: 30; background: var(--modal-overlay-bg); }
   .person-side-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; z-index: 31; box-shadow: var(--modal-shadow); padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
-@container digital-person (max-width: 600px) {
+@container person-conversation (max-width: 600px) {
   .person-header { grid-template-columns: auto minmax(0, 1fr) 44px; min-height: 56px; padding: var(--work-center-space-1) var(--work-center-space-2); gap: var(--work-center-space-2); flex-shrink: 0; }
   .person-navigation { gap: var(--work-center-space-1); max-width: 44cqw; }
   .person-identity { text-align: left; }
@@ -137,6 +137,8 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
   .person-header .person-more-button { display: inline-flex; align-items: center; justify-content: center; }
   .person-agent-select .modern-select-trigger { min-height: 44px; padding-inline: var(--work-center-space-1); font-size: 12px; color: var(--text-secondary); }
   .person-agent-select .modern-select-label { min-width: 0; }
+}
+@container digital-person (max-width: 600px) {
   .person-connection-notice { padding-left: var(--work-center-space-3); padding-right: var(--work-center-space-3); }
   .person-journal-toolbar, .person-notice { padding-left: var(--work-center-space-3); padding-right: var(--work-center-space-3); }
   .person-messages, .person-journal-scroll { padding: var(--work-center-space-3); }

@@ -36,6 +36,7 @@ export default {
     const state = Vue.reactive(personState());
     const pageRoot = Vue.ref(null);
     const pageTitle = Vue.ref(null);
+    const conversationPane = Vue.ref(null);
     const enabled = agent => chat.digitalPersonUiEnabledByAgent?.[agent.id] === true;
     const agentId = Vue.ref(resolveDigitalPersonAgentId(chat) || '');
     Vue.watch(agentId, value => { chat.digitalPersonAgentId = value; }, { immediate: true });
@@ -174,7 +175,7 @@ export default {
     const resize = () => {
       const width = pageRoot.value?.clientWidth || window.innerWidth;
       compactPanel.value = width <= 900;
-      mobileHeader.value = width <= 600;
+      mobileHeader.value = (conversationPane.value?.clientWidth || width) <= 600;
       if (!mobileHeader.value) closeMore();
       Vue.nextTick(scrollInspectorSection);
     };
@@ -185,6 +186,7 @@ export default {
       if (typeof ResizeObserver !== 'undefined' && pageRoot.value) {
         pageResizeObserver = new ResizeObserver(resize);
         pageResizeObserver.observe(pageRoot.value);
+        if (conversationPane.value) pageResizeObserver.observe(conversationPane.value);
       }
       window.addEventListener('resize', resize);
       document.addEventListener('keydown', panelKeydown);
@@ -380,6 +382,9 @@ export default {
       controller.closeOutput();
       if (restoreFocus) Vue.nextTick(() => {
         if (moreOpen.value || settingsOpen.value) return;
+        // Removing the split pane can widen the header before ResizeObserver
+        // runs. Resolve its new layout before choosing a visible focus target.
+        resize();
         const opener = mobileHeader.value && !panelOpener?.matches('.person-delivered-output')
           ? moreButton.value : !mobileHeader.value && panelOpener === moreButton.value ? thoughtButton.value : panelOpener;
         if (opener?.isConnected) opener.focus();
@@ -635,54 +640,54 @@ export default {
     const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
     const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { pageRoot, pageTitle, settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+    return { pageRoot, pageTitle, conversationPane, settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div ref="pageRoot" class="person-page">
-      <header class="chat-header person-header" :inert="backgroundInert ? true : undefined">
-        <nav class="person-navigation" :aria-label="$t('person.navigation')">
-          <button type="button" class="header-sidebar-toggle" @click="$emit('toggle-sidebar')" :aria-label="$t('chat.sidebar.expand')" :title="$t('chat.sidebar.expand')"><NavigationIcon name="menu" /></button>
-          <div class="person-breadcrumb">
-            <ModernSelect id="person-agent" class="person-agent-select" menu-class="agent-select-menu" v-model="agentId" :options="agentOptions" :aria-label="$t('person.agent')" :placeholder="$t('person.noAgent')" :empty-text="$t('person.noAgent')" :disabled="!agentOptions.length" :menu-min-width="220" />
-          </div>
-        </nav>
-        <div class="person-identity">
-          <h1 ref="pageTitle" tabindex="-1" :title="state.person?.name || $t('person.title')">{{ state.person?.name || $t('person.title') }}</h1>
-        </div>
-        <div class="person-header-actions person-desktop-actions">
-          <button type="button" class="header-action-btn" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>
-          <button ref="searchButton" type="button" class="header-action-btn person-search-button" :class="{ active: panel === 'search' }" :aria-expanded="panel === 'search'" aria-controls="person-side-panel" :aria-label="$t('person.searchMessages')" :title="$t('person.searchMessages')" @click="panel === 'search' ? closePanel() : openPanel('search')"><NavigationIcon name="search" /></button>
-          <button ref="outputButton" type="button" class="header-action-btn person-outputs-button" :class="{ active: panel === 'outputs' }" :aria-expanded="panel === 'outputs'" aria-controls="person-side-panel" :aria-label="$t('person.outputs')" :title="$t('person.outputs')" @click="panel === 'outputs' ? closePanel() : openPanel('outputs')"><NavigationIcon name="file" /></button>
-          <button ref="thoughtButton" type="button" class="header-action-btn person-thoughts-button" :class="{ active: !!panel && !['search', 'outputs'].includes(panel) }" :aria-expanded="!!panel && !['search', 'outputs'].includes(panel)" aria-controls="person-side-panel" :aria-label="$t('person.inside')" :title="$t('person.inside')" @click="togglePanel()"><NavigationIcon name="eye" /></button>
-          <button ref="settingsButton" type="button" class="header-action-btn person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending" @click="settingsOpen = true" :aria-label="$t('person.settings')" :title="$t('person.settings')"><NavigationIcon name="settings" /></button>
-        </div>
-        <button ref="moreButton" type="button" class="header-action-btn person-more-button" :aria-label="$t('person.moreActions')" :title="$t('person.moreActions')" aria-haspopup="dialog" :aria-expanded="moreOpen" aria-controls="person-actions-sheet" @click="moreOpen = true"><NavigationIcon name="more" /></button>
-      </header>
-      <div v-if="gate || state.loading" class="person-connection-notice" :inert="backgroundInert ? true : undefined" role="status" aria-live="polite">
-        <span>{{ $t('person.' + (gate || 'loading')) }}</span>
-        <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
-      </div>
-      <section v-if="(state.configured === false || state.storageReady === false || state.modelReady === false) && !gate" class="person-configuration" :inert="backgroundInert ? true : undefined" role="status">
-        <h2>{{ $t('person.configureTitle') }}</h2>
-        <p>{{ $t('person.configureAgent') }}</p>
-        <p>{{ $t('person.configureSecrets') }}</p>
-        <p>{{ $t('person.configureRefresh') }}</p>
-        <p v-if="state.reason" class="person-muted">{{ state.reason }}</p>
-      </section>
-      <div v-if="state.latestEpisode && ['failed', 'interrupted', 'budget_exhausted'].includes(state.latestEpisode.status)" class="person-error" :inert="backgroundInert ? true : undefined" role="alert">
-        {{ $t(state.latestEpisode.terminalCode === 'OUTPUT_TRUNCATED' ? 'person.outputTruncated' : 'person.episodeFailed') }}
-      </div>
-      <div v-if="state.error" class="person-error" :inert="backgroundInert ? true : undefined" role="alert">
-        <p>{{ $t('person.requestFailed') }} {{ state.error.message }}</p>
-        <p v-if="state.error.code === 'timeout'">{{ $t('person.timeout') }}</p>
-      </div>
-      <div v-if="state.retryCommand && !state.commandPending" class="person-retry" :inert="backgroundInert ? true : undefined" role="status">
-        <p>{{ $t('person.uncertain') }}</p>
-        <button type="button" class="btn-secondary" :disabled="!!gate || !state.person" @click="command(state.retryCommand.op, true)">{{ $t('person.retrySame') }}</button>
-        <button type="button" class="btn-ghost" @click="discardRetry()">{{ $t('person.discardRetry') }}</button>
-      </div>
       <div class="person-workspace">
-        <main id="person-conversation" :inert="backgroundInert ? true : undefined" class="person-conversation" :aria-label="$t('person.conversation')">
+        <main id="person-conversation" ref="conversationPane" :inert="backgroundInert ? true : undefined" class="person-conversation" :aria-label="$t('person.conversation')">
+          <header class="chat-header person-header" :inert="backgroundInert ? true : undefined">
+            <nav class="person-navigation" :aria-label="$t('person.navigation')">
+              <button type="button" class="header-sidebar-toggle" @click="$emit('toggle-sidebar')" :aria-label="$t('chat.sidebar.expand')" :title="$t('chat.sidebar.expand')"><NavigationIcon name="menu" /></button>
+              <div class="person-breadcrumb">
+                <ModernSelect id="person-agent" class="person-agent-select" menu-class="agent-select-menu" v-model="agentId" :options="agentOptions" :aria-label="$t('person.agent')" :placeholder="$t('person.noAgent')" :empty-text="$t('person.noAgent')" :disabled="!agentOptions.length" :menu-min-width="220" />
+              </div>
+            </nav>
+            <div class="person-identity">
+              <h1 ref="pageTitle" tabindex="-1" :title="state.person?.name || $t('person.title')">{{ state.person?.name || $t('person.title') }}</h1>
+            </div>
+            <div class="person-header-actions person-desktop-actions">
+              <button type="button" class="header-action-btn" @click="controller.refresh()" :disabled="!!gate || state.loading || state.commandPending" :aria-label="$t('common.refresh')" :title="$t('common.refresh')"><NavigationIcon name="refresh" /></button>
+              <button ref="searchButton" type="button" class="header-action-btn person-search-button" :class="{ active: panel === 'search' }" :aria-expanded="panel === 'search'" aria-controls="person-side-panel" :aria-label="$t('person.searchMessages')" :title="$t('person.searchMessages')" @click="panel === 'search' ? closePanel() : openPanel('search')"><NavigationIcon name="search" /></button>
+              <button ref="outputButton" type="button" class="header-action-btn person-outputs-button" :class="{ active: panel === 'outputs' }" :aria-expanded="panel === 'outputs'" aria-controls="person-side-panel" :aria-label="$t('person.outputs')" :title="$t('person.outputs')" @click="panel === 'outputs' ? closePanel() : openPanel('outputs')"><NavigationIcon name="file" /></button>
+              <button ref="thoughtButton" type="button" class="header-action-btn person-thoughts-button" :class="{ active: !!panel && !['search', 'outputs'].includes(panel) }" :aria-expanded="!!panel && !['search', 'outputs'].includes(panel)" aria-controls="person-side-panel" :aria-label="$t('person.inside')" :title="$t('person.inside')" @click="togglePanel()"><NavigationIcon name="eye" /></button>
+              <button ref="settingsButton" type="button" class="header-action-btn person-settings-button" :disabled="!!gate || state.loading || !state.person || state.busy || state.commandPending" @click="settingsOpen = true" :aria-label="$t('person.settings')" :title="$t('person.settings')"><NavigationIcon name="settings" /></button>
+            </div>
+            <button ref="moreButton" type="button" class="header-action-btn person-more-button" :aria-label="$t('person.moreActions')" :title="$t('person.moreActions')" aria-haspopup="dialog" :aria-expanded="moreOpen" aria-controls="person-actions-sheet" @click="moreOpen = true"><NavigationIcon name="more" /></button>
+          </header>
+          <div v-if="gate || state.loading" class="person-connection-notice" :inert="backgroundInert ? true : undefined" role="status" aria-live="polite">
+            <span>{{ $t('person.' + (gate || 'loading')) }}</span>
+            <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
+          </div>
+          <section v-if="(state.configured === false || state.storageReady === false || state.modelReady === false) && !gate" class="person-configuration" :inert="backgroundInert ? true : undefined" role="status">
+            <h2>{{ $t('person.configureTitle') }}</h2>
+            <p>{{ $t('person.configureAgent') }}</p>
+            <p>{{ $t('person.configureSecrets') }}</p>
+            <p>{{ $t('person.configureRefresh') }}</p>
+            <p v-if="state.reason" class="person-muted">{{ state.reason }}</p>
+          </section>
+          <div v-if="state.latestEpisode && ['failed', 'interrupted', 'budget_exhausted'].includes(state.latestEpisode.status)" class="person-error" :inert="backgroundInert ? true : undefined" role="alert">
+            {{ $t(state.latestEpisode.terminalCode === 'OUTPUT_TRUNCATED' ? 'person.outputTruncated' : 'person.episodeFailed') }}
+          </div>
+          <div v-if="state.error" class="person-error" :inert="backgroundInert ? true : undefined" role="alert">
+            <p>{{ $t('person.requestFailed') }} {{ state.error.message }}</p>
+            <p v-if="state.error.code === 'timeout'">{{ $t('person.timeout') }}</p>
+          </div>
+          <div v-if="state.retryCommand && !state.commandPending" class="person-retry" :inert="backgroundInert ? true : undefined" role="status">
+            <p>{{ $t('person.uncertain') }}</p>
+            <button type="button" class="btn-secondary" :disabled="!!gate || !state.person" @click="command(state.retryCommand.op, true)">{{ $t('person.retrySame') }}</button>
+            <button type="button" class="btn-ghost" @click="discardRetry()">{{ $t('person.discardRetry') }}</button>
+          </div>
           <div class="person-transcript">
           <div ref="messagePane" class="person-messages virtual-transcript-scroller" :class="{ 'is-response-pinned': responsePinned }" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading"
             @wheel.passive="releaseResponseFocus" @touchmove.passive="releaseResponseFocus" @keydown="releaseResponseFocus" @pointerdown.passive="releaseResponseFocus">
