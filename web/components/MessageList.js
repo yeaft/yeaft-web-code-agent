@@ -1739,7 +1739,9 @@ export default {
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(true);
     };
 
-    const pauseAutoFollow = () => {
+    let resumeFollowingAfterSplit = false;
+    const pauseAutoFollow = ({ forSplit = false } = {}) => {
+      if (!forSplit) resumeFollowingAfterSplit = false;
       autoFollowPaused.value = true;
       isAtBottom.value = false;
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(false);
@@ -2036,7 +2038,15 @@ export default {
       { immediate: true }
     );
 
-    Vue.watch(splitActive, (active) => { if (active) pauseAutoFollow(); }, { flush: 'sync', immediate: true });
+    Vue.watch(splitActive, (active) => {
+      if (active) {
+        resumeFollowingAfterSplit = !autoFollowPaused.value;
+        pauseAutoFollow({ forSplit: true });
+      } else if (resumeFollowingAfterSplit) {
+        resumeFollowingAfterSplit = false;
+        resumeAutoFollow();
+      }
+    }, { flush: 'sync', immediate: true });
     Vue.watch(visibleTranscriptTailSignature, () => {
       if (!splitActive.value) smartScrollToBottom();
       Vue.nextTick(scheduleResponseNavigationUpdate);
@@ -2055,7 +2065,7 @@ export default {
       for (const key of Object.keys(assistantTurnActionStates)) delete assistantTurnActionStates[key];
       for (const key of Object.keys(toolExpandStates)) delete toolExpandStates[key];
       for (const key of Object.keys(messageTurnCollapseStates)) delete messageTurnCollapseStates[key];
-      if (splitActive.value) pauseAutoFollow();
+      if (splitActive.value) pauseAutoFollow({ forSplit: true });
       else resumeAutoFollow();
       Vue.nextTick(() => { if (!splitActive.value) scrollToBottom(); });
     });

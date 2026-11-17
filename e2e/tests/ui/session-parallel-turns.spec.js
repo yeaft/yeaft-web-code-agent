@@ -62,6 +62,7 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
     await page.setViewportSize({ width, height: 1000 });
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
+    await expect.poll(() => page.locator('.chat-container').evaluate(el => el.getBoundingClientRect().left)).toBeGreaterThanOrEqual(0);
     await tabs.last().focus();
     await page.keyboard.press('Enter');
     await expect(tabs.last()).toHaveAttribute('aria-selected', 'true');
@@ -75,7 +76,8 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
       const narrowPane = await pane(page, e).evaluate(el => el.getBoundingClientRect().width);
       expect(narrowPane).toBeGreaterThanOrEqual(250);
     }
-    await page.screenshot({ path: info.outputPath(`parallel-five-${theme}-${width}.png`), fullPage: true });
+    await expect(pane(page, e).getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath(`parallel-five-${theme}-${width}.png`), fullPage: true, animations: 'disabled' });
   }
 
   // B completes before A: only B leaves the live region, while A continues.

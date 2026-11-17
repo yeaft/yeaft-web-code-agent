@@ -62,6 +62,11 @@ const test = base.extend({
   persistedHistory: [async ({ mockAgent }, use) => {
     const root = mkdtempSync(join(tmpdir(), 'yeaft-e2e-fold-history-'));
     const { folds, store } = seedHistory(root);
+    // Register the fixture's Sessions with the real Server, not only Pinia.
+    // Ownership-checked read receipts must not manufacture local error rows
+    // that change identity across reload and pollute the durable-ID assertion.
+    mockAgent.send({ type: 'yeaft_output', event: { type: 'session_list_updated', sessions: [SESSION_A, SESSION_B]
+      .map(id => ({ id, name: id, roster: ['omni'], defaultVpId: 'omni', workDir: '/tmp/test' })) } });
     // Server intentionally replaces pending transcript images with confirmed,
     // owner-scoped assets. Exercise its real upload/ack and authenticated URL.
     mockAgent.send({
