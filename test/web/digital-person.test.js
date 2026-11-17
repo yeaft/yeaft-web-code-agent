@@ -37,6 +37,26 @@ function fixture(options = {}) {
 }
 
 describe('Digital Person owner / Agent request boundary', () => {
+  it('projects active snapshots and fences episode cancellation without stopping a sibling', async () => {
+    const f = fixture();
+    let activeEpisodes = [{ id: 'a', status: 'running', createdAt: 1 }, { episodeId: 'b', status: 'paused', createdAt: 2 }];
+    f.auto(r => r.op === 'snapshot' ? { person: { id: 'p' }, messages: [], activeEpisodes, busy: true, episodeId: 'b' } : undefined);
+    await f.controller.open('a');
+    expect(f.state.activeEpisodes).toEqual(activeEpisodes);
+    expect(await f.controller.cancel('missing')).toBe(false);
+    expect(f.requests.filter(r => r.op === 'cancel')).toHaveLength(0);
+    expect(await f.controller.cancel('a')).toBe(true);
+    expect(f.requests.filter(r => r.op === 'cancel').at(-1).payload).toEqual({ episodeId: 'a' });
+    expect(await f.controller.cancel()).toBe(true);
+    expect(f.requests.filter(r => r.op === 'cancel').at(-1).payload).toEqual({});
+    activeEpisodes = [{ episodeId: 'b', status: 'running' }];
+    await f.controller.refresh();
+    expect(await f.controller.cancel()).toBe(true);
+    expect(f.requests.filter(r => r.op === 'cancel').at(-1).payload).toEqual({ episodeId: 'b' });
+    f.auto(); await f.controller.refresh();
+    expect(f.state.activeEpisodes).toBe(null);
+  });
+
   it('fences delayed responses after Agent and owner changes', async () => {
     const f = fixture(); const old = f.controller.open('a'); const request = f.requests[0];
     f.auto(); await f.controller.open('b'); await old;

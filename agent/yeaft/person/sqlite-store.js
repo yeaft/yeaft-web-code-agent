@@ -22,7 +22,7 @@ const scopeValues = s => [s.namespace, s.ownerId, s.personId];
 // Query-only projections; record retains the original public Unicode text.
 const SEARCH_COLUMNS = Object.freeze({ messages: 'text', concepts: 'statement' });
 const metadataDates = Object.freeze({
-  persons: ['createdAt', 'leaseUntil'], episodes: ['createdAt', 'endedAt', 'callFinalizeUntil'],
+  persons: ['createdAt', 'leaseUntil'], episodes: ['createdAt', 'endedAt', 'callFinalizeUntil', 'leaseUntil'],
   messages: ['createdAt', 'receivedAt'], states: ['updatedAt'], concepts: ['updatedAt'], concept_revisions: ['updatedAt'],
   state_commits: ['createdAt'], traces: ['createdAt'],
 });
@@ -157,7 +157,15 @@ export class SqlitePersonStore {
     text(ownerId, 256);
     return { ownerId, namespace: this.namespace, personId: `person-${digest([this.namespace, ownerId]).slice(0, 32)}` };
   }
-  doc(scope, values) { return { ...values, schemaVersion: 1, ...scope }; }
+  doc(scope, values) {
+    const episode = values.episodeId ? this.one('episodes', scope, ' AND id = ?', [values.episodeId]) : null;
+    return { ...(episode && values.role ? { rootMessageId: episode.messageId, turnStartedAt: episode.createdAt } : {}), ...values, schemaVersion: 1, ...scope };
+  }
+  messageView(value) {
+    if (!value) return null;
+    const episode = value.episodeId ? this.one('episodes', this.episodeScope(value), ' AND id = ?', [value.episodeId]) : null;
+    return messageView({ ...value, ...(episode ? { rootMessageId: episode.messageId, turnStartedAt: episode.createdAt } : {}) });
+  }
   table(name) { if (!Object.hasOwn(TABLES, name)) fail('INVALID_REQUEST'); return TABLES[name]; }
   // All clauses at call sites below are fixed application strings; values are bound.
   rows(table, scope, clause = '', params = []) {
@@ -219,25 +227,48 @@ export class SqlitePersonStore {
     this.put('episodes', episode);
     this.trace(ownerId, episode.id, 'call_failed', { ...call, code, output: unavailableOutput() });
   }
+  activeRecords(ownerId) {
+    return this.rows('episodes', this.scope(ownerId), " AND status = 'running' ORDER BY inputWatermark ASC");
+  }
+  activeView(record) {
+    return { id: record.id, episodeId: record.id, rootMessageId: record.messageId, inputPreview: record.text.slice(0, 1000), kind: record.kind,
+      status: record.executionControl?.status ?? record.status, createdAt: record.createdAt,
+      ...(record.feedback ? { feedback: record.feedback } : {}) };
+  }
+  refreshActive(ownerId) {
+    const p = this.getPerson(ownerId), first = this.activeRecords(ownerId)[0];
+    p.activeEpisodeId = first?.id ?? null; p.leaseOwner = first?.workerId ?? null;
+    p.leaseUntil = first?.leaseUntil ?? new Date(0); p.writeSerial++;
+    this.put('persons', p);
+  }
   recover(ownerId) {
     const scope = this.scope(ownerId), p = this.one('persons', scope);
-    const expired = Boolean(p?.activeEpisodeId && p.leaseUntil <= this.now);
+    if (!p) return false;
+    let expired = false;
+    for (const episode of this.activeRecords(ownerId)) {
+      // Additive upgrade of a pre-parallel live lease before a sibling can
+      // advance the legacy Person-level inbox/lease fields.
+      if (!episode.leaseUntil || episode.pendingInboxVersion === undefined) {
+        episode.leaseUntil ??= p.leaseUntil;
+        episode.pendingInboxVersion ??= p.inboxVersion ?? 0;
+        this.put('episodes', episode);
+      }
+      if ((episode.leaseUntil ?? p.leaseUntil) > this.now) continue;
+      expired = true;
+      delete episode.executionControl;
+      Object.assign(episode, { status: 'interrupted', terminalCode: 'INTERRUPTED', endedAt: this.now });
+      this.put('episodes', episode); this.abandonCall(ownerId, episode, 'INTERRUPTED');
+      this.stopInputs(scope, episode.id);
+      this.trace(ownerId, episode.id, 'interrupted', { code: 'INTERRUPTED', reason: 'lease-expired', baseStateVersion: p.stateVersion });
+    }
     if (expired) {
-      const id = p.activeEpisodeId;
-      p.epoch++; p.writeSerial++; p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0);
-      if (p.settings.autonomyEnabled === true && p.autonomy?.version === 1) {
-        p.settings.autonomyEnabled = false;
-        p.autonomy = { ...p.autonomy, generation: randomUUID(), pending: [], nextAt: null };
+      const current = this.getPerson(ownerId);
+      if (current.settings.autonomyEnabled === true && current.autonomy?.version === 1) {
+        current.settings.autonomyEnabled = false;
+        current.autonomy = { ...current.autonomy, generation: randomUUID(), pending: [], nextAt: null };
+        this.put('persons', current);
       }
-      this.put('persons', p);
-      const episode = this.one('episodes', scope, ' AND id = ?', [id]);
-      if (episode?.status === 'running') {
-        delete episode.executionControl;
-        Object.assign(episode, { status: 'interrupted', terminalCode: 'INTERRUPTED', endedAt: this.now });
-        this.put('episodes', episode); this.abandonCall(ownerId, episode, 'INTERRUPTED');
-      }
-      this.stopInputs(scope, id);
-      this.trace(ownerId, id, 'interrupted', { code: 'INTERRUPTED', reason: 'lease-expired', baseStateVersion: p.stateVersion });
+      this.refreshActive(ownerId);
     }
     for (const episode of this.rows('episodes', scope, " AND status = ? AND callFinalizeUntil <= ? AND json_type(record, '$.openCall') IS NOT NULL", ['cancelled', this.now.getTime()])) {
       this.abandonCall(ownerId, episode, 'CANCELLED');
@@ -251,7 +282,7 @@ export class SqlitePersonStore {
     const episode = message ? this.one('episodes', scope, ' AND id = ?', [message.episodeId])
       : this.one('episodes', scope, ' AND clientMessageId = ?', [clientMessageId]);
     const receipt = admissionReceipt(episode && message ? { ...episode, kind: message.id === episode.messageId ? episode.kind : 'send',
-      messageId: message.id, text: message.text, attachments: message.attachments, requestHash: message.requestHash ?? episode.requestHash } : episode,
+      messageId: message.id, rootMessageId: episode.messageId, text: message.text, attachments: message.attachments, requestHash: message.requestHash ?? episode.requestHash } : episode,
     clientMessageId, requestHash);
     return receipt.found ? { ...receipt, deliveryState: message?.deliveryState ?? (receipt.messageId ? 'received' : null) } : receipt;
   }
@@ -285,7 +316,8 @@ export class SqlitePersonStore {
     let p = this.getPerson(ownerId), a = p.autonomy;
     if (p.settings.autonomyEnabled !== true || a?.version !== 1) return null;
     if (p.activeEpisodeId) {
-      if (p.leaseUntil <= this.now) {
+      const active = this.activeRecords(ownerId);
+      if (active.some(record => (record.leaseUntil ?? p.leaseUntil) <= this.now)) {
         // Lost execution control is not permission to replay host effects. Reconcile
         // the episode, then require explicit re-enable before further cognition.
         this.recover(ownerId); p = this.getPerson(ownerId);
@@ -329,7 +361,7 @@ export class SqlitePersonStore {
     this.trace(ownerId, admitted.episodeId, 'autonomy_scheduled', { scheduling });
     return admitted;
   }
-  admit(ownerId, { kind, text: input, clientMessageId, workerId, budget, files = [] }) {
+  admit(ownerId, { kind, text: input, clientMessageId, workerId, budget, files = [], routing = null }) {
     if (!['send', 'think', 'dream', 'autonomous'].includes(kind)) fail('INVALID_REQUEST');
     const validated = validateFiles(files, input, kind), attachments = validated.map(attachmentMetadata);
     identifier(clientMessageId); text(workerId, 256);
@@ -337,24 +369,26 @@ export class SqlitePersonStore {
     const scope = this.scope(ownerId), requestHash = attachmentRequestHash(kind, input, validated);
     const existing = this.receipt(ownerId, clientMessageId, requestHash);
     if (existing.found) return { episodeId: existing.episodeId, duplicate: true, status: existing.status,
-      messageId: existing.messageId, deliveryState: existing.deliveryState };
+      messageId: existing.messageId, rootMessageId: existing.rootMessageId, deliveryState: existing.deliveryState };
     const p = this.getPerson(ownerId);
-    if (p.activeEpisodeId) {
-      if (kind !== 'send') fail('BUSY');
-      const active = this.one('episodes', scope, ' AND id = ?', [p.activeEpisodeId]);
-      if (!active || active.status !== 'running') fail('STALE');
+    if (p.activeEpisodeId && routing?.decision === 'idle') fail('STALE');
+    const targetId = routing?.decision === 'related' ? routing.targetThreadId : routing?.decision === 'unrelated' ? null : p.activeEpisodeId;
+    if (p.activeEpisodeId && kind !== 'send') fail('BUSY');
+    const active = targetId ? this.one('episodes', scope, ' AND id = ?', [targetId]) : null;
+    if (active?.status === 'running') {
       // Arrival changes no execution lease/fence or cognitive revision. Only an
       // explicit receive acknowledges this new instruction at a safe boundary.
       p.inboxVersion = (p.inboxVersion ?? 0) + 1; p.messageSeq++; p.writeSerial++;
+      active.pendingInboxVersion = p.inboxVersion; this.put('episodes', active);
       this.put('persons', p);
       for (const file of validated) this.put('attachments', this.doc(scope, file));
-      const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: active.id,
+      const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: active.id, rootMessageId: active.messageId,
         role: 'user', text: input, attachments, createdAt: this.now, clientMessageId, requestHash,
         inboxVersion: p.inboxVersion, deliveryState: 'queued' });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
       this.trace(ownerId, active.id, 'input_queued', { messageId: message.id, inboxVersion: p.inboxVersion });
       return { episodeId: active.id, duplicate: false, appended: true, status: active.status,
-        messageId: message.id, deliveryState: message.deliveryState };
+        messageId: message.id, rootMessageId: active.messageId, deliveryState: message.deliveryState };
     }
     if (kind !== 'autonomous' && p.settings.autonomyEnabled === true && p.autonomy?.version === 1) {
       p.autonomy = { ...p.autonomy, backoffMs: 60000, nextAt: this.now.getTime() + 60000, lastFingerprint: null };
@@ -372,15 +406,15 @@ export class SqlitePersonStore {
     for (const file of validated) this.put('attachments', this.doc(scope, file));
     if (hasMessage) {
       messageId = randomUUID();
-      const message = this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, role: 'user', text: input, attachments, createdAt: this.now, clientMessageId, requestHash,
+      const message = this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, rootMessageId: messageId, turnStartedAt: this.now, role: 'user', text: input, attachments, createdAt: this.now, clientMessageId, requestHash,
         inboxVersion: p.inboxVersion, deliveryState: 'received', receivedAt: this.now });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
     }
-    const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text: input, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], defaultModel: p.settings.defaultModel ?? null, status: 'running', workerId, epoch: p.epoch,
+    const episode = this.doc(scope, { id, clientMessageId, requestHash, kind, text: input, messageId, attachments, modelCandidates: [...(p.settings.modelCandidates ?? [])], defaultModel: p.settings.defaultModel ?? null, status: 'running', workerId, epoch: p.epoch, leaseUntil: new Date(this.now.getTime() + this.leaseMs), pendingInboxVersion: p.inboxVersion,
       baseStateVersion: p.stateVersion, inboxVersion: p.inboxVersion, lastInputSeq: hasMessage ? p.messageSeq : 0, inputMessageIds: messageId ? [messageId] : [], inputWatermark: p.inputWatermark, controlVersion: p.controlVersion, autonomyGeneration: p.settings.autonomyEnabled === true ? p.autonomy?.generation ?? null : null, budget, createdAt: this.now });
     this.put('episodes', episode, true);
     this.trace(ownerId, id, 'accepted', { trigger: { kind, text: input, messageId, attachments }, baseStateVersion: p.stateVersion, budget });
-    return { episodeId: id, duplicate: false, status: 'running', messageId, deliveryState: hasMessage ? 'received' : null, episode };
+    return { episodeId: id, duplicate: false, status: 'running', messageId, rootMessageId: messageId, deliveryState: hasMessage ? 'received' : null, episode };
   }
   inputEpisode(episode) {
     const p = this.own(episode), scope = this.episodeScope(episode);
@@ -390,10 +424,10 @@ export class SqlitePersonStore {
   }
   pendingInputs(episode) {
     const { p, record } = this.inputEpisode(episode);
-    return (record.inboxVersion ?? 0) < (p.inboxVersion ?? 0);
+    return (record.inboxVersion ?? 0) < (record.pendingInboxVersion ?? p.inboxVersion ?? 0);
   }
   inputCurrent(episode, p, record) {
-    if ((record.inboxVersion ?? 0) < (p.inboxVersion ?? 0)) return false;
+    if ((record.inboxVersion ?? 0) < (record.pendingInboxVersion ?? p.inboxVersion ?? 0)) return false;
     if (episode.inboxVersion !== undefined) return episode.inboxVersion === (record.inboxVersion ?? 0);
     // Legacy callers may omit the version for an initial episode, but cannot
     // silently claim instructions subsequently consumed by this same worker.
@@ -423,7 +457,7 @@ export class SqlitePersonStore {
       // The textual context is <=64KiB; image bytes are separately bounded by
       // attachment admission (and returned whole, never partially acknowledged).
       const files = this.inputFiles(scope, [message]);
-      const cost = bytes(messageView(message)) + files.reduce((n, file) => n + bytes(file.content ?? ''), 0);
+      const cost = bytes(this.messageView(message)) + files.reduce((n, file) => n + bytes(file.content ?? ''), 0);
       if (messages.length && size + cost > 64 * 1024) break;
       size += cost;
       message.deliveryState = 'received'; message.receivedAt = this.now; message.revision++;
@@ -436,7 +470,7 @@ export class SqlitePersonStore {
       this.put('episodes', record); p.writeSerial++; this.put('persons', p);
       this.trace(episode.ownerId, episode.id, 'inputs_received', { messageIds: messages.map(message => message.id), inboxVersion: record.inboxVersion });
     }
-    return { messages: messages.map(messageView), attachments: this.inputFiles(scope, messages), inboxVersion: record.inboxVersion ?? 0 };
+    return { messages: messages.map(message => this.messageView(message)), attachments: this.inputFiles(scope, messages), inboxVersion: record.inboxVersion ?? 0 };
   }
   stopInputs(scope, episodeId) {
     for (const message of this.rows('messages', scope,
@@ -469,10 +503,11 @@ export class SqlitePersonStore {
     return scope;
   }
   fenced(episode, withLease = true) {
-    const p = this.one('persons', this.episodeScope(episode));
-    return p && p.activeEpisodeId === episode.id && p.epoch === episode.epoch && p.leaseOwner === episode.workerId &&
-      p.stateVersion === episode.baseStateVersion && p.controlVersion === episode.controlVersion && p.inputWatermark === episode.inputWatermark &&
-      (!withLease || p.leaseUntil > this.now) ? p : null;
+    const scope = this.episodeScope(episode), p = this.one('persons', scope);
+    const record = this.one('episodes', scope, ' AND id = ?', [episode.id]);
+    return p && record?.status === 'running' && record.epoch === episode.epoch && record.workerId === episode.workerId &&
+      record.controlVersion === episode.controlVersion && record.inputWatermark === episode.inputWatermark &&
+      (!withLease || (record.leaseUntil ?? p.leaseUntil) > this.now) ? p : null;
   }
   own(episode) { const p = this.fenced(episode); if (!p) fail('STALE'); return p; }
   executionControl(episode, control) {
@@ -487,6 +522,7 @@ export class SqlitePersonStore {
     const p = this.own(episode); p.leaseUntil = new Date(this.now.getTime() + this.leaseMs); p.writeSerial++; this.put('persons', p);
     const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
     if (!record || record.status !== 'running') fail('STALE');
+    record.leaseUntil = new Date(this.now.getTime() + this.leaseMs); this.put('episodes', record);
     const lastAt = new Date(record.feedback?.at ?? record.lastReplyAt ?? record.createdAt).getTime();
     // Heartbeats are at most 5s apart: publish the fallback between 55–60s.
     // This updates one snapshot field, never adds messages or schedules cognition.
@@ -662,7 +698,9 @@ export class SqlitePersonStore {
   context(episode) {
     const p = this.own(episode), scope = this.episodeScope(episode), state = this.one('states', scope);
     const focused = this.focused(scope, state.focusConceptIds.slice(0, 12));
-    const latestUser = this.one('messages', scope, " AND json_extract(record, '$.role') = 'user' ORDER BY seq DESC");
+    const latestUser = episode.messageId
+      ? this.one('messages', scope, " AND json_extract(record, '$.role') = 'user' AND json_extract(record, '$.episodeId') = ? ORDER BY seq DESC", [episode.id])
+      : this.one('messages', scope, " AND json_extract(record, '$.role') = 'user' ORDER BY seq DESC");
     const dream = executionOrientation(episode.kind, episode.scheduling) === 'dream', recentLimit = dream ? 6 : 12;
     const recent = this.rows('concepts', scope, ` ORDER BY updatedAt DESC, id ASC LIMIT ${recentLimit}`);
     let messages = dream ? [] : this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 12');
@@ -701,7 +739,8 @@ export class SqlitePersonStore {
     if (latestUser && !messages.some(m => m.id === latestUser.id)) messages = [...messages.slice(0, 11), latestUser];
     messages.sort((a, b) => a.seq - b.seq);
     return { person: this.personView(p), capabilityExperience: capabilityExperienceView(p.capabilityExperience),
-      state: stateView(state), latestUserInstruction: messageView(latestUser), messages: messages.map(messageView),
+      activeEpisodes: this.activeRecords(episode.ownerId).map(record => this.activeView(record)),
+      state: stateView(state), latestUserInstruction: this.messageView(latestUser), messages: messages.map(message => this.messageView(message)),
       concepts: [...new Map([...focused, ...recent, ...older].map(c => [c.id, conceptView(c)])).values()],
       contextSelection: { strategy: dream ? 'dream-diverse' : 'recent', rotation: dream ? episode.inputWatermark - 1 : null,
         limits: { messages: 12, focusedConcepts: 12, recentConcepts: recentLimit, olderConcepts: dream ? 6 : 0 },
@@ -727,7 +766,7 @@ export class SqlitePersonStore {
       if (receipt.invocationHash !== invocationHash) fail('INVALID_REQUEST');
       const message = prior.find(m => m.id === receipt.messageId);
       if (!message) fail('STORAGE_UNAVAILABLE');
-      return messageView(message);
+      return this.messageView(message);
     }
     const proof = this.capabilityProof(scope, episode.id, record?.openCapability);
     if (!record || record.status !== 'running' || record.openCall || !proof || record.openCapability?.callId !== callId ||
@@ -739,7 +778,7 @@ export class SqlitePersonStore {
         .find(m => digest(m.presentation) === digest(presentation)) : null);
     if (repeated) {
       this.trace(episode.ownerId, episode.id, 'presentation_published', { callId, invocationHash, messageId: repeated.id, phase: presentation.phase, duplicate: true });
-      return messageView(repeated);
+      return this.messageView(repeated);
     }
     p.messageSeq++; p.writeSerial++; this.put('persons', p);
     const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id,
@@ -748,7 +787,7 @@ export class SqlitePersonStore {
     this.put('messages', message, true); this.journal(scope, 'messages', message);
     record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'presentation_published', { callId, invocationHash, messageId: message.id, phase: presentation.phase });
-    return messageView(message);
+    return this.messageView(message);
   }
   repeatsAutonomousReply(scope, episode, reply) {
     return episode.kind === 'autonomous' && typeof reply === 'string' &&
@@ -776,7 +815,7 @@ export class SqlitePersonStore {
       " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.replyKind') = 'message-reply'", [episode.id, callId]);
     if (prior) {
       if (prior.publicationHash !== invocationHash) fail('INVALID_REQUEST');
-      return messageView(prior);
+      return this.messageView(prior);
     }
     if (record.openCall || !record.openCapability || record.openCapability.callId !== callId || record.openCapability.capability.id !== 'Conversation.reply' ||
         !isDeepStrictEqual(record.openCapability.capability.args, { messageIds, text: reply }) ||
@@ -787,7 +826,7 @@ export class SqlitePersonStore {
     this.put('messages', message, true); this.journal(scope, 'messages', message);
     record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'message_reply', { callId, messageId: message.id, replyToMessageIds: message.replyToMessageIds });
-    return messageView(message);
+    return this.messageView(message);
   }
   /** Publish only a validated, complete call's reply. This is communication, not
    * a state/Concept commit. Fencing, dedupe and the memory journal share one transaction. */
@@ -801,7 +840,7 @@ export class SqlitePersonStore {
     if (!record || record.status !== 'running' || record.openCall || record.openCapability) fail('STALE');
     const prior = this.rows('messages', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') IN ('progress', 'execution-final')", [episode.id]);
     const duplicate = prior.find(m => m.callId === callId);
-    if (duplicate) { if (duplicate.text !== reply) fail('INVALID_REQUEST'); return messageView(duplicate); }
+    if (duplicate) { if (duplicate.text !== reply) fail('INVALID_REQUEST'); return this.messageView(duplicate); }
     const proof = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, callId]);
     if (proof?.output?.protocol === 'native-tools') {
       if (proof.output.text !== reply || (final && (proof.output.stopReason !== 'end_turn' || proof.output.toolCalls?.length))) fail('INVALID_REQUEST');
@@ -815,9 +854,9 @@ export class SqlitePersonStore {
     // A final duplicate is already delivered. Preserve its identity so final
     // cognition does not interpret dedupe as a missing public result.
     const sameReply = prior.find(m => m.text.trim() === reply.trim());
-    if (final && sameReply) return messageView(sameReply);
+    if (final && sameReply) return this.messageView(sameReply);
     if (final && this.repeatsAutonomousReply(scope, episode, reply)) {
-      return messageView(this.rows('messages', scope, " AND json_extract(record, '$.role') = 'assistant' ORDER BY seq DESC LIMIT 32").find(message => message.text.trim() === reply.trim()));
+      return this.messageView(this.rows('messages', scope, " AND json_extract(record, '$.role') = 'assistant' ORDER BY seq DESC LIMIT 32").find(message => message.text.trim() === reply.trim()));
     }
     // Provider latency counts too: a call started before 30s can finish after it.
     if ((!final && this.now.getTime() - new Date(record.lastReplyAt ?? record.createdAt).getTime() < FEEDBACK.minMs) ||
@@ -828,7 +867,7 @@ export class SqlitePersonStore {
     this.put('messages', message, true); this.journal(scope, 'messages', message);
     record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'progress_reply', { callId, messageId: message.id });
-    return messageView(message);
+    return this.messageView(message);
   }
   commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     const p = this.own(episode), scope = this.episodeScope(episode);
@@ -836,12 +875,19 @@ export class SqlitePersonStore {
     if (!record || record.status !== 'running') fail('STALE');
     if (!this.inputCurrent(episode, p, record)) return { inputPending: true };
     if (proposal.baseStateVersion !== episode.baseStateVersion) fail('STALE');
+    if (p.stateVersion !== episode.baseStateVersion || proposal.concepts.some(patch =>
+      (this.one('concepts', scope, ' AND id = ?', [patch.id])?.revision ?? 0) !== patch.expectedRevision)) {
+      record.baseStateVersion = p.stateVersion; this.put('episodes', record);
+      const snapshot = this.context(episode);
+      snapshot.concepts = [...new Map([...snapshot.concepts,
+        ...this.focused(scope, proposal.concepts.map(patch => patch.id)).map(conceptView)].map(concept => [concept.id, concept])).values()];
+      return { stateConflict: true, snapshot };
+    }
     const repeatsExecutionReply = proposal.reply && this.rows('messages', scope,
       " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') IN ('progress', 'execution-final')", [episode.id])
       .some(message => message.text.trim() === proposal.reply.trim());
     const publishReply = proposal.reply && !this.repeatsAutonomousReply(scope, episode, proposal.reply) && !repeatsExecutionReply && !this.repeatsPresentation(scope, episode.id, proposal.reply);
     p.stateVersion++; p.writeSerial++; if (publishReply) p.messageSeq++;
-    p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0);
     this.put('persons', p);
     const revisions = [];
     for (const patch of proposal.concepts) {
@@ -891,45 +937,38 @@ export class SqlitePersonStore {
     }
     delete record.executionControl;
     Object.assign(record, { status: 'completed', endedAt: this.now, stateVersion: p.stateVersion }); this.put('episodes', record);
+    this.refreshActive(episode.ownerId);
     this.trace(episode.ownerId, episode.id, 'committed', { callId, parentVersion: episode.baseStateVersion, stateVersion: p.stateVersion, conceptRevisions: revisions, decision: proposal.decision });
     return { state: stateView(state) };
   }
   finish(episode, status, code) {
     const p = this.fenced(episode, false);
     if (!p) return false;
-    p.writeSerial++; p.epoch++; p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0); this.put('persons', p);
+    p.writeSerial++; this.put('persons', p);
     const record = this.one('episodes', this.episodeScope(episode), ' AND id = ?', [episode.id]);
     if (record?.status === 'running') {
       delete record.executionControl;
       Object.assign(record, { status, terminalCode: code, endedAt: this.now }); this.put('episodes', record); this.abandonCall(episode.ownerId, record, code);
     }
+    this.refreshActive(episode.ownerId);
     this.stopInputs(this.episodeScope(episode), episode.id);
     this.trace(episode.ownerId, episode.id, status, { code, baseStateVersion: episode.baseStateVersion });
     return true;
   }
   cancel(ownerId, episodeId = null) {
     const scope = this.scope(ownerId), p = this.getPerson(ownerId);
-    // Cancel is also a durable autonomy stop, even when the target already ended.
     p.settings = { ...p.settings, autonomyEnabled: false };
     p.autonomy = { version: 1, generation: randomUUID(), pending: [], nextAt: null };
     p.writeSerial++; this.put('persons', p);
-    if (!p.activeEpisodeId) return { cancelled: false, episodeId };
-    if (episodeId && p.activeEpisodeId !== episodeId) {
-      const active = this.one('episodes', scope, ' AND id = ?', [p.activeEpisodeId]);
-      if (active?.kind !== 'autonomous') return { cancelled: false, episodeId };
-      // The target may finish just before a queued autonomous admission. Cancel
-      // that follow-up too; never let a stale target bypass the owner's stop.
-    }
-    const id = p.activeEpisodeId, until = p.leaseUntil;
-    p.epoch++; p.controlVersion++; p.writeSerial++; p.activeEpisodeId = null; p.leaseOwner = null; p.leaseUntil = new Date(0); this.put('persons', p);
-    const record = this.one('episodes', scope, ' AND id = ?', [id]);
-    if (record?.status === 'running') {
+    const targets = this.activeRecords(ownerId).filter(record => !episodeId || record.id === episodeId || record.kind === 'autonomous');
+    for (const record of targets) {
       delete record.executionControl;
-      Object.assign(record, { status: 'cancelled', terminalCode: 'CANCELLED', endedAt: this.now, callFinalizeUntil: until }); this.put('episodes', record);
+      Object.assign(record, { status: 'cancelled', terminalCode: 'CANCELLED', endedAt: this.now, callFinalizeUntil: record.leaseUntil ?? p.leaseUntil });
+      this.put('episodes', record); this.stopInputs(scope, record.id);
+      this.trace(ownerId, record.id, 'cancelled', { code: 'CANCELLED' });
     }
-    this.stopInputs(scope, id);
-    this.trace(ownerId, id, 'cancelled', { code: 'CANCELLED' });
-    return { cancelled: true, episodeId: id };
+    this.refreshActive(ownerId);
+    return { cancelled: targets.length > 0, episodeId: targets[0]?.id ?? episodeId, episodeIds: targets.map(record => record.id) };
   }
   settings(ownerId, settings, expectedControlVersion, expectedAutonomyGeneration) {
     const p = this.getPerson(ownerId);
@@ -969,7 +1008,7 @@ export class SqlitePersonStore {
     this.getPerson(ownerId);
     const records = this.rows('messages', this.scope(ownerId),
       ' AND (? IS NULL OR seq < ?) AND instr(text, ?) > 0 ORDER BY seq DESC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);
-    return inspectionPage(records, limit, 'seq', messageView, LIMITS.responseBytes);
+    return inspectionPage(records, limit, 'seq', message => this.messageView(message), LIMITS.responseBytes);
   }
   turns(ownerId, options = {}) {
     const { cursor, limit } = turnsPage(options);
@@ -1039,7 +1078,7 @@ export class SqlitePersonStore {
     if (cursor != null) { clause += ' AND seq < ?'; params.push(sequence(cursor)); }
     if (query) { clause += ' AND instr(text, ?) > 0'; params.push(query.toLowerCase()); }
     const docs = this.rows(collection, this.scope(ownerId), `${clause} ORDER BY seq DESC LIMIT ?`, [...params, limit + 1]);
-    return inspectionPage(docs, limit, record => String(record.seq), collection === 'messages' ? messageView : publicDoc, LIMITS.responseBytes);
+    return inspectionPage(docs, limit, record => String(record.seq), collection === 'messages' ? message => this.messageView(message) : publicDoc, LIMITS.responseBytes);
   }
   recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 } = {}) {
     memoryKind(kind); text(query, LIMITS.inputBytes, true); boundedLimit(limit);
@@ -1101,12 +1140,12 @@ export class SqlitePersonStore {
     this.recover(ownerId);
     const scope = this.scope(ownerId), p = this.getPerson(ownerId), state = this.one('states', scope);
     const messages = this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 21');
-    const messagePage = inspectionPage(messages, 20, record => String(record.seq), messageView, LIMITS.responseBytes);
+    const messagePage = inspectionPage(messages, 20, record => String(record.seq), message => this.messageView(message), LIMITS.responseBytes);
     const episode = this.one('episodes', scope, ' ORDER BY inputWatermark DESC');
     const latestEpisode = episode ? { id: episode.id, status: episode.status, createdAt: episode.createdAt,
       ...(episode.status === 'running' && episode.feedback ? { feedback: episode.feedback } : {}),
       ...(episode.terminalCode ? { terminalCode: episode.terminalCode } : {}), ...(episode.endedAt ? { endedAt: episode.endedAt } : {}) } : null;
-    return { latestEpisode, person: this.personView(p), state: stateView(state), concepts: this.focused(scope, state.focusConceptIds).slice(0, 12).map(conceptView),
+    return { latestEpisode, activeEpisodes: this.activeRecords(ownerId).map(record => this.activeView(record)), person: this.personView(p), state: stateView(state), concepts: this.focused(scope, state.focusConceptIds).slice(0, 12).map(conceptView),
       messages: messagePage.items.reverse(), nextMessagesCursor: messagePage.nextCursor,
       outputs: this.outputs(ownerId), busy: Boolean(p.activeEpisodeId), episodeId: p.activeEpisodeId };
   }
@@ -1115,7 +1154,7 @@ export class SqlitePersonStore {
     const rows = this.sql(`SELECT seq, kind, id, revision, record FROM memory_changes WHERE ${SCOPE} AND seq > ? ORDER BY seq ASC LIMIT ?`)
       .all(...scopeValues(this.scope(ownerId)), after, limit + 1);
     const items = rows.slice(0, limit).map(row => ({ ...row,
-      record: (row.kind === 'messages' ? messageView : conceptView)(decode(row, row.kind)) }));
+      record: (row.kind === 'messages' ? value => this.messageView({ ...value, ...this.scope(ownerId) }) : conceptView)(decode(row, row.kind)) }));
     return { items, lastSeq: items.at(-1)?.seq ?? after, hasMore: rows.length > limit };
   }
   resolveMemories(ownerId, kind, refs) {
@@ -1125,7 +1164,7 @@ export class SqlitePersonStore {
     for (const ref of refs) {
       if (!ref || typeof ref.id !== 'string' || !Number.isSafeInteger(ref.revision) || ref.revision < 1) fail('INVALID_REQUEST');
       const record = this.one(kind, scope, ' AND id = ? AND revision = ?', [ref.id, ref.revision]);
-      if (record && !seen.has(record.id)) { seen.add(record.id); records.push((kind === 'messages' ? messageView : conceptView)(record)); }
+      if (record && !seen.has(record.id)) { seen.add(record.id); records.push((kind === 'messages' ? value => this.messageView(value) : conceptView)(record)); }
     }
     return records;
   }

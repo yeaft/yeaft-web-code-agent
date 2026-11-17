@@ -292,3 +292,10 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
   .person-inspector-nav > button { flex-shrink: 0; white-space: nowrap; }
   .person-side-panel .person-panel-header { padding-top: max(var(--work-center-space-2), env(safe-area-inset-top, 0px)); }
 }
+
+/* The existing turn region supplies responsive columns/tabs and pane-local
+   scrolling. Person history remains in its normal outer transcript scroller. */
+.person-reading-column.has-concurrent-episodes > .virtual-transcript,
+.person-reading-column.has-concurrent-episodes > .person-load-more { max-width: var(--session-content-width); margin-inline: auto; }
+.person-page .concurrent-turn-body > .person-response-loading { padding-block: var(--work-center-space-3); }
+.person-page .concurrent-turn-body .person-reply-context { overflow-wrap: anywhere; }

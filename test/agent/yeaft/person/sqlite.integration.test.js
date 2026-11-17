@@ -154,7 +154,7 @@ describe('Person real SQLite authority in managed workers', () => {
     const r = repo('expiry'); await r.open('alice');
     const one = await r.admit('alice', input()); await call(r, one.episode, 'one');
     // Persist an expired clock boundary rather than racing setup against a tiny lease.
-    inspect(r, db => db.prepare("UPDATE persons SET record = json_set(record, '$.leaseUntil', ?) WHERE namespace = ? AND ownerId = ?").run(new Date(0).toISOString(), 'expiry', 'alice'));
+    inspect(r, db => db.prepare("UPDATE episodes SET record = json_set(record, '$.leaseUntil', ?) WHERE namespace = ? AND ownerId = ?").run(new Date(0).toISOString(), 'expiry', 'alice'));
     await r.close();
     const reopened = repo('expiry');
     expect(await reopened.recover('alice')).toBe(true);

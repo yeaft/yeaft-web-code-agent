@@ -26,11 +26,20 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
   const wire = await sessionTurnsFixture(page, mockAgent);
   const a = await wire.send('Root A first');
   wire.delta(a, 'A-only initial');
+  // Single-turn mode keeps the user's Workbench choice unchanged.
+  await page.evaluate(() => window.Pinia.useChatStore().openWorkbench());
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().workbenchExpanded)).toBe(true);
   const b = await wire.send('Root B second');
   wire.delta(b, 'B-only initial');
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().workbenchExpanded)).toBe(false);
+  await page.evaluate(() => window.Pinia.useChatStore().openWorkbench());
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().workbenchExpanded)).toBe(true);
   wire.delta(a, ' A-only continuation');
   wire.delta(b, ' B-only continuation');
   await expect(page.locator('.parallel-turn-pane')).toHaveCount(2);
+  expect(await page.evaluate(() => window.Pinia.useChatStore().workbenchExpanded)).toBe(true);
+  // Close it again for the full-width responsive geometry assertions below.
+  await page.evaluate(() => window.Pinia.useChatStore().toggleWorkbench());
   await expect(pane(page, a)).toContainText('A-only initial A-only continuation');
   await expect(pane(page, b)).toContainText('B-only initial B-only continuation');
   await expect(pane(page, a)).not.toContainText('B-only');
@@ -53,10 +62,13 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
   const track = page.locator('.parallel-turn-track');
   await expect.poll(() => track.evaluate(el => el.scrollWidth > el.clientWidth + 20)).toBe(true);
   // Five columns must not be squeezed into the viewport; at most three fit.
-  const desktopWidth = await track.evaluate(el => el.clientWidth);
-  const desktopPane = await pane(page, a).evaluate(el => el.getBoundingClientRect().width);
-  expect(desktopPane).toBeGreaterThanOrEqual(desktopWidth / 3 - 10);
-  expect(desktopPane).toBeLessThanOrEqual(desktopWidth + 1);
+  await expect.poll(() => track.evaluate(el => {
+    const width = el.clientWidth;
+    const pane = el.querySelector('.parallel-turn-pane').getBoundingClientRect().width;
+    const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+    // Account for both real inter-column gaps rather than a fixed allowance.
+    return pane >= (width - 2 * gap) / 3 - 1 && pane <= width + 1;
+  })).toBe(true);
 
   for (const [theme, width] of [['light', 1600], ['dark', 320]]) {
     await page.setViewportSize({ width, height: 1000 });

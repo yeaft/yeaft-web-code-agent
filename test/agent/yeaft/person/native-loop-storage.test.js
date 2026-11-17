@@ -96,7 +96,7 @@ describe('native tool loop SQLite proof and diagnostics', () => {
   it('keeps interrupted enhancement usage unknown after lease recovery and SQLite reopen', async () => {
     const tool = wire('ResponseEnhance', { question: 'q', draft: 'private' }), parent = await complete([tool]);
     await r.startCapability(episode, invocation(parent, tool, 0));
-    sql(db => db.prepare("UPDATE persons SET record = json_set(record, '$.leaseUntil', ?) WHERE ownerId = ?").run(new Date(0).toISOString(), 'alice'));
+    sql(db => db.prepare("UPDATE episodes SET record = json_set(record, '$.leaseUntil', ?) WHERE ownerId = ?").run(new Date(0).toISOString(), 'alice'));
     await r.close(); r = repo();
     expect(await r.recover('alice')).toBe(true);
     const turn = (await r.turns('alice')).items[0];

@@ -32,6 +32,15 @@ for (const scenario of [{ width: 1280, theme: 'light' }, { width: 320, theme: 'd
     const gate = new Promise(resolve => { release = () => { released = true; resolve(); }; });
     const adapter = { async *stream(params) {
       await setImmediate(); // Real provider I/O gives relay/SQLite workers a boundary.
+      // Routing is a separate bounded inference call, not execution/cognition.
+      // Both addenda deliberately join the original inbox in this scenario.
+      if (params.maxTokens === 256) {
+        const route = JSON.parse(params.messages[0].content);
+        expect(route.runningThreads).toHaveLength(1);
+        yield { type: 'text_delta', text: JSON.stringify({ decision: 'related', targetThreadId: route.runningThreads[0].threadId }) };
+        yield personStop(false);
+        return;
+      }
       calls.push(params);
       const input = personInput(params);
       expect(input.trigger.text).toBe(initial);

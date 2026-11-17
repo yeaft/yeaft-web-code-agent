@@ -337,6 +337,7 @@ export default {
   "person.manualMode": "Manual mode",
   "person.manualHint": "Send a message or click Think / Dream to start one activity. No automatic thinking; you can cancel while it runs.",
   "person.version": "State v{version}",
+  "person.stopAll": "Stop all",
   "person.cancelling": "Cancelling…",
   "person.configureTitle": "Configure Digital Person on this Agent",
   "person.configureAgent": "Memory uses this Agent instance's local SQLite database; no database service or backend selection is needed. Configure a native model provider for this instance. If unavailable, check instance storage permissions and model configuration.",

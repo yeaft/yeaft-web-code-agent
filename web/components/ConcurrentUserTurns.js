@@ -5,8 +5,8 @@ import { userTurnExcerpt } from '../utils/concurrent-user-turns.js';
 export default {
   name: 'ConcurrentUserTurns',
   components: { VirtualTranscript },
-  props: { turns: { type: Array, default: () => [] }, messages: { type: Array, default: () => [] }, estimateHeight: Function },
-  emits: ['stop'],
+  props: { turns: { type: Array, default: () => [] }, messages: { type: Array, default: () => [] }, estimateHeight: Function, itemGap: { type: Number, default: 18 }, stopDisabled: Boolean },
+  emits: ['stop', 'pane-scroll'],
   template: `
     <section class="concurrent-user-turns parallel-turn-region" :aria-label="$t('chat.concurrent.turns')">
       <nav class="concurrent-turn-tabs parallel-turn-tabs" role="tablist" :aria-label="$t('chat.concurrent.turns')">
@@ -22,15 +22,16 @@ export default {
           :data-user-turn-id="turn.userTurnId" class="concurrent-turn-column parallel-turn-pane" role="tabpanel" :aria-labelledby="panelId(turn) + '-tab'">
           <header class="concurrent-turn-header">
             <span class="concurrent-turn-state" role="status">{{ $t('chat.concurrent.' + turn.state) }}</span>
-            <button type="button" class="btn-ghost" :disabled="turn.state === 'cancelling'" @click="$emit('stop', turn)">{{ $t('chat.concurrent.stop') }}</button>
+            <button type="button" class="btn-ghost" :disabled="stopDisabled || turn.disabled || turn.state === 'cancelling'" @click="$emit('stop', turn)">{{ $t('chat.concurrent.stop') }}</button>
           </header>
-          <div class="concurrent-turn-body" @wheel.passive="onPaneWheel($event, turn.userTurnId)"
+          <div class="concurrent-turn-body" @scroll.passive="$emit('pane-scroll', turn)" @wheel.passive="onPaneWheel($event, turn.userTurnId)"
             @touchstart.passive="touchStart($event, turn.userTurnId)" @touchmove.passive="touchMove($event, turn.userTurnId)"
             @keydown="onPaneKey($event, turn.userTurnId)" @pointerdown="onPanePointer($event, turn.userTurnId)" tabindex="0" :aria-label="label(turn) || $t('chat.concurrent.turn')">
             <VirtualTranscript :ref="el => setTranscript(turn.userTurnId, el)" :items="turn.blocks"
-              :estimate-height="estimateHeight" initial-align="end" scroll-container=".concurrent-turn-body" :overscan="1" :item-gap="18">
-              <template #default="{ item: block }"><slot :block="block"></slot></template>
+              :estimate-height="estimateHeight" initial-align="end" scroll-container=".concurrent-turn-body" :overscan="1" :item-gap="itemGap">
+              <template #default="{ item: block }"><slot :block="block" :turn="turn"></slot></template>
             </VirtualTranscript>
+            <slot name="after" :turn="turn"></slot>
           </div>
         </section>
       </div>
@@ -92,7 +93,7 @@ export default {
       } else transcripts.delete(id);
     };
     const panelId = turn => `pending-user-turn-${encodeURIComponent(turn.userTurnId)}`;
-    const label = turn => userTurnExcerpt(props.messages.find(message => message.type === 'user'
+    const label = turn => turn.label || userTurnExcerpt(props.messages.find(message => message.type === 'user'
       && (message.userTurnId === turn.userTurnId || [message.id, message.messageId, message.clientMessageId].includes(turn.userMessageId || turn.userTurnId))));
     const columnFor = id => Array.from(trackRef.value?.children || []).find(el => el.dataset.userTurnId === id);
     const scrollToTurn = id => {
@@ -136,7 +137,14 @@ export default {
       return transcripts.get(id)?.scrollToKey?.(blockId, options) || false;
     };
     const anchorRow = (id, blockId, row, options) => transcripts.get(id)?.anchorTarget?.(blockId, row, options);
-    const revealLatest = () => trackRef.value?.scrollIntoView?.({ block: 'end', inline: 'nearest' });
+    // The global Latest action resumes all live panes, not just the outer page.
+    const revealLatest = () => {
+      for (const turn of props.turns) {
+        followPane(turn.userTurnId, true);
+        transcripts.get(turn.userTurnId)?.scrollToBottom?.();
+      }
+      trackRef.value?.scrollIntoView?.({ block: 'end', inline: 'nearest' });
+    };
     expose({ revealBlock, anchorRow, revealLatest });
     return { trackRef, selectedId, onTrackScroll, onPaneWheel, onPanePointer, touchStart, touchMove, onPaneKey, setTranscript, panelId, label, scrollToTurn, onTabKey };
   },

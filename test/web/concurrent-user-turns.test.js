@@ -96,6 +96,13 @@ describe('concurrent user turn presentation', () => {
       await new Promise(resolve => setTimeout(resolve, 40));
       await Vue.nextTick();
       expect(wrapper.find('[data-virtual-id="block-0"]').exists()).toBe(true);
+      // Latest must also resume the nested transcript after user reading.
+      const transcript = wrapper.findComponent({ name: 'VirtualTranscript' }).vm.$.exposed;
+      const bottom = vi.spyOn(transcript, 'scrollToBottom');
+      const follow = vi.spyOn(transcript, 'setBottomFollowEnabled');
+      api.revealLatest();
+      expect(follow).toHaveBeenLastCalledWith(true);
+      expect(bottom).toHaveBeenCalledTimes(1);
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });
 
@@ -106,7 +113,8 @@ describe('concurrent user turn presentation', () => {
       messages: [{ id: 'm1', type: 'user', content: 'first', timestamp: 10 },
         { id: 'm2', type: 'user', content: 'second', timestamp: 20, userTurnId: 'm2' },
         { id: 'm3', type: 'assistant', content: 'first reply', userTurnId: 'm1', turnId: 'engine-1' }],
-      yeaftSessionTurns: [{ userTurnId: 'm1', state: 'running' }], stopYeaftTurn: vi.fn() });
+      yeaftSessionTurns: [{ userTurnId: 'm1', state: 'running' }], stopYeaftTurn: vi.fn(),
+      workbenchExpanded: true, toggleWorkbench: vi.fn(function () { this.workbenchExpanded = !this.workbenchExpanded; }) });
     vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => store });
     const { default: MessageList } = await import('../../web/components/MessageList.js');
     const errors = [];
@@ -115,9 +123,19 @@ describe('concurrent user turn presentation', () => {
     const wrapper = mount({ ...MessageList, template: '<main ref="containerRef"><span>{{ splitActive }}</span></main>' });
     try {
       expect(wrapper.vm.splitActive).toBe(false);
+      expect(store.toggleWorkbench).not.toHaveBeenCalled();
       store.yeaftSessionTurns.push({ userTurnId: 'm2', state: 'queued' });
       await Vue.nextTick();
       expect(wrapper.vm.splitActive).toBe(true);
+      expect(store.workbenchExpanded).toBe(false);
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(1);
+      // A manual reopen survives streaming and further live snapshot updates.
+      store.workbenchExpanded = true;
+      store.yeaftSessionTurns = store.yeaftSessionTurns.map(turn => ({ ...turn }));
+      store.messages[2].content += ' live delta';
+      await Vue.nextTick();
+      expect(store.workbenchExpanded).toBe(true);
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(1);
       expect(wrapper.vm.historyBlocks).toEqual([]);
       expect(wrapper.vm.pendingTurns[0].blocks[0].items.map(item => item.type)).toEqual(['user', 'assistant-turn']);
       store.yeaftSessionTurns[0].state = 'completed';
@@ -130,6 +148,16 @@ describe('concurrent user turn presentation', () => {
       await Vue.nextTick();
       expect(wrapper.vm.splitActive).toBe(false);
       expect(wrapper.vm.historyBlocks.map(block => block.originMessageId)).toEqual(['m1', 'm2']);
+      // A new parallel period closes again, and direct split-to-split Session
+      // navigation applies the default to the new owner exactly once.
+      store.yeaftSessionTurns = store.yeaftSessionTurns.map(turn => ({ ...turn, state: 'running' }));
+      await Vue.nextTick();
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(2);
+      store.workbenchExpanded = true;
+      store.yeaftActiveSessionFilter = 'other-session';
+      await Vue.nextTick();
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(3);
+      expect(store.workbenchExpanded).toBe(false);
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });
 });

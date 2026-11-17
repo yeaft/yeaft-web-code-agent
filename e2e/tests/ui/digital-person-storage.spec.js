@@ -139,7 +139,9 @@ test('Person SQLite native tool and script evidence persist through relay and re
     await expect.poll(() => completedCognitions).toBe(3);
     await expect(page.locator('#person-input')).toBeEnabled();
     expect(requests[beforeDream].capabilities.active).toEqual([]);
-    await expect(page.locator('.session-sidebar-shell')).toHaveCount(0);
+    // Digital Person keeps the shared Session sidebar (since PR #1912).
+    await expect(page.locator('.session-sidebar-shell')).toHaveCount(1);
+    await expect(page.locator('.sidebar-person-trigger:visible')).toBeVisible();
     await page.locator('#person-input').fill('Learn a reusable sum script.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     // Creation runs multiple fresh WASM workers plus cognition and snapshot polling.

@@ -12,6 +12,8 @@ Session 和 turn 仍是用户概念，不增加 topic、panel 或第二个输入
 
 完成、停止或失败的 turn 离开分裂区，进入按发起时间排序的单列历史。保留其他 turn 和历史阅读位置；用户正在选择或操作内容时不抢焦点。分裂只影响投影，不重写 transcript。
 
+当前对话首次进入分裂区时自动收起 Workbench，让出阅读宽度；手动重新打开后，流式更新、补充和新增 sibling turn 不会再次收起。所有活动 turn 结束后下一次进入分栏，或切换到另一个已有分栏的对话时，重新应用一次默认收起。数字人遵循同样的展示原则，关闭自身检查／产物栏，不改变普通 Session 的 Workbench 偏好。
+
 ## 身份与兼容
 
 `userTurnId` 为一次用户发起的 turn 的稳定根身份；已有 `turnId` 仍表示某个 VP 的引擎 query，`threadId` 保持既有执行路由含义。一个用户 turn 可以包含多个 VP execution，多条补充仍归同一个 `userTurnId`。
