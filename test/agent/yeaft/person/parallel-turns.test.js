@@ -1,16 +1,17 @@
-import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqlitePersonRepository } from '../../../../agent/yeaft/person/sqlite-repository.js';
 import { createPersonService } from '../../../../agent/yeaft/person/service.js';
+import { PersonTaskHost } from '../../../../agent/yeaft/person/task-host.js';
 import { routePersonTurn } from '../../../../agent/yeaft/person/turn-routing.js';
 import { config, finalProposal } from './fixtures.js';
 
 const resources = [];
 afterEach(async () => { for (const { service, repository, dir } of resources.splice(0)) {
   await service?.close(); await repository?.close(); await rm(dir, { recursive: true, force: true });
-} });
+} vi.restoreAllMocks(); });
 const input = (id, routing) => ({ kind: 'send', text: id, clientMessageId: id, workerId: 'worker', budget: { calls: null }, routing });
 const selection = { model: 'test/first', effort: null };
 async function setup() {
@@ -152,4 +153,99 @@ it('rebases concurrent final cognition without replaying either execution', asyn
   expect((await call('snapshot')).state.version).toBe(2);
   expect(executions).toBe(2); expect(cognition).toBe(3);
   expect((await call('turns')).items.every(turn => turn.status === 'completed')).toBe(true);
+});
+
+it('keeps a live sibling native FileRead private at bootstrap while publishing its public context', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'person-parallel-private-'));
+  const marker = 'PRIVATE_NATIVE_FILE_CONTENT_7391';
+  await writeFile(join(dir, 'private.txt'), marker);
+  let first, siblingRequest, readResult;
+  const held = [];
+  const adapter = { async *stream(params) {
+    if (params.maxTokens === 256) { yield* text('{"decision":"unrelated"}'); return; }
+    const trigger = JSON.parse(params.messages[0].content).trigger;
+    if (trigger.text === 'read private fixture') {
+      const result = params.messages.find(message => message.role === 'tool' && message.toolCallId === 'read');
+      if (!result) {
+        yield { type: 'tool_call', id: 'read', name: 'FileRead', input: { file_path: 'private.txt' } };
+        yield { type: 'stop', stopReason: 'tool_use' }; return;
+      }
+      readResult = JSON.parse(result.content);
+    } else siblingRequest = params;
+    await new Promise(resolve => held.push(resolve));
+  } };
+  const service = createPersonService({ yeaftDir: dir, workDir: dir, config, adapter, embedding: { enabled: false } });
+  resources.push({ service, dir });
+  const call = (op, payload = {}) => service.request({ ownerId: 'alice', op, payload });
+  try {
+    await call('open'); first = await call('send', { text: 'read private fixture', clientMessageId: 'private' });
+    await vi.waitFor(() => expect(readResult?.output).toContain(marker));
+    await call('send', { text: 'independent public question', clientMessageId: 'public' });
+    await vi.waitFor(() => expect(siblingRequest).toBeDefined());
+    const rendered = JSON.stringify(siblingRequest);
+    expect(rendered).not.toContain(marker);
+    expect(rendered).toContain(first.episodeId);
+    expect(rendered).toContain('read private fixture');
+    expect((await call('snapshot')).activeEpisodes).toHaveLength(2);
+  } finally { for (const release of held) release(); }
+});
+
+it('filters waiting-resume evidence by refreshed live lineage while retaining current and terminal historical records', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'person-parallel-resume-'));
+  let siblingId, currentId, resumed, pending = true;
+  const held = [];
+  const evidence = () => {
+    const records = (make) => ['current', 'history', 'sibling', 'unknown', 'ambiguous'].map(label => {
+      const id = { current: currentId, history: 'terminal-history', sibling: siblingId }[label];
+      return { ...make(id, label), ...(label === 'ambiguous' ? { episodeId: currentId, source: { episodeId: siblingId } } : {}) };
+    });
+    return { namespace: 'test',
+      tasks: records((id, label) => ({ id: label, source: { episodeId: id } })),
+      agents: records((id, label) => ({ id: label, personEpisodeId: id })),
+      completions: records((id, label) => ({ id: label, task: { source: { episodeId: id } } })),
+      toolResults: records((id, label) => ({ episodeId: id, output: label })) };
+  };
+  vi.spyOn(PersonTaskHost.prototype, 'snapshot').mockImplementation(evidence);
+  vi.spyOn(PersonTaskHost.prototype, 'goalState').mockImplementation(() => ({
+    tasks: [{ id: 'wait-fixture', status: pending ? 'running' : 'succeeded', currentEpisode: true }], agents: [],
+  }));
+  const adapter = { async *stream(params) {
+    if (params.maxTokens === 256) { yield* text('{"decision":"unrelated"}'); return; }
+    const trigger = JSON.parse(params.messages[0].content).trigger;
+    if (trigger.text === 'sibling public input') {
+      siblingId = params.requestIdentity.threadId;
+      await new Promise(resolve => held.push(resolve)); return;
+    }
+    currentId = params.requestIdentity.threadId;
+    const instruction = params.messages.find(message => typeof message.content === 'string' && message.content.includes('execution-results-ready'));
+    if (instruction) {
+      resumed = JSON.parse(instruction.content);
+      await new Promise(resolve => held.push(resolve)); return;
+    }
+    yield { type: 'tool_call', id: 'wait', name: 'Execution__goal', input: {
+      objective: 'Collect fixture', acceptance: 'Fixture collected', kind: 'work', status: 'waiting',
+      reason: '', nextStep: 'Collect', sourceRefs: [], acceptanceChecks: [], waitFor: ['wait-fixture'], blocker: null,
+    } };
+    yield { type: 'stop', stopReason: 'tool_use' };
+  } };
+  const service = createPersonService({ yeaftDir: dir, workDir: dir, config, adapter, embedding: { enabled: false } });
+  resources.push({ service, dir });
+  const call = (op, payload = {}) => service.request({ ownerId: 'alice', op, payload });
+  try {
+    await call('open'); await call('send', { text: 'wait for fixture', clientMessageId: 'current' });
+    await vi.waitFor(async () => expect((await call('executions')).main?.phase).toBe('waiting'));
+    // Admit the sibling only AFTER bootstrap: resume must refresh the live set.
+    await call('send', { text: 'sibling public input', clientMessageId: 'sibling' });
+    await vi.waitFor(() => expect(siblingId).toBeDefined());
+    pending = false;
+    await vi.waitFor(() => expect(resumed).toBeDefined(), { timeout: 5000 });
+    expect(resumed.taskEvidence.items).toHaveLength(8);
+    for (const kind of ['task', 'agent', 'completion', 'tool-result']) {
+      const items = resumed.taskEvidence.items.filter(item => item.kind === kind);
+      expect(items).toHaveLength(2);
+      expect(JSON.stringify(items)).toContain('current');
+      expect(JSON.stringify(items)).toContain('history');
+    }
+    expect(JSON.stringify(resumed)).not.toMatch(/sibling|unknown|ambiguous/);
+  } finally { for (const release of held) release(); }
 });
