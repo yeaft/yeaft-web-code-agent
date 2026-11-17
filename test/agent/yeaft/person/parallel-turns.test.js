@@ -45,7 +45,10 @@ it('isolates sibling leases, targeted inbox/attachments and cleanup across concu
   b.baseStateVersion = 1; proposal.baseStateVersion = 1;
   expect((await r.commit(b, proposal, selection, 'second-final')).state.version).toBe(2);
   expect((await r.snapshot('alice')).busy).toBe(false);
-  expect((await r.list('alice', 'messages')).items.filter(m => m.role === 'assistant').every(m => m.rootMessageId)).toBe(true);
+  const storedMessages = (await r.list('alice', 'messages')).items;
+  expect(storedMessages.filter(m => m.role === 'assistant').every(m => m.rootMessageId)).toBe(true);
+  expect(storedMessages.every(message => new Date(message.turnStartedAt).getTime() === new Date(message.episodeId === a.id ? a.createdAt : b.createdAt).getTime())).toBe(true);
+  expect((await r.list('alice', 'messages', { limit: 1 })).items[0].turnStartedAt).toEqual(b.createdAt);
 });
 
 it('handles ended routing targets, independent cancellation, owner scope and legacy stop-all without losing receipts', async () => {

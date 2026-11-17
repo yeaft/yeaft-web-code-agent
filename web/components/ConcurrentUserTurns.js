@@ -137,7 +137,14 @@ export default {
       return transcripts.get(id)?.scrollToKey?.(blockId, options) || false;
     };
     const anchorRow = (id, blockId, row, options) => transcripts.get(id)?.anchorTarget?.(blockId, row, options);
-    const revealLatest = () => trackRef.value?.scrollIntoView?.({ block: 'end', inline: 'nearest' });
+    // The global Latest action resumes all live panes, not just the outer page.
+    const revealLatest = () => {
+      for (const turn of props.turns) {
+        followPane(turn.userTurnId, true);
+        transcripts.get(turn.userTurnId)?.scrollToBottom?.();
+      }
+      trackRef.value?.scrollIntoView?.({ block: 'end', inline: 'nearest' });
+    };
     expose({ revealBlock, anchorRow, revealLatest });
     return { trackRef, selectedId, onTrackScroll, onPaneWheel, onPanePointer, touchStart, touchMove, onPaneKey, setTranscript, panelId, label, scrollToTurn, onTabKey };
   },

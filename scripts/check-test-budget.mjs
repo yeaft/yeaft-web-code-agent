@@ -193,7 +193,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +21 concurrent Session turn regressions: routing/context/cancellation (7),
 // presentation/scroll intent (6), store/retention/relay isolation (4), browser lifecycle (3),
 // durable copy/merge root and client-collision compatibility (1).
-export const TEST_CASE_LIMIT = 1090;
+// +12 Person parallel regressions: episode leases/inbox/routing/rebase (5),
+// private evidence bootstrap/wait filtering (2), UI/store projection (2),
+// authenticated desktop light/dark and narrow browser lifecycle (3).
+export const TEST_CASE_LIMIT = 1102;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

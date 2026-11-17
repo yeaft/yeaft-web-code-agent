@@ -47,7 +47,7 @@ for (const scenario of [{ width: 1600, theme: 'light', panel: 'inside' }, { widt
     const dir = await mkdtemp(join(tmpdir(), 'person-parallel-browser-'));
     const requests = [], responses = [], calls = [], routes = [], gates = new Map(), started = new Set();
     const texts = Array.from({ length: 5 }, (_, i) => `Independent question ${i + 1}: describe public result ${i + 1}.`);
-    const supplement = 'Supplement the first question with a concise answer.';
+    const supplement = 'Supplement the first question with a concise answer.\n' + 'Long user supplied detail for scroll recovery.\n'.repeat(75);
     const privateMarker = 'PRIVATE_PROVIDER_REASONING_MUST_NOT_LEAK';
     let service;
     const hold = key => {
@@ -161,6 +161,15 @@ for (const scenario of [{ width: 1600, theme: 'light', panel: 'inside' }, { widt
       expect(records('episodes')).toHaveLength(5);
       expect((await snapshot()).activeEpisodes).toHaveLength(5);
       const tabs = page.locator('.parallel-turn-tabs [role="tab"]');
+      await tabs.first().click();
+      const firstBody = pane(first.episodeId).locator('.concurrent-turn-body');
+      await firstBody.focus();
+      await firstBody.press('End');
+      await firstBody.press('Home');
+      await expect.poll(() => firstBody.evaluate(node => node.scrollHeight - node.clientHeight)).toBeGreaterThan(100);
+      await expect.poll(() => firstBody.evaluate(node => node.scrollTop)).toBe(0);
+      await page.locator('.person-transcript-navigation .scroll-to-latest').click();
+      await expect.poll(() => firstBody.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop)).toBeLessThan(3);
       await tabs.first().focus(); await tabs.first().press('End');
       await expect(tabs.last()).toBeFocused(); await expect(tabs.last()).toHaveAttribute('aria-selected', 'true');
       await expect(pane(turns[4].episodeId)).toBeInViewport();

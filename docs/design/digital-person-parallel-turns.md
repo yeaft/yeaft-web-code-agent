@@ -5,7 +5,7 @@
 ## 公共接口
 
 - `send` 回执仍有 `episodeId / messageId / deliveryState`，新增 `rootMessageId`，指向该轮次初始用户消息。补充记录同样保留自己的 `messageId / clientMessageId`。
-- 公共消息投影新增 `rootMessageId`；既有 `episodeId / replyToMessageIds` 保留。新消息持久保存归属，历史旧消息的 `rootMessageId` 可缺省，reader 使用 episodeId 分组。
+- 公共消息投影新增 `rootMessageId / turnStartedAt`；既有 `episodeId / replyToMessageIds` 保留。新消息持久保存归属，旧消息读取时从同 owner/Person 的 episode 只读补齐根身份与发起时间，避免分页窗口内的补充消息被当作根而重排。
 - `snapshot.activeEpisodes[]`：`id / episodeId / rootMessageId / inputPreview / kind / status / createdAt / feedback?`，本进程执行时合并现有 runtime execution 元数据（phase、loops、model、models、executionGoal、resumable 等）。`inputPreview` 是初始请求的最多 1000 字符，不是私有推理。
 - `executions.active[]` 和 `status.active[]` 返回本进程 owner-scoped runtime execution 元数据。`status.concurrentTurnsSupported: true` 表示支持并行。`main` 保留兼容，不能据此判断全部活动。
 - `snapshot.busy` 表示任一持久 live episode；旧 `episodeId / latestEpisode / main` 保留。UI 应使用 activeEpisodes 判断和控制多轮次。

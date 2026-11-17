@@ -158,8 +158,13 @@ export class SqlitePersonStore {
     return { ownerId, namespace: this.namespace, personId: `person-${digest([this.namespace, ownerId]).slice(0, 32)}` };
   }
   doc(scope, values) {
-    const rootMessageId = values.episodeId ? this.one('episodes', scope, ' AND id = ?', [values.episodeId])?.messageId : null;
-    return { ...(rootMessageId && values.role ? { rootMessageId } : {}), ...values, schemaVersion: 1, ...scope };
+    const episode = values.episodeId ? this.one('episodes', scope, ' AND id = ?', [values.episodeId]) : null;
+    return { ...(episode && values.role ? { rootMessageId: episode.messageId, turnStartedAt: episode.createdAt } : {}), ...values, schemaVersion: 1, ...scope };
+  }
+  messageView(value) {
+    if (!value) return null;
+    const episode = value.episodeId ? this.one('episodes', this.episodeScope(value), ' AND id = ?', [value.episodeId]) : null;
+    return messageView({ ...value, ...(episode ? { rootMessageId: episode.messageId, turnStartedAt: episode.createdAt } : {}) });
   }
   table(name) { if (!Object.hasOwn(TABLES, name)) fail('INVALID_REQUEST'); return TABLES[name]; }
   // All clauses at call sites below are fixed application strings; values are bound.
@@ -401,7 +406,7 @@ export class SqlitePersonStore {
     for (const file of validated) this.put('attachments', this.doc(scope, file));
     if (hasMessage) {
       messageId = randomUUID();
-      const message = this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, rootMessageId: messageId, role: 'user', text: input, attachments, createdAt: this.now, clientMessageId, requestHash,
+      const message = this.doc(scope, { id: messageId, revision: 1, seq: p.messageSeq, episodeId: id, rootMessageId: messageId, turnStartedAt: this.now, role: 'user', text: input, attachments, createdAt: this.now, clientMessageId, requestHash,
         inboxVersion: p.inboxVersion, deliveryState: 'received', receivedAt: this.now });
       this.put('messages', message, true); this.journal(scope, 'messages', message);
     }
@@ -452,7 +457,7 @@ export class SqlitePersonStore {
       // The textual context is <=64KiB; image bytes are separately bounded by
       // attachment admission (and returned whole, never partially acknowledged).
       const files = this.inputFiles(scope, [message]);
-      const cost = bytes(messageView(message)) + files.reduce((n, file) => n + bytes(file.content ?? ''), 0);
+      const cost = bytes(this.messageView(message)) + files.reduce((n, file) => n + bytes(file.content ?? ''), 0);
       if (messages.length && size + cost > 64 * 1024) break;
       size += cost;
       message.deliveryState = 'received'; message.receivedAt = this.now; message.revision++;
@@ -465,7 +470,7 @@ export class SqlitePersonStore {
       this.put('episodes', record); p.writeSerial++; this.put('persons', p);
       this.trace(episode.ownerId, episode.id, 'inputs_received', { messageIds: messages.map(message => message.id), inboxVersion: record.inboxVersion });
     }
-    return { messages: messages.map(messageView), attachments: this.inputFiles(scope, messages), inboxVersion: record.inboxVersion ?? 0 };
+    return { messages: messages.map(message => this.messageView(message)), attachments: this.inputFiles(scope, messages), inboxVersion: record.inboxVersion ?? 0 };
   }
   stopInputs(scope, episodeId) {
     for (const message of this.rows('messages', scope,
@@ -735,7 +740,7 @@ export class SqlitePersonStore {
     messages.sort((a, b) => a.seq - b.seq);
     return { person: this.personView(p), capabilityExperience: capabilityExperienceView(p.capabilityExperience),
       activeEpisodes: this.activeRecords(episode.ownerId).map(record => this.activeView(record)),
-      state: stateView(state), latestUserInstruction: messageView(latestUser), messages: messages.map(messageView),
+      state: stateView(state), latestUserInstruction: this.messageView(latestUser), messages: messages.map(message => this.messageView(message)),
       concepts: [...new Map([...focused, ...recent, ...older].map(c => [c.id, conceptView(c)])).values()],
       contextSelection: { strategy: dream ? 'dream-diverse' : 'recent', rotation: dream ? episode.inputWatermark - 1 : null,
         limits: { messages: 12, focusedConcepts: 12, recentConcepts: recentLimit, olderConcepts: dream ? 6 : 0 },
@@ -761,7 +766,7 @@ export class SqlitePersonStore {
       if (receipt.invocationHash !== invocationHash) fail('INVALID_REQUEST');
       const message = prior.find(m => m.id === receipt.messageId);
       if (!message) fail('STORAGE_UNAVAILABLE');
-      return messageView(message);
+      return this.messageView(message);
     }
     const proof = this.capabilityProof(scope, episode.id, record?.openCapability);
     if (!record || record.status !== 'running' || record.openCall || !proof || record.openCapability?.callId !== callId ||
@@ -773,7 +778,7 @@ export class SqlitePersonStore {
         .find(m => digest(m.presentation) === digest(presentation)) : null);
     if (repeated) {
       this.trace(episode.ownerId, episode.id, 'presentation_published', { callId, invocationHash, messageId: repeated.id, phase: presentation.phase, duplicate: true });
-      return messageView(repeated);
+      return this.messageView(repeated);
     }
     p.messageSeq++; p.writeSerial++; this.put('persons', p);
     const message = this.doc(scope, { id: randomUUID(), revision: 1, seq: p.messageSeq, episodeId: episode.id,
@@ -782,7 +787,7 @@ export class SqlitePersonStore {
     this.put('messages', message, true); this.journal(scope, 'messages', message);
     record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'presentation_published', { callId, invocationHash, messageId: message.id, phase: presentation.phase });
-    return messageView(message);
+    return this.messageView(message);
   }
   repeatsAutonomousReply(scope, episode, reply) {
     return episode.kind === 'autonomous' && typeof reply === 'string' &&
@@ -810,7 +815,7 @@ export class SqlitePersonStore {
       " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.replyKind') = 'message-reply'", [episode.id, callId]);
     if (prior) {
       if (prior.publicationHash !== invocationHash) fail('INVALID_REQUEST');
-      return messageView(prior);
+      return this.messageView(prior);
     }
     if (record.openCall || !record.openCapability || record.openCapability.callId !== callId || record.openCapability.capability.id !== 'Conversation.reply' ||
         !isDeepStrictEqual(record.openCapability.capability.args, { messageIds, text: reply }) ||
@@ -821,7 +826,7 @@ export class SqlitePersonStore {
     this.put('messages', message, true); this.journal(scope, 'messages', message);
     record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'message_reply', { callId, messageId: message.id, replyToMessageIds: message.replyToMessageIds });
-    return messageView(message);
+    return this.messageView(message);
   }
   /** Publish only a validated, complete call's reply. This is communication, not
    * a state/Concept commit. Fencing, dedupe and the memory journal share one transaction. */
@@ -835,7 +840,7 @@ export class SqlitePersonStore {
     if (!record || record.status !== 'running' || record.openCall || record.openCapability) fail('STALE');
     const prior = this.rows('messages', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.replyKind') IN ('progress', 'execution-final')", [episode.id]);
     const duplicate = prior.find(m => m.callId === callId);
-    if (duplicate) { if (duplicate.text !== reply) fail('INVALID_REQUEST'); return messageView(duplicate); }
+    if (duplicate) { if (duplicate.text !== reply) fail('INVALID_REQUEST'); return this.messageView(duplicate); }
     const proof = this.one('traces', scope, " AND json_extract(record, '$.episodeId') = ? AND json_extract(record, '$.kind') = 'call_output' AND json_extract(record, '$.callId') = ? AND json_extract(record, '$.output.complete') = 1", [episode.id, callId]);
     if (proof?.output?.protocol === 'native-tools') {
       if (proof.output.text !== reply || (final && (proof.output.stopReason !== 'end_turn' || proof.output.toolCalls?.length))) fail('INVALID_REQUEST');
@@ -849,9 +854,9 @@ export class SqlitePersonStore {
     // A final duplicate is already delivered. Preserve its identity so final
     // cognition does not interpret dedupe as a missing public result.
     const sameReply = prior.find(m => m.text.trim() === reply.trim());
-    if (final && sameReply) return messageView(sameReply);
+    if (final && sameReply) return this.messageView(sameReply);
     if (final && this.repeatsAutonomousReply(scope, episode, reply)) {
-      return messageView(this.rows('messages', scope, " AND json_extract(record, '$.role') = 'assistant' ORDER BY seq DESC LIMIT 32").find(message => message.text.trim() === reply.trim()));
+      return this.messageView(this.rows('messages', scope, " AND json_extract(record, '$.role') = 'assistant' ORDER BY seq DESC LIMIT 32").find(message => message.text.trim() === reply.trim()));
     }
     // Provider latency counts too: a call started before 30s can finish after it.
     if ((!final && this.now.getTime() - new Date(record.lastReplyAt ?? record.createdAt).getTime() < FEEDBACK.minMs) ||
@@ -862,7 +867,7 @@ export class SqlitePersonStore {
     this.put('messages', message, true); this.journal(scope, 'messages', message);
     record.lastReplyAt = this.now.toISOString(); delete record.feedback; this.put('episodes', record);
     this.trace(episode.ownerId, episode.id, 'progress_reply', { callId, messageId: message.id });
-    return messageView(message);
+    return this.messageView(message);
   }
   commit(episode, proposal, selection, callId, reportedSources = new Map()) {
     const p = this.own(episode), scope = this.episodeScope(episode);
@@ -1003,7 +1008,7 @@ export class SqlitePersonStore {
     this.getPerson(ownerId);
     const records = this.rows('messages', this.scope(ownerId),
       ' AND (? IS NULL OR seq < ?) AND instr(text, ?) > 0 ORDER BY seq DESC LIMIT ?', [cursor, cursor, query.toLowerCase(), limit + 1]);
-    return inspectionPage(records, limit, 'seq', messageView, LIMITS.responseBytes);
+    return inspectionPage(records, limit, 'seq', message => this.messageView(message), LIMITS.responseBytes);
   }
   turns(ownerId, options = {}) {
     const { cursor, limit } = turnsPage(options);
@@ -1073,7 +1078,7 @@ export class SqlitePersonStore {
     if (cursor != null) { clause += ' AND seq < ?'; params.push(sequence(cursor)); }
     if (query) { clause += ' AND instr(text, ?) > 0'; params.push(query.toLowerCase()); }
     const docs = this.rows(collection, this.scope(ownerId), `${clause} ORDER BY seq DESC LIMIT ?`, [...params, limit + 1]);
-    return inspectionPage(docs, limit, record => String(record.seq), collection === 'messages' ? messageView : publicDoc, LIMITS.responseBytes);
+    return inspectionPage(docs, limit, record => String(record.seq), collection === 'messages' ? message => this.messageView(message) : publicDoc, LIMITS.responseBytes);
   }
   recall(ownerId, { kind = 'messages', query = '', cursor = null, limit = 5 } = {}) {
     memoryKind(kind); text(query, LIMITS.inputBytes, true); boundedLimit(limit);
@@ -1135,7 +1140,7 @@ export class SqlitePersonStore {
     this.recover(ownerId);
     const scope = this.scope(ownerId), p = this.getPerson(ownerId), state = this.one('states', scope);
     const messages = this.rows('messages', scope, ' ORDER BY seq DESC LIMIT 21');
-    const messagePage = inspectionPage(messages, 20, record => String(record.seq), messageView, LIMITS.responseBytes);
+    const messagePage = inspectionPage(messages, 20, record => String(record.seq), message => this.messageView(message), LIMITS.responseBytes);
     const episode = this.one('episodes', scope, ' ORDER BY inputWatermark DESC');
     const latestEpisode = episode ? { id: episode.id, status: episode.status, createdAt: episode.createdAt,
       ...(episode.status === 'running' && episode.feedback ? { feedback: episode.feedback } : {}),
@@ -1149,7 +1154,7 @@ export class SqlitePersonStore {
     const rows = this.sql(`SELECT seq, kind, id, revision, record FROM memory_changes WHERE ${SCOPE} AND seq > ? ORDER BY seq ASC LIMIT ?`)
       .all(...scopeValues(this.scope(ownerId)), after, limit + 1);
     const items = rows.slice(0, limit).map(row => ({ ...row,
-      record: (row.kind === 'messages' ? messageView : conceptView)(decode(row, row.kind)) }));
+      record: (row.kind === 'messages' ? value => this.messageView({ ...value, ...this.scope(ownerId) }) : conceptView)(decode(row, row.kind)) }));
     return { items, lastSeq: items.at(-1)?.seq ?? after, hasMore: rows.length > limit };
   }
   resolveMemories(ownerId, kind, refs) {
@@ -1159,7 +1164,7 @@ export class SqlitePersonStore {
     for (const ref of refs) {
       if (!ref || typeof ref.id !== 'string' || !Number.isSafeInteger(ref.revision) || ref.revision < 1) fail('INVALID_REQUEST');
       const record = this.one(kind, scope, ' AND id = ? AND revision = ?', [ref.id, ref.revision]);
-      if (record && !seen.has(record.id)) { seen.add(record.id); records.push((kind === 'messages' ? messageView : conceptView)(record)); }
+      if (record && !seen.has(record.id)) { seen.add(record.id); records.push((kind === 'messages' ? value => this.messageView(value) : conceptView)(record)); }
     }
     return records;
   }

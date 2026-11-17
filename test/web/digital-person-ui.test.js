@@ -103,6 +103,15 @@ describe('Digital Person surface', () => {
     expect(partitionPersonEpisodes(projected, undefined).pending).toEqual([]);
     expect(partitionPersonEpisodes(projected, [{ id: 'a', status: 'completed' }]).history).toEqual(projected);
     expect(personResponseOrigins(projected).get(projected[1].key)).toBe(projected[0].key);
+    // The true root may be outside the latest page; a later supplement is not
+    // the root timestamp, and prepending the root must not reorder the panes.
+    const partial = [
+      { ...user('b-q', 'b', 20), rootMessageId: 'b-q', turnStartedAt: 20 },
+      { ...user('late-a', 'a', 30), rootMessageId: 'a-q', turnStartedAt: 10 },
+    ];
+    expect(orderPersonEpisodeMessages(partial).map(row => row.episodeId)).toEqual(['a', 'b']);
+    expect(partitionPersonEpisodes(projectPersonConversation(partial), episodes).pending.map(turn => turn.userTurnId)).toEqual(['a', 'b']);
+    expect(orderPersonEpisodeMessages([user('a-q', 'a', 10), ...partial]).map(row => row.episodeId)).toEqual(['a', 'a', 'b']);
   });
 
   it('uses the shared sidebar toggle rather than a back route and reports modal blocking', async () => {

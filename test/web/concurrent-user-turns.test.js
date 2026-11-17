@@ -96,6 +96,13 @@ describe('concurrent user turn presentation', () => {
       await new Promise(resolve => setTimeout(resolve, 40));
       await Vue.nextTick();
       expect(wrapper.find('[data-virtual-id="block-0"]').exists()).toBe(true);
+      // Latest must also resume the nested transcript after user reading.
+      const transcript = wrapper.findComponent({ name: 'VirtualTranscript' }).vm.$.exposed;
+      const bottom = vi.spyOn(transcript, 'scrollToBottom');
+      const follow = vi.spyOn(transcript, 'setBottomFollowEnabled');
+      api.revealLatest();
+      expect(follow).toHaveBeenLastCalledWith(true);
+      expect(bottom).toHaveBeenCalledTimes(1);
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });
 

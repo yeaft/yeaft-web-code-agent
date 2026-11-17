@@ -100,8 +100,9 @@ export function orderPersonEpisodeMessages(messages = []) {
     buckets.get(key).rows.push(message);
   }
   const time = bucket => {
-    const root = bucket.rows.find(row => row.role === 'user') || bucket.rows[0];
-    const at = new Date(root.createdAt).getTime();
+    const declared = bucket.rows.find(row => row.turnStartedAt != null)?.turnStartedAt;
+    const root = bucket.rows.find(row => row.role === 'user' && (!row.rootMessageId || (row.messageId || row.id) === row.rootMessageId));
+    const at = new Date(declared ?? root?.createdAt).getTime();
     return Number.isFinite(at) ? at : null;
   };
   return [...buckets.values()].sort((a, b) => {
@@ -130,7 +131,8 @@ export function partitionPersonEpisodes(blocks = [], episodes) {
     const turn = byId.get(block.episodeId);
     if (turn) turn.blocks.push(block); else history.push(block);
   }
-  const at = turn => new Date(turn.blocks.find(block => block.role === 'user')?.createdAt ?? turn.episode.createdAt).getTime();
+  const at = turn => new Date(turn.episode.createdAt ?? turn.blocks.find(block => block.turnStartedAt != null)?.turnStartedAt
+    ?? turn.blocks.find(block => block.role === 'user' && (!block.rootMessageId || (block.messageId || block.id) === block.rootMessageId))?.createdAt).getTime();
   pending.sort((a, b) => (at(a) || 0) - (at(b) || 0));
   for (const turn of pending) {
     // A long-running turn's initial prompt can be outside the latest page.
