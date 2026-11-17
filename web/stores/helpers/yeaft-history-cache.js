@@ -181,10 +181,17 @@ export function yeaftHistoryUnitKey(row) {
 
 function durableTurnRows(rows) {
   const turns = [];
+  const roots = new Map();
   let current = null;
   for (const row of rows) {
     if (!isDurableYeaftHistoryRow(row)) continue;
-    if (row?.type === 'user' || !current) {
+    if (row.userTurnId) {
+      if (!roots.has(row.userTurnId)) {
+        roots.set(row.userTurnId, []);
+        turns.push(roots.get(row.userTurnId));
+      }
+      current = roots.get(row.userTurnId);
+    } else if (row?.type === 'user' || !current) {
       current = [];
       turns.push(current);
     }

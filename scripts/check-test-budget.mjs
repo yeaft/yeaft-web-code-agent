@@ -190,9 +190,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // Existing Person inbox, inspector, output and Session navigation cases retained.
 // +4 all-Agent Person entry regressions: rendered availability/priority, initial
 // destination and offline draft ownership, and desktop/mobile real multi-Agent relay.
-// +17 concurrent Session turn regressions: routing/context/cancellation (5),
-// presentation (5), store/retention/relay isolation (4), browser lifecycle (3).
-export const TEST_CASE_LIMIT = 1086;
+// +20 concurrent Session turn regressions: routing/context/cancellation (7),
+// presentation/scroll intent (6), store/retention/relay isolation (4), browser lifecycle (3).
+export const TEST_CASE_LIMIT = 1089;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
