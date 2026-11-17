@@ -149,7 +149,7 @@ describe('durable live Person inbox', () => {
       if (terminal === 'cancel') await r.cancel('alice', episode.id);
       if (terminal === 'finish') await r.finish(episode, 'failed', 'PROVIDER_FAILED');
       if (terminal === 'recover') {
-        inspect(r, db => db.prepare("UPDATE persons SET record = json_set(record, '$.leaseUntil', ?)").run(new Date(0).toISOString()));
+        inspect(r, db => db.prepare("UPDATE episodes SET record = json_set(record, '$.leaseUntil', ?)").run(new Date(0).toISOString()));
         expect(await r.recover('alice')).toBe(true);
       }
       await expect(r.receiveInputs(episode)).rejects.toMatchObject({ code: 'STALE' });

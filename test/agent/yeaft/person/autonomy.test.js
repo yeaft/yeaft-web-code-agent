@@ -116,7 +116,7 @@ it('cancel fences queued admissions and stale completion generations until expli
   const queued = (await r.autonomyAdmit('alice', admission)).episode;
   const generation = (await r.getPerson('alice')).autonomy.generation;
   expect(await r.autonomyObserve('alice', event(queued))).toBe(true); // completion queued before cancel
-  expect(await r.cancel('alice', first.id)).toEqual({ cancelled: true, episodeId: queued.id });
+  expect(await r.cancel('alice', first.id)).toMatchObject({ cancelled: true, episodeId: queued.id });
   expect((await r.getPerson('alice')).autonomy.pending).toEqual([]);
   expect(await r.autonomyObserve('alice', { ...event(first), taskId: 'late-result' })).toBe(false);
   await expect(r.settings('alice', { autonomyEnabled: true }, undefined, generation)).rejects.toMatchObject({ code: 'STALE' });
@@ -264,7 +264,8 @@ it('joins shutdown/admission races without starting queued models or replaying e
   // Reconciliation after process loss stops consent instead of replaying a leased job.
   await r.settings('alice', { autonomyEnabled: true }); due(r);
   const lost = (await original('alice', admission)).episode;
-  edit(r, p => { p.leaseUntil = new Date(0).toISOString(); });
+  const expiryDb = new DatabaseSync(r.dbPath);
+  try { expiryDb.prepare("UPDATE episodes SET record = json_set(record, '$.leaseUntil', ?) WHERE ownerId = 'alice' AND status = 'running'").run(new Date(0).toISOString()); } finally { expiryDb.close(); }
   expect(await original('alice', admission)).toBeNull();
   expect((await r.getPerson('alice')).settings.autonomyEnabled).toBe(false);
   expect((await r.snapshot('alice')).latestEpisode).toMatchObject({ id: lost.id, status: 'interrupted' });

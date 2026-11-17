@@ -61,7 +61,7 @@ export function admissionReceipt(episode, clientMessageId, requestHash) {
   if (!episode) return { found: false, clientMessageId };
   if (requestHash != null && requestHash !== episode.requestHash) fail('IDEMPOTENCY_CONFLICT');
   return { found: true, clientMessageId, episodeId: episode.id, status: episode.status, kind: episode.kind,
-    requestHash: episode.requestHash, text: episode.text, messageId: episode.messageId,
+    requestHash: episode.requestHash, text: episode.text, messageId: episode.messageId, rootMessageId: episode.rootMessageId ?? episode.messageId,
     attachments: (episode.attachments ?? []).map(({ id, name, mimeType, size, sha256, kind }) => ({ id, name, mimeType, size, sha256, kind })) };
 }
 export function page(payload = {}) {

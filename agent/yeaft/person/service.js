@@ -1,3 +1,4 @@
+import { routePersonTurn } from './turn-routing.js';
 import { SqlitePersonRepository } from './sqlite-repository.js';
 import { LocalPersonMemory } from './local-memory.js';
 import { ensurePersonStorage } from './sqlite-storage.js';
@@ -69,7 +70,7 @@ export function createPersonService(options = {}) {
       const filePublication = outputFilePublicationSupport();
       const status = { outputsSupported: true, outputsFileSupported: filePublication.supported, outputsFileReason: filePublication.reason,
         renameSupported: true, defaultModelSupported: true, autonomySupported: true, autonomyEnabled: false, configured, storage: 'sqlite', modelReady: false,
-        executionsSupported: true, pauseSupported: true, main: runtime.execution(ownerId),
+        executionsSupported: true, pauseSupported: true, concurrentTurnsSupported: true, active: runtime.executions(ownerId), main: runtime.execution(ownerId),
         defaultModel: null, agentDefaultModel, modelCandidates: [], effectiveModelCandidates: [], effectiveDefaultModel: null };
       if (!configured) return { ...status, reason: 'Digital person storage configuration is missing.', storageReady: false };
       try { await repository.init(); }
@@ -120,14 +121,14 @@ export function createPersonService(options = {}) {
         object(payload, []);
         const snapshot = await repository.snapshot(ownerId);
         const main = runtime.execution(ownerId);
-        return { ...snapshot, main, ...(main && snapshot.busy && snapshot.latestEpisode?.id === main.episodeId
+        return { ...snapshot, main, activeEpisodes: snapshot.activeEpisodes.map(episode => ({ ...episode, ...runtime.execution(ownerId, episode.episodeId) })), ...(main && snapshot.busy && snapshot.latestEpisode?.id === main.episodeId
           ? { latestEpisode: { ...snapshot.latestEpisode, ...main, id: main.episodeId } } : {}) };
       }
       case 'executions': {
         object(payload, []);
         // No recover, task-host construction or provider work from this read.
         const diagnostics = await repository.turns(ownerId, { limit: 5 });
-        return { main: runtime.execution(ownerId), ...diagnostics };
+        return { main: runtime.execution(ownerId), active: runtime.executions(ownerId), ...diagnostics };
       }
       case 'pause':
       case 'resume': {
@@ -154,8 +155,27 @@ export function createPersonService(options = {}) {
           const receipt = await repository.receipt(ownerId, payload.clientMessageId);
           if (!receipt.found) fail('BUSY');
         }
-        const admitted = await repository.admit(ownerId, { kind: op, text: payload.text ?? '', clientMessageId: payload.clientMessageId,
-          workerId: runtime.workerId, budget: runtime.budget, files: payload.files });
+        let routing = null;
+        // Reconcile retries before routing; retries never incur a classifier call.
+        const priorReceipt = await repository.receipt(ownerId, payload.clientMessageId);
+        let admitted;
+        for (;;) {
+          if (op === 'send' && !priorReceipt.found) {
+            const snapshot = await repository.snapshot(ownerId);
+            routing = snapshot.activeEpisodes.length ? await routePersonTurn({ getProvider, person: snapshot.person,
+              activeEpisodes: snapshot.activeEpisodes, messages: snapshot.messages, input: payload.text ?? '' }) : { decision: 'idle' };
+          }
+          if (!priorReceipt.found && ((autonomyStops.get(ownerId) ?? 0) !== stopGeneration || runtime.pendingCancellations.has(ownerId))) fail('BUSY');
+          try {
+            admitted = await repository.admit(ownerId, { kind: op, text: payload.text ?? '', clientMessageId: payload.clientMessageId,
+              workerId: runtime.workerId, budget: runtime.budget, files: payload.files, routing });
+            break;
+          } catch (error) {
+            // A simultaneous idle send won admission. Classify against the new
+            // durable active turn, rather than silently appending an unrouted input.
+            if (error.code !== 'STALE' || routing?.decision !== 'idle') throw error;
+          }
+        }
         if (!admitted.duplicate && !admitted.appended) {
           const cancelled = (autonomyStops.get(ownerId) ?? 0) !== stopGeneration || runtime.pendingCancellations.has(ownerId);
           if (closed || cancelled) {
@@ -167,7 +187,7 @@ export function createPersonService(options = {}) {
           } else runtime.start(admitted.episode);
         }
         return { episodeId: admitted.episodeId, duplicate: admitted.duplicate, status: admitted.status,
-          messageId: admitted.messageId, deliveryState: admitted.deliveryState };
+          messageId: admitted.messageId, rootMessageId: admitted.rootMessageId, deliveryState: admitted.deliveryState };
       }
       case 'traces': await repository.recover(ownerId); return repository.list(ownerId, 'traces', page(payload));
       case 'messages': return repository.list(ownerId, 'messages', page(payload));
@@ -191,8 +211,7 @@ export function createPersonService(options = {}) {
           // Even a repeated cancel must join an already-fenced local execution.
           // A durable cancelled status alone does not prove host effects stopped.
           await Promise.all([runtime.cancel(payload.episodeId, 'CANCELLED', ownerId),
-            ...(result.cancelled && payload.episodeId && result.episodeId !== payload.episodeId
-              ? [runtime.cancel(result.episodeId, 'CANCELLED', ownerId)] : [])]);
+            ...(result.episodeIds ?? []).filter(id => id !== payload.episodeId).map(id => runtime.cancel(id, 'CANCELLED', ownerId))]);
           return result;
         } finally { release(); }
       }
