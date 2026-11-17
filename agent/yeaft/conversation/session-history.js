@@ -229,8 +229,8 @@ function requestTurns(input) {
     }
     if (clientKey) clientRows.set(clientKey, [...(clientRows.get(clientKey) || []), row]);
     const rootKey = row.userTurnId && scopedIdentity(row, row.userTurnId, streamId);
-    let turn = rootKey && byRoot.get(rootKey)
-      || candidates.find(candidate => sameStream(candidate) && sentAt(candidate.user) === sentAt(row));
+    let turn = rootKey ? byRoot.get(rootKey)
+      : candidates.find(candidate => sameStream(candidate) && sentAt(candidate.user) === sentAt(row));
     if (!turn) {
       turn = { user: row, rows: [], origins: new Set(), explicitOrigins: false, index, input };
       turns.push(turn);
