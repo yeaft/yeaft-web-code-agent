@@ -197,6 +197,10 @@ describe('Anthropic gateway compatibility and prefix binding', () => {
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call1', content: 'result' }] }] };
     const entries = [{ state, messageIndex: 1 }];
     expect(() => validateAnthropicRequestPrefixes(body, entries)).not.toThrow();
+    const withPeer = structuredClone(body);
+    withPeer.messages.push({ role: 'user', content: [{ type: 'text', text: '[Session peer context] visible delta; state=running' }] });
+    expect(() => validateAnthropicRequestPrefixes(withPeer, entries)).not.toThrow();
+    expect(withPeer.messages.slice(0, body.messages.length)).toEqual(body.messages);
     const cacheOnly = structuredClone(body);
     cacheOnly.system[0].cache_control = { type: 'ephemeral' };
     cacheOnly.tools[0].cache_control = { type: 'ephemeral' };

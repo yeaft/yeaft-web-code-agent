@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); const gate = { promise, resolve }; gates.push(gate); return gate; }
 async function until(fn) { for (let i = 0; i < 400; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 5)); } throw Error('condition timed out'); }
-function setup(adapter, roster = ['omni']) {
+function setup(adapter, roster = ['omni'], config = {}) {
   root = mkdtempSync(join(tmpdir(), 'session-parallel-'));
   seedDefaultVps(join(root, 'virtual-persons'));
   const meta = createSessionFromSpec(root, { name: 'Parallel', roster, defaultVpId: 'omni' });
@@ -33,7 +33,7 @@ function setup(adapter, roster = ['omni']) {
   ctx.ws = { readyState: 1, send() {} }; ctx.serverEncryptionRequired = false;
   ctx.outboundSendQueue = []; ctx.outboundSendQueueActive = true;
   bridge.__testSetSession({ adapter, trace: new NullTrace(), conversationStore: store,
-    config: { model: 'test-model', maxOutputTokens: 1024 }, toolRegistry: new ToolRegistry(), yeaftDir: root });
+    config: { model: 'test-model', maxOutputTokens: 1024, ...config }, toolRegistry: new ToolRegistry(), yeaftDir: root });
   return { store, sessionId: meta.id, send: (id, text) => bridge.handleYeaftSessionSend({ sessionId: meta.id, id, text }) };
 }
 const frames = () => ctx.outboundSendQueue.map(item => item.msg);
@@ -75,6 +75,9 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   expect(requests.length).toBeGreaterThanOrEqual(3);
   expect(JSON.stringify(requests.at(-1))).toContain('additional details');
   expect(JSON.stringify(requests.at(-1))).toContain('already visible first output');
+  const peerNotes = requests.at(-1).filter(row => row.role === 'user' && String(row.content).includes('[Session peer context')).map(row => row.content).join('\n');
+  expect(peerNotes).toContain('state=aborted');
+  expect(peerNotes.match(/already visible first output/g)).toHaveLength(1);
   const rows = store.loadAllBySession(sessionId);
   expect(rows.find(r => r.clientMessageId === 'extra-b')).toMatchObject({ userTurnId: 'root-b', relation: 'supplement' });
   expect(rows.filter(r => r.role === 'assistant').every(r => ['root-a', 'root-b'].includes(r.userTurnId))).toBe(true);
@@ -97,7 +100,10 @@ it('revalidates a supplement target after classifier await instead of appending 
     yield { type: 'stop', stopReason: 'end_turn' };
   } });
   await send('race-a', 'first'); await until(() => calls === 1);
+  let receivedAt;
   bridge.__testSetThreadClassifier(async ({ runningThreads }) => {
+    receivedAt = Date.now();
+    expect(runningThreads[0].summary).toContain('output 1');
     await classify.promise;
     return { decision: 'related', targetThreadId: runningThreads[0].threadId };
   });
@@ -106,6 +112,8 @@ it('revalidates a supplement target after classifier await instead of appending 
   finish.resolve(); await until(() => events('vp_turn_end').length === 1);
   classify.resolve(); await pending; await bridge.__testDrainVpDrivers();
   expect(calls).toBe(2);
+  const rootTurn = events('session_turns').at(-1).event.turns.find(turn => turn.userTurnId === 'race-b');
+  expect(rootTurn.startedAt).toBeLessThanOrEqual(receivedAt);
   expect(events('user_message_routed').at(-1).event).toMatchObject({ userTurnId: 'race-b', relation: 'new' });
   expect(events('vp_turn_start').map(f => f.userTurnId)).toEqual(['race-a', 'race-b']);
 });
@@ -180,9 +188,33 @@ it('serializes simultaneous routing decisions and fences a stopped classificatio
   await entered.promise;
   bridge.handleYeaftAbortTurn({ sessionId, userTurnId: first.userTurnId });
   classify.resolve(); await pending;
-  await until(() => calls === 3);
-  expect(events('user_message_routed').at(-1).event).toMatchObject({ userTurnId: 'classification-after-stop', relation: 'new' });
+  expect(calls).toBe(2);
+  expect(events('user_message_routed').some(frame => frame.event.messageId === 'classification-after-stop')).toBe(false);
+  expect(events('session_turns').some(frame => frame.event.turns.some(turn => turn.userTurnId === first.userTurnId && turn.state === 'cancelling'))).toBe(true);
   expect(events('vp_turn_end').some(frame => frame.userTurnId === 'simultaneous-b')).toBe(false);
   finish.resolve(); await bridge.__testDrainVpDrivers();
-  expect(calls).toBe(3); // stopped pending supplement must not resurrect its execution
+  expect(calls).toBe(2); // stopped pending supplement/classification must not resurrect its execution
+});
+
+it('bounds a stuck classifier and continues queued sends using visible assistant choices', async () => {
+  const finish = deferred(); let calls = 0; let signal;
+  const { send, sessionId } = setup({ async *stream(params) {
+    calls++;
+    yield { type: 'text_delta', text: 'Option 1: red. Option 2: blue.' };
+    await Promise.race([finish.promise, new Promise(resolve => params.signal.addEventListener('abort', resolve, { once: true }))]);
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } }, ['omni'], { threadClassifierTimeoutMs: 30 });
+  await send('timeout-a', 'choose colors'); await until(() => calls === 1);
+  bridge.__testSetThreadClassifier(params => {
+    expect(params.runningThreads[0].summary).toContain('Option 2: blue');
+    signal = params.signal;
+    return new Promise(() => {}); // deliberately ignores abort
+  });
+  const before = Date.now();
+  await Promise.all([send('timeout-b', 'use the second option'), send('timeout-c', 'independent queued send')]);
+  await until(() => calls === 3);
+  expect(Date.now() - before).toBeLessThan(2000);
+  expect(signal.aborted).toBe(true);
+  bridge.handleYeaftAbortTurn({ sessionId, userTurnId: 'timeout-b' });
+  finish.resolve(); await bridge.__testDrainVpDrivers();
 });
