@@ -1,3 +1,4 @@
+import { userMessageRoute } from './yeaft-session-turns.js';
 // Provider-neutral assistant output frame processing helpers.
 
 import { resetProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
@@ -115,7 +116,8 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
     // New assistant message means all previous tools are done
     const msgs = store.messagesMap[conversationId] || [];
     for (const msg of msgs) {
-      if (msg.type === 'tool-use' && !msg.hasResult) {
+      if (msg.type === 'tool-use' && !msg.hasResult
+          && (!store._currentYeaftTurnId || msg.turnId === store._currentYeaftTurnId)) {
         msg.hasResult = true;
       }
     }
@@ -272,7 +274,8 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         let matched = false;
         if (resultToolUseId) {
           for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].type === 'tool-use' && msgs[i].toolId === resultToolUseId) {
+            if (msgs[i].type === 'tool-use' && msgs[i].toolId === resultToolUseId
+                && (!store._currentYeaftTurnId || msgs[i].turnId === store._currentYeaftTurnId)) {
               msgs[i].hasResult = true;
               msgs[i].toolResult = result.is_update && msgs[i].toolResult
                 ? `${msgs[i].toolResult}\n\n${resultContent}`
@@ -284,7 +287,8 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         }
         if (!matched) {
           for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].type === 'tool-use' && !msgs[i].hasResult) {
+            if (msgs[i].type === 'tool-use' && !msgs[i].hasResult
+                && (!store._currentYeaftTurnId || msgs[i].turnId === store._currentYeaftTurnId)) {
               msgs[i].hasResult = true;
               msgs[i].toolResult = resultContent;
               break;
@@ -305,6 +309,9 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       // See review I2 (Fowler) for why this lives in a single helper
       // rather than being reimplemented at each gate.
       const echoClientMsgId = data.message?.clientMessageId || data.clientMessageId || null;
+      const route = userMessageRoute(store, frameAgentId, store._currentYeaftSessionId, echoClientMsgId || data.message?.id);
+      const userTurnId = data.message?.userTurnId || store._currentYeaftUserTurnId || route?.userTurnId || null;
+      const turnRelation = data.message?.turnRelation || route?.turnRelation || null;
       const echoCandidate = {
         type: 'user',
         content: userContent,
@@ -318,6 +325,8 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
           ...(data.ts ? { ts: data.ts } : {}),
           type: 'user',
           content: userContent,
+          ...(userTurnId ? { userTurnId } : {}),
+          ...(turnRelation ? { turnRelation } : {}),
           // Preserve attachment metadata from agent history replay
           ...(data.message?.attachments ? { attachments: data.message.attachments } : {}),
           ...(data.message?.quote ? { quote: data.message.quote } : {}),
@@ -341,6 +350,8 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         // branch — it isn't, every successful send hits it.
         for (let i = msgs.length - 1; i >= 0; i--) {
           if (msgs[i].type === 'user' && msgs[i].clientMessageId === echoClientMsgId) {
+            if (userTurnId) msgs[i].userTurnId = userTurnId;
+            if (turnRelation) msgs[i].turnRelation = turnRelation;
             if (data.dbMessageId && !msgs[i].dbMessageId) msgs[i].dbMessageId = data.dbMessageId;
             if (data.message?.id && !msgs[i].messageId) {
               msgs[i].id = data.message.id;
@@ -354,9 +365,12 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       }
     }
   } else if (data.type === 'result') {
-    // ★ result 表示当前 turn 已完成，立即清除 processing 状态
-    delete store.processingConversations[conversationId];
-    stopProcessingWatchdog(store, conversationId);
+    // CLI results finish the conversation. Native results finish only their
+    // execution; sibling turns keep their processing state and watchdog.
+    if (!store._currentYeaftSessionId) {
+      delete store.processingConversations[conversationId];
+      stopProcessingWatchdog(store, conversationId);
+    }
 
     // A terminal result also resolves the connecting state: either the backend
     // session booted (init already cleared it) or boot failed and surfaced this
@@ -391,12 +405,17 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
         agentId: store._currentYeaftAgentId || null,
       });
     }
-    // ★ 设置防护窗口，防止后续 agent_list 中的 stale processing:true 重新设回
-    if (!store._closedAt) store._closedAt = {};
-    store._closedAt[conversationId] = Date.now();
-    // ★ 持久标记：阻止 agent_list 重新设置 processing 直到下次 sendMessage
-    if (!store._turnCompletedConvs) store._turnCompletedConvs = new Set();
-    store._turnCompletedConvs.add(conversationId);
+    // A native conversation can contain other running Sessions and turns.
+    // Fence stale agent-list processing only after all of them have settled.
+    const hasSibling = Object.values(store.activeVpTurns || {}).some(turn =>
+      turn.conversationId === conversationId
+      || (store._currentYeaftAgentId && turn.agentId === store._currentYeaftAgentId));
+    if (!hasSibling) {
+      if (!store._closedAt) store._closedAt = {};
+      store._closedAt[conversationId] = Date.now();
+      if (!store._turnCompletedConvs) store._turnCompletedConvs = new Set();
+      store._turnCompletedConvs.add(conversationId);
+    }
     execStatus.currentTool = null;
     markAllToolsCompleted(store, conversationId, store._currentYeaftSessionId ? {
       sessionId: store._currentYeaftSessionId,
@@ -416,8 +435,13 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       // Walk backwards from the end; stop at the first user/human message (turn boundary).
       let hasAssistantInTurn = false;
       for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].type === 'assistant') { hasAssistantInTurn = true; break; }
-        if (msgs[i].type === 'user') break;
+        if (store._currentYeaftTurnId) {
+          if (msgs[i].turnId !== store._currentYeaftTurnId) continue;
+          if (msgs[i].type === 'assistant') { hasAssistantInTurn = true; break; }
+        } else {
+          if (msgs[i].type === 'assistant') { hasAssistantInTurn = true; break; }
+          if (msgs[i].type === 'user') break;
+        }
       }
       if (!hasAssistantInTurn) {
         store.appendToAssistantMessageForConversation(conversationId, resultText.trim());

@@ -53,6 +53,7 @@ function stampSpeakerOnVpMessage(store, conversationId, m) {
   if (!isYeaftConversation(store, conversationId)) return;
   if (!m.vpId && store._currentYeaftVpId) m.vpId = store._currentYeaftVpId;
   if (!m.turnId && store._currentYeaftTurnId) m.turnId = store._currentYeaftTurnId;
+  if (!m.userTurnId && store._currentYeaftUserTurnId) m.userTurnId = store._currentYeaftUserTurnId;
   if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
 }
 
@@ -284,6 +285,9 @@ export function addMessageToConversation(store, conversationId, msg) {
     if (!newMsg.turnId && store._currentYeaftTurnId) {
       newMsg.turnId = store._currentYeaftTurnId;
     }
+    if (!newMsg.userTurnId && store._currentYeaftUserTurnId) {
+      newMsg.userTurnId = store._currentYeaftUserTurnId;
+    }
     // Speaker derivation is gated by message type (assistant / tool-use)
     // inside the helper itself.
     stampSpeakerOnVpMessage(store, conversationId, newMsg);
@@ -443,12 +447,7 @@ export function finishStreamingForConversation(store, conversationId, { complete
       // routing context was set and the defensive stamper below will
       // adopt them into the active turn). Anything tagged with a
       // DIFFERENT turnId is a concurrent VP — leave it alone.
-      if (m.turnId && m.turnId !== targetTurnId) {
-        // Stop at the user message that opened this fan-out so we don't
-        // wander into older history.
-        if (m.type === 'user') break;
-        continue;
-      }
+      if (m.turnId !== targetTurnId) continue;
     }
     if (m.isStreaming) {
       m.isStreaming = false;
@@ -464,7 +463,7 @@ export function finishStreamingForConversation(store, conversationId, { complete
     // it in from the still-active routing context.
     stampSpeakerOnVpMessage(store, conversationId, m);
     // Stop at the last user message (turn boundary) — no need to go further
-    if (m.type === 'user') break;
+    if (!targetTurnId && m.type === 'user') break;
   }
 }
 

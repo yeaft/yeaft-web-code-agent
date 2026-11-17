@@ -52,10 +52,23 @@ function isUnsafeResidentRow(row) {
 
 function residentTurns(rows) {
   const turns = [];
+  const byUserTurn = new Map();
   let current = null;
   for (const row of rows) {
+    if (row?.userTurnId) {
+      let turn = byUserTurn.get(row.userTurnId);
+      if (!turn) {
+        turn = { rows: [], protected: false };
+        byUserTurn.set(row.userTurnId, turn);
+        turns.push(turn);
+      }
+      turn.rows.push(row);
+      if (isUnsafeResidentRow(row)) turn.protected = true;
+      current = turn;
+      continue;
+    }
     if (row?.type === 'user' || !current) {
-        current = { rows: [], protected: false };
+      current = { rows: [], protected: false };
       turns.push(current);
     }
     current.rows.push(row);

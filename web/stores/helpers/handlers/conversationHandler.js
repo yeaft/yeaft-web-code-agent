@@ -816,6 +816,10 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
     const uiKey = clientMessageId
       ? yeaftOptimisticMessageIdentity(agentId, rowSessionId, clientMessageId)
       : durableKey;
+    const userTurnMeta = {
+      ...(typeof m.userTurnId === 'string' && m.userTurnId ? { userTurnId: m.userTurnId } : {}),
+      ...(m.turnRelation === 'new' || m.turnRelation === 'supplement' ? { turnRelation: m.turnRelation } : {}),
+    };
     const historyEntryMeta = m.historyEntryId
       ? {
           historyEntryId: m.historyEntryId,
@@ -836,6 +840,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
         ...(durableKey ? { stableKey: durableKey } : {}),
         ...(uiKey ? { uiKey } : {}),
         ...historyEntryMeta,
+        ...userTurnMeta,
         seq: Number.isFinite(m.seq) ? m.seq : parsePersistedHistorySeq(stableId),
         type: 'user',
         content: m.content,
@@ -868,6 +873,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           ...(durableKey ? { stableKey: durableKey } : {}),
           ...(uiKey ? { uiKey } : {}),
           ...historyEntryMeta,
+          ...userTurnMeta,
           seq: Number.isFinite(m.seq) ? m.seq : parsePersistedHistorySeq(stableId),
           ...(m.entryId ? { entryId: m.entryId } : {}),
           ...(Array.isArray(m.sourceMessageIds) ? { sourceMessageIds: m.sourceMessageIds } : {}),
@@ -877,6 +883,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           sessionId: rowSessionId,
           turnId,
           _hasPersistedTurnId: hasPersistedTurnId,
+          ...(m.threadId ? { threadId: m.threadId } : {}),
           ...executionOriginMeta,
           ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
           ...(m.presentation ? { presentation: m.presentation } : {}),
@@ -900,6 +907,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           ...(stableId ? { id: `${stableId}:todos`, messageId: `${stableId}:todos`, persistedMessageId: stableId } : {}),
           ...(durableKey ? { stableKey: `${durableKey}:todos` } : {}),
           ...historyEntryMeta,
+          ...userTurnMeta,
           seq: Number.isFinite(m.seq) ? m.seq : parsePersistedHistorySeq(stableId),
           type: 'tool-use',
           toolName: 'TodoWrite',
@@ -923,6 +931,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           ...(stableId ? { id: `${stableId}:tool:${toolIdentityKey}`, messageId: `${stableId}:tool:${toolIdentityKey}`, persistedMessageId: stableId } : {}),
           ...(durableKey ? { stableKey: `${durableKey}:tool:${toolIdentityKey}` } : {}),
           ...historyEntryMeta,
+          ...userTurnMeta,
           seq: Number.isFinite(m.seq) ? m.seq : parsePersistedHistorySeq(stableId),
           type: 'tool-use',
           toolId: toolCall.id || null,
@@ -952,6 +961,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           ...(stableId ? { persistedMessageId: stableId } : {}),
           ...(durableKey ? { stableKey: `${durableKey}:image:${occurrenceKey}` } : {}),
           ...historyEntryMeta,
+          ...userTurnMeta,
           seq: Number.isFinite(m.seq) ? m.seq : parsePersistedHistorySeq(stableId),
           type: 'chat-image', ...image, timestamp, sessionId: rowSessionId, turnId,
           ...executionOriginMeta,
@@ -992,6 +1002,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
           ...(stableId ? { persistedMessageId: stableId } : {}),
           ...(durableKey ? { stableKey: `${durableKey}:ask:${result.toolCallId}` } : {}),
           ...historyEntryMeta,
+          ...userTurnMeta,
           seq: Number.isFinite(m.seq) ? m.seq : parsePersistedHistorySeq(stableId),
           type: 'tool-use',
           timestamp,
