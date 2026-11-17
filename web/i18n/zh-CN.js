@@ -337,6 +337,7 @@ export default {
   "person.manualMode": "手动模式",
   "person.manualHint": "发送消息或点击“思考 / 遐想”才会开始一轮，不会自动思考，运行中可取消。",
   "person.version": "状态 v{version}",
+  "person.stopAll": "全部停止",
   "person.cancelling": "正在取消…",
   "person.configureTitle": "在此 Agent 上配置数字人",
   "person.configureAgent": "记忆使用此 Agent 实例的本地 SQLite，无需数据库服务或选择后端。请为此实例配置原生模型；不可用时检查实例存储权限与模型配置。",

@@ -87,3 +87,55 @@ export function personResponseOrigins(blocks) {
   }
   return origins;
 }
+
+/** Keep interleaved episodes in root-prompt order. Supplements retain their
+ * episode bucket; legacy records without identity retain their relative order.
+ * This is display-only: storage pagination continues to use the original rows.
+ */
+export function orderPersonEpisodeMessages(messages = []) {
+  const buckets = new Map();
+  for (const message of messages) {
+    const key = message.episodeId || message;
+    if (!buckets.has(key)) buckets.set(key, { rows: [], first: buckets.size });
+    buckets.get(key).rows.push(message);
+  }
+  const time = bucket => {
+    const root = bucket.rows.find(row => row.role === 'user') || bucket.rows[0];
+    const at = new Date(root.createdAt).getTime();
+    return Number.isFinite(at) ? at : null;
+  };
+  return [...buckets.values()].sort((a, b) => {
+    const left = time(a), right = time(b);
+    return left != null && right != null ? left - right || a.first - b.first : a.first - b.first;
+  }).flatMap(bucket => bucket.rows);
+}
+
+/** Adapt public Person episodes to the shared user-turn presentation contract.
+ * A missing array is a legacy Agent, not evidence that its execution finished.
+ */
+export function partitionPersonEpisodes(blocks = [], episodes) {
+  const pending = [];
+  const byId = new Map();
+  for (const episode of Array.isArray(episodes) ? episodes : []) {
+    const id = episode.episodeId || episode.id;
+    if (!id || byId.has(id) || !['accepted', 'queued', 'running', 'waiting', 'paused', 'pausing', 'cancelling'].includes(episode.status)) continue;
+    const turn = { userTurnId: id, episode, blocks: [],
+      state: episode.status === 'cancelling' ? 'cancelling' : ['paused', 'pausing', 'waiting'].includes(episode.status) ? 'waiting'
+        : ['queued', 'accepted'].includes(episode.status) ? 'queued' : 'running' };
+    byId.set(id, turn);
+    pending.push(turn);
+  }
+  const history = [];
+  for (const block of blocks) {
+    const turn = byId.get(block.episodeId);
+    if (turn) turn.blocks.push(block); else history.push(block);
+  }
+  const at = turn => new Date(turn.blocks.find(block => block.role === 'user')?.createdAt ?? turn.episode.createdAt).getTime();
+  pending.sort((a, b) => (at(a) || 0) - (at(b) || 0));
+  for (const turn of pending) {
+    const text = turn.blocks.find(block => block.role === 'user')?.text || '';
+    const label = text.replace(/\s+/g, ' ').trim();
+    turn.label = label.length > 36 ? `${label.slice(0, 36)}…` : label;
+  }
+  return { history, pending };
+}

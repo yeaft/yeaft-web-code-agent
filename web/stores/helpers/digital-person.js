@@ -44,7 +44,7 @@ const inspectionPage = () => ({ items: [], nextCursor: null, loading: false, loa
 export function personState() {
   return {
     loading: false, configured: null, storageReady: null, modelReady: null, reason: '', person: null, state: null, latestEpisode: null,
-    messages: [], traces: [], busy: false, episodeId: null, error: null,
+    messages: [], traces: [], activeEpisodes: null, busy: false, episodeId: null, error: null,
     messageCursor: null, traceCursor: null, messagesLoading: false, tracesLoading: false,
     commandPending: false, commandEpisodeId: null, cancelPending: false, retryCommand: null, tracesStale: false,
     activityRecords: [], activityEpisodeId: null, activityStale: false, progressStale: false, feedbackSuppressedEpisodeId: null,
@@ -184,7 +184,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     const unavailable = ['disconnected', 'offline'].includes(digitalPersonGate(chat, nextAgentId));
     const progress = nextAgentId === agentId && activeScope === scope() && unavailable ? {
       activityRecords: state.activityRecords, activityEpisodeId: state.episodeId || state.activityEpisodeId,
-      latestEpisode: state.latestEpisode, busy: state.busy, activityStale: true, progressStale: true,
+      activeEpisodes: state.activeEpisodes, latestEpisode: state.latestEpisode, busy: state.busy, activityStale: true, progressStale: true,
     } : {};
     const feedbackSuppressedEpisodeId = nextAgentId === agentId && activeScope === scope() ? state.feedbackSuppressedEpisodeId : null;
     outputs.reset();
@@ -257,7 +257,9 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
       if (incoming.some(row => !existing.has(row.id))) messageWindowVersion += 1;
       state.messages = mergeMessages(state.messages, incoming);
     }
-    state.busy = data.busy === true;
+    // Null distinguishes legacy single-execution Agents from a confirmed idle array.
+    state.activeEpisodes = Array.isArray(data.activeEpisodes) ? data.activeEpisodes : null;
+    state.busy = data.busy === true || !!state.activeEpisodes?.length;
     state.episodeId = data.episodeId || null;
     state.activityEpisodeId = state.episodeId || state.latestEpisode?.id || state.activityEpisodeId;
     state.progressStale = false;
@@ -848,9 +850,11 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
   }
 
   async function cancel(expectedEpisodeId = null) {
-    const episodeId = expectedEpisodeId || state.episodeId;
+    const multiple = !expectedEpisodeId && state.activeEpisodes?.length > 1;
+    const episodeId = expectedEpisodeId || state.episodeId || state.activeEpisodes?.[0]?.id || state.activeEpisodes?.[0]?.episodeId;
     if (!current() || state.cancelPending || digitalPersonGate(chat, agentId) || !episodeId) return false;
-    if (expectedEpisodeId ? state.executions.active?.episodeId !== expectedEpisodeId : !state.busy) return false;
+    if (expectedEpisodeId ? state.executions.active?.episodeId !== expectedEpisodeId
+      && !state.activeEpisodes?.some(episode => (episode.episodeId || episode.id) === expectedEpisodeId) : !state.busy) return false;
     const g = generation, target = state.executions;
     // Composer Stop remains available while pausing; its cancellation wins over
     // any late pause/resume acknowledgement and owns the pending indicator.
@@ -866,7 +870,7 @@ export function createPersonController({ chat, state, scope, timeoutMs = 30_000,
     target.pending = 'cancel';
     let acknowledged = false;
     try {
-      await request('cancel', { episodeId });
+      await request('cancel', multiple ? {} : { episodeId });
       if (!current(g) || target !== state.executions || control !== executionControl) return false;
       snapshotRequest += 1;
       state.person.settings = { ...state.person.settings, autonomyEnabled: false };

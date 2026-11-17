@@ -1,5 +1,6 @@
 import VirtualTranscript from './VirtualTranscript.js';
-import UserTurnBlock from './UserTurnBlock.js';
+import PersonConversationBlock from './PersonConversationBlock.js';
+import ConcurrentUserTurns from './ConcurrentUserTurns.js';
 import MessageComposer from './MessageComposer.js';
 import NavigationIcon from './NavigationIcon.js';
 import PaneResizeHandle from './PaneResizeHandle.js';
@@ -18,18 +19,17 @@ import { PERSON_FILE_ACCEPT, validatePersonFiles, uploadPersonFiles } from '../s
 import PersonThoughtJournal from './PersonThoughtJournal.js';
 import PersonDebugLog from './PersonDebugLog.js';
 import PersonResponseLoading from './PersonResponseLoading.js';
-import { createPersonConversationProjector, personResponseOrigins } from '../utils/person-conversation.js';
+import { createPersonConversationProjector, personResponseOrigins, orderPersonEpisodeMessages, partitionPersonEpisodes } from '../utils/person-conversation.js';
 import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.js';
 import { projectPersonActivity, projectPersonFeedback } from '../utils/person-activity.js';
 import { useAuthStore } from '../stores/auth.js';
-import { renderSafeMessageMarkdown } from '../utils/safe-message-markdown.js';
 import { createPersonController, digitalPersonGate, personState } from '../stores/helpers/digital-person.js';
 import { resolveDigitalPersonAgentId } from '../utils/digital-person-agent.js';
 
 export default {
   name: 'DigitalPersonPage',
   emits: ['toggle-sidebar', 'interaction-blocked'],
-  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, UserTurnBlock, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonActionsSheet, PersonThoughtJournal, PersonDebugLog, PersonResponseLoading },
+  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, PersonConversationBlock, ConcurrentUserTurns, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonActionsSheet, PersonThoughtJournal, PersonDebugLog, PersonResponseLoading },
   setup(_props, { emit }) {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -93,7 +93,7 @@ export default {
       const pane = messagePane.value;
       if (!pane) return;
       const top = pane.getBoundingClientRect().top + pane.clientTop;
-      const entry = [...pane.querySelectorAll('.virtual-transcript-item')].find(element => {
+      const entry = [...pane.querySelectorAll('.person-reading-column > .virtual-transcript .virtual-transcript-item')].find(element => {
         const rect = element.getBoundingClientRect();
         return rect.bottom > top && rect.top < top + pane.clientHeight;
       });
@@ -211,7 +211,7 @@ export default {
     const conversation = Vue.computed(() => {
       // Resolve links only inside this owner's already-loaded Person window.
       const users = new Map(state.messages.filter(message => message.role === 'user').map(message => [message.id, message]));
-      return projectConversation(state.messages, JSON.stringify([attachmentScope(), state.person?.id])).map(block => {
+      return projectConversation(Array.isArray(state.activeEpisodes) ? orderPersonEpisodeMessages(state.messages) : state.messages, JSON.stringify([attachmentScope(), state.person?.id])).map(block => {
         const ids = [...new Set((block.replyToMessageIds || []).filter(id => typeof id === 'string' && id))];
         return { ...block, id: block.key, messageId: block.id, replyContext: ids.length ? {
           count: ids.length, excerpts: ids.map(id => users.get(id)).filter(Boolean).slice(0, 2)
@@ -219,6 +219,30 @@ export default {
         } : null };
       });
     });
+    const concurrentTurns = Vue.ref(null);
+    const splitEpisodes = Vue.ref(false);
+    const episodeLayout = Vue.computed(() => partitionPersonEpisodes(conversation.value, state.activeEpisodes));
+    Vue.watch(() => [attachmentScope(), state.person?.id], () => { splitEpisodes.value = false; }, { flush: 'sync' });
+    Vue.watch(() => episodeLayout.value.pending.length, count => {
+      if (!count) splitEpisodes.value = false;
+      else if (count > 1 && !splitEpisodes.value) {
+        splitEpisodes.value = true;
+        resetResponseFocus();
+        setBottomFollow(false);
+        transcript.value?.cancelPendingBottomFollow();
+        closePanel();
+        // Person owns its inspector. Do not mutate an unrelated Session's
+        // Workbench preference just because this independent surface split.
+      }
+    }, { flush: 'sync' });
+    const historyConversation = Vue.computed(() => splitEpisodes.value ? episodeLayout.value.history : conversation.value);
+    const pendingEpisodes = Vue.computed(() => episodeLayout.value.pending.map(turn => {
+      const episodeState = { ...state, busy: true, episodeId: turn.userTurnId, latestEpisode: { ...turn.episode, id: turn.userTurnId } };
+      const loading = projectPersonActivity(episodeState, gate.value).loading;
+      const tail = turn.blocks.at(-1);
+      return { ...turn, loading, loadingKey: loading && tail?.role === 'assistant' ? tail.key : null,
+        feedback: projectPersonFeedback(episodeState, gate.value) };
+    }));
     const responseOrigins = Vue.computed(() => personResponseOrigins(conversation.value));
     const activeResponseKey = Vue.ref('');
     const atLatest = Vue.ref(true);
@@ -260,7 +284,9 @@ export default {
       const key = responseOrigins.value.get(activeResponseKey.value);
       if (!key) return;
       releaseReadingAnchor();
-      await transcript.value?.scrollToKey(key, { align: 'start' });
+      const turn = splitEpisodes.value && pendingEpisodes.value.find(turn => turn.blocks.some(block => block.key === key));
+      if (turn) await concurrentTurns.value?.revealBlock(turn.userTurnId, key, { align: 'start' });
+      else await transcript.value?.scrollToKey(key, { align: 'start' });
       scheduleConversationNavigation();
     }
     function scrollToLatest() {
@@ -271,7 +297,8 @@ export default {
       setBottomFollow(true);
       Vue.nextTick(() => {
         if (disposed || !followingLatest.value || identity !== transcriptIdentity.value) return;
-        transcript.value?.scrollToBottom();
+        if (splitEpisodes.value) concurrentTurns.value?.revealLatest();
+        else transcript.value?.scrollToBottom();
         scheduleConversationNavigation();
       });
     }
@@ -582,10 +609,10 @@ export default {
     Vue.watch(() => state.messagesLoading, async loading => {
       if (loading || !historyAnchor) return;
       const anchor = historyAnchor;
-      const index = conversation.value.findIndex(item => item.id === anchor.key);
+      const index = historyConversation.value.findIndex(item => item.id === anchor.key);
       if (index < 0) { historyAnchor = null; return; }
       transcript.value?.cancelPendingBottomFollow();
-      const mounted = [...(messagePane.value?.querySelectorAll('.virtual-transcript-item') || [])]
+      const mounted = [...(messagePane.value?.querySelectorAll('.person-reading-column > .virtual-transcript .virtual-transcript-item') || [])]
         .some(element => element.dataset.virtualId === anchor.key);
       if (!mounted) await transcript.value?.scrollToIndex(index, { align: 'start' });
       if (historyAnchor !== anchor || disposed) return;
@@ -637,10 +664,8 @@ export default {
     }
     const deliveredOutputs = message => message.episodeId ? state.outputs.items.filter(item => item.episodeId === message.episodeId) : [];
     Vue.watch(() => state.person?.id, (next, previous) => { if (previous && next && next !== previous) closePanel(); }, { flush: 'sync' });
-    const asUserMessage = message => ({ id: message.messageId || message.id, type: 'user', content: message.text, createdAt: new Date(message.createdAt).getTime() });
     const time = value => value ? new Date(value).toLocaleString() : '';
-    const datetime = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : undefined;
-    return { pageRoot, pageTitle, conversationPane, settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, asUserMessage, time, datetime, renderSafeMessageMarkdown, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+        return { concurrentTurns, splitEpisodes, historyConversation, pendingEpisodes, scheduleConversationNavigation, pageRoot, pageTitle, conversationPane, settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, time, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div ref="pageRoot" class="person-page">
@@ -691,41 +716,28 @@ export default {
           <div class="person-transcript">
           <div ref="messagePane" class="person-messages virtual-transcript-scroller" :class="{ 'is-response-pinned': responsePinned }" tabindex="0" :aria-label="$t('person.messages')" :aria-busy="state.messagesLoading"
             @wheel.passive="releaseResponseFocus" @touchmove.passive="releaseResponseFocus" @keydown="releaseResponseFocus" @pointerdown.passive="releaseResponseFocus">
-            <div ref="readingColumn" class="person-reading-column">
+            <div ref="readingColumn" class="person-reading-column" :class="{ 'has-concurrent-episodes': splitEpisodes }">
               <button v-if="state.messageCursor != null" type="button" class="btn-ghost person-load-more" @click="loadOlderMessages" :disabled="!!gate || state.messagesLoading">{{ $t('person.olderMessages') }}</button>
               <div v-if="!state.messages.length && ready && !responding" class="person-welcome"><NavigationIcon name="activity" :size="28" /><h2>{{ $t('person.welcome') }}</h2><p>{{ $t('person.empty') }}</p></div>
-              <VirtualTranscript :key="transcriptIdentity" ref="transcript" :items="conversation" initial-align="end" scroll-container=".person-messages" :item-gap="0" :estimate-height="estimateConversationHeight" @scroll-state="conversationScroll">
+              <VirtualTranscript :key="transcriptIdentity" ref="transcript" :items="historyConversation" initial-align="end" scroll-container=".person-messages" :item-gap="0" :estimate-height="estimateConversationHeight" @scroll-state="conversationScroll">
                 <template #default="{ item: message }">
-                <div v-if="message.role === 'user'">
-                  <UserTurnBlock :message="asUserMessage(message)" :session-actions="false" />
-                  <ul v-if="message.attachments?.length" class="person-sent-files" :aria-label="$t('person.attachedFiles')"><li v-for="(file, index) in message.attachments" :key="file.id || index">{{ file.name }}</li></ul>
-                  <p v-if="['queued', 'received', 'stopped'].includes(message.deliveryState)" class="person-delivery" :data-delivery-state="message.deliveryState">{{ $t('person.delivery.' + message.deliveryState) }}</p>
-                </div>
-                <article v-else-if="message.role === 'assistant'" class="person-message person-reply" :data-message-id="message.messageId" :data-episode-id="message.episodeId" :data-response-key="message.key">
-                  <div v-if="message.replyContext" class="person-reply-context">
-                    <span>{{ $t('person.replyContext', { count: message.replyContext.count }) }}</span>
-                    <blockquote v-for="excerpt in message.replyContext.excerpts" :key="excerpt.id">{{ excerpt.text }}</blockquote>
-                  </div>
-                  <header class="person-message-meta"><strong>{{ state.person?.name || $t('person.title') }}</strong></header>
-                  <section v-for="(part, index) in message.parts" :key="part.id" class="person-reply-part" :data-message-id="part.id">
-                    <div class="person-reply-part-meta" :class="{ 'person-reply-divider': index > 0 }">
-                      <span v-if="['progress', 'final', 'execution-final'].includes(part.replyKind)" class="person-reply-kind">{{ $t(part.replyKind === 'progress' ? 'person.progressReply' : 'person.finalReply') }}</span>
-                      <time :datetime="datetime(part.createdAt)">{{ time(part.createdAt) }}</time>
-                    </div>
-                    <ResponsePresentation v-if="part.presentation" :presentation="part.presentation" :open-link="openReplyBrowser" />
-                    <div v-else class="person-message-text markdown-body" @click="previewReplyLink" v-html="renderSafeMessageMarkdown(part.text)"></div>
-                  </section>
-                  <div v-if="deliveredOutputs(message).length" class="person-delivered-outputs" :aria-label="$t('person.outputs')"><button v-for="output in deliveredOutputs(message)" :key="output.id" type="button" class="btn-secondary person-delivered-output" :disabled="!!gate || state.loading" @click="selectOutput(output)">{{ output.title }} · {{ $t('person.outputsPreview') }}</button></div>
-                  <PersonResponseLoading v-if="loadingReplyKey === message.key" :feedback="feedback" />
-                </article>
-                <article v-else class="person-message" :data-message-id="message.messageId">
-                  <header class="person-message-meta"><strong>{{ $t('person.system') }}</strong><time>{{ time(message.createdAt) }}</time></header>
-                  <div class="person-message-text markdown-body" v-html="renderSafeMessageMarkdown(message.text)"></div>
-                </article>
+                <PersonConversationBlock :message="message" :person-name="state.person?.name" :outputs="deliveredOutputs(message)"
+                  :disabled="!!gate || state.loading" :loading="loadingReplyKey === message.key" :feedback="feedback"
+                  :open-reply-browser="openReplyBrowser" :preview-reply-link="previewReplyLink" @output="selectOutput" />
                 </template>
               </VirtualTranscript>
+              <ConcurrentUserTurns v-if="splitEpisodes" :key="transcriptIdentity + ':episodes'" ref="concurrentTurns" :turns="pendingEpisodes"
+                :estimate-height="estimateConversationHeight" :item-gap="0" :stop-disabled="!!gate || state.loading || state.cancelPending"
+                @stop="turn => controller.cancel(turn.userTurnId)" @pane-scroll="scheduleConversationNavigation">
+                <template #default="{ block: message, turn }">
+                  <PersonConversationBlock :message="message" :person-name="state.person?.name" :outputs="deliveredOutputs(message)"
+                    :disabled="!!gate || state.loading" :loading="turn.loadingKey === message.key" :feedback="turn.feedback"
+                    :open-reply-browser="openReplyBrowser" :preview-reply-link="previewReplyLink" @output="selectOutput" />
+                </template>
+                <template #after="{ turn }"><PersonResponseLoading v-if="turn.loading && !turn.loadingKey" :feedback="turn.feedback" /></template>
+              </ConcurrentUserTurns>
               <div v-if="hasResponseFocus && !focusedResponseId" ref="responseStart" class="person-response-start" aria-hidden="true"></div>
-              <PersonResponseLoading v-if="activity.loading && !loadingReplyKey" :feedback="feedback" />
+              <PersonResponseLoading v-if="!splitEpisodes && activity.loading && !loadingReplyKey" :feedback="feedback" />
               <div v-if="hasResponseFocus" ref="responseTail" class="person-response-tail" aria-hidden="true"></div>
             </div>
           </div>
@@ -736,7 +748,7 @@ export default {
           </div>
           <div class="input-area person-composer">
             <label class="person-sr-only" for="person-input">{{ $t('person.input') }}</label>
-            <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="state.commandPending" :show-stop="!gate && state.busy" :stop-disabled="state.cancelPending" :stop-label="$t(state.cancelPending ? 'person.cancelling' : 'chatInput.stop')" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')"
+            <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="state.commandPending" :show-stop="!gate && state.busy" :stop-disabled="state.cancelPending" :stop-label="$t(state.cancelPending ? 'person.cancelling' : pendingEpisodes.length > 1 ? 'person.stopAll' : 'chatInput.stop')" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')"
               keyboard-send attachments-enabled :attachments="attachments" :attachment-accept="PERSON_FILE_ACCEPT"
               @send="command('send')" @stop="controller.cancel()" @files-selected="addFiles" @retry-attachment="retryAttachment" @remove-attachment="removeAttachment">
               <template #start-actions>

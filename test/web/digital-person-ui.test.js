@@ -13,7 +13,7 @@ import { personTurn } from '../fixtures/person-turns.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
-import { createPersonConversationProjector, projectPersonConversation, personResponseOrigins } from '../../web/utils/person-conversation.js';
+import { createPersonConversationProjector, projectPersonConversation, personResponseOrigins, orderPersonEpisodeMessages, partitionPersonEpisodes } from '../../web/utils/person-conversation.js';
 
 vi.mock('../../web/stores/auth.js', () => ({ useAuthStore: () => ({ userId: 'owner', authGeneration: 1 }) }));
 let wrapper;
@@ -55,6 +55,54 @@ async function render(messages = en) {
 }
 
 describe('Digital Person surface', () => {
+  it('splits active episodes once, preserves manual Workbench reopen and returns completed episodes to ordered history', async () => {
+    await render();
+    const state = wrapper.vm.state;
+    const user = (id, episodeId, createdAt) => ({ id, episodeId, createdAt, role: 'user', text: 'Question ' + id });
+    const answer = (id, episodeId, createdAt) => ({ id, episodeId, createdAt, role: 'assistant', text: 'Answer ' + id, replyToMessageIds: [episodeId + '-q'] });
+    const episodes = [{ id: 'b', status: 'running', createdAt: 20 }, { id: 'a', status: 'running', createdAt: 10 }];
+    const rows = [user('a-q', 'a', 10), user('b-q', 'b', 20), answer('b-r', 'b', 30), answer('a-r', 'a', 40), user('supplement', 'a', 50)];
+    Object.assign(state, { messages: rows, busy: true, episodeId: 'b', activeEpisodes: [episodes[0]] });
+    await Vue.nextTick();
+    expect(wrapper.findComponent({ name: 'ConcurrentUserTurns' }).exists()).toBe(false);
+    await wrapper.vm.openPanel('thoughts');
+    chat.workbenchExpanded = true;
+    state.activeEpisodes = episodes;
+    await Vue.nextTick();
+    expect(wrapper.vm.panel).toBe(null);
+    expect(chat.workbenchExpanded).toBe(true); // unrelated Session preference
+    const concurrent = wrapper.findComponent({ name: 'ConcurrentUserTurns' });
+    expect(concurrent.props('turns').map(turn => turn.userTurnId)).toEqual(['a', 'b']);
+    expect(concurrent.props('turns')[0].blocks.filter(row => row.role === 'user').map(row => row.messageId)).toEqual(['a-q', 'supplement']);
+    expect(wrapper.get('.stop-btn').attributes('aria-label')).toBe(en['person.stopAll']);
+    const cancel = vi.spyOn(wrapper.vm.controller, 'cancel').mockResolvedValue(true);
+    await wrapper.get('[data-user-turn-id="a"] .concurrent-turn-header button').trigger('click');
+    expect(cancel).toHaveBeenLastCalledWith('a');
+    await wrapper.get('.stop-btn').trigger('click');
+    expect(cancel).toHaveBeenLastCalledWith();
+    await wrapper.vm.openPanel('thoughts');
+    state.messages.push(answer('b-r2', 'b', 60));
+    state.activeEpisodes = [...episodes, { episodeId: 'c', status: 'queued', createdAt: 70 }];
+    await Vue.nextTick();
+    expect(wrapper.vm.panel).toBe('thoughts');
+    state.activeEpisodes = [episodes[0]];
+    await Vue.nextTick();
+    expect(wrapper.findComponent({ name: 'ConcurrentUserTurns' }).exists()).toBe(true);
+    expect(wrapper.vm.historyConversation.map(row => row.episodeId)).toEqual(['a', 'a', 'a']);
+    expect(wrapper.vm.panel).toBe('thoughts');
+    Object.assign(state, { activeEpisodes: [], busy: false });
+    await Vue.nextTick();
+    expect(wrapper.findComponent({ name: 'ConcurrentUserTurns' }).exists()).toBe(false);
+    expect(wrapper.vm.conversation.map(row => row.episodeId)).toEqual(['a', 'a', 'a', 'b', 'b']);
+    expect(wrapper.vm.panel).toBe('thoughts');
+    const ordered = orderPersonEpisodeMessages(rows);
+    expect(ordered.map(row => row.id)).toEqual(['a-q', 'a-r', 'supplement', 'b-q', 'b-r', 'b-r2']);
+    const projected = projectPersonConversation(ordered);
+    expect(partitionPersonEpisodes(projected, undefined).pending).toEqual([]);
+    expect(partitionPersonEpisodes(projected, [{ id: 'a', status: 'completed' }]).history).toEqual(projected);
+    expect(personResponseOrigins(projected).get(projected[1].key)).toBe(projected[0].key);
+  });
+
   it('uses the shared sidebar toggle rather than a back route and reports modal blocking', async () => {
     await render();
     expect(wrapper.find('.person-navigation [title="Sessions"]').exists()).toBe(false);
