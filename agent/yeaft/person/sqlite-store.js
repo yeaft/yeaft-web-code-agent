@@ -226,7 +226,7 @@ export class SqlitePersonStore {
     return this.rows('episodes', this.scope(ownerId), " AND status = 'running' ORDER BY inputWatermark ASC");
   }
   activeView(record) {
-    return { episodeId: record.id, rootMessageId: record.messageId, inputPreview: record.text.slice(0, 1000), kind: record.kind,
+    return { id: record.id, episodeId: record.id, rootMessageId: record.messageId, inputPreview: record.text.slice(0, 1000), kind: record.kind,
       status: record.executionControl?.status ?? record.status, createdAt: record.createdAt,
       ...(record.feedback ? { feedback: record.feedback } : {}) };
   }

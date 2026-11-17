@@ -35,7 +35,9 @@ it('isolates sibling leases, targeted inbox/attachments and cleanup across concu
   await expect(r.heartbeat(a)).resolves.toBeUndefined(); await expect(r.heartbeat(b)).resolves.toBeUndefined();
   const proposal = finalProposal(); proposal.concepts = []; proposal.state.focusConceptIds = [];
   expect((await r.commit(a, proposal, selection, 'first-final')).state.version).toBe(1);
-  expect((await r.snapshot('alice')).activeEpisodes.map(e => e.episodeId)).toEqual([b.id]);
+  expect((await r.snapshot('alice')).activeEpisodes).toEqual([expect.objectContaining({
+    id: b.id, episodeId: b.id, rootMessageId: b.messageId, status: 'running', createdAt: expect.any(Date),
+  })]);
   await expect(r.heartbeat(b)).resolves.toBeUndefined();
   const conflict = await r.commit(b, proposal, selection, 'second-final');
   expect(conflict).toMatchObject({ stateConflict: true, snapshot: { state: { version: 1 } } });
