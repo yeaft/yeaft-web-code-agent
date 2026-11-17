@@ -1253,7 +1253,7 @@ function registerUserExecution(sessionId, userTurnId, vpId, threadId, turnId, pr
     turns.set(userTurnId, turn);
   }
   turn.executions.set(turnId, { vpId, threadId, turnId, state: 'queued' });
-  visibleExecutionText.set(turnId, { sessionId, userTurnId, vpId, prompt: String(prompt).slice(0, 4000), text: '', textOffset: 0, state: 'queued' });
+  visibleExecutionText.set(turnId, { sessionId, userTurnId, vpId, prompt: String(prompt).slice(0, 4000), promptOffset: 0, text: '', textOffset: 0, state: 'queued' });
   if (visibleExecutionText.size > 200) visibleExecutionText.delete(visibleExecutionText.keys().next().value);
   // Retain a bounded reconnect projection; history owns the complete tape.
   for (const [id, row] of turns) {
@@ -1316,6 +1316,7 @@ async function classifySessionUserInput(sessionId, messageId, text, ingress, tur
     const key = thread.userTurnId || thread.threadId;
     if (!representatives.has(key) || mentions.includes(thread.vpId)) representatives.set(key, thread);
   }
+  const candidateRoots = new Map([...representatives.values()].map(thread => [thread.threadId, thread.userTurnId]));
   let target = null;
   if (running.length && !turnConfig) {
     try {
@@ -1330,11 +1331,16 @@ async function classifySessionUserInput(sessionId, messageId, text, ingress, tur
         const candidate = running.find(thread => thread.threadId === decision.targetThreadId);
         // A stopped target is not a natural finish race: never resurrect a
         // late supplement as a new independent execution after explicit stop.
-        const candidateRoot = candidate && userTurnsFor(sessionId).get(candidate.userTurnId);
+        const selectedUserTurnId = candidateRoots.get(decision.targetThreadId);
+        const candidateRoot = selectedUserTurnId && userTurnsFor(sessionId).get(selectedUserTurnId);
         const candidateStopped = candidateRoot && [...candidateRoot.executions.values()]
           .some(execution => execution.threadId === candidate.threadId && ['cancelling', 'aborted'].includes(execution.state));
         if (candidateRoot?.cancelled || candidateStopped) return null;
-        if (candidate && liveSessionThreads(sessionId).includes(candidate)) target = candidate;
+        // The representative is only a classifier handle: a sibling execution
+        // may still own this user turn after that representative finishes.
+        const live = liveSessionThreads(sessionId);
+        target = live.includes(candidate) ? candidate
+          : live.find(thread => selectedUserTurnId && thread.userTurnId === selectedUserTurnId) || null;
       }
     } catch (error) {
       console.warn('[Yeaft] Session input classification failed; starting parallel turn:', error?.message || error);
@@ -1349,7 +1355,9 @@ async function classifySessionUserInput(sessionId, messageId, text, ingress, tur
   const activeVpIds = relation === 'supplement'
     ? [...new Set(liveSessionThreads(sessionId).filter(thread => thread.userTurnId === userTurnId).map(thread => thread.vpId))]
     : [];
-  return { userTurnId, relation, targetVpIds: mentions.length ? mentions : activeVpIds };
+  const addressedActiveVpIds = activeVpIds.filter(vpId => mentions.includes(vpId));
+  return { userTurnId, relation, targetVpIds: relation === 'supplement'
+    ? (addressedActiveVpIds.length ? addressedActiveVpIds : activeVpIds) : mentions };
 }
 
 // Race even adapters that ignore AbortSignal, so a failed classifier cannot
@@ -1376,14 +1384,16 @@ function peerVisibleContext(sessionId, ownTurnId, seen) {
     const previous = seen.get(turnId);
     const end = (row.textOffset || 0) + row.text.length;
     const state = row.state || 'running';
-    if (previous?.end === end && previous?.state === state) continue;
+    const promptEnd = (row.promptOffset || 0) + row.prompt.length;
+    if (previous?.end === end && previous?.state === state && previous?.promptEnd === promptEnd) continue;
     const delta = row.text.slice(Math.max(0, (previous?.end || 0) - (row.textOffset || 0)));
+    const promptDelta = row.prompt.slice(Math.max(0, (previous?.promptEnd || 0) - (row.promptOffset || 0)));
     const note = `[${row.vpId}; userTurnId=${row.userTurnId || ''}; execution=${turnId}; state=${state}]\n`
-      + (!previous && row.prompt ? `User request: ${row.prompt}\n` : '') + delta;
+      + (promptDelta ? `User ${previous ? 'input update' : 'request'}: ${promptDelta}\n` : '') + delta;
     if (note.length > budget && notes.length) break;
     notes.push(note.slice(-budget));
     budget -= Math.min(note.length, budget);
-    seen.set(turnId, { end, state });
+    seen.set(turnId, { end, state, promptEnd });
     if (!budget) break;
   }
   // Completed executions eventually leave the bounded bridge cache. Do not
@@ -2760,7 +2770,13 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
         const execution = [...(userTurnsFor(sessionId).get(userTurnId)?.executions.values() || [])]
           .find(row => row.threadId === thread.threadId && ['running', 'queued'].includes(row.state));
         const visible = execution ? visibleExecutionText.get(execution.turnId) : null;
-        if (visible) visible.prompt = `${visible.prompt || ''}\nSupplement: ${text}`.slice(-8000);
+        if (visible) {
+          // Keep an absolute append cursor even when the bounded prompt tail
+          // rolls over; peers track it separately from assistant text/state.
+          const prompt = `${visible.prompt || ''}\nSupplement: ${text}`;
+          visible.promptOffset = (visible.promptOffset || 0) + Math.max(0, prompt.length - 8000);
+          visible.prompt = prompt.slice(-8000);
+        }
       }
       thread.updatedAt = Date.now();
       try {

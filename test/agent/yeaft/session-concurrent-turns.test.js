@@ -218,3 +218,81 @@ it('bounds a stuck classifier and continues queued sends using visible assistant
   bridge.handleYeaftAbortTurn({ sessionId, userTurnId: 'timeout-b' });
   finish.resolve(); await bridge.__testDrainVpDrivers();
 });
+
+it('delivers peer prompt supplements once even without new peer output or state', async () => {
+  const finishA = deferred(); const loopB = deferred(); const nextB = deferred();
+  const requests = [];
+  const { send } = setup({ async *stream(params) {
+    requests.push(structuredClone(params.messages));
+    const n = requests.length;
+    if (n === 1) {
+      yield { type: 'text_delta', text: 'A visible output before supplement' };
+      await finishA.promise;
+    } else if (n === 2) await loopB.promise;
+    else if (n === 3) await nextB.promise;
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } }, ['omni', 'linus']);
+  bridge.__testSetThreadClassifier(({ runningThreads, newQuery }) => ({
+    decision: newQuery.includes('independent') ? 'unrelated' : 'related',
+    targetThreadId: runningThreads.find(t => t.userTurnId === (newQuery.startsWith('A:') ? 'prompt-a' : 'prompt-b'))?.threadId,
+  }));
+  await send('prompt-a', '@omni initial A');
+  await until(() => frames().some(f => f.data && JSON.stringify(f.data).includes('A visible output')));
+  await send('prompt-b', '@linus independent B');
+  await until(() => requests.length === 2);
+  expect(JSON.stringify(requests[1])).toContain('A visible output before supplement');
+  // Exceed the retained prompt window so the cursor must survive trimming too.
+  const constraint = 'A_UNIQUE_PEER_CONSTRAINT_7521';
+  await send('prompt-a-extra', `A: ${'x'.repeat(8100)} ${constraint}`);
+  await send('prompt-b-loop', 'B: continue first loop');
+  loopB.resolve();
+  await until(() => requests.length === 3);
+  const peerNotes = messages => messages.filter(row => row.role === 'user'
+    && String(row.content).includes('[Session peer context')).map(row => row.content).join('\n');
+  expect(peerNotes(requests[2]).match(new RegExp(constraint, 'g'))).toHaveLength(1);
+  await send('prompt-b-next', 'B: continue second loop');
+  nextB.resolve();
+  await until(() => requests.length === 4);
+  expect(peerNotes(requests[3]).match(new RegExp(constraint, 'g'))).toHaveLength(1);
+  finishA.resolve();
+  await bridge.__testDrainVpDrivers();
+});
+
+it('keeps a classified fan-out supplement on the root when its representative finishes during await', async () => {
+  const classify = deferred(); const entered = deferred();
+  const first = deferred(); const second = deferred(); let calls = 0;
+  const { send, sessionId } = setup({ async *stream() {
+    const n = ++calls;
+    yield { type: 'text_delta', text: `fan-out output ${n}` };
+    if (n === 1) await first.promise;
+    if (n === 2) await second.promise;
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } }, ['omni', 'linus']);
+  await send('fanout-root', '@all initial request');
+  await until(() => events('vp_turn_start').length === 2 && calls === 2);
+  const starts = events('vp_turn_start');
+  let representative;
+  bridge.__testSetThreadClassifier(async ({ runningThreads }) => {
+    expect(runningThreads).toHaveLength(1);
+    representative = starts.find(frame => frame.threadId === runningThreads[0].threadId);
+    entered.resolve();
+    await classify.promise;
+    return { decision: 'related', targetThreadId: representative.threadId };
+  });
+  const pending = send('fanout-extra', '@all refine existing root');
+  await entered.promise;
+  (representative.turnId === starts[0].turnId ? first : second).resolve();
+  await until(() => events('vp_turn_end').some(frame => frame.turnId === representative.turnId));
+  classify.resolve();
+  await pending;
+  const sibling = starts.find(frame => frame.turnId !== representative.turnId);
+  expect(events('user_message_routed').at(-1).event).toMatchObject({
+    messageId: 'fanout-extra', userTurnId: 'fanout-root', relation: 'supplement',
+  });
+  expect(events('vp_thread_user_appended').map(frame => frame.vpId)).toEqual([sibling.vpId]);
+  expect(bridge.__testGetVpThreads(sessionId, sibling.vpId)[0].pendingQueries).toHaveLength(1);
+  expect(events('vp_turn_start')).toHaveLength(2);
+  first.resolve(); second.resolve();
+  await bridge.__testDrainVpDrivers();
+  expect(events('vp_turn_start')).toHaveLength(2);
+});
