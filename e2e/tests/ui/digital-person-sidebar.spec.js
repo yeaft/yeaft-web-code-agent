@@ -166,6 +166,45 @@ for (const scenario of [
       await expect(navigation).toBeVisible();
       await page.locator('.sidebar-overlay:visible, .yeaft-sidebar-overlay:visible').click({ position: { x: scenario.width - 4, y: 750 } });
     }
+    let dividerColors;
+    if (scenario.width > 768) {
+      await clickPersonAction(page, 'inside');
+      const panel = page.locator('#person-side-panel');
+      const divider = page.getByRole('separator', { name: 'Resize output panel', exact: true });
+      dividerColors = await panel.evaluate(el => {
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--text-secondary)';
+        el.append(probe);
+        const colors = { border: getComputedStyle(el).borderLeftColor, feedback: getComputedStyle(probe).color };
+        probe.remove();
+        return colors;
+      });
+      const color = () => divider.evaluate(el => getComputedStyle(el, '::after').backgroundColor);
+      await page.mouse.move(10, 10);
+      await expect.poll(color).toBe('rgba(0, 0, 0, 0)');
+      await divider.hover();
+      await expect.poll(color).toBe(dividerColors.feedback);
+      const box = await divider.boundingBox();
+      await page.mouse.down();
+      await page.mouse.move(box.x - 20, box.y + box.height / 2);
+      await expect(divider).toHaveClass(/is-dragging/);
+      await expect.poll(color).toBe(dividerColors.feedback);
+      await page.mouse.up();
+      await expect(divider).not.toHaveClass(/is-dragging/);
+      await page.mouse.move(10, 10);
+      await page.locator('#person-input').focus();
+      await expect.poll(color).toBe('rgba(0, 0, 0, 0)');
+      await page.keyboard.press('Tab');
+      await divider.focus();
+      await expect.poll(() => divider.evaluate(el => el.matches(':focus-visible'))).toBe(true);
+      await expect.poll(color).toBe(dividerColors.feedback);
+      const width = (await panel.boundingBox()).width;
+      await divider.press('ArrowLeft');
+      await expect.poll(async () => (await panel.boundingBox()).width).toBeGreaterThan(width);
+      await page.screenshot({ path: testInfo.outputPath(`person-neutral-divider-${scenario.theme}.png`) });
+      await panel.getByRole('button', { name: 'Close', exact: true }).click();
+      await expect(panel).toHaveCount(0);
+    }
     // Person modal must block the shared sidebar as well as its own transcript.
     await clickPersonAction(page, 'settings');
     await expect(page.locator('.person-settings-modal')).toBeVisible();
@@ -181,6 +220,22 @@ for (const scenario of [
     await session.click();
     await expect(page.locator('.person-page')).toHaveCount(0);
     await expect(page.locator('.yeaft-main')).toBeVisible();
+    if (dividerColors) {
+      await page.evaluate(() => window.Pinia.useChatStore().openWorkbench());
+      const workbench = page.locator('.workbench-panel.expanded');
+      await expect(workbench).toBeVisible();
+      await workbench.evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => {}))));
+      expect(await workbench.evaluate(el => getComputedStyle(el).borderLeftColor)).toBe(dividerColors.border);
+      const divider = workbench.locator('.resize-handle');
+      await divider.hover({ position: { x: 5, y: 50 } });
+      await expect.poll(() => divider.evaluate(el => getComputedStyle(el).backgroundColor)).toBe(dividerColors.feedback);
+      await page.mouse.down();
+      await expect.poll(() => divider.evaluate(el => getComputedStyle(el).backgroundColor)).toBe(dividerColors.feedback);
+      await page.mouse.up();
+      await page.mouse.move(10, 10);
+      await expect.poll(() => divider.evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
+      await page.evaluate(() => window.Pinia.useChatStore().toggleWorkbench());
+    }
     // Re-enter through the native sidebar, then create a Session directly.
     if (scenario.width <= 768) await page.locator('.yeaft-topbar-sidebar-toggle').click();
     await person.click();

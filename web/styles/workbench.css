@@ -143,10 +143,13 @@
   touch-action: none;
 }
 
+/* Session and Digital Person dividers share neutral interaction feedback. */
 .resize-handle:hover,
-.resize-handle:active {
-  background: var(--accent-blue);
-  opacity: 0.5;
+.resize-handle:active,
+.person-workspace > .pane-resize-handle:hover::after,
+.person-workspace > .pane-resize-handle.is-dragging::after,
+.person-workspace > .pane-resize-handle:focus-visible::after {
+  background: var(--text-secondary);
 }
 
 @media (pointer: coarse) {

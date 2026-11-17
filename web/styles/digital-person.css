@@ -212,9 +212,6 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-side-panel.is-expanded { position: fixed; inset: 0; width: 100%; z-index: 31; }
 .person-workspace > .pane-resize-handle { position: relative; z-index: 1; flex: 0 0 8px; margin: 0 -4px; cursor: col-resize; touch-action: none; }
 .person-workspace > .pane-resize-handle::after { content: ''; position: absolute; inset: 0 3.5px; background: transparent; }
-.person-workspace > .pane-resize-handle:hover::after,
-.person-workspace > .pane-resize-handle.is-dragging::after,
-.person-workspace > .pane-resize-handle:focus-visible::after { background: var(--accent-blue); }
 .person-workspace > .pane-resize-handle:focus-visible { outline: none; }
 .person-delivered-outputs { display: flex; flex-wrap: wrap; gap: var(--work-center-space-2); margin-top: var(--work-center-space-3); }
 .person-delivered-output { max-width: 100%; overflow-wrap: anywhere; text-align: left; padding: 6px 12px; min-height: 32px; border: 1px solid var(--border-color); border-radius: var(--agent-setup-control-radius); background: var(--bg-main); color: var(--text-primary); font: inherit; font-size: 13px; cursor: pointer; }
