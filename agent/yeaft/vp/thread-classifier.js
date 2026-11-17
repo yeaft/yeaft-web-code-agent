@@ -1,6 +1,6 @@
 const VALID_DECISIONS = new Set(['related', 'unrelated']);
 
-export const THREAD_CLASSIFIER_SYSTEM_PROMPT = `You route a new user query for one VP into an existing running thread or a new thread.
+export const THREAD_CLASSIFIER_SYSTEM_PROMPT = `You route a new Session user input into a supplement of one active user turn or a new parallel user turn. Running threads are executions of those user turns; the same VP can run several at once.
 Return JSON only:
 {"decision":"related|unrelated","targetThreadId":"string|null","title":"short title","reason":"optional debug reason"}
 Rules:
@@ -83,6 +83,8 @@ export function buildThreadClassificationPrompt({ vp = {}, runningThreads = [], 
     },
     runningThreads: (runningThreads || []).map(t => ({
       threadId: t.threadId,
+      ...(t.userTurnId ? { userTurnId: t.userTurnId } : {}),
+      ...(t.vpId ? { vpId: t.vpId } : {}),
       title: t.title || '',
       status: t.status || '',
       updatedAt: t.updatedAt || null,

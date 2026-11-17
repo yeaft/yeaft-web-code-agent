@@ -8,6 +8,9 @@ import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import UserTurnBlock from './UserTurnBlock.js';
 import VirtualTranscript from './VirtualTranscript.js';
+import MessageBlock from './MessageBlock.js';
+import ConcurrentUserTurns from './ConcurrentUserTurns.js';
+import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
 import { applyRunningCatFrame, createRunningCatLoop, resolveRunningCatFrame } from '../utils/running-cat.js';
 import {
   orderYeaftVpTurnMessagesByExecution,
@@ -50,7 +53,7 @@ import { resolveLongResponseOrigin } from '../utils/response-origin-navigation.j
 
 export default {
   name: 'MessageList',
-  components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript },
+  components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns },
   template: `
     <main class="chat-container virtual-transcript-scroller" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -106,7 +109,7 @@ export default {
       </div>
 
       <!-- Messages when in conversation -->
-      <div v-else class="messages">
+      <div v-else class="messages" :class="{ 'has-concurrent-turns': splitActive }">
         <!-- Connecting banner: non-Claude provider session booting in background -->
         <div v-if="store.isConversationConnecting(store.currentConversation)" class="typing-status-banner typing-status-banner-connecting">
           <span class="typing-status-text typing-status-compact">
@@ -149,7 +152,7 @@ export default {
         <VirtualTranscript
           :key="virtualTranscriptIdentity"
           ref="virtualTranscriptRef"
-          :items="messageBlocks"
+          :items="historyBlocks"
           :estimate-height="estimateMessageBlockHeight"
           initial-align="end"
           :overscan="1"
@@ -157,179 +160,21 @@ export default {
           @scroll-state="onVirtualTranscriptScrollState"
         >
           <template #default="{ item: block }">
-          <section
-            v-if="block.type === 'message-block'"
-            class="message-block"
-            :data-vp-id="block.vpId || ''"
-            :data-message-id="block.messageId || ''"
-          >
-            <template v-for="item in visibleItemsForBlock(block)" :key="item.id">
-              <!-- The rendered row id is stable even when one assistant row
-                   aggregates several persisted messages. Search navigation maps
-                   persisted ids to this row before scrolling or flashing. -->
-              <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
-                <!-- User message in Yeaft group view: render IM-style on the
-                     right side via UserTurnBlock (mirror of VpTurnBlock).
-                     Outside of group view (legacy 1:1 chat) keep the original
-                     MessageItem path so chat-mode is untouched. -->
-                <UserTurnBlock
-                  v-if="item.type === 'user' && useImStyleForUser"
-                  :message="item.message"
-                  @quote="$emit('quote-message', $event)"
-                  @edit-as-new="$emit('edit-message-as-new', $event)"
-                />
-                <!-- User / system / error messages: rendered by MessageItem -->
-                <MessageItem v-else-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
-
-                <!-- Assistant turn — VP-block redesign (2026-05-08).
-                     - Yeaft multi-VP turns (speakerVpId set) -> VpTurnBlock,
-                       which renders the VP header plus the full AssistantTurn
-                       body. VirtualTranscript handles delayed mounting for
-                       off-screen blocks; messages themselves are not collapsed.
-                     - Legacy 1:1 Chat turns (no VP attribution) -> plain
-                       AssistantTurn unchanged. -->
-                <VpTurnBlock
-                  v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
-                  :turn="item"
-                  :show-fork-action="forkFromTurnEnabled && !!item.forkBoundaryTurnId && !item.isStreaming && !item.isActive"
-                  :fork-action-disabled="forkFromTurnDisabled"
-                  :fork-action-title="forkFromTurnTitle"
-                  @fork-from-turn="$emit('fork-from-turn', item)"
-                  :now-ms="nowMs"
-                  :response-collapsible="responseToggleBelongsToItem(block, item)"
-                  :response-collapsed="block.responseCollapsed"
-                  :response-toggle-label="responseCollapseLabel(block)"
-                  :origin-message-id="block.originMessageId"
-                  @quote="$emit('quote-message', $event)"
-                  @toggle-response-collapse="toggleMessageTurnResponse(block)"
-                  @open-debug="onOpenTurnDebug(item)"
-                />
-                <AssistantTurn
-                  v-else-if="item.type === 'assistant-turn'"
-                  :turn="item"
-                  :show-fork-action="forkFromTurnEnabled && !!item.forkBoundaryTurnId && !item.isStreaming && !item.isActive"
-                  :fork-action-disabled="forkFromTurnDisabled"
-                  :fork-action-title="forkFromTurnTitle"
-                  @fork-from-turn="$emit('fork-from-turn', item)"
-                  :actions-expanded="assistantTurnActionsExpandedFor(item)"
-                  :tool-expand-states="toolExpandStates"
-                  :tool-state-prefix="turnUiKey(item)"
-                  :session-actions="useImStyleForUser"
-                  :response-collapsible="responseToggleBelongsToItem(block, item)"
-                  :response-collapsed="block.responseCollapsed"
-                  :response-toggle-label="responseCollapseLabel(block)"
-                  :origin-message-id="block.originMessageId"
-                  @update-actions-expanded="value => setAssistantTurnActionsExpanded(item, value)"
-                  @update-tool-expanded="setToolExpanded"
-                  @quote="$emit('quote-message', $event)"
-                  @toggle-response-collapse="toggleMessageTurnResponse(block)"
-                />
-              </div>
-        <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
-                   main message stream. Reflection is an engine-internal context
-                   compaction step - surfacing it inline during normal chat is
-                   noise. Cards remain in store.yeaftReflectionCards so the
-                   debug panel (PR B) can render them under the loop they
-                   summarize. The component is still imported because PR B
-                   will reuse it inside YeaftDebugPanel. -->
-              <!-- PR-M3: sub-agent cards anchored to this row. -->
-              <SubAgentCard
-                v-for="card in subAgentCardsForRow(item)"
-                :key="card.key"
-                :card="card"
-              />
-            </template>
-            <div v-if="showBlockResponseToggle(block)" class="message-block-collapsed-response">
-              <div class="message-block-collapsed-preview">
-                <div class="vp-turn-block-main-header message-block-collapsed-preview-header">
-                  <span
-                    class="vp-turn-block-name message-block-collapsed-preview-speaker"
-                    :style="collapsedResponsePreviewSpeaker(block).style"
-                  >{{ collapsedResponsePreviewSpeaker(block).name }}</span>
-                  <template v-if="collapsedResponsePreviewSpeaker(block).timeText">
-                    <span class="vp-turn-block-sep" aria-hidden="true">·</span>
-                    <span
-                      class="vp-turn-block-time"
-                      :title="collapsedResponsePreviewSpeaker(block).fullTimeText"
-                    >{{ collapsedResponsePreviewSpeaker(block).timeText }}</span>
-                  </template>
-                  <span class="vp-turn-block-spacer"></span>
-                  <button
-                    type="button"
-                    class="response-collapse-btn message-block-collapse-header-btn"
-                    :class="{ 'is-collapsed': block.responseCollapsed }"
-                    @click="toggleMessageTurnResponse(block)"
-                    :title="responseCollapseLabel(block)"
-                    :aria-label="responseCollapseLabel(block)"
-                    :aria-expanded="String(!block.responseCollapsed)"
-                  >
-                    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-                      <path v-if="block.responseCollapsed" fill="currentColor" d="M7 10l5 5 5-5z"/>
-                      <path v-else fill="currentColor" d="M7 14l5-5 5 5z"/>
-                    </svg>
-                    <span class="response-collapse-label">{{ responseCollapseLabel(block) }}</span>
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  class="message-block-collapsed-preview-body markdown-body"
-                  @click="toggleMessageTurnResponse(block)"
-                  :title="responseCollapseLabel(block)"
-                  :aria-label="responseCollapseLabel(block)"
-                >
-                  <span
-                    v-for="(line, index) in collapsedResponsePreviewLines(block)"
-                    :key="index"
-                    class="message-block-collapsed-preview-line"
-                  >{{ line }}</span>
-                </button>
-              </div>
-            </div>
-          </section>
-          <template v-else>
-            <div class="msg-row" :data-msg-id="block.id" :class="{ 'msg-flash': block.id === flashMsgId }">
-              <UserTurnBlock
-                v-if="block.type === 'user' && useImStyleForUser"
-                :message="block.message"
-                @quote="$emit('quote-message', $event)"
-                @edit-as-new="$emit('edit-message-as-new', $event)"
-              />
-              <MessageItem v-else-if="block.type === 'user' || block.type === 'system' || block.type === 'error'" :message="block.message" />
-              <VpTurnBlock
-                v-else-if="block.type === 'assistant-turn' && block.speakerVpId"
-                :turn="block"
-                :show-fork-action="forkFromTurnEnabled && !!block.forkBoundaryTurnId && !block.isStreaming && !block.isActive"
-                :fork-action-disabled="forkFromTurnDisabled"
-                :fork-action-title="forkFromTurnTitle"
-                @fork-from-turn="$emit('fork-from-turn', block)"
-                :now-ms="nowMs"
-                @quote="$emit('quote-message', $event)"
-                @open-debug="onOpenTurnDebug(block)"
-              />
-              <AssistantTurn
-                v-else-if="block.type === 'assistant-turn'"
-                :turn="block"
-                :show-fork-action="forkFromTurnEnabled && !!block.forkBoundaryTurnId && !block.isStreaming && !block.isActive"
-                :fork-action-disabled="forkFromTurnDisabled"
-                :fork-action-title="forkFromTurnTitle"
-                @fork-from-turn="$emit('fork-from-turn', block)"
-                :actions-expanded="assistantTurnActionsExpandedFor(block)"
-                :tool-expand-states="toolExpandStates"
-                :tool-state-prefix="turnUiKey(block)"
-                :session-actions="useImStyleForUser"
-                @update-actions-expanded="value => setAssistantTurnActionsExpanded(block, value)"
-                @update-tool-expanded="setToolExpanded"
-                @quote="$emit('quote-message', $event)"
-              />
-            </div>
-            <SubAgentCard
-              v-for="card in subAgentCardsForRow(block)"
-              :key="card.key"
-              :card="card"
-            />
-          </template>
+          <MessageBlock :block="block" :context="blockRenderContext"
+            @quote-message="$emit('quote-message', $event)"
+            @edit-message-as-new="$emit('edit-message-as-new', $event)"
+            @fork-from-turn="$emit('fork-from-turn', $event)" />
         </template>
         </VirtualTranscript>
+        <ConcurrentUserTurns v-if="splitActive" ref="concurrentTurnsRef" :turns="pendingTurns" :messages="store.messages"
+          :estimate-height="estimateMessageBlockHeight" @stop="stopUserTurn">
+          <template #default="{ block }">
+            <MessageBlock :block="block" :context="blockRenderContext"
+              @quote-message="$emit('quote-message', $event)"
+              @edit-message-as-new="$emit('edit-message-as-new', $event)"
+              @fork-from-turn="$emit('fork-from-turn', $event)" />
+          </template>
+        </ConcurrentUserTurns>
         <!-- feat-6af5f9f1 PR A: orphan-card flush also removed. Orphans
              still latch in the store; PR B's debug panel surfaces them
              under the matching loop range. -->
@@ -354,7 +199,7 @@ export default {
           empty.
         -->
         <!-- Typing dots: visible when processing but not streaming text -->
-        <div v-if="previewShowTypingDots" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
+        <div v-if="previewShowTypingDots && !splitActive" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
           <template v-if="animationType === 'cat'">
           <span class="svg-cat-walk" ref="catWalkRef">
@@ -942,16 +787,18 @@ export default {
       };
     };
 
+    const userTurnProjection = Vue.computed(() => orderUserTurnMessages(store.messages || []));
+
     // Turn aggregation: group flat messages into turn groups
     const turnGroups = Vue.computed(() => {
-      const inlineMessages = orderResponseImageMessages(store.messages);
+      const inlineMessages = orderResponseImageMessages(store.currentView === 'yeaft' ? userTurnProjection.value.messages : store.messages);
       const messages = store.currentView === 'yeaft'
         ? orderYeaftVpTurnMessagesByExecution(inlineMessages)
         : inlineMessages;
       const result = [];
       // Rendering can bucket parallel VP executions. Fork endpoints must still
       // follow transcript order, not the reordered visual row positions.
-      const transcriptOrder = new Map(inlineMessages.map((message, index) => [message, index]));
+      const transcriptOrder = new Map(store.messages.map((message, index) => [message, index]));
       let currentTurn = null;
 
       // task-708: every VP-attributed turn carries its own avatar header.
@@ -1093,6 +940,7 @@ export default {
           type: 'assistant-turn',
           id: `response_${renderSafeUiKey(uiKey)}`,
           uiKey,
+          userTurnId: userTurnProjection.value.userTurnByMessage.get(message) || '',
           ...(message?.entryId ? { entryId: message.entryId } : {}),
           textContent: '',
           textSegments: [],
@@ -1138,6 +986,7 @@ export default {
       // so equal turnId alone must not merge different speakerVpId blocks.
       // After owner is checked, turnId still splits same-speaker deliveries.
       const closeTurnIfTurnBoundaryChanged = (msg) => {
+        if (currentTurn && currentTurn.userTurnId !== userTurnProjection.value.userTurnByMessage.get(msg)) finishTurn();
         if (shouldCloseYeaftVpTurn(currentTurn, msg)) finishTurn();
       };
 
@@ -1150,13 +999,13 @@ export default {
             continue;
           }
           finishTurn();
-          result.push({ type: 'user', id: messageUiKey(msg), message: msg });
+          result.push({ type: 'user', id: messageUiKey(msg), userTurnId: userTurnProjection.value.userTurnByMessage.get(msg) || '', message: msg });
           continue;
         }
 
         if (msg.type === 'system' || msg.type === 'error') {
           finishTurn();
-          result.push({ type: msg.type, id: messageUiKey(msg), message: msg });
+          result.push({ type: msg.type, id: messageUiKey(msg), userTurnId: userTurnProjection.value.userTurnByMessage.get(msg) || '', message: msg });
           continue;
         }
 
@@ -1227,7 +1076,7 @@ export default {
 
         // Unknown type: pass through
         finishTurn();
-        result.push({ type: msg.type || 'unknown', id: messageUiKey(msg), message: msg });
+        result.push({ type: msg.type || 'unknown', id: messageUiKey(msg), userTurnId: userTurnProjection.value.userTurnByMessage.get(msg) || '', message: msg });
       }
 
       finishTurn();
@@ -1281,12 +1130,13 @@ export default {
         }
 
         const meta = messageBlockMetaForItem(item);
-        if (item.type === 'user' || !currentBlock) {
+        if (item.type === 'user' || !currentBlock || currentBlock.userTurnId !== item.userTurnId) {
           finishBlock();
           currentBlock = {
             type: 'message-block',
             id: `block_${renderSafeUiKey(meta.uiKey)}`,
             uiKey: meta.uiKey,
+            userTurnId: item.userTurnId || '',
             vpId: meta.vpId,
             messageId: meta.messageId,
             originMessageId: item.type === 'user' ? item.id : '',
@@ -1302,6 +1152,21 @@ export default {
       finishBlock();
       return blocks;
     });
+
+    const concurrentTurnsRef = Vue.ref(null);
+    const parallelStarted = Vue.ref(false);
+    const currentPendingTurns = Vue.computed(() => store.currentView === 'yeaft'
+      ? (store.yeaftSessionTurns || []).filter(isPendingUserTurn) : []);
+    Vue.watch(() => [virtualTranscriptIdentity.value, currentPendingTurns.value.length], ([identity, count], previous) => {
+      if (previous && identity !== previous[0]) parallelStarted.value = false;
+      if (count > 1) parallelStarted.value = true;
+      if (!count) parallelStarted.value = false;
+    }, { immediate: true, flush: 'sync' });
+    const splitActive = Vue.computed(() => parallelStarted.value && currentPendingTurns.value.length > 0);
+    const splitProjection = Vue.computed(() => partitionUserTurnBlocks(messageBlocks.value, currentPendingTurns.value));
+    const historyBlocks = Vue.computed(() => splitActive.value ? splitProjection.value.history : messageBlocks.value);
+    const pendingTurns = Vue.computed(() => splitProjection.value.pending);
+    const stopUserTurn = (turn) => store.stopYeaftTurn?.({ userTurnId: turn.userTurnId });
 
     // PR-L: reflection cards grouped by anchor (the message id present at the
     // moment the `pending` event arrived). Cards whose anchor isn't in the
@@ -1874,7 +1739,9 @@ export default {
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(true);
     };
 
-    const pauseAutoFollow = () => {
+    let resumeFollowingAfterSplit = false;
+    const pauseAutoFollow = ({ forSplit = false } = {}) => {
+      if (!forSplit) resumeFollowingAfterSplit = false;
       autoFollowPaused.value = true;
       isAtBottom.value = false;
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(false);
@@ -2115,8 +1982,12 @@ export default {
       }
       clearUserScrollInteraction();
       resetHistoryPagination();
-      resumeAutoFollow();
-      Vue.nextTick(scrollToBottom);
+      if (splitActive.value) pauseAutoFollow();
+      else resumeAutoFollow();
+      Vue.nextTick(() => {
+        if (splitActive.value) concurrentTurnsRef.value?.revealLatest?.();
+        else scrollToBottom();
+      });
     };
 
     const smartScrollToBottom = () => {
@@ -2167,11 +2038,20 @@ export default {
       { immediate: true }
     );
 
+    Vue.watch(splitActive, (active) => {
+      if (active) {
+        resumeFollowingAfterSplit = !autoFollowPaused.value;
+        pauseAutoFollow({ forSplit: true });
+      } else if (resumeFollowingAfterSplit) {
+        resumeFollowingAfterSplit = false;
+        resumeAutoFollow();
+      }
+    }, { flush: 'sync', immediate: true });
     Vue.watch(visibleTranscriptTailSignature, () => {
-      smartScrollToBottom();
+      if (!splitActive.value) smartScrollToBottom();
       Vue.nextTick(scheduleResponseNavigationUpdate);
     });
-    Vue.watch(previewShowTypingDots, (show) => { if (show) smartScrollToBottom(); });
+    Vue.watch(previewShowTypingDots, (show) => { if (show && !splitActive.value) smartScrollToBottom(); });
     // Reset local transcript state only when the user actually navigates to a
     // different conversation. Yeaft history loading may replace the transport
     // conversation id while retaining the same Agent + Session identity; using
@@ -2185,8 +2065,9 @@ export default {
       for (const key of Object.keys(assistantTurnActionStates)) delete assistantTurnActionStates[key];
       for (const key of Object.keys(toolExpandStates)) delete toolExpandStates[key];
       for (const key of Object.keys(messageTurnCollapseStates)) delete messageTurnCollapseStates[key];
-      resumeAutoFollow();
-      Vue.nextTick(scrollToBottom);
+      if (splitActive.value) pauseAutoFollow({ forSplit: true });
+      else resumeAutoFollow();
+      Vue.nextTick(() => { if (!splitActive.value) scrollToBottom(); });
     });
 
     const flashMsgId = Vue.ref(null);
@@ -2205,13 +2086,17 @@ export default {
       if (!block?.id) return false;
       activeLongResponseOriginId.value = '';
       pauseAutoFollow();
-      const moved = await virtualTranscriptRef.value?.scrollToKey?.(block.id, { align: 'start' });
+      const turn = splitActive.value && pendingTurns.value.find(turn => turn.blocks.some(item => item.id === block.id));
+      const moved = turn
+        ? await concurrentTurnsRef.value?.revealBlock?.(turn.userTurnId, block.id, { align: 'start' })
+        : await virtualTranscriptRef.value?.scrollToKey?.(block.id, { align: 'start' });
       if (!moved) return false;
       await Vue.nextTick();
       const rows = containerRef.value?.querySelectorAll?.('[data-msg-id]') || [];
       const row = Array.from(rows).find(el => el?.dataset?.msgId === originMessageId) || null;
       if (!row) return false;
-      virtualTranscriptRef.value?.anchorTarget?.(block.id, row, { align: 'start' });
+      if (turn) concurrentTurnsRef.value?.anchorRow?.(turn.userTurnId, block.id, row, { align: 'start' });
+      else virtualTranscriptRef.value?.anchorTarget?.(block.id, row, { align: 'start' });
       flashMessageRow(originMessageId);
       return true;
     };
@@ -2226,13 +2111,19 @@ export default {
         nextTick: Vue.nextTick,
         scrollToBlock: (blockId, options) => {
           pauseAutoFollow();
+          const turn = pendingTurns.value.find(turn => turn.blocks.some(block => block.id === blockId));
+          if (splitActive.value && turn) return concurrentTurnsRef.value?.revealBlock?.(turn.userTurnId, blockId, options);
           return virtualTranscriptRef.value?.scrollToKey?.(blockId, options);
         },
         findRow: (rowId) => {
           const rows = containerRef.value?.querySelectorAll?.('[data-msg-id]') || [];
           return Array.from(rows).find(el => el?.dataset?.msgId === rowId) || null;
         },
-        anchorRow: (blockId, _rowId, row, options) => virtualTranscriptRef.value?.anchorTarget?.(blockId, row, options),
+        anchorRow: (blockId, _rowId, row, options) => {
+          const turn = splitActive.value && pendingTurns.value.find(turn => turn.blocks.some(block => block.id === blockId));
+          if (turn) concurrentTurnsRef.value?.anchorRow?.(turn.userTurnId, blockId, row, options);
+          else virtualTranscriptRef.value?.anchorTarget?.(blockId, row, options);
+        },
         flashRow: flashMessageRow,
       });
       return revealed;
@@ -2244,7 +2135,8 @@ export default {
       if (typeof ResizeObserver !== 'undefined') {
         responseNavigationResizeObserver = new ResizeObserver(scheduleResponseNavigationUpdate);
       }
-      scrollToBottom();
+      if (splitActive.value) pauseAutoFollow();
+      else scrollToBottom();
       Vue.nextTick(scheduleResponseNavigationUpdate);
       if (containerRef.value) {
         containerRef.value.addEventListener('wheel', onWheel, { passive: true });
@@ -2286,6 +2178,29 @@ export default {
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
 
+    const blockRenderContext = Vue.computed(() => ({
+      visibleItemsForBlock,
+      flashMsgId: flashMsgId.value,
+      useImStyleForUser: useImStyleForUser.value,
+      forkFromTurnEnabled: _props.forkFromTurnEnabled,
+      forkFromTurnDisabled: _props.forkFromTurnDisabled,
+      forkFromTurnTitle: _props.forkFromTurnTitle,
+      nowMs: nowMs.value,
+      responseToggleBelongsToItem,
+      responseCollapseLabel,
+      toggleMessageTurnResponse,
+      onOpenTurnDebug,
+      assistantTurnActionsExpandedFor,
+      toolExpandStates,
+      turnUiKey,
+      setAssistantTurnActionsExpanded,
+      setToolExpanded,
+      subAgentCardsForRow,
+      showBlockResponseToggle,
+      collapsedResponsePreviewSpeaker,
+      collapsedResponsePreviewLines
+    }));
+
     return {
       store,
       containerRef,
@@ -2321,6 +2236,7 @@ export default {
       welcomeSetupError,
       turnGroups,
       messageBlocks,
+      historyBlocks, pendingTurns, splitActive, concurrentTurnsRef, stopUserTurn, blockRenderContext,
       virtualTranscriptIdentity,
       estimateMessageBlockHeight,
       visibleItemsForBlock,

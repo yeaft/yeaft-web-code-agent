@@ -793,6 +793,7 @@ export class Engine {
 
   /** Durable formal-CLI root identity inherited by every row in this query. */
   #currentCausalRootId = null;
+  #currentUserTurnId = null;
 
   /**
    * Identity-bound hook into the active query's local read-only result cache.
@@ -1438,6 +1439,7 @@ export class Engine {
       requestIdentity: vpCtx?.requestIdentity,
       queryTurnId: vpCtx?.queryTurnId,
       causalRootId: vpCtx?.causalRootId || null,
+      userTurnId: this.#currentUserTurnId,
       webResearch: vpCtx?.webResearch,
       historyBeforeSeq: vpCtx?.historyBeforeSeq,
       yeaftDir: this.#yeaftDir,
@@ -1655,6 +1657,7 @@ export class Engine {
       record.turnId = effectiveTurnId;
     }
     if (effectiveCausalRootId) record.causalRootId = effectiveCausalRootId;
+    if (this.#currentUserTurnId) record.userTurnId = this.#currentUserTurnId;
     if (executionOrigin === 'route_forward' && (message.role === 'assistant' || message.role === 'tool')) {
       record.executionOrigin = executionOrigin;
     }
@@ -1866,6 +1869,10 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @param {string|null} [params.causalRootId] - Stable durable identity for
    *   every row generated as part of one externally accepted causal root.
+   * @param {Function} [params.getPeerContext] - Bridge-owned bounded visible text
+   *   updates, consumed at provider loop boundaries; never raw peer messages.
+   * @param {string[]} [params.peerTurnIds] - Active peer executions whose durable
+   *   history is text-only even when they use the same VP as this execution.
    * @param {Function} [params.onProviderRequestStart] - Internal liveness policy
    *   callback before dispatch: { effort, streamIdleTimeoutMs } from the final
    *   native request. No user content; not persisted or projected to the Web.
@@ -1929,7 +1936,7 @@ export class Engine {
     }
   }
 
-  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null } = {}) {
+  async *#queryLifecycle({ prompt, promptParts = null, messages = [], signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, onProviderRequestStart = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       const error = new Error('prompt is required and must be a non-empty string');
       yield {
@@ -2021,7 +2028,8 @@ export class Engine {
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
       this.#currentCausalRootId = effectiveCausalRootId;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart });
+      this.#currentUserTurnId = inboundEnvelope?._userTurnId || currentUserMessage?.userTurnId || null;
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts: effectivePromptParts, messages, signal: runSignal, turnConfig: turnConfig ? { model: turnConfig.model, effort: turnConfig.effort, maxOutputTokens: turnConfig.maxOutputTokens } : null, userEffort: explicitUserEffort, scenario, isSubAgent, parentEffortDecision, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds, projectInstruction, projectLabel, vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted, currentUserMessage, causalRootId: effectiveCausalRootId, getCurrentTodos, setCurrentTodos, askUser, threadId: this.#currentThreadId, vpTurnId, drainPendingUserMessages, getPeerContext, peerTurnIds, prepareProviderRequest, startProviderRequest, finishProviderRequest, failProviderRequest, closePendingUserInput, collabToolPolicy: effectiveCollabToolPolicy, explicitSkillName: parsedSkill.skillName, retryLifecycle, onProviderRequestStart });
     } finally {
       // Closing the async generator at a visible retry boundary means the
       // continuation never reached a provider. Keep it out of history and
@@ -2051,6 +2059,7 @@ export class Engine {
       this.#abortReason = null;
       this.#currentQueryTurnId = null;
       this.#currentCausalRootId = null;
+      this.#currentUserTurnId = null;
       this.#currentThreadId = MAIN_THREAD_ID;
       this.#pendingUserMessages.length = 0;
       this.#externalUserWakePending = false;
@@ -2076,7 +2085,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, turnConfig = null, userEffort = null, scenario = 'chat', isSubAgent = false, parentEffortDecision = null, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, sessionMembers, projectSessionIds = null, projectInstruction = '', projectLabel = '', vpPlan, sessionAnnouncement, workCenterInstructions, workDir, userAlreadyPersisted = false, currentUserMessage = null, causalRootId = null, getCurrentTodos = null, setCurrentTodos = null, askUser = null, threadId = MAIN_THREAD_ID, vpTurnId = null, drainPendingUserMessages = null, getPeerContext = null, peerTurnIds = [], prepareProviderRequest = null, startProviderRequest = null, finishProviderRequest = null, failProviderRequest = null, closePendingUserInput = null, collabToolPolicy = null, explicitSkillName = null, retryLifecycle, onProviderRequestStart = null }) {
 
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
@@ -2205,11 +2214,15 @@ export class Engine {
           await loadHistory.call(this.#conversationStore, runtimeSessionId, recentTurnCap, { beforeSeq }),
           attachmentOptions,
         );
+        const peerExecutions = new Set(peerTurnIds);
         messages = tail.filter(m => parseSeqFromId(m.id) < beforeSeq
-          && (m.role !== 'tool' || !queryVpId || m.speakerVpId === queryVpId))
+          && (m.role !== 'tool' || (!peerExecutions.has(m.turnId) && (!queryVpId || m.speakerVpId === queryVpId))))
           .map(m => {
-            if (m.role !== 'assistant' || !queryVpId || m.speakerVpId === queryVpId) return m;
-            const { toolCalls, thinkingBlocks, ...textOnly } = m;
+            if (m.role !== 'assistant') return m;
+            if (peerExecutions.has(m.turnId)) return { role: 'assistant', content: typeof m.content === 'string' ? m.content : '',
+              threadId: m.threadId, turnId: m.turnId, speakerVpId: m.speakerVpId };
+            if (!queryVpId || m.speakerVpId === queryVpId) return m;
+            const { toolCalls, thinkingBlocks, providerState, ...textOnly } = m;
             return textOnly;
           });
         if (relatedTurnCap > 0 && this.#yeaftDir) {
@@ -2803,6 +2816,13 @@ export class Engine {
       // tools/registry.js can never disagree.
       const currentContextWindow = resolveContextWindow(currentModel, requestConfig);
 
+      // Only a bridge-projected text note enters the query tape. Never splice
+      // peer provider state, thinking signatures or unpaired tool arcs here.
+      // Appending at loop boundaries also preserves signed Anthropic prefixes.
+      const peerContext = typeof getPeerContext === 'function' ? getPeerContext() : '';
+      if (typeof peerContext === 'string' && peerContext) {
+        conversationMessages.push({ role: 'user', content: peerContext });
+      }
       const appendedBeforeStream = this.#drainPendingUserMessages(drainPendingUserMessages);
       syncProgressInput(appendedBeforeStream);
       if (appendedBeforeStream.length > 0) {
@@ -5668,6 +5688,7 @@ export class Engine {
       threadId: opts.threadId || meta.threadId,
       taskKind: opts.taskKind,
       taskStatus: opts.taskStatus,
+      userTurnId: meta.userTurnId || this.#currentUserTurnId || null,
       turnId: opts.turnId || meta.turnId || null,
       // Registration owns provenance even when newer human input arrives before
       // completion. Retain it until provider acceptance or undelivered rescue.
@@ -5718,6 +5739,7 @@ export class Engine {
       ? meta.toolCallId
       : (typeof meta.id === 'string' && meta.id ? meta.id : null);
     this.#asyncTaskToolMeta.set(taskId, {
+      userTurnId: this.#currentUserTurnId,
       toolCallId,
       toolName: typeof meta.toolName === 'string' && meta.toolName ? meta.toolName : (typeof meta.name === 'string' ? meta.name : undefined),
       threadId: typeof meta.threadId === 'string' && meta.threadId ? meta.threadId : undefined,

@@ -77,6 +77,8 @@ function projectEntry(sessionId, identity, rows) {
     sourceMessageIds: ordered.map(row => row.message.id),
     textParts: ordered.filter(row => row.text).map(row => row.text),
     timestamp: message.ts || message.time || null,
+    ...(message.userTurnId ? { userTurnId: message.userTurnId } : {}),
+    ...(message.relation ? { relation: message.relation } : {}),
     ...(message.clientMessageId ? { clientMessageId: message.clientMessageId } : {}),
   };
 }

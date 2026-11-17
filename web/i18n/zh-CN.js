@@ -5,6 +5,15 @@ import { zhCN as quickSend } from './quick-send.js';
 import { zhCN as userShortcuts } from './user-shortcuts.js';
 
 export default {
+  "chat.concurrent.turns": "进行中的对话",
+  "chat.concurrent.turn": "对话",
+  "chat.concurrent.running": "运行中",
+  "chat.concurrent.waiting": "等待中",
+  "chat.concurrent.queued": "排队中",
+  "chat.concurrent.error": "出错",
+  "chat.concurrent.cancelling": "正在停止…",
+  "chat.concurrent.stop": "停止",
+
   "richResponse.response": "回复",
   "richResponse.progress": "进展更新",
   "richResponse.copySummary": "复制摘要",

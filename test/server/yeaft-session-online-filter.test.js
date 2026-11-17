@@ -133,6 +133,28 @@ describe('Yeaft Plugin Skill detail relay', () => {
 });
 
 describe('Yeaft legacy Session roster deltas', () => {
+  it('relays user-turn identity and snapshots without widening owner or request-client access', async () => {
+    CONFIG.skipAuth = false;
+    const agent = { ownerId: 'turn-owner', conversations: new Map() };
+    const owner = { authenticated: true, userId: 'turn-owner', sent: [] };
+    const sibling = { authenticated: true, userId: 'turn-owner', sent: [] };
+    const foreign = { authenticated: true, userId: 'foreign', sent: [] };
+    webClients.set('owner', owner); webClients.set('sibling', sibling); webClients.set('foreign', foreign);
+    const frame = { type: 'yeaft_output', conversationId: 'conv', sessionId: 's', vpId: 'v',
+      turnId: 'execution', threadId: 'thread', userTurnId: 'root',
+      data: { type: 'assistant', message: { content: 'visible output' } } };
+    await handleAgentOutput('agent', agent, frame);
+    expect(owner.sent.at(-1)).toMatchObject({ agentId: 'agent', userTurnId: 'root', turnId: 'execution', threadId: 'thread' });
+    expect(sibling.sent).toEqual(owner.sent);
+    expect(foreign.sent).toEqual([]);
+    const snapshot = { type: 'session_turns', sessionId: 's', turns: [{ userTurnId: 'root', state: 'running', executions: [] }] };
+    await handleAgentOutput('agent', agent, { ...frame, data: undefined, event: snapshot, _requestClientId: 'owner' });
+    expect(owner.sent.at(-1)).toMatchObject({ event: snapshot });
+    expect(sibling.sent).toHaveLength(1);
+    await handleAgentOutput('agent', agent, { ...frame, _requestClientId: 'foreign' });
+    expect(foreign.sent).toEqual([]);
+  });
+
   it('persists config-only Session deltas without a full snapshot and broadcasts only to the owner', async () => {
     CONFIG.skipAuth = false;
     const owner = userDb.getOrCreate('model-config-owner');

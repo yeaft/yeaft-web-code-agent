@@ -54,6 +54,7 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 
 - Create a Session with an Agent, working directory, roster, and default VP. After creation, choose model/effort in the composer and edit the announcement in Session settings.
 - Address one or more VPs with `@mentions`; selected VPs execute the same turn independently and can hand work to a peer with `RouteForward`.
+- Keep sending during a native Session turn: AI routes additions to that turn or starts a parallel turn. Active turns share one composer and up to three horizontally scrollable columns; completed turns return to history in request order.
 - Search and page durable Session history, and inspect per-VP turns, running background tasks, model choice, tool calls, token usage, and stop reasons.
 - Organize native Sessions into Projects, drag them between Project and Recents sections, and attach a Project instruction to all member Sessions.
 - Start a persistent WorkItem from the current Session; origin identity is stamped by the runtime.

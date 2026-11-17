@@ -55,6 +55,27 @@ export function sessionCopyOrigins(rows, sourceSessionId, streamId) {
   });
 }
 
+// Client/root identities are local to the row's source stream, including after
+// a merge. Persisted row references retain their existing ambiguity rules.
+function scopedIdentity(row, id, streamId) {
+  return JSON.stringify([row.origin?.streamId || streamId, id]);
+}
+
+function explicitIdentities(rows, streamId) {
+  const clients = new Map();
+  const roots = new Map();
+  const add = (map, row, id, index) => {
+    const key = scopedIdentity(row, id, streamId);
+    map.set(key, [...(map.get(key) || []), index]);
+  };
+  rows.forEach((row, index) => {
+    if (!isHumanRequest(row) || !row.userTurnId) return;
+    if (row.clientMessageId) add(clients, row, row.clientMessageId, index);
+    if (row.relation !== 'supplement') add(roots, row, row.userTurnId, index);
+  });
+  return { clients, roots };
+}
+
 /**
  * 按源记录位置分配复制身份，不能用 Map<旧 ID, 新 ID> 覆盖冲突记录。
  * 无法唯一识别目标的引用从可执行引用字段移到诊断元数据；保留
@@ -71,6 +92,7 @@ export function materializeSessionCopy(rows, { sourceSessionId, streamId, target
   });
   const idMap = new Map([...occurrences].filter(([, positions]) => positions.length === 1 && positions[0] < rows.length)
     .map(([id, positions]) => [id, ids[positions[0]]]));
+  const identities = explicitIdentities(sourceRows, streamId);
   const copies = rows.map((row, index) => {
     const copy = { ...historicalReplayRow(row), id: ids[index], seq: firstSeq + index,
       sessionId: targetSessionId, origin: origins[index] };
@@ -91,8 +113,24 @@ export function materializeSessionCopy(rows, { sourceSessionId, streamId, target
         candidateOrigins: positions.map(position => origins[position]) });
       return undefined;
     };
+    const remapIdentity = (id, field, map) => {
+      const positions = map.get(scopedIdentity(row, id, streamId));
+      if (!positions) return id;
+      if (positions.length === 1) return ids[positions[0]] || id;
+      unresolved.push({ field, messageId: id,
+        candidateMessageIds: positions.map(position => ids[position]).filter(Boolean),
+        candidateOrigins: positions.map(position => origins[position]) });
+      return undefined;
+    };
+    for (const [field, map] of [['userTurnId', identities.roots], ['clientMessageId', identities.clients]]) {
+      if (!row.userTurnId || !row[field]) continue;
+      const value = remapIdentity(row[field], field, map);
+      if (value === undefined) delete copy[field];
+      else copy[field] = value;
+    }
     if (row.causalRootId) {
-      const value = remap(row.causalRootId, 'causalRootId');
+      const value = occurrences.has(row.causalRootId) ? remap(row.causalRootId, 'causalRootId')
+        : remapIdentity(row.causalRootId, 'causalRootId', identities.clients);
       if (value === undefined) delete copy.causalRootId;
       else copy.causalRootId = value;
     }
@@ -174,6 +212,8 @@ function requestTurns(input) {
   const turns = [];
   const byRow = new Map();
   const byClient = new Map();
+  const byRoot = new Map();
+  const clientRows = new Map();
   for (const [index, row] of rows.entries()) {
     if (!isHumanRequest(row)) continue;
     const candidates = row.clientMessageId ? (byClient.get(row.clientMessageId) || []) : [];
@@ -182,15 +222,21 @@ function requestTurns(input) {
     // if two clients happened to reuse the same clientMessageId.
     const sameStream = candidate => !candidate.user.origin || !row.origin
       || candidate.user.origin.streamId === row.origin.streamId;
-    if (candidates.some(candidate => sameStream(candidate) && sentAt(candidate.user) !== sentAt(row))) {
+    const clientKey = row.clientMessageId && scopedIdentity(row, row.clientMessageId, streamId);
+    if (row.userTurnId ? (clientRows.get(clientKey) || []).some(candidate => sentAt(candidate) !== sentAt(row))
+      : candidates.some(candidate => sameStream(candidate) && sentAt(candidate.user) !== sentAt(row))) {
       ambiguous('Reused clientMessageId within one Session');
     }
-    let turn = candidates.find(candidate => sameStream(candidate) && sentAt(candidate.user) === sentAt(row));
+    if (clientKey) clientRows.set(clientKey, [...(clientRows.get(clientKey) || []), row]);
+    const rootKey = row.userTurnId && scopedIdentity(row, row.userTurnId, streamId);
+    let turn = rootKey ? byRoot.get(rootKey)
+      : candidates.find(candidate => sameStream(candidate) && sentAt(candidate.user) === sentAt(row));
     if (!turn) {
       turn = { user: row, rows: [], origins: new Set(), explicitOrigins: false, index, input };
       turns.push(turn);
-      if (row.clientMessageId) byClient.set(row.clientMessageId, [...candidates, turn]);
     }
+    if (row.clientMessageId && !candidates.includes(turn)) byClient.set(row.clientMessageId, [...candidates, turn]);
+    if (rootKey) byRoot.set(rootKey, turn);
     byRow.set(row.id, turn);
     turn.origins.add(originKey(messageOrigin(row, sessionId, streamId)));
     turn.explicitOrigins ||= !!row.origin;
@@ -209,11 +255,12 @@ function requestTurns(input) {
     if (candidates.length > 1) ambiguous('Ambiguous client causal reference');
     return candidates[0] || causalTurn(records.get(row.causalRootId), seen);
   }
+  const explicitTurn = row => row.userTurnId && byRoot.get(scopedIdentity(row, row.userTurnId, streamId));
   const byVpTurn = new Map();
   const vpTurnKey = row => row.turnId ? JSON.stringify([row.speakerVpId || row.vpId || '', row.turnId]) : null;
   // Learn explicit causal ownership before assigning interleaved legacy tails.
   for (const row of rows) {
-    const turn = causalTurn(row);
+    const turn = explicitTurn(row) || causalTurn(row);
     const key = vpTurnKey(row);
     if (!turn || !key) continue;
     if (byVpTurn.has(key) && byVpTurn.get(key) !== turn) ambiguous('A VP turn belongs to multiple human requests');
@@ -223,7 +270,7 @@ function requestTurns(input) {
   for (const row of rows) {
     if (isHumanRequest(row)) current = byRow.get(row.id);
     const key = vpTurnKey(row);
-    const turn = byRow.get(row.id) || causalTurn(row) || byVpTurn.get(key) || current;
+    const turn = byRow.get(row.id) || explicitTurn(row) || causalTurn(row) || byVpTurn.get(key) || current;
     if (!turn) {
       if (isVisibleConversationRow(row) && row.role !== 'system') ambiguous('History begins inside a human request');
       turns[0].rows.push(row);
@@ -281,13 +328,23 @@ function equivalentRows(left, right, aliases) {
       const canonical = rowRefs.get(candidate.user.id);
       clientRefs.set(clientId, clientRefs.has(clientId) && clientRefs.get(clientId) !== canonical ? null : canonical);
     }
+    const explicit = explicitIdentities(turn.input.rows, turn.input.streamId);
+    const identityRef = (row, value, map) => {
+      const positions = map.get(scopedIdentity(row, value, turn.input.streamId));
+      return positions?.length === 1 ? rowRefs.get(turn.input.rows[positions[0]].id) : null;
+    };
     const remap = value => rowRefs.get(value) || value;
     const callRefs = new Map([...turn.links.calls].map(([key, call]) => [key, `call:${call.index}:${call.callIndex}`]));
     return turn.rows.map((row, index) => {
       const copy = historicalReplayRow(row);
       for (const key of ['id', 'seq', 'sessionId', 'origin', 'cold']) delete copy[key];
       if (row.turnId) copy.turnId = row.origin?.turnId || row.turnId;
-      if (row.causalRootId) copy.causalRootId = rowRefs.get(row.causalRootId) || clientRefs.get(row.causalRootId) || row.causalRootId;
+      if (row.userTurnId) {
+        copy.userTurnId = identityRef(row, row.userTurnId, explicit.roots) || row.userTurnId;
+        if (row.clientMessageId) copy.clientMessageId = identityRef(row, row.clientMessageId, explicit.clients) || row.clientMessageId;
+      }
+      if (row.causalRootId) copy.causalRootId = rowRefs.get(row.causalRootId)
+        || identityRef(row, row.causalRootId, explicit.clients) || clientRefs.get(row.causalRootId) || row.causalRootId;
       for (const key of ['foldedMessageIds', 'sourceMessageIds']) {
         if (Array.isArray(row[key])) copy[key] = row[key].map(remap);
       }
@@ -386,10 +443,17 @@ export function materializeSessionMerge(plan, targetSessionId, firstSeq) {
     }
     clientMaps.set(input, clients);
   }
+  const identities = new Map([...clientMaps.keys()].map(input => [input, explicitIdentities(input.rows, input.streamId)]));
   const rows = [];
   for (const turn of plan.turns) {
     const ids = mapping(turn.input);
     const vpTurns = new Map();
+    const identityRef = (row, value, map) => {
+      const positions = map.get(scopedIdentity(row, value, turn.input.streamId));
+      if (positions?.length > 1) ambiguous('Ambiguous explicit client/root identity');
+      return positions?.length === 1 ? ids.get(turn.input.rows[positions[0]].id) : null;
+    };
+    const explicit = identities.get(turn.input);
     const remap = id => ids.get(id) || id;
     const callId = call => `merge_${ids.get(turn.rows[call.index].id)}_${call.callIndex}`;
     const calls = new Map([...turn.links.calls].map(([key, call]) => [key, callId(call)]));
@@ -402,7 +466,12 @@ export function materializeSessionMerge(plan, targetSessionId, firstSeq) {
         if (!vpTurns.has(key)) vpTurns.set(key, `merge_${copy.id}_turn`);
         copy.turnId = vpTurns.get(key);
       }
+      if (row.userTurnId) {
+        copy.userTurnId = identityRef(row, row.userTurnId, explicit.roots) || row.userTurnId;
+        if (row.clientMessageId) copy.clientMessageId = identityRef(row, row.clientMessageId, explicit.clients) || row.clientMessageId;
+      }
       if (row.causalRootId) copy.causalRootId = ids.get(row.causalRootId)
+        || identityRef(row, row.causalRootId, explicit.clients)
         || clientMaps.get(turn.input)?.get(row.causalRootId) || row.causalRootId;
       for (const key of ['foldedMessageIds', 'sourceMessageIds']) {
         if (Array.isArray(row[key])) copy[key] = row[key].map(remap);

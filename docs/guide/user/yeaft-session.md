@@ -96,6 +96,14 @@ A message without mentions goes to the default VP. Use `@VPName` to address a su
 
 When several VPs are selected, Yeaft persists one canonical user message and fans the turn out to independent VP engines. Each VP has its own persona and memory view, streams its own response, and uses the current Session's allowed tools. The shared timeline keeps speaker identity visible.
 
+## 并行 turn
+
+原生 Session 正在执行时仍可使用同一个输入框发送消息。AI 根据正在执行的 turn 判断新输入是补充还是独立请求：补充在目标 turn 下一次 loop 读取，独立请求并行执行，同一个 VP 也能同时回答多个 turn。没有 turn 执行时保持普通对话行为。
+
+两个以上 turn 执行时，历史下方自动展开横向分裂区；根据聊天区域宽度显示一到三栏。通过顶部短摘录 tab 或横向滚动查看其他 turn。每个 turn 可独立停止，完成、停止或失败后回到按原始提问时间排列的单列历史；输入框始终只有一个。刷新或切换 Session 后，运行状态和消息归属由所属 Agent 恢复。旧版 Agent 缺少新字段时保持单列展示，需要同步更新 Agent、Server 和 Web 才能使用完整能力。
+
+新执行可读取 Session 有界历史和其他未结束执行已公开的输入／正文，后续 loop 接收增量参考，不共享 thinking 或 provider 私有续接状态。并行仍使用同一个工作目录，不自动隔离文件写入；同时修改代码时应明确分工或使用独立 worktree。
+
 ## Planning and progress
 
 The native engine no longer provides `TodoWrite` or `StartPlan`. It does not require repeated checklist updates or an extra planning-tool call just to display progress. Neither the tool registry nor `DiscoverTools` exposes these tools.

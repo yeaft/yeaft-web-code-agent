@@ -770,6 +770,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
             ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
+            ...(msg.userTurnId != null ? { userTurnId: msg.userTurnId } : {}),
             ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
             data,
             event,

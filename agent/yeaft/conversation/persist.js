@@ -597,6 +597,8 @@ function serializeMessage(msg) {
   // Defaults to 'main' for legacy messages (see migrate-messages-threadid.js).
   fm.push(`threadId: ${msg.threadId || 'main'}`);
   if (msg.turnId) fm.push(`turnId: ${msg.turnId}`);
+  if (msg.userTurnId) fm.push(`userTurnId: ${msg.userTurnId}`);
+  if (msg.relation) fm.push(`relation: ${msg.relation}`);
   if (msg.causalRootId) fm.push(`causalRootId: ${msg.causalRootId}`);
   if (msg.executionOrigin === 'route_forward') fm.push('executionOrigin: route_forward');
   if (msg.imageAssetAnchor) fm.push('imageAssetAnchor: true');
@@ -751,6 +753,8 @@ export function parseMessage(raw) {
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
       case 'threadId': msg.threadId = value; break;
       case 'turnId': msg.turnId = value; break;
+      case 'userTurnId': msg.userTurnId = value; break;
+      case 'relation': msg.relation = value; break;
       case 'causalRootId': msg.causalRootId = value; break;
       case 'executionOrigin':
         if (value === 'route_forward') msg.executionOrigin = value;
@@ -3577,6 +3581,8 @@ export class ConversationStore {
       entryId: entry.entryId,
       messageId: entry.anchorMessageId,
       ...(entry.clientMessageId ? { clientMessageId: entry.clientMessageId } : {}),
+      ...(entry.userTurnId ? { userTurnId: entry.userTurnId } : {}),
+      ...(entry.relation ? { relation: entry.relation } : {}),
       turnId: entry.turnId,
       seq: entry.anchorSeq,
       entryStartSeq: entry.entryStartSeq,

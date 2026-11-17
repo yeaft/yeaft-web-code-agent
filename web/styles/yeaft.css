@@ -4815,3 +4815,97 @@
   .mobile-session-status .yeaft-session-status-close { width: 44px; height: 44px; flex: 0 0 44px; }
   .scheduled-task-bar .btn { min-height: 44px; }
 }
+
+/* Parallel user turns remain in the Session transcript, below virtual history.
+   Container queries intentionally follow the chat area, not the viewport. */
+.yeaft-page .messages.has-concurrent-turns {
+  max-width: none;
+}
+.messages.has-concurrent-turns > .virtual-transcript {
+  width: 100%;
+  max-width: var(--session-content-width);
+  margin-inline: auto;
+}
+.concurrent-user-turns {
+  container-type: inline-size;
+  min-width: 0;
+  width: 100%;
+}
+.concurrent-turn-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  margin-bottom: 8px;
+}
+.concurrent-user-turns .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--agent-setup-control-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.concurrent-user-turns .btn-ghost:hover:not(:disabled),
+.concurrent-turn-tab[aria-selected="true"] {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+.concurrent-user-turns .btn-ghost:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+}
+.concurrent-user-turns .btn-ghost:disabled { cursor: default; opacity: .6; }
+.concurrent-turn-tab {
+  flex: 0 0 auto;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-height: 44px;
+}
+.concurrent-turn-track {
+  --turn-columns: 1;
+  position: relative;
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  overflow-anchor: none;
+  align-items: stretch;
+}
+.concurrent-turn-column {
+  --visible-turn-columns: min(var(--turn-columns), var(--turn-count));
+  flex: 0 0 calc((100% - (var(--visible-turn-columns) - 1) * 16px) / var(--visible-turn-columns));
+  min-width: 0;
+  scroll-snap-align: start;
+}
+.concurrent-turn-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 44px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.concurrent-turn-header button { min-height: 44px; }
+.concurrent-turn-body {
+  height: clamp(280px, 60dvh, 720px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-anchor: none;
+  overscroll-behavior-y: auto;
+  padding: 4px;
+}
+.concurrent-turn-body .message-block { min-width: 0; }
+@container (min-width: 680px) {
+  .concurrent-turn-track { --turn-columns: 2; }
+}
+@container (min-width: 1080px) {
+  .concurrent-turn-track { --turn-columns: 3; }
+}

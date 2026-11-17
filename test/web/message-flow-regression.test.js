@@ -64,6 +64,82 @@ const { useChatStore } = await import('../../web/stores/chat.js');
 const { timelineQueryProgress } = await import('../../web/components/YeaftPage.js');
 
 describe('message flow regressions', () => {
+  it('keeps concurrent user-turn identities, tools and terminal state isolated through live routing and replay', async () => {
+    storeFactories.clear();
+    runtimeSessionsStore.sessionList = [{ id: 'parallel', agentId: 'agent-a' }];
+    runtimeSessionsStore.setActive('parallel', 'agent-a');
+    const store = useChatStore();
+    store.currentView = 'yeaft';
+    store.currentAgent = 'agent-a';
+    store.yeaftAgentId = 'agent-a';
+    store.yeaftActiveSessionFilter = 'parallel';
+    store.yeaftSessionAgentById = { parallel: 'agent-a' };
+    store.yeaftConversationId = 'parallel-conversation';
+    store.yeaftConversationIdsByAgent = { 'agent-a': 'parallel-conversation' };
+    store.activeConversations = ['parallel-conversation'];
+    store.connectionState = 'connected';
+    store.agents = [{ id: 'agent-a', online: true }];
+    store.sendWsMessage = vi.fn(() => true);
+    const envelope = { agentId: 'agent-a', conversationId: 'parallel-conversation', sessionId: 'parallel' };
+    const event = data => store.handleYeaftOutput({ ...envelope, event: { sessionId: 'parallel', ...data } });
+    const frame = (turnId, userTurnId, data) => store.handleYeaftOutput({ ...envelope, vpId: 'omni',
+      turnId, threadId: turnId, userTurnId, data });
+    const rows = () => store.messagesMap['parallel-conversation'] || [];
+    try {
+      store.sendYeaftSessionMessage({ groupId: 'parallel', text: 'fix login' });
+      const a = rows()[0].clientMessageId;
+      event({ type: 'user_message_routed', messageId: a, userTurnId: a, relation: 'new' });
+      event({ type: 'vp_turn_start', vpId: 'omni', turnId: 'engine-a', userTurnId: a, threadId: 'engine-a' });
+      frame('engine-a', a, { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-a', name: 'Bash', input: { command: 'sleep 1' } }] } });
+      store.sendYeaftSessionMessage({ groupId: 'parallel', text: 'explain SQL' });
+      const b = rows().find(row => row.content === 'explain SQL').clientMessageId;
+      event({ type: 'user_message_routed', messageId: b, userTurnId: b, relation: 'new' });
+      event({ type: 'vp_turn_start', vpId: 'omni', turnId: 'engine-b', userTurnId: b, threadId: 'engine-b' });
+      frame('engine-b', b, { type: 'assistant', message: { content: 'SQL reply' } });
+      expect(rows().find(row => row.toolId === 'tool-a').hasResult).not.toBe(true);
+      frame('engine-a', a, { type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: 'tool-a', content: 'login evidence' }] });
+      frame('engine-a', a, { type: 'assistant', message: { content: 'login reply' } });
+      expect(rows().find(row => row.toolId === 'tool-a')).toMatchObject({ userTurnId: a, toolResult: 'login evidence' });
+      expect(rows().filter(row => row.type === 'assistant').map(row => [row.userTurnId, row.content])).toEqual([[b, 'SQL reply'], [a, 'login reply']]);
+      store.sendYeaftSessionMessage({ groupId: 'parallel', text: 'frontend only' });
+      const supplement = rows().find(row => row.content === 'frontend only').clientMessageId;
+      event({ type: 'user_message_routed', messageId: supplement, userTurnId: a, relation: 'supplement' });
+      expect(rows().find(row => row.clientMessageId === supplement)).toMatchObject({ userTurnId: a, turnRelation: 'supplement' });
+      const turns = [a, b].map((root, index) => ({ userTurnId: root, userMessageId: root, startedAt: index + 1,
+        state: 'running', executions: [{ vpId: 'omni', threadId: `engine-${index ? 'b' : 'a'}`, turnId: `engine-${index ? 'b' : 'a'}`, state: 'running' }] }));
+      event({ type: 'session_turns', turns });
+      expect(store.yeaftSessionTurns.map(row => row.userTurnId)).toEqual([a, b]);
+      store.handleYeaftOutput({ ...envelope, agentId: 'agent-b', conversationId: 'other', event: { type: 'session_turns', sessionId: 'parallel', turns: [] } });
+      expect(store.yeaftSessionTurns).toHaveLength(2);
+      event({ type: 'yeaft_turn_aborted', turnId: 'engine-a', turnIds: ['engine-a'], vpId: 'omni', success: true });
+      expect(Object.values(store.activeVpTurns).map(row => row.turnId)).toEqual(['engine-b']);
+      // Restore A to continue exercising terminal frame isolation independently.
+      event({ type: 'vp_turn_start', vpId: 'omni', turnId: 'engine-a', userTurnId: a, threadId: 'engine-a' });
+      frame('engine-b', b, { type: 'result', result_text: '' });
+      expect(store.processingConversations['parallel-conversation']).toBe(true);
+      expect(rows().find(row => row.content === 'login reply').isStreaming).toBe(true);
+      expect(rows().find(row => row.content === 'SQL reply').isStreaming).toBe(false);
+      expect(store._turnCompletedConvs?.has('parallel-conversation')).not.toBe(true);
+      frame('engine-a', a, { type: 'result', result_text: '' });
+      expect(rows().find(row => row.content === 'login reply').isStreaming).toBe(false);
+      event({ type: 'session_turns', turns: [] });
+      expect(store.yeaftSessionTurns).toEqual([]);
+      // A reconnect history projection retains identity for body and folded tools.
+      const request = store.beginYeaftHistoryLoad({ agentId: 'agent-a', sessionId: 'parallel', mode: 'recent' });
+      store.handleMessage({ type: 'yeaft_history_chunk', ...envelope, requestId: request.requestId, mode: 'recent', messages: [
+        { id: 'm0100', role: 'user', content: 'persisted input', sessionId: 'parallel', userTurnId: 'persisted-root', turnRelation: 'new', ts: 100 },
+        { id: 'm0101', role: 'assistant', content: 'persisted reply', sessionId: 'parallel', userTurnId: 'persisted-root', turnId: 'persisted-engine', vpId: 'omni', ts: 200,
+          toolCalls: [{ id: 'history-tool', name: 'Read', input: {} }] },
+      ], oldestSeq: 100, latestSeq: 101, hasMore: false });
+      expect(rows().filter(row => row.userTurnId === 'persisted-root')).toHaveLength(3);
+    } finally {
+      store.clearYeaftSessionProcessingIfIdle('parallel', { agentId: 'agent-a', ignoreStatuses: true });
+      storeFactories.clear();
+      runtimeSessionsStore.sessionList = [];
+      runtimeSessionsStore.setActive(null, null);
+    }
+  });
+
   it('retains scoped VP errors across navigation and snapshots with accessible plain-text disclosure', async () => {
     storeFactories.clear();
     const store = useChatStore();

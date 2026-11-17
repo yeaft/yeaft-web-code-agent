@@ -182,6 +182,7 @@ export function createRouter(deps = {}) {
         taskId: args.taskId ?? null,
         // Runtime provenance follows the human request through handoffs; the
         // coordinator forwards underscore fields without persisting them.
+        _userTurnId: args.inboundEnvelope?._userTurnId || args.inboundEnvelope?._persistedUserMessage?.userTurnId || null,
         _causalRootId: args.inboundEnvelope?._causalRootId
           || args.inboundEnvelope?._persistedUserMessage?.id || null,
         // route_forward is already visible as the source VP's tool action.

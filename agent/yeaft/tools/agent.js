@@ -526,6 +526,7 @@ stops or finalizes work no longer needed.`,
           source: {
             threadId: callerScope.parentThreadId || ctx?.threadId || 'main',
             ...(ctx.causalRootId ? { causalRootId: ctx.causalRootId } : {}),
+            ...(ctx.userTurnId ? { userTurnId: ctx.userTurnId } : {}),
           },
         });
         if (task?.id) {

@@ -1,0 +1,35 @@
+# Session 并行 turn
+
+## 产品边界
+
+Session 和 turn 仍是用户概念，不增加 topic、panel 或第二个输入框。没有执行中的 turn 时沿用原路径；有执行中的 turn 时使用 AI 判断新请求还是某个 turn 的补充。补充在该执行的下一轮 loop 被读取，新请求独立并行。同一个 VP 可以同时执行多个 turn。
+
+新执行读取同 Session 的历史与其他未完成 turn 已公开的内容，并在后续安全的 loop 边界接收新增上下文。共享参考必须携带来源和未完成状态，不能变成对当前 turn 的新指令，也不能复制其他请求的 thinking、签名状态或未配对工具消息。
+
+## 展示
+
+正常单列历史下方只有一个横向分裂区，按发起用户消息顺序排列所有执行中的 turn。根据聊天区域实际宽度同时显示一到三栏；更多 turn 通过 tab 定位和横向滚动查看，不替换栏位内容。手机显示一栏。单 turn 原路径保持原样，composer 始终一个。
+
+完成、停止或失败的 turn 离开分裂区，进入按发起时间排序的单列历史。保留其他 turn 和历史阅读位置；用户正在选择或操作内容时不抢焦点。分裂只影响投影，不重写 transcript。
+
+## 身份与兼容
+
+`userTurnId` 为一次用户发起的 turn 的稳定根身份；已有 `turnId` 仍表示某个 VP 的引擎 query，`threadId` 保持既有执行路由含义。一个用户 turn 可以包含多个 VP execution，多条补充仍归同一个 `userTurnId`。
+
+兼容字段与事件：
+
+- 可见用户消息、正文、工具结果、状态与持久历史附加 `userTurnId`。
+- 持久用户消息附加 `relation: new | supplement`；Web 规范化为 `turnRelation`。
+- `session_turns { sessionId, turns: [{ userTurnId, userMessageId, startedAt, state, executions: [{ vpId, threadId, turnId, state }] }] }` 是 Session 级权威状态投影，正常运行和重连均发送。
+- `user_message_routed { sessionId, messageId, userTurnId, relation }` 更新尚未归属的乐观用户行。
+- Web 状态按 `(agentId, sessionId)` 隔离。旧 Agent 缺少新增字段时继续原单列展示。
+
+## 验证重点
+
+真实 bridge 的多请求交错、补充仅到目标、分类期间结束/停止、未完成内容共享、持久恢复、单 turn 和 CLI 兼容；前端覆盖同 VP 多流、独立停止和错误、重连/切换隔离、补充与历史排序、虚拟列表与保留策略；浏览器覆盖一到五个 turn、宽屏/窄屏、tab/滑动、明暗主题、滚动与焦点。
+
+自动分类默认最多等待 5 秒。分类器自行返回失败兜底时，单执行优先沿用补充语义，多执行时使用新 turn 避免误投；bridge 的硬超时或未被分类器处理的异常则启动新 turn，不让后续输入一直等待。分类期间整个目标自然结束时回退为新 turn，用户已停止的目标不被迟到结果复活。Quick send 保持独立请求配置，不追加到已有执行。
+
+所有执行仍使用 Session 的同一个 `workDir`；并行不提供自动 worktree、文件锁或写入隔离。需要同时修改相同文件的工作应明确约束范围或主动隔离，工具不是写权限 sandbox。本文不声称并行文件操作无冲突。
+
+实际行为以配套代码与测试为准。
