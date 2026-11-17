@@ -48,7 +48,7 @@ describe('concurrent user turn presentation', () => {
     const stop = vi.fn();
     const wrapper = mount(ConcurrentUserTurns, {
       props: { turns: [{ userTurnId: 'm1', state: 'running', blocks: [] }, { userTurnId: 'm2', state: 'waiting', blocks: [] }],
-        messages: [{ id: 'm1', content: 'first task' }, { id: 'm2', content: 'second task' }], onStop: stop },
+        messages: [{ id: 'm1', type: 'user', content: 'first task' }, { id: 'm2', type: 'user', content: 'second task' }], onStop: stop },
       global: { stubs: { VirtualTranscript: true }, config: { globalProperties: { $t: key => key } } },
     });
     try {

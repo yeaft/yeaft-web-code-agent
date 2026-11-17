@@ -11,6 +11,7 @@ export default {
   "chat.concurrent.waiting": "等待中",
   "chat.concurrent.queued": "排队中",
   "chat.concurrent.error": "出错",
+  "chat.concurrent.cancelling": "正在停止…",
   "chat.concurrent.stop": "停止",
 
   "richResponse.response": "回复",

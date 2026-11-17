@@ -11,6 +11,7 @@ export default {
   "chat.concurrent.waiting": "Waiting",
   "chat.concurrent.queued": "Queued",
   "chat.concurrent.error": "Error",
+  "chat.concurrent.cancelling": "Stopping…",
   "chat.concurrent.stop": "Stop",
 
   "richResponse.response": "Response",

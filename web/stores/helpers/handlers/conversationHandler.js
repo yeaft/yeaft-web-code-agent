@@ -818,7 +818,7 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
       : durableKey;
     const userTurnMeta = {
       ...(typeof m.userTurnId === 'string' && m.userTurnId ? { userTurnId: m.userTurnId } : {}),
-      ...(m.turnRelation === 'new' || m.turnRelation === 'supplement' ? { turnRelation: m.turnRelation } : {}),
+      ...(['new', 'supplement'].includes(m.turnRelation || m.relation) ? { turnRelation: m.turnRelation || m.relation } : {}),
     };
     const historyEntryMeta = m.historyEntryId
       ? {

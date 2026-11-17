@@ -131,7 +131,7 @@ test('Session navigation and reconnect snapshots restore roots; stopping one exe
   await pane(page, a).getByRole('button', { name: /stop/i }).click();
   await expect.poll(() => mockAgent.messages('yeaft_abort_turn').length).toBe(before + 1);
   const stop = mockAgent.messages('yeaft_abort_turn').at(-1);
-  expect(stop.turnId).toBe(a.executions[0].turnId);
+  expect(stop.userTurnId).toBe(a.userTurnId);
   expect(stop.sessionId).toBe(SESSION);
   expect(mockAgent.messages('yeaft_abort_all')).toHaveLength(0);
   wire.finish(a, 'aborted');

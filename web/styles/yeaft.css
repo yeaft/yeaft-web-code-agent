@@ -4837,6 +4837,29 @@
   overflow-x: auto;
   margin-bottom: 8px;
 }
+.concurrent-user-turns .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--agent-setup-control-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.concurrent-user-turns .btn-ghost:hover:not(:disabled),
+.concurrent-turn-tab[aria-selected="true"] {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+.concurrent-user-turns .btn-ghost:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+}
+.concurrent-user-turns .btn-ghost:disabled { cursor: default; opacity: .6; }
 .concurrent-turn-tab {
   flex: 0 0 auto;
   max-width: 220px;
@@ -4876,7 +4899,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: none;
-  overscroll-behavior-y: contain;
+  overscroll-behavior-y: auto;
   padding: 4px;
 }
 .concurrent-turn-body .message-block { min-width: 0; }

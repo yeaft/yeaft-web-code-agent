@@ -6257,7 +6257,7 @@ export const useChatStore = defineStore('chat', {
             const row = this.activeVpTurns?.[turnKey] || null;
             if (!row || matchesYeaftRuntimeIdentity(row, row.sessionId, msg.agentId || null)) removeIds.add(turnKey);
           }
-          if (targetVpId) {
+          if (targetVpId && explicitTurnIds.length === 0) {
             for (const [turnId, info] of Object.entries(this.activeVpTurns || {})) {
               if (!info || info.vpId !== targetVpId) continue;
               if (!matchesYeaftRuntimeIdentity(info, targetSessionId, msg.agentId || null)) continue;
@@ -8317,6 +8317,16 @@ export const useChatStore = defineStore('chat', {
      * `sessionId` / `vpId` are optional metadata for newer agents; old agents
      * still use the turnId-only path.
      */
+    stopYeaftTurn({ userTurnId, sessionId = this.yeaftActiveSessionFilter, agentId = null } = {}) {
+      const targetAgentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!userTurnId || !sessionId || !targetAgentId) return false;
+      const key = yeaftSessionIdentityKey(targetAgentId, sessionId);
+      const turn = this.yeaftSessionTurnsBySession[key]?.turns.find(row => row.userTurnId === userTurnId);
+      if (!turn || !LIVE_SESSION_TURN_STATES.has(turn.state)) return false;
+      // Backend resolves all queued/running executions from the root, including
+      // executions not yet announced via vp_turn_start after reconnect.
+      return this.sendWsMessage({ type: 'yeaft_abort_turn', agentId: targetAgentId, sessionId, userTurnId }) !== false;
+    },
     cancelVpTurn(turnId, { sessionId = null, vpId = null } = {}) {
       // sessionId is optional metadata from newer agents. When present we route
       // by the session's owner; the legacy turnId-only path (no sessionId)

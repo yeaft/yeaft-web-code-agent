@@ -1,6 +1,6 @@
 /** UI identity is the root user message, never an engine execution turnId. */
 export function isPendingUserTurn(turn) {
-  return ['running', 'waiting', 'queued'].includes(turn?.state);
+  return ['running', 'waiting', 'queued', 'cancelling'].includes(turn?.state);
 }
 
 export function userTurnExcerpt(message) {

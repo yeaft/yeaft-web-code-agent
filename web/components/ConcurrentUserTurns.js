@@ -7,24 +7,27 @@ export default {
   props: { turns: { type: Array, default: () => [] }, messages: { type: Array, default: () => [] }, estimateHeight: Function },
   emits: ['stop'],
   template: `
-    <section class="concurrent-user-turns" :aria-label="$t('chat.concurrent.turns')">
-      <nav class="concurrent-turn-tabs" :aria-label="$t('chat.concurrent.turns')">
+    <section class="concurrent-user-turns parallel-turn-region" :aria-label="$t('chat.concurrent.turns')">
+      <nav class="concurrent-turn-tabs parallel-turn-tabs" role="tablist" :aria-label="$t('chat.concurrent.turns')">
         <button v-for="(turn, index) in turns" :key="turn.userTurnId" type="button"
-          class="btn-ghost concurrent-turn-tab" :aria-controls="panelId(turn)"
+          class="btn-ghost concurrent-turn-tab" role="tab" :id="panelId(turn) + '-tab'"
+          :aria-selected="selectedId === turn.userTurnId" :tabindex="selectedId === turn.userTurnId ? 0 : -1" :aria-controls="panelId(turn)"
           @click="scrollToTurn(turn.userTurnId)" @keydown="onTabKey($event, index)">
           {{ label(turn) || $t('chat.concurrent.turn') }}
         </button>
       </nav>
-      <div class="concurrent-turn-track" ref="trackRef" :style="{ '--turn-count': turns.length }">
+      <div class="concurrent-turn-track parallel-turn-track" ref="trackRef" @scroll.passive="onTrackScroll" :style="{ '--turn-count': turns.length }">
         <section v-for="turn in turns" :key="turn.userTurnId" :id="panelId(turn)"
-          :data-user-turn-id="turn.userTurnId" class="concurrent-turn-column" :aria-label="label(turn) || $t('chat.concurrent.turn')">
+          :data-user-turn-id="turn.userTurnId" class="concurrent-turn-column parallel-turn-pane" role="tabpanel" :aria-labelledby="panelId(turn) + '-tab'">
           <header class="concurrent-turn-header">
             <span class="concurrent-turn-state" role="status">{{ $t('chat.concurrent.' + turn.state) }}</span>
-            <button type="button" class="btn-ghost" @click="$emit('stop', turn)">{{ $t('chat.concurrent.stop') }}</button>
+            <button type="button" class="btn-ghost" :disabled="turn.state === 'cancelling'" @click="$emit('stop', turn)">{{ $t('chat.concurrent.stop') }}</button>
           </header>
-          <div class="concurrent-turn-body" tabindex="0" :aria-label="label(turn) || $t('chat.concurrent.turn')">
+          <div class="concurrent-turn-body" @wheel.passive="onPaneWheel($event, turn.userTurnId)"
+            @touchstart.passive="touchStart($event, turn.userTurnId)" @touchmove.passive="touchMove($event, turn.userTurnId)"
+            @keydown="onPaneKey($event, turn.userTurnId)" tabindex="0" :aria-label="label(turn) || $t('chat.concurrent.turn')">
             <VirtualTranscript :ref="el => setTranscript(turn.userTurnId, el)" :items="turn.blocks"
-              :estimate-height="estimateHeight" scroll-container=".concurrent-turn-body" :overscan="1" :item-gap="18">
+              :estimate-height="estimateHeight" initial-align="end" scroll-container=".concurrent-turn-body" :overscan="1" :item-gap="18">
               <template #default="{ item: block }"><slot :block="block"></slot></template>
             </VirtualTranscript>
           </div>
@@ -34,20 +37,65 @@ export default {
   `,
   setup(props, { expose }) {
     const trackRef = Vue.ref(null);
+    const selectedId = Vue.ref(props.turns[0]?.userTurnId || '');
+    const onTrackScroll = () => {
+      const track = trackRef.value;
+      if (!track) return;
+      const bounds = track.getBoundingClientRect();
+      const visible = Array.from(track.children).find(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.left >= bounds.left - 2 && rect.right <= bounds.right + 2;
+      });
+      if (visible && !Array.from(track.children).some(el => el.dataset.userTurnId === selectedId.value
+        && el.getBoundingClientRect().left >= bounds.left - 2 && el.getBoundingClientRect().right <= bounds.right + 2)) {
+        selectedId.value = visible.dataset.userTurnId;
+      }
+    };
     const transcripts = new Map();
+    const paused = new Set();
+    const touchY = new Map();
+    const followPane = (id, follow) => {
+      if (follow) paused.delete(id); else paused.add(id);
+      transcripts.get(id)?.setBottomFollowEnabled?.(follow);
+    };
+    const onPaneWheel = (event, id) => {
+      if (!event.deltaY) return;
+      if (event.deltaY < 0) followPane(id, false);
+      else {
+        const body = event.currentTarget;
+        if (body.scrollHeight - body.scrollTop - body.clientHeight < event.deltaY + 40) followPane(id, true);
+      }
+    };
+    const touchStart = (event, id) => touchY.set(id, event.touches?.[0]?.clientY);
+    const touchMove = (event, id) => {
+      const y = event.touches?.[0]?.clientY;
+      const previous = touchY.get(id);
+      if (Number.isFinite(previous) && Number.isFinite(y)) {
+        onPaneWheel({ currentTarget: event.currentTarget, deltaY: previous - y }, id);
+      }
+      touchY.set(id, y);
+    };
+    const onPaneKey = (event, id) => {
+      if (event.target !== event.currentTarget) return;
+      if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) followPane(id, false);
+      if (event.key === 'End') followPane(id, true);
+      if (['ArrowDown', 'PageDown'].includes(event.key)) onPaneWheel({ currentTarget: event.currentTarget, deltaY: event.key === 'PageDown' ? event.currentTarget.clientHeight : 40 }, id);
+    };
     const setTranscript = (id, instance) => {
       if (instance) {
         transcripts.set(id, instance);
-        instance.setBottomFollowEnabled?.(false);
+        instance.setBottomFollowEnabled?.(!paused.has(id));
       } else transcripts.delete(id);
     };
     const panelId = turn => `pending-user-turn-${encodeURIComponent(turn.userTurnId)}`;
-    const label = turn => userTurnExcerpt(props.messages.find(message => message.id === (turn.userMessageId || turn.userTurnId)));
+    const label = turn => userTurnExcerpt(props.messages.find(message => message.type === 'user'
+      && (message.userTurnId === turn.userTurnId || [message.id, message.messageId, message.clientMessageId].includes(turn.userMessageId || turn.userTurnId))));
     const columnFor = id => Array.from(trackRef.value?.children || []).find(el => el.dataset.userTurnId === id);
     const scrollToTurn = id => {
       const track = trackRef.value;
       const column = columnFor(id);
       if (!track || !column) return false;
+      selectedId.value = id;
       track.scrollTo({ left: column.offsetLeft - track.offsetLeft, behavior: 'instant' });
       return true;
     };
@@ -64,6 +112,7 @@ export default {
     // Preserve the leading surviving column's screen offset when another turn
     // finishes. Appends never select, focus, or scroll to the new turn.
     Vue.watch(() => props.turns.map(turn => turn.userTurnId), (ids, previous) => {
+      if (!ids.includes(selectedId.value)) selectedId.value = ids[0] || '';
       if (!previous || !trackRef.value) return;
       const track = trackRef.value;
       const bounds = track.getBoundingClientRect();
@@ -82,7 +131,8 @@ export default {
       return transcripts.get(id)?.scrollToKey?.(blockId, options) || false;
     };
     const anchorRow = (id, blockId, row, options) => transcripts.get(id)?.anchorTarget?.(blockId, row, options);
-    expose({ revealBlock, anchorRow });
-    return { trackRef, setTranscript, panelId, label, scrollToTurn, onTabKey };
+    const revealLatest = () => trackRef.value?.scrollIntoView?.({ block: 'end', inline: 'nearest' });
+    expose({ revealBlock, anchorRow, revealLatest });
+    return { trackRef, selectedId, onTrackScroll, onPaneWheel, touchStart, touchMove, onPaneKey, setTranscript, panelId, label, scrollToTurn, onTabKey };
   },
 };

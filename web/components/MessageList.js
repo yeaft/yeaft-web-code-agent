@@ -1982,7 +1982,10 @@ export default {
       resetHistoryPagination();
       if (splitActive.value) pauseAutoFollow();
       else resumeAutoFollow();
-      Vue.nextTick(() => { if (!splitActive.value) scrollToBottom(); });
+      Vue.nextTick(() => {
+        if (splitActive.value) concurrentTurnsRef.value?.revealLatest?.();
+        else scrollToBottom();
+      });
     };
 
     const smartScrollToBottom = () => {

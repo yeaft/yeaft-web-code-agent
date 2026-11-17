@@ -209,7 +209,10 @@ function mergeAssistantTextByStableId(store, conversationId, opts, text) {
   const stableId = opts?.id ? String(opts.id) : null;
   if (!stableId) return false;
   const msgs = store.messagesMap[conversationId] || [];
-  const existing = msgs.find(m => m?.type === 'assistant' && explicitMessageId(m) === stableId);
+  const existing = msgs.find(m => m?.type === 'assistant'
+    && [explicitMessageId(m), m.id, m.messageId, m.persistedMessageId].includes(stableId)
+    && (!opts.sessionId || m.sessionId === opts.sessionId)
+    && (!opts.turnId || !m.turnId || m.turnId === opts.turnId));
   if (!existing) return false;
   if (!existing.id) existing.id = stableId;
   if (!existing.messageId) existing.messageId = stableId;
@@ -229,6 +232,12 @@ function mergeAssistantTextByStableId(store, conversationId, opts, text) {
     }
   }
   stampSpeakerOnVpMessage(store, conversationId, existing);
+  const active = Object.values(store.activeVpTurns || {}).some(turn => turn.turnId === opts.turnId
+    && (!opts.sessionId || turn.sessionId === opts.sessionId));
+  if (active) {
+    existing.isStreaming = true;
+    existing.status = 'pending';
+  }
   return true;
 }
 

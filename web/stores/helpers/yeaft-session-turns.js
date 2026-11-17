@@ -3,7 +3,7 @@ import { yeaftSessionIdentityKey } from './yeaft-session-identity.js';
 
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : null;
 export const LIVE_SESSION_TURN_STATES = new Set(['routing', 'queued', 'running', 'cancelling', 'waiting', 'thinking', 'streaming', 'tool', 'retrying']);
-const STATES = new Set(['routing', 'queued', 'running', 'cancelling', 'waiting', 'thinking', 'streaming', 'tool', 'retrying', 'completed', 'stopped', 'aborted', 'error', 'errored']);
+const STATES = new Set(['routing', 'queued', 'running', 'cancelling', 'waiting', 'thinking', 'streaming', 'tool', 'retrying', 'interrupted', 'completed', 'stopped', 'aborted', 'error', 'errored']);
 
 /** User-turn identity is independent of each VP's Engine.query() turnId. */
 export function normalizeSessionTurn(row) {

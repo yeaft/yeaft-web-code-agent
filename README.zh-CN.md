@@ -54,6 +54,7 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 
 - 创建 Session 时选择 Agent、工作目录、roster 和 default VP；创建后在 composer 选择 model/effort，在 Session settings 编辑公告。
 - 用 `@mention` 指定一个或多个 VP；选中的 VP 独立执行同一个 turn，也能通过 `RouteForward` 明确交接给同 Session 的其他 VP。
+- 原生 Session 执行中仍可发送：AI 判断是补充已有 turn，还是新建并行 turn。所有 turn 共用一个输入框，执行中最多显示三栏并可横向切换，完成后按发起顺序回归历史。
 - 搜索和分页加载持久 Session history，检查每个 VP turn、运行中的后台任务、模型选择、工具调用、token 用量和 stop reason。
 - 将原生 Session 放入 Project，在 Project 与 Recents 之间拖动，并为所有成员 Session 设置共享 Project instruction。
 - 从当前 Session 创建持久 WorkItem；来源 Session 身份由 runtime 强制写入。

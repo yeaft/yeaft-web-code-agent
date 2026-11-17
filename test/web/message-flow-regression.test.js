@@ -111,6 +111,10 @@ describe('message flow regressions', () => {
       expect(store.yeaftSessionTurns.map(row => row.userTurnId)).toEqual([a, b]);
       store.handleYeaftOutput({ ...envelope, agentId: 'agent-b', conversationId: 'other', event: { type: 'session_turns', sessionId: 'parallel', turns: [] } });
       expect(store.yeaftSessionTurns).toHaveLength(2);
+      event({ type: 'yeaft_turn_aborted', turnId: 'engine-a', turnIds: ['engine-a'], vpId: 'omni', success: true });
+      expect(Object.values(store.activeVpTurns).map(row => row.turnId)).toEqual(['engine-b']);
+      // Restore A to continue exercising terminal frame isolation independently.
+      event({ type: 'vp_turn_start', vpId: 'omni', turnId: 'engine-a', userTurnId: a, threadId: 'engine-a' });
       frame('engine-b', b, { type: 'result', result_text: '' });
       expect(store.processingConversations['parallel-conversation']).toBe(true);
       expect(rows().find(row => row.content === 'login reply').isStreaming).toBe(true);

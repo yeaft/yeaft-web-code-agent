@@ -311,7 +311,7 @@ export function handleAssistantOutputFrame(store, conversationId, data, frameAge
       const echoClientMsgId = data.message?.clientMessageId || data.clientMessageId || null;
       const route = userMessageRoute(store, frameAgentId, store._currentYeaftSessionId, echoClientMsgId || data.message?.id);
       const userTurnId = data.message?.userTurnId || store._currentYeaftUserTurnId || route?.userTurnId || null;
-      const turnRelation = data.message?.turnRelation || route?.turnRelation || null;
+      const turnRelation = data.message?.turnRelation || data.message?.relation || route?.turnRelation || null;
       const echoCandidate = {
         type: 'user',
         content: userContent,
