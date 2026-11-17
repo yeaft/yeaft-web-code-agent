@@ -283,6 +283,15 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
     await expect(panel.getByRole('heading', { name: 'Layout result', exact: true })).toBeVisible();
     const handle = page.getByRole('separator', { name: 'Resize output panel', exact: true });
     const initial = await panel.boundingBox();
+    const conversation = page.locator('#person-conversation');
+    const header = page.locator('.person-header');
+    const workspace = await page.locator('.person-workspace').boundingBox();
+    const chatHeader = await header.boundingBox();
+    expect(Math.abs(initial.y - workspace.y)).toBeLessThan(1);
+    expect(Math.abs(initial.height - workspace.height)).toBeLessThan(1);
+    expect(chatHeader.x + chatHeader.width).toBeLessThanOrEqual(initial.x + 1);
+    expect(Math.abs((await conversation.boundingBox()).height - initial.height)).toBeLessThan(1);
+    await page.locator('#person-input').fill('Keep my split-view draft');
     await handle.focus();
     await handle.press('ArrowLeft');
     await expect.poll(async () => (await panel.boundingBox()).width).toBeGreaterThan(initial.width);
@@ -332,6 +341,37 @@ test('Output drawer resizes by keyboard and pointer, restores fullscreen and foc
     await page.mouse.move(grip.x + grip.width / 2 - 75, grip.y + grip.height / 2, { steps: 5 });
     await page.mouse.up();
     await expect.poll(async () => (await panel.boundingBox()).width).toBeGreaterThan(keyboardWidth + 40);
+    await handle.focus();
+    await handle.press('End'); // Only the left column becomes narrow; reader stays split.
+    await expect.poll(async () => (await conversation.boundingBox()).width).toBeLessThanOrEqual(601);
+    await expect(panel).not.toHaveAttribute('aria-modal', 'true');
+    await expect(page.locator('.person-more-button')).toBeVisible();
+    await expect(page.locator('.person-desktop-actions')).not.toBeVisible();
+    const narrowHeader = await header.boundingBox();
+    expect(narrowHeader.x + narrowHeader.width).toBeLessThanOrEqual((await panel.boundingBox()).x + 1);
+    for (const button of await header.locator('button:visible').all()) {
+      const rect = await button.boundingBox();
+      expect(rect.x).toBeGreaterThanOrEqual(narrowHeader.x - 1);
+      expect(rect.x + rect.width).toBeLessThanOrEqual(narrowHeader.x + narrowHeader.width + 1);
+    }
+    await page.screenshot({ path: testInfo.outputPath('outputs-narrow-desktop-split.png') });
+    await clickPersonAction(page, 'settings');
+    await expect(page.locator('.person-settings-modal')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.person-more-button')).toBeFocused();
+    await expect(page.locator('#person-input')).toHaveValue('Keep my split-view draft');
+    // Search and inspector share the same full-height right column, not the header.
+    for (const action of ['search', 'inside']) {
+      await clickPersonAction(page, action);
+      const right = await panel.boundingBox();
+      expect(Math.abs(right.y - workspace.y)).toBeLessThan(1);
+      expect(Math.abs(right.height - workspace.height)).toBeLessThan(1);
+    }
+    await panel.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(panel).toHaveCount(0);
+    await expect(page.locator('.person-more-button')).not.toBeVisible();
+    await expect(page.locator('.person-thoughts-button')).toBeFocused();
+    await expect(page.locator('#person-input')).toHaveValue('Keep my split-view draft');
     expect(runtime.inputs).toHaveLength(idleCalls);
   } finally { await runtime.close(); }
 });

@@ -58,6 +58,7 @@ describe('Digital Person surface', () => {
   it('uses the shared sidebar toggle rather than a back route and reports modal blocking', async () => {
     await render();
     expect(wrapper.find('.person-navigation [title="Sessions"]').exists()).toBe(false);
+    expect(wrapper.get('.person-header').element.parentElement).toBe(wrapper.get('#person-conversation').element);
     await wrapper.get('.header-sidebar-toggle').trigger('click');
     expect(wrapper.emitted('toggle-sidebar')).toHaveLength(1);
     expect(chat.leaveDigitalPerson).not.toHaveBeenCalled();
@@ -74,6 +75,9 @@ describe('Digital Person surface', () => {
     await wrapper.get('.person-settings-modal button[aria-label="Close"]').trigger('click');
     await flushPromises();
     expect(wrapper.emitted('interaction-blocked').at(-1)).toEqual([false]);
+    await wrapper.get('.person-thoughts-button').trigger('click'); await flushPromises();
+    expect(wrapper.get('#person-side-panel').element.parentElement).toBe(wrapper.get('#person-conversation').element.parentElement);
+    expect(wrapper.get('#person-side-panel').find('.person-header').exists()).toBe(false);
   });
 
   it('mounts the selected eligible Agent rather than a stale offline/unsupported Person destination', async () => {

@@ -8,15 +8,16 @@ const desktopActions = {
   refresh: '.person-header-actions > button:first-child',
 };
 
-// Choose from the viewport contract, not element visibility: a missing mobile
-// trigger or an accidentally visible desktop icon should fail the regression.
+// A desktop split can make just the conversation header compact. Layout tests
+// assert that breakpoint explicitly; focus assertions target its visible opener.
 export function personActionOpener(page, action) {
-  return page.locator(page.viewportSize().width <= 600 ? '.person-more-button' : desktopActions[action]);
+  return page.locator(`.person-more-button:visible, ${desktopActions[action]}:visible`);
 }
 
 export async function clickPersonAction(page, action) {
   if (!Object.hasOwn(desktopActions, action)) throw new Error(`Unknown Person action: ${action}`);
-  if (page.viewportSize().width <= 600) {
+  const conversation = await page.locator('#person-conversation').boundingBox();
+  if (conversation.width <= 600) {
     await page.locator('.person-more-button').click();
     const sheet = page.locator('#person-actions-sheet');
     await expect(sheet).toBeVisible();
