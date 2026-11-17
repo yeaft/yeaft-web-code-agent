@@ -135,7 +135,10 @@ it('rebases concurrent final cognition without replaying either execution', asyn
     if (count === 1) { entered(); await firstGate; }
     const rebase = params.messages.filter(m => typeof m.content === 'string').map(m => { try { return JSON.parse(m.content); } catch { return {}; } }).findLast(m => m.phase === 'cognition-rebase');
     const proposal = finalProposal(rebase?.baseStateVersion ?? JSON.parse(params.messages[0].content).state.version);
-    proposal.concepts = []; proposal.state.focusConceptIds = []; proposal.reply = null;
+    // Both finalizers update the same concept: exercise real revision rebasing,
+    // not only the top-level state version conflict.
+    proposal.concepts[0].expectedRevision = rebase?.concepts.find(concept => concept.id === 'curiosity')?.revision ?? 0;
+    proposal.reply = null;
     yield* text(JSON.stringify(proposal));
   } };
   const service = createPersonService({ yeaftDir: dir, workDir: dir, config, adapter, embedding: { enabled: false } });
