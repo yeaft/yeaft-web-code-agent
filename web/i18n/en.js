@@ -5,6 +5,14 @@ import { en as quickSend } from './quick-send.js';
 import { en as userShortcuts } from './user-shortcuts.js';
 
 export default {
+  "chat.concurrent.turns": "Active turns",
+  "chat.concurrent.turn": "Turn",
+  "chat.concurrent.running": "Running",
+  "chat.concurrent.waiting": "Waiting",
+  "chat.concurrent.queued": "Queued",
+  "chat.concurrent.error": "Error",
+  "chat.concurrent.stop": "Stop",
+
   "richResponse.response": "Response",
   "richResponse.progress": "Progress update",
   "richResponse.copySummary": "Copy summary",
