@@ -26,11 +26,20 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
   const wire = await sessionTurnsFixture(page, mockAgent);
   const a = await wire.send('Root A first');
   wire.delta(a, 'A-only initial');
+  // Single-turn mode keeps the user's Workbench choice unchanged.
+  await page.evaluate(() => window.Pinia.useChatStore().openWorkbench());
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().workbenchExpanded)).toBe(true);
   const b = await wire.send('Root B second');
   wire.delta(b, 'B-only initial');
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().workbenchExpanded)).toBe(false);
+  await page.evaluate(() => window.Pinia.useChatStore().openWorkbench());
+  await expect.poll(() => page.evaluate(() => window.Pinia.useChatStore().workbenchExpanded)).toBe(true);
   wire.delta(a, ' A-only continuation');
   wire.delta(b, ' B-only continuation');
   await expect(page.locator('.parallel-turn-pane')).toHaveCount(2);
+  expect(await page.evaluate(() => window.Pinia.useChatStore().workbenchExpanded)).toBe(true);
+  // Close it again for the full-width responsive geometry assertions below.
+  await page.evaluate(() => window.Pinia.useChatStore().toggleWorkbench());
   await expect(pane(page, a)).toContainText('A-only initial A-only continuation');
   await expect(pane(page, b)).toContainText('B-only initial B-only continuation');
   await expect(pane(page, a)).not.toContainText('B-only');

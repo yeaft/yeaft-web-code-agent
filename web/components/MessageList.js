@@ -1163,6 +1163,11 @@ export default {
       if (!count) parallelStarted.value = false;
     }, { immediate: true, flush: 'sync' });
     const splitActive = Vue.computed(() => parallelStarted.value && currentPendingTurns.value.length > 0);
+    // Free reading width only when this conversation enters parallel layout.
+    // A user may reopen Workbench; streaming/new siblings must not close it again.
+    Vue.watch(splitActive, active => {
+      if (active && store.workbenchExpanded) store.toggleWorkbench();
+    }, { immediate: true });
     const splitProjection = Vue.computed(() => partitionUserTurnBlocks(messageBlocks.value, currentPendingTurns.value));
     const historyBlocks = Vue.computed(() => splitActive.value ? splitProjection.value.history : messageBlocks.value);
     const pendingTurns = Vue.computed(() => splitProjection.value.pending);
