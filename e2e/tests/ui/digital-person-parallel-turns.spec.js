@@ -153,23 +153,13 @@ for (const scenario of [{ width: 1600, theme: 'light', panel: 'inside' }, { widt
       const turns = [first, second];
       for (const text of texts.slice(2)) turns.push(await send(text));
       await expect(page.locator('.parallel-turn-pane')).toHaveCount(5);
-      const inspectorSurvived = scenario.width !== 1600 || await panel.count() > 0;
       if (scenario.width === 1600) {
-        await expect.soft(panel, 'Manually reopened inspector must survive new sibling admissions').toBeVisible({ timeout: 1000 });
-        if (await panel.count()) await panel.getByRole('button', { name: /^Close(?: reader)?$/ }).click();
+        await expect(panel, 'Manually reopened inspector must survive new sibling admissions').toBeVisible();
+        await panel.getByRole('button', { name: /^Close(?: reader)?$/ }).click();
       }
       expect(new Set(turns.map(turn => turn.episodeId)).size).toBe(5);
       expect(records('episodes')).toHaveLength(5);
       expect((await snapshot()).activeEpisodes).toHaveLength(5);
-      if (!inspectorSurvived) {
-        // Keep the regression assertion above, but restore the view through a
-        // real navigation so the remaining independent contracts still run.
-        await screenshot('inspector-regression');
-        await page.reload();
-        await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
-        await page.locator('.sidebar-person-trigger:visible').click();
-        await expect(page.locator('.parallel-turn-pane')).toHaveCount(5);
-      }
       const tabs = page.locator('.parallel-turn-tabs [role="tab"]');
       await tabs.first().focus(); await tabs.first().press('End');
       await expect(tabs.last()).toBeFocused(); await expect(tabs.last()).toHaveAttribute('aria-selected', 'true');
