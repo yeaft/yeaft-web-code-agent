@@ -756,7 +756,7 @@ export default {
                 <button type="button" class="btn-ghost" :disabled="!canStartEpisode" @click="command('dream')">{{ $t('person.dream') }}</button>
               </template>
             </MessageComposer>
-            <p v-if="ready && state.busy" class="person-inbox-hint">{{ $t('person.inboxHint') }}</p>
+            <p v-if="ready && state.busy && !Array.isArray(state.activeEpisodes)" class="person-inbox-hint">{{ $t('person.inboxHint') }}</p>
             <p v-if="fileError" class="person-upload-error person-settings-error" role="alert">{{ $t(fileError) }}</p>
           </div>
         </main>

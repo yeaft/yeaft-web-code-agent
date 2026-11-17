@@ -62,10 +62,13 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
   const track = page.locator('.parallel-turn-track');
   await expect.poll(() => track.evaluate(el => el.scrollWidth > el.clientWidth + 20)).toBe(true);
   // Five columns must not be squeezed into the viewport; at most three fit.
-  const desktopWidth = await track.evaluate(el => el.clientWidth);
-  const desktopPane = await pane(page, a).evaluate(el => el.getBoundingClientRect().width);
-  expect(desktopPane).toBeGreaterThanOrEqual(desktopWidth / 3 - 10);
-  expect(desktopPane).toBeLessThanOrEqual(desktopWidth + 1);
+  await expect.poll(() => track.evaluate(el => {
+    const width = el.clientWidth;
+    const pane = el.querySelector('.parallel-turn-pane').getBoundingClientRect().width;
+    const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+    // Account for both real inter-column gaps rather than a fixed allowance.
+    return pane >= (width - 2 * gap) / 3 - 1 && pane <= width + 1;
+  })).toBe(true);
 
   for (const [theme, width] of [['light', 1600], ['dark', 320]]) {
     await page.setViewportSize({ width, height: 1000 });

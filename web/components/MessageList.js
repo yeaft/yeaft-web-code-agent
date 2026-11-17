@@ -1165,7 +1165,7 @@ export default {
     const splitActive = Vue.computed(() => parallelStarted.value && currentPendingTurns.value.length > 0);
     // Free reading width only when this conversation enters parallel layout.
     // A user may reopen Workbench; streaming/new siblings must not close it again.
-    Vue.watch(splitActive, active => {
+    Vue.watch(() => [virtualTranscriptIdentity.value, splitActive.value], ([, active]) => {
       if (active && store.workbenchExpanded) store.toggleWorkbench();
     }, { immediate: true });
     const splitProjection = Vue.computed(() => partitionUserTurnBlocks(messageBlocks.value, currentPendingTurns.value));
