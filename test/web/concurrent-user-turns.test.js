@@ -66,6 +66,39 @@ describe('concurrent user turn presentation', () => {
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });
 
+  it('hands off pane follow ownership for off-window navigation and scrollbar reading', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const blocks = Array.from({ length: 20 }, (_, index) => ({ id: `block-${index}`, content: `row ${index}` }));
+    const wrapper = mount(ConcurrentUserTurns, {
+      attachTo: document.body,
+      props: { turns: [{ userTurnId: 'root', state: 'running', blocks }],
+        messages: [{ id: 'root', type: 'user', content: 'long execution' }], estimateHeight: () => 100 },
+      slots: { default: '<template #default="{ block }"><div style="height:100px">{{ block.content }}</div></template>' },
+      global: { config: { globalProperties: { $t: key => key } } },
+    });
+    try {
+      const track = wrapper.get('.concurrent-turn-track').element;
+      track.scrollTo = vi.fn();
+      const body = wrapper.get('.concurrent-turn-body').element;
+      Object.defineProperty(body, 'clientHeight', { configurable: true, value: 300 });
+      Object.defineProperty(body, 'clientWidth', { configurable: true, value: 280 });
+      Object.defineProperty(body, 'offsetWidth', { configurable: true, value: 300 });
+      body.getBoundingClientRect = () => ({ top: 0, bottom: 300, left: 0, right: 300 });
+      await Vue.nextTick();
+      const api = wrapper.vm.$.exposed;
+      expect(await api.revealBlock('root', 'block-0', { align: 'start' })).toBe(true);
+      expect(wrapper.find('[data-virtual-id="block-0"]').exists()).toBe(true);
+      // Explicit bottom intent resumes follow; a scrollbar press hands it back.
+      await wrapper.get('.concurrent-turn-body').trigger('keydown', { key: 'End' });
+      await wrapper.get('.concurrent-turn-body').trigger('pointerdown', { button: 0, clientX: 295, clientY: 100 });
+      body.scrollTop = 0;
+      body.dispatchEvent(new Event('scroll'));
+      await new Promise(resolve => setTimeout(resolve, 40));
+      await Vue.nextTick();
+      expect(wrapper.find('[data-virtual-id="block-0"]').exists()).toBe(true);
+    } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
+  });
+
   it('keeps single-turn layout, latches parallel layout, and returns only completed roots to history', async () => {
     vi.stubGlobal('Vue', Vue);
     const store = Vue.reactive({ currentView: 'yeaft', currentAgent: 'a', yeaftActiveSessionFilter: 's',

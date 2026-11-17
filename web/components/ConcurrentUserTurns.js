@@ -1,4 +1,5 @@
 import VirtualTranscript from './VirtualTranscript.js';
+import { isTranscriptScrollbarPointer } from '../utils/virtual-transcript.js';
 import { userTurnExcerpt } from '../utils/concurrent-user-turns.js';
 
 export default {
@@ -25,7 +26,7 @@ export default {
           </header>
           <div class="concurrent-turn-body" @wheel.passive="onPaneWheel($event, turn.userTurnId)"
             @touchstart.passive="touchStart($event, turn.userTurnId)" @touchmove.passive="touchMove($event, turn.userTurnId)"
-            @keydown="onPaneKey($event, turn.userTurnId)" tabindex="0" :aria-label="label(turn) || $t('chat.concurrent.turn')">
+            @keydown="onPaneKey($event, turn.userTurnId)" @pointerdown="onPanePointer($event, turn.userTurnId)" tabindex="0" :aria-label="label(turn) || $t('chat.concurrent.turn')">
             <VirtualTranscript :ref="el => setTranscript(turn.userTurnId, el)" :items="turn.blocks"
               :estimate-height="estimateHeight" initial-align="end" scroll-container=".concurrent-turn-body" :overscan="1" :item-gap="18">
               <template #default="{ item: block }"><slot :block="block"></slot></template>
@@ -57,6 +58,9 @@ export default {
     const followPane = (id, follow) => {
       if (follow) paused.delete(id); else paused.add(id);
       transcripts.get(id)?.setBottomFollowEnabled?.(follow);
+    };
+    const onPanePointer = (event, id) => {
+      if (isTranscriptScrollbarPointer(event, event.currentTarget)) followPane(id, false);
     };
     const onPaneWheel = (event, id) => {
       if (!event.deltaY) return;
@@ -126,6 +130,7 @@ export default {
     }, { flush: 'pre' });
     const revealBlock = async (id, blockId, options) => {
       if (!scrollToTurn(id)) return false;
+      followPane(id, false);
       columnFor(id)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
       await Vue.nextTick();
       return transcripts.get(id)?.scrollToKey?.(blockId, options) || false;
@@ -133,6 +138,6 @@ export default {
     const anchorRow = (id, blockId, row, options) => transcripts.get(id)?.anchorTarget?.(blockId, row, options);
     const revealLatest = () => trackRef.value?.scrollIntoView?.({ block: 'end', inline: 'nearest' });
     expose({ revealBlock, anchorRow, revealLatest });
-    return { trackRef, selectedId, onTrackScroll, onPaneWheel, touchStart, touchMove, onPaneKey, setTranscript, panelId, label, scrollToTurn, onTabKey };
+    return { trackRef, selectedId, onTrackScroll, onPaneWheel, onPanePointer, touchStart, touchMove, onPaneKey, setTranscript, panelId, label, scrollToTurn, onTabKey };
   },
 };
