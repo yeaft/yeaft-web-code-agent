@@ -91,11 +91,30 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
   await expect(pane(page, a)).toContainText('A survives B completion');
   for (const turn of [e, d, c, a]) wire.finish(turn);
   await expect(page.locator('.parallel-turn-region')).toHaveCount(0);
-  const questions = await page.locator('.message-user-block').allTextContents();
-  expect(questions.map(text => text.trim())).toEqual([
+  // Completed history remains virtualized. Read it by scrolling, rather than
+  // requiring off-window roots to exist simultaneously in the DOM.
+  const scroller = page.locator('.chat-container');
+  await scroller.focus();
+  await page.keyboard.press('Home');
+  const questions = [];
+  let foundA = false;
+  for (let step = 0; step < 50; step += 1) {
+    const sample = await scroller.evaluate(async (el, step) => {
+      el.scrollTop = step * el.clientHeight * .65;
+      el.dispatchEvent(new Event('scroll'));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { top: el.scrollTop, end: el.scrollTop + el.clientHeight >= el.scrollHeight - 2,
+        questions: [...el.querySelectorAll('.message-user-block')].map(row => row.textContent.trim()),
+        foundA: [...el.querySelectorAll('.assistant-turn')].some(row => row.textContent.includes('A-only initial A-only continuation A survives B completion')) };
+    }, step);
+    for (const text of sample.questions) if (!questions.includes(text)) questions.push(text);
+    foundA ||= sample.foundA;
+    if (sample.end) break;
+  }
+  expect(questions).toEqual([
     'Root A first', 'Supplement belongs to A', 'Root B second', 'Root C third', 'Root D fourth', 'Root E fifth',
   ]);
-  await expect(page.locator('.assistant-turn').filter({ hasText: 'A-only initial A-only continuation A survives B completion' })).toHaveCount(1);
+  expect(foundA).toBe(true);
 });
 
 test('Session navigation and reconnect snapshots restore roots; stopping one execution leaves its same-VP peer streaming', async ({ chatPage: page, mockAgent }) => {
