@@ -356,7 +356,7 @@ for (const scenario of [{ width: 320, theme: 'dark', locale: 'zh-CN' }]) {
     await expect(list.nth(0)).toBeChecked();
     await expect(list.nth(1)).toBeChecked();
     await expect(list.nth(0)).toBeDisabled();
-    await expect(dialog.locator('.person-model-summary')).toContainText('2');
+    await expect(list).toHaveCount(2);
     await expect(dialog.locator('.person-default-model-field')).toContainText('provider/model-a');
     const select = dialog.locator('#person-default-model');
     await select.selectOption('provider/model-b');
