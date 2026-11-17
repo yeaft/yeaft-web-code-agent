@@ -65,7 +65,7 @@ for (const scenario of [{ width: 1600, theme: 'light', panel: 'inside' }, { widt
         routes.push(route);
         expect(params.tools).toEqual([]);
         expect(JSON.stringify(route)).not.toContain(privateMarker);
-        const related = route.newQuery === supplement;
+        const related = route.newQuery === supplement.trim();
         yield { type: 'text_delta', text: JSON.stringify({ decision: related ? 'related' : 'unrelated', targetThreadId: related ? first.episodeId : null, title: 'Independent public question' }) };
         yield personStop(false); return;
       }
