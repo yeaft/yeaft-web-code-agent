@@ -198,7 +198,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // authenticated desktop light/dark and narrow browser lifecycle (3).
 // +1 confirmed-append response grouping regression: live/replay tool aggregation
 // retains optimistic boundaries and distinct VP/independent turn ownership.
-export const TEST_CASE_LIMIT = 1103;
+// +1 Person compact blocking-recovery contract; responsive gutters replace the prior full-width browser expectation.
+export const TEST_CASE_LIMIT = 1104;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -139,6 +139,42 @@ describe('Digital Person surface', () => {
     expect(wrapper.get('#person-side-panel').find('.person-header').exists()).toBe(false);
   });
 
+  it('keeps configuration guidance out of the transcript and offers only localized blocking recovery beside the composer', async () => {
+    for (const messages of [en, zhCN]) {
+      await render(messages);
+      const state = wrapper.vm.state;
+      expect(wrapper.find('.person-availability').exists()).toBe(false);
+      Object.assign(state, { modelReady: false, reason: 'PRIVATE raw model or effort catalog diagnostics' });
+      await Vue.nextTick();
+      expect(wrapper.find('.person-configuration').exists()).toBe(false);
+      expect(wrapper.text()).not.toContain('PRIVATE raw');
+      const notice = wrapper.get('.person-availability');
+      expect(notice.element.parentElement).toBe(wrapper.get('.person-composer').element);
+      expect(notice.text()).toContain(messages['person.modelRequired']);
+      expect(wrapper.get('#person-input').attributes('disabled')).toBeDefined();
+      notice.get('button').element.focus();
+      await notice.get('button').trigger('click'); await flushPromises();
+      expect(wrapper.find('.person-settings-modal').exists()).toBe(true);
+      await wrapper.get('.person-settings-close').trigger('click'); await flushPromises();
+      expect(wrapper.vm.settingsOpen).toBe(false);
+      expect(document.activeElement).toBe(notice.get('button').element);
+      // A transport/loading gate already explains why controls are unavailable.
+      state.loading = true; await Vue.nextTick();
+      expect(wrapper.find('.person-availability').exists()).toBe(false);
+      state.loading = false; state.storageReady = false; await Vue.nextTick();
+      expect(wrapper.get('.person-availability').text()).toContain(messages['person.storageUnavailable']);
+      const refresh = vi.spyOn(wrapper.vm.controller, 'refresh').mockResolvedValue();
+      await wrapper.get('.person-availability button').trigger('click');
+      expect(refresh).toHaveBeenCalledOnce();
+      Object.assign(state, { configured: false, storageReady: true }); await Vue.nextTick();
+      expect(wrapper.get('.person-availability').text()).toContain(messages['person.setupRequired']);
+      Object.assign(state, { configured: true, modelReady: true }); await Vue.nextTick();
+      expect(wrapper.find('.person-availability').exists()).toBe(false);
+      expect(wrapper.get('#person-input').attributes('disabled')).toBeUndefined();
+      wrapper.unmount(); wrapper = null;
+    }
+  });
+
   it('mounts the selected eligible Agent rather than a stale offline/unsupported Person destination', async () => {
     chat.agents.push({ id: 'unsupported', online: true, capabilities: [] },
       { id: 'offline', online: false, capabilities: ['digital_person'] });
