@@ -55,6 +55,27 @@ export function isGitHubCopilotProvider(provider) {
     || provider.name === GITHUB_COPILOT_PROVIDER_NAME;
 }
 
+/** Quick Send requires unique model ownership, even when managed routing
+ * normally deduplicates entries. Inspect configured IDs before normalization. */
+export function collectAmbiguousModelRefs(providers) {
+  const seen = new Set();
+  const ambiguous = new Set();
+  for (const provider of Array.isArray(providers) ? providers : []) {
+    const managed = isGitHubCopilotProvider(provider);
+    const name = provider?.name || (managed ? GITHUB_COPILOT_PROVIDER_NAME : '');
+    const models = Array.isArray(provider?.models) && provider.models.length ? provider.models
+      : managed ? FALLBACK_GITHUB_COPILOT_MODELS : [];
+    for (const entry of models) {
+      const id = typeof entry === 'string' || managed || typeof entry?.id === 'string' ? modelId(entry) : '';
+      if (!id) continue;
+      const ref = name ? `${name}/${id}` : id;
+      if (seen.has(ref)) ambiguous.add(ref);
+      else seen.add(ref);
+    }
+  }
+  return ambiguous;
+}
+
 export function protocolForKnownModel(id) {
   const value = String(id || '').toLowerCase();
   if (!value) return null;

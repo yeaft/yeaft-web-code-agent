@@ -70,6 +70,7 @@ import { streamContextRollover, contextRolloverReport } from './context-rollover
 import { getModelInfo, normalizeEffort, parseModelRef, resolveContextWindow, resolveMaxOutputTokens } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
+import { findEffortModelEntry, usesNativeGeminiLevels } from './sessions/session-config.js';
 import { approxTokens, computeBudget } from './memory/budget.js';
 import { COLLAB_TOOL_POLICY, isToolErrorOutput, toolValidationError, localizeVisibleText, normalizeToolOutput, truncateToolResultIfNeeded } from './tools/registry.js';
 import { CONDITIONAL_BUILTIN_TOOL_NAMES, resolveActiveToolNames } from './tools/activation.js';
@@ -1970,7 +1971,7 @@ export class Engine {
     // task-327c nit: defensively normalize caller-supplied userEffort BEFORE
     // the merge, so an invalid caller value (e.g. 'ULTRA') does not shadow a
     // valid prompt prefix.
-    const parsed = parseEffortPrefix(prompt);
+    const parsed = parseEffortPrefix(prompt, { preserveNative: true });
     const parsedSkill = parseExplicitSkillCommand(parsed.cleanedPrompt, this.#skillManager);
     const effectivePrompt = parsedSkill.cleanedPrompt;
     const effectivePromptParts = parsedSkill.skillName
@@ -1979,7 +1980,7 @@ export class Engine {
     // Only actual caller input and a prompt prefix are per-query overrides.
     // Session-configured effort belongs to the live config and is resolved at
     // each provider-request boundary, just like the live model snapshot.
-    const explicitUserEffort = normalizeEffort(userEffort) || parsed.effort || null;
+    const explicitUserEffort = normalizeEffort(userEffort, true) || parsed.effort || null;
     const effectiveCollabToolPolicy = collabToolPolicy === COLLAB_TOOL_POLICY.SINGLE_VP || collabToolPolicy === COLLAB_TOOL_POLICY.MULTI_VP
       ? collabToolPolicy
       : null;
@@ -2701,6 +2702,10 @@ export class Engine {
       const requestAdapter = typeof this.#adapter.captureRequest === 'function'
         ? this.#adapter.captureRequest()
         : this.#adapter;
+      const routedProvider = this.#adapter.getProviderForModel?.(currentModel);
+      const effortModel = findEffortModelEntry(requestConfig, currentModel, routedProvider?.name);
+      const preserveNativeEffort = usesNativeGeminiLevels(currentModel, effortModel,
+        routedProvider?.protocol || requestConfig.adapter);
       retryPolicy = resolveRetryPolicy(requestConfig);
 
       // task-324: no hard MAX_TURNS cap. Loop terminates on end_turn,
@@ -2911,19 +2916,19 @@ export class Engine {
         // Resolve effort per provider request so a saved Session effort takes
         // effect at the next loop. A caller override or `/effort` prefix stays
         // fixed for this query and still wins over live Session config.
-        const configuredEffort = normalizeEffort(requestConfig.modelEffort);
-        const requestUserEffort = normalizeEffort(turnConfig?.effort) || userEffort || configuredEffort || null;
-        let resolvedEffort = pickEffort({ scenario, toolLoopTurns, userEffort: requestUserEffort });
+        const requestUserEffort = normalizeEffort(turnConfig?.effort, preserveNativeEffort)
+          || normalizeEffort(userEffort, preserveNativeEffort)
+          || normalizeEffort(requestConfig.modelEffort, preserveNativeEffort);
+        const geminiDefault = scenario === 'chat' && effortModel?.effortProtocol === 'gemini'
+          ? effortModel.defaultEffort : null;
+        let resolvedEffort = requestUserEffort || geminiDefault || pickEffort({ scenario, toolLoopTurns });
+        let effortSource = requestUserEffort ? 'user' : geminiDefault ? 'model-default' : 'auto';
 
-        // DESIGN.md §9.16: thinking-mode precedence chain. When a VP
-        // persona is active, the router/continuity bookkeeping has more
-        // signal than the raw scenario tag — the prior assistant turn's
-        // routerPlan, the VP's role default, and the global config all
-        // outrank the scenario picker for `'high'|'max'`. UI/userEffort
-        // is already honoured by pickEffort (highest precedence).
-        if (!requestUserEffort && vpPersona && vpPersona.vpId) {
+        // An explicit VP/router policy outranks the native model's chat default.
+        // A VP's mere presence (with no configured policy) does not.
+        if (!requestUserEffort && vpPersona?.vpId) {
           const priorPlan = extractPriorPlan(conversationMessages, vpPersona.vpId);
-          const thinkingCfg = (this.#config && this.#config.thinking) || {};
+          const thinkingCfg = requestConfig.thinking || {};
           // PR-I: live routerPlan.thinking — when the dispatcher passes
           // `vpPlan` for this turn (per-VP plan from the V2 router) and its
           // `vpId` matches the active persona, surface its `thinking` field
@@ -2935,18 +2940,21 @@ export class Engine {
             ? vpPlan.thinking
             : null;
           const resolved = resolveThinking({
-            uiOverride: (requestUserEffort === 'max' || requestUserEffort === 'high') ? requestUserEffort : null,
             routerPlan: liveRouterThinking,
             priorPlan: priorPlan && priorPlan.thinking ? priorPlan.thinking : null,
             vpDefault: typeof vpPersona.thinking === 'string' ? vpPersona.thinking : null,
             globalDefault: typeof thinkingCfg.default === 'string' ? thinkingCfg.default : null,
             allowRouterEscalate: thinkingCfg.allowRouterEscalate !== false,
           });
-          // Only adopt the chain's choice when it strengthens the
-          // baseline. We never weaken below pickEffort (e.g. explicit
-          // 'ultra' or consolidate='max' must not be downgraded by a VP
-          // default or router plan).
-          if (resolvedEffort !== 'ultra'
+          // The native chat default is only a fallback. Outside this path,
+          // preserve the legacy rule that policy may strengthen the scenario
+          // baseline but never downgrade it.
+          if (geminiDefault && resolved.source !== 'default') {
+            resolvedEffort = resolved.value;
+            // Like other explicitly selected effort, native VP policy applies
+            // even when automatic scenario thinking is disabled.
+            effortSource = 'user';
+          } else if (!geminiDefault && resolvedEffort !== 'ultra'
             && (resolved.value === 'max' || (resolved.value === 'high' && resolvedEffort === 'low'))) {
             resolvedEffort = resolved.value;
           }
@@ -3282,7 +3290,7 @@ export class Engine {
           requestIdentity,
           onEffortDecision: decision => { requestEffortDecision = snapshotEffortDecision(decision); },
           onProviderDiagnostics: info => traceRequest('llm.capabilities', { detail: info }),
-          effortSource: requestUserEffort ? 'user' : 'auto',
+          effortSource,
           signal,
           onRawExchange: captureRawExchange,
           rawExchangeMaxBytes,

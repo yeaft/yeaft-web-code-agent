@@ -107,7 +107,7 @@ export async function createPersonProvider({ yeaftDir, config: suppliedConfig, a
     const explicitImages = m.supportsImages ?? rawModel?.supportsImages ?? rawProvider?.supportsImages;
     const protocol = routedModel?.protocol || routedProvider?.protocol || inferProtocolFromModelId(m.id) || 'openai-responses';
     const effortContext = { ...m, protocol, thinkingProtocol: m.effortProtocol || m.thinkingProtocol };
-    const efforts = effortEnabled ? [...new Set((m.effortOptions || []).map(normalizeEffort).filter(Boolean))].filter(e => {
+    const efforts = effortEnabled ? [...new Set((m.effortOptions || []).map(effort => normalizeEffort(effort, protocol === 'gemini')).filter(Boolean))].filter(e => {
       // Manual thinking can silently expand native max_tokens. Use the exact
       // adapter rules to admit only combinations that fit this model's reserve;
       // adaptive and Responses effort do not require a larger output budget.

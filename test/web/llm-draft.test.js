@@ -3,6 +3,8 @@ import { mount } from '@vue/test-utils';
 import * as Vue from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import LlmTab from '../../web/components/LlmTab.js';
+import ProviderPresetPicker from '../../web/components/ProviderPresetPicker.js';
+import { GEMINI_BASE_URL as AGENT_GEMINI_BASE_URL } from '../../agent/yeaft/llm/gemini-endpoint.js';
 import en from '../../web/i18n/en.js';
 
 globalThis.Vue = Vue;
@@ -192,7 +194,8 @@ describe('Agent LLM editing draft ownership', () => {
       agents: [{ id: 'agent-a', online: true }], inputDrafts: {}, llmConfig: {}, sendWsMessage: vi.fn() });
     globalThis.Pinia = { useChatStore: () => store, useAuthStore: () => auth,
       useVpStore: () => ({ vpList: [] }) };
-    wrapper = mount(ChatInput, { props: { quickSendEnabled: true, sendFn: vi.fn() },
+    const sendFn = vi.fn();
+    wrapper = mount(ChatInput, { props: { quickSendEnabled: true, sendFn },
       global: { mocks: { $t: key => key }, stubs: { MessageComposer: { template: '<div />' } } } });
     expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
     expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'get_llm_config', agentId: 'agent-a' });
@@ -224,10 +227,68 @@ describe('Agent LLM editing draft ownership', () => {
     await wrapper.setProps({ quickSendEnabled: true });
     expect(store.sendWsMessage).toHaveBeenCalledTimes(4);
     expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'get_llm_config', agentId: 'agent-b' });
+    const blocked = { id: 'blocked', name: 'Unavailable shortcut', model: 'test/model-a', effort: 'high', available: false };
+    store.llmConfig['agent-b'] = config('ready', { quickSends: [blocked, { id: 'next', name: 'Next', model: 'test/model-b' }] });
+    wrapper.vm.inputText = 'Keep draft';
+    wrapper.vm.inputFocused = true;
+    await Vue.nextTick();
+    expect(wrapper.vm.canQuickSend).toBe(true);
+    expect(wrapper.findAll('.mobile-quick-send-button').map(button => button.element.disabled)).toEqual([true, false]);
+    wrapper.vm.sendQuick(wrapper.vm.quickSends[0]);
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(wrapper.vm.inputText).toBe('Keep draft');
   });
 });
 
 describe('native Gemini settings', () => {
+  it('retains manual model options through draft edits, rediscovery and save while refreshing catalog limits', async () => {
+    const store = await setup();
+    const id = 'gemini-2.5-flash';
+    const geminiOptions = { serviceTier: 'flex', generationConfig: { stopSequences: ['END'] } };
+    const saved = { id, protocol: 'anthropic', effortOptions: ['high'], supportsEffort: true,
+      thinkingProtocol: 'anthropic', maxBudgetTokens: 6000, contextWindow: 2048, maxOutput: 512, geminiOptions };
+    store.agents = [{ id: 'agent-a', online: true }];
+    store.llmConfig['agent-a'] = config('gemini-read', { primaryModel: `google/${id}`, providers: [
+      { name: 'google', protocol: 'gemini', baseUrl: 'https://gemini.invalid/v1', apiKey: 'fixture', models: [saved] },
+    ] });
+    await Vue.nextTick();
+    const vm = wrapper.vm;
+    expect(vm.editableProviders[0].models[0].geminiOptions).not.toBe(geminiOptions);
+    await wrapper.find('textarea').setValue(`${id}, new-model`);
+    expect(vm.editableProviders[0].models[0]).toEqual(saved);
+    const pending = vm.refreshGeminiModels(0);
+    store.llmModelDiscovery = { 'agent-a': { requestId: pendingRequest(store).requestId,
+      providerModels: [{ id, protocol: 'gemini', supportsEffort: false, contextWindow: 65536, maxOutput: 8192 }] } };
+    await vi.advanceTimersByTimeAsync(100);
+    await pending;
+    await saveButton().trigger('click');
+    expect(pendingRequest(store)).toMatchObject({ type: 'update_llm_config', config: { providers: [
+      { name: 'google', models: [{ ...saved, contextWindow: 65536, maxOutput: 8192 }] },
+    ] } });
+  });
+
+  it('uses the Agent default in the Google preset and preserves beta on draft save', async () => {
+    const emit = vi.fn();
+    const beta = 'https://generativelanguage.googleapis.com/v1beta';
+    ProviderPresetPicker.methods.confirm.call({ selectedProviderId: 'google',
+      registry: { google: { api: beta } }, selectedModels: new Set(['gemini-2.5-pro']), $emit: emit });
+    expect(emit).toHaveBeenCalledWith('pick', expect.objectContaining({ protocol: 'gemini', baseUrl: AGENT_GEMINI_BASE_URL }));
+
+    const store = await setup();
+    store.llmConfig['agent-a'] = config('gemini-read', { providers: [
+      { name: 'beta', protocol: 'gemini', baseUrl: beta, models: ['gemini-2.5-pro'] },
+      { name: 'stable', protocol: 'gemini', models: ['gemini-2.5-pro'] },
+    ] });
+    await Vue.nextTick();
+    const vm = wrapper.vm;
+    expect(vm.editableProviders.map(p => p.baseUrl)).toEqual([beta, AGENT_GEMINI_BASE_URL]);
+    vm.editableProviders[1].baseUrl = '';
+    vm.saveConfig();
+    expect(pendingRequest(store)).toMatchObject({ type: 'update_llm_config', config: { providers: [
+      { name: 'beta', baseUrl: beta }, { name: 'stable', baseUrl: AGENT_GEMINI_BASE_URL },
+    ] } });
+  });
+
   it('offers native protocol presets, refreshes the draft over catalog GET and preserves model metadata', async () => {
     const store = await setup();
     store.agents = [{ id: 'agent-a', online: true }];
@@ -239,13 +300,14 @@ describe('native Gemini settings', () => {
     vm.editableProviders[idx].apiKey = 'fixture-gemini';
     vm.setProtocol(idx, 'gemini');
     await Vue.nextTick();
-    expect(vm.editableProviders[idx].baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta');
-    expect(vm.editableProviders[idx].models).toEqual(['gemini-2.5-pro', 'gemini-2.5-flash']);
+    expect(vm.editableProviders[idx].baseUrl).toBe('https://generativelanguage.googleapis.com/v1');
+    expect(vm.editableProviders[idx].models).toEqual(['gemini-4-hydrogen', 'gemini-4-carbon']);
     expect(wrapper.text()).toContain(en['settings.llm.protocolGemini']);
     expect(wrapper.text()).toContain(en['settings.llm.testAndDiscover']);
     const pending = vm.refreshGeminiModels(idx);
     const request = pendingRequest(store);
-    expect(request).toMatchObject({ type: 'discover_llm_models', providerType: 'gemini', apiKey: 'fixture-gemini' });
+    expect(request).toMatchObject({ type: 'discover_llm_models', providerType: 'gemini',
+      apiKey: 'fixture-gemini', baseUrl: AGENT_GEMINI_BASE_URL });
     store.llmModelDiscovery = { 'agent-a': { requestId: request.requestId,
       providerModels: [{ id: 'gemini-2.5-pro', protocol: 'gemini', contextWindow: 1048576, maxOutput: 65536 }] } };
     await vi.advanceTimersByTimeAsync(100);

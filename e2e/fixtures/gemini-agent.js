@@ -1,10 +1,10 @@
 // Mock only the Agent boundary; settings/discovery travel through the real Server.
 import { scheduledTaskAgent } from './scheduled-task-agent.js';
 
-export const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta';
+export const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1';
 export const GEMINI_MODELS = [
   { id: 'gemini-2.5-flash', protocol: 'gemini', contextWindow: 1048576, maxOutput: 65536 },
-  { id: 'gemini-2.5-pro', protocol: 'gemini', contextWindow: 1048576, maxOutput: 65536 },
+  { id: 'gemini-4-hydrogen', protocol: 'gemini', contextWindow: 1048576, maxOutput: 65536 },
 ];
 
 export function geminiAgent(agent) {

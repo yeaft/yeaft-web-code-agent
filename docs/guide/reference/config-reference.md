@@ -292,6 +292,6 @@ When upgrading and hitting `Phase 7 removed ...` errors, use the mapping above.
 
 ## Gemini 原生协议补充
 
-协议值为 `gemini`，默认地址 `https://generativelanguage.googleapis.com/v1beta`，静态 `apiKey` 通过 `x-goog-api-key` 认证，不使用 OpenAI 兼容 `/openai` 路径。model 显式协议优先于 provider，之后才按模型 ID 推断。GitHub Copilot 的 Gemini 目录项显式保留 `openai-responses`，不改用 Google 地址或凭据。
+协议值为 `gemini`，默认地址 `https://generativelanguage.googleapis.com/v1`，静态 `apiKey` 通过 `x-goog-api-key` 认证，不使用 OpenAI 兼容 `/openai` 路径。model 显式协议优先于 provider，之后才按模型 ID 推断。GitHub Copilot 的 Gemini 目录项显式保留 `openai-responses`，不改用 Google 地址或凭据。
 
-配置、CLI / Web 模型目录发现、2.5 token 预算三档和窗口优先级见 [Gemini 配置](../yeaft-config.md#google-gemini-原生-api)。目录测试仅执行分页 GET，不发起生成。Gemini 2.5 用 `thinkingBudget`；Gemini 3 用 `thinkingLevel`，二者互斥。图片输入复用原生附件链路。
+配置、CLI / Web 模型目录发现、2.5 token 预算三档和窗口优先级见 [Gemini 配置](../yeaft-config.md#google-gemini-原生-api)。目录测试仅执行分页 GET，不发起生成。Gemini 2.5 用 `thinkingBudget`；Gemini 3/4 按模型用 `thinkingLevel`，二者互斥。显式 beta 地址不迁移；v1 隐式缓存由 Google 管理。图片输入复用原生附件链路。

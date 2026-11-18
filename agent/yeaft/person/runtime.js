@@ -464,7 +464,7 @@ export class PersonRuntime {
         try {
           const restored = { ...snapshot.state.lastSelection };
           if (restored.effort != null) {
-            restored.effort = normalizeEffort(restored.effort);
+            restored.effort = normalizeEffort(restored.effort, provider.catalog.some(model => model.id === restored.model && model.efforts.includes(restored.effort)));
             if (!restored.effort) fail('MODEL_SELECTION');
           }
           validateSelection(restored, provider.catalog);

@@ -29,6 +29,7 @@ import {
   discoverGitHubCopilotModels,
   discoverOpenAICompatibleModels,
   discoverGeminiModels,
+  GEMINI_BASE_URL,
   GITHUB_COPILOT_PROVIDER,
 } from './llm-model-discovery.js';
 import {
@@ -207,7 +208,7 @@ export function printLlmHelp() {
     yeaft-agent llm list-models [<provider-name>]
     yeaft-agent llm setup
     yeaft-agent llm use github-copilot --model <modelId> [--fast <modelId>] [--allow-unknown-model]
-    yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-2.5-pro [--fast gemini-2.5-flash]
+    yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-4-hydrogen [--fast gemini-4-carbon]
     yeaft-agent llm use openai-compatible --name <name> --base-url <url> --api-key-env <ENV> --model <modelId> [--fast <modelId>]
     yeaft-agent llm add-provider --name <name> --base-url <url> --models <m1,m2> \
       [--api-key <key>|--api-key-env <ENV>|--credential-provider github-copilot] \
@@ -346,7 +347,7 @@ async function handleLlmCommand(args) {
  *    actionable hint ("Run `gh auth login` ...") and exits non-zero so
  *    scripts can detect the failure.
  *  - Any other name — must already exist in config.json; uses its
- *    baseUrl + apiKey for OpenAI-compatible `/models` discovery.
+ *    baseUrl + apiKey for Gemini or OpenAI-compatible `/models` discovery.
  */
 export async function handleListModels(
   config,
@@ -387,12 +388,11 @@ export async function handleListModels(
       return;
     }
     try {
-      const discover = target.protocol === 'gemini' ? deps.discoverGemini || discoverGeminiModels : discoverOpenAI;
-      const result = await discover({
-        baseUrl: target.baseUrl,
-        apiKey: target.apiKey,
-      });
-      console.log(`Available models from "${providerName}" (${target.baseUrl}, source: ${result.source}):`);
+      const gemini = target.protocol === 'gemini';
+      const discover = gemini ? deps.discoverGemini || discoverGeminiModels : discoverOpenAI;
+      const baseUrl = gemini ? target.baseUrl || GEMINI_BASE_URL : target.baseUrl;
+      const result = await discover({ baseUrl, apiKey: target.apiKey });
+      console.log(`Available models from "${providerName}" (${baseUrl}, source: ${result.source}):`);
       for (const id of result.models) console.log(`  ${providerName}/${id}`);
       return;
     } catch (err) {
@@ -439,7 +439,7 @@ async function runLlmSetup(current, configPath) {
     console.log('3) Advanced manual provider (use add-provider command)');
     const choice = (await rl.question('Choose provider [1]: ')).trim() || '1';
     if (choice === '2') {
-      const model = (await rl.question('Primary model id [gemini-2.5-pro]: ')).trim() || 'gemini-2.5-pro';
+      const model = (await rl.question('Primary model id [gemini-4-hydrogen]: ')).trim() || 'gemini-4-hydrogen';
       const result = await useGemini(current, { model, apiKeyEnv: 'GEMINI_API_KEY' });
       writeLocalLlmConfig(result.config, configPath, current);
       console.log(`Configured Google Gemini: ${result.config.primaryModel}`);

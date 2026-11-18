@@ -1,10 +1,11 @@
 import ModernSelect from './ModernSelect.js';
-import { getSelectableModelEfforts, normalizeModelEffort, modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
+import { getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, normalizeModelEffort } from '../utils/modelRefs.js';
 
 const MAX_QUICK_SENDS = 5;
 const cloneEntries = entries => (Array.isArray(entries) ? entries : []).map(item => ({
   id: item.id, name: item.name, model: item.model,
-  effort: normalizeModelEffort(item.effort) || null, maxOutputTokens: item.maxOutputTokens ?? null,
+  effort: item.effort || null, maxOutputTokens: item.maxOutputTokens ?? null,
+  ...(item.available === false ? { available: false } : {}),
 }));
 
 export default {
@@ -82,7 +83,9 @@ export default {
       const agentConfig = config.agentConfig || config.effectiveConfig || {};
       this.models = agentConfig.availableModels || [];
       if (!this.dirty || pending.kind === 'save') {
-        this.draft = cloneEntries(agentConfig.quickSends);
+        this.draft = cloneEntries(agentConfig.quickSends).map(item => ({
+          ...item, effort: item.available === false ? item.effort : normalizeModelEffort(item.effort, this.modelFor(item)) || null,
+        }));
         this.dirty = false;
       }
       this.loaded = true;
@@ -92,8 +95,14 @@ export default {
         this.$emit('saved', this.agentId);
       }
     },
-    modelFor(item) { return this.models.find(model => modelOptionMatchesRef(model, item.model)); },
-    effortsFor(item) { return getSelectableModelEfforts(this.modelFor(item)?.effortOptions); },
+    modelFor(item) {
+      const matches = this.models.filter(model => modelOptionMatchesRef(model, item.model));
+      return matches.length === 1 ? matches[0] : null;
+    },
+    effortsFor(item) {
+      const model = this.modelFor(item);
+      return getSelectableModelEfforts(model?.effortOptions, model);
+    },
     add() {
       if (this.disabled || this.draft.length >= MAX_QUICK_SENDS) return;
       this.draft.push({ id: globalThis.crypto?.randomUUID?.() || `qs-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -107,6 +116,7 @@ export default {
     changed() { this.dirty = true; this.message = ''; this.error = ''; },
     changeModel(item, model) {
       item.model = model;
+      delete item.available;
       if (!this.effortsFor(item).includes(item.effort)) item.effort = null;
       this.changed();
     },
@@ -118,7 +128,8 @@ export default {
         if (!item.name?.trim() || item.name.trim().length > 80) return this.$t('quickSend.nameRequired');
         const model = this.modelFor(item);
         if (!model) return this.$t('quickSend.modelRequired');
-        if (item.effort !== null && !this.effortsFor(item).includes(item.effort)) return this.$t('quickSend.effortInvalid');
+        const supported = model.effortProtocol === 'gemini' ? model.effortOptions : this.effortsFor(item);
+        if (item.effort !== null && !supported?.includes(item.effort)) return this.$t('quickSend.effortInvalid');
         if (item.maxOutputTokens !== null && (!Number.isSafeInteger(item.maxOutputTokens) || item.maxOutputTokens <= 0 || item.maxOutputTokens > model.maxOutput)) {
           return this.$t('quickSend.outputInvalid', { max: model.maxOutput });
         }
@@ -129,7 +140,7 @@ export default {
       if (this.disabled || !this.dirty) return;
       this.error = this.validate();
       if (this.error) return;
-      this.request('save', { quickSends: cloneEntries(this.draft).map(item => ({ ...item, name: item.name.trim() })) });
+      this.request('save', { quickSends: cloneEntries(this.draft).map(({ available: _available, ...item }) => ({ ...item, name: item.name.trim() })) });
     },
   },
   template: `
@@ -151,7 +162,7 @@ export default {
             :placeholder="$t('quickSend.chooseModel')" :empty-text="$t('quickSend.noModels')" searchable :disabled="disabled" @update:model-value="changeModel(item, $event)" />
         </div>
         <div class="quick-send-field quick-send-effort"><span>{{ $t('quickSend.effort') }}</span>
-          <ModernSelect :model-value="item.effort || ''" :options="effortOptions(item)" :aria-label="$t('quickSend.effort')"
+          <ModernSelect :model-value="item.effort || ''" :options="effortOptions(item)" :aria-label="$t('quickSend.effort')" :placeholder="item.effort || ''"
             :disabled="disabled || !effortsFor(item).length" @update:model-value="changeEffort(item, $event)" />
         </div>
         <label class="quick-send-output"><span>{{ $t('quickSend.maxOutputTokens') }}</span>

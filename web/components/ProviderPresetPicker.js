@@ -10,6 +10,7 @@
  *       Caller (LlmTab) appends this to localProviders.
  */
 
+import { GEMINI_BASE_URL } from '../utils/geminiEndpoint.js';
 import {
   clearOverlayPointerGesture,
   shouldDismissFromOverlayClick,
@@ -238,7 +239,7 @@ export default {
       });
       this.$emit('pick', {
         name: this.selectedProviderId,
-        baseUrl: this.selectedProviderId === 'google' ? 'https://generativelanguage.googleapis.com/v1beta' : entry.api || '',
+        baseUrl: this.selectedProviderId === 'google' ? GEMINI_BASE_URL : entry.api || '',
         // Google uses a single native API. Other catalogs may be mixed; an empty
         // protocol is intentional: LlmTab.saveConfig drops empty/`'openai'`
         // protocol values so the per-model entries are the sole source of truth.

@@ -20,6 +20,8 @@
  */
 
 import { lookupModelLimitSync } from './llm/models-dev.js';
+import { GEMINI_BASE_URL } from './llm/gemini-endpoint.js';
+import { cloneGeminiOptions } from './llm/gemini-options.js';
 
 /**
  * @typedef {Object} ModelInfo
@@ -151,14 +153,14 @@ export const MODEL_REGISTRY = new Map([
   ['gemini-2.5-pro', {
     provider: 'google',
     adapter: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    baseUrl: GEMINI_BASE_URL,
     displayName: 'Gemini 2.5 Pro',
     supportsImages: true,
   }],
   ['gemini-2.5-flash', {
     provider: 'google',
     adapter: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    baseUrl: GEMINI_BASE_URL,
     displayName: 'Gemini 2.5 Flash',
     supportsImages: true,
   }],
@@ -364,13 +366,72 @@ export function parseModelRef(ref) {
  * @typedef {'medium' | 'xhigh' | 'max' | 'ultra'} Effort
  */
 
-// Yeaft's three UI tiers map to token budgets, NOT Gemini 3 thinkingLevel.
-// Gemini 2.5 Pro: 128..32768; Flash: 0..24576 (generateContent).
+// Google Developer API GenerateContent uses model-specific enums, not one
+// Gemini-wide enum. Keep unverified IDs out rather than guessing from a prefix.
+const GEMINI_LEVEL_MODELS = new Map([
+  ['gemini-4-hydrogen', ['low', 'medium', 'high', 'xhigh']],
+  ...['gemini-4-carbon', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-pro-preview-customtools']
+    .map(id => [id, ['low', 'medium', 'high']]),
+  ...['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-robotics-er-2-preview']
+    .map(id => [id, ['minimal', 'low', 'medium', 'high']]),
+  ['gemini-3-pro-preview', ['low', 'high']],
+  ['gemini-3.1-flash-lite-image', ['minimal', 'high']],
+]);
+const GEMINI_LEVEL_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const geminiModelId = model => String(model || '').toLowerCase().split('/').at(-1);
 export const GEMINI_THINKING_BUDGETS = Object.freeze({ medium: 8192, xhigh: 16384, max: 24576 });
+
+export function getGeminiThinkingProfile(model, context = {}) {
+  const id = geminiModelId(model);
+  const levels = GEMINI_LEVEL_MODELS.get(id);
+  if (levels) return { levels: [...levels] };
+  const pro = /^gemini-2\.5-pro(?:-preview(?:-\d{2}-\d{2})?)?$/.test(id);
+  const flash = /^gemini-2\.5-flash(-lite)?(?:-preview(?:-\d{2}-\d{2})?)?$/.exec(id);
+  if (!pro && !flash && id !== 'gemini-robotics-er-1.6-preview' && context.thinkingProtocol !== 'gemini') return null;
+  return { minBudget: pro ? 128 : flash?.[1] ? 512 : 1, maxBudget: pro ? 32768 : 24576, off: !pro };
+}
+
 export function geminiThinkingBudgetForEffort(model, effort) {
   const budget = GEMINI_THINKING_BUDGETS[normalizeEffort(effort)];
   if (!budget) return null;
-  return /(?:^|\/)gemini-2\.5-pro(?:-|$)/i.test(parseModelRef(model).modelId) && normalizeEffort(effort) === 'max' ? 32768 : budget;
+  return effort === 'max' ? (getGeminiThinkingProfile(model)?.maxBudget ?? budget) : budget;
+}
+
+/** Resolve old saved tiers to the closest native tier at or below their rank.
+ * Retired max, ultra and non-native xhigh mean the old highest Gemini level.
+ * A deliberately narrowed catalog must not promote a lower explicit choice.
+ */
+export function resolveGeminiEffort(model, effort, options) {
+  if (options.includes(effort)) return effort;
+  const profile = getGeminiThinkingProfile(model);
+  if (!profile?.levels) {
+    const legacy = normalizeEffort(effort);
+    return options.includes(legacy) ? legacy : null;
+  }
+  if (['max', 'ultra', 'xhigh'].includes(effort)) return options.at(-1) || null;
+  return options.filter(level => GEMINI_LEVEL_ORDER.indexOf(level) <= GEMINI_LEVEL_ORDER.indexOf(effort)).at(-1) || null;
+}
+
+/** Publish the distinction between accepted saved tiers and distinct menu choices. */
+export function geminiEffortCatalog(model, capability) {
+  if (capability.thinkingProtocol !== 'gemini') return {};
+  if (capability.maxBudgetTokens === null) return { geminiThinkingMode: 'level' };
+  const seen = new Set();
+  const effortMenuOptions = capability.effortOptions.filter(effort => {
+    const budget = Math.min(capability.maxBudgetTokens, geminiThinkingBudgetForEffort(model, effort));
+    if (seen.has(budget)) return false;
+    seen.add(budget);
+    return true;
+  });
+  return { geminiThinkingMode: 'budget', effortMenuOptions };
+}
+
+/** Resolve an explicit Quick Send selection against the owning model, including legacy Gemini aliases. */
+export function resolveCatalogEffort(model, effort) {
+  const options = model?.effortOptions || [];
+  if (model?.effortProtocol === 'gemini') return resolveGeminiEffort(model.id, effort, options);
+  const value = normalizeEffort(effort);
+  return options.includes(value) ? value : null;
 }
 
 /**
@@ -409,9 +470,9 @@ export const OPENAI_REASONING_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh',
 export const ANTHROPIC_ADAPTIVE_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max']);
 export const ANTHROPIC_MANUAL_EFFORT_OPTIONS = Object.freeze(['medium', 'xhigh', 'max']);
 
-export function normalizeEffortOptions(options) {
+export function normalizeEffortOptions(options, preserveNative = false) {
   if (!Array.isArray(options)) return null;
-  const out = [...new Set(options.map(normalizeEffort).filter(Boolean))];
+  const out = [...new Set(options.map(value => normalizeEffort(value, preserveNative)).filter(Boolean))];
   return out.length ? out : null;
 }
 
@@ -449,17 +510,18 @@ export function getThinkingCapability(model, context = {}) {
   const disabled = { supportsThinking: false, thinkingProtocol: 'none', defaultEffort: null, maxBudgetTokens: null, effortOptions: [] };
   if (context.supportsEffort === false || context.thinkingProtocol === 'none') return disabled;
   if (protocol === 'gemini') {
-    const budgetBased = /^gemini-2\.5-(pro|flash)(?:-|$)/.test(modelId);
-    const levelBased = /^gemini-3(?:\.[0-9]+)?-(pro|flash)(?:-|$)/.test(modelId);
-    // Unknown Gemini families need explicit opt-in rather than guessed knobs.
-    if (!budgetBased && !levelBased && context.thinkingProtocol !== 'gemini') return disabled;
-    const overrides = normalizeEffortOptions(context.effortOptions);
-    const effortOptions = Object.keys(GEMINI_THINKING_BUDGETS).filter(value => !overrides || overrides.includes(value));
-    if (!effortOptions.length) return disabled;
-    const defaultEffort = normalizeEffort(context.defaultEffort);
-    return { supportsThinking: true, thinkingProtocol: 'gemini',
-      defaultEffort: effortOptions.includes(defaultEffort) ? defaultEffort : null,
-      maxBudgetTokens: levelBased ? null : context.maxBudgetTokens ?? (/^gemini-2\.5-pro(?:-|$)/.test(modelId) ? 32768 : 24576), effortOptions };
+    const profile = getGeminiThinkingProfile(model, context);
+    if (!profile) return disabled;
+    const nativeOptions = profile.levels || Object.keys(GEMINI_THINKING_BUDGETS);
+    const overrides = normalizeEffortOptions(context.effortOptions, Boolean(profile.levels));
+    const allowed = overrides?.map(value => resolveGeminiEffort(model, value, nativeOptions));
+    const effortOptions = nativeOptions.filter(value => !allowed || allowed.includes(value));
+    const maxBudgetTokens = profile.levels ? null : Math.min(profile.maxBudget, context.maxBudgetTokens ?? profile.maxBudget);
+    if (!effortOptions.length || maxBudgetTokens < (profile.minBudget ?? 0)) return disabled;
+    const capability = { supportsThinking: true, thinkingProtocol: 'gemini', maxBudgetTokens, effortOptions };
+    const defaults = geminiEffortCatalog(model, capability).effortMenuOptions || effortOptions;
+    return { ...capability, defaultEffort: resolveGeminiEffort(model, context.defaultEffort, effortOptions)
+      || ['xhigh', 'medium', 'high'].find(value => defaults.includes(value)) || defaults[0] };
   }
   if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;
   const manual = protocol === 'anthropic' && context.thinkingProtocol === 'anthropic';
@@ -494,7 +556,8 @@ export function modelSupportsEffort(model, context = {}) {
  * @param {unknown} effort
  * @returns {Effort | null}
  */
-export function normalizeEffort(effort) {
+export function normalizeEffort(effort, preserveNative = false) {
+  if (preserveNative === true && ['minimal', 'low', 'high'].includes(effort)) return effort;
   // Read legacy selections without retaining retired tiers in new requests.
   if (effort === 'minimal' || effort === 'low') return 'medium';
   if (effort === 'high') return 'xhigh';
@@ -539,6 +602,8 @@ export function normalizeProviderModels(provider) {
     }
     if (entry && typeof entry === 'object' && typeof entry.id === 'string' && entry.id.trim()) {
       const norm = { id: entry.id.trim() };
+      const geminiOptions = cloneGeminiOptions(entry.geminiOptions);
+      if (geminiOptions !== undefined) norm.geminiOptions = geminiOptions;
       if (entry.capabilities && typeof entry.capabilities === 'object') norm.capabilities = { ...entry.capabilities };
       if (Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
         norm.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
@@ -554,7 +619,8 @@ export function normalizeProviderModels(provider) {
       if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol.trim()) {
         norm.thinkingProtocol = entry.thinkingProtocol.trim();
       }
-      const effortOptions = normalizeEffortOptions(entry.effortOptions);
+      const effortOptions = normalizeEffortOptions(entry.effortOptions,
+        (entry.protocol === 'gemini' || !entry.protocol) && Boolean(getGeminiThinkingProfile(entry.id)?.levels));
       if (effortOptions) norm.effortOptions = effortOptions;
       const maxBudget = coercePositiveInt(entry.maxBudgetTokens);
       if (maxBudget !== undefined) norm.maxBudgetTokens = maxBudget;
@@ -586,12 +652,15 @@ export function serializeModelForPersistence(entry) {
   const effort = {};
   if (typeof entry.supportsEffort === 'boolean') effort.supportsEffort = entry.supportsEffort;
   if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol.trim()) effort.thinkingProtocol = entry.thinkingProtocol.trim();
-  const effortOptions = normalizeEffortOptions(entry.effortOptions);
+  const effortOptions = normalizeEffortOptions(entry.effortOptions,
+    (proto === 'gemini' || !proto) && Boolean(getGeminiThinkingProfile(entry.id)?.levels));
   if (effortOptions) effort.effortOptions = effortOptions;
   const maxBudget = coercePositiveInt(entry.maxBudgetTokens);
   if (maxBudget !== undefined) effort.maxBudgetTokens = maxBudget;
-  if (ctx === undefined && max === undefined && proto === undefined && capabilities === undefined && streamIdleTimeoutMs === undefined && !Object.keys(effort).length) return entry.id;
+  const geminiOptions = cloneGeminiOptions(entry.geminiOptions);
+  if (ctx === undefined && max === undefined && proto === undefined && capabilities === undefined && streamIdleTimeoutMs === undefined && geminiOptions === undefined && !Object.keys(effort).length) return entry.id;
   const obj = { id: entry.id, ...effort };
+  if (geminiOptions !== undefined) obj.geminiOptions = geminiOptions;
   if (capabilities !== undefined) obj.capabilities = capabilities;
   if (streamIdleTimeoutMs !== undefined) obj.streamIdleTimeoutMs = streamIdleTimeoutMs;
   if (ctx !== undefined) obj.contextWindow = ctx;

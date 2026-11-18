@@ -1,11 +1,12 @@
 import { getApiToken, copilotRequestHeaders } from './yeaft/llm/credentials/github-copilot.js';
+import { GEMINI_BASE_URL, geminiModelsUrl } from './yeaft/llm/gemini-endpoint.js';
 import {
   FALLBACK_GITHUB_COPILOT_MODELS,
   GITHUB_COPILOT_PROVIDER,
   modelEntryForGitHubCopilot,
 } from './yeaft/llm/known-providers.js';
 
-export { FALLBACK_GITHUB_COPILOT_MODELS, GITHUB_COPILOT_PROVIDER };
+export { FALLBACK_GITHUB_COPILOT_MODELS, GITHUB_COPILOT_PROVIDER, GEMINI_BASE_URL };
 
 function modelId(item) {
   if (typeof item === 'string') return item.trim();
@@ -158,17 +159,10 @@ export async function discoverLlmModels(options = {}) {
   throw new Error(`Unsupported provider preset: ${providerType || '(missing)'}`);
 }
 
-
-export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-
 /** List only generateContent models. Tokens remain opaque and URL-encoded. */
 export async function discoverGeminiModels({ baseUrl = GEMINI_BASE_URL, apiKey, fetchFn = fetch } = {}) {
   if (!apiKey) throw new Error('Gemini discovery requires an API key.');
-  const url = new URL(baseUrl || GEMINI_BASE_URL);
-  let path = url.pathname.replace(/\/+$/, '');
-  if (!path) path = '/v1beta';
-  path = path.replace(/\/models\/[^/]+:(?:streamGenerateContent|generateContent)$/, '/models');
-  url.pathname = path.endsWith('/models') ? path : `${path}/models`;
+  const url = geminiModelsUrl(baseUrl);
   url.searchParams.delete('key');
   url.searchParams.delete('alt');
   const entries = new Map();

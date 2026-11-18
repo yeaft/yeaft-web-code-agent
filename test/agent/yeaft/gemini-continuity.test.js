@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AdapterRouter, inferProtocolFromModelId, sanitizeMessagesForWire } from '../../../agent/yeaft/llm/router.js';
@@ -7,6 +7,7 @@ import { createProviderContext, createProviderState, replayProviderState, bindPr
 import { trimSnapshotForBudget } from '../../../agent/yeaft/history-window.js';
 import { ConversationStore, projectVisibleSessionMessages } from '../../../agent/yeaft/conversation/persist.js';
 import { searchMessages } from '../../../agent/yeaft/conversation/search.js';
+import { loadConfig } from '../../../agent/yeaft/config.js';
 import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
@@ -83,9 +84,56 @@ describe('Gemini routing and private continuation integration', () => {
       { name: 'proxy', apiKey: 'key', baseUrl: 'https://proxy.invalid/v1', protocol: 'openai-responses', models: ['gemini-2.5-pro'] },
     ] });
     expect((await router.call({ model: 'google/gemini-2.5-pro', messages: [] })).text).toBe('native');
-    expect(fetch.mock.calls[0][0]).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent');
+    expect(fetch.mock.calls[0][0]).toBe('https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent');
     expect((await router.call({ model: 'proxy/gemini-2.5-pro', messages: [] })).text).toBe('proxy');
     expect(fetch.mock.calls.at(-1)[0]).toContain('/responses');
+  });
+
+  it('applies the routed default, explicit VP policy, and slash effort on the actual Engine wire', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gemini-engine-effort-'));
+    try {
+      vi.stubEnv('YEAFT_THINKING_V1', '0');
+      const modelId = 'gemini-4-hydrogen';
+      const native = `google/${modelId}`;
+      const providers = [
+        { name: 'proxy', protocol: 'openai-responses', apiKey: 'fixture', baseUrl: 'https://proxy.invalid/v1', models: [modelId] },
+        { ...provider, models: [modelId] },
+      ];
+      writeFileSync(join(dir, 'config.json'), JSON.stringify({ providers }));
+      const config = loadConfig({ dir });
+      const requests = [];
+      vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+        requests.push({ url: String(url), body: JSON.parse(init.body) });
+        return String(url).endsWith('/responses')
+          ? json({ id: 'r', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }] })
+          : json({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
+      }));
+      const vpPersona = { vpId: 'vp' };
+      async function query(model, options = {}) {
+        const engine = new Engine({ adapter: new AdapterRouter({ providers }), trace: new NullTrace(),
+          toolRegistry: new ToolRegistry(), conversationStore: new ConversationStore(dir), yeaftDir: dir, vpId: 'vp',
+          // The adapter routes the bare ID to the first provider; UI catalog
+          // order must not override that if the duplicate appears first there.
+          config: { ...config, model, availableModels: [...config.availableModels].reverse() } });
+        const before = requests.length;
+        const events = await collect(engine.query({ prompt: 'Question', vpPersona, workDir: dir, ...options }));
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(requests).toHaveLength(before + 1);
+        return requests.at(-1);
+      }
+      const thinking = request => request.body.generationConfig?.thinkingConfig?.thinkingLevel;
+      expect(thinking(await query(native))).toBe('XHIGH');
+      expect(thinking(await query(native, { vpPersona: { ...vpPersona, thinking: 'high' } }))).toBe('HIGH');
+      vi.stubEnv('YEAFT_THINKING_V1', '1');
+      const bare = await query(modelId);
+      expect(bare.url).toBe('https://proxy.invalid/v1/responses');
+      expect(bare.body.reasoning?.effort).toBe('max');
+      vi.stubEnv('YEAFT_THINKING_V1', '0');
+      for (const [effort, legacy] of [['low', 'medium'], ['high', 'xhigh']]) {
+        expect(thinking(await query(native, { prompt: `/${effort} Question` }))).toBe(effort.toUpperCase());
+        expect((await query(modelId, { prompt: `/${effort} Question` })).body.reasoning?.effort).toBe(legacy);
+      }
+    } finally { await closeConversationHistoryIndexes(); rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('routes stream state and replays its exact parts through a native gateway', async () => {

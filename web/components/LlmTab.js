@@ -1,4 +1,5 @@
 import { PROTOCOL_PRESET_MODELS } from '../utils/protocolPresets.js';
+import { GEMINI_BASE_URL } from '../utils/geminiEndpoint.js';
 import ProviderPresetPicker from './ProviderPresetPicker.js';
 
 // Preserve non-secret request policies that have no controls in this form.
@@ -146,6 +147,7 @@ export default {
             </div>
 
             <div v-if="provider.protocol === 'gemini'" class="llm-field">
+              <p class="llm-models-hint">{{ $t('settings.llm.geminiVersionHint') }}</p>
               <button class="sp-btn" :disabled="discoveringModels || !provider.apiKey || !agentOnline" @click="refreshGeminiModels(idx)">
                 {{ discoveringModels ? $t('settings.llm.refreshingModels') : $t('settings.llm.testAndDiscover') }}
               </button>
@@ -395,8 +397,18 @@ export default {
       if (this.editableProviders[idx] !== provider || provider.protocol !== 'gemini'
         || provider.baseUrl !== baseUrl || provider.apiKey !== apiKey) return;
       const previous = new Map((provider.models || []).map(model => [this._modelId(model), model]));
-      provider.models = (result.providerModels || []).map(model => ({ ...model,
-        ...(typeof previous.get(model.id) === 'object' ? previous.get(model.id) : {}) }));
+      provider.models = (result.providerModels || []).map(model => {
+        const saved = previous.get(model.id);
+        if (!saved || typeof saved !== 'object') return model;
+        // Catalog limits can refresh; existing request policy has no provenance
+        // marker, so keep it rather than risk erasing a manual override.
+        return {
+          ...model,
+          ...saved,
+          ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+          ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
+        };
+      });
       this.refreshProviderModelsText();
       this.modelDiscoveryWarning = this.$t('settings.llm.testSuccess');
       this.markDirty();
@@ -595,14 +607,19 @@ export default {
         type: p.type || 'api-key',
         scope: 'agent',
         name: p.originalName || p.name || '',
-        baseUrl: p.baseUrl || (p.protocol === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : ''),
+        baseUrl: p.baseUrl || (p.protocol === 'gemini' ? GEMINI_BASE_URL : ''),
         apiKey: p.apiKey || '',
         githubToken: p.githubToken || '',
         protocol: p.protocol || 'openai',
         credentialProvider: p.credentialProvider || null,
         ...cloneRequestPolicy(p),
         models: Array.isArray(p.models)
-          ? p.models.map(m => (m && typeof m === 'object') ? { ...m } : m)
+          ? p.models.map(m => (m && typeof m === 'object') ? {
+            ...m,
+            // JSON-only model options stay in the draft even without form controls.
+            ...(m.geminiOptions && typeof m.geminiOptions === 'object'
+              ? { geminiOptions: JSON.parse(JSON.stringify(m.geminiOptions)) } : {}),
+          } : m)
           : []
       };
     },
@@ -672,7 +689,7 @@ export default {
       const models = Array.isArray(payload.models) ? payload.models.filter(Boolean) : [];
       this.editableProviders.push({
         name,
-        baseUrl: payload.baseUrl || '',
+        baseUrl: payload.baseUrl || (payload.protocol === 'gemini' ? GEMINI_BASE_URL : ''),
         apiKey: '',
         protocol: payload.protocol || 'openai',
         credentialProvider: null,
@@ -721,7 +738,7 @@ export default {
       const prev = this.editableProviders[idx].protocol;
       this.editableProviders[idx].protocol = protocol;
       if (protocol === 'gemini' && !this.editableProviders[idx].baseUrl) {
-        this.editableProviders[idx].baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+        this.editableProviders[idx].baseUrl = GEMINI_BASE_URL;
       }
       this.markDirty();
 
@@ -773,7 +790,7 @@ export default {
 
       // Build providers for saving (clean up empty entries)
       const providers = this.editableProviders
-        .filter(p => p.name && (this.isManagedProvider(p) || p.baseUrl))
+        .filter(p => p.name && (this.isManagedProvider(p) || p.protocol === 'gemini' || p.baseUrl))
         .map(p => {
           if (this.isManagedProvider(p)) {
             return {
@@ -789,7 +806,7 @@ export default {
           const clean = {
             type: p.type || 'api-key',
             name: p.name.trim(),
-            baseUrl: p.baseUrl.trim(),
+            baseUrl: p.baseUrl.trim() || (p.protocol === 'gemini' ? GEMINI_BASE_URL : ''),
             apiKey: p.apiKey || '',
             githubToken: p.githubToken || '',
             ...cloneRequestPolicy(p),

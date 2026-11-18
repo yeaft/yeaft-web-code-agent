@@ -25,6 +25,11 @@ const EFFORT_RANK = Object.freeze({
   ultra: 6,
 });
 
+const GEMINI_NATIVE_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const hasNativeGeminiLevels = model => model?.effortProtocol === 'gemini'
+  && (model.geminiThinkingMode === 'level' || (!model.geminiThinkingMode
+    && model.effortOptions?.some(effort => ['minimal', 'low', 'high'].includes(effort))));
+
 function normalizeEffortList(options) {
   if (!Array.isArray(options)) return [];
   const values = [];
@@ -37,30 +42,53 @@ function normalizeEffortList(options) {
   return values;
 }
 
-export function getSelectableModelEfforts(options) {
-  // Older Agent catalogs may still advertise retired tiers; never show them.
-  return normalizeEffortList(options).filter(effort => Object.hasOwn(EFFORT_RANK, effort));
+export function getSelectableModelEfforts(options, model = null) {
+  // Native capabilities and saved values remain available to the transport.
+  // Menus start at Medium and only offer High if X-High is unavailable.
+  const values = normalizeEffortList(options).filter(effort => !Array.isArray(model?.effortMenuOptions) || model.effortMenuOptions.includes(effort));
+  return values.filter(effort => Object.hasOwn(EFFORT_RANK, effort)
+    || (effort === 'high' && hasNativeGeminiLevels(model) && !values.includes('xhigh')));
 }
 
-export function getDefaultModelEffort(options) {
-  const values = getSelectableModelEfforts(options);
+export function getDefaultModelEffort(options, model = null) {
+  const values = getSelectableModelEfforts(options, model);
   if (!values.length) return '';
   if (values.includes('xhigh')) return 'xhigh';
+  if (model?.effortProtocol === 'gemini' && values.includes(model.defaultEffort)) return model.defaultEffort;
   if (values.length === 1) return values[0];
   if (values.includes('ultra') && values.includes('max')) return 'max';
   return values[values.length - 2];
 }
 
-export function normalizeModelEffort(effort) {
+export function normalizeModelEffort(effort, model = null) {
+  if (hasNativeGeminiLevels(model) && GEMINI_NATIVE_LEVELS.includes(effort)) return effort;
   if (effort === 'minimal' || effort === 'low') return 'medium';
   if (effort === 'high') return 'xhigh';
   return Object.hasOwn(EFFORT_RANK, effort) ? effort : '';
 }
 
-export function resolveSessionModelEffort(session, fallbackEffort = '') {
-  const sessionEffort = session?.config?.modelEffort;
-  if (typeof sessionEffort === 'string' && sessionEffort.trim()) return normalizeModelEffort(sessionEffort.trim());
-  return typeof fallbackEffort === 'string' ? normalizeModelEffort(fallbackEffort.trim()) : '';
+function configuredSessionEffort(session, fallbackEffort) {
+  const configured = session?.config?.modelEffort;
+  if (typeof configured === 'string' && configured.trim()) return configured.trim();
+  return typeof fallbackEffort === 'string' ? fallbackEffort.trim() : '';
+}
+
+export function resolveSessionModelEffort(session, fallbackEffort = '', model = null) {
+  const effort = normalizeModelEffort(configuredSessionEffort(session, fallbackEffort), model);
+  if (!hasNativeGeminiLevels(model) || model.effortOptions.includes(effort)) return effort;
+  if (['max', 'ultra', 'xhigh'].includes(effort)) return model.effortOptions.at(-1);
+  return model.effortOptions.filter(level => GEMINI_NATIVE_LEVELS.indexOf(level) <= GEMINI_NATIVE_LEVELS.indexOf(effort)).at(-1) || '';
+}
+
+/** Display the actual saved/native selection, never an unapplied menu default. */
+export function getSessionEffortDisplay(session, fallbackEffort, model) {
+  const options = getSelectableModelEfforts(model?.effortOptions, model);
+  if (!options.length) return '';
+  const resolved = resolveSessionModelEffort(session, fallbackEffort, model);
+  if (model?.effortProtocol === 'gemini' && configuredSessionEffort(session, fallbackEffort)) {
+    return model.effortOptions?.includes(resolved) ? resolved : 'unavailable';
+  }
+  return options.includes(resolved) ? resolved : getDefaultModelEffort(options, model);
 }
 
 export function buildModelSelectionRows(models) {
@@ -69,13 +97,13 @@ export function buildModelSelectionRows(models) {
     const modelRef = modelOptionRef(model);
     if (!modelRef) continue;
     const label = model.label || model.id || modelRef;
-    const efforts = getSelectableModelEfforts(model?.effortOptions);
+    const efforts = getSelectableModelEfforts(model?.effortOptions, model);
     rows.push({
       model,
       modelRef,
       label,
       efforts,
-      defaultEffort: getDefaultModelEffort(efforts) || null,
+      defaultEffort: getDefaultModelEffort(efforts, model) || null,
     });
   }
   return rows;

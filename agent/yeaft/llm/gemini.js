@@ -1,6 +1,8 @@
 /** Native Gemini GenerateContent transport (no SDK or OpenAI translation). */
 import { randomUUID } from 'node:crypto';
-import { getThinkingCapability, getModelEffortOptions, normalizeEffort, geminiThinkingBudgetForEffort } from '../models.js';
+import { getThinkingCapability, getGeminiThinkingProfile, resolveGeminiEffort, geminiThinkingBudgetForEffort } from '../models.js';
+import { GEMINI_BASE_URL, geminiModelsUrl } from './gemini-endpoint.js';
+import { EFFORT_LEVELS, resolveSubAgentEffort } from '../effort.js';
 import {
   LLMAdapter, LLMRateLimitError, LLMServerError, LLMToolInputError, LLMContextError,
   LLMAbortError, classifyAuthError, classifyFetchError, retryAfterFromResponse,
@@ -11,7 +13,6 @@ import {
   createProviderContext, createProviderState, replayProviderState, providerStateBytes, hasSignedProviderState, ProviderStateError,
 } from './provider-state.js';
 
-const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const refusalReasons = new Set(['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII',
   'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'IMAGE_RECITATION', 'ESCALATION', 'PUP_LIMITED_DISABLED']);
@@ -85,22 +86,44 @@ function stopReason(reason, hasTools) {
   return 'unknown';
 }
 
+/** Validate mutually constrained fields after runtime parameters are applied. */
+function validateGeminiBody(body, tools = []) {
+  const config = body.generationConfig;
+  if (config.logprobs !== undefined && config.responseLogprobs !== true) {
+    throw new Error('Gemini generationConfig.logprobs requires responseLogprobs: true');
+  }
+  const legacySchemas = ['responseSchema', 'responseJsonSchema', '_responseJsonSchema'].filter(key => config[key] !== undefined);
+  if (legacySchemas.length > 1 || (config.responseFormat && (legacySchemas.length || config.responseMimeType))) {
+    throw new Error('Gemini responseFormat and legacy response schema/MIME fields cannot be combined');
+  }
+  if (legacySchemas.length && !['application/json', 'text/x.enum'].includes(config.responseMimeType)) {
+    throw new Error('Gemini response schema requires a compatible generationConfig.responseMimeType');
+  }
+  if (config.responseFormat?.text?.schema && config.responseFormat.text.mimeType !== 'APPLICATION_JSON') {
+    throw new Error('Gemini responseFormat.text.schema requires APPLICATION_JSON');
+  }
+  const calling = body.toolConfig?.functionCallingConfig;
+  if (calling?.allowedFunctionNames?.length) {
+    if (!['ANY', 'VALIDATED'].includes(calling.mode)) {
+      throw new Error('Gemini allowedFunctionNames requires ANY or VALIDATED mode');
+    }
+    const names = new Set(tools.map(tool => tool.name));
+    if (calling.allowedFunctionNames.some(name => !names.has(name))) {
+      throw new Error('Gemini allowedFunctionNames names must be available in the current request');
+    }
+  }
+}
+
 export class GeminiAdapter extends LLMAdapter {
-  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL, headers = {}, extraHeaders = {},
+  constructor({ apiKey, baseUrl = GEMINI_BASE_URL, headers = {}, extraHeaders = {},
     streamIdleTimeoutMs = 0, highEffortStreamIdleTimeoutMs } = {}) {
     super({ apiKey, baseUrl, headers: { ...headers, ...extraHeaders }, streamIdleTimeoutMs, highEffortStreamIdleTimeoutMs });
   }
 
   #url(model, streaming) {
-    const url = new URL(this.config.baseUrl);
-    const resource = `models/${encodeURIComponent(String(model).replace(/^models\//, ''))}`;
-    let path = url.pathname.replace(/\/+$/, '');
-    if (!path) path = '/v1beta';
-    // Also accept a full custom endpoint or a base ending in /models.
-    if (/\/models\/[^/]+:(?:streamGenerateContent|generateContent)$/.test(path)) {
-      path = path.replace(/\/models\/[^/]+:(?:streamGenerateContent|generateContent)$/, `/${resource}:${streaming ? 'streamGenerateContent' : 'generateContent'}`);
-    } else path += `${path.endsWith('/models') ? `/${resource.slice(7)}` : `/${resource}`}:${streaming ? 'streamGenerateContent' : 'generateContent'}`;
-    url.pathname = path;
+    const url = geminiModelsUrl(this.config.baseUrl);
+    const id = encodeURIComponent(String(model).replace(/^models\//, ''));
+    url.pathname += `/${id}:${streaming ? 'streamGenerateContent' : 'generateContent'}`;
     url.searchParams.delete('key'); // API keys belong in the header, never trace URLs.
     if (streaming) url.searchParams.set('alt', 'sse');
     else url.searchParams.delete('alt');
@@ -108,7 +131,7 @@ export class GeminiAdapter extends LLMAdapter {
   }
 
   #request(params) {
-    const { model, system, messages = [], tools, requestIdentity, extraBody = {}, maxTokens = 16384 } = params;
+    const { model, system, messages = [], tools, requestIdentity, geminiOptions = {}, extraBody = {}, maxTokens = 16384 } = params;
     const context = params.providerContext || createProviderContext({ protocol: 'gemini',
       baseUrl: this.config.baseUrl, staticApiKey: this.config.apiKey, model });
     const contents = [];
@@ -147,8 +170,9 @@ export class GeminiAdapter extends LLMAdapter {
         const text = parts.filter(part => typeof part.text === 'string').map(part => part.text).join('\n');
         const images = parts.filter(part => part.inlineData || part.fileData);
         const functionResponse = { name: call.name, ...(call.nativeId ? { id: call.nativeId } : {}),
-          response: msg.isError ? { error: text } : { output: text },
-          ...(images.length ? { parts: images } : {}) };
+          response: { [msg.isError ? 'error' : 'output']: text,
+            ...(images.length && /(?:^|\/)gemini-2\.5-/.test(model) ? { attachmentNotice: 'Image tool output is not available on this model.' } : {}) },
+          ...(images.length && !/(?:^|\/)gemini-2\.5-/.test(model) ? { parts: images } : {}) };
         append('user', [{ functionResponse }], true);
       } else if (msg.role === 'user') append('user', contentParts(msg.content), true);
     }
@@ -162,53 +186,88 @@ export class GeminiAdapter extends LLMAdapter {
     if (lowDetailImages) generationConfig.mediaResolution = 'MEDIA_RESOLUTION_LOW';
     const effortContext = { ...params.effortContext, protocol: 'gemini' };
     const capability = getThinkingCapability(model, effortContext);
-    const supportedEfforts = getModelEffortOptions(model, effortContext);
-    const requestedEffort = normalizeEffort(params.effort);
-    const effort = params.effortConstraint ? 'medium' : requestedEffort;
-    if (effort && capability.supportsThinking && supportedEfforts.includes(effort)) {
-      if (capability.maxBudgetTokens !== null) {
-        let budget = geminiThinkingBudgetForEffort(model, effort);
-        if (Number.isFinite(capability.maxBudgetTokens)) budget = Math.min(budget, capability.maxBudgetTokens);
-        if (budget) generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: true };
-      } else if (/gemini-3(?:[.-]|$)/i.test(model)) {
-        const levels = { minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high', ultra: 'high' };
-        if (levels[effort]) generationConfig.thinkingConfig = { thinkingLevel: /gemini-3(?:\.0)?-pro/i.test(model) ? (['minimal', 'low', 'medium'].includes(effort) ? 'low' : 'high') : levels[effort], includeThoughts: true };
-      }
-    }
-    const body = { ...extraBody, contents, generationConfig: { ...generationConfig, ...extraBody.generationConfig } };
+    const profile = getGeminiThinkingProfile(model, effortContext);
+    const effort = resolveGeminiEffort(model, params.effort, capability.effortOptions);
+    const body = { ...geminiOptions, ...extraBody, contents,
+      generationConfig: { ...geminiOptions.generationConfig, ...generationConfig, ...extraBody.generationConfig } };
     // These are ownership-bearing fields; extraBody cannot replace them.
     delete body.model;
     delete body.systemInstruction;
+    delete body.tools;
     if (systems.length) body.systemInstruction = { parts: systems };
     if (tools?.length) body.tools = [{ functionDeclarations: tools.map(tool => ({ name: tool.name,
       description: tool.description || '', parametersJsonSchema: tool.parameters })) }];
+    body.generationConfig.maxOutputTokens = maxTokens;
     body.generationConfig.candidateCount = 1;
     if (lowDetailImages) body.generationConfig.mediaResolution = 'MEDIA_RESOLUTION_LOW';
     if (Number.isFinite(params.contextOutputLimit) && body.generationConfig.maxOutputTokens > params.contextOutputLimit) {
       body.generationConfig.maxOutputTokens = Math.max(1, Math.floor(params.contextOutputLimit));
     }
-    if (params.effortConstraint && !capability.supportsThinking) delete body.generationConfig.thinkingConfig;
-    if (params.effortConstraint) {
-      const config = body.generationConfig.thinkingConfig;
-      if (config?.thinkingBudget > 8192 || config?.thinkingBudget === -1) body.generationConfig.thinkingConfig = { ...config, thinkingBudget: 8192 };
-      if (config?.thinkingLevel && !['minimal', 'low', 'medium'].includes(config.thinkingLevel)) {
-        body.generationConfig.thinkingConfig = { ...config, thinkingLevel: /gemini-3(?:\.0)?-pro/i.test(model) ? 'low' : 'medium' };
+    const endpoint = geminiModelsUrl(this.config.baseUrl);
+    const google = endpoint.hostname === 'generativelanguage.googleapis.com';
+    const beta = endpoint.pathname === '/v1beta/models';
+    // These fields would transfer Session/logging ownership outside the runtime.
+    delete body.store;
+    delete body.continuationToken;
+    if (body.cachedContent !== undefined) {
+      if (!google || !beta || /(?:^|\/)gemini-4-/.test(model) || typeof body.cachedContent !== 'string' || !/^cachedContents\/[^/\s]+$/.test(body.cachedContent)) {
+        throw new Error('Gemini explicit cachedContent requires a supported v1beta GenerateContent model and a cachedContents resource name');
+      }
+      if (body.systemInstruction || body.tools?.length || body.toolConfig) {
+        throw new Error('Gemini explicit cachedContent cannot be combined with inline system instructions, tools or tool configuration');
       }
     }
-    const thinking = body.generationConfig.thinkingConfig;
-    if (thinking?.thinkingLevel !== undefined && thinking?.thinkingBudget !== undefined) {
-      throw new Error('Gemini thinkingLevel and thinkingBudget are mutually exclusive');
+    if (!body.tools?.length) delete body.toolConfig;
+    if (google && !beta) {
+      delete body.labels;
+      for (const key of ['speechConfig', 'audioTranscriptionConfig', 'translationConfig', 'enableAffectiveDialog']) delete body.generationConfig[key];
     }
-    const effectiveEffort = thinking?.thinkingLevel
-      ? ({ minimal: 'medium', low: 'medium', medium: 'medium', high: 'max' })[thinking.thinkingLevel]
-      : thinking?.thinkingBudget > 0
-        ? ['medium', 'xhigh', 'max'].find(level => thinking.thinkingBudget <= geminiThinkingBudgetForEffort(model, level)) || 'ultra' : null;
-    params.onEffortDecision?.({ requested: params.effort || null, effective: effectiveEffort || null, source: params.effortSource || 'scenario', model, cap: params.effortConstraint ? 'medium' : null, thinkingEnabled: Boolean(thinking), wireMode: thinking?.thinkingLevel ? 'thinking-level' : thinking ? 'manual' : 'omitted', ...(thinking?.thinkingBudget !== undefined ? { budgetTokens: thinking.thinkingBudget } : {}) });
-    // Implicit caching has no client toggle or cache ID. Only claim the
-    // documented provider policy for native Google routes, not custom proxies.
-    const promptCaching = context.diagnostics?.capabilitySource === 'native-endpoint' && context.capabilities.promptCaching
-      ? 'implicit' : 'provider-managed-unverified';
-    params.onProviderDiagnostics?.({ ...context.diagnostics, nativeReasoningState: Boolean(context.capabilities.nativeReasoningState), promptCaching });
+    const child = params.effortConstraint && resolveSubAgentEffort({ model, protocol: 'gemini', effortContext,
+      parentDecision: params.effortConstraint.parentDecision });
+    let thinking = body.generationConfig.thinkingConfig;
+    if (!capability.supportsThinking) thinking = undefined;
+    else if (child || effort) {
+      const lower = (left, right) => left && EFFORT_LEVELS.indexOf(left) <= EFFORT_LEVELS.indexOf(right) ? left : right;
+      const configured = typeof thinking?.thinkingLevel === 'string' && thinking.thinkingLevel.toLowerCase();
+      const constrained = child
+        ? lower(effort || (capability.effortOptions.includes(configured) ? configured : null), child.effective)
+        : effort;
+      const includeThoughts = typeof thinking?.includeThoughts === 'boolean' ? thinking.includeThoughts : true;
+      if (profile.levels) thinking = { thinkingLevel: constrained.toUpperCase(), includeThoughts };
+      else {
+        const budget = Math.min(capability.maxBudgetTokens, geminiThinkingBudgetForEffort(model, constrained),
+          ...(params.effortConstraint && thinking?.thinkingBudget >= 0 ? [thinking.thinkingBudget] : []));
+        thinking = { thinkingBudget: budget === 0 && profile.off ? 0 : Math.max(profile.minBudget, budget), includeThoughts };
+      }
+    } else if (thinking) {
+      thinking = { ...thinking };
+      if (thinking.thinkingLevel !== undefined && thinking.thinkingBudget !== undefined) {
+        throw new Error('Gemini thinkingLevel and thinkingBudget are mutually exclusive');
+      }
+      if (thinking.thinkingLevel !== undefined) {
+        const value = typeof thinking.thinkingLevel === 'string' ? thinking.thinkingLevel.toLowerCase() : '';
+        if (!profile.levels?.includes(value) || !capability.effortOptions.includes(value)) throw new Error('Gemini thinkingLevel is not supported by this model');
+        thinking.thinkingLevel = value.toUpperCase();
+      }
+      if (thinking.thinkingBudget !== undefined) {
+        const budget = thinking.thinkingBudget;
+        if (profile.levels || !Number.isSafeInteger(budget) || (budget !== -1 && !(budget === 0 && profile.off)
+          && (budget < profile.minBudget || budget > capability.maxBudgetTokens))) throw new Error('Gemini thinkingBudget is not supported by this model');
+      }
+    }
+    if (thinking) body.generationConfig.thinkingConfig = thinking;
+    else delete body.generationConfig.thinkingConfig;
+    validateGeminiBody(body, tools);
+    const effectiveEffort = thinking?.thinkingLevel?.toLowerCase() || (thinking?.thinkingBudget > 0
+      ? ['medium', 'xhigh', 'max'].find(level => thinking.thinkingBudget <= geminiThinkingBudgetForEffort(model, level)) : null);
+    params.onEffortDecision?.({ requested: params.effort || null, effective: effectiveEffort || null, source: params.effortSource || 'scenario', model,
+      cap: child?.cap ?? null, ...(child?.nativeEffortCap ? { nativeEffortCap: true } : {}), thinkingEnabled: Boolean(thinking && thinking.thinkingBudget !== 0),
+      wireMode: thinking?.thinkingLevel ? 'thinking-level' : thinking ? 'manual' : child?.wireMode || 'omitted',
+      ...(thinking?.thinkingLevel ? { thinkingLevel: thinking.thinkingLevel } : {}),
+      ...(thinking?.thinkingBudget !== undefined ? { budgetTokens: thinking.thinkingBudget } : {}) });
+    params.onProviderDiagnostics?.({ ...context.diagnostics, nativeReasoningState: Boolean(context.capabilities.nativeReasoningState),
+      promptCaching: body.cachedContent ? 'explicit-reference'
+        : google && context.capabilities.promptCaching ? 'implicit' : 'provider-managed-unverified' });
     return { body: toWellFormedJson(body), context };
   }
 

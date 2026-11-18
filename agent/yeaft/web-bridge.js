@@ -25,7 +25,7 @@ import { DEFAULT_YEAFT_DIR } from './init.js';
 import { Engine } from './engine.js';
 import { loadSession } from './session.js';
 import { loadAgentMCPConfig, loadConfig, loadMCPConfig } from './config.js';
-import { normalizeEffort, resolveMaxOutputTokens } from './models.js';
+import { resolveCatalogEffort, resolveMaxOutputTokens } from './models.js';
 import {
   createManagedProjectSkill,
   createManagedSkill,
@@ -4516,9 +4516,10 @@ export function handleYeaftUpdateSessionConfig(msg) {
     if (!sessionId) throw new SessionConfigError('missing_group_id', 'sessionId required');
     if (!partial) throw new SessionConfigError('invalid_patch', 'config object required');
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const savedConfig = updateSessionConfig(yeaftDir, sessionId, partial);
-    if (Object.hasOwn(partial, 'model') || Object.hasOwn(partial, 'modelEffort')) {
-      const effectiveBaseConfig = session?.config || loadConfig({ dir: yeaftDir });
+    const updatesModel = Object.hasOwn(partial, 'model') || Object.hasOwn(partial, 'modelEffort');
+    const effectiveBaseConfig = updatesModel ? session?.config || loadConfig({ dir: yeaftDir }) : null;
+    const savedConfig = updateSessionConfig(yeaftDir, sessionId, partial, effectiveBaseConfig);
+    if (updatesModel) {
       // The write above is the source of truth. Merge it directly instead of
       // reopening the file so cached engines cannot observe an unrelated stale
       // read between persistence and publication.
@@ -5241,7 +5242,8 @@ function handleEngineEvent(event, hctx) {
         outputTokens: event.outputTokens,
         cacheReadTokens: event.cacheReadTokens || 0,
         cacheWriteTokens: event.cacheWriteTokens || 0,
-        totalInputTokens: (event.inputTokens || 0) + (event.cacheReadTokens || 0) + (event.cacheWriteTokens || 0),
+        totalInputTokens: (event.inputTokens || 0) + (event.cacheTokensAreIncludedInInput
+          ? 0 : (event.cacheReadTokens || 0) + (event.cacheWriteTokens || 0)),
       }, envelope);
       break;
 
@@ -5547,12 +5549,14 @@ export function validateQuickSend(value, config) {
     throw new Error('quickSend must be an object');
   }
   const { model, maxOutputTokens } = value;
-  const effort = normalizeEffort(value.effort);
   const entry = typeof model === 'string' && model.includes('/')
     ? config?.availableModels?.find(candidate => candidate.ref === model)
     : null;
-  if (!entry) throw new Error('quickSend.model must name an available provider/model');
-  if (value.effort !== null && (!effort || !entry.effortOptions?.includes(effort))) {
+  if (!entry || config?.ambiguousModelRefs?.includes(model)) {
+    throw new Error('quickSend.model must name an available, unambiguous provider/model');
+  }
+  const effort = resolveCatalogEffort(entry, value.effort);
+  if (value.effort !== null && !effort) {
     throw new Error('quickSend.effort is not supported by the selected model');
   }
   if (maxOutputTokens !== null && (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1

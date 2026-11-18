@@ -232,11 +232,11 @@ describe('native Gemini config and catalog integration', () => {
       const copilot = normalizeKnownProviderForRuntime({ name: 'github-copilot', models: ['gemini-2.5-pro'] });
       expect(copilot.models[0].protocol).toBe('openai-responses');
       const { provider } = addOrUpdateProvider({}, { name: 'google', protocol: 'gemini', models: 'gemini-2.5-pro', apiKey: 'fixture' });
-      expect(provider.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta');
+      expect(provider.baseUrl).toBe('https://generativelanguage.googleapis.com/v1');
       delete provider.baseUrl;
       expect(updateLlmConfig({ providers: [provider, copilot], primaryModel: 'google/gemini-2.5-pro' }, dir).error).toBeUndefined();
       const config = loadConfig({ dir });
-      expect(config.providers[0].baseUrl).toContain('/v1beta');
+      expect(config.providers[0].baseUrl).toContain('/v1');
       expect(config.availableModels.find(m => m.ref === 'google/gemini-2.5-pro')).toMatchObject({ protocol: 'gemini', effortOptions: anthropicOptions });
       expect(getLlmConfig(dir).availableModels.find(m => m.ref === 'github-copilot/gemini-2.5-pro').protocol).toBe('openai-responses');
       expect(updateLlmConfig({ providers: [{ ...provider, protocol: 'bogus' }] }, dir).error).toContain('Unsupported');
@@ -260,7 +260,7 @@ describe('native Gemini config and catalog integration', () => {
     const result = await discoverLlmModels({ providerType: 'gemini', apiKey: 'fixture-secret', fetchFn });
     expect(result.models).toEqual(['gemini-2.5-pro', 'gemini-2.5-flash']);
     expect(result.providerModels[1]).toMatchObject({ protocol: 'gemini', contextWindow: 1048576, maxOutput: 65536 });
-    expect(calls[0].url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(calls[0].url).toBe('https://generativelanguage.googleapis.com/v1/models');
     expect(calls[0].options.headers['x-goog-api-key']).toBe('fixture-secret');
     expect(calls[1].url).not.toContain('fixture-secret');
     expect(new URL(calls[1].url).searchParams.get('pageToken')).toBe('opaque+/=');

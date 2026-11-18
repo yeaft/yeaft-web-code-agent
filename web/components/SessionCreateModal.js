@@ -635,7 +635,7 @@ export default {
       // Inherit may resolve to different VP models; only expose capabilities
       // for an explicit model owned by the Agent selected in this dialog.
       const model = this.taskModels.find(item => modelOptionMatchesRef(item, this.form.model));
-      return getSelectableModelEfforts(model?.effortOptions);
+      return getSelectableModelEfforts(model?.effortOptions, model);
     },
     taskEffortOptions() {
       return [

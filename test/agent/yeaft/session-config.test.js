@@ -5,10 +5,14 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ctx from '../../../agent/context.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
-import { getPluginConfig, updatePluginConfig } from '../../../agent/yeaft/config-api.js';
+import { getLlmConfig, getPluginConfig, updateLlmConfig, updatePluginConfig } from '../../../agent/yeaft/config-api.js';
+import { addOrUpdateProvider, useGemini } from '../../../agent/llm-config-cli.js';
+import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
+import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
+import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { flushAllAgentPerfTraces } from '../../../agent/yeaft/perf-trace.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
-import { __testHooks, __testResetVpState, __testSetSession, handleYeaftLoadHistory, handleYeaftManagedSkill, handleYeaftPluginCatalog, handleYeaftUpdateSessionConfig } from '../../../agent/yeaft/web-bridge.js';
+import { __testHooks, __testResetVpState, __testSetSession, handleYeaftLoadHistory, handleYeaftManagedSkill, handleYeaftPluginCatalog, handleYeaftUpdateSessionConfig, validateQuickSend } from '../../../agent/yeaft/web-bridge.js';
 import { buildPluginCatalog, buildPluginSkillDetail } from '../../../agent/yeaft/plugins.js';
 import { _resetAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
@@ -305,6 +309,103 @@ describe('Yeaft managed Skill protocol', () => {
   });
 });
 
+describe('Model-level Gemini options', () => {
+  it('sanitizes and persists JSON options, then forwards fresh config-only copies on native call and stream', async () => {
+    const root = makeDir();
+    const modelId = 'gemini-2.5-flash';
+    const expected = {
+      serviceTier: 'flex',
+      safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' }],
+      toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['search'] } },
+      generationConfig: { topP: 0.8, stopSequences: ['END'], presencePenalty: -0.5, frequencyPenalty: 0.2,
+        responseLogprobs: true, logprobs: 0, mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
+        responseMimeType: 'application/json', responseSchema: { type: 'OBJECT', properties: { model: { type: 'STRING' } } },
+        thinkingConfig: { thinkingBudget: 0, includeThoughts: false } },
+    };
+    const dirty = {
+      ...expected, model: 'forged', contents: [], systemInstruction: {}, tools: [], cachedContent: 'forged', store: true, continuationToken: 'forged',
+      safetySettings: [...expected.safetySettings, { category: 'bogus', threshold: 'BLOCK_NONE' }],
+      toolConfig: { ...expected.toolConfig, betaField: true },
+      generationConfig: { ...expected.generationConfig, temperature: '0.5', imageConfig: {}, speechConfig: {},
+        responseModalities: ['TEXT', 'IMAGE'], maxOutputTokens: 9000, candidateCount: 2, _responseJsonSchema: {} },
+    };
+    const second = { generationConfig: { responseJsonSchema: { type: 'object', additionalProperties: false } } };
+    const provider = { name: 'fixture', baseUrl: 'https://gemini.invalid/v1', apiKey: 'fixture-key', protocol: 'gemini',
+      models: [{ id: modelId, geminiOptions: dirty }, { id: 'other-native', geminiOptions: second },
+        { id: 'gemini-compat', protocol: 'openai-responses', geminiOptions: expected }, 'no-options'] };
+    expect(updateLlmConfig({ providers: [provider], primaryModel: `fixture/${modelId}` }, root).error).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(root, 'config.json'), 'utf8')).providers[0].models[0]).toEqual({ id: modelId, geminiOptions: expected });
+    expect(getLlmConfig(root).agentConfig.providers[0].models[1]).toEqual({ id: 'other-native', geminiOptions: second });
+
+    const nativeCall = vi.spyOn(GeminiAdapter.prototype, 'call').mockResolvedValue({ text: 'fixture' });
+    const nativeStream = vi.spyOn(GeminiAdapter.prototype, 'stream').mockImplementation(async function* () { yield { type: 'done' }; });
+    const responsesCall = vi.spyOn(OpenAIResponsesAdapter.prototype, 'call').mockResolvedValue({ text: 'fixture' });
+    try {
+      const config = loadConfig({ dir: root });
+      const router = new AdapterRouter({ providers: config.providers });
+      const params = { messages: [], maxTokens: 123, geminiOptions: { serviceTier: 'priority' } };
+      config.providers[0].models[0].geminiOptions.generationConfig.stopSequences[0] = 'config mutation';
+      await router.call({ ...params, model: `fixture/${modelId}` });
+      expect(nativeCall).toHaveBeenLastCalledWith(expect.objectContaining({ model: modelId, maxTokens: 123, geminiOptions: expected }));
+      nativeCall.mock.calls[0][0].geminiOptions.generationConfig.stopSequences[0] = 'adapter mutation';
+      for await (const event of router.stream({ ...params, model: `fixture/${modelId}` })) expect(event.type).toBe('done');
+      expect(nativeStream).toHaveBeenLastCalledWith(expect.objectContaining({ model: modelId, geminiOptions: expected }));
+      await router.call({ ...params, model: 'fixture/other-native' });
+      expect(nativeCall.mock.lastCall[0].geminiOptions).toEqual(second);
+      await router.call({ ...params, model: 'fixture/no-options' });
+      expect(nativeCall.mock.lastCall[0]).not.toHaveProperty('geminiOptions');
+      await router.call({ ...params, model: 'fixture/gemini-compat' });
+      expect(responsesCall.mock.lastCall[0]).not.toHaveProperty('geminiOptions');
+    } finally {
+      nativeCall.mockRestore();
+      nativeStream.mockRestore();
+      responsesCall.mockRestore();
+    }
+  });
+
+  it('keeps legacy Gemini Max Quick Sends usable without advertising a nonexistent level', () => {
+    const root = makeDir();
+    const model = 'google/gemini-3.1-pro-preview';
+    const quickSend = { id: 'q1', name: 'Existing shortcut', model, effort: 'max', maxOutputTokens: null };
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ providers: [{ name: 'google', protocol: 'gemini',
+      apiKey: 'fixture', models: ['gemini-3.1-pro-preview'] }], quickSends: [quickSend] }));
+    const cfg = getLlmConfig(root);
+    expect(cfg.quickSends).toEqual([{ ...quickSend, effort: 'high' }]);
+    expect(cfg.availableModels[0].effortOptions).not.toContain('max');
+    expect(validateQuickSend(quickSend, loadConfig({ dir: root }))).toEqual({ model, effort: 'high', maxOutputTokens: null });
+    expect(updateLlmConfig({ quickSends: [{ ...quickSend, name: 'Renamed' }] }, root).quickSends)
+      .toEqual([{ ...quickSend, name: 'Renamed', effort: 'high' }]);
+    const duplicate = { ...cfg.providers[0], models: ['gemini-3.1-pro-preview', 'gemini-3.1-pro-preview'] };
+    expect(updateLlmConfig({ providers: [duplicate], quickSends: [quickSend] }, root).error).toContain('unambiguous');
+    const hydrogen = 'google/gemini-4-hydrogen';
+    const ambiguous = { ...quickSend, model: hydrogen, effort: 'high' };
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ providers: [{ ...duplicate,
+      models: ['gemini-4-hydrogen', 'gemini-4-hydrogen'] }], quickSends: [ambiguous] }));
+    expect(getLlmConfig(root).quickSends).toEqual([{ ...ambiguous, available: false }]);
+    expect(() => validateQuickSend(ambiguous, loadConfig({ dir: root }))).toThrow('unambiguous');
+
+    const managed = { name: 'github-copilot', managed: 'github-copilot', models: ['gpt-4.1', { id: 'gpt-4.1', effortOptions: ['medium'] }] };
+    const managedPreset = { ...quickSend, model: 'github-copilot/gpt-4.1', effort: 'high' };
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ providers: [managed], quickSends: [managedPreset] }));
+    expect(getLlmConfig(root).quickSends).toEqual([{ ...managedPreset, available: false }]);
+    expect(() => validateQuickSend(managedPreset, loadConfig({ dir: root }))).toThrow('unambiguous');
+    expect(updateLlmConfig({ providers: [managed], quickSends: [managedPreset] }, root).error).toContain('unambiguous');
+  });
+
+  it('keeps configured options by model ID through CLI edits and Gemini discovery', async () => {
+    const model = 'gemini-2.5-flash';
+    const geminiOptions = { generationConfig: { responseModalities: ['TEXT'] } };
+    const config = { providers: [{ name: 'google', protocol: 'gemini', models: [{ id: model, geminiOptions }] }] };
+    const edit = addOrUpdateProvider(config, { name: 'google', protocol: 'gemini', models: `${model},new-model`, apiKey: 'fixture' });
+    expect(edit.provider.models).toEqual([{ id: model, geminiOptions }, 'new-model']);
+    const fetchFn = vi.fn(async () => Response.json({ models: [{ name: `models/${model}`,
+      supportedGenerationMethods: ['generateContent'], outputTokenLimit: 1024 }] }));
+    const discovered = await useGemini(config, { model, apiKey: 'fixture', baseUrl: 'https://gemini.invalid/v1', fetchFn });
+    expect(discovered.provider.models).toEqual([{ id: model, protocol: 'gemini', maxOutput: 1024, geminiOptions }]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('Yeaft session-scoped model config', () => {
   it('fails closed for an invalid config.json root and preserves every bad file', () => {
     const root = makeDir();
@@ -322,6 +423,36 @@ describe('Yeaft session-scoped model config', () => {
       });
       expect(readFileSync(configPath, 'utf8')).toBe(invalidRoot);
     }
+  });
+
+  it('round-trips an effort-only update against the inherited provider without pinning its model', () => {
+    const root = makeDir();
+    const sessionId = 'inherited-effort';
+    const modelId = 'gemini-4-hydrogen';
+    const providers = [
+      { name: 'proxy', protocol: 'openai-responses', models: [modelId] },
+      { name: 'google', protocol: 'gemini', models: [modelId] },
+    ];
+    createSession(sessionsRoot(root), { id: sessionId, roster: ['omni'] }).close();
+    const keys = ['CONFIG', 'ws', 'outboundSendQueue', 'outboundSendQueueActive', 'serverEncryptionRequired', 'serverCapabilities'];
+    const previous = Object.fromEntries(keys.map(key => [key, ctx[key]]));
+    Object.assign(ctx, { CONFIG: { yeaftDir: root }, ws: { readyState: 1, send() {} }, outboundSendQueue: [],
+      outboundSendQueueActive: true, serverEncryptionRequired: false, serverCapabilities: new Set(['yeaft_session_config_delta']) });
+    try {
+      for (const [primaryModel, expected] of [[`google/${modelId}`, ['low', 'high']], [modelId, ['medium', 'xhigh']]]) {
+        writeFileSync(join(root, 'config.json'), JSON.stringify({ providers, primaryModel }));
+        const config = loadConfig({ dir: root });
+        __testSetSession({ yeaftDir: root, config });
+        for (const [index, effort] of ['low', 'high'].entries()) {
+          const saved = { modelEffort: expected[index] };
+          handleYeaftUpdateSessionConfig({ sessionId, requestId: `${primaryModel}:${effort}`, config: { modelEffort: effort } });
+          expect(ctx.outboundSendQueue.at(-1)?.msg.event).toMatchObject({ ok: true, sessionId, config: saved });
+          expect(JSON.parse(readFileSync(join(sessionsRoot(root), sessionId, 'config.json'), 'utf8'))).toEqual(saved);
+          expect(loadSessionConfig(root, sessionId)).toEqual(saved);
+          expect(resolveSessionConfig(config, saved)).toMatchObject({ model: primaryModel, ...saved });
+        }
+      }
+    } finally { Object.assign(ctx, previous); }
   });
 
   it('bounds a model/effort edit to the target metadata/config and never repairs unrelated inventory or logs', () => {

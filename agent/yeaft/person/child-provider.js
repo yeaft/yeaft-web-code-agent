@@ -1,10 +1,10 @@
-import { EFFORT_LEVELS } from '../effort.js';
+import { EFFORT_LEVELS, snapshotEffortDecision } from '../effort.js';
 import { inferProtocolFromModelId } from '../llm/router.js';
 import { applyAnthropicThinking } from '../llm/anthropic.js';
 import { normalizeEffort, parseModelRef } from '../models.js';
 import { fail } from './contracts.js';
 
-const rank = effort => EFFORT_LEVELS.indexOf(normalizeEffort(effort));
+const rank = effort => EFFORT_LEVELS.indexOf(normalizeEffort(effort, true));
 const pinModels = (models, model) => Object.fromEntries(Object.keys(models || {}).map(key => [key, model]));
 
 /**
@@ -59,13 +59,14 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
     fail('MODEL_UNAVAILABLE');
   }
   const model = entry.id;
-  const efforts = [...new Set((entry.efforts || []).map(normalizeEffort).filter(Boolean))];
-  const effort = normalizeEffort(selected.effort);
-  if (selected.effort != null && !effort) fail('MODEL_SELECTION');
-  if (effort !== null && !efforts.includes(effort)) fail('MODEL_SELECTION');
   const config = structuredClone(instanceConfig);
   const { modelId, providerName } = parseModelRef(model);
   const metadata = config.availableModels?.find(item => (item.ref || item.id) === model) || {};
+  const preserveNative = (metadata.protocol || inferProtocolFromModelId(modelId)) === 'gemini';
+  const efforts = [...new Set((entry.efforts || []).map(effort => normalizeEffort(effort, preserveNative)).filter(Boolean))];
+  const effort = normalizeEffort(selected.effort, preserveNative);
+  if (selected.effort != null && !effort) fail('MODEL_SELECTION');
+  if (effort !== null && !efforts.includes(effort)) fail('MODEL_SELECTION');
   const outputCeiling = Number.isFinite(config.maxOutputTokens) && config.maxOutputTokens >= 1
     ? Math.floor(config.maxOutputTokens) : Math.floor(entry.maxOutput);
   const maxOutputTokens = Math.min(Math.floor(entry.maxOutput), outputCeiling);
@@ -98,13 +99,17 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
     const maxTokens = Number.isFinite(params.maxTokens) && params.maxTokens >= 1
       ? Math.min(Math.floor(params.maxTokens), maxOutputTokens) : maxOutputTokens;
     let effectiveEffort = effort;
-    if (params.effortConstraint && efforts.length) {
-      const parent = params.effortConstraint.parentDecision;
-      const inherited = normalizeEffort(parent?.effective) || 'medium';
-      const cap = normalizeEffort(parent?.cap);
+    let inheritedCap = null;
+    if (params.effortConstraint) {
+      const parent = snapshotEffortDecision(params.effortConstraint.parentDecision);
+      const inherited = parent.effective || 'medium';
+      const cap = parent.cap;
       const ceiling = Math.min(effectiveEffort ? rank(effectiveEffort) : Infinity, rank(inherited), rank('medium'), cap ? rank(cap) : Infinity);
-      effectiveEffort = EFFORT_LEVELS.filter(value => efforts.includes(value) && rank(value) <= ceiling).at(-1) || null;
-      if (!effectiveEffort) fail('MODEL_SELECTION');
+      inheritedCap = EFFORT_LEVELS[ceiling];
+      if (efforts.length) {
+        effectiveEffort = EFFORT_LEVELS.filter(value => efforts.includes(value) && rank(value) <= ceiling).at(-1) || null;
+        if (!effectiveEffort) fail('MODEL_SELECTION');
+      }
     }
     if (effectiveEffort && (effortContext.protocol || inferProtocolFromModelId(modelId)) === 'anthropic') {
       const body = { max_tokens: maxTokens };
@@ -116,6 +121,7 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
     }
     return { ...params, model, maxTokens, effort: effectiveEffort ?? undefined,
       effortContext: { ...effortContext, effortOptions: [...efforts] },
+      ...(inheritedCap && params.onEffortDecision ? { onEffortDecision: decision => params.onEffortDecision({ ...decision, cap: inheritedCap, ...(['minimal', 'low'].includes(inheritedCap) ? { nativeEffortCap: true } : {}) }) } : {}),
       effortSource: effectiveEffort ? 'user' : undefined, effortConstraint: null, extraBody: undefined };
   }
 

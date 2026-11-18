@@ -11,13 +11,14 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { getModelEffortOptions, normalizeEffort, normalizeProviderModels, parseModelRef, resolveMaxOutputTokens, serializeModelForPersistence } from './models.js';
+import { geminiEffortCatalog, getThinkingCapability, normalizeEffort, resolveCatalogEffort, normalizeProviderModels, parseModelRef, resolveMaxOutputTokens, serializeModelForPersistence } from './models.js';
 import { inferProtocolFromModelId } from './llm/router.js';
+import { withGeminiDefault } from './llm/gemini-endpoint.js';
 import { clampYeaftField, normaliseTelemetrySection, normaliseYeaftSection } from './config.js';
 import { normaliseBrowserRuntimeSection, validateBrowserRuntimeUpdate } from '../browser-runtime/config.js';
 import { normalizePluginConfig } from './plugins.js';
 import { mutateAgentConfig, readAgentConfigForWrite } from './config-store.js';
-import { isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
+import { collectAmbiguousModelRefs, isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
 import { getWorkCenterFeatureState } from './work-center/feature.js';
 
 /** Agent-owned model catalog, with the same protocol/capability resolution as runtime. */
@@ -26,25 +27,43 @@ function quickSendModels(config) {
     const provider = normalizeKnownProviderForRuntime(raw);
     return normalizeProviderModels(provider).map(model => {
       const protocol = model.protocol || provider.protocol || inferProtocolFromModelId(model.id) || 'openai-responses';
+      const capability = getThinkingCapability(model.id, { ...model, protocol });
       return {
         id: model.id,
         ref: provider.name ? `${provider.name}/${model.id}` : model.id,
         provider: provider.name,
         label: model.id,
         protocol,
-        effortOptions: getModelEffortOptions(model.id, { ...model, protocol }),
+        effortProtocol: protocol === 'gemini' ? 'gemini' : undefined,
+        effortOptions: capability.effortOptions,
+        ...geminiEffortCatalog(model.id, capability),
         maxOutput: resolveMaxOutputTokens(model.id, { modelInfo: model }),
       };
     });
   });
 }
 
-function publicQuickSends(value) {
-  return (Array.isArray(value) ? value : []).map(item => ({ ...item, effort: normalizeEffort(item.effort) }));
+function findQuickSendModel(models, ref, ambiguousRefs) {
+  const exact = models.filter(model => model.ref === ref);
+  const candidates = exact.length ? exact : models.filter(model => model.id === ref);
+  return candidates.length === 1 && !ambiguousRefs.has(candidates[0].ref) ? candidates[0] : null;
+}
+
+function publicQuickSends(value, models, ambiguousRefs) {
+  return (Array.isArray(value) ? value : []).map(item => {
+    const model = findQuickSendModel(models, item.model, ambiguousRefs);
+    // Keep unavailable rows editable and preserve their keyboard slots. Never
+    // reinterpret a saved effort when its model ownership cannot be resolved.
+    if (!model) return { ...item, available: false };
+    const effort = model.effortProtocol === 'gemini'
+      ? resolveCatalogEffort(model, item.effort) ?? normalizeEffort(item.effort, model.geminiThinkingMode === 'level')
+      : normalizeEffort(item.effort);
+    return { ...item, effort };
+  });
 }
 
 /** Validate inside mutateAgentConfig's lock, against the resulting provider catalog. */
-function validateQuickSends(value, config) {
+function validateQuickSends(value, config, ambiguousRefs = collectAmbiguousModelRefs(config.providers)) {
   if (!Array.isArray(value) || value.length > 5) throw new Error('quickSends must be an array of at most 5 items');
   const models = quickSendModels(config);
   const ids = new Set();
@@ -56,12 +75,10 @@ function validateQuickSends(value, config) {
     if (!name || name.length > 80) throw new Error('Quick send name must be 1–80 characters');
     ids.add(id);
     const ref = typeof item.model === 'string' ? item.model.trim() : '';
-    const matches = models.filter(model => model.ref === ref);
-    const candidates = matches.length ? matches : models.filter(model => model.id === ref);
-    if (candidates.length !== 1) throw new Error(`Quick send model must exist and be unambiguous: ${ref}`);
-    const model = candidates[0];
-    const effort = normalizeEffort(item.effort);
-    if (item.effort != null && (!effort || !model.effortOptions.includes(effort))) {
+    const model = findQuickSendModel(models, ref, ambiguousRefs);
+    if (!model) throw new Error(`Quick send model must exist and be unambiguous: ${ref}`);
+    const effort = resolveCatalogEffort(model, item.effort);
+    if (item.effort != null && !effort) {
       throw new Error(`Quick send effort is not available for ${model.ref}`);
     }
     const maxOutputTokens = item.maxOutputTokens ?? null;
@@ -103,15 +120,16 @@ function readLocalLlmConfig(dir) {
 
   const raw = readFileSync(configPath, 'utf8');
   const json = JSON.parse(raw);
-  const providers = Array.isArray(json.providers) ? json.providers : [];
+  const providers = Array.isArray(json.providers) ? json.providers.map(withGeminiDefault) : [];
+  const availableModels = quickSendModels(json);
   return {
     providers,
     primaryModel: json.primaryModel || null,
     fastModel: json.fastModel || null,
     language: json.language || 'en',
     debug: json.debug === true,
-    quickSends: publicQuickSends(json.quickSends),
-    availableModels: quickSendModels(json),
+    quickSends: publicQuickSends(json.quickSends, availableModels, collectAmbiguousModelRefs(providers)),
+    availableModels,
     needsSetup: providers.length === 0 || providers.every(p => p.apiKey === 'proxy' || p.apiKey === '' || (!p.apiKey && !p.credentialProvider)),
   };
 }
@@ -223,8 +241,7 @@ export function updateLlmConfig(update, dir) {
           const managed = serializeKnownProviderForPersistence(provider);
           if (managed) return managed;
           return {
-            ...provider,
-            ...(provider.protocol === 'gemini' && !provider.baseUrl ? { baseUrl: 'https://generativelanguage.googleapis.com/v1beta' } : {}),
+            ...withGeminiDefault(provider),
             models: normalizeProviderModels(provider).map(serializeModelForPersistence),
           };
         });
@@ -234,16 +251,21 @@ export function updateLlmConfig(update, dir) {
       if (update.providers !== undefined) normalizeManagedModelDefaults(existing);
       if (update.language !== undefined) existing.language = update.language;
       if (update.debug !== undefined) existing.debug = update.debug === true;
-      if (update.quickSends !== undefined) existing.quickSends = validateQuickSends(update.quickSends, existing);
+      // Managed provider serialization may remove duplicates. Do not select a
+      // winner for a Quick Send submitted in the same ambiguous update.
+      if (update.quickSends !== undefined) existing.quickSends = validateQuickSends(
+        update.quickSends, existing, collectAmbiguousModelRefs(update.providers ?? existing.providers),
+      );
 
+      const availableModels = quickSendModels(existing);
       const agentConfig = {
-        providers: Array.isArray(existing.providers) ? existing.providers : [],
+        providers: Array.isArray(existing.providers) ? existing.providers.map(withGeminiDefault) : [],
         primaryModel: existing.primaryModel || null,
         fastModel: existing.fastModel || null,
         language: existing.language || 'en',
         debug: existing.debug === true,
-        quickSends: publicQuickSends(existing.quickSends),
-        availableModels: quickSendModels(existing),
+        quickSends: publicQuickSends(existing.quickSends, availableModels, collectAmbiguousModelRefs(existing.providers)),
+        availableModels,
       };
       return {
         ...agentConfig,

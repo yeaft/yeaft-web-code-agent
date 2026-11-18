@@ -22,7 +22,8 @@
  */
 
 import { LLMAdapter, LLMAuthError } from './adapter.js';
-import { getModelEffortOptions, getThinkingCapability, normalizeEffort, normalizeEffortOptions, parseModelRef } from '../models.js';
+import { cloneGeminiOptions } from './gemini-options.js';
+import { getGeminiThinkingProfile, getThinkingCapability, normalizeEffort, normalizeEffortOptions, parseModelRef, resolveGeminiEffort } from '../models.js';
 import {
   GITHUB_COPILOT_BASE_URL,
   GITHUB_COPILOT_CREDENTIAL_PROVIDER,
@@ -47,6 +48,8 @@ export function normalizeModelEntry(entry) {
   }
   if (entry && typeof entry === 'object' && typeof entry.id === 'string' && entry.id) {
     const out = { id: entry.id };
+    const geminiOptions = cloneGeminiOptions(entry.geminiOptions);
+    if (geminiOptions !== undefined) out.geminiOptions = geminiOptions;
     if (entry.capabilities && typeof entry.capabilities === 'object') out.capabilities = { ...entry.capabilities };
     if (Number.isFinite(entry.streamIdleTimeoutMs) && entry.streamIdleTimeoutMs >= 0) {
       out.streamIdleTimeoutMs = Math.min(600_000, Math.floor(entry.streamIdleTimeoutMs));
@@ -58,7 +61,8 @@ export function normalizeModelEntry(entry) {
     if (typeof entry.thinkingProtocol === 'string' && entry.thinkingProtocol) {
       out.thinkingProtocol = entry.thinkingProtocol;
     }
-    const effortOptions = normalizeEffortOptions(entry.effortOptions);
+    const effortOptions = normalizeEffortOptions(entry.effortOptions,
+      (entry.protocol === 'gemini' || !entry.protocol) && Boolean(getGeminiThinkingProfile(entry.id)?.levels));
     if (effortOptions) out.effortOptions = effortOptions;
     if (Number.isFinite(entry.maxBudgetTokens) && entry.maxBudgetTokens > 0) {
       out.maxBudgetTokens = entry.maxBudgetTokens;
@@ -66,6 +70,16 @@ export function normalizeModelEntry(entry) {
     return out;
   }
   return null;
+}
+
+function finalAdapterParams(params, resolved) {
+  // This is a model-level config setting, not a per-request override.
+  const { geminiOptions: _ignored, ...out } = params;
+  if (resolved.protocol === 'gemini') {
+    const geminiOptions = cloneGeminiOptions(resolved.entry?.geminiOptions);
+    if (geminiOptions !== undefined) out.geminiOptions = geminiOptions;
+  }
+  return out;
 }
 
 /**
@@ -120,12 +134,12 @@ function thinkingV1Enabled() {
 export function filterEffortForModel(params, context = {}) {
   if (!params || !('effort' in params)) return params;
   if (!thinkingV1Enabled()) {
-    if (params.effortSource !== 'user') {
+    if (params.effortSource !== 'user' && !(context.protocol === 'gemini' && params.effortSource === 'model-default')) {
       const { effort: _drop, effortSource: _source, ...rest } = params;
       return rest;
     }
   }
-  const norm = normalizeEffort(params.effort);
+  const norm = normalizeEffort(params.effort, context.protocol === 'gemini');
   if (!norm) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
@@ -143,11 +157,13 @@ export function filterEffortForModel(params, context = {}) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  if (!getModelEffortOptions(modelId, effortContext).includes(norm)) {
+  const options = cap.effortOptions;
+  const supported = context.protocol === 'gemini' ? resolveGeminiEffort(modelId, norm, options) : options.includes(norm) ? norm : null;
+  if (!supported) {
     const { effort: _drop, effortSource: _source, ...rest } = params;
     return rest;
   }
-  return { ...params, effort: norm, effortSource: params.effortSource };
+  return { ...params, effort: supported, effortSource: params.effortSource };
 }
 
 /**
@@ -689,7 +705,7 @@ export class AdapterRouter extends LLMAdapter {
       const configuredTimeout = [resolved.entry?.streamIdleTimeoutMs, provider?.streamIdleTimeoutMs]
         .find(value => Number.isFinite(value) && value >= 0);
       try {
-        yield* resolved.adapter.stream({ ...sanitized, model: resolved.modelId, effortContext, providerContext,
+        yield* resolved.adapter.stream({ ...finalAdapterParams(sanitized, resolved), model: resolved.modelId, effortContext, providerContext,
           streamIdleTimeoutMs: configuredTimeout, rawExchangeMaxBytes: params.rawExchangeMaxBytes });
         return;
       } catch (err) {
@@ -731,7 +747,7 @@ export class AdapterRouter extends LLMAdapter {
       const filtered = filterEffortForModel({ ...params, model: resolved.modelId }, resolved);
       const sanitized = sanitizeMessagesForWire(filtered);
       try {
-        return await resolved.adapter.call({ ...sanitized, model: resolved.modelId, effortContext, providerContext });
+        return await resolved.adapter.call({ ...finalAdapterParams(sanitized, resolved), model: resolved.modelId, effortContext, providerContext });
       } catch (err) {
         this.#annotateAuthError(err, provider, params.model);
         if (err?.statusCode !== 401 || refreshedCredential
