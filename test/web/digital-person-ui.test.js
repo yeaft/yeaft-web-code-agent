@@ -152,10 +152,12 @@ describe('Digital Person surface', () => {
       expect(notice.element.parentElement).toBe(wrapper.get('.person-composer').element);
       expect(notice.text()).toContain(messages['person.modelRequired']);
       expect(wrapper.get('#person-input').attributes('disabled')).toBeDefined();
+      notice.get('button').element.focus();
       await notice.get('button').trigger('click'); await flushPromises();
       expect(wrapper.find('.person-settings-modal').exists()).toBe(true);
       await wrapper.get('.person-settings-close').trigger('click'); await flushPromises();
       expect(wrapper.vm.settingsOpen).toBe(false);
+      expect(document.activeElement).toBe(notice.get('button').element);
       // A transport/loading gate already explains why controls are unavailable.
       state.loading = true; await Vue.nextTick();
       expect(wrapper.find('.person-availability').exists()).toBe(false);

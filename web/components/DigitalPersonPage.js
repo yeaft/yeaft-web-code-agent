@@ -148,8 +148,9 @@ export default {
         // Child unmount runs while the header is still inert. Restore only
         // after that attribute is removed, and never into another owner.
         if (disposed || settingsScope !== attachmentScope() || moreOpen.value || panel.value) return;
-        const opener = mobileHeader.value ? moreButton.value
-          : settingsOpener === moreButton.value ? settingsButton.value : settingsOpener;
+        const composerOpener = settingsOpener?.isConnected && settingsOpener.closest('.person-composer') ? settingsOpener : null;
+        const opener = composerOpener || (mobileHeader.value ? moreButton.value
+          : settingsOpener === moreButton.value ? settingsButton.value : settingsOpener);
         if (opener?.isConnected && !opener.disabled) opener.focus();
       });
     }, { flush: 'sync' });
