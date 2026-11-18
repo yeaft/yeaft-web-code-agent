@@ -82,6 +82,11 @@ copyFileSync(join(vendorDir, 'katex', 'katex.min.css'), join(katexDistDir, 'kate
 copyFileSync(join(vendorDir, 'katex', 'LICENSE'), join(katexDistDir, 'LICENSE'));
 cpSync(join(vendorDir, 'katex', 'fonts'), join(katexDistDir, 'fonts'), { recursive: true });
 
+// Ship the license for the grapheme fallback bundled into app.bundle.js.
+const unicodeSegmenterDistDir = join(distDir, 'vendor', 'unicode-segmenter');
+mkdirSync(unicodeSegmenterDistDir, { recursive: true });
+copyFileSync(join(vendorDir, 'unicode-segmenter', 'LICENSE'), join(unicodeSegmenterDistDir, 'LICENSE'));
+
 // Keep spreadsheet decompression/parsing off the UI thread, with a cancellable deadline.
 esbuild.buildSync({
   entryPoints: [join(__dirname, 'spreadsheet-worker.js')],

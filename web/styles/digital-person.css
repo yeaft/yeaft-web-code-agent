@@ -180,6 +180,20 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
 .person-search-form { display: flex; gap: var(--work-center-space-2); padding: var(--work-center-space-3) var(--work-center-space-4); }
 .person-search-form input { flex: 1; min-width: 0; padding: var(--work-center-space-2); border: 1px solid var(--border-color); border-radius: var(--agent-setup-control-radius); background: var(--bg-main); color: var(--text-primary); font: inherit; font-size: 13px; }
 .person-search-result { padding-bottom: var(--work-center-space-4); margin-bottom: var(--work-center-space-4); border-bottom: 1px solid var(--border-light); }
+.person-search-result .person-message-meta { margin-bottom: var(--work-center-space-1); overflow-wrap: anywhere; }
+.person-search-snippet {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  font-size: 14px;
+}
+.person-search-result.is-compact .person-search-snippet { -webkit-line-clamp: 3; }
+.person-search-snippet mark { background: var(--tag-high-bg); color: var(--text-primary); font-weight: 600; }
+.person-page .person-search-details { padding-inline: var(--work-center-space-1); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 600px) { .person-page .person-search-details { min-height: 44px; } }
 
 .person-usage-note { margin-bottom: var(--work-center-space-3); }
 .person-turn-row { border-bottom: 1px solid var(--border-light); padding: var(--work-center-space-3) 0; font-size: 12px; overflow-wrap: anywhere; }
