@@ -11,7 +11,7 @@
  */
 
 import { createReadStream, promises as fsp } from 'fs';
-import { basename, dirname, extname, join } from 'path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { createInterface } from 'readline';
 
@@ -516,6 +516,49 @@ function traceMatchesIdentity(trace, sessionId, turnId) {
     && (trace.requestId === turnId || trace.traceId === turnId);
 }
 
+function exactIds(ids) {
+  return new Set((Array.isArray(ids) || ids instanceof Set ? [...ids] : [])
+    .filter(id => typeof id === 'string' && id.length > 0));
+}
+
+function turnTombstones(ids) {
+  return { turnIds: exactIds(ids?.turnIds), messageIds: exactIds(ids?.messageIds) };
+}
+
+function matchesTurnTombstones(trace, ids) {
+  return !!ids && (ids.turnIds.has(trace.requestId) || ids.turnIds.has(trace.traceId)
+    || ids.messageIds.has(trace.messageId));
+}
+
+// Unlike best-effort debug reads, deletion must report I/O errors so the
+// caller can retry physical cleanup while the canonical tombstone hides it.
+async function readJsonForDeletion(filePath) {
+  try {
+    if (!(await fsp.lstat(filePath)).isFile()) return null;
+    return JSON.parse(await fsp.readFile(filePath, 'utf8'));
+  } catch (err) {
+    if (err?.code === 'ENOENT' || err instanceof SyntaxError) return null;
+    throw err;
+  }
+}
+
+async function listDeletionDir(rootDir, dir) {
+  // Treat the configured storage root as trusted, but do not follow links in
+  // the Session directory tree (including the legacy Session path).
+  try {
+    let path = rootDir;
+    for (const component of relative(rootDir, dir).split(sep)) {
+      if (component === '..') return [];
+      path = join(path, component);
+      if (!(await fsp.lstat(path)).isDirectory()) return [];
+    }
+    return await fsp.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return [];
+    throw err;
+  }
+}
+
 async function prepareJsonlAppend(filePath) {
   let text;
   try { text = await fsp.readFile(filePath, 'utf8'); }
@@ -941,15 +984,23 @@ export class DebugTrace {
   #flushChain = Promise.resolve();
   /** @type {boolean} */
   #acceptingWrites = true;
+  // Process-local write fence; restart visibility comes from canonical storage.
+  #deletedSessionTurns = new Map();
+  #loadSessionTurnTombstones;
 
   /**
    * @param {string} tracePath — Back-compatible path. If it looks like a DB
    * file, traces are stored in a sibling `debug/` directory.
+   * @param {object} [options]
+   * @param {(sessionId: string) => Promise<{turnIds?: string[]|Set<string>, messageIds?: string[]|Set<string>}|null>} [options.loadSessionTurnTombstones]
+   * Loads exact IDs from the canonical Session store at read time. Arrays or
+   * Sets are accepted; errors propagate rather than revealing hidden traces.
    */
   constructor(tracePath, options = {}) {
     const rootDir = fileTraceRoot(tracePath);
     if (!rootDir) throw new Error('DebugTrace requires a storage path');
-    this.#rootDir = rootDir;
+    this.#rootDir = resolve(rootDir);
+    this.#loadSessionTurnTombstones = options?.loadSessionTurnTombstones;
     // `textMaxBytes` remains an accepted constructor option for compatibility,
     // but debug source data is intentionally lossless.
     void options?.textMaxBytes;
@@ -965,6 +1016,7 @@ export class DebugTrace {
   startTurn({ traceId, messageId = null, mode = null, turnNumber = null, sessionId = null, vpId = null, threadId = null, userPrompt = null, memoryLoaded = null, memoryLoadedMeta = null } = {}) {
     if (!this.#acceptingWrites) return 'null';
     const turnRowId = randomUUID();
+    if (this.#isDeleted({ sessionId, traceId, messageId })) return 'null';
     const now = Date.now();
     const request = this.#getOrCreateRequest({
       traceId: traceId || turnRowId,
@@ -980,6 +1032,7 @@ export class DebugTrace {
       now,
       turnRowId,
     });
+    if (!request) return 'null';
     this.#turnIndex.set(turnRowId, {
       requestKey: request.requestKey,
       sessionId: request.sessionId || null,
@@ -993,7 +1046,7 @@ export class DebugTrace {
     const ctx = this.#turnIndex.get(turnId);
     if (!ctx) return;
     const trace = this.#loadRequest(ctx.sessionId, ctx.requestKey);
-    if (!trace) return;
+    if (!trace || this.#isDeleted(trace)) return;
     const loopNumber = ctx.loopNumber || Number(info.turnNumber || 0);
     const snapshot = buildRequestSnapshot({
       ...info,
@@ -1065,7 +1118,7 @@ export class DebugTrace {
     const ctx = this.#turnIndex.get(turnId);
     if (!ctx) return id;
     const trace = this.#loadRequest(ctx.sessionId, ctx.requestKey);
-    if (!trace) return id;
+    if (!trace || this.#isDeleted(trace)) return id;
     if (!Array.isArray(trace.tools)) trace.tools = [];
     const tool = {
       id,
@@ -1093,14 +1146,14 @@ export class DebugTrace {
 
   async queryByMessage(messageId) {
     await this.#drainWrites();
-    const traces = (await readTraceSummaries(this.#rootDir)).map(item => item.trace)
+    const traces = (await this.#visibleTraces(await readTraceSummaries(this.#rootDir))).map(item => item.trace)
       .filter(trace => trace.messageId === messageId);
     return this.#expandLegacy(traces);
   }
 
   async queryByTrace(traceId) {
     await this.#drainWrites();
-    const traces = (await readTraceSummaries(this.#rootDir)).map(item => item.trace)
+    const traces = (await this.#visibleTraces(await readTraceSummaries(this.#rootDir))).map(item => item.trace)
       .filter(trace => trace.traceId === traceId || trace.requestId === traceId);
     return this.#expandLegacy(traces);
   }
@@ -1108,7 +1161,7 @@ export class DebugTrace {
   async queryRecent(limit = 20) {
     await this.#drainWrites();
     const lim = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Number(limit) || MAX_HISTORY_LIMIT));
-    return (await readTraceSummaries(this.#rootDir))
+    return (await this.#visibleTraces(await readTraceSummaries(this.#rootDir)))
       .slice(-lim)
       .reverse()
       .flatMap(({ trace }) => traceToLegacyRows(trace));
@@ -1116,7 +1169,7 @@ export class DebugTrace {
 
   finalizeQuery(traceId, { sessionId = null, stopReason = 'end_turn' } = {}) {
     for (const trace of this.#requestCache.values()) {
-      if (trace.traceId !== traceId || (sessionId != null && trace.sessionId !== sessionId)) continue;
+      if (trace.traceId !== traceId || (sessionId != null && trace.sessionId !== sessionId) || this.#isDeleted(trace)) continue;
       trace.active = false;
       trace.closedAt ||= Date.now();
       trace.updatedAt = Date.now();
@@ -1128,7 +1181,8 @@ export class DebugTrace {
   async fetchTurnDebug({ sessionId, turnId } = {}) {
     const requestedSessionId = typeof sessionId === 'string' && sessionId ? sessionId : null;
     const requestedTurnId = typeof turnId === 'string' && turnId ? turnId : null;
-    if (!requestedSessionId || !requestedTurnId) {
+    if (!requestedSessionId || !requestedTurnId
+      || this.#isDeleted({ sessionId: requestedSessionId, requestId: requestedTurnId })) {
       return { loops: [], turns: [], dreamEvents: [], detailTurnId: requestedTurnId };
     }
     await this.#drainWrites();
@@ -1156,7 +1210,9 @@ export class DebugTrace {
       }
     }
     const dreamEvents = []; // Compatibility shape; retired Dream events are not replayed.
-    if (!trace) return { loops: [], turns: [], dreamEvents, detailTurnId: requestedTurnId };
+    if (!trace || (await this.#visibleTraces([{ trace }])).length === 0) {
+      return { loops: [], turns: [], dreamEvents, detailTurnId: requestedTurnId };
+    }
     const expanded = expandTrace(trace);
     return { ...expanded, dreamEvents, detailTurnId: requestedTurnId };
   }
@@ -1170,7 +1226,7 @@ export class DebugTrace {
     await this.#drainWrites();
     const lim = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Number(limit) || MAX_HISTORY_LIMIT));
     const searchRegex = requestedDetailTurnId ? null : compileTraceSearchRegex(search);
-    const traces = (await readTraceHeaders(this.#rootDir, sessionId))
+    const traces = (await this.#visibleTraces(await readTraceHeaders(this.#rootDir, sessionId)))
       .map(({ trace }) => trace)
       .filter(trace => !threadId || trace.threadId === threadId)
       .filter(trace => requestedDetailTurnId || traceMatchesRegex(trace, searchRegex));
@@ -1197,7 +1253,7 @@ export class DebugTrace {
       };
     }
     const selectedKeys = new Set(selected.map(trace => trace.requestKey));
-    const detailed = (await readTraceSummaries(this.#rootDir, sessionId))
+    const detailed = (await this.#visibleTraces(await readTraceSummaries(this.#rootDir, sessionId)))
       .map(({ trace }) => trace)
       .filter(trace => selectedKeys.has(trace.requestKey));
     const expanded = detailed.reduce((acc, trace) => {
@@ -1213,7 +1269,7 @@ export class DebugTrace {
     await this.#ensureHydrated();
     await this.#drainWrites();
     const tools = [];
-    for (const { trace: header } of this.#traceSummaries().slice().reverse()) {
+    for (const { trace: header } of (await this.#visibleTraces(this.#traceSummaries())).reverse()) {
       const live = this.#requestCache.get(header.requestKey);
       const trace = live ? await readAvailableTrace(this.#rootDir, live) : await readHeaderDetail(this.#rootDir, header);
       if (!trace) continue;
@@ -1221,12 +1277,12 @@ export class DebugTrace {
         const row = traceToolToLegacy(trace, tool);
         if (name && row.tool_name !== name) continue;
         if (since && row.created_at < since) continue;
-        tools.push(row);
+        tools.push({ trace: header, row });
       }
-      tools.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      tools.sort((a, b) => (b.row.created_at || 0) - (a.row.created_at || 0));
       if (tools.length > 100) tools.length = 100;
     }
-    return tools;
+    return tools.filter(({ trace }) => !this.#isDeleted(trace)).map(({ row }) => row);
   }
 
   async search(keyword) {
@@ -1235,20 +1291,20 @@ export class DebugTrace {
     const needle = String(keyword || '').toLowerCase();
     if (!needle) return [];
     const results = [];
-    for (const { trace: header } of this.#traceSummaries().slice().reverse()) {
+    for (const { trace: header } of (await this.#visibleTraces(this.#traceSummaries())).reverse()) {
       const live = this.#requestCache.get(header.requestKey);
       const trace = live ? await readAvailableTrace(this.#rootDir, live) : await readHeaderDetail(this.#rootDir, header);
       if (!trace || !JSON.stringify(trace).toLowerCase().includes(needle)) continue;
-      results.push(...traceToLegacyRows(trace));
+      results.push(...traceToLegacyRows(trace).map(row => ({ trace: header, row })));
       if (results.length >= 50) break;
     }
-    return results.slice(0, 50);
+    return results.filter(({ trace }) => !this.#isDeleted(trace)).slice(0, 50).map(({ row }) => row);
   }
 
   async stats() {
     await this.#ensureHydrated();
     await this.#drainWrites();
-    const traces = this.#traceSummaries().map(({ trace }) => trace);
+    const traces = (await this.#visibleTraces(this.#traceSummaries())).map(({ trace }) => trace);
     let turnCount = 0;
     let toolCount = 0;
     for (const header of traces) {
@@ -1280,7 +1336,7 @@ export class DebugTrace {
     await this.#drainWrites();
     const keep = Math.max(1, Math.min(REQUEST_RETENTION, Number(retention) || REQUEST_RETENTION));
     const before = this.#traceSummaries().length;
-    await this.#pruneAll(keep);
+    await this.#chain(() => this.#pruneAll(keep));
     const after = this.#traceSummaries().length;
     return { deletedTurns: Math.max(0, before - after), deletedTools: 0, deletedEvents: 0, deletedRequests: Math.max(0, before - after) };
   }
@@ -1291,6 +1347,109 @@ export class DebugTrace {
     await this.cleanup(REQUEST_RETENTION);
     const after = (await countDirFiles(this.#rootDir)).bytes;
     return { before, after };
+  }
+
+  /**
+   * Remove full debug request directories for caller-resolved, exact IDs.
+   * Only this Session is considered. The return value counts directories, not
+   * turns (one turn can have multiple requests or a legacy copy).
+   * @param {{sessionId: string, turnIds?: string[]|Set<string>, messageIds?: string[]|Set<string>}} ids
+   */
+  async deleteSessionTurns({ sessionId, turnIds, messageIds } = {}) {
+    const ids = turnTombstones({ turnIds, messageIds });
+    if (typeof sessionId !== 'string' || ['', '.', '..'].includes(sessionId.trim())
+      || (!ids.turnIds.size && !ids.messageIds.size)) {
+      return { deletedRequests: 0 };
+    }
+
+    const fenced = this.#deletedSessionTurns.get(sessionId) || turnTombstones();
+    for (const id of ids.turnIds) fenced.turnIds.add(id);
+    for (const id of ids.messageIds) fenced.messageIds.add(id);
+    this.#deletedSessionTurns.set(sessionId, fenced);
+    const matches = trace => trace?.sessionId === sessionId && matchesTurnTombstones(trace, ids);
+    this.#pendingWrites = this.#pendingWrites.filter(({ trace }) => !matches(trace));
+
+    return this.#chain(async () => {
+      // Any in-flight append (including retention/migration) is now settled.
+      // Later batches see the fence and cannot recreate deleted directories.
+      const removedKeys = new Set();
+      const locatedRequests = new Map();
+      const remember = trace => {
+        removedKeys.add(trace.requestKey);
+        const keys = locatedRequests.get(trace.requestId) || new Set();
+        keys.add(trace.requestKey);
+        locatedRequests.set(trace.requestId, keys);
+      };
+      for (const index of [this.#requestCache, this.#diskHeaders]) {
+        for (const [key, trace] of index) {
+          if (!matches(trace)) continue;
+          remember(trace);
+          index.delete(key);
+        }
+      }
+      const retention = this.#retentionIndex.get(sessionId);
+      for (const [key, { trace }] of retention || []) {
+        if (!matches(trace)) continue;
+        remember(trace);
+        retention.delete(key);
+      }
+      for (const key of removedKeys) this.#initializedRequestKeys.delete(key);
+      for (const [id, ctx] of this.#turnIndex) {
+        if (ctx.sessionId === sessionId && removedKeys.has(ctx.requestKey)) this.#turnIndex.delete(id);
+      }
+
+      const targets = [];
+      const requestPaths = sessionRequestDirs(this.#rootDir, sessionId);
+      for (const requestsDir of requestPaths) {
+        for (const entry of await listDeletionDir(this.#rootDir, requestsDir)) {
+          if (!entry.isDirectory()) continue;
+          const requestDir = join(requestsDir, entry.name);
+          const meta = await readJsonForDeletion(requestMetaPath(requestDir));
+          const stored = meta?.requestId ? meta : await readJsonForDeletion(requestFilePath(requestDir));
+          if (!matches(stored)) continue;
+          remember(stored);
+          targets.push(requestDir);
+        }
+      }
+
+      for (const requestsDir of requestPaths) {
+        // Unlink locators first, while their request metadata is still present
+        // for retry (notably when the caller supplied only message IDs).
+        const turnsDir = join(requestsDir, '..', 'turns');
+        for (const entry of await listDeletionDir(this.#rootDir, turnsDir)) {
+          if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+          const path = join(turnsDir, entry.name);
+          const locator = await readJsonForDeletion(path);
+          if (locator?.sessionId !== sessionId || !locator.requestId || !locator.requestKey) continue;
+          if (ids.turnIds.has(locator.requestId) || locatedRequests.get(locator.requestId)?.has(locator.requestKey)) {
+            await fsp.rm(path, { force: true });
+          }
+        }
+      }
+      for (const requestDir of targets) {
+        await fsp.rm(requestDir, { recursive: true, force: true });
+      }
+      return { deletedRequests: targets.length };
+    });
+  }
+
+  #isDeleted(trace) {
+    return matchesTurnTombstones(trace, this.#deletedSessionTurns.get(trace.sessionId));
+  }
+
+  async #visibleTraces(entries) {
+    const load = this.#loadSessionTurnTombstones;
+    const canonical = new Map();
+    if (load) {
+      for (const { trace } of entries) {
+        const sessionId = trace.sessionId;
+        if (sessionId && !canonical.has(sessionId)) {
+          canonical.set(sessionId, turnTombstones(await load(sessionId)));
+        }
+      }
+    }
+    return entries.filter(({ trace }) => !this.#isDeleted(trace)
+      && !matchesTurnTombstones(trace, canonical.get(trace.sessionId)));
   }
 
   async purge() {
@@ -1305,6 +1464,7 @@ export class DebugTrace {
     this.#initializedRequestKeys.clear();
     this.#reconciledRetentionSessions.clear();
     this.#retentionIndex.clear();
+    this.#deletedSessionTurns.clear();
     this.#hydrated = false;
     this.#hydratePromise = null;
     this.#acceptingWrites = true;
@@ -1346,6 +1506,7 @@ export class DebugTrace {
     const isUsableExisting = (t) => (
       t?.sessionId === normalizedSessionId
       && t?.traceId === traceId
+      && !this.#isDeleted(t)
       && t.active !== false
       && !(turnNumber === 1 && (t.loops || []).some(l => l.loopNumber === 1))
     );
@@ -1397,6 +1558,7 @@ export class DebugTrace {
       loops: [],
       tools: [],
     };
+    if (this.#isDeleted(trace)) return null;
     this.#requestCache.set(requestKey, trace);
     return trace;
   }
@@ -1420,7 +1582,7 @@ export class DebugTrace {
         .map(item => item.trace)
         .find(item => traceMatchesIdentity(item, sessionId, turnId)) || null;
     }
-    if (!trace) return false;
+    if (!trace || (await this.#visibleTraces([{ trace }])).length === 0 || this.#isDeleted(trace)) return false;
     // Legacy traces must keep their source payload until format migration has
     // durably copied it. Event traces already own their history on disk.
     if (trace._persistedFormat === 'events') {
@@ -1437,7 +1599,7 @@ export class DebugTrace {
     const out = [];
     for (const trace of merged.values()) {
       if (sessionId && trace.sessionId !== sessionId) continue;
-      if (!trace?.requestId || !trace?.requestKey) continue;
+      if (!trace?.requestId || !trace?.requestKey || this.#isDeleted(trace)) continue;
       out.push({
         trace,
         file: this.#traceFile(trace),
@@ -1459,7 +1621,7 @@ export class DebugTrace {
     this.#hydratePromise = (async () => {
       const headers = await readTraceHeaders(this.#rootDir, null);
       for (const { trace } of headers) {
-        if (!trace?.requestKey || this.#requestCache.has(trace.requestKey)) continue;
+        if (!trace?.requestKey || this.#requestCache.has(trace.requestKey) || this.#isDeleted(trace)) continue;
         this.#diskHeaders.set(trace.requestKey, trace.active
           ? { ...trace, active: false, interrupted: true }
           : trace);
@@ -1494,7 +1656,7 @@ export class DebugTrace {
   }
 
   #appendTraceRecord(trace, type, record, { writeMeta = false, evictAfterWrite = false } = {}) {
-    if (!this.#acceptingWrites || !trace?.requestKey || !record) return;
+    if (!this.#acceptingWrites || !trace?.requestKey || !record || this.#isDeleted(trace)) return;
     this.#requestCache.set(trace.requestKey, trace);
     const initialize = !this.#initializedRequestKeys.has(trace.requestKey);
     if (initialize) this.#initializedRequestKeys.add(trace.requestKey);
@@ -1531,7 +1693,7 @@ export class DebugTrace {
     this.#chain(async () => {
       const batches = new Map();
       for (const entry of entries) {
-        if (!this.#requestCache.has(entry.trace.requestKey)) continue;
+        if (!this.#requestCache.has(entry.trace.requestKey) || this.#isDeleted(entry.trace)) continue;
         const requestDir = requestDirFor(this.#rootDir, entry.trace.sessionId || null, entry.trace.requestKey);
         const batch = batches.get(requestDir) || { trace: entry.trace, initialize: false, writeMeta: false, evictAfterWrite: false, records: [] };
         batch.trace = entry.trace;
@@ -1543,6 +1705,7 @@ export class DebugTrace {
       }
       for (const [requestDir, batch] of batches) {
         const { trace } = batch;
+        if (this.#isDeleted(trace)) continue;
         // A failed append may contain the base/delta for every later loop.
         // Retry it before new records (including finalize); do not run a timer
         // retry loop on a full disk. Record identity makes partial replay safe.
@@ -1638,7 +1801,7 @@ export class DebugTrace {
     const prev = this.#flushChain;
     this.#flushChain = (async () => {
       try { await prev; } catch { /* predecessor errors already logged */ }
-      await task();
+      return task();
     })();
     return this.#flushChain;
   }
@@ -1676,6 +1839,7 @@ export class DebugTrace {
     if (!this.#reconciledRetentionSessions.has(sessionKey)) {
       index = new Map();
       for (const item of await readTraceHeaders(this.#rootDir, sessionId)) {
+        if (this.#isDeleted(item.trace)) continue;
         const existing = index.get(item.trace.requestKey);
         if (existing) {
           existing.requestDirs.add(item.requestDir);
@@ -1696,7 +1860,7 @@ export class DebugTrace {
       this.#reconciledRetentionSessions.add(sessionKey);
     }
     for (const trace of this.#requestCache.values()) {
-      if ((trace.sessionId || null) !== sessionId) continue;
+      if ((trace.sessionId || null) !== sessionId || this.#isDeleted(trace)) continue;
       const requestDir = requestDirFor(this.#rootDir, sessionId, trace.requestKey);
       const existing = index.get(trace.requestKey);
       index.set(trace.requestKey, {
@@ -1705,7 +1869,7 @@ export class DebugTrace {
         openedAt: Math.min(Number(trace.openedAt || 0), existing?.openedAt ?? Infinity),
       });
     }
-    const traces = Array.from(index.values()).sort((a, b) => (
+    const traces = Array.from(index.values()).filter(item => !this.#isDeleted(item.trace)).sort((a, b) => (
       (a.openedAt || 0) - (b.openedAt || 0)
       || String(a.trace.requestKey).localeCompare(String(b.trace.requestKey))
     ));
@@ -1749,6 +1913,10 @@ export class DebugTrace {
 }
 
 export class NullTrace {
+  #tracePath;
+
+  constructor(tracePath = null) { this.#tracePath = tracePath; }
+
   startTurn() { return 'null'; }
   endTurn() {}
   finalizeQuery() {}
@@ -1765,6 +1933,11 @@ export class NullTrace {
   async cleanup() { return { deletedTurns: 0, deletedTools: 0, deletedEvents: 0, deletedRequests: 0 }; }
   async compact() { return { before: 0, after: 0 }; }
   async purge() {}
+  async deleteSessionTurns(ids) {
+    // Turning off collection does not erase previously collected diagnostics.
+    if (!this.#tracePath) return { deletedRequests: 0 };
+    return new DebugTrace(this.#tracePath).deleteSessionTurns(ids);
+  }
   async close() {}
   refreshConfig() {}
   async flush() {}
@@ -1772,8 +1945,8 @@ export class NullTrace {
   async fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [] }; }
 }
 
-export function createTrace({ enabled, dbPath, dirPath, textMaxBytes }) {
+export function createTrace({ enabled, dbPath, dirPath, textMaxBytes, loadSessionTurnTombstones }) {
   const path = dirPath || dbPath;
-  if (!enabled || !path) return new NullTrace();
-  return new DebugTrace(path, { textMaxBytes });
+  if (!enabled || !path) return new NullTrace(path);
+  return new DebugTrace(path, { textMaxBytes, loadSessionTurnTombstones });
 }

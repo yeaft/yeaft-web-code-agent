@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicAdapter } from '../../../agent/yeaft/llm/anthropic.js';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { createProviderContext } from '../../../agent/yeaft/llm/provider-state.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DebugTrace } from '../../../agent/yeaft/debug-trace.js';
+import { createTrace, DebugTrace } from '../../../agent/yeaft/debug-trace.js';
 import { parseMessage } from '../../../agent/yeaft/conversation/persist.js';
 
 const identity = { instanceScope: 'instance', ownerScope: 'owner', sessionId: 'session', vpId: 'vp', threadId: 'main' };
@@ -235,6 +235,122 @@ describe('Anthropic evolving Messages protocol', () => {
       expect(events.some(event => event.type === 'tool_call')).toBe(false);
       expect(events.find(event => event.type === 'stop')?.stopReason).toBe('model_context_window_exceeded');
       expect(events.some(event => event.type === 'usage')).toBe(true);
+    }
+  });
+});
+
+describe('Session debug trace deletion', () => {
+  function record(trace, sessionId, traceId, messageId) {
+    const loop = trace.startTurn({ sessionId, traceId, messageId, turnNumber: 1, userPrompt: 'same prompt' });
+    trace.endTurn(loop, {
+      stopReason: 'tool_use',
+      rawRequest: { messages: [{ role: 'user', content: 'raw request body' }] },
+      rawResponse: { text: 'raw response body' },
+      toolCalls: [{ id: 'tool-call', name: 'test-tool' }],
+    });
+    trace.logTool(loop, { toolName: 'test-tool', toolCallId: 'tool-call', toolInput: 'tool input', toolOutput: 'tool output' });
+    return loop;
+  }
+
+  it('removes full persisted request directories and live/queued payloads without touching neighboring traces', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'debug-delete-'));
+    const trace = new DebugTrace(dir);
+    try {
+      const target = record(trace, 'session-a', 'target', 'client-id');
+      record(trace, 'session-a', 'another-target', 'persistent-id');
+      trace.finalizeQuery('another-target', { sessionId: 'session-a' });
+      record(trace, 'session-a', 'keep', 'different-id');
+      record(trace, 'session-b', 'target', 'client-id');
+      await trace.flush();
+      const debug = join(dir, 'sessions', 'session-a', 'debug');
+      const paths = readdirSync(join(debug, 'requests'));
+      expect(paths).toHaveLength(3);
+      expect(readdirSync(join(debug, 'turns'))).toHaveLength(3);
+      const detail = await trace.fetchTurnDebug({ sessionId: 'session-a', turnId: 'target' });
+      expect(detail.loops[0]).toMatchObject({ rawRequest: { messages: [{ content: 'raw request body' }] },
+        rawResponse: { text: 'raw response body' }, toolCalls: [{ id: 'tool-call' }] });
+      expect(detail.turns[0].tools[0]).toMatchObject({ toolInput: 'tool input', toolOutput: 'tool output' });
+      expect(await trace.queryTools()).toHaveLength(4); // Hydrate the cached index.
+
+      const queued = record(trace, 'session-a', 'queued', 'queued-message');
+      const flush = trace.flush();
+      const ids = { sessionId: 'session-a', turnIds: ['target', 'queued', 'same prompt'], messageIds: ['persistent-id'] };
+      const deletion = trace.deleteSessionTurns(ids);
+      trace.endTurn(target, { rawResponse: 'late append' });
+      trace.logTool(queued, { toolOutput: 'late queued tool' });
+      expect(trace.startTurn({ sessionId: 'session-a', traceId: 'queued' })).toBe('null');
+      expect(await deletion).toEqual({ deletedRequests: 2 });
+      await flush;
+      trace.finalizeQuery('target', { sessionId: 'session-a' });
+      expect(await trace.deleteSessionTurns(ids)).toEqual({ deletedRequests: 0 });
+      expect(await trace.deleteSessionTurns({ turnIds: ['target'] })).toEqual({ deletedRequests: 0 });
+      expect(await trace.deleteSessionTurns({ sessionId: 'absent', messageIds: ['client-id'] })).toEqual({ deletedRequests: 0 });
+      expect((await trace.fetchTurnDebug({ sessionId: 'session-a', turnId: 'target' })).loops).toEqual([]);
+      expect(await trace.queryTools()).toHaveLength(2);
+      expect((await trace.stats()).requestCount).toBe(2);
+      for (const path of paths.filter(path => !path.includes('-keep-'))) {
+        expect(existsSync(join(debug, 'requests', path))).toBe(false);
+      }
+      expect(readdirSync(join(debug, 'turns'))).toHaveLength(1);
+      await trace.close();
+      const restarted = new DebugTrace(dir);
+      try {
+        expect(await restarted.resumeTrace({ sessionId: 'session-a', turnId: 'target' })).toBe(false);
+        expect((await restarted.fetchTurnDebug({ sessionId: 'session-b', turnId: 'target' })).loops).toHaveLength(1);
+      } finally { await restarted.close(); }
+      const disabled = createTrace({ enabled: false, dirPath: dir });
+      expect(await disabled.deleteSessionTurns({ sessionId: 'session-b', messageIds: ['client-id'] })).toEqual({ deletedRequests: 1 });
+    } finally { await trace.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('cleans up a legacy request after restart without deleting a colliding Session or locator', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'debug-delete-legacy-'));
+    const debug = join(dir, 'sessions', 'session_a', 'debug');
+    const trace = new DebugTrace(dir);
+    try {
+      for (const [sessionId, key] of [['session/a', 'remove'], ['session_a', 'keep']]) {
+        const requestDir = join(debug, 'requests', key);
+        mkdirSync(requestDir, { recursive: true });
+        writeFileSync(join(requestDir, 'trace.json'), JSON.stringify({ sessionId, requestKey: key,
+          requestId: 'legacy-id', traceId: 'legacy-turn', loops: [], tools: [] }));
+        const turnsDir = join(debug, 'turns');
+        mkdirSync(turnsDir, { recursive: true });
+        writeFileSync(join(turnsDir, `${key}.json`), JSON.stringify({ sessionId, requestKey: key, requestId: 'legacy-id' }));
+      }
+      expect(await trace.deleteSessionTurns({ sessionId: 'session/a', turnIds: ['legacy-turn'] })).toEqual({ deletedRequests: 1 });
+      expect(readdirSync(join(debug, 'requests'))).toEqual(['keep']);
+      expect(readdirSync(join(debug, 'turns'))).toEqual(['keep.json']);
+      expect((await trace.fetchTurnDebug({ sessionId: 'session_a', turnId: 'legacy-turn' })).turns).toHaveLength(1);
+    } finally { await trace.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('filters surviving trace data using canonical Session tombstones loaded after restart', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'debug-delete-tombstones-'));
+    const writer = new DebugTrace(dir);
+    const tombstones = new Map();
+    const reader = new DebugTrace(dir, { loadSessionTurnTombstones: async sessionId => tombstones.get(sessionId) });
+    try {
+      record(writer, 'session-a', 'remove', 'client-id');
+      record(writer, 'session-b', 'remove', 'client-id');
+      await writer.close();
+      expect(await reader.queryTools()).toHaveLength(2);
+      tombstones.set('session-a', { messageIds: new Set(['client-id']) });
+      const request = { sessionId: 'session-a', turnId: 'remove' };
+      expect((await reader.fetchTurnDebug(request)).loops).toEqual([]);
+      expect((await reader.fetchRecentDebugHistory({ sessionId: 'session-a', indexOnly: true })).turns).toEqual([]);
+      expect((await reader.fetchRecentDebugHistory({ sessionId: 'session-a', search: 'same prompt' })).turns).toEqual([]);
+      expect((await reader.fetchRecentDebugHistory({ detailTurnId: 'remove' })).turns[0].sessionId).toBe('session-b');
+      expect(await reader.resumeTrace(request)).toBe(false);
+      expect((await reader.queryByMessage('client-id')).turns).toHaveLength(1);
+      expect((await reader.queryByTrace('remove')).turns).toHaveLength(1);
+      expect(await reader.queryRecent()).toHaveLength(1);
+      expect(await reader.queryTools()).toHaveLength(1);
+      expect(await reader.search('raw response body')).toHaveLength(1);
+      expect(readdirSync(join(dir, 'sessions', 'session-a', 'debug', 'requests'))).toHaveLength(1);
+    } finally {
+      await writer.close();
+      await reader.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
