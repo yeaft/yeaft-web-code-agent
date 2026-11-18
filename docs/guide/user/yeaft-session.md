@@ -36,7 +36,7 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 Open the scene menu using the chevron next to **Attach**; the current choice is checked. On phones, **Attach** and **Scene** are above the text box, while model, effort, Stop and Send remain below it. It saves to this Session without sending a message. The scene applies to new turns; running turns continue unchanged. For example, switch from Software to Writing to turn an earlier design discussion into an announcement without starting over. A scene guides the work, not which questions you may ask. It does not change model, effort, permissions, or workspace.
 
-Scenes bring different expertise to the conversation, not different report templates. Tell Software that a menu is hard to find and you can talk about that experience without asking for a patch. Ask Writing for a message to send and the reply can be the message itself. If a detail would change your decision, it belongs alongside the answer rather than in a standard disclaimer. You can still ask for a detailed review or a table when that's what you need.
+Say you’re adding drafts that can be reopened on another device. In Software, a useful design question is what happens to an unsaved edit if the same draft is open on both devices. Switch to Writing to announce the feature, and the important distinction is what you can promise readers: ‘Open a saved draft on your other device’ doesn’t promise that every keystroke has already synced. The scene changes what the assistant notices, not the format you have to read. A request to change one word can still get a one-word edit.
 
 ### Compatibility with existing Sessions
 

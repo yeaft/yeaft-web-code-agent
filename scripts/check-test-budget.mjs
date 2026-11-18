@@ -211,7 +211,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +1 Session status regression: hide superseded failures without losing live or latest errors.
 // +6 strict Responses tool regressions: catalogue, protocol isolation, external
 // schemas, native/fallback replay and atomic rejection of malformed encoded arguments.
-export const TEST_CASE_LIMIT = 1146;
+// +1 exact per-owner v1.0.713 stock scene soul migration, including edited and wrong-owner copies.
+export const TEST_CASE_LIMIT = 1147;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
