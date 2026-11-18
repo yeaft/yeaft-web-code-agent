@@ -10,6 +10,7 @@ export default {
     canSend: { type: Boolean, default: false },
     sending: { type: Boolean, default: false },
     showStop: { type: Boolean, default: false },
+    startActionsOnTop: { type: Boolean, default: false },
     stopDisabled: { type: Boolean, default: false },
     // Opt-in keeps other consumers' keyboard handling unchanged. Parent keydown
     // handlers (autocomplete / quick-send) run first and may preventDefault().
@@ -30,6 +31,7 @@ export default {
   emits: ['update:modelValue', 'input', 'keydown', 'paste', 'focus', 'blur', 'send', 'stop', 'files-selected', 'retry-attachment', 'remove-attachment'],
   setup(props, { emit }) {
     const fileInput = Vue.ref(null);
+    const topActionsTarget = Vue.ref(null);
     const uid = Vue.getCurrentInstance()?.uid ?? nextComposerId++;
     const fileInputId = `composer-files-${uid}`;
     const attachmentsLocked = Vue.computed(() => props.disabled || props.sending || props.attachmentsDisabled);
@@ -164,7 +166,7 @@ export default {
     });
 
     return {
-      fileInput, fileInputId, attachmentsLocked, sendDisabled, send, onKeydown, onPaste, onFileSelect, onDragover, onDrop, retryAttachment, removeAttachment, formatFileSize,
+      fileInput, fileInputId, topActionsTarget, attachmentsLocked, sendDisabled, send, onKeydown, onPaste, onFileSelect, onDragover, onDrop, retryAttachment, removeAttachment, formatFileSize,
       textareaWrapperRef,
       textareaRef,
       textareaScrollable,
@@ -177,7 +179,8 @@ export default {
     };
   },
   template: `
-    <div class="input-wrapper chat-composer" :class="{ 'is-disabled': disabled }" data-message-composer @dragover="onDragover" @drop="onDrop">
+    <div class="input-wrapper chat-composer" :class="{ 'is-disabled': disabled, 'has-top-actions': startActionsOnTop }" data-message-composer @dragover="onDragover" @drop="onDrop">
+      <div v-show="startActionsOnTop" ref="topActionsTarget" class="chat-composer-top-actions"></div>
       <div class="attachments-preview" v-if="attachmentsEnabled && attachments.length" aria-live="polite">
         <div v-for="file in attachments" :key="file.localId" class="attachment-item" :class="{ 'is-uploading': file.uploading, 'has-error': file.uploadError }">
           <img v-if="file.preview" :src="file.preview" :alt="file.name" class="attachment-thumb" />
@@ -218,12 +221,16 @@ export default {
         ></textarea>
       </div>
       <div class="chat-composer-actions">
-        <div class="chat-composer-actions-start">
-          <button v-if="attachmentsEnabled" type="button" class="attach-btn" :disabled="attachmentsLocked" :aria-controls="fileInputId" :title="$t('chatInput.upload')" :aria-label="$t('chatInput.upload')" @click="fileInput?.click()">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
-          </button>
-          <slot name="start-actions"></slot>
-        </div>
+        <!-- Reparent the existing controls so focus order matches the layout,
+             without duplicating the file input or the scene selection state. -->
+        <Teleport :to="topActionsTarget" :disabled="!startActionsOnTop || !topActionsTarget">
+          <div class="chat-composer-actions-start">
+            <button v-if="attachmentsEnabled" type="button" class="attach-btn" :disabled="attachmentsLocked" :aria-controls="fileInputId" :title="$t('chatInput.upload')" :aria-label="$t('chatInput.upload')" @click="fileInput?.click()">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
+            </button>
+            <slot name="start-actions"></slot>
+          </div>
+        </Teleport>
         <slot name="quick-actions"></slot>
         <div class="chat-composer-actions-end">
           <slot name="end-actions-before"></slot>

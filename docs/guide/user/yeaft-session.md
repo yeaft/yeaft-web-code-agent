@@ -34,7 +34,7 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 ### Change the scene during a conversation
 
-Use **Scene** next to **Attach**. It saves to this Session without sending a message. The scene applies to new turns; running turns continue unchanged. For example, switch from Software to Writing to turn an earlier design discussion into an announcement without starting over. A scene guides the work, not which questions you may ask. It does not change model, effort, permissions, or workspace.
+Open the scene menu using the chevron next to **Attach**; the current choice is checked. On phones, **Attach** and **Scene** are above the text box, while model, effort, Stop and Send remain below it. It saves to this Session without sending a message. The scene applies to new turns; running turns continue unchanged. For example, switch from Software to Writing to turn an earlier design discussion into an announcement without starting over. A scene guides the work, not which questions you may ask. It does not change model, effort, permissions, or workspace.
 
 ### Compatibility with existing Sessions
 
@@ -113,7 +113,7 @@ The Yeaft page provides:
 - a paged, virtualized conversation timeline;
 - history outline and text/speaker search;
 - per-VP turn blocks and message quote/edit-as-new actions;
-- Session status with announcement, roster, and active background tasks;
+- Session status with announcement, execution state, per-turn Stop, live elapsed time, reported tokens, and active background tasks. Legacy members are still managed in Session settings; the status panel does not list them;
 - model/effort selection in the composer;
 - an optional debug panel for provider requests, tools, tokens, and stop reasons. Dream events and settings are not exposed.
 
