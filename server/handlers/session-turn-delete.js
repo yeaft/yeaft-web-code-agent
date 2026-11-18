@@ -5,6 +5,8 @@ import { agents, webClients } from '../context.js';
 import { sendToAgent, sendToWebClient } from '../ws-utils.js';
 
 const DELETE = 'yeaft_session_delete_turn';
+// Unprefixed by design: older Servers only relay unknown yeaft_/unify_ types.
+const AUTHORIZED_DELETE = 'session_turn_delete_authorized';
 const RESULT = 'yeaft_session_delete_turn_result';
 const DELETED = 'yeaft_session_turn_deleted';
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -60,7 +62,7 @@ export async function handleClientSessionTurnDelete(clientId, client, msg) {
   const type = msg.type.startsWith('unify_') ? `yeaft_${msg.type.slice(6)}` : msg.type;
   // Agent-only frames must also be reserved before the generic yeaft/unify
   // relay. Only the canonical operation is sent to the Agent.
-  if (type === RESULT || type === DELETED) return true;
+  if (type === AUTHORIZED_DELETE || type === RESULT || type === DELETED) return true;
   if (type !== DELETE) return false;
   if (!client.authenticated || !client.userId) return true;
 
@@ -105,10 +107,9 @@ export async function handleClientSessionTurnDelete(clientId, client, msg) {
     timer.unref();
     pending.set(relayRequestId, { clientId, userId: client.userId, reply, timer });
     try {
-      // This operation is owner-authorized by construction. The Agent should
-      // only accept it from the Server; browser actor/permission fields are
-      // neither required nor forwarded.
-      if (await sendToAgent(agent, { type: DELETE, agentId, sessionId, requestId: relayRequestId, messageId })) return true;
+      // The Agent must execute only this internal type, never the browser
+      // DELETE type (which older Servers can forward without this check).
+      if (await sendToAgent(agent, { type: AUTHORIZED_DELETE, agentId, sessionId, requestId: relayRequestId, messageId })) return true;
     } catch { /* Settle a failed dispatch with its original Web correlation. */ }
     if (forget(relayRequestId)) {
       await reject('agent_unavailable', 'Agent delivery could not be confirmed. Refresh the Session before retrying.');
@@ -127,6 +128,9 @@ export async function handleAgentSessionTurnDelete(agentId, agent, msg) {
   // Agent IDs come from the authenticated socket, never from the payload.
   const deletedIds = Array.isArray(msg.deletedMessageIds) && msg.deletedMessageIds.every(validId)
     ? { deletedMessageIds: msg.deletedMessageIds } : {};
+  // The Agent supplies the same safe, opaque event identity in both frames.
+  // It need not expose the canonical user turn ID from the transcript.
+  const turnIdentity = validId(msg.turnId) ? { turnId: msg.turnId } : null;
   if (msg.type === RESULT) {
     const request = pending.get(msg.requestId);
     if (!request || request.reply.agentId !== agentId || request.reply.sessionId !== msg.sessionId
@@ -137,18 +141,18 @@ export async function handleAgentSessionTurnDelete(agentId, agent, msg) {
       await deliver(requester, {
         ...request.reply,
         ok: msg.ok,
-        ...(msg.ok ? deletedIds : {
+        ...(msg.ok ? { ...turnIdentity, ...deletedIds } : {
           ...(validId(msg.errorCode) ? { errorCode: msg.errorCode } : {}),
           ...(typeof msg.error === 'string' ? { error: msg.error.slice(0, 512) } : {}),
         }),
       });
     }
-  } else if (validId(msg.turnId)) {
+  } else if (turnIdentity) {
     // This is a separate, bufferable Agent event, not an ACK. An Agent may
     // flush it after reconnect even if the original browser has gone away.
     // Offline browsers recover from the Agent's authoritative history, just
     // as for other live Session events.
-    const update = { type: DELETED, agentId, sessionId: msg.sessionId, turnId: msg.turnId, ...deletedIds };
+    const update = { type: DELETED, agentId, sessionId: msg.sessionId, ...turnIdentity, ...deletedIds };
     await Promise.all([...webClients.values()]
       .filter(client => client.authenticated && client.userId === ownerId)
       .map(client => deliver(client, update)));

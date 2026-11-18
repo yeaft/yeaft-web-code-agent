@@ -176,6 +176,7 @@ describe('native Session turn deletion relay', () => {
   const agentId = 'owner:agent';
   const sessionId = 'session_shared';
   const DELETE = 'yeaft_session_delete_turn';
+  const AUTHORIZED_DELETE = 'session_turn_delete_authorized';
   const RESULT = 'yeaft_session_delete_turn_result';
   const DELETED = 'yeaft_session_turn_deleted';
   const request = { type: DELETE, agentId, sessionId, requestId: 'delete_1', messageId: 'msg_001' };
@@ -227,8 +228,8 @@ describe('native Session turn deletion relay', () => {
     CONFIG.skipAuth = true;
     await send('other');
     expect(other.ws.getLastMessage()).toMatchObject({ type: RESULT, ok: false, errorCode: 'agent_access_denied' });
-    for (const type of [RESULT, DELETED, 'unify_session_delete_turn_result', 'unify_session_turn_deleted']) {
-      expect(await send('requester', { type })).toBe(true);
+    for (const type of [AUTHORIZED_DELETE, RESULT, DELETED, 'unify_session_delete_turn_result', 'unify_session_turn_deleted']) {
+      expect(await send('requester', { type, userId: 'owner', authorized: true })).toBe(true);
     }
     expect(unexpectedGenericRelay).not.toHaveBeenCalled();
     expect(agent.ws.getSentMessages()).toEqual([]);
@@ -241,10 +242,10 @@ describe('native Session turn deletion relay', () => {
     await send('other-tab'); // same Web request ID is independently correlated
     const [first, second] = agent.ws.getSentMessages();
     expect(agent.ws.getSentMessages()).toHaveLength(2);
-    expect(first).toEqual({ ...request, requestId: expect.any(String) });
+    expect(first).toEqual({ ...request, type: AUTHORIZED_DELETE, requestId: expect.any(String) });
     expect(first.requestId).not.toBe(second.requestId);
     expect(first.requestId).not.toBe(request.requestId);
-    const result = { ...first, type: RESULT, agentId: 'forged', ok: true, deletedMessageIds: ['msg_001'], _requestClientId: 'other-tab' };
+    const result = { ...first, type: RESULT, agentId: 'forged', ok: true, turnId: 'deletion_a', userTurnId: 'arbitrary/raw user ID', deletedMessageIds: ['msg_001'], _requestClientId: 'other-tab' };
     const wrongAgent = createMockAgent({ ownerId: 'owner' });
     agents.set('owner:wrong', wrongAgent);
     yeaftSessionDb.getForAgent.mockReturnValue({ id: sessionId });
@@ -253,7 +254,7 @@ describe('native Session turn deletion relay', () => {
     expect(owner.ws.getSentMessages()).toEqual([]);
     await handleAgentSessionTurnDelete(agentId, agent, result);
     await handleAgentSessionTurnDelete(agentId, agent, result);
-    expect(owner.ws.getSentMessages()).toEqual([{ type: RESULT, agentId, sessionId, requestId: request.requestId, ok: true, deletedMessageIds: ['msg_001'] }]);
+    expect(owner.ws.getSentMessages()).toEqual([{ type: RESULT, agentId, sessionId, requestId: request.requestId, ok: true, turnId: 'deletion_a', deletedMessageIds: ['msg_001'] }]);
     expect(tab.ws.getSentMessages()).toEqual([]);
     await handleAgentSessionTurnDelete(agentId, agent, { ...result, requestId: second.requestId, ok: false, errorCode: 'turn_active', error: 'Turn is running' });
     expect(tab.ws.getSentMessages()).toEqual([{ type: RESULT, agentId, sessionId, requestId: request.requestId, ok: false, errorCode: 'turn_active', error: 'Turn is running' }]);
@@ -271,7 +272,7 @@ describe('native Session turn deletion relay', () => {
     const unauth = addWeb('unauth', { authenticated: false });
     agent = createMockAgent({ ownerId: 'owner', encryptOutbound: false });
     agents.set(agentId, agent);
-    const update = { type: DELETED, agentId: 'spoof', sessionId, turnId: 'u_123', deletedMessageIds: ['msg_001'] };
+    const update = { type: DELETED, agentId: 'spoof', sessionId, turnId: 'deletion_a', deletedMessageIds: ['msg_001'] };
     await handleAgentSessionTurnDelete(agentId, staleAgent, update);
     await handleAgentSessionTurnDelete(agentId, agent, { ...update, sessionId: 'session_other' });
     await handleAgentSessionTurnDelete(agentId, agent, { ...update, turnId: [] });
