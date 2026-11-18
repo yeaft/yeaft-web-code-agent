@@ -148,7 +148,11 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
   .person-header .header-action-btn, .person-header .header-sidebar-toggle { width: 44px; min-width: 44px; height: 44px; padding: var(--work-center-space-2); }
   .person-header .person-more-button { display: inline-flex; align-items: center; justify-content: center; justify-self: end; }
   .person-agent-select .modern-select-trigger { min-height: 44px; padding-inline: var(--work-center-space-1); font-size: 12px; color: var(--text-secondary); }
-  .person-agent-select .modern-select-label { min-width: 0; }
+  .person-agent-select .modern-select-caret { margin-left: var(--work-center-space-1); }
+  /* Keep the offline status readable without taking horizontal space from the Agent name. */
+  .person-agent-select .modern-select-value { flex-direction: column; align-items: flex-start; gap: 0; }
+  .person-agent-select :is(.modern-select-label, .modern-select-badge) { max-width: 100%; }
+  .person-agent-select .modern-select-badge { display: block; height: auto; padding: 0; border: 0; background: transparent; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; }
 }
 @container digital-person (max-width: 600px) {
   .person-connection-notice { padding-left: var(--work-center-space-3); padding-right: var(--work-center-space-3); }

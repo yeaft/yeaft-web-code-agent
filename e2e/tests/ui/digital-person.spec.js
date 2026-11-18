@@ -162,6 +162,10 @@ async function mockPersonSocket(page, { conversationFlow = false, modelPreferenc
     });
   });
   return { requests,
+    setAgentOnline(agentId, online) {
+      agents.find(agent => agent.id === agentId).online = online;
+      socket.send(JSON.stringify({ type: 'agent_list', agents }));
+    },
     setModelReady(value) { modelReady = value; },
     holdStatus() { holdStatus = true; },
     statusPending() { return statusReplies.length > 0; },
@@ -1145,7 +1149,7 @@ test('Digital Person mobile actions expose loading, disabled and recoverable err
 });
 
 test('Digital Person mobile sheet does not survive owner scope changes', async ({ page, serverUrl }) => {
-  await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
+  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
   await openResponseConversation(page, serverUrl, { width: 320, theme: 'dark' });
   const picker = page.locator('#person-agent .modern-select-trigger');
   await page.locator('.person-navigation > button').focus();
@@ -1159,6 +1163,24 @@ test('Digital Person mobile sheet does not survive owner scope changes', async (
   await picker.press('Enter');
   await expect(picker).toContainText('Owner Agent B');
   await expect(page.locator('.person-identity h1')).toHaveText('Bea');
+
+  // Exercise an offline entry that remains in the directory. The relay's actual
+  // disconnect removes its entry entirely and is covered by the sidebar suite.
+  mock.setAgentOnline('person-b', false);
+  const badge = picker.locator('.modern-select-badge');
+  await expect(badge).toHaveText('Offline');
+  expect(await badge.evaluate(el => {
+    const badgeBounds = el.getBoundingClientRect();
+    const valueBounds = el.parentElement.getBoundingClientRect();
+    return el.scrollWidth <= el.clientWidth && badgeBounds.right <= valueBounds.right;
+  })).toBe(true);
+  expect((await picker.locator('.modern-select-label').boundingBox()).width).toBeGreaterThan(0);
+  await expectPersonTitleCentered(page);
+  await expectPersonFits(page);
+  mock.setAgentOnline('person-b', true);
+  await expect(badge).toHaveCount(0);
+  await expect(page.locator('#person-input')).toBeEnabled();
+
   await page.locator('.person-more-button').click();
   await expect(page.locator('#person-actions-sheet')).toBeVisible();
   // authGeneration is the existing controller's ownership fence; no production
