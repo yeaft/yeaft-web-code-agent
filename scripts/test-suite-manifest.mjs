@@ -57,6 +57,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/yeaft/person/tool-contract-safety.test.js",
   "test/agent/yeaft/provider-continuity.test.js",
   "test/agent/yeaft/provider-tool-input-safety.test.js",
+  "test/agent/yeaft/responses-tool-schema.test.js",
   "test/agent/yeaft/query-progress-bridge.test.js",
   "test/agent/yeaft/query-progress-engine.test.js",
   "test/agent/yeaft/query-progress.test.js",

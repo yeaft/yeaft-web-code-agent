@@ -7,7 +7,7 @@
  *     instead of `messages[]` with role/content
  *   - System prompt: passed as `instructions` field (not as a message)
  *   - Content parts: `input_text` / `input_image` (image_url string) / `output_text`
- *   - Tool definitions: flat `{type:"function", name, description, parameters}`
+ *   - Tool definitions: flat `{type:"function", name, description, strict, parameters}`
  *     (no nested `function` object)
  *   - Tool call id: uses `call_id` (separate from the internal item `id`)
  *   - Stream: semantic SSE events
@@ -25,6 +25,7 @@
  *   - tool_result.toolCallId ← → function_call_output.call_id (direct passthrough)
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { normalizeEffortPayload, enforceSubAgentEffortPayload, captureEffortDecision } from '../effort.js';
 import {
   LLMAdapter,
@@ -55,6 +56,8 @@ import {
 
 import { createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyResponsesContinuity, reasoningUsage, reportedUsageFields, hasUsageCounts } from './provider-state.js';
 
+import { decodeResponsesInput, encodeResponsesInput, projectResponsesTools, responsesArgumentProjection } from './responses-tool-schema.js';
+
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 
 /**
@@ -75,7 +78,7 @@ function effortForResponses(effort) {
 }
 
 // Never turn malformed/missing wire arguments into an executable empty object.
-function parseToolInput(argumentsJson) {
+function parseToolInput(argumentsJson, codec) {
   let input;
   try {
     if (typeof argumentsJson !== 'string') throw new Error();
@@ -86,7 +89,7 @@ function parseToolInput(argumentsJson) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new LLMToolInputError('OpenAI returned non-object tool input');
   }
-  return input;
+  return decodeResponsesInput(input, codec);
 }
 
 // Match the bounded UnifiedToolCall identity accepted by the provider collector.
@@ -98,7 +101,7 @@ function validateToolCallId(id) {
   return id;
 }
 
-function projectToolCalls(items, incomplete = false) {
+function projectToolCalls(items, incomplete, codecs) {
   const calls = [];
   const ids = new Set();
   for (const item of items) {
@@ -107,7 +110,7 @@ function projectToolCalls(items, incomplete = false) {
     if (ids.has(id)) throw new LLMToolInputError('OpenAI returned duplicate tool call identity');
     ids.add(id);
     if (incomplete || item.status === 'incomplete') throw new LLMToolInputError('OpenAI tool response was truncated');
-    calls.push({ type: 'tool_call', id, name: item.name || '', input: parseToolInput(item.arguments) });
+    calls.push({ type: 'tool_call', id, name: item.name || '', input: parseToolInput(item.arguments, codecs.get(item.name)) });
   }
   return calls;
 }
@@ -205,7 +208,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * Assistant tool_calls → separate { type:'function_call', call_id, name, arguments } items
    * Tool message → { type:'function_call_output', call_id, output }
    */
-  #translateInput(messages, context, identity) {
+  #translateInput(messages, context, identity, codecs) {
     const input = [];
     for (const msg of messages) {
       if (msg.role === 'system') {
@@ -235,7 +238,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               type: 'function_call',
               call_id: tc.id,
               name: tc.name,
-              arguments: JSON.stringify(toWellFormedJson(tc.input ?? {})),
+              arguments: JSON.stringify(encodeResponsesInput(toWellFormedJson(tc.input ?? {}), codecs.get(tc.name))),
             });
           }
         }
@@ -303,8 +306,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   /**
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'medium'|'xhigh'|'max'|'ultra', effortSource?: 'user'|'auto', effortContext?: object, extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void, onRequestStart?: () => void }} params
    *
-   * NOTE on `extraBody`: any keys you spread here are merged verbatim into
-   * the wire body and — because the verbatim debug feature is intentionally
+   * NOTE on `extraBody`: fields are merged before protocol normalization
+   * and — because the verbatim debug feature is intentionally
    * non-truncating — will surface in the debug panel via `rawRequest.body`.
    * Do NOT put secrets in `extraBody`. Only `Authorization` / `x-api-key` /
    * `api-key` headers are auto-redacted (see `redactRawRequest` in
@@ -314,10 +317,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, model });
-    const input = this.#translateInput(messages, context, requestIdentity);
     const body = {
       model,
-      input,
       stream: true,
       max_output_tokens: maxTokens,
     };
@@ -338,6 +339,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
 
     if (extraBody) Object.assign(body, extraBody);
+    const { tools: wireTools, codecs } = projectResponsesTools(body.tools, { external: Object.hasOwn(extraBody ?? {}, 'tools') });
+    if (wireTools !== undefined) body.tools = wireTools;
+    const input = this.#translateInput(messages, context, requestIdentity, codecs);
     body.model = model; // Origin binding must describe the actual dispatched model.
     applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
     normalizeEffortPayload(body, 'openai-responses');
@@ -395,7 +399,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       if (result.status === 'failed') throw new LLMServerError('OpenAI JSON response failed', 0);
       let calls;
       try {
-        calls = projectToolCalls(items, result.status === 'incomplete');
+        calls = projectToolCalls(items, result.status === 'incomplete', codecs);
       } catch (error) {
         if (!(error instanceof LLMToolInputError)) throw error;
         const usage = result.usage || {};
@@ -413,7 +417,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       }
       for (const call of calls) yield call;
       if (['completed', 'incomplete'].includes(result.status)) {
-        const state = createProviderState({ context, identity: requestIdentity, items, responseId: result.id });
+        const state = createProviderState({ context, identity: requestIdentity, items, responseId: result.id, responsesArguments: responsesArgumentProjection(items, codecs) });
         if (state) yield { type: 'provider_state', providerState: state, providerStateBytes: providerStateBytes(state) };
       }
       const usage = result.usage || {};
@@ -440,6 +444,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     // Hold calls by raw output slot, never by call_id: sibling IDs must be
     // validated before any merge can overwrite or skip an executable call.
     const completedToolCalls = new Map();
+    const completeToolSlot = (index, call) => {
+      if (completedToolCalls.has(index) && !isDeepStrictEqual(completedToolCalls.get(index), call)) {
+        throw new LLMToolInputError('OpenAI returned inconsistent tool call arguments');
+      }
+      completedToolCalls.set(index, call);
+    };
     const toolSlotIds = new Map();
     const toolIdSlots = new Map();
     const registerToolSlot = (index, id) => {
@@ -511,8 +521,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             if (item?.type === 'function_call') {
               try {
                 registerToolSlot(idx, item.call_id);
-                const [call] = projectToolCalls([item]);
-                completedToolCalls.set(idx, call);
+                const [call] = projectToolCalls([item], false, codecs);
+                completeToolSlot(idx, call);
                 toolCallAccum.delete(idx);
               } catch (error) {
                 toolInputError = error;
@@ -560,9 +570,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             // must not hide a malformed sibling whose added event was omitted.
             const argsStr = event.arguments === undefined ? accum?.arguments : event.arguments;
             try {
-              const input = parseToolInput(argsStr);
+              const input = parseToolInput(argsStr, codecs.get(accum?.name));
               registerToolSlot(idx, accum?.callId);
-              completedToolCalls.set(idx, { type: 'tool_call', id: accum.callId, name: accum.name, input });
+              completeToolSlot(idx, { type: 'tool_call', id: accum.callId, name: accum.name, input });
             } catch (error) {
               // Drain through final usage before rejecting every sibling.
               toolInputError = error;
@@ -585,8 +595,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             try {
               // Validate all completed slots, even if a gateway omits a sibling
               // from its final output projection.
-              projectToolCalls([...completedItems.values()]);
-              const calls = projectToolCalls(outputArr, type === 'response.incomplete' || respObj.status === 'incomplete');
+              projectToolCalls([...completedItems.values()], false, codecs);
+              const calls = projectToolCalls(outputArr, type === 'response.incomplete' || respObj.status === 'incomplete', codecs);
               // Register every raw terminal slot before merging. A repeated
               // representation of the same slot is allowed; sibling reuse and
               // identity changes are not. Keep fallback output_index values.
@@ -594,7 +604,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               for (const [idx, item] of toolSlots) registerToolSlot(idx, item.call_id);
               for (let i = 0; i < calls.length; i++) {
                 const [idx] = toolSlots[i];
-                completedToolCalls.set(idx, calls[i]);
+                completeToolSlot(idx, calls[i]);
                 // Terminal output can finish this slot missing arguments.done.
                 toolCallAccum.delete(idx);
               }
@@ -630,7 +640,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               yield { type: 'error', error: toolInputError, retryable: false };
               return;
             }
-            const state = createProviderState({ context, identity: requestIdentity, items: outputArr, responseId: respObj.id });
+            const state = outputArr.filter(item => item?.type === 'function_call').length === completedToolCalls.size
+              ? createProviderState({ context, identity: requestIdentity, items: outputArr, responseId: respObj.id,
+                responsesArguments: responsesArgumentProjection(outputArr, codecs) }) : null;
             // Completion events may arrive out of order; dispatch in model output order.
             for (const [, call] of [...completedToolCalls].sort(([a], [b]) => a - b)) {
               sawToolCall = true;
@@ -713,17 +725,17 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
    * expose them, mirror the stream() instrumentation. Parity with
    * anthropic.js's `call()`.
    */
-  async call({ model, system, messages, maxTokens = 4096, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
+  async call({ model, system, messages, tools, maxTokens = 4096, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, model });
-    const input = this.#translateInput(messages, context, requestIdentity);
     const body = {
       model,
-      input,
       max_output_tokens: maxTokens,
     };
     if (system) body.instructions = system;
+    const translatedTools = this.#translateTools(tools);
+    if (translatedTools) body.tools = translatedTools;
 
     // Mirror stream()'s thinking injection for non-streaming side queries.
     const normEffort = normalizeEffort(effort);
@@ -737,6 +749,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
 
     if (extraBody) Object.assign(body, extraBody);
+    const { tools: wireTools, codecs } = projectResponsesTools(body.tools, { external: Object.hasOwn(extraBody ?? {}, 'tools') });
+    if (wireTools !== undefined) body.tools = wireTools;
+    const input = this.#translateInput(messages, context, requestIdentity, codecs);
     body.model = model; // Origin binding must describe the actual dispatched model.
     applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
     normalizeEffortPayload(body, 'openai-responses');
@@ -768,15 +783,15 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     }
 
     const result = await response.json();
-    projectToolCalls(Array.isArray(result.output) ? result.output : [], result.status === 'incomplete');
+    const items = Array.isArray(result.output) ? result.output : [];
+    projectToolCalls(items, result.status === 'incomplete', codecs);
 
     // Prefer the `output_text` convenience field; fall back to output[].content[].text
     let text = '';
     if (typeof result.output_text === 'string' && result.output_text.length > 0) {
       text = result.output_text;
     } else {
-      const out = Array.isArray(result.output) ? result.output : [];
-      for (const item of out) {
+      for (const item of items) {
         if (item?.type === 'message' && Array.isArray(item.content)) {
           for (const part of item.content) {
             if (part?.type === 'output_text' && typeof part.text === 'string') {
@@ -791,7 +806,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     return {
       text,
       providerState: ['completed', 'incomplete'].includes(result.status)
-        ? createProviderState({ context, identity: requestIdentity, items: result.output, responseId: result.id }) : null,
+        ? createProviderState({ context, identity: requestIdentity, items, responseId: result.id,
+          responsesArguments: responsesArgumentProjection(items, codecs) }) : null,
       stopReason: this.#mapStopReason(result, false),
       usage: {
         inputTokens: usage.input_tokens || 0,

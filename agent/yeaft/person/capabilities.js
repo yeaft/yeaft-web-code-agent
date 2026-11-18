@@ -130,7 +130,7 @@ const nullable = schema => ({ anyOf: [schema, { type: 'null' }] });
 const builtinSchema = id => {
   const schemas = {
     'Execution.read': [{ callId: idString, sourceRef: { type: 'string', pattern: '^person-tool:[a-f0-9]{64}:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![\\s\\S])' }, episodeId: idString, offset: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, maxBytes: { type: 'integer', minimum: 4, maximum: 4096 } }, []],
-    'Conversation.reply': [{ messageIds: { type: 'array', minItems: 1, maxItems: 24, uniqueItems: true, items: idString }, text: boundedText(LIMITS.outputBytes) }, ['messageIds', 'text']],
+    'Conversation.reply': [{ messageIds: { type: 'array', minItems: 1, maxItems: 24, uniqueItems: true, description: 'Use each exact message ID at most once.', items: idString }, text: boundedText(LIMITS.outputBytes) }, ['messageIds', 'text']],
     Recall: [{ kind: { type: 'string', enum: ['messages', 'concepts'] }, query: boundedText(200, true), cursor: nullable(idString), limit: { type: 'integer', minimum: 1, maximum: 5 } }, ['kind']],
     'Output.publish': [{ file_path: boundedText(4096), url: boundedText(4096), title: boundedText(240) }, []],
     'catalog.search': [{ query: boundedText(200, true), cursor: nullable(idString), limit: { type: 'integer', minimum: 1, maximum: 5 } }, []],

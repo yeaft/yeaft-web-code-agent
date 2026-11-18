@@ -372,6 +372,14 @@ export function planningVpCatalog(vps) {
   }));
 }
 
+// A missing VP roster permits automatic assignment, not a nonempty array
+// whose item schema contains an invalid empty enum.
+function planningCandidateVpIds(vpIds) {
+  return { type: 'array', uniqueItems: true, ...(vpIds.length
+    ? { minItems: 1, items: { type: 'string', enum: vpIds } }
+    : { maxItems: 0, items: { type: 'string' } }) };
+}
+
 export function createSubmitWorkItemPlanTool({
   vps,
   workItem,
@@ -400,7 +408,7 @@ export function createSubmitWorkItemPlanTool({
           id: { type: 'string', minLength: 1, maxLength: 64 }, name: { type: 'string', minLength: 1, maxLength: 120 },
           type: { type: 'string', enum: actionTypes }, capability: { type: 'string', maxLength: 64 },
           objective: { type: 'string', minLength: 1, maxLength: 2_000 }, approach: { type: 'string', minLength: 1, maxLength: 2_000 }, expectedOutcome: { type: 'string', minLength: 1, maxLength: 2_000 },
-          candidateVpIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: vpIds } }, assignmentReason: { type: 'string', minLength: 1, maxLength: 1_000 },
+          candidateVpIds: planningCandidateVpIds(vpIds), assignmentReason: { type: 'string', minLength: 1, maxLength: 1_000 },
           dependsOnActionIds: { type: 'array', uniqueItems: true, items: { type: 'string' } }, workspaceMode: { type: 'string', enum: ['read', 'isolated-write', 'integrate', 'shared'] },
           separateFromActionTypes: { type: 'array', uniqueItems: true, items: { type: 'string' } }, changesRequestedActionId: { type: 'string' }, maxAttempts: { type: 'integer', minimum: 1, maximum: 5 },
         } } },
@@ -478,7 +486,7 @@ function plannedActionSchema(vpIds, { requireCandidates = true } = {}) {
     id: { type: 'string', minLength: 1, maxLength: 64 }, name: { type: 'string', minLength: 1, maxLength: 120 },
     type: { type: 'string', enum: BUILT_IN_ACTION_TYPES.filter(type => !['triage', 'create_vp'].includes(type)) }, capability: { type: 'string', maxLength: 64 },
     objective: { type: 'string', minLength: 1, maxLength: 2_000 }, approach: { type: 'string', minLength: 1, maxLength: 2_000 }, expectedOutcome: { type: 'string', minLength: 1, maxLength: 2_000 },
-    candidateVpIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: vpIds } }, assignmentReason: { type: 'string', minLength: 1, maxLength: 1_000 },
+    candidateVpIds: planningCandidateVpIds(vpIds), assignmentReason: { type: 'string', minLength: 1, maxLength: 1_000 },
     dependsOnActionIds: { type: 'array', uniqueItems: true, items: { type: 'string' } }, workspaceMode: { type: 'string', enum: ['read', 'isolated-write', 'integrate', 'shared'] },
     separateFromActionTypes: { type: 'array', uniqueItems: true, items: { type: 'string' } }, changesRequestedActionId: { type: 'string' }, maxAttempts: { type: 'integer', minimum: 1, maximum: 5 },
   } };
@@ -490,6 +498,7 @@ export function createProposeWorkItemActionsTool({
   const vpCatalog = planningVpCatalog(vps);
   const vpIds = vpCatalog.map(vp => vp.id);
   const existing = actions.filter(action => !['superseded', 'cancelled'].includes(action.status));
+  const patchTargets = existing.filter(action => action.status === 'ready' && action.attempt === 0).map(action => action.id);
   const currentIdentity = currentAction
     ? ` Current Action: stageId=${currentAction.stageId}; internalActionId=${currentAction.id}. Its graph references must use stageId.`
     : '';
@@ -506,7 +515,12 @@ export function createProposeWorkItemActionsTool({
         proposalId: { type: 'string', minLength: 1, maxLength: 128 },
         basePlanRevision: { type: 'integer', const: workItem.planRevision },
         actions: { type: 'array', minItems: 1, maxItems: 8, items: plannedActionSchema(vpIds) },
-        dependencyPatches: { type: 'array', maxItems: 8, items: { type: 'object', additionalProperties: false, required: ['actionId', 'addDependsOnActionIds'], properties: { actionId: { type: 'string', enum: existing.filter(action => action.status === 'ready' && action.attempt === 0).map(action => action.id) }, addDependsOnActionIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string' } } } } },
+        dependencyPatches: { type: 'array', maxItems: patchTargets.length ? 8 : 0, items: {
+          type: 'object', additionalProperties: false, required: ['actionId', 'addDependsOnActionIds'], properties: {
+            actionId: patchTargets.length ? { type: 'string', enum: patchTargets } : { type: 'string' },
+            addDependsOnActionIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string' } },
+          },
+        } },
       } },
     async execute(input, ctx = {}) {
       if (!isRunActive()) throw new Error('Work Center Run is no longer active');

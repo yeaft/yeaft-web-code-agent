@@ -209,7 +209,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 Session activity: reconnect Stop ownership and scoped legacy no-ID fallback.
 // +1 bilingual scene/VP assembly contract: only the selected localized practices reach the prompt.
 // +1 Session status regression: hide superseded failures without losing live or latest errors.
-export const TEST_CASE_LIMIT = 1140;
+// +6 strict Responses tool regressions: catalogue, protocol isolation, external
+// schemas, native/fallback replay and atomic rejection of malformed encoded arguments.
+export const TEST_CASE_LIMIT = 1146;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
