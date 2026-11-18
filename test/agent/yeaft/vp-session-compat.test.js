@@ -127,7 +127,7 @@ describe('VP catalog and durable Session compatibility', () => {
   it('renders only the chosen localized practices, shared with the stock VP but without its identity', () => {
     const cues = {
       general: ['hint', '提示'], software: ['read-only', '只读'], writing: ['Proofreading', '校对'],
-      'short-video': ['shootable substitute', '能拍的替代方案'], investment: ['out-of-sample', '样本外'],
+      'short-video': ['shootable substitute', '能拍的替代方案'], investment: ['explicit scoped authorization and appropriate controls', '范围明确的授权和适当的风控措施'],
     };
     for (const [id, vpId] of Object.entries(LEGACY_SCENE_PROFILES)) {
       const stock = DEFAULT_VPS.find(vp => vp.vpId === vpId);
