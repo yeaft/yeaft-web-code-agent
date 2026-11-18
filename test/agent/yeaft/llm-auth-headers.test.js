@@ -244,7 +244,7 @@ describe('LLM adapter auth headers', () => {
     await anthropic.call({ model: 'claude-sonnet-4.5', system: '', messages });
 
     expect(anthropicCalls[0].body.messages).toEqual([
-      { role: 'user', content: 'Original question' },
+      { role: 'user', content: [{ type: 'text', text: 'Original question', cache_control: { type: 'ephemeral' } }] },
       { role: 'assistant', content: [{ type: 'text', text: 'I found the state boundary.' }] },
       { role: 'assistant', content: [{ type: 'text', text: 'The previous turn completed.' }] },
     ]);

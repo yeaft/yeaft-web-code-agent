@@ -204,7 +204,11 @@ export class GeminiAdapter extends LLMAdapter {
       : thinking?.thinkingBudget > 0
         ? ['medium', 'xhigh', 'max'].find(level => thinking.thinkingBudget <= geminiThinkingBudgetForEffort(model, level)) || 'ultra' : null;
     params.onEffortDecision?.({ requested: params.effort || null, effective: effectiveEffort || null, source: params.effortSource || 'scenario', model, cap: params.effortConstraint ? 'medium' : null, thinkingEnabled: Boolean(thinking), wireMode: thinking?.thinkingLevel ? 'thinking-level' : thinking ? 'manual' : 'omitted', ...(thinking?.thinkingBudget !== undefined ? { budgetTokens: thinking.thinkingBudget } : {}) });
-    params.onProviderDiagnostics?.({ ...context.diagnostics, nativeReasoningState: Boolean(context.capabilities.nativeReasoningState), promptCaching: 'implicit' });
+    // Implicit caching has no client toggle or cache ID. Only claim the
+    // documented provider policy for native Google routes, not custom proxies.
+    const promptCaching = context.diagnostics?.capabilitySource === 'native-endpoint' && context.capabilities.promptCaching
+      ? 'implicit' : 'provider-managed-unverified';
+    params.onProviderDiagnostics?.({ ...context.diagnostics, nativeReasoningState: Boolean(context.capabilities.nativeReasoningState), promptCaching });
     return { body: toWellFormedJson(body), context };
   }
 

@@ -148,9 +148,19 @@ This lets the same provider (like GitHub Copilot) run two protocols without spli
 
 `normalizeModelEntry()` unifies both into the object form.
 
+## Prompt caching defaults
+
+No settings switch is required for the native Yeaft engine, including Sessions, Digital Humans, and Work Center. The effective API protocol determines how caching works:
+
+- **Anthropic Messages:** Send standard short-lived `cache_control` breakpoints for the tools, system instructions, and latest eligible user/tool result, including on compatible gateways with a known credential scope. Claude's short-lived cache writes are billed separately from cache reads.
+- **OpenAI Responses:** Supported models already use provider-side caching. When request and credential ownership are known, send an opaque, stable `prompt_cache_key` on official and compatible routes. This is a routing hint and does not change `store: false` or request extended retention.
+- **Gemini GenerateContent:** Supported Gemini models use Google's implicit caching with no request flag. Yeaft does not provision explicit `cachedContents` resources or incur their storage charges. Custom gateways control their own upstream caching.
+
+If a gateway explicitly rejects a Yeaft-added cache field in request validation, Yeaft retries the request once without that field. Existing provider- or model-level `capabilities.promptCaching: false` and `capabilities.translation: true` suppress only the cache fields Yeaft adds; they cannot disable a provider's own implicit caching. A reported cache-read count—not the presence of a request hint—confirms a hit. It can be zero when the prefix changes, is too short, has expired, or the backend does not support caching.
+
 ## Native Anthropic continuity
 
-Anthropic-compatible gateways preserve original signed thinking and redacted blocks with tool responses. Static keys automatically use an opaque credential fingerprint; Copilot uses the source GitHub credential so access-token refresh does not change ownership. Provider, endpoint, model, credential and instance/owner/Session/VP/thread fences still apply. Custom endpoints do not automatically opt into caching or eager streaming; translation routes can disable native replay explicitly.
+Anthropic-compatible gateways preserve original signed thinking and redacted blocks with tool responses. Static keys automatically use an opaque credential fingerprint; Copilot uses the source GitHub credential so access-token refresh does not change ownership. Provider, endpoint, model, credential and instance/owner/Session/VP/thread fences still apply. Custom endpoints do not automatically opt into eager streaming; translation routes can disable native replay explicitly.
 
 New thinking state is bound to the finalized wire prefix. Active Session tool loops keep already-sent messages/results immutable. On supported models, changed runtime instructions and tools are appended as native system messages and inline tool additions/removals, rather than rewriting the top-level system/tools. Unsupported models or a context that cannot fit fail visibly. No active thinking is silently removed and server-side `drop_block` is not enabled automatically.
 

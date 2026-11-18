@@ -212,7 +212,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +6 strict Responses tool regressions: catalogue, protocol isolation, external
 // schemas, native/fallback replay and atomic rejection of malformed encoded arguments.
 // +1 exact per-owner v1.0.713 stock scene soul migration, including edited and wrong-owner copies.
-export const TEST_CASE_LIMIT = 1147;
+// +4 prompt-cache regressions: Anthropic defaults/overrides, Responses scope,
+// cache-only preflight fallback on both adapters, and no retry on unrelated/abort.
+export const TEST_CASE_LIMIT = 1151;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
