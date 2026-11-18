@@ -754,6 +754,34 @@ describe('Engine', () => {
       }
     });
 
+    it.each([false, true])('does not send an unbudgeted cache fallback when reporting=%s', async reporting => {
+      const dir = mkdtempSync(join(tmpdir(), 'yeaft-child-cache-cap-'));
+      const child = { budget: { max_llm_calls: 1 }, usage: { llmCalls: reporting ? 1 : 0 }, execution: { toolCalls: 0, recentCalls: [] } };
+      const registry = new SubAgentToolRegistry({ agent: child });
+      const fetch = vi.fn(async () => new Response(JSON.stringify({ error: {
+        message: 'system.0.text.cache_control: Extra inputs are not permitted',
+      } }), { status: 400 }));
+      vi.stubGlobal('fetch', fetch);
+      try {
+        const engine = new Engine({ adapter: router('claude-opus-4.8'), trace, toolRegistry: registry, yeaftDir: dir,
+          config: { model: 'gateway/claude-opus-4.8', maxOutputTokens: 1024, projectDocMaxBytes: 0 } });
+        const events = [];
+        for await (const event of engine.query({ prompt: 'Summarize the available evidence.', sessionId: 'child-cache-cap',
+          isSubAgent: true, vpPersona: { vpId: 'child', subAgent: true } })) events.push(event);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(fetch.mock.lastCall[1].body).system.at(-1).cache_control).toEqual({ type: 'ephemeral' });
+        expect(child.usage.llmCalls).toBe(reporting ? 2 : 1);
+        expect(child.usage.reportingLlmCalls).toBe(reporting ? 1 : undefined);
+        expect(events.find(event => event.type === 'error')?.error?.message).toMatch(reporting
+          ? /reporting request already used/ : /max_llm_calls.*reached before dispatch/);
+        expect(events.filter(event => event.type === 'turn_end' && event.terminal)).toHaveLength(1);
+      } finally {
+        vi.unstubAllGlobals();
+        await closeConversationHistoryIndexes();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it.each(['already', 'during'])('keeps the reserved child report available when signed context is full: %s', async mode => {
       const originalFetch = globalThis.fetch;
       const requests = [];

@@ -3248,16 +3248,15 @@ export class Engine {
           retryLifecycle.pendingContinuation = null;
           continuationCommitted = true;
         };
-        let childDispatchReserved = false;
+        let legacyDispatchReserved = false;
         let progressRequestCounted = false;
-        const commitDispatch = () => {
+        const commitDispatch = (reserveChild = true) => {
           if (!progressRequestCounted) {
             queryProgress.requestStarted();
             progressRequestCounted = true;
           }
-          if (isSubAgent && !childDispatchReserved) {
+          if (isSubAgent && reserveChild) {
             this.#toolRegistry?.reserveProviderRequest?.({ reporting: !!executionPolicy?.finalize });
-            childDispatchReserved = true;
           }
           if (!activeProviderRequest && typeof prepareProviderRequest === 'function') {
             activeProviderRequest = prepareProviderRequest({
@@ -3291,7 +3290,10 @@ export class Engine {
             // Native adapters invoke this immediately before fetch(). A retry
             // continuation and Work Center EngineTurn become durable only when
             // their request crosses dispatch, never when turn_start is shown.
-            commitDispatch();
+            // Logical bookkeeping is idempotent, but a second HTTP dispatch
+            // (including cache fallback) must consume its own child allowance.
+            commitDispatch(!legacyDispatchReserved);
+            legacyDispatchReserved = false;
             onProviderRequestStart?.(requestPolicy);
           },
         });
@@ -3302,7 +3304,10 @@ export class Engine {
         // adapter only enters its generator at iteration, so preserve its old
         // dispatch semantics while keeping captured Router requests inert.
         if (signal?.aborted) throw new LLMAbortError();
-        if (!hasCaptureStream) commitDispatch();
+        if (!hasCaptureStream) {
+          commitDispatch();
+          legacyDispatchReserved = true;
+        }
 
         // Snapshot task results carried by this exact request. Request start
         // is not delivery: fetch may remain pending and then be aborted before

@@ -214,7 +214,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +1 exact per-owner v1.0.713 stock scene soul migration, including edited and wrong-owner copies.
 // +4 prompt-cache regressions: Anthropic defaults/overrides, Responses scope,
 // cache-only preflight fallback on both adapters, and no retry on unrelated/abort.
-export const TEST_CASE_LIMIT = 1151;
+// +2 cache fallback dispatch cases for normal and reserved reporting child caps.
+export const TEST_CASE_LIMIT = 1153;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
