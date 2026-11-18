@@ -208,7 +208,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // durable copy/merge and CLI reentry (2), relay compatibility (1), browser (1).
 // +2 Session activity: reconnect Stop ownership and scoped legacy no-ID fallback.
 // +1 bilingual scene/VP assembly contract: only the selected localized practices reach the prompt.
-export const TEST_CASE_LIMIT = 1139;
+// +1 Session status regression: hide superseded failures without losing live or latest errors.
+export const TEST_CASE_LIMIT = 1140;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -8230,19 +8230,20 @@ export const useChatStore = defineStore('chat', {
       for (const [key, status] of Object.entries(statuses)) {
         if (status?.vpId !== vpId || !matchesYeaftRuntimeIdentity(status, sessionId, agentId)) continue;
         if (Array.isArray(status.threads)) {
-          const threads = status.threads.map(thread => thread.turnId === turnId
-            ? { ...thread, state: thread.state === 'error' ? 'error' : 'idle',
-              status: thread.state === 'error' ? 'error' : 'idle', turnId: null } : thread);
+          // Error rows are already terminal. Keep their turn identity even if
+          // the Agent didn't include errorDetail so the UI can scope them.
+          const threads = status.threads.map(thread => thread.turnId === turnId && thread.state !== 'error'
+            ? { ...thread, state: 'idle', status: 'idle', turnId: null } : thread);
           const live = threads.filter(thread => YEAFT_RUNNING_VP_STATES.has(thread.state));
           const state = ['tool', 'streaming', 'retrying', 'thinking', 'typing', 'error', 'idle']
             .find(candidate => threads.some(thread => thread.state === candidate)) || 'idle';
           statuses[key] = { ...status, threads, runningThreadCount: live.length, state,
-            turnId: status.turnId === turnId ? null : status.turnId };
+            turnId: status.turnId === turnId && status.state !== 'error' ? null : status.turnId };
         } else if ((!status.turnId || status.turnId === turnId)
             && !Object.values(active).some(turn => turn.vpId === vpId
               && matchesYeaftRuntimeIdentity(turn, sessionId, agentId))) {
           statuses[key] = { ...status, state: status.state === 'error' ? 'error' : 'idle',
-            turnId: null, runningThreadCount: 0 };
+            turnId: status.state === 'error' ? status.turnId : null, runningThreadCount: 0 };
         }
       }
       this.vpStatuses = statuses;

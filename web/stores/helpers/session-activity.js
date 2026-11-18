@@ -6,6 +6,11 @@ import { userTurnExcerpt } from '../../utils/concurrent-user-turns.js';
 
 const executionKey = (row) => JSON.stringify([row.vpId, row.turnId || null, row.threadId || 'main']);
 const scopedTo = (row, agentId, sessionId) => row?.agentId === agentId && (row.sessionId ?? row.groupId) === sessionId;
+const promptTime = (message) => {
+  const value = message.ts ?? message.timestamp;
+  const time = typeof value === 'string' ? Date.parse(value) : value;
+  return Number.isFinite(time) ? time : 0;
+};
 
 /** Project activity by user Turn, not by the internal executor. Older and
  * background executions without a root remain individually stoppable by ID. */
@@ -21,6 +26,9 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
   const turns = online && hasCurrentSnapshot ? snapshot.turns : [];
   const rows = new Map();
   const ownerByExecution = new Map();
+  const turnByExecution = new Map();
+  const rootIds = new Set();
+  let latestRoot = null;
   const terminalExecutions = new Set();
   const rootOwners = new Set();
   const knownRootExecutions = new Set();
@@ -32,15 +40,20 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
   }
   for (const turn of turns || []) {
     const live = LIVE_SESSION_TURN_STATES.has(turn.state);
+    rootIds.add(turn.userTurnId);
+    rootIds.add(turn.userMessageId);
+    if (!latestRoot || turn.startedAt >= latestRoot.startedAt) latestRoot = turn;
     const active = turn.executions.filter(execution => LIVE_SESSION_TURN_STATES.has(execution.state));
     const state = turn.state === 'running' && active.length && active.every(execution => execution.state === 'queued')
       ? 'queued' : turn.state;
     for (const execution of turn.executions) {
       if (!execution.turnId) continue;
+      const key = executionKey(execution);
+      turnByExecution.set(key, turn);
       if (live && LIVE_SESSION_TURN_STATES.has(execution.state)) {
-        ownerByExecution.set(executionKey(execution), turn.userTurnId);
+        ownerByExecution.set(key, turn.userTurnId);
         rootOwners.add(execution.vpId);
-      } else terminalExecutions.add(executionKey(execution));
+      } else terminalExecutions.add(key);
     }
     if (!live) continue;
     rows.set(`user:${turn.userTurnId}`, {
@@ -100,15 +113,22 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
   for (const execution of executionRows.values()) {
     if (execution.userTurnId) labelIds.add(execution.userTurnId);
   }
-  if (labelIds.size) {
+  let latestUnmappedPromptAt = 0;
+  if (labelIds.size || errors.length) {
     for (const message of store.messagesMap?.[conversationId] || []) {
       if (message.type !== 'user' || message.turnRelation === 'supplement'
           || (message.sessionId ?? message.groupId) !== sessionId || (message.agentId && message.agentId !== agentId)) continue;
-      const ids = [message.userTurnId, message.id, message.messageId, message.clientMessageId]
-        .filter(id => labelIds.has(id) && !labels.has(id));
-      if (!ids.length) continue;
+      const ids = [message.userTurnId, message.id, message.messageId, message.clientMessageId];
+      if (errors.length && !ids.some(id => rootIds.has(id))
+          && (message.isHistory || message.dbMessageId || message.ts || !message.clientMessageId)) {
+        // Replay and older Agents may have a confirmed prompt but no root snapshot.
+        // An optimistic send alone could still be rejected or routed as a supplement.
+        latestUnmappedPromptAt = Math.max(latestUnmappedPromptAt, promptTime(message));
+      }
+      const missingLabels = ids.filter(id => labelIds.has(id) && !labels.has(id));
+      if (!missingLabels.length) continue;
       const label = userTurnExcerpt(message);
-      if (label) for (const id of ids) labels.set(id, label);
+      if (label) for (const id of missingLabels) labels.set(id, label);
     }
   }
   const exactOwners = new Set([...rootOwners, ...[...executionRows.values()].filter(row => row.turnId).map(row => row.vpId)]);
@@ -139,10 +159,18 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
     const progress = execution.queryProgress;
     if (progress && progress.threadId === (execution.threadId || 'main')) row.observations.push(progress);
   }
+  const latestPromptAt = Math.max(latestRoot?.startedAt || 0, latestUnmappedPromptAt);
   for (const detail of errors) {
     const key = executionKey(detail);
+    const turn = turnByExecution.get(key);
+    const liveRoot = turn && rows.get(`user:${turn.userTurnId}`);
+    // Use root order, not failure time: an older parallel turn can fail after
+    // the newer one starts. A still-live root can show its own sibling failures.
+    if (!liveRoot && (turn
+      ? turn !== latestRoot || latestUnmappedPromptAt > turn.startedAt
+      : detail.at > 0 && latestPromptAt > detail.at)) continue;
     const { vpId: _owner, ...error } = detail;
-    rowForExecution(key, { ...detail, status: 'error' }).errors.push(error);
+    (liveRoot || rowForExecution(key, { ...detail, status: 'error' })).errors.push(error);
   }
   return [...rows.values()].map(row => row.userTurnId
     ? { ...row, label: labels.get(row.userTurnId) || labels.get(row.userMessageId) }
