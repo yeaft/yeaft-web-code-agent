@@ -12,8 +12,13 @@ describe('concurrent user turn presentation', () => {
     const reply = { id: 'm3', type: 'assistant', userTurnId: 'm1', turnId: 'engine-a' };
     const supplement = { id: 'm4', type: 'user', content: 'also', userTurnId: 'm1', turnRelation: 'supplement' };
     const end = { id: 'm5', type: 'assistant', userTurnId: 'm2' };
-    const ordered = orderUserTurnMessages([a, b, reply, supplement, end]);
-    expect(ordered.messages).toEqual([a, reply, supplement, b, end]);
+    const continuation = { id: 'm6', type: 'assistant', userTurnId: 'm1', turnId: 'engine-a' };
+    const original = [a, b, reply, supplement, end, continuation];
+    const ordered = orderUserTurnMessages(original);
+    // Confirmed supplements belong to the same input group, not a second AI
+    // response boundary. Reordering is a view projection, never a transcript edit.
+    expect(ordered.messages).toEqual([a, supplement, reply, continuation, b, end]);
+    expect(original).toEqual([a, b, reply, supplement, end, continuation]);
     expect(ordered.userTurnByMessage.get(supplement)).toBe('m1');
     expect(reply.turnId).toBe('engine-a');
   });
@@ -158,6 +163,57 @@ describe('concurrent user turn presentation', () => {
       await Vue.nextTick();
       expect(store.toggleWorkbench).toHaveBeenCalledTimes(3);
       expect(store.workbenchExpanded).toBe(false);
+    } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
+  });
+
+  it('merges confirmed append tools and text into one response live and after replay without merging independent turns', async () => {
+    vi.stubGlobal('Vue', Vue);
+    const store = Vue.reactive({ currentView: 'yeaft', currentAgent: 'a', yeaftActiveSessionFilter: 's',
+      currentConversation: 'conv', activeConversationId: 'conv', agents: [], isProcessing: false,
+      messages: [], yeaftSessionTurns: [] });
+    vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => store });
+    const { default: MessageList } = await import('../../web/components/MessageList.js');
+    const wrapper = mount({ ...MessageList, template: '<main ref="containerRef"></main>' });
+    try {
+      // Append while the same execution is using tools: routing metadata can
+      // arrive after the optimistic user row. Only a confirmed supplement may
+      // stop being a response boundary, and unrelated executions stay separate.
+      store.messages = [
+        { id: 'root', type: 'user', content: 'first', userTurnId: 'root' },
+        { id: 'before', type: 'assistant', content: 'checking', userTurnId: 'root', turnId: 'engine', vpId: 'omni' },
+        { id: 'tool-before', type: 'tool-use', toolId: 'before', toolName: 'Read', userTurnId: 'root', turnId: 'engine', vpId: 'omni' },
+        { id: 'extra', type: 'user', content: 'also check eligibility' },
+        { id: 'tool-after', type: 'tool-use', toolId: 'after', toolName: 'Grep', userTurnId: 'root', turnId: 'engine', vpId: 'omni' },
+        { id: 'after', type: 'assistant', content: 'done', userTurnId: 'root', turnId: 'engine', vpId: 'omni' },
+      ];
+      await Vue.nextTick();
+      expect(wrapper.vm.messageBlocks).toHaveLength(2);
+      Object.assign(store.messages[3], { userTurnId: 'root', turnRelation: 'supplement' });
+      await Vue.nextTick();
+      const replies = () => wrapper.vm.turnGroups.filter(item => item.type === 'assistant-turn');
+      expect(replies()).toHaveLength(1);
+      expect(replies()[0].toolMsgs.map(tool => tool.toolId)).toEqual(['before', 'after']);
+      expect(replies()[0].textSegments.map(segment => segment.content)).toEqual(['checking', 'done']);
+      expect(wrapper.vm.messageBlocks).toHaveLength(1);
+      expect(wrapper.vm.messageBlocks[0].originMessageId).toBe('root');
+      expect(wrapper.vm.messageBlocks[0].items.map(item => item.type)).toEqual(['user', 'user', 'assistant-turn']);
+      // A genuine new live execution under the same root keeps its boundary.
+      store.messages.push({ id: 'retry', type: 'assistant', content: 'new execution', userTurnId: 'root', turnId: 'retry', vpId: 'omni' });
+      await Vue.nextTick();
+      expect(replies().map(item => item.turnId)).toEqual(['engine', 'retry']);
+      store.messages.pop();
+      // History replay uses the same grouping. Different speakers and unrelated
+      // user turns still retain their own response blocks.
+      store.messages.forEach(message => { message.isHistory = true; });
+      await Vue.nextTick();
+      expect(replies()).toHaveLength(1);
+      store.messages.push(
+        { id: 'vp', type: 'assistant', content: 'other VP', userTurnId: 'root', turnId: 'engine', vpId: 'other' },
+        { id: 'new', type: 'user', content: 'unrelated', userTurnId: 'new', turnRelation: 'new' },
+        { id: 'other', type: 'assistant', content: 'other answer', userTurnId: 'new', turnId: 'independent', vpId: 'omni' },
+      );
+      await Vue.nextTick();
+      expect(replies().map(item => [item.speakerVpId, item.userTurnId])).toEqual([['omni', 'root'], ['other', 'root'], ['omni', 'new']]);
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });
 });

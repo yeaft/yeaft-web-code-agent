@@ -1130,7 +1130,9 @@ export default {
         }
 
         const meta = messageBlockMetaForItem(item);
-        if (item.type === 'user' || !currentBlock || currentBlock.userTurnId !== item.userTurnId) {
+        const isSupplement = store.currentView === 'yeaft' && item.type === 'user'
+          && item.message?.turnRelation === 'supplement' && !!item.message?.userTurnId;
+        if ((item.type === 'user' && !isSupplement) || !currentBlock || currentBlock.userTurnId !== item.userTurnId) {
           finishBlock();
           currentBlock = {
             type: 'message-block',

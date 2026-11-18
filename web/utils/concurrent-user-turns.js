@@ -39,7 +39,23 @@ export function orderUserTurnMessages(messages = []) {
     const right = time(b);
     return left && right ? left - right : 0;
   });
-  return { messages: keys.flatMap(key => buckets.get(key)), userTurnByMessage, roots };
+  const ordered = keys.flatMap(key => {
+    const bucket = buckets.get(key);
+    // A confirmed append is another input to the original response, not a
+    // response boundary. Keep inputs together before aggregating VP executions
+    // so tools/text on either side of the append render in one AI block. Only
+    // move explicitly routed supplements; optimistic/legacy user rows remain
+    // boundaries. Stored order and message objects stay untouched.
+    const supplements = bucket.filter(message => message.type === 'user'
+      && message.userTurnId === key && message.turnRelation === 'supplement');
+    if (!supplements.length) return bucket;
+    const supplementSet = new Set(supplements);
+    const rest = bucket.filter(message => !supplementSet.has(message));
+    const rootIndex = rest.indexOf(roots.get(key));
+    rest.splice(rootIndex + 1, 0, ...supplements);
+    return rest;
+  });
+  return { messages: ordered, userTurnByMessage, roots };
 }
 
 export function partitionUserTurnBlocks(blocks = [], turns = []) {
