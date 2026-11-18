@@ -989,11 +989,15 @@ test('Digital Person shares Session reading gutters, keeps desktop actions and c
 });
 
 test('Digital Person search previews keep deep matches visible and preserve rich messages and paging', async ({ page, serverUrl }, testInfo) => {
+  // Exercise the non-native grapheme segmentation path in the actual bundle.
+  await page.addInitScript(() => Object.defineProperty(Intl, 'Segmenter', { value: undefined, configurable: true }));
   const keyword = '部署策略';
   const longPhrase = '接口变更顺序'.repeat(8);
+  const emoji = '👍🏽';
+  const leadingContext = `${emoji}${'x'.repeat(19)}<img src=x> `;
   const oversizedPhrase = '数据库迁移发布方案'.repeat(20);
   const longContext = '这段很长的前文不应该把搜索词挤出结果。'.repeat(6);
-  const text = `Hidden beginning. ${'A long archived paragraph that should not fill the result.\n'.repeat(25)}<img src=x> ${keyword} ${'随后说明'.repeat(60)} Hidden ending.`;
+  const text = `Hidden beginning. ${'A long archived paragraph that should not fill the result.\n'.repeat(25)}${leadingContext}${keyword} ${'随后说明'.repeat(60)} Hidden ending.`;
   const pages = [
     { items: [{ id: 'deep', role: 'assistant', text, createdAt: 2,
       presentation: { version: 1, title: 'Archived report', summary: text, blocks: [{ type: 'markdown', text: 'Full report detail' }] } }], nextCursor: 'page-two' },
@@ -1014,7 +1018,7 @@ test('Digital Person search previews keep deep matches visible and preserve rich
     const results = page.locator('.person-search-result');
     const first = results.first();
     const preview = first.locator('.person-search-snippet');
-    await expect(preview).toHaveText(/^….*<img src=x> 部署策略 .*…$/s);
+    await expect(preview).toHaveText(/^…👍🏽x+<img src=x> 部署策略 .*…$/s);
     await expect(preview).not.toContainText('Hidden beginning');
     await expect(preview).not.toContainText('Hidden ending');
     await expect(preview.locator('img')).toHaveCount(0);
