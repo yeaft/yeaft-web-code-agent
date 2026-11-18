@@ -339,7 +339,7 @@ export default {
   "person.version": "State v{version}",
   "person.stopAll": "Stop all",
   "person.cancelling": "Cancelling…",
-  "person.setupRequired": "Configure an Agent model to start chatting.",
+  "person.setupRequired": "Digital Person unavailable. Check the Agent configuration, then refresh.",
   "person.storageUnavailable": "Storage unavailable. Check the Agent, then refresh.",
   "person.modelRequired": "Model unavailable. Choose another in Settings.",
   "person.requestFailed": "Request failed.",

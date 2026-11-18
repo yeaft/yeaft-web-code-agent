@@ -339,7 +339,7 @@ export default {
   "person.version": "状态 v{version}",
   "person.stopAll": "全部停止",
   "person.cancelling": "正在取消…",
-  "person.setupRequired": "请先配置 Agent 模型，再开始对话。",
+  "person.setupRequired": "数字人尚未就绪，检查 Agent 配置后刷新。",
   "person.storageUnavailable": "存储不可用，检查 Agent 后刷新。",
   "person.modelRequired": "当前模型不可用，请在设置中重新选择。",
   "person.requestFailed": "请求失败。",

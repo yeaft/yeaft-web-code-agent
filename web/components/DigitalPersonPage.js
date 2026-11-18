@@ -206,8 +206,8 @@ export default {
     Vue.onUpdated(keepPanelFocus);
     const availability = Vue.computed(() => {
       if (gate.value || state.loading) return '';
-      if (state.storageReady === false) return 'storageUnavailable';
       if (state.configured === false) return 'setupRequired';
+      if (state.storageReady === false) return 'storageUnavailable';
       if (state.modelReady === false) return 'modelRequired';
       return '';
     });
