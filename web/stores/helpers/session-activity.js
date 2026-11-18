@@ -23,6 +23,9 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
   const snapshot = store.yeaftSessionTurnsBySession?.[yeaftSessionIdentityKey(agentId, sessionId)];
   const hasCurrentSnapshot = current(snapshot);
   const awaitingRoots = !hasCurrentSnapshot && store.hasAgentCapability?.(agentId, 'session_scenes');
+  // Broker snapshots can arrive before Turn inventory on reconnect. Don't
+  // redisplay a stale failure without the Turn order needed to classify it.
+  const awaitingErrorRoots = awaitingRoots || (!hasCurrentSnapshot && !!snapshot && snapshot.conversationId === conversationId);
   const turns = online && hasCurrentSnapshot ? snapshot.turns : [];
   const rows = new Map();
   const ownerByExecution = new Map();
@@ -89,7 +92,9 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
         && (!status.agentId || !row.agentId || row.agentId === status.agentId));
       if (candidates.length !== 1 || candidates[0].id !== sessionId || candidates[0].agentId !== agentId) continue;
     }
-    for (const detail of timelineErrors(status)) errors.push({ ...detail, vpId: status.vpId });
+    if (!awaitingErrorRoots) {
+      for (const detail of timelineErrors(status)) errors.push({ ...detail, vpId: status.vpId });
+    }
     if (!online) continue;
     // The aggregate may point at an idle sibling; use the full inventory
     // when it exists. Older brokers expose only the aggregate.

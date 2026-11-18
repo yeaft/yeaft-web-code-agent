@@ -322,6 +322,14 @@ describe('message flow regressions', () => {
     const lateFailure = { ...older, state: 'errored', executions: [execution('late', 'errored')] };
     snapshot(a, lateFailure, b);
     expect(errors()).toEqual([]);
+    // The global broker can replay before this Session's Turn inventory.
+    // The failed parallel root must not flash back; B cannot be stopped yet.
+    broker.transition({ sessionId: 's', ...execution('b', 'tool') });
+    store.chatHistoryConnectionGeneration++;
+    broker.broadcastSnapshot();
+    expect(rows()).toMatchObject([{ turnId: 'engine-b', canStop: false, errors: [] }]);
+    snapshot(a, lateFailure, b);
+    expect(rows()).toMatchObject([{ userTurnId: 'b', canStop: true, errors: [] }]);
     // B becomes the latest failure; missing provider details don't erase its identity.
     now = 240;
     broker.transition({ sessionId: 's', ...execution('b', 'error') });
@@ -337,7 +345,7 @@ describe('message flow regressions', () => {
     expect(Object.values(store.vpStatuses)[0].threads.filter(thread => thread.state === 'error')).toHaveLength(3);
 
     // Older Agents can replay a later prompt but have no user-turn inventory.
-    store.agents = [{ id: 'a', online: true }];
+    store.agents = [{ id: 'a', online: true, capabilities: [] }];
     store.yeaftSessionTurnsBySession = {};
     expect(errors()).toContain('engine-b');
     store.messagesMap.conv.push({ type: 'user', sessionId: 's', isHistory: true, timestamp: 250 });
