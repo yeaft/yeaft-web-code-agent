@@ -405,7 +405,7 @@ function loadLegacyConfig(dir, overrides) {
   if (!config.adapter) {
     const modelInfo = resolveModel(config.model);
     if (modelInfo) {
-      config.adapter = modelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
+      config.adapter = modelInfo.adapter === 'gemini' ? 'gemini' : modelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
       if (!config.baseUrl) config.baseUrl = modelInfo.baseUrl;
       // Resolve token limits via the resolver ladder (models.dev → config →
       // DEFAULT). Only fill in when the caller left the slot at the default
@@ -459,7 +459,9 @@ export function loadConfig(overrides = {}) {
   }
 
   // ─── Build config from config.json ────────────────────────
-  const providers = Array.isArray(jsonConfig.providers) ? jsonConfig.providers : [];
+  const providers = Array.isArray(jsonConfig.providers) ? jsonConfig.providers.map(provider =>
+    provider?.protocol === 'gemini' && !provider.baseUrl
+      ? { ...provider, baseUrl: 'https://generativelanguage.googleapis.com/v1beta' } : provider) : [];
 
   // Resolve primary model
   let model = 'claude-sonnet-4-20250514';

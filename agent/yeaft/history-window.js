@@ -1,4 +1,4 @@
-import { providerProjectionDigest, providerStateBytes, MAX_PROVIDER_STATE_BYTES, ProviderStateError } from './llm/provider-state.js';
+import { providerProjectionDigest, providerStateBytes, MAX_PROVIDER_STATE_BYTES, ProviderStateError, hasSignedProviderState } from './llm/provider-state.js';
 /**
  * history-window.js — deterministic history shaping for provider requests.
  *
@@ -170,6 +170,9 @@ export function estimateMessageTokens(message) {
     const thinking = (message.providerState.items || [])
       .filter(item => ['thinking', 'redacted_thinking'].includes(item?.type));
     if (thinking.length > 0) total += estimateContentTokens(thinking);
+  } else if (message.providerState?.protocol === 'gemini') {
+    const thoughts = (message.providerState.items || []).filter(item => item?.part?.thought === true);
+    total += thoughts.reduce((sum, item) => sum + estimateTokens(item.part.text || ''), 0);
   } else if (!message.providerState) {
     total += estimateThinkingBlocksTokens(message.thinkingBlocks);
   }
@@ -441,8 +444,7 @@ function shrinkMessageToBudget(message, tokenBudget) {
   }
   if (next.providerState && providerProjectionDigest(next) !== next.providerState.projectionDigest) {
     // Modified assistant projections must never resurrect removed text/calls.
-    const signed = next.providerState.protocol === 'anthropic'
-      && next.providerState.items?.some(item => ['thinking', 'redacted_thinking'].includes(item?.type));
+    const signed = hasSignedProviderState(next.providerState);
     delete next.providerState;
     if (signed) delete next.toolCalls;
   }
@@ -843,8 +845,7 @@ function preservesTextBaseline(textBaseline, enriched) {
 }
 
 function hasSignedProviderThinking(message) {
-  return message.providerState?.protocol === 'anthropic'
-    && message.providerState.items?.some(item => ['thinking', 'redacted_thinking'].includes(item?.type));
+  return hasSignedProviderState(message.providerState);
 }
 
 function completeToolCallGroups(messages) {

@@ -76,9 +76,13 @@ Server 的 pending upload 原始 TTL 为 `CONFIG.fileCleanupInterval`（默认 1
 | GPT-4.1-mini、GPT-5.2 / 5.4 / 5.5；`openai-responses` | 强制 `detail: "low"`；这些 patch 模型的 low 不一定比 high 便宜 | 16384 tokens |
 | Claude 3 Haiku/Sonnet/Opus、3.5 Haiku/Sonnet、3.7 Sonnet；Sonnet 4/4.5/4.6、Opus 4/4.1/4.5/4.6/4.7/4.8、Haiku 4.5；`anthropic` | 原生 image block，由 provider 有界缩放 | 8192 tokens |
 
-已审核家族可使用日期快照后缀；Claude 同时接受 `4.5` / `4-5` 命名和 `-latest`。其他别名、未来变种、Gemini 或不匹配的协议均没有已证明的预算，保守不开放 Person 图片输入，即使配置了 `supportsImages:true`。这里只收紧 Person，不改变其他原生引擎调用的默认 detail。
+| Gemini 2.5 / 3.x Pro、Flash 家族；`gemini` | 原生 `inlineData`，强制 `MEDIA_RESOLUTION_LOW` | 8192 tokens |
 
-上界依据：[OpenAI 图像 detail 与 tokenization](https://developers.openai.com/api/docs/guides/images-vision) 规定上述 tile 模型 low 只收基础 tokens，与尺寸无关，最高为 GPT-4o-mini 的 **2833**；patch 组 low 上界不超过 **6144 patches × 1.62**，向上取整后仍低于 16384。[Claude 缩放规则](https://platform.claude.com/docs/en/build-with-claude/vision-coordinates#how-claude-resizes-and-pads-images) 同时约束边长与 visual token budget，标准/高分辨率分别不超过 **1568 / 4784**，8192 保留额外余量。这是输入上界预留，不是精确计费预测；供应商变更这些规则后需重新审核。兼容端点也必须遵守其所声明模型及协议的图像语义。
+已审核家族可使用日期快照后缀；Claude 同时接受 `4.5` / `4-5` 命名和 `-latest`。其他别名、未来未审核家族或不匹配的协议均没有已证明的预算，保守不开放 Person 图片输入，即使配置了 `supportsImages:true`。这里只收紧 Person，不改变其他原生引擎调用的默认 detail。
+
+上界依据：[OpenAI 图像 detail 与 tokenization](https://developers.openai.com/api/docs/guides/images-vision) 规定上述 tile 模型 low 只收基础 tokens，与尺寸无关，最高为 GPT-4o-mini 的 **2833**；patch 组 low 上界不超过 **6144 patches × 1.62**，向上取整后仍低于 16384。[Claude 缩放规则](https://platform.claude.com/docs/en/build-with-claude/vision-coordinates#how-claude-resizes-and-pads-images) 同时约束边长与 visual token budget，标准/高分辨率分别不超过 **1568 / 4784**，8192 保留额外余量。Gemini 原生请求将 `detail:low` 绑定为 `generationConfig.mediaResolution:MEDIA_RESOLUTION_LOW`，`extraBody` 不能放大它；依据 [GenerateContent 配置中的 mediaResolution](https://aistudio.google.com/api-reference/generate-content/stream-generate-content)，保留 8192 tokens 的保守余量。这里只保证该低分辨率输入，不开放未知家族。
+
+这是输入上界预留，不是精确计费预测；供应商变更这些规则后需重新审核。兼容端点也必须遵守其所声明模型及协议的图像语义。
 
 图片始终以真实 base64 多模态内容送达模型；low detail 会降低小字、密集截图、精确坐标等任务的辨识质量，不应声称已完整读出原图细节。用户可在上传前裁剪相关区域，不能通过模型输出或附件元数据请求绕过 low。provider 仍可因无效图像、尺寸、动画等自身限制拒绝请求；本修复不新增解码器或图像处理依赖。
 

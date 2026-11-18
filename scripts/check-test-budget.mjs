@@ -198,7 +198,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // authenticated desktop light/dark and narrow browser lifecycle (3).
 // +1 confirmed-append response grouping regression: live/replay tool aggregation
 // retains optimistic boundaries and distinct VP/independent turn ownership.
-export const TEST_CASE_LIMIT = 1103;
+// +22 native Gemini boundaries: 9 transport/tool/finish/signature regressions,
+// 6 routing/Engine/Person/history/private-state integrations, 3 config/catalog/UI
+// cases and 4 desktop/mobile/theme browser flows. Existing protocol tests retained.
+export const TEST_CASE_LIMIT = 1125;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

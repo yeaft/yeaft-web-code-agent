@@ -226,3 +226,35 @@ describe('Agent LLM editing draft ownership', () => {
     expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'get_llm_config', agentId: 'agent-b' });
   });
 });
+
+describe('native Gemini settings', () => {
+  it('offers native protocol presets, refreshes the draft over catalog GET and preserves model metadata', async () => {
+    const store = await setup();
+    store.agents = [{ id: 'agent-a', online: true }];
+    const vm = wrapper.vm;
+    await Vue.nextTick();
+    vm.addProvider();
+    const idx = vm.editableProviders.length - 1;
+    vm.editableProviders[idx].name = 'google';
+    vm.editableProviders[idx].apiKey = 'fixture-gemini';
+    vm.setProtocol(idx, 'gemini');
+    await Vue.nextTick();
+    expect(vm.editableProviders[idx].baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta');
+    expect(vm.editableProviders[idx].models).toEqual(['gemini-2.5-pro', 'gemini-2.5-flash']);
+    expect(wrapper.text()).toContain(en['settings.llm.protocolGemini']);
+    expect(wrapper.text()).toContain(en['settings.llm.testAndDiscover']);
+    const pending = vm.refreshGeminiModels(idx);
+    const request = pendingRequest(store);
+    expect(request).toMatchObject({ type: 'discover_llm_models', providerType: 'gemini', apiKey: 'fixture-gemini' });
+    store.llmModelDiscovery = { 'agent-a': { requestId: request.requestId,
+      providerModels: [{ id: 'gemini-2.5-pro', protocol: 'gemini', contextWindow: 1048576, maxOutput: 65536 }] } };
+    await vi.advanceTimersByTimeAsync(100);
+    await pending;
+    expect(vm.editableProviders[idx].models[0]).toMatchObject({ protocol: 'gemini', contextWindow: 1048576 });
+    expect(vm.modelDiscoveryWarning).toBe(en['settings.llm.testSuccess']);
+    expect(vm.isDirty).toBe(true);
+    expect(store.sendWsMessage.mock.calls.some(([msg]) => msg.type === 'update_llm_config')).toBe(false);
+    vm.onPresetPick({ name: 'other', models: [{ id: 'gemini-2.5-pro', protocol: 'gemini' }], protocol: 'gemini' });
+    expect(vm.providerModelsText.at(-1)).toBe('gemini-2.5-pro');
+  });
+});

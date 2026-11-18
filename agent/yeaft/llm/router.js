@@ -11,11 +11,11 @@
  * Effective protocol for each (provider, model) is resolved in this order:
  *   1. per-model `protocol` override on the model entry
  *   2. provider-level `protocol` (explicit config wins over inference)
- *   3. heuristic by model id (claude-* → anthropic, gpt-/o1-/o3-/o4-/chatgpt-* → openai-responses)
+ *   3. heuristic by model id (claude-* → anthropic, gpt-/o1-/o3-/o4-/chatgpt-* → openai-responses, gemini-* → gemini)
  *   4. default `openai-responses`
  *
  * This lets a single provider (e.g. GitHub Copilot, a unified proxy) serve
- * both Anthropic and OpenAI families without splitting into two provider
+ * Anthropic, OpenAI and Gemini families without splitting into two provider
  * entries.
  *
  * Phase 7 removed the legacy "openai" (Chat Completions) protocol entirely.
@@ -30,7 +30,7 @@ import {
   isGitHubCopilotProvider,
   normalizeKnownProviderForRuntime,
 } from './known-providers.js';
-import { ProviderStateError, createCredentialScopeId, createProviderContext } from './provider-state.js';
+import { ProviderStateError, createCredentialScopeId, createProviderContext, hasSignedProviderState } from './provider-state.js';
 import { pairSanitize } from '../pair-sanitize.js';
 
 /**
@@ -84,6 +84,7 @@ export function inferProtocolFromModelId(modelId) {
   if (id.startsWith('claude') || id.includes('/claude') || id.includes('.claude')) {
     return 'anthropic';
   }
+  if (/(?:^|[/.])gemini(?:-|$)/.test(id)) return 'gemini';
   // OpenAI Responses-API family. Models that route through /v1/responses:
   //   gpt-*, o1*, o3*, o4*, chatgpt-*, codex-*, omni-*.
   // Note: Chat-Completions-only models are intentionally NOT matched here —
@@ -185,9 +186,8 @@ export function sanitizeMessagesForWire(params) {
   // active signed reasoning before the adapter's projection/ownership checks.
   for (const message of params.messages) {
     if (!message?.toolCalls?.length) continue;
-    const signed = message.providerState?.protocol === 'anthropic'
-      ? message.providerState.items?.some?.(item => ['thinking', 'redacted_thinking'].includes(item?.type))
-      : !message.providerState && message.thinkingBlocks?.length;
+    const signed = hasSignedProviderState(message.providerState)
+      || (!message.providerState && message.thinkingBlocks?.length);
     if (!signed) continue;
     if (!cleaned.some(candidate => (message.providerState ? candidate?.providerState === message.providerState
       : candidate?.thinkingBlocks === message.thinkingBlocks) && candidate.toolCalls?.length === message.toolCalls.length)) {
@@ -436,7 +436,7 @@ export class AdapterRouter extends LLMAdapter {
    *
    * @param {object} provider — Provider config
    * @param {{id: string, protocol?: string}} entry — Normalized model entry
-   * @returns {'anthropic' | 'openai-responses'}
+   * @returns {'anthropic' | 'openai-responses' | 'gemini'}
    */
   #effectiveProtocol(provider, entry) {
     const modelId = entry.id;
@@ -482,7 +482,7 @@ export class AdapterRouter extends LLMAdapter {
     const { provider, entry } = hit;
 
     // Compute the effective protocol per model — a single provider may need
-    // two adapters (e.g. mixed config: openai-responses for gpt-5*, anthropic
+    // multiple adapters (e.g. mixed config: openai-responses for gpt-5*, anthropic
     // for claude-*). Cache key includes the protocol.
     const protocol = this.#effectiveProtocol(provider, entry);
 
@@ -536,10 +536,13 @@ export class AdapterRouter extends LLMAdapter {
         baseUrl: provider.baseUrl,
         ...this.#streamIdlePolicy,
       });
+    } else if (protocol === 'gemini') {
+      const { GeminiAdapter } = await import('./gemini.js');
+      adapter = new GeminiAdapter({ apiKey, baseUrl: provider.baseUrl, ...this.#streamIdlePolicy });
     } else {
       throw new Error(
         `Unsupported protocol "${protocol}" for provider "${provider.name}". ` +
-        `Use protocol: "anthropic" or "openai-responses". ` +
+        `Use protocol: "anthropic", "openai-responses" or "gemini". ` +
         `The chat-completions adapter was removed in Phase 7.`
       );
     }

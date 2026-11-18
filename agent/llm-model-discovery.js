@@ -153,6 +153,51 @@ export async function discoverOpenAICompatibleModels({ baseUrl, apiKey, fetchFn 
 export async function discoverLlmModels(options = {}) {
   const providerType = options.providerType || options.provider || options.preset;
   if (providerType === 'github-copilot') return discoverGitHubCopilotModels(options);
+  if (providerType === 'gemini' || options.protocol === 'gemini') return discoverGeminiModels(options);
   if (providerType === 'openai-compatible') return discoverOpenAICompatibleModels(options);
   throw new Error(`Unsupported provider preset: ${providerType || '(missing)'}`);
+}
+
+
+export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+
+/** List only generateContent models. Tokens remain opaque and URL-encoded. */
+export async function discoverGeminiModels({ baseUrl = GEMINI_BASE_URL, apiKey, fetchFn = fetch } = {}) {
+  if (!apiKey) throw new Error('Gemini discovery requires an API key.');
+  const url = new URL(baseUrl || GEMINI_BASE_URL);
+  let path = url.pathname.replace(/\/+$/, '');
+  if (!path) path = '/v1beta';
+  path = path.replace(/\/models\/[^/]+:(?:streamGenerateContent|generateContent)$/, '/models');
+  url.pathname = path.endsWith('/models') ? path : `${path}/models`;
+  url.searchParams.delete('key');
+  url.searchParams.delete('alt');
+  const entries = new Map();
+  const seen = new Set();
+  for (let page = 0; page < 100; page++) {
+    const res = await fetchFn(url.toString(), { method: 'GET',
+      headers: { 'x-goog-api-key': apiKey, Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`Gemini model discovery failed: HTTP ${res.status}`);
+    const payload = await readJson(res);
+    if (!Array.isArray(payload?.models)) throw new Error('Invalid Gemini model catalog.');
+    for (const model of payload.models) {
+      if (!model.supportedGenerationMethods?.includes('generateContent')) continue;
+      const id = typeof model.name === 'string' ? model.name.replace(/^models\//, '') : '';
+      if (!id) continue;
+      const entry = { id, protocol: 'gemini' };
+      if (Number.isSafeInteger(model.inputTokenLimit) && model.inputTokenLimit > 0) entry.contextWindow = model.inputTokenLimit;
+      if (Number.isSafeInteger(model.outputTokenLimit) && model.outputTokenLimit > 0) entry.maxOutput = model.outputTokenLimit;
+      if (model.thinking === false) entry.supportsEffort = false;
+      entries.set(id, entry);
+    }
+    const token = payload.nextPageToken;
+    if (!token) {
+      if (!entries.size) throw new Error('Gemini model discovery returned no generateContent models.');
+      return { provider: { baseUrl: baseUrl || GEMINI_BASE_URL, protocol: 'gemini' },
+        models: [...entries.keys()], providerModels: [...entries.values()], source: 'live', warning: null };
+    }
+    if (typeof token !== 'string' || seen.has(token)) throw new Error('Invalid Gemini model pagination token.');
+    seen.add(token);
+    url.searchParams.set('pageToken', token);
+  }
+  throw new Error('Gemini model discovery exceeded pagination limit.');
 }

@@ -13,7 +13,7 @@ function cloneRequestPolicy(provider) {
     policy.capabilities = { ...provider.capabilities };
   }
   if (typeof provider.supportsEffort === 'boolean') policy.supportsEffort = provider.supportsEffort;
-  if (['anthropic', 'anthropic-adaptive', 'openai-reasoning', 'none'].includes(provider.thinkingProtocol)) {
+  if (['anthropic', 'anthropic-adaptive', 'openai-reasoning', 'gemini', 'none'].includes(provider.thinkingProtocol)) {
     policy.thinkingProtocol = provider.thinkingProtocol;
   }
   if (Array.isArray(provider.effortOptions)) policy.effortOptions = [...provider.effortOptions];
@@ -109,6 +109,10 @@ export default {
                       {{ $t('settings.llm.protocolOpenAIResponses') }}
                       <svg v-if="provider.protocol === 'openai-responses'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                     </div>
+                    <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'gemini' }"
+                      @click="setProtocol(idx, 'gemini'); closeDropdown('protocol-' + idx)">
+                      {{ $t('settings.llm.protocolGemini') }}
+                    </div>
                     <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'anthropic' }"
                       @click="setProtocol(idx, 'anthropic'); closeDropdown('protocol-' + idx)">
                       {{ $t('settings.llm.protocolAnthropic') }}
@@ -141,6 +145,11 @@ export default {
               </div>
             </div>
 
+            <div v-if="provider.protocol === 'gemini'" class="llm-field">
+              <button class="sp-btn" :disabled="discoveringModels || !provider.apiKey || !agentOnline" @click="refreshGeminiModels(idx)">
+                {{ discoveringModels ? $t('settings.llm.refreshingModels') : $t('settings.llm.testAndDiscover') }}
+              </button>
+            </div>
             <div v-if="!isManagedProvider(provider)" class="llm-field">
               <label class="llm-field-label">{{ $t('settings.llm.models') }}</label>
               <p class="llm-models-hint">{{ $t('settings.llm.modelsHint') }}</p>
@@ -363,6 +372,36 @@ export default {
       }
     },
 
+    async refreshGeminiModels(idx) {
+      const agentId = this.effectiveAgentId;
+      const provider = this.editableProviders[idx];
+      if (!agentId || !this.agentOnline || !provider?.apiKey) return;
+      this.cancelPendingDiscovery();
+      this.discoveringModels = true;
+      this.modelDiscoveryError = null;
+      this.modelDiscoveryWarning = null;
+      const baseUrl = provider.baseUrl;
+      const apiKey = provider.apiKey;
+      const requestId = `llm-discovery-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      this._pendingDiscovery = { agentId, requestId };
+      this.chatStore.sendWsMessage({ type: 'discover_llm_models', agentId, requestId,
+        providerType: 'gemini', baseUrl: provider.baseUrl, apiKey: provider.apiKey });
+      const result = await this.waitForModelDiscovery(agentId, requestId);
+      if (this._pendingDiscovery?.requestId !== requestId || this.effectiveAgentId !== agentId) return;
+      this._pendingDiscovery = null;
+      this.discoveringModels = false;
+      if (result.error) { this.modelDiscoveryError = result.error; return; }
+      // Do not overwrite another provider/draft that replaced this row while awaiting I/O.
+      if (this.editableProviders[idx] !== provider || provider.protocol !== 'gemini'
+        || provider.baseUrl !== baseUrl || provider.apiKey !== apiKey) return;
+      const previous = new Map((provider.models || []).map(model => [this._modelId(model), model]));
+      provider.models = (result.providerModels || []).map(model => ({ ...model,
+        ...(typeof previous.get(model.id) === 'object' ? previous.get(model.id) : {}) }));
+      this.refreshProviderModelsText();
+      this.modelDiscoveryWarning = this.$t('settings.llm.testSuccess');
+      this.markDirty();
+    },
+
     async useGitHubCopilotPreset() {
       const agentId = this.effectiveAgentId;
       if (!agentId || !this.agentOnline) return;
@@ -556,10 +595,10 @@ export default {
         type: p.type || 'api-key',
         scope: 'agent',
         name: p.originalName || p.name || '',
-        baseUrl: p.baseUrl || '',
+        baseUrl: p.baseUrl || (p.protocol === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : ''),
         apiKey: p.apiKey || '',
         githubToken: p.githubToken || '',
-        protocol: p.protocol || 'openai-responses',
+        protocol: p.protocol || 'openai',
         credentialProvider: p.credentialProvider || null,
         ...cloneRequestPolicy(p),
         models: Array.isArray(p.models)
@@ -639,7 +678,7 @@ export default {
         credentialProvider: null,
         models,
       });
-      this.providerModelsText.push(models.join(', '));
+      this.providerModelsText.push(models.map(model => this._modelId(model)).join(', '));
       this.markDirty();
     },
 
@@ -681,6 +720,9 @@ export default {
     setProtocol(idx, protocol) {
       const prev = this.editableProviders[idx].protocol;
       this.editableProviders[idx].protocol = protocol;
+      if (protocol === 'gemini' && !this.editableProviders[idx].baseUrl) {
+        this.editableProviders[idx].baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+      }
       this.markDirty();
 
       // Auto-fill model presets if the models field is empty
@@ -695,6 +737,7 @@ export default {
     },
 
     protocolLabel(protocol) {
+      if (protocol === 'gemini') return this.$t('settings.llm.protocolGemini');
       if (protocol === 'anthropic') return this.$t('settings.llm.protocolAnthropic');
       if (protocol === 'openai-responses') return this.$t('settings.llm.protocolOpenAIResponses');
       return this.$t('settings.llm.protocolOpenAI');
