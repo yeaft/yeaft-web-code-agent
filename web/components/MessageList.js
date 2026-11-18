@@ -514,6 +514,7 @@ export default {
     </main>
   `,
   props: {
+    hideSpeakerIdentity: { type: Boolean, default: false },
     forkFromTurnEnabled: { type: Boolean, default: false },
     forkFromTurnDisabled: { type: Boolean, default: false },
     forkFromTurnTitle: { type: String, default: '' },
@@ -2189,6 +2190,7 @@ export default {
       visibleItemsForBlock,
       flashMsgId: flashMsgId.value,
       useImStyleForUser: useImStyleForUser.value,
+      hideSpeakerIdentity: _props.hideSpeakerIdentity,
       forkFromTurnEnabled: _props.forkFromTurnEnabled,
       forkFromTurnDisabled: _props.forkFromTurnDisabled,
       forkFromTurnTitle: _props.forkFromTurnTitle,

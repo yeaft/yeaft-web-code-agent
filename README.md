@@ -8,7 +8,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md) | [Documentation](https://yeaft.github.io/yeaft-web-code-agent/)
 
-Yeaft is a web control plane for code agents running on your own machines. One browser can connect to multiple Agents, open Claude Code or GitHub Copilot CLI conversations, and run Yeaft's native multi-provider engine with durable Sessions, reusable Virtual Persons (VPs), scoped memory, Projects, and Work Center.
+Yeaft is a web control plane for code agents running on your own machines. One browser can connect to multiple Agents, open Claude Code or GitHub Copilot CLI conversations, and run Yeaft's native multi-provider engine with durable Sessions, selectable scenes, scoped history, Projects, and Work Center.
 
 **Try the hosted service:** [cc.yeaft.com](https://cc.yeaft.com)
 
@@ -18,7 +18,7 @@ Yeaft is a web control plane for code agents running on your own machines. One b
 
 - **Keep execution near the code.** Shell commands, files, Git operations, providers, credentials, Session data, and Work Center state stay on the connected Agent machine. The server authenticates users and relays browser-to-Agent traffic.
 - **Use the right runtime for each task.** Claude Code CLI, GitHub Copilot CLI over ACP, and the native Yeaft engine share one Web UI without pretending they have identical behavior.
-- **Scale a Session from one VP to many.** A native Yeaft Session is the only collaboration unit: use one VP for focused work, or address several VPs for parallel implementation, review, research, or design.
+- **One Session, one conversation.** Choose the working scene without changing the assistant or splitting the history. Independent turns can run in parallel.
 - **Carry context deliberately.** Native Sessions use a bounded window of their own persisted turns; Project instructions remain separate and sibling transcripts are not injected automatically.
 - **Move long work out of a chat turn.** Work Center persists a goal as a WorkItem, lets an AI planner create a validated Action graph, assigns Actions to VPs, records Runs and tool evidence, and can continue after a browser disconnect or Agent restart.
 
@@ -27,8 +27,8 @@ Yeaft is a web control plane for code agents running on your own machines. One b
 | Concept | What it means |
 | --- | --- |
 | **Agent** | A Node.js worker on a laptop, VM, server, or container. It owns execution, local configuration, and native Yeaft runtime data. |
-| **Session** | A durable native Yeaft conversation with 1..N VPs, one message timeline, a working directory, model override, and announcement. |
-| **VP (Virtual Person)** | A reusable persona with localized metadata, traits, prompt, and a primary/fast model hint. A VP is a role, not a separate machine. |
+| **Session** | A durable native Yeaft conversation with one timeline, a scene, a working directory, model override, and announcement. |
+| **VP (Virtual Person)** | Compatibility role for old Sessions and existing task flows. New chat does not require choosing a VP. |
 | **Project** | A browser-visible grouping of native Sessions. It carries a shared Project instruction without merging or automatically injecting sibling Session transcripts. |
 | **Work Center** | An Agent-level durable task system. A WorkItem has a contract and conversation; planned Actions are executed as fenced Runs with status, evidence, retries, human input, and review outcomes. |
 
@@ -40,7 +40,7 @@ Some internal wire types and storage paths retain historical names such as `grou
 | --- | --- | --- |
 | **Claude Code** | One Claude Code CLI process per conversation; Claude Code tools, skills, MCP, compact/clear, sub-agent events, and resume behavior | Requires a locally installed and authenticated Claude Code CLI |
 | **GitHub Copilot** | One `copilot --acp` process per conversation; Copilot model catalog and explicit tool-permission prompts | Requires the Copilot CLI and an eligible GitHub Copilot account |
-| **Yeaft Code Agent** | Native engine inside `yeaft-agent`; 1..N VPs, 33 built-in tools, provider routing, bounded Session history, Projects, sub-agents, and Work Center handoff | Does not emulate every Claude Code or Copilot CLI command |
+| **Yeaft Code Agent** | Native engine inside `yeaft-agent`; Session scenes, 33 built-in tools, provider routing, bounded Session history, Projects, sub-agents, and Work Center handoff | Does not emulate every Claude Code or Copilot CLI command |
 
 The Web UI also includes a terminal, Git status/diff, file browser/editor, port proxy, split-screen CLI conversations, an Expert Panel for Claude Code conversations, usage administration, light/dark themes, and English/Chinese localization.
 
@@ -52,10 +52,10 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 
 ### Sessions and Projects
 
-- Create a Session with an Agent, working directory, roster, and default VP. After creation, choose model/effort in the composer and edit the announcement in Session settings.
-- Address one or more VPs with `@mentions`; selected VPs execute the same turn independently and can hand work to a peer with `RouteForward`.
+- Create a Session with an Agent, working directory, and scene. Change the scene next to Attach; model/effort and the announcement are separate settings.
+- Changing the scene applies to future turns on the same timeline; already running turns keep the scene they started with. Legacy Sessions retain their routing unless you select a scene.
 - Keep sending during a native Session turn: AI routes additions to that turn or starts a parallel turn. Active turns share one composer and up to three horizontally scrollable columns; completed turns return to history in request order.
-- Search and page durable Session history, and inspect per-VP turns, running background tasks, model choice, tool calls, token usage, and stop reasons.
+- Search and page durable Session history, and inspect individual turns, running background tasks, model choice, tool calls, token usage, and stop reasons.
 - Organize native Sessions into Projects, drag them between Project and Recents sections, and attach a Project instruction to all member Sessions.
 - Start a persistent WorkItem from the current Session; origin identity is stamped by the runtime.
 

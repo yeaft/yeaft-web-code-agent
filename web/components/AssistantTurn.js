@@ -64,6 +64,7 @@ export default {
       default: ''
     },
     sessionActions: { type: Boolean, default: false },
+    hideSpeakerIdentity: { type: Boolean, default: false },
     quoteAuthor: { type: String, default: '' },
     originMessageId: { type: String, default: '' },
     // VpTurnBlock opts into the turn-scoped debug action. Keeping this
@@ -87,7 +88,7 @@ export default {
            should show the attribution. Legacy 1:1 chat turns leave
            speakerVpId null → showSpeakerHeader stays false → inert. -->
       <VpSpeakerHeader
-        v-if="turn.showSpeakerHeader && turn.speakerVpId && !hideSpeakerHeader"
+        v-if="turn.showSpeakerHeader && turn.speakerVpId && !hideSpeakerHeader && !hideSpeakerIdentity"
         :vp-id="turn.speakerVpId"
         :timestamp="turn.speakerTimestamp || 0"
         :state-cause="turn.speakerStateCause || ''"
@@ -147,7 +148,7 @@ export default {
       <div v-if="routeMessages.length > 0" class="turn-route-messages">
         <div v-for="(route, i) in routeMessages" :key="route.key || i" class="turn-route-message">
           <div class="turn-route-body">
-            <div class="turn-route-target">{{ route.target }}</div>
+            <div v-if="!hideSpeakerIdentity" class="turn-route-target">{{ route.target }}</div>
             <div v-if="route.text" class="turn-route-text">{{ route.text }}</div>
             <div v-if="route.reason" class="turn-route-reason">{{ route.reason }}</div>
           </div>

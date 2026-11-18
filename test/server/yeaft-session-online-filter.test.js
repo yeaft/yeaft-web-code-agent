@@ -155,6 +155,23 @@ describe('Yeaft legacy Session roster deltas', () => {
     expect(foreign.sent).toEqual([]);
   });
 
+  it('fences scene writes to their Agent and rejects unsupported peers rather than dropping the scene', async () => {
+    CONFIG.skipAuth = false;
+    const client = { authenticated: true, userId: 'scene-owner', sent: [] };
+    const agent = { ownerId: client.userId, ws: { readyState: 1 }, capabilities: [] };
+    agents.set('scene-agent', agent);
+    const update = { type: 'yeaft_update_session_config', sessionId: 's', agentId: 'scene-agent', requestId: 'r', config: { sceneId: 'writing' } };
+    await handleClientConversation('client', { ...client, userId: 'foreign' }, update, allow);
+    expect(client.sent.at(-1).event.error.code).toBe('agent_access_denied');
+    await handleClientConversation('client', client, update, allow);
+    expect(client.sent.at(-1).event).toMatchObject({ requestId: 'r', sessionId: 's', error: { code: 'session_scenes_unsupported' } });
+    expect(forwardToAgent).not.toHaveBeenCalled();
+    agent.capabilities = ['session_scenes'];
+    await handleClientConversation('client', client, update, allow);
+    const { agentId, ...outbound } = update;
+    expect(forwardToAgent).toHaveBeenLastCalledWith(agentId, outbound);
+  });
+
   it('persists config-only Session deltas without a full snapshot and broadcasts only to the owner', async () => {
     CONFIG.skipAuth = false;
     const owner = userDb.getOrCreate('model-config-owner');
@@ -168,7 +185,7 @@ describe('Yeaft legacy Session roster deltas', () => {
     sessions.upsertFromSnapshot(owner.id, 'config-agent', { id: 's', name: 'Session', config: { model: 'old' }, createdAt: 1 });
     sessions.upsertFromSnapshot(owner.id, 'other-agent', { id: 's', name: 'Other', config: { model: 'other' }, createdAt: 1 });
     for (const type of ['yeaft_output', 'session_crud_result']) {
-      const config = { model: 'proxy/new-model', modelEffort: type === 'yeaft_output' ? 'xhigh' : 'medium' };
+      const config = { sceneId: 'writing', model: 'proxy/new-model', modelEffort: type === 'yeaft_output' ? 'xhigh' : 'medium' };
       const event = { type: 'session_crud_result', op: 'update_config', sessionId: 's', requestId: type,
         ok: true, config, session: { id: 's', name: 'Session', roster: [], config } };
       await handleAgentOutput('config-agent', agent, type === 'yeaft_output' ? { type, event } : event);

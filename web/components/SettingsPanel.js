@@ -520,7 +520,7 @@ export default {
     const chatStore = Pinia.useChatStore();
     return {
       activeTab: 'general',
-      yeaftSubTab: 'vp',
+      yeaftSubTab: 'search',
       profile: null,
       agentSecret: null,
       showSecret: false,
@@ -625,9 +625,9 @@ export default {
     },
     yeaftSubTabs() {
       return [
-        { key: 'vp', label: this.$t('settings.yeaft.tabs.vp') },
         { key: 'search', label: this.$t('settings.yeaft.tabs.search') },
         { key: 'mcp', label: this.$t('settings.yeaft.tabs.mcp') },
+        { key: 'vp', label: this.$t('yeaft.session.settings.nav.compatibility') },
       ];
     },
     languageOptions() {
@@ -1007,7 +1007,7 @@ export default {
       if (this.initialSubTab && this.activeTab === 'yeaft') {
         this.yeaftSubTab = this.yeaftSubTabs.some(st => st.key === this.initialSubTab)
           ? this.initialSubTab
-          : 'vp';
+          : 'search';
       }
       if (this.initialEditVpId && this.activeTab === 'yeaft') {
         this.yeaftSubTab = 'vp';

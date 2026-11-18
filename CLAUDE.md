@@ -15,8 +15,8 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。用户在�
 | 概念 | 在项目中的含义 |
 | --- | --- |
 | Agent instance | 拥有本机执行环境、配置和数据的运行实例；不是一个模型角色。 |
-| VP（Virtual Person） | 可复用的角色，拥有独立 soul、角色元数据和模型偏好。角色差异是产品能力，不只是显示名称。 |
-| Session | 原生引擎唯一的持久对话编排单元，包含 1..N 个 VP。单人对话与多人协作是同一种 Session，不另设 chat/group mode。 |
+| VP（Virtual Person） | 旧 Session 与已有任务流程的兼容角色。普通场景会话不绑定 VP。 |
+| Session | 原生引擎的持久对话、历史和场景归属单元。每轮在接受时固定场景，独立轮次可并行；未选场景的旧 Session 保留原路由。 |
 | Project | 用户级 Session 归属与共享 instruction；成员 Session 的 transcript 不会自动互相注入。 |
 | Work Center | 跨越单次对话 turn 的持久任务系统。WorkItem 表示目标与验收条件，Action 表示工作单元，Run 表示一次执行尝试；它不是另一种 Session。 |
 
@@ -96,7 +96,7 @@ Project 的权威归属在 Server SQLite 的 `yeaft_projects` / `yeaft_project_s
 
 `session.js#loadSession()` 组装运行环境；`engine.js` 管理单个 VP / Action 的 query lifecycle；`web-bridge.js` 将 Session 执行投影为 `yeaft_output`。`sessions/` 管理 Session 生命周期和上下文，`conversation/` 管理持久历史、搜索与可见投影。本地 CLI 入口为 `cli.js`、`cli-session-runner.js` 和 `stdio-protocol.js`；自动化的 `stream-json` stdout 是严格 JSONL。
 
-引擎上下文包含 VP soul、Project instruction、工作目录中的 `CLAUDE.md` / `AGENTS.md`、运行环境、skills 和有界 Session 历史。Project instruction 来自 Server metadata，项目文档来自 `workDir`，历史内容不取代这两层。
+引擎上下文包含会话场景准则（旧路径为 VP soul）、Project instruction、工作目录中的 `CLAUDE.md` / `AGENTS.md`、运行环境、skills 和有界 Session 历史。Project instruction 来自 Server metadata，项目文档来自 `workDir`，历史内容不取代这两层。
 
 Query 的重要契约：
 
@@ -115,7 +115,7 @@ Query 的重要契约：
 - 静态凭据为 `apiKey`，动态凭据为 `credentialProvider`（包括 GitHub Copilot）。
 - 模型能力来自显式配置、`models.dev` cache 和 `models.js`；模型级 `maxOutput` 与 runtime 顶层 `maxOutputTokens` 是不同字段，窗口大小不在 UI / prompt 中另行硬编码。
 - Effort 档位按最终生效的 `anthropic` / `openai-responses` API 提供，不由模型 ID 白名单决定；显式 `effortOptions` / `supportsEffort:false` 可缩小或禁用，旧 Anthropic 手动预算需显式 `thinkingProtocol:"anthropic"`。
-- Session 的 `model` / `modelEffort` override 写入自己的 `config.json`，不改变 Agent 默认模型。
+- Session 的 `sceneId`、`model` 和 `modelEffort` 写入自己的 `config.json`。场景不改变模型、权限或历史归属。
 
 ### 历史上下文、Skills 与工具
 

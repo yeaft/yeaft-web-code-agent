@@ -18,6 +18,7 @@
  *   3. Calls a user-supplied deliver(vpId, envelope) per target
  */
 
+import { isSessionSceneId, SESSION_ASSISTANT_ID } from './scene-ids.js';
 import { parseMentions, selectRespondingVps } from './pre-flow.js';
 
 // Re-export so existing importers (`createCoordinator(...).parseMentions`,
@@ -92,7 +93,9 @@ export function createCoordinator(group, options = {}) {
       : (isRouteForwardInjection && typeof inputMeta.routeForwardTarget === 'string'
         ? inputMeta.routeForwardTarget.trim()
         : '');
-    const mentions = routingIntent
+    const sceneTurn = fromUser && !isRouteForwardInjection && !isRouteForwardResultInjection && !isTaskResultInjection
+      && isSessionSceneId(input._sceneId);
+    const mentions = sceneTurn ? [] : routingIntent
       ? (routingIntent.broadcast === true ? ['all'] : routingIntent.targetVpIds.slice())
       : (forcedRouteTarget ? [forcedRouteTarget] : parseMentions(input.text));
 
@@ -132,9 +135,18 @@ export function createCoordinator(group, options = {}) {
       role: input.role || (fromUser ? 'user' : 'assistant'),
     });
 
+    if (sceneTurn) {
+      const target = SESSION_ASSISTANT_ID;
+      const outcome = deliver(target, makeEnvelope(stored, meta, 'fallback', ephemeral));
+      const ok = outcome !== false && outcome?.ok !== false;
+      return { message: stored, dispatched: ok ? [target] : [], fallback: ok ? target : null,
+        errors: ok ? [] : [{ vpId: target, error: outcome?.error || 'delivery_rejected' }] };
+    }
+
     // Ask pre-flow which VPs (if any) should respond.
     const selection = selectRespondingVps({
-      meta,
+      meta: isTaskResultInjection && isSessionSceneId(input._sceneId) && forcedRouteTarget === SESSION_ASSISTANT_ID
+        ? { roster: [SESSION_ASSISTANT_ID], defaultVpId: SESSION_ASSISTANT_ID } : meta,
       fromUser,
       mentions,
       sender: input.from,

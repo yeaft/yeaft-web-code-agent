@@ -43,6 +43,7 @@ export default {
     outlineState: { type: Object, required: true },
     searchState: { type: Object, required: true },
     activeMessageId: { type: String, default: null },
+    hideSpeakerIdentity: { type: Boolean, default: false },
   },
   emits: ['query', 'select', 'move', 'preview', 'load-older', 'load-more-search', 'close'],
   template: `
@@ -90,7 +91,7 @@ export default {
           @click="$emit('select', result)"
         >
           <span class="yeaft-conversation-outline-meta">
-            <span>{{ result.role === 'user' ? $t('yeaft.outline.you') : (result.speakerVpId || $t('yeaft.outline.assistant')) }}</span>
+            <span>{{ result.role === 'user' ? $t('yeaft.outline.you') : ((!hideSpeakerIdentity && result.speakerVpId) || $t('yeaft.outline.assistant')) }}</span>
             <time v-if="result.timestamp">{{ formatOutlineTime(result.timestamp) }}</time>
           </span>
           <span class="yeaft-conversation-outline-snippet">{{ result.snippet || $t('yeaft.outline.nonText') }}</span>

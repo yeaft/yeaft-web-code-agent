@@ -84,11 +84,11 @@ npm run docs:build
 2. Choose **New chat** in the unified sidebar.
 3. Select **Yeaft** and the target Agent.
 4. Choose a working directory.
-5. Select one or more VPs and a default VP.
+5. Choose a scene (General is the default).
 6. Create the Session.
 7. After creation, choose model/effort in the composer and edit the announcement in Session settings, then send a message.
 
-Use one VP for a conventional coding-assistant workflow. Add more VPs only when independent roles are useful; use `@mentions` to select who handles each turn.
+Use Software for a coding workflow, or switch scenes next to Attach at any time. The same conversation continues; active turns retain their original scene.
 
 ## Try Work Center
 

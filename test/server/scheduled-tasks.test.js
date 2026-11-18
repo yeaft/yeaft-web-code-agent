@@ -162,6 +162,11 @@ describe('Session-backed scheduled tasks', () => {
     agent.capabilities = [];
     await handleClientConversation('client-a', client, { ...create, type: 'unify_create_group' }, allow);
     expect(lastError(client).error.code).toBe('scheduled_tasks_unsupported');
+    agent.capabilities = ['scheduled_tasks'];
+    for (const scene of [{ sceneId: 'writing' }, { config: { sceneId: 'writing' } }]) {
+      await handleClientConversation('client-a', client, { ...create, payload: { ...create.payload, ...scene } }, allow);
+      expect(lastError(client).error.code).toBe('invalid_scene');
+    }
     expect(forwardToAgent).not.toHaveBeenCalled();
     await handleClientConversation('client-a', client, { ...create, payload: { name: 'Ordinary' } }, allow);
     expect(forwardToAgent).toHaveBeenCalledWith('agent-a', expect.objectContaining({ type: 'yeaft_create_session', payload: { name: 'Ordinary' } }));

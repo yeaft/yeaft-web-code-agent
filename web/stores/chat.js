@@ -1055,6 +1055,7 @@ export const useChatStore = defineStore('chat', {
     yeaftSessionAgentById: {},      // Legacy bare-session owner cache; activeSessionKey wins when ids collide.
     yeaftModel: null,              // agent/default Yeaft 模型名；Session override lives in sessions[].config.model
     yeaftModelEffort: null,        // agent/default effort；Session override lives in sessions[].config.modelEffort
+    yeaftSessionSceneSelections: {},
     yeaftSessionModelSelections: {}, // Agent/Session-scoped previews until persistence is acknowledged
     yeaftSessionReady: false,     // Session 是否已初始化
     yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
@@ -3665,11 +3666,13 @@ export const useChatStore = defineStore('chat', {
       // agent that has no such session on disk → "Session not found".
       const targetAgentId = resolveAgentIdForSession(this, groupId);
       if (!groupId || !targetAgentId) return false;
-      const modelChange = this._sessionModelSwitchQueue?.get(yeaftSessionIdentityKey(targetAgentId, groupId));
-      if (modelChange) {
+      const sessionKey = yeaftSessionIdentityKey(targetAgentId, groupId);
+      const pendingConfig = this._sessionSceneSwitches?.get(sessionKey)?.promise
+        || this._sessionModelSwitchQueue?.get(sessionKey);
+      if (pendingConfig) {
         const authGeneration = Number(useAuthStore().authGeneration || 0);
         const connectionGeneration = Number(this.chatHistoryConnectionGeneration || 0);
-        return modelChange.then(result => {
+        return pendingConfig.then(result => {
           if (!result?.ok || authGeneration !== Number(useAuthStore().authGeneration || 0)
               || connectionGeneration !== Number(this.chatHistoryConnectionGeneration || 0)
               || targetAgentId !== resolveAgentIdForSession(this, groupId)) return false;
@@ -4877,13 +4880,9 @@ export const useChatStore = defineStore('chat', {
     },
 
     // ─── Yeaft Session creation ────────────────────────────────
-    // Phase 3: unified Session creation. A session is operationally a
-    // group with N≥1 VPs. Phase 2 router accepts `yeaft_create_session`
-    // as an alias of `yeaft_create_group`; this action goes through the
-    // shared sessionCrudRequest path so callers can `await` and surface
-    // the new session row immediately. Phase 4 will rename the wire +
-    // store fields; until then this is a thin facade.
-    createYeaftSession({ displayName, vpIds, defaultVpId, workDir, agentId, task, config } = {}) {
+    // Ordinary Sessions select a scene. Scheduled tasks and pre-scene
+    // clients retain the legacy roster contract.
+    createYeaftSession({ displayName, vpIds, defaultVpId, workDir, agentId, task, config, sceneId } = {}) {
       if (task !== undefined) {
         const rejection = scheduledTaskHelpers.scheduledTaskRequestError(this, agentId, 'create', task);
         if (rejection) return Promise.resolve(rejection);
@@ -4897,7 +4896,16 @@ export const useChatStore = defineStore('chat', {
         : (roster[0] || null);
       const trimmed = (displayName || '').trim();
       const trimmedWorkDir = (workDir || '').trim();
-      const payload = { roster, defaultVpId: resolvedDefault };
+      let payload = { roster, defaultVpId: resolvedDefault };
+      if (sceneId !== undefined) {
+        if (agentHasCapability(this, agentId || this.currentAgent, 'session_scenes')) {
+          payload = { sceneId };
+        } else if (sceneId !== 'general') {
+          return Promise.resolve({ ok: false, error: { code: 'session_scenes_unsupported' } });
+        }
+        // General remains usable against a pre-scene Agent via its original
+        // default Session creation path. Never silently discard a specialty.
+      }
       if (trimmed) payload.name = trimmed;
       if (trimmedWorkDir) payload.workDir = trimmedWorkDir;
       if (task !== undefined) payload.task = task;
@@ -6648,7 +6656,7 @@ export const useChatStore = defineStore('chat', {
           },
         });
         const sent = this.sendWsMessage(msg);
-        if (['copy', 'merge', 'update_config', 'update_task', 'run_task'].includes(op) && !sent) {
+        if (['create', 'copy', 'merge', 'update_config', 'update_task', 'run_task'].includes(op) && !sent) {
           if (timer) clearTimeout(timer);
           this._sessionCrudPending.delete(requestId);
           if (gs?.pending) delete gs.pending[requestId];
@@ -6786,6 +6794,44 @@ export const useChatStore = defineStore('chat', {
     },
     // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
     // clearYeaftJumpTarget actions removed.
+    pendingSessionSceneSelectionFor(sessionId, agentId = this.currentAgent) {
+      const selection = this.yeaftSessionSceneSelections[yeaftSessionIdentityKey(agentId, sessionId)];
+      return selection?.authGeneration === Number(useAuthStore().authGeneration || 0)
+        && selection.connectionGeneration === Number(this.chatHistoryConnectionGeneration || 0)
+        ? selection.sceneId : null;
+    },
+    async updateYeaftSessionScene(sessionId, sceneId, agentId = null) {
+      agentId = resolveAgentIdForSession(this, sessionId, agentId);
+      if (!sessionId || !agentHasCapability(this, agentId, 'session_scenes')) {
+        return { ok: false, error: { code: 'session_scenes_unsupported' } };
+      }
+      if (this.connectionState !== 'connected' || !this.agents.some(agent => agent.id === agentId && agent.online)) {
+        return { ok: false, error: { code: 'agent_offline' } };
+      }
+      const row = getSessionsStore()?.sessionById?.(sessionId, agentId);
+      if (!row || row.agentId !== agentId || row.task) return { ok: false, error: { code: 'invalid_session' } };
+      const key = yeaftSessionIdentityKey(agentId, sessionId);
+      if (!this._sessionSceneSwitches) this._sessionSceneSwitches = new Map();
+      if (this._sessionSceneSwitches.has(key)) return { ok: false, error: { code: 'scene_selection_pending' } };
+      const entry = {
+        sceneId,
+        authGeneration: Number(useAuthStore().authGeneration || 0),
+        connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
+      };
+      this.yeaftSessionSceneSelections[key] = entry;
+      const promise = this.sessionCrudRequest('update_config', { sessionId, config: { sceneId } }, { agentId })
+        .then(result => result?.ok && result.config?.sceneId !== sceneId
+          ? { ok: false, error: { code: 'scene_not_saved' } } : result);
+      this._sessionSceneSwitches.set(key, { promise });
+      try {
+        return await promise;
+      } finally {
+        if (this._sessionSceneSwitches.get(key)?.promise === promise) {
+          this._sessionSceneSwitches.delete(key);
+          delete this.yeaftSessionSceneSelections[key];
+        }
+      }
+    },
     sessionModelSelectionFor(sessionId, agentId = this.currentAgent) {
       const key = yeaftSessionIdentityKey(agentId, sessionId);
       const selection = this.yeaftSessionModelSelections[key];

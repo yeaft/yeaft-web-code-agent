@@ -92,6 +92,9 @@ export async function handleClientScheduledTasks(clientId, client, msg) {
   };
   try {
     if (isCreate) {
+      if (Object.hasOwn(msg.payload, 'sceneId') || (isRecord(msg.payload.config) && Object.hasOwn(msg.payload.config, 'sceneId'))) {
+        return reject('invalid_scene', 'Scheduled tasks do not accept scenes');
+      }
       outbound.payload = Object.fromEntries(CREATE_FIELDS.filter(key => Object.hasOwn(msg.payload, key)).map(key => [key, msg.payload[key]]));
       outbound.payload.task = projectTaskInput(msg.payload.task);
     } else {

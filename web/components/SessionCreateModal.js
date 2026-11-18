@@ -1,13 +1,14 @@
 import ScheduledTaskEditor, { newScheduledTask } from './ScheduledTaskEditor.js';
 import FolderPickerDialog from './FolderPickerDialog.js';
+import { SESSION_SCENE_IDS } from './SessionSceneSelect.js';
 /**
  * SessionCreateModal — chat-style "new session" modal.
  *
  * Mirrors Chat's new-conversation modal (chat-modals.css `.resume-modal*`)
  * so the two creation surfaces feel identical. The only Yeaft-specific
  * additions on top of chat's layout are:
- *   - VP roster row with per-row default-star button (replaces chat's
- *     provider/model rows — yeaft picks VPs, chat picks an agent).
+ *   - Scene selection for native Sessions; the legacy roster picker is
+ *     retained for scheduled task targeting.
  *   - Agent picker (only shown when more than one online agent exists),
  *     because Yeaft sessions are owned by a specific agent and a
  *     multi-agent deployment needs to decide where the session lands.
@@ -86,11 +87,18 @@ const creationControls = `
             />
           </div>
 
-          <!-- VP roster (yeaft-specific) — collapsed-by-default picker.
+          <label v-if="isYeaftProvider && !taskMode" class="resume-control-row">
+            <span class="resume-control-label">{{ $t('yeaft.session.scene.label') }}</span>
+            <select v-model="form.sceneId" class="resume-input yeaft-create-scene-select" :disabled="busy">
+              <option v-for="sceneId in sceneIds" :key="sceneId" :value="sceneId" :disabled="sceneId !== 'general' && !supportsSessionScenes">{{ $t('yeaft.session.scene.' + sceneId) }}</option>
+            </select>
+          </label>
+
+          <!-- VP roster (scheduled tasks only) — collapsed-by-default picker.
                Trigger shows the current selection summary (names if ≤3, else
                "N selected"); clicking opens the full list below. Mirrors the
                Copilot model picker pattern from ChatPage. -->
-          <div v-if="isYeaftProvider" class="resume-control-row resume-control-row-vp">
+          <div v-if="taskMode && isYeaftProvider" class="resume-control-row resume-control-row-vp">
             <label class="resume-control-label">{{ $t('yeaft.session.create.vpPicker') }}<span v-if="taskMode" class="task-required">{{ $t('scheduledTasks.required') }}</span></label>
             <div class="yeaft-roster" ref="vpRosterRoot">
               <div v-if="vpList.length === 0 && vpLibraryEmpty" class="yeaft-roster-empty">
@@ -396,11 +404,13 @@ export default {
   `,
   data() {
     return {
+      sceneIds: SESSION_SCENE_IDS,
       taskDraft: newScheduledTask(),
       taskValid: false,
       form: {
         provider: !this.taskMode && ['yeaft', 'copilot', 'claude-code'].includes(this.initialProvider) ? this.initialProvider : 'yeaft',
         name: '',
+        sceneId: 'general',
         // Pre-checked once vpList hydrates (see applyDefaultSelection).
         vpIds: [],
         defaultVpId: null,
@@ -467,6 +477,7 @@ export default {
       return null;
     },
     isYeaftProvider() { return this.form.provider === 'yeaft'; },
+    supportsSessionScenes() { return this.chat?.hasAgentCapability?.(this.form.agentId, 'session_scenes') !== false; },
     vpSnapshot() {
       const store = this.vpStore;
       return store?.snapshotForAgent ? store.snapshotForAgent(this.form.agentId) : store;
@@ -651,7 +662,7 @@ export default {
     },
     canSubmit() {
       if (this.taskMode && (this.taskAgentUnavailable || !this.taskValid || !this.taskDraft.prompt.trim())) return false;
-      if (this.isYeaftProvider && (!this.vpLibraryReady || this.form.vpIds.length === 0)) return false;
+      if (this.taskMode && (!this.vpLibraryReady || this.form.vpIds.length === 0)) return false;
       if (!this.form.agentId) return false;
       const a = this.agentOptions.find(x => x.id === this.form.agentId);
       return !!(a && a.online);
@@ -695,6 +706,7 @@ export default {
     this.applyDefaultSelection();
   },
   watch: {
+    supportsSessionScenes(supported) { if (!supported) this.form.sceneId = 'general'; },
     folderPickerAgentId() { this.closeFolderPicker(); this.form.model = ''; this.form.modelEffort = ''; },
     taskSelectableEfforts(options) {
       if (!options.includes(this.form.modelEffort)) this.form.modelEffort = '';
@@ -881,6 +893,7 @@ export default {
      * the original bug a multi-file root-cause hunt.
      */
     subscribeVpsFor(agentId, { force = false } = {}) {
+      if (!this.taskMode) return false;
       const chat = this.chat;
       const target = agentId || chat?.currentAgent || null;
       const vp = this.vpStore;
@@ -1054,7 +1067,7 @@ export default {
       }
     },
     applyDefaultSelection() {
-      if (this.vpPickerTouched) return;
+      if (!this.taskMode || this.vpPickerTouched) return;
       const list = this.vpList || [];
       if (list.length === 0) return;
       const ids = list.map(vp => vp && vp.vpId).filter(Boolean);
@@ -1213,11 +1226,6 @@ export default {
           this.submitError = this.$t('yeaft.session.error.unknown', { message: 'store unavailable' });
           return;
         }
-        // The Agent owns VP validation. A partial snapshot or a live removal
-        // must not silently drop a checked member or replace the chosen default.
-        // Preserve the full selection so validation errors remain actionable.
-        const submittedVpIds = [...this.form.vpIds];
-        const defaultVpId = this.form.defaultVpId || submittedVpIds[0];
         // Auto-derive name when the user left it blank — the server
         // rejects empty names with `invalid_name`, and the user said
         // they shouldn't have to fill it. Prefer the workDir basename
@@ -1229,12 +1237,12 @@ export default {
           || this.$t('yeaft.session.create.untitled');
         const res = await this.chat.createYeaftSession({
           ...(this.taskMode ? {
+            vpIds: [...this.form.vpIds],
+            defaultVpId: this.form.defaultVpId || this.form.vpIds[0],
             task: { ...this.taskDraft, prompt: this.taskDraft.prompt.trim() },
             ...(Object.keys(this.taskSessionConfig).length ? { config: this.taskSessionConfig } : {}),
-          } : {}),
+          } : { sceneId: this.supportsSessionScenes ? this.form.sceneId : 'general' }),
           displayName: derivedName,
-          vpIds: submittedVpIds,
-          defaultVpId,
           workDir: this.form.workDir.trim(),
           agentId: this.form.agentId || null,
         });
@@ -1247,8 +1255,12 @@ export default {
           const id = created && created.id;
           const owner = created?.agentId || this.form.agentId || null;
           if (id) {
-            if (owner && chat && chat.currentAgent !== owner
-                && typeof chat.selectAgent === 'function') {
+            if (!this.taskMode && chat.currentView !== 'yeaft' && typeof chat.enterYeaft === 'function') {
+              // New chat can be opened from a different provider's surface.
+              // Enter the native view first; selecting the new Session below
+              // owns the one history bootstrap for the new conversation.
+              chat.enterYeaft(owner, { deferBootstrap: true });
+            } else if (owner && chat.currentAgent !== owner && typeof chat.selectAgent === 'function') {
               chat.selectAgent(owner);
             }
             if (this.sessionsStore) this.sessionsStore.setActive(id, owner);

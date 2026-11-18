@@ -1,8 +1,6 @@
 # Yeaft Sessions and Projects
 
-A **Session** is the native Yeaft engine's only conversation and collaboration unit. It always has the same shape: one durable timeline and a roster of 1..N VPs. One VP gives you a focused code agent; several VPs let you direct the same turn to independent roles.
-
-![A multi-VP Session with an implementation and review handoff](/images/session.png)
+A **Session** is one durable conversation with a single timeline. Its scene guides how the assistant works without changing its identity or splitting the conversation.
 
 ## Session contents
 
@@ -10,10 +8,10 @@ A Session stores and exposes:
 
 - an Agent owner and stable Session ID;
 - a name, working directory, announcement, and creation/activity metadata;
-- a VP roster and default VP;
+- the current scene (legacy roles are retained for compatibility);
 - an optional Session-level model and reasoning-effort override;
-- durable messages, per-VP turns, tool results, background task state, and debug traces;
-- Session-scoped and nested VP/user memory.
+- durable messages and turns, tool results, background task state, and debug traces;
+- historical data retained under the Session scope.
 
 Session metadata and history live under the owning Agent's Yeaft directory. `workDir` is execution context and the root for project-tier instructions, Skills, and MCP discovery; it is not the Session data directory.
 
@@ -28,39 +26,25 @@ Legacy browser-local section state is not imported into user preferences. The in
 1. Choose **New chat** in the unified sidebar and select **Yeaft** as the runtime.
 2. Select the Agent that owns the working directory.
 3. Set a Session name and working directory.
-4. Choose one or more VPs and a default VP.
+4. Choose **General**, **Software**, **Writing**, **Short video**, or **Investment**. The default is General.
 5. Create the Session.
 6. After creation, choose model/effort in the composer and edit the announcement in Session settings, then send a message.
 
 模型与推理强度选择会立即预览，并等待 Agent 确认保存；保存失败会恢复已确认值并提示。连续切换按 Session 顺序应用，其他 Session 不受影响；若立即发送消息，会先等待所选模型确认，不会悄悄使用旧模型。切换模型时优先默认使用 `xhigh`，没有此档位时只从该模型支持的档位选择；已保存的 Session 强度不会被刷新覆盖。运行中的请求不被中断，新设置从下一次模型请求开始使用。
 
-When the roster is omitted and the Agent's VP library contains `omni`, the runtime can use the **All-purpose Assistant** (Chinese name: **全能助手**) as the default generalist. A fresh automatically created default Session includes only that assistant, not the entire library. Internal IDs stay stable, and an explicitly non-empty roster is never silently replaced.
+### Change the scene during a conversation
 
-### Choose an assistant for the work
+Use **Scene** next to **Attach**. It saves to this Session without sending a message. The scene applies to new turns; running turns continue unchanged. For example, switch from Software to Writing to turn an earlier design discussion into an announcement without starting over. A scene guides the work, not which questions you may ask. It does not change model, effort, permissions, or workspace.
 
-Session creation, member settings, and the VP library initially show five primary assistants and custom VPs:
+### Compatibility with existing Sessions
 
-| Assistant | Stable ID | Typical work |
-| --- | --- | --- |
-| All-purpose Assistant | `omni` | Everyday questions, learning, research, creation, and cross-domain tasks |
-| Software Assistant | `software-omni` | Build, debug, review, and improve software from user need through operation |
-| Writing Assistant | `writing-omni` | Create and edit text for its reader, purpose, and author's voice |
-| Short Video Assistant | `short-video-omni` | Ideas, shootable scripts, production briefs, and evidence-based improvements |
-| Investment Research Assistant | `quant-omni` | Reproducible investment analysis that accounts for costs and risk |
-
-A specialty is a starting point, not a limit on what you can ask. Each assistant owns the requested outcome end to end, handles simple work directly, and uses Skills, tools, or collaboration only when useful—not a mandatory expert team or fixed long workflow. Research, creative, and software goals do not automatically authorize trading, publishing, spending, or changes to live systems.
-
-### Legacy VPs and existing Sessions
-
-Legacy roles are not deleted. Expand **Show legacy VPs** to inspect or add them. Existing members, the default VP, `@` routing, and historical speaker identities remain intact. Changing a Session's name, model, working directory, or announcement does not rebuild its roster. Only an explicit member removal makes that VP leave the Session; it can be added back through the legacy entry. Settings retain a saved member's ID even when its library metadata is temporarily missing.
-
-At Agent startup, only souls that exactly match recorded shipped versions are upgraded. Custom bodies and bodies paired with custom prompt/instruction frontmatter are not automatically upgraded. Names, roles, descriptions, and aliases change only when each field exactly matches a recorded official value; user renames, extended alias lists, and unknown frontmatter are preserved. The five assistants retain their prior IDs and aliases.
+Existing Sessions keep their complete messages, membership, and custom definitions. Until you choose a scene, they continue to use their existing routing; settings such as title or model do not convert the Session. Choose a scene explicitly to use the single-assistant workflow on future messages. Saved role IDs are not deleted, but they no longer route messages in that Session. Legacy role settings are under **Compatibility**; replies in scene Sessions do not display role names. Existing scheduled tasks retain their configured targeting. Scene switching requires an updated Agent.
 
 ## Fork the current Session
 
 Choose **Copy session** from the active Session’s sidebar menu, or the copy icon at the top right of the conversation. No setup dialog is needed: the new Session opens automatically on the same Agent.
 
-The fork copies the complete persisted conversation, announcement, VP roster/default VP, working directory, and Session model/effort overrides. If the source belongs to a Project, the Server puts the fork in the same Project, so the shared instruction continues to apply. The source remains unchanged; later conversation and Session setting changes are independent.
+The fork copies the complete persisted conversation, announcement, working directory, and Session scene/model/effort settings (and legacy roster, if applicable). If the source belongs to a Project, the Server puts the fork in the same Project, so the shared instruction continues to apply. The source remains unchanged; later conversation and Session setting changes are independent.
 
 A supporting Agent can fork while responding: the new Session contains the complete durable history before the active input, excluding that input and its response or tools, without stopping the source. The safe boundary is checkpointed in the Session’s instance data directory, so task-result replies resumed after an Agent restart can still fork earlier history. For legacy tasks without a checkpoint, recovery requires a verified original human input; otherwise the copy fails explicitly rather than cloning a partial turn. Overlapping inputs or parallel VPs use the safe prefix before the earliest active input. Older Agents still require the response to finish. Forking is unavailable while disconnected or another fork is pending. Background processes, running tasks, debug traces, and Session memory files are not cloned. Available uploaded attachments are copied into the new Session’s own storage; missing or inaccessible legacy files remain explicitly unavailable. Both Server and Agent must support Project inheritance for this behavior.
 
@@ -72,15 +56,15 @@ Legacy duplicate message IDs do not block a full fork. Every durable record rece
 
 Choose **Merge Sessions** from the Session's sidebar menu, then select another native Session on the same Agent. The conversation header keeps **Fork Session** but does not show Merge. Both Sessions must be idle and the Agent must support merging.
 
-Merging opens a new Session and leaves both sources unchanged. The new Session inherits the initiating source's working directory, announcement, default VP, model settings and Project, with a union of both VP rosters. Shared history is retained once; remaining whole request turns are ordered by the user's sent time. Without shared history, all turns are time-ordered. Identical prompt text alone is never treated as shared history; ambiguous divergence is rejected rather than guessed. Tool calls and results stay together.
+Merging opens a new Session and leaves both sources unchanged. The new Session inherits the initiating source's working directory, announcement, scene, model settings and Project. Legacy roster data is also retained. Shared history is retained once; remaining whole request turns are ordered by the user's sent time. Without shared history, all turns are time-ordered. Identical prompt text alone is never treated as shared history; ambiguous divergence is rejected rather than guessed. Tool calls and results stay together.
 
 Attachments are verified and copied into the new Session's storage. Conflicting shared attachment bytes or entirely unavailable copies cause an explicit failure, not silent loss. This does not merge Git files or migrate running tasks. Project ownership remains Server-authoritative.
 
 Forks and merged Sessions continue from canonical text and tool history, not provider-private signatures or reasoning continuation bound to a source Session. Source transcripts remain intact. Historical **Fork from this turn** also works while a later response is running, provided the selected endpoint precedes the active input; the current response has no fork action.
 
-## Route a turn
+## Legacy routing
 
-A message without mentions goes to the default VP. Use `@VPName` to address a subset:
+Only Sessions that have not opted into a scene use the following routing. A message without mentions goes to the default VP. Use `@VPName` to address a subset:
 
 ```text
 @Linus Implement the smallest safe fix and add focused tests.
@@ -94,11 +78,11 @@ A message without mentions goes to the default VP. Use `@VPName` to address a su
 @Linus @Martin Compare the implementation and review perspectives in parallel.
 ```
 
-When several VPs are selected, Yeaft persists one canonical user message and fans the turn out to independent VP engines. Each VP has its own persona and memory view, streams its own response, and uses the current Session's allowed tools. The shared timeline keeps speaker identity visible.
+When several VPs are selected, Yeaft persists one canonical user message and fans the turn out to independent VP engines. Each VP has its own persona and memory view, streams its own response, and uses the current Session's allowed tools. Historical attribution remains in the underlying records.
 
-## 并行 turn
+## Parallel turns
 
-原生 Session 正在执行时仍可使用同一个输入框发送消息。AI 根据正在执行的 turn 判断新输入是补充还是独立请求：补充在目标 turn 下一次 loop 读取，独立请求并行执行，同一个 VP 也能同时回答多个 turn。没有 turn 执行时保持普通对话行为。
+原生 Session 正在执行时仍可使用同一个输入框发送消息。AI 根据正在执行的 turn 判断新输入是补充还是独立请求：补充在目标 turn 下一次 loop 读取，独立请求并行执行，同一会话也能同时处理多个 turn；切换场景后发出的消息不会追加到旧场景的 turn。没有 turn 执行时保持普通对话行为。
 
 两个以上 turn 执行时，历史下方自动展开横向分裂区；根据聊天区域宽度显示一到三栏。通过顶部短摘录 tab 或横向滚动查看其他 turn。每个 turn 可独立停止，完成、停止或失败后回到按原始提问时间排列的单列历史；输入框始终只有一个。刷新或切换 Session 后，运行状态和消息归属由所属 Agent 恢复。旧版 Agent 缺少新字段时保持单列展示，需要同步更新 Agent、Server 和 Web 才能使用完整能力。
 

@@ -1,8 +1,6 @@
 # Yeaft Session 与 Project
 
-**Session** 是 Yeaft 原生引擎唯一的 conversation 与协作单元。它始终是同一种结构：一个持久 timeline 和 1..N 个 VP。1 个 VP 就是专注代码 Agent；多个 VP 让你把同一个 turn 交给彼此独立的角色。
-
-![包含实现与审查交接的多 VP Session](/images/zh-CN/session.png)
+**Session** 是一段持久对话，使用同一个消息时间线。场景只改变 AI 做事的准则，不切换身份，也不分割历史。
 
 ## Session 包含什么
 
@@ -10,10 +8,10 @@
 
 - Agent owner 与稳定 Session ID；
 - 名称、工作目录、公告，以及创建/活动 metadata；
-- VP roster 和 default VP；
+- 当前场景（旧角色资料仅为兼容保留）；
 - 可选的 Session-level model 与 reasoning effort override；
-- 持久 messages、per-VP turns、tool results、后台任务状态和 debug traces；
-- Session scope 与嵌套 VP/user memory。
+- 持久消息和对话轮次、tool results、后台任务状态和 debug traces；
+- 保存在 Session 作用域中的历史数据。
 
 Session metadata 和 history 位于所属 Agent 的 Yeaft 目录。`workDir` 是 execution context，也是 project-tier instructions、Skills 与 MCP discovery 的根；它不是 Session 数据目录。
 
@@ -28,31 +26,17 @@ Project 文件夹及“项目／最近”分区的展开、收起状态按用户
 1. 在统一侧栏选择 **新建聊天**，runtime 选择 **Yeaft**。
 2. 选择拥有目标工作目录的 Agent。
 3. 设置 Session name 和 working directory。
-4. 选择一个或多个 VP，并指定 default VP。
+4. 选择「通用」「软件」「写作」「短视频」或「投资研究」，默认通用。
 5. 创建 Session。
 6. 创建后在 composer 选择 model/effort，在 Session settings 编辑公告，然后发送消息。
 
-如果没有传 roster，而 Agent 的 VP library 中存在 `omni`，runtime 可以使用**全能助手**作为默认通用助手。首次自动创建的默认 Session 只加入这一位助手，不再加入整个角色库。内部 ID 保持不变，显式传入的非空 roster 永远不会被静默覆盖。
+### 在同一段对话中切换场景
 
-### 按场景选择助手
+点击附件右侧的「场景」，选择会保存到当前 Session，不会自动发送消息。新消息使用新场景，已经运行的轮次保持原样。例如先用「软件」讨论设计，再切到「写作」整理成公告，不需要重复提供上下文。场景不限制可提的问题，也不改变模型、推理强度、权限或工作目录。
 
-创建 Session、成员设置和角色库默认展示五个主助手及自定义 VP：
+### 兼容已有 Session
 
-| 助手 | 稳定 ID | 适用场景 |
-| --- | --- | --- |
-| 全能助手 | `omni` | 日常问答、学习、研究、创作与跨领域执行 |
-| 软件助手 | `software-omni` | 从需求到运行，开发、排错、评审和改进软件 |
-| 写作助手 | `writing-omni` | 围绕读者、目的和作者声音创作、编辑文本 |
-| 短视频助手 | `short-video-omni` | 创意、可拍脚本、制作说明与有证据的复盘 |
-| 投资研究助手 | `quant-omni` | 以可复现、考虑成本和风险的证据支持投资判断 |
-
-场景是默认优势，不是能力边界。每位助手对当前成果端到端负责；简单任务直接做，按需使用 Skills、工具或协作，不默认组织专家团队或跑固定长流程。研究、创作或开发目标不自动授权交易、发布、付费或修改在线系统。
-
-### 旧 VP 与已有 Session
-
-旧角色没有删除，展开 **显示旧版 VP** 仍可查看或添加。已有 Session 的旧成员、默认 VP、`@` 路由和历史发言身份保留；修改名称、模型、工作目录或公告不会重新生成成员列表。只有明确移除某个成员时，它才退出该 Session，之后仍可从旧版入口重新添加。成员在当前角色库中暂时缺少元数据时，设置中仍保留其 ID，不静默丢弃。
-
-Agent 启动时仅把精确匹配已发布官方版本的 soul 升级为新定义；自定义正文或带自定义 prompt/instruction 的正文不自动升级。名称、角色、简介和别名只在逐字段确切匹配已记录的旧官方值时更新；用户改名、扩充的别名和未知 frontmatter 保留。五位助手原有 ID 和别名继续有效。
+旧会话保留完整历史、成员和自定义定义。未选场景时继续使用原有路由，改名或改模型不转换会话。明确选择场景后，后续消息按单助手处理：旧角色数据仍保存，但不再参与该会话的消息路由。未转换的旧角色设置位于「兼容设置」；场景会话中的 AI 回复不展示角色名称。现有定时任务继续使用原有目标设置。切换场景需要支持该功能的 Agent。
 
 ## 选择工作目录
 
@@ -70,7 +54,7 @@ Agent 启动时仅把精确匹配已发布官方版本的 soul 升级为新定�
 
 在当前 Session 的侧栏菜单选择 **复制会话**，或点击 conversation 右上角的复制图标。无需填写创建弹窗，完成后自动打开同一 Agent 上的新 Session。
 
-Fork 保留完整持久对话、公告、VP roster/default VP、工作目录和 Session model/effort 配置。原 Session 属于 Project 时，Server 会将新 Session 放入同一 Project，继续使用统一 instruction。原 Session 不变，之后两边的对话和 Session 配置修改彼此独立。
+Fork 保留完整持久对话、公告、工作目录和场景／模型／强度配置（包括已有的兼容成员数据）。原 Session 属于 Project 时，Server 会将新 Session 放入同一 Project，继续使用统一 instruction。原 Session 不变，之后两边的对话和 Session 配置修改彼此独立。
 
 新版 Agent 支持在生成回复期间 Fork：只复制当前活动输入之前的完整持久历史，不包含进行中 turn 的用户输入、回复或工具执行，也不会停止原 Session。安全边界会保存在该 Session 的实例数据目录，Agent 重启后后台任务恢复回复时仍可复制先前历史；旧任务没有边界记录时，只在能确认其原始用户输入的情况下恢复，否则明确拒绝，不复制半截 turn。重叠输入或并行 VP 使用最早活动输入之前的安全边界；旧版 Agent 仍需等待回复结束。断线或 Fork 进行中时入口禁用。Fork 不复制后台进程、运行任务、debug trace 或 Session memory 文件；可读取的上传附件复制到新 Session 自己的数据目录；缺失或无法安全读取的旧附件仍明确标为不可用。Project 继承要求 Server 和 Agent 均支持此能力。
 
@@ -82,15 +66,15 @@ Fork 保留完整持久对话、公告、VP roster/default VP、工作目录和 
 
 在 Session 侧栏菜单选择 **合并会话**，再选择同一 Agent 上的另一个原生 Session。对话 Header 保留 **复制会话（Fork）**，不再显示合并图标。两边都必须停止生成回复，且 Agent 支持合并能力；断线或旧版 Agent 不会静默派发。
 
-合并会创建并打开一个全新的 Session，不覆盖、归档或删除两条来源。新 Session 沿用发起侧的工作目录、公告、默认 VP、模型配置和 Project instruction，VP roster 取两边并集。持久历史中的共同轮次只保留一次，之后按用户发送时间合并完整 turn，文字、工具调用与结果不会拆开；没有共同历史时，全部 turn 按发送时间排序。仅提问文本相同不算共同历史，来源或分歧存在歧义时明确报错，不猜测去重。附件验证字节后复制到新 Session 的数据目录；共同附件内容冲突或所有副本均不可用时拒绝合并，不静默丢弃。运行任务和后台进程不会迁移。
+合并会创建并打开一个全新的 Session，不覆盖、归档或删除两条来源。新 Session 沿用发起侧的工作目录、公告、场景、模型配置和 Project instruction，并保留兼容成员数据。持久历史中的共同轮次只保留一次，之后按用户发送时间合并完整 turn，文字、工具调用与结果不会拆开；没有共同历史时，全部 turn 按发送时间排序。仅提问文本相同不算共同历史，来源或分歧存在歧义时明确报错，不猜测去重。附件验证字节后复制到新 Session 的数据目录；共同附件内容冲突或所有副本均不可用时拒绝合并，不静默丢弃。运行任务和后台进程不会迁移。
 
 Fork 和合并后的 Session 使用可重建的文本及工具历史继续对话，不沿用绑定原 Session 的 provider 私有签名或推理 continuation；源 transcript 保持完整。
 
 合并不是 Git 合并，也不修改工作目录里的文件。Project 归属由 Server 保存，不会采用另一条来源或浏览器传入的 Project；要使用另一条来源的配置与 Project，应从那条 Session 发起。
 
-## 路由一个 turn
+## 旧会话路由
 
-没有 mention 的消息发送给 default VP。用 `@VPName` 指定子集：
+仅未启用场景的旧会话沿用以下路由。没有 mention 的消息发送给 default VP。用 `@VPName` 指定子集：
 
 ```text
 @Linus 实现最小安全修复，并补充定向测试。
@@ -104,7 +88,7 @@ Fork 和合并后的 Session 使用可重建的文本及工具历史继续对话
 @Linus @Martin 并行给出实现与审查视角。
 ```
 
-选择多个 VP 时，Yeaft 只持久化一条 canonical user message，然后 fan-out 到独立 VP engine。每个 VP 有自己的 persona 和 memory view，流式输出自己的回复，并使用当前 Session 允许的工具；共享 timeline 会保留 speaker identity。
+选择多个 VP 时，Yeaft 只持久化一条 canonical user message，然后 fan-out 到独立 VP engine。每个 VP 有自己的 persona 和 memory view，流式输出自己的回复，并使用当前 Session 允许的工具；历史发言归属仍保存于底层记录。
 
 ## 规划与进度
 

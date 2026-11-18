@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { topUpDefaultVps } from '../../../agent/yeaft/vp/seed-topup.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
+import { createCliSessionRunner } from '../../../agent/yeaft/cli-session-runner.js';
+import { runStreamSessionTurn } from '../../../agent/yeaft/stdio-protocol.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import {
-  addMember, createSessionFromSpec, ensureDefaultSessionIfEmpty, removeMember,
+  addMember, copySession, mergeSessions, createSessionFromSpec, ensureDefaultSessionIfEmpty, removeMember,
   renameSession, setSessionDefaultVp, snapshotSessions, updateSessionAnnouncement,
   updateSessionConfig, updateSessionWorkDir,
 } from '../../../agent/yeaft/sessions/session-crud.js';
@@ -118,4 +120,57 @@ describe('VP catalog and durable Session compatibility', () => {
     expect(conversation.loadAllBySession(session.id)).toEqual(history);
     expect(history[1].speakerVpId).toBe('linus');
   });
+
+  it('stores scenes independently of roles and keeps them through metadata edits, fork and merge', () => {
+    const root = temp('yeaft-scene-config-');
+    const spec = { name: 'Research', sceneId: 'investment', config: { model: 'provider/model', modelEffort: 'xhigh' } };
+    expect(() => createSessionFromSpec(root, { ...spec, sceneId: '__proto__' })).toThrow();
+    expect(() => createSessionFromSpec(root, { name: 'Nested', config: { sceneId: 'investment' } })).toThrow();
+    expect(existsSync(join(root, 'sessions'))).toBe(false);
+    const a = createSessionFromSpec(root, spec, { libDir: join(root, 'no-role-library') });
+    const b = createSessionFromSpec(root, { name: 'Write', sceneId: 'writing' });
+    renameSession(root, a.id, 'Renamed');
+    updateSessionAnnouncement(root, a.id, 'Shared constraints');
+    updateSessionConfig(root, a.id, { modelEffort: 'medium' });
+    expect(() => updateSessionConfig(root, a.id, { sceneId: null })).toThrow();
+    const c = copySession(root, a.id);
+    const d = mergeSessions(root, a.id, b.id);
+    const rows = new Map(snapshotSessions(root).map(row => [row.id, row]));
+    for (const id of [a.id, c.id, d.id]) expect(rows.get(id)).toMatchObject({
+      config: { sceneId: 'investment', model: 'provider/model', modelEffort: 'medium' },
+    });
+    expect(rows.get(b.id).config.sceneId).toBe('writing');
+  });
+
+  it('continues a converted Session on CLI without a compatible roster and reenters with the original scene', async () => {
+    const root = temp('yeaft-cli-scene-');
+    const session = createSessionFromSpec(root, { name: 'Legacy', roster: ['linus'] });
+    updateSessionConfig(root, session.id, { sceneId: 'writing' });
+    const store = new ConversationStore(root);
+    store.append({ sessionId: session.id, role: 'user', content: 'legacy question' });
+    store.append({ sessionId: session.id, role: 'assistant', content: 'legacy finding', speakerVpId: 'linus' });
+    const requests = [];
+    const runner = createCliSessionRunner({ loaded: { yeaftDir: root, conversationStore: store }, sessionId: session.id,
+      personaFactory: () => { throw new Error('scene must not look up VP'); },
+      engineFactory: () => ({ async *query(options) {
+        requests.push(options);
+        yield { type: 'text_delta', text: 'result' };
+        yield { type: 'stop', stopReason: 'end_turn' };
+      } }),
+    });
+    try {
+      expect((await runner.run('@all carry on')).report.dispatched).toEqual(['omni']);
+      expect(JSON.stringify(requests[0].messages)).toContain('legacy finding');
+      await expect(runner.run('invalid selector', { routingIntent: { targetVpIds: ['linus'], explicit: true } })).rejects.toThrow('do not accept explicit VP');
+      updateSessionConfig(root, session.id, { sceneId: 'software' });
+      const output = [];
+      await runStreamSessionTurn({ runner, sessionId: session.id, prompt: 'background result', write: frame => output.push(frame),
+        internal: true, sceneId: 'writing', meta: { injectedBy: 'task_result' }, routingIntent: { targetVpIds: ['omni'] },
+      });
+      expect(requests.map(options => options.vpPersona?.sceneId)).toEqual(['writing', 'writing']);
+      expect(requests.every(options => !options.router)).toBe(true);
+      expect(output.at(-1)).toMatchObject({ type: 'result', is_error: false });
+    } finally { await runner.close(); }
+  });
+
 });

@@ -569,6 +569,7 @@ export async function runStreamSessionTurn({
   write,
   routingIntent = null,
   internal = false,
+  sceneId = null,
   taskId = null,
   meta = null,
 }) {
@@ -592,6 +593,7 @@ export async function runStreamSessionTurn({
       modelEffort,
       routingIntent,
       internal,
+      sceneId,
       taskId,
       meta,
       onEvent: event => projector.project(event),

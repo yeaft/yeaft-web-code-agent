@@ -11,6 +11,7 @@ import AgentSettingsPanel from './AgentSettingsPanel.js';
 import YeaftSidebar from './YeaftSidebar.js';
 import SessionInviteModal from './SessionInviteModal.js';
 import SessionCreateModal from './SessionCreateModal.js';
+import SessionSceneSelect from './SessionSceneSelect.js';
 import SessionSettingsModal from './SessionSettingsModal.js';
 import PluginCenterPage from './PluginCenterPage.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
@@ -119,7 +120,7 @@ export function timelineQueryProgress(store, row, { agentId, sessionId }) {
 
 export default {
   name: 'YeaftPage',
-  components: { DigitalPersonPage, ScheduledTaskBar, ScheduledTaskNotifications, NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
+  components: { DigitalPersonPage, ScheduledTaskBar, ScheduledTaskNotifications, NavigationIcon, ChatInput, AgentInstaller, MessageList, SettingsPanel, AgentSettingsPanel, YeaftSidebar, SessionInviteModal, SessionCreateModal, SessionSceneSelect, SessionSettingsModal, PluginCenterPage, WorkbenchPanel, WorkCenterPage, YeaftDebugPanel, VpTimelinePane, YeaftSessionActions, YeaftConversationOutline },
   template: `
     <div class="yeaft-page" ref="pageRef">
       <!-- Mobile sidebar overlay -->
@@ -207,6 +208,7 @@ export default {
           :outline-state="historyOutlineState"
           :search-state="store.yeaftHistorySearchState"
           :active-message-id="historySearchActiveMessageId"
+          :hide-speaker-identity="sceneSession"
           @query="onHistorySearchQuery"
           @move="historySearchActiveMessageId = $event"
           @preview="previewHistorySearchResult"
@@ -307,6 +309,7 @@ export default {
         <MessageList
           ref="messageListRef"
           v-if="!showSettings && !showOnboardingGuide && (conversationInventoryReady || store.yeaftVisibleMessages.length > 0) && (!isActiveGroupEmpty || store.yeaftVisibleMessages.length > 0 || store.yeaftInitialHistoryLoading)"
+          :hide-speaker-identity="sceneSession"
           :fork-from-turn-enabled="forkFromTurnEnabled"
           :fork-from-turn-disabled="!!forkUnavailableReason"
           :fork-from-turn-title="forkUnavailableReason ? $t('yeaft.session.error.' + forkUnavailableReason) : $t('yeaft.session.forkFromTurnHint')"
@@ -324,6 +327,7 @@ export default {
           :conversation-id="store.yeaftConversationId"
           :draft-key="yeaftInputDraftKey"
           :send-fn="sendMessage"
+          :hide-vp-mentions="sceneSession"
           quick-send-enabled
           :quote="messageQuote"
           :cancel-fn="cancelYeaft"
@@ -334,6 +338,15 @@ export default {
           @remove-quote="messageQuote = null"
           @quote-consumed="messageQuote = null"
         >
+          <template #actions-start>
+            <SessionSceneSelect
+              v-if="ordinarySession && topbarGroup"
+              :key="JSON.stringify([sceneAgentId, topbarGroup.id])"
+              :session="topbarGroup"
+              :agent-id="sceneAgentId"
+              :disabled="isActiveSessionCopying || store.connectionState !== 'connected' || store.hasAgentCapability?.(sceneAgentId, 'session_scenes') === false"
+            />
+          </template>
           <template #actions-end-before>
             <div class="yeaft-composer-model-controls" :aria-busy="store.sessionModelSelectionFor(topbarGroup?.id, store.currentAgent) ? 'true' : 'false'">
               <div
@@ -430,6 +443,7 @@ export default {
         v-if="!store.workCenterOpen && !store.pluginCenterOpen && !store.digitalPersonOpen && !showOnboardingGuide"
         v-show="showVpTimeline"
         :rows="vpTimelineRows"
+        :hide-vp-identity="sceneSession"
         :tasks="sessionStatusTasksForActiveSession"
         :announcement-text="sessionStatusAnnouncementText"
         :stopping-tasks-by-id="store.yeaftStoppingTasksById"
@@ -538,7 +552,7 @@ export default {
     const agentSecret = Vue.ref('');
     const agentSecretLoading = Vue.ref(false);
     const agentSecretError = Vue.ref('');
-    const settingsInitialTab = Vue.ref('vp');
+    const settingsInitialTab = Vue.ref('search');
     const settingsInitialEditVpId = Vue.ref(null);
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
     // can call its imperative `appendMention(vpId)` when the Session status
@@ -987,8 +1001,8 @@ export default {
       // invite modal instead of sending a message that would round-trip
       // a `no_default_vp` error back as a silent toast.
       const gs = sessionsStore();
-      if (gs && gs.activeNeedsInvite) {
-        const g = gs.activeSession;
+      if (isActiveGroupEmpty.value) {
+        const g = gs?.activeSession;
         if (g) inviteDismissedFor.delete(g.id); // force show
         return false;
       }
@@ -998,7 +1012,7 @@ export default {
       // resolution aligned with the visible filter prevents quick group
       // switches from stamping a message with a different group's id.
       const groupId = store.yeaftActiveSessionFilter || (gs && gs.activeSessionId) || 'grp_default';
-      const mentions = parseMentions(text).mentions;
+      const mentions = sceneSession.value ? [] : parseMentions(text).mentions;
       // Attachments: ChatInput's custom-send path passes the resolved
       // info list as the second arg. We forward it untouched — the
       // store helper strips `fileId` shape for the wire and keeps the
@@ -1087,6 +1101,10 @@ export default {
       }
       return typeof gs.sessionById === 'function' ? gs.sessionById('grp_default', store.currentAgent || null) : null;
     });
+
+    const ordinarySession = Vue.computed(() => !topbarGroup.value?.task);
+    const sceneSession = Vue.computed(() => ordinarySession.value && !!topbarGroup.value?.sceneId);
+    const sceneAgentId = Vue.computed(() => topbarGroup.value?.agentId || store.currentAgent || null);
 
     const forkSessionRow = Vue.computed(() => {
       const sessionId = store.yeaftActiveSessionFilter || topbarGroup.value?.id;
@@ -1287,7 +1305,7 @@ export default {
 
     const toggleSettings = () => {
       if (!showSettings.value) {
-        settingsInitialTab.value = 'vp';
+        settingsInitialTab.value = 'search';
         settingsInitialEditVpId.value = null;
       }
       showSettings.value = !showSettings.value;
@@ -1295,8 +1313,8 @@ export default {
 
     // task-343: VP library lives inside Settings as a tab. Helper to open
     // Settings at a specific tab (used by SessionInviteModal CTA).
-    const openSettings = ({ initialTab = 'vp', editVpId = null } = {}) => {
-      settingsInitialTab.value = ['vp', 'search', 'mcp', 'security'].includes(initialTab) ? initialTab : 'vp';
+    const openSettings = ({ initialTab = 'search', editVpId = null } = {}) => {
+      settingsInitialTab.value = ['vp', 'search', 'mcp', 'security'].includes(initialTab) ? initialTab : 'search';
       settingsInitialEditVpId.value = settingsInitialTab.value === 'vp' ? (editVpId || null) : null;
       showSettings.value = true;
     };
@@ -1372,8 +1390,10 @@ export default {
     );
     const shouldShowInviteModal = Vue.computed(() => {
       const gs = sessionsStore();
-      if (!gs || !gs.activeNeedsInvite) return false;
-      const g = gs.activeSession;
+      if (!isActiveGroupEmpty.value) return false;
+      // A scene-capable empty Session can recover directly in the composer.
+      if (ordinarySession.value && store.hasAgentCapability?.(sceneAgentId.value, 'session_scenes')) return false;
+      const g = gs?.activeSession;
       if (!g) return false;
       // Skip if the user already dismissed THIS empty-roster state.
       return !inviteDismissedFor.has(g.id);
@@ -1382,8 +1402,8 @@ export default {
     // hero state stays visible even after the user dismisses the modal —
     // the empty group still needs a clear next step in the main pane.
     const isActiveGroupEmpty = Vue.computed(() => {
-      const gs = sessionsStore();
-      return !!(gs && gs.activeNeedsInvite);
+      const row = topbarGroup.value;
+      return !!row && !sceneSession.value && !row.defaultVpId && !row.roster?.length;
     });
     const conversationInventoryReady = Vue.computed(() => {
       const gs = sessionsStore();
@@ -1530,18 +1550,15 @@ export default {
       const convId = store.yeaftConversationId;
       if (!convId) return [];
 
-      // Active group resolution: an explicit conversation-pane filter
-      // wins; otherwise fall back to the groups store's selected group.
-      // The VP timeline is ALWAYS roster-scoped — no group means no
-      // rows. This matches the user's mental model: the middle column
-      // is "this group's roster", not "every VP in the library".
+      // Follow the visible Session, not the global role library. Legacy
+      // entries stay roster-scoped; scene activity comes from runtime state.
       const gs = sessionsStore();
       const filter = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
       if (!filter) return [];
 
       const group = resolveTimelineSession(gs, filter, store.currentAgent || null);
       const roster = (group && Array.isArray(group.roster)) ? group.roster : [];
-      if (roster.length === 0) return [];
+      if (!group || (!sceneSession.value && !roster.length)) return [];
       const rosterSet = new Set(roster);
 
       // Base list = the group's declared roster, ordered by the roster
@@ -1552,20 +1569,21 @@ export default {
       // id until vp_snapshot lands.
       const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
 
-      // Cross-group leak defense: only include status rows whose
-      // sessionId matches the active filter, and whose vpId is in the
-      // active roster. The store keys vpStatuses by `${sessionId}::${vpId}`
-      // (see chat.js `vpStatusKey`) — iterate values, not keys, since
-      // the composite key isn't a usable VP id by itself.
+      // Scope statuses to this exact Agent/Session. Retain the loose legacy
+      // envelope fallback only for rows that also belong to a known roster.
       const rawStatuses = store.vpStatuses || {};
       const scopedStatuses = {};
-      const activeAgentId = store.currentAgent || null;
+      const activeAgentId = group.agentId || store.currentAgent || null;
       for (const entry of Object.values(rawStatuses)) {
         if (!entry || !entry.vpId) continue;
         const entrySessionId = entry.sessionId ?? entry.groupId;
         if (entrySessionId && entrySessionId !== filter) continue;
         if (activeAgentId && entry.agentId && entry.agentId !== activeAgentId) continue;
-        if (!rosterSet.has(entry.vpId)) continue;
+        if (sceneSession.value) {
+          // Scene ownership is Session-scoped, including any old execution
+          // still draining under its original role after the switch.
+          if (entrySessionId !== filter || (activeAgentId && entry.agentId !== activeAgentId)) continue;
+        } else if (!rosterSet.has(entry.vpId)) continue;
         scopedStatuses[entry.vpId] = entry;
       }
 
@@ -1636,6 +1654,9 @@ export default {
       debugMode,
       composerMenuOpen,
       topbarGroup,
+      ordinarySession,
+      sceneSession,
+      sceneAgentId,
       forkSessionRow,
       forkSessionKey,
       activeSessionForkState,

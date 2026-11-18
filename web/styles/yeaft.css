@@ -221,6 +221,68 @@
   text-align: left;
 }
 
+.yeaft-create-scene-select {
+  min-width: 0;
+  font-family: inherit;
+}
+
+.yeaft-composer-scene {
+  flex: 0 0 clamp(6.5rem, 26vw, 8rem);
+  min-width: 0;
+  position: relative;
+}
+
+.yeaft-composer-scene-select {
+  width: 100%;
+  height: var(--chat-composer-control-size);
+  padding-inline-start: var(--sidebar-section-toggle-gap);
+  border: 0;
+  border-radius: var(--sidebar-section-toggle-radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--yeaft-composer-model-font-size);
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.yeaft-composer-scene-select:focus-visible {
+  outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
+  outline-offset: var(--sidebar-focus-ring-offset);
+}
+
+.yeaft-composer-scene-select:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.yeaft-composer-scene-error {
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: calc(100% + var(--chat-composer-control-gap));
+  width: max-content;
+  max-width: min(15rem, 65vw);
+  padding: var(--chat-composer-control-gap);
+  z-index: 1;
+  border-radius: var(--sidebar-section-toggle-radius);
+  background: var(--bg-input);
+  color: var(--error-text);
+  font-size: var(--yeaft-composer-model-font-size);
+}
+
+.yeaft-session-input:has(.yeaft-composer-scene) .chat-composer-actions {
+  flex-wrap: wrap;
+}
+
+.yeaft-session-input:has(.yeaft-composer-scene) .chat-composer-actions-start {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.yeaft-session-input:has(.yeaft-composer-scene) .attach-btn {
+  flex-shrink: 0;
+}
+
 .yeaft-composer-model-controls {
   display: flex;
   align-items: center;
@@ -504,6 +566,11 @@
 @media (max-width: 768px) {
   .yeaft-composer-model {
     max-width: var(--yeaft-composer-model-mobile-max-width);
+  }
+
+  /* Leave room for the scene, attachment, effort, Stop and Send controls. */
+  .yeaft-session-input:has(.yeaft-composer-scene) .yeaft-composer-model {
+    max-width: min(25vw, var(--yeaft-composer-model-mobile-max-width));
   }
 
   .yeaft-composer-model-dropdown,
@@ -3487,6 +3554,7 @@
   cursor: pointer;
   border-radius: 4px;
 }
+div.yeaft-vp-timeline-row-body { cursor: default; }
 .yeaft-vp-timeline-row-body:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .yeaft-vp-error-toggle.btn-ghost {
   flex: 0 0 auto;

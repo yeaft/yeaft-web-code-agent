@@ -19,6 +19,7 @@
  * deterministic per-request history-window trimming.
  */
 
+import { renderSessionScene } from './sessions/scene-prompts.js';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -292,7 +293,10 @@ export function buildSystemPrompt({
   // ─── 1. Stable Core ────────────────────────────────────
   // A VP persona supplies the identity layer when present. The compact core
   // rules stay stable across turns and replace the old full base/common bundle.
-  const personaBlock = renderVpPersona(vpPersona, lang, effectiveLang);
+  const sceneBlock = renderSessionScene(vpPersona?.sceneId, effectiveLang);
+  const personaBlock = sceneBlock
+    ? [sceneBlock, vpPersona.runtimePreamble?.trim()].filter(Boolean).join('\n\n')
+    : renderVpPersona(vpPersona, lang, effectiveLang);
   if (personaBlock) parts.push(personaBlock);
   const coreTemplate = getTemplate('core', effectiveLang);
   if (coreTemplate) {

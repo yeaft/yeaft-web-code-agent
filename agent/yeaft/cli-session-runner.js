@@ -7,6 +7,7 @@ import { createCoordinator } from './sessions/coordinator.js';
 import { resolveMemberId } from './sessions/roster.js';
 import { sessionsRoot } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta } from './sessions/session-store.js';
+import { isSessionSceneId, SESSION_ASSISTANT_ID } from './sessions/scene-ids.js';
 import { loadSessionConfig, resolveSessionConfig } from './sessions/session-config.js';
 import { readVp } from './vp/vp-crud.js';
 import { COLLAB_TOOL_POLICY } from './tools/registry.js';
@@ -180,6 +181,7 @@ export function createCliSessionRunner({
   const runEnvelope = async (vpId, envelope, options) => {
     const meta = handle.getMeta();
     const engine = engineFor(vpId);
+    const sceneId = envelope?._sceneId || null;
     const prompt = envelope?.msg?.text || '';
     const persistedUserClientMessageId = typeof envelope?._persistedUserClientMessageId === 'string'
       ? envelope._persistedUserClientMessageId
@@ -247,19 +249,16 @@ export function createCliSessionRunner({
       sessionId,
       workDir: meta.workDir || workDir,
       senderVpId: vpId,
-      sessionMembers: meta.roster.slice(),
+      sessionMembers: sceneId ? [] : meta.roster.slice(),
       sessionAnnouncement: meta.announcement || '',
-      vpPersona: personaFactory(vpId, loaded),
-      router: createRouter({
-        coordinator: scopedCoordinator,
-        guard: routeForwardGuard,
-      }),
+      vpPersona: sceneId ? { sceneId, vpId } : personaFactory(vpId, loaded),
+      router: sceneId ? undefined : createRouter({ coordinator: scopedCoordinator, guard: routeForwardGuard }),
       inboundEnvelope: envelope,
       userAlreadyPersisted: true,
       causalRootId,
       threadId: 'main',
       vpTurnId: envelope?.msg?.id || randomUUID(),
-      collabToolPolicy: meta.roster.length > 1
+      collabToolPolicy: !sceneId && meta.roster.length > 1
         ? COLLAB_TOOL_POLICY.MULTI_VP
         : COLLAB_TOOL_POLICY.SINGLE_VP,
       getCurrentTodos: () => todos.slice(),
@@ -288,13 +287,14 @@ export function createCliSessionRunner({
         } else if (event.type === 'stop' && event.stopReason) {
           stopReason = event.stopReason;
         }
-        await options.onEvent?.({ vpId, event, sessionId, turnId: queryOptions.vpTurnId });
+        await options.onEvent?.({ vpId, event, sessionId, sceneId, turnId: queryOptions.vpTurnId });
       }
     } catch (error) {
       failed = error;
       await options.onEvent?.({
         vpId,
         sessionId,
+        sceneId,
         turnId: queryOptions.vpTurnId,
         event: { type: 'error', error, retryable: false },
       });
@@ -422,18 +422,25 @@ export function createCliSessionRunner({
     get meta() { return handle.getMeta(); },
     async run(prompt, options = {}) {
       if (closed) throw new Error('CLI Session runner is closed');
+      const meta = handle.getMeta();
+      const sceneId = options.internal
+        ? (isSessionSceneId(options.sceneId) ? options.sceneId : null)
+        : (meta.task ? null : loadSessionConfig(loaded.yeaftDir, sessionId).sceneId || null);
       let routingIntent = options.routingIntent && typeof options.routingIntent === 'object'
         ? options.routingIntent
         : null;
+      if (sceneId && !options.internal && routingIntent) {
+        throw new Error('Scene Sessions do not accept explicit VP selectors');
+      }
       if (routingIntent) {
-        const meta = handle.getMeta();
         const rawTargets = Array.isArray(routingIntent.targetVpIds)
           ? routingIntent.targetVpIds
           : [];
         const targetVpIds = [];
         for (const rawTarget of rawTargets) {
           const target = typeof rawTarget === 'string' ? rawTarget.trim() : '';
-          const resolved = resolveMemberId(meta, target);
+          const resolved = sceneId && options.internal && target === SESSION_ASSISTANT_ID
+            ? target : resolveMemberId(meta, target);
           if (!resolved) throw new Error(`Unknown stream-json target VP ${target || String(rawTarget)}: not in roster`);
           if (!targetVpIds.includes(resolved)) targetVpIds.push(resolved);
         }
@@ -503,6 +510,7 @@ export function createCliSessionRunner({
         } : {}),
         ...(routingIntent ? { _routingIntent: routingIntent } : {}),
         ...(persistedUserClientMessageId ? { _persistedUserClientMessageId: persistedUserClientMessageId } : {}),
+        _sceneId: sceneId,
         _cliRootOrder: rootOrder,
         _cliCausalRootId: messageId,
         _cliTurnContext: turnContext,

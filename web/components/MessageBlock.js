@@ -29,6 +29,7 @@ export default {
                 <UserTurnBlock
                   v-if="item.type === 'user' && context.useImStyleForUser"
                   :message="item.message"
+                  :hide-speaker-identity="context.hideSpeakerIdentity"
                   @quote="$emit('quote-message', $event)"
                   @edit-as-new="$emit('edit-message-as-new', $event)"
                 />
@@ -45,6 +46,7 @@ export default {
                 <VpTurnBlock
                   v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
                   :turn="item"
+                  :hide-speaker-identity="context.hideSpeakerIdentity"
                   :show-fork-action="context.forkFromTurnEnabled && !!item.forkBoundaryTurnId && !item.isStreaming && !item.isActive"
                   :fork-action-disabled="context.forkFromTurnDisabled"
                   :fork-action-title="context.forkFromTurnTitle"
@@ -61,6 +63,7 @@ export default {
                 <AssistantTurn
                   v-else-if="item.type === 'assistant-turn'"
                   :turn="item"
+                  :hide-speaker-identity="context.hideSpeakerIdentity"
                   :show-fork-action="context.forkFromTurnEnabled && !!item.forkBoundaryTurnId && !item.isStreaming && !item.isActive"
                   :fork-action-disabled="context.forkFromTurnDisabled"
                   :fork-action-title="context.forkFromTurnTitle"
@@ -97,11 +100,12 @@ export default {
               <div class="message-block-collapsed-preview">
                 <div class="vp-turn-block-main-header message-block-collapsed-preview-header">
                   <span
+                    v-if="!context.hideSpeakerIdentity"
                     class="vp-turn-block-name message-block-collapsed-preview-speaker"
                     :style="context.collapsedResponsePreviewSpeaker(block).style"
                   >{{ context.collapsedResponsePreviewSpeaker(block).name }}</span>
                   <template v-if="context.collapsedResponsePreviewSpeaker(block).timeText">
-                    <span class="vp-turn-block-sep" aria-hidden="true">·</span>
+                    <span v-if="!context.hideSpeakerIdentity" class="vp-turn-block-sep" aria-hidden="true">·</span>
                     <span
                       class="vp-turn-block-time"
                       :title="context.collapsedResponsePreviewSpeaker(block).fullTimeText"
@@ -145,6 +149,7 @@ export default {
               <UserTurnBlock
                 v-if="block.type === 'user' && context.useImStyleForUser"
                 :message="block.message"
+                :hide-speaker-identity="context.hideSpeakerIdentity"
                 @quote="$emit('quote-message', $event)"
                 @edit-as-new="$emit('edit-message-as-new', $event)"
               />
@@ -152,6 +157,7 @@ export default {
               <VpTurnBlock
                 v-else-if="block.type === 'assistant-turn' && block.speakerVpId"
                 :turn="block"
+                :hide-speaker-identity="context.hideSpeakerIdentity"
                 :show-fork-action="context.forkFromTurnEnabled && !!block.forkBoundaryTurnId && !block.isStreaming && !block.isActive"
                 :fork-action-disabled="context.forkFromTurnDisabled"
                 :fork-action-title="context.forkFromTurnTitle"
@@ -163,6 +169,7 @@ export default {
               <AssistantTurn
                 v-else-if="block.type === 'assistant-turn'"
                 :turn="block"
+                :hide-speaker-identity="context.hideSpeakerIdentity"
                 :show-fork-action="context.forkFromTurnEnabled && !!block.forkBoundaryTurnId && !block.isStreaming && !block.isActive"
                 :fork-action-disabled="context.forkFromTurnDisabled"
                 :fork-action-title="context.forkFromTurnTitle"

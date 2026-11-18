@@ -142,6 +142,7 @@ export default {
   emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'cancel-task', 'close'],
   props: {
     rows: { type: Array, required: true },
+    hideVpIdentity: { type: Boolean, default: false },
     tasks: { type: Array, default: () => [] },
     announcementText: { type: String, default: '' },
     stoppingTasksById: { type: Object, default: () => ({}) },
@@ -217,31 +218,32 @@ export default {
 
       <slot name="scheduled-task"></slot>
 
-      <section class="yeaft-session-status-section" :aria-label="$t('yeaft.sessionStatus.vps')">
+      <section v-if="!hideVpIdentity || statusRows.length" class="yeaft-session-status-section" :aria-label="$t(statusSectionTitleKey)">
         <header class="yeaft-session-status-section-header">
-          <span>{{ $t('yeaft.sessionStatus.vps') }}</span>
-          <span class="yeaft-session-status-count" v-if="rows.length">{{ rows.length }}</span>
+          <span>{{ $t(statusSectionTitleKey) }}</span>
+          <span class="yeaft-session-status-count" v-if="!hideVpIdentity && statusRows.length">{{ statusRows.length }}</span>
         </header>
 
-        <div v-if="!rows.length" class="yeaft-vp-timeline-empty">
+        <div v-if="!statusRows.length" class="yeaft-vp-timeline-empty">
           {{ $t('yeaft.vpTimeline.empty') }}
         </div>
 
         <ul v-else class="yeaft-vp-timeline-list">
           <li
-            v-for="row in rows"
+            v-for="row in statusRows"
             :key="row.vpId"
             class="yeaft-vp-timeline-row"
             :class="['is-status-' + row.status, { 'is-stopping': row.isStopping, 'has-query-progress': !!row.queryProgress }]"
           >
             <div class="yeaft-vp-timeline-row-header">
-              <button type="button" class="yeaft-vp-timeline-row-body"
-                :aria-label="row.displayName + ' — ' + statusLabel(row)"
-                :title="$t('yeaft.vpTimeline.mention')"
-                @click="$emit('mention-vp', row.vpId)">
+              <component :is="hideVpIdentity ? 'div' : 'button'"
+                :type="hideVpIdentity ? undefined : 'button'" class="yeaft-vp-timeline-row-body"
+                :aria-label="(hideVpIdentity ? $t('message.assistant') : row.displayName) + ' — ' + statusLabel(row)"
+                :title="hideVpIdentity ? undefined : $t('yeaft.vpTimeline.mention')"
+                @click="!hideVpIdentity && $emit('mention-vp', row.vpId)">
                 <span class="yeaft-vp-timeline-row-copy">
-                  <span class="yeaft-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
-                  <span v-if="row.description" class="yeaft-vp-timeline-row-description">{{ row.description }}</span>
+                  <span class="yeaft-vp-timeline-row-name" :style="hideVpIdentity ? undefined : { color: vpTextColorFor(row.vpId) }">{{ (hideVpIdentity ? $t('message.assistant') : row.displayName) }}</span>
+                  <span v-if="!hideVpIdentity && row.description" class="yeaft-vp-timeline-row-description">{{ row.description }}</span>
                 </span>
                 <span v-if="row.status !== 'error'" class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
                 <span
@@ -249,9 +251,9 @@ export default {
                   class="yeaft-vp-timeline-thread-count"
                   :title="threadCountTitle(row)"
                 >{{ row.runningThreadCount }} threads</span>
-              </button>
+              </component>
               <button v-if="row.errors?.length" type="button" class="btn-ghost yeaft-vp-error-toggle"
-                :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: row.displayName })"
+                :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: (hideVpIdentity ? $t('message.assistant') : row.displayName) })"
                 :aria-expanded="isErrorExpanded(row)"
                 @click="toggleError(row)">
                 {{ $t('yeaft.vpTimeline.status.error') }} <span aria-hidden="true">{{ isErrorExpanded(row) ? '▾' : '▸' }}</span>
@@ -273,6 +275,7 @@ export default {
                 </button>
                 <button
                   type="button"
+                  v-if="!hideVpIdentity"
                   class="yeaft-vp-timeline-edit"
                   :aria-label="$t('yeaft.vpTimeline.edit')"
                   :title="$t('yeaft.vpTimeline.edit')"
@@ -286,7 +289,7 @@ export default {
               </span>
             </div>
             <section v-if="row.errors?.length && isErrorExpanded(row)" class="yeaft-vp-error-details"
-              :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: row.displayName })">
+              :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: (hideVpIdentity ? $t('message.assistant') : row.displayName) })">
               <article v-for="(error, index) in row.errors" :key="index" class="yeaft-vp-error-detail">
                 <p class="yeaft-vp-error-message">{{ error.message || $t('yeaft.vpTimeline.errorUnavailable') }}</p>
                 <dl class="yeaft-vp-error-metadata">
@@ -379,7 +382,7 @@ export default {
                 <span class="yeaft-vp-task-main">
                   <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
                   <code v-if="shellTaskCommand(task)" class="yeaft-vp-task-command">{{ shellTaskCommand(task) }}</code>
-                  <span class="yeaft-vp-task-meta">{{ taskOwnerName(task) }} · {{ formatTaskTime(task.startedAt) }}</span>
+                  <span class="yeaft-vp-task-meta"><template v-if="!hideVpIdentity">{{ taskOwnerName(task) }} · </template>{{ formatTaskTime(task.startedAt) }}</span>
                 </span>
               </button>
               <span class="yeaft-vp-task-kind">{{ taskKindLabel(task) }}</span>
@@ -525,6 +528,12 @@ export default {
       })
     );
 
+    const statusRows = Vue.computed(() => props.hideVpIdentity
+      ? props.rows.filter(row => isActiveStatus(row.status) || row.queryProgress || row.errors?.length)
+      : props.rows);
+    const statusSectionTitleKey = Vue.computed(() => props.hideVpIdentity
+      ? 'yeaft.sessionStatus.activity' : 'yeaft.sessionStatus.vps');
+
     const taskOwnerName = (task) => {
       const owner = task?.ownerVpId || '';
       if (!owner) return 'unknown';
@@ -614,6 +623,8 @@ export default {
       expandedTasks,
       toggleTaskExpanded,
       taskOwnerName,
+      statusRows,
+      statusSectionTitleKey,
       formatTaskTime,
       taskKindLabel,
       shellTaskCommand,

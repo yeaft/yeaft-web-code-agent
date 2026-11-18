@@ -8,7 +8,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md) | [文档站](https://yeaft.github.io/yeaft-web-code-agent/zh-CN/)
 
-Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个浏览器可以连接多台 Agent，打开 Claude Code 或 GitHub Copilot CLI 对话，也可以运行 Yeaft 原生多 provider 引擎，使用持久 Session、可复用的 Virtual Person（VP）、有边界的记忆、Project 和 Work Center。
+Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个浏览器可以连接多台 Agent，打开 Claude Code 或 GitHub Copilot CLI 对话，也可以运行 Yeaft 原生多 provider 引擎，使用持久 Session、可切换场景、有界历史、Project 和 Work Center。
 
 **在线体验：** [cc.yeaft.com](https://cc.yeaft.com)
 
@@ -18,7 +18,7 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 
 - **让执行靠近代码。** Shell、文件、Git、provider、凭据、Session 数据和 Work Center 状态都留在已连接的 Agent 机器。Server 负责用户认证和 Browser ↔ Agent 中继。
 - **每个任务选合适的 runtime。** Claude Code CLI、基于 ACP 的 GitHub Copilot CLI 与 Yeaft 原生引擎共用一套 Web UI，但文档不会假装它们行为完全相同。
-- **一个 Session 从 1 个 VP 扩到多个 VP。** 原生 Yeaft 只有 Session 这一种协作单元：1 个 VP 做专注任务，多个 VP 可并行承担实现、审查、调研或设计。
+- **同一个 Session，同一份对话。** 场景决定本轮的工作准则，不切换身份、不分割历史；独立轮次可以并行执行。
 - **有意识地携带上下文。** 原生 Session 使用自身持久 turn 的有界窗口；Project instruction 独立注入，不自动注入兄弟 Session transcript。
 - **把长任务移出单次 chat turn。** Work Center 将目标持久化为 WorkItem，由 AI 规划经过校验的 Action graph，分配 VP、记录 Run 和工具证据，并能在浏览器断开或 Agent 重启后继续恢复。
 
@@ -27,8 +27,8 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 | 概念 | 准确定义 |
 | --- | --- |
 | **Agent** | 运行在笔记本、VM、服务器或容器上的 Node.js worker。它拥有执行环境、本机配置和原生 Yeaft 运行数据。 |
-| **Session** | 原生 Yeaft 的持久对话单元，包含 1..N 个 VP、一个消息时间线、工作目录、模型 override 和公告。 |
-| **VP（Virtual Person）** | 可复用角色，包含双语元数据、traits、persona prompt，以及 primary/fast model hint。VP 是角色，不是另一台机器。 |
+| **Session** | 原生 Yeaft 的持久对话单元，包含一个消息时间线、场景、工作目录、模型 override 和公告。 |
+| **VP（Virtual Person）** | 旧 Session 和已有任务流程的兼容角色；新建对话不需要选 VP。 |
 | **Project** | 浏览器中对原生 Session 的分组。Project instruction 作用于成员 Session，但不会合并或自动注入兄弟 Session transcript。 |
 | **Work Center** | Agent 级持久任务系统。WorkItem 包含合同和对话；规划出的 Action 通过有 fence 的 Run 执行，记录状态、证据、重试、人工输入和 review 结论。 |
 
@@ -40,7 +40,7 @@ Yeaft 是运行在自有机器上的代码 Agent 的 Web 控制面。同一个�
 | --- | --- | --- |
 | **Claude Code** | 每个 conversation 一个 Claude Code CLI 进程；支持 Claude Code 工具、skills、MCP、compact/clear、sub-agent event 和 resume | 本机必须安装并登录 Claude Code CLI |
 | **GitHub Copilot** | 每个 conversation 一个 `copilot --acp` 进程；使用 Copilot model catalog 和明确的工具权限确认 | 本机必须安装 Copilot CLI，并拥有可用的 GitHub Copilot 账号 |
-| **Yeaft Code Agent** | `yeaft-agent` 内的原生引擎；1..N 个 VP、33 个内置工具、多 provider 路由、有界 Session history、Project、sub-agent 和 Work Center 交接 | 不模拟 Claude Code 或 Copilot CLI 的所有命令和行为 |
+| **Yeaft Code Agent** | `yeaft-agent` 内的原生引擎；会话场景、33 个内置工具、多 provider 路由、有界 Session history、Project、sub-agent 和 Work Center 交接 | 不模拟 Claude Code 或 Copilot CLI 的所有命令和行为 |
 
 Web UI 还提供终端、Git 状态与 diff、文件浏览/编辑、端口代理、CLI conversation 分屏、Claude Code conversation 的 Expert Panel、用量管理、light/dark theme，以及中英文切换。
 
@@ -52,10 +52,10 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 
 ### Session 与 Project
 
-- 创建 Session 时选择 Agent、工作目录、roster 和 default VP；创建后在 composer 选择 model/effort，在 Session settings 编辑公告。
-- 用 `@mention` 指定一个或多个 VP；选中的 VP 独立执行同一个 turn，也能通过 `RouteForward` 明确交接给同 Session 的其他 VP。
+- 创建 Session 时选择 Agent、工作目录和场景；创建后可在附件旁切换场景，模型／强度和公告分别设置。
+- 切换场景只影响后续轮次，历史共用，运行中的轮次保留原场景。旧会话在未选场景前继续使用旧路由。
 - 原生 Session 执行中仍可发送：AI 判断是补充已有 turn，还是新建并行 turn。所有 turn 共用一个输入框，执行中最多显示三栏并可横向切换，完成后按发起顺序回归历史。
-- 搜索和分页加载持久 Session history，检查每个 VP turn、运行中的后台任务、模型选择、工具调用、token 用量和 stop reason。
+- 搜索和分页加载持久 Session history，检查每个对话轮次、运行中的后台任务、模型选择、工具调用、token 用量和 stop reason。
 - 将原生 Session 放入 Project，在 Project 与 Recents 之间拖动，并为所有成员 Session 设置共享 Project instruction。
 - 从当前 Session 创建持久 WorkItem；来源 Session 身份由 runtime 强制写入。
 

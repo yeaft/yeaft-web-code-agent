@@ -100,11 +100,11 @@ npm run docs:build
 2. 在统一侧栏选择 **新建聊天**。
 3. 选择 **Yeaft** 和目标 Agent。
 4. 选择 working directory。
-5. 选择一个或多个 VP，并指定 default VP。
+5. 选择场景（默认通用）。
 6. 创建 Session。
 7. 创建后在 composer 选择 model/effort，在 Session settings 编辑公告，然后发送消息。
 
-1 个 VP 适合普通代码 Agent workflow。只有确实需要独立角色时才增加 VP，并用 `@mention` 指定每个 turn 的参与者。
+开发任务可选择「软件」。之后可在附件旁切换场景，继续使用同一份历史；正在执行的轮次不受影响。
 
 ## 体验 Work Center
 

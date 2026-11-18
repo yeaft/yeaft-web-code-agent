@@ -21,6 +21,7 @@ export default {
     sendFn: { type: Function, default: null },
     /** Explicit opt-in: CLI / Work Center do not support native per-turn model overrides. */
     quickSendEnabled: { type: Boolean, default: false },
+    hideVpMentions: { type: Boolean, default: false },
     /** Custom cancel/stop function. Overrides store.cancelExecution. */
     cancelFn: { type: Function, default: null },
     /** i18n key for placeholder text. Defaults to 'chatInput.placeholder'. */
@@ -297,6 +298,7 @@ export default {
     ));
     const vpMentionPopupOpen = Vue.computed(() => (
       !store.btwMode
+      && !props.hideVpMentions
       && showVpAutocomplete.value
       && !showExpertAutocomplete.value
       && filteredVpMentions.value.length > 0
@@ -530,7 +532,7 @@ export default {
         const charBefore = atIdx > 0 ? rawText[atIdx - 1] : ' ';
         if (charBefore === ' ' || charBefore === '\n' || atIdx === 0) {
           if (isInYeaftGroupContext()) {
-            showVpAutocomplete.value = true;
+            showVpAutocomplete.value = !props.hideVpMentions;
             vpSelectedIndex.value = 0;
             showExpertAutocomplete.value = false;
           } else {
@@ -729,7 +731,7 @@ export default {
         return;
       }
       // ★ task-334j: VP autocomplete keyboard nav (before expert, same contract)
-      if (showVpAutocomplete.value) {
+      if (!props.hideVpMentions && showVpAutocomplete.value) {
         const vpList = filteredVpMentions.value;
         if (vpList.length > 0) {
           if (e.key === 'ArrowDown') {

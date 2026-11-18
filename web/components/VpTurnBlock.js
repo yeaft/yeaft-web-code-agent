@@ -43,6 +43,7 @@ export default {
     responseCollapsed: { type: Boolean, default: false },
     responseToggleLabel: { type: String, default: '' },
     displayNameOverride: { type: String, default: '' },
+    hideSpeakerIdentity: { type: Boolean, default: false },
     sessionActions: { type: Boolean, default: true },
     debugActionEnabled: { type: Boolean, default: true },
     canStop: { type: Boolean, default: true },
@@ -116,6 +117,7 @@ export default {
           :turn="turn"
           :conversation-id="conversationId"
           :hide-speaker-header="true"
+          :hide-speaker-identity="hideSpeakerIdentity"
           :response-collapsible="responseCollapsible"
           :response-collapsed="responseCollapsed"
           :response-toggle-label="responseToggleLabel"
@@ -143,6 +145,7 @@ export default {
     const $t = (inst && inst.appContext.config.globalProperties.$t) || ((key) => key);
 
     const displayName = Vue.computed(() => {
+      if (props.hideSpeakerIdentity) return '';
       if (props.displayNameOverride) return props.displayNameOverride;
       const vpId = props.turn && props.turn.speakerVpId;
       if (!vpId) return '';
