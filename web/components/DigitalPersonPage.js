@@ -803,7 +803,7 @@ export default {
               <p v-if="state.search.loading" role="status" class="person-muted">{{ $t('person.loading') }}</p>
               <p v-else-if="state.search.loaded && !state.search.items.length" class="person-empty">{{ $t('person.noSearchResults') }}</p>
               <PersonSearchResult v-for="message in state.search.items" :key="message.id" :message="message" :query="state.search.query"
-                :person-name="state.person?.name" :open-link="openReplyBrowser" />
+                :person-name="state.person?.name" :compact="state.search.items.length > 1" :open-link="openReplyBrowser" />
               <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>
             </div>
           </section>

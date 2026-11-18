@@ -69,6 +69,16 @@ describe('Digital Person surface', () => {
     expect(personSearchSnippet('Short message', '[')).toEqual({ parts: [{ text: 'Short message', match: false }], leading: false, trailing: false });
     expect(personSearchSnippet(`prefix😀${'x'.repeat(31)}match`, 'MATCH').parts[0].text.startsWith('😀')).toBe(true);
     expect(personSearchSnippet(`${'x'.repeat(199)}😀suffix`, '')).toEqual({ parts: [{ text: `${'x'.repeat(199)}😀`, match: false }], leading: false, trailing: true });
+    for (const cluster of ['e\u0301', '👍🏽', '👩‍💻']) {
+      const sample = personSearchSnippet(`prefix ${cluster}${'x'.repeat(31)}match`, 'MATCH');
+      expect(sample.parts[0].text.startsWith(cluster)).toBe(true);
+      expect(personSearchSnippet(`${'x'.repeat(199)}${cluster}suffix`, '').parts[0].text).toBe(`${'x'.repeat(199)}${cluster}`);
+    }
+    expect(personSearchSnippet('e\u0301', '\u0301').parts).toEqual([{ text: 'e\u0301', match: true }]);
+    const phrase = '接口变更顺序'.repeat(8);
+    expect(personSearchSnippet(`preceding context ${phrase} after`, phrase)).toEqual({
+      parts: [{ text: phrase, match: true }, { text: ' after', match: false }], leading: true, trailing: false,
+    });
     expect(personSearchSnippet('x'.repeat(200), 'x'.repeat(200))).toEqual({ parts: [{ text: 'x'.repeat(200), match: true }], leading: false, trailing: false });
   });
 

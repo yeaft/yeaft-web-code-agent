@@ -190,6 +190,7 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
   line-height: 1.6;
   font-size: 14px;
 }
+.person-search-result.is-compact .person-search-snippet { -webkit-line-clamp: 3; }
 .person-search-snippet mark { background: var(--tag-high-bg); color: var(--text-primary); font-weight: 600; }
 .person-page .person-search-details { padding-inline: var(--work-center-space-1); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
 @media (max-width: 600px) { .person-page .person-search-details { min-height: 44px; } }

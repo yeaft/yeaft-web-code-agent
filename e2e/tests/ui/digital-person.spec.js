@@ -23,7 +23,7 @@ async function submitPersonDraft(page, scenario) {
 // This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], personName = 'Ada', agentName = 'Owner Agent A', searchPages } = {}) {
+async function mockPersonSocket(page, { conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], personName = 'Ada', agentName = 'Owner Agent A', searchResults } = {}) {
   await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
@@ -120,7 +120,7 @@ async function mockPersonSocket(page, { conversationFlow = false, modelPreferenc
           searchError = null;
           return;
         }
-        reply(searchPages?.[request.payload.cursor == null ? 0 : 1] ?? { items: [{ id: 'archived', role: 'user', text: 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
+        reply(searchResults?.(request.payload) ?? { items: [{ id: 'archived', role: 'user', text: 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
         if (conversationFlow && request.op === 'send') {
           if (receipts.has(request.payload.clientMessageId)) { reply(receipts.get(request.payload.clientMessageId)); return; }
@@ -990,12 +990,20 @@ test('Digital Person shares Session reading gutters, keeps desktop actions and c
 
 test('Digital Person search previews keep deep matches visible and preserve rich messages and paging', async ({ page, serverUrl }, testInfo) => {
   const keyword = '部署策略';
+  const longPhrase = '接口变更顺序'.repeat(8);
+  const oversizedPhrase = '数据库迁移发布方案'.repeat(20);
+  const longContext = '这段很长的前文不应该把搜索词挤出结果。'.repeat(6);
   const text = `Hidden beginning. ${'A long archived paragraph that should not fill the result.\n'.repeat(25)}<img src=x> ${keyword} ${'随后说明'.repeat(60)} Hidden ending.`;
-  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation, searchPages: [
+  const pages = [
     { items: [{ id: 'deep', role: 'assistant', text, createdAt: 2,
       presentation: { version: 1, title: 'Archived report', summary: text, blocks: [{ type: 'markdown', text: 'Full report detail' }] } }], nextCursor: 'page-two' },
     { items: [{ id: 'short', role: 'user', text: keyword + ' update', createdAt: 1 }], nextCursor: null },
-  ] });
+  ];
+  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation,
+    searchResults: ({ query, cursor }) => query === keyword ? pages[cursor == null ? 0 : 1] : {
+      items: [1, 2].map(id => ({ id: `phrase-${id}`, role: 'user', text: `${longContext} ${query} 后续内容`, createdAt: id })), nextCursor: null,
+    },
+  });
   await openResponseConversation(page, serverUrl, { width: 1280, theme: 'light' });
   for (const [width, theme] of [[1280, 'light'], [320, 'dark']]) {
     await page.setViewportSize({ width, height: 800 });
@@ -1011,11 +1019,13 @@ test('Digital Person search previews keep deep matches visible and preserve rich
     await expect(preview).not.toContainText('Hidden ending');
     await expect(preview.locator('img')).toHaveCount(0);
     await expect(preview.locator('mark')).toHaveText(keyword);
-    expect(await preview.evaluate(el => {
-      const line = parseFloat(getComputedStyle(el).lineHeight), rect = el.getBoundingClientRect();
+    const measure = el => {
+      const style = getComputedStyle(el), line = parseFloat(style.lineHeight), rect = el.getBoundingClientRect();
       const hit = el.querySelector('mark').getBoundingClientRect();
-      return { bounded: rect.height >= line * 3 - 1 && rect.height <= line * 5 + 1, showsHit: hit.bottom <= rect.bottom + 1 };
-    })).toEqual({ bounded: true, showsHit: true });
+      return { lines: Math.round(rect.height / line), maxLines: Number(style.webkitLineClamp),
+        showsHit: hit.top < rect.bottom, fullHit: hit.bottom <= rect.bottom + 1 };
+    };
+    expect(await preview.evaluate(measure)).toEqual({ lines: 5, maxLines: 5, showsHit: true, fullHit: true });
     await expect(first.locator('.response-presentation')).toHaveCount(0);
     await expectPersonFits(page);
     await page.screenshot({ path: testInfo.outputPath(`person-search-${width}-${theme}.png`) });
@@ -1023,13 +1033,32 @@ test('Digital Person search previews keep deep matches visible and preserve rich
     await details.focus(); await page.keyboard.press('Enter');
     await expect(first.getByRole('button', { name: 'Hide full message' })).toHaveAttribute('aria-expanded', 'true');
     await expect(first.locator('.response-presentation')).toContainText('Full report detail');
-    await page.keyboard.press('Enter');
-    await expect(first.locator('.response-presentation')).toHaveCount(0);
     await page.getByRole('button', { name: 'Load more' }).click();
     await expect(results).toHaveCount(2);
+    await expect(first.locator('.response-presentation')).toContainText('Full report detail');
+    await first.getByRole('button', { name: 'Hide full message' }).click();
+    await expect(first.locator('.response-presentation')).toHaveCount(0);
+    expect(await preview.evaluate(measure)).toEqual({ lines: 3, maxLines: 3, showsHit: true, fullHit: true });
     await expect(results.last().locator('.person-search-snippet')).toHaveText(keyword + ' update');
     await expect(results.last().locator('mark')).toHaveText(keyword);
     expect(mock.requests.filter(r => r.op === 'search').at(-1).payload).toMatchObject({ query: keyword, cursor: 'page-two' });
+    await page.screenshot({ path: testInfo.outputPath(`person-search-multiple-${width}-${theme}.png`) });
+    if (width === 320) {
+      // A pasted CJK phrase fits once the leading prose yields its line budget.
+      await input.fill(longPhrase); await input.press('Enter');
+      await expect(results).toHaveCount(2);
+      await expect(preview.locator('mark')).toHaveText(longPhrase);
+      expect(await preview.evaluate(measure)).toEqual({ lines: 3, maxLines: 3, showsHit: true, fullHit: true });
+      // For a phrase longer than the entire card, show its highlighted start and
+      // keep the exact original content accessible without expanding its sibling.
+      await input.fill(oversizedPhrase); await input.press('Enter');
+      await expect(preview.locator('mark')).toHaveText(oversizedPhrase);
+      expect(await preview.evaluate(measure)).toEqual({ lines: 3, maxLines: 3, showsHit: true, fullHit: false });
+      await expectPersonFits(page);
+      await first.getByRole('button', { name: 'View full message' }).click();
+      await expect(first.locator('.person-prose')).toHaveText(`${longContext} ${oversizedPhrase} 后续内容`);
+      await expect(results.last().getByRole('button', { name: 'View full message' })).toHaveAttribute('aria-expanded', 'false');
+    }
     await page.locator('.person-panel-header .header-action-btn').click();
     await expect(page.locator('#person-side-panel')).toHaveCount(0);
   }
