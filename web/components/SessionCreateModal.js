@@ -1042,18 +1042,8 @@ export default {
         );
         if (res && res.ok) {
           const restored = res.session || res.group || session;
-          // Mirror resumeExisting / onSubmit: pin currentAgent +
-          // sessionsStore.active + chat filter to the restored session so
-          // the user doesn't get bounced back to whatever was active.
           const owner = restored?.agentId || session.agentId || agentId;
-          if (owner && chat.currentAgent !== owner
-              && typeof chat.selectAgent === 'function') {
-            chat.selectAgent(owner);
-          }
-          if (this.sessionsStore) this.sessionsStore.setActive(restored.id || session.id, owner);
-          if (typeof chat.setActiveSessionFilter === 'function') {
-            chat.setActiveSessionFilter(restored.id || session.id, { agentId: owner, force: true });
-          }
+          this.activateNativeSession(restored.id || session.id, owner);
           this.$emit('created', restored);
           this.$emit('close');
           return;
@@ -1131,6 +1121,19 @@ export default {
       if (this.form.provider === 'copilot') options.providerOptions = { allowAllTools: true };
       return options;
     },
+    activateNativeSession(sessionId, owner) {
+      const chat = this.chat;
+      if (!sessionId || !chat) return;
+      // Creation, resume and restore may all start on a vendor chat.
+      // Enter first; selecting the exact Agent/Session owns its history load.
+      if (!this.taskMode && chat.currentView !== 'yeaft' && typeof chat.enterYeaft === 'function') {
+        chat.enterYeaft(owner, { deferBootstrap: true });
+      } else if (owner && chat.currentAgent !== owner) {
+        chat.selectAgent?.(owner);
+      }
+      this.sessionsStore?.setActive(sessionId, owner);
+      chat.setActiveSessionFilter?.(sessionId, { agentId: owner, force: true });
+    },
     resumeExisting(session) {
       if (!session || !session.id) return;
       const chat = this.chat;
@@ -1144,24 +1147,7 @@ export default {
         this.restoreError = this.$t('yeaft.restore.modal.restoreError', { message: 'catalog unavailable' });
         return;
       }
-      // 1. Cross-agent route — if the session belongs to a different
-      //    agent than the one currently selected, switch first so any
-      //    subsequent CRUD/messaging hits the owning agent. Mirrors
-      //    YeaftSidebar.onSelectGroup.
-      if (owner && chat && chat.currentAgent !== owner
-          && typeof chat.selectAgent === 'function') {
-        chat.selectAgent(owner);
-      }
-      // 2. UI pointer (which session the main pane shows).
-      if (this.sessionsStore) this.sessionsStore.setActive(session.id, owner);
-      // 3. The action that actually fires `yeaft_load_history` and
-      //    sets `yeaftActiveSessionFilter`. Without this, the modal
-      //    closes but the main pane stays empty — that's the bug
-      //    users reported as "resume doesn't work". `force: true` so
-      //    it re-fires even when re-picking the currently-active id.
-      if (chat && typeof chat.setActiveSessionFilter === 'function') {
-        chat.setActiveSessionFilter(session.id, { agentId: owner, force: true });
-      }
+      this.activateNativeSession(session.id, owner);
       this.$emit('created', { ...session, ...(owner ? { agentId: owner } : {}) });
       this.$emit('close');
     },
@@ -1247,27 +1233,8 @@ export default {
           agentId: this.form.agentId || null,
         });
         if (res && res.ok) {
-          // Mirror resumeExisting: pin currentAgent + sessionsStore.active
-          // + chat filter to the new session so the next click doesn't
-          // snap back. (See commit 54028e1a for the regression history.)
-          const chat = this.chat;
           const created = res.session || res.group || null;
-          const id = created && created.id;
-          const owner = created?.agentId || this.form.agentId || null;
-          if (id) {
-            if (!this.taskMode && chat.currentView !== 'yeaft' && typeof chat.enterYeaft === 'function') {
-              // New chat can be opened from a different provider's surface.
-              // Enter the native view first; selecting the new Session below
-              // owns the one history bootstrap for the new conversation.
-              chat.enterYeaft(owner, { deferBootstrap: true });
-            } else if (owner && chat.currentAgent !== owner && typeof chat.selectAgent === 'function') {
-              chat.selectAgent(owner);
-            }
-            if (this.sessionsStore) this.sessionsStore.setActive(id, owner);
-            if (chat && typeof chat.setActiveSessionFilter === 'function') {
-              chat.setActiveSessionFilter(id, { agentId: owner, force: true });
-            }
-          }
+          this.activateNativeSession(created?.id, created?.agentId || this.form.agentId || null);
           this.$emit('created', created);
           this.$emit('close');
           return;

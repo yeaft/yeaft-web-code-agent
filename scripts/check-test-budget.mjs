@@ -204,9 +204,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // cases and 4 desktop/mobile/theme browser flows. Existing protocol tests retained.
 // +2 Person search excerpt regressions: literal Unicode match bounds and
 // responsive highlighted results with preserved pagination and full rich replies.
-// +7 Session scenes: create/switch UI (2), concurrent Engine lifecycle (1),
+// +8 Session scenes: create/switch/resume UI (3), concurrent Engine lifecycle (1),
 // durable copy/merge and CLI reentry (2), relay compatibility (1), browser (1).
-export const TEST_CASE_LIMIT = 1135;
+export const TEST_CASE_LIMIT = 1136;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -160,6 +160,12 @@ describe('Yeaft legacy Session roster deltas', () => {
     const client = { authenticated: true, userId: 'scene-owner', sent: [] };
     const agent = { ownerId: client.userId, ws: { readyState: 1 }, capabilities: [] };
     agents.set('scene-agent', agent);
+    for (const type of ['yeaft_create_session', 'yeaft_create_group', 'unify_create_session', 'unify_create_group']) {
+      await handleClientConversation('client', client, { type, agentId: 'scene-agent', requestId: type,
+        payload: { name: 'Misplaced scene', config: { sceneId: 'writing' } } }, allow);
+      expect(client.sent.at(-1).event).toMatchObject({ op: 'create', requestId: type, ok: false, error: { code: 'invalid_scene' } });
+    }
+    expect(forwardToAgent).not.toHaveBeenCalled();
     const update = { type: 'yeaft_update_session_config', sessionId: 's', agentId: 'scene-agent', requestId: 'r', config: { sceneId: 'writing' } };
     await handleClientConversation('client', { ...client, userId: 'foreign' }, update, allow);
     expect(client.sent.at(-1).event.error.code).toBe('agent_access_denied');

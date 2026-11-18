@@ -311,8 +311,9 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
   // Scene-aware clients must not receive a successful legacy create that
   // silently ignores the requested prompt. Keep the existing generic relay
   // for non-scene traffic, including old clients and scheduled-task setup.
-  const sceneCreate = ['yeaft_create_session', 'yeaft_create_group', 'unify_create_session', 'unify_create_group'].includes(msg.type)
-    && msg.payload && Object.hasOwn(msg.payload, 'sceneId');
+  const isCreate = ['yeaft_create_session', 'yeaft_create_group', 'unify_create_session', 'unify_create_group'].includes(msg.type);
+  const nestedScene = isCreate && msg.payload?.config && Object.hasOwn(msg.payload.config, 'sceneId');
+  const sceneCreate = isCreate && (nestedScene || (msg.payload && Object.hasOwn(msg.payload, 'sceneId')));
   const sceneUpdate = ['yeaft_update_session_config', 'yeaft_update_group_config', 'unify_update_session_config', 'unify_update_group_config'].includes(msg.type)
     && msg.config && Object.hasOwn(msg.config, 'sceneId');
   if (sceneCreate || sceneUpdate) {
@@ -330,6 +331,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       const denied = !client.authenticated || access === 'Agent access denied';
       return reject(denied ? 'agent_access_denied' : 'agent_offline', denied ? 'Agent access denied' : 'Agent offline');
     }
+    if (nestedScene) return reject('invalid_scene', 'Use top-level sceneId to create a Session');
     if (!agents.get(agentId)?.capabilities?.includes('session_scenes')) {
       return reject('session_scenes_unsupported', 'This Agent does not support Session scenes');
     }

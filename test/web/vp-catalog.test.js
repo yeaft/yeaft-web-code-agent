@@ -119,6 +119,22 @@ describe('Scenario VP catalog compatibility', () => {
     });
   });
 
+  it('opens resumed or restored native Sessions from a vendor view on the owning Agent', async () => {
+    chat.currentView = 'chat';
+    chat.enterYeaft = vi.fn(() => { chat.currentView = 'yeaft'; });
+    render(SessionCreateModal, { initialAgentId: 'b' });
+    const existing = { id: 'existing', agentId: 'b' };
+    wrapper.vm.resumeExisting(existing);
+    expect(chat.enterYeaft).toHaveBeenLastCalledWith('b', { deferBootstrap: true });
+    expect(chat.setActiveSessionFilter).toHaveBeenLastCalledWith('existing', { agentId: 'b', force: true });
+    chat.currentView = 'chat';
+    chat.enterYeaft.mockClear();
+    chat.sessionCrudRequest.mockResolvedValueOnce({ ok: true, session: { id: 'registered', agentId: 'b' } });
+    await wrapper.vm.onRestoreClick({ id: 'on-disk', agentId: 'b' });
+    expect(chat.enterYeaft).toHaveBeenCalledOnce();
+    expect(chat.setActiveSessionFilter).toHaveBeenLastCalledWith('registered', { agentId: 'b', force: true });
+  });
+
   it('lets a legacy Session explicitly opt into the inferred scene and restores the committed scene on failure', async () => {
     const session = Vue.reactive({ id: 'legacy', defaultVpId: 'omni' });
     let complete;
