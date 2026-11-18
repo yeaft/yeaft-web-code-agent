@@ -203,6 +203,13 @@ export default {
       document.removeEventListener('visibilitychange', controller.visibilityChanged);
     });
     Vue.onUpdated(keepPanelFocus);
+    const availability = Vue.computed(() => {
+      if (gate.value || state.loading) return '';
+      if (state.storageReady === false) return 'storageUnavailable';
+      if (state.configured === false) return 'setupRequired';
+      if (state.modelReady === false) return 'modelRequired';
+      return '';
+    });
     const ready = Vue.computed(() => !gate.value && state.configured && state.modelReady !== false && !!state.person && !state.loading);
     const activity = Vue.computed(() => projectPersonActivity(state, gate.value));
     const feedback = Vue.computed(() => projectPersonFeedback(state, gate.value));
@@ -665,7 +672,7 @@ export default {
     const deliveredOutputs = message => message.episodeId ? state.outputs.items.filter(item => item.episodeId === message.episodeId) : [];
     Vue.watch(() => state.person?.id, (next, previous) => { if (previous && next && next !== previous) closePanel(); }, { flush: 'sync' });
     const time = value => value ? new Date(value).toLocaleString() : '';
-        return { concurrentTurns, splitEpisodes, historyConversation, pendingEpisodes, scheduleConversationNavigation, pageRoot, pageTitle, conversationPane, settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, gate, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, time, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
+        return { concurrentTurns, splitEpisodes, historyConversation, pendingEpisodes, scheduleConversationNavigation, pageRoot, pageTitle, conversationPane, settingsButton, mobileHeader, moreOpen, moreButton, inspectorNav, backgroundInert, closeMore, selectMore, outputReader, outputVisited, outputButton, panelWidth, expandedPanel, modalPanel, selectOutput, previewReplyLink, openReplyBrowser, deliveredOutputs, chat, state, agentId, draft, panel, compactPanel, sidePanel, thoughtButton, inspectedEpisodeId, inspectTurn, searchButton, searchInput, searchQuery, closePanelButton, agentOptions, messagePane, readingColumn, transcript, transcriptIdentity, activeResponseKey, atLatest, backToCurrentTurn, scrollToLatest, conversationScroll, loadOlderMessages, estimateConversationHeight, responseStart, responseTail, focusedResponseId, hasResponseFocus, responsePinned, releaseResponseFocus, gate, availability, ready, activity, feedback, responding, conversation, loadingReplyKey, canCompose, canStartEpisode, controller, command, discardRetry, openPanel, closePanel, togglePanel, panelKeydown, time, attachments, attachmentError, fileError, filesReady, canSend, addFiles, retryAttachment, removeAttachment, settingsOpen, saveSettings, PERSON_FILE_ACCEPT };
   },
   template: `
     <div ref="pageRoot" class="person-page">
@@ -694,13 +701,6 @@ export default {
             <span>{{ $t('person.' + (gate || 'loading')) }}</span>
             <button v-if="gate === 'disconnected'" type="button" class="btn-ghost" @click="chat.manualReconnect()">{{ $t('chat.connection.reconnect') }}</button>
           </div>
-          <section v-if="(state.configured === false || state.storageReady === false || state.modelReady === false) && !gate" class="person-configuration" :inert="backgroundInert ? true : undefined" role="status">
-            <h2>{{ $t('person.configureTitle') }}</h2>
-            <p>{{ $t('person.configureAgent') }}</p>
-            <p>{{ $t('person.configureSecrets') }}</p>
-            <p>{{ $t('person.configureRefresh') }}</p>
-            <p v-if="state.reason" class="person-muted">{{ state.reason }}</p>
-          </section>
           <div v-if="state.latestEpisode && ['failed', 'interrupted', 'budget_exhausted'].includes(state.latestEpisode.status)" class="person-error" :inert="backgroundInert ? true : undefined" role="alert">
             {{ $t(state.latestEpisode.terminalCode === 'OUTPUT_TRUNCATED' ? 'person.outputTruncated' : 'person.episodeFailed') }}
           </div>
@@ -747,6 +747,11 @@ export default {
           </nav>
           </div>
           <div class="input-area person-composer">
+            <div v-if="availability" class="person-availability" role="status">
+              <span>{{ $t('person.' + availability) }}</span>
+              <button v-if="availability === 'modelRequired' && state.person" type="button" class="btn-ghost" :disabled="state.busy || state.commandPending" @click="settingsOpen = true">{{ $t('person.settings') }}</button>
+              <button v-else type="button" class="btn-ghost" :disabled="state.commandPending" @click="controller.refresh()">{{ $t('common.refresh') }}</button>
+            </div>
             <label class="person-sr-only" for="person-input">{{ $t('person.input') }}</label>
             <MessageComposer v-model="draft" input-id="person-input" :disabled="!canCompose" :can-send="canSend" :sending="state.commandPending" :show-stop="!gate && state.busy" :stop-disabled="state.cancelPending" :stop-label="$t(state.cancelPending ? 'person.cancelling' : pendingEpisodes.length > 1 ? 'person.stopAll' : 'chatInput.stop')" :placeholder="$t('person.placeholder')" :send-label="$t('person.send')"
               keyboard-send attachments-enabled :attachments="attachments" :attachment-accept="PERSON_FILE_ACCEPT"
