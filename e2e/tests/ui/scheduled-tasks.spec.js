@@ -925,10 +925,10 @@ test('task status panel preserves schedules, pinned header access, scrolling and
       expect(await pane.evaluate(element => {
         const announcement = element.querySelector('.yeaft-session-status-announcement');
         const task = element.querySelector('.yeaft-session-status-scheduled-task');
-        const vps = element.querySelector('section[aria-label="VPs"]');
+        const activity = element.querySelector('.yeaft-session-activity');
         return { immediatelyAfterAnnouncement: announcement.nextElementSibling === task,
-          beforeVps: !!(task.compareDocumentPosition(vps) & Node.DOCUMENT_POSITION_FOLLOWING) };
-      })).toEqual({ immediatelyAfterAnnouncement: true, beforeVps: true });
+          beforeActivity: !!(activity && task.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING) };
+      })).toEqual({ immediatelyAfterAnnouncement: true, beforeActivity: true });
       await expect(task.locator('.scheduled-task-state')).toHaveCount(0);
       await expect(task).not.toContainText('Enabled');
       await expect(task).toContainText('Next run');

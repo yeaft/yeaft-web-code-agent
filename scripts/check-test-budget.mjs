@@ -206,8 +206,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // responsive highlighted results with preserved pagination and full rich replies.
 // +8 Session scenes: create/switch/resume UI (3), concurrent Engine lifecycle (1),
 // durable copy/merge and CLI reentry (2), relay compatibility (1), browser (1).
+// +2 Session activity: reconnect Stop ownership and scoped legacy no-ID fallback.
 // +1 bilingual scene/VP assembly contract: only the selected localized practices reach the prompt.
-export const TEST_CASE_LIMIT = 1137;
+export const TEST_CASE_LIMIT = 1139;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

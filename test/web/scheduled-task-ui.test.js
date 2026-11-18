@@ -368,7 +368,7 @@ it('runs and pauses the Agent-scoped task schedule with revision, pending and fa
   expect(chat.cancelYeaftSession).not.toHaveBeenCalled();
 });
 
-it('renders inline below the announcement and before the VP roster without a popover', async () => {
+it('renders inline below the announcement and before execution status without a popover', async () => {
   window.Pinia = { useChatStore: () => ({ scheduledTaskProtocolSupported: true, agents }) };
   wrapper = mount(VpTimelinePane, { props: { rows: [] }, slots: {
     'scheduled-task': () => Vue.h(ScheduledTaskBar, { agentId: 'a', session: { id: 'task', task } }),
@@ -376,7 +376,7 @@ it('renders inline below the announcement and before the VP roster without a pop
   const sections = wrapper.findAll('.yeaft-session-status-section');
   expect(sections[0].classes()).toContain('yeaft-session-status-announcement');
   expect(sections[1].classes()).toContain('scheduled-task-bar');
-  expect(sections[2].attributes('aria-label')).toBe(en['yeaft.sessionStatus.vps']);
+  expect(sections[2].attributes('aria-label')).toBe(en['yeaft.sessionStatus.activity']);
   expect(sections[1].text()).toContain(en['scheduledTasks.never']);
   expect(sections[1].text()).not.toContain(en['scheduledTasks.runOnceHelp']);
   const run = sections[1].get('.scheduled-task-run');

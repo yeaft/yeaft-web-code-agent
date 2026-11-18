@@ -1,4 +1,6 @@
 import TerminalOutput from './TerminalOutput.js';
+import { formatElapsed } from '../stores/helpers/turn-timing.js';
+import { LIVE_SESSION_TURN_STATES } from '../stores/helpers/yeaft-session-turns.js';
 
 const tryParseJsonLine = (line) => {
   if (typeof line !== 'string') return null;
@@ -112,37 +114,14 @@ export function createSubAgentTaskDetailLines(task, translate) {
   return [...resultLine, ...activityLines];
 }
 
-/**
- * VpTimelinePane — right-of-conversation Session status pane.
- *
- * Originally introduced as a VP roster pane. It now presents the active
- * Yeaft Session status: the VP roster first, then running background
- * tasks. The historical file/component name is intentionally kept to avoid
- * a noisy rename chain across parent components and tests.
- *
- * Props:
- *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
- *   tasks — running Session task snapshots.
- *   announcementText — active Session announcement preview source.
- * Emits:
- *   mention-vp (vpId)      — primary row click / Enter / Space. YeaftPage
- *                            forwards to the chat input which appends
- *                            `@<vpId> ` to the current draft.
- *   edit-vp (vpId)         — hover-revealed edit button on the row.
- *   start-resize  (event)  — mousedown on the resize handle; YeaftPage
- *                            owns the drag bookkeeping (matches the
- *                            .yeaft-detail pattern).
- *   cancel-vp-turn (vpId)  — abort button click for an active turn.
- *   edit-announcement      — open the Session settings announcement editor.
- *   close                  — hide the Session status pane.
- */
+/** Session execution activity, announcement and background tasks. */
 export default {
   name: 'VpTimelinePane',
   components: { TerminalOutput },
-  emits: ['mention-vp', 'edit-vp', 'start-resize', 'cancel-vp-turn', 'edit-announcement', 'cancel-task', 'close'],
+  emits: ['start-resize', 'stop-turn', 'edit-announcement', 'cancel-task', 'close'],
   props: {
     rows: { type: Array, required: true },
-    hideVpIdentity: { type: Boolean, default: false },
+    visible: { type: Boolean, default: true },
     tasks: { type: Array, default: () => [] },
     announcementText: { type: String, default: '' },
     stoppingTasksById: { type: Object, default: () => ({}) },
@@ -218,78 +197,47 @@ export default {
 
       <slot name="scheduled-task"></slot>
 
-      <section v-if="!hideVpIdentity || statusRows.length" class="yeaft-session-status-section" :aria-label="$t(statusSectionTitleKey)">
+      <section class="yeaft-session-status-section yeaft-session-activity" :aria-label="$t('yeaft.sessionStatus.activity')">
         <header class="yeaft-session-status-section-header">
-          <span>{{ $t(statusSectionTitleKey) }}</span>
-          <span class="yeaft-session-status-count" v-if="!hideVpIdentity && statusRows.length">{{ statusRows.length }}</span>
+          <span>{{ $t('yeaft.sessionStatus.activity') }}</span>
         </header>
 
-        <div v-if="!statusRows.length" class="yeaft-vp-timeline-empty">
-          {{ $t('yeaft.vpTimeline.empty') }}
-        </div>
+        <div v-if="!rows.length" class="yeaft-vp-timeline-empty">{{ $t('yeaft.sessionStatus.noActiveTurns') }}</div>
 
         <ul v-else class="yeaft-vp-timeline-list">
           <li
-            v-for="row in statusRows"
-            :key="row.vpId"
+            v-for="(row, index) in rows"
+            :key="row.key"
             class="yeaft-vp-timeline-row"
-            :class="['is-status-' + row.status, { 'is-stopping': row.isStopping, 'has-query-progress': !!row.queryProgress }]"
+            :class="['is-status-' + row.status, { 'is-stopping': row.isStopping }]"
           >
             <div class="yeaft-vp-timeline-row-header">
-              <component :is="hideVpIdentity ? 'div' : 'button'"
-                :type="hideVpIdentity ? undefined : 'button'" class="yeaft-vp-timeline-row-body"
-                :aria-label="(hideVpIdentity ? $t('message.assistant') : row.displayName) + ' — ' + statusLabel(row)"
-                :title="hideVpIdentity ? undefined : $t('yeaft.vpTimeline.mention')"
-                @click="!hideVpIdentity && $emit('mention-vp', row.vpId)">
-                <span class="yeaft-vp-timeline-row-copy">
-                  <span class="yeaft-vp-timeline-row-name" :style="hideVpIdentity ? undefined : { color: vpTextColorFor(row.vpId) }">{{ (hideVpIdentity ? $t('message.assistant') : row.displayName) }}</span>
-                  <span v-if="!hideVpIdentity && row.description" class="yeaft-vp-timeline-row-description">{{ row.description }}</span>
-                </span>
-                <span v-if="row.status !== 'error'" class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
-                <span
-                  v-if="row.runningThreadCount > 1"
-                  class="yeaft-vp-timeline-thread-count"
-                  :title="threadCountTitle(row)"
-                >{{ row.runningThreadCount }} threads</span>
-              </component>
+              <div class="yeaft-session-activity-copy">
+                <span v-if="row.label || rows.length > 1" class="yeaft-session-activity-label" :title="turnLabel(row, index)">{{ turnLabel(row, index) }}</span>
+                <div class="yeaft-session-activity-meta">
+                  <span class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
+                  <span v-if="elapsed(row)" class="yeaft-session-activity-elapsed">{{ $t('yeaft.sessionStatus.elapsed', { duration: elapsed(row) }) }}</span>
+                </div>
+              </div>
               <button v-if="row.errors?.length" type="button" class="btn-ghost yeaft-vp-error-toggle"
-                :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: (hideVpIdentity ? $t('message.assistant') : row.displayName) })"
+                :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: turnLabel(row, index) })"
                 :aria-expanded="isErrorExpanded(row)"
                 @click="toggleError(row)">
-                {{ $t('yeaft.vpTimeline.status.error') }} <span aria-hidden="true">{{ isErrorExpanded(row) ? '▾' : '▸' }}</span>
+                {{ $t('yeaft.sessionStatus.errorDetails') }} <span aria-hidden="true">{{ isErrorExpanded(row) ? '▾' : '▸' }}</span>
               </button>
-              <span class="yeaft-vp-timeline-row-actions">
-                <button
-                  type="button"
-                  v-if="isActiveStatus(row.status)"
-                  class="yeaft-vp-timeline-abort"
-                  :class="{ 'is-stopping': row.isStopping }"
-                  :aria-label="$t('yeaft.vpTimeline.abort')"
-                  :disabled="row.isStopping"
-                  :title="$t('yeaft.vpTimeline.abort')"
-                  @click.stop="!row.isStopping && $emit('cancel-vp-turn', row.vpId)"
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
-                    <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  v-if="!hideVpIdentity"
-                  class="yeaft-vp-timeline-edit"
-                  :aria-label="$t('yeaft.vpTimeline.edit')"
-                  :title="$t('yeaft.vpTimeline.edit')"
-                  @click.stop="$emit('edit-vp', row.vpId)"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 20h9"/>
-                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
-                  </svg>
-                </button>
-              </span>
+              <button v-if="row.canStop || row.isStopping || row.status === 'cancelling'" type="button"
+                class="btn-ghost yeaft-vp-timeline-abort" :class="{ 'is-stopping': row.isStopping || row.status === 'cancelling' }"
+                :aria-label="$t('yeaft.sessionStatus.stopTurn', { name: turnLabel(row, index) })"
+                :title="$t('yeaft.sessionStatus.stopTurn', { name: turnLabel(row, index) })"
+                :disabled="row.isStopping || row.status === 'cancelling'"
+                @click="$emit('stop-turn', row)">
+                <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+                </svg>
+              </button>
             </div>
             <section v-if="row.errors?.length && isErrorExpanded(row)" class="yeaft-vp-error-details"
-              :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: (hideVpIdentity ? $t('message.assistant') : row.displayName) })">
+              :aria-label="$t('yeaft.vpTimeline.errorDetailsFor', { name: turnLabel(row, index) })">
               <article v-for="(error, index) in row.errors" :key="index" class="yeaft-vp-error-detail">
                 <p class="yeaft-vp-error-message">{{ error.message || $t('yeaft.vpTimeline.errorUnavailable') }}</p>
                 <dl class="yeaft-vp-error-metadata">
@@ -303,52 +251,53 @@ export default {
                 </dl>
               </article>
             </section>
-            <div v-if="row.queryProgress" class="yeaft-query-progress" :class="'is-' + row.queryProgress.stage">
+            <div v-for="(progress, observationIndex) in row.observations" :key="progress.turnId" class="yeaft-query-progress" :class="'is-' + progress.stage">
+              <span v-if="row.observations.length > 1" class="yeaft-query-progress-label">{{ $t('yeaft.sessionStatus.executionNumber', { count: observationIndex + 1 }) }}</span>
               <div class="yeaft-query-progress-tokens" :aria-label="$t('yeaft.queryProgress.tokenScope')">
-                <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.inputTokens') }}</span><strong>{{ formatTokenCount(row.queryProgress.inputTokens) }}</strong></span>
-                <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.outputTokens') }}</span><strong>{{ formatTokenCount(row.queryProgress.outputTokens) }}</strong></span>
+                <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.inputTokens') }}</span><strong>{{ formatTokenCount(progress.inputTokens) }}</strong></span>
+                <span><span class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.outputTokens') }}</span><strong>{{ formatTokenCount(progress.outputTokens) }}</strong></span>
               </div>
               <div class="yeaft-query-progress-counts">
-                <span>{{ $t('yeaft.queryProgress.requests', { count: formatCount(row.queryProgress.modelRequests) }) }}</span>
-                <span>{{ $t('yeaft.queryProgress.tools', { count: formatCount(row.queryProgress.toolExecutions) }) }}</span>
+                <span>{{ $t('yeaft.queryProgress.requests', { count: formatCount(progress.modelRequests) }) }}</span>
+                <span>{{ $t('yeaft.queryProgress.tools', { count: formatCount(progress.toolExecutions) }) }}</span>
                 <button type="button" class="btn-ghost yeaft-query-progress-failures-toggle"
-                  :class="{ 'has-failures': row.queryProgress.failedCalls > 0 }"
-                  :aria-expanded="isProgressExpanded(row, 'failures')"
-                  :aria-label="$t('yeaft.queryProgress.failureToggle', { count: row.queryProgress.failedCalls })"
-                  @click="toggleProgress(row, 'failures')">
-                  {{ $t('yeaft.queryProgress.failed', { count: formatCount(row.queryProgress.failedCalls) }) }}
-                  <span aria-hidden="true">{{ isProgressExpanded(row, 'failures') ? '▾' : '▸' }}</span>
+                  :class="{ 'has-failures': progress.failedCalls > 0 }"
+                  :aria-expanded="isProgressExpanded(row, progress, 'failures')"
+                  :aria-label="$t('yeaft.queryProgress.failureToggle', { count: progress.failedCalls })"
+                  @click="toggleProgress(row, progress, 'failures')">
+                  {{ $t('yeaft.queryProgress.failed', { count: formatCount(progress.failedCalls) }) }}
+                  <span aria-hidden="true">{{ isProgressExpanded(row, progress, 'failures') ? '▾' : '▸' }}</span>
                 </button>
-                <button type="button" class="btn-ghost yeaft-query-progress-details-toggle" :aria-expanded="isProgressExpanded(row, 'details')" @click="toggleProgress(row, 'details')">
-                  {{ $t('yeaft.queryProgress.details') }} <span aria-hidden="true">{{ isProgressExpanded(row, 'details') ? '▾' : '▸' }}</span>
+                <button type="button" class="btn-ghost yeaft-query-progress-details-toggle" :aria-expanded="isProgressExpanded(row, progress, 'details')" @click="toggleProgress(row, progress, 'details')">
+                  {{ $t('yeaft.queryProgress.details') }} <span aria-hidden="true">{{ isProgressExpanded(row, progress, 'details') ? '▾' : '▸' }}</span>
                 </button>
               </div>
-              <div v-if="row.queryProgress.stage !== 'running'" class="yeaft-query-progress-footer">
-                <span class="yeaft-query-progress-state" role="status">{{ $t('yeaft.queryProgress.stage.' + row.queryProgress.stage) }}</span>
+              <div v-if="progress.stage !== 'running'" class="yeaft-query-progress-footer">
+                <span class="yeaft-query-progress-state" role="status">{{ $t('yeaft.queryProgress.stage.' + progress.stage) }}</span>
               </div>
-              <section v-if="isProgressExpanded(row, 'failures')" class="yeaft-query-progress-failures" :aria-label="$t('yeaft.queryProgress.failureTitle')">
+              <section v-if="isProgressExpanded(row, progress, 'failures')" class="yeaft-query-progress-failures" :aria-label="$t('yeaft.queryProgress.failureTitle')">
                 <p class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.failureTitle') }}</p>
-                <template v-if="Array.isArray(row.queryProgress.toolStats)">
-                  <div v-if="failedTools(row.queryProgress).length" class="yeaft-query-progress-failure-list">
+                <template v-if="Array.isArray(progress.toolStats)">
+                  <div v-if="failedTools(progress).length" class="yeaft-query-progress-failure-list">
                     <div class="yeaft-query-progress-tool-row yeaft-query-progress-tool-head" aria-hidden="true">
                       <span>{{ $t('yeaft.queryProgress.toolName') }}</span><span>{{ $t('yeaft.queryProgress.executions') }}</span><span>{{ $t('yeaft.queryProgress.failures') }}</span><span>{{ $t('yeaft.queryProgress.blocked') }}</span>
                     </div>
-                    <div v-for="tool in failedTools(row.queryProgress)" :key="tool.name" class="yeaft-query-progress-tool-row"
+                    <div v-for="tool in failedTools(progress)" :key="tool.name" class="yeaft-query-progress-tool-row"
                       :aria-label="$t('yeaft.queryProgress.toolSummary', { name: tool.name, executions: tool.executions, failures: tool.failedCalls, blocked: tool.blockedCalls })">
                       <code>{{ tool.name }}</code><span>{{ formatCount(tool.executions) }}</span><span>{{ formatCount(tool.failedCalls) }}</span><span>{{ formatCount(tool.blockedCalls) }}</span>
                     </div>
                   </div>
-                  <p v-else>{{ $t(row.queryProgress.toolStatsTruncated ? 'yeaft.queryProgress.failuresNotListed' : 'yeaft.queryProgress.noFailures') }}</p>
+                  <p v-else>{{ $t(progress.toolStatsTruncated ? 'yeaft.queryProgress.failuresNotListed' : 'yeaft.queryProgress.noFailures') }}</p>
                   <p class="yeaft-query-progress-label">{{ $t('yeaft.queryProgress.failureNote') }}</p>
-                  <p v-if="row.queryProgress.toolStatsTruncated">{{ $t('yeaft.queryProgress.statsTruncated') }}</p>
+                  <p v-if="progress.toolStatsTruncated">{{ $t('yeaft.queryProgress.statsTruncated') }}</p>
                 </template>
                 <p v-else>{{ $t('yeaft.queryProgress.statsUnavailable') }}</p>
               </section>
-              <div v-if="isProgressExpanded(row, 'details')" class="yeaft-query-progress-details">
+              <div v-if="isProgressExpanded(row, progress, 'details')" class="yeaft-query-progress-details">
                 <span>{{ $t('yeaft.queryProgress.tokenScope') }}</span>
-                <span v-if="row.queryProgress.reason">{{ $t('yeaft.queryProgress.reason.' + row.queryProgress.reason) }}</span>
-                <span>{{ $t('yeaft.queryProgress.reused', { count: row.queryProgress.reusedCalls }) }} · {{ $t('yeaft.queryProgress.repeated', { count: row.queryProgress.repeatedCalls }) }}</span>
-                <span>{{ row.queryProgress.lastEvidenceAt === null ? $t('yeaft.queryProgress.noEvidence') : $t('yeaft.queryProgress.lastEvidence', { time: formatTaskTime(row.queryProgress.lastEvidenceAt) }) }}</span>
+                <span v-if="progress.reason">{{ $t('yeaft.queryProgress.reason.' + progress.reason) }}</span>
+                <span>{{ $t('yeaft.queryProgress.reused', { count: progress.reusedCalls }) }} · {{ $t('yeaft.queryProgress.repeated', { count: progress.repeatedCalls }) }}</span>
+                <span>{{ progress.lastEvidenceAt === null ? $t('yeaft.queryProgress.noEvidence') : $t('yeaft.queryProgress.lastEvidence', { time: formatTaskTime(progress.lastEvidenceAt) }) }}</span>
                 <span>{{ $t('yeaft.queryProgress.caveat') }}</span>
               </div>
             </div>
@@ -382,7 +331,7 @@ export default {
                 <span class="yeaft-vp-task-main">
                   <span class="yeaft-vp-task-title">{{ task.title || task.id }}</span>
                   <code v-if="shellTaskCommand(task)" class="yeaft-vp-task-command">{{ shellTaskCommand(task) }}</code>
-                  <span class="yeaft-vp-task-meta"><template v-if="!hideVpIdentity">{{ taskOwnerName(task) }} · </template>{{ formatTaskTime(task.startedAt) }}</span>
+                  <span class="yeaft-vp-task-meta">{{ formatTaskTime(task.startedAt) }}</span>
                 </span>
               </button>
               <span class="yeaft-vp-task-kind">{{ taskKindLabel(task) }}</span>
@@ -429,17 +378,7 @@ export default {
       </section>
     </aside>
   `,
-  setup(props, { emit }) {
-    const vpStore = (window.Pinia && window.Pinia.useVpStore)
-      ? window.Pinia.useVpStore()
-      : null;
-    const vpTextColorFor = (vpId) => (vpStore && typeof vpStore.vpTextColor === 'function'
-      ? vpStore.vpTextColor(vpId)
-      : 'var(--text-primary)');
-
-    // Capture $t ONCE at mount via getCurrentInstance(); reusing the
-    // same reference for every status label avoids re-walking
-    // appContext on every render (40 lookups for 20 rows otherwise).
+  setup(props) {
     const inst = Vue.getCurrentInstance();
     const $t = (inst && inst.appContext.config.globalProperties.$t) || ((k) => k);
 
@@ -455,7 +394,7 @@ export default {
     });
 
     const expandedErrors = Vue.ref({});
-    const errorKey = row => JSON.stringify([row.agentId, row.sessionId, row.vpId,
+    const errorKey = row => JSON.stringify([row.agentId, row.sessionId, row.key,
       (row.errors || []).map(error => [error.turnId, error.threadId, error.at])]);
     const isErrorExpanded = row => !!expandedErrors.value[errorKey(row)];
     const toggleError = row => {
@@ -468,15 +407,15 @@ export default {
     const formatErrorTime = value => new Date(value).toLocaleString();
 
     const expandedProgress = Vue.ref({});
-    const progressKey = (row) => JSON.stringify([row.vpId, row.queryProgress?.sessionId, row.queryProgress?.turnId, row.queryProgress?.threadId]);
-    const isProgressExpanded = (row, section) => !!expandedProgress.value[progressKey(row)]?.[section];
-    const toggleProgress = (row, section) => {
-      const key = progressKey(row);
+    const progressKey = (row, progress) => JSON.stringify([row.agentId, row.sessionId, row.key, progress.turnId, progress.threadId]);
+    const isProgressExpanded = (row, progress, section) => !!expandedProgress.value[progressKey(row, progress)]?.[section];
+    const toggleProgress = (row, progress, section) => {
+      const key = progressKey(row, progress);
       expandedProgress.value = { ...expandedProgress.value, [key]: {
-        ...expandedProgress.value[key], [section]: !isProgressExpanded(row, section),
+        ...expandedProgress.value[key], [section]: !isProgressExpanded(row, progress, section),
       } };
     };
-    Vue.watch(() => props.rows.filter(row => row.queryProgress).map(progressKey), keys => {
+    Vue.watch(() => props.rows.flatMap(row => (row.observations || []).map(progress => progressKey(row, progress))), keys => {
       expandedProgress.value = Object.fromEntries(Object.entries(expandedProgress.value).filter(([key]) => keys.includes(key)));
     });
     const formatCount = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
@@ -528,17 +467,6 @@ export default {
       })
     );
 
-    const statusRows = Vue.computed(() => props.hideVpIdentity
-      ? props.rows.filter(row => isActiveStatus(row.status) || row.queryProgress || row.errors?.length)
-      : props.rows);
-    const statusSectionTitleKey = Vue.computed(() => props.hideVpIdentity
-      ? 'yeaft.sessionStatus.activity' : 'yeaft.sessionStatus.vps');
-
-    const taskOwnerName = (task) => {
-      const owner = task?.ownerVpId || '';
-      if (!owner) return 'unknown';
-      return vpStore && typeof vpStore.vpLabel === 'function' ? vpStore.vpLabel(owner) : owner;
-    };
     const formatTaskTime = (value) => {
       if (!value) return '';
       try { return new Date(value).toLocaleTimeString(); } catch (_) { return String(value); }
@@ -573,37 +501,22 @@ export default {
     const taskDetailLines = (task) => createSubAgentTaskDetailLines(task, $t);
     const subAgentTaskStreamText = (task) => createSubAgentTaskStreamText(task, $t);
 
-    const statusLabel = (row) => {
-      switch (row.status) {
-        case 'idle':      return $t('yeaft.vpTimeline.status.idle');
-        case 'typing':    return $t('yeaft.vpTimeline.status.typing');
-        case 'thinking':  return $t('yeaft.vpTimeline.status.thinking');
-        case 'retrying':  return $t('yeaft.vpTimeline.status.retrying');
-        case 'streaming': return $t('yeaft.vpTimeline.status.streaming');
-        case 'tool':      return $t('yeaft.vpTimeline.status.tool');
-        case 'error':     return $t('yeaft.vpTimeline.status.error');
-        case 'offline':   return $t('yeaft.vpTimeline.status.offline');
-        default:          return row.status;
-      }
-    };
-
-    // "Active" = there's actually a turn in flight we could abort. We
-    // intentionally exclude `idle` (no turn), `error` (turn already
-    // ended with a failure), and `offline` (agent gone — abort would
-    // never land). Without this gate, an offline row would render a
-    // dead abort button that does nothing on click, which is worse than
-    // not showing it at all.
-    const ACTIVE_STATES = new Set(['typing', 'thinking', 'retrying', 'streaming', 'tool']);
-    const isActiveStatus = (s) => ACTIVE_STATES.has(s);
-
-    const threadCountTitle = (row) => {
-      const threads = Array.isArray(row && row.threads) ? row.threads : [];
-      if (!threads.length) return '';
-      return threads
-        .slice(0, 5)
-        .map((t) => `${t.title || t.threadId || 'thread'}: ${t.status || 'idle'}`)
-        .join('\n');
-    };
+    const statusLabel = row => row.isStopping || row.status === 'cancelling'
+      ? $t('chat.concurrent.cancelling')
+      : ['routing', 'queued', 'running', 'waiting'].includes(row.status)
+        ? $t('chat.concurrent.' + (row.status === 'routing' ? 'waiting' : row.status))
+        : $t('yeaft.vpTimeline.status.' + row.status);
+    const turnLabel = (row, index) => row.label || $t('yeaft.sessionStatus.turnNumber', { count: index + 1 });
+    const canTime = row => row.startedAt > 0 && LIVE_SESSION_TURN_STATES.has(row.status);
+    const now = Vue.ref(0);
+    Vue.watch(() => props.visible && props.rows.some(canTime), (running, _, onCleanup) => {
+      if (!running) return;
+      const tick = () => { now.value = Date.now(); };
+      tick();
+      const timer = setInterval(tick, 1000);
+      onCleanup(() => clearInterval(timer));
+    }, { immediate: true });
+    const elapsed = row => canTime(row) ? formatElapsed(Math.max(0, now.value - row.startedAt)) : '';
 
     return {
       hasAnnouncement,
@@ -612,9 +525,8 @@ export default {
       isErrorExpanded,
       toggleError,
       formatErrorTime,
-      isActiveStatus,
-      threadCountTitle,
-      vpTextColorFor,
+      turnLabel,
+      elapsed,
       isProgressExpanded,
       toggleProgress,
       formatCount,
@@ -622,9 +534,6 @@ export default {
       failedTools,
       expandedTasks,
       toggleTaskExpanded,
-      taskOwnerName,
-      statusRows,
-      statusSectionTitleKey,
       formatTaskTime,
       taskKindLabel,
       shellTaskCommand,
