@@ -302,9 +302,17 @@ export class AnthropicAdapter extends LLMAdapter {
     return result;
   }
 
-  #dispatch({ url, headers, requestBody, signal, cacheMarkersSent, context, onProviderDiagnostics, onRequestStart }) {
+  #uncachedBody(body, replayed) {
+    // Use the pre-cache shape, including shorthand text accepted by gateways
+    // that do not implement cache blocks. Do not rewrite signed history.
+    const wire = toWellFormedJson(stripAnthropicCaching(body));
+    validateAnthropicRequestPrefixes(wire, replayed);
+    return wire;
+  }
+
+  #dispatch({ url, headers, requestBody, signal, withoutCache, context, onProviderDiagnostics, onRequestStart }) {
     return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, providerLabel: 'Anthropic', field: 'cache_control',
-      withoutCache: cacheMarkersSent ? stripAnthropicCaching : undefined, onRequestStart,
+      withoutCache, onRequestStart,
       onCacheFallback: () => onProviderDiagnostics?.({ ...context.diagnostics, promptCaching: 'rejected-fallback' }),
     });
   }
@@ -351,7 +359,7 @@ export class AnthropicAdapter extends LLMAdapter {
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
     const replayed = [];
     const translatedMessages = this.#translateMessages(messages, context, requestIdentity, replayed);
-    let body = {
+    const body = {
       model,
       max_tokens: maxTokens,
       system,
@@ -373,8 +381,6 @@ export class AnthropicAdapter extends LLMAdapter {
     body.model = model; // Do not let extraBody bypass origin/model ownership.
     body.messages = translatedMessages;
     body.system = system;
-    const caching = applyAnthropicCaching(body, context, onProviderDiagnostics);
-    body = caching.body;
     normalizeEffortPayload(body, 'anthropic');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
@@ -383,7 +389,8 @@ export class AnthropicAdapter extends LLMAdapter {
     applyThinkingDisplay(body, context, effortContext);
     onEffortDecision?.(effortDecision);
     validateSignedOutputBudget(body, replayed, contextOutputLimit);
-    const requestBody = toWellFormedJson(body);
+    const caching = applyAnthropicCaching(body, context, onProviderDiagnostics);
+    const requestBody = toWellFormedJson(caching.body);
     validateAnthropicRequestPrefixes(requestBody, replayed);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
 
@@ -391,7 +398,7 @@ export class AnthropicAdapter extends LLMAdapter {
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };
 
     const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal,
-      cacheMarkersSent: caching.sent, context, onProviderDiagnostics,
+      withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed) : undefined, context, onProviderDiagnostics,
       onRequestStart: () => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs }) });
     // Capture the final request after any pre-generation cache field rejection.
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body: wireBody });
@@ -823,7 +830,7 @@ export class AnthropicAdapter extends LLMAdapter {
     const context = providerContext || createProviderContext({ protocol: 'anthropic', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
     const replayed = [];
     const translatedMessages = this.#translateMessages(messages, context, requestIdentity, replayed);
-    let body = {
+    const body = {
       model,
       max_tokens: maxTokens,
       system,
@@ -839,8 +846,6 @@ export class AnthropicAdapter extends LLMAdapter {
     body.model = model; // Do not let extraBody bypass origin/model ownership.
     body.messages = translatedMessages;
     body.system = system;
-    const caching = applyAnthropicCaching(body, context, onProviderDiagnostics);
-    body = caching.body;
     normalizeEffortPayload(body, 'anthropic');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'anthropic', effortContext, effortConstraint })
@@ -849,13 +854,14 @@ export class AnthropicAdapter extends LLMAdapter {
     applyThinkingDisplay(body, context, effortContext);
     onEffortDecision?.(effortDecision);
     validateSignedOutputBudget(body, replayed, contextOutputLimit);
-    const requestBody = toWellFormedJson(body);
+    const caching = applyAnthropicCaching(body, context, onProviderDiagnostics);
+    const requestBody = toWellFormedJson(caching.body);
     validateAnthropicRequestPrefixes(requestBody, replayed);
 
     const url = `${this.#baseUrl}/v1/messages`;
     const headers = { ...this.#headers(), ...midConversationHeaders(requestBody) };
     const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal,
-      cacheMarkersSent: caching.sent, context, onProviderDiagnostics, onRequestStart });
+      withoutCache: caching.sent ? () => this.#uncachedBody(body, replayed) : undefined, context, onProviderDiagnostics, onRequestStart });
     if (!response.ok) throw this.#classifyError(response.status, errorBody, response);
 
     const result = await response.json();

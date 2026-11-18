@@ -388,7 +388,7 @@ describe('default prompt caching on native and compatible routes', () => {
         items: anthropic ? anthropicItems : responsesItems, requestBody: { model, system: 'fixed', messages } }), signed);
       const cacheError = () => anthropic
         ? rejecting({ detail: [{ type: 'extra_forbidden', loc: ['body', 'messages', 2, 'content', 0, 'tool_result', 'cache_control'] }] }, 422)
-        : rejecting({ error: { code: 'unknown_parameter', param: 'prompt_cache_key' } });
+        : rejecting({ error: { message: 'Unrecognized request argument supplied: prompt_cache_key', code: 'unknown_parameter', param: 'prompt_cache_key' } });
       for (const method of ['stream', 'call']) {
         fetch.mockReset().mockImplementationOnce(async () => cacheError())
           .mockImplementationOnce(async () => anthropic ? anthropicDone() : method === 'stream'
@@ -397,10 +397,13 @@ describe('default prompt caching on native and compatible routes', () => {
         await exercise(adapter, method, { model, system: 'fixed', requestIdentity: identity, onProviderDiagnostics, onRequestStart, onRawExchange,
           messages: [...messages, signed, { role: 'tool', toolCallId: 'call1', content: 'result' }] });
         expect(fetch).toHaveBeenCalledTimes(2);
-        expect(onRequestStart).toHaveBeenCalledTimes(1);
+        expect(onRequestStart).toHaveBeenCalledTimes(2);
         expect(onProviderDiagnostics.mock.calls.map(([info]) => info.promptCaching)).toEqual(['sent-unverified', 'rejected-fallback']);
         const [first, second] = fetch.mock.calls.map(([, req]) => readWire(req));
         if (anthropic) {
+          expect(first.system[0].cache_control).toEqual({ type: 'ephemeral' });
+          expect(second.system).toBe('fixed');
+          expect(second.messages[0]).toEqual(messages[0]);
           expect(first.messages[2].content[0]).toHaveProperty('cache_control');
           expect(second.messages[1].content).toEqual(anthropicItems);
           expect(second.messages[2].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'call1', content: 'result', is_error: false });
@@ -419,7 +422,7 @@ describe('default prompt caching on native and compatible routes', () => {
     }
   });
 
-  it('does not retry unrelated request/auth failures or an aborted cache fallback', async () => {
+  it('does not retry unrelated failures and respects abort or a denied dispatch during fallback', async () => {
     const adapter = new OpenAIResponsesAdapter({ apiKey: 'fixture' });
     const params = { model: 'gpt-5', messages, requestIdentity: identity };
     const fetch = vi.fn();
@@ -435,6 +438,18 @@ describe('default prompt caching on native and compatible routes', () => {
       await expect(collect(adapter.stream(params))).rejects.toThrow();
       expect(fetch).toHaveBeenCalledTimes(1);
     }
+    const anthropic = new AnthropicAdapter({ apiKey: 'fixture' });
+    fetch.mockReset().mockImplementation(async () => rejecting({ error: {
+      message: 'system.0.text.cache_control: Extra inputs are not permitted\nmax_tokens: field required',
+    } }));
+    await expect(anthropic.call({ ...params, model: 'claude-sonnet-4', system: 'fixed' })).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const lostLease = new Error('lease lost before dispatch');
+    const onRequestStart = vi.fn().mockImplementationOnce(() => {}).mockImplementationOnce(() => { throw lostLease; });
+    fetch.mockReset().mockImplementation(async () => rejecting(cacheError));
+    await expect(adapter.call({ ...params, onRequestStart })).rejects.toBe(lostLease);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(onRequestStart).toHaveBeenCalledTimes(2);
     const controller = new AbortController();
     fetch.mockReset().mockImplementation(async () => { controller.abort(); return rejecting(cacheError); });
     await expect(adapter.call({ ...params, signal: controller.signal })).rejects.toMatchObject({ name: 'LLMAbortError' });

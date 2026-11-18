@@ -53,6 +53,24 @@ class MockAdapter {
   }
 }
 
+// Prefix/rollover assertions compare the prompt, not the movable cache
+// markers. Normalize only the specific wire fields that carry those markers.
+function anthropicWireWithoutCache(init) {
+  const body = JSON.parse(init.body);
+  const strip = ({ cache_control, ...block }) => block;
+  const system = Array.isArray(body.system) ? body.system.map(strip) : body.system;
+  const tools = Array.isArray(body.tools) ? body.tools.map(strip) : body.tools;
+  const messages = body.messages.map(message => ({ ...message,
+    content: Array.isArray(message.content) && message.role === 'user'
+      ? message.content.map(strip) : message.content,
+  }));
+  // Single text blocks and the string shorthand are the same Anthropic input.
+  const text = content => content?.length === 1 && content[0]?.type === 'text'
+    && Object.keys(content[0]).length === 2 ? content[0].text : content;
+  return { ...body, system: text(system), ...(tools === undefined ? {} : { tools }),
+    messages: messages.map(message => message.role === 'user' ? { ...message, content: text(message.content) } : message) };
+}
+
 let trace;
 let mockAdapter;
 
@@ -397,7 +415,7 @@ describe('Engine', () => {
       try {
         writeFileSync(join(dir, 'CLAUDE.md'), 'FIRST_PROJECT_INSTRUCTION');
         globalThis.fetch = vi.fn(async (_url, init) => {
-          requests.push({ body: JSON.parse(init.body), headers: init.headers });
+          requests.push({ body: anthropicWireWithoutCache(init), headers: init.headers });
           const index = requests.length - 1;
           return response(`signed-${index}`, ['FileRead', 'DiscoverTools', 'DiskUsage', 'FileRead'][index]);
         });
@@ -458,7 +476,7 @@ describe('Engine', () => {
       registry.register(defineTool({ name: 'DiskUsage', description: 'Inspect disk use', parameters: { type: 'object' }, readOnly: true, execute }));
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
-          requests.push({ body: JSON.parse(init.body), headers: init.headers });
+          requests.push({ body: anthropicWireWithoutCache(init), headers: init.headers });
           return response(`legacy-${requests.length}`, ['DiscoverTools', 'DiskUsage'][requests.length - 1], {}, model);
         });
         const store = new ConversationStore(dir);
@@ -506,7 +524,7 @@ describe('Engine', () => {
         } }));
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
-          requests.push({ body: JSON.parse(init.body), headers: init.headers });
+          requests.push({ body: anthropicWireWithoutCache(init), headers: init.headers });
           return response(`background-${requests.length}`, ['Bash', 'WaitTask'][requests.length - 1]);
         });
         const store = new ConversationStore(dir);
@@ -555,7 +573,7 @@ describe('Engine', () => {
       let engine;
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
-          const body = JSON.parse(init.body);
+          const body = anthropicWireWithoutCache(init);
           if (body.stream !== true) {
             if (body.system.startsWith('Summarize the supplied')) summaries.push(body);
             return new Response(JSON.stringify({ content: [{ type: 'text', text: 'Evidence obtained. Continue with the answer; echo already ran.' }], stop_reason: 'end_turn' }), { headers: { 'content-type': 'application/json' } });
@@ -659,7 +677,7 @@ describe('Engine', () => {
         for (const id of [...ids, 'claude-unknown-capability']) {
           const requests = [];
           globalThis.fetch = vi.fn(async (_url, init) => {
-            requests.push(JSON.parse(init.body));
+            requests.push(anthropicWireWithoutCache(init));
             return response('million-' + requests.length, requests.length === 1 ? 'echo' : undefined, {}, id,
               { input_tokens: 210000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
           });
@@ -689,7 +707,7 @@ describe('Engine', () => {
       const result = 'HEAD_EVIDENCE\n' + 'large measured evidence\n'.repeat(900) + '\nTAIL_EVIDENCE';
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
-          requests.push(JSON.parse(init.body));
+          requests.push(anthropicWireWithoutCache(init));
           const n = requests.length;
           const usage = { input_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 100 };
           if (mode === 'stream') return response('tail-' + n, n < 3 ? 'echo' : undefined, { n }, 'claude-opus-4.8', usage);
@@ -745,7 +763,7 @@ describe('Engine', () => {
         execute: async () => 'COMPLETE_EVIDENCE: performed once ' + (mode === 'during' ? 'history '.repeat(35000) : '') }));
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
-          const body = JSON.parse(init.body);
+          const body = anthropicWireWithoutCache(init);
           if (body.stream !== true) {
             expect(mode).toBe('during');
             return new Response(JSON.stringify({ content: [{ type: 'text', text: 'Completed evidence; report pending.' }], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 10 } }), { headers: { 'content-type': 'application/json' } });
@@ -782,7 +800,7 @@ describe('Engine', () => {
       const inbox = [];
       try {
         globalThis.fetch = vi.fn(async (_url, init) => {
-          const body = JSON.parse(init.body);
+          const body = anthropicWireWithoutCache(init);
           if (body.stream !== true) {
             if (body.system.startsWith('Summarize the supplied')) summaries.push(body);
             expect(body.tools).toBeUndefined();
@@ -2040,7 +2058,7 @@ describe('native Session response publication', () => {
     ];
     const requests = [];
     const fetch = vi.fn(async (_url, init) => {
-      const body = JSON.parse(init.body);
+      const body = anthropicWireWithoutCache(init);
       requests.push(body);
       // Match the native API's prefill rejection rather than allowing a mock
       // provider to accept an invalid post-publication request.

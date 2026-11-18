@@ -10,35 +10,39 @@ function rejectsCacheField(status, raw, field) {
   const cachePath = new RegExp(`^(?:body\\.)?${path}$`, 'i');
   const cacheParam = `['"\x60]?(?:body\\.)?${path}['"\x60]?`;
   const unsupported = '(?:unknown|unrecogni[sz]ed|unsupported|unexpected)';
-  const messageMatch = new RegExp(`^(?:${unsupported} (?:parameter|field|argument|name)\\s*:?\\s*${cacheParam}(?=\\.(?:\\s|$)|[\\s:]|$)|${cacheParam}\\s*:\\s*(?:extra (?:inputs|fields) (?:are )?not permitted|unknown field|not supported)\\b)`, 'i');
+  const extra = '(?:extra (?:inputs|fields) (?:are )?not permitted|unknown field|not supported)';
+  const messageMatch = new RegExp(`^(?:${unsupported} (?:request )?(?:parameter|field|argument|name)(?: supplied)?\\s*:?\\s*${cacheParam}(?: is not supported(?: (?:with|by|for) this model)?)?|${cacheParam}\\s*:\\s*${extra})\\.?$`, 'i');
   const matchesMessage = message => typeof message === 'string' && messageMatch.test(message.trim());
   let response;
   try { response = JSON.parse(raw); } catch { return matchesMessage(raw); }
   if (Array.isArray(response?.detail)) {
-    return response.detail.length > 0 && response.detail.every(entry => ['extra_forbidden', 'value_error.extra'].includes(entry?.type)
-      && Array.isArray(entry.loc) && entry.loc.every(part => typeof part === 'string' || Number.isInteger(part))
-      && cachePath.test(entry.loc.join('.')));
+    return !response.error && !response.message && response.detail.length > 0
+      && response.detail.every(entry => ['extra_forbidden', 'value_error.extra'].includes(entry?.type)
+        && Array.isArray(entry.loc) && entry.loc.every(part => typeof part === 'string' || Number.isInteger(part))
+        && cachePath.test(entry.loc.join('.')));
   }
   const error = response?.error ?? response;
-  if (typeof error?.param === 'string') {
-    if (!cachePath.test(error.param)) return false;
-    if (/^(?:unknown_parameter|unsupported_parameter|unrecognized_parameter|extra_forbidden)$/.test(error.code ?? error.type ?? '')) return true;
-  }
-  return matchesMessage(typeof error === 'string' ? error : error?.message ?? response?.detail);
+  if (typeof error?.param === 'string' && !cachePath.test(error.param)) return false;
+  const message = typeof error === 'string' ? error : error?.message ?? response?.detail;
+  if (message != null) return matchesMessage(message);
+  return typeof error?.param === 'string'
+    && /^(?:unknown_parameter|unsupported_parameter|unrecognized_parameter|extra_forbidden)$/.test(error.code ?? error.type ?? '');
 }
 
 /** Dispatch once normally, and at most once without the optional cache hint. */
 export async function fetchWithPromptCacheFallback({ url, headers, body, signal, providerLabel, field, withoutCache, onCacheFallback, onRequestStart }) {
-  const dispatch = async (payload, onStart) => {
+  const dispatch = async payload => {
     if (signal?.aborted) throw new LLMAbortError();
     try {
-      onStart?.();
+      // Re-run the caller's admission hook on every HTTP dispatch: an owned
+      // Work Center lease or a request allowance may have expired meanwhile.
+      onRequestStart?.();
       return await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload), signal });
     } catch (error) {
       throw classifyFetchError(error, { providerLabel, signal });
     }
   };
-  let response = await dispatch(body, onRequestStart);
+  let response = await dispatch(body);
   let errorBody = response.ok ? null : await response.text();
   if (withoutCache && rejectsCacheField(response.status, errorBody, field)) {
     if (signal?.aborted) throw new LLMAbortError();
