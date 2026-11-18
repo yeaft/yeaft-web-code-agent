@@ -291,4 +291,45 @@ test('execution error disclosure survives Session navigation and snapshot-only r
   broker.transition({ ...owner, state: 'error', turnId: 'legacy-failure' });
   await toggle.click();
   await expect(details).toContainText('此 Agent 未保留错误详情');
+
+  // A new user Turn normally gets its own broker thread. Keep the failed
+  // thread in the broker (and the earlier response in the transcript).
+  const old = { ...owner, turnId: 'legacy-failure' };
+  const oldRoot = { userTurnId: 'old-root', startedAt: Date.now() - 10_000, state: 'errored', executions: [{ ...old, state: 'errored' }] };
+  const turns = (...rows) => send({ type: 'session_turns', sessionId: owner.sessionId, turns: rows });
+  turns(oldRoot);
+  mockAgent.send({ type: 'yeaft_output', conversationId, ...old, userTurnId: oldRoot.userTurnId,
+    data: { type: 'assistant', message: { content: 'Earlier failure in the transcript' } } });
+  const sendCount = mockAgent.messages('yeaft_session_send').length;
+  await page.getByRole('button', { name: '关闭 Session 状态', exact: true }).click();
+  const composer = page.locator('.chat-composer textarea');
+  await composer.fill('Try again as a new Turn');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect.poll(() => mockAgent.messages('yeaft_session_send').length).toBe(sendCount + 1);
+  const request = mockAgent.messages('yeaft_session_send').at(-1);
+  expect(request.sessionId).toBe(owner.sessionId);
+  const next = { ...owner, turnId: 'next-turn', threadId: 'next-thread' };
+  const nextRoot = { userTurnId: request.id, startedAt: Date.now(), state: 'running', executions: [{ ...next, state: 'running' }] };
+  send({ type: 'user_message_routed', sessionId: owner.sessionId, messageId: request.id, userTurnId: request.id, relation: 'new' });
+  turns(oldRoot, nextRoot);
+  send({ ...next, type: 'vp_turn_start', userTurnId: nextRoot.userTurnId });
+  broker.transition({ ...next, state: 'tool' });
+  send({ ...next, type: 'query_progress', revision: 1, stage: 'running', reason: null, lastEvidenceAt: null,
+    modelRequests: 1, toolExecutions: 1, reusedCalls: 0, repeatedCalls: 0, failedCalls: 0, stagnantBatches: 0,
+    inputTokens: 777, outputTokens: 44 });
+  await expect(page.getByText('Earlier failure in the transcript')).toBeVisible();
+  await page.evaluate(() => window.Pinia.useChatStore().changeLocale('en'));
+  await page.getByRole('button', { name: 'Show Session status', exact: true }).click();
+  await expect(toggle).toHaveCount(0);
+  await expect(details).toHaveCount(0);
+  await expect(page.locator('.yeaft-session-activity')).toContainText('Try again as a new Turn');
+  await expect(page.locator('.yeaft-query-progress')).toContainText('777');
+  await expect(page.locator('.yeaft-vp-timeline-abort')).toBeVisible();
+  send({ ...next, type: 'vp_turn_end', reason: 'end_turn' });
+  turns(oldRoot, { ...nextRoot, state: 'completed', executions: [{ ...next, state: 'completed' }] });
+  broker.settleIdle(next);
+  broker.broadcastSnapshot({ sessionId: owner.sessionId });
+  await expect(page.locator('.yeaft-vp-timeline-abort')).toHaveCount(0);
+  await expect(toggle).toHaveCount(0);
+  expect(broker.snapshot(owner.sessionId)[0].threads).toContainEqual(expect.objectContaining({ state: 'error', turnId: old.turnId }));
 });

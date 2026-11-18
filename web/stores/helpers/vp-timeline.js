@@ -13,20 +13,22 @@ export function normalizeTimelineErrorDetail(detail) {
   return Object.keys(out).length ? out : null;
 }
 
+const errorTime = (detail, since) => detail?.at ?? (Number.isSafeInteger(since) && since > 0 ? since : null);
+
 export function timelineErrors(entry) {
   if (!entry) return [];
   const threads = Array.isArray(entry.threads) ? entry.threads : [];
   const errors = threads.filter(thread => thread && (thread.state || thread.status) === 'error').map(thread => {
     const detail = normalizeTimelineErrorDetail(thread.errorDetail);
-    return { ...detail, turnId: thread.turnId || detail?.turnId || null, threadId: thread.threadId || 'main' };
+    return { ...detail, at: errorTime(detail, thread.since),
+      turnId: thread.turnId || detail?.turnId || null, threadId: thread.threadId || 'main' };
   });
-  if (entry.state === 'error') {
+  // When the last live sibling settles, the aggregate can say 'error' while
+  // still naming that sibling. The failed threads, when available, own the errors.
+  if (!errors.length && entry.state === 'error') {
     const detail = normalizeTimelineErrorDetail(entry.errorDetail);
-    const turnId = detail?.turnId || entry.turnId || null;
-    const threadId = detail?.threadId || entry.threadId || 'main';
-    if (!errors.some(error => error.turnId === turnId && error.threadId === threadId)) {
-      errors.unshift({ ...detail, turnId, threadId });
-    }
+    errors.push({ ...detail, at: errorTime(detail, entry.since),
+      turnId: detail?.turnId || entry.turnId || null, threadId: detail?.threadId || entry.threadId || 'main' });
   }
   return errors;
 }
