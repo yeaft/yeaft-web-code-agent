@@ -209,3 +209,67 @@ describe('API-based effort capability', () => {
     }
   });
 });
+
+describe('native Gemini config and catalog integration', () => {
+  it('resolves native limits, API effort and explicit overrides without changing Copilot routes', async () => {
+    const { geminiThinkingBudgetForEffort, resolveModel } = await import('../../../agent/yeaft/models.js');
+    const { normalizeKnownProviderForRuntime } = await import('../../../agent/yeaft/llm/known-providers.js');
+    const { updateLlmConfig, getLlmConfig } = await import('../../../agent/yeaft/config-api.js');
+    const { addOrUpdateProvider } = await import('../../../agent/llm-config-cli.js');
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-gemini-config-'));
+    _setMemCacheForTest(null);
+    try {
+      expect(resolveModel('gemini-2.5-pro')).toMatchObject({ adapter: 'gemini', supportsImages: true });
+      expect(resolveContextWindow('google/gemini-2.5-pro')).toBe(1048576);
+      expect(resolveMaxOutputTokens('gemini-2.5-flash')).toBe(65536);
+      expect(getModelEffortOptions('gemini-2.5-pro', { protocol: 'gemini' })).toEqual(anthropicOptions);
+      expect(getModelEffortOptions('gemini-2.5-pro', { protocol: 'openai-responses' })).toEqual(openaiOptions);
+      expect(getModelEffortOptions('gemini-2.5-pro', { protocol: 'gemini', supportsEffort: false })).toEqual([]);
+      expect(getModelEffortOptions('gemini-2.5-flash', { protocol: 'gemini', effortOptions: ['medium'] })).toEqual(['medium']);
+      expect(getThinkingCapability('gemini-3-pro-preview', { protocol: 'gemini' }).maxBudgetTokens).toBeNull();
+      expect(['medium', 'xhigh', 'max'].map(e => geminiThinkingBudgetForEffort('gemini-2.5-pro', e))).toEqual([8192, 16384, 32768]);
+      expect(geminiThinkingBudgetForEffort('gemini-2.5-flash', 'max')).toBe(24576);
+      const copilot = normalizeKnownProviderForRuntime({ name: 'github-copilot', models: ['gemini-2.5-pro'] });
+      expect(copilot.models[0].protocol).toBe('openai-responses');
+      const { provider } = addOrUpdateProvider({}, { name: 'google', protocol: 'gemini', models: 'gemini-2.5-pro', apiKey: 'fixture' });
+      expect(provider.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta');
+      delete provider.baseUrl;
+      expect(updateLlmConfig({ providers: [provider, copilot], primaryModel: 'google/gemini-2.5-pro' }, dir).error).toBeUndefined();
+      const config = loadConfig({ dir });
+      expect(config.providers[0].baseUrl).toContain('/v1beta');
+      expect(config.availableModels.find(m => m.ref === 'google/gemini-2.5-pro')).toMatchObject({ protocol: 'gemini', effortOptions: anthropicOptions });
+      expect(getLlmConfig(dir).availableModels.find(m => m.ref === 'github-copilot/gemini-2.5-pro').protocol).toBe('openai-responses');
+      expect(updateLlmConfig({ providers: [{ ...provider, protocol: 'bogus' }] }, dir).error).toContain('Unsupported');
+    } finally { _setMemCacheForTest(null); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('discovers paginated native models with header credentials, limits and setup validation', async () => {
+    const { discoverLlmModels, discoverGeminiModels } = await import('../../../agent/llm-model-discovery.js');
+    const { useGemini } = await import('../../../agent/llm-config-cli.js');
+    const calls = [];
+    const fetchFn = async (url, options) => {
+      calls.push({ url, options });
+      const second = new URL(url).searchParams.has('pageToken');
+      return { ok: true, text: async () => JSON.stringify(second ? {
+        models: [{ name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'], inputTokenLimit: 1048576, outputTokenLimit: 65536 }],
+      } : {
+        models: [{ name: 'models/gemini-2.5-pro', supportedGenerationMethods: ['generateContent'] },
+          { name: 'models/embedding', supportedGenerationMethods: ['embedContent'] }], nextPageToken: 'opaque+/=',
+      }) };
+    };
+    const result = await discoverLlmModels({ providerType: 'gemini', apiKey: 'fixture-secret', fetchFn });
+    expect(result.models).toEqual(['gemini-2.5-pro', 'gemini-2.5-flash']);
+    expect(result.providerModels[1]).toMatchObject({ protocol: 'gemini', contextWindow: 1048576, maxOutput: 65536 });
+    expect(calls[0].url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(calls[0].options.headers['x-goog-api-key']).toBe('fixture-secret');
+    expect(calls[1].url).not.toContain('fixture-secret');
+    expect(new URL(calls[1].url).searchParams.get('pageToken')).toBe('opaque+/=');
+    const setup = await useGemini({}, { model: 'gemini-2.5-pro', apiKeyEnv: 'FIXTURE', fetchFn }, { FIXTURE: 'fixture-secret' });
+    expect(setup.config.primaryModel).toBe('google/gemini-2.5-pro');
+    expect(setup.provider.protocol).toBe('gemini');
+    await expect(useGemini({}, { model: 'not-there', apiKey: 'fixture', fetchFn })).rejects.toThrow('not found');
+    await expect(discoverGeminiModels({})).rejects.toThrow('API key');
+    await expect(discoverGeminiModels({ apiKey: 'fixture', fetchFn: async () => ({ ok: false, status: 401 }) })).rejects.toThrow('HTTP 401');
+    await expect(discoverGeminiModels({ apiKey: 'fixture', fetchFn: async () => ({ ok: true, text: async () => JSON.stringify({ models: [], nextPageToken: 'repeated' }) }) })).rejects.toThrow('pagination');
+  });
+});

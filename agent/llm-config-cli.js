@@ -5,6 +5,8 @@ import { normalizePluginConfig } from './yeaft/plugins.js';
 import { mutateAgentConfigPath } from './yeaft/config-store.js';
 import {
   discoverGitHubCopilotModels,
+  discoverGeminiModels,
+  GEMINI_BASE_URL,
   discoverOpenAICompatibleModels,
   GITHUB_COPILOT_PROVIDER,
   modelEntryForGitHubCopilotProvider,
@@ -13,7 +15,7 @@ import {
 
 export const DEFAULT_GITHUB_COPILOT_MODEL = 'gpt-5.5';
 
-const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses']);
+const VALID_PROTOCOLS = new Set(['anthropic', 'openai-responses', 'gemini']);
 const VALID_CREDENTIAL_PROVIDERS = new Set(['github-copilot']);
 
 export function getDefaultYeaftConfigPath() {
@@ -128,7 +130,7 @@ function formatModelEntry(model) {
 
 export function addOrUpdateProvider(config, options, env = process.env) {
   const name = requireNonEmpty(options.name, '--name');
-  const baseUrl = requireNonEmpty(options.baseUrl, '--base-url');
+  const baseUrl = options.protocol === 'gemini' ? options.baseUrl || GEMINI_BASE_URL : requireNonEmpty(options.baseUrl, '--base-url');
   const models = parseModelsCsv(options.models);
   validateProtocol(options.protocol);
   validateCredentials(options, env);
@@ -329,14 +331,14 @@ export async function tryAutoConfigureGitHubCopilot(configPath = getDefaultYeaft
 }
 
 
-export async function useOpenAICompatible(config, options = {}, env = process.env) {
-  const name = options.name ? String(options.name).trim() : 'openai';
-  const baseUrl = requireNonEmpty(options.baseUrl, '--base-url');
+async function useApiKeyProvider(config, options, env, { gemini = false } = {}) {
+  const name = options.name ? String(options.name).trim() : gemini ? 'google' : 'openai';
+  const baseUrl = gemini ? options.baseUrl || GEMINI_BASE_URL : requireNonEmpty(options.baseUrl, '--base-url');
   const primaryModel = requireNonEmpty(options.model, '--model');
   const fastModel = options.fast ? String(options.fast).trim() : null;
   validateCredentials(options, env);
   const apiKey = options.apiKey || env[options.apiKeyEnv];
-  const discovery = await discoverOpenAICompatibleModels({ ...options, apiKey });
+  const discovery = await (gemini ? discoverGeminiModels : discoverOpenAICompatibleModels)({ ...options, baseUrl, apiKey });
   const discoveredIds = modelIdsFromProviderModels(discovery.providerModels);
   const allowUnknown = Boolean(options.allowUnknownModel);
 
@@ -359,7 +361,7 @@ export async function useOpenAICompatible(config, options = {}, env = process.en
 
   const next = { ...config };
   const providers = Array.isArray(config.providers) ? [...config.providers] : [];
-  const provider = { name, baseUrl, apiKey, protocol: 'openai-responses', models: providerModels };
+  const provider = { name, baseUrl, apiKey, protocol: gemini ? 'gemini' : 'openai-responses', models: providerModels };
   const index = providers.findIndex(p => p && p.name === provider.name);
   if (index >= 0) providers[index] = provider;
   else providers.push(provider);
@@ -367,4 +369,12 @@ export async function useOpenAICompatible(config, options = {}, env = process.en
   next.primaryModel = `${provider.name}/${primaryModel}`;
   if (fastModel) next.fastModel = `${provider.name}/${fastModel}`;
   return { config: next, provider, discovery };
+}
+
+export function useGemini(config, options = {}, env = process.env) {
+  return useApiKeyProvider(config, options, env, { gemini: true });
+}
+
+export function useOpenAICompatible(config, options = {}, env = process.env) {
+  return useApiKeyProvider(config, options, env);
 }

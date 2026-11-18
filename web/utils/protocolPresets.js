@@ -11,6 +11,7 @@
  */
 
 export const PROTOCOL_PRESET_MODELS = {
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
   anthropic: [
     'claude-opus-4-8',
     'claude-opus-4.8',

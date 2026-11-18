@@ -72,6 +72,11 @@ function imageInputBudget(modelId, protocol) {
   if (protocol === 'anthropic' && /^claude-(?:3-(?:haiku|sonnet|opus)|3-5-(?:haiku|sonnet)|3-7-sonnet|sonnet-4(?:[.-][56])?|opus-4(?:[.-][15678])?|haiku-4[.-]5)(?:-\d{8}|-latest)?$/.test(modelId)) {
     return { tokensPerImage: 8192 };
   }
+  // GenerateContent MEDIA_RESOLUTION_LOW bounds Gemini's visual tokenization;
+  // retain generous headroom and do not infer a bound for unreviewed families.
+  if (protocol === 'gemini' && /^gemini-(?:2\.5|3(?:\.[0-9]+)?)-(?:pro|flash)(?:-|$)/.test(modelId)) {
+    return { detail: 'low', tokensPerImage: 8192 };
+  }
   // Unknown aliases/future variants need a reviewed bound, even with an explicit
   // supportsImages:true. The adapter accepting an image is not token accounting.
   return null;

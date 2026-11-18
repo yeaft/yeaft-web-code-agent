@@ -35,7 +35,7 @@
 | `baseUrl` | `string` | ✓ | API 根 URL（不带 `/v1/...` 尾） |
 | `apiKey` | `string` | △ | 静态 key（和 `credentialProvider` 二选一） |
 | `credentialProvider` | `string` | △ | 动态凭证名（当前仅支持 `github-copilot`） |
-| `protocol` | `'anthropic' \| 'openai-responses'` | — | provider 级 wire 协议；per-model 覆盖优先 |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | provider 级 wire 协议；per-model 覆盖优先 |
 | `models` | `(string \| ModelEntry)[]` | ✓ | 该 provider 服务的 model |
 | `credentialScopeId` | `string` | — | 原生 reasoning 回传与缓存的稳定、非敏感账号归属；动态凭据/自定义 endpoint 必填，官方静态 key 路径默认使用 key 指纹。换账号时更换；仅轮换 token 时保持 |
 | `capabilities` | `object` | — | `nativeReasoningState`、`promptCaching`、`parallelToolCalls`、`eagerInputStreaming` 布尔开关；`translation: true` 强制关闭这些能力。模型级覆盖优先 |
@@ -50,7 +50,7 @@ model 项可以是裸字符串（`"gpt-5"`），也可以是对象：
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | :---: | --- |
 | `id` | `string` | ✓ | vendor 端识别的 model id |
-| `protocol` | `'anthropic' \| 'openai-responses'` | — | 覆盖 provider 协议 |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | 覆盖 provider 协议 |
 | `contextWindow` | `number` | — | 覆盖该 model 的注册表默认 |
 | `maxOutput` | `number` | — | 覆盖该 model 的注册表输出默认 |
 | `capabilities` | `object` | — | 逐字段覆盖 provider 的协议能力开关 |
@@ -292,3 +292,10 @@ Azure AD 加四家 OAuth provider 走同一套 enable + credential 模式。每�
 | 移除 `protocol: "openai"` 别名 | v0.1.590（Phase 7） |
 
 老版本 config 升级时如果碰到 `Phase 7 removed ...` 错误，照上面映射改即可。
+
+
+## Gemini 原生协议补充
+
+协议值为 `gemini`，默认地址 `https://generativelanguage.googleapis.com/v1beta`，静态 `apiKey` 通过 `x-goog-api-key` 认证，不使用 OpenAI 兼容 `/openai` 路径。model 显式协议优先于 provider，之后才按模型 ID 推断。GitHub Copilot 的 Gemini 目录项显式保留 `openai-responses`，不改用 Google 地址或凭据。
+
+配置、CLI / Web 模型目录发现、2.5 token 预算三档和窗口优先级见 [Gemini 配置](../yeaft-config.md#google-gemini-原生-api)。目录测试仅执行分页 GET，不发起生成。Gemini 2.5 用 `thinkingBudget`；Gemini 3 用 `thinkingLevel`，二者互斥。图片输入复用原生附件链路。

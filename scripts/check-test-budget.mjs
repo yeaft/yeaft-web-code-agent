@@ -199,7 +199,10 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +1 confirmed-append response grouping regression: live/replay tool aggregation
 // retains optimistic boundaries and distinct VP/independent turn ownership.
 // +1 Person compact blocking-recovery contract; responsive gutters replace the prior full-width browser expectation.
-export const TEST_CASE_LIMIT = 1104;
+// +22 native Gemini boundaries: 9 transport/tool/finish/signature regressions,
+// 6 routing/Engine/Person/history/private-state integrations, 3 config/catalog/UI
+// cases and 4 desktop/mobile/theme browser flows. Existing protocol tests retained.
+export const TEST_CASE_LIMIT = 1126;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

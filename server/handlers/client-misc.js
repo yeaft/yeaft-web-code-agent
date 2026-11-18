@@ -261,6 +261,14 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
+    case 'get_models_dev_registry': {
+      const targetAgentId = msg.agentId || client.currentAgent;
+      if (!targetAgentId) break;
+      if (!await checkAgentAccess(targetAgentId)) break;
+      await forwardToAgent(targetAgentId, { type: 'get_models_dev_registry', requestId: msg.requestId });
+      break;
+    }
+
     case 'discover_llm_models': {
       const llmDiscoverAgentId = msg.agentId || client.currentAgent;
       if (!llmDiscoverAgentId) break;

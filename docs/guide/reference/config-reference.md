@@ -35,13 +35,13 @@ This chapter is the **field-by-field** reference for an Agent instance's Yeaft `
 | `baseUrl` | `string` | ✓ | API root URL (no `/v1/...` suffix) |
 | `apiKey` | `string` | △ | Static key (mutually exclusive with `credentialProvider`) |
 | `credentialProvider` | `string` | △ | Dynamic credential name (currently only `github-copilot`) |
-| `protocol` | `'anthropic' \| 'openai-responses'` | — | Provider-level wire protocol; per-model overrides win |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | Provider-level wire protocol; per-model overrides win |
 | `models` | `(string \| ModelEntry)[]` | ✓ | Models served by this provider |
 | `credentialScopeId` | `string` | — | Stable, non-secret account scope for native reasoning replay and caching. Required for dynamic credentials/custom endpoints; official static-key routes default to a key fingerprint. Change when switching accounts; preserve when rotating tokens |
 | `capabilities` | `object` | — | Boolean `nativeReasoningState`, `promptCaching`, `parallelToolCalls`, `eagerInputStreaming`; `translation: true` disables these capabilities. Model overrides take precedence |
 | `streamIdleTimeoutMs` | `number` | — | Provider stream read silence budget (0–600000ms); absolute override of global policy, with model overrides taking precedence. Managed Copilot also preserves timeout and capability overrides when saving |
 
-> The chat-completions protocol was removed in Phase 7 (v0.1.590). Only `anthropic` and `openai-responses` are valid.
+> The chat-completions protocol was removed in Phase 7 (v0.1.590). 有效协议为 `anthropic`、`openai-responses`、`gemini`。
 
 ### Model Entry (string shorthand also valid)
 
@@ -50,7 +50,7 @@ A model entry can be either the bare id string (`"gpt-5"`) or an object:
 | Field | Type | Required | Description |
 | --- | --- | :---: | --- |
 | `id` | `string` | ✓ | Model id the vendor recognizes |
-| `protocol` | `'anthropic' \| 'openai-responses'` | — | Overrides the provider protocol |
+| `protocol` | `'anthropic' \| 'openai-responses' \| 'gemini'` | — | Overrides the provider protocol |
 | `contextWindow` | `number` | — | Overrides the registry default for this model |
 | `maxOutput` | `number` | — | Overrides the registry default output cap |
 | `capabilities` | `object` | — | Per-field overrides of provider protocol capabilities |
@@ -288,3 +288,10 @@ Azure AD plus four OAuth providers share the same enable/credential pattern. Eac
 | Removed `protocol: "openai"` alias | v0.1.590 (Phase 7) |
 
 When upgrading and hitting `Phase 7 removed ...` errors, use the mapping above.
+
+
+## Gemini 原生协议补充
+
+协议值为 `gemini`，默认地址 `https://generativelanguage.googleapis.com/v1beta`，静态 `apiKey` 通过 `x-goog-api-key` 认证，不使用 OpenAI 兼容 `/openai` 路径。model 显式协议优先于 provider，之后才按模型 ID 推断。GitHub Copilot 的 Gemini 目录项显式保留 `openai-responses`，不改用 Google 地址或凭据。
+
+配置、CLI / Web 模型目录发现、2.5 token 预算三档和窗口优先级见 [Gemini 配置](../yeaft-config.md#google-gemini-原生-api)。目录测试仅执行分页 GET，不发起生成。Gemini 2.5 用 `thinkingBudget`；Gemini 3 用 `thinkingLevel`，二者互斥。图片输入复用原生附件链路。

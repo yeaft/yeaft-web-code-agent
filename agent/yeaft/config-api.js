@@ -199,7 +199,15 @@ export function updateLlmConfig(update, dir) {
         return { error: 'Each provider must have a name' };
       }
       if (isGitHubCopilotProvider(provider)) continue;
-      if (!provider.baseUrl || typeof provider.baseUrl !== 'string') {
+      for (const model of normalizeProviderModels(provider)) {
+        if (model.protocol && !['anthropic', 'openai-responses', 'gemini'].includes(model.protocol)) {
+          return { error: `Unsupported model protocol: ${model.protocol}` };
+        }
+      }
+      if (provider.protocol && !['anthropic', 'openai-responses', 'gemini'].includes(provider.protocol)) {
+        return { error: `Unsupported provider protocol: ${provider.protocol}` };
+      }
+      if ((!provider.baseUrl && provider.protocol !== 'gemini') || (provider.baseUrl && typeof provider.baseUrl !== 'string')) {
         return { error: `Provider "${provider.name}" must have a baseUrl` };
       }
       if (!Array.isArray(provider.models) || provider.models.length === 0) {
@@ -216,6 +224,7 @@ export function updateLlmConfig(update, dir) {
           if (managed) return managed;
           return {
             ...provider,
+            ...(provider.protocol === 'gemini' && !provider.baseUrl ? { baseUrl: 'https://generativelanguage.googleapis.com/v1beta' } : {}),
             models: normalizeProviderModels(provider).map(serializeModelForPersistence),
           };
         });

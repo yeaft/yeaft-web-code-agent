@@ -31,7 +31,7 @@ agent/yeaft/llm/
     github-copilot.js     — GitHub OAuth → Copilot API token
 ```
 
-> Phase 7（2026-04-27）移除了旧的 ChatCompletionsAdapter。当前只有两个 wire 协议：`anthropic` 和 `openai-responses`。
+> Phase 7（2026-04-27）移除了旧的 ChatCompletionsAdapter。当前支持三个 wire 协议：`anthropic`、`openai-responses`、`gemini`。
 
 ## 适配器层
 
@@ -284,3 +284,10 @@ Web 端 Debug 面板的每个 turn 详情可以**导出 raw request**（headers 
 - `agent/yeaft/llm/anthropic.js` — Anthropic adapter
 - `agent/yeaft/llm/openai-responses.js` — OpenAI Responses adapter
 - `agent/yeaft/llm/credentials/github-copilot.js` — GitHub OAuth → Copilot token
+
+
+## Gemini 原生协议补充
+
+协议值为 `gemini`，默认地址 `https://generativelanguage.googleapis.com/v1beta`，静态 `apiKey` 通过 `x-goog-api-key` 认证，不使用 OpenAI 兼容 `/openai` 路径。model 显式协议优先于 provider，之后才按模型 ID 推断。GitHub Copilot 的 Gemini 目录项显式保留 `openai-responses`，不改用 Google 地址或凭据。
+
+配置、CLI / Web 模型目录发现、2.5 token 预算三档和窗口优先级见 [Gemini 配置](../yeaft-config.md#google-gemini-原生-api)。目录测试仅执行分页 GET，不发起生成。Gemini 2.5 用 `thinkingBudget`；Gemini 3 用 `thinkingLevel`，二者互斥。图片输入复用原生附件链路。

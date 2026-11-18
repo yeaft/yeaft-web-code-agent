@@ -26,7 +26,7 @@ import { lookupModelLimitSync } from './llm/models-dev.js';
  * @property {'anthropic' | 'openai' | 'deepseek' | 'google'} provider — Which provider this model belongs to.
  *   These ids are intentionally aligned with the top-level keys in the models.dev
  *   catalog so they can be used as a `providerHint` to {@link lookupModelLimitSync}.
- * @property {'anthropic' | 'openai-responses'} adapter — Which wire protocol to use
+ * @property {'anthropic' | 'openai-responses' | 'gemini'} adapter — Which wire protocol to use
  * @property {string} baseUrl — Official API endpoint base URL
  * @property {string} displayName — Human-readable model name
  */
@@ -147,18 +147,20 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'DeepSeek Reasoner',
   }],
 
-  // ── Google (via OpenAI-compatible API) ─────────────────────────
+  // ── Google (native Gemini API) ─────────────────────────
   ['gemini-2.5-pro', {
     provider: 'google',
-    adapter: 'openai-responses',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    adapter: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     displayName: 'Gemini 2.5 Pro',
+    supportsImages: true,
   }],
   ['gemini-2.5-flash', {
     provider: 'google',
-    adapter: 'openai-responses',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    adapter: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     displayName: 'Gemini 2.5 Flash',
+    supportsImages: true,
   }],
 ]);
 
@@ -214,7 +216,9 @@ function lookupRuntimeModelLimit(modelName) {
     candidate = candidate.slice(slash + 1);
   }
   // Fable 5.2 is known to have a 1M window even before the catalog warms.
-  // Exact version only; do not infer output limits or widen other Claude IDs.
+  // Exact versions only; do not infer output limits or widen other Claude IDs.
+  // Gemini limits are offline fallbacks; explicit config and models.dev still win.
+  if (['gemini-2.5-pro', 'gemini-2.5-flash'].includes(candidate)) return { context: 1_048_576, output: 65_536 };
   return candidate === 'claude-fable-5-2' ? { context: 1_000_000 } : null;
 }
 
@@ -360,6 +364,15 @@ export function parseModelRef(ref) {
  * @typedef {'medium' | 'xhigh' | 'max' | 'ultra'} Effort
  */
 
+// Yeaft's three UI tiers map to token budgets, NOT Gemini 3 thinkingLevel.
+// Gemini 2.5 Pro: 128..32768; Flash: 0..24576 (generateContent).
+export const GEMINI_THINKING_BUDGETS = Object.freeze({ medium: 8192, xhigh: 16384, max: 24576 });
+export function geminiThinkingBudgetForEffort(model, effort) {
+  const budget = GEMINI_THINKING_BUDGETS[normalizeEffort(effort)];
+  if (!budget) return null;
+  return /(?:^|\/)gemini-2\.5-pro(?:-|$)/i.test(parseModelRef(model).modelId) && normalizeEffort(effort) === 'max' ? 32768 : budget;
+}
+
 /**
  * Budget-token map for the Anthropic extended-thinking protocol.
  * Explicit thinkingProtocol:'anthropic' selects these legacy manual budgets.
@@ -427,7 +440,7 @@ export function thinkingBudgetForEffort(model, effort) {
  */
 export function getThinkingCapability(model, context = {}) {
   const modelId = parseModelRef(model).modelId.toLowerCase();
-  const protocol = context.protocol || (
+  const protocol = context.protocol || (/(?:^|[/.])gemini(?:-|$)/.test(modelId) ? 'gemini' : null) || (
     context.thinkingProtocol?.startsWith('anthropic') ||
     MODEL_REGISTRY.get(modelId)?.adapter === 'anthropic' ||
     modelId.startsWith('claude') || modelId.includes('/claude') || modelId.includes('.claude')
@@ -435,6 +448,19 @@ export function getThinkingCapability(model, context = {}) {
   );
   const disabled = { supportsThinking: false, thinkingProtocol: 'none', defaultEffort: null, maxBudgetTokens: null, effortOptions: [] };
   if (context.supportsEffort === false || context.thinkingProtocol === 'none') return disabled;
+  if (protocol === 'gemini') {
+    const budgetBased = /^gemini-2\.5-(pro|flash)(?:-|$)/.test(modelId);
+    const levelBased = /^gemini-3(?:\.[0-9]+)?-(pro|flash)(?:-|$)/.test(modelId);
+    // Unknown Gemini families need explicit opt-in rather than guessed knobs.
+    if (!budgetBased && !levelBased && context.thinkingProtocol !== 'gemini') return disabled;
+    const overrides = normalizeEffortOptions(context.effortOptions);
+    const effortOptions = Object.keys(GEMINI_THINKING_BUDGETS).filter(value => !overrides || overrides.includes(value));
+    if (!effortOptions.length) return disabled;
+    const defaultEffort = normalizeEffort(context.defaultEffort);
+    return { supportsThinking: true, thinkingProtocol: 'gemini',
+      defaultEffort: effortOptions.includes(defaultEffort) ? defaultEffort : null,
+      maxBudgetTokens: levelBased ? null : context.maxBudgetTokens ?? (/^gemini-2\.5-pro(?:-|$)/.test(modelId) ? 32768 : 24576), effortOptions };
+  }
   if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;
   const manual = protocol === 'anthropic' && context.thinkingProtocol === 'anthropic';
   const thinkingProtocol = protocol === 'openai-responses' ? 'openai-reasoning'
@@ -616,6 +642,7 @@ export function getModelInfo(model, providerConfig) {
     if (reg.adapter) info.adapter = reg.adapter;
     if (reg.baseUrl) info.baseUrl = reg.baseUrl;
     if (reg.displayName) info.displayName = reg.displayName;
+    if (reg.supportsImages !== undefined) info.supportsImages = reg.supportsImages;
   }
   if (ctx !== undefined) info.contextWindow = ctx;
   if (max !== undefined) info.maxOutput = max;

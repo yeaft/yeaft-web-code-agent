@@ -36,6 +36,7 @@ export function pickProtocolForModelId(modelId) {
   if (id.startsWith('claude') || id.includes('/claude') || id.includes('.claude')) {
     return 'anthropic';
   }
+  if (/(?:^|[/.])gemini(?:-|$)/.test(id)) return 'gemini';
   if (/^(gpt-|o1|o3|o4|chatgpt-|codex-|omni-)/.test(id)) {
     return 'openai-responses';
   }
@@ -231,17 +232,19 @@ export default {
       // Copilot) can serve both Anthropic and OpenAI families without
       // splitting into two provider rows.
       const models = Array.from(this.selectedModels).map(id => {
-        const proto = pickProtocolForModelId(id);
+        const proto = this.selectedProviderId === 'github-copilot' && /(?:^|[/.])gemini(?:-|$)/i.test(id)
+          ? 'openai-responses' : pickProtocolForModelId(id);
         return proto ? { id, protocol: proto } : id;
       });
       this.$emit('pick', {
         name: this.selectedProviderId,
-        baseUrl: entry.api || '',
-        // Empty string is intentional: LlmTab.saveConfig drops empty/`'openai'`
+        baseUrl: this.selectedProviderId === 'google' ? 'https://generativelanguage.googleapis.com/v1beta' : entry.api || '',
+        // Google uses a single native API. Other catalogs may be mixed; an empty
+        // protocol is intentional: LlmTab.saveConfig drops empty/`'openai'`
         // protocol values so the per-model entries are the sole source of truth.
         // Do NOT default this back to a real protocol or you'll break mixed
         // providers (the provider-level value would win over heuristic).
-        protocol: '',
+        protocol: this.selectedProviderId === 'google' ? 'gemini' : '',
         models,
       });
     },

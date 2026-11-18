@@ -22,11 +22,13 @@ import {
   setLocalModels,
   useGitHubCopilot,
   useOpenAICompatible,
+  useGemini,
   writeLocalLlmConfig,
 } from './llm-config-cli.js';
 import {
   discoverGitHubCopilotModels,
   discoverOpenAICompatibleModels,
+  discoverGeminiModels,
   GITHUB_COPILOT_PROVIDER,
 } from './llm-model-discovery.js';
 import {
@@ -205,10 +207,11 @@ export function printLlmHelp() {
     yeaft-agent llm list-models [<provider-name>]
     yeaft-agent llm setup
     yeaft-agent llm use github-copilot --model <modelId> [--fast <modelId>] [--allow-unknown-model]
+    yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-2.5-pro [--fast gemini-2.5-flash]
     yeaft-agent llm use openai-compatible --name <name> --base-url <url> --api-key-env <ENV> --model <modelId> [--fast <modelId>]
     yeaft-agent llm add-provider --name <name> --base-url <url> --models <m1,m2> \
       [--api-key <key>|--api-key-env <ENV>|--credential-provider github-copilot] \
-      [--protocol anthropic|openai-responses] [--set-primary <model>] [--set-fast <model>]
+      [--protocol anthropic|openai-responses|gemini] [--set-primary <model>] [--set-fast <model>]
     yeaft-agent llm set-model [--primary <provider/model>] [--fast <provider/model>]
     yeaft-agent llm remove-provider --name <name>
 
@@ -286,8 +289,8 @@ async function handleLlmCommand(args) {
         if (result.config.fastModel) console.log(`Fast model: ${result.config.fastModel}`);
         return;
       }
-      if (preset === 'openai-compatible') {
-        result = await useOpenAICompatible(current, options, process.env);
+      if (preset === 'openai-compatible' || preset === 'gemini') {
+        result = await (preset === 'gemini' ? useGemini : useOpenAICompatible)(current, options, process.env);
         writeLocalLlmConfig(result.config, configPath, current);
         console.log(`Configured ${result.provider.name} with ${result.discovery.models.length} live models.`);
         console.log(`Primary model: ${result.config.primaryModel}`);
@@ -384,7 +387,8 @@ export async function handleListModels(
       return;
     }
     try {
-      const result = await discoverOpenAI({
+      const discover = target.protocol === 'gemini' ? deps.discoverGemini || discoverGeminiModels : discoverOpenAI;
+      const result = await discover({
         baseUrl: target.baseUrl,
         apiKey: target.apiKey,
       });
@@ -431,8 +435,16 @@ async function runLlmSetup(current, configPath) {
   try {
     console.log('Yeaft LLM setup');
     console.log('1) GitHub Copilot (uses local device token / gh auth, no API key in config)');
-    console.log('2) Advanced manual provider (use add-provider command)');
+    console.log('2) Google Gemini (native API, uses GEMINI_API_KEY)');
+    console.log('3) Advanced manual provider (use add-provider command)');
     const choice = (await rl.question('Choose provider [1]: ')).trim() || '1';
+    if (choice === '2') {
+      const model = (await rl.question('Primary model id [gemini-2.5-pro]: ')).trim() || 'gemini-2.5-pro';
+      const result = await useGemini(current, { model, apiKeyEnv: 'GEMINI_API_KEY' });
+      writeLocalLlmConfig(result.config, configPath, current);
+      console.log(`Configured Google Gemini: ${result.config.primaryModel}`);
+      return;
+    }
     if (choice !== '1') {
       console.log('Use `yeaft-agent llm add-provider --help` for advanced endpoints.');
       return;

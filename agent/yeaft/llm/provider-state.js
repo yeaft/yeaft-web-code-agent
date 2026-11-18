@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const MAX_PROVIDER_STATE_BYTES = 4 * 1024 * 1024;
-const PROTOCOLS = new Set(['openai-responses', 'anthropic']);
+const PROTOCOLS = new Set(['openai-responses', 'anthropic', 'gemini']);
 const hash = value => `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
 const clone = value => structuredClone(value);
 const nonempty = value => typeof value === 'string' && value.length > 0;
@@ -70,18 +70,20 @@ export function createCredentialScopeId(credential, kind = 'static-api-key') {
 export function createProviderContext({ protocol, baseUrl, providerId, credentialScopeId, staticApiKey, model, capabilities = {} }) {
   let endpoint;
   try {
-    const url = new URL(baseUrl || (protocol === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'));
+    const url = new URL(baseUrl || (protocol === 'anthropic' ? 'https://api.anthropic.com'
+      : protocol === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : 'https://api.openai.com/v1'));
     url.username = ''; url.password = ''; url.search = ''; url.hash = '';
     endpoint = url.toString().replace(/\/+$/, '');
   } catch { endpoint = ''; }
   const native = protocol === 'anthropic' ? endpoint === 'https://api.anthropic.com'
-    : endpoint === 'https://api.openai.com/v1';
+    : protocol === 'gemini' ? /^https:\/\/generativelanguage\.googleapis\.com\/v1(?:beta)?$/.test(endpoint)
+      : endpoint === 'https://api.openai.com/v1';
   // A static gateway credential fences accounts just as an official key does.
   // Dynamic providers pass the scope of the source credential used for exchange,
   // not a rotating access token or a provider name shared by every account.
   if (!nonempty(credentialScopeId)) credentialScopeId = createCredentialScopeId(staticApiKey);
   const enabled = key => capabilities.translation !== true
-    && (capabilities[key] ?? (key === 'nativeReasoningState' && protocol === 'anthropic' ? Boolean(endpoint) : native)) === true;
+    && (capabilities[key] ?? (key === 'nativeReasoningState' && ['anthropic', 'gemini'].includes(protocol) ? Boolean(endpoint) : native)) === true;
   return {
     protocol,
     origin: { providerId: providerId || protocol, endpointFingerprint: hash(endpoint), model, credentialScopeId },
@@ -153,9 +155,35 @@ function projectItems(protocol, items) {
       else if (item.type === 'tool_use' && nonempty(item.id) && nonempty(item.name) && item.input && typeof item.input === 'object') {
         projection.toolCalls.push({ id: item.id, name: item.name, input: item.input });
       } else throw new ProviderStateError('unsupported or unsigned Anthropic block');
+    } else if (protocol === 'gemini') {
+      if (item.type !== 'part' || !record(item.part)) throw new ProviderStateError('invalid Gemini part');
+      const part = item.part;
+      if (part.thoughtSignature !== undefined && !nonempty(part.thoughtSignature)) {
+        throw new ProviderStateError('invalid Gemini thought signature');
+      }
+      if (part.functionCall) {
+        const call = part.functionCall;
+        const id = item.toolCallId || call.id;
+        if (!nonempty(id) || !nonempty(call.name) || (call.args !== undefined && !record(call.args))) {
+          throw new ProviderStateError('invalid Gemini function call');
+        }
+        projection.toolCalls.push({ id, name: call.name, input: call.args ?? {} });
+      } else if (typeof part.text === 'string') {
+        if (part.thought !== true) projection.content += part.text;
+      } else if (!nonempty(part.thoughtSignature)) {
+        throw new ProviderStateError('unsupported Gemini part');
+      }
     }
   }
   return projection;
+}
+
+/** Whether native signatures bind the complete assistant projection. */
+export function hasSignedProviderState(state) {
+  // Do not trust a possibly damaged discriminator to decide whether signatures
+  // exist: a protocol edit must not downgrade a signed turn to unsigned replay.
+  return Array.isArray(state?.items) && state.items.some(item =>
+    ['thinking', 'redacted_thinking'].includes(item?.type) || nonempty(item?.part?.thoughtSignature));
 }
 
 export function createProviderState({ context, identity, items, responseId, requestBody }) {
@@ -168,6 +196,10 @@ export function createProviderState({ context, identity, items, responseId, requ
         !requestOwner(identity) && 'request identity (instance/owner/session/VP/thread)'].filter(Boolean).join(', ');
       throw new ProviderStateError(`signed tool turn requires ${missing}; preserve the signed response and correct the route before retrying`);
     }
+    if (context?.protocol === 'gemini' && hasSignedProviderState({ protocol: 'gemini', items })
+      && items.some(item => item?.part?.functionCall)) {
+      throw new ProviderStateError('signed Gemini tool turn requires nativeReasoningState, credential scope and request identity');
+    }
     return null;
   }
   if (!Array.isArray(items) || !items.length) return null;
@@ -179,7 +211,8 @@ export function createProviderState({ context, identity, items, responseId, requ
   catch (error) {
     if (state.protocol === 'anthropic' && items.some(item => ANTHROPIC_TOOL_USES.has(item?.type))
       && items.some(item => ['thinking', 'redacted_thinking'].includes(item?.type))) throw error;
-    return null; // unsupported/partial optional Responses state is not replayable
+    if (state.protocol === 'gemini' && hasSignedProviderState(state)) throw error;
+    return null; // unsupported/partial optional state is not replayable
   }
   if (state.protocol === 'anthropic' && requestBody && hasThinking(items)
       && supportsAnthropicPreservedThinking(requestBody.model)) {
@@ -249,7 +282,11 @@ export function validateAnthropicRequestPrefixes(body, entries) {
 }
 
 function signedToolState(state, message) {
-  return state?.protocol === 'anthropic'
+  if (state?.protocol === 'gemini' || state?.items?.some?.(item => nonempty(item?.part?.thoughtSignature))) {
+    return (message?.toolCalls?.length > 0 || state.items?.some?.(item => item?.part?.functionCall))
+      && (!Array.isArray(state.items) || hasSignedProviderState(state));
+  }
+  return (state?.protocol === 'anthropic' || hasSignedProviderState(state))
     && (message?.toolCalls?.length > 0 || state.items?.some?.(item => ANTHROPIC_TOOL_USES.has(item?.type)))
     && (!Array.isArray(state.items) || hasThinking(state.items));
 }

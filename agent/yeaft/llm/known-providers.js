@@ -70,7 +70,8 @@ export function protocolForKnownModel(id) {
 export function modelEntryForGitHubCopilot(id) {
   const value = String(id || '').trim();
   if (!value) return null;
-  const protocol = protocolForKnownModel(value);
+  // Copilot serves Gemini over Responses, not Google's native endpoint.
+  const protocol = /(?:^|[/.])gemini(?:-|$)/i.test(value) ? 'openai-responses' : protocolForKnownModel(value);
   return protocol ? { id: value, protocol } : { id: value };
 }
 

@@ -1,9 +1,10 @@
 /**
  * adapter.js — LLM Adapter base class, unified types, and factory
  *
- * Design decision (Phase 7, 2026-04-27): Only two adapters remain:
+ * Native adapters:
  *   1. AnthropicAdapter        — Anthropic Messages API
  *   2. OpenAIResponsesAdapter  — OpenAI Responses API (covers GPT, DeepSeek, CopilotProxy, etc.)
+ *   3. GeminiAdapter           — Gemini GenerateContent API
  *
  * The legacy ChatCompletionsAdapter (OpenAI Chat Completions API) was deleted in
  * Phase 7. Configurations using protocol "openai" or alias "chat-completions"
@@ -574,7 +575,7 @@ export function redactRawRequest(req) {
   // Common auth headers
   for (const k of Object.keys(headers)) {
     const lower = k.toLowerCase();
-    if (lower === 'x-api-key' || lower === 'authorization' || lower === 'api-key') {
+    if (lower === 'x-api-key' || lower === 'authorization' || lower === 'api-key' || lower === 'x-goog-api-key') {
       headers[k] = '***';
     }
   }
@@ -726,6 +727,17 @@ export async function createLLMAdapter(config) {
 
   // ─── Legacy path: single adapter from env vars ────────
   const adapter = config.adapter;
+
+  if (adapter === 'gemini') {
+    if (!config.apiKey) throw new Error('Gemini adapter requires YEAFT_API_KEY');
+    const { GeminiAdapter } = await import('./gemini.js');
+    return new GeminiAdapter({
+      apiKey: config.apiKey, baseUrl: config.baseUrl || undefined,
+      headers: config.headers,
+      streamIdleTimeoutMs: config.llmRetry?.streamIdleTimeoutMs,
+      highEffortStreamIdleTimeoutMs: config.llmRetry?.highEffortStreamIdleTimeoutMs,
+    });
+  }
 
   if (adapter === 'anthropic' || (!adapter && config.apiKey)) {
     if (!config.apiKey) {

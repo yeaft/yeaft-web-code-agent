@@ -67,7 +67,8 @@ Markdown messages render LaTeX formulas locally with KaTeX: use `$E=mc^2$` or `\
 
 ### Providers, tools, and context
 
-- Native adapters support Anthropic Messages and OpenAI Responses protocols.
+- Native adapters support Anthropic Messages, OpenAI Responses, and Google Gemini native GenerateContent (not the OpenAI-compatible endpoint).
+- Google Gemini quick setup: `yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-2.5-pro --fast gemini-2.5-flash`. Set the key in your shell first; it is saved as `apiKey` in the selected instance config. In LLM Settings, select **Google Gemini (native API)**; the connection test lists models without a generation request.
 - A configured provider can use a static API key or a dynamic GitHub Copilot credential provider. Per-model protocol, context window, output limit, and reasoning-effort metadata are supported.
 - The current native registry exposes **33 built-in tools** for files/patches, shell and background jobs, Git worktrees, search, Web access, images, notebooks, planning, persistent work creation, and sub-agent/VP orchestration. Skills and MCP can extend that registry.
 - Provider context uses a bounded, disposable window of the current Session’s persisted turns. Post-turn compact remains a separate history-window optimization; it does not reactivate Dream or H2-AMS memory.
@@ -222,7 +223,7 @@ Agent (Node.js on the code machine)
         ├── GitHub Copilot CLI provider (ACP)
         ├── Native Yeaft engine
         │   ├── Session + VP orchestration
-        │   ├── Anthropic / OpenAI Responses adapters
+        │   ├── Anthropic / OpenAI Responses / Gemini adapters
         │   ├── 33 built-in tools + Skills + MCP
         │   ├── bounded Session history + post-turn compact
         │   └── Work Center (WorkItem → Action → Run)
