@@ -55,6 +55,7 @@ import {
 } from '../models.js';
 
 import { createProviderContext, createProviderState, replayProviderState, providerStateBytes, applyResponsesContinuity, reasoningUsage, reportedUsageFields, hasUsageCounts } from './provider-state.js';
+import { fetchWithPromptCacheFallback } from './prompt-cache.js';
 
 import { decodeResponsesInput, encodeResponsesInput, projectResponsesTools, responsesArgumentProjection } from './responses-tool-schema.js';
 
@@ -256,6 +257,14 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     return input;
   }
 
+  #dispatch({ url, headers, requestBody, signal, cacheKeySent, context, onProviderDiagnostics, onRequestStart }) {
+    return fetchWithPromptCacheFallback({ url, headers, body: requestBody, signal, providerLabel: 'OpenAI', field: 'prompt_cache_key',
+      withoutCache: cacheKeySent ? ({ prompt_cache_key, ...uncached }) => uncached : undefined, onRequestStart,
+      onCacheFallback: () => onProviderDiagnostics?.({ ...context.diagnostics,
+        nativeReasoningState: Boolean(requestBody.include?.includes('reasoning.encrypted_content')), promptCaching: 'rejected-fallback' }),
+    });
+  }
+
   // ─── Error classification ───────────────────────────────
 
   #classifyError(status, body, response = null) {
@@ -316,7 +325,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   async *stream({ model, system, messages, tools, maxTokens = 16384, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRawExchange, rawExchangeMaxBytes = 512 * 1024, onRequestStart, streamIdleTimeoutMs }) {
     if (signal?.aborted) throw new LLMAbortError();
 
-    const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, model });
+    const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
     const body = {
       model,
       stream: true,
@@ -343,13 +352,13 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     if (wireTools !== undefined) body.tools = wireTools;
     const input = this.#translateInput(messages, context, requestIdentity, codecs);
     body.model = model; // Origin binding must describe the actual dispatched model.
-    applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
+    const cacheKeySent = applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
     normalizeEffortPayload(body, 'openai-responses');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'openai-responses', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'openai-responses', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
-    const wireBody = toWellFormedJson(body);
+    const requestBody = toWellFormedJson(body);
     const idleMs = resolveStreamIdleTimeoutMs(this.#streamIdlePolicy, effortDecision.effective, streamIdleTimeoutMs);
 
     const url = `${this.#baseUrl}/responses`;
@@ -358,25 +367,12 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       'Authorization': `Bearer ${this.#apiKey}`,
     };
 
-    // Expose the raw request (auth-redacted) for the debug panel. See
-    // `redactRawRequest` in adapter.js for the verbatim-design rationale.
+    const { response, errorBody, body: wireBody } = await this.#dispatch({ url, headers, requestBody, signal,
+      cacheKeySent, context, onProviderDiagnostics,
+      onRequestStart: () => onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs }) });
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body: wireBody });
 
-    let response;
-    try {
-      onRequestStart?.({ effort: effortDecision.effective, streamIdleTimeoutMs: idleMs });
-      response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(wireBody),
-        signal,
-      });
-    } catch (err) {
-      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
-    }
-
     if (!response.ok) {
-      const errorBody = await response.text();
       // Capture error response too, then throw. Parity with anthropic.js.
       if (onRawExchange) {
         try {
@@ -728,7 +724,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   async call({ model, system, messages, tools, maxTokens = 4096, effort, effortSource, effortContext = {}, extraBody, providerContext, requestIdentity, onProviderDiagnostics, effortConstraint = null, onEffortDecision = null, signal, onRequestStart }) {
     if (signal?.aborted) throw new LLMAbortError();
 
-    const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, model });
+    const context = providerContext || createProviderContext({ protocol: 'openai-responses', baseUrl: this.#baseUrl, staticApiKey: this.#apiKey, model });
     const body = {
       model,
       max_output_tokens: maxTokens,
@@ -753,34 +749,19 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     if (wireTools !== undefined) body.tools = wireTools;
     const input = this.#translateInput(messages, context, requestIdentity, codecs);
     body.model = model; // Origin binding must describe the actual dispatched model.
-    applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
+    const cacheKeySent = applyResponsesContinuity(body, { context, identity: requestIdentity, input, onProviderDiagnostics });
     normalizeEffortPayload(body, 'openai-responses');
     const effortDecision = effortConstraint
       ? enforceSubAgentEffortPayload(body, { model, protocol: 'openai-responses', effortContext, effortConstraint })
       : captureEffortDecision({ body, model, protocol: 'openai-responses', effortContext, requested: effort, source: effortSource || 'scenario' });
     onEffortDecision?.(effortDecision);
-    const wireBody = toWellFormedJson(body);
+    const requestBody = toWellFormedJson(body);
 
-    let response;
-    try {
-      onRequestStart?.();
-      response = await fetch(`${this.#baseUrl}/responses`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.#apiKey}`,
-        },
-        body: JSON.stringify(wireBody),
-        signal,
-      });
-    } catch (err) {
-      throw classifyFetchError(err, { providerLabel: 'OpenAI', signal });
-    }
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw this.#classifyError(response.status, errorBody, response);
-    }
+    const url = `${this.#baseUrl}/responses`;
+    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.#apiKey}` };
+    const { response, errorBody } = await this.#dispatch({ url, headers, requestBody, signal,
+      cacheKeySent, context, onProviderDiagnostics, onRequestStart });
+    if (!response.ok) throw this.#classifyError(response.status, errorBody, response);
 
     const result = await response.json();
     const items = Array.isArray(result.output) ? result.output : [];

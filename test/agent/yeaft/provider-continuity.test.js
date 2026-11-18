@@ -133,7 +133,7 @@ describe('Anthropic gateway compatibility and prefix binding', () => {
     const next = { ...params, messages: [...params.messages, msg, { role: 'tool', toolCallId: 'call1', content: 'result' }] };
     await router.call(next);
     expect(JSON.parse(fetch.mock.calls.at(-1)[1].body).messages[1].content).toEqual(anthropicItems);
-    expect(fetch.mock.calls.at(-1)[1].body).not.toContain('cache_control');
+    expect(JSON.parse(fetch.mock.calls.at(-1)[1].body).messages.at(-1).content.at(-1).cache_control).toEqual({ type: 'ephemeral' });
     expect(fetch.mock.calls.at(-1)[1].body).not.toContain('eager_input_streaming');
     await expect(router.call({ ...next, messages: [msg] })).rejects.toThrow(/pair repair/);
     await expect(router.call({ ...next, messages: [{ ...msg, content: '', providerState: undefined,
@@ -298,7 +298,8 @@ describe('native provider wire contracts', () => {
     const fetch = vi.fn().mockImplementation(() => Promise.resolve(json({ id: 'plain', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' })));
     vi.stubGlobal('fetch', fetch);
     const adapter = new AnthropicAdapter({ apiKey: 'synthetic' });
-    const params = { model: 'claude-sonnet-4', system: 'fixed', messages: [{ role: 'user', content: 'question' }], requestIdentity: identity };
+    const params = { model: 'claude-sonnet-4', system: 'fixed', messages: [{ role: 'user', content: 'question' }], requestIdentity: identity,
+      providerContext: createProviderContext({ protocol: 'anthropic', model: 'claude-sonnet-4' }) };
     await adapter.call(params);
     await collect(adapter.stream(params));
     for (const [, init] of fetch.mock.calls) expect(init.body).not.toContain('cache_control');
@@ -314,5 +315,144 @@ describe('native provider wire contracts', () => {
     fetch.mockImplementation(() => Promise.resolve(json({ id: 'signed', content: anthropicItems, stop_reason: 'tool_use' })));
     await expect(adapter.call(params)).rejects.toThrow(/credentialScopeId/);
     await expect(collect(adapter.stream(params))).rejects.toThrow(/credentialScopeId/);
+  });
+});
+
+
+describe('default prompt caching on native and compatible routes', () => {
+  const exercise = (adapter, method, params) => method === 'stream' ? collect(adapter.stream(params)) : adapter.call(params);
+  const readWire = init => JSON.parse(init.body);
+  const messages = [{ role: 'user', content: 'question' }];
+  const anthropicDone = () => json({ id: 'plain', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn',
+    usage: { input_tokens: 10, output_tokens: 8, cache_read_input_tokens: 5, cache_creation_input_tokens: 3 } });
+  const responsesDone = () => json({ id: 'plain', status: 'completed', output_text: 'done', output: [],
+    usage: { input_tokens: 10, output_tokens: 8, input_tokens_details: { cached_tokens: 5 } } });
+  const rejecting = (error, status = 400) => new Response(JSON.stringify(error), { status });
+
+  it('uses the Anthropic breakpoints on legacy stream and call, and honors model-over-provider overrides', async () => {
+    const fetch = vi.fn(async () => anthropicDone());
+    vi.stubGlobal('fetch', fetch);
+    const direct = new AnthropicAdapter({ apiKey: 'fixture' });
+    const router = new AdapterRouter({ providers: [
+      { name: 'proxy', baseUrl: 'https://proxy.invalid', apiKey: 'fixture', protocol: 'anthropic',
+        capabilities: { promptCaching: false }, models: ['skip', { id: 'use-cache', capabilities: { promptCaching: true } }] },
+      { name: 'translator', baseUrl: 'https://translator.invalid', apiKey: 'fixture', protocol: 'anthropic',
+        capabilities: { translation: true }, models: [{ id: 'translated', capabilities: { promptCaching: true } }] },
+    ] });
+    for (const method of ['stream', 'call']) {
+      for (const [adapter, model, expected] of [[direct, 'claude-sonnet-4', true], [router, 'proxy/skip', false],
+        [router, 'proxy/use-cache', true], [router, 'translator/translated', false]]) {
+        const result = await exercise(adapter, method, { model, system: 'fixed', messages });
+        const body = readWire(fetch.mock.lastCall[1]);
+        expect(body.system).toEqual(expected ? [{ type: 'text', text: 'fixed', cache_control: { type: 'ephemeral' } }] : 'fixed');
+        const usage = method === 'stream' ? result.find(event => event.type === 'usage') : result.usage;
+        expect(usage).toMatchObject({ cacheReadTokens: 5, cacheWriteTokens: 3 });
+      }
+    }
+  });
+
+  it('defaults the Responses hint on for a gateway and keeps it stable and owner-fenced on both request paths', async () => {
+    const fetch = vi.fn(async () => responsesDone());
+    vi.stubGlobal('fetch', fetch);
+    const provider = { name: 'proxy', baseUrl: 'https://proxy.invalid/v1', apiKey: 'PRIVATE-FIXTURE', models: ['gpt-5'] };
+    const router = new AdapterRouter({ providers: [provider] });
+    const params = { model: 'proxy/gpt-5', system: 'PRIVATE-FIXTURE-SYSTEM', messages, requestIdentity: identity };
+    const getKey = () => readWire(fetch.mock.lastCall[1]).prompt_cache_key;
+    const stream = await collect(router.stream(params));
+    const first = getKey();
+    expect(first).toMatch(/^yeaft:[a-f0-9]{48}$/);
+    expect(stream.find(event => event.type === 'usage')).toMatchObject({ cacheReadTokens: 5 });
+    expect(readWire(fetch.mock.lastCall[1])).toMatchObject({ store: false });
+    expect(readWire(fetch.mock.lastCall[1])).not.toHaveProperty('include');
+    await router.call({ ...params, messages: [...messages, { role: 'user', content: 'new input' }] });
+    expect(getKey()).toBe(first);
+    await router.call({ ...params, requestIdentity: { ...identity, sessionId: 'other' } });
+    expect(getKey()).not.toBe(first);
+    router.refreshProviders([{ ...provider, apiKey: 'ROTATED-FIXTURE' }]);
+    await router.call(params);
+    expect(getKey()).not.toBe(first);
+    await router.call({ ...params, requestIdentity: undefined, extraBody: { prompt_cache_key: 'caller-value' } });
+    expect(getKey()).toBeUndefined();
+  });
+
+  it('retries once for validated cache-only errors on both protocols without changing signed inputs or dispatch ownership', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    for (const protocol of ['anthropic', 'openai-responses']) {
+      const anthropic = protocol === 'anthropic';
+      const model = anthropic ? 'claude-opus-4.8' : 'gpt-5';
+      const adapter = anthropic ? new AnthropicAdapter({ apiKey: 'fixture' }) : new OpenAIResponsesAdapter({ apiKey: 'fixture' });
+      const initialContext = createProviderContext({ protocol, model, staticApiKey: 'fixture' });
+      const signed = { role: 'assistant', content: 'visible answer', toolCalls: [{ id: 'call1', name: 'Read', input: { path: 'file' } }] };
+      signed.providerState = bindProviderState(createProviderState({ context: initialContext, identity,
+        items: anthropic ? anthropicItems : responsesItems, requestBody: { model, system: 'fixed', messages } }), signed);
+      const cacheError = () => anthropic
+        ? rejecting({ detail: [{ type: 'extra_forbidden', loc: ['body', 'messages', 2, 'content', 0, 'tool_result', 'cache_control'] }] }, 422)
+        : rejecting({ error: { message: 'Unrecognized request argument supplied: prompt_cache_key', code: 'unknown_parameter', param: 'prompt_cache_key' } });
+      for (const method of ['stream', 'call']) {
+        fetch.mockReset().mockImplementationOnce(async () => cacheError())
+          .mockImplementationOnce(async () => anthropic ? anthropicDone() : method === 'stream'
+            ? sse([{ type: 'response.completed', response: { id: 'plain', status: 'completed', output: [] } }]) : responsesDone());
+        const onProviderDiagnostics = vi.fn(), onRequestStart = vi.fn(), onRawExchange = vi.fn();
+        await exercise(adapter, method, { model, system: 'fixed', requestIdentity: identity, onProviderDiagnostics, onRequestStart, onRawExchange,
+          messages: [...messages, signed, { role: 'tool', toolCallId: 'call1', content: 'result' }] });
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(onRequestStart).toHaveBeenCalledTimes(2);
+        expect(onProviderDiagnostics.mock.calls.map(([info]) => info.promptCaching)).toEqual(['sent-unverified', 'rejected-fallback']);
+        const [first, second] = fetch.mock.calls.map(([, req]) => readWire(req));
+        if (anthropic) {
+          expect(first.system[0].cache_control).toEqual({ type: 'ephemeral' });
+          expect(second.system).toBe('fixed');
+          expect(second.messages[0]).toEqual(messages[0]);
+          expect(first.messages[2].content[0]).toHaveProperty('cache_control');
+          expect(second.messages[1].content).toEqual(anthropicItems);
+          expect(second.messages[2].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'call1', content: 'result', is_error: false });
+          expect(JSON.stringify(second)).not.toContain('cache_control');
+        } else {
+          const { prompt_cache_key, ...withoutHint } = first;
+          expect(prompt_cache_key).toBeTruthy();
+          expect(second).toEqual(withoutHint);
+          expect(second.input.slice(1, 4)).toEqual(responsesItems);
+        }
+        if (method === 'stream') expect(onRawExchange.mock.lastCall[0].rawRequest.body).toEqual(second);
+      }
+      fetch.mockReset().mockImplementation(async () => cacheError());
+      await expect(adapter.call({ model, system: 'fixed', messages, requestIdentity: identity })).rejects.toThrow(/API error/);
+      expect(fetch).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it('does not retry unrelated failures and respects abort or a denied dispatch during fallback', async () => {
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'fixture' });
+    const params = { model: 'gpt-5', messages, requestIdentity: identity };
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const cacheError = { error: { message: 'Unknown parameter: prompt_cache_key' } };
+    for (const [error, status] of [[cacheError, 401], [cacheError, 429], [cacheError, 500],
+      [{ error: { message: 'Unknown parameter: prompt_cache_key.mode' } }, 400],
+      [{ error: { message: 'Unknown parameter: prompt_cache_key', param: 'input' } }, 400],
+      [{ error: { message: 'Invalid input: mentions prompt_cache_key' } }, 400],
+      [{ detail: [{ type: 'extra_forbidden', loc: ['body', 'prompt_cache_key'] },
+        { type: 'missing', loc: ['body', 'input'] }] }, 422]]) {
+      fetch.mockReset().mockImplementation(async () => rejecting(error, status));
+      await expect(collect(adapter.stream(params))).rejects.toThrow();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+    const anthropic = new AnthropicAdapter({ apiKey: 'fixture' });
+    fetch.mockReset().mockImplementation(async () => rejecting({ error: {
+      message: 'system.0.text.cache_control: Extra inputs are not permitted\nmax_tokens: field required',
+    } }));
+    await expect(anthropic.call({ ...params, model: 'claude-sonnet-4', system: 'fixed' })).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const lostLease = new Error('lease lost before dispatch');
+    const onRequestStart = vi.fn().mockImplementationOnce(() => {}).mockImplementationOnce(() => { throw lostLease; });
+    fetch.mockReset().mockImplementation(async () => rejecting(cacheError));
+    await expect(adapter.call({ ...params, onRequestStart })).rejects.toBe(lostLease);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(onRequestStart).toHaveBeenCalledTimes(2);
+    const controller = new AbortController();
+    fetch.mockReset().mockImplementation(async () => { controller.abort(); return rejecting(cacheError); });
+    await expect(adapter.call({ ...params, signal: controller.signal })).rejects.toMatchObject({ name: 'LLMAbortError' });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

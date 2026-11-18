@@ -65,8 +65,8 @@ export function createCredentialScopeId(credential, kind = 'static-api-key') {
 }
 
 /** Protocol selects the native block format, not a hostname allowlist.
- * Optional wire features still require a recognized endpoint or explicit opt-in.
- * Translation routes can explicitly disable native replay.
+ * Caching defaults on for compatible routes. Other optional wire features
+ * keep their existing endpoint and opt-in rules.
  */
 export function createProviderContext({ protocol, baseUrl, providerId, credentialScopeId, staticApiKey, model, capabilities = {} }) {
   let endpoint;
@@ -90,7 +90,7 @@ export function createProviderContext({ protocol, baseUrl, providerId, credentia
     origin: { providerId: providerId || protocol, endpointFingerprint: hash(endpoint), model, credentialScopeId },
     capabilities: {
       nativeReasoningState: enabled('nativeReasoningState'),
-      promptCaching: enabled('promptCaching'),
+      promptCaching: Boolean(endpoint) && capabilities.translation !== true && (capabilities.promptCaching ?? true) === true,
       parallelToolCalls: enabled('parallelToolCalls'),
       eagerInputStreaming: protocol === 'anthropic' && enabled('eagerInputStreaming'),
     },
@@ -367,26 +367,24 @@ export function applyResponsesContinuity(body, { context, identity, input, onPro
   } else delete body.parallel_tool_calls;
   onProviderDiagnostics?.({ ...context?.diagnostics, nativeReasoningState: Boolean(body.include?.includes('reasoning.encrypted_content')),
     promptCaching: key ? 'sent-unverified' : 'not-sent' });
+  return Boolean(key);
+}
+
+/** Remove wire cache markers, not signed blocks or keys inside tool arguments. */
+export function stripAnthropicCaching(body) {
+  const { cache_control, ...plain } = body;
+  if (Array.isArray(plain.system)) plain.system = plain.system.map(withoutCacheMarker);
+  if (Array.isArray(plain.tools)) plain.tools = plain.tools.map(withoutCacheMarker);
+  if (Array.isArray(plain.messages)) plain.messages = plain.messages.map(message => ({ ...message,
+    content: Array.isArray(message.content) ? message.content.map(block =>
+      ['thinking', 'redacted_thinking'].includes(block?.type) ? block : withoutCacheMarker(block)) : message.content,
+  }));
+  return plain;
 }
 
 /** At most three cache breakpoints. Never modifies signed assistant blocks. */
 export function applyAnthropicCaching(body, context, onProviderDiagnostics) {
-  // Own the policy after extraBody: do not mix automatic/long-TTL caching or
-  // inherit caller breakpoints on unknown translation endpoints.
-  delete body.cache_control;
-  const withoutCache = block => {
-    if (!block || typeof block !== 'object') return block;
-    const { cache_control, ...rest } = block;
-    return rest;
-  };
-  if (Array.isArray(body.system)) body.system = body.system.map(withoutCache);
-  if (Array.isArray(body.tools)) body.tools = body.tools.map(withoutCache);
-  if (Array.isArray(body.messages)) body.messages = body.messages.map(message => ({ ...message,
-    content: Array.isArray(message.content) ? message.content.map(block => {
-      // Signed native blocks are immutable (and never eligible for caching).
-      return ['thinking', 'redacted_thinking'].includes(block?.type) ? block : withoutCache(block);
-    }) : message.content,
-  }));
+  body = stripAnthropicCaching(body);
   let sent = false;
   if (context?.capabilities?.promptCaching && validOrigin(context.origin)) {
     if (typeof body.system === 'string' && body.system) body.system = [{ type: 'text', text: body.system }];
@@ -411,6 +409,7 @@ export function applyAnthropicCaching(body, context, onProviderDiagnostics) {
     }
   }
   onProviderDiagnostics?.({ ...context?.diagnostics, promptCaching: sent ? 'sent-unverified' : 'not-sent' });
+  return { body, sent };
 }
 
 export function reasoningUsage(usage, protocol) {

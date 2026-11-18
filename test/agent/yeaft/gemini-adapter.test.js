@@ -19,16 +19,18 @@ function sse(events, tail = '') {
 describe('native Gemini adapter', () => {
   it('uses generateContent, native parameters, system instructions, schemas, images and redacted key', async () => {
     global.fetch = vi.fn(async () => json(candidate([{ text: 'ok' }])));
-    const exchange = vi.fn();
+    const exchange = vi.fn(), onProviderDiagnostics = vi.fn();
     const instance = await createLLMAdapter({ adapter: 'gemini', apiKey: 'secret', baseUrl: 'https://gateway.test/custom?tenant=a', headers: { 'X-Route': 'local' } });
     const result = await instance.call({ ...params, system: 'system', messages: [{ role: 'system', content: 'rules' }, { role: 'user', content: [{ type: 'text', text: 'image' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'YWJj' } }] }],
       tools: [{ name: 'read', description: 'Read', parameters: { type: 'object', additionalProperties: false } }],
-      maxTokens: 123, temperature: 0, stopSequences: ['STOP'], jsonMode: true, effort: 'medium', onRawExchange: exchange });
+      maxTokens: 123, temperature: 0, stopSequences: ['STOP'], jsonMode: true, effort: 'medium', onRawExchange: exchange, onProviderDiagnostics });
     const [url, req] = global.fetch.mock.calls[0];
     const body = JSON.parse(req.body);
     expect(url).toBe('https://gateway.test/custom/models/gemini-2.5-flash:generateContent?tenant=a');
     expect(req.headers['x-goog-api-key']).toBe('secret');
     expect(req.headers['X-Route']).toBe('local');
+    expect(body).not.toHaveProperty('cachedContent');
+    expect(onProviderDiagnostics.mock.lastCall[0]).toMatchObject({ promptCaching: 'provider-managed-unverified' });
     expect(body.systemInstruction.parts).toEqual([{ text: 'system' }, { text: 'rules' }]);
     expect(body.contents[0].parts[1]).toEqual({ inlineData: { mimeType: 'image/png', data: 'YWJj' } });
     expect(body.tools[0].functionDeclarations[0].parametersJsonSchema.additionalProperties).toBe(false);
@@ -43,8 +45,12 @@ describe('native Gemini adapter', () => {
       { ...candidate([{ text: 'hé' }], null), usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 1, thoughtsTokenCount: 3 } },
       { ...candidate([{ text: 'llo' }]), usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 2, thoughtsTokenCount: 4, cachedContentTokenCount: 10 } },
     ]));
-    const events = await collect(adapter().stream(params));
+    const onProviderDiagnostics = vi.fn();
+    const events = await collect(adapter().stream({ ...params, onProviderDiagnostics }));
     expect(global.fetch.mock.calls[0][0]).toContain(':streamGenerateContent?alt=sse');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).not.toHaveProperty('cachedContent');
+    expect(onProviderDiagnostics.mock.lastCall[0]).toMatchObject({ promptCaching: 'implicit' });
     expect(events.filter(e => e.type === 'text_delta').map(e => e.text)).toEqual(['hé', 'llo']);
     expect(events.find(e => e.type === 'thinking_delta').text).toBe('plan');
     expect(events.filter(e => e.type === 'usage')).toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 6, reasoningTokens: 4, cacheReadTokens: 10, cacheTokensAreIncludedInInput: true })]);

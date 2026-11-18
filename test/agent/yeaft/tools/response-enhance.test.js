@@ -122,7 +122,7 @@ describe('ResponseEnhance', () => {
       const adapter = new AnthropicAdapter({ apiKey: 'fixture' });
       await enhanceResponse(input, { adapter, config, model: 'claude-sonnet-4-6', effort: 'low', effortConstraint: { parentDecision: { effective: 'low' } } });
       expect(bodies).toHaveLength(1);
-      expect(bodies[0].system).toContain(RESPONSE_ENHANCE_SYSTEM);
+      expect(bodies[0].system).toEqual([{ type: 'text', text: RESPONSE_ENHANCE_SYSTEM, cache_control: { type: 'ephemeral' } }]);
       expect(bodies[0].tools ?? []).toEqual([]);
       expect(bodies[0].output_config?.effort).toBe('medium');
       vi.stubEnv('YEAFT_THINKING_V1', '1');

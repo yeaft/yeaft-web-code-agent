@@ -134,13 +134,23 @@ router 解析 `<provider-name>` 找到 provider 配置，用 `<model-id>` 调对
 
 `normalizeModelEntry()` 把两种 shape 统一成对象形式。
 
+## Prompt 缓存默认策略
+
+原生 Yeaft 引擎的 Session、数字人与 Work Center 都不需要单独配置缓存开关。具体行为取决于实际请求协议：
+
+- **Anthropic Messages：** 官方和兼容网关只要有凭据作用域，就默认在工具、系统指令、最近符合条件的用户消息或工具结果上发送短时 `cache_control` 断点。Claude 的短时缓存写入与读取采用不同费率。
+- **OpenAI Responses：** 支持的模型本来就由服务端自动缓存。请求和凭据归属明确时，官方和兼容网关都会收到稳定且不含明文内容的 `prompt_cache_key` 路由提示；不改变 `store: false`，也不请求延长缓存保留时间。
+- **Gemini GenerateContent：** 支持的模型由 Google 隐式缓存，不需要请求字段。Yeaft 不主动创建显式 `cachedContents` 资源，避免额外存储收费。自定义网关是否缓存取决于它的上游实现。
+
+如果网关在请求校验时明确拒绝 Yeaft 添加的缓存字段，会去掉该字段重试一次。原有的 provider 或模型级 `capabilities.promptCaching: false`、`capabilities.translation: true` 仍可阻止发送 Yeaft 的缓存字段，但不能关闭上游自己的隐式缓存。是否实际命中以服务商返回的缓存读取 token 数为准；前缀太短、不同、过期，或上游不支持时可能为零。
+
 ## 原生 continuation 与 preserved thinking
 
 Anthropic-compatible 网关的签名 thinking / redacted thinking 随同原始 assistant blocks 保存和重放；不要求网关使用官方域名，也不要求为普通静态 `apiKey` 手工设置 `nativeReasoningState` 或 `credentialScopeId`。静态凭据只保存 SHA-256 指纹；Copilot 使用本次交换所用 GitHub 源凭据的指纹，短期 API token 刷新不会改变 scope，切换源凭据则拒绝重放。provider、endpoint、model 和 instance / owner / Session / VP / thread 仍逐项隔离。
 
 当有效协议为 Anthropic Messages API 时，对已知默认省略 thinking 摘要的 Claude 型号（Claude 5 / 5.5、Fable / Mythos 5–5.2、Mythos Preview，以及已启用 thinking 的 Opus 4.7 / 4.8），官方和兼容代理路由都默认补 `thinking.display: "summarized"`，不依赖上游域名。未知型号和 OpenAI Responses 不变；显式 `extraBody.thinking.display`（包括 `omitted`）优先，子 Agent 限制 effort 时也保留该设置，`disabled` / `between_tools` 不补 display。摘要不等于原始内部推理，也不保证在固定超时前一定有进展。
 
-未知网关不会因此自动启用 prompt caching、eager input streaming 等可选 wire 字段。`capabilities.translation: true` 或 `capabilities.nativeReasoningState: false` 仍可明确禁用原生重放；如果响应已经包含签名 thinking 和工具调用，会报可诊断错误，而不是丢掉 thinking 后继续执行工具。Router 的 orphan 修复也不能悄悄删除这样的工具 turn。
+未知网关仍不会自动启用 eager input streaming。`capabilities.translation: true` 或 `capabilities.nativeReasoningState: false` 仍可明确禁用原生重放；如果响应已经包含签名 thinking 和工具调用，会报可诊断错误，而不是丢掉 thinking 后继续执行工具。Router 的 orphan 修复也不能悄悄删除这样的工具 turn。
 
 [Claude preserved-thinking 官方文档](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking) 要求保持顶层 `system`、`tools` 和 thinking 前的消息 prefix；`cache_control` 标记、effort、输出预算不属于该 prefix。不能在保留后续签名的同时重写之前的工具结果、删改旧消息或在 thinking 链中挖空。客户端 compact 应建立明确的新上下文边界，而不是让仍在执行中的工具 turn 丢失 reasoning。
 
