@@ -412,6 +412,28 @@ export function resolveGeminiEffort(model, effort, options) {
   return options.filter(level => GEMINI_LEVEL_ORDER.indexOf(level) <= GEMINI_LEVEL_ORDER.indexOf(effort)).at(-1) || null;
 }
 
+/** Publish the distinction between accepted saved tiers and distinct menu choices. */
+export function geminiEffortCatalog(model, capability) {
+  if (capability.thinkingProtocol !== 'gemini') return {};
+  if (capability.maxBudgetTokens === null) return { geminiThinkingMode: 'level' };
+  const seen = new Set();
+  const effortMenuOptions = capability.effortOptions.filter(effort => {
+    const budget = Math.min(capability.maxBudgetTokens, geminiThinkingBudgetForEffort(model, effort));
+    if (seen.has(budget)) return false;
+    seen.add(budget);
+    return true;
+  });
+  return { geminiThinkingMode: 'budget', effortMenuOptions };
+}
+
+/** Resolve an explicit Quick Send selection against the owning model, including legacy Gemini aliases. */
+export function resolveCatalogEffort(model, effort) {
+  const options = model?.effortOptions || [];
+  if (model?.effortProtocol === 'gemini') return resolveGeminiEffort(model.id, effort, options);
+  const value = normalizeEffort(effort);
+  return options.includes(value) ? value : null;
+}
+
 /**
  * Budget-token map for the Anthropic extended-thinking protocol.
  * Explicit thinkingProtocol:'anthropic' selects these legacy manual budgets.
@@ -496,11 +518,10 @@ export function getThinkingCapability(model, context = {}) {
     const effortOptions = nativeOptions.filter(value => !allowed || allowed.includes(value));
     const maxBudgetTokens = profile.levels ? null : Math.min(profile.maxBudget, context.maxBudgetTokens ?? profile.maxBudget);
     if (!effortOptions.length || maxBudgetTokens < (profile.minBudget ?? 0)) return disabled;
-    return { supportsThinking: true, thinkingProtocol: 'gemini',
-      defaultEffort: resolveGeminiEffort(model, context.defaultEffort, effortOptions)
-        || ['xhigh', 'medium', 'high'].find(value => effortOptions.includes(value))
-        || effortOptions.at(-2) || effortOptions[0],
-      maxBudgetTokens, effortOptions };
+    const capability = { supportsThinking: true, thinkingProtocol: 'gemini', maxBudgetTokens, effortOptions };
+    const defaults = geminiEffortCatalog(model, capability).effortMenuOptions || effortOptions;
+    return { ...capability, defaultEffort: resolveGeminiEffort(model, context.defaultEffort, effortOptions)
+      || ['xhigh', 'medium', 'high'].find(value => defaults.includes(value)) || defaults[0] };
   }
   if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;
   const manual = protocol === 'anthropic' && context.thinkingProtocol === 'anthropic';

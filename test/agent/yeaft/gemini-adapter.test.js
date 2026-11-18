@@ -3,7 +3,7 @@ import { GeminiAdapter, projectGeminiToolCalls } from '../../../agent/yeaft/llm/
 import { createLLMAdapter, LLMAbortError, LLMRateLimitError, LLMServerError, LLMToolInputError } from '../../../agent/yeaft/llm/adapter.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
-import { buildModelSelectionRows } from '../../../web/utils/modelRefs.js';
+import { buildModelSelectionRows, resolveSessionModelEffort } from '../../../web/utils/modelRefs.js';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -151,14 +151,15 @@ describe('native Gemini adapter', () => {
         'gemini-3-pro-preview': ['low', 'high'],
         'gemini-3.6-flash': ['minimal', 'low', 'medium', 'high'],
       };
-      const providers = [{ name: 'google', protocol: 'gemini', apiKey: 'fixture', models: [...Object.keys(families), 'gemini-4-unverified'] }];
+      const providers = [{ name: 'google', protocol: 'gemini', apiKey: 'fixture', models: [...Object.keys(families), 'gemini-4-unverified', { id: 'gemini-2.5-flash', maxBudgetTokens: 16384 }] },
+        { name: 'restricted', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-hydrogen', effortOptions: ['medium', 'xhigh'] }] }];
       writeFileSync(join(dir, 'config.json'), JSON.stringify({ providers }));
       mkdirSync(join(dir, 'sessions', 'gemini'), { recursive: true });
       const config = loadConfig({ dir });
       const router = new AdapterRouter({ providers: config.providers });
       global.fetch = vi.fn(async url => url.includes(':streamGenerateContent') ? sse([candidate([{ text: 'ok' }])]) : json(candidate([{ text: 'ok' }])));
       for (const [model, levels] of Object.entries(families)) {
-        const row = buildModelSelectionRows(config.availableModels).find(row => row.model.id === model);
+        const row = buildModelSelectionRows(config.availableModels).find(row => row.modelRef === `google/${model}`);
         expect(row.model.effortOptions).toEqual(levels);
         const visible = levels.includes('xhigh') ? ['medium', 'xhigh'] : levels.filter(level => ['medium', 'high'].includes(level));
         expect(row.efforts).toEqual(visible);
@@ -178,7 +179,20 @@ describe('native Gemini adapter', () => {
           }
         }
       }
-      expect(buildModelSelectionRows(config.availableModels).at(-1).efforts).toEqual([]);
+      const rows = buildModelSelectionRows(config.availableModels);
+      expect(rows.find(row => row.modelRef === 'google/gemini-4-unverified').efforts).toEqual([]);
+      const capped = rows.find(row => row.modelRef === 'google/gemini-2.5-flash');
+      expect(capped).toMatchObject({ efforts: ['medium', 'xhigh'], defaultEffort: 'xhigh' });
+      expect(capped.model.effortOptions).toContain('max');
+      for (const effort of ['xhigh', 'max']) {
+        await router.call({ ...params, model: capped.modelRef, effort, effortSource: 'user' });
+        expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingBudget).toBe(16384);
+      }
+      const narrowed = rows.find(row => row.modelRef === 'restricted/gemini-4-hydrogen');
+      expect(narrowed.model).toMatchObject({ geminiThinkingMode: 'level', effortOptions: ['medium', 'xhigh'] });
+      expect(resolveSessionModelEffort({ config: { modelEffort: 'high' } }, '', narrowed.model)).toBe('medium');
+      await router.call({ ...params, model: narrowed.modelRef, effort: 'high', effortSource: 'user' });
+      expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('MEDIUM');
       await router.call({ ...params, model: 'google/gemini-3-pro-preview', effort: 'max', effortSource: 'user' });
       expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
       await router.call({ ...params, model: 'google/gemini-4-hydrogen', effort: 'xhigh', effortSource: 'model-default' });
@@ -235,7 +249,7 @@ describe('native Gemini adapter', () => {
     const decisions = [];
     const onEffortDecision = value => decisions.push(value);
     const request = { ...params, model: 'gemini-4-hydrogen', effort: 'xhigh', onEffortDecision };
-    await adapter().call({ ...request, effortConstraint: { parentDecision: { effective: 'low' } } });
+    await adapter().call({ ...request, effortConstraint: { parentDecision: { effective: 'low', wireMode: 'thinking-level' } } });
     expect(decisions.at(-1)).toMatchObject({ effective: 'low', cap: 'low', thinkingLevel: 'LOW' });
     await adapter().call({ ...request, model: 'gemini-4-unknown', effortConstraint: { parentDecision: decisions.at(-1) } });
     expect(decisions.at(-1)).toMatchObject({ effective: null, cap: 'low' });

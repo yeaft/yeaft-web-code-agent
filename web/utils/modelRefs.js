@@ -27,7 +27,8 @@ const EFFORT_RANK = Object.freeze({
 
 const GEMINI_NATIVE_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 const hasNativeGeminiLevels = model => model?.effortProtocol === 'gemini'
-  && model.effortOptions?.some(effort => ['minimal', 'low', 'high'].includes(effort));
+  && (model.geminiThinkingMode === 'level' || (!model.geminiThinkingMode
+    && model.effortOptions?.some(effort => ['minimal', 'low', 'high'].includes(effort))));
 
 function normalizeEffortList(options) {
   if (!Array.isArray(options)) return [];
@@ -44,7 +45,7 @@ function normalizeEffortList(options) {
 export function getSelectableModelEfforts(options, model = null) {
   // Native capabilities and saved values remain available to the transport.
   // Menus start at Medium and only offer High if X-High is unavailable.
-  const values = normalizeEffortList(options);
+  const values = normalizeEffortList(options).filter(effort => !Array.isArray(model?.effortMenuOptions) || model.effortMenuOptions.includes(effort));
   return values.filter(effort => Object.hasOwn(EFFORT_RANK, effort)
     || (effort === 'high' && hasNativeGeminiLevels(model) && !values.includes('xhigh')));
 }

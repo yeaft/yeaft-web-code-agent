@@ -125,14 +125,18 @@ const atMost = (value, ceiling) => effortRank(value) >= 0 && effortRank(value) <
 
 /** Copy only durable decision fields; never retain a mutable request/config object. */
 export function snapshotEffortDecision(decision = null) {
+  // Older providers used low/high as aliases. Only a native thinking-level
+  // decision (or its inherited cap) has literal Gemini semantics.
+  const native = decision?.wireMode === 'thinking-level' || decision?.nativeEffortCap === true;
   return Object.freeze({
-    requested: normalizeEffort(decision?.requested, true),
-    effective: normalizeEffort(decision?.effective, true),
+    requested: normalizeEffort(decision?.requested, native),
+    effective: normalizeEffort(decision?.effective, native),
     source: typeof decision?.source === 'string' ? decision.source : 'unknown',
     model: typeof decision?.model === 'string' ? decision.model : null,
     wireMode: typeof decision?.wireMode === 'string' ? decision.wireMode : 'omitted',
     thinkingEnabled: decision?.thinkingEnabled === true,
-    cap: normalizeEffort(decision?.cap, true),
+    cap: normalizeEffort(decision?.cap, native),
+    ...(decision?.nativeEffortCap === true ? { nativeEffortCap: true } : {}),
     ...(typeof decision?.thinkingLevel === 'string' ? { thinkingLevel: decision.thinkingLevel } : {}),
     ...(Number.isFinite(decision?.budgetTokens) ? { budgetTokens: decision.budgetTokens } : {}),
   });
@@ -171,6 +175,7 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   const base = {
     requested: parentTarget, source: parent.effective ? 'inherited' : 'fallback',
     model, cap: target, thinkingEnabled: false,
+    ...(['minimal', 'low'].includes(target) ? { nativeEffortCap: true } : {}),
   };
   if (!capability.supportsThinking || capability.thinkingProtocol === 'none') {
     return snapshotEffortDecision({ ...base, effective: null, wireMode: 'unsupported' });

@@ -23,7 +23,7 @@ import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens, DEFAULT_CONTEXT_WINDOW } from './models.js';
+import { geminiEffortCatalog, getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens, DEFAULT_CONTEXT_WINDOW } from './models.js';
 import { inferProtocolFromModelId } from './llm/router.js';
 import { withGeminiDefault } from './llm/gemini-endpoint.js';
 import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
@@ -616,7 +616,7 @@ export function loadConfig(overrides = {}) {
             entry.supportsEffort = modelSupportsEffort(m.id, effortContext);
             entry.effortOptions = effortOptions;
             entry.effortProtocol = cap.thinkingProtocol;
-            if (protocol === 'gemini') entry.defaultEffort = cap.defaultEffort;
+            if (protocol === 'gemini') Object.assign(entry, geminiEffortCatalog(m.id, cap), { defaultEffort: cap.defaultEffort });
           }
           config.availableModels.push(entry);
         }

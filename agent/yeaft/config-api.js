@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { getModelEffortOptions, normalizeEffort, normalizeProviderModels, parseModelRef, resolveMaxOutputTokens, serializeModelForPersistence } from './models.js';
+import { geminiEffortCatalog, getThinkingCapability, normalizeEffort, resolveCatalogEffort, normalizeProviderModels, parseModelRef, resolveMaxOutputTokens, serializeModelForPersistence } from './models.js';
 import { inferProtocolFromModelId } from './llm/router.js';
 import { withGeminiDefault } from './llm/gemini-endpoint.js';
 import { clampYeaftField, normaliseTelemetrySection, normaliseYeaftSection } from './config.js';
@@ -27,6 +27,7 @@ function quickSendModels(config) {
     const provider = normalizeKnownProviderForRuntime(raw);
     return normalizeProviderModels(provider).map(model => {
       const protocol = model.protocol || provider.protocol || inferProtocolFromModelId(model.id) || 'openai-responses';
+      const capability = getThinkingCapability(model.id, { ...model, protocol });
       return {
         id: model.id,
         ref: provider.name ? `${provider.name}/${model.id}` : model.id,
@@ -34,15 +35,29 @@ function quickSendModels(config) {
         label: model.id,
         protocol,
         effortProtocol: protocol === 'gemini' ? 'gemini' : undefined,
-        effortOptions: getModelEffortOptions(model.id, { ...model, protocol }),
+        effortOptions: capability.effortOptions,
+        ...geminiEffortCatalog(model.id, capability),
         maxOutput: resolveMaxOutputTokens(model.id, { modelInfo: model }),
       };
     });
   });
 }
 
-function publicQuickSends(value) {
-  return (Array.isArray(value) ? value : []).map(item => ({ ...item, effort: normalizeEffort(item.effort, /(?:^|\/)gemini-/.test(item.model || '')) }));
+function findQuickSendModel(models, ref) {
+  const exact = models.find(model => model.ref === ref);
+  if (exact) return exact;
+  const bare = models.filter(model => model.id === ref);
+  return bare.length === 1 ? bare[0] : null;
+}
+
+function publicQuickSends(value, models) {
+  return (Array.isArray(value) ? value : []).map(item => {
+    const model = findQuickSendModel(models, item.model);
+    const effort = model?.effortProtocol === 'gemini'
+      ? resolveCatalogEffort(model, item.effort) ?? normalizeEffort(item.effort, model.geminiThinkingMode === 'level')
+      : normalizeEffort(item.effort);
+    return { ...item, effort };
+  });
 }
 
 /** Validate inside mutateAgentConfig's lock, against the resulting provider catalog. */
@@ -58,12 +73,10 @@ function validateQuickSends(value, config) {
     if (!name || name.length > 80) throw new Error('Quick send name must be 1–80 characters');
     ids.add(id);
     const ref = typeof item.model === 'string' ? item.model.trim() : '';
-    const matches = models.filter(model => model.ref === ref);
-    const candidates = matches.length ? matches : models.filter(model => model.id === ref);
-    if (candidates.length !== 1) throw new Error(`Quick send model must exist and be unambiguous: ${ref}`);
-    const model = candidates[0];
-    const effort = normalizeEffort(item.effort, model.protocol === 'gemini' && model.effortOptions.some(effort => ['minimal', 'low', 'high'].includes(effort)));
-    if (item.effort != null && (!effort || !model.effortOptions.includes(effort))) {
+    const model = findQuickSendModel(models, ref);
+    if (!model) throw new Error(`Quick send model must exist and be unambiguous: ${ref}`);
+    const effort = resolveCatalogEffort(model, item.effort);
+    if (item.effort != null && !effort) {
       throw new Error(`Quick send effort is not available for ${model.ref}`);
     }
     const maxOutputTokens = item.maxOutputTokens ?? null;
@@ -106,14 +119,15 @@ function readLocalLlmConfig(dir) {
   const raw = readFileSync(configPath, 'utf8');
   const json = JSON.parse(raw);
   const providers = Array.isArray(json.providers) ? json.providers.map(withGeminiDefault) : [];
+  const availableModels = quickSendModels(json);
   return {
     providers,
     primaryModel: json.primaryModel || null,
     fastModel: json.fastModel || null,
     language: json.language || 'en',
     debug: json.debug === true,
-    quickSends: publicQuickSends(json.quickSends),
-    availableModels: quickSendModels(json),
+    quickSends: publicQuickSends(json.quickSends, availableModels),
+    availableModels,
     needsSetup: providers.length === 0 || providers.every(p => p.apiKey === 'proxy' || p.apiKey === '' || (!p.apiKey && !p.credentialProvider)),
   };
 }
@@ -237,14 +251,15 @@ export function updateLlmConfig(update, dir) {
       if (update.debug !== undefined) existing.debug = update.debug === true;
       if (update.quickSends !== undefined) existing.quickSends = validateQuickSends(update.quickSends, existing);
 
+      const availableModels = quickSendModels(existing);
       const agentConfig = {
         providers: Array.isArray(existing.providers) ? existing.providers.map(withGeminiDefault) : [],
         primaryModel: existing.primaryModel || null,
         fastModel: existing.fastModel || null,
         language: existing.language || 'en',
         debug: existing.debug === true,
-        quickSends: publicQuickSends(existing.quickSends),
-        availableModels: quickSendModels(existing),
+        quickSends: publicQuickSends(existing.quickSends, availableModels),
+        availableModels,
       };
       return {
         ...agentConfig,

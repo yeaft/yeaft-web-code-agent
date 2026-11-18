@@ -1,4 +1,4 @@
-import { EFFORT_LEVELS } from '../effort.js';
+import { EFFORT_LEVELS, snapshotEffortDecision } from '../effort.js';
 import { inferProtocolFromModelId } from '../llm/router.js';
 import { applyAnthropicThinking } from '../llm/anthropic.js';
 import { normalizeEffort, parseModelRef } from '../models.js';
@@ -101,9 +101,9 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
     let effectiveEffort = effort;
     let inheritedCap = null;
     if (params.effortConstraint) {
-      const parent = params.effortConstraint.parentDecision;
-      const inherited = normalizeEffort(parent?.effective, true) || 'medium';
-      const cap = normalizeEffort(parent?.cap, true);
+      const parent = snapshotEffortDecision(params.effortConstraint.parentDecision);
+      const inherited = parent.effective || 'medium';
+      const cap = parent.cap;
       const ceiling = Math.min(effectiveEffort ? rank(effectiveEffort) : Infinity, rank(inherited), rank('medium'), cap ? rank(cap) : Infinity);
       inheritedCap = EFFORT_LEVELS[ceiling];
       if (efforts.length) {
@@ -121,7 +121,7 @@ export function createPersonChildProvider(provider, selection, instanceConfig = 
     }
     return { ...params, model, maxTokens, effort: effectiveEffort ?? undefined,
       effortContext: { ...effortContext, effortOptions: [...efforts] },
-      ...(inheritedCap && params.onEffortDecision ? { onEffortDecision: decision => params.onEffortDecision({ ...decision, cap: inheritedCap }) } : {}),
+      ...(inheritedCap && params.onEffortDecision ? { onEffortDecision: decision => params.onEffortDecision({ ...decision, cap: inheritedCap, ...(['minimal', 'low'].includes(inheritedCap) ? { nativeEffortCap: true } : {}) }) } : {}),
       effortSource: effectiveEffort ? 'user' : undefined, effortConstraint: null, extraBody: undefined };
   }
 

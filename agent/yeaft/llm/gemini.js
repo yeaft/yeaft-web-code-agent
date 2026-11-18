@@ -261,7 +261,7 @@ export class GeminiAdapter extends LLMAdapter {
     const effectiveEffort = thinking?.thinkingLevel?.toLowerCase() || (thinking?.thinkingBudget > 0
       ? ['medium', 'xhigh', 'max'].find(level => thinking.thinkingBudget <= geminiThinkingBudgetForEffort(model, level)) : null);
     params.onEffortDecision?.({ requested: params.effort || null, effective: effectiveEffort || null, source: params.effortSource || 'scenario', model,
-      cap: child?.cap ?? null, thinkingEnabled: Boolean(thinking && thinking.thinkingBudget !== 0),
+      cap: child?.cap ?? null, ...(child?.nativeEffortCap ? { nativeEffortCap: true } : {}), thinkingEnabled: Boolean(thinking && thinking.thinkingBudget !== 0),
       wireMode: thinking?.thinkingLevel ? 'thinking-level' : thinking ? 'manual' : child?.wireMode || 'omitted',
       ...(thinking?.thinkingLevel ? { thinkingLevel: thinking.thinkingLevel } : {}),
       ...(thinking?.thinkingBudget !== undefined ? { budgetTokens: thinking.thinkingBudget } : {}) });

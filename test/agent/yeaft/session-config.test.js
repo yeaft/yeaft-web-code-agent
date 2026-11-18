@@ -12,7 +12,7 @@ import { GeminiAdapter } from '../../../agent/yeaft/llm/gemini.js';
 import { OpenAIResponsesAdapter } from '../../../agent/yeaft/llm/openai-responses.js';
 import { flushAllAgentPerfTraces } from '../../../agent/yeaft/perf-trace.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
-import { __testHooks, __testResetVpState, __testSetSession, handleYeaftLoadHistory, handleYeaftManagedSkill, handleYeaftPluginCatalog, handleYeaftUpdateSessionConfig } from '../../../agent/yeaft/web-bridge.js';
+import { __testHooks, __testResetVpState, __testSetSession, handleYeaftLoadHistory, handleYeaftManagedSkill, handleYeaftPluginCatalog, handleYeaftUpdateSessionConfig, validateQuickSend } from '../../../agent/yeaft/web-bridge.js';
 import { buildPluginCatalog, buildPluginSkillDetail } from '../../../agent/yeaft/plugins.js';
 import { _resetAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
 import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
@@ -361,6 +361,20 @@ describe('Model-level Gemini options', () => {
       nativeStream.mockRestore();
       responsesCall.mockRestore();
     }
+  });
+
+  it('keeps legacy Gemini Max Quick Sends usable without advertising a nonexistent level', () => {
+    const root = makeDir();
+    const model = 'google/gemini-3.1-pro-preview';
+    const quickSend = { id: 'q1', name: 'Existing shortcut', model, effort: 'max', maxOutputTokens: null };
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ providers: [{ name: 'google', protocol: 'gemini',
+      apiKey: 'fixture', models: ['gemini-3.1-pro-preview'] }], quickSends: [quickSend] }));
+    const cfg = getLlmConfig(root);
+    expect(cfg.quickSends).toEqual([{ ...quickSend, effort: 'high' }]);
+    expect(cfg.availableModels[0].effortOptions).not.toContain('max');
+    expect(validateQuickSend(quickSend, loadConfig({ dir: root }))).toEqual({ model, effort: 'high', maxOutputTokens: null });
+    expect(updateLlmConfig({ quickSends: [{ ...quickSend, name: 'Renamed' }] }, root).quickSends)
+      .toEqual([{ ...quickSend, name: 'Renamed', effort: 'high' }]);
   });
 
   it('keeps configured options by model ID through CLI edits and Gemini discovery', async () => {
