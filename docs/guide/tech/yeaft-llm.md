@@ -25,6 +25,8 @@ agent/yeaft/llm/
   router.js               — AdapterRouter: route by model to provider
   anthropic.js            — Anthropic Messages API adapter
   openai-responses.js     — OpenAI Responses API adapter (/v1/responses)
+  responses-tool-schema.js — Responses strict schema and argument conversion
+  gemini.js               — Gemini GenerateContent API adapter
   models-dev.js           — models.dev registry (UI autocomplete)
   credentials/
     index.js              — credential provider registry
@@ -80,6 +82,20 @@ export class LLMAdapter {
 - Supports reasoning models (o1 / o3 / o4 / gpt-5)
 - Thinking surfaces via reasoning summary
 - Tool calls use `tools` + `function_call` format
+
+### 工具 schema 按协议转换
+
+Session、数字人、Work Center 和 MCP 共用工具定义，不按模型或厂商复制定义。适配器负责出站格式：
+
+| 协议 | 工具参数在请求中的位置 | Yeaft 的处理 |
+| --- | --- | --- |
+| OpenAI Responses（包括走这个协议的 Copilot 路由） | `tools[].parameters` | 本地生成 OpenAI strict 子集，显式传 `strict: true`；不依赖网关自动转换。 |
+| Anthropic Messages | `tools[].input_schema` | 延续已有的原始 schema，不自动开启 Anthropic 的 strict tool use。 |
+| Gemini GenerateContent | `tools[].functionDeclarations[].parametersJsonSchema` | 保持原始 schema，由 Gemini 自己的接口定义支持范围。 |
+
+Responses 的对象在出站时关闭额外字段，并将可省略字段表示为 `null`；工具执行前还原省略语义，必填的 `null` 不丢失。内置 `uniqueItems`、二选一等不能直接交给 strict 编译器的约束保留在公共定义和工具侧，由说明提示模型；例如 `Conversation__reply` 的执行前检查仍会拒绝重复 ID。无法直接表示的任意 JSON（例如子 Agent 的输出 schema 或开放的 MCP 参数）只在 Responses 的 wire 中用 JSON 文本承载，解析后再交给原工具。strict 约束的是这个外层传输结构，不保证内层 JSON 或业务规则有效。已有 provider 原生历史继续按原始 wire 参数回放；缺少原生状态时，对仍在工具列表中的调用按当前工具格式重建参数。
+
+参考：[OpenAI strict mode](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)、[Anthropic strict tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use)、[Gemini FunctionDeclaration](https://ai.google.dev/api/caching#FunctionDeclaration)。遵循公开的 Responses 子集不等于任意兼容网关都承诺支持；第三方工具的业务校验仍由其执行端负责。
 
 ## AdapterRouter (`router.js`)
 

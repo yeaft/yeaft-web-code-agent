@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { decodeResponsesInput } from './responses-tool-schema.js';
 
 export const MAX_PROVIDER_STATE_BYTES = 4 * 1024 * 1024;
 const PROTOCOLS = new Set(['openai-responses', 'anthropic', 'gemini']);
@@ -131,7 +132,14 @@ function opaqueAnthropicBlock(item) {
   return item.type === 'container_upload' && nonempty(item.file_id);
 }
 
-function projectItems(protocol, items) {
+function projectItems(protocol, items, responsesArguments) {
+  let codecs;
+  if (responsesArguments !== undefined) {
+    if (protocol !== 'openai-responses' || responsesArguments?.version !== 1 || !Array.isArray(responsesArguments.tools)) {
+      throw new ProviderStateError('invalid Responses argument projection');
+    }
+    codecs = new Map(responsesArguments.tools);
+  }
   const projection = { content: '', toolCalls: [] };
   for (const item of items) {
     if (!item || typeof item !== 'object') throw new ProviderStateError('invalid item');
@@ -145,7 +153,7 @@ function projectItems(protocol, items) {
           projection.content += part.text;
         }
       } else if (item.type === 'function_call' && nonempty(item.call_id) && nonempty(item.name) && typeof item.arguments === 'string') {
-        projection.toolCalls.push({ id: item.call_id, name: item.name, input: JSON.parse(item.arguments) });
+        projection.toolCalls.push({ id: item.call_id, name: item.name, input: decodeResponsesInput(JSON.parse(item.arguments), codecs?.get(item.name)) });
       } else throw new ProviderStateError('unsupported Responses item');
     } else if (protocol === 'anthropic') {
       if (item.type === 'thinking' && typeof item.thinking === 'string' && nonempty(item.signature)) continue;
@@ -186,7 +194,7 @@ export function hasSignedProviderState(state) {
     ['thinking', 'redacted_thinking'].includes(item?.type) || nonempty(item?.part?.thoughtSignature));
 }
 
-export function createProviderState({ context, identity, items, responseId, requestBody }) {
+export function createProviderState({ context, identity, items, responseId, requestBody, responsesArguments }) {
   if (!context?.capabilities?.nativeReasoningState || !validOrigin(context.origin) || !requestOwner(identity)) {
     if (context?.protocol === 'anthropic' && Array.isArray(items)
       && items.some(item => ANTHROPIC_TOOL_USES.has(item?.type))
@@ -206,8 +214,9 @@ export function createProviderState({ context, identity, items, responseId, requ
   const state = { version: 1, protocol: context.protocol, origin: clone(context.origin), owner: requestOwner(identity),
     ...(nonempty(responseId) ? { responseId } : {}), items: clone(items) };
   if (!PROTOCOLS.has(state.protocol)) return null;
+  if (responsesArguments !== undefined) state.responsesArguments = clone(responsesArguments);
   if (providerStateBytes(state) > MAX_PROVIDER_STATE_BYTES) throw new ProviderStateError('state exceeds byte budget');
-  try { state.projectionDigest = providerProjectionDigest(projectItems(state.protocol, state.items)); }
+  try { state.projectionDigest = providerProjectionDigest(projectItems(state.protocol, state.items, state.responsesArguments)); }
   catch (error) {
     if (state.protocol === 'anthropic' && items.some(item => ANTHROPIC_TOOL_USES.has(item?.type))
       && items.some(item => ['thinking', 'redacted_thinking'].includes(item?.type))) throw error;
@@ -313,7 +322,7 @@ export function replayProviderState(message, context, identity) {
   else {
     try {
       if (state.projectionDigest !== providerProjectionDigest(message)
-        || state.projectionDigest !== providerProjectionDigest(projectItems(state.protocol, state.items))) reason = 'projection changed';
+        || state.projectionDigest !== providerProjectionDigest(projectItems(state.protocol, state.items, state.responsesArguments))) reason = 'projection changed';
     } catch { reason = 'invalid native items'; }
   }
   if (reason) {
