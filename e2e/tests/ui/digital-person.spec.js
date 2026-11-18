@@ -279,6 +279,7 @@ async function expectSessionWidthConversation(page, { width, theme }, testInfo) 
     })).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     expect(await page.locator('.person-messages').evaluate(el => el.scrollWidth > el.clientWidth)).toBe(false);
+    await expectPersonTitleCentered(page);
   };
   await expectSessionWidth();
   // Person follows the same content-width token as Session, with no fixed 880px cap.
@@ -796,6 +797,19 @@ async function expectPersonFits(page) {
   expect(await page.locator('.person-header').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
 }
 
+async function expectPersonTitleCentered(page) {
+  await expect.poll(() => page.locator('.person-identity h1').evaluate(title => {
+    const centerX = el => { const bounds = el.getBoundingClientRect(); return bounds.left + bounds.width / 2; };
+    return Math.abs(centerX(title) - centerX(title.closest('#person-conversation')));
+  })).toBeLessThanOrEqual(1);
+  await expect(page.locator('.person-identity h1')).toHaveCSS('text-align', 'center');
+}
+
+async function expectBorderlessPersonAgent(picker) {
+  await expect(picker).toHaveCSS('border-top-width', '0px');
+  await expect(picker).toHaveCSS('box-shadow', 'none');
+}
+
 async function expectMobilePersonPanel(page) {
   const panel = page.locator('#person-side-panel');
   await expect(panel).toHaveAttribute('role', 'dialog');
@@ -853,6 +867,7 @@ for (const width of [320, 390]) {
       const more = page.locator('.person-more-button');
       await expect(more).toHaveAccessibleName(zh ? '更多操作' : 'More actions');
       await expect(page.locator('.person-identity h1')).toHaveText(name);
+      await expectPersonTitleCentered(page);
       const headerControls = [page.locator('.person-navigation > button'), page.locator('#person-agent .modern-select-trigger'), more];
       for (const control of headerControls) {
         const box = await control.boundingBox();
@@ -961,6 +976,15 @@ test('Digital Person shares Session reading gutters, keeps desktop actions and c
   }
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
+  const picker = page.locator('#person-agent .modern-select-trigger');
+  await expectBorderlessPersonAgent(picker);
+  await picker.hover();
+  await expectBorderlessPersonAgent(picker);
+  await picker.click();
+  await expect(picker).toHaveAttribute('aria-expanded', 'true');
+  await expectBorderlessPersonAgent(picker);
+  await picker.press('Escape');
+  await expect(picker).toHaveAttribute('aria-expanded', 'false');
   const more = page.locator('.person-more-button');
   await expect(more).not.toBeVisible();
   for (const action of ['search', 'outputs', 'inside']) {
@@ -1123,8 +1147,17 @@ test('Digital Person mobile actions expose loading, disabled and recoverable err
 test('Digital Person mobile sheet does not survive owner scope changes', async ({ page, serverUrl }) => {
   await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation });
   await openResponseConversation(page, serverUrl, { width: 320, theme: 'dark' });
-  await page.locator('#person-agent .modern-select-trigger').click();
-  await page.getByRole('option', { name: 'Owner Agent B', exact: true }).click();
+  const picker = page.locator('#person-agent .modern-select-trigger');
+  await page.locator('.person-navigation > button').focus();
+  await page.keyboard.press('Tab');
+  await expect(picker).toBeFocused();
+  await expect(picker).toHaveCSS('outline-style', 'solid');
+  await picker.press('Enter');
+  await expect(picker).toHaveAttribute('aria-expanded', 'true');
+  await expectBorderlessPersonAgent(picker);
+  await picker.press('ArrowDown');
+  await picker.press('Enter');
+  await expect(picker).toContainText('Owner Agent B');
   await expect(page.locator('.person-identity h1')).toHaveText('Bea');
   await page.locator('.person-more-button').click();
   await expect(page.locator('#person-actions-sheet')).toBeVisible();

@@ -11,7 +11,8 @@
   background: var(--bg-main);
   color: var(--text-primary);
 }
-.person-header { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: var(--work-center-space-3); padding: var(--work-center-space-3) var(--agent-setup-space-lg); }
+/* Equal side tracks keep the title centered in the conversation, independent of the controls. */
+.person-header { display: grid; flex-shrink: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; gap: var(--work-center-space-3); padding: var(--work-center-space-3) var(--agent-setup-space-lg); }
 .person-navigation { display: flex; align-items: center; gap: var(--work-center-space-2); min-width: 0; }
 .person-navigation > button { flex-shrink: 0; }
 .person-identity { min-width: 0; text-align: center; }
@@ -20,8 +21,9 @@
 .person-header-actions { display: flex; align-items: center; justify-self: end; gap: var(--work-center-space-2); min-width: 0; }
 .person-breadcrumb { min-width: 0; max-width: 100%; }
 .person-agent-select { width: auto; max-width: 100%; min-width: 0; font-family: var(--font-sans); }
-.person-agent-select .modern-select-trigger { min-height: 32px; padding: 4px 8px; border-color: transparent; background: transparent; box-shadow: none; font-size: 14px; }
-.person-agent-select .modern-select-trigger:hover:not(:disabled) { background: var(--sidebar-hover); }
+.person-agent-select .modern-select-trigger { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; box-shadow: none; font-size: 14px; }
+.person-agent-select .modern-select-trigger:hover:not(:disabled),
+.person-agent-select.is-open .modern-select-trigger { background: var(--sidebar-hover); box-shadow: none; }
 .person-agent-select .modern-select-label { font-weight: 400; }
 .person-page .btn-ghost, .person-retry .btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: var(--work-center-space-2); min-height: 32px; padding: 6px 12px; border: 0; border-radius: var(--agent-setup-control-radius); background: transparent; color: var(--text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
 .person-retry .btn-secondary { border: 1px solid var(--border-color); }
@@ -133,12 +135,18 @@ details.person-activity > summary { cursor: pointer; border-radius: var(--agent-
   .person-side-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; z-index: 31; box-shadow: var(--modal-shadow); padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
 @container person-conversation (max-width: 600px) {
-  .person-header { grid-template-columns: auto minmax(0, 1fr) 44px; min-height: 56px; padding: var(--work-center-space-1) var(--work-center-space-2); gap: var(--work-center-space-2); flex-shrink: 0; }
-  .person-navigation { gap: var(--work-center-space-1); max-width: 44cqw; }
-  .person-identity { text-align: left; }
+  .person-header {
+    /* Keep room for the sidebar toggle and a short Agent label at 320px. */
+    --person-header-side-min: min(112px, 35cqw);
+    grid-template-columns: minmax(var(--person-header-side-min), 1fr) minmax(0, 1fr) minmax(var(--person-header-side-min), 1fr);
+    min-height: 56px;
+    padding: var(--work-center-space-1) var(--work-center-space-2);
+    gap: var(--work-center-space-2);
+  }
+  .person-navigation { gap: var(--work-center-space-1); }
   .person-header .person-desktop-actions { display: none; }
   .person-header .header-action-btn, .person-header .header-sidebar-toggle { width: 44px; min-width: 44px; height: 44px; padding: var(--work-center-space-2); }
-  .person-header .person-more-button { display: inline-flex; align-items: center; justify-content: center; }
+  .person-header .person-more-button { display: inline-flex; align-items: center; justify-content: center; justify-self: end; }
   .person-agent-select .modern-select-trigger { min-height: 44px; padding-inline: var(--work-center-space-1); font-size: 12px; color: var(--text-secondary); }
   .person-agent-select .modern-select-label { min-width: 0; }
 }
