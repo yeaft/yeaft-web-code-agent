@@ -391,6 +391,7 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(sceneMenu).toHaveCount(0);
   await expect(model).toHaveAttribute('aria-expanded', 'true');
   await model.press('Escape');
+  await expect(composer.locator('.chat-composer-actions .session-scene-select__trigger')).toHaveCount(1);
   const sendUsage = (turn, inputTokens, outputTokens) => wire.event({
     type: 'query_progress', sessionId, ...turn.executions[0], revision: 1,
     inputTokens, outputTokens, modelRequests: 1, toolExecutions: 0, reusedCalls: 0, repeatedCalls: 0,
@@ -451,17 +452,21 @@ test('ordinary Session scenes persist through a live switch and reload without e
     await page.setViewportSize({ width, height: 740 });
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     for (const control of [attach, scene, model, effort, stop, send]) await expectWithinViewport(control, page);
-    // Compare the actual control bounds, not only page overflow (which a
-    // clipping ancestor can hide). The model label keeps enough usable space.
-    const toolbar = composer.locator('.chat-composer-actions');
-    expect(await toolbar.evaluate(el => {
+    // Geometry matters: attachment and scene sit above the editor (not a
+    // wrapped row below it), with the trailing actions on a single row.
+    await expect(composer.locator('.chat-composer-top-actions .attach-btn')).toHaveCount(1);
+    await expect(composer.locator('.chat-composer-top-actions .session-scene-select__trigger')).toHaveCount(1);
+    await expect(composer.locator('input[type="file"]')).toHaveCount(1);
+    expect(await composer.evaluate(el => {
       const container = el.getBoundingClientRect();
-      const buttons = [...el.querySelectorAll('.attach-btn, .session-scene-select__trigger, .yeaft-composer-model, .yeaft-composer-effort, .send-btn')];
-      const bounds = buttons.map(button => button.getBoundingClientRect());
-      return bounds.every((rect, index) => rect.left >= container.left - 1 && rect.right <= container.right + 1
-        && bounds.slice(index + 1).every(other => rect.right <= other.left + 1 || other.right <= rect.left + 1
-          || rect.bottom <= other.top + 1 || other.bottom <= rect.top + 1));
-    })).toBe(true);
+      const input = el.querySelector('textarea').getBoundingClientRect();
+      const top = [...el.querySelectorAll('.chat-composer-top-actions button')].map(button => button.getBoundingClientRect());
+      const bottom = [...el.querySelectorAll('.chat-composer-actions-end button')].map(button => button.getBoundingClientRect());
+      const within = bounds => bounds.every((rect, index) => rect.left >= container.left - 1 && rect.right <= container.right + 1
+        && bounds.slice(index + 1).every(other => rect.right <= other.left + 1));
+      return { top: within(top) && top.every(rect => rect.bottom <= input.top + 1),
+        bottom: within(bottom) && bottom.every(rect => rect.top >= input.bottom - 1 && Math.abs(rect.top - bottom[0].top) < 1) };
+    })).toEqual({ top: true, bottom: true });
     expect(await model.locator('.yeaft-composer-model-name').evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(60);
     await model.click();
     await expectWithinViewport(modelMenu, page);
@@ -478,7 +483,7 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await page.screenshot({ path: info.outputPath('scene-menu-dark-320.png'), fullPage: true });
   await sceneMenu.getByRole('option', { name: 'Writing', exact: true }).press('Tab');
   await expect(sceneMenu).toHaveCount(0);
-  await expect(scene).not.toBeFocused();
+  await expect(composer.getByRole('textbox')).toBeFocused();
   const tabs = region.getByRole('tab');
   await expect(tabs).toHaveCount(2);
   await tabs.filter({ hasText: 'Second scene question' }).press('Enter');

@@ -117,11 +117,18 @@ export function handleAgentList(store, msg) {
   if ([...previouslyOnlineAgentIds].some(id => !nextOnlineAgentIds.has(id))) {
     // Retire observations used for Stop without clearing the transcript or its
     // routing cache. Only fresh frames from the returning Agent re-enable it.
+    const conversationOwners = new Map();
+    for (const [agentId, conversationId] of Object.entries(store.yeaftConversationIdsByAgent || {})) {
+      if (!conversationId) continue;
+      // Do not infer an anonymous row's owner from an ambiguous conversation.
+      conversationOwners.set(conversationId, conversationOwners.has(conversationId) ? null : agentId);
+    }
     for (const field of ['yeaftSessionTurnsBySession', 'vpStatuses']) {
       if (!store[field]) continue;
-      store[field] = Object.fromEntries(Object.entries(store[field]).map(([key, row]) => [key,
-        row?.agentId && nextOnlineAgentIds.has(row.agentId) ? row : { ...row, connectionGeneration: -1 },
-      ]));
+      store[field] = Object.fromEntries(Object.entries(store[field]).map(([key, row]) => {
+        const owner = row?.agentId || conversationOwners.get(row?.conversationId);
+        return [key, owner && nextOnlineAgentIds.has(owner) ? row : { ...row, connectionGeneration: -1 }];
+      }));
     }
   }
   // Sidebar catch-up waits for an authenticated inventory of this socket, not

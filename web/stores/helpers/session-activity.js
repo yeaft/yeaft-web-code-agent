@@ -57,16 +57,19 @@ export function sessionActivityRows(store, { agentId, sessionId, legacyRoster = 
   }
   const legacyMembers = new Set(legacyRoster);
   const errors = [];
-  for (const status of Object.values(store.vpStatuses || {})) {
-    if (!status?.vpId || status.connectionGeneration !== generation
-        || (status.conversationId && status.conversationId !== conversationId)) continue;
+  const statuses = Object.values(store.vpStatuses || {}).filter(status => status?.vpId
+    && status.connectionGeneration === generation && (!status.conversationId || status.conversationId === conversationId));
+  // An exact idle/terminal row is also authoritative: a looser legacy row
+  // must not keep role-scoped Stop available after the execution has settled.
+  const scopedOwners = new Set(statuses.filter(status => scopedTo(status, agentId, sessionId)).map(status => status.vpId));
+  for (const status of statuses) {
     const statusSession = status.sessionId ?? status.groupId;
     const exact = scopedTo(status, agentId, sessionId);
     // An older broker can omit Session ownership. Only infer it if this VP
     // is in exactly one known roster for that Agent. A missing Agent stamp
     // additionally requires the bound conversation and an unambiguous owner.
     if (!exact) {
-      if (!legacyMembers.has(status.vpId) || (statusSession && statusSession !== sessionId)
+      if (scopedOwners.has(status.vpId) || !legacyMembers.has(status.vpId) || (statusSession && statusSession !== sessionId)
           || (status.agentId && status.agentId !== agentId)
           || (!status.agentId && (!conversationId || status.conversationId !== conversationId))) continue;
       const candidates = sessions.filter(row => (statusSession ? row.id === statusSession : row.roster?.includes(status.vpId))

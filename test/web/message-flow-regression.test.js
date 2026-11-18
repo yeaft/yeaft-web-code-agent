@@ -195,10 +195,20 @@ describe('message flow regressions', () => {
     // Exact fresh evidence takes precedence over a stale/unstamped role row.
     status({ agentId: 'a', event: { sessionId: 's', turnId: 'exact' } });
     expect(read()).toMatchObject([{ turnId: 'exact', canStop: true, legacyStop: false }]);
+    status({ agentId: 'a', event: { sessionId: 's', state: 'idle' } });
+    expect(read()).toEqual([]); // The earlier unscoped tool row must not revive Stop.
     store.vpStatuses = {};
     status({ event: { sessionId: 's' } });
     expect(read()).toMatchObject([{ canStop: true }]);
     expect(read([row, { ...row, agentId: 'b' }])).toEqual([]);
+    const a = store.agents[0];
+    store.handleMessage({ type: 'agent_list', agents: [a] });
+    expect(read()).toMatchObject([{ canStop: true }]); // B dropping does not invalidate A's status.
+    store.handleMessage({ type: 'agent_list', agents: [] });
+    store.handleMessage({ type: 'agent_list', agents: [a] });
+    expect(read()).toEqual([]); // A reconnects without a fresh status frame.
+    status({ event: { sessionId: 's' } });
+    expect(read()).toMatchObject([{ canStop: true }]);
   });
 
   it('retains scoped execution errors across navigation and snapshots with accessible plain-text disclosure', async () => {

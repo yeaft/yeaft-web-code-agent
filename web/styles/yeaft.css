@@ -258,8 +258,7 @@
   flex-wrap: nowrap;
 }
 
-/* Keep the action groups together. If they do not fit, the model group
-   wraps with Stop and Send, then uses that row's actual available width. */
+/* The trailing controls stay together on the available line. */
 .yeaft-session-input:has(.yeaft-composer-scene) .chat-composer-actions-end {
   flex-shrink: 1;
   max-width: 100%;
@@ -573,6 +572,14 @@
 }
 
 @media (max-width: 768px) {
+  .yeaft-session-input > .chat-composer.has-top-actions {
+    row-gap: var(--sidebar-section-toggle-gap);
+  }
+
+  .yeaft-session-input .chat-composer-top-actions .chat-composer-actions-start {
+    gap: var(--sidebar-section-toggle-gap);
+  }
+
   .yeaft-composer-model {
     max-width: var(--yeaft-composer-model-mobile-max-width);
   }

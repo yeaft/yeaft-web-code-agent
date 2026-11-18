@@ -317,6 +317,7 @@ export default {
           :quote="messageQuote"
           :cancel-fn="cancelYeaft"
           :show-stop="isProcessing"
+          :start-actions-on-top="isMobile && ordinarySession && !!topbarGroup"
           :disabled="isActiveSessionCopying"
           disabled-placeholder-key="yeaft.session.copying"
           placeholder-key="yeaft.placeholder"
@@ -822,6 +823,8 @@ export default {
     const narrowDetailMedia = typeof window.matchMedia === 'function' ? window.matchMedia(NARROW_DETAIL_QUERY) : null;
     const matchesMedia = (media, fallbackWidth) => media ? media.matches : window.innerWidth <= fallbackWidth;
     const isMobile = Vue.ref(matchesMedia(mobileMedia, 768));
+    // Responsive reparenting can move whichever control owns keyboard focus.
+    Vue.watch(isMobile, () => { composerMenuOpen.value = null; });
     const isNarrowDetail = Vue.ref(matchesMedia(narrowDetailMedia, 1024));
     const effectiveSidebarCollapsed = Vue.computed(() =>
       isMobile.value ? !store.sessionSidebarOpen : store.sidebarCollapsed
