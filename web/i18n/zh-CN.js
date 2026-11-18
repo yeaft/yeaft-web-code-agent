@@ -1511,6 +1511,7 @@ export default {
   'settings.llm.managedCopilotTitle': '托管的 GitHub Copilot',
   'settings.llm.providersTitle': '服务商',
   'settings.llm.protocolGemini': 'Google Gemini（原生 API）',
+  'settings.llm.geminiVersionHint': '默认使用 Google API v1。支持的模型会自动使用隐式缓存；手动缓存资源仅适用于 v1beta。',
   'settings.llm.testAndDiscover': '测试连接并刷新模型',
   'settings.llm.testSuccess': '连接成功，已刷新模型目录（未调用生成接口）。',
   'settings.llm.testFailed': '连接测试失败',

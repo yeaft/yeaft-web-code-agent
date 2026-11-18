@@ -3,6 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { normalizePluginConfig } from './yeaft/plugins.js';
 import { mutateAgentConfigPath } from './yeaft/config-store.js';
+import { cloneGeminiOptions } from './yeaft/llm/gemini-options.js';
 import {
   discoverGitHubCopilotModels,
   discoverGeminiModels,
@@ -128,28 +129,57 @@ function formatModelEntry(model) {
   return String(model);
 }
 
+const MODEL_OVERRIDE_FIELDS = ['protocol', 'effortOptions', 'supportsEffort', 'thinkingProtocol', 'maxBudgetTokens'];
+
+function mergeConfiguredModels(models, previous) {
+  const previousById = new Map((Array.isArray(previous?.models) ? previous.models : [])
+    .filter(model => model && typeof model === 'object').map(model => [model.id, model]));
+  return models.map(model => {
+    const saved = previousById.get(typeof model === 'string' ? model : model.id);
+    if (!saved) return model;
+    const { geminiOptions, ...metadata } = saved;
+    const merged = { ...metadata, ...(typeof model === 'string' ? { id: model } : model) };
+    // Refresh supplied catalog limits, but keep saved request policy. Existing
+    // fields such as supportsEffort have no marker distinguishing manual edits.
+    for (const key of MODEL_OVERRIDE_FIELDS) {
+      if (Object.hasOwn(metadata, key)) merged[key] = metadata[key];
+    }
+    const clonedOptions = cloneGeminiOptions(geminiOptions);
+    if (clonedOptions) merged.geminiOptions = clonedOptions;
+    return merged;
+  });
+}
+
+function resolveGeminiBaseUrl(baseUrl, previous) {
+  return baseUrl || (previous?.protocol === 'gemini' && previous.baseUrl) || GEMINI_BASE_URL;
+}
+
 export function addOrUpdateProvider(config, options, env = process.env) {
   const name = requireNonEmpty(options.name, '--name');
-  const baseUrl = options.protocol === 'gemini' ? options.baseUrl || GEMINI_BASE_URL : requireNonEmpty(options.baseUrl, '--base-url');
+  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
+  const index = providers.findIndex(p => p && p.name === name);
+  const previous = providers[index];
+  const protocol = options.protocol || (previous?.protocol === 'gemini' ? 'gemini' : undefined);
+  const baseUrl = protocol === 'gemini' ? resolveGeminiBaseUrl(options.baseUrl, previous) : requireNonEmpty(options.baseUrl, '--base-url');
   const models = parseModelsCsv(options.models);
-  validateProtocol(options.protocol);
+  validateProtocol(protocol);
   validateCredentials(options, env);
 
   const next = { ...config };
-  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
   const provider = {
     name,
     baseUrl,
     models,
   };
-  if (options.protocol) provider.protocol = options.protocol;
+  if (protocol) provider.protocol = protocol;
   if (options.credentialProvider) provider.credentialProvider = options.credentialProvider;
   if (options.apiKey) provider.apiKey = options.apiKey;
   if (options.apiKeyEnv) provider.apiKey = env[options.apiKeyEnv];
 
-  const index = providers.findIndex(p => p && p.name === name);
-  if (index >= 0) providers[index] = provider;
-  else providers.push(provider);
+  if (index >= 0) {
+    provider.models = mergeConfiguredModels(provider.models, previous);
+    providers[index] = provider;
+  } else providers.push(provider);
   next.providers = providers;
 
   if (options.setPrimary) next.primaryModel = qualifyModelRef(options.setPrimary, name);
@@ -333,7 +363,10 @@ export async function tryAutoConfigureGitHubCopilot(configPath = getDefaultYeaft
 
 async function useApiKeyProvider(config, options, env, { gemini = false } = {}) {
   const name = options.name ? String(options.name).trim() : gemini ? 'google' : 'openai';
-  const baseUrl = gemini ? options.baseUrl || GEMINI_BASE_URL : requireNonEmpty(options.baseUrl, '--base-url');
+  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
+  const index = providers.findIndex(p => p && p.name === name);
+  const previous = providers[index];
+  const baseUrl = gemini ? resolveGeminiBaseUrl(options.baseUrl, previous) : requireNonEmpty(options.baseUrl, '--base-url');
   const primaryModel = requireNonEmpty(options.model, '--model');
   const fastModel = options.fast ? String(options.fast).trim() : null;
   validateCredentials(options, env);
@@ -360,11 +393,11 @@ async function useApiKeyProvider(config, options, env, { gemini = false } = {}) 
   }
 
   const next = { ...config };
-  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
   const provider = { name, baseUrl, apiKey, protocol: gemini ? 'gemini' : 'openai-responses', models: providerModels };
-  const index = providers.findIndex(p => p && p.name === provider.name);
-  if (index >= 0) providers[index] = provider;
-  else providers.push(provider);
+  if (index >= 0) {
+    if (gemini) provider.models = mergeConfiguredModels(providerModels, previous);
+    providers[index] = provider;
+  } else providers.push(provider);
   next.providers = providers;
   next.primaryModel = `${provider.name}/${primaryModel}`;
   if (fastModel) next.fastModel = `${provider.name}/${fastModel}`;

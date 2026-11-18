@@ -68,7 +68,7 @@ Markdown 消息通过本地 KaTeX 渲染 LaTeX 公式：行内使用 `$E=mc^2$` 
 ### Provider、工具与上下文
 
 - 原生 adapter 支持 Anthropic Messages、OpenAI Responses 和 Google Gemini 原生 GenerateContent 三种协议（Gemini 不走 OpenAI 兼容接口）。
-- Google Gemini 快速配置：先在当前 shell 设置 `GEMINI_API_KEY`，再运行 `yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-2.5-pro --fast gemini-2.5-flash`。密钥写入所选实例配置的 `apiKey`。界面选择 **Google Gemini（原生 API）**，测试连接只读取模型目录，不调用生成接口。
+- Google Gemini 快速配置：先在当前 shell 设置 `GEMINI_API_KEY`，再运行 `yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-4-hydrogen --fast gemini-4-carbon`。密钥写入所选实例配置的 `apiKey`。界面选择 **Google Gemini（原生 API）**，测试连接只读取模型目录，不调用生成接口。
 - Provider 可以使用静态 API key，也可以使用 GitHub Copilot 动态凭据。支持 per-model protocol、context window、output limit 和 reasoning effort 元数据。
 - 当前原生 registry 提供 **33 个内置工具**，覆盖文件/patch、shell 与后台任务、Git worktree、搜索、Web、图片、notebook、计划、持久 WorkItem 创建，以及 sub-agent/VP 编排；Skills 和 MCP 可以继续扩展工具表。
 - Provider context 使用当前 Session 持久 turn 的有界临时窗口。Turn 后 compact 是独立的 history-window 优化，不会重新启用 Dream 或 H2-AMS memory。

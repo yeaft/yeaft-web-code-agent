@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GeminiAdapter, projectGeminiToolCalls } from '../../../agent/yeaft/llm/gemini.js';
 import { createLLMAdapter, LLMAbortError, LLMRateLimitError, LLMServerError, LLMToolInputError } from '../../../agent/yeaft/llm/adapter.js';
+import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
+import { loadConfig } from '../../../agent/yeaft/config.js';
+import { buildModelSelectionRows } from '../../../web/utils/modelRefs.js';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadSessionConfig, resolveSessionConfig, saveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 import { createProviderContext } from '../../../agent/yeaft/llm/provider-state.js';
 
 const originalFetch = global.fetch;
@@ -62,7 +69,7 @@ describe('native Gemini adapter', () => {
     const calls = projectGeminiToolCalls(parts);
     expect(parts[0].functionCall.id).toBeUndefined();
     global.fetch = vi.fn(async () => json(candidate([{ text: 'done' }])));
-    await adapter().call({ ...params, messages: [params.messages[0], { role: 'assistant', content: '', toolCalls: calls },
+    await adapter().call({ ...params, model: 'gemini-3.6-flash', messages: [params.messages[0], { role: 'assistant', content: '', toolCalls: calls },
       { role: 'tool', toolCallId: calls[0].id, content: 'first' },
       { role: 'tool', toolCallId: calls[1].id, isError: true, content: [{ type: 'text', text: 'bad' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'YWJj' } }] }] });
     const body = JSON.parse(global.fetch.mock.calls[0][1].body);
@@ -123,13 +130,138 @@ describe('native Gemini adapter', () => {
   it('enforces stream silence timeout and Gemini 3 thinking levels / subagent ceiling after extraBody', async () => {
     global.fetch = vi.fn(async () => json(candidate([{ text: 'ok' }])));
     await adapter().call({ ...params, model: 'gemini-3-flash-preview', effort: 'max', effortConstraint: {}, extraBody: { generationConfig: { thinkingConfig: { thinkingLevel: 'high' } } } });
-    expect(JSON.parse(global.fetch.mock.calls[0][1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('medium');
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('MEDIUM');
     global.fetch = vi.fn(async () => new Response(new ReadableStream({ start() {}, cancel() {} }), { headers: { 'content-type': 'text/event-stream' } }));
     vi.useFakeTimers();
     const pending = collect(adapter().stream({ ...params, streamIdleTimeoutMs: 1000 }));
     const rejection = expect(pending).rejects.toMatchObject({ name: 'LLMStreamIdleTimeoutError' });
     await vi.advanceTimersByTimeAsync(1001);
     await rejection;
+  });
+
+  it('preserves actual Gemini levels from the catalog through saved sessions and REST unary/SSE', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yeaft-gemini-v1-'));
+    try {
+      const families = {
+        'gemini-4-hydrogen': ['low', 'medium', 'high', 'xhigh'],
+        'gemini-4-carbon': ['low', 'medium', 'high'],
+        'gemini-4-argon': ['low', 'medium', 'high'],
+        'gemini-3.8-flash': ['low', 'medium', 'high'],
+        'gemini-3.1-pro-preview': ['low', 'medium', 'high'],
+        'gemini-3-pro-preview': ['low', 'high'],
+        'gemini-3.6-flash': ['minimal', 'low', 'medium', 'high'],
+      };
+      const providers = [{ name: 'google', protocol: 'gemini', apiKey: 'fixture', models: [...Object.keys(families), 'gemini-4-unverified'] }];
+      writeFileSync(join(dir, 'config.json'), JSON.stringify({ providers }));
+      mkdirSync(join(dir, 'sessions', 'gemini'), { recursive: true });
+      const config = loadConfig({ dir });
+      const router = new AdapterRouter({ providers: config.providers });
+      global.fetch = vi.fn(async url => url.includes(':streamGenerateContent') ? sse([candidate([{ text: 'ok' }])]) : json(candidate([{ text: 'ok' }])));
+      for (const [model, levels] of Object.entries(families)) {
+        const row = buildModelSelectionRows(config.availableModels).find(row => row.model.id === model);
+        expect(row.efforts).toEqual(levels);
+        expect(row.defaultEffort).toBe(levels.includes('xhigh') ? 'xhigh' : levels.at(-2));
+        for (const effort of levels) {
+          saveSessionConfig(dir, 'gemini', { model: row.modelRef, modelEffort: effort });
+          const selection = resolveSessionConfig(config, loadSessionConfig(dir, 'gemini'));
+          expect(selection.modelEffort).toBe(effort);
+          const request = { ...params, model: selection.model, effort: selection.modelEffort, effortSource: 'user' };
+          await router.call(request);
+          await collect(router.stream(request));
+          for (const [url, options] of global.fetch.mock.calls.slice(-2)) {
+            expect(url).toContain(`/v1/models/${model}:`);
+            expect(JSON.parse(options.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: effort.toUpperCase(), includeThoughts: true });
+          }
+        }
+      }
+      expect(buildModelSelectionRows(config.availableModels).at(-1).efforts).toEqual([]);
+      await router.call({ ...params, model: 'google/gemini-3-pro-preview', effort: 'max', effortSource: 'user' });
+      expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
+      await router.call({ ...params, model: 'google/gemini-4-hydrogen', effort: 'xhigh', effortSource: 'model-default' });
+      expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('XHIGH');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('reports implicit cache hits without a cache request field and fences explicit references by endpoint', async () => {
+    global.fetch = vi.fn(async () => json({ ...candidate([{ text: 'ok' }]),
+      usageMetadata: { promptTokenCount: 4097, cachedContentTokenCount: 4096, candidatesTokenCount: 3 } }));
+    const diagnostics = vi.fn();
+    const stable = new GeminiAdapter({ apiKey: 'secret', baseUrl: 'https://generativelanguage.googleapis.com' });
+    const request = { ...params, onProviderDiagnostics: diagnostics };
+    expect((await stable.call(request)).usage).toMatchObject({ inputTokens: 4097, cacheReadTokens: 4096, cacheTokensAreIncludedInInput: true });
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).not.toHaveProperty('cachedContent');
+    expect(diagnostics).toHaveBeenLastCalledWith(expect.objectContaining({ promptCaching: 'implicit' }));
+    const extraBody = { cachedContent: 'cachedContents/existing-key' };
+    await expect(stable.call({ ...request, extraBody })).rejects.toThrow('requires a supported v1beta');
+    const beta = new GeminiAdapter({ apiKey: 'secret', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' });
+    await expect(beta.call({ ...request, extraBody, system: 'do not omit' })).rejects.toThrow('inline system instructions');
+    await expect(beta.call({ ...request, extraBody, model: 'gemini-4-hydrogen' })).rejects.toThrow('requires a supported v1beta');
+    for (const baseUrl of ['https://proxy.invalid/v1', 'https://proxy.invalid/v1beta']) {
+      await expect(new GeminiAdapter({ apiKey: 'fixture', baseUrl }).call({ ...request, extraBody })).rejects.toThrow('requires a supported v1beta');
+    }
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    await beta.call({ ...request, extraBody });
+    expect(global.fetch.mock.calls.at(-1)[0]).toContain('/v1beta/models/');
+    expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body)).toMatchObject(extraBody);
+    expect(diagnostics).toHaveBeenLastCalledWith(expect.objectContaining({ promptCaching: 'explicit-reference' }));
+  });
+
+  it('applies native generation parameters without overriding selected effort or runtime budgets', async () => {
+    global.fetch = vi.fn(async () => json(candidate([{ text: 'ok' }])));
+    const router = new AdapterRouter({ providers: [{ name: 'google', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-hydrogen', geminiOptions: {
+      serviceTier: 'flex', safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' }],
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } }, generationConfig: { temperature: 0.3, topP: 0.4, maxOutputTokens: 9999, candidateCount: 4,
+        responseMimeType: 'application/json', responseJsonSchema: { type: 'object' }, thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: false } },
+    } }] }] });
+    const request = { ...params, model: 'google/gemini-4-hydrogen', maxTokens: 321, effortSource: 'user', effort: 'low',
+      tools: [{ name: 'read', parameters: { type: 'object' } }] };
+    await router.call(request);
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body).toMatchObject({ serviceTier: 'flex', safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' }],
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } }, generationConfig: { temperature: 0.3, topP: 0.4, maxOutputTokens: 321, candidateCount: 1,
+        responseMimeType: 'application/json', responseJsonSchema: { type: 'object' }, thinkingConfig: { thinkingLevel: 'LOW', includeThoughts: false } } });
+    await router.call({ ...request, effort: undefined, tools: [], effortConstraint: {} });
+    const constrained = JSON.parse(global.fetch.mock.calls.at(-1)[1].body);
+    expect(constrained).not.toHaveProperty('toolConfig');
+    expect(constrained.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'MEDIUM', includeThoughts: false });
+  });
+
+  it('propagates native LOW through nested or unsupported children without raising it on another provider', async () => {
+    global.fetch = vi.fn(async () => json(candidate([{ text: 'ok' }])));
+    const decisions = [];
+    const onEffortDecision = value => decisions.push(value);
+    const request = { ...params, model: 'gemini-4-hydrogen', effort: 'xhigh', onEffortDecision };
+    await adapter().call({ ...request, effortConstraint: { parentDecision: { effective: 'low' } } });
+    expect(decisions.at(-1)).toMatchObject({ effective: 'low', cap: 'low', thinkingLevel: 'LOW' });
+    await adapter().call({ ...request, model: 'gemini-4-unknown', effortConstraint: { parentDecision: decisions.at(-1) } });
+    expect(decisions.at(-1)).toMatchObject({ effective: null, cap: 'low' });
+    await adapter().call({ ...request, effortConstraint: { parentDecision: decisions.at(-1) } });
+    expect(decisions.at(-1)).toMatchObject({ effective: 'low', cap: 'low' });
+    const mixed = new AdapterRouter({ providers: [{ name: 'proxy', protocol: 'openai-responses',
+      baseUrl: 'https://proxy.invalid', apiKey: 'fixture', models: ['gpt-5'] }] });
+    await expect(mixed.call({ ...request, model: 'proxy/gpt-5', effortConstraint: { parentDecision: decisions.at(-1) } }))
+      .rejects.toMatchObject({ code: 'SUB_AGENT_EFFORT_UNREPRESENTABLE' });
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('validates conflicting v1 options before unary or streaming dispatch and owns runtime fields', async () => {
+    global.fetch = vi.fn(async () => json(candidate([{ text: 'ok' }])));
+    const tool = { name: 'read', parameters: { type: 'object' } };
+    for (const [extraBody, error] of [
+      [{ generationConfig: { responseLogprobs: false, logprobs: 2 } }, 'requires responseLogprobs'],
+      [{ generationConfig: { responseSchema: {}, responseJsonSchema: {}, responseMimeType: 'application/json' } }, 'cannot be combined'],
+      [{ toolConfig: { functionCallingConfig: { mode: 'AUTO', allowedFunctionNames: ['read'] } } }, 'requires ANY or VALIDATED'],
+      [{ toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['missing'] } } }, 'available in the current request'],
+    ]) {
+      const request = { ...params, tools: [tool], extraBody };
+      await expect(adapter().call(request)).rejects.toThrow(error);
+      await expect(collect(adapter().stream(request))).rejects.toThrow(error);
+    }
+    expect(global.fetch).not.toHaveBeenCalled();
+    await adapter().call({ ...params, maxTokens: 321, extraBody: { tools: [tool], generationConfig: { maxOutputTokens: 9999, candidateCount: 2 } } });
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body).not.toHaveProperty('tools');
+    expect(body.generationConfig).toMatchObject({ maxOutputTokens: 321, candidateCount: 1 });
   });
 
   it('assigns unique response-local IDs for repeated no-arg tool calls without changing signed parts', async () => {

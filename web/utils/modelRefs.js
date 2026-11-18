@@ -25,6 +25,10 @@ const EFFORT_RANK = Object.freeze({
   ultra: 6,
 });
 
+const GEMINI_NATIVE_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const hasNativeGeminiLevels = model => model?.effortProtocol === 'gemini'
+  && model.effortOptions?.some(effort => ['minimal', 'low', 'high'].includes(effort));
+
 function normalizeEffortList(options) {
   if (!Array.isArray(options)) return [];
   const values = [];
@@ -37,13 +41,14 @@ function normalizeEffortList(options) {
   return values;
 }
 
-export function getSelectableModelEfforts(options) {
+export function getSelectableModelEfforts(options, model = null) {
   // Older Agent catalogs may still advertise retired tiers; never show them.
-  return normalizeEffortList(options).filter(effort => Object.hasOwn(EFFORT_RANK, effort));
+  return normalizeEffortList(options).filter(effort => Object.hasOwn(EFFORT_RANK, effort) || (hasNativeGeminiLevels(model) && GEMINI_NATIVE_LEVELS.includes(effort)));
 }
 
-export function getDefaultModelEffort(options) {
-  const values = getSelectableModelEfforts(options);
+export function getDefaultModelEffort(options, model = null) {
+  const values = getSelectableModelEfforts(options, model);
+  if (model?.effortProtocol === 'gemini' && values.includes(model.defaultEffort)) return model.defaultEffort;
   if (!values.length) return '';
   if (values.includes('xhigh')) return 'xhigh';
   if (values.length === 1) return values[0];
@@ -51,16 +56,21 @@ export function getDefaultModelEffort(options) {
   return values[values.length - 2];
 }
 
-export function normalizeModelEffort(effort) {
+export function normalizeModelEffort(effort, model = null) {
+  if (hasNativeGeminiLevels(model) && GEMINI_NATIVE_LEVELS.includes(effort)) return effort;
   if (effort === 'minimal' || effort === 'low') return 'medium';
   if (effort === 'high') return 'xhigh';
   return Object.hasOwn(EFFORT_RANK, effort) ? effort : '';
 }
 
-export function resolveSessionModelEffort(session, fallbackEffort = '') {
-  const sessionEffort = session?.config?.modelEffort;
-  if (typeof sessionEffort === 'string' && sessionEffort.trim()) return normalizeModelEffort(sessionEffort.trim());
-  return typeof fallbackEffort === 'string' ? normalizeModelEffort(fallbackEffort.trim()) : '';
+export function resolveSessionModelEffort(session, fallbackEffort = '', model = null) {
+  const configured = session?.config?.modelEffort;
+  const raw = typeof configured === 'string' && configured.trim() ? configured : fallbackEffort;
+  if (typeof raw !== 'string') return '';
+  const effort = normalizeModelEffort(raw.trim(), model);
+  if (!hasNativeGeminiLevels(model) || model.effortOptions.includes(effort)) return effort;
+  if (['max', 'ultra', 'xhigh'].includes(effort)) return model.effortOptions.at(-1);
+  return model.effortOptions.filter(level => GEMINI_NATIVE_LEVELS.indexOf(level) <= GEMINI_NATIVE_LEVELS.indexOf(effort)).at(-1) || '';
 }
 
 export function buildModelSelectionRows(models) {
@@ -69,13 +79,13 @@ export function buildModelSelectionRows(models) {
     const modelRef = modelOptionRef(model);
     if (!modelRef) continue;
     const label = model.label || model.id || modelRef;
-    const efforts = getSelectableModelEfforts(model?.effortOptions);
+    const efforts = getSelectableModelEfforts(model?.effortOptions, model);
     rows.push({
       model,
       modelRef,
       label,
       efforts,
-      defaultEffort: getDefaultModelEffort(efforts) || null,
+      defaultEffort: getDefaultModelEffort(efforts, model) || null,
     });
   }
   return rows;

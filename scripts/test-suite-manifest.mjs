@@ -15,6 +15,7 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/agent/yeaft/context-rollover.test.js",
   "test/agent/yeaft/fable-effort.test.js",
   "test/agent/yeaft/gemini-adapter.test.js",
+  "test/agent/yeaft/gemini-endpoint.test.js",
   "test/agent/yeaft/gemini-continuity.test.js",
   "test/agent/yeaft/llm-adapter-errors.test.js",
   "test/agent/yeaft/llm-auth-headers.test.js",

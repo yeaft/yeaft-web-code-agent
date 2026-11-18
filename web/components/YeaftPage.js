@@ -1201,16 +1201,16 @@ export default {
       topbarModelMeta.value?.label || topbarModelMeta.value?.id || topbarModel.value
     ));
 
-    const selectableEffortsForModel = (model) => getSelectableModelEfforts(model?.effortOptions);
+    const selectableEffortsForModel = (model) => getSelectableModelEfforts(model?.effortOptions, model);
 
-    const topbarRawEffort = Vue.computed(() => resolveSessionModelEffort(topbarModelSession.value, store.yeaftModelEffort || ''));
+    const topbarRawEffort = Vue.computed(() => resolveSessionModelEffort(topbarModelSession.value, store.yeaftModelEffort || '', topbarModelMeta.value));
 
     const topbarEffort = Vue.computed(() => {
       const options = selectableEffortsForModel(topbarModelMeta.value);
       if (!options.length) return null;
       return options.includes(topbarRawEffort.value)
         ? topbarRawEffort.value
-        : getDefaultModelEffort(options);
+        : getDefaultModelEffort(options, topbarModelMeta.value);
     });
 
     const topbarModelRows = Vue.computed(() => buildModelSelectionRows(store.yeaftAvailableModels));

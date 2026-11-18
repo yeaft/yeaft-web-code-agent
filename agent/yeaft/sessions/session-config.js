@@ -23,7 +23,8 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { writeAtomic } from '../storage/index.js';
 import { isGitHubCopilotProvider } from '../llm/known-providers.js';
-import { normalizeEffort } from '../models.js';
+import { getGeminiThinkingProfile, normalizeEffort, parseModelRef } from '../models.js';
+import { loadConfig } from '../config.js';
 import { isSessionSceneId } from './scene-ids.js';
 import { sessionsRoot } from './session-crud.js';
 
@@ -46,11 +47,49 @@ export function sessionConfigPath(yeaftDir, sessionId) {
   return join(sessionsRoot(yeaftDir), sessionId, CONFIG_FILE);
 }
 
-function publicConfig(stored) {
+// A bare ID belongs to the first provider that lists it. Never filter for
+// Gemini before resolving ownership: Responses providers can serve that ID too.
+export function findEffortModelEntry(config, model, routedProviderName = null) {
+  const { providerName, modelId } = parseModelRef(model);
+  const owner = providerName || routedProviderName;
+  const catalog = config?.availableModels;
+  if (!modelId || !Array.isArray(catalog)) return undefined;
+  if (!owner) return catalog.find(entry => entry.id === modelId || entry.ref === model);
+  return catalog.find(entry => entry.ref === `${owner}/${modelId}`
+    || (entry.provider === owner && entry.id === modelId));
+}
+
+export function usesNativeGeminiLevels(model, entry, protocol = null) {
+  return (entry?.protocol || entry?.effortProtocol || protocol) === 'gemini'
+    && Boolean(getGeminiThinkingProfile(model)?.levels);
+}
+
+function inheritedModel(config) {
+  const { model, primaryModel } = config || {};
+  // loadConfig exposes the configured ref in primaryModel and may leave an
+  // unqualified ID in model. Do not lose that provider when IDs collide.
+  return !model || (!parseModelRef(model).providerName && modelRefsEquivalent(model, primaryModel))
+    ? primaryModel || model
+    : model;
+}
+
+function normalizeSessionEffort(effort, model, config, yeaftDir) {
+  const legacy = normalizeEffort(effort);
+  if (legacy === effort || !legacy) return legacy;
+  // Public reads need the Agent catalog only for values with different native
+  // and legacy meanings. Model catalogs live in the Agent's JSON config.
+  const base = (typeof config === 'function' ? config() : config)
+    ?? (yeaftDir && existsSync(join(yeaftDir, CONFIG_FILE)) ? loadConfig({ dir: yeaftDir }) : null);
+  const effective = (model && resolveAllowedModelRef(base, model)) || inheritedModel(base);
+  return usesNativeGeminiLevels(effective, findEffortModelEntry(base, effective), base?.adapter) ? effort : legacy;
+}
+
+function publicConfig(stored, config, yeaftDir) {
   const out = {};
   for (const key of WRITABLE_KEYS) {
     if (key === 'sceneId' && !isSessionSceneId(stored?.sceneId)) continue;
-    if (Object.prototype.hasOwnProperty.call(stored || {}, key)) out[key] = key === 'modelEffort' ? normalizeEffort(stored[key]) : stored[key];
+    if (Object.hasOwn(stored, key)) out[key] = key === 'modelEffort'
+      ? normalizeSessionEffort(stored[key], stored.model, config, yeaftDir) : stored[key];
   }
   return out;
 }
@@ -80,8 +119,8 @@ function persistStoredSessionConfig(yeaftDir, sessionId, stored) {
 /**
  * Read public Session config. Internal provenance never crosses this boundary.
  */
-export function loadSessionConfig(yeaftDir, sessionId) {
-  return publicConfig(loadStoredSessionConfig(yeaftDir, sessionId));
+export function loadSessionConfig(yeaftDir, sessionId, userConfig = null) {
+  return publicConfig(loadStoredSessionConfig(yeaftDir, sessionId), userConfig, yeaftDir);
 }
 
 /** Validate a user/wire supplied partial Session config. */
@@ -115,7 +154,7 @@ export function validateSessionConfig(cfg) {
  * set here rather than accepted from clients, so future migrations can
  * distinguish a user choice from the retired automatic default seed.
  */
-export function saveSessionConfig(yeaftDir, sessionId, partial) {
+export function saveSessionConfig(yeaftDir, sessionId, partial, userConfig = null) {
   if (!sessionId) throw new SessionConfigError('missing_group_id', 'sessionId required');
   validateSessionConfig(partial);
   const next = { ...loadStoredSessionConfig(yeaftDir, sessionId) };
@@ -126,11 +165,15 @@ export function saveSessionConfig(yeaftDir, sessionId, partial) {
       if (key === 'model') delete next.modelSource;
       continue;
     }
-    next[key] = key === 'modelEffort' ? normalizeEffort(value.trim()) : typeof value === 'string' ? value.trim() : value;
+    next[key] = typeof value === 'string' ? value.trim() : value;
     if (key === 'model') next.modelSource = MODEL_SOURCE_EXPLICIT;
   }
+  const saved = publicConfig(next, userConfig, yeaftDir);
+  if (Object.hasOwn(partial ?? {}, 'modelEffort') && Object.hasOwn(saved, 'modelEffort')) {
+    next.modelEffort = saved.modelEffort;
+  }
   persistStoredSessionConfig(yeaftDir, sessionId, next);
-  return publicConfig(next);
+  return saved;
 }
 
 /** Create an empty Session config file without inventing an override. */
@@ -216,7 +259,7 @@ export function normalizeSessionConfig(
   { previousDefaultModel = null } = {},
 ) {
   const stored = loadStoredSessionConfig(yeaftDir, sessionId);
-  if (!stored.model || typeof stored.model !== 'string') return publicConfig(stored);
+  if (!stored.model || typeof stored.model !== 'string') return publicConfig(stored, userConfig, yeaftDir);
 
   const allowedModel = resolveAllowedModelRef(userConfig, stored.model);
   // The retired create path wrote the then-current Agent default without a
@@ -239,20 +282,22 @@ export function normalizeSessionConfig(
       changed = true;
     }
     if (changed) persistStoredSessionConfig(yeaftDir, sessionId, next);
-    return publicConfig(next);
+    return publicConfig(next, userConfig, yeaftDir);
   }
 
   const next = { ...stored };
   delete next.model;
   delete next.modelSource;
   persistStoredSessionConfig(yeaftDir, sessionId, next);
-  return publicConfig(next);
+  return publicConfig(next, userConfig, yeaftDir);
 }
 
 /** Overlay a valid Session override on the Agent config. */
 export function resolveSessionConfig(userConfig, sessionConfig) {
   const base = userConfig ? { ...userConfig } : {};
   const overrides = sessionConfig && typeof sessionConfig === 'object' ? sessionConfig : {};
+  const inherited = inheritedModel(base);
+  if (inherited) base.model = inherited;
   if (overrides.model && typeof overrides.model === 'string' && overrides.model.trim()) {
     const model = resolveAllowedModelRef(base, overrides.model.trim());
     if (model) {
@@ -260,7 +305,7 @@ export function resolveSessionConfig(userConfig, sessionConfig) {
       base.primaryModel = model;
     }
   }
-  const effort = normalizeEffort(overrides.modelEffort) || normalizeEffort(base.modelEffort);
+  const effort = normalizeSessionEffort(overrides.modelEffort, null, base) || normalizeSessionEffort(base.modelEffort, null, base);
   if (effort) base.modelEffort = effort;
   return base;
 }

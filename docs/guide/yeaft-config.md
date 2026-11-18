@@ -260,28 +260,35 @@ import('./agent/yeaft/config.js').then(async ({ loadConfig }) => {
 
 ## Google Gemini 原生 API
 
-`gemini` 是独立的第三套 wire pattern，使用 Google GenerateContent / StreamGenerateContent；不是 OpenAI 兼容接口，也不是 Vertex AI 服务账号模式。
+`gemini` 对接 Google Gemini Developer API 的 `GenerateContent` / `StreamGenerateContent`，默认使用稳定版 `/v1`。显式填写的 `/v1beta` 或网关地址不会自动改写；Gemini 版 API 并不是 Vertex AI、OpenAI 转接、Interactions 或 Live API。
 
 ```json
 {
   "providers": [{
     "name": "google",
     "protocol": "gemini",
-    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1",
     "apiKey": "YOUR_GOOGLE_AI_STUDIO_KEY",
-    "models": ["gemini-2.5-pro", "gemini-2.5-flash"]
+    "models": [
+      {
+        "id": "gemini-4-hydrogen",
+        "geminiOptions": {
+          "serviceTier": "standard",
+          "generationConfig": { "temperature": 1, "thinkingConfig": { "includeThoughts": true } }
+        }
+      },
+      "gemini-4-carbon"
+    ]
   }],
-  "primaryModel": "google/gemini-2.5-pro",
-  "fastModel": "google/gemini-2.5-flash"
+  "primaryModel": "google/gemini-4-hydrogen",
+  "fastModel": "google/gemini-4-carbon"
 }
 ```
 
-- 显式 model protocol → provider protocol → model ID 推断 → `openai-responses` 默认。`gemini-*` 可自动识别；兼容网关需要使用其实际协议显式覆盖。省略原生 Gemini 的 `baseUrl` 时使用上例默认地址，不能填 `/v1beta/openai`。
-- 静态凭据为 `apiKey`，请求通过 `x-goog-api-key` header 认证。CLI 的 `--api-key-env` 读取环境变量并把值写入本机实例配置，不会保存环境变量引用。命名实例请显式传 `--config ~/.yeaft/instances/<name>/config.json`。
-- CLI：`yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-2.5-pro --fast gemini-2.5-flash`；交互式 `yeaft-agent llm setup` 也提供 Google Gemini 选项。`yeaft-agent llm list-models google` 从已配置 provider 读取原生目录。
-- Web：添加 provider，协议选“Google Gemini（原生 API）”，填写 key；“测试连接并刷新模型”通过 Agent 请求 `GET /v1beta/models`，逐页传递 `nextPageToken`，只保留支持 `generateContent` 的模型并保存输入/输出 token 上限到当前草稿；仍需点击“保存”。测试不调用生成接口，不能证明生成配额或工具调用权限。
-- 静态起始目录只预置已有 `gemini-2.5-pro` / `gemini-2.5-flash`，不猜测未来模型名称；是否可用以账户实时目录为准。两者支持图片输入，已知离线输入窗口为 1,048,576、输出上限为 65,536 tokens；显式模型配置优先于目录和离线回退。
-- Gemini 2.5 使用 `generationConfig.thinkingConfig.thinkingBudget`，不是 `thinkingLevel`。Yeaft 三档 `medium / xhigh / max` 分别为 8,192 / 16,384 / 模型预算上限（Pro 32,768，Flash 24,576）。这是本产品预算映射，不是 Google 同名枚举。`supportsEffort:false` 可禁用；`effortOptions` 可缩小选项。Gemini 3 系列使用独立的 `thinkingLevel`，不能同时发送两种控制。
-- **GitHub Copilot 中的 Gemini 不走 Google 路径**：managed Copilot 模型目录会显式写入 `protocol: "openai-responses"`，继续使用 Copilot 动态凭据和地址。若迁移旧手工网关配置，须显式选择网关实际支持的协议。
+- 使用 Google AI Studio 密钥，Agent 通过 `x-goog-api-key` header 认证。CLI 示例：`yeaft-agent llm use gemini --api-key-env GEMINI_API_KEY --model gemini-4-hydrogen --fast gemini-4-carbon`。CLI 读取环境变量并将密钥保存在所选实例的本机配置中。Web 的“测试连接并刷新模型”仅在同一 API 版本分页查询 `/models`；不发起生成。模型可用性、配额和请求参数支持仍以账户及模型为准。
+- **思考档位**：Gemini 4 Hydrogen 提供 `low / medium / high / xhigh`，默认 `xhigh`；4 Carbon、4 Argon 和 3.8 Flash 提供 `low / medium / high`。其他已确认的 Gemini 3 模型按各自能力展示（例如 3.6 Flash 支持 `minimal`）。请求用 `generationConfig.thinkingConfig.thinkingLevel`。Gemini 2.5 仍用 `thinkingBudget`：`medium / xhigh / max` 对应 8,192 / 16,384 / 模型预算上限（Pro 32,768，Flash 24,576）。两个字段不一起发。可用 `supportsEffort: false` 禁用或 `effortOptions` 缩小菜单；已有 Session 选择保留。
+- **缓存**：Google 在支持的模型上自动使用隐式缓存，无需传请求参数。命中时 `usageMetadata.cachedContentTokenCount` 是输入 token 的一部分，不能重复计入。显式 `cachedContents` 资源和 `cachedContent` 请求字段只在支持的 **`v1beta` GenerateContent** 路径（且不是 Gemini 4）提供；Yeaft 不创建或管理显式缓存资源，也不为此自动切换 endpoint。
+- **高级参数**：可在实例 `config.json` 的模型对象中设置 `geminiOptions`，支持 `safetySettings`、`serviceTier`、`toolConfig` 和 `generationConfig` 的文本参数（采样、stop sequences、结构化输出、logprobs、media resolution 和 thinking config）。具体组合受 Google 模型限制。Session 选择的 effort、Agent 的工具声明、输出上限及单候选约束仍由 Yeaft 决定。Web/CLI 编辑与刷新保留这些模型设置；当前没有独立表单。独立的 Files、Batch、Embeddings、Interactions、Live API 及非文本生成，不在这个会话适配器内。
+- **Copilot Gemini 不变**：它使用自己的 `openai-responses` 协议和动态凭据，并不使用 Google 的地址、缓存或思考字段。
 
-官方参考：[思考控制](https://ai.google.dev/gemini-api/docs/thinking)、[模型目录与 token 上限](https://ai.google.dev/api/models)。官方思考页可能跳转至新 Interactions API 文档；本实现仍为 GenerateContent，不自动迁移协议或模型目录。
+官方参考：[API 版本](https://aistudio.google.com/api-reference/api-versions)、[GenerateContent v1](https://aistudio.google.com/api-reference/generate-content/generate-content?api-version=v1)、[思考档位](https://aistudio.google.com/docs/thinking?generate-content=true#thinking-levels)、[上下文缓存](https://aistudio.google.com/docs/caching?generate-content=true)。

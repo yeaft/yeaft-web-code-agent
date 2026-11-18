@@ -25,6 +25,7 @@ import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens, DEFAULT_CONTEXT_WINDOW } from './models.js';
 import { inferProtocolFromModelId } from './llm/router.js';
+import { withGeminiDefault } from './llm/gemini-endpoint.js';
 import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 import { createDenyAllPluginConfig, normalizePluginConfig } from './plugins.js';
 import { normaliseBrowserRuntimeSection } from '../browser-runtime/config.js';
@@ -459,9 +460,7 @@ export function loadConfig(overrides = {}) {
   }
 
   // ─── Build config from config.json ────────────────────────
-  const providers = Array.isArray(jsonConfig.providers) ? jsonConfig.providers.map(provider =>
-    provider?.protocol === 'gemini' && !provider.baseUrl
-      ? { ...provider, baseUrl: 'https://generativelanguage.googleapis.com/v1beta' } : provider) : [];
+  const providers = Array.isArray(jsonConfig.providers) ? jsonConfig.providers.map(withGeminiDefault) : [];
 
   // Resolve primary model
   let model = 'claude-sonnet-4-20250514';
@@ -617,6 +616,7 @@ export function loadConfig(overrides = {}) {
             entry.supportsEffort = modelSupportsEffort(m.id, effortContext);
             entry.effortOptions = effortOptions;
             entry.effortProtocol = cap.thinkingProtocol;
+            if (protocol === 'gemini') entry.defaultEffort = cap.defaultEffort;
           }
           config.availableModels.push(entry);
         }

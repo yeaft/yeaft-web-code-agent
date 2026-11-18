@@ -13,6 +13,7 @@ import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { getModelEffortOptions, normalizeEffort, normalizeProviderModels, parseModelRef, resolveMaxOutputTokens, serializeModelForPersistence } from './models.js';
 import { inferProtocolFromModelId } from './llm/router.js';
+import { withGeminiDefault } from './llm/gemini-endpoint.js';
 import { clampYeaftField, normaliseTelemetrySection, normaliseYeaftSection } from './config.js';
 import { normaliseBrowserRuntimeSection, validateBrowserRuntimeUpdate } from '../browser-runtime/config.js';
 import { normalizePluginConfig } from './plugins.js';
@@ -32,6 +33,7 @@ function quickSendModels(config) {
         provider: provider.name,
         label: model.id,
         protocol,
+        effortProtocol: protocol === 'gemini' ? 'gemini' : undefined,
         effortOptions: getModelEffortOptions(model.id, { ...model, protocol }),
         maxOutput: resolveMaxOutputTokens(model.id, { modelInfo: model }),
       };
@@ -40,7 +42,7 @@ function quickSendModels(config) {
 }
 
 function publicQuickSends(value) {
-  return (Array.isArray(value) ? value : []).map(item => ({ ...item, effort: normalizeEffort(item.effort) }));
+  return (Array.isArray(value) ? value : []).map(item => ({ ...item, effort: normalizeEffort(item.effort, /(?:^|\/)gemini-/.test(item.model || '')) }));
 }
 
 /** Validate inside mutateAgentConfig's lock, against the resulting provider catalog. */
@@ -60,7 +62,7 @@ function validateQuickSends(value, config) {
     const candidates = matches.length ? matches : models.filter(model => model.id === ref);
     if (candidates.length !== 1) throw new Error(`Quick send model must exist and be unambiguous: ${ref}`);
     const model = candidates[0];
-    const effort = normalizeEffort(item.effort);
+    const effort = normalizeEffort(item.effort, model.protocol === 'gemini' && model.effortOptions.some(effort => ['minimal', 'low', 'high'].includes(effort)));
     if (item.effort != null && (!effort || !model.effortOptions.includes(effort))) {
       throw new Error(`Quick send effort is not available for ${model.ref}`);
     }
@@ -103,7 +105,7 @@ function readLocalLlmConfig(dir) {
 
   const raw = readFileSync(configPath, 'utf8');
   const json = JSON.parse(raw);
-  const providers = Array.isArray(json.providers) ? json.providers : [];
+  const providers = Array.isArray(json.providers) ? json.providers.map(withGeminiDefault) : [];
   return {
     providers,
     primaryModel: json.primaryModel || null,
@@ -223,8 +225,7 @@ export function updateLlmConfig(update, dir) {
           const managed = serializeKnownProviderForPersistence(provider);
           if (managed) return managed;
           return {
-            ...provider,
-            ...(provider.protocol === 'gemini' && !provider.baseUrl ? { baseUrl: 'https://generativelanguage.googleapis.com/v1beta' } : {}),
+            ...withGeminiDefault(provider),
             models: normalizeProviderModels(provider).map(serializeModelForPersistence),
           };
         });
@@ -237,7 +238,7 @@ export function updateLlmConfig(update, dir) {
       if (update.quickSends !== undefined) existing.quickSends = validateQuickSends(update.quickSends, existing);
 
       const agentConfig = {
-        providers: Array.isArray(existing.providers) ? existing.providers : [],
+        providers: Array.isArray(existing.providers) ? existing.providers.map(withGeminiDefault) : [],
         primaryModel: existing.primaryModel || null,
         fastModel: existing.fastModel || null,
         language: existing.language || 'en',

@@ -47,6 +47,7 @@ import {
   realpathSync,
 } from 'fs';
 import { randomBytes } from 'crypto';
+import { loadConfig } from '../config.js';
 import { homedir } from 'os';
 import { isAbsolute, join, resolve } from 'path';
 import {
@@ -804,7 +805,7 @@ export function updateSessionWorkDir(yeaftDir, sessionId, workDir) {
  * metadata: opening a Session handle would scan/repair its legacy audit log,
  * and resolving through the manifest would inspect every Session's metadata.
  */
-export function updateSessionConfig(yeaftDir, sessionId, partial) {
+export function updateSessionConfig(yeaftDir, sessionId, partial, userConfig = null) {
   // Keep legacy simple IDs readable, but never let a wire ID escape sessions/.
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(sessionId)) {
     throw new SessionCrudError('invalid_session_id', sessionId);
@@ -822,7 +823,7 @@ export function updateSessionConfig(yeaftDir, sessionId, partial) {
   if (meta.task && partial && Object.hasOwn(partial, 'sceneId')) {
     throw new SessionCrudError('invalid_scene', sessionId, 'Scheduled tasks use legacy targeting');
   }
-  const saved = saveSessionConfig(yeaftDir, sessionId, partial || {});
+  const saved = saveSessionConfig(yeaftDir, sessionId, partial || {}, userConfig);
   saveSessionMeta(dir, { ...meta, metadataUpdatedAt: new Date().toISOString() });
   return saved;
 }
@@ -1027,10 +1028,16 @@ export function snapshotSessions(yeaftDir) {
   for (const row of listManifestSessions(yeaftDir)) {
     byId.set(row.meta.id, row.meta);
   }
-  // Attach per-group config overrides (v1: just `model`). Frontend can
-  // render the effective model without re-querying.
+  // Resolve at most one Agent catalog for public effort aliases in this snapshot.
+  let agentConfig;
+  const getAgentConfig = () => {
+    if (agentConfig === undefined) {
+      agentConfig = existsSync(join(yeaftDir, 'config.json')) ? loadConfig({ dir: yeaftDir }) : {};
+    }
+    return agentConfig;
+  };
   for (const meta of byId.values()) {
-    meta.config = loadSessionConfig(yeaftDir, meta.id);
+    meta.config = loadSessionConfig(yeaftDir, meta.id, getAgentConfig);
     if (meta.task) meta.task = publicScheduledTask(meta.task);
   }
   return Array.from(byId.values()).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));

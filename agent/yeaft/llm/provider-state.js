@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { normalizeGeminiEndpoint } from './gemini-endpoint.js';
 import { decodeResponsesInput } from './responses-tool-schema.js';
 
 export const MAX_PROVIDER_STATE_BYTES = 4 * 1024 * 1024;
@@ -71,8 +72,8 @@ export function createCredentialScopeId(credential, kind = 'static-api-key') {
 export function createProviderContext({ protocol, baseUrl, providerId, credentialScopeId, staticApiKey, model, capabilities = {} }) {
   let endpoint;
   try {
-    const url = new URL(baseUrl || (protocol === 'anthropic' ? 'https://api.anthropic.com'
-      : protocol === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : 'https://api.openai.com/v1'));
+    const url = protocol === 'gemini' ? normalizeGeminiEndpoint(baseUrl)
+      : new URL(baseUrl || (protocol === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'));
     url.username = ''; url.password = ''; url.search = ''; url.hash = '';
     endpoint = url.toString().replace(/\/+$/, '');
   } catch { endpoint = ''; }

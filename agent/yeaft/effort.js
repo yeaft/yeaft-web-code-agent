@@ -109,30 +109,31 @@ export function pickEffort({ scenario = 'chat', toolLoopTurns = 0, userEffort = 
  * @param {string} prompt
  * @returns {{ effort: 'medium'|'xhigh'|'max'|'ultra'|null, cleanedPrompt: string }}
  */
-export function parseEffortPrefix(prompt) {
+export function parseEffortPrefix(prompt, { preserveNative = false } = {}) {
   if (typeof prompt !== 'string') return { effort: null, cleanedPrompt: prompt };
   const m = prompt.match(/^\/(ultra|max|xhigh|high|medium|low)(\s+|$)/);
   if (!m) return { effort: null, cleanedPrompt: prompt };
-  const effort = normalizeEffort(m[1]);
+  const effort = normalizeEffort(m[1], preserveNative);
   const cleanedPrompt = prompt.slice(m[0].length);
   return { effort, cleanedPrompt };
 }
 
 // Ordinal levels, not lexical sorting or cross-model token-budget equivalence.
-export const EFFORT_LEVELS = Object.freeze(['medium', 'xhigh', 'max', 'ultra']);
-const effortRank = value => EFFORT_LEVELS.indexOf(normalizeEffort(value));
+export const EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+const effortRank = value => EFFORT_LEVELS.indexOf(normalizeEffort(value, true));
 const atMost = (value, ceiling) => effortRank(value) >= 0 && effortRank(value) <= effortRank(ceiling);
 
 /** Copy only durable decision fields; never retain a mutable request/config object. */
 export function snapshotEffortDecision(decision = null) {
   return Object.freeze({
-    requested: normalizeEffort(decision?.requested),
-    effective: normalizeEffort(decision?.effective),
+    requested: normalizeEffort(decision?.requested, true),
+    effective: normalizeEffort(decision?.effective, true),
     source: typeof decision?.source === 'string' ? decision.source : 'unknown',
     model: typeof decision?.model === 'string' ? decision.model : null,
     wireMode: typeof decision?.wireMode === 'string' ? decision.wireMode : 'omitted',
     thinkingEnabled: decision?.thinkingEnabled === true,
-    cap: normalizeEffort(decision?.cap),
+    cap: normalizeEffort(decision?.cap, true),
+    ...(typeof decision?.thinkingLevel === 'string' ? { thinkingLevel: decision.thinkingLevel } : {}),
     ...(Number.isFinite(decision?.budgetTokens) ? { budgetTokens: decision.budgetTokens } : {}),
   });
 }
@@ -164,7 +165,7 @@ export function resolveSubAgentEffort({ parentDecision = null, model, effortCont
   if (parent.cap && atMost(parent.cap, parentTarget)) parentTarget = parent.cap;
   // Keep the existing child ceiling below the retired high tier; do not
   // increase child cost to xhigh when the public tiers are consolidated.
-  const target = 'medium';
+  const target = atMost(parentTarget, 'medium') ? parentTarget : 'medium';
   const context = capabilityContext(protocol, effortContext);
   const capability = getThinkingCapability(model, context);
   const base = {

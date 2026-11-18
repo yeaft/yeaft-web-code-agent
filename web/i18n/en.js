@@ -1513,6 +1513,7 @@ export default {
   'settings.llm.managedCopilotTitle': 'Managed GitHub Copilot',
   'settings.llm.providersTitle': 'Providers',
   'settings.llm.protocolGemini': 'Google Gemini (native API)',
+  'settings.llm.geminiVersionHint': 'Defaults to Google API v1. Eligible models use implicit caching automatically; manual cache resources are v1beta only.',
   'settings.llm.testAndDiscover': 'Test connection & refresh models',
   'settings.llm.testSuccess': 'Connected. Model catalog refreshed (no generation request).',
   'settings.llm.testFailed': 'Connection test failed',
