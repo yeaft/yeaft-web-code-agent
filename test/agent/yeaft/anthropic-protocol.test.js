@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTrace, DebugTrace } from '../../../agent/yeaft/debug-trace.js';
 import { parseMessage } from '../../../agent/yeaft/conversation/persist.js';
+import { commitSessionTurnDeletion } from '../../../agent/yeaft/conversation/turn-deletion-journal.js';
 
 const identity = { instanceScope: 'instance', ownerScope: 'owner', sessionId: 'session', vpId: 'vp', threadId: 'main' };
 const context = createProviderContext({ protocol: 'anthropic', providerId: 'test', credentialScopeId: 'account', model: 'claude-opus-5-5' });
@@ -327,26 +328,33 @@ describe('Session debug trace deletion', () => {
   it('filters surviving trace data using canonical Session tombstones loaded after restart', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'debug-delete-tombstones-'));
     const writer = new DebugTrace(dir);
-    const tombstones = new Map();
-    const reader = new DebugTrace(dir, { loadSessionTurnTombstones: async sessionId => tombstones.get(sessionId) });
+    const reader = new DebugTrace(dir);
     try {
-      record(writer, 'session-a', 'remove', 'client-id');
-      record(writer, 'session-b', 'remove', 'client-id');
+      record(writer, 'session-a', 'by-execution'); // Historical traces have no messageId.
+      record(writer, 'session-a', 'by-client', 'client-id');
+      record(writer, 'session-a', 'by-durable', 'durable-id');
+      record(writer, 'session-b', 'by-execution', 'client-id');
       await writer.close();
-      expect(await reader.queryTools()).toHaveLength(2);
-      tombstones.set('session-a', { messageIds: new Set(['client-id']) });
-      const request = { sessionId: 'session-a', turnId: 'remove' };
+      expect(await reader.queryTools()).toHaveLength(4); // Journal absent; cache hydrated.
+      commitSessionTurnDeletion(dir, 'session-a', [], {
+        version: 1, sessionId: 'session-a', turnId: 'user-turn',
+        anchorMessageIds: ['durable-id'], messageIds: ['durable-id'], clientMessageIds: ['client-id'],
+        executionIds: ['by-execution'], referenceIds: ['durable-id', 'client-id', 'user-turn'],
+      });
+      const request = { sessionId: 'session-a', turnId: 'by-execution' };
       expect((await reader.fetchTurnDebug(request)).loops).toEqual([]);
       expect((await reader.fetchRecentDebugHistory({ sessionId: 'session-a', indexOnly: true })).turns).toEqual([]);
       expect((await reader.fetchRecentDebugHistory({ sessionId: 'session-a', search: 'same prompt' })).turns).toEqual([]);
-      expect((await reader.fetchRecentDebugHistory({ detailTurnId: 'remove' })).turns[0].sessionId).toBe('session-b');
+      expect((await reader.fetchRecentDebugHistory({ detailTurnId: 'by-execution' })).turns[0].sessionId).toBe('session-b');
       expect(await reader.resumeTrace(request)).toBe(false);
       expect((await reader.queryByMessage('client-id')).turns).toHaveLength(1);
-      expect((await reader.queryByTrace('remove')).turns).toHaveLength(1);
+      expect((await reader.queryByMessage('durable-id')).turns).toEqual([]);
+      expect((await reader.queryByTrace('by-execution')).turns).toHaveLength(1);
       expect(await reader.queryRecent()).toHaveLength(1);
       expect(await reader.queryTools()).toHaveLength(1);
       expect(await reader.search('raw response body')).toHaveLength(1);
-      expect(readdirSync(join(dir, 'sessions', 'session-a', 'debug', 'requests'))).toHaveLength(1);
+      expect((await reader.stats()).requestCount).toBe(1);
+      expect(readdirSync(join(dir, 'sessions', 'session-a', 'debug', 'requests'))).toHaveLength(3);
     } finally {
       await writer.close();
       await reader.close();

@@ -14,6 +14,7 @@ import { createReadStream, promises as fsp } from 'fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { createInterface } from 'readline';
+import { readSessionTurnDeletions } from './conversation/turn-deletion-journal.js';
 
 const TRACE_VERSION = 3;
 const REQUEST_RETENTION = 10;
@@ -525,6 +526,14 @@ function turnTombstones(ids) {
   return { turnIds: exactIds(ids?.turnIds), messageIds: exactIds(ids?.messageIds) };
 }
 
+function readSessionTraceTombstones(ownerRoot, sessionId) {
+  const { operations } = readSessionTurnDeletions(ownerRoot, sessionId);
+  return {
+    turnIds: new Set(operations.flatMap(op => op.executionIds)),
+    messageIds: new Set(operations.flatMap(op => [...op.messageIds, ...op.clientMessageIds])),
+  };
+}
+
 function matchesTurnTombstones(trace, ids) {
   return !!ids && (ids.turnIds.has(trace.requestId) || ids.turnIds.has(trace.traceId)
     || ids.messageIds.has(trace.messageId));
@@ -989,18 +998,20 @@ export class DebugTrace {
   #loadSessionTurnTombstones;
 
   /**
-   * @param {string} tracePath — Back-compatible path. If it looks like a DB
-   * file, traces are stored in a sibling `debug/` directory.
+   * @param {string} tracePath — Yeaft root or a legacy DB path (`.files` is appended).
    * @param {object} [options]
-   * @param {(sessionId: string) => Promise<{turnIds?: string[]|Set<string>, messageIds?: string[]|Set<string>}|null>} [options.loadSessionTurnTombstones]
-   * Loads exact IDs from the canonical Session store at read time. Arrays or
-   * Sets are accepted; errors propagate rather than revealing hidden traces.
+   * @param {string} [options.ownerRoot] Canonical journal root when different from the trace storage root.
+   * @param {(sessionId: string) => Promise<{turnIds?: string[]|Set<string>, messageIds?: string[]|Set<string>}|null>|{turnIds?: string[]|Set<string>, messageIds?: string[]|Set<string>}|null} [options.loadSessionTurnTombstones]
+   * Overrides journal lookup for stores with per-Session owners. Errors propagate
+   * rather than revealing hidden traces.
    */
   constructor(tracePath, options = {}) {
     const rootDir = fileTraceRoot(tracePath);
     if (!rootDir) throw new Error('DebugTrace requires a storage path');
     this.#rootDir = resolve(rootDir);
-    this.#loadSessionTurnTombstones = options?.loadSessionTurnTombstones;
+    const ownerRoot = options?.ownerRoot ? resolve(options.ownerRoot) : this.#rootDir;
+    this.#loadSessionTurnTombstones = options?.loadSessionTurnTombstones
+      ?? (sessionId => readSessionTraceTombstones(ownerRoot, sessionId));
     // `textMaxBytes` remains an accepted constructor option for compatibility,
     // but debug source data is intentionally lossless.
     void options?.textMaxBytes;
@@ -1277,12 +1288,12 @@ export class DebugTrace {
         const row = traceToolToLegacy(trace, tool);
         if (name && row.tool_name !== name) continue;
         if (since && row.created_at < since) continue;
-        tools.push({ trace: header, row });
+        tools.push({ trace, row });
       }
       tools.sort((a, b) => (b.row.created_at || 0) - (a.row.created_at || 0));
       if (tools.length > 100) tools.length = 100;
     }
-    return tools.filter(({ trace }) => !this.#isDeleted(trace)).map(({ row }) => row);
+    return (await this.#visibleTraces(tools)).map(({ row }) => row);
   }
 
   async search(keyword) {
@@ -1295,10 +1306,10 @@ export class DebugTrace {
       const live = this.#requestCache.get(header.requestKey);
       const trace = live ? await readAvailableTrace(this.#rootDir, live) : await readHeaderDetail(this.#rootDir, header);
       if (!trace || !JSON.stringify(trace).toLowerCase().includes(needle)) continue;
-      results.push(...traceToLegacyRows(trace).map(row => ({ trace: header, row })));
+      results.push(...traceToLegacyRows(trace).map(row => ({ trace, row })));
       if (results.length >= 50) break;
     }
-    return results.filter(({ trace }) => !this.#isDeleted(trace)).slice(0, 50).map(({ row }) => row);
+    return (await this.#visibleTraces(results)).slice(0, 50).map(({ row }) => row);
   }
 
   async stats() {
@@ -1352,7 +1363,8 @@ export class DebugTrace {
   /**
    * Remove full debug request directories for caller-resolved, exact IDs.
    * Only this Session is considered. The return value counts directories, not
-   * turns (one turn can have multiple requests or a legacy copy).
+   * turns (one turn can have multiple requests or a legacy copy). This is not
+   * global erasure: later requests' raw diagnostic snapshots are not redacted.
    * @param {{sessionId: string, turnIds?: string[]|Set<string>, messageIds?: string[]|Set<string>}} ids
    */
   async deleteSessionTurns({ sessionId, turnIds, messageIds } = {}) {
@@ -1438,14 +1450,11 @@ export class DebugTrace {
   }
 
   async #visibleTraces(entries) {
-    const load = this.#loadSessionTurnTombstones;
     const canonical = new Map();
-    if (load) {
-      for (const { trace } of entries) {
-        const sessionId = trace.sessionId;
-        if (sessionId && !canonical.has(sessionId)) {
-          canonical.set(sessionId, turnTombstones(await load(sessionId)));
-        }
+    for (const { trace } of entries) {
+      const sessionId = trace.sessionId;
+      if (sessionId && !canonical.has(sessionId)) {
+        canonical.set(sessionId, turnTombstones(await this.#loadSessionTurnTombstones(sessionId)));
       }
     }
     return entries.filter(({ trace }) => !this.#isDeleted(trace)
@@ -1945,8 +1954,8 @@ export class NullTrace {
   async fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [] }; }
 }
 
-export function createTrace({ enabled, dbPath, dirPath, textMaxBytes, loadSessionTurnTombstones }) {
+export function createTrace({ enabled, dbPath, dirPath, textMaxBytes, ownerRoot, loadSessionTurnTombstones }) {
   const path = dirPath || dbPath;
   if (!enabled || !path) return new NullTrace(path);
-  return new DebugTrace(path, { textMaxBytes, loadSessionTurnTombstones });
+  return new DebugTrace(path, { textMaxBytes, ownerRoot, loadSessionTurnTombstones });
 }
