@@ -75,8 +75,8 @@ describe('stock VP scenario defaults', () => {
       expect(vp.aliases).toEqual(expect.arrayContaining([...old.aliases, old.name, vp.displayName, vp.displayNameZh]));
       // Every turn carries one scene: full professional coverage is intended,
       // but its per-turn prompt cost stays explicit and bounded.
-      expect(vp.personaEn.length).toBeLessThanOrEqual(9000);
-      expect(vp.personaZh.length).toBeLessThanOrEqual(3000);
+      expect(vp.personaEn.length).toBeLessThanOrEqual(8500);
+      expect(vp.personaZh.length).toBeLessThanOrEqual(2800);
       expect(lensLayout(vp.personaEn).reduce((sum, count) => sum + count, 0)).toBeGreaterThanOrEqual(8);
       expect(lensLayout(vp.personaZh)).toEqual(lensLayout(vp.personaEn));
       expect(vp.persona).toContain(`<!-- lang:en -->\n\n${vp.personaEn}\n\n<!-- lang:zh -->\n\n${vp.personaZh}`);
