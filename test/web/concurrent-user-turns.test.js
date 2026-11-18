@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as Vue from 'vue';
 import { mount } from '@vue/test-utils';
 import ConcurrentUserTurns from '../../web/components/ConcurrentUserTurns.js';
-import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn, userTurnExcerpt } from '../../web/utils/concurrent-user-turns.js';
+import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn, userTurnExcerpt, hasParallelUserTurns } from '../../web/utils/concurrent-user-turns.js';
 
 describe('concurrent user turn presentation', () => {
   it('keeps interleaved streams and supplements with their root, ordered by root time', () => {
@@ -31,6 +31,64 @@ describe('concurrent user turn presentation', () => {
     expect(result.pending.map(turn => [turn.userTurnId, turn.blocks.map(block => block.id)])).toEqual([['a', ['0', '3']], ['c', ['2']]]);
     expect(['running', 'waiting', 'queued'].every(state => isPendingUserTurn({ state }))).toBe(true);
     expect(['error', 'completed', 'stopped'].some(state => isPendingUserTurn({ state }))).toBe(false);
+  });
+
+  it('derives the parallel period from Agent times and settles finished roots in completion order', () => {
+    const turn = (userTurnId, state, startedAt, endedAt) => ({ userTurnId, state, startedAt, ...(endedAt ? { endedAt } : {}) });
+    expect(hasParallelUserTurns([])).toBe(false);
+    expect(hasParallelUserTurns([turn('a', 'running', 10)])).toBe(false);
+    expect(hasParallelUserTurns([turn('a', 'running', 10), turn('b', 'queued', 20)])).toBe(true);
+    // The remaining live root keeps its lane whichever overlapping root ended first.
+    expect(hasParallelUserTurns([turn('a', 'running', 10), turn('b', 'completed', 20, 30)])).toBe(true);
+    expect(hasParallelUserTurns([turn('a', 'completed', 10, 30), turn('b', 'running', 20)])).toBe(true);
+    // No overlap, an unknown end (older Agent) or an unknown start ends the period.
+    expect(hasParallelUserTurns([turn('a', 'completed', 10, 15), turn('b', 'running', 20)])).toBe(false);
+    expect(hasParallelUserTurns([turn('a', 'completed', 10), turn('b', 'running', 20)])).toBe(false);
+    expect(hasParallelUserTurns([turn('a', 'completed', 10, 30), turn('b', 'running', 0)])).toBe(false);
+    // An older Agent still keeps the lane when the later root ran during the live one.
+    expect(hasParallelUserTurns([turn('a', 'running', 10), { ...turn('b', 'completed', 20), executions: [{ vpId: 'v' }] }])).toBe(true);
+    // A task result reopening a root measures from the reopen: a root that ran
+    // in between is not parallel, one that runs during the new span is.
+    const reopened = { ...turn('a', 'running', 10), activeSince: 40 };
+    expect(hasParallelUserTurns([reopened, turn('b', 'completed', 20, 30)])).toBe(false);
+    expect(hasParallelUserTurns([reopened, turn('b', 'completed', 45, 50)])).toBe(true);
+    expect(hasParallelUserTurns([reopened, turn('b', 'running', 20)])).toBe(true);
+    // A routed root that never got an execution has nothing to overlap.
+    expect(hasParallelUserTurns([turn('a', 'running', 10), { ...turn('r', 'completed', 20), executions: [] }])).toBe(false);
+    // An older Agent reopens without activeSince. A live root that already
+    // finished an execution cannot use its question time against roots
+    // without an end time; one still in its first execution can. End times
+    // (newer Agents) are unaffected.
+    const ran = { ...turn('b', 'completed', 20), executions: [{ vpId: 'v', state: 'completed' }] };
+    const legacyReopened = { ...turn('a', 'running', 10), executions: [{ vpId: 'v', state: 'completed' }, { vpId: 'v', state: 'running' }] };
+    expect(hasParallelUserTurns([legacyReopened, ran])).toBe(false);
+    expect(hasParallelUserTurns([legacyReopened, turn('b', 'running', 20)])).toBe(true);
+    expect(hasParallelUserTurns([{ ...turn('a', 'running', 10), executions: [{ vpId: 'v', state: 'running' }] }, ran])).toBe(true);
+    expect(hasParallelUserTurns([legacyReopened, { ...ran, endedAt: 30 }])).toBe(true);
+
+    const a = { id: 'a', type: 'user', content: 'earlier', timestamp: 10, userTurnId: 'a' };
+    const b = { id: 'b', type: 'user', content: 'later', timestamp: 20, userTurnId: 'b' };
+    const replyA = { id: 'ra', type: 'assistant', timestamp: 25, userTurnId: 'a' };
+    const replyB = { id: 'rb', type: 'assistant', timestamp: 26, userTurnId: 'b' };
+    const old = { id: 'o', type: 'user', content: 'old', timestamp: 1, userTurnId: 'o' };
+    const optimistic = { id: 'c', type: 'user', content: 'just sent', timestamp: 40 };
+    const rows = [old, a, b, replyA, replyB, optimistic];
+    const order = turns => orderUserTurnMessages(rows, turns).messages.map(row => row.id);
+    // Without a snapshot (or from an older Agent) questions keep their sent order.
+    expect(order([])).toEqual(['o', 'a', 'ra', 'b', 'rb', 'c']);
+    expect(order([turn('a', 'completed', 10), turn('b', 'completed', 20)])).toEqual(['o', 'a', 'ra', 'b', 'rb', 'c']);
+    // A later root that finished first settles above the live one; the unrouted
+    // optimistic send and older history keep their own slots.
+    expect(order([turn('a', 'running', 10), turn('b', 'completed', 20, 30)])).toEqual(['o', 'b', 'rb', 'a', 'ra', 'c']);
+    // Finishing the earlier root appends it after the already-settled answer.
+    expect(order([turn('a', 'completed', 10, 50), turn('b', 'completed', 20, 30)])).toEqual(['o', 'b', 'rb', 'a', 'ra', 'c']);
+    expect(rows.map(row => row.id)).toEqual(['o', 'a', 'b', 'ra', 'rb', 'c']);
+    // A finished root without an end time (never ran) keeps its own slot
+    // instead of jumping above every settled answer.
+    const never = { id: 'n', type: 'user', content: 'failed send', timestamp: 15, userTurnId: 'n' };
+    expect(orderUserTurnMessages([a, never, b, replyA, replyB], [turn('a', 'completed', 10, 50),
+      { ...turn('n', 'completed', 15), executions: [] }, turn('b', 'completed', 20, 30)]).messages.map(row => row.id))
+      .toEqual(['b', 'rb', 'n', 'a', 'ra']);
   });
 
   it('preserves legacy rows and attaches old replies without inventing engine identity', () => {
@@ -111,14 +169,14 @@ describe('concurrent user turn presentation', () => {
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });
 
-  it('keeps single-turn layout, latches parallel layout, and returns only completed roots to history', async () => {
+  it('keeps single-turn layout, derives the parallel layout across navigation, and returns only completed roots to history', async () => {
     vi.stubGlobal('Vue', Vue);
     const store = Vue.reactive({ currentView: 'yeaft', currentAgent: 'a', yeaftActiveSessionFilter: 's',
       currentConversation: 'conv', activeConversationId: 'conv', agents: [], isProcessing: false,
       messages: [{ id: 'm1', type: 'user', content: 'first', timestamp: 10 },
         { id: 'm2', type: 'user', content: 'second', timestamp: 20, userTurnId: 'm2' },
         { id: 'm3', type: 'assistant', content: 'first reply', userTurnId: 'm1', turnId: 'engine-1' }],
-      yeaftSessionTurns: [{ userTurnId: 'm1', state: 'running' }], stopYeaftTurn: vi.fn(),
+      yeaftSessionTurns: [{ userTurnId: 'm1', state: 'running', startedAt: 10 }], stopYeaftTurn: vi.fn(),
       workbenchExpanded: true, toggleWorkbench: vi.fn(function () { this.workbenchExpanded = !this.workbenchExpanded; }) });
     vi.stubGlobal('Pinia', { defineStore: () => () => ({}), useChatStore: () => store });
     const { default: MessageList } = await import('../../web/components/MessageList.js');
@@ -129,7 +187,7 @@ describe('concurrent user turn presentation', () => {
     try {
       expect(wrapper.vm.splitActive).toBe(false);
       expect(store.toggleWorkbench).not.toHaveBeenCalled();
-      store.yeaftSessionTurns.push({ userTurnId: 'm2', state: 'queued' });
+      store.yeaftSessionTurns.push({ userTurnId: 'm2', state: 'queued', startedAt: 20 });
       await Vue.nextTick();
       expect(wrapper.vm.splitActive).toBe(true);
       expect(store.workbenchExpanded).toBe(false);
@@ -143,25 +201,51 @@ describe('concurrent user turn presentation', () => {
       expect(store.toggleWorkbench).toHaveBeenCalledTimes(1);
       expect(wrapper.vm.historyBlocks).toEqual([]);
       expect(wrapper.vm.pendingTurns[0].blocks[0].items.map(item => item.type)).toEqual(['user', 'assistant-turn']);
-      store.yeaftSessionTurns[0].state = 'completed';
+      Object.assign(store.yeaftSessionTurns[0], { state: 'completed', endedAt: 30 });
       await Vue.nextTick();
       expect(wrapper.vm.splitActive).toBe(true);
       expect(wrapper.vm.historyBlocks[0].originMessageId).toBe('m1');
+      // Leaving and reopening the Session keeps the remaining lane; a latch in
+      // this component used to reset here and drop it back into one column.
+      const snapshot = store.yeaftSessionTurns;
+      store.yeaftActiveSessionFilter = 'elsewhere';
+      store.yeaftSessionTurns = [];
+      await Vue.nextTick();
+      expect(wrapper.vm.splitActive).toBe(false);
+      store.yeaftActiveSessionFilter = 's';
+      store.yeaftSessionTurns = snapshot;
+      await Vue.nextTick();
+      expect(wrapper.vm.splitActive).toBe(true);
+      expect(wrapper.vm.pendingTurns.map(turn => turn.userTurnId)).toEqual(['m2']);
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(2);
       wrapper.vm.stopUserTurn(store.yeaftSessionTurns[1]);
       expect(store.stopYeaftTurn).toHaveBeenCalledWith({ userTurnId: 'm2' });
-      store.yeaftSessionTurns[1].state = 'completed';
+      Object.assign(store.yeaftSessionTurns[1], { state: 'completed', endedAt: 40 });
       await Vue.nextTick();
       expect(wrapper.vm.splitActive).toBe(false);
       expect(wrapper.vm.historyBlocks.map(block => block.originMessageId)).toEqual(['m1', 'm2']);
+      // A background result reopening m1 after m2 finished is not parallel: no
+      // one-lane split, the reopened Workbench stays, and the live root reads last.
+      store.workbenchExpanded = true;
+      store.yeaftSessionTurns[0] = { userTurnId: 'm1', state: 'running', startedAt: 10, activeSince: 50 };
+      await Vue.nextTick();
+      expect(wrapper.vm.splitActive).toBe(false);
+      expect(store.workbenchExpanded).toBe(true);
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(2);
+      expect(wrapper.vm.historyBlocks.map(block => block.originMessageId)).toEqual(['m2', 'm1']);
+      store.yeaftSessionTurns[0] = { userTurnId: 'm1', state: 'completed', startedAt: 10, endedAt: 60 };
+      await Vue.nextTick();
+      expect(wrapper.vm.historyBlocks.map(block => block.originMessageId)).toEqual(['m2', 'm1']);
       // A new parallel period closes again, and direct split-to-split Session
       // navigation applies the default to the new owner exactly once.
+      store.workbenchExpanded = true;
       store.yeaftSessionTurns = store.yeaftSessionTurns.map(turn => ({ ...turn, state: 'running' }));
       await Vue.nextTick();
-      expect(store.toggleWorkbench).toHaveBeenCalledTimes(2);
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(3);
       store.workbenchExpanded = true;
       store.yeaftActiveSessionFilter = 'other-session';
       await Vue.nextTick();
-      expect(store.toggleWorkbench).toHaveBeenCalledTimes(3);
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(4);
       expect(store.workbenchExpanded).toBe(false);
     } finally { wrapper.unmount(); vi.unstubAllGlobals(); }
   });

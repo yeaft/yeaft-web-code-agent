@@ -8,10 +8,74 @@ export function userTurnExcerpt(message) {
   return text.length > 36 ? `${text.slice(0, 36)}…` : text;
 }
 
+const epoch = value => (Number.isFinite(value) && value > 0 ? value : null);
+
+/**
+ * A Session stays in parallel layout while a live root overlaps another root
+ * that actually ran: both are live, the other started during the live span, or
+ * the other ended after that span began. A root reopened by a task result or
+ * leftover supplement starts its span at `activeSince`, so turns that ran
+ * between its two spans are not parallel. Derived from the Agent snapshot
+ * alone, so navigation, reload and other tabs agree. Without `endedAt` (older
+ * Agents) the "earlier root finished first" case, and a live root that already
+ * finished an execution, fall back to one column unless two roots are live.
+ * @param {Array<{ userTurnId: string, state: string, startedAt?: number, activeSince?: number, endedAt?: number, executions?: object[] }>} turns
+ * @returns {boolean}
+ */
+export function hasParallelUserTurns(turns = []) {
+  const live = turns.filter(isPendingUserTurn);
+  if (live.length > 1) return true;
+  const root = live[0];
+  const start = epoch(root?.activeSince) ?? epoch(root?.startedAt);
+  if (start == null) return false;
+  // Older Agents send neither activeSince nor endedAt. Once the live root has
+  // finished an execution it may have been reopened, and its original question
+  // time would make every later question look parallel; only an end time can
+  // prove overlap then.
+  const startProvesOverlap = epoch(root.activeSince) != null
+    || !(root.executions || []).some(execution => !isPendingUserTurn(execution));
+  return turns.some((turn) => {
+    if (turn.userTurnId === root.userTurnId) return false;
+    const endedAt = epoch(turn.endedAt);
+    if (endedAt != null) return endedAt > start || (epoch(turn.startedAt) ?? -Infinity) >= start;
+    // A routed root that never got an execution produced no answer to overlap.
+    return startProvesOverlap && turn.executions?.length > 0 && (epoch(turn.startedAt) ?? -Infinity) >= start;
+  });
+}
+
+/** Snapshot-known roots settle in completion order; live roots stay last. */
+function settleKnownRoots(keys, turns) {
+  const rank = new Map();
+  for (const turn of turns) {
+    if (!turn?.userTurnId) continue;
+    if (isPendingUserTurn(turn)) rank.set(turn.userTurnId, [1, 0]);
+    else if (epoch(turn.endedAt) != null) rank.set(turn.userTurnId, [0, turn.endedAt]);
+    // A finished root without an end time (older Agent, or a routed root that
+    // never ran) has no completion position and keeps its question-order slot.
+  }
+  const known = keys.filter(key => rank.has(key));
+  if (known.length < 2) return keys;
+  const index = new Map(keys.map((key, position) => [key, position]));
+  known.sort((left, right) => {
+    const [leftGroup, leftValue] = rank.get(left);
+    const [rightGroup, rightValue] = rank.get(right);
+    return leftGroup - rightGroup || leftValue - rightValue || index.get(left) - index.get(right);
+  });
+  // Only the slots of ranked roots are permuted: older history and optimistic
+  // sends that the Agent has not routed yet keep their question-order slots.
+  let cursor = 0;
+  return keys.map(key => (rank.has(key) ? known[cursor++] : key));
+}
+
 /** Stable root buckets keep supplements and interleaved executions together.
  * Message objects are not cloned: quote/search/fork references retain identity.
+ * With an Agent `session_turns` snapshot, finished roots read in the order they
+ * finished and live roots stay below them, so completing an earlier question
+ * never reorders answers that already settled.
+ * @param {object[]} messages Visible transcript rows (repository order).
+ * @param {object[]} [turns] Normalized `session_turns` rows for the same Session.
  */
-export function orderUserTurnMessages(messages = []) {
+export function orderUserTurnMessages(messages = [], turns = []) {
   const userTurnByMessage = new Map();
   const roots = new Map();
   const buckets = new Map();
@@ -34,11 +98,11 @@ export function orderUserTurnMessages(messages = []) {
   };
   // An all-legacy transcript retains its exact original layout/order.
   if (!messages.some(message => message.userTurnId)) return { messages, userTurnByMessage, roots };
-  const keys = [...buckets.keys()].sort((a, b) => {
+  const keys = settleKnownRoots([...buckets.keys()].sort((a, b) => {
     const left = time(a);
     const right = time(b);
     return left && right ? left - right : 0;
-  });
+  }), Array.isArray(turns) ? turns : []);
   const ordered = keys.flatMap(key => {
     const bucket = buckets.get(key);
     // A confirmed append is another input to the original response, not a

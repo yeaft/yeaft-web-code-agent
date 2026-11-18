@@ -10,6 +10,7 @@ const CONVERSATION = 'yeaft-parallel-regression';
 export function sessionTurnWire(page, agent, { sessionId = SESSION, vpId = VP, conversationId = CONVERSATION } = {}) {
   const turns = [];
   const history = [];
+  let lastEndedAt = 0;
   const event = data => agent.send({ type: 'yeaft_output', conversationId: conversationId,
     sessionId: data.sessionId || sessionId, event: data });
   const frame = (turn, data) => agent.send({ type: 'yeaft_output', conversationId: conversationId,
@@ -36,7 +37,8 @@ export function sessionTurnWire(page, agent, { sessionId = SESSION, vpId = VP, c
     const userTurnId = supplement?.userTurnId || request.id;
     const relation = supplement ? 'supplement' : 'new';
     event({ type: 'user_message_routed', sessionId, messageId: request.id, userTurnId, relation });
-    history.push({ id: request.id, seq: history.length + 1, role: 'user', content: text,
+    // The Agent persists the send id as clientMessageId, which dedupes the optimistic row on replay.
+    history.push({ id: request.id, clientMessageId: request.id, seq: history.length + 1, role: 'user', content: text,
       sessionId, userTurnId, turnRelation: relation, ts: Date.now() });
     if (supplement) return supplement;
     const turn = { userTurnId, userMessageId: request.id, startedAt: Date.now(), state: 'running',
@@ -65,6 +67,8 @@ export function sessionTurnWire(page, agent, { sessionId = SESSION, vpId = VP, c
   const finish = (turn, reason = 'end_turn') => {
     turn.state = reason === 'aborted' ? 'aborted' : 'completed';
     turn.executions[0].state = turn.state;
+    // Like the Agent, a finished root carries its end time; strictly ordered here.
+    turn.endedAt = lastEndedAt = Math.max(Date.now(), lastEndedAt + 1);
     if (reason === 'end_turn') frame(turn, { type: 'result', result_text: '' });
     event({ type: 'vp_turn_end', sessionId, userTurnId: turn.userTurnId, ...turn.executions[0], reason });
     snapshot();

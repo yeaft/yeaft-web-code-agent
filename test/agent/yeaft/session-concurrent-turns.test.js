@@ -83,9 +83,42 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   expect(rows.find(r => r.clientMessageId === 'extra-b')).toMatchObject({ userTurnId: 'root-b', relation: 'supplement' });
   expect(rows.filter(r => r.role === 'assistant').every(r => ['root-a', 'root-b'].includes(r.userTurnId))).toBe(true);
   expect(events('session_turns').some(f => f.event.turns.filter(t => t.state === 'running').length === 2)).toBe(true);
+  // Live roots (including a stopping one) never carry an end time; finished
+  // roots do, in the order they ended, and never carry a live span.
+  const publishedTurns = () => events('session_turns').flatMap(f => f.event.turns);
+  expect(publishedTurns().some(t => t.state === 'cancelling')).toBe(true);
+  expect(publishedTurns().every(t => (['running', 'cancelling'].includes(t.state) ? t.endedAt === undefined : t.activeSince === undefined))).toBe(true);
+  const settled = events('session_turns').at(-1).event.turns;
+  const endedA = settled.find(t => t.userTurnId === 'root-a');
+  const endedB = settled.find(t => t.userTurnId === 'root-b');
+  expect(endedA).toMatchObject({ state: 'aborted' });
+  expect(endedA.endedAt).toBeGreaterThanOrEqual(endedA.startedAt);
+  expect(endedB.endedAt).toBeGreaterThanOrEqual(endedA.endedAt);
+  // A background result reopens finished root-b: the question start is kept,
+  // the new live span starts after its earlier end, and it ends again later.
+  // Only frames published after the rescue count, and the clock must move past
+  // the earlier end so a stale endedAt cannot pass as the new one.
+  expect(publishedTurns().some(t => t.userTurnId === 'root-b' && t.activeSince)).toBe(false);
+  const framesBeforeRescue = events('session_turns').length;
+  const rescuedTurns = () => events('session_turns').slice(framesBeforeRescue).flatMap(f => f.event.turns);
+  await until(() => Date.now() > endedB.endedAt);
+  expect(bridge.__testHooks.scheduleTaskResultRescue({ taskId: 'bg-result', sessionId, vpId: 'omni',
+    content: 'background result', userTurnId: 'root-b' })).toBe(true);
+  await until(() => rescuedTurns().some(t => t.userTurnId === 'root-b' && t.activeSince));
+  await bridge.__testDrainVpDrivers();
+  const reopened = rescuedTurns().find(t => t.userTurnId === 'root-b' && t.activeSince);
+  expect(reopened).toMatchObject({ state: 'running', startedAt: endedB.startedAt });
+  expect(reopened.activeSince).toBeGreaterThan(endedB.endedAt);
+  expect(reopened.endedAt).toBeUndefined();
+  const closed = events('session_turns').at(-1).event.turns.find(t => t.userTurnId === 'root-b');
+  expect(closed.activeSince).toBeUndefined();
+  expect(closed.endedAt).toBeGreaterThanOrEqual(reopened.activeSince);
   await bridge.__testResetVpState();
   await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'hydrate-groups', limit: 10 });
   expect(events('session_turns').some(frame => frame.event.turns.some(turn => turn.userTurnId === 'root-b' && turn.executions.length))).toBe(true);
+  // A replayed root has no runtime end event; its last durable row bounds the end.
+  const replayedB = events('session_turns').at(-1).event.turns.find(turn => turn.userTurnId === 'root-b');
+  expect(replayedB.endedAt).toBeGreaterThanOrEqual(replayedB.startedAt);
   const chunk = frames().find(frame => frame.type === 'yeaft_history_chunk' && frame.requestId === 'hydrate-groups');
   expect(chunk.messages.find(row => row.relation === 'supplement')).toMatchObject({ userTurnId: 'root-b' });
   const hydrated = bridge.__testGroupHistory(sessionId);

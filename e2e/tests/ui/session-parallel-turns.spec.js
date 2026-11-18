@@ -159,10 +159,68 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
     foundA ||= sample.foundA;
     if (sample.end) break;
   }
+  // Finished roots read in the order they finished (B, then E, D, C, A).
   expect(questions).toEqual([
-    'Root A first', 'Supplement belongs to A', 'Root B second', 'Root C third', 'Root D fourth', 'Root E fifth',
+    'Root B second', 'Root E fifth', 'Root D fourth', 'Root C third', 'Root A first', 'Supplement belongs to A',
   ]);
   expect(foundA).toBe(true);
+});
+
+test('a later root that finishes first settles above the remaining lane, which survives Session navigation and reload', async ({ chatPage: page, mockAgent }, info) => {
+  test.setTimeout(60000);
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const wire = await sessionTurnsFixture(page, mockAgent);
+  const a = await wire.send('Earlier long question');
+  wire.delta(a, 'A is still researching');
+  const b = await wire.send('Later quick question');
+  wire.delta(b, 'B answered quickly');
+  await expect(page.locator('.parallel-turn-pane')).toHaveCount(2);
+  // Each lane names its question, and one rule separates the lanes. With both
+  // lanes on screen the tab strip would only repeat the headers.
+  await expect(pane(page, a).locator('.concurrent-turn-title')).toHaveText('Earlier long question');
+  await expect(pane(page, b).locator('.concurrent-turn-state')).toHaveText('Running');
+  await expect(page.locator('.parallel-turn-tabs')).toBeHidden();
+  expect(await pane(page, b).evaluate(el => getComputedStyle(el, '::before').width)).toBe('1px');
+  expect(await pane(page, a).evaluate(el => getComputedStyle(el, '::before').content)).toBe('none');
+  for (const [theme, width] of [['light', 1400], ['dark', 320]]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // One lane fits at 320px, so the tab strip returns as navigation.
+    await expect(page.locator('.parallel-turn-tabs')).toBeVisible({ visible: width === 320 });
+    await page.screenshot({ path: info.outputPath(`lanes-${theme}-${width}.png`), animations: 'disabled' });
+  }
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+
+  const settledAboveLane = () => page.evaluate((text) => {
+    const region = document.querySelector('.parallel-turn-region');
+    const answer = [...document.querySelectorAll('.assistant-turn')]
+      .find(el => el.textContent.includes(text) && !el.closest('.parallel-turn-region'));
+    return !!region && !!answer && !!(answer.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }, 'B answered quickly');
+  wire.finish(b);
+  await expect(page.locator('.parallel-turn-pane')).toHaveCount(1);
+  await expect(pane(page, a)).toContainText('A is still researching');
+  await expect.poll(settledAboveLane).toBe(true);
+  // Reopening the Session restores the same layout instead of one column with
+  // the live answer above the finished one.
+  await wire.open(OTHER_SESSION);
+  await expect(page.locator('.parallel-turn-region')).toHaveCount(0);
+  wire.delta(a, ' while away');
+  await wire.open(SESSION);
+  await expect(pane(page, a)).toContainText('A is still researching while away');
+  await expect.poll(settledAboveLane).toBe(true);
+  // The earlier question settles after the answer that finished first.
+  wire.finish(a);
+  await expect(page.locator('.parallel-turn-region')).toHaveCount(0);
+  const questions = () => page.locator('.message-user-block').allTextContents().then(rows => rows.map(row => row.trim()));
+  await expect.poll(questions).toEqual(['Later quick question', 'Earlier long question']);
+  await page.reload();
+  await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
+  await wire.open(SESSION);
+  await expect.poll(questions).toEqual(['Later quick question', 'Earlier long question']);
 });
 
 test('Session navigation and reconnect snapshots restore roots; stopping one execution leaves its same-VP peer streaming', async ({ chatPage: page, mockAgent }) => {

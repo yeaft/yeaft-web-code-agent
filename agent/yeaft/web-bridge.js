@@ -1217,12 +1217,15 @@ function hydrateSessionTurns(sessionId, store) {
   const runtimeExecutions = new Set([...turns.values()].flatMap(turn => [...turn.executions.keys()]));
   for (const row of store.loadRecentBySession(sessionId, 20)) {
     if (!row.userTurnId) continue;
+    const rowTime = Date.parse(row.time || row.ts);
     let turn = turns.get(row.userTurnId);
     if (!turn) {
       turn = { userTurnId: row.userTurnId, userMessageId: row.userTurnId,
-        startedAt: Date.parse(row.time || row.ts) || Date.now(), state: 'completed', executions: new Map() };
+        startedAt: rowTime || Date.now(), state: 'completed', executions: new Map() };
       turns.set(row.userTurnId, turn);
     }
+    // Replayed roots have no runtime end event; their last durable row bounds it.
+    if (rowTime > 0) turn.lastActivityAt = Math.max(turn.lastActivityAt || 0, rowTime);
     if (row.turnId && !runtimeExecutions.has(row.turnId)) {
       const state = row.incomplete ? 'interrupted' : 'completed';
       turn.executions.set(row.turnId, { vpId: row.speakerVpId || null, threadId: row.threadId || 'main',
@@ -1240,8 +1243,11 @@ function publishSessionTurns(sessionId, extra = {}) {
     const state = active.length
       ? (active.every(execution => execution.state === 'cancelling') ? 'cancelling' : 'running')
       : (turn.state || 'completed');
+    // Web settles finished roots in this order and keeps overlapping roots split.
+    const endedAt = active.length ? null : (turn.endedAt || turn.lastActivityAt || null);
+    const activeSince = active.length ? turn.activeSince : null;
     return { userTurnId: turn.userTurnId, userMessageId: turn.userMessageId,
-      startedAt: turn.startedAt, state, executions };
+      startedAt: turn.startedAt, ...(activeSince > 0 ? { activeSince } : {}), ...(endedAt > 0 ? { endedAt } : {}), state, executions };
   });
   sendSessionEvent({ type: 'session_turns', turns }, { sessionId, ...extra });
 }
@@ -1253,6 +1259,13 @@ function registerUserExecution(sessionId, userTurnId, vpId, threadId, turnId, pr
   if (!turn) {
     turn = { userTurnId, userMessageId: userTurnId, startedAt: Date.now(), executions: new Map() };
     turns.set(userTurnId, turn);
+  }
+  // A task result or leftover supplement can reopen a finished root. Its new
+  // active span starts now, not at the original question, so Web does not
+  // mistake turns that ran in between for parallel ones.
+  if (turn.executions.size && ![...turn.executions.values()].some(row => ['queued', 'running', 'cancelling'].includes(row.state))) {
+    turn.activeSince = Date.now();
+    delete turn.endedAt;
   }
   turn.executions.set(turnId, { vpId, threadId, turnId, state: 'queued' });
   visibleExecutionText.set(turnId, { sessionId, userTurnId, vpId, prompt: String(prompt).slice(0, 4000), promptOffset: 0, text: '', textOffset: 0, state: 'queued' });
@@ -1282,7 +1295,13 @@ function observeUserExecution(event, sessionId, turnId) {
       : event.reason === 'aborted' ? 'aborted' : event.reason === 'errored' ? 'errored' : 'completed';
     const visible = visibleExecutionText.get(turnId);
     if (visible) visible.state = execution.state;
-    if (event.type === 'vp_turn_end') turn.state = execution.state;
+    if (event.type === 'vp_turn_end') {
+      turn.state = execution.state;
+      // Normal end, stop and queued-abort all arrive here; the root ends with its last execution.
+      if (![...turn.executions.values()].some(row => ['queued', 'running', 'cancelling'].includes(row.state))) {
+        turn.endedAt = Date.now();
+      }
+    }
     publishSessionTurns(sessionId);
     return;
   }

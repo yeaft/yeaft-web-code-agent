@@ -13,6 +13,10 @@ export function normalizeSessionTurn(row) {
     userTurnId,
     userMessageId: id(row.userMessageId) || userTurnId,
     startedAt: Number.isFinite(row.startedAt) ? row.startedAt : 0,
+    // Agent clock. activeSince marks a reopened live root's current span;
+    // endedAt is present only once every execution of the root has ended.
+    ...(Number.isFinite(row.activeSince) && row.activeSince > 0 ? { activeSince: row.activeSince } : {}),
+    ...(Number.isFinite(row.endedAt) && row.endedAt > 0 ? { endedAt: row.endedAt } : {}),
     state: row.state,
     executions: (Array.isArray(row.executions) ? row.executions : []).flatMap(execution => {
       if (!id(execution?.vpId)) return [];

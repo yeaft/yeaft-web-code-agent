@@ -217,7 +217,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +2 cache fallback dispatch cases for normal and reserved reporting child caps.
 // +17 Gemini v1 regressions: endpoint and reconfiguration, native effort and
 // nested ceilings, request options, cache version, and Session/Quick Send preservation.
-export const TEST_CASE_LIMIT = 1170;
+// +2 parallel turn lanes: snapshot-derived overlap with completion-order settling,
+// and a browser flow keeping the remaining lane across navigation and reload.
+export const TEST_CASE_LIMIT = 1172;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
