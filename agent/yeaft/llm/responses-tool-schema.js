@@ -62,6 +62,7 @@ function project(source, { external, depth = 1, root = false }) {
   if (!record(source) || depth > 9) return fallback();
   const next = { external, depth: depth + 1 };
   const shapeType = source.type;
+  const stringShape = shapeType === 'string' || (Array.isArray(shapeType) && shapeType.includes('string'));
 
   // Keep the portable subset. The original source and tool checks remain the
   // execution contract. For external/unknown rules we preserve the full value
@@ -72,7 +73,7 @@ function project(source, { external, depth = 1, root = false }) {
       if (value) description = describe(description, 'Array items must be unique.');
     } else if (!external && key === 'oneOf' && isPresenceXor(source)) {
       description = describe(description, `Set exactly one of ${value.map(branch => branch.required[0]).join(', ')}; leave the others null.`);
-    } else if (['minLength', 'maxLength', 'pattern'].includes(key) && shapeType === 'string') {
+    } else if (['minLength', 'maxLength', 'pattern'].includes(key) && stringShape) {
       description = describe(description, key === 'pattern' ? `Must match /${value}/.` :
         `${key === 'minLength' ? 'Minimum' : 'Maximum'} length: ${value} characters.`);
     } else return fallback();

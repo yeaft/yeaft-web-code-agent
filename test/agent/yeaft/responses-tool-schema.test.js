@@ -101,10 +101,10 @@ describe('Responses strict tool boundary', () => {
   });
 
   it('accepts nested external not and open maps using lossless wire JSON; schema-field names are not keywords', async () => {
-    const wireJson = { not: 'ordinary property', payload: { values: [null, '雪', '"\\', { nested: true }] }, choice: 'ok', maybe: null };
-    const external = { type: 'object', additionalProperties: false, required: ['not', 'payload', 'choice'], properties: {
+    const wireJson = { not: 'ordinary property', payload: { values: [null, '雪', '"\\', { nested: true }] }, choice: 'ok', maybe: null, requiredNullable: null };
+    const external = { type: 'object', additionalProperties: false, required: ['not', 'payload', 'choice', 'requiredNullable'], properties: {
       not: { type: 'string' }, payload: { type: 'object', additionalProperties: true },
-      choice: { type: 'string', not: { const: 'blocked' } }, maybe: { type: ['string', 'null'] },
+      choice: { type: 'string', not: { const: 'blocked' } }, maybe: { type: ['string', 'null'] }, requiredNullable: { type: ['string', 'null'], minLength: 2 },
     } };
     const mcp = { callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] })),
       listTools: () => [{ name: 'fixture__inspect', server: 'fixture', inputSchema: external }] };
@@ -112,11 +112,12 @@ describe('Responses strict tool boundary', () => {
     registry.registerAll(buildMcpFlattenedTools(mcp));
     const tools = registry.getToolDefs().filter(t => t.name === 'mcp__fixture__inspect');
     const name = tools[0].name;
-    const encoded = { not: wireJson.not, payload: JSON.stringify(wireJson.payload), choice: '"ok"', maybe: 'null' };
+    const encoded = { not: wireJson.not, payload: JSON.stringify(wireJson.payload), choice: '"ok"', maybe: 'null', requiredNullable: null };
     vi.stubGlobal('fetch', vi.fn(async (_url, req) => {
       const sent = JSON.parse(req.body).tools[0];
       strictSchema(sent.parameters, name);
       expect(sent.parameters.properties.not.type).toBe('string');
+      expect(sent.parameters.properties.requiredNullable.type).toEqual(['string', 'null']);
       expect(sent.parameters.properties.choice.description).toContain('"not"');
       return json(done([callItem(name, encoded)]));
     }));
@@ -149,9 +150,13 @@ describe('Responses strict tool boundary', () => {
     const message = { role: 'assistant', content: '', toolCalls, providerState: bindProviderState(state, { toolCalls }) };
     expect(replayProviderState(message, context, { ...identity, ownerScope: 'other' })).toBeNull();
     expect(replayProviderState(message, context, identity)).toEqual(raw);
-    const tampered = structuredClone(message);
-    tampered.providerState.items[1].arguments = JSON.stringify({ ...values, summary: 'changed' });
-    expect(replayProviderState(tampered, context, identity)).toBeNull();
+    expect(state.version).toBe(2);
+    const { title, ...withoutOptionalNull } = values;
+    for (const bad of [{ ...values, summary: 'changed' }, withoutOptionalNull]) {
+      const tampered = structuredClone(message);
+      tampered.providerState.items[1].arguments = JSON.stringify(bad);
+      expect(replayProviderState(tampered, context, identity)).toBeNull();
+    }
     fetch.mockResolvedValueOnce(json(done()));
     await collect(responses().stream({ ...params, tools: [], providerContext: context, requestIdentity: identity,
       messages: [...params.messages, message, ...toolCalls.map(c => ({ role: 'tool', toolCallId: c.id, content: 'ok' }))] }));

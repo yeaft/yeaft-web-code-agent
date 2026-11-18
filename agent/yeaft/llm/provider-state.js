@@ -194,6 +194,13 @@ export function hasSignedProviderState(state) {
     ['thinking', 'redacted_thinking'].includes(item?.type) || nonempty(item?.part?.thoughtSignature));
 }
 
+// The semantic digest alone cannot detect equivalent wire edits such as
+// stripping optional nulls. Retain the raw call bytes and codec together.
+function responsesWireDigest(state) {
+  return hash(stable({ codecs: state.responsesArguments,
+    calls: state.items.filter(item => item?.type === 'function_call') }));
+}
+
 export function createProviderState({ context, identity, items, responseId, requestBody, responsesArguments }) {
   if (!context?.capabilities?.nativeReasoningState || !validOrigin(context.origin) || !requestOwner(identity)) {
     if (context?.protocol === 'anthropic' && Array.isArray(items)
@@ -214,7 +221,11 @@ export function createProviderState({ context, identity, items, responseId, requ
   const state = { version: 1, protocol: context.protocol, origin: clone(context.origin), owner: requestOwner(identity),
     ...(nonempty(responseId) ? { responseId } : {}), items: clone(items) };
   if (!PROTOCOLS.has(state.protocol)) return null;
-  if (responsesArguments !== undefined) state.responsesArguments = clone(responsesArguments);
+  if (context.protocol === 'openai-responses' && responsesArguments !== undefined) {
+    state.version = 2;
+    state.responsesArguments = clone(responsesArguments);
+    state.responsesWireDigest = responsesWireDigest(state);
+  }
   if (providerStateBytes(state) > MAX_PROVIDER_STATE_BYTES) throw new ProviderStateError('state exceeds byte budget');
   try { state.projectionDigest = providerProjectionDigest(projectItems(state.protocol, state.items, state.responsesArguments)); }
   catch (error) {
@@ -314,14 +325,18 @@ export function replayProviderState(message, context, identity) {
   const state = message?.providerState;
   if (!state) return null;
   let reason = '';
-  if (state.version !== 1 || !PROTOCOLS.has(state.protocol)) reason = 'unknown schema';
+  const projectedResponses = state.version === 2 && state.protocol === 'openai-responses';
+  if (!PROTOCOLS.has(state.protocol) || (state.version !== 1 && !projectedResponses)
+    || (!projectedResponses && state.responsesArguments !== undefined)) reason = 'unknown schema';
   else if (!context?.capabilities?.nativeReasoningState || state.protocol !== context.protocol) reason = 'protocol/capability changed';
   else if (!validOrigin(context.origin) || hash(state.origin) !== hash(context.origin)) reason = 'origin changed';
   else if (!requestOwner(identity) || hash(state.owner) !== hash(requestOwner(identity))) reason = 'owner changed';
   else if (providerStateBytes(state) > MAX_PROVIDER_STATE_BYTES) reason = 'state exceeds byte budget';
   else {
     try {
-      if (state.projectionDigest !== providerProjectionDigest(message)
+      if (projectedResponses && (!state.responsesArguments || state.responsesWireDigest !== responsesWireDigest(state))) {
+        reason = 'Responses wire arguments changed';
+      } else if (state.projectionDigest !== providerProjectionDigest(message)
         || state.projectionDigest !== providerProjectionDigest(projectItems(state.protocol, state.items, state.responsesArguments))) reason = 'projection changed';
     } catch { reason = 'invalid native items'; }
   }
