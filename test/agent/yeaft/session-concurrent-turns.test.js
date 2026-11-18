@@ -83,9 +83,20 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   expect(rows.find(r => r.clientMessageId === 'extra-b')).toMatchObject({ userTurnId: 'root-b', relation: 'supplement' });
   expect(rows.filter(r => r.role === 'assistant').every(r => ['root-a', 'root-b'].includes(r.userTurnId))).toBe(true);
   expect(events('session_turns').some(f => f.event.turns.filter(t => t.state === 'running').length === 2)).toBe(true);
+  // Live roots never carry an end time; finished roots do, in the order they ended.
+  expect(events('session_turns').every(f => f.event.turns.every(t => t.state !== 'running' || t.endedAt === undefined))).toBe(true);
+  const settled = events('session_turns').at(-1).event.turns;
+  const endedA = settled.find(t => t.userTurnId === 'root-a');
+  const endedB = settled.find(t => t.userTurnId === 'root-b');
+  expect(endedA).toMatchObject({ state: 'aborted' });
+  expect(endedA.endedAt).toBeGreaterThanOrEqual(endedA.startedAt);
+  expect(endedB.endedAt).toBeGreaterThanOrEqual(endedA.endedAt);
   await bridge.__testResetVpState();
   await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'hydrate-groups', limit: 10 });
   expect(events('session_turns').some(frame => frame.event.turns.some(turn => turn.userTurnId === 'root-b' && turn.executions.length))).toBe(true);
+  // A replayed root has no runtime end event; its last durable row bounds the end.
+  const replayedB = events('session_turns').at(-1).event.turns.find(turn => turn.userTurnId === 'root-b');
+  expect(replayedB.endedAt).toBeGreaterThanOrEqual(replayedB.startedAt);
   const chunk = frames().find(frame => frame.type === 'yeaft_history_chunk' && frame.requestId === 'hydrate-groups');
   expect(chunk.messages.find(row => row.relation === 'supplement')).toMatchObject({ userTurnId: 'root-b' });
   const hydrated = bridge.__testGroupHistory(sessionId);

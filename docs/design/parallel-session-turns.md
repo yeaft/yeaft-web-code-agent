@@ -8,9 +8,9 @@ Session 和 turn 仍是用户概念，不增加 topic、panel 或第二个输入
 
 ## 展示
 
-正常单列历史下方只有一个横向分裂区，按发起用户消息顺序排列所有执行中的 turn。根据聊天区域实际宽度同时显示一到三栏；更多 turn 通过 tab 定位和横向滚动查看，不替换栏位内容。手机显示一栏。单 turn 原路径保持原样，composer 始终一个。
+正常单列历史下方只有一个横向分裂区，按发起用户消息顺序排列所有执行中的 turn。根据聊天区域实际宽度同时显示一到三栏，栏与栏之间用一条竖线分隔；栏头显示状态和提问摘要，内容滚动后仍能认出是哪个请求。栏数超过可见宽度时，通过 tab 定位和横向滚动查看，不替换栏位内容；所有栏都放得下时不显示 tab。手机显示一栏。单 turn 原路径保持原样，composer 始终一个。
 
-完成、停止或失败的 turn 离开分裂区，进入按发起时间排序的单列历史。保留其他 turn 和历史阅读位置；用户正在选择或操作内容时不抢焦点。分裂只影响投影，不重写 transcript。
+完成、停止或失败的 turn 离开分裂区，按结束先后接到单列历史末尾，执行中的 turn 始终在已结束的下方。之后其他 turn 结束只会继续往后接，已经读过的回复不会被挪动。分栏由 Agent 快照推导：只要还有执行中的 turn 与另一个 turn 在时间上重叠（同时执行，或对方在它执行期间开始或结束），即使只剩一栏也保持分栏，切换 Session、刷新或换浏览器打开得到相同布局。保留其他 turn 和历史阅读位置；用户正在选择或操作内容时不抢焦点。分裂和排序只影响投影，不重写 transcript。
 
 已确认的补充消息与根提问在展示时组成同一输入组，同一 VP execution 在补充前后的正文、工具活动保持一个回复块；未确认的乐观用户行仍保留独立边界。原始消息顺序、时间和身份不变，刷新历史使用相同投影；不同 VP、独立 turn 和真正的 execution 边界不因此合并。
 
@@ -24,9 +24,9 @@ Session 和 turn 仍是用户概念，不增加 topic、panel 或第二个输入
 
 - 可见用户消息、正文、工具结果、状态与持久历史附加 `userTurnId`。
 - 持久用户消息附加 `relation: new | supplement`；Web 规范化为 `turnRelation`。
-- `session_turns { sessionId, turns: [{ userTurnId, userMessageId, startedAt, state, executions: [{ vpId, threadId, turnId, state }] }] }` 是 Session 级权威状态投影，正常运行和重连均发送。
+- `session_turns { sessionId, turns: [{ userTurnId, userMessageId, startedAt, endedAt?, state, executions: [{ vpId, threadId, turnId, state }] }] }` 是 Session 级权威状态投影，正常运行和重连均发送。`endedAt` 只在该 turn 的全部 execution 结束后出现，使用 Agent 时钟；从持久历史恢复的 turn 取其最后一条持久行的时间。
 - `user_message_routed { sessionId, messageId, userTurnId, relation }` 更新尚未归属的乐观用户行。
-- Web 状态按 `(agentId, sessionId)` 隔离。旧 Agent 缺少新增字段时继续原单列展示。
+- Web 状态按 `(agentId, sessionId)` 隔离。旧 Agent 缺少新增字段时继续原单列展示；只缺 `endedAt` 时，已结束 turn 按发起时间排列，较早发起的 turn 先结束后，剩下的 turn 回到单列末尾。
 
 ## 验证重点
 

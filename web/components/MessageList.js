@@ -10,7 +10,7 @@ import UserTurnBlock from './UserTurnBlock.js';
 import VirtualTranscript from './VirtualTranscript.js';
 import MessageBlock from './MessageBlock.js';
 import ConcurrentUserTurns from './ConcurrentUserTurns.js';
-import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
+import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn, hasParallelUserTurns } from '../utils/concurrent-user-turns.js';
 import { applyRunningCatFrame, createRunningCatLoop, resolveRunningCatFrame } from '../utils/running-cat.js';
 import {
   orderYeaftVpTurnMessagesByExecution,
@@ -788,7 +788,8 @@ export default {
       };
     };
 
-    const userTurnProjection = Vue.computed(() => orderUserTurnMessages(store.messages || []));
+    const currentSessionTurns = Vue.computed(() => (store.currentView === 'yeaft' ? (store.yeaftSessionTurns || []) : []));
+    const userTurnProjection = Vue.computed(() => orderUserTurnMessages(store.messages || [], currentSessionTurns.value));
 
     // Turn aggregation: group flat messages into turn groups
     const turnGroups = Vue.computed(() => {
@@ -1157,15 +1158,10 @@ export default {
     });
 
     const concurrentTurnsRef = Vue.ref(null);
-    const parallelStarted = Vue.ref(false);
-    const currentPendingTurns = Vue.computed(() => store.currentView === 'yeaft'
-      ? (store.yeaftSessionTurns || []).filter(isPendingUserTurn) : []);
-    Vue.watch(() => [virtualTranscriptIdentity.value, currentPendingTurns.value.length], ([identity, count], previous) => {
-      if (previous && identity !== previous[0]) parallelStarted.value = false;
-      if (count > 1) parallelStarted.value = true;
-      if (!count) parallelStarted.value = false;
-    }, { immediate: true, flush: 'sync' });
-    const splitActive = Vue.computed(() => parallelStarted.value && currentPendingTurns.value.length > 0);
+    const currentPendingTurns = Vue.computed(() => currentSessionTurns.value.filter(isPendingUserTurn));
+    // Derived from the Agent snapshot rather than latched in this component, so
+    // a remaining lane survives Session navigation, reload and other tabs.
+    const splitActive = Vue.computed(() => hasParallelUserTurns(currentSessionTurns.value));
     // Free reading width only when this conversation enters parallel layout.
     // A user may reopen Workbench; streaming/new siblings must not close it again.
     Vue.watch(() => [virtualTranscriptIdentity.value, splitActive.value], ([, active]) => {

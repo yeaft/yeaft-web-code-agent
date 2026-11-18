@@ -11,11 +11,14 @@ describe('Session user-turn projection', () => {
   it('scopes snapshots and route arrival-order by Agent and Session, clearing only the exact owner', () => {
     const store = { messagesMap: { 'conv-a': [{ id: 'm1', clientMessageId: 'client', type: 'user', sessionId: 's' }] },
       yeaftConversationIdsByAgent: { a: 'conv-a', b: 'conv-b' }, chatHistoryConnectionGeneration: 3 };
-    expect(applySessionTurns(store, frame('a', 's', [turn('root-a')]))).toBe(true);
+    expect(applySessionTurns(store, frame('a', 's', [turn('root-a'),
+      { ...turn('done', 'completed'), endedAt: 200 }, { ...turn('clock', 'completed'), endedAt: 'soon' }]))).toBe(true);
     expect(applySessionTurns(store, frame('b', 's', [turn('root-b')]))).toBe(true);
     expect(applySessionTurns(store, frame('a', 'other', [turn('other')]))).toBe(true);
     expect(applySessionTurns(store, { ...frame('a', 's', []), conversationId: 'old-conv' })).toBe(false);
     expect(store.yeaftSessionTurnsBySession['a\u001fs'].turns[0].userTurnId).toBe('root-a');
+    // Only a finite Agent end time survives normalization; live roots carry none.
+    expect(store.yeaftSessionTurnsBySession['a\u001fs'].turns.map(row => row.endedAt)).toEqual([undefined, 200, undefined]);
     const route = { ...frame('a', 's', []), event: { type: 'user_message_routed', sessionId: 's', messageId: 'client', userTurnId: 'root-a', relation: 'supplement' } };
     expect(applyUserMessageRoute(store, route)).toBe(true);
     expect(store.messagesMap['conv-a'][0]).toMatchObject({ userTurnId: 'root-a', turnRelation: 'supplement' });

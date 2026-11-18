@@ -4764,6 +4764,7 @@
   width: 100%;
 }
 .concurrent-turn-tabs {
+  position: relative;
   display: flex;
   gap: 4px;
   overflow-x: auto;
@@ -4802,9 +4803,10 @@
 }
 .concurrent-turn-track {
   --turn-columns: 1;
+  --turn-gap: 24px;
   position: relative;
   display: flex;
-  gap: 16px;
+  gap: var(--turn-gap);
   overflow-x: auto;
   scroll-snap-type: x mandatory;
   overscroll-behavior-x: contain;
@@ -4813,19 +4815,64 @@
 }
 .concurrent-turn-column {
   --visible-turn-columns: min(var(--turn-columns), var(--turn-count));
-  flex: 0 0 calc((100% - (var(--visible-turn-columns) - 1) * 16px) / var(--visible-turn-columns));
+  position: relative;
+  flex: 0 0 calc((100% - (var(--visible-turn-columns) - 1) * var(--turn-gap)) / var(--visible-turn-columns));
   min-width: 0;
   scroll-snap-align: start;
 }
+/* One quiet rule marks lane ownership. It sits in the gutter, so lanes keep
+   equal widths and a snapped lane never shows a stray edge line. */
+.concurrent-turn-column + .concurrent-turn-column::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(var(--turn-gap) / -2);
+  width: 1px;
+  background: var(--border-color);
+  pointer-events: none;
+}
 .concurrent-turn-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 8px;
   min-height: 44px;
+  min-width: 0;
+  padding-inline: 4px 0;
   color: var(--text-secondary);
   font-size: 12px;
 }
 .concurrent-turn-header button { min-height: 44px; }
+.concurrent-turn-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.concurrent-turn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--text-muted);
+}
+.concurrent-turn-column.is-running .concurrent-turn-dot {
+  background: var(--status-online);
+  animation: yeaft-task-running-pulse 1.25s ease-in-out infinite;
+}
+.concurrent-turn-column.is-waiting .concurrent-turn-dot { background: var(--status-busy); }
+.concurrent-turn-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.concurrent-turn-stop { flex: 0 0 auto; margin-inline-start: auto; }
+@media (prefers-reduced-motion: reduce) {
+  .concurrent-turn-column.is-running .concurrent-turn-dot { animation: none; }
+}
 .concurrent-turn-body {
   height: clamp(280px, 60dvh, 720px);
   overflow-y: auto;
