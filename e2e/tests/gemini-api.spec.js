@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { test } from '../fixtures/test-server.js';
 import { geminiAgent, GEMINI_URL, GEMINI_MODELS } from '../fixtures/gemini-agent.js';
-import { getThinkingCapability } from '../../agent/yeaft/models.js';
+import { geminiEffortCatalog, getThinkingCapability } from '../../agent/yeaft/models.js';
 
 // SERVE_DIST=true runs this exact suite against the production bundle.
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true', SERVE_DIST: process.env.SERVE_DIST || 'false' } });
@@ -133,8 +133,9 @@ for (const theme of ['light', 'dark']) {
 
       // The Agent catalog and per-Session writes still cross the real relay.
       const catalog = [...GEMINI_MODELS, { id: 'gemini-4-carbon', protocol: 'gemini' }].map(model => {
-        const { effortOptions, defaultEffort, thinkingProtocol } = getThinkingCapability(model.id, model);
-        return { ...model, ref: `google/${model.id}`, provider: 'google', label: model.id, effortProtocol: thinkingProtocol, effortOptions, defaultEffort };
+        const capability = getThinkingCapability(model.id, model);
+        const { effortOptions, defaultEffort, thinkingProtocol } = capability;
+        return { ...model, ref: `google/${model.id}`, provider: 'google', label: model.id, effortProtocol: thinkingProtocol, effortOptions, defaultEffort, ...geminiEffortCatalog(model.id, capability) };
       });
       mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: catalog[0].ref,
         catalogEpoch: 'gemini-e2e', catalogRevision: 1, catalogRefreshedAt: Date.now(), availableModels: catalog } });
@@ -174,6 +175,14 @@ for (const theme of ['light', 'dark']) {
       await expect.poll(() => state.inventory.sessions.get('ordinary-session').config?.model).toBe('google/gemini-4-hydrogen');
       await expect(effort).toHaveText('X-High');
       await chooseEffort(['Medium', 'X-High'], 'Medium', 'medium');
+      // Restricting the catalog must not present a higher unselected effort.
+      const restricted = catalog.map(model => model.id === 'gemini-4-hydrogen' ? { ...model, effortOptions: ['xhigh'] } : model);
+      mockAgent.send({ type: 'yeaft_output', event: { type: 'yeaft_status', model: catalog[0].ref,
+        catalogEpoch: 'gemini-e2e', catalogRevision: 2, catalogRefreshedAt: Date.now(), availableModels: restricted } });
+      await expect(effort).toHaveText('Unavailable');
+      expect(state.inventory.sessions.get('ordinary-session').config?.modelEffort).toBe('medium');
+      await chooseEffort(['X-High'], 'X-High', 'xhigh');
+
       await page.screenshot({ path: resolve(`artifacts/gemini-api/${mode}-session-${theme}-${width}.png`) });
       expect(externalRequests).toEqual([]);
     });

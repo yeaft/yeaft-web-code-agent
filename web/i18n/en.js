@@ -836,6 +836,8 @@ export default {
   'yeaft.modelMenu.effort.xhigh': 'X-High',
   'yeaft.modelMenu.effort.max': 'Max',
   'yeaft.modelMenu.effort.ultra': 'Ultra',
+  'yeaft.modelMenu.effort.unavailable': 'Unavailable',
+  'yeaft.modelMenu.savedEffortUnavailable': 'The saved effort is unavailable for this model. Choose another level.',
   'yeaft.modelMenu.noEffort': 'This model does not expose a compatible effort control.',
   'yeaft.modelMenu.configureHint': 'Providers, keys, model list',
   'yeaft.settings.title': 'Settings',

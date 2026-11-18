@@ -375,6 +375,9 @@ describe('Model-level Gemini options', () => {
     expect(validateQuickSend(quickSend, loadConfig({ dir: root }))).toEqual({ model, effort: 'high', maxOutputTokens: null });
     expect(updateLlmConfig({ quickSends: [{ ...quickSend, name: 'Renamed' }] }, root).quickSends)
       .toEqual([{ ...quickSend, name: 'Renamed', effort: 'high' }]);
+    const duplicate = { ...cfg.providers[0], models: ['gemini-3.1-pro-preview', 'gemini-3.1-pro-preview'] };
+    expect(updateLlmConfig({ providers: [duplicate], quickSends: [quickSend] }, root).error).toContain('unambiguous');
+
   });
 
   it('keeps configured options by model ID through CLI edits and Gemini discovery', async () => {

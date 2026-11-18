@@ -44,8 +44,8 @@ function quickSendModels(config) {
 }
 
 function findQuickSendModel(models, ref) {
-  const exact = models.find(model => model.ref === ref);
-  if (exact) return exact;
+  const exact = models.filter(model => model.ref === ref);
+  if (exact.length) return exact.length === 1 ? exact[0] : null;
   const bare = models.filter(model => model.id === ref);
   return bare.length === 1 ? bare[0] : null;
 }

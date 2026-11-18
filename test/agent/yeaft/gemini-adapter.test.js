@@ -3,7 +3,7 @@ import { GeminiAdapter, projectGeminiToolCalls } from '../../../agent/yeaft/llm/
 import { createLLMAdapter, LLMAbortError, LLMRateLimitError, LLMServerError, LLMToolInputError } from '../../../agent/yeaft/llm/adapter.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { loadConfig } from '../../../agent/yeaft/config.js';
-import { buildModelSelectionRows, resolveSessionModelEffort } from '../../../web/utils/modelRefs.js';
+import { buildModelSelectionRows, getSessionEffortDisplay } from '../../../web/utils/modelRefs.js';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -152,7 +152,8 @@ describe('native Gemini adapter', () => {
         'gemini-3.6-flash': ['minimal', 'low', 'medium', 'high'],
       };
       const providers = [{ name: 'google', protocol: 'gemini', apiKey: 'fixture', models: [...Object.keys(families), 'gemini-4-unverified', { id: 'gemini-2.5-flash', maxBudgetTokens: 16384 }] },
-        { name: 'restricted', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-hydrogen', effortOptions: ['medium', 'xhigh'] }] }];
+        { name: 'restricted', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-hydrogen', effortOptions: ['medium', 'xhigh'] }] },
+        { name: 'strict', protocol: 'gemini', apiKey: 'fixture', models: [{ id: 'gemini-4-hydrogen', effortOptions: ['xhigh'] }] }];
       writeFileSync(join(dir, 'config.json'), JSON.stringify({ providers }));
       mkdirSync(join(dir, 'sessions', 'gemini'), { recursive: true });
       const config = loadConfig({ dir });
@@ -190,9 +191,16 @@ describe('native Gemini adapter', () => {
       }
       const narrowed = rows.find(row => row.modelRef === 'restricted/gemini-4-hydrogen');
       expect(narrowed.model).toMatchObject({ geminiThinkingMode: 'level', effortOptions: ['medium', 'xhigh'] });
-      expect(resolveSessionModelEffort({ config: { modelEffort: 'high' } }, '', narrowed.model)).toBe('medium');
+      const saved = { config: { modelEffort: 'high' } };
+      expect(getSessionEffortDisplay(saved, '', narrowed.model)).toBe('medium');
       await router.call({ ...params, model: narrowed.modelRef, effort: 'high', effortSource: 'user' });
       expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('MEDIUM');
+      const strict = rows.find(row => row.modelRef === 'strict/gemini-4-hydrogen');
+      expect(getSessionEffortDisplay({}, '', strict.model)).toBe('xhigh');
+      expect(getSessionEffortDisplay(saved, '', strict.model)).toBe('unavailable');
+      expect(saved.config.modelEffort).toBe('high');
+      await router.call({ ...params, model: strict.modelRef, effort: 'high', effortSource: 'user' });
+      expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig).not.toHaveProperty('thinkingConfig');
       await router.call({ ...params, model: 'google/gemini-3-pro-preview', effort: 'max', effortSource: 'user' });
       expect(JSON.parse(global.fetch.mock.calls.at(-1)[1].body).generationConfig.thinkingConfig.thinkingLevel).toBe('HIGH');
       await router.call({ ...params, model: 'google/gemini-4-hydrogen', effort: 'xhigh', effortSource: 'model-default' });

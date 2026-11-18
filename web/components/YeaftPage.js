@@ -22,7 +22,7 @@ import YeaftConversationOutline from './YeaftConversationOutline.js';
 import WorkCenterPage from './WorkCenterPage.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { sessionActivityRows } from '../stores/helpers/session-activity.js';
-import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
+import { buildModelSelectionRows, getSessionEffortDisplay, getSelectableModelEfforts, modelOptionMatchesRef, resolveSessionModelRef } from '../utils/modelRefs.js';
 import {
   clearOverlayPointerGesture,
   shouldDismissFromOverlayClick,
@@ -393,7 +393,7 @@ export default {
                   type="button"
                   class="yeaft-composer-effort"
                   @click.stop="toggleComposerMenu('effort')"
-                  :title="$t('yeaft.modelMenu.effort')"
+                  :title="$t(topbarEffort === 'unavailable' ? 'yeaft.modelMenu.savedEffortUnavailable' : 'yeaft.modelMenu.effort')"
                   aria-haspopup="menu"
                   :aria-expanded="composerMenuOpen === 'effort' ? 'true' : 'false'"
                 >
@@ -1203,18 +1203,9 @@ export default {
 
     const selectableEffortsForModel = (model) => getSelectableModelEfforts(model?.effortOptions, model);
 
-    const topbarRawEffort = Vue.computed(() => resolveSessionModelEffort(topbarModelSession.value, store.yeaftModelEffort || '', topbarModelMeta.value));
-
-    const topbarEffort = Vue.computed(() => {
-      const model = topbarModelMeta.value;
-      const options = selectableEffortsForModel(model);
-      if (!options.length) return null;
-      // A filtered-out choice is still the actual effort of an existing Session.
-      // Do not change it or label the request as a different tier.
-      if (options.includes(topbarRawEffort.value)
-        || (model?.effortProtocol === 'gemini' && model.effortOptions?.includes(topbarRawEffort.value))) return topbarRawEffort.value;
-      return getDefaultModelEffort(options, model);
-    });
+    const topbarEffort = Vue.computed(() => getSessionEffortDisplay(
+      topbarModelSession.value, store.yeaftModelEffort || '', topbarModelMeta.value,
+    ));
 
     const topbarModelRows = Vue.computed(() => buildModelSelectionRows(store.yeaftAvailableModels));
 

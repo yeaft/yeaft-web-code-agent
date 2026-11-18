@@ -67,14 +67,28 @@ export function normalizeModelEffort(effort, model = null) {
   return Object.hasOwn(EFFORT_RANK, effort) ? effort : '';
 }
 
-export function resolveSessionModelEffort(session, fallbackEffort = '', model = null) {
+function configuredSessionEffort(session, fallbackEffort) {
   const configured = session?.config?.modelEffort;
-  const raw = typeof configured === 'string' && configured.trim() ? configured : fallbackEffort;
-  if (typeof raw !== 'string') return '';
-  const effort = normalizeModelEffort(raw.trim(), model);
+  if (typeof configured === 'string' && configured.trim()) return configured.trim();
+  return typeof fallbackEffort === 'string' ? fallbackEffort.trim() : '';
+}
+
+export function resolveSessionModelEffort(session, fallbackEffort = '', model = null) {
+  const effort = normalizeModelEffort(configuredSessionEffort(session, fallbackEffort), model);
   if (!hasNativeGeminiLevels(model) || model.effortOptions.includes(effort)) return effort;
   if (['max', 'ultra', 'xhigh'].includes(effort)) return model.effortOptions.at(-1);
   return model.effortOptions.filter(level => GEMINI_NATIVE_LEVELS.indexOf(level) <= GEMINI_NATIVE_LEVELS.indexOf(effort)).at(-1) || '';
+}
+
+/** Display the actual saved/native selection, never an unapplied menu default. */
+export function getSessionEffortDisplay(session, fallbackEffort, model) {
+  const options = getSelectableModelEfforts(model?.effortOptions, model);
+  if (!options.length) return '';
+  const resolved = resolveSessionModelEffort(session, fallbackEffort, model);
+  if (model?.effortProtocol === 'gemini' && configuredSessionEffort(session, fallbackEffort)) {
+    return model.effortOptions?.includes(resolved) ? resolved : 'unavailable';
+  }
+  return options.includes(resolved) ? resolved : getDefaultModelEffort(options, model);
 }
 
 export function buildModelSelectionRows(models) {
