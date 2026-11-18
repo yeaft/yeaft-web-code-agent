@@ -21,8 +21,7 @@ import YeaftSessionActions from './YeaftSessionActions.js';
 import YeaftConversationOutline from './YeaftConversationOutline.js';
 import WorkCenterPage from './WorkCenterPage.js';
 import { parseMentions } from '../utils/parseMentions.js';
-import { buildTimelineRows, resolveTimelineSession, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
-import { visibleQueryProgress } from '../stores/helpers/query-progress.js';
+import { sessionActivityRows } from '../stores/helpers/session-activity.js';
 import { buildModelSelectionRows, getDefaultModelEffort, getSelectableModelEfforts, modelOptionMatchesRef, resolveSessionModelEffort, resolveSessionModelRef } from '../utils/modelRefs.js';
 import {
   clearOverlayPointerGesture,
@@ -102,20 +101,6 @@ export function visibleSessionStatusTasks(taskMap) {
   return Object.values(taskMap || {})
     .filter(task => task?.status === 'running')
     .sort((a, b) => sessionTaskSortTime(b) - sessionTaskSortTime(a));
-}
-
-/** Show the latest live thread with an authorized observation, not the broker's
- * latest aggregate identity (which may name an already completed thread). */
-export function timelineQueryProgress(store, row, { agentId, sessionId }) {
-  const owners = Array.isArray(row.threads) && row.threads.length ? row.threads
-    .filter(thread => ['typing', 'thinking', 'retrying', 'streaming', 'tool'].includes(thread.state) && thread.turnId)
-    .slice().sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0)
-      || String(a.threadId).localeCompare(String(b.threadId))) : [row];
-  for (const owner of owners) {
-    const progress = visibleQueryProgress(store, { agentId, sessionId, vpId: row.vpId, turnId: owner.turnId });
-    if (progress && (!owner.threadId || progress.threadId === owner.threadId)) return progress;
-  }
-  return null;
 }
 
 export default {
@@ -344,7 +329,9 @@ export default {
               :key="JSON.stringify([sceneAgentId, topbarGroup.id])"
               :session="topbarGroup"
               :agent-id="sceneAgentId"
+              :open="composerMenuOpen === 'scene'"
               :disabled="isActiveSessionCopying || store.connectionState !== 'connected' || store.hasAgentCapability?.(sceneAgentId, 'session_scenes') === false"
+              @update:open="$event ? (composerMenuOpen = 'scene') : closeComposerMenu('scene')"
             />
           </template>
           <template #actions-end-before>
@@ -436,23 +423,21 @@ export default {
 
       <WorkbenchPanel v-if="canUseWorkbench && !store.digitalPersonOpen" v-show="!store.workCenterOpen" />
 
-      <!-- Session status pane: announcement + VP roster + background tasks.
+      <!-- Session status pane: announcement + execution activity + background tasks.
            It sits to the right of the conversation and to the left of debug. -->
       <VpTimelinePane
         ref="sessionStatusPane"
         v-if="!store.workCenterOpen && !store.pluginCenterOpen && !store.digitalPersonOpen && !showOnboardingGuide"
-        v-show="showVpTimeline"
-        :rows="vpTimelineRows"
-        :hide-vp-identity="sceneSession"
+        v-show="showSessionStatus"
+        :rows="sessionActivity"
+        :visible="showSessionStatus"
         :tasks="sessionStatusTasksForActiveSession"
         :announcement-text="sessionStatusAnnouncementText"
         :stopping-tasks-by-id="store.yeaftStoppingTasksById"
         :class="{ 'mobile-session-status': isNarrowDetail }"
         :style="timelineWidthStyle"
-        @mention-vp="onMentionVpFromTimeline"
-        @edit-vp="onEditVpFromTimeline"
         @start-resize="startTimelineResize"
-        @cancel-vp-turn="onCancelVpFromTimeline"
+        @stop-turn="stopActivityTurn"
         @edit-announcement="openAnnouncementSettings"
         @cancel-task="onCancelTaskFromTimeline"
         @close="dismissSessionStatus"
@@ -554,10 +539,6 @@ export default {
     const agentSecretError = Vue.ref('');
     const settingsInitialTab = Vue.ref('search');
     const settingsInitialEditVpId = Vue.ref(null);
-    // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
-    // can call its imperative `appendMention(vpId)` when the Session status
-    // pane emits a VP mention request. Keeps the Yeaft-specific @-syntax out
-    // of ChatInput (review fix — Fowler C2, PR #763).
     const chatInputRef = Vue.ref(null);
     const messageQuote = Vue.ref(null);
     const pageRef = Vue.ref(null);
@@ -604,6 +585,7 @@ export default {
     });
     Vue.watch(yeaftInputDraftKey, () => {
       messageQuote.value = null;
+      if (composerMenuOpen.value === 'scene') composerMenuOpen.value = null;
     });
     let mobileViewportRaf = null;
     let mobileViewportRecoverTimer = null;
@@ -1519,20 +1501,11 @@ export default {
     };
 
     // ── Session status pane computeds + handlers ───────────────────────
-    // Pane is visible when (a) we're not in settings and (b) the user hasn't
-    // hidden it via the topbar toggle or pane close button. On narrow screens
-    // CSS promotes it to an overlay instead of removing the only announcement
-    // and status surface. Historical vpTimeline naming remains for the row
-    // projection helper and component shell only.
-    const showVpTimeline = Vue.computed(
+    // The same Session status surface is an overlay on narrow screens.
+    const showSessionStatus = Vue.computed(
       () => !showSettings.value && !showOnboardingGuide.value && sessionStatusVisible.value
     );
 
-    // Resolve the active group's roster and project it into timeline
-    // rows. Status comes from the store's `vpStatuses` map (mirrored
-    // from the agent broker) — no reverse-inference from message-level
-    // `isStreaming` flags any more (see
-    // docs/notes/2026-05-15-vp-status-from-agent.md).
     const sessionStatusTasksForActiveSession = Vue.computed(() => {
       const gs = sessionsStore();
       const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
@@ -1546,98 +1519,26 @@ export default {
       return visibleSessionStatusTasks(map);
     });
 
-    const vpTimelineRows = Vue.computed(() => {
-      const convId = store.yeaftConversationId;
-      if (!convId) return [];
-
-      // Follow the visible Session, not the global role library. Legacy
-      // entries stay roster-scoped; scene activity comes from runtime state.
-      const gs = sessionsStore();
-      const filter = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
-      if (!filter) return [];
-
-      const group = resolveTimelineSession(gs, filter, store.currentAgent || null);
-      const roster = (group && Array.isArray(group.roster)) ? group.roster : [];
-      if (!group || (!sceneSession.value && !roster.length)) return [];
-      const rosterSet = new Set(roster);
-
-      // Base list = the group's declared roster, ordered by the roster
-      // array. Hydrate display data from vpStore (which holds
-      // {displayName, ...}); roster ids the library hasn't hydrated yet
-      // are stubbed as { vpId: id } so the timeline still has a row for
-      // every roster member — the label callback falls back to the raw
-      // id until vp_snapshot lands.
-      const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
-
-      // Scope statuses to this exact Agent/Session. Retain the loose legacy
-      // envelope fallback only for rows that also belong to a known roster.
-      const rawStatuses = store.vpStatuses || {};
-      const scopedStatuses = {};
-      const activeAgentId = group.agentId || store.currentAgent || null;
-      for (const entry of Object.values(rawStatuses)) {
-        if (!entry || !entry.vpId) continue;
-        const entrySessionId = entry.sessionId ?? entry.groupId;
-        if (entrySessionId && entrySessionId !== filter) continue;
-        if (activeAgentId && entry.agentId && entry.agentId !== activeAgentId) continue;
-        if (sceneSession.value) {
-          // Scene ownership is Session-scoped, including any old execution
-          // still draining under its original role after the switch.
-          if (entrySessionId !== filter || (activeAgentId && entry.agentId !== activeAgentId)) continue;
-        } else if (!rosterSet.has(entry.vpId)) continue;
-        scopedStatuses[entry.vpId] = entry;
-      }
-
-      const scopedStoppingTurnIds = {};
-      for (const row of Object.values(store.activeVpTurns || {})) {
-        if (!row?.turnId || !row?.sessionId) continue;
-        if (row.sessionId !== filter || (activeAgentId && row.agentId && row.agentId !== activeAgentId)) continue;
-        if (Object.entries(store.stoppingVpTurnIds || {}).some(([key]) => store.activeVpTurns?.[key] === row)) {
-          scopedStoppingTurnIds[row.turnId] = true;
-        }
-      }
-
-      return buildTimelineRows({
-        vpList,
-        vpStatuses: scopedStatuses,
-        stoppingVpTurnIds: scopedStoppingTurnIds,
-        connectionState: store.connectionState,
-        vpLabelOf: (id) => vpStore.vpLabel(id),
-        vpDescriptionOf: (id) => vpStore.vpDescription(id),
-      }).map(row => ({
-        ...row,
-        queryProgress: timelineQueryProgress(store, row, { agentId: activeAgentId, sessionId: filter }),
-      }));
+    const sessionActivity = Vue.computed(() => {
+      const group = topbarGroup.value;
+      if (!showSessionStatus.value || !group) return [];
+      return sessionActivityRows(store, {
+        agentId: sceneAgentId.value, sessionId: group.id,
+        legacyRoster: group.sceneId ? [] : group.roster || [],
+        sessions: sessionsStore()?.sessionList,
+      });
     });
 
-    const onEditVpFromTimeline = (vpId) => {
-      if (!vpId) return;
-      const sessionId = activeSessionIdForSettings();
-      if (!sessionId) return;
-      openSessionSettings({ sessionId, section: 'members', editVpId: vpId });
-    };
-
-    // Clicking a VP row @-mentions that VP in the chat input (default
-    // action), instead of jumping straight to a secondary panel.
-    // YeaftPage owns the ChatInput template ref and calls its exposed
-    // `appendMention()` method directly.
-    const onMentionVpFromTimeline = (vpId) => {
-      if (!vpId) return;
-      const ci = chatInputRef.value;
-      if (ci && typeof ci.appendMention === 'function') {
-        ci.appendMention(vpId);
-      }
-    };
-
-    // Per-VP abort from the timeline. The row can be active before the
-    // engine has emitted vp_turn_start, so use the store helper that falls
-    // back to the agent status table's current turnId.
-    const onCancelVpFromTimeline = (vpId) => {
-      if (!vpId) return;
-      const gs = sessionsStore();
-      const sessionId = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
-      if (!sessionId) return;
-      if (typeof store.cancelVpTurnForSession === 'function') {
-        store.cancelVpTurnForSession(vpId, sessionId);
+    const stopActivityTurn = (target) => {
+      const row = sessionActivity.value.find(candidate => candidate.key === target.key
+        && candidate.sessionId === target.sessionId && candidate.agentId === target.agentId);
+      if (!row?.canStop || row.isStopping) return;
+      if (row.userTurnId) store.stopYeaftTurn(row);
+      else if (row.turnId) store.cancelVpTurn(row.turnId, row);
+      else if (row.legacyStop) {
+        // Pre-turn-ID brokers only support role-scoped abort inside this Session.
+        const { agentId, sessionId, vpId } = row;
+        store.sendWsMessage({ type: 'yeaft_abort_turn', agentId, sessionId, vpId });
       }
     };
 
@@ -1759,9 +1660,9 @@ export default {
       openVpLibraryFromGroupSettings,
       // Backwards-compat shim — onInviteOpenLibrary still calls this.
       openMemberEditor,
-      // VP timeline pane bindings — restored in v0.1.767.
-      showVpTimeline,
-      vpTimelineRows,
+      // Session activity pane bindings.
+      showSessionStatus,
+      sessionActivity,
       sessionStatusTasksForActiveSession,
       sessionStatusAnnouncementText,
       sessionStatusVisible,
@@ -1773,9 +1674,7 @@ export default {
       toggleWorkbench,
       timelineWidthStyle,
       startTimelineResize,
-      onEditVpFromTimeline,
-      onMentionVpFromTimeline,
-      onCancelVpFromTimeline,
+      stopActivityTurn,
       onCancelTaskFromTimeline,
     };
   }

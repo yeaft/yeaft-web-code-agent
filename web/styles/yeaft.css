@@ -226,32 +226,11 @@
   font-family: inherit;
 }
 
-.yeaft-composer-scene {
-  flex: 0 0 clamp(6.5rem, 26vw, 8rem);
-  min-width: 0;
-  position: relative;
+.session-scene-select__trigger {
+  max-width: clamp(6.5rem, 26vw, 8rem);
 }
 
-.yeaft-composer-scene-select {
-  width: 100%;
-  height: var(--chat-composer-control-size);
-  padding-inline-start: var(--sidebar-section-toggle-gap);
-  border: 0;
-  border-radius: var(--sidebar-section-toggle-radius);
-  background: var(--bg-input);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--yeaft-composer-model-font-size);
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-.yeaft-composer-scene-select:focus-visible {
-  outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
-  outline-offset: var(--sidebar-focus-ring-offset);
-}
-
-.yeaft-composer-scene-select:disabled {
+.session-scene-select__trigger[aria-disabled="true"] {
   opacity: 0.65;
   cursor: default;
 }
@@ -279,8 +258,16 @@
   flex-wrap: nowrap;
 }
 
-.yeaft-session-input:has(.yeaft-composer-scene) .attach-btn {
-  flex-shrink: 0;
+/* Keep the action groups together. If they do not fit, the model group
+   wraps with Stop and Send, then uses that row's actual available width. */
+.yeaft-session-input:has(.yeaft-composer-scene) .chat-composer-actions-end {
+  flex-shrink: 1;
+  max-width: 100%;
+}
+
+.yeaft-session-input:has(.yeaft-composer-scene) .yeaft-composer-model {
+  max-width: var(--yeaft-composer-model-max-width);
+  width: 100%;
 }
 
 .yeaft-composer-model-controls {
@@ -300,7 +287,8 @@
 }
 
 .yeaft-composer-model,
-.yeaft-composer-effort {
+.yeaft-composer-effort,
+.session-scene-select__trigger {
   display: flex;
   align-items: center;
   gap: var(--sidebar-section-toggle-gap);
@@ -325,13 +313,16 @@
 .yeaft-composer-model:focus-visible,
 .yeaft-composer-effort:hover,
 .yeaft-composer-effort:focus-visible,
+.session-scene-select__trigger:not([aria-disabled="true"]):hover,
+.session-scene-select__trigger:focus-visible,
 .yeaft-composer-choice.is-open > button {
   background: var(--sidebar-hover);
   color: var(--text-primary);
 }
 
 .yeaft-composer-model:focus-visible,
-.yeaft-composer-effort:focus-visible {
+.yeaft-composer-effort:focus-visible,
+.session-scene-select__trigger:focus-visible {
   outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
   outline-offset: var(--sidebar-focus-ring-offset);
 }
@@ -430,9 +421,27 @@
   max-height: 320px;
 }
 
-.yeaft-composer-effort-option {
+.yeaft-composer-effort-option,
+.yeaft-composer-scene-option {
   align-items: center;
   cursor: pointer;
+}
+
+.yeaft-composer-scene .yeaft-composer-scene-dropdown {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + var(--chat-composer-gap));
+  width: max-content;
+  min-width: max(100%, min(var(--yeaft-effort-menu-width), 60vw));
+  max-width: 60vw;
+  max-height: var(--yeaft-model-menu-max-height);
+  overflow: auto;
+  z-index: var(--yeaft-model-menu-layer);
+}
+
+.yeaft-composer-scene-option:focus-visible {
+  outline: var(--sidebar-focus-ring-width) solid var(--accent-blue);
+  outline-offset: -2px;
 }
 
 .yeaft-model-list {
@@ -566,11 +575,6 @@
 @media (max-width: 768px) {
   .yeaft-composer-model {
     max-width: var(--yeaft-composer-model-mobile-max-width);
-  }
-
-  /* Leave room for the scene, attachment, effort, Stop and Send controls. */
-  .yeaft-session-input:has(.yeaft-composer-scene) .yeaft-composer-model {
-    max-width: min(25vw, var(--yeaft-composer-model-mobile-max-width));
   }
 
   .yeaft-composer-model-dropdown,
@@ -3520,8 +3524,6 @@
      the list past pane width. */
   min-width: 0;
 }
-/* Compact identity row: localized name + capability summary, with status
-   kept as the right-side operational signal. */
 .yeaft-vp-timeline-row {
   display: flex;
   flex-direction: column;
@@ -3539,23 +3541,27 @@
   min-width: 0;
   width: 100%;
 }
-.yeaft-vp-timeline-row-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.yeaft-session-activity-copy { flex: 1; min-width: 0; }
+.yeaft-session-activity-label {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
   overflow: hidden;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  text-align: start;
-  cursor: pointer;
-  border-radius: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-div.yeaft-vp-timeline-row-body { cursor: default; }
-.yeaft-vp-timeline-row-body:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.yeaft-session-activity-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-height: 24px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.yeaft-session-activity-elapsed { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.yeaft-vp-timeline-row.is-status-error .yeaft-vp-timeline-row-status { color: var(--error); }
 .yeaft-vp-error-toggle.btn-ghost {
   flex: 0 0 auto;
   padding: 2px 4px;
@@ -3619,45 +3625,6 @@ div.yeaft-vp-timeline-row-body { cursor: default; }
 .yeaft-query-progress-tool-row code { min-width: 0; white-space: normal; overflow-wrap: anywhere; color: var(--text-primary); font-size: inherit; }
 .yeaft-query-progress-tool-head { color: var(--text-muted); }
 .yeaft-query-progress-failure-list { max-height: 240px; overflow: auto; }
-.yeaft-vp-timeline-row-copy {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.yeaft-vp-timeline-row-name {
-  font-size: 13px;
-  color: var(--text-primary);
-  font-weight: 500;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.yeaft-vp-timeline-row-description {
-  font-size: 11px;
-  line-height: 1.3;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.yeaft-vp-timeline-row-status {
-  font-size: 11px;
-  color: var(--text-secondary);
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  flex-wrap: nowrap;
-  overflow: hidden;
-  flex: 0 1 auto;
-  max-width: 38%;
-  min-width: 0;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
 @media (max-width: 1024px) {
   /* Narrow screens still need the consolidated announcement/status surface.
      Promote it to a full-screen panel instead of a right-side drawer so the
@@ -3685,119 +3652,26 @@ div.yeaft-vp-timeline-row-body { cursor: default; }
   }
 }
 
-/* Native sibling buttons keep mention, abort, edit and diagnostics independent. */
-.yeaft-vp-timeline-row-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-.yeaft-vp-timeline-abort,
-.yeaft-vp-timeline-edit {
+.yeaft-vp-timeline-abort.btn-ghost {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
+  border-radius: var(--response-radius);
   background: transparent;
-  border-radius: 4px;
-  color: var(--text-muted);
+  color: var(--error);
   cursor: pointer;
-  /* Hover-revealed (interaction parity). Edit button is hidden at rest; the
-     abort sibling overrides this below because it MUST be visible the
-     moment the v-if turns true (a stop button you can't see isn't a
-     stop button). */
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
-/* Abort visibility: the abort button only renders (`v-if`) when a VP
-   is in an active state. Once rendered it stays full-opacity + danger-
-   tinted regardless of hover — per Rams, hiding the only "stop" the
-   user has behind hover is a discoverability failure. */
-.yeaft-vp-timeline-row .yeaft-vp-timeline-abort {
-  opacity: 1;
-  color: var(--error);
-}
-.yeaft-vp-timeline-row .yeaft-vp-timeline-abort.is-stopping {
-  cursor: wait;
-  opacity: 0.6;
-}
-/* Keyboard-focus styling mirrors hover styling so a keyboard user can
-   tell destructive (abort = red) from edit action (edit = accent)
-   without having to read the aria-label. */
-.yeaft-vp-timeline-abort:focus-visible {
-  background: var(--error-bg);
-  color: var(--error);
-  outline: none;
-  opacity: 1;
-}
-.yeaft-vp-timeline-edit:focus-visible {
-  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
-  color: var(--accent);
-  outline: none;
-  opacity: 1;
-}
-/* Row-hover bumps the edit button from 0 → 0.7. Abort is excluded —
-   it's already at opacity 1 and a lower opacity on hover would dim
-   the most important affordance the moment the user moves toward it
-   (the bug Torvalds caught: 0,0,2,0 specificity overriding 0,0,1,0). */
-.yeaft-vp-timeline-row:hover .yeaft-vp-timeline-edit,
-.yeaft-vp-timeline-row:focus-within .yeaft-vp-timeline-edit {
-  opacity: 0.7;
-}
-.yeaft-vp-timeline-row .yeaft-vp-timeline-abort:hover {
-  opacity: 1;
-  color: var(--error);
-  background: var(--error-bg);
-}
-.yeaft-vp-timeline-row .yeaft-vp-timeline-edit:hover {
-  opacity: 1;
-  color: var(--accent);
-  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
-}
+.yeaft-vp-timeline-abort.btn-ghost:disabled { cursor: wait; opacity: 0.6; }
+.yeaft-vp-timeline-abort.btn-ghost:hover,
+.yeaft-vp-timeline-abort.btn-ghost:focus-visible { background: var(--error-bg); }
+.yeaft-vp-timeline-abort.btn-ghost:focus-visible { outline: 2px solid var(--error); outline-offset: 1px; }
 
-/* In-flight breathing animation on the row name. Retrying is a live turn,
-   not an error terminal, so it shares the existing activity treatment. */
-.yeaft-vp-timeline-row.is-status-streaming .yeaft-vp-timeline-row-name,
-.yeaft-vp-timeline-row.is-status-typing .yeaft-vp-timeline-row-name,
-.yeaft-vp-timeline-row.is-status-thinking .yeaft-vp-timeline-row-name,
-.yeaft-vp-timeline-row.is-status-retrying .yeaft-vp-timeline-row-name,
-.yeaft-vp-timeline-row.is-status-tool .yeaft-vp-timeline-row-name {
-  animation: yeaftVpNameBreathing 3s ease-in-out infinite;
-}
-@keyframes yeaftVpNameBreathing {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .yeaft-vp-timeline-row.is-status-streaming .yeaft-vp-timeline-row-name,
-  .yeaft-vp-timeline-row.is-status-typing .yeaft-vp-timeline-row-name,
-  .yeaft-vp-timeline-row.is-status-thinking .yeaft-vp-timeline-row-name,
-  .yeaft-vp-timeline-row.is-status-retrying .yeaft-vp-timeline-row-name,
-  .yeaft-vp-timeline-row.is-status-tool .yeaft-vp-timeline-row-name {
-    animation: none;
-  }
-}
-
-/* Offline = agent connection lost. Mute everything so the user can
-   tell at a glance that this row isn't actionable. Error = the turn
-   ended in a failure; tint the status label red but keep the rest of
-   the row legible (the user may still want to @-mention or open the
-   detail view). */
-.yeaft-vp-timeline-row.is-status-offline {
-  opacity: 0.55;
-}
-.yeaft-vp-timeline-row.is-status-offline .yeaft-vp-timeline-row-status {
-  color: var(--text-muted, #94a3b8);
-  font-style: italic;
-}
-.yeaft-vp-timeline-row.is-status-error .yeaft-vp-timeline-row-status {
-  color: var(--danger, #e74c3c);
-}
-
-/* ── Topbar VP-list toggle button ────────────────────────────────────
+/* ── Topbar Session status and Workbench buttons ────────────────────────────────────
    First session action in the right side of the topbar.
    Inactive = muted icon; active = accent-tinted background. Same
    shape/size as the existing topbar buttons. */
@@ -4167,19 +4041,6 @@ div.yeaft-vp-timeline-row-body { cursor: default; }
 
 .vp-thread-meta {
   color: var(--text-muted);
-}
-
-.yeaft-vp-timeline-thread-count {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  margin-top: 2px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--surface-muted, #f1f5f9);
-  color: var(--text-tertiary, #64748b);
-  font-size: 11px;
-  line-height: 16px;
 }
 
 /* Mobile Yeaft session settings -------------------------------------------------
@@ -4763,10 +4624,6 @@ div.yeaft-vp-timeline-row-body { cursor: default; }
   .yeaft-onboarding-step-head {
     grid-template-columns: 1fr;
   }
-}
-
-@media (hover: none) {
-  .yeaft-vp-timeline-row .yeaft-vp-timeline-edit { opacity: 0.7; }
 }
 
 /* Compact Session merge dialog, shared by sidebar and conversation actions. */

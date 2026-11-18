@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { __testHooks, __testResetVpState, __testSetSession, __testGetOrCreateVpEngine } from '../../agent/yeaft/web-bridge.js';
 import { NullTrace } from '../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../agent/yeaft/tools/registry.js';
-import { buildTimelineRows } from '../../web/stores/helpers/vp-timeline.js';
+import { sessionActivityRows } from '../../web/stores/helpers/session-activity.js';
 import VpTimelinePane from '../../web/components/VpTimelinePane.js';
 import en from '../../web/i18n/en.js';
 import { normalizeQueryProgress, visibleQueryProgress } from '../../web/stores/helpers/query-progress.js';
@@ -61,7 +61,6 @@ globalThis.Pinia = {
   useSessionsStore: () => runtimeSessionsStore,
 };
 const { useChatStore } = await import('../../web/stores/chat.js');
-const { timelineQueryProgress } = await import('../../web/components/YeaftPage.js');
 
 describe('message flow regressions', () => {
   it('keeps concurrent user-turn identities, tools and terminal state isolated through live routing and replay', async () => {
@@ -140,7 +139,69 @@ describe('message flow regressions', () => {
     }
   });
 
-  it('retains scoped VP errors across navigation and snapshots with accessible plain-text disclosure', async () => {
+  it('requires fresh Session and broker evidence for stopping after browser or Agent reconnect', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    const agent = { id: 'a', online: true, capabilities: ['session_scenes'] };
+    store.agents = [agent];
+    store._hasHandledAgentList = true;
+    store.connectionState = 'connected';
+    store.yeaftConversationIdsByAgent = { a: 'conv' };
+    store.sendWsMessage = vi.fn(() => true);
+    const scope = { agentId: 'a', sessionId: 's' };
+    const frame = event => store.handleYeaftOutput({ ...scope, conversationId: 'conv', event });
+    const execution = { vpId: 'omni', turnId: 'engine', threadId: 'thread', state: 'streaming' };
+    const status = () => frame({ ...execution, type: 'vp_status_changed', sessionId: 's', threads: [execution] });
+    const snapshot = () => frame({ type: 'session_turns', sessionId: 's', turns: [{
+      userTurnId: 'root', startedAt: 1234, state: 'running', executions: [execution],
+    }] });
+    const read = () => sessionActivityRows(store, scope);
+    snapshot();
+    status();
+    expect(read()).toMatchObject([{ userTurnId: 'root', status: 'streaming', canStop: true, startedAt: 1234 }]);
+    for (const reconnect of [
+      () => { store.chatHistoryConnectionGeneration++; },
+      () => {
+        const generation = store.chatHistoryConnectionGeneration;
+        store.handleMessage({ type: 'agent_list', agents: [] });
+        store.handleMessage({ type: 'agent_list', agents: [agent] });
+        expect(store.chatHistoryConnectionGeneration).toBe(generation);
+      },
+    ]) {
+      reconnect();
+      expect(read()).toEqual([]);
+      status();
+      expect(read()).toMatchObject([{ turnId: 'engine', canStop: false }]);
+      snapshot();
+      expect(read()).toMatchObject([{ userTurnId: 'root', status: 'streaming', canStop: true, startedAt: 1234 }]);
+    }
+  });
+
+  it('keeps old no-ID Stop only when the legacy executor can be scoped to one Session', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.agents = [{ id: 'a', online: true }, { id: 'b', online: true }];
+    store.connectionState = 'connected';
+    store.yeaftConversationIdsByAgent = { a: 'conv', b: 'other' };
+    const row = { agentId: 'a', id: 's', roster: ['old-role'] };
+    const read = (sessions = [row], legacyRoster = row.roster) => sessionActivityRows(store,
+      { agentId: 'a', sessionId: 's', legacyRoster, sessions });
+    const status = event => store.handleYeaftOutput({ conversationId: 'conv', ...event,
+      event: { type: 'vp_status_changed', state: 'tool', vpId: 'old-role', ...event.event } });
+    status({ agentId: 'a' });
+    expect(read()).toMatchObject([{ status: 'tool', legacyStop: true, canStop: true, turnId: null }]);
+    expect(read([row, { ...row, id: 'sibling' }])).toEqual([]);
+    expect(read([row], [])).toEqual([]);
+    // Exact fresh evidence takes precedence over a stale/unstamped role row.
+    status({ agentId: 'a', event: { sessionId: 's', turnId: 'exact' } });
+    expect(read()).toMatchObject([{ turnId: 'exact', canStop: true, legacyStop: false }]);
+    store.vpStatuses = {};
+    status({ event: { sessionId: 's' } });
+    expect(read()).toMatchObject([{ canStop: true }]);
+    expect(read([row, { ...row, agentId: 'b' }])).toEqual([]);
+  });
+
+  it('retains scoped execution errors across navigation and snapshots with accessible plain-text disclosure', async () => {
     storeFactories.clear();
     const store = useChatStore();
     store.currentView = 'yeaft';
@@ -149,16 +210,17 @@ describe('message flow regressions', () => {
     store.yeaftConversationId = 'conv';
     store.yeaftConversationIdsByAgent = { a: 'conv', b: 'conv-b' };
     store.connectionState = 'connected';
+    store.agents = [{ id: 'a', online: true }];
     store.sendWsMessage = vi.fn(() => true);
     const frame = event => store.handleYeaftOutput({ agentId: 'a', conversationId: 'conv', event });
     const broker = createVpStatusBroker({ send: frame, now: () => 1000 });
     const owner = { sessionId: 's', vpId: 'v', turnId: 'failed-turn', threadId: 'main' };
     const message = '<script>alert(1)</script>\nProvider timed out';
     broker.transition({ ...owner, state: 'error', errorDetail: { message, code: 'TIMEOUT', reason: 'retry_exhausted', stack: 'PRIVATE' } });
-    const rows = sessionId => buildTimelineRows({ vpList: [{ vpId: 'v' }], connectionState: 'connected',
-      vpStatuses: Object.fromEntries(Object.values(store.vpStatuses).filter(row => row.agentId === 'a' && row.sessionId === sessionId).map(row => [row.vpId, row])) });
-    expect(rows('other')[0].errors).toEqual([]);
-    const expected = rows('s')[0].errors;
+    const rows = sessionId => sessionActivityRows(store, { agentId: 'a', sessionId });
+    const errors = sessionId => rows(sessionId).flatMap(row => row.errors);
+    expect(rows('other')).toEqual([]);
+    const expected = errors('s');
     expect(expected).toEqual([expect.objectContaining({ turnId: owner.turnId, threadId: owner.threadId, at: 1000, message })]);
     vi.stubGlobal('Vue', Vue);
     const pane = mount(VpTimelinePane, { props: { rows: rows('s') },
@@ -177,7 +239,7 @@ describe('message flow regressions', () => {
       for (const sessionId of ['s', null]) {
         store.vpStatuses = {};
         broker.broadcastSnapshot({ sessionId });
-        expect(rows('s')[0].errors).toEqual(expected);
+        expect(errors('s')).toEqual(expected);
       }
       await pane.setProps({ rows: rows('s') });
       expect(pane.find('.yeaft-vp-error-details').exists()).toBe(false);
@@ -189,9 +251,9 @@ describe('message flow regressions', () => {
       broker.transition({ ...owner, turnId: 'second-failure', threadId: 'parallel', state: 'error', errorDetail: { message: 'Second failure' } });
       broker.transition({ ...owner, threadId: 'running', turnId: 'running', state: 'tool' });
       await pane.setProps({ rows: rows('s') });
-      await pane.get('.yeaft-vp-error-toggle').trigger('click');
+      for (const toggle of pane.findAll('.yeaft-vp-error-toggle[aria-expanded="false"]')) await toggle.trigger('click');
       expect(pane.findAll('.yeaft-vp-error-detail')).toHaveLength(2);
-      expect(pane.get('.yeaft-vp-timeline-row-status').text()).toBe('using tool…');
+      expect(pane.get('.is-status-tool .yeaft-vp-timeline-row-status').text()).toBe('using tool…');
       expect(pane.text()).toContain('failed-turn');
       expect(pane.text()).toContain('second-failure');
       broker.transition({ ...owner, state: 'thinking', turnId: 'new-turn' });
@@ -292,7 +354,7 @@ describe('message flow regressions', () => {
       expect(normalizeQueryProgress({ ...base, inputTokens: -1, outputTokens: Infinity, toolStats })).toEqual(base);
     }
     vi.stubGlobal('Vue', Vue);
-    const row = { vpId: 'v', displayName: 'Software assistant', status: 'tool', runningThreadCount: 1, queryProgress: progress };
+    const row = { key: 't', vpId: 'v', turnId: 't', status: 'tool', canStop: true, observations: [progress] };
     const pane = mount(VpTimelinePane, { props: { rows: [row] },
       global: { config: { globalProperties: { $t: (key, args = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (_, name) => args[name] ?? '') } } } });
     try {
@@ -309,18 +371,16 @@ describe('message flow regressions', () => {
       await pane.get('.yeaft-query-progress-details-toggle').trigger('click');
       expect(pane.get('.yeaft-query-progress-details').text()).toContain('not context size');
       await pane.get('.yeaft-vp-timeline-abort').trigger('click');
-      expect(pane.emitted('cancel-vp-turn')).toEqual([['v']]);
+      expect(pane.emitted('stop-turn')).toEqual([[row]]);
       expect(pane.emitted('mention-vp')).toBeUndefined();
-      await pane.get('.yeaft-vp-timeline-row-body').trigger('click');
-      expect(pane.emitted('mention-vp')).toEqual([['v']]);
       await pane.setProps({ rows: [{ ...row, isStopping: true }] });
       expect(pane.get('.yeaft-vp-timeline-abort').attributes()).toHaveProperty('disabled');
-      await pane.setProps({ rows: [{ ...row, queryProgress: { ...base, turnId: 'new' } }] });
+      await pane.setProps({ rows: [{ ...row, observations: [{ ...base, turnId: 'new' }] }] });
       expect(pane.get('.yeaft-query-progress-tokens').text()).toContain('Not provided');
       expect(pane.find('.yeaft-query-progress-failures').exists()).toBe(false);
       await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
       expect(pane.get('.yeaft-query-progress-failures').text()).toContain('has not provided');
-      await pane.setProps({ rows: [{ ...row, queryProgress: { ...progress, toolStats: [], toolStatsTruncated: true } }] });
+      await pane.setProps({ rows: [{ ...row, observations: [{ ...progress, toolStats: [], toolStatsTruncated: true }] }] });
       await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
       expect(pane.get('.yeaft-query-progress-failures').text()).toContain('outside the retained');
       expect(pane.get('.yeaft-query-progress-failures').text()).toContain('first 128');
@@ -407,21 +467,17 @@ describe('message flow regressions', () => {
     const pane = mount({
       components: { VpTimelinePane },
       setup() {
-        const rows = Vue.computed(() => buildTimelineRows({
-          vpList: [{ vpId: 'v' }],
-          vpStatuses: { v: Object.values(store.vpStatuses).find(status => status.agentId === 'a' && status.sessionId === 's') },
-          connectionState: store.connectionState,
-        }).map(row => ({ ...row, queryProgress: timelineQueryProgress(store, row, { agentId: 'a', sessionId: 's' }) })));
+        const rows = Vue.computed(() => sessionActivityRows(store, { agentId: 'a', sessionId: 's' }));
         return { rows };
       },
       template: '<VpTimelinePane :rows="rows" />',
     }, { global: { mocks: { $t: (key, args = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (_, name) => args[name] ?? '') } } });
     try {
-      expect(pane.get('.yeaft-query-progress').text()).toContain('Requests 7');
+      expect(pane.findAll('.yeaft-query-progress').map(row => row.text()).join(' ')).toContain('Requests 7');
       // A live thread with no fresh counters cannot hide an observed sibling.
       broker.transition({ ...owner, threadId: 'unobserved', turnId: 'unobserved-turn' });
       await Vue.nextTick();
-      expect(pane.get('.yeaft-query-progress').text()).toContain('Requests 7');
+      expect(pane.findAll('.yeaft-query-progress').map(row => row.text()).join(' ')).toContain('Requests 7');
       broker.settleIdle({ sessionId: 's', vpId: 'v', threadId: 'unobserved' });
       broker.transition({ ...owner, state: 'streaming' });
       frame(snapshot());
@@ -431,7 +487,7 @@ describe('message flow regressions', () => {
       broker.transition({ ...owner, threadId: 'parallel', turnId: parallel.turnId, state: 'streaming' });
       frame(snapshot());
       await Vue.nextTick();
-      expect(pane.get('.yeaft-query-progress').text()).toContain('Requests 7');
+      expect(pane.findAll('.yeaft-query-progress').map(row => row.text()).join(' ')).toContain('Requests 7');
     } finally {
       pane.unmount();
       vi.unstubAllGlobals();

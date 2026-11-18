@@ -6370,11 +6370,13 @@ export const useChatStore = defineStore('chat', {
               }
             }
           }
-          const sessionId = event.sessionId || null;
+          const sessionId = event.sessionId || event.groupId || msg.sessionId || null;
           const agentId = msg.agentId || null;
           const k = vpStatusKey(agentId, sessionId, event.vpId);
           const nextStatus = {
             agentId,
+            conversationId: envelopeConversationId,
+            connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
             state: event.state,
             errorDetail: event.state === 'error' ? normalizeTimelineErrorDetail(event.errorDetail) : null,
             since: event.since || Date.now(),
@@ -6426,10 +6428,12 @@ export const useChatStore = defineStore('chat', {
             }
             for (const row of statuses) {
               if (!row || !row.vpId) continue;
-              const rowSessionId = row.sessionId || row.groupId || null;
+              const rowSessionId = row.sessionId || row.groupId || eventSessionId || null;
               const k = vpStatusKey(msg.agentId || null, rowSessionId, row.vpId);
               next[k] = {
                 agentId: msg.agentId || null,
+                conversationId: envelopeConversationId,
+                connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
                 state: row.state,
                 errorDetail: row.state === 'error' ? normalizeTimelineErrorDetail(row.errorDetail) : null,
                 since: row.since || Date.now(),
@@ -6455,10 +6459,12 @@ export const useChatStore = defineStore('chat', {
             }
             for (const row of statuses) {
               if (!row || !row.vpId) continue;
-              const rowSessionId = row.sessionId || row.groupId || null;
+              const rowSessionId = row.sessionId || row.groupId || eventSessionId || null;
               const k = vpStatusKey(msg.agentId || null, rowSessionId, row.vpId);
               merged[k] = {
                 agentId: msg.agentId || null,
+                conversationId: envelopeConversationId,
+                connectionGeneration: Number(this.chatHistoryConnectionGeneration || 0),
                 state: row.state,
                 errorDetail: row.state === 'error' ? normalizeTimelineErrorDetail(row.errorDetail) : null,
                 since: row.since || Date.now(),
@@ -8373,12 +8379,12 @@ export const useChatStore = defineStore('chat', {
       // executions not yet announced via vp_turn_start after reconnect.
       return this.sendWsMessage({ type: 'yeaft_abort_turn', agentId: targetAgentId, sessionId, userTurnId }) !== false;
     },
-    cancelVpTurn(turnId, { sessionId = null, vpId = null } = {}) {
+    cancelVpTurn(turnId, { sessionId = null, vpId = null, agentId = null } = {}) {
       // sessionId is optional metadata from newer agents. When present we route
       // by the session's owner; the legacy turnId-only path (no sessionId)
       // resolves to currentAgent — matching the pre-refactor behavior where the
       // abort always hit the active page agent.
-      const targetAgentId = resolveAgentIdForSession(this, sessionId);
+      const targetAgentId = resolveAgentIdForSession(this, sessionId, agentId);
       if (!targetAgentId || !turnId) return;
       const turnKey = yeaftTurnStateKey(this, targetAgentId, turnId);
       this.stoppingVpTurnIds = {

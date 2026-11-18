@@ -20,21 +20,103 @@ export default {
     session: { type: Object, required: true },
     agentId: { type: String, default: null },
     disabled: { type: Boolean, default: false },
+    open: { type: Boolean, default: undefined },
+  },
+  emits: ['update:open'],
+  setup() {
+    return { listboxId: `session-scene-${Vue.useId()}` };
   },
   data() {
-    return { requestedScene: '', error: false, sceneIds: SESSION_SCENE_IDS };
+    return { localOpen: false, requestedScene: '', error: false, sceneIds: SESSION_SCENE_IDS };
   },
   computed: {
     pendingScene() {
       return this.requestedScene || Pinia.useChatStore().pendingSessionSceneSelectionFor?.(this.session.id, this.agentId) || '';
     },
-    selectedScene() { return this.pendingScene || this.session.sceneId || ''; },
-    inferredScene() { return displaySessionScene(this.session); },
+    displayedScene() { return this.pendingScene || displaySessionScene(this.session); },
+    displayedLabel() { return this.$t('yeaft.session.scene.' + this.displayedScene); },
+    isOpen() { return !this.unavailable && (this.open ?? this.localOpen); },
+    unavailable() { return this.disabled || !!this.pendingScene; },
+  },
+  watch: {
+    isOpen: {
+      flush: 'post',
+      handler(open) {
+        if (open) this.focusOption(this.displayedScene);
+      },
+    },
+    unavailable(value) {
+      if (value) this.setOpen(false);
+    },
+  },
+  mounted() {
+    document.addEventListener('pointerdown', this.onOutside, true);
+    document.addEventListener('click', this.onOutside, true);
+    if (this.isOpen) this.focusOption(this.displayedScene);
+  },
+  beforeUnmount() {
+    document.removeEventListener('pointerdown', this.onOutside, true);
+    document.removeEventListener('click', this.onOutside, true);
   },
   methods: {
-    async changeScene(event) {
-      const sceneId = event.target.value;
-      if (this.disabled || this.pendingScene || !this.sceneIds.includes(sceneId) || sceneId === this.session.sceneId) return;
+    setOpen(open) {
+      if (open === (this.open ?? this.localOpen) || (open && this.unavailable)) return;
+      if (this.open === undefined) this.localOpen = open;
+      this.$emit('update:open', open);
+    },
+    closeToTrigger() {
+      this.$refs.trigger.focus({ preventScroll: true });
+      this.setOpen(false);
+    },
+    focusOption(sceneId) {
+      this.$refs.listbox?.querySelector(`[data-scene-id="${sceneId}"]`)?.focus();
+    },
+    onOutside(event) {
+      if (this.isOpen && !this.$el.contains(event.target)) this.setOpen(false);
+    },
+    onFocusout(event) {
+      if (this.isOpen && !this.$el.contains(event.relatedTarget)) this.setOpen(false);
+    },
+    onKeydown(event) {
+      const { key } = event;
+      if (!this.isOpen) {
+        if (!this.unavailable && (key === 'ArrowDown' || key === 'ArrowUp')) {
+          event.preventDefault();
+          this.setOpen(true);
+        }
+        return;
+      }
+      if (key === 'Tab') {
+        // Continue from the trigger in the browser's normal tab order, in either direction.
+        this.closeToTrigger();
+        return;
+      }
+      if (key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeToTrigger();
+        return;
+      }
+      const sceneId = event.target.dataset.sceneId;
+      const index = this.sceneIds.indexOf(sceneId);
+      const last = this.sceneIds.length - 1;
+      let next;
+      if (key === 'ArrowDown') next = Math.min(index + 1, last);
+      else if (key === 'ArrowUp') next = index < 0 ? last : Math.max(index - 1, 0);
+      else if (key === 'Home') next = 0;
+      else if (key === 'End') next = last;
+      else if ((key === 'Enter' || key === ' ') && sceneId) {
+        event.preventDefault();
+        this.changeScene(sceneId);
+        return;
+      } else return;
+      event.preventDefault();
+      this.focusOption(this.sceneIds[next]);
+    },
+    async changeScene(sceneId) {
+      if (this.unavailable || !this.sceneIds.includes(sceneId)) return;
+      this.closeToTrigger();
+      if (sceneId === this.session.sceneId) return;
       this.requestedScene = sceneId;
       this.error = false;
       try {
@@ -45,28 +127,47 @@ export default {
         this.error = true;
       } finally {
         this.requestedScene = '';
-        await this.$nextTick();
-        // If a rejected change left the committed value unchanged, Vue may
-        // have no value patch to apply after the browser changed the select.
-        if (this.$refs.select) this.$refs.select.value = this.selectedScene;
       }
     },
   },
   template: `
-    <div class="yeaft-composer-scene">
-      <select
-        ref="select"
-        class="yeaft-composer-scene-select"
-        :value="selectedScene"
-        :aria-label="$t('yeaft.session.scene.label')"
+    <div class="yeaft-composer-choice yeaft-composer-scene" :class="{ 'is-open': isOpen }" @keydown="onKeydown" @focusout="onFocusout">
+      <button
+        ref="trigger"
+        type="button"
+        class="session-scene-select__trigger"
+        :aria-label="$t('yeaft.session.scene.label') + ': ' + displayedLabel"
         :title="$t('yeaft.session.scene.label')"
+        aria-haspopup="listbox"
+        :aria-expanded="isOpen"
+        :aria-controls="isOpen ? listboxId : undefined"
         :aria-busy="!!pendingScene"
-        :disabled="disabled || !!pendingScene"
-        @change="changeScene"
+        :aria-disabled="unavailable"
+        :disabled="disabled"
+        @mousedown="isOpen && $event.preventDefault()"
+        @click="isOpen ? closeToTrigger() : setOpen(true)"
       >
-        <option v-if="!session.sceneId" value="" disabled>{{ $t('yeaft.session.scene.' + (inferredScene || 'choose')) }}</option>
-        <option v-for="sceneId in sceneIds" :key="sceneId" :value="sceneId">{{ $t('yeaft.session.scene.' + sceneId) }}</option>
-      </select>
+        <span class="yeaft-composer-model-name">{{ displayedLabel }}</span>
+        <svg class="yeaft-model-chevron" :class="{ open: isOpen }" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+      </button>
+      <div v-if="isOpen" :id="listboxId" ref="listbox" class="yeaft-model-dropdown yeaft-composer-scene-dropdown" role="listbox" :aria-label="$t('yeaft.session.scene.label')">
+        <button
+          v-for="sceneId in sceneIds"
+          :key="sceneId"
+          type="button"
+          class="yeaft-model-option yeaft-composer-scene-option"
+          :class="{ active: sceneId === session.sceneId }"
+          role="option"
+          tabindex="-1"
+          :data-scene-id="sceneId"
+          :aria-selected="sceneId === session.sceneId"
+          @mousedown.prevent
+          @click="changeScene(sceneId)"
+        >
+          <span class="yeaft-model-check" aria-hidden="true">{{ sceneId === session.sceneId ? '✓' : '' }}</span>
+          <span class="yeaft-model-option-label">{{ $t('yeaft.session.scene.' + sceneId) }}</span>
+        </button>
+      </div>
       <span v-if="error" class="yeaft-composer-scene-error" role="alert">{{ $t('yeaft.session.scene.updateError') }}</span>
     </div>
   `,

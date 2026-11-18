@@ -114,6 +114,16 @@ export function handleAgentList(store, msg) {
   // Agent-only disconnects leave the browser socket/generation intact. Retire
   // progress ownership now; an online inventory alone cannot re-authorize it.
   invalidateOfflineQueryProgress(store);
+  if ([...previouslyOnlineAgentIds].some(id => !nextOnlineAgentIds.has(id))) {
+    // Retire observations used for Stop without clearing the transcript or its
+    // routing cache. Only fresh frames from the returning Agent re-enable it.
+    for (const field of ['yeaftSessionTurnsBySession', 'vpStatuses']) {
+      if (!store[field]) continue;
+      store[field] = Object.fromEntries(Object.entries(store[field]).map(([key, row]) => [key,
+        row?.agentId && nextOnlineAgentIds.has(row.agentId) ? row : { ...row, connectionGeneration: -1 },
+      ]));
+    }
+  }
   // Sidebar catch-up waits for an authenticated inventory of this socket, not
   // merely onopen with an old online Agent record. Routine broadcasts dedupe.
   store.workCenterActivityConnectionGeneration = Number(store.chatHistoryConnectionGeneration || 0);

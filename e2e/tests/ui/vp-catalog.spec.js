@@ -53,7 +53,7 @@ const test = base.extend({
       }
       const send = (event, requestId) => agent.send({ type: 'yeaft_output', ...(requestId ? { requestId } : {}), event });
       const publish = () => send({ type: 'session_list_updated', sessions: snapshotSessions(root) });
-      const models = [{ id: 'catalog-model-a', label: 'Catalog model A', provider: 'fixture' },
+      const models = [{ id: 'catalog-model-a', label: 'Catalog model A', provider: 'fixture', effortOptions: ['medium', 'xhigh', 'ultra'] },
         { id: 'catalog-model-b', label: 'Catalog model B', provider: 'fixture' }];
       const status = () => ({ model: 'fixture/catalog-model-a', availableModels: models,
         catalogRevision: 1, catalogEpoch: 'vp-catalog-fixture', catalogRefreshedAt: Date.now() });
@@ -326,7 +326,7 @@ test('scenario catalog preserves scheduled-task targeting and legacy Session com
     .map(row => row.content)).toEqual(['linus preserved historical answer', 'martin preserved historical answer']);
 });
 
-test('ordinary Session scenes persist through a live switch and reload without exposing VP names', async ({ page, serverUrl, mockAgent }) => {
+test('ordinary Session scenes persist through a live switch and reload without exposing VP names', async ({ page, serverUrl, mockAgent }, info) => {
   test.setTimeout(60_000);
   await page.addInitScript(() => localStorage.setItem('locale', 'en'));
   await page.setViewportSize({ width: 1360, height: 900 });
@@ -362,17 +362,53 @@ test('ordinary Session scenes persist through a live switch and reload without e
   fixture.turnWire = { sessionId, ...wire };
   // Creating from the vendor chat surface opens the new native Session.
   const composer = page.locator('.yeaft-session-input [data-message-composer]');
-  const scene = composer.getByRole('combobox', { name: 'Scene', exact: true });
-  await expect(scene).toHaveValue('software');
+  const scene = composer.getByRole('button', { name: /^Scene:/ });
+  const sceneMenu = composer.getByRole('listbox', { name: 'Scene', exact: true });
+  const expectScene = id => expect(scene).toHaveAccessibleName(`Scene: ${id}`);
+  const activity = page.locator('.yeaft-session-status-toggle');
+  const statusPane = page.locator('.yeaft-session-status-pane');
+  const status = text => statusPane.locator('.yeaft-vp-timeline-row').filter({ hasText: text });
+  await expectScene('Software');
+  await expect(scene.locator('.yeaft-model-chevron')).toBeVisible();
+  await scene.press('ArrowDown');
+  await expect(sceneMenu).toBeVisible();
+  const software = sceneMenu.getByRole('option', { name: 'Software', exact: true });
+  await expect(software).toBeFocused();
+  await expect(software).toHaveAttribute('aria-selected', 'true');
+  await expect(software.locator('.yeaft-model-check')).toHaveText('✓');
+  await expectWithinViewport(sceneMenu, page);
+  await software.press('Escape');
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(scene).toBeFocused();
+  const model = composer.locator('.yeaft-composer-model');
+  await model.click();
+  await expect(model).toHaveAttribute('aria-expanded', 'true');
+  await scene.click();
+  await expect(model).toHaveAttribute('aria-expanded', 'false');
+  await expect(sceneMenu).toBeVisible();
+  await page.screenshot({ path: info.outputPath('scene-menu-desktop.png'), fullPage: true });
+  await model.click();
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(model).toHaveAttribute('aria-expanded', 'true');
+  await model.press('Escape');
+  const sendUsage = (turn, inputTokens, outputTokens) => wire.event({
+    type: 'query_progress', sessionId, ...turn.executions[0], revision: 1,
+    inputTokens, outputTokens, modelRequests: 1, toolExecutions: 0, reusedCalls: 0, repeatedCalls: 0,
+    failedCalls: 0, lastEvidenceAt: null, stage: 'running', reason: null, stagnantBatches: 0,
+  });
   const first = await wire.send('First scene question');
   wire.delta(first, 'First scene answer');
   const firstAnswer = page.locator('.assistant-turn').filter({ hasText: 'First scene answer' });
   await expect(firstAnswer).toBeVisible();
   await expect(firstAnswer).toHaveClass(/streaming/);
 
-  await scene.selectOption('writing');
+  await scene.press('ArrowDown');
+  await software.press('ArrowDown');
+  const writing = sceneMenu.getByRole('option', { name: 'Writing', exact: true });
+  await expect(writing).toBeFocused();
+  await writing.press('Enter');
   await expect(scene).toBeEnabled();
-  await expect(scene).toHaveValue('writing');
+  await expectScene('Writing');
   expect(mockAgent.messages('yeaft_update_session_config')).toEqual([
     expect.objectContaining({ sessionId, config: { sceneId: 'writing' } }),
   ]);
@@ -394,16 +430,71 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(pane(page, second)).toContainText('Second scene answer');
   await expect(pane(page, second)).not.toContainText('First scene answer');
   await expectAnonymous(region);
+  if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
+  sendUsage(first, 1111, 21);
+  sendUsage(second, 2222, 43);
+  await expect(status('First scene question')).toContainText('1,111');
+  await expect(status('Second scene question')).toContainText('2,222');
+  await expect(status('Second scene question')).not.toContainText('1,111');
+  await expect(status('Second scene question').locator('.yeaft-session-activity-elapsed')).toContainText(/Elapsed .+s/);
+  await expect(statusPane.getByText('Execution status')).toBeVisible();
+  await expect(statusPane).not.toContainText(/\b(VPs?|Omni)\b/i);
 
   await page.setViewportSize({ width: 320, height: 740 });
   await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
-  await expectWithinViewport(scene, page);
+  const effort = composer.locator('.yeaft-composer-effort');
+  const modelMenu = composer.locator('.yeaft-composer-model-dropdown');
+  const attach = composer.locator('.attach-btn');
+  const stop = composer.locator('.stop-btn');
+  const send = composer.locator('.send-btn:not(.stop-btn)');
+  for (const [width, theme] of [[390, 'light'], [320, 'dark']]) {
+    await page.setViewportSize({ width, height: 740 });
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    for (const control of [attach, scene, model, effort, stop, send]) await expectWithinViewport(control, page);
+    // Compare the actual control bounds, not only page overflow (which a
+    // clipping ancestor can hide). The model label keeps enough usable space.
+    const toolbar = composer.locator('.chat-composer-actions');
+    expect(await toolbar.evaluate(el => {
+      const container = el.getBoundingClientRect();
+      const buttons = [...el.querySelectorAll('.attach-btn, .session-scene-select__trigger, .yeaft-composer-model, .yeaft-composer-effort, .send-btn')];
+      const bounds = buttons.map(button => button.getBoundingClientRect());
+      return bounds.every((rect, index) => rect.left >= container.left - 1 && rect.right <= container.right + 1
+        && bounds.slice(index + 1).every(other => rect.right <= other.left + 1 || other.right <= rect.left + 1
+          || rect.bottom <= other.top + 1 || other.bottom <= rect.top + 1));
+    })).toBe(true);
+    expect(await model.locator('.yeaft-composer-model-name').evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(60);
+    await model.click();
+    await expectWithinViewport(modelMenu, page);
+    await expect(modelMenu.getByRole('menuitemradio', { name: /Catalog model A/ })).toHaveAttribute('aria-checked', 'true');
+    await effort.click();
+    await expect(modelMenu).toHaveCount(0);
+    await expectWithinViewport(composer.locator('.yeaft-composer-effort-dropdown'), page);
+    await effort.press('Escape');
+  }
+  await page.screenshot({ path: info.outputPath('scene-model-toolbar-dark-320.png'), fullPage: true });
+  await scene.click();
+  await expectWithinViewport(sceneMenu, page);
+  await expect(sceneMenu.getByRole('option', { name: 'Writing', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.screenshot({ path: info.outputPath('scene-menu-dark-320.png'), fullPage: true });
+  await sceneMenu.getByRole('option', { name: 'Writing', exact: true }).press('Tab');
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(scene).not.toBeFocused();
   const tabs = region.getByRole('tab');
   await expect(tabs).toHaveCount(2);
   await tabs.filter({ hasText: 'Second scene question' }).press('Enter');
   await expect(tabs.filter({ hasText: 'Second scene question' })).toHaveAttribute('aria-selected', 'true');
   await expect(pane(page, second).getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
-  wire.finish(first);
+  await activity.click();
+  await expect(statusPane).toBeVisible();
+  await expectWithinViewport(statusPane, page);
+  await page.screenshot({ path: info.outputPath('scene-status-dark-320.png'), fullPage: true });
+  await status('First scene question').getByRole('button', { name: 'Stop First scene question', exact: true }).click();
+  await expect.poll(() => mockAgent.messages('yeaft_abort_turn').at(-1)).toMatchObject({ sessionId, userTurnId: first.userTurnId });
+  expect(mockAgent.messages('yeaft_abort_turn')).toHaveLength(1);
+  wire.finish(first, 'aborted');
+  await expect(status('First scene question')).toHaveCount(0);
+  await expect(status('Second scene question')).toContainText('2,222');
+  await statusPane.getByRole('button', { name: 'Close Session status', exact: true }).click();
   await expect(pane(page, first)).toHaveCount(0);
   await expect(firstAnswer).not.toHaveClass(/streaming/);
   wire.delta(second, ' continues after the first Turn finishes');
@@ -416,7 +507,7 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await showSidebar(page);
   await page.locator('.sidebar-session-row:visible').filter({ hasText: title }).click();
   await hideMobileSidebar(page);
-  await expect(scene).toHaveValue('writing');
+  await expectScene('Writing');
   await expect(page.locator('.assistant-turn')).toContainText(['First scene answer', 'Second scene answer continues after the first Turn finishes']);
   await expectAnonymous(page.locator('.chat-container'));
   await expect(region).toHaveCount(0);
@@ -428,21 +519,34 @@ test('ordinary Session scenes persist through a live switch and reload without e
   // in the frame between a mobile sidebar closing and the desktop layout.
   await expect(page.locator('.sidebar-navigation:visible')).toBeVisible();
   await page.locator('.sidebar-session-row:visible').filter({ hasText: 'Legacy collaboration' }).click();
-  const legacyScene = composer.getByRole('combobox', { name: 'Scene', exact: true });
   const legacyInput = composer.getByRole('textbox');
   await legacyInput.fill('@linus');
   await expect(page.locator('.vp-mention-autocomplete')).toBeVisible();
   await legacyInput.fill('');
-  await legacyScene.selectOption('investment');
-  await expect(legacyScene).toBeEnabled();
+  if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
+  mockAgent.send({ type: 'yeaft_output', conversationId, sessionId: fixture.legacyId,
+    event: { type: 'session_turns', sessionId: fixture.legacyId, turns: [] } });
+  const legacyStatus = state => mockAgent.send({ type: 'yeaft_output', conversationId, sessionId: fixture.legacyId,
+    event: { type: 'vp_status_changed', sessionId: fixture.legacyId, vpId: 'linus', state } });
+  legacyStatus('tool');
+  await expect(statusPane.getByText('using tool…')).toBeVisible();
+  await expect(statusPane).not.toContainText(/\b(VPs?|Linus|Martin)\b/i);
+  await statusPane.getByRole('button', { name: 'Stop Turn 1', exact: true }).click();
+  await expect.poll(() => mockAgent.messages('yeaft_abort_turn').at(-1)).toMatchObject({ sessionId: fixture.legacyId, vpId: 'linus' });
+  legacyStatus('idle');
+  await expect(statusPane.getByText('No active turns.')).toBeVisible();
+  await scene.click();
+  await sceneMenu.getByRole('option', { name: 'Investment', exact: true }).click();
+  await expect(scene).toBeEnabled();
+  await expectScene('Investment');
   expect(fixture.session()).toMatchObject({ roster: ['linus', 'martin'], config: { sceneId: 'investment' } });
   const converted = sessionTurnWire(page, mockAgent, { sessionId: fixture.legacyId, conversationId });
   fixture.turnWire = { sessionId: fixture.legacyId, ...converted };
   const convertedTurn = await converted.send('Evaluate the finding');
   converted.delta(convertedTurn, 'Converted Session response');
-  const activity = page.locator('.yeaft-session-status-toggle');
   if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
-  await expect(page.locator('.yeaft-vp-timeline-row.is-status-streaming')).toContainText('Assistant');
+  await expect(status('Evaluate the finding')).toContainText('streaming');
+  await expect(statusPane).not.toContainText(/\b(VPs?|Omni|Linus|Martin)\b/i);
   await expectAnonymous(page.locator('.chat-container'));
   converted.finish(convertedTurn);
   expect(fixture.errors).toEqual([]);
