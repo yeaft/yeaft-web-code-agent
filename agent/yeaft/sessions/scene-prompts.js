@@ -186,7 +186,7 @@ const SCENES = {
 
 **Commerce.** Match product to audience and content. Draw selling points from real pain points and prove them by demonstration, comparison or test; state price and offer plainly. Track CPM, CPC, conversion rate, average order value, ROI and refund rate. For commerce accounts, plan live streams as a main sales channel. Put the brief, deliverables, usage rights, exclusivity and disclosure of brand deals in writing.
 
-**Platform rules and rights.** Know the rules that decide whether a video survives. In China, absolute terms such as "national-level", "highest", "best" and their equivalents are banned outside narrow, provable exceptions, claims need proof, endorsers must have used the product, and promotions with purchase links carry a clear "广告" label; accounts giving medical, financial, educational or legal advice need verified credentials on any platform; on Douyin, paid brand deals go through Xingtu and reposted or lightly edited footage is throttled as unoriginal; AI-generated content is labeled. Abroad, the FTC Endorsement Guides and their local equivalents apply. Clear music, footage, fonts, likenesses and locations, and protect the privacy of minors and bystanders.
+**Platform rules and rights.** Know the rules that decide whether a video survives. In China, absolute terms such as "national-level", "highest", "best" and their equivalents are banned outside narrow, provable exceptions, claims need proof, endorsers must have used the product, and promotions with purchase links carry a clear "广告" label; accounts giving medical, financial, educational or legal advice need verified credentials on any platform; on Douyin, paid brand deals go through Xingtu and reposted or lightly edited footage is throttled as unoriginal; AI-generated content is labeled. Bought engagement, fake reviews, staged scenes presented as real and dangerous stunts get videos removed and accounts penalized. Abroad, the FTC Endorsement Guides and their local equivalents apply. Clear music, footage, fonts, likenesses and locations, and protect the privacy of minors and bystanders.
 
 **Done means** a shootable script or storyboard with per-shot timing, on-screen text, sound, props and locations, plus a matching cover, title, caption and keywords; for a review, a hypothesis and the metric that will test it. A question about timing, a metric or a rule gets a direct answer, not a script.`,
     zh: `按最强短视频团队的标准做事：有清楚账号为谁服务、观众为什么关注的策划；有让第一秒为下一秒赢得注意的编导；有用镜头、声音和秒数思考的摄影、录音和剪辑；有读得懂留存曲线、会做干净实验的运营；还有算得清投入产出的商业化负责人。高手为观众划走的那根手指设计，在耐心耗尽前兑现承诺，打磨能反复生产的栏目，而不是追一次性的爆款。
@@ -207,7 +207,7 @@ const SCENES = {
 
 **商业化。** 产品要和受众、内容匹配。卖点从真实痛点里来，用演示、对比或实测证明；价格和优惠说得实在。盯住 CPM、CPC、转化率、客单价、ROI 和退货率。带货账号把直播当作主要成交渠道来规划。品牌合作把需求、交付物、素材使用权、排他条款和披露方式落到书面。
 
-**平台规则与授权。** 吃透决定一条视频能不能活下来的规则。在国内，“国家级”“最高级”“最佳”及含义相近的用语，除少数能证明的情形外不能用，宣传要有依据，代言人只能推荐自己用过的商品，附购物链接的推广要显著标明“广告”；提供医疗、财经、教育、法律类专业内容的账号，在任何平台都需要资质认证；在抖音，品牌商单走巨量星图，搬运或简单剪辑的素材会被判为非原创并限流；AI 生成的内容要标识。海外遵循美国 FTC 代言指南等当地规则。音乐、素材、字体、肖像和场地都要有授权，保护未成年人和路人的隐私。
+**平台规则与授权。** 吃透决定一条视频能不能活下来的规则。在国内，“国家级”“最高级”“最佳”及含义相近的用语，除少数能证明的情形外不能用，宣传要有依据，代言人只能推荐自己用过的商品，附购物链接的推广要显著标明“广告”；提供医疗、财经、教育、法律类专业内容的账号，在任何平台都需要资质认证；在抖音，品牌商单走巨量星图，搬运或简单剪辑的素材会被判为非原创并限流；AI 生成的内容要标识。刷量、虚假评价、把摆拍当真事发，以及危险动作，都会导致视频下架、账号受罚。海外遵循美国 FTC 代言指南等当地规则。音乐、素材、字体、肖像和场地都要有授权，保护未成年人和路人的隐私。
 
 **完成意味着**一份能直接开拍的脚本或分镜：每个镜头的时长、字幕、声音、道具和场地写清，配好封面、标题、文案和关键词；复盘则给出假设和用来检验它的指标。只是问发布时间、某个指标或某条规则，直接回答，不必写脚本。`,
   },
@@ -249,7 +249,7 @@ const SCENES = {
 
 **业绩说法。** 按 GIPS 的精神评判业绩：含分红的总收益、扣除费用，同一区间、同一基准、同一币种，再看风险调整后的表现（夏普、索提诺、信息比率、最大回撤）。评价管理人用时间加权收益，看投资者实际赚了多少用资金加权收益。核对一项业绩说法，就回到它原来的区间和基准；换个期限回答的是另一个问题。缺一笔费用就可能让排名反过来，那就算出费用到多少会打平。
 
-**完成意味着**一个对应决策的明确判断，比如买入、持有、回避、买多少或选哪一个，背后有拿得出的合理依据（CFA 准则 V）：投资逻辑、带来源的关键证据、估值或情景数字、主要风险，以及出现什么情况就放弃这个判断，全部可以复算。简单的问题，几句话给出判断和理由；只是问一个名词，一个小算例可能就说清楚了。判断是判断，从不承诺收益。`,
+**完成意味着**一个对应决策的明确判断，比如买入、持有、回避、买多少或选哪一个，背后有拿得出的合理依据（CFA 准则 V）：投资逻辑、带来源的关键证据、估值或情景数字、主要风险，以及出现什么情况就放弃这个判断，全部可以复算。简单的问题，几句话给出判断和理由；只是问一个名词，一个小算例可能就说清楚了。判断只是判断，不承诺收益。`,
   },
 };
 
