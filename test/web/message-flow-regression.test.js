@@ -278,6 +278,80 @@ describe('message flow regressions', () => {
     } finally { pane.unmount(); vi.unstubAllGlobals(); }
   });
 
+  it('filters only superseded Session errors, including late parallel failures and legacy history replay', () => {
+    storeFactories.clear();
+    const store = useChatStore();
+    store.agents = [{ id: 'a', online: true, capabilities: ['session_scenes'] }];
+    store.connectionState = 'connected';
+    store.yeaftConversationIdsByAgent = { a: 'conv' };
+    store.sendWsMessage = vi.fn(() => true);
+    const scope = { agentId: 'a', sessionId: 's' };
+    const frame = event => store.handleYeaftOutput({ ...scope, conversationId: 'conv', event });
+    const execution = (id, state = 'running') => ({ vpId: 'omni', turnId: `engine-${id}`, threadId: id, state });
+    const root = (id, startedAt, state, executions = [execution(id, state)]) => ({ userTurnId: id, startedAt, state, executions });
+    const snapshot = (...turns) => frame({ type: 'session_turns', turns });
+    const rows = () => sessionActivityRows(store, scope);
+    const errors = () => rows().flatMap(row => row.errors.map(error => error.turnId));
+    let now = 150;
+    const broker = createVpStatusBroker({ send: frame, now: () => now });
+    const fail = id => broker.transition({ ...execution(id, 'error'), sessionId: 's', errorDetail: { message: id } });
+    const a = root('a', 100, 'errored');
+    const b = root('b', 200, 'running');
+    snapshot(a);
+    fail('a');
+    frame({ ...execution('a'), type: 'vp_turn_end', reason: 'errored' });
+    expect(errors()).toEqual(['engine-a']);
+    store.messagesMap = { conv: [
+      { type: 'user', sessionId: 's', timestamp: 180, turnRelation: 'supplement', userTurnId: 'a', isHistory: true },
+      { type: 'user', sessionId: 's', timestamp: 185, clientMessageId: 'unconfirmed' },
+      { type: 'user', sessionId: 'other', timestamp: 900, isHistory: true },
+      { type: 'user', sessionId: 's', agentId: 'other', timestamp: 900, isHistory: true },
+    ] };
+    expect(errors()).toEqual(['engine-a']);
+    snapshot(a, b);
+    expect(rows()).toMatchObject([{ userTurnId: 'b', canStop: true, errors: [] }]);
+
+    // An execution from an older root can fail after B is running; live
+    // siblings of that root keep its diagnostics without affecting B's row.
+    const older = root('older', 180, 'running', [execution('late', 'errored'), execution('still-live')]);
+    snapshot(a, older, b);
+    now = 220;
+    fail('late');
+    expect(rows()).toMatchObject([{ userTurnId: 'older', canStop: true, errors: [{ turnId: 'engine-late' }] },
+      { userTurnId: 'b', canStop: true, errors: [] }]);
+    const lateFailure = { ...older, state: 'errored', executions: [execution('late', 'errored')] };
+    snapshot(a, lateFailure, b);
+    expect(errors()).toEqual([]);
+    // The global broker can replay before this Session's Turn inventory.
+    // The failed parallel root must not flash back; B cannot be stopped yet.
+    broker.transition({ sessionId: 's', ...execution('b', 'tool') });
+    store.chatHistoryConnectionGeneration++;
+    broker.broadcastSnapshot();
+    expect(rows()).toMatchObject([{ turnId: 'engine-b', canStop: false, errors: [] }]);
+    snapshot(a, lateFailure, b);
+    expect(rows()).toMatchObject([{ userTurnId: 'b', canStop: true, errors: [] }]);
+    // B becomes the latest failure; missing provider details don't erase its identity.
+    now = 240;
+    broker.transition({ sessionId: 's', ...execution('b', 'error') });
+    frame({ ...execution('b'), type: 'vp_turn_end', reason: 'errored' });
+    const failed = { ...b, state: 'errored', executions: [execution('b', 'errored')] };
+    snapshot(a, lateFailure, failed);
+    expect(errors()).toEqual(['engine-b']);
+    const completed = root('c', 250, 'completed');
+    store.chatHistoryConnectionGeneration++;
+    snapshot(a, lateFailure, failed, completed);
+    broker.broadcastSnapshot({ sessionId: 's' });
+    expect(rows()).toEqual([]);
+    expect(Object.values(store.vpStatuses)[0].threads.filter(thread => thread.state === 'error')).toHaveLength(3);
+
+    // Older Agents can replay a later prompt but have no user-turn inventory.
+    store.agents = [{ id: 'a', online: true, capabilities: [] }];
+    store.yeaftSessionTurnsBySession = {};
+    expect(errors()).toContain('engine-b');
+    store.messagesMap.conv.push({ type: 'user', sessionId: 's', isHistory: true, timestamp: 250 });
+    expect(rows()).toEqual([]);
+  });
+
   it('previews model/effort immediately, serializes rapid changes, rolls back failures and fences owners', async () => {
     storeFactories.clear();
     const store = useChatStore();
