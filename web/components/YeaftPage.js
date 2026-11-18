@@ -1206,11 +1206,14 @@ export default {
     const topbarRawEffort = Vue.computed(() => resolveSessionModelEffort(topbarModelSession.value, store.yeaftModelEffort || '', topbarModelMeta.value));
 
     const topbarEffort = Vue.computed(() => {
-      const options = selectableEffortsForModel(topbarModelMeta.value);
+      const model = topbarModelMeta.value;
+      const options = selectableEffortsForModel(model);
       if (!options.length) return null;
-      return options.includes(topbarRawEffort.value)
-        ? topbarRawEffort.value
-        : getDefaultModelEffort(options, topbarModelMeta.value);
+      // A filtered-out choice is still the actual effort of an existing Session.
+      // Do not change it or label the request as a different tier.
+      if (options.includes(topbarRawEffort.value)
+        || (model?.effortProtocol === 'gemini' && model.effortOptions?.includes(topbarRawEffort.value))) return topbarRawEffort.value;
+      return getDefaultModelEffort(options, model);
     });
 
     const topbarModelRows = Vue.computed(() => buildModelSelectionRows(store.yeaftAvailableModels));

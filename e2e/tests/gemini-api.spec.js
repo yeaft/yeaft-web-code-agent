@@ -132,7 +132,7 @@ for (const theme of ['light', 'dark']) {
       await dialog.locator('.agent-settings-close').click();
 
       // The Agent catalog and per-Session writes still cross the real relay.
-      const catalog = GEMINI_MODELS.map(model => {
+      const catalog = [...GEMINI_MODELS, { id: 'gemini-4-carbon', protocol: 'gemini' }].map(model => {
         const { effortOptions, defaultEffort, thinkingProtocol } = getThinkingCapability(model.id, model);
         return { ...model, ref: `google/${model.id}`, provider: 'google', label: model.id, effortProtocol: thinkingProtocol, effortOptions, defaultEffort };
       });
@@ -152,29 +152,28 @@ for (const theme of ['light', 'dark']) {
       await expect(page.getByText(`${mockAgent.agentName}: persistent conversation for ordinary-session`, { exact: true })).toBeVisible();
       const modelTrigger = page.locator('.yeaft-composer-model');
       await expect(modelTrigger).toHaveText('gemini-2.5-flash');
-      await modelTrigger.focus();
-      await expect(modelTrigger).toBeFocused();
-      await modelTrigger.press('Enter');
       const modelMenu = page.locator('.yeaft-composer-model-dropdown');
-      await expect(modelMenu).toContainText('gemini-4-hydrogen');
+      const effort = page.locator('.yeaft-composer-effort');
+      const effortMenu = page.locator('.yeaft-composer-effort-dropdown');
+      const chooseEffort = async (names, choice, expected) => {
+        await fitsViewport(page, effort);
+        await effort.press('Enter');
+        await expect(effortMenu.locator('.yeaft-model-option-label')).toHaveText(names);
+        await effortMenu.getByRole('menuitemradio', { name: choice, exact: true }).click();
+        await expect.poll(() => state.inventory.sessions.get('ordinary-session').config?.modelEffort).toBe(expected);
+        await expect(effort).toHaveText(choice);
+      };
+      // Budget-only Gemini 2.5 retains a separate Max tier.
+      await chooseEffort(['Medium', 'X-High', 'Max'], 'Max', 'max');
+      await modelTrigger.press('Enter');
+      await modelMenu.getByRole('menuitemradio', { name: /gemini-4-carbon/ }).click();
+      await expect.poll(() => state.inventory.sessions.get('ordinary-session').config?.model).toBe('google/gemini-4-carbon');
+      await chooseEffort(['Medium', 'High'], 'High', 'high');
+      await modelTrigger.press('Enter');
       await modelMenu.getByRole('menuitemradio', { name: /gemini-4-hydrogen/ }).click();
       await expect.poll(() => state.inventory.sessions.get('ordinary-session').config?.model).toBe('google/gemini-4-hydrogen');
-      const effort = page.locator('.yeaft-composer-effort');
-      await fitsViewport(page, effort);
-      await expect(effort).toContainText('X-High');
-      await effort.click();
-      const effortMenu = page.locator('.yeaft-composer-effort-dropdown');
-      await expect(effortMenu.getByRole('menuitemradio')).toHaveCount(4);
-      for (const name of ['Low', 'Medium', 'High', 'X-High']) {
-        await expect(effortMenu.getByRole('menuitemradio', { name, exact: true })).toBeVisible();
-      }
-      await effortMenu.getByRole('menuitemradio', { name: 'Low', exact: true }).click();
-      await expect.poll(() => state.inventory.sessions.get('ordinary-session').config?.modelEffort).toBe('low');
-      await expect(effort).toContainText('Low');
-      await effort.click();
-      await effortMenu.getByRole('menuitemradio', { name: 'High', exact: true }).click();
-      await expect.poll(() => state.inventory.sessions.get('ordinary-session').config?.modelEffort).toBe('high');
-      await expect(effort).toHaveText('High');
+      await expect(effort).toHaveText('X-High');
+      await chooseEffort(['Medium', 'X-High'], 'Medium', 'medium');
       await page.screenshot({ path: resolve(`artifacts/gemini-api/${mode}-session-${theme}-${width}.png`) });
       expect(externalRequests).toEqual([]);
     });

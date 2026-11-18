@@ -1,5 +1,5 @@
 import ModernSelect from './ModernSelect.js';
-import { getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef } from '../utils/modelRefs.js';
+import { getSelectableModelEfforts, modelOptionMatchesRef, modelOptionRef, normalizeModelEffort } from '../utils/modelRefs.js';
 
 const MAX_QUICK_SENDS = 5;
 const cloneEntries = entries => (Array.isArray(entries) ? entries : []).map(item => ({
@@ -82,7 +82,9 @@ export default {
       const agentConfig = config.agentConfig || config.effectiveConfig || {};
       this.models = agentConfig.availableModels || [];
       if (!this.dirty || pending.kind === 'save') {
-        this.draft = cloneEntries(agentConfig.quickSends);
+        this.draft = cloneEntries(agentConfig.quickSends).map(item => ({
+          ...item, effort: normalizeModelEffort(item.effort, this.modelFor(item)) || null,
+        }));
         this.dirty = false;
       }
       this.loaded = true;
@@ -121,7 +123,8 @@ export default {
         if (!item.name?.trim() || item.name.trim().length > 80) return this.$t('quickSend.nameRequired');
         const model = this.modelFor(item);
         if (!model) return this.$t('quickSend.modelRequired');
-        if (item.effort !== null && !this.effortsFor(item).includes(item.effort)) return this.$t('quickSend.effortInvalid');
+        const supported = model.effortProtocol === 'gemini' ? model.effortOptions : this.effortsFor(item);
+        if (item.effort !== null && !supported?.includes(item.effort)) return this.$t('quickSend.effortInvalid');
         if (item.maxOutputTokens !== null && (!Number.isSafeInteger(item.maxOutputTokens) || item.maxOutputTokens <= 0 || item.maxOutputTokens > model.maxOutput)) {
           return this.$t('quickSend.outputInvalid', { max: model.maxOutput });
         }
@@ -154,7 +157,7 @@ export default {
             :placeholder="$t('quickSend.chooseModel')" :empty-text="$t('quickSend.noModels')" searchable :disabled="disabled" @update:model-value="changeModel(item, $event)" />
         </div>
         <div class="quick-send-field quick-send-effort"><span>{{ $t('quickSend.effort') }}</span>
-          <ModernSelect :model-value="item.effort || ''" :options="effortOptions(item)" :aria-label="$t('quickSend.effort')"
+          <ModernSelect :model-value="item.effort || ''" :options="effortOptions(item)" :aria-label="$t('quickSend.effort')" :placeholder="item.effort || ''"
             :disabled="disabled || !effortsFor(item).length" @update:model-value="changeEffort(item, $event)" />
         </div>
         <label class="quick-send-output"><span>{{ $t('quickSend.maxOutputTokens') }}</span>

@@ -498,7 +498,8 @@ export function getThinkingCapability(model, context = {}) {
     if (!effortOptions.length || maxBudgetTokens < (profile.minBudget ?? 0)) return disabled;
     return { supportsThinking: true, thinkingProtocol: 'gemini',
       defaultEffort: resolveGeminiEffort(model, context.defaultEffort, effortOptions)
-        || (effortOptions.includes('xhigh') ? 'xhigh' : effortOptions.at(-2) || effortOptions[0]),
+        || ['xhigh', 'medium', 'high'].find(value => effortOptions.includes(value))
+        || effortOptions.at(-2) || effortOptions[0],
       maxBudgetTokens, effortOptions };
   }
   if (protocol !== 'anthropic' && protocol !== 'openai-responses') return disabled;

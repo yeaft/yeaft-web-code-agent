@@ -159,8 +159,12 @@ describe('native Gemini adapter', () => {
       global.fetch = vi.fn(async url => url.includes(':streamGenerateContent') ? sse([candidate([{ text: 'ok' }])]) : json(candidate([{ text: 'ok' }])));
       for (const [model, levels] of Object.entries(families)) {
         const row = buildModelSelectionRows(config.availableModels).find(row => row.model.id === model);
-        expect(row.efforts).toEqual(levels);
-        expect(row.defaultEffort).toBe(levels.includes('xhigh') ? 'xhigh' : levels.at(-2));
+        expect(row.model.effortOptions).toEqual(levels);
+        const visible = levels.includes('xhigh') ? ['medium', 'xhigh'] : levels.filter(level => ['medium', 'high'].includes(level));
+        expect(row.efforts).toEqual(visible);
+        const expectedDefault = levels.includes('xhigh') ? 'xhigh' : levels.includes('medium') ? 'medium' : 'high';
+        expect(row.defaultEffort).toBe(expectedDefault);
+        expect(row.model.defaultEffort).toBe(expectedDefault);
         for (const effort of levels) {
           saveSessionConfig(dir, 'gemini', { model: row.modelRef, modelEffort: effort });
           const selection = resolveSessionConfig(config, loadSessionConfig(dir, 'gemini'));

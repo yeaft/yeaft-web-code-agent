@@ -42,15 +42,18 @@ function normalizeEffortList(options) {
 }
 
 export function getSelectableModelEfforts(options, model = null) {
-  // Older Agent catalogs may still advertise retired tiers; never show them.
-  return normalizeEffortList(options).filter(effort => Object.hasOwn(EFFORT_RANK, effort) || (hasNativeGeminiLevels(model) && GEMINI_NATIVE_LEVELS.includes(effort)));
+  // Native capabilities and saved values remain available to the transport.
+  // Menus start at Medium and only offer High if X-High is unavailable.
+  const values = normalizeEffortList(options);
+  return values.filter(effort => Object.hasOwn(EFFORT_RANK, effort)
+    || (effort === 'high' && hasNativeGeminiLevels(model) && !values.includes('xhigh')));
 }
 
 export function getDefaultModelEffort(options, model = null) {
   const values = getSelectableModelEfforts(options, model);
-  if (model?.effortProtocol === 'gemini' && values.includes(model.defaultEffort)) return model.defaultEffort;
   if (!values.length) return '';
   if (values.includes('xhigh')) return 'xhigh';
+  if (model?.effortProtocol === 'gemini' && values.includes(model.defaultEffort)) return model.defaultEffort;
   if (values.length === 1) return values[0];
   if (values.includes('ultra') && values.includes('max')) return 'max';
   return values[values.length - 2];
