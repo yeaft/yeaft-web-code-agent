@@ -22,6 +22,7 @@ import {
   verifyConversationOwnership, verifyAgentOwnership, resolveAgentAccessError
 } from '../ws-utils.js';
 import { routeSessionPin } from './session-pin-router.js';
+import { handleClientSessionTurnDelete } from './session-turn-delete.js';
 import { handleClientScheduledTasks } from './client-scheduled-tasks.js';
 import { handleClientScheduledTaskReceipts } from './client-scheduled-task-receipts.js';
 import { recordPerfTraceEvent } from '../perf-trace.js';
@@ -306,6 +307,7 @@ function skippedYeaftDreamResult(msg, reason) {
  *        update_conversation_settings, ask_user_answer, btw_question
  */
 export async function handleClientConversation(clientId, client, msg, checkAgentAccess) {
+  if (typeof msg.type === 'string' && await handleClientSessionTurnDelete(clientId, client, msg)) return true;
   if (await handleClientScheduledTaskReceipts(client, msg)) return true;
   if (await handleClientScheduledTasks(clientId, client, msg)) return true;
   // Scene-aware clients must not receive a successful legacy create that
