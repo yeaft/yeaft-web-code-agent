@@ -36,6 +36,8 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 Use **Scene** next to **Attach**. It saves to this Session without sending a message. The scene applies to new turns; running turns continue unchanged. For example, switch from Software to Writing to turn an earlier design discussion into an announcement without starting over. A scene guides the work, not which questions you may ask. It does not change model, effort, permissions, or workspace.
 
+The request determines the deliverable. For example, Software distinguishes a diagnosis from a request to change code; Writing distinguishes proofreading from a rewrite. Short video fits a script to the time and crew available. Investment compares results on a consistent basis and calls out missing data that could change the conclusion. General can recommend an option and say when a different one makes sense. In any scene you can ask for just the result, without a report.
+
 ### Compatibility with existing Sessions
 
 Existing Sessions keep their complete messages, membership, and custom definitions. Until you choose a scene, they continue to use their existing routing; settings such as title or model do not convert the Session. Choose a scene explicitly to use the single-assistant workflow on future messages. Saved role IDs are not deleted, but they no longer route messages in that Session. Legacy role settings are under **Compatibility**; replies in scene Sessions do not display role names. Existing scheduled tasks retain their configured targeting. Scene switching requires an updated Agent.
