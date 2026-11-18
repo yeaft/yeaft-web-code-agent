@@ -96,13 +96,19 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   expect(endedB.endedAt).toBeGreaterThanOrEqual(endedA.endedAt);
   // A background result reopens finished root-b: the question start is kept,
   // the new live span starts after its earlier end, and it ends again later.
+  // Only frames published after the rescue count, and the clock must move past
+  // the earlier end so a stale endedAt cannot pass as the new one.
+  expect(publishedTurns().some(t => t.userTurnId === 'root-b' && t.activeSince)).toBe(false);
+  const framesBeforeRescue = events('session_turns').length;
+  const rescuedTurns = () => events('session_turns').slice(framesBeforeRescue).flatMap(f => f.event.turns);
+  await until(() => Date.now() > endedB.endedAt);
   expect(bridge.__testHooks.scheduleTaskResultRescue({ taskId: 'bg-result', sessionId, vpId: 'omni',
     content: 'background result', userTurnId: 'root-b' })).toBe(true);
-  await until(() => publishedTurns().some(t => t.userTurnId === 'root-b' && t.activeSince));
+  await until(() => rescuedTurns().some(t => t.userTurnId === 'root-b' && t.activeSince));
   await bridge.__testDrainVpDrivers();
-  const reopened = publishedTurns().find(t => t.userTurnId === 'root-b' && t.activeSince);
+  const reopened = rescuedTurns().find(t => t.userTurnId === 'root-b' && t.activeSince);
   expect(reopened).toMatchObject({ state: 'running', startedAt: endedB.startedAt });
-  expect(reopened.activeSince).toBeGreaterThanOrEqual(endedB.endedAt);
+  expect(reopened.activeSince).toBeGreaterThan(endedB.endedAt);
   expect(reopened.endedAt).toBeUndefined();
   const closed = events('session_turns').at(-1).event.turns.find(t => t.userTurnId === 'root-b');
   expect(closed.activeSince).toBeUndefined();

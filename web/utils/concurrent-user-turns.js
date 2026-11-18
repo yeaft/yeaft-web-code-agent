@@ -17,19 +17,30 @@ const epoch = value => (Number.isFinite(value) && value > 0 ? value : null);
  * leftover supplement starts its span at `activeSince`, so turns that ran
  * between its two spans are not parallel. Derived from the Agent snapshot
  * alone, so navigation, reload and other tabs agree. Without `endedAt` (older
- * Agents) the "earlier root finished first" case falls back to one column.
+ * Agents) the "earlier root finished first" case, and a live root that already
+ * finished an execution, fall back to one column unless two roots are live.
  * @param {Array<{ userTurnId: string, state: string, startedAt?: number, activeSince?: number, endedAt?: number, executions?: object[] }>} turns
  * @returns {boolean}
  */
 export function hasParallelUserTurns(turns = []) {
   const live = turns.filter(isPendingUserTurn);
   if (live.length > 1) return true;
-  const start = epoch(live[0]?.activeSince) ?? epoch(live[0]?.startedAt);
+  const root = live[0];
+  const start = epoch(root?.activeSince) ?? epoch(root?.startedAt);
   if (start == null) return false;
-  return turns.some(turn => turn.userTurnId !== live[0].userTurnId
+  // Older Agents send neither activeSince nor endedAt. Once the live root has
+  // finished an execution it may have been reopened, and its original question
+  // time would make every later question look parallel; only an end time can
+  // prove overlap then.
+  const startProvesOverlap = epoch(root.activeSince) != null
+    || !(root.executions || []).some(execution => !isPendingUserTurn(execution));
+  return turns.some((turn) => {
+    if (turn.userTurnId === root.userTurnId) return false;
+    const endedAt = epoch(turn.endedAt);
+    if (endedAt != null) return endedAt > start || (epoch(turn.startedAt) ?? -Infinity) >= start;
     // A routed root that never got an execution produced no answer to overlap.
-    && (turn.executions?.length > 0 || epoch(turn.endedAt) != null)
-    && ((epoch(turn.startedAt) ?? -Infinity) >= start || (epoch(turn.endedAt) ?? -Infinity) > start));
+    return startProvesOverlap && turn.executions?.length > 0 && (epoch(turn.startedAt) ?? -Infinity) >= start;
+  });
 }
 
 /** Snapshot-known roots settle in completion order; live roots stay last. */

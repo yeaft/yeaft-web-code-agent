@@ -28,7 +28,7 @@ Session 和 turn 仍是用户概念，不增加 topic、panel 或第二个输入
 - 持久用户消息附加 `relation: new | supplement`；Web 规范化为 `turnRelation`。
 - `session_turns { sessionId, turns: [{ userTurnId, userMessageId, startedAt, activeSince?, endedAt?, state, executions: [{ vpId, threadId, turnId, state }] }] }` 是 Session 级权威状态投影，正常运行和重连均发送。时间均使用 Agent 时钟：`endedAt` 只在该 turn 的全部 execution 结束后出现，从持久历史恢复的 turn 取其最后一条持久行的时间；`activeSince` 只在已结束的 turn 被重新唤起并仍在执行时出现，表示这段执行的开始时间。
 - `user_message_routed { sessionId, messageId, userTurnId, relation }` 更新尚未归属的乐观用户行。
-- Web 状态按 `(agentId, sessionId)` 隔离。旧 Agent 缺少新增字段时继续原单列展示；只缺 `endedAt` 时，已结束 turn 按发起时间排列，较早发起的 turn 先结束后，剩下的 turn 回到单列末尾。
+- Web 状态按 `(agentId, sessionId)` 隔离。旧 Agent 缺少新增字段时继续原单列展示；只缺 `endedAt` 和 `activeSince` 时，已结束 turn 按发起时间排列，较早发起的 turn 先结束后，剩下的 turn 回到单列末尾。执行中的 turn 已有结束过的 execution 时，可能是被重新唤起的，此时只有另一个 turn 也在执行才分栏，不按原提问时间把之后的提问都算作并行。
 
 ## 验证重点
 

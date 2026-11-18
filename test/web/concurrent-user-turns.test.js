@@ -55,6 +55,16 @@ describe('concurrent user turn presentation', () => {
     expect(hasParallelUserTurns([reopened, turn('b', 'running', 20)])).toBe(true);
     // A routed root that never got an execution has nothing to overlap.
     expect(hasParallelUserTurns([turn('a', 'running', 10), { ...turn('r', 'completed', 20), executions: [] }])).toBe(false);
+    // An older Agent reopens without activeSince. A live root that already
+    // finished an execution cannot use its question time against roots
+    // without an end time; one still in its first execution can. End times
+    // (newer Agents) are unaffected.
+    const ran = { ...turn('b', 'completed', 20), executions: [{ vpId: 'v', state: 'completed' }] };
+    const legacyReopened = { ...turn('a', 'running', 10), executions: [{ vpId: 'v', state: 'completed' }, { vpId: 'v', state: 'running' }] };
+    expect(hasParallelUserTurns([legacyReopened, ran])).toBe(false);
+    expect(hasParallelUserTurns([legacyReopened, turn('b', 'running', 20)])).toBe(true);
+    expect(hasParallelUserTurns([{ ...turn('a', 'running', 10), executions: [{ vpId: 'v', state: 'running' }] }, ran])).toBe(true);
+    expect(hasParallelUserTurns([legacyReopened, { ...ran, endedAt: 30 }])).toBe(true);
 
     const a = { id: 'a', type: 'user', content: 'earlier', timestamp: 10, userTurnId: 'a' };
     const b = { id: 'b', type: 'user', content: 'later', timestamp: 20, userTurnId: 'b' };
