@@ -233,6 +233,8 @@ export default {
   "person.skills": "技能与能力",
   "person.searchMessages": "搜索消息",
   "person.search": "搜索",
+  "person.viewFullMessage": "查看完整消息",
+  "person.hideFullMessage": "收起完整消息",
   "person.noSearchResults": "没有找到匹配的消息。",
   "person.you": "你",
   "person.currentUnderstanding": "当前认识",

@@ -424,7 +424,9 @@ test('ordinary Session scenes persist through a live switch and reload without e
   // A converted Session does not need the compatibility owner in its old
   // roster. Verify the activity and Stop action still follow the live turn.
   await page.setViewportSize({ width: 1360, height: 900 });
-  await showSidebar(page);
+  // Wait for the responsive layout to commit instead of sampling visibility
+  // in the frame between a mobile sidebar closing and the desktop layout.
+  await expect(page.locator('.sidebar-navigation:visible')).toBeVisible();
   await page.locator('.sidebar-session-row:visible').filter({ hasText: 'Legacy collaboration' }).click();
   const legacyScene = composer.getByRole('combobox', { name: 'Scene', exact: true });
   const legacyInput = composer.getByRole('textbox');
