@@ -138,7 +138,13 @@ describe('VP catalog and durable Session compatibility', () => {
         } });
         expect(system.startsWith(`${block}\n\nsession-preamble`)).toBe(true);
         expect(system).not.toContain('private-soul');
+        const stockSystem = buildSystemPrompt({ language: locale, vpPersona: stock });
+        for (const prompt of [system, stockSystem]) {
+          expect(prompt).not.toMatch(/Changes \/ Validation \/ Risks|Conclusion \/ Findings \/ Validation|改动 \/ 验证 \/ 风险|结论 \/ Findings \/ 验证/);
+          expect(prompt).toContain(i ? '在相关的那句话里点明' : 'beside the answer');
+        }
         const body = i ? stock.personaZh : stock.personaEn;
+        expect(stockSystem).toContain(body);
         expect(block).not.toContain(body.split('\n')[0]);
         expect(block).toContain(body.slice(body.indexOf('\n\n') + 2));
         for (const [other, phrases] of Object.entries(cues)) {

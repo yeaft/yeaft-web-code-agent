@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ctx from '../../../agent/context.js';
+import { renderSessionScene } from '../../../agent/yeaft/sessions/scene-prompts.js';
 import * as bridge from '../../../agent/yeaft/web-bridge.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
@@ -321,7 +322,7 @@ it('pins each Turn to its selected scene while sharing a durable transcript acro
   await send('scene-history', '@all review the design');
   await bridge.__testDrainVpDrivers();
   expect(requests).toHaveLength(1);
-  expect(requests[0].prompt).toContain('start read-only');
+  expect(requests[0].prompt).toContain(renderSessionScene('software', 'en'));
   expect(requests[0].prompt).not.toContain('## Soul');
   expect(requests[0].prompt).not.toContain('multi_vp_routing');
   expect(JSON.stringify(requests[0].messages)).toContain('@all review the design');
@@ -342,8 +343,8 @@ it('pins each Turn to its selected scene while sharing a durable transcript acro
   const current = events('vp_turn_start').at(-1);
   expect(current).toMatchObject({ userTurnId: 'scene-new', vpId: old.vpId });
   expect(current.threadId).not.toBe(old.threadId);
-  expect(requests[2].prompt).toContain('if only copy was requested');
-  expect(requests[2].prompt).not.toContain('start read-only');
+  expect(requests[2].prompt).toContain(renderSessionScene('writing', 'en'));
+  expect(requests[2].prompt).not.toContain(renderSessionScene('software', 'en'));
   expect(JSON.stringify(requests[2].messages)).toContain('shared architectural conclusion');
   await send('scene-extra', 'use shorter sentences');
   expect(classified).toEqual([['scene-new']]);
@@ -353,7 +354,7 @@ it('pins each Turn to its selected scene while sharing a durable transcript acro
   expect(events('vp_turn_end').some(frame => frame.turnId === current.turnId)).toBe(false);
   writingFinish.resolve();
   await bridge.__testDrainVpDrivers();
-  expect(requests.at(-1).prompt).toContain('if only copy was requested');
+  expect(requests.at(-1).prompt).toContain(renderSessionScene('writing', 'en'));
   expect(store.loadAllBySession(sessionId).find(row => row.clientMessageId === 'scene-extra'))
     .toMatchObject({ userTurnId: 'scene-new', relation: 'supplement' });
   await bridge.__testResetVpState();
