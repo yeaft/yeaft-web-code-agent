@@ -45,6 +45,16 @@ describe('concurrent user turn presentation', () => {
     expect(hasParallelUserTurns([turn('a', 'completed', 10, 15), turn('b', 'running', 20)])).toBe(false);
     expect(hasParallelUserTurns([turn('a', 'completed', 10), turn('b', 'running', 20)])).toBe(false);
     expect(hasParallelUserTurns([turn('a', 'completed', 10, 30), turn('b', 'running', 0)])).toBe(false);
+    // An older Agent still keeps the lane when the later root ran during the live one.
+    expect(hasParallelUserTurns([turn('a', 'running', 10), { ...turn('b', 'completed', 20), executions: [{ vpId: 'v' }] }])).toBe(true);
+    // A task result reopening a root measures from the reopen: a root that ran
+    // in between is not parallel, one that runs during the new span is.
+    const reopened = { ...turn('a', 'running', 10), activeSince: 40 };
+    expect(hasParallelUserTurns([reopened, turn('b', 'completed', 20, 30)])).toBe(false);
+    expect(hasParallelUserTurns([reopened, turn('b', 'completed', 45, 50)])).toBe(true);
+    expect(hasParallelUserTurns([reopened, turn('b', 'running', 20)])).toBe(true);
+    // A routed root that never got an execution has nothing to overlap.
+    expect(hasParallelUserTurns([turn('a', 'running', 10), { ...turn('r', 'completed', 20), executions: [] }])).toBe(false);
 
     const a = { id: 'a', type: 'user', content: 'earlier', timestamp: 10, userTurnId: 'a' };
     const b = { id: 'b', type: 'user', content: 'later', timestamp: 20, userTurnId: 'b' };
@@ -63,6 +73,12 @@ describe('concurrent user turn presentation', () => {
     // Finishing the earlier root appends it after the already-settled answer.
     expect(order([turn('a', 'completed', 10, 50), turn('b', 'completed', 20, 30)])).toEqual(['o', 'b', 'rb', 'a', 'ra', 'c']);
     expect(rows.map(row => row.id)).toEqual(['o', 'a', 'b', 'ra', 'rb', 'c']);
+    // A finished root without an end time (never ran) keeps its own slot
+    // instead of jumping above every settled answer.
+    const never = { id: 'n', type: 'user', content: 'failed send', timestamp: 15, userTurnId: 'n' };
+    expect(orderUserTurnMessages([a, never, b, replyA, replyB], [turn('a', 'completed', 10, 50),
+      { ...turn('n', 'completed', 15), executions: [] }, turn('b', 'completed', 20, 30)]).messages.map(row => row.id))
+      .toEqual(['b', 'rb', 'n', 'a', 'ra']);
   });
 
   it('preserves legacy rows and attaches old replies without inventing engine identity', () => {
@@ -198,6 +214,18 @@ describe('concurrent user turn presentation', () => {
       await Vue.nextTick();
       expect(wrapper.vm.splitActive).toBe(false);
       expect(wrapper.vm.historyBlocks.map(block => block.originMessageId)).toEqual(['m1', 'm2']);
+      // A background result reopening m1 after m2 finished is not parallel: no
+      // one-lane split, the reopened Workbench stays, and the live root reads last.
+      store.workbenchExpanded = true;
+      store.yeaftSessionTurns[0] = { userTurnId: 'm1', state: 'running', startedAt: 10, activeSince: 50 };
+      await Vue.nextTick();
+      expect(wrapper.vm.splitActive).toBe(false);
+      expect(store.workbenchExpanded).toBe(true);
+      expect(store.toggleWorkbench).toHaveBeenCalledTimes(2);
+      expect(wrapper.vm.historyBlocks.map(block => block.originMessageId)).toEqual(['m2', 'm1']);
+      store.yeaftSessionTurns[0] = { userTurnId: 'm1', state: 'completed', startedAt: 10, endedAt: 60 };
+      await Vue.nextTick();
+      expect(wrapper.vm.historyBlocks.map(block => block.originMessageId)).toEqual(['m2', 'm1']);
       // A new parallel period closes again, and direct split-to-split Session
       // navigation applies the default to the new owner exactly once.
       store.workbenchExpanded = true;

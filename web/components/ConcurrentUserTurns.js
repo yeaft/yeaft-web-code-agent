@@ -20,7 +20,9 @@ export default {
       </nav>
       <div class="concurrent-turn-track parallel-turn-track" ref="trackRef" @scroll.passive="onTrackScroll" :style="{ '--turn-count': turns.length }">
         <section v-for="turn in turns" :key="turn.userTurnId" :id="panelId(turn)"
-          :data-user-turn-id="turn.userTurnId" class="concurrent-turn-column parallel-turn-pane" :class="'is-' + turn.state" role="tabpanel" :aria-labelledby="panelId(turn) + '-tab'">
+          :data-user-turn-id="turn.userTurnId" class="concurrent-turn-column parallel-turn-pane" :class="'is-' + turn.state"
+          :role="tabsVisible ? 'tabpanel' : 'region'" :aria-labelledby="tabsVisible ? panelId(turn) + '-tab' : null"
+          :aria-label="tabsVisible ? null : (label(turn) || $t('chat.concurrent.turn'))">
           <header class="concurrent-turn-header">
             <span class="concurrent-turn-state" role="status"><span class="concurrent-turn-dot" aria-hidden="true"></span>{{ $t('chat.concurrent.' + turn.state) }}</span>
             <span v-if="label(turn)" class="concurrent-turn-title" :title="label(turn)">{{ label(turn) }}</span>
@@ -106,7 +108,12 @@ export default {
       const track = trackRef.value;
       // Unmeasured layouts (hidden, tests) keep the tab list as the safe default.
       if (!track?.clientWidth) return;
-      tabsVisible.value = track.scrollWidth > track.clientWidth + 1;
+      const visible = track.scrollWidth > track.clientWidth + 1;
+      // Widening the window must not drop a keyboard user's focus onto the page.
+      if (!visible && tabsRef.value?.contains(document.activeElement)) {
+        columnFor(selectedId.value)?.querySelector('.concurrent-turn-body')?.focus({ preventScroll: true });
+      }
+      tabsVisible.value = visible;
     };
     // Swiping or keyboard selection keeps the matching tab inside the tab strip
     // without scrolling the page itself.

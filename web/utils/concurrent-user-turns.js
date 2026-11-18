@@ -11,43 +11,49 @@ export function userTurnExcerpt(message) {
 const epoch = value => (Number.isFinite(value) && value > 0 ? value : null);
 
 /**
- * A Session stays in parallel layout while a live root overlaps another root:
- * both are live, the other started while it ran, or the other ended after it
- * started. Derived from the Agent snapshot alone, so navigation, reload and
- * other tabs agree. Snapshots without `endedAt` (older Agents) only lose the
- * "earlier root finished first" case and fall back to the ordinary transcript.
- * @param {Array<{ userTurnId: string, state: string, startedAt?: number, endedAt?: number }>} turns
+ * A Session stays in parallel layout while a live root overlaps another root
+ * that actually ran: both are live, the other started during the live span, or
+ * the other ended after that span began. A root reopened by a task result or
+ * leftover supplement starts its span at `activeSince`, so turns that ran
+ * between its two spans are not parallel. Derived from the Agent snapshot
+ * alone, so navigation, reload and other tabs agree. Without `endedAt` (older
+ * Agents) the "earlier root finished first" case falls back to one column.
+ * @param {Array<{ userTurnId: string, state: string, startedAt?: number, activeSince?: number, endedAt?: number, executions?: object[] }>} turns
  * @returns {boolean}
  */
 export function hasParallelUserTurns(turns = []) {
   const live = turns.filter(isPendingUserTurn);
   if (live.length > 1) return true;
-  const start = epoch(live[0]?.startedAt);
+  const start = epoch(live[0]?.activeSince) ?? epoch(live[0]?.startedAt);
   if (start == null) return false;
   return turns.some(turn => turn.userTurnId !== live[0].userTurnId
+    // A routed root that never got an execution produced no answer to overlap.
+    && (turn.executions?.length > 0 || epoch(turn.endedAt) != null)
     && ((epoch(turn.startedAt) ?? -Infinity) >= start || (epoch(turn.endedAt) ?? -Infinity) > start));
 }
 
 /** Snapshot-known roots settle in completion order; live roots stay last. */
 function settleKnownRoots(keys, turns) {
-  const byId = new Map(turns.filter(turn => turn?.userTurnId).map(turn => [turn.userTurnId, turn]));
-  if (keys.filter(key => byId.has(key)).length < 2) return keys;
+  const rank = new Map();
+  for (const turn of turns) {
+    if (!turn?.userTurnId) continue;
+    if (isPendingUserTurn(turn)) rank.set(turn.userTurnId, [1, 0]);
+    else if (epoch(turn.endedAt) != null) rank.set(turn.userTurnId, [0, turn.endedAt]);
+    // A finished root without an end time (older Agent, or a routed root that
+    // never ran) has no completion position and keeps its question-order slot.
+  }
+  const known = keys.filter(key => rank.has(key));
+  if (known.length < 2) return keys;
   const index = new Map(keys.map((key, position) => [key, position]));
-  const rank = (key) => {
-    const turn = byId.get(key);
-    if (isPendingUserTurn(turn)) return [2, index.get(key)];
-    const ended = epoch(turn.endedAt);
-    return ended == null ? [0, index.get(key)] : [1, ended];
-  };
-  const settled = keys.filter(key => byId.has(key)).sort((left, right) => {
-    const [leftGroup, leftValue] = rank(left);
-    const [rightGroup, rightValue] = rank(right);
+  known.sort((left, right) => {
+    const [leftGroup, leftValue] = rank.get(left);
+    const [rightGroup, rightValue] = rank.get(right);
     return leftGroup - rightGroup || leftValue - rightValue || index.get(left) - index.get(right);
   });
-  // Only the slots of known roots are permuted: older history and optimistic
+  // Only the slots of ranked roots are permuted: older history and optimistic
   // sends that the Agent has not routed yet keep their question-order slots.
   let cursor = 0;
-  return keys.map(key => (byId.has(key) ? settled[cursor++] : key));
+  return keys.map(key => (rank.has(key) ? known[cursor++] : key));
 }
 
 /** Stable root buckets keep supplements and interleaved executions together.

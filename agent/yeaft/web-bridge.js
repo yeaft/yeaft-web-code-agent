@@ -1245,8 +1245,9 @@ function publishSessionTurns(sessionId, extra = {}) {
       : (turn.state || 'completed');
     // Web settles finished roots in this order and keeps overlapping roots split.
     const endedAt = active.length ? null : (turn.endedAt || turn.lastActivityAt || null);
+    const activeSince = active.length ? turn.activeSince : null;
     return { userTurnId: turn.userTurnId, userMessageId: turn.userMessageId,
-      startedAt: turn.startedAt, ...(endedAt > 0 ? { endedAt } : {}), state, executions };
+      startedAt: turn.startedAt, ...(activeSince > 0 ? { activeSince } : {}), ...(endedAt > 0 ? { endedAt } : {}), state, executions };
   });
   sendSessionEvent({ type: 'session_turns', turns }, { sessionId, ...extra });
 }
@@ -1258,6 +1259,13 @@ function registerUserExecution(sessionId, userTurnId, vpId, threadId, turnId, pr
   if (!turn) {
     turn = { userTurnId, userMessageId: userTurnId, startedAt: Date.now(), executions: new Map() };
     turns.set(userTurnId, turn);
+  }
+  // A task result or leftover supplement can reopen a finished root. Its new
+  // active span starts now, not at the original question, so Web does not
+  // mistake turns that ran in between for parallel ones.
+  if (turn.executions.size && ![...turn.executions.values()].some(row => ['queued', 'running', 'cancelling'].includes(row.state))) {
+    turn.activeSince = Date.now();
+    delete turn.endedAt;
   }
   turn.executions.set(turnId, { vpId, threadId, turnId, state: 'queued' });
   visibleExecutionText.set(turnId, { sessionId, userTurnId, vpId, prompt: String(prompt).slice(0, 4000), promptOffset: 0, text: '', textOffset: 0, state: 'queued' });
