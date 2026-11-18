@@ -99,6 +99,9 @@ export function isCurrentYeaftHistoryResponse(store, msg = {}) {
   const sessionKey = yeaftHistoryIdentityKey(agentId, sessionId);
   const state = loadState(store, sessionKey);
   const responseRequestId = normalizeRequestId(msg.requestId);
+  // Once a mutation fences this Session, uncorrelated legacy replays can
+  // never prove they reflect it (including after a fresh chunk has landed).
+  if (!responseRequestId && store.yeaftTurnDeleteHistoryBySession?.[sessionKey]) return false;
   if (!state) return responseRequestId === null;
   const pendingRequestId = normalizeRequestId(state.requestId);
   if (responseRequestId) return responseRequestId === pendingRequestId;

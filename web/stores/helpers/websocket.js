@@ -212,6 +212,7 @@ export function connect(store) {
   store.agentSwitching = false;
 
   if (store.ws) {
+    store.interruptYeaftTurnDeletions?.();
     settleSessionCrudForConnection(
       store,
       store.chatHistoryConnectionGeneration,
@@ -334,6 +335,7 @@ export function connect(store) {
       return;
     }
     console.log('[WS] Disconnected:', event.code, event.reason);
+    store.interruptYeaftTurnDeletions?.();
     store.authenticated = false;
     if (store.sessionCatalogProtocolSupported === false) {
       store.sidebarLegacySessionCatalog = sidebarSessionCatalogRows(

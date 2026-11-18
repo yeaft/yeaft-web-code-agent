@@ -11,10 +11,11 @@ export default {
       required: true
     },
     sessionActions: { type: Boolean, default: false },
+    deleteTurnAction: { type: Object, default: null },
     hideSpeakerIdentity: { type: Boolean, default: false },
     externalAttachmentOpen: { type: Boolean, default: false }
   },
-  emits: ['quote', 'edit-as-new', 'open-attachment'],
+  emits: ['quote', 'edit-as-new', 'open-attachment', 'delete-turn'],
   template: `
     <div :class="messageClass">
       <!-- User message -->
@@ -96,6 +97,14 @@ export default {
           </button>
           <button type="button" class="message-action-btn" @click="$emit('edit-as-new', displayContent)" :title="$t('message.editAsNew')" :aria-label="$t('message.editAsNew')">
             <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+          </button>
+          <button v-if="deleteTurnAction" type="button" class="message-action-btn message-delete-turn"
+            :aria-disabled="deleteTurnAction.reason ? 'true' : undefined"
+            :title="$t(deleteTurnAction.reason ? 'yeaft.deleteTurn.' + deleteTurnAction.reason : 'yeaft.deleteTurn.action')"
+            :aria-label="$t('yeaft.deleteTurn.action')"
+            @click="!deleteTurnAction.reason && $emit('delete-turn', deleteTurnAction.target)"
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
           </button>
         </div>
       </template>

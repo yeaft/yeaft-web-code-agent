@@ -1030,6 +1030,12 @@ function formatYeaftHistoryMessages(incomingMessages, msgSessionId, mode, existi
 export function handleYeaftHistoryChunk(store, msg) {
   const msgSessionId = msg.sessionId != null ? msg.sessionId : msg.groupId;
   const retiredAgentId = msg.agentId || (msgSessionId && store.yeaftSessionAgentById?.[msgSessionId]) || null;
+  const deletionKey = yeaftHistoryIdentityKey(retiredAgentId, msgSessionId);
+  const deletion = store.yeaftTurnDeleteHistoryBySession?.[deletionKey];
+  if (deletion && (!msg.agentId || !msg.requestId)) return;
+  if (msg.requestId && typeof store.isCurrentYeaftHistoryResponse === 'function'
+      && !store.isCurrentYeaftHistoryResponse(msg)) return;
+  if (deletion?.needsReplay && (msg.mode !== 'recent' || msg.error || !Array.isArray(msg.messages))) return;
   if (isRetiredYeaftConversation(store, retiredAgentId, msg.conversationId)) {
     const currentConversationId = store.yeaftConversationIdsByAgent?.[retiredAgentId] || null;
     if (!currentConversationId || currentConversationId === msg.conversationId) return;
@@ -1038,8 +1044,6 @@ export function handleYeaftHistoryChunk(store, msg) {
     });
     msg = { ...msg, conversationId: currentConversationId };
   }
-  if (msg.requestId && typeof store.isCurrentYeaftHistoryResponse === 'function'
-      && !store.isCurrentYeaftHistoryResponse(msg)) return;
   let mode = msg.mode === 'recent' || msg.mode === 'delta' ? msg.mode : 'older';
   const incomingMessages = Array.isArray(msg.messages) ? msg.messages : [];
 
@@ -1131,7 +1135,16 @@ export function handleYeaftHistoryChunk(store, msg) {
   const repository = conversationRepositoryFor(store);
   let insertedRows = 0;
   let preservedEmptyRecent = false;
-  if (mode === 'recent') {
+  if (deletion?.needsReplay) {
+    // Replace in one render pass, including the empty/last-turn case. Keep
+    // only genuinely live overlays that might have started in another tab.
+    store.dropYeaftInvalidatedTranscript(retiredAgentId, msgSessionId, convId);
+    insertedRows = repository.commitDurable({ conversationId: convId,
+      sessionId: msgSessionId, rows: formatted, mode: 'recent', preserveEmpty: false }).insertedRows;
+    store.yeaftTurnDeleteHistoryBySession = {
+      ...store.yeaftTurnDeleteHistoryBySession, [deletionKey]: { ...deletion, needsReplay: false },
+    };
+  } else if (mode === 'recent') {
     const recentResult = replaceYeaftRecentHistoryRows(
       repository,
       convId,

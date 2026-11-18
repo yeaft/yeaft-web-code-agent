@@ -34,16 +34,19 @@ export default {
   components: { MessageItem },
   props: {
     message: { type: Object, required: true },
+    deleteTurnAction: { type: Object, default: null },
     sessionActions: { type: Boolean, default: true },
     hideSpeakerIdentity: { type: Boolean, default: false },
     externalAttachmentOpen: { type: Boolean, default: false },
   },
-  emits: ['quote', 'edit-as-new', 'open-attachment'],
+  emits: ['quote', 'edit-as-new', 'open-attachment', 'delete-turn'],
   template: `
     <div class="user-turn-block" :data-msg-id="message.id || ''">
       <div class="user-turn-block-main">
         <MessageItem
           :message="message"
+          :delete-turn-action="deleteTurnAction"
+          @delete-turn="$emit('delete-turn', $event)"
           :session-actions="sessionActions"
           :hide-speaker-identity="hideSpeakerIdentity"
           :external-attachment-open="externalAttachmentOpen"

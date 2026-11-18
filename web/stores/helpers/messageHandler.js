@@ -613,6 +613,11 @@ export function handleMessage(store, msg) {
       break;
     }
 
+    case 'yeaft_session_delete_turn_result':
+    case 'yeaft_session_turn_deleted':
+      store.handleYeaftTurnDeletion(msg);
+      break;
+
     case 'yeaft_history_chunk':
       handleYeaftHistoryChunk(store, msg);
       break;
