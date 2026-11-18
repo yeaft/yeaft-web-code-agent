@@ -5,6 +5,7 @@ const MAX_QUICK_SENDS = 5;
 const cloneEntries = entries => (Array.isArray(entries) ? entries : []).map(item => ({
   id: item.id, name: item.name, model: item.model,
   effort: item.effort || null, maxOutputTokens: item.maxOutputTokens ?? null,
+  ...(item.available === false ? { available: false } : {}),
 }));
 
 export default {
@@ -83,7 +84,7 @@ export default {
       this.models = agentConfig.availableModels || [];
       if (!this.dirty || pending.kind === 'save') {
         this.draft = cloneEntries(agentConfig.quickSends).map(item => ({
-          ...item, effort: normalizeModelEffort(item.effort, this.modelFor(item)) || null,
+          ...item, effort: item.available === false ? item.effort : normalizeModelEffort(item.effort, this.modelFor(item)) || null,
         }));
         this.dirty = false;
       }
@@ -94,7 +95,10 @@ export default {
         this.$emit('saved', this.agentId);
       }
     },
-    modelFor(item) { return this.models.find(model => modelOptionMatchesRef(model, item.model)); },
+    modelFor(item) {
+      const matches = this.models.filter(model => modelOptionMatchesRef(model, item.model));
+      return matches.length === 1 ? matches[0] : null;
+    },
     effortsFor(item) {
       const model = this.modelFor(item);
       return getSelectableModelEfforts(model?.effortOptions, model);
@@ -112,6 +116,7 @@ export default {
     changed() { this.dirty = true; this.message = ''; this.error = ''; },
     changeModel(item, model) {
       item.model = model;
+      delete item.available;
       if (!this.effortsFor(item).includes(item.effort)) item.effort = null;
       this.changed();
     },
@@ -135,7 +140,7 @@ export default {
       if (this.disabled || !this.dirty) return;
       this.error = this.validate();
       if (this.error) return;
-      this.request('save', { quickSends: cloneEntries(this.draft).map(item => ({ ...item, name: item.name.trim() })) });
+      this.request('save', { quickSends: cloneEntries(this.draft).map(({ available: _available, ...item }) => ({ ...item, name: item.name.trim() })) });
     },
   },
   template: `

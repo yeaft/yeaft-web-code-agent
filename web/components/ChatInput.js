@@ -76,8 +76,8 @@ export default {
           :key="preset.id || index"
           type="button"
           class="mobile-quick-send-button"
-          :disabled="!canQuickSend"
-          :title="preset.name"
+          :disabled="!canQuickSend || preset.available === false"
+          :title="preset.available === false ? $t('quickSend.modelRequired') : preset.name"
           :aria-label="$t('quickSend.composer.send', { number: index + 1, name: preset.name })"
           @pointerdown.prevent
           @click="sendQuick(preset)"
@@ -490,7 +490,7 @@ export default {
       }
     }, { immediate: true });
     const sendQuick = (preset) => {
-      if (!canQuickSend.value || !quickSends.value.includes(preset)) return;
+      if (!canQuickSend.value || !quickSends.value.includes(preset) || preset.available === false) return;
       send({ model: preset.model, effort: preset.effort ?? null, maxOutputTokens: preset.maxOutputTokens ?? null });
     };
 
@@ -718,7 +718,7 @@ export default {
         const preset = slot ? quickSends.value[slot - 1] : null;
         // An unconfigured or currently unavailable quick-send shortcut is inert:
         // do not consume Alt+1..5 unless this keypress can actually send.
-        if (!e.repeat && preset && canQuickSend.value) {
+        if (!e.repeat && preset && preset.available !== false && canQuickSend.value) {
           e.preventDefault();
           e.stopPropagation();
           sendQuick(preset);

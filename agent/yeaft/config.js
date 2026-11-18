@@ -581,6 +581,8 @@ export function loadConfig(overrides = {}) {
   // Normalizes each provider's `models` into `{ id, contextWindow?, maxOutput? }`
   // so consumers never have to deal with raw string / object ambiguity.
   config.availableModels = [];
+  const modelRefs = new Set();
+  const ambiguousModelRefs = new Set();
   if (providers) {
     for (const rawProvider of providers) {
       const p = normalizeKnownProviderForRuntime(rawProvider);
@@ -590,7 +592,8 @@ export function loadConfig(overrides = {}) {
         // A model id is only unique inside its provider. Keep provider-qualified
         // duplicates so an explicit `provider/model` never disappears from the
         // runtime catalog just because another provider exposes the same id.
-        if (!config.availableModels.some(am => am.ref === ref)) {
+        if (!modelRefs.has(ref)) {
+          modelRefs.add(ref);
           const entry = {
             id: m.id,
             ref,
@@ -619,10 +622,12 @@ export function loadConfig(overrides = {}) {
             if (protocol === 'gemini') Object.assign(entry, geminiEffortCatalog(m.id, cap), { defaultEffort: cap.defaultEffort });
           }
           config.availableModels.push(entry);
-        }
+        } else ambiguousModelRefs.add(ref);
       }
     }
   }
+
+  if (ambiguousModelRefs.size) config.ambiguousModelRefs = [...ambiguousModelRefs];
 
   // Agent-level primaryModel is optional. When absent, use the first provider
   // model as the effective runtime/UI default without writing it back to

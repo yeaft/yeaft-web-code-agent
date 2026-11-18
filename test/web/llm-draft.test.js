@@ -194,7 +194,8 @@ describe('Agent LLM editing draft ownership', () => {
       agents: [{ id: 'agent-a', online: true }], inputDrafts: {}, llmConfig: {}, sendWsMessage: vi.fn() });
     globalThis.Pinia = { useChatStore: () => store, useAuthStore: () => auth,
       useVpStore: () => ({ vpList: [] }) };
-    wrapper = mount(ChatInput, { props: { quickSendEnabled: true, sendFn: vi.fn() },
+    const sendFn = vi.fn();
+    wrapper = mount(ChatInput, { props: { quickSendEnabled: true, sendFn },
       global: { mocks: { $t: key => key }, stubs: { MessageComposer: { template: '<div />' } } } });
     expect(store.sendWsMessage).toHaveBeenCalledTimes(1);
     expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'get_llm_config', agentId: 'agent-a' });
@@ -226,6 +227,16 @@ describe('Agent LLM editing draft ownership', () => {
     await wrapper.setProps({ quickSendEnabled: true });
     expect(store.sendWsMessage).toHaveBeenCalledTimes(4);
     expect(store.sendWsMessage).toHaveBeenLastCalledWith({ type: 'get_llm_config', agentId: 'agent-b' });
+    const blocked = { id: 'blocked', name: 'Unavailable shortcut', model: 'test/model-a', effort: 'high', available: false };
+    store.llmConfig['agent-b'] = config('ready', { quickSends: [blocked, { id: 'next', name: 'Next', model: 'test/model-b' }] });
+    wrapper.vm.inputText = 'Keep draft';
+    wrapper.vm.inputFocused = true;
+    await Vue.nextTick();
+    expect(wrapper.vm.canQuickSend).toBe(true);
+    expect(wrapper.findAll('.mobile-quick-send-button').map(button => button.element.disabled)).toEqual([true, false]);
+    wrapper.vm.sendQuick(wrapper.vm.quickSends[0]);
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(wrapper.vm.inputText).toBe('Keep draft');
   });
 });
 

@@ -5552,7 +5552,9 @@ export function validateQuickSend(value, config) {
   const entry = typeof model === 'string' && model.includes('/')
     ? config?.availableModels?.find(candidate => candidate.ref === model)
     : null;
-  if (!entry) throw new Error('quickSend.model must name an available provider/model');
+  if (!entry || config?.ambiguousModelRefs?.includes(model)) {
+    throw new Error('quickSend.model must name an available, unambiguous provider/model');
+  }
   const effort = resolveCatalogEffort(entry, value.effort);
   if (value.effort !== null && !effort) {
     throw new Error('quickSend.effort is not supported by the selected model');

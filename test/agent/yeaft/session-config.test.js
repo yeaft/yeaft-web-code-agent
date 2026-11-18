@@ -377,7 +377,12 @@ describe('Model-level Gemini options', () => {
       .toEqual([{ ...quickSend, name: 'Renamed', effort: 'high' }]);
     const duplicate = { ...cfg.providers[0], models: ['gemini-3.1-pro-preview', 'gemini-3.1-pro-preview'] };
     expect(updateLlmConfig({ providers: [duplicate], quickSends: [quickSend] }, root).error).toContain('unambiguous');
-
+    const hydrogen = 'google/gemini-4-hydrogen';
+    const ambiguous = { ...quickSend, model: hydrogen, effort: 'high' };
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ providers: [{ ...duplicate,
+      models: ['gemini-4-hydrogen', 'gemini-4-hydrogen'] }], quickSends: [ambiguous] }));
+    expect(getLlmConfig(root).quickSends).toEqual([{ ...ambiguous, available: false }]);
+    expect(() => validateQuickSend(ambiguous, loadConfig({ dir: root }))).toThrow('unambiguous');
   });
 
   it('keeps configured options by model ID through CLI edits and Gemini discovery', async () => {

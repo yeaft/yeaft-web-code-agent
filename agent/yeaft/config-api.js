@@ -53,7 +53,10 @@ function findQuickSendModel(models, ref) {
 function publicQuickSends(value, models) {
   return (Array.isArray(value) ? value : []).map(item => {
     const model = findQuickSendModel(models, item.model);
-    const effort = model?.effortProtocol === 'gemini'
+    // Keep unavailable rows editable and preserve their keyboard slots. Never
+    // reinterpret a saved effort when its model ownership cannot be resolved.
+    if (!model) return { ...item, available: false };
+    const effort = model.effortProtocol === 'gemini'
       ? resolveCatalogEffort(model, item.effort) ?? normalizeEffort(item.effort, model.geminiThinkingMode === 'level')
       : normalizeEffort(item.effort);
     return { ...item, effort };
