@@ -85,9 +85,9 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   expect(events('session_turns').some(f => f.event.turns.filter(t => t.state === 'running').length === 2)).toBe(true);
   // Live roots (including a stopping one) never carry an end time; finished
   // roots do, in the order they ended, and never carry a live span.
-  const rows = () => events('session_turns').flatMap(f => f.event.turns);
-  expect(rows().some(t => t.state === 'cancelling')).toBe(true);
-  expect(rows().every(t => (['running', 'cancelling'].includes(t.state) ? t.endedAt === undefined : t.activeSince === undefined))).toBe(true);
+  const publishedTurns = () => events('session_turns').flatMap(f => f.event.turns);
+  expect(publishedTurns().some(t => t.state === 'cancelling')).toBe(true);
+  expect(publishedTurns().every(t => (['running', 'cancelling'].includes(t.state) ? t.endedAt === undefined : t.activeSince === undefined))).toBe(true);
   const settled = events('session_turns').at(-1).event.turns;
   const endedA = settled.find(t => t.userTurnId === 'root-a');
   const endedB = settled.find(t => t.userTurnId === 'root-b');
@@ -98,9 +98,9 @@ it('runs overlapping same-VP user turns with visible partial peer context, suppl
   // the new live span starts after its earlier end, and it ends again later.
   expect(bridge.__testHooks.scheduleTaskResultRescue({ taskId: 'bg-result', sessionId, vpId: 'omni',
     content: 'background result', userTurnId: 'root-b' })).toBe(true);
-  await until(() => rows().some(t => t.userTurnId === 'root-b' && t.activeSince));
+  await until(() => publishedTurns().some(t => t.userTurnId === 'root-b' && t.activeSince));
   await bridge.__testDrainVpDrivers();
-  const reopened = rows().find(t => t.userTurnId === 'root-b' && t.activeSince);
+  const reopened = publishedTurns().find(t => t.userTurnId === 'root-b' && t.activeSince);
   expect(reopened).toMatchObject({ state: 'running', startedAt: endedB.startedAt });
   expect(reopened.activeSince).toBeGreaterThanOrEqual(endedB.endedAt);
   expect(reopened.endedAt).toBeUndefined();
