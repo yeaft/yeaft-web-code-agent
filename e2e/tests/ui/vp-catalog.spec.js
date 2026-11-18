@@ -441,7 +441,11 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(statusPane.getByText('Execution status')).toBeVisible();
   await expect(statusPane).not.toContainText(/\b(VPs?|Omni)\b/i);
 
+  await scene.press('ArrowDown');
+  await expect(sceneMenu.getByRole('option', { name: 'Writing', exact: true })).toBeFocused();
   await page.setViewportSize({ width: 320, height: 740 });
+  await expect(sceneMenu).toHaveCount(0);
+  await expect(scene).toBeFocused();
   await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
   const effort = composer.locator('.yeaft-composer-effort');
   const modelMenu = composer.locator('.yeaft-composer-model-dropdown');
@@ -519,7 +523,9 @@ test('ordinary Session scenes persist through a live switch and reload without e
 
   // A converted Session does not need the compatibility owner in its old
   // roster. Verify the activity and Stop action still follow the live turn.
+  await attach.focus();
   await page.setViewportSize({ width: 1360, height: 900 });
+  await expect(composer.locator('.chat-composer-actions .attach-btn')).toBeFocused();
   // Wait for the responsive layout to commit instead of sampling visibility
   // in the frame between a mobile sidebar closing and the desktop layout.
   await expect(page.locator('.sidebar-navigation:visible')).toBeVisible();

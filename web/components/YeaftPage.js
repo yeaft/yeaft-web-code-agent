@@ -823,8 +823,23 @@ export default {
     const narrowDetailMedia = typeof window.matchMedia === 'function' ? window.matchMedia(NARROW_DETAIL_QUERY) : null;
     const matchesMedia = (media, fallbackWidth) => media ? media.matches : window.innerWidth <= fallbackWidth;
     const isMobile = Vue.ref(matchesMedia(mobileMedia, 768));
-    // Responsive reparenting can move whichever control owns keyboard focus.
-    Vue.watch(isMobile, () => { composerMenuOpen.value = null; });
+    // Capture focus before moving the leading controls or closing a popup.
+    Vue.watch(isMobile, (mobile) => {
+      const composer = chatInputRef.value?.$el;
+      const active = document.activeElement;
+      const restore = composer?.contains(active)
+        ? active.closest('.yeaft-composer-choice')?.querySelector(':scope > button') || active.closest('.attach-btn')
+        : null;
+      composerMenuOpen.value = null;
+      if (!restore) return;
+      Vue.nextTick(() => {
+        if (isMobile.value !== mobile || !restore.isConnected || restore.disabled) return;
+        // Do not steal focus if the user or another control already moved it.
+        if (document.activeElement === document.body || document.activeElement === active) {
+          restore.focus({ preventScroll: true });
+        }
+      });
+    });
     const isNarrowDetail = Vue.ref(matchesMedia(narrowDetailMedia, 1024));
     const effectiveSidebarCollapsed = Vue.computed(() =>
       isMobile.value ? !store.sessionSidebarOpen : store.sidebarCollapsed
