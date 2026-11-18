@@ -11,6 +11,7 @@ export default {
       required: true
     },
     sessionActions: { type: Boolean, default: false },
+    hideSpeakerIdentity: { type: Boolean, default: false },
     externalAttachmentOpen: { type: Boolean, default: false }
   },
   emits: ['quote', 'edit-as-new', 'open-attachment'],
@@ -35,7 +36,7 @@ export default {
             >{{ formatExpertLabel(sel) }}</span>
           </div>
           <div v-if="message.quote" class="message-quoted-context">
-            <div class="message-quoted-author">{{ $t('message.quotedFrom', { author: message.quote.author }) }}</div>
+            <div class="message-quoted-author">{{ $t('message.quotedFrom', { author: hideSpeakerIdentity && message.quote.role === 'assistant' ? $t('message.assistant') : message.quote.author }) }}</div>
             <div v-if="message.quote.content" class="message-quoted-content">{{ message.quote.content }}</div>
             <div v-if="message.quote.todos && message.quote.todos.length" class="message-quoted-todos">
               <div v-for="todo in message.quote.todos" :key="todo.content" class="message-quoted-todo">

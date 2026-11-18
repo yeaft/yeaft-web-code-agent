@@ -725,6 +725,7 @@ export const useSessionsStore = defineStore('sessions', {
         if (prev) {
           this.sessions[opKey] = {
             ...prev,
+            sceneId: result.config?.sceneId || null,
             config: result.config && typeof result.config === 'object' ? { ...result.config } : {},
           };
         }
@@ -868,6 +869,7 @@ export const useSessionsStore = defineStore('sessions', {
         roster: Array.isArray(s.roster) ? s.roster.slice() : [],
         defaultVpId: s.defaultVpId || null,
         announcement: typeof s.announcement === 'string' ? s.announcement : '',
+        sceneId: s.config?.sceneId || null,
         config: s.config && typeof s.config === 'object' ? { ...s.config } : {},
         task: s.task && typeof s.task === 'object' ? JSON.parse(JSON.stringify(s.task)) : null,
         workDir: typeof s.workDir === 'string' ? s.workDir : '',

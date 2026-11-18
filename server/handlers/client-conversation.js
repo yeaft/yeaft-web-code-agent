@@ -308,6 +308,40 @@ function skippedYeaftDreamResult(msg, reason) {
 export async function handleClientConversation(clientId, client, msg, checkAgentAccess) {
   if (await handleClientScheduledTaskReceipts(client, msg)) return true;
   if (await handleClientScheduledTasks(clientId, client, msg)) return true;
+  // Scene-aware clients must not receive a successful legacy create that
+  // silently ignores the requested prompt. Keep the existing generic relay
+  // for non-scene traffic, including old clients and scheduled-task setup.
+  const isCreate = ['yeaft_create_session', 'yeaft_create_group', 'unify_create_session', 'unify_create_group'].includes(msg.type);
+  const nestedScene = isCreate && msg.payload?.config && Object.hasOwn(msg.payload.config, 'sceneId');
+  const sceneCreate = isCreate && (nestedScene || (msg.payload && Object.hasOwn(msg.payload, 'sceneId')));
+  const sceneUpdate = ['yeaft_update_session_config', 'yeaft_update_group_config', 'unify_update_session_config', 'unify_update_group_config'].includes(msg.type)
+    && msg.config && Object.hasOwn(msg.config, 'sceneId');
+  if (sceneCreate || sceneUpdate) {
+    const agentId = msg.agentId || client.currentAgent || null;
+    const sessionId = sceneUpdate ? msg.sessionId || null : null;
+    const op = sceneCreate ? 'create' : 'update_config';
+    const reject = async (code, message) => {
+      await sendToWebClient(client, { type: 'yeaft_output', agentId, sessionId,
+        event: { type: 'session_crud_result', op, requestId: msg.requestId ?? null,
+          sessionId, ok: false, error: { code, message } } });
+      return true;
+    };
+    const access = resolveAgentAccessError(agentId, client.userId, client.role);
+    if (!client.authenticated || access) {
+      const denied = !client.authenticated || access === 'Agent access denied';
+      return reject(denied ? 'agent_access_denied' : 'agent_offline', denied ? 'Agent access denied' : 'Agent offline');
+    }
+    if (nestedScene) return reject('invalid_scene', 'Use top-level sceneId to create a Session');
+    if (!agents.get(agentId)?.capabilities?.includes('session_scenes')) {
+      return reject('session_scenes_unsupported', 'This Agent does not support Session scenes');
+    }
+    const outbound = sceneCreate
+      ? { type: 'yeaft_create_session', requestId: msg.requestId, payload: msg.payload }
+      : { type: 'yeaft_update_session_config', requestId: msg.requestId, sessionId, config: msg.config };
+    try { if (await forwardToAgent(agentId, outbound)) return true; }
+    catch { /* Relay failure must settle the requesting browser. */ }
+    return reject('agent_offline', 'Agent delivery could not be confirmed; refresh before retrying');
+  }
   switch (msg.type) {
     case 'get_agents':
       // 前端可能附带 conversationIds（server 重启后恢复场景）

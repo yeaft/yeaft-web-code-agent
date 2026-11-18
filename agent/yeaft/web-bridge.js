@@ -108,6 +108,7 @@ import { publicScheduledTask } from './sessions/scheduled-task-definition.js';
 import { ScheduledTaskScheduler, SCHEDULED_TASK_DISPATCH_GUARD } from './sessions/scheduled-task-scheduler.js';
 import { loadSessionConfig, normalizeSessionConfig, resolveSessionConfig, SessionConfigError } from './sessions/session-config.js';
 import { updateSessionConfig } from './sessions/session-crud.js';
+import { isSessionSceneId } from './sessions/scene-ids.js';
 import { createCoordinator } from './sessions/coordinator.js';
 import { seedDefaultSession } from './sessions/seed-default.js';
 import { trimHistoryCacheForRuntime } from './history-window.js';
@@ -821,10 +822,8 @@ function buildAsyncTaskCoordinator() {
       const releaseActivity = beginSessionActivity(sessionId);
       try {
         if (!deleteOwnerIfMatch(taskId, engine)) return;
-        let causalRootId = delivery?.causalRootId || null;
-        if (!causalRootId && sessionId) {
-          try { causalRootId = session?.taskManager?.getTask?.(sessionId, taskId)?.source?.causalRootId || null; } catch { /* legacy fallback is best-effort */ }
-        }
+        let source = null;
+        try { source = sessionId && session?.taskManager?.getTask?.(sessionId, taskId)?.source; } catch { /* legacy fallback is best-effort */ }
         scheduleTaskResultRescue({
           taskId,
           sessionId,
@@ -833,8 +832,9 @@ function buildAsyncTaskCoordinator() {
           content: delivery?.content,
           taskKind: delivery?.taskKind,
           taskStatus: delivery?.taskStatus,
-          causalRootId,
-          userTurnId: delivery?.userTurnId || null,
+          causalRootId: delivery?.causalRootId || source?.causalRootId || null,
+          userTurnId: delivery?.userTurnId || source?.userTurnId || null,
+          sceneId: source?.sceneId,
         });
       } finally {
         releaseActivity();
@@ -857,6 +857,8 @@ function buildAsyncTaskCoordinator() {
           taskKind: task.kind,
           taskStatus: task.status,
           causalRootId: task.source?.causalRootId || null,
+          userTurnId: task.source?.userTurnId || null,
+          sceneId: task.source?.sceneId,
         });
       } finally {
         releaseActivity();
@@ -1306,8 +1308,10 @@ async function withSessionRouting(sessionId, fn) {
   }
 }
 
-async function classifySessionUserInput(sessionId, messageId, text, ingress, turnConfig, mentions = []) {
-  const running = liveSessionThreads(sessionId);
+async function classifySessionUserInput(sessionId, messageId, text, ingress, turnConfig, mentions = [], sceneId = null) {
+  // Supplements inherit the running Turn's prompt. Never append a send
+  // captured under a different scene to that Turn (including legacy -> scene).
+  const running = liveSessionThreads(sessionId).filter(thread => (thread.sceneId || null) === sceneId);
   // The classifier chooses user turns, not fan-out executions of one request.
   // Prefer an explicitly addressed VP as the representative, without treating
   // VP identity itself as evidence that independent requests are related.
@@ -1329,6 +1333,7 @@ async function classifySessionUserInput(sessionId, messageId, text, ingress, tur
             .map(row => row.text).join('\n').slice(-2000) })), newQuery: text });
       if (decision?.decision === 'related') {
         const candidate = running.find(thread => thread.threadId === decision.targetThreadId);
+        if (!candidate) throw new Error('Unknown active Turn');
         // A stopped target is not a natural finish race: never resurrect a
         // late supplement as a new independent execution after explicit stop.
         const selectedUserTurnId = candidateRoots.get(decision.targetThreadId);
@@ -1340,7 +1345,7 @@ async function classifySessionUserInput(sessionId, messageId, text, ingress, tur
         // may still own this user turn after that representative finishes.
         const live = liveSessionThreads(sessionId);
         target = live.includes(candidate) ? candidate
-          : live.find(thread => selectedUserTurnId && thread.userTurnId === selectedUserTurnId) || null;
+          : live.find(thread => selectedUserTurnId && thread.userTurnId === selectedUserTurnId && (thread.sceneId || null) === sceneId) || null;
       }
     } catch (error) {
       console.warn('[Yeaft] Session input classification failed; starting parallel turn:', error?.message || error);
@@ -1353,7 +1358,7 @@ async function classifySessionUserInput(sessionId, messageId, text, ingress, tur
     startedAt: ingress.startedAt, executions: new Map() });
   sendSessionEvent({ type: 'user_message_routed', messageId, userTurnId, relation }, { sessionId, userTurnId });
   const activeVpIds = relation === 'supplement'
-    ? [...new Set(liveSessionThreads(sessionId).filter(thread => thread.userTurnId === userTurnId).map(thread => thread.vpId))]
+    ? [...new Set(liveSessionThreads(sessionId).filter(thread => thread.userTurnId === userTurnId && (thread.sceneId || null) === sceneId).map(thread => thread.vpId))]
     : [];
   const addressedActiveVpIds = activeVpIds.filter(vpId => mentions.includes(vpId));
   return { userTurnId, relation, targetVpIds: relation === 'supplement'
@@ -1376,7 +1381,7 @@ async function classifyWithDeadline(params) {
   } finally { clearTimeout(timer); }
 }
 
-function peerVisibleContext(sessionId, ownTurnId, seen) {
+function peerVisibleContext(sessionId, ownTurnId, seen, sceneId) {
   const notes = [];
   let budget = 32000;
   for (const [turnId, row] of visibleExecutionText) {
@@ -1388,7 +1393,7 @@ function peerVisibleContext(sessionId, ownTurnId, seen) {
     if (previous?.end === end && previous?.state === state && previous?.promptEnd === promptEnd) continue;
     const delta = row.text.slice(Math.max(0, (previous?.end || 0) - (row.textOffset || 0)));
     const promptDelta = row.prompt.slice(Math.max(0, (previous?.promptEnd || 0) - (row.promptOffset || 0)));
-    const note = `[${row.vpId}; userTurnId=${row.userTurnId || ''}; execution=${turnId}; state=${state}]\n`
+    const note = `[${sceneId ? 'Session turn' : row.vpId}; userTurnId=${row.userTurnId || ''}; execution=${turnId}; state=${state}]\n`
       + (promptDelta ? `User ${previous ? 'input update' : 'request'}: ${promptDelta}\n` : '') + delta;
     if (note.length > budget && notes.length) break;
     notes.push(note.slice(-budget));
@@ -1466,7 +1471,7 @@ function buildVpPromptPayload(vpId, envelope) {
   const text = envelope?.msg?.text || '';
   const inboundSuffix = `${envelope?._promptSuffix || ''}${sessionMessageQuotePrompt(envelope?.msg?.meta?.quote)}`;
   const inboundParts = Array.isArray(envelope?._promptParts) ? envelope._promptParts : [];
-  const prompt = `@vp-${vpId} ${text}${inboundSuffix}`;
+  const prompt = `${envelope?._sceneId ? '' : `@vp-${vpId} `}${text}${inboundSuffix}`;
   const promptParts = inboundParts.length > 0
     ? [...inboundParts, { type: 'text', text: prompt }]
     : null;
@@ -1482,6 +1487,7 @@ function buildPendingRescueEnvelope({ sessionId, taskId = null, threadId = 'main
     sessionId,
     taskId,
     trigger: 'pending_rescue',
+    _sceneId: leftover?.sceneId || null,
     _userTurnId: leftover?.userTurnId || leftover?.persistedMessage?.userTurnId || null,
     ...(leftover?.persistedMessage ? {
       _persistedUserMessage: leftover.persistedMessage,
@@ -2525,7 +2531,7 @@ function enqueueForVp(sessionId, vpId, envelope) {
   registerRoutePromise(envelope?.msg?.id, routePromise);
 }
 
-function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus, causalRootId = null, userTurnId = null }) {
+function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus, causalRootId = null, userTurnId = null, sceneId = null }) {
   if (!sessionId || !vpId || !taskId) return false;
   const text = typeof content === 'string'
     ? content
@@ -2539,6 +2545,7 @@ function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', 
         sessionId,
         taskId,
         trigger: 'task_result',
+        _sceneId: isSessionSceneId(sceneId) ? sceneId : null,
         _userTurnId: userTurnId,
         _causalRootId: causalRootId,
         _promptSuffix: '',
@@ -2614,6 +2621,7 @@ function scheduleTaskResultReentry(event) {
     taskStatus: task.status,
     causalRootId: task.source?.causalRootId || null,
     userTurnId: task.source?.userTurnId || task.runtime?.userTurnId || null,
+    sceneId: task.source?.sceneId,
   });
 }
 
@@ -2632,7 +2640,8 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
   const routeStart = perfNowMs();
   if (ingress.cancelled) return null;
   const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
-  const runningThreads = getRunningThreads(sessionId, vpId);
+  const sceneId = envelope?._sceneId || null;
+  const runningThreads = getRunningThreads(sessionId, vpId).filter(candidate => (candidate.sceneId || null) === sceneId);
   let thread = null;
   let related = false;
 
@@ -2646,14 +2655,15 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
   if (userRouting) {
     if (userRouting.relation === 'supplement') {
       thread = getRunningThreads(sessionId, vpId).find(candidate => candidate.userTurnId === userRouting.userTurnId
+        && (candidate.sceneId || null) === sceneId
         && !vpAborts.get(threadKey(sessionId, vpId, candidate.threadId))?.signal.aborted) || null;
       related = Boolean(thread);
     }
     if (!thread) thread = getOrCreateVpThread({ sessionId, vpId, title: fallbackTitle(text) });
   } else if (isTaskResult && sourceThreadId) {
     const source = getVpThreadMap(sessionId, vpId).get(sourceThreadId);
-    const canReuse = !envelope?._userTurnId || !source || !RUNNING_THREAD_STATES.has(source.status)
-      || (envelope?._userTurnId && envelope._userTurnId === source.userTurnId);
+    const canReuse = !source || !RUNNING_THREAD_STATES.has(source.status)
+      || ((source.sceneId || null) === sceneId && (!envelope?._userTurnId || envelope._userTurnId === source.userTurnId));
     thread = getOrCreateVpThread({ sessionId, vpId, ...(canReuse ? { threadId: sourceThreadId } : {}), title: fallbackTitle(text) });
   } else if (runningThreads.length === 0) {
     thread = getOrCreateVpThread({ sessionId, vpId, title: fallbackTitle(text) });
@@ -2675,7 +2685,7 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
     }
     if (ingress.cancelled) return null;
     const targetIsRunning = decision
-      ? getRunningThreads(sessionId, vpId).some((t) => t.threadId === decision.targetThreadId
+      ? getRunningThreads(sessionId, vpId).some((t) => t.threadId === decision.targetThreadId && (t.sceneId || null) === sceneId
         && !vpAborts.get(threadKey(sessionId, vpId, t.threadId))?.signal.aborted)
       : false;
     if (decision?.decision === 'related' && decision.targetThreadId && targetIsRunning
@@ -2730,6 +2740,7 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
       userTurnId,
       preview: prompt,
       originalText: text,
+      sceneId,
       originalParts: Array.isArray(envelope?._promptParts) ? envelope._promptParts : null,
       internal: isInternalAppend,
       injectedBy: isInternalAppend ? injectedBy : null,
@@ -2803,6 +2814,7 @@ async function routeActiveEnvelopeToVpThread(sessionId, vpId, envelope, ingress)
     vpInboxes.set(key, inbox);
   }
   registerUserExecution(sessionId, userTurnId, vpId, thread.threadId, turnId, text);
+  thread.sceneId = sceneId;
   inbox.push({ envelope, turnId, thread });
   turnAbortMeta.set(turnId, { sessionId, vpId, threadId: thread.threadId, key });
 
@@ -4422,7 +4434,7 @@ export function handleYeaftRestoreSession(msg) {
     if (!workDir) throw new SessionCrudError('invalid_workdir', sessionId);
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const meta = restoreSessionToRegistry(yeaftDir, sessionId, workDir);
-    sendSessionCrudResult({ op: 'restore', requestId, ok: true, session: meta });
+    sendSessionCrudResult({ op: 'restore', requestId, ok: true, session: { ...meta, config: loadSessionConfig(yeaftDir, sessionId) } });
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'restore', requestId, ok: false, error: sessionErrorPayload(err) });
@@ -4437,7 +4449,7 @@ export function handleYeaftRenameSession(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = renameSession(yeaftDir, sessionId, name);
     invalidateGroupContext(sessionId);
-    sendSessionCrudResult({ op: 'rename', requestId, ok: true, session: group });
+    sendSessionCrudResult({ op: 'rename', requestId, ok: true, session: { ...group, config: loadSessionConfig(yeaftDir, sessionId) } });
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'rename', requestId, ok: false, error: sessionErrorPayload(err) });
@@ -4478,7 +4490,7 @@ export function handleYeaftUpdateSession(msg) {
       group = updateSessionWorkDir(yeaftDir, sessionId, patch.workDir);
     }
     invalidateGroupContext(sessionId);
-    sendSessionCrudResult({ op: 'update', requestId, ok: true, session: group });
+    sendSessionCrudResult({ op: 'update', requestId, ok: true, session: { ...group, config: loadSessionConfig(yeaftDir, sessionId) } });
     sendSessionSnapshotBroadcast();
   } catch (err) {
     sendSessionCrudResult({ op: 'update', requestId, ok: false, error: sessionErrorPayload(err) });
@@ -4505,19 +4517,21 @@ export function handleYeaftUpdateSessionConfig(msg) {
     if (!partial) throw new SessionConfigError('invalid_patch', 'config object required');
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const savedConfig = updateSessionConfig(yeaftDir, sessionId, partial);
-    const effectiveBaseConfig = session?.config || loadConfig({ dir: yeaftDir });
-    // The write above is the source of truth. Merge it directly instead of
-    // reopening the file so cached engines cannot observe an unrelated stale
-    // read between persistence and publication.
-    const sessionConfig = resolveSessionConfig(effectiveBaseConfig, savedConfig);
-    const publishedSessionConfig = sessionConfig.dir || !effectiveBaseConfig?.dir
-      ? sessionConfig
-      : { ...sessionConfig, dir: effectiveBaseConfig.dir };
-    const prefix = `${sessionId}::`;
-    for (const [key, engine] of vpEngines) {
-      if (!key.startsWith(prefix)) continue;
-      engine.refreshConfig?.(publishedSessionConfig);
-      vpEngineConfigKeys.set(key, engineConfigKey(publishedSessionConfig));
+    if (Object.hasOwn(partial, 'model') || Object.hasOwn(partial, 'modelEffort')) {
+      const effectiveBaseConfig = session?.config || loadConfig({ dir: yeaftDir });
+      // The write above is the source of truth. Merge it directly instead of
+      // reopening the file so cached engines cannot observe an unrelated stale
+      // read between persistence and publication.
+      const sessionConfig = resolveSessionConfig(effectiveBaseConfig, savedConfig);
+      const publishedSessionConfig = sessionConfig.dir || !effectiveBaseConfig?.dir
+        ? sessionConfig
+        : { ...sessionConfig, dir: effectiveBaseConfig.dir };
+      const prefix = `${sessionId}::`;
+      for (const [key, engine] of vpEngines) {
+        if (!key.startsWith(prefix)) continue;
+        engine.refreshConfig?.(publishedSessionConfig);
+        vpEngineConfigKeys.set(key, engineConfigKey(publishedSessionConfig));
+      }
     }
     // Do not invalidate the Session coordinator or abort active VP turns.
     // The next adapter loop sees this config; the stream already underway
@@ -4532,7 +4546,7 @@ export function handleYeaftUpdateSessionConfig(msg) {
     // Keep rolling upgrades correct; modern peers negotiate the bounded delta.
     if (!ctx.serverCapabilities?.has?.('yeaft_session_config_delta')) sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendSessionCrudResult({ op: 'update_config', requestId, ok: false, error: sessionErrorPayload(err) });
+    sendSessionCrudResult({ op: 'update_config', requestId, sessionId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -5663,13 +5677,16 @@ async function runYeaftSessionSend(msg) {
   }
   traceDuration('session_send.open_session', openSessionStart, { ok: !!sessionHandle });
 
+  // Snapshot at message acceptance, before boot/classification can yield to
+  // another client's scene update. Never mutate the scene of a running turn.
+  const sceneId = sessionHandle && !sessionMetaForRuntime?.task ? loadSessionConfig(yeaftDir, sessionId).sceneId || null : null;
   const releaseActivity = beginSessionActivity(sessionId);
   const ingress = beginSessionIngress(sessionId);
   ingress.messageId = typeof msg.id === 'string' && msg.id ? msg.id : randomUUID();
   try {
     return await dispatchAcceptedSessionSend({
       msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress,
-      tracePerf, traceDuration, turnConfig, sessionHandle, sessionRoot, sessionMetaForRuntime,
+      tracePerf, traceDuration, turnConfig, sceneId, sessionHandle, sessionRoot, sessionMetaForRuntime,
     });
   } finally {
     ingress.release();
@@ -5679,7 +5696,7 @@ async function runYeaftSessionSend(msg) {
 
 async function dispatchAcceptedSessionSend({
   msg, text, mentions, quote, sessionId, yeaftDir, perfTraceId, perfStart, ingress,
-  tracePerf, traceDuration, turnConfig, sessionHandle, sessionRoot, sessionMetaForRuntime,
+  tracePerf, traceDuration, turnConfig, sceneId, sessionHandle, sessionRoot, sessionMetaForRuntime,
 }) {
   const ensureSessionStart = perfNowMs();
   await ensureSessionLoaded({ sessionMeta: sessionMetaForRuntime, perfTraceId });
@@ -5713,7 +5730,7 @@ async function dispatchAcceptedSessionSend({
 
   // Auto-add @-mentioned VPs from the library, heal missing defaultVpId.
   let rosterMutated = false;
-  try {
+  if (!sceneId) try {
     const meta = sessionHandle.getMeta();
     const wantsAdd = mentions.filter(
       (m) => m && m !== 'all' && !meta.roster.includes(m)
@@ -5813,18 +5830,19 @@ async function dispatchAcceptedSessionSend({
       const messageId = ingress.messageId;
       if (ingress.cancelled) return;
       const routing = await classifySessionUserInput(sessionId, messageId, text, ingress, turnConfig,
-        mentions.length ? mentions : coord.parseMentions(text));
+        sceneId ? [] : (mentions.length ? mentions : coord.parseMentions(text)), sceneId);
       if (!routing) return;
       report = coord.ingest({
         id: messageId,
         _userTurnRouting: routing,
+        _sceneId: sceneId,
         _userTurnId: routing.userTurnId,
         ...(routing.targetVpIds.length ? { _routingIntent: { targetVpIds: routing.targetVpIds, broadcast: false } } : {}),
         from: 'user',
         role: 'user',
         text,
         meta: {
-          mentions,
+          mentions: sceneId ? [] : mentions,
           // Persisted form (no base64) — safe for jsonl-log.
           attachments: persistedAttachments,
           ...(quote ? { quote } : {}),
@@ -5983,9 +6001,10 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
   if (typeof sessionId === 'string' && sessionId.trim()) {
     out.sessionId = sessionId.trim();
   }
-  const collabToolPolicy = resolveCollabToolPolicy(sessionMeta);
+  const sceneId = isSessionSceneId(envelope?._sceneId) ? envelope._sceneId : null;
+  const collabToolPolicy = sceneId ? COLLAB_TOOL_POLICY.SINGLE_VP : resolveCollabToolPolicy(sessionMeta);
   if (collabToolPolicy) out.collabToolPolicy = collabToolPolicy;
-  if (sessionMeta && Array.isArray(sessionMeta.roster)) {
+  if (!sceneId && sessionMeta && Array.isArray(sessionMeta.roster)) {
     out.sessionMembers = sessionMeta.roster
       .filter(v => typeof v === 'string' && v.trim())
       .map(v => v.trim());
@@ -6003,9 +6022,9 @@ export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope
   if (sessionMeta && typeof sessionMeta.workDir === 'string' && sessionMeta.workDir.trim()) {
     out.workDir = sessionMeta.workDir.trim();
   }
-  const persona = buildVpPersona(resolvedVpId);
+  const persona = sceneId ? { sceneId, vpId: resolvedVpId } : buildVpPersona(resolvedVpId);
   if (persona) out.vpPersona = persona;
-  if (sessionCoordinator && typeof sessionCoordinator.ingest === 'function') {
+  if (!sceneId && sessionCoordinator && typeof sessionCoordinator.ingest === 'function') {
     try {
       out.router = createRouter({
         coordinator: sessionCoordinator,
@@ -6553,7 +6572,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         // each write a copy of the user message, and history replay
         // would render the user's prompt N times.
         userAlreadyPersisted: true,
-        getPeerContext: () => peerVisibleContext(sessionId, turnId, peerContextSeen),
+        getPeerContext: () => peerVisibleContext(sessionId, turnId, peerContextSeen, inboundEnvelope?._sceneId),
         peerTurnIds: liveSessionThreads(sessionId).filter(peer => peer !== thread)
           .flatMap(peer => [...(userTurnsFor(sessionId).get(peer.userTurnId)?.executions.keys() || [])]),
         currentUserMessage: inboundEnvelope?._persistedUserMessage || null,

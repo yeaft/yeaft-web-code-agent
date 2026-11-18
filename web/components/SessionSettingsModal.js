@@ -163,15 +163,25 @@ export default {
     deleteConfirmReady() {
       return this.deleteConfirmText.trim() === this.groupDisplayName;
     },
+    showCompatibility() {
+      return !!(this.group && (this.group.task || !this.group.sceneId));
+    },
     sections() {
       return [
         ...(this.group?.task ? [{ id: 'task', label: this.$t('scheduledTasks.task') }] : []),
         { id: SESSION_SETTINGS_SECTION, label: this.$t('yeaft.session.settings.nav.session') },
-        { id: 'members', label: this.$t('yeaft.session.settings.nav.members') },
+        ...(this.showCompatibility ? [{
+          id: 'members',
+          label: this.$t(this.group.task ? 'yeaft.session.settings.nav.members' : 'yeaft.session.settings.nav.compatibility'),
+        }] : []),
       ];
     },
   },
   watch: {
+    showCompatibility(visible) {
+      if (!visible && this.group && this.section === 'members') this.section = SESSION_SETTINGS_SECTION;
+      if (visible && this.section === 'members') this.subscribeVps();
+    },
     section(next) {
       // Seed the relevant draft when entering a section so the user sees
       // the current value rather than a stale or empty input.
@@ -180,6 +190,7 @@ export default {
         this.renameDraft = this.groupDisplayName;
         this.workDirDraft = this.workDir;
       }
+      if (next === 'members') this.subscribeVps();
       // Clear unrelated errors so they don't haunt other sections.
       this.announcementError = '';
       this.renameError = '';
@@ -245,6 +256,7 @@ export default {
   },
   methods: {
     subscribeVps({ force = false } = {}) {
+      if (!this.showCompatibility) return;
       if (this.vpSnapshotTimer) clearTimeout(this.vpSnapshotTimer);
       this.vpSnapshotTimer = null;
       if (!force && this.vpLibraryReady) return;
@@ -575,7 +587,7 @@ export default {
             </div>
 
             <!-- Members -->
-            <div v-else-if="section === 'members'" class="group-settings-section">
+            <div v-else-if="section === 'members' && showCompatibility" class="group-settings-section">
               <div class="group-settings-section-header">
                 <h3 class="group-settings-heading" id="session-settings-members-heading">{{ $t('yeaft.session.settings.members.heading') }}</h3>
                 <button

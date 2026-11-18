@@ -35,6 +35,7 @@ export default {
   props: {
     message: { type: Object, required: true },
     sessionActions: { type: Boolean, default: true },
+    hideSpeakerIdentity: { type: Boolean, default: false },
     externalAttachmentOpen: { type: Boolean, default: false },
   },
   emits: ['quote', 'edit-as-new', 'open-attachment'],
@@ -44,6 +45,7 @@ export default {
         <MessageItem
           :message="message"
           :session-actions="sessionActions"
+          :hide-speaker-identity="hideSpeakerIdentity"
           :external-attachment-open="externalAttachmentOpen"
           @quote="$emit('quote', $event)"
           @edit-as-new="$emit('edit-as-new', $event)"

@@ -25,6 +25,7 @@ const { useSessionsStore } = await import('../../web/stores/sessions.js');
 const { useChatStore } = await import('../../web/stores/chat.js');
 const { useAuthStore } = await import('../../web/stores/auth.js');
 const { default: VpCrudPanel } = await import('../../web/components/VpCrudPanel.js');
+const { default: SessionSceneSelect } = await import('../../web/components/SessionSceneSelect.js');
 const { default: SessionCreateModal } = await import('../../web/components/SessionCreateModal.js');
 const { default: SessionSettingsModal } = await import('../../web/components/SessionSettingsModal.js');
 const { default: ChatInput } = await import('../../web/components/ChatInput.js');
@@ -47,7 +48,7 @@ beforeEach(() => {
   vp.applySnapshot({ vps: library() }, 'a', 'initial');
   sessions.applySnapshot([{ id: 'legacy', name: 'Old team', roster: ['linus', 'martin'], defaultVpId: 'linus', workDir: '/repo', announcement: 'Keep facts' }], 'a');
   chat = Vue.reactive({ currentView: 'yeaft', yeaftActiveSessionFilter: 'legacy', inputDrafts: {},
-    currentAgent: 'a', agents: [{ id: 'a', online: true }, { id: 'b', online: true }],
+    currentAgent: 'a', scheduledTaskProtocolSupported: true, agents: ['a', 'b'].map(id => ({ id, online: true, capabilities: ['scheduled_tasks'] })),
     sendWsMessage: vi.fn(() => true), sessionCrudRequest: vi.fn(async () => ({ ok: true })),
     createYeaftSession: vi.fn(async () => ({ ok: true, session: { id: 'created' } })), setActiveSessionFilter: vi.fn(),
   });
@@ -101,8 +102,68 @@ describe('Scenario VP catalog compatibility', () => {
     expect(buildVpMentionSections(ordered).flatMap(section => section.items.map(item => item.flatIndex))).toEqual(ordered.map((_, index) => index));
   });
 
-  it('shows the recommended creation picker but preserves an explicitly selected legacy VP when collapsed', async () => {
-    render(SessionCreateModal, { initialAgentId: 'a' });
+  it('creates ordinary Sessions with a scene and no dependency on VP hydration', async () => {
+    vp.beginSnapshot('b', 'pending', { target: true });
+    render(SessionCreateModal, { initialAgentId: 'b' });
+    const scene = document.querySelector('.yeaft-create-scene-select');
+    expect(scene.value).toBe('general');
+    expect(document.querySelector('.yeaft-roster')).toBeNull();
+    expect(chat.sendWsMessage).not.toHaveBeenCalled();
+    scene.value = 'short-video';
+    scene.dispatchEvent(new Event('change', { bubbles: true }));
+    await Vue.nextTick();
+    expect(wrapper.vm.canSubmit).toBe(true);
+    await wrapper.vm.onSubmit();
+    expect(chat.createYeaftSession).toHaveBeenCalledWith({
+      agentId: 'b', sceneId: 'short-video', workDir: '', displayName: en['yeaft.session.create.untitled'],
+    });
+  });
+
+  it('opens resumed or restored native Sessions from a vendor view on the owning Agent', async () => {
+    chat.currentView = 'chat';
+    chat.enterYeaft = vi.fn(() => { chat.currentView = 'yeaft'; });
+    render(SessionCreateModal, { initialAgentId: 'b' });
+    const existing = { id: 'existing', agentId: 'b' };
+    wrapper.vm.resumeExisting(existing);
+    expect(chat.enterYeaft).toHaveBeenLastCalledWith('b', { deferBootstrap: true });
+    expect(chat.setActiveSessionFilter).toHaveBeenLastCalledWith('existing', { agentId: 'b', force: true });
+    chat.currentView = 'chat';
+    chat.enterYeaft.mockClear();
+    chat.sessionCrudRequest.mockResolvedValueOnce({ ok: true, session: { id: 'registered', agentId: 'b' } });
+    await wrapper.vm.onRestoreClick({ id: 'on-disk', agentId: 'b' });
+    expect(chat.enterYeaft).toHaveBeenCalledOnce();
+    expect(chat.setActiveSessionFilter).toHaveBeenLastCalledWith('registered', { agentId: 'b', force: true });
+  });
+
+  it('lets a legacy Session explicitly opt into the inferred scene and restores the committed scene on failure', async () => {
+    const session = Vue.reactive({ id: 'legacy', defaultVpId: 'omni' });
+    let complete;
+    chat.updateYeaftSessionScene = vi.fn(() => new Promise(resolve => { complete = resolve; }));
+    render(SessionSceneSelect, { session, agentId: 'b' });
+    const select = wrapper.get('select');
+    expect(select.element.selectedOptions[0].textContent).toBe('General');
+    expect(select.element.value).toBe('');
+    expect(select.findAll('option').filter(option => option.element.value).map(option => option.element.value))
+      .toEqual(['general', 'software', 'writing', 'short-video', 'investment']);
+    await select.setValue('general');
+    expect(select.element.disabled).toBe(true);
+    expect(chat.updateYeaftSessionScene).toHaveBeenCalledWith('legacy', 'general', 'b');
+    complete({ ok: false });
+    await flushPromises();
+    expect(select.element.value).toBe('');
+    expect(wrapper.get('[role="alert"]').text()).toBe(en['yeaft.session.scene.updateError']);
+    await select.setValue('general');
+    session.sceneId = 'general';
+    complete({ ok: true });
+    await flushPromises();
+    expect(select.element.value).toBe('general');
+    expect(select.element.disabled).toBe(false);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+  });
+
+  it('shows the recommended scheduled-task targeting picker but preserves an explicitly selected legacy VP when collapsed', async () => {
+    render(SessionCreateModal, { initialAgentId: 'a', taskMode: true });
+    await wrapper.setData({ taskDraft: { ...wrapper.vm.taskDraft, prompt: 'Check the build' }, taskValid: true });
     await wrapper.setData({ vpRosterOpen: true });
     expect([...document.querySelectorAll('.yeaft-roster-row input')].map(input => input.value)).toEqual([...RECOMMENDED_VP_IDS, 'my-assistant']);
     expect(wrapper.vm.form.vpIds).toEqual(['omni']);
@@ -239,7 +300,8 @@ describe('Scenario VP catalog compatibility', () => {
   });
 
   it('keeps create-Agent requests local and scopes websocket failures and retries', async () => {
-    render(SessionCreateModal, { initialAgentId: 'a' });
+    render(SessionCreateModal, { initialAgentId: 'a', taskMode: true });
+    await wrapper.setData({ taskDraft: { ...wrapper.vm.taskDraft, prompt: 'Check the build' }, taskValid: true });
     await wrapper.setData({ form: { ...wrapper.vm.form, agentId: 'b' }, vpRosterOpen: true });
     const requestId = vp.snapshotForAgent('b').snapshotRequestId;
     expect(vp.snapshotAgentId).toBe('a');
@@ -266,7 +328,8 @@ describe('Scenario VP catalog compatibility', () => {
   });
 
   it('submits the entire pinned selection and default after partial hydration, validation failure and retry', async () => {
-    render(SessionCreateModal, { initialAgentId: 'a' });
+    render(SessionCreateModal, { initialAgentId: 'a', taskMode: true });
+    await wrapper.setData({ taskDraft: { ...wrapper.vm.taskDraft, prompt: 'Check the build' }, taskValid: true });
     await wrapper.setData({ vpRosterOpen: true });
     wrapper.vm.toggleVp('linus', true);
     wrapper.vm.form.defaultVpId = 'linus';
@@ -291,7 +354,8 @@ describe('Scenario VP catalog compatibility', () => {
   });
 
   it('never reseeds an existing create selection when live removal makes its metadata unavailable', async () => {
-    render(SessionCreateModal, { initialAgentId: 'a' });
+    render(SessionCreateModal, { initialAgentId: 'a', taskMode: true });
+    await wrapper.setData({ taskDraft: { ...wrapper.vm.taskDraft, prompt: 'Check the build' }, taskValid: true });
     await wrapper.setData({ vpRosterOpen: true, form: { ...wrapper.vm.form, vpIds: ['omni', 'linus'], defaultVpId: 'linus' } });
     // Even before a user toggle marks the picker touched, hydration cannot change
     // a selection already represented by checked rows.
@@ -334,7 +398,7 @@ describe('Scenario VP catalog compatibility', () => {
   it('promotes only an actually activated Agent library and continues receiving scoped wire updates', async () => {
     const realChat = useChatStore();
     realChat.currentAgent = 'a';
-    render(SessionCreateModal, { initialAgentId: 'b' });
+    render(SessionCreateModal, { initialAgentId: 'b', taskMode: true });
     const requestId = vp.snapshotForAgent('b').snapshotRequestId;
     realChat.handleYeaftOutput({ agentId: 'b', requestId,
       event: { type: 'vp_snapshot', vps: [{ vpId: 'omni', displayName: 'B Omni' }] } });

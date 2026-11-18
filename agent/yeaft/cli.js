@@ -717,13 +717,14 @@ async function runREPL(config, args) {
       if (sessionRunner) {
         const outcome = await sessionRunner.run(input, {
           modelEffort: args.modelEffort || session.config.modelEffort || null,
-          onEvent: ({ vpId, event }) => {
+          onEvent: ({ vpId, event, sceneId }) => {
+            const speaker = sceneId ? '' : `[${vpId}] `;
             if (event.type === 'text_delta') {
               responseText += event.text || '';
-              process.stdout.write(`\n[${vpId}] ${event.text || ''}`);
+              process.stdout.write(`\n${speaker}${event.text || ''}`);
             } else if (event.type === 'response_presentation') {
               responseText += event.message?.content || '';
-              process.stdout.write(`\n[${vpId}] ${event.message?.content || ''}`);
+              process.stdout.write(`\n${speaker}${event.message?.content || ''}`);
             } else if (event.type === 'tool_start') {
               process.stderr.write(`\n[${vpId}] ${event.name}...\n`);
             } else if (event.type === 'error') {
@@ -958,6 +959,7 @@ async function runStreamJson(config, args) {
             runner: sessionRunner,
             ...common,
             internal: true,
+            sceneId: context.task.source?.sceneId || null,
             meta: {
               injectedBy: 'task_result',
               routeTargetVpId: context.vpId,
@@ -1023,8 +1025,9 @@ async function runStreamJson(config, args) {
         onUndelivered(taskId, delivery, ownerEngine) {
           const owner = removeOwner(taskId, ownerEngine);
           if (!owner || rescuedTaskIds.has(taskId)) return;
+          const saved = loaded.taskManager?.getTask?.(owner.sessionId, taskId, owner.vpId);
           queueTaskRescue({
-            task: { id: taskId, kind: delivery?.taskKind, status: delivery?.taskStatus },
+            task: saved || { id: taskId, kind: delivery?.taskKind, status: delivery?.taskStatus },
             sessionId: delivery?.sessionId || owner.sessionId,
             vpId: delivery?.vpId || owner.vpId,
             threadId: delivery?.threadId || owner.threadId,
@@ -1252,9 +1255,10 @@ async function runOnce(config, args) {
     if (sessionRunner) {
       const outcome = await sessionRunner.run(args.prompt, {
         modelEffort: args.modelEffort || session.config.modelEffort || null,
-        onEvent: ({ vpId, event }) => {
-          if (event.type === 'text_delta') process.stdout.write(`\n[${vpId}] ${event.text || ''}`);
-          else if (event.type === 'response_presentation') process.stdout.write(`\n[${vpId}] ${event.message?.content || ''}`);
+        onEvent: ({ vpId, event, sceneId }) => {
+          const speaker = sceneId ? '' : `[${vpId}] `;
+          if (event.type === 'text_delta') process.stdout.write(`\n${speaker}${event.text || ''}`);
+          else if (event.type === 'response_presentation') process.stdout.write(`\n${speaker}${event.message?.content || ''}`);
           else if (event.type === 'tool_start') process.stderr.write(`\n[${vpId}] ${event.name}...\n`);
           else if (event.type === 'error') process.stderr.write(`\n[${vpId}] Error: ${event.error?.message || event.error}\n`);
         },

@@ -8,7 +8,7 @@ import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js'
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
-import { createSessionFromSpec } from '../../../agent/yeaft/sessions/session-crud.js';
+import { createSessionFromSpec, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 
 let root;
@@ -24,10 +24,10 @@ afterEach(async () => {
 });
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); const gate = { promise, resolve }; gates.push(gate); return gate; }
 async function until(fn) { for (let i = 0; i < 400; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 5)); } throw Error('condition timed out'); }
-function setup(adapter, roster = ['omni'], config = {}) {
+function setup(adapter, roster = ['omni'], config = {}, sceneId) {
   root = mkdtempSync(join(tmpdir(), 'session-parallel-'));
   seedDefaultVps(join(root, 'virtual-persons'));
-  const meta = createSessionFromSpec(root, { name: 'Parallel', roster, defaultVpId: 'omni' });
+  const meta = createSessionFromSpec(root, { name: 'Parallel', roster, defaultVpId: 'omni', sceneId });
   const store = new ConversationStore(root);
   ctx.CONFIG = { yeaftDir: root };
   ctx.ws = { readyState: 1, send() {} }; ctx.serverEncryptionRequired = false;
@@ -295,4 +295,69 @@ it('keeps a classified fan-out supplement on the root when its representative fi
   first.resolve(); second.resolve();
   await bridge.__testDrainVpDrivers();
   expect(events('vp_turn_start')).toHaveLength(2);
+});
+
+
+it('pins each Turn to its selected scene while sharing a durable transcript across a switch', async () => {
+  const writingFinish = deferred();
+  const requests = [];
+  const { send, sessionId, store } = setup({ async *stream(params) {
+    requests.push({ prompt: params.system, messages: structuredClone(params.messages) });
+    if (requests.length === 1) {
+      yield { type: 'text_delta', text: 'shared architectural conclusion' };
+    } else if (requests.length === 2) {
+      yield { type: 'text_delta', text: 'old scene still running' };
+      if (!params.signal.aborted) await new Promise(resolve => params.signal.addEventListener('abort', resolve, { once: true }));
+      const error = Error('aborted'); error.name = 'AbortError'; throw error;
+    } else if (requests.length === 3) {
+      yield { type: 'text_delta', text: 'new scene draft' };
+      await writingFinish.promise;
+    } else {
+      yield { type: 'text_delta', text: 'incorporated writing supplement' };
+    }
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } }, ['omni', 'linus'], { language: 'en' }, 'software');
+
+  await send('scene-history', '@all review the design');
+  await bridge.__testDrainVpDrivers();
+  expect(requests).toHaveLength(1);
+  expect(requests[0].prompt).toContain('maintainable software');
+  expect(requests[0].prompt).not.toContain('## Soul');
+  expect(requests[0].prompt).not.toContain('multi_vp_routing');
+  expect(JSON.stringify(requests[0].messages)).toContain('@all review the design');
+  expect(JSON.stringify(requests[0].messages)).not.toContain('@vp-omni');
+  await send('scene-old', 'keep working from the conclusion');
+  await until(() => requests.length === 2);
+  const old = events('vp_turn_start').at(-1);
+  const classified = [];
+  bridge.__testSetThreadClassifier(({ runningThreads }) => {
+    classified.push(runningThreads.map(t => t.userTurnId));
+    return { decision: 'related', targetThreadId: runningThreads[0].threadId };
+  });
+  bridge.handleYeaftUpdateSessionConfig({ sessionId, config: { sceneId: 'writing' } });
+  expect(snapshotSessions(root).find(row => row.id === sessionId)).toMatchObject({ roster: ['omni', 'linus'], config: { sceneId: 'writing' } });
+  expect(events('vp_turn_end').some(frame => frame.turnId === old.turnId)).toBe(false);
+  await send('scene-new', 'write about that conclusion');
+  await until(() => requests.length === 3);
+  const current = events('vp_turn_start').at(-1);
+  expect(current).toMatchObject({ userTurnId: 'scene-new', vpId: old.vpId });
+  expect(current.threadId).not.toBe(old.threadId);
+  expect(requests[2].prompt).toContain("author's voice");
+  expect(requests[2].prompt).not.toContain('maintainable software');
+  expect(JSON.stringify(requests[2].messages)).toContain('shared architectural conclusion');
+  await send('scene-extra', 'use shorter sentences');
+  expect(classified).toEqual([['scene-new']]);
+  expect(events('user_message_routed').at(-1).event).toMatchObject({ userTurnId: 'scene-new', relation: 'supplement' });
+  bridge.handleYeaftAbortTurn({ sessionId, turnId: old.turnId });
+  await until(() => events('vp_turn_end').some(frame => frame.turnId === old.turnId));
+  expect(events('vp_turn_end').some(frame => frame.turnId === current.turnId)).toBe(false);
+  writingFinish.resolve();
+  await bridge.__testDrainVpDrivers();
+  expect(requests.at(-1).prompt).toContain("author's voice");
+  expect(store.loadAllBySession(sessionId).find(row => row.clientMessageId === 'scene-extra'))
+    .toMatchObject({ userTurnId: 'scene-new', relation: 'supplement' });
+  await bridge.__testResetVpState();
+  await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'replay-scenes', limit: 10 });
+  expect(frames().find(frame => frame.type === 'yeaft_history_chunk' && frame.requestId === 'replay-scenes').messages)
+    .toEqual(expect.arrayContaining([expect.objectContaining({ userTurnId: 'scene-old' }), expect.objectContaining({ userTurnId: 'scene-new', relation: 'supplement' })]));
 });

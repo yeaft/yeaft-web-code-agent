@@ -1,5 +1,5 @@
 /**
- * session-config.js — Per-session selected model override state.
+ * session-config.js — Per-session scene and model override state.
  *
  * Each session carries its header-selected model override in `config.json` at
  *   ~/.yeaft/sessions/<sessionId>/config.json
@@ -10,7 +10,8 @@
  * Public v1 schema:
  *   {
  *     "model": "my-proxy/claude-sonnet-4-20250514",  // optional
- *     "modelEffort": "xhigh"                          // optional
+ *     "modelEffort": "xhigh",                         // optional
+ *     "sceneId": "software"                          // optional, absent = legacy routing
  *   }
  *
  * Missing file or `{}` means no Session-level override. Managed provider
@@ -23,11 +24,12 @@ import { join } from 'path';
 import { writeAtomic } from '../storage/index.js';
 import { isGitHubCopilotProvider } from '../llm/known-providers.js';
 import { normalizeEffort } from '../models.js';
+import { isSessionSceneId } from './scene-ids.js';
 import { sessionsRoot } from './session-crud.js';
 
 const CONFIG_FILE = 'config.json';
 const MODEL_SOURCE_EXPLICIT = 'explicit';
-const WRITABLE_KEYS = new Set(['model', 'modelEffort']);
+const WRITABLE_KEYS = new Set(['model', 'modelEffort', 'sceneId']);
 const STORED_KEYS = new Set([...WRITABLE_KEYS, 'modelSource']);
 
 export class SessionConfigError extends Error {
@@ -47,6 +49,7 @@ export function sessionConfigPath(yeaftDir, sessionId) {
 function publicConfig(stored) {
   const out = {};
   for (const key of WRITABLE_KEYS) {
+    if (key === 'sceneId' && !isSessionSceneId(stored?.sceneId)) continue;
     if (Object.prototype.hasOwnProperty.call(stored || {}, key)) out[key] = key === 'modelEffort' ? normalizeEffort(stored[key]) : stored[key];
   }
   return out;
@@ -91,6 +94,9 @@ export function validateSessionConfig(cfg) {
     if (!WRITABLE_KEYS.has(key)) {
       throw new SessionConfigError('unknown_key', `unknown config key: ${key}`);
     }
+  }
+  if (Object.hasOwn(cfg, 'sceneId') && !isSessionSceneId(cfg.sceneId)) {
+    throw new SessionConfigError('invalid_scene', 'Unknown Session scene');
   }
   if ('model' in cfg && cfg.model !== null && cfg.model !== undefined && cfg.model !== '') {
     if (typeof cfg.model !== 'string' || !cfg.model.trim()) {

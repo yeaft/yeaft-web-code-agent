@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test as base, TestServer, getAvailablePort, useTestServer, useMockAgent } from '../../fixtures/test-server.js';
 import { MockAgent } from '../../fixtures/mock-agent.js';
+import { pane, sessionTurnWire } from '../../helpers/session-turns.js';
+import { sessionConfigPath } from '../../../agent/yeaft/sessions/session-config.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { createVp } from '../../../agent/yeaft/vp/vp-crud.js';
 import { scanVpLibrary } from '../../../agent/yeaft/vp/vp-store.js';
@@ -17,6 +19,7 @@ import {
 
 const recommended = ['omni', 'software-omni', 'writing-omni', 'short-video-omni', 'quant-omni'];
 const customId = 'catalog-custom';
+const conversationId = 'yeaft-vp-catalog-fixture';
 
 // Every Server/Agent data root is disposable. Nothing uses the user's ~/.yeaft.
 const test = base.extend({
@@ -54,11 +57,12 @@ const test = base.extend({
         { id: 'catalog-model-b', label: 'Catalog model B', provider: 'fixture' }];
       const status = () => ({ model: 'fixture/catalog-model-a', availableModels: models,
         catalogRevision: 1, catalogEpoch: 'vp-catalog-fixture', catalogRefreshedAt: Date.now() });
-      agent.catalog = { root, libDir, legacyId: legacy.id, publish, errors: [],
+      agent.catalog = { root, libDir, legacyId: legacy.id, publish, errors: [], turnWire: null,
         session: () => snapshotSessions(root).find(row => row.id === legacy.id) };
       agent._messageHandlers.push(request => {
-        const reply = (op, payload) => send({ type: 'session_crud_result', op, requestId: request.requestId,
-          ok: true, ...payload }, request.requestId);
+        const reply = (op, payload) => agent.send({ type: 'yeaft_output', requestId: request.requestId,
+          _requestClientId: request._requestClientId,
+          event: { type: 'session_crud_result', op, requestId: request.requestId, ok: true, ...payload } });
         try {
           switch (request.type) {
             case 'yeaft_vp_subscribe':
@@ -67,25 +71,35 @@ const test = base.extend({
             case 'yeaft_load_history': {
               const sessionId = request.sessionId;
               if (!sessionId) return;
-              const conversationId = 'yeaft-vp-catalog-fixture';
               agent.send({ type: 'yeaft_output', conversationId, sessionId,
                 event: { type: 'session_ready', conversationId, sessionId, ...status() } });
               if (request.limit === 0) return;
-              const messages = history.loadAllBySession(sessionId).map(row => ({ ...row,
-                seq: Number(row.id.slice(1)), ts: Date.parse(row.time) }));
+              const wire = agent.catalog.turnWire;
+              const messages = wire?.sessionId === sessionId ? wire.history
+                : history.loadAllBySession(sessionId).map(row => ({ ...row,
+                  seq: Number(row.id.slice(1)), ts: Date.parse(row.time) }));
               agent.send({ type: 'yeaft_history_chunk', sessionId, requestId: request.requestId,
                 mode: 'recent', messages, oldestSeq: messages[0]?.seq ?? null,
                 latestSeq: messages.at(-1)?.seq ?? null, hasMore: false });
+              if (wire?.sessionId === sessionId) wire.snapshot();
               return;
             }
             case 'yeaft_list_sessions': reply('list', { sessions: snapshotSessions(root) }); return;
             case 'yeaft_scan_workdir_sessions': reply('scan_workdir', { sessions: snapshotSessions(root)
               .filter(row => row.workDir === request.workDir).map(row => ({ ...row, alreadyRegistered: true })) }); return;
-            case 'yeaft_create_session': reply('create', { session: createSessionFromSpec(root, request.payload, { libDir }) }); break;
+            case 'yeaft_create_session': {
+              const created = createSessionFromSpec(root, request.payload, { libDir });
+              reply('create', { session: snapshotSessions(root).find(row => row.id === created.id) });
+              break;
+            }
             case 'yeaft_rename_session': reply('rename', { session: renameSession(root, request.sessionId, request.name) }); break;
             case 'yeaft_update_session': reply('update', { session: updateSessionAnnouncement(root, request.sessionId, request.patch.announcement) }); break;
-            case 'yeaft_update_session_config': reply('update_config', { sessionId: request.sessionId,
-              config: updateSessionConfig(root, request.sessionId, request.config) }); break;
+            case 'yeaft_update_session_config': {
+              const { sessionId } = request;
+              const config = updateSessionConfig(root, sessionId, request.config);
+              reply('update_config', { sessionId, config, session: snapshotSessions(root).find(row => row.id === sessionId) });
+              return;
+            }
             case 'yeaft_session_add_member': reply('add_member', { session: addMember(root, request.sessionId, request.vpId) }); break;
             case 'yeaft_session_remove_member': reply('remove_member', { session: removeMember(root, request.sessionId, request.vpId) }); break;
             case 'yeaft_session_set_default_vp': reply('set_default_vp', { session: setSessionDefaultVp(root, request.sessionId, request.vpId) }); break;
@@ -96,7 +110,12 @@ const test = base.extend({
           agent.catalog.errors.push({ type: request.type, message: error.message });
         }
       });
-      await useMockAgent(agent, use);
+      await useMockAgent(agent, async () => {
+        agent.send({ type: 'agent_capabilities_updated', capabilities: [
+          'plaintext-ok', 'work_center', 'workbench_session_routes', 'scheduled_tasks', 'session_scenes',
+        ] });
+        await use(agent);
+      });
     } finally {
       await closeConversationHistoryIndexes();
       rmSync(root, { recursive: true, force: true });
@@ -147,7 +166,7 @@ const member = (dialog, id) => dialog.locator('.group-settings-roster-item')
 
 // One end-to-end catalog/legacy-Session journey, repeated in two presentation
 // environments rather than splitting the same protocol contract into many cases.
-test('scenario catalog preserves legacy Session members, history and mentions through real relay and disk CRUD', async ({ page, serverUrl, mockAgent }, info) => {
+test('scenario catalog preserves scheduled-task targeting and legacy Session compatibility through real relay and disk CRUD', async ({ page, serverUrl, mockAgent }, info) => {
   test.setTimeout(120_000);
   await page.addInitScript(() => {
     localStorage.setItem('locale', 'en');
@@ -167,9 +186,10 @@ test('scenario catalog preserves legacy Session members, history and mentions th
       fixture.publish();
       await showSidebar(page);
       await expect(page.locator('.sidebar-session-row:visible').filter({ hasText: title })).toBeVisible();
-      await page.locator('.sidebar-primary-action:visible').filter({ hasText: 'New chat' }).click();
-      const create = page.locator('.yeaft-session-create-modal');
+      await page.locator('.sidebar-task-create:visible').click();
+      const create = page.locator('.yeaft-session-create-modal.task-mode');
       await expect(create).toBeVisible();
+      await expect(create.getByRole('combobox', { name: 'Scene', exact: true })).toHaveCount(0);
       const trigger = create.locator('.yeaft-roster-trigger');
       await expect(trigger).toHaveAttribute('aria-expanded', 'false');
       await trigger.focus();
@@ -219,7 +239,7 @@ test('scenario catalog preserves legacy Session members, history and mentions th
       await expect(page.locator('.assistant-turn').filter({ hasText: 'linus preserved historical answer' })).toBeVisible();
       await expect(page.locator('.assistant-turn').filter({ hasText: 'martin preserved historical answer' })).toBeVisible();
       let dialog = await openSettings(page, title);
-      await dialog.getByRole('tab', { name: 'Members', exact: true }).click();
+      await dialog.getByRole('tab', { name: 'Compatibility', exact: true }).click();
       for (const id of ['linus', 'martin']) await expect(member(dialog, id).locator('input')).toBeChecked();
       await expect(member(dialog, 'linus').locator('.group-settings-default-star')).toHaveAttribute('aria-pressed', 'true');
       await expect(member(dialog, 'linus').locator('.group-settings-default-star')).toBeDisabled();
@@ -250,7 +270,7 @@ test('scenario catalog preserves legacy Session members, history and mentions th
       await expect.poll(() => fixture.session().config.model).toBe(`fixture/catalog-model-${model.toLowerCase()}`);
       expect(fixture.session()).toMatchObject({ roster: ['linus', 'martin'], defaultVpId: 'linus' });
       dialog = await openSettings(page, title);
-      await dialog.getByRole('tab', { name: 'Members', exact: true }).click();
+      await dialog.getByRole('tab', { name: 'Compatibility', exact: true }).click();
       // Remove only the non-default member; collapsing does not rebuild a roster.
       await member(dialog, 'martin').locator('input').uncheck();
       await expect.poll(() => fixture.session().roster).toEqual(['linus']);
@@ -289,18 +309,6 @@ test('scenario catalog preserves legacy Session members, history and mentions th
       await expect(library.locator('.vp-crud-card')).toHaveCount(6);
       await page.locator('.settings-close:visible').click();
       await hideMobileSidebar(page);
-      const input = page.locator('.yeaft-session-input textarea');
-      for (const id of ['linus', 'martin']) {
-        await input.fill(`@${id.slice(0, 3)}`);
-        const option = page.getByRole('option').filter({ hasText: `@${id}` });
-        await expect(option).toBeVisible();
-        await expectWithinViewport(page.locator('.vp-mention-autocomplete'), page);
-        if (id === 'martin') await page.screenshot({ path: info.outputPath(`vp-mention-${suffix}.png`) });
-        await input.press('ArrowDown');
-        await input.press('Tab');
-        await expect(input).toHaveValue(`@${id} `);
-      }
-      await input.fill('');
       await expect(page.locator('.assistant-turn').filter({ hasText: 'linus preserved historical answer' })).toBeVisible();
       await expect(page.locator('.assistant-turn').filter({ hasText: 'martin preserved historical answer' })).toBeVisible();
       await page.screenshot({ path: info.outputPath(`vp-history-${suffix}.png`) });
@@ -316,4 +324,126 @@ test('scenario catalog preserves legacy Session members, history and mentions th
   expect(requests.some(row => /delete|archive/.test(row.type))).toBe(false);
   expect(new ConversationStore(fixture.root).loadAllBySession(fixture.legacyId).filter(row => row.role === 'assistant')
     .map(row => row.content)).toEqual(['linus preserved historical answer', 'martin preserved historical answer']);
+});
+
+test('ordinary Session scenes persist through a live switch and reload without exposing VP names', async ({ page, serverUrl, mockAgent }) => {
+  test.setTimeout(60_000);
+  await page.addInitScript(() => localStorage.setItem('locale', 'en'));
+  await page.setViewportSize({ width: 1360, height: 900 });
+  const fixture = mockAgent.catalog;
+  await page.goto(serverUrl);
+  await expect(page.locator('.chat-page, .yeaft-page').first()).toBeVisible();
+  fixture.publish();
+  await showSidebar(page);
+  await expect(page.locator('.sidebar-session-row:visible').filter({ hasText: 'Legacy collaboration' })).toBeVisible();
+  await page.locator('.sidebar-primary-action:visible').filter({ hasText: 'New chat' }).click();
+  const create = page.locator('.yeaft-session-create-modal');
+  const createScene = create.getByRole('combobox', { name: 'Scene', exact: true });
+  await expect(createScene).toHaveValue('general');
+  await expect(create.locator('.yeaft-roster-trigger')).toHaveCount(0);
+  await createScene.focus();
+  await createScene.press('ArrowDown');
+  await expect(createScene).toHaveValue('software');
+  const title = 'Scene switch regression';
+  await create.getByPlaceholder('Session name (optional)').fill(title);
+  await create.locator('.workdir-input-group input').fill(fixture.root);
+  await create.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(create).toHaveCount(0);
+  const [{ payload }] = mockAgent.messages('yeaft_create_session');
+  expect(payload).toMatchObject({ name: title, sceneId: 'software' });
+  for (const key of ['roster', 'vpIds', 'defaultVpId', 'task']) expect(payload).not.toHaveProperty(key);
+  const sessions = () => snapshotSessions(fixture.root).filter(row => row.name === title);
+  const [{ id: sessionId }] = sessions();
+  const readConfig = () => JSON.parse(readFileSync(sessionConfigPath(fixture.root, sessionId), 'utf8'));
+  expect(readConfig()).toMatchObject({ sceneId: 'software' });
+  expect(sessions()).toEqual([expect.objectContaining({ id: sessionId, roster: ['omni'], defaultVpId: 'omni' })]);
+
+  const wire = sessionTurnWire(page, mockAgent, { sessionId, conversationId });
+  fixture.turnWire = { sessionId, ...wire };
+  // Creating from the vendor chat surface opens the new native Session.
+  const composer = page.locator('.yeaft-session-input [data-message-composer]');
+  const scene = composer.getByRole('combobox', { name: 'Scene', exact: true });
+  await expect(scene).toHaveValue('software');
+  const first = await wire.send('First scene question');
+  wire.delta(first, 'First scene answer');
+  const firstAnswer = page.locator('.assistant-turn').filter({ hasText: 'First scene answer' });
+  await expect(firstAnswer).toBeVisible();
+  await expect(firstAnswer).toHaveClass(/streaming/);
+
+  await scene.selectOption('writing');
+  await expect(scene).toBeEnabled();
+  await expect(scene).toHaveValue('writing');
+  expect(mockAgent.messages('yeaft_update_session_config')).toEqual([
+    expect.objectContaining({ sessionId, config: { sceneId: 'writing' } }),
+  ]);
+  expect(readConfig()).toMatchObject({ sceneId: 'writing' });
+  expect(sessions()).toEqual([expect.objectContaining({ id: sessionId, roster: ['omni'], defaultVpId: 'omni' })]);
+  await expect(firstAnswer).toHaveClass(/streaming/);
+
+  const second = await wire.send('Second scene question');
+  expect(second.userTurnId).not.toBe(first.userTurnId);
+  wire.delta(second, 'Second scene answer');
+  const region = page.locator('.parallel-turn-region');
+  const expectAnonymous = async (surface) => {
+    await expect(surface.locator('.vp-turn-block-name, .vp-speaker-header')).toHaveCount(0);
+    await expect(surface).not.toContainText(/\bOmni\b/i);
+  };
+  await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
+  await expect(pane(page, first)).toContainText('First scene answer');
+  await expect(pane(page, first)).not.toContainText('Second scene answer');
+  await expect(pane(page, second)).toContainText('Second scene answer');
+  await expect(pane(page, second)).not.toContainText('First scene answer');
+  await expectAnonymous(region);
+
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
+  await expectWithinViewport(scene, page);
+  const tabs = region.getByRole('tab');
+  await expect(tabs).toHaveCount(2);
+  await tabs.filter({ hasText: 'Second scene question' }).press('Enter');
+  await expect(tabs.filter({ hasText: 'Second scene question' })).toHaveAttribute('aria-selected', 'true');
+  await expect(pane(page, second).getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
+  wire.finish(first);
+  await expect(pane(page, first)).toHaveCount(0);
+  await expect(firstAnswer).not.toHaveClass(/streaming/);
+  wire.delta(second, ' continues after the first Turn finishes');
+  await expect(pane(page, second)).toContainText('Second scene answer continues after the first Turn finishes');
+  wire.finish(second);
+  await expect(region).toHaveCount(0);
+  await expect(page.locator('.assistant-turn.streaming')).toHaveCount(0);
+
+  await page.reload();
+  await showSidebar(page);
+  await page.locator('.sidebar-session-row:visible').filter({ hasText: title }).click();
+  await hideMobileSidebar(page);
+  await expect(scene).toHaveValue('writing');
+  await expect(page.locator('.assistant-turn')).toContainText(['First scene answer', 'Second scene answer continues after the first Turn finishes']);
+  await expectAnonymous(page.locator('.chat-container'));
+  await expect(region).toHaveCount(0);
+
+  // A converted Session does not need the compatibility owner in its old
+  // roster. Verify the activity and Stop action still follow the live turn.
+  await page.setViewportSize({ width: 1360, height: 900 });
+  // Wait for the responsive layout to commit instead of sampling visibility
+  // in the frame between a mobile sidebar closing and the desktop layout.
+  await expect(page.locator('.sidebar-navigation:visible')).toBeVisible();
+  await page.locator('.sidebar-session-row:visible').filter({ hasText: 'Legacy collaboration' }).click();
+  const legacyScene = composer.getByRole('combobox', { name: 'Scene', exact: true });
+  const legacyInput = composer.getByRole('textbox');
+  await legacyInput.fill('@linus');
+  await expect(page.locator('.vp-mention-autocomplete')).toBeVisible();
+  await legacyInput.fill('');
+  await legacyScene.selectOption('investment');
+  await expect(legacyScene).toBeEnabled();
+  expect(fixture.session()).toMatchObject({ roster: ['linus', 'martin'], config: { sceneId: 'investment' } });
+  const converted = sessionTurnWire(page, mockAgent, { sessionId: fixture.legacyId, conversationId });
+  fixture.turnWire = { sessionId: fixture.legacyId, ...converted };
+  const convertedTurn = await converted.send('Evaluate the finding');
+  converted.delta(convertedTurn, 'Converted Session response');
+  const activity = page.locator('.yeaft-session-status-toggle');
+  if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
+  await expect(page.locator('.yeaft-vp-timeline-row.is-status-streaming')).toContainText('Assistant');
+  await expectAnonymous(page.locator('.chat-container'));
+  converted.finish(convertedTurn);
+  expect(fixture.errors).toEqual([]);
 });

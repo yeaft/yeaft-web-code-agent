@@ -63,7 +63,8 @@ import {
   removeConversationIndexScope,
 } from '../conversation/history-index-state.js';
 import { retireConversationHistoryIndex } from '../conversation/history-index.js';
-import { ensureSessionConfigFile, saveSessionConfig, loadSessionConfig } from './session-config.js';
+import { ensureSessionConfigFile, saveSessionConfig, loadSessionConfig, validateSessionConfig } from './session-config.js';
+import { SESSION_ASSISTANT_ID } from './scene-ids.js';
 import { ConversationStore } from '../conversation/persist.js';
 import { repairSessionStore } from './recovery.js';
 import {
@@ -515,6 +516,14 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   const input = spec || {};
   // Task validation precedes discovery repair and every filesystem mutation.
   if (input.task !== undefined) normalizeScheduledTask(input.task);
+  const sceneId = input.sceneId;
+  if ((input.config && Object.hasOwn(input.config, 'sceneId')) || (input.task !== undefined && sceneId !== undefined)) {
+    throw new SessionCrudError('invalid_scene', null, 'Use top-level sceneId only for ordinary Session creation');
+  }
+  if (sceneId !== undefined) {
+    validateSessionConfig({ sceneId });
+    validateSessionConfig(input.config);
+  }
   const normalizedWorkDir = normalizeWorkDir(input.workDir);
   const workspaceKey = canonicalWorkspaceKey(normalizedWorkDir);
   ensureSessionManifestReady(yeaftDir);
@@ -527,7 +536,7 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   const preserveEmptyRoster = options.preserveEmptyRoster === true && Array.isArray(input.roster);
   const fallbackVpId = callerRoster.length > 0 || preserveEmptyRoster
     ? null
-    : preferDefaultVp(scanSortedVpIds(libDir));
+    : (sceneId !== undefined ? SESSION_ASSISTANT_ID : preferDefaultVp(scanSortedVpIds(libDir)));
   const roster = callerRoster.length > 0 || preserveEmptyRoster
     ? callerRoster
     : (fallbackVpId ? [fallbackVpId] : []);
@@ -571,10 +580,16 @@ export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   // turn.
   try {
     ensureSessionConfigFile(yeaftDir, id);
-    if (input.config && typeof input.config === 'object') {
+    if (sceneId !== undefined) {
+      saveSessionConfig(yeaftDir, id, { ...input.config, sceneId });
+    } else if (input.config && typeof input.config === 'object') {
       saveSessionConfig(yeaftDir, id, input.config);
     }
   } catch (err) {
+    if (sceneId !== undefined) {
+      deleteSession(yeaftDir, id, options);
+      throw err;
+    }
     console.warn(`[session-crud] failed to seed config.json for ${id}:`, err?.message || err);
   }
 
@@ -804,6 +819,9 @@ export function updateSessionConfig(yeaftDir, sessionId, partial) {
     meta = loadSessionMeta(dir);
   }
   if (!meta) throw new SessionCrudError('not_found', sessionId);
+  if (meta.task && partial && Object.hasOwn(partial, 'sceneId')) {
+    throw new SessionCrudError('invalid_scene', sessionId, 'Scheduled tasks use legacy targeting');
+  }
   const saved = saveSessionConfig(yeaftDir, sessionId, partial || {});
   saveSessionMeta(dir, { ...meta, metadataUpdatedAt: new Date().toISOString() });
   return saved;

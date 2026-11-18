@@ -527,6 +527,7 @@ stops or finalizes work no longer needed.`,
             threadId: callerScope.parentThreadId || ctx?.threadId || 'main',
             ...(ctx.causalRootId ? { causalRootId: ctx.causalRootId } : {}),
             ...(ctx.userTurnId ? { userTurnId: ctx.userTurnId } : {}),
+            ...(ctx.sceneId ? { sceneId: ctx.sceneId } : {}),
           },
         });
         if (task?.id) {
