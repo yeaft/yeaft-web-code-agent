@@ -26,7 +26,7 @@ import { DEFAULT_YEAFT_DIR } from './init.js';
 import { geminiEffortCatalog, getModelEffortOptions, getThinkingCapability, modelSupportsEffort, resolveModel, parseModelRef, normalizeProviderModels, resolveContextWindow, resolveMaxOutputTokens, DEFAULT_CONTEXT_WINDOW } from './models.js';
 import { inferProtocolFromModelId } from './llm/router.js';
 import { withGeminiDefault } from './llm/gemini-endpoint.js';
-import { normalizeKnownProviderForRuntime } from './llm/known-providers.js';
+import { collectAmbiguousModelRefs, normalizeKnownProviderForRuntime } from './llm/known-providers.js';
 import { createDenyAllPluginConfig, normalizePluginConfig } from './plugins.js';
 import { normaliseBrowserRuntimeSection } from '../browser-runtime/config.js';
 import { readWorkspaceFile } from './workspace-file.js';
@@ -582,7 +582,7 @@ export function loadConfig(overrides = {}) {
   // so consumers never have to deal with raw string / object ambiguity.
   config.availableModels = [];
   const modelRefs = new Set();
-  const ambiguousModelRefs = new Set();
+  const ambiguousModelRefs = collectAmbiguousModelRefs(providers);
   if (providers) {
     for (const rawProvider of providers) {
       const p = normalizeKnownProviderForRuntime(rawProvider);
@@ -622,7 +622,7 @@ export function loadConfig(overrides = {}) {
             if (protocol === 'gemini') Object.assign(entry, geminiEffortCatalog(m.id, cap), { defaultEffort: cap.defaultEffort });
           }
           config.availableModels.push(entry);
-        } else ambiguousModelRefs.add(ref);
+        }
       }
     }
   }

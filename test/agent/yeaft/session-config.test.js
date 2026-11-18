@@ -383,6 +383,13 @@ describe('Model-level Gemini options', () => {
       models: ['gemini-4-hydrogen', 'gemini-4-hydrogen'] }], quickSends: [ambiguous] }));
     expect(getLlmConfig(root).quickSends).toEqual([{ ...ambiguous, available: false }]);
     expect(() => validateQuickSend(ambiguous, loadConfig({ dir: root }))).toThrow('unambiguous');
+
+    const managed = { name: 'github-copilot', managed: 'github-copilot', models: ['gpt-4.1', { id: 'gpt-4.1', effortOptions: ['medium'] }] };
+    const managedPreset = { ...quickSend, model: 'github-copilot/gpt-4.1', effort: 'high' };
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ providers: [managed], quickSends: [managedPreset] }));
+    expect(getLlmConfig(root).quickSends).toEqual([{ ...managedPreset, available: false }]);
+    expect(() => validateQuickSend(managedPreset, loadConfig({ dir: root }))).toThrow('unambiguous');
+    expect(updateLlmConfig({ providers: [managed], quickSends: [managedPreset] }, root).error).toContain('unambiguous');
   });
 
   it('keeps configured options by model ID through CLI edits and Gemini discovery', async () => {

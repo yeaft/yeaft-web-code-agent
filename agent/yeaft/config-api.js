@@ -18,7 +18,7 @@ import { clampYeaftField, normaliseTelemetrySection, normaliseYeaftSection } fro
 import { normaliseBrowserRuntimeSection, validateBrowserRuntimeUpdate } from '../browser-runtime/config.js';
 import { normalizePluginConfig } from './plugins.js';
 import { mutateAgentConfig, readAgentConfigForWrite } from './config-store.js';
-import { isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
+import { collectAmbiguousModelRefs, isGitHubCopilotProvider, normalizeKnownProviderForRuntime, serializeKnownProviderForPersistence } from './llm/known-providers.js';
 import { getWorkCenterFeatureState } from './work-center/feature.js';
 
 /** Agent-owned model catalog, with the same protocol/capability resolution as runtime. */
@@ -43,16 +43,15 @@ function quickSendModels(config) {
   });
 }
 
-function findQuickSendModel(models, ref) {
+function findQuickSendModel(models, ref, ambiguousRefs) {
   const exact = models.filter(model => model.ref === ref);
-  if (exact.length) return exact.length === 1 ? exact[0] : null;
-  const bare = models.filter(model => model.id === ref);
-  return bare.length === 1 ? bare[0] : null;
+  const candidates = exact.length ? exact : models.filter(model => model.id === ref);
+  return candidates.length === 1 && !ambiguousRefs.has(candidates[0].ref) ? candidates[0] : null;
 }
 
-function publicQuickSends(value, models) {
+function publicQuickSends(value, models, ambiguousRefs) {
   return (Array.isArray(value) ? value : []).map(item => {
-    const model = findQuickSendModel(models, item.model);
+    const model = findQuickSendModel(models, item.model, ambiguousRefs);
     // Keep unavailable rows editable and preserve their keyboard slots. Never
     // reinterpret a saved effort when its model ownership cannot be resolved.
     if (!model) return { ...item, available: false };
@@ -64,7 +63,7 @@ function publicQuickSends(value, models) {
 }
 
 /** Validate inside mutateAgentConfig's lock, against the resulting provider catalog. */
-function validateQuickSends(value, config) {
+function validateQuickSends(value, config, ambiguousRefs = collectAmbiguousModelRefs(config.providers)) {
   if (!Array.isArray(value) || value.length > 5) throw new Error('quickSends must be an array of at most 5 items');
   const models = quickSendModels(config);
   const ids = new Set();
@@ -76,7 +75,7 @@ function validateQuickSends(value, config) {
     if (!name || name.length > 80) throw new Error('Quick send name must be 1–80 characters');
     ids.add(id);
     const ref = typeof item.model === 'string' ? item.model.trim() : '';
-    const model = findQuickSendModel(models, ref);
+    const model = findQuickSendModel(models, ref, ambiguousRefs);
     if (!model) throw new Error(`Quick send model must exist and be unambiguous: ${ref}`);
     const effort = resolveCatalogEffort(model, item.effort);
     if (item.effort != null && !effort) {
@@ -129,7 +128,7 @@ function readLocalLlmConfig(dir) {
     fastModel: json.fastModel || null,
     language: json.language || 'en',
     debug: json.debug === true,
-    quickSends: publicQuickSends(json.quickSends, availableModels),
+    quickSends: publicQuickSends(json.quickSends, availableModels, collectAmbiguousModelRefs(providers)),
     availableModels,
     needsSetup: providers.length === 0 || providers.every(p => p.apiKey === 'proxy' || p.apiKey === '' || (!p.apiKey && !p.credentialProvider)),
   };
@@ -252,7 +251,11 @@ export function updateLlmConfig(update, dir) {
       if (update.providers !== undefined) normalizeManagedModelDefaults(existing);
       if (update.language !== undefined) existing.language = update.language;
       if (update.debug !== undefined) existing.debug = update.debug === true;
-      if (update.quickSends !== undefined) existing.quickSends = validateQuickSends(update.quickSends, existing);
+      // Managed provider serialization may remove duplicates. Do not select a
+      // winner for a Quick Send submitted in the same ambiguous update.
+      if (update.quickSends !== undefined) existing.quickSends = validateQuickSends(
+        update.quickSends, existing, collectAmbiguousModelRefs(update.providers ?? existing.providers),
+      );
 
       const availableModels = quickSendModels(existing);
       const agentConfig = {
@@ -261,7 +264,7 @@ export function updateLlmConfig(update, dir) {
         fastModel: existing.fastModel || null,
         language: existing.language || 'en',
         debug: existing.debug === true,
-        quickSends: publicQuickSends(existing.quickSends, availableModels),
+        quickSends: publicQuickSends(existing.quickSends, availableModels, collectAmbiguousModelRefs(existing.providers)),
         availableModels,
       };
       return {
