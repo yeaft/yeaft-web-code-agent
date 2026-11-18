@@ -5,17 +5,44 @@ import { OTHER_SESSION, SESSION, pane, sessionTurnsFixture } from '../../helpers
 // Run the actual browser modules, not component stubs or injected message arrays.
 test.use({ serverEnv: { YEAFT_LOCAL_RUN: 'true' } });
 
-test('one native Session turn retains the ordinary transcript without parallel chrome', async ({ chatPage: page, mockAgent }) => {
+test('one native Session turn retains the ordinary transcript and merges appended tools across replay', async ({ chatPage: page, mockAgent }, info) => {
   const wire = await sessionTurnsFixture(page, mockAgent);
   const turn = await wire.send('Single root question');
   wire.delta(turn, 'Single answer begins');
   await expect(page.locator('.assistant-turn').filter({ hasText: 'Single answer begins' })).toBeVisible();
   await expect(page.locator('.parallel-turn-tabs')).toHaveCount(0);
-  wire.delta(turn, ' and finishes.');
-  wire.finish(turn);
-  const answer = page.locator('.assistant-turn').filter({ hasText: 'Single answer begins and finishes.' });
+  wire.tool(turn, 'before-append', 'Read');
+  await wire.send('Extra detail for the same turn', turn);
+  wire.tool(turn, 'after-append', 'Grep');
+  // A new assistant row after a tool loop, not a delta into the old text row.
+  wire.delta(turn, 'Appended answer finishes.', 'reply-after-append');
+  const answer = page.locator('.assistant-turn');
   await expect(answer).toHaveCount(1);
+  await expect(answer).toContainText('Single answer begins');
+  await expect(answer).toContainText('Appended answer finishes.');
+  await expect(answer.locator('.turn-actions')).toHaveCount(1);
+  await answer.getByRole('button', { name: '1 more', exact: true }).click();
+  await expect(answer.locator('.tool-line')).toHaveCount(2);
+  await expect(page.locator('.vp-turn-block')).toHaveCount(1);
+  await expect(page.locator('.message-user-block').filter({ hasText: 'Extra detail for the same turn' })).toHaveCount(1);
+  wire.finish(turn);
   await expect(answer).not.toHaveClass(/streaming/);
+  await page.reload();
+  await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
+  await wire.open();
+  await expect(answer).toHaveCount(1);
+  await expect(answer).toContainText('Single answer begins');
+  await expect(answer).toContainText('Appended answer finishes.');
+  await expect(answer.locator('.turn-actions')).toHaveCount(1);
+  await answer.getByRole('button', { name: '1 more', exact: true }).click();
+  await expect(answer.locator('.tool-line')).toHaveCount(2);
+  await expect(page.locator('.message-block')).toHaveCount(1);
+  for (const [theme, width] of [['light', 1400], ['dark', 320]]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`append-merged-${theme}-${width}.png`), fullPage: true, animations: 'disabled' });
+  }
   await expect(page.locator('.parallel-turn-region')).toHaveCount(0);
   await expect(page.locator('.message-user-block').filter({ hasText: 'Single root question' })).toHaveCount(1);
 });
@@ -45,8 +72,15 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
   await expect(pane(page, a)).not.toContainText('B-only');
   await expect(pane(page, b)).not.toContainText('A-only');
 
+  wire.tool(a, 'parallel-before', 'Read');
   await wire.send('Supplement belongs to A', a);
+  wire.tool(a, 'parallel-after', 'Grep');
+  wire.delta(a, 'A response after supplement.', 'parallel-append-reply');
   await expect(page.locator('.parallel-turn-pane')).toHaveCount(2);
+  await expect(pane(page, a).locator('.assistant-turn')).toHaveCount(1);
+  await expect(pane(page, a).locator('.turn-actions')).toHaveCount(1);
+  await pane(page, a).getByRole('button', { name: '1 more', exact: true }).click();
+  await expect(pane(page, a).locator('.tool-line')).toHaveCount(2);
   await expect(pane(page, a)).toContainText('Supplement belongs to A');
   await expect(pane(page, b)).not.toContainText('Supplement belongs to A');
   const c = await wire.send('Root C third');
@@ -117,7 +151,9 @@ test('same-VP concurrent roots isolate interleaved streams, supplement and compl
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       return { top: el.scrollTop, end: el.scrollTop + el.clientHeight >= el.scrollHeight - 2,
         questions: [...el.querySelectorAll('.message-user-block')].map(row => row.textContent.trim()),
-        foundA: [...el.querySelectorAll('.assistant-turn')].some(row => row.textContent.includes('A-only initial A-only continuation A survives B completion')) };
+        foundA: [...el.querySelectorAll('.assistant-turn')].some(row => [
+          'A-only initial A-only continuation', 'A response after supplement.', 'A survives B completion',
+        ].every(text => row.textContent.includes(text))) };
     }, step);
     for (const text of sample.questions) if (!questions.includes(text)) questions.push(text);
     foundA ||= sample.foundA;

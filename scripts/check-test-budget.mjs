@@ -196,7 +196,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +12 Person parallel regressions: episode leases/inbox/routing/rebase (5),
 // private evidence bootstrap/wait filtering (2), UI/store projection (2),
 // authenticated desktop light/dark and narrow browser lifecycle (3).
-export const TEST_CASE_LIMIT = 1102;
+// +1 confirmed-append response grouping regression: live/replay tool aggregation
+// retains optimistic boundaries and distinct VP/independent turn ownership.
+export const TEST_CASE_LIMIT = 1103;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

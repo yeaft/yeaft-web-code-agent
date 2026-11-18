@@ -75,14 +75,21 @@ export async function sessionTurnsFixture(page, agent) {
     snapshot();
     return turn;
   };
-  const delta = (turn, text) => {
-    const id = `reply-${turn.userTurnId}`;
+  const delta = (turn, text, id = `reply-${turn.userTurnId}`) => {
     frame(turn, { type: 'assistant', message: { id, content: text } });
     const existing = history.find(row => row.id === id);
     if (existing) existing.content += text;
     else history.push({ id, seq: history.length + 1, role: 'assistant', content: text,
       sessionId: SESSION, userTurnId: turn.userTurnId, speakerVpId: VP,
       turnId: turn.executions[0].turnId, threadId: turn.executions[0].threadId, ts: Date.now() });
+  };
+  const tool = (turn, id, name) => {
+    frame(turn, { type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input: { path: `${id}.js` } }] } });
+    frame(turn, { type: 'user', tool_use_result: [{ type: 'tool_result', tool_use_id: id, content: `${id} evidence` }] });
+    history.push({ id: `tool-${id}`, seq: history.length + 1, role: 'assistant', content: '',
+      sessionId: SESSION, userTurnId: turn.userTurnId, speakerVpId: VP,
+      turnId: turn.executions[0].turnId, threadId: turn.executions[0].threadId, ts: Date.now(),
+      toolCalls: [{ id, name, input: { path: `${id}.js` } }] });
   };
   const finish = (turn, reason = 'end_turn') => {
     turn.state = reason === 'aborted' ? 'aborted' : 'completed';
@@ -92,7 +99,7 @@ export async function sessionTurnsFixture(page, agent) {
     snapshot();
   };
   await open();
-  return { turns, history, open, send, delta, finish, snapshot, event, frame, catalog };
+  return { turns, history, open, send, delta, tool, finish, snapshot, event, frame, catalog };
 }
 
 // Pane identity is on the pane itself (not an implementation-specific child).
