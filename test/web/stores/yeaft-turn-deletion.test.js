@@ -21,7 +21,8 @@ function setup() {
     ...options.chat.state(), ...options.chat.actions,
     currentView: 'yeaft', currentAgent: 'a', yeaftActiveSessionFilter: 's', yeaftConversationId: 'a-conv',
     yeaftConversationIdsByAgent: { a: 'a-conv', b: 'b-conv' },
-    agents: [{ id: 'a', online: true }, { id: 'b', online: true }], connectionState: 'connected',
+    agents: [{ id: 'a', online: true, capabilities: ['session_delete_turn'] }, { id: 'b', online: true }],
+    connectionState: 'connected', yeaftSessionDeleteTurnSupported: true,
     messagesMap: { 'a-conv': [userRow('s', 'm0001'), selected, otherSession], 'b-conv': [sameIdOtherAgent] },
     sendWsMessage: vi.fn(() => true),
   };

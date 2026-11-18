@@ -1210,6 +1210,10 @@ export function handleYeaftHistoryChunk(store, msg) {
   const historyIdentity = {
     streamId: typeof msg.streamId === 'string' ? msg.streamId : (prevState.streamId ?? null),
     revision: Number.isFinite(msg.revision) ? msg.revision : (prevState.revision ?? null),
+    // Metadata-only completion and older pages do not reconcile the tail.
+    ...(msg.requestId && (mode === 'recent' || mode === 'delta')
+      ? { validatedConnectionGeneration: store.chatHistoryConnectionGeneration ?? 0 }
+      : {}),
   };
   let nextState = mode === 'delta'
     ? {

@@ -3,6 +3,7 @@
 import { useAuthStore } from '../auth.js';
 import { encrypt, decrypt, isEncrypted } from '../../utils/encryption.js';
 import { clearSessionLoading } from './session.js';
+import { interruptYeaftHistoryLoads } from './yeaft-history-load.js';
 import { bindScheduledTaskNotificationOwner } from './scheduled-tasks.js';
 import {
   sidebarCatalogAuthIsCurrent,
@@ -197,6 +198,7 @@ export function connect(store) {
   store._hasHandledAgentList = false;
   store._hasHandledYeaftSessionHydrate = false;
   store.yeaftSessionInventoryCompleteSupported = null;
+  store.yeaftSessionDeleteTurnSupported = false;
   store.workbenchRouteProtocolSupported = null;
   store.workCenterWorkbenchProtocolSupported = null;
   store.browserRuntimeProtocolSupported = null;
@@ -234,6 +236,7 @@ export function connect(store) {
   store.chatHistoryRequestIdSupported = null;
   const connectionGeneration = Number(store.chatHistoryConnectionGeneration || 0) + 1;
   store.chatHistoryConnectionGeneration = connectionGeneration;
+  interruptYeaftHistoryLoads(store);
   for (const [requestId, request] of Object.entries(store.projectMutationRequests || {})) {
     request?.resolve?.({
       ok: false,
@@ -337,6 +340,7 @@ export function connect(store) {
     console.log('[WS] Disconnected:', event.code, event.reason);
     store.interruptYeaftTurnDeletions?.();
     store.authenticated = false;
+    store.yeaftSessionDeleteTurnSupported = false;
     if (store.sessionCatalogProtocolSupported === false) {
       store.sidebarLegacySessionCatalog = sidebarSessionCatalogRows(
         store,

@@ -92,6 +92,7 @@ import {
   isCurrentYeaftHistoryResponse,
   syncActiveYeaftHistoryLoad,
   YEAFT_HISTORY_LOAD_TIMEOUT_MS,
+  yeaftHistoryNeedsReconnectValidation,
 } from './helpers/yeaft-history-load.js';
 import {
   yeaftAgentSessionIdentityPrefix,
@@ -630,6 +631,7 @@ export const useChatStore = defineStore('chat', {
     _hasHandledAgentList: false,
     _hasHandledYeaftSessionHydrate: false,
     yeaftSessionInventoryCompleteSupported: null,
+    yeaftSessionDeleteTurnSupported: false,
     workbenchRouteProtocolSupported: null,
     workCenterWorkbenchProtocolSupported: null,
     browserRuntimeProtocolSupported: null,
@@ -3350,15 +3352,18 @@ export const useChatStore = defineStore('chat', {
         && this.messagesMap[this.yeaftConversationId].some(row => row && (row.sessionId ?? row.groupId ?? null) === activeSessionId);
       const deletionRefresh = this.yeaftTurnDeleteHistoryBySession?.[sessionKey];
       const needsDeletionReplay = deletionRefresh?.needsReplay;
-      const needHistoryReplay = !!activeSessionId
-        && (needsDeletionReplay ? !sessionState?.loading : msgHelpers.shouldReplayYeaftSessionHistory({
-          sessionState,
-          hasCachedSessionRows,
-          force: !!forceHistoryReplay,
-        }));
+      // Reconnect only fetches the active Session. Validate any other loaded
+      // Session against its durable identity when it is next opened.
+      const needsReconnectValidation = yeaftHistoryNeedsReconnectValidation(this, sessionState);
+      const canValidateWithDelta = typeof sessionState?.streamId === 'string'
+        && Number.isFinite(sessionState?.revision) && latestSeq !== null;
+      const mustReplay = needsDeletionReplay || (needsReconnectValidation && !canValidateWithDelta);
+      const needHistoryReplay = !!activeSessionId && (mustReplay
+        ? !sessionState?.loading
+        : msgHelpers.shouldReplayYeaftSessionHistory({ sessionState, hasCachedSessionRows, force: !!forceHistoryReplay }));
       const needHistoryCatchUp = !!activeSessionId
         && !needHistoryReplay
-        && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory);
+        && msgHelpers.shouldCatchUpLoadedYeaftSession(sessionState, catchUpHistory || needsReconnectValidation);
       if (!needSessionReady && !needHistoryReplay && !needHistoryCatchUp) return false;
       // Route session-scoped history through the single resolver (sessions
       // store → per-session cache → currentAgent), same as every other
@@ -3439,7 +3444,16 @@ export const useChatStore = defineStore('chat', {
           needSessionReady,
         },
       });
-      this.sendWsMessage(payload);
+      if (!this.sendWsMessage(payload)) {
+        if (metadataOnly) this.yeaftBootstrapMetaLoadingKey = null;
+        if (historyRequest) failYeaftHistoryLoad(this, {
+          agentId: targetAgentId,
+          sessionId: activeSessionId,
+          requestId: historyRequest.requestId,
+          error: 'history_load_send_failed',
+        });
+        return false;
+      }
       return true;
     },
     leaveYeaft() {
@@ -3909,8 +3923,12 @@ export const useChatStore = defineStore('chat', {
       const { agentId, sessionId } = target;
       const key = yeaftHistoryIdentityKey(agentId, sessionId);
       if (this._yeaftTurnDeletePending[key]) return 'pending';
-      if (this.yeaftTurnDeleteHistoryBySession?.[key]?.needsReplay) return 'refreshing';
-      if (this.connectionState !== 'connected' || !this.agents.some(agent => agent.id === agentId && agent.online)) return 'offline';
+      const agent = this.agents.find(agent => agent.id === agentId);
+      if (this.connectionState !== 'connected' || !agent?.online) return 'offline';
+      if (this.yeaftSessionDeleteTurnSupported !== true || !Array.isArray(agent.capabilities)
+          || !agent.capabilities.includes('session_delete_turn')) return 'unsupported';
+      if (this.yeaftTurnDeleteHistoryBySession?.[key]?.needsReplay
+          || yeaftHistoryNeedsReconnectValidation(this, this.yeaftSessionHistoryState[key])) return 'refreshing';
       if (this.isYeaftSessionProcessing(sessionId, agentId)
           || this.sessionForkPendingKey === yeaftCatalogKey(agentId, sessionId)) return 'running';
       return null;
@@ -6971,7 +6989,8 @@ export const useChatStore = defineStore('chat', {
           getSessionsStore()?.sessionById?.(next, targetAgentId)?.task?.lastRun);
       }
       this.syncActiveYeaftHistoryLoad();
-      if (next && targetAgentId && !repeatedSelection) {
+      const historyState = this.yeaftSessionHistoryState?.[yeaftHistoryIdentityKey(targetAgentId, next)];
+      if (next && targetAgentId && (!repeatedSelection || yeaftHistoryNeedsReconnectValidation(this, historyState))) {
         this.requestYeaftSessionBootstrap({
           forceSessionReady: true,
           forceHistoryReplay: true,

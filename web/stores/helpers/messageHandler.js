@@ -373,6 +373,7 @@ export function handleMessage(store, msg) {
       break;
 
     case 'auth_result':
+      store.yeaftSessionDeleteTurnSupported = msg.success === true && msg.yeaftSessionDeleteTurn === true;
       if (msg.success) {
         store.authenticated = true;
 

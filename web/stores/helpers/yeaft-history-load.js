@@ -10,6 +10,10 @@ function loadState(store, sessionKey) {
   return store?.yeaftSessionHistoryState?.[sessionKey] || null;
 }
 
+export function yeaftHistoryNeedsReconnectValidation(store, state) {
+  return !!state?.loaded && (state.validatedConnectionGeneration ?? 0) !== (store.chatHistoryConnectionGeneration ?? 0);
+}
+
 export function activeYeaftHistoryIdentity(store) {
   let sessionId = store?.yeaftActiveSessionFilter || null;
   if (!sessionId) {
@@ -163,6 +167,17 @@ export function failYeaftHistoryLoad(store, { agentId, sessionId, requestId, err
   };
   syncActiveYeaftHistoryLoad(store);
   return true;
+}
+
+// A new socket cannot receive the old socket's correlated chunks. Keep the
+// committed cache but release the request fences so revalidation can start.
+export function interruptYeaftHistoryLoads(store) {
+  const entries = Object.entries(store.yeaftSessionHistoryState || {});
+  if (!entries.some(([, state]) => state.loading)) return;
+  store.yeaftSessionHistoryState = Object.fromEntries(entries.map(([key, state]) => [key, state.loading
+    ? { ...state, loading: false, requestId: null, syncingAfterSeq: null }
+    : state]));
+  syncActiveYeaftHistoryLoad(store);
 }
 
 export function syncActiveYeaftHistoryLoad(store) {
