@@ -221,7 +221,8 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // and a browser flow keeping the remaining lane across navigation and reload.
 // Native turn deletion: scoped Agent/Server authorization, durable context and
 // trace removal, stale browser replay fencing and narrow-screen confirmation.
-export const TEST_CASE_LIMIT = 1192;
+// +2 deletion storage regressions: idle audit handle and cross-process CLI admission.
+export const TEST_CASE_LIMIT = 1194;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

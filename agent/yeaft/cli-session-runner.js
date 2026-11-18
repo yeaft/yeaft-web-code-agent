@@ -7,6 +7,7 @@ import { createCoordinator } from './sessions/coordinator.js';
 import { resolveMemberId } from './sessions/roster.js';
 import { sessionsRoot } from './sessions/session-crud.js';
 import { openSession, loadSessionMeta } from './sessions/session-store.js';
+import { tryAcquireSessionTurn } from './sessions/session-turn-fence.js';
 import { isSessionSceneId, SESSION_ASSISTANT_ID } from './sessions/scene-ids.js';
 import { loadSessionConfig, resolveSessionConfig } from './sessions/session-config.js';
 import { readVp } from './vp/vp-crud.js';
@@ -472,6 +473,12 @@ export function createCliSessionRunner({
         cancellation: { cancelled: false, reason: null },
         activeEngines: new Set(),
       });
+      const release = tryAcquireSessionTurn(sessionDir);
+      if (!release) {
+        throw Object.assign(new Error('Session turn deletion in progress. Retry after it completes.'), {
+          code: 'session_running',
+        });
+      }
       activeTurnContexts.set(cancellationId, turnContext);
       try {
       const rootOrder = nextRootOrder++;
@@ -527,7 +534,19 @@ export function createCliSessionRunner({
       }
       return { report, results };
       } finally {
-        activeTurnContexts.delete(cancellationId);
+        // A VP callback can throw while siblings are still writing durable rows
+        // or queueing handoffs. Do not release admission until they all settle.
+        try {
+          let settled = 0;
+          while (settled < turnContext.tasks.length) {
+            const batch = turnContext.tasks.slice(settled);
+            settled += batch.length;
+            await Promise.allSettled(batch);
+          }
+        } finally {
+          activeTurnContexts.delete(cancellationId);
+          release();
+        }
       }
     },
     abort(reason = 'user', options = {}) {

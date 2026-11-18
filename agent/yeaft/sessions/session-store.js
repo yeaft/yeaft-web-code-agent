@@ -33,6 +33,7 @@ import { nextMsgId, isReservedVpId, ReservedVpIdError, validateVpId, InvalidVpId
 
 import { readSessionTurnDeletions, sessionDeletionProjection } from '../conversation/turn-deletion-journal.js';
 import { normalizeScheduledTask, scheduledTaskRevision } from './scheduled-task-definition.js';
+import { withCoordinatorLogLock } from './session-turn-fence.js';
 
 export const SESSION_META_FILE = 'session.json';
 export const LEGACY_GROUP_META_FILE = 'group.json';
@@ -54,7 +55,10 @@ export function openSession(sessionsRoot, sessionId) {
 
   const messagesDir = join(dir, MESSAGES_DIR);
   if (!existsSync(messagesDir)) mkdirSync(messagesDir, { recursive: true });
-  const log = openLog(messagesDir);
+  // No handle retains an append fd or a writable index snapshot between calls.
+  // In particular, closing an idle handle must not overwrite a newer index.
+  withCoordinatorLogLock(dir, () => openLog(messagesDir).close());
+  let closed = false;
   function *visibleMessages(records) {
     const { operations } = readSessionTurnDeletions(join(sessionsRoot, '..'), sessionId);
     const ids = new Set(operations.flatMap(op => op.clientMessageIds));
@@ -87,6 +91,7 @@ export function openSession(sessionsRoot, sessionId) {
      * forgot to partition ephemeral fields off — fix the caller.
      */
     appendMessage(record) {
+      if (closed) throw new Error('appendMessage: Session handle is closed');
       if (!record || typeof record !== 'object') {
         throw new Error('appendMessage: record required');
       }
@@ -107,20 +112,42 @@ export function openSession(sessionsRoot, sessionId) {
         mentions: Array.isArray(record.mentions) ? record.mentions.slice() : [],
         meta: record.meta || {},
       };
-      log.append(stored);
+      withCoordinatorLogLock(dir, () => {
+        const log = openLog(messagesDir);
+        try { log.append(stored); } finally { log.close(); }
+      });
       return stored;
     },
     /** Iterate all messages oldest→newest. */
     *streamMessages() {
-      yield* visibleMessages(log.streamAll());
+      yield* visibleMessages(readCoordinatorRows(messagesDir));
     },
     /** Iterate a message id range inclusive. */
     *readMessageRange(firstId, lastId) {
-      yield* visibleMessages(log.readRange(firstId, lastId));
+      for (const row of visibleMessages(readCoordinatorRows(messagesDir))) {
+        if (row?.id != null && firstId <= row.id && row.id <= lastId) yield row;
+      }
     },
-    /** Flush + close underlying log (on shutdown). */
-    close() { log.close(); },
+    /** Stop writes through this handle. No fd or index is held. */
+    close() { closed = true; },
   };
+}
+
+function* readCoordinatorRows(dir) {
+  for (const file of listSegmentFiles(dir)) {
+    let raw;
+    try { raw = readFileSync(join(dir, file), 'utf8'); }
+    catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      let row;
+      try { row = JSON.parse(line); } catch { continue; }
+      yield row;
+    }
+  }
 }
 
 function projectCoordinatorMessage(row, ids, references) {
@@ -131,8 +158,12 @@ function projectCoordinatorMessage(row, ids, references) {
   return { ...row, meta };
 }
 
-/** Remove matching coordinator inputs and causal handoffs; caller has closed the idle runtime log. */
+/** Offline cleanup only. Older processes ignore the lock and can retain append fds. */
 export function pruneDeletedCoordinatorMessages(sessionDir, operation) {
+  return withCoordinatorLogLock(sessionDir, () => pruneCoordinatorLog(sessionDir, operation));
+}
+
+function pruneCoordinatorLog(sessionDir, operation) {
   const dir = join(sessionDir, MESSAGES_DIR);
   const ids = new Set(operation.clientMessageIds);
   const references = new Set(operation.referenceIds);
