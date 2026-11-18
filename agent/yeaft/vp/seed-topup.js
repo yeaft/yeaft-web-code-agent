@@ -71,14 +71,29 @@ import { STOCK_VP_IDS } from './stock-ids.js';
 const SEEDED_VERSIONS_FILE = '.seeded-versions.json';
 const SEEDED_VERSIONS_VERSION = 1;
 
-// Full bilingual bodies written by 0f566fa, keyed by their owning VP.
+// Full bilingual bodies written by 0f566fa and v1.0.712 respectively, keyed by owner.
 // The ledger's short hash is bookkeeping, never proof of body ownership.
 const SHIPPED_BODY_SHA256 = {
-  omni: 'c8f2aa99d45e962ed991282e42dcb805fb274a8071379fb03cee63e163934974',
-  'software-omni': '045a7edce52fef5807985357a516c72c663b5bd54b6aa2cde20877a25f272009',
-  'writing-omni': '43123b36a997b424eb13d09b853316712ada934ee1294abf86ad1cd5a927f7fd',
-  'short-video-omni': 'ae8f66c18508d46468eb64354fcfc958cb0dc1166038a450df726fb93357a42b',
-  'quant-omni': '98ce6f52ae22e76d61acb99704419dd0f41859923c4144bd227c10318ce589fb',
+  omni: [
+    'c8f2aa99d45e962ed991282e42dcb805fb274a8071379fb03cee63e163934974',
+    '6d897d95aaee343a20f212ce9ce08a7149746278cf3b7d0bc6aa32b5f9756ffc',
+  ],
+  'software-omni': [
+    '045a7edce52fef5807985357a516c72c663b5bd54b6aa2cde20877a25f272009',
+    '1bb6d5fc99a0f90e75862c91b3825776996991cfbd0bf04032d9b6a7964c97f7',
+  ],
+  'writing-omni': [
+    '43123b36a997b424eb13d09b853316712ada934ee1294abf86ad1cd5a927f7fd',
+    '10b330a2ac25692888b9a2c60f86e8d7146271935418093485a4a2cfd0652a54',
+  ],
+  'short-video-omni': [
+    'ae8f66c18508d46468eb64354fcfc958cb0dc1166038a450df726fb93357a42b',
+    'c5670e3b6d974b3a22c8ecc81c9ffb4c804f1ce30c15c7f6b3d23e4eb6a65994',
+  ],
+  'quant-omni': [
+    '98ce6f52ae22e76d61acb99704419dd0f41859923c4144bd227c10318ce589fb',
+    '1b60fb391631c8e55653a0d0557192ff3dcb04dc7124ee50562c865b3d8a0ade',
+  ],
 };
 
 /**
@@ -323,10 +338,10 @@ export function backfillLocalizedPersonaBody(source, vp) {
   // buildRoleMd adds a separator blank line; replaceRoleBody does not. Both
   // writers terminate the body with one newline. Ignore only that framing,
   // not whitespace the user may have added to their prompt.
-  const digest = SHIPPED_BODY_SHA256[vp.vpId];
-  if (digest && (rawBody === `\n${body}\n` || rawBody === `${body}\n`)
-      && createHash('sha256').update(body).digest('hex') === digest) {
-    // This generation changed only the persona, not stock metadata.
+  const digests = SHIPPED_BODY_SHA256[vp.vpId];
+  if (Array.isArray(digests) && (rawBody === `\n${body}\n` || rawBody === `${body}\n`)
+      && digests.includes(createHash('sha256').update(body).digest('hex'))) {
+    // These generations changed only the persona, not stock metadata.
     return source.slice(0, -(body.length + 1)) + nextBody + '\n';
   }
 

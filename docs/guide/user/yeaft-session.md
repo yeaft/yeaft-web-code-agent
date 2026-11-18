@@ -36,7 +36,7 @@ Legacy browser-local section state is not imported into user preferences. The in
 
 Open the scene menu using the chevron next to **Attach**; the current choice is checked. On phones, **Attach** and **Scene** are above the text box, while model, effort, Stop and Send remain below it. It saves to this Session without sending a message. The scene applies to new turns; running turns continue unchanged. For example, switch from Software to Writing to turn an earlier design discussion into an announcement without starting over. A scene guides the work, not which questions you may ask. It does not change model, effort, permissions, or workspace.
 
-The request determines the deliverable. For example, Software distinguishes a diagnosis from a request to change code; Writing distinguishes proofreading from a rewrite. Short video fits a script to the time and crew available. Investment compares results on a consistent basis and calls out missing data that could change the conclusion. General can recommend an option and say when a different one makes sense. In any scene you can ask for just the result, without a report.
+Scenes bring different expertise to the conversation, not different report templates. Tell Software that a menu is hard to find and you can talk about that experience without asking for a patch. Ask Writing for a message to send and the reply can be the message itself. If a detail would change your decision, it belongs alongside the answer rather than in a standard disclaimer. You can still ask for a detailed review or a table when that's what you need.
 
 ### Compatibility with existing Sessions
 

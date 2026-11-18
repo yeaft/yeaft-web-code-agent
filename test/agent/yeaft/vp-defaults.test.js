@@ -23,6 +23,8 @@ const OTHER_VPS = DEFAULT_VPS.filter(vp => !Object.hasOwn(SHIPPED_HASHES, vp.vpI
 const hash = value => createHash('sha256').update(value).digest('hex');
 // Actual buildRoleMd output from the isolated 0f566fa Git tree.
 const baselineOmniRole = readFileSync(new URL('./fixtures/omni-0f566fa.role.md', import.meta.url), 'utf8');
+// Captured before changing the v1.0.712 default addressed by @vp-software-omni.
+const v712SoftwareRole = readFileSync(new URL('./fixtures/software-omni-1.0.712.role.md', import.meta.url), 'utf8');
 const shippedBody = (vp, format = 'bilingual') => vp.legacyPersonas.at(format === 'en' ? -2 : -1);
 
 function shippedPayload(vp, format = 'bilingual') {
@@ -121,10 +123,13 @@ describe('stock VP scenario defaults', () => {
     const omni = PRIMARY_VPS.find(vp => vp.vpId === 'omni');
     const baseline = baselineOmniRole.replace('name: All-purpose Assistant', 'name: My assistant');
     writeRole(omni, baseline);
+    const software = PRIMARY_VPS.find(vp => vp.vpId === 'software-omni');
+    writeRole(software, v712SoftwareRole);
     const first = topUpDefaultVps(libDir);
     expect(first.errors).toEqual([]);
     expect(first.personaBackfilled.sort()).toEqual(PRIMARY_VPS.map(vp => vp.vpId).sort());
     expect(readRole(omni)).toBe(baseline.replace(parseRoleMd(baseline).body, () => omni.persona.trim()));
+    expect(readRole(software)).toBe(v712SoftwareRole.replace(parseRoleMd(v712SoftwareRole).body, () => software.persona.trim()));
     expect(readSeedVersions(libDir).seeded.omni).toBe(personaHash(omni.persona));
     const before = snapshotLibrary();
     for (let run = 0; run < 2; run += 1) {
@@ -141,6 +146,7 @@ describe('stock VP scenario defaults', () => {
     for (const vp of PRIMARY_VPS) {
       const old = shippedPayload(vp);
       if (vp.vpId === 'omni') old.persona = parseRoleMd(baselineOmniRole).body;
+      if (vp.vpId === 'software-omni') old.persona = parseRoleMd(v712SoftwareRole).body;
       old.persona = kind === 'subtle edit'
         ? old.persona.replace('You are', 'I am')
         : `${old.persona}\nMy private custom prompt: answer in haiku.`;
