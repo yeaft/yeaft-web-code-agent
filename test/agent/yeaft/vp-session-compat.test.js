@@ -2,7 +2,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
+import { buildSystemPrompt } from '../../../agent/yeaft/prompts.js';
+import { renderSessionScene } from '../../../agent/yeaft/sessions/scene-prompts.js';
+import { LEGACY_SCENE_PROFILES } from '../../../agent/yeaft/sessions/scene-ids.js';
+import { DEFAULT_VPS, seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { topUpDefaultVps } from '../../../agent/yeaft/vp/seed-topup.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
 import { createCliSessionRunner } from '../../../agent/yeaft/cli-session-runner.js';
@@ -119,6 +122,34 @@ describe('VP catalog and durable Session compatibility', () => {
     expect(current()).toMatchObject({ roster: [], defaultVpId: null });
     expect(conversation.loadAllBySession(session.id)).toEqual(history);
     expect(history[1].speakerVpId).toBe('linus');
+  });
+
+  it('renders only the chosen localized practices, shared with the stock VP but without its identity', () => {
+    const cues = {
+      general: ['hint', '提示'], software: ['read-only', '只读'], writing: ['Proofreading', '校对'],
+      'short-video': ['shootable substitute', '能拍的替代方案'], investment: ['explicit scoped authorization and appropriate controls', '范围明确的授权和适当的风控措施'],
+    };
+    for (const [id, vpId] of Object.entries(LEGACY_SCENE_PROFILES)) {
+      const stock = DEFAULT_VPS.find(vp => vp.vpId === vpId);
+      for (const [locale, lang, i] of [['en-US', 'en', 0], ['zh-CN', 'zh', 1]]) {
+        const block = renderSessionScene(id, lang);
+        const system = buildSystemPrompt({ language: locale, vpPersona: {
+          sceneId: id, displayName: 'Private VP', persona: 'private-soul', runtimePreamble: 'session-preamble',
+        } });
+        expect(system.startsWith(`${block}\n\nsession-preamble`)).toBe(true);
+        expect(system).not.toContain('private-soul');
+        const body = i ? stock.personaZh : stock.personaEn;
+        expect(block).not.toContain(body.split('\n')[0]);
+        expect(block).toContain(body.slice(body.indexOf('\n\n') + 2));
+        for (const [other, phrases] of Object.entries(cues)) {
+          expect(block.includes(phrases[i]), `${id}/${lang}: ${other}`).toBe(other === id);
+        }
+        expect(block).not.toContain(cues[id][1 - i]);
+      }
+    }
+    expect(renderSessionScene('__proto__', 'en')).toBe('');
+    expect(buildSystemPrompt({ vpPersona: { displayName: 'Private VP', persona: 'private-soul' } }))
+      .toContain('## Soul\n\nprivate-soul');
   });
 
   it('stores scenes independently of roles and keeps them through metadata edits, fork and merge', () => {

@@ -60,6 +60,7 @@
  * user-edited bodies are deliberately left alone.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createVp, VpCrudError } from './vp-crud.js';
@@ -69,6 +70,16 @@ import { STOCK_VP_IDS } from './stock-ids.js';
 
 const SEEDED_VERSIONS_FILE = '.seeded-versions.json';
 const SEEDED_VERSIONS_VERSION = 1;
+
+// Full bilingual bodies written by 0f566fa, keyed by their owning VP.
+// The ledger's short hash is bookkeeping, never proof of body ownership.
+const SHIPPED_BODY_SHA256 = {
+  omni: 'c8f2aa99d45e962ed991282e42dcb805fb274a8071379fb03cee63e163934974',
+  'software-omni': '045a7edce52fef5807985357a516c72c663b5bd54b6aa2cde20877a25f272009',
+  'writing-omni': '43123b36a997b424eb13d09b853316712ada934ee1294abf86ad1cd5a927f7fd',
+  'short-video-omni': 'ae8f66c18508d46468eb64354fcfc958cb0dc1166038a450df726fb93357a42b',
+  'quant-omni': '98ce6f52ae22e76d61acb99704419dd0f41859923c4144bd227c10318ce589fb',
+};
 
 /**
  * Read the seed-versions sidecar. Returns `{ seeded: {} }` on any failure.
@@ -304,9 +315,20 @@ function simpleFrontmatterFields(source) {
 export function backfillLocalizedPersonaBody(source, vp) {
   const frontmatter = simpleFrontmatterFields(source);
   if (!frontmatter) return null;
-  const body = roleBodyOf(source).trim();
+  const rawBody = roleBodyOf(source);
+  const body = rawBody.trim();
   const nextBody = typeof vp.persona === 'string' ? vp.persona.trim() : '';
   if (!body || !nextBody || body === nextBody) return null;
+
+  // buildRoleMd adds a separator blank line; replaceRoleBody does not. Both
+  // writers terminate the body with one newline. Ignore only that framing,
+  // not whitespace the user may have added to their prompt.
+  const digest = SHIPPED_BODY_SHA256[vp.vpId];
+  if (digest && (rawBody === `\n${body}\n` || rawBody === `${body}\n`)
+      && createHash('sha256').update(body).digest('hex') === digest) {
+    // This generation changed only the persona, not stock metadata.
+    return source.slice(0, -(body.length + 1)) + nextBody + '\n';
+  }
 
   const acceptedOldBodies = [
     vp.legacyPersonaEn,

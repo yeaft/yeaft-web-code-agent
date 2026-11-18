@@ -21,6 +21,8 @@ const SHIPPED_HASHES = {
 const PRIMARY_VPS = DEFAULT_VPS.filter(vp => Object.hasOwn(SHIPPED_HASHES, vp.vpId));
 const OTHER_VPS = DEFAULT_VPS.filter(vp => !Object.hasOwn(SHIPPED_HASHES, vp.vpId));
 const hash = value => createHash('sha256').update(value).digest('hex');
+// Actual buildRoleMd output from the isolated 0f566fa Git tree.
+const baselineOmniRole = readFileSync(new URL('./fixtures/omni-0f566fa.role.md', import.meta.url), 'utf8');
 const shippedBody = (vp, format = 'bilingual') => vp.legacyPersonas.at(format === 'en' ? -2 : -1);
 
 function shippedPayload(vp, format = 'bilingual') {
@@ -116,7 +118,14 @@ describe('stock VP scenario defaults', () => {
 
   it('is byte-idempotent after migration, including the ledger and all legacy specialist VPs', () => {
     for (const vp of PRIMARY_VPS) writeRole(vp, buildRoleMd(shippedPayload(vp)));
-    expect(topUpDefaultVps(libDir).errors).toEqual([]);
+    const omni = PRIMARY_VPS.find(vp => vp.vpId === 'omni');
+    const baseline = baselineOmniRole.replace('name: All-purpose Assistant', 'name: My assistant');
+    writeRole(omni, baseline);
+    const first = topUpDefaultVps(libDir);
+    expect(first.errors).toEqual([]);
+    expect(first.personaBackfilled.sort()).toEqual(PRIMARY_VPS.map(vp => vp.vpId).sort());
+    expect(readRole(omni)).toBe(baseline.replace(parseRoleMd(baseline).body, () => omni.persona.trim()));
+    expect(readSeedVersions(libDir).seeded.omni).toBe(personaHash(omni.persona));
     const before = snapshotLibrary();
     for (let run = 0; run < 2; run += 1) {
       const result = topUpDefaultVps(libDir);
@@ -131,6 +140,7 @@ describe('stock VP scenario defaults', () => {
     const sources = new Map();
     for (const vp of PRIMARY_VPS) {
       const old = shippedPayload(vp);
+      if (vp.vpId === 'omni') old.persona = parseRoleMd(baselineOmniRole).body;
       old.persona = kind === 'subtle edit'
         ? old.persona.replace('You are', 'I am')
         : `${old.persona}\nMy private custom prompt: answer in haiku.`;
@@ -217,7 +227,13 @@ describe('stock VP scenario defaults', () => {
     }
   });
 
-  it('does not treat a user-selected English-only current soul as shipped history', () => {
+  it('does not treat an English-only scenario soul as shipped bilingual history', () => {
+    const omni = PRIMARY_VPS.find(vp => vp.vpId === 'omni');
+    const oldEnglish = parseRoleMd(baselineOmniRole).body.split('<!-- lang:zh -->')[0].replace('<!-- lang:en -->', '').trim();
+    const oldSource = buildRoleMd({ ...omni, persona: oldEnglish });
+    writeRole(omni, oldSource);
+    expect(topUpDefaultVps(libDir).personaBackfilled).toEqual([]);
+    expect(readRole(omni)).toBe(oldSource);
     const sources = new Map();
     for (const vp of PRIMARY_VPS) {
       const source = buildRoleMd({ ...vp, persona: vp.personaEn });
