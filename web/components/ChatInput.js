@@ -28,6 +28,7 @@ export default {
     placeholderKey: { type: String, default: '' },
     /** External processing flag. Controls stop button visibility. */
     showStop: { type: Boolean, default: false },
+    startActionsOnTop: { type: Boolean, default: false },
     /** Explicit Chat conversation this input controls. Defaults to the active view conversation. */
     conversationId: { type: String, default: null },
     /** Explicit draft scope. Use this when one conversation contains multiple logical inputs. */
@@ -100,6 +101,7 @@ export default {
         @retry-attachment="retryAttachment"
         @remove-attachment="removeAttachment"
         :show-stop="isStopVisible"
+        :start-actions-on-top="startActionsOnTop"
         :input-id="inputElementId"
         :send-label="$t('chatInput.send')"
         :stop-label="$t('chatInput.stop')"

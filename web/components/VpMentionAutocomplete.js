@@ -115,15 +115,8 @@ export function buildVpMentionSections(vps) {
  *   - Active group: return ONLY the VPs that are on the group's roster.
  *     Off-roster VPs are hidden entirely — you can't @-mention someone
  *     who isn't in the conversation, and the dropdown shouldn't tempt
- *     the user to try. An empty roster means an empty dropdown; this
- *     matches the VP timeline (`selectGroupRosterVpList` in
- *     `web/stores/helpers/vp-timeline.js`) and the autocomplete's
- *     `v-if="filteredList.length > 0"` then hides the popover entirely.
- *
- * See also: `selectGroupRosterVpList` is a deliberately-different sibling
- *   — it preserves roster order and stubs ghost ids for the timeline,
- *   whereas this helper preserves library order and drops ghosts so the
- *   mention dropdown never offers something we can't render.
+ *     the user to try. An empty roster yields no candidates. Missing
+ *     library entries are not offered until they can be rendered.
  *
  * @param {object[]|null|undefined} vpList — the full VP library (typically vpStore.vpList).
  * @param {{ roster?: string[] }|null|undefined} group — the active group's record.

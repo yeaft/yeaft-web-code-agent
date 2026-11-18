@@ -135,30 +135,103 @@ describe('Scenario VP catalog compatibility', () => {
     expect(chat.setActiveSessionFilter).toHaveBeenLastCalledWith('registered', { agentId: 'b', force: true });
   });
 
-  it('lets a legacy Session explicitly opt into the inferred scene and restores the committed scene on failure', async () => {
+  it('selects composer scenes by pointer and keyboard, preserving explicit legacy opt-in and rollback', async () => {
     const session = Vue.reactive({ id: 'legacy', defaultVpId: 'omni' });
     let complete;
     chat.updateYeaftSessionScene = vi.fn(() => new Promise(resolve => { complete = resolve; }));
     render(SessionSceneSelect, { session, agentId: 'b' });
-    const select = wrapper.get('select');
-    expect(select.element.selectedOptions[0].textContent).toBe('General');
-    expect(select.element.value).toBe('');
-    expect(select.findAll('option').filter(option => option.element.value).map(option => option.element.value))
+    const trigger = wrapper.get('.session-scene-select__trigger');
+    const option = sceneId => wrapper.get(`[role="option"][data-scene-id="${sceneId}"]`);
+    expect(trigger.attributes('aria-label')).toBe('Scene: General');
+    await trigger.trigger('click');
+    expect(wrapper.get('[role="listbox"]').attributes('id')).toBe(trigger.attributes('aria-controls'));
+    expect(wrapper.findAll('[role="option"]').map(row => row.attributes('data-scene-id')))
       .toEqual(['general', 'software', 'writing', 'short-video', 'investment']);
-    await select.setValue('general');
-    expect(select.element.disabled).toBe(true);
+    expect(wrapper.find('[aria-selected="true"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(option('general').element);
+    expect(chat.updateYeaftSessionScene).not.toHaveBeenCalled();
+
+    await option('general').trigger('keydown', { key: 'Enter' });
+    expect(trigger.attributes('aria-busy')).toBe('true');
+    expect(trigger.attributes('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(trigger.element);
     expect(chat.updateYeaftSessionScene).toHaveBeenCalledWith('legacy', 'general', 'b');
+    await trigger.trigger('click');
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false);
     complete({ ok: false });
     await flushPromises();
-    expect(select.element.value).toBe('');
+    expect(session.sceneId).toBeUndefined();
     expect(wrapper.get('[role="alert"]').text()).toBe(en['yeaft.session.scene.updateError']);
-    await select.setValue('general');
+
+    await trigger.trigger('click');
+    await option('general').trigger('click');
     session.sceneId = 'general';
     complete({ ok: true });
     await flushPromises();
-    expect(select.element.value).toBe('general');
-    expect(select.element.disabled).toBe(false);
+    expect(trigger.attributes('aria-disabled')).toBe('false');
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    await trigger.trigger('click');
+    expect(option('general').attributes('aria-selected')).toBe('true');
+    expect(option('general').get('.yeaft-model-check').text()).toBe('✓');
+    await option('general').trigger('click');
+    expect(chat.updateYeaftSessionScene).toHaveBeenCalledTimes(2);
+
+    await trigger.trigger('click');
+    await option('software').trigger('click');
+    expect(trigger.attributes('aria-label')).toBe(`Scene: ${en['yeaft.session.scene.software']}`);
+    complete({ ok: false });
+    await flushPromises();
+    expect(trigger.attributes('aria-label')).toBe('Scene: General');
+    expect(wrapper.get('[role="alert"]').exists()).toBe(true);
+
+    // With a parent controlling the popup, navigation and dismissal never save a scene.
+    chat.updateYeaftSessionScene.mockClear();
+    session.sceneId = 'software';
+    await wrapper.setProps({ open: false });
+    const focusedScene = () => document.activeElement.dataset.sceneId;
+    const key = async (value, modifiers = {}) => {
+      const event = new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true, ...modifiers });
+      document.activeElement.dispatchEvent(event);
+      await Vue.nextTick();
+      return event;
+    };
+    const expectCloseRequest = async () => {
+      expect(wrapper.emitted('update:open').at(-1)).toEqual([false]);
+      await wrapper.setProps({ open: false });
+      expect(trigger.attributes('aria-expanded')).toBe('false');
+    };
+    trigger.element.focus();
+    const priorEvents = wrapper.emitted('update:open').length;
+    await key('ArrowDown');
+    expect(wrapper.emitted('update:open').slice(priorEvents)).toEqual([[true]]);
+    expect(trigger.attributes('aria-expanded')).toBe('false');
+    await wrapper.setProps({ open: true });
+    expect(focusedScene()).toBe('software');
+    await key('ArrowDown'); expect(focusedScene()).toBe('writing');
+    await key('End'); expect(focusedScene()).toBe('investment');
+    await key('ArrowUp'); expect(focusedScene()).toBe('short-video');
+    await key('Home'); expect(focusedScene()).toBe('general');
+    expect(wrapper.get('[data-scene-id="software"]').attributes('aria-selected')).toBe('true');
+    expect((await key('Escape')).defaultPrevented).toBe(true);
+    await expectCloseRequest();
+    expect(document.activeElement).toBe(trigger.element);
+
+    for (const shiftKey of [false, true]) {
+      await wrapper.setProps({ open: true });
+      expect((await key('Tab', { shiftKey })).defaultPrevented).toBe(false);
+      await expectCloseRequest();
+      expect(document.activeElement).toBe(trigger.element);
+    }
+
+    const outside = document.body.appendChild(document.createElement('button'));
+    await wrapper.setProps({ open: true });
+    outside.focus();
+    await expectCloseRequest();
+    expect(document.activeElement).toBe(outside);
+    await wrapper.setProps({ open: true });
+    outside.click();
+    await expectCloseRequest();
+    expect(chat.updateYeaftSessionScene).not.toHaveBeenCalled();
   });
 
   it('shows the recommended scheduled-task targeting picker but preserves an explicitly selected legacy VP when collapsed', async () => {
