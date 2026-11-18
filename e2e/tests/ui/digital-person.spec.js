@@ -23,7 +23,7 @@ async function submitPersonDraft(page, scenario) {
 // This is not a model, SQLite or Server authorization integration test.
 test.use({ serverEnv: { SERVE_DIST: process.env.PERSON_UI_PRODUCTION || 'false' } });
 
-async function mockPersonSocket(page, { conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], personName = 'Ada', agentName = 'Owner Agent A' } = {}) {
+async function mockPersonSocket(page, { conversationFlow = false, modelPreferences = false, initialMessages = [], olderMessages = [], personName = 'Ada', agentName = 'Owner Agent A', searchPages } = {}) {
   await page.addInitScript(() => localStorage.setItem('digital-person-ui-enabled-by-agent',
     JSON.stringify({ 'person-a': true, 'person-b': true, 'old-agent': true })));
   const requests = [];
@@ -120,7 +120,7 @@ async function mockPersonSocket(page, { conversationFlow = false, modelPreferenc
           searchError = null;
           return;
         }
-        reply({ items: [{ id: 'archived', role: 'user', text: 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
+        reply(searchPages?.[request.payload.cursor == null ? 0 : 1] ?? { items: [{ id: 'archived', role: 'user', text: 'A message from the durable archive. <img src=x>', createdAt: 1 }], nextCursor: null });
       } else if (['send', 'think', 'dream'].includes(request.op)) {
         if (conversationFlow && request.op === 'send') {
           if (receipts.has(request.payload.clientMessageId)) { reply(receipts.get(request.payload.clientMessageId)); return; }
@@ -986,6 +986,53 @@ test('Digital Person shares Session reading gutters, keeps desktop actions and c
   await expect(page.locator('.person-search-button')).toBeVisible();
   await expect(page.locator('#person-input')).toBeEnabled();
   await expectPersonFits(page);
+});
+
+test('Digital Person search previews keep deep matches visible and preserve rich messages and paging', async ({ page, serverUrl }, testInfo) => {
+  const keyword = '部署策略';
+  const text = `Hidden beginning. ${'A long archived paragraph that should not fill the result.\n'.repeat(25)}<img src=x> ${keyword} ${'随后说明'.repeat(60)} Hidden ending.`;
+  const mock = await mockPersonSocket(page, { conversationFlow: true, initialMessages: previousConversation, searchPages: [
+    { items: [{ id: 'deep', role: 'assistant', text, createdAt: 2,
+      presentation: { version: 1, title: 'Archived report', summary: text, blocks: [{ type: 'markdown', text: 'Full report detail' }] } }], nextCursor: 'page-two' },
+    { items: [{ id: 'short', role: 'user', text: keyword + ' update', createdAt: 1 }], nextCursor: null },
+  ] });
+  await openResponseConversation(page, serverUrl, { width: 1280, theme: 'light' });
+  for (const [width, theme] of [[1280, 'light'], [320, 'dark']]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+    await clickPersonAction(page, 'search');
+    const input = page.locator('.person-search-form input');
+    await input.fill(keyword); await input.press('Enter');
+    const results = page.locator('.person-search-result');
+    const first = results.first();
+    const preview = first.locator('.person-search-snippet');
+    await expect(preview).toHaveText(/^….*<img src=x> 部署策略 .*…$/s);
+    await expect(preview).not.toContainText('Hidden beginning');
+    await expect(preview).not.toContainText('Hidden ending');
+    await expect(preview.locator('img')).toHaveCount(0);
+    await expect(preview.locator('mark')).toHaveText(keyword);
+    expect(await preview.evaluate(el => {
+      const line = parseFloat(getComputedStyle(el).lineHeight), rect = el.getBoundingClientRect();
+      const hit = el.querySelector('mark').getBoundingClientRect();
+      return { bounded: rect.height >= line * 3 - 1 && rect.height <= line * 5 + 1, showsHit: hit.bottom <= rect.bottom + 1 };
+    })).toEqual({ bounded: true, showsHit: true });
+    await expect(first.locator('.response-presentation')).toHaveCount(0);
+    await expectPersonFits(page);
+    await page.screenshot({ path: testInfo.outputPath(`person-search-${width}-${theme}.png`) });
+    const details = first.getByRole('button', { name: 'View full message' });
+    await details.focus(); await page.keyboard.press('Enter');
+    await expect(first.getByRole('button', { name: 'Hide full message' })).toHaveAttribute('aria-expanded', 'true');
+    await expect(first.locator('.response-presentation')).toContainText('Full report detail');
+    await page.keyboard.press('Enter');
+    await expect(first.locator('.response-presentation')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Load more' }).click();
+    await expect(results).toHaveCount(2);
+    await expect(results.last().locator('.person-search-snippet')).toHaveText(keyword + ' update');
+    await expect(results.last().locator('mark')).toHaveText(keyword);
+    expect(mock.requests.filter(r => r.op === 'search').at(-1).payload).toMatchObject({ query: keyword, cursor: 'page-two' });
+    await page.locator('.person-panel-header .header-action-btn').click();
+    await expect(page.locator('#person-side-panel')).toHaveCount(0);
+  }
 });
 
 test('Digital Person mobile actions expose loading, disabled and recoverable error states', async ({ page, serverUrl }) => {

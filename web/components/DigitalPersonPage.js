@@ -5,7 +5,7 @@ import MessageComposer from './MessageComposer.js';
 import NavigationIcon from './NavigationIcon.js';
 import PaneResizeHandle from './PaneResizeHandle.js';
 import PersonOutputs from './PersonOutputs.js';
-import ResponsePresentation from './ResponsePresentation.js';
+import PersonSearchResult from './PersonSearchResult.js';
 import { normalizeBrowserAddress } from '../utils/browser-address.js';
 import { safeOutputUrl } from '../stores/helpers/person-outputs.js';
 import PersonKnowledgeBrowser from './PersonKnowledgeBrowser.js';
@@ -29,7 +29,7 @@ import { resolveDigitalPersonAgentId } from '../utils/digital-person-agent.js';
 export default {
   name: 'DigitalPersonPage',
   emits: ['toggle-sidebar', 'interaction-blocked'],
-  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, ResponsePresentation, PersonConversationBlock, ConcurrentUserTurns, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonActionsSheet, PersonThoughtJournal, PersonDebugLog, PersonResponseLoading },
+  components: { VirtualTranscript, PaneResizeHandle, PersonOutputs, PersonSearchResult, PersonConversationBlock, ConcurrentUserTurns, MessageComposer, NavigationIcon, PersonKnowledgeBrowser, PersonManagement, PersonTurnUsage, ModernSelect, PersonSettingsModal, PersonActionsSheet, PersonThoughtJournal, PersonDebugLog, PersonResponseLoading },
   setup(_props, { emit }) {
     const chat = Pinia.useChatStore();
     const auth = useAuthStore();
@@ -802,11 +802,8 @@ export default {
               <p v-if="state.search.error" role="alert" class="person-settings-error">{{ $t('person.requestFailed') }} {{ state.search.error.message }}</p>
               <p v-if="state.search.loading" role="status" class="person-muted">{{ $t('person.loading') }}</p>
               <p v-else-if="state.search.loaded && !state.search.items.length" class="person-empty">{{ $t('person.noSearchResults') }}</p>
-              <article v-for="message in state.search.items" :key="message.id" class="person-search-result">
-                <header class="person-message-meta"><strong>{{ message.role === 'user' ? $t('person.you') : (state.person?.name || $t('person.title')) }}</strong><span v-if="message.role === 'assistant' && message.replyKind === 'progress'" class="person-reply-kind">{{ $t('person.progressReply') }}</span><time>{{ time(message.createdAt) }}</time></header>
-                <ResponsePresentation v-if="message.presentation" :presentation="message.presentation" :open-link="openReplyBrowser" />
-                <p v-else class="person-prose">{{ message.text }}</p>
-              </article>
+              <PersonSearchResult v-for="message in state.search.items" :key="message.id" :message="message" :query="state.search.query"
+                :person-name="state.person?.name" :open-link="openReplyBrowser" />
               <button v-if="state.search.nextCursor != null" type="button" class="btn-ghost person-load-more" :disabled="!!gate || state.search.loading" @click="controller.search(state.search.query, true)">{{ $t('person.loadMore') }}</button>
             </div>
           </section>

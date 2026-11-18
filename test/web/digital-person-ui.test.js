@@ -13,6 +13,7 @@ import { personTurn } from '../fixtures/person-turns.js';
 import { personRecords } from '../fixtures/person-records.js';
 import en from '../../web/i18n/en.js';
 import zhCN from '../../web/i18n/zh-CN.js';
+import { personSearchSnippet } from '../../web/utils/person-search-snippet.js';
 import { createPersonConversationProjector, projectPersonConversation, personResponseOrigins, orderPersonEpisodeMessages, partitionPersonEpisodes } from '../../web/utils/person-conversation.js';
 
 vi.mock('../../web/stores/auth.js', () => ({ useAuthStore: () => ({ userId: 'owner', authGeneration: 1 }) }));
@@ -55,6 +56,22 @@ async function render(messages = en) {
 }
 
 describe('Digital Person surface', () => {
+  it('creates bounded literal search snippets around matches in the original text', () => {
+    const text = `${'before '.repeat(60)}İstanbul: 😀 C++ and c++ — 知识库. ${'after '.repeat(60)}`;
+    const snippet = personSearchSnippet(text, ' C++ ');
+    expect(snippet).toMatchObject({ leading: true, trailing: true });
+    expect(snippet.parts.filter(part => part.match).map(part => part.text)).toEqual(['C++', 'c++']);
+    expect(snippet.parts.map(part => part.text).join('')).toHaveLength(200);
+    expect(personSearchSnippet('İstanbul and İstanbul', 'i\u0307STANBUL').parts.filter(part => part.match).map(part => part.text)).toEqual(['İstanbul', 'İstanbul']);
+    expect(personSearchSnippet('İ — regular I', 'i').parts.filter(part => part.match).map(part => part.text)).toEqual(['İ', 'I']);
+    expect(personSearchSnippet(text, '知识库').parts.some(part => part.match && part.text === '知识库')).toBe(true);
+    expect(personSearchSnippet('ΣΟΣ', 'σος').parts).toEqual([{ text: 'ΣΟΣ', match: true }]);
+    expect(personSearchSnippet('Short message', '[')).toEqual({ parts: [{ text: 'Short message', match: false }], leading: false, trailing: false });
+    expect(personSearchSnippet(`prefix😀${'x'.repeat(31)}match`, 'MATCH').parts[0].text.startsWith('😀')).toBe(true);
+    expect(personSearchSnippet(`${'x'.repeat(199)}😀suffix`, '')).toEqual({ parts: [{ text: `${'x'.repeat(199)}😀`, match: false }], leading: false, trailing: true });
+    expect(personSearchSnippet('x'.repeat(200), 'x'.repeat(200))).toEqual({ parts: [{ text: 'x'.repeat(200), match: true }], leading: false, trailing: false });
+  });
+
   it('splits active episodes once, preserves manual Workbench reopen and returns completed episodes to ordered history', async () => {
     await render();
     const state = wrapper.vm.state;

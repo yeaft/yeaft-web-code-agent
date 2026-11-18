@@ -233,6 +233,8 @@ export default {
   "person.skills": "Skills & capabilities",
   "person.searchMessages": "Search messages",
   "person.search": "Search",
+  "person.viewFullMessage": "View full message",
+  "person.hideFullMessage": "Hide full message",
   "person.noSearchResults": "No matching messages.",
   "person.you": "You",
   "person.currentUnderstanding": "Current understanding",

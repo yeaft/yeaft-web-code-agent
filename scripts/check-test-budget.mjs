@@ -202,7 +202,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // +22 native Gemini boundaries: 9 transport/tool/finish/signature regressions,
 // 6 routing/Engine/Person/history/private-state integrations, 3 config/catalog/UI
 // cases and 4 desktop/mobile/theme browser flows. Existing protocol tests retained.
-export const TEST_CASE_LIMIT = 1126;
+// +2 Person search excerpt regressions: literal Unicode match bounds and
+// responsive highlighted results with preserved pagination and full rich replies.
+export const TEST_CASE_LIMIT = 1128;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
