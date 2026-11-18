@@ -38,7 +38,7 @@ Open the scene menu using the chevron next to **Attach**; the current choice is 
 
 Each scene brings the working standards of its field. Software thinks like a principal engineer across product, design, security, testing, data migrations and operations. Writing works like an editor, fact-checker and copy chief, following style guides such as Chicago or GB/T 15834. Short Video covers positioning, scripting, shooting, editing, operations, data, commerce and advertising rules. Investment Research works like a buy-side analyst and risk manager under the CFA Institute’s standards. The All-purpose Assistant holds specialist questions, such as health, law or safety, to that profession’s standard of care.
 
-The assistant checks the whole field but raises only what matters to your request. Ask Software how drafts should reopen on another device, and it considers an unsaved edit open on both devices; ask it to change one word, and you still get a one-word edit. The scene changes what the assistant notices and the standard it works to, not the format you have to read.
+The assistant checks the whole field but raises only what matters to your request. When you ask what to do or which option is better, it recommends one and says why instead of listing conditions. Ask Software how drafts should reopen on another device, and it considers an unsaved edit open on both devices; ask it to change one word, and you still get a one-word edit. The scene changes what the assistant notices and the standard it works to, not the format you have to read.
 
 ### Compatibility with existing Sessions
 
