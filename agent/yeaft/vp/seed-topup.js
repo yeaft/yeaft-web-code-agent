@@ -71,33 +71,39 @@ import { STOCK_VP_IDS } from './stock-ids.js';
 const SEEDED_VERSIONS_FILE = '.seeded-versions.json';
 const SEEDED_VERSIONS_VERSION = 1;
 
-// Full bilingual bodies written by 0f566fa, v1.0.712 and v1.0.713, keyed by owner.
-// The ledger's short hash is bookkeeping, never proof of body ownership.
+// Full bilingual bodies written by 0f566fa, v1.0.712, v1.0.713 and v1.0.716,
+// keyed by owner. The ledger's short hash is bookkeeping, never proof of body
+// ownership.
 const SHIPPED_BODY_SHA256 = {
   omni: [
     'c8f2aa99d45e962ed991282e42dcb805fb274a8071379fb03cee63e163934974',
     '6d897d95aaee343a20f212ce9ce08a7149746278cf3b7d0bc6aa32b5f9756ffc',
     'c4d2b8cfa0527407dcefd9e73ef64f737e6f7587bc68a7e1947161ac02953cca',
+    'bda02e0c5b33c3bdfe146776ba1a8b4776ba0ebdf6f1c177a657a3f7013df61a',
   ],
   'software-omni': [
     '045a7edce52fef5807985357a516c72c663b5bd54b6aa2cde20877a25f272009',
     '1bb6d5fc99a0f90e75862c91b3825776996991cfbd0bf04032d9b6a7964c97f7',
     'b7b78dfe93e369aaa22d5d4b94ff2bb7c6bfc98435e67484715c46cb7c3954fe',
+    '56f9f39b996da872badddd9ef894833b6384e77012de8283225633f686c82140',
   ],
   'writing-omni': [
     '43123b36a997b424eb13d09b853316712ada934ee1294abf86ad1cd5a927f7fd',
     '10b330a2ac25692888b9a2c60f86e8d7146271935418093485a4a2cfd0652a54',
     '7a772292789cac99d75f0724538071dbc99a49339bd607070c43100b81e5a72d',
+    'bd586758f99e9fa208100e05ff7345f88b8999134ede0a4b8ac2f7329e36c3a0',
   ],
   'short-video-omni': [
     'ae8f66c18508d46468eb64354fcfc958cb0dc1166038a450df726fb93357a42b',
     'c5670e3b6d974b3a22c8ecc81c9ffb4c804f1ce30c15c7f6b3d23e4eb6a65994',
     '652252538ee2451d54d3f5597724e128a13f455f4cdb0baf8a138afd0892a570',
+    '8a6137ec5b0ad3b3201bce152d1193ac1e947029195f7139aca475dac891bfe8',
   ],
   'quant-omni': [
     '98ce6f52ae22e76d61acb99704419dd0f41859923c4144bd227c10318ce589fb',
     '1b60fb391631c8e55653a0d0557192ff3dcb04dc7124ee50562c865b3d8a0ade',
     '1824219160ef85f3be17d793973dce17cf8513239559d76717c8b07617b63fdd',
+    'd1e94d3b3652984ecd4435b3bcc5708be7aad32d79b8cd2166421fed56f62ced',
   ],
 };
 
