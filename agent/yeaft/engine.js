@@ -2736,6 +2736,7 @@ export class Engine {
         // merged separate user requests into one debug turn, so every request's
         // first LLM call showed up as another stale "Loop 1" under the same row.
         traceId: queryTurnId,
+        messageId: persistedQueryUser?.id || null,
         turnNumber,
         // fix-vp-multi-thread (bug 4): stamp routing context so the
         // debug-trace SQL row carries enough info to be filtered by

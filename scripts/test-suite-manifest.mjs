@@ -122,6 +122,8 @@ export const CORE_TEST_FILES = Object.freeze([
   "test/web/message-flow-regression.test.js",
   "test/web/concurrent-user-turns.test.js",
   "test/web/session-turns-store.test.js",
+  "test/web/stores/yeaft-turn-deletion.test.js",
+  "test/web/yeaft-delete-turn-ui.test.js",
   "test/web/history-pagination.test.js",
   "test/web/llm-draft.test.js",
   "test/web/plugin-center-ui.test.js",

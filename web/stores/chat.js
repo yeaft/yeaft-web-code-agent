@@ -3895,7 +3895,8 @@ export const useChatStore = defineStore('chat', {
       const messageId = persistedYeaftUserMessageId(message);
       if (!messageId) return null;
       const { agentId, sessionId } = activeYeaftHistoryIdentity(this);
-      if (!agentId || !sessionId || (message.sessionId ?? message.groupId) !== sessionId
+      if (!agentId || !sessionId || getSessionsStore()?.sessionById?.(sessionId, agentId)?.task
+          || (message.sessionId ?? message.groupId) !== sessionId
           || (message.agentId && message.agentId !== agentId)) return null;
       const key = yeaftHistoryIdentityKey(agentId, sessionId);
       const { streamId, revision } = this.yeaftSessionHistoryState[key] || {};
@@ -3959,7 +3960,8 @@ export const useChatStore = defineStore('chat', {
       if (!pending || msg.requestId !== pending.requestId || typeof msg.ok !== 'boolean'
           || !isYeaftTurnDeletionFenceCurrent(this, useAuthStore(), pending)) return;
       if (msg.ok) this.invalidateYeaftDeletedTurn(msg);
-      settleYeaftTurnDeletion(this, pending, { ok: msg.ok, errorCode: msg.errorCode });
+      settleYeaftTurnDeletion(this, pending, { ok: msg.ok, errorCode: msg.errorCode,
+        ...(msg.cleanupPending === true ? { cleanupPending: true } : {}) });
     },
 
     interruptYeaftTurnDeletions() {
@@ -3982,6 +3984,24 @@ export const useChatStore = defineStore('chat', {
       const key = yeaftHistoryIdentityKey(agentId, sessionId);
       const previous = this.yeaftTurnDeleteHistoryBySession?.[key];
       if (turnId && previous?.lastDeletedTurnId === turnId) return;
+      const panel = this.yeaftDebugPanel;
+      if (panel?.agentId === agentId && panel.sessionId === sessionId) this.closeYeaftDebugPanel();
+      // Cached raw loops can contain the removed tool activity. Scope the
+      // eviction through their sessions, including list responses in flight.
+      const pendingDebug = this._yeaftDebugHistoryPending?.payload;
+      if (pendingDebug?.agentId === agentId && (!pendingDebug.sessionId || pendingDebug.sessionId === sessionId)) {
+        if (!panel?.open || panel.sessionId === sessionId) this.closeYeaftDebugPanel();
+      }
+      const debugTurns = this.yeaftDebugTurnsById || {};
+      const staleDebugIds = new Set(Object.keys(debugTurns).filter(id => {
+        const row = debugTurns[id];
+        return row?.sessionId === sessionId && (!row.agentId || row.agentId === agentId);
+      }));
+      if (staleDebugIds.size) {
+        this.yeaftDebugTurnsById = Object.fromEntries(Object.entries(debugTurns).filter(([id]) => !staleDebugIds.has(id)));
+        this.yeaftDebugTurnOrder = this.yeaftDebugTurnOrder.filter(id => !staleDebugIds.has(id));
+        this.yeaftDebugLoops = this.yeaftDebugLoops.filter(loop => !staleDebugIds.has(loop?.turnId));
+      }
       const active = this.currentView === 'yeaft' && activeYeaftHistoryIdentity(this).sessionKey === key;
       // Inactive sessions drop cached rows immediately. Keep the active
       // projection until the replacement chunk so Vue can preserve anchors.

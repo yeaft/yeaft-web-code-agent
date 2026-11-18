@@ -134,11 +134,12 @@ export function materializeSessionCopy(rows, { sourceSessionId, streamId, target
       if (value === undefined) delete copy.causalRootId;
       else copy.causalRootId = value;
     }
-    if (row.quote?.messageId) {
-      copy.quote = { ...row.quote };
-      const value = remap(row.quote.messageId, 'quote.messageId');
-      if (value === undefined) delete copy.quote.messageId;
-      else copy.quote.messageId = value;
+    for (const field of ['id', 'messageId']) {
+      if (!row.quote?.[field]) continue;
+      copy.quote = { ...copy.quote };
+      const value = remap(row.quote[field], `quote.${field}`);
+      if (value === undefined) delete copy.quote[field];
+      else copy.quote[field] = value;
     }
     for (const field of ['foldedMessageIds', 'sourceMessageIds']) {
       if (Array.isArray(row[field])) copy[field] = row[field]
@@ -348,7 +349,11 @@ function equivalentRows(left, right, aliases) {
       for (const key of ['foldedMessageIds', 'sourceMessageIds']) {
         if (Array.isArray(row[key])) copy[key] = row[key].map(remap);
       }
-      if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remap(row.quote.messageId) };
+      if (row.quote?.id || row.quote?.messageId) copy.quote = {
+        ...row.quote,
+        ...(row.quote.id ? { id: remap(row.quote.id) } : {}),
+        ...(row.quote.messageId ? { messageId: remap(row.quote.messageId) } : {}),
+      };
       if (row.unresolvedMessageReferences) copy.unresolvedMessageReferences = row.unresolvedMessageReferences
         .map(reference => {
           if (reference.candidateOrigins) {
@@ -476,7 +481,11 @@ export function materializeSessionMerge(plan, targetSessionId, firstSeq) {
       for (const key of ['foldedMessageIds', 'sourceMessageIds']) {
         if (Array.isArray(row[key])) copy[key] = row[key].map(remap);
       }
-      if (row.quote?.messageId) copy.quote = { ...row.quote, messageId: remap(row.quote.messageId) };
+      if (row.quote?.id || row.quote?.messageId) copy.quote = {
+        ...row.quote,
+        ...(row.quote.id ? { id: remap(row.quote.id) } : {}),
+        ...(row.quote.messageId ? { messageId: remap(row.quote.messageId) } : {}),
+      };
       if (row.unresolvedMessageReferences) copy.unresolvedMessageReferences = row.unresolvedMessageReferences
         .map(reference => ({ ...reference, candidateMessageIds: reference.candidateMessageIds.map(remap) }));
       if (row.toolCalls) copy.toolCalls = row.toolCalls.map(call => ({ ...call, id: calls.get(toolScope(row, call.id)) }));

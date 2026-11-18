@@ -126,7 +126,7 @@ export async function handleAgentSessionTurnDelete(agentId, agent, msg) {
       || (!CONFIG.skipAuth && !userDb.isActive(ownerId))) return true;
 
   // Agent IDs come from the authenticated socket, never from the payload.
-  const deletedIds = Array.isArray(msg.deletedMessageIds) && msg.deletedMessageIds.every(validId)
+  const deletedIds = Array.isArray(msg.deletedMessageIds) && msg.deletedMessageIds.length <= 2048 && msg.deletedMessageIds.every(validId)
     ? { deletedMessageIds: msg.deletedMessageIds } : {};
   // The Agent supplies the same safe, opaque event identity in both frames.
   // It need not expose the canonical user turn ID from the transcript.
@@ -141,7 +141,7 @@ export async function handleAgentSessionTurnDelete(agentId, agent, msg) {
       await deliver(requester, {
         ...request.reply,
         ok: msg.ok,
-        ...(msg.ok ? { ...turnIdentity, ...deletedIds } : {
+        ...(msg.ok ? { ...turnIdentity, ...deletedIds, ...(msg.cleanupPending === true ? { cleanupPending: true } : {}) } : {
           ...(validId(msg.errorCode) ? { errorCode: msg.errorCode } : {}),
           ...(typeof msg.error === 'string' ? { error: msg.error.slice(0, 512) } : {}),
         }),

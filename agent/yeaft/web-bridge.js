@@ -23,6 +23,9 @@ import { writeAtomic } from './storage/atomic.js';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { Engine } from './engine.js';
+import { DebugTrace } from './debug-trace.js';
+import { readSessionTurnDeletions, sessionDeletionProjection } from './conversation/turn-deletion-journal.js';
+import { historyError } from './conversation/session-history.js';
 import { loadSession } from './session.js';
 import { loadAgentMCPConfig, loadConfig, loadMCPConfig } from './config.js';
 import { resolveCatalogEffort, resolveMaxOutputTokens } from './models.js';
@@ -101,8 +104,9 @@ import {
   readWorkDirRegistry,
   migrateRegisteredWorkDirSessions,
   resolveSessionYeaftDir,
+  findExistingSessionYeaftDir,
 } from './sessions/session-crud.js';
-import { openSession, loadSessionMeta, SESSION_META_FILE } from './sessions/session-store.js';
+import { openSession, loadSessionMeta, SESSION_META_FILE, pruneDeletedCoordinatorMessages } from './sessions/session-store.js';
 import { validateSessionId } from './sessions/ids.js';
 import { publicScheduledTask } from './sessions/scheduled-task-definition.js';
 import { ScheduledTaskScheduler, SCHEDULED_TASK_DISPATCH_GUARD } from './sessions/scheduled-task-scheduler.js';
@@ -2552,6 +2556,11 @@ function enqueueForVp(sessionId, vpId, envelope) {
 
 function scheduleTaskResultRescue({ taskId, sessionId, vpId, threadId = 'main', content, taskKind, taskStatus, causalRootId = null, userTurnId = null, sceneId = null }) {
   if (!sessionId || !vpId || !taskId) return false;
+  if ((causalRootId || userTurnId) && ctx.CONFIG?.yeaftDir) {
+    const root = findExistingSessionYeaftDir(ctx.CONFIG.yeaftDir, sessionId);
+    const { operations } = readSessionTurnDeletions(root, sessionId);
+    if (operations.some(op => op.referenceIds.includes(causalRootId) || op.referenceIds.includes(userTurnId))) return false;
+  }
   const text = typeof content === 'string'
     ? content
     : (() => { try { return JSON.stringify(content); } catch { return String(content); } })();
@@ -4383,6 +4392,105 @@ export function handleYeaftCopySession(msg) {
   }
 }
 
+const turnDeletionsInProgress = new Set();
+const turnDeleteId = id => typeof id === 'string' && /^[A-Za-z0-9_.:-]{1,160}$/.test(id) && !/\s/.test(id);
+const TURN_DELETE_PUBLIC_ERRORS = new Set(['invalid_request', 'session_not_found', 'session_running',
+  'message_not_found', 'ambiguous_turn', 'unsupported_session']);
+
+/** Only dispatched by the Server's owner-authorized relay, never a generic Web frame. */
+export async function handleYeaftDeleteTurn(msg = {}) {
+  const { sessionId, requestId, messageId } = msg;
+  const result = { type: 'yeaft_session_delete_turn_result', sessionId, requestId };
+  let operation;
+  let locked = false;
+  let cleanupPending = false;
+  try {
+    const root = ctx.CONFIG?.yeaftDir;
+    if (!root || !validateSessionId(sessionId).ok || !turnDeleteId(requestId) || (typeof messageId !== 'string' || !/^m[0-9]{1,30}$/.test(messageId))) {
+      throw historyError('invalid_request', 'A saved user message and native Session are required.');
+    }
+    const ownerRoot = findExistingSessionYeaftDir(root, sessionId);
+    const sessionDir = join(sessionsRoot(ownerRoot), sessionId);
+    const meta = loadSessionMeta(sessionDir);
+    if (!meta || meta.id !== sessionId) throw historyError('session_not_found', 'Session not found.');
+    if (meta.task) throw historyError('unsupported_session', 'Scheduled-task Session history cannot be deleted here.');
+    if (turnDeletionsInProgress.has(sessionId) || sessionHasActiveWork(sessionId)
+      || sessionCopyRecoveryTasks(sessionId).length) {
+      throw historyError('session_running', 'Stop all work in this Session before deleting a turn.');
+    }
+    turnDeletionsInProgress.add(sessionId);
+    locked = true;
+    const store = new ConversationStore(ownerRoot);
+    // Synchronous commit and cache invalidation: no send or task can take a
+    // snapshot between these steps. Async cleanup only touches scoped trace IDs.
+    operation = store.deleteSessionTurn(sessionId, messageId, {
+      getRuntimeExecutionIds: userTurnId => [...(sessionUserTurns.get(sessionId)?.get(userTurnId)?.executions.keys() || [])],
+    });
+    const affected = new Set(operation.messageIds);
+    const referenceIds = new Set(operation.referenceIds);
+    for (const [key, row] of _persistedInboundRows) {
+      if (row?.sessionId === sessionId && affected.has(row.id)) _persistedInboundRows.delete(key);
+    }
+    const coordinator = sessionContexts.get(sessionId)?.sessionHandle;
+    // The coordinator owns an open append fd. Retire it before rewriting its
+    // log, otherwise later inputs could be written to an unlinked inode.
+    invalidateGroupContext(sessionId, { abortRuntime: true });
+    for (const key of vpEngines.keys()) {
+      if (key.startsWith(`${sessionId}::`)) retireCachedVpEngine(key, { reason: 'turn_deleted', rescue: false });
+    }
+    for (const [id, row] of visibleExecutionText) {
+      if (row.sessionId === sessionId && (referenceIds.has(row.userTurnId) || referenceIds.has(id))) {
+        visibleExecutionText.delete(id);
+      }
+    }
+    if (referenceIds.has(operation.turnId)) sessionUserTurns.get(sessionId)?.delete(operation.turnId);
+    const clean = (fn) => {
+      try { fn(); } catch (error) {
+        cleanupPending = true;
+        console.warn('[Yeaft] Session turn cleanup failed:', error?.code || error?.name);
+      }
+    };
+    clean(() => { coordinator?.close?.(); pruneDeletedCoordinatorMessages(sessionDir, operation); });
+    clean(() => store.pruneDeletedSessionTurnRows(sessionId));
+    try {
+      // Debug collection is opt-in. Files from an earlier debug-enabled run
+      // still need deletion even when the current runtime uses NullTrace.
+      const trace = session?.trace instanceof DebugTrace ? session.trace : new DebugTrace(root);
+      const traceRoots = new Set([resolve(root), resolve(ownerRoot)]);
+      for (const traceRoot of traceRoots) {
+        const scopedTrace = traceRoot === resolve(root) ? trace : new DebugTrace(traceRoot);
+        await scopedTrace.deleteSessionTurns({ sessionId, turnIds: operation.executionIds,
+          messageIds: [...operation.anchorMessageIds, ...operation.clientMessageIds] });
+      }
+
+    } catch (error) {
+      cleanupPending = true;
+      console.warn('[Yeaft] Session turn trace cleanup failed:', error?.code || error?.name);
+    }
+  } catch (error) {
+    if (!operation) {
+      const errorCode = TURN_DELETE_PUBLIC_ERRORS.has(error?.code) ? error.code : 'delete_failed';
+      if (errorCode === 'delete_failed') console.warn('[Yeaft] Session turn deletion failed:', error?.code || error?.name);
+      await sendToServer({ ...result, ok: false, errorCode,
+        error: errorCode === 'delete_failed' ? 'Could not delete the turn.' : error.message });
+      return;
+    }
+    cleanupPending = true;
+    console.warn('[Yeaft] Post-deletion cleanup failed:', error?.code || error?.name);
+  } finally {
+    if (locked) turnDeletionsInProgress.delete(sessionId);
+  }
+  // Use one stable, opaque notification identity even for legacy/merged turns
+  // whose user/VP IDs are not safe (or unique) as wire correlations.
+  const deleted = { sessionId, turnId: operation.deletionId,
+    ...(operation.messageIds.length <= 2048 ? { deletedMessageIds: operation.messageIds } : {}),
+    ...(cleanupPending ? { cleanupPending: true } : {}) };
+  // No raw prompt/tool content leaves the Agent with these messages.
+  await sendToServer({ ...result, ...deleted, ok: true });
+  await sendToServer({ type: 'yeaft_session_turn_deleted', ...deleted });
+  publishSessionTurns(sessionId);
+}
+
 /** Merge creates a new Session; neither source runtime is stopped or retired. */
 export function handleYeaftMergeSessions(msg) {
   const requestId = msg?.requestId;
@@ -5855,6 +5963,11 @@ async function dispatchAcceptedSessionSend({
       const routing = await classifySessionUserInput(sessionId, messageId, text, ingress, turnConfig,
         sceneId ? [] : (mentions.length ? mentions : coord.parseMentions(text)), sceneId);
       if (!routing) return;
+      if (quote?.id) {
+        const ownerRoot = findExistingSessionYeaftDir(yeaftDir, sessionId);
+        const { operations } = readSessionTurnDeletions(ownerRoot, sessionId);
+        if (sessionDeletionProjection(operations).references.has(quote.id)) quote = null;
+      }
       report = coord.ingest({
         id: messageId,
         _userTurnRouting: routing,

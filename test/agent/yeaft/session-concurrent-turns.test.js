@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ctx from '../../../agent/context.js';
@@ -7,7 +7,7 @@ import { renderSessionScene } from '../../../agent/yeaft/sessions/scene-prompts.
 import * as bridge from '../../../agent/yeaft/web-bridge.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
-import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { DebugTrace, NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { createSessionFromSpec, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
@@ -394,4 +394,56 @@ it('pins each Turn to its selected scene while sharing a durable transcript acro
   await bridge.handleYeaftLoadHistory({ sessionId, requestId: 'replay-scenes', limit: 10 });
   expect(frames().find(frame => frame.type === 'yeaft_history_chunk' && frame.requestId === 'replay-scenes').messages)
     .toEqual(expect.arrayContaining([expect.objectContaining({ userTurnId: 'scene-old' }), expect.objectContaining({ userTurnId: 'scene-new', relation: 'supplement' })]));
+});
+
+it('deletes a finished Session input, coordinator audit and raw loops, and excludes it from real Engine requests', async () => {
+  const gate = deferred();
+  const requests = [];
+  const { send, store, sessionId } = setup({ async *stream(params) {
+    requests.push(JSON.stringify(params.messages));
+    if (requests.length === 1) {
+      yield { type: 'text_delta', text: 'deleted-special-reply' };
+      await gate.promise;
+    } else yield { type: 'text_delta', text: 'retained-answer' };
+    yield { type: 'stop', stopReason: 'end_turn' };
+  } });
+  // Allow the real transport queue to drain while retaining frames for assertions.
+  const sent = [];
+  ctx.ws.send = encoded => sent.push(JSON.parse(encoded));
+  ctx.outboundSendQueueActive = false;
+  const { handleMessage } = await import('../../../agent/connection/message-router.js');
+  await send('deleted-client-id', 'deleted-special-request');
+  await until(() => requests.length === 1);
+  const row = store.loadAllBySession(sessionId).find(row => row.clientMessageId === 'deleted-client-id');
+  const deletion = { sessionId, messageId: row.id, requestId: 'delete-correlation' };
+  await handleMessage({ type: 'session_turn_delete_authorized', ...deletion });
+  expect(sent.find(frame => frame.requestId === deletion.requestId)).toMatchObject({ ok: false, errorCode: 'session_running' });
+  gate.resolve();
+  await bridge.__testDrainVpDrivers();
+  const traceId = store.loadAllBySession(sessionId).find(message => message.role === 'assistant').turnId;
+  const trace = new DebugTrace(root);
+  const loop = trace.startTurn({ sessionId, traceId, messageId: row.id, turnNumber: 1, userPrompt: 'deleted-special-request' });
+  trace.endTurn(loop, { rawRequest: { messages: ['deleted-special-request'] }, rawResponse: { text: 'deleted-special-reply' } });
+  trace.logTool(loop, { toolName: 'Read', toolInput: 'deleted-special-tool', toolOutput: 'deleted-special-output' });
+  await trace.close();
+  await handleMessage({ type: 'yeaft_session_delete_turn', ...deletion });
+  expect(store.loadAllBySession(sessionId)).toHaveLength(2); // Public name is never executable on the Agent.
+  await handleMessage({ type: 'session_turn_delete_authorized', ...deletion });
+  const ack = sent.filter(frame => frame.type === 'yeaft_session_delete_turn_result').at(-1);
+  expect(ack).toMatchObject({ requestId: deletion.requestId, ok: true, deletedMessageIds: expect.arrayContaining([row.id]) });
+  expect(sent.find(frame => frame.type === 'yeaft_session_turn_deleted')).toMatchObject({ turnId: ack.turnId, sessionId });
+  expect(store.loadAllBySession(sessionId)).toEqual([]);
+  const sessionDir = join(root, 'sessions', sessionId);
+  expect(readdirSync(join(sessionDir, 'debug', 'requests'))).toEqual([]);
+  await bridge.handleYeaftSessionSend({ sessionId, id: 'next-user', text: 'next question', quote: {
+    id: row.id, role: 'user', content: 'deleted-special-request',
+  } });
+  await bridge.__testDrainVpDrivers();
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).not.toContain('deleted-special');
+  const logDir = join(sessionDir, 'messages');
+  const messages = readdirSync(logDir).filter(file => file.endsWith('.jsonl')).map(file => readFileSync(join(logDir, file), 'utf8')).join('\n');
+  expect(messages).not.toContain('deleted-special');
+  expect(messages).toContain('next question');
+  await until(() => ctx.outboundSendQueue.length === 0 && !ctx.outboundSendQueueActive);
 });

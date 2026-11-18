@@ -44,6 +44,12 @@ The assistant checks the whole field but raises only what matters to your reques
 
 Existing Sessions keep their complete messages, membership, and custom definitions. Until you choose a scene, they continue to use their existing routing; settings such as title or model do not convert the Session. Choose a scene explicitly to use the single-assistant workflow on future messages. Saved role IDs are not deleted, but they no longer route messages in that Session. Legacy role settings are under **Compatibility**; replies in scene Sessions do not display role names. Existing scheduled tasks retain their configured targeting. Scene switching requires an updated Agent.
 
+## 删除对话轮次
+
+在原生 Yeaft Session 空闲时，会话所有者可以在自己发送的消息下选择 **删除轮次** 并确认。选择原始提问或任意一条补充消息，删除的都是整个 Turn：所有用户输入、VP 回复、模型 Loop 及工具调用和返回结果。无法安全确定归属的旧记录不会删除。
+
+删除后，历史、搜索和新的模型请求不再读取该轮次。此操作不能撤销，但不会回滚已经执行的工具操作、修改过的工作区文件，也不会修改早已复制到其他 Session 或后来回复中已经复述的内容。若清理部分本机文件失败，界面会明确提示；该轮次仍不会进入后续上下文。该功能需要 Agent、Server 和 Web 同步更新，不适用于定时任务 Session、数字人或 CLI 对话。
+
 ## Fork the current Session
 
 Choose **Copy session** from the active Session’s sidebar menu, or the copy icon at the top right of the conversation. No setup dialog is needed: the new Session opens automatically on the same Agent.

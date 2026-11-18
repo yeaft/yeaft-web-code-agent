@@ -8,6 +8,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseMessage, parseSeqFromId } from './persist.js';
 import { isVisibleConversationRow } from './internal-control.js';
+import { readSessionTurnDeletions, sessionDeletionProjection } from './turn-deletion-journal.js';
 
 function parseJsonLine(line) {
   if (!line || !line.trim()) return null;
@@ -89,7 +90,7 @@ function searchMarkdownDir(dir, terms, limit, source, telemetry, boundary) {
     recordMessageScan(telemetry);
     const lowerRaw = raw.toLocaleLowerCase();
     if (!terms.every(term => lowerRaw.includes(term))) continue;
-    const msg = parseMessage(raw);
+    const msg = source.project(parseMessage(raw), source.sessionId);
     if (matchesMessage(msg, terms, source, boundary)) results.push(withSource(msg, source));
   }
   return results;
@@ -114,7 +115,7 @@ function searchSegmentDir(dir, terms, limit, source, telemetry, boundary) {
       if (results.length >= limit) break;
       if (!lines[i]?.trim()) continue;
       recordMessageScan(telemetry);
-      const msg = parseJsonLine(lines[i]);
+      const msg = source.project(parseJsonLine(lines[i]), source.sessionId);
       if (matchesMessage(msg, terms, source, boundary)) results.push(withSource(msg, source));
     }
   }
@@ -194,6 +195,16 @@ export function searchMessages(dir, keyword, limit = 10, options = {}) {
     ? scopedSessionDirs
     : [{ dir: join(dir, 'chat'), sessionId: null, kind: 'chat' }, ...scopedSessionDirs];
 
+  const deletions = new Map();
+  const project = (row, scopeId) => {
+    if (!row) return null;
+    const sessionId = row.sessionId || scopeId;
+    if (!sessionId) return row;
+    if (!deletions.has(sessionId)) {
+      deletions.set(sessionId, sessionDeletionProjection(readSessionTurnDeletions(dir, sessionId).operations));
+    }
+    return deletions.get(sessionId).scrub(row);
+  };
   const markdownDirs = [
     ...conversationDirs.flatMap(source => [
       { ...source, dir: join(source.dir, 'messages') },
@@ -207,8 +218,8 @@ export function searchMessages(dir, keyword, limit = 10, options = {}) {
   const segmentDirs = conversationDirs.map(source => ({ ...source, dir: join(source.dir, 'segments') }));
 
   const results = [
-    ...segmentDirs.flatMap(source => searchSegmentDir(source.dir, terms, resultLimit, source, telemetry, boundary)),
-    ...markdownDirs.flatMap(source => searchMarkdownDir(source.dir, terms, resultLimit, source, telemetry, boundary)),
+    ...segmentDirs.flatMap(source => searchSegmentDir(source.dir, terms, resultLimit, { ...source, project }, telemetry, boundary)),
+    ...markdownDirs.flatMap(source => searchMarkdownDir(source.dir, terms, resultLimit, { ...source, project }, telemetry, boundary)),
   ]
     .sort(compareNewest)
     .slice(0, resultLimit);

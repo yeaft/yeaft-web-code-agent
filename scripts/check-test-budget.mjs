@@ -219,7 +219,9 @@ import { CORE_TEST_FILES, E2E_TEST_FILES, REVIEWED_TEST_FILES, isTestFile, norma
 // nested ceilings, request options, cache version, and Session/Quick Send preservation.
 // +2 parallel turn lanes: snapshot-derived overlap with completion-order settling,
 // and a browser flow keeping the remaining lane across navigation and reload.
-export const TEST_CASE_LIMIT = 1172;
+// Native turn deletion: scoped Agent/Server authorization, durable context and
+// trace removal, stale browser replay fencing and narrow-screen confirmation.
+export const TEST_CASE_LIMIT = 1192;
 
 function walkFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

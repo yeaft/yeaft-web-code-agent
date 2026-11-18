@@ -21,6 +21,7 @@ const DESTRUCTIVE_MUTATION_REASONS = new Set([
   'clear',
   'compact-orphans',
   'delete-session',
+  'delete-turn',
   'restore-session',
 ]);
 let requestCounter = 0;

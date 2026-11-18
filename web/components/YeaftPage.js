@@ -1141,9 +1141,14 @@ export default {
       deleteTurnDialogOpen = false;
       if (!confirmed || navigation !== deleteTurnNavigation) return;
       const result = await store.deleteYeaftSessionTurn(target);
-      if (result.ok || navigation !== deleteTurnNavigation) return;
-      const code = ({ session_running: 'running', session_busy: 'running', turn_not_found: 'not_found' })[result.errorCode] || result.errorCode;
-      const known = ['unconfirmed', 'stale', 'offline', 'running', 'not_found'];
+      if (navigation !== deleteTurnNavigation) return;
+      if (result.ok) {
+        if (result.cleanupPending) await alertDialog($t('yeaft.deleteTurn.cleanupPending'), { title: $t('yeaft.deleteTurn.action') });
+        return;
+      }
+      const code = ({ session_running: 'running', turn_not_found: 'not_found', message_not_found: 'not_found',
+        agent_access_denied: 'denied', session_delete_turn_unsupported: 'unsupported', ambiguous_turn: 'ambiguous' })[result.errorCode] || result.errorCode;
+      const known = ['unconfirmed', 'stale', 'offline', 'running', 'not_found', 'denied', 'unsupported', 'ambiguous'];
       const reason = known.includes(code) ? code : 'failed';
       await alertDialog($t('yeaft.deleteTurn.' + reason), { title: $t('yeaft.deleteTurn.action') });
     };
