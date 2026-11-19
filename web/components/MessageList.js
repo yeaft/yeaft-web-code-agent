@@ -10,7 +10,7 @@ import UserTurnBlock from './UserTurnBlock.js';
 import VirtualTranscript from './VirtualTranscript.js';
 import MessageBlock from './MessageBlock.js';
 import ConcurrentUserTurns from './ConcurrentUserTurns.js';
-import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn, hasParallelUserTurns } from '../utils/concurrent-user-turns.js';
+import { orderUserTurnMessages, partitionUserTurnBlocks, isPendingUserTurn } from '../utils/concurrent-user-turns.js';
 import { applyRunningCatFrame, createRunningCatLoop, resolveRunningCatFrame } from '../utils/running-cat.js';
 import {
   orderYeaftVpTurnMessagesByExecution,
@@ -55,7 +55,7 @@ export default {
   name: 'MessageList',
   components: { AgentInstaller, MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, UserTurnBlock, VirtualTranscript, MessageBlock, ConcurrentUserTurns },
   template: `
-    <main class="chat-container virtual-transcript-scroller" ref="containerRef">
+    <main class="chat-container virtual-transcript-scroller" ref="containerRef" tabindex="-1">
       <!-- Session Loading Overlay - only covers message area -->
       <div class="session-loading-overlay" v-if="showSessionLoadingOverlay">
         <div class="session-loading-content">
@@ -168,7 +168,7 @@ export default {
         </template>
         </VirtualTranscript>
         <ConcurrentUserTurns v-if="splitActive" ref="concurrentTurnsRef" :turns="pendingTurns" :messages="store.messages"
-          :estimate-height="estimateMessageBlockHeight" @stop="stopUserTurn">
+          :estimate-height="estimateMessageBlockHeight" @stop="stopUserTurn" @read-pane="onReadPane">
           <template #default="{ block }">
             <MessageBlock :block="block" :context="blockRenderContext"
               @quote-message="$emit('quote-message', $event)"
@@ -1162,9 +1162,9 @@ export default {
 
     const concurrentTurnsRef = Vue.ref(null);
     const currentPendingTurns = Vue.computed(() => currentSessionTurns.value.filter(isPendingUserTurn));
-    // Derived from the Agent snapshot rather than latched in this component, so
-    // a remaining lane survives Session navigation, reload and other tabs.
-    const splitActive = Vue.computed(() => hasParallelUserTurns(currentSessionTurns.value));
+    // Settled roots still determine history order, but cannot keep a single
+    // pending root in parallel layout. This also applies after navigation/reload.
+    const splitActive = Vue.computed(() => currentPendingTurns.value.length > 1);
     // Free reading width only when this conversation enters parallel layout.
     // A user may reopen Workbench; streaming/new siblings must not close it again.
     Vue.watch(() => [virtualTranscriptIdentity.value, splitActive.value], ([, active]) => {
@@ -1740,15 +1740,23 @@ export default {
         || after.firstBlockIdentity !== before.firstBlockIdentity;
     };
 
+    let readingTransferGeneration = 0;
     const resumeAutoFollow = () => {
+      readingTransferGeneration += 1;
       autoFollowPaused.value = false;
       isAtBottom.value = true;
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(true);
     };
 
     let resumeFollowingAfterSplit = false;
+    let readingPaneId = null;
+    const onReadPane = id => { readingPaneId = id; };
     const pauseAutoFollow = ({ forSplit = false } = {}) => {
-      if (!forSplit) resumeFollowingAfterSplit = false;
+      readingTransferGeneration += 1;
+      if (!forSplit) {
+        resumeFollowingAfterSplit = false;
+        readingPaneId = null;
+      }
       autoFollowPaused.value = true;
       isAtBottom.value = false;
       virtualTranscriptRef.value?.setBottomFollowEnabled?.(false);
@@ -1989,8 +1997,11 @@ export default {
       }
       clearUserScrollInteraction();
       resetHistoryPagination();
-      if (splitActive.value) pauseAutoFollow();
-      else resumeAutoFollow();
+      if (splitActive.value) {
+        readingPaneId = null;
+        resumeFollowingAfterSplit = true;
+        pauseAutoFollow({ forSplit: true });
+      } else resumeAutoFollow();
       Vue.nextTick(() => {
         if (splitActive.value) concurrentTurnsRef.value?.revealLatest?.();
         else scrollToBottom();
@@ -2045,15 +2056,73 @@ export default {
       { immediate: true }
     );
 
-    Vue.watch(splitActive, (active) => {
+    // Transfer the surviving lane's reading position by stable row id. A
+    // visible Markdown block is a better anchor than a pixel offset when the
+    // same text reflows from a narrow lane to the wider transcript.
+    const laneRows = (root) => Array.from(root?.querySelectorAll('.virtual-transcript-item > .message-block > .msg-row, .virtual-transcript-item > .msg-row') || []);
+    const markdownBlocks = (row) => Array.from(row.querySelectorAll('.turn-text > *'));
+    const captureLaneReadingPosition = (body) => {
+      const { top, bottom } = body.getBoundingClientRect();
+      const visible = (el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.bottom > top && rect.top < bottom;
+      };
+      const row = laneRows(body).find(visible);
+      if (!row?.dataset.msgId) return null;
+      const itemKey = row.closest('.virtual-transcript-item')?.dataset.virtualId;
+      if (!itemKey) return null;
+      const markdown = markdownBlocks(row);
+      const blockIndex = markdown.findIndex(visible);
+      const block = markdown[blockIndex];
+      const offsetFromTop = (el) => el.getBoundingClientRect().top - top;
+      return { itemKey, rowId: row.dataset.msgId, rowOffset: offsetFromTop(row), blockIndex,
+        blockPrefix: block?.textContent?.slice(0, 64), blockOffset: block ? offsetFromTop(block) : 0 };
+    };
+    const restoreLaneReadingPosition = async (position, identity, generation) => {
+      await Vue.nextTick();
+      const current = () => identity === virtualTranscriptIdentity.value && !splitActive.value
+        && generation === readingTransferGeneration && !!virtualTranscriptRef.value;
+      if (!current() || !await virtualTranscriptRef.value.scrollToKey(position.itemKey, { align: 'start' }) || !current()) return;
+      const findRow = () => laneRows(virtualTranscriptRef.value?.$el).find(el => el.dataset.msgId === position.rowId);
+      const findBlock = () => {
+        const row = findRow();
+        const block = row && markdownBlocks(row)[position.blockIndex];
+        return position.blockPrefix && block?.textContent?.startsWith(position.blockPrefix) ? block : null;
+      };
+      // Streaming may replace the Markdown DOM; resolve the anchor again after
+      // measurements instead of pinning a detached paragraph or its old offset.
+      if (findBlock()) virtualTranscriptRef.value.anchorTarget(position.itemKey, findBlock, { offset: position.blockOffset });
+      else if (findRow()) virtualTranscriptRef.value.anchorTarget(position.itemKey, findRow, { offset: position.rowOffset });
+    };
+
+    Vue.watch([virtualTranscriptIdentity, splitActive], ([identity, active], [previousIdentity, wasActive]) => {
       if (active) {
-        resumeFollowingAfterSplit = !autoFollowPaused.value;
+        readingPaneId = null;
+        resumeFollowingAfterSplit = (!!previousIdentity && identity !== previousIdentity) || !autoFollowPaused.value;
         pauseAutoFollow({ forSplit: true });
-      } else if (resumeFollowingAfterSplit) {
+      } else if (wasActive && identity === previousIdentity) {
+        const focused = document.activeElement;
+        const focusLeavingLane = focused && concurrentTurnsRef.value?.$el?.contains(focused);
+        const survivor = currentPendingTurns.value[0];
+        const pausedPane = survivor?.userTurnId === readingPaneId
+          ? concurrentTurnsRef.value?.pausedPaneBody(readingPaneId) : null;
+        const position = pausedPane && captureLaneReadingPosition(pausedPane);
+        if (position) void restoreLaneReadingPosition(position, identity, ++readingTransferGeneration);
+        else if (resumeFollowingAfterSplit && !pausedPane) {
+          resumeAutoFollow();
+          smartScrollToBottom();
+        }
+        readingPaneId = null;
         resumeFollowingAfterSplit = false;
-        resumeAutoFollow();
+        if (focusLeavingLane) Vue.nextTick(() => {
+          // A removed lane (e.g. its Stop button or selected tab) must not
+          // strand keyboard focus. Leave the composer/sidebar alone.
+          if (identity === virtualTranscriptIdentity.value && !focused.isConnected && document.activeElement === document.body) {
+            containerRef.value?.focus({ preventScroll: true });
+          }
+        });
       }
-    }, { flush: 'sync', immediate: true });
+    }, { immediate: true });
     Vue.watch(visibleTranscriptTailSignature, () => {
       if (!splitActive.value) smartScrollToBottom();
       Vue.nextTick(scheduleResponseNavigationUpdate);
@@ -2142,7 +2211,7 @@ export default {
       if (typeof ResizeObserver !== 'undefined') {
         responseNavigationResizeObserver = new ResizeObserver(scheduleResponseNavigationUpdate);
       }
-      if (splitActive.value) pauseAutoFollow();
+      if (splitActive.value) pauseAutoFollow({ forSplit: true });
       else scrollToBottom();
       Vue.nextTick(scheduleResponseNavigationUpdate);
       if (containerRef.value) {
@@ -2245,7 +2314,7 @@ export default {
       welcomeSetupError,
       turnGroups,
       messageBlocks,
-      historyBlocks, pendingTurns, splitActive, concurrentTurnsRef, stopUserTurn, blockRenderContext,
+      historyBlocks, pendingTurns, splitActive, concurrentTurnsRef, stopUserTurn, onReadPane, blockRenderContext,
       virtualTranscriptIdentity,
       estimateMessageBlockHeight,
       visibleItemsForBlock,

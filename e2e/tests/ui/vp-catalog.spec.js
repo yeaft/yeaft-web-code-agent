@@ -27,7 +27,7 @@ const test = base.extend({
     const root = mkdtempSync(join(tmpdir(), 'yeaft-vp-catalog-server-'));
     const server = new TestServer(await getAvailablePort());
     Object.assign(server.env, { HOME: root, YEAFT_DIR: join(root, 'yeaft'), TEST_DB_DIR: join(root, 'db'),
-      SERVE_DIST: 'false', YEAFT_LOCAL_RUN: 'true' });
+      SERVE_DIST: process.env.SERVE_DIST || 'false', YEAFT_LOCAL_RUN: 'true' });
     try { await useTestServer(server, use); }
     finally { rmSync(root, { recursive: true, force: true }); }
   }, { scope: 'worker' }],
@@ -142,10 +142,13 @@ async function expectWithinViewport(locator, page) {
 }
 
 async function showSidebar(page) {
-  if (!await page.locator('.sidebar-navigation:visible').count()) {
-    await page.locator('.header-sidebar-toggle:visible, .yeaft-topbar-sidebar-toggle:visible').first().click();
-  }
-  await expect(page.locator('.sidebar-navigation:visible')).toBeVisible();
+  const navigation = page.locator('.sidebar-navigation:visible');
+  const toggle = page.locator('.header-sidebar-toggle:visible, .yeaft-topbar-sidebar-toggle:visible').first();
+  // After reload the page can restore the desktop sidebar asynchronously and
+  // remove the toggle before it can be clicked. Wait for either usable state.
+  await expect(navigation.or(toggle).first()).toBeVisible();
+  if (!await navigation.isVisible() && await toggle.isVisible()) await toggle.click();
+  await expect(navigation).toBeVisible();
 }
 
 async function hideMobileSidebar(page) {
@@ -346,10 +349,10 @@ test('ordinary Session scenes persist through a live switch and reload without e
   await expect(status('First scene question')).toHaveCount(0);
   await expect(status('Second scene question')).toContainText('2,222');
   await statusPane.getByRole('button', { name: 'Close Session status', exact: true }).click();
-  await expect(pane(page, first)).toHaveCount(0);
+  await expect(region).toHaveCount(0);
   await expect(firstAnswer).not.toHaveClass(/streaming/);
   wire.delta(second, ' continues after the first Turn finishes');
-  await expect(pane(page, second)).toContainText('Second scene answer continues after the first Turn finishes');
+  await expect(page.locator('.assistant-turn.streaming')).toContainText('Second scene answer continues after the first Turn finishes');
   wire.finish(second);
   await expect(region).toHaveCount(0);
   await expect(page.locator('.assistant-turn.streaming')).toHaveCount(0);

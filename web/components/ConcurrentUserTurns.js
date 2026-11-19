@@ -6,7 +6,7 @@ export default {
   name: 'ConcurrentUserTurns',
   components: { VirtualTranscript },
   props: { turns: { type: Array, default: () => [] }, messages: { type: Array, default: () => [] }, estimateHeight: Function, itemGap: { type: Number, default: 18 }, stopDisabled: Boolean },
-  emits: ['stop', 'pane-scroll'],
+  emits: ['stop', 'pane-scroll', 'read-pane'],
   template: `
     <section class="concurrent-user-turns parallel-turn-region" :aria-label="$t('chat.concurrent.turns')">
       <!-- Tabs navigate lanes that are off screen; when every lane fits they only repeat the lane headers. -->
@@ -41,7 +41,7 @@ export default {
       </div>
     </section>
   `,
-  setup(props, { expose }) {
+  setup(props, { expose, emit }) {
     const trackRef = Vue.ref(null);
     const selectedId = Vue.ref(props.turns[0]?.userTurnId || '');
     const onTrackScroll = () => {
@@ -60,8 +60,13 @@ export default {
     const transcripts = new Map();
     const paused = new Set();
     const touchY = new Map();
+    const claimPausedPane = id => { if (paused.has(id)) emit('read-pane', id); };
     const followPane = (id, follow) => {
-      if (follow) paused.delete(id); else paused.add(id);
+      if (follow) paused.delete(id);
+      else {
+        paused.add(id);
+        emit('read-pane', id);
+      }
       transcripts.get(id)?.setBottomFollowEnabled?.(follow);
     };
     const onPanePointer = (event, id) => {
@@ -73,6 +78,7 @@ export default {
       else {
         const body = event.currentTarget;
         if (body.scrollHeight - body.scrollTop - body.clientHeight < event.deltaY + 40) followPane(id, true);
+        else claimPausedPane(id);
       }
     };
     const touchStart = (event, id) => touchY.set(id, event.touches?.[0]?.clientY);
@@ -135,11 +141,24 @@ export default {
     });
     Vue.onBeforeUnmount(() => resizeObserver?.disconnect());
     const columnFor = id => Array.from(trackRef.value?.children || []).find(el => el.dataset.userTurnId === id);
+    const paneBody = id => columnFor(id)?.querySelector('.concurrent-turn-body');
+    Vue.onBeforeUpdate(() => {
+      const focused = document.activeElement;
+      if (!trackRef.value?.contains(focused) || !focused.matches('.concurrent-turn-stop')) return;
+      const id = focused.closest('.parallel-turn-pane')?.dataset.userTurnId;
+      const turn = props.turns.find(turn => turn.userTurnId === id);
+      // A focused native button loses focus when it becomes disabled.
+      if (turn && (turn.state === 'cancelling' || turn.disabled || props.stopDisabled)) {
+        paneBody(id)?.focus({ preventScroll: true });
+      }
+    });
+    const pausedPaneBody = id => paused.has(id) ? paneBody(id) : null;
     const scrollToTurn = id => {
       const track = trackRef.value;
       const column = columnFor(id);
       if (!track || !column) return false;
       selectedId.value = id;
+      claimPausedPane(id);
       track.scrollTo({ left: column.offsetLeft - track.offsetLeft, behavior: 'instant' });
       return true;
     };
@@ -185,7 +204,7 @@ export default {
       }
       trackRef.value?.scrollIntoView?.({ block: 'end', inline: 'nearest' });
     };
-    expose({ revealBlock, anchorRow, revealLatest });
+    expose({ revealBlock, anchorRow, revealLatest, pausedPaneBody });
     return { trackRef, tabsRef, tabsVisible, selectedId, onTrackScroll, onPaneWheel, onPanePointer, touchStart, touchMove, onPaneKey, setTranscript, panelId, label, scrollToTurn, onTabKey };
   },
 };

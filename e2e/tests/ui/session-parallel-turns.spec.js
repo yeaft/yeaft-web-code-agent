@@ -54,61 +54,197 @@ test('one native Session turn retains the ordinary transcript and merges appende
   await expect(page.locator('.message-user-block').filter({ hasText: 'Single root question' })).toHaveCount(1);
 });
 
-test('a later root that finishes first settles above the remaining lane, which survives Session navigation and reload', async ({ chatPage: page, mockAgent }, info) => {
-  test.setTimeout(60000);
+test('stopping a sibling restores the ordinary live Session transcript and completion order', async ({ chatPage: page, mockAgent }, info) => {
+  test.setTimeout(60_000);
   await page.setViewportSize({ width: 1400, height: 900 });
   const wire = await sessionTurnsFixture(page, mockAgent);
+  const composer = page.locator('[data-message-composer]');
+  const stop = composer.locator('.stop-btn');
+  const messages = page.locator('.yeaft-page .messages');
+  const region = messages.locator('.parallel-turn-region');
+  const activity = page.locator('.yeaft-session-status-toggle');
+  const scroller = page.locator('.yeaft-page .virtual-transcript-scroller');
+  const status = label => page.locator('.yeaft-vp-timeline-row').filter({ hasText: label });
+  if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
   const a = await wire.send('Earlier long question');
   wire.delta(a, 'A is still researching');
+  const ordinaryWidth = () => messages.evaluate(el => getComputedStyle(el).maxWidth);
+  const originalWidth = await ordinaryWidth();
+  expect(originalWidth).not.toBe('none');
+  await expect(stop).toBeVisible();
+
   const b = await wire.send('Later quick question');
-  wire.delta(b, 'B answered quickly');
-  await expect(page.locator('.parallel-turn-pane')).toHaveCount(2);
-  // Each lane names its question, and one rule separates the lanes. With both
-  // lanes on screen the tab strip would only repeat the headers.
+  wire.delta(b, 'B partial answer');
+  await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
   await expect(pane(page, a).locator('.concurrent-turn-title')).toHaveText('Earlier long question');
   await expect(pane(page, b).locator('.concurrent-turn-state')).toHaveText('Running');
   await expect(page.locator('.parallel-turn-tabs')).toBeHidden();
   expect(await pane(page, b).evaluate(el => getComputedStyle(el, '::before').width)).toBe('1px');
   expect(await pane(page, a).evaluate(el => getComputedStyle(el, '::before').content)).toBe('none');
-  for (const [theme, width] of [['light', 1400], ['dark', 320]]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
-    await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    // One lane fits at 320px, so the tab strip returns as navigation.
-    await expect(page.locator('.parallel-turn-tabs')).toBeVisible({ visible: width === 320 });
-    await page.screenshot({ path: info.outputPath(`lanes-${theme}-${width}.png`), animations: 'disabled' });
-  }
-  await page.setViewportSize({ width: 1400, height: 900 });
-  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  expect(await ordinaryWidth()).toBe('none');
+  await expect(status('Earlier long question')).toBeVisible();
+  await expect(status('Later quick question')).toBeVisible();
+  await page.screenshot({ path: info.outputPath('parallel-desktop.png'), animations: 'disabled' });
 
-  const settledAboveLane = () => page.evaluate((text) => {
-    const region = document.querySelector('.parallel-turn-region');
-    const answer = [...document.querySelectorAll('.assistant-turn')]
-      .find(el => el.textContent.includes(text) && !el.closest('.parallel-turn-region'));
-    return !!region && !!answer && !!(answer.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING);
-  }, 'B answered quickly');
-  wire.finish(b);
-  await expect(page.locator('.parallel-turn-pane')).toHaveCount(1);
-  await expect(pane(page, a)).toContainText('A is still researching');
-  await expect.poll(settledAboveLane).toBe(true);
-  // Reopening the Session restores the same layout instead of one column with
-  // the live answer above the finished one.
+  const siblingStop = pane(page, b).getByRole('button', { name: 'Stop', exact: true });
+  await siblingStop.press('Enter');
+  await expect.poll(() => mockAgent.messages('yeaft_abort_turn')).toEqual([
+    expect.objectContaining({ sessionId: SESSION, userTurnId: b.userTurnId }),
+  ]);
+  wire.cancelling(b);
+  await expect(region.locator('.parallel-turn-pane')).toHaveCount(2); // Wait for Agent confirmation.
+  await expect(siblingStop).toBeDisabled();
+  await expect(pane(page, b).locator('.concurrent-turn-body')).toBeFocused();
+  wire.finish(b, 'aborted');
+  const questions = () => messages.locator('.message-user-block').allTextContents().then(rows => rows.map(row => row.trim()));
+  const expectOrdinaryLive = async (tail, { order, width = originalWidth } = {}) => {
+    await expect(region).toHaveCount(0); // No lane header, status, tabs, or inline Stop.
+    await expect.poll(ordinaryWidth).toBe(width);
+    await expect(messages.locator('.assistant-turn').filter({ hasText: tail })).toBeVisible();
+    await expect(stop).toBeEnabled();
+    if (order) await expect.poll(questions).toEqual(order);
+  };
+  const afterStop = ['Later quick question', 'Earlier long question'];
+  await expectOrdinaryLive('A is still researching', { order: afterStop });
+  await expect(messages.getByText('B partial answer', { exact: true })).toBeVisible();
+  await expect(status('Later quick question')).toHaveCount(0);
+  await expect(status('Earlier long question').locator('.yeaft-vp-timeline-abort')).toBeEnabled();
+  await expect(scroller).toBeFocused();
+  await expect(page.locator('.yeaft-page .scroll-to-latest')).toHaveClass(/is-hidden/);
+  wire.delta(a, ' after the split');
+  await expect(messages.locator('.assistant-turn.streaming')).toContainText('A is still researching after the split');
+  await page.screenshot({ path: info.outputPath('single-desktop-after-stop.png'), animations: 'disabled' });
+
+  // Navigation and a fresh page project the same single-column state.
   await wire.open(OTHER_SESSION);
-  await expect(page.locator('.parallel-turn-region')).toHaveCount(0);
+  await expect(region).toHaveCount(0);
   wire.delta(a, ' while away');
   await wire.open(SESSION);
-  await expect(pane(page, a)).toContainText('A is still researching while away');
-  await expect.poll(settledAboveLane).toBe(true);
-  // The earlier question settles after the answer that finished first.
-  wire.finish(a);
-  await expect(page.locator('.parallel-turn-region')).toHaveCount(0);
-  const questions = () => page.locator('.message-user-block').allTextContents().then(rows => rows.map(row => row.trim()));
-  await expect.poll(questions).toEqual(['Later quick question', 'Earlier long question']);
+  await expectOrdinaryLive('A is still researching after the split while away', { order: afterStop });
   await page.reload();
   await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
   await wire.open(SESSION);
-  await expect.poll(questions).toEqual(['Later quick question', 'Earlier long question']);
+  wire.delta(a, ' after reload');
+  await expectOrdinaryLive('A is still researching after the split while away after reload', { order: afterStop });
+
+  // A new sibling can split the UI again on mobile. Natural completion
+  // also returns to single-column rather than waiting for the survivor to end.
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  await page.evaluate(() => window.Pinia.useChatStore().closeSessionSidebar());
+  const mobileWidth = await ordinaryWidth();
+  const longReply = Array.from({ length: 60 }, (_, i) => `\n\nReading marker ${i}: this part of the continuous response should stay in view when the two layouts change.`).join('');
+  wire.delta(a, longReply);
+  const c = await wire.send('Mobile sibling');
+  wire.delta(c, 'Mobile sibling response that wraps across several lines. '.repeat(64).trim());
+  await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
+  await expect(region.getByRole('tablist')).toBeVisible();
+  await region.getByRole('tab', { name: 'Earlier long question' }).click();
+  const readingPane = pane(page, a).locator('.concurrent-turn-body');
+  const scrollTop = () => readingPane.evaluate(node => node.scrollTop);
+  await expect.poll(scrollTop).toBeGreaterThan(800);
+  await readingPane.hover();
+  const priorTop = await scrollTop();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(scrollTop).toBeLessThan(priorTop - 500);
+  const savedLaneTop = await scrollTop();
+  const siblingTab = region.getByRole('tab', { name: 'Mobile sibling' });
+  await siblingTab.click();
+  const siblingBody = pane(page, c).locator('.concurrent-turn-body');
+  const siblingTop = () => siblingBody.evaluate(node => node.scrollTop);
+  await expect.poll(siblingTop).toBeGreaterThan(240);
+  await siblingBody.hover();
+  const siblingBottom = await siblingTop();
+  await page.mouse.wheel(0, -180);
+  await expect.poll(siblingTop).toBeLessThan(siblingBottom - 120);
+  await siblingTab.press('ArrowLeft');
+  await expect(region.getByRole('tab', { name: 'Earlier long question' })).toBeFocused();
+  await expect.poll(scrollTop).toBeCloseTo(savedLaneTop, 0);
+  const readingAnchor = await readingPane.evaluate(node => {
+    const top = node.getBoundingClientRect().top;
+    const paragraph = [...node.querySelectorAll('.turn-text > p')].find(p => p.getBoundingClientRect().bottom > top);
+    return { text: paragraph.textContent, offset: paragraph.getBoundingClientRect().top - top };
+  });
+  const editor = composer.getByRole('textbox');
+  await editor.fill('Unsent mobile draft');
+  await page.screenshot({ path: info.outputPath('parallel-dark-320.png'), animations: 'disabled' });
+  wire.finish(c);
+  await expectOrdinaryLive('A is still researching after the split while away after reload', { width: mobileWidth });
+  const anchorError = () => messages.getByText(readingAnchor.text, { exact: true }).evaluate((p, offset) => {
+    const container = p.closest('.virtual-transcript-scroller');
+    const rect = p.getBoundingClientRect();
+    const expected = Math.max(-Math.max(0, rect.height - 24), offset);
+    return Math.abs(rect.top - container.getBoundingClientRect().top - expected);
+  }, readingAnchor.offset);
+  await expect.poll(anchorError).toBeLessThan(4);
+  wire.delta(a, '\n\nMore streaming text below the reading position.');
+  await expect(messages.getByText('More streaming text below the reading position.', { exact: true })).toBeVisible();
+  await expect.poll(anchorError).toBeLessThan(4);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await expect(stop).toBeInViewport();
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue('Unsent mobile draft');
+  await page.screenshot({ path: info.outputPath('single-dark-320-after-finish.png'), animations: 'disabled' });
+
+  await page.setViewportSize({ width: 1400, height: 900 });
+  if (await activity.getAttribute('aria-expanded') === 'false') await activity.click();
+  await page.locator('.yeaft-page .scroll-to-latest').click();
+  const wideParagraph = 'Reflow anchor. ' + 'The same reply gains horizontal space after the split, but the paragraph should not disappear from view. '.repeat(30).trim();
+  wire.delta(a, `\n\n${wideParagraph}\n\n${longReply.trim()}`.replaceAll('Reading marker', 'Desktop tail marker'));
+  const d = await wire.send('Desktop reflow sibling');
+  wire.delta(d, 'D quick answer');
+  await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
+  const narrowParagraph = pane(page, a).getByText(wideParagraph, { exact: true });
+  await expect(narrowParagraph).toBeVisible();
+  await readingPane.hover();
+  const beforeWheel = await scrollTop();
+  await page.mouse.wheel(0, -180);
+  await expect.poll(scrollTop).toBeLessThan(beforeWheel - 100);
+  const clipped = await narrowParagraph.evaluate(p => {
+    const body = p.closest('.concurrent-turn-body');
+    const rect = p.getBoundingClientRect();
+    const clip = rect.height - 36;
+    body.scrollTop += rect.top - body.getBoundingClientRect().top + clip;
+    return clip;
+  });
+  await expect.poll(() => narrowParagraph.evaluate(p => p.getBoundingClientRect().bottom
+    - p.closest('.concurrent-turn-body').getBoundingClientRect().top)).toBeCloseTo(36, 0);
+  wire.finish(d);
+  await expect(region).toHaveCount(0);
+  const restoredParagraph = messages.getByText(wideParagraph, { exact: true });
+  expect(await restoredParagraph.evaluate(p => p.getBoundingClientRect().height)).toBeLessThan(clipped);
+  await expect(restoredParagraph).toBeInViewport();
+
+  // Jumping to the active question pauses the outer transcript and the lane.
+  // The explicitly selected lane still owns the reading position on collapse.
+  const e = await wire.send('Desktop navigation sibling');
+  wire.delta(e, 'E quick answer');
+  await expect(region.locator('.parallel-turn-pane')).toHaveCount(2);
+  await page.locator('.yeaft-page .scroll-to-latest').click();
+  const origin = page.getByRole('button', { name: 'Back to this turn’s question' });
+  await origin.click();
+  const question = messages.getByText('Earlier long question', { exact: true });
+  await expect(region.locator('.msg-flash').getByText('Earlier long question', { exact: true })).toBeInViewport();
+  wire.finish(e);
+  await expect(region).toHaveCount(0);
+  await expect(question).toBeInViewport();
+
+  await stop.click();
+  await expect.poll(() => mockAgent.messages('yeaft_abort_all')).toEqual([expect.objectContaining({ sessionId: SESSION })]);
+  wire.finish(a, 'aborted');
+  await expect(region).toHaveCount(0);
+  await expect(stop).toHaveCount(0);
+  await page.reload();
+  await page.waitForFunction(id => window.Pinia?.useChatStore?.().agents.some(agent => agent.id === id && agent.status === 'ready'), mockAgent.agentId);
+  await wire.open(SESSION);
+  // Check the ends separately: the long reply virtualizes some rows out of
+  // each viewport, but the latest question must still follow the settled ones.
+  await expect.poll(async () => (await questions()).at(-1)).toBe('Earlier long question');
+  await scroller.focus();
+  await scroller.press('Home');
+  await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBe(0);
+  await expect(messages.getByText('Later quick question', { exact: true })).toBeInViewport();
+  await expect.poll(async () => (await questions())[0]).toBe('Later quick question');
 });
 
 test('Delete turn from a saved supplement replays the remaining Session in both tabs', async ({ chatPage: page, context, mockAgent, serverUrl }) => {

@@ -71,6 +71,7 @@ export default {
     const bottomFollowEnabled = Vue.ref(true);
     let activeTargetKey = null;
     let activeTargetAlign = 'start';
+    let activeTargetOffset = 0;
     let activeTargetElement = null;
     let previousItems = [];
     let itemChangeGeneration = 0;
@@ -90,7 +91,9 @@ export default {
       const nextTop = readTranscriptContentTop();
       const delta = nextTop - transcriptContentTop;
       transcriptContentTop = nextTop;
-      if (bottomFollowEnabled.value && props.initialAlign === 'end') {
+      if (typeof activeTargetElement === 'function' && Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) {
+        scheduleTargetAlignment(activeTargetKey, activeTargetAlign);
+      } else if (bottomFollowEnabled.value && props.initialAlign === 'end') {
         scheduleScrollAdjustment({ toBottom: true });
       } else if (Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) {
         // Only the root's content origin belongs here. Row/prepend changes are
@@ -302,7 +305,8 @@ export default {
 
       const scroller = scrollEl.value;
       const windowStart = virtualWindow.value.visibleStart;
-      const shouldRealignTarget = !!activeTargetKey && measurements.some(measurement => measurement.key === activeTargetKey);
+      const shouldRealignTarget = !!activeTargetKey && (typeof activeTargetElement === 'function'
+        || measurements.some(measurement => measurement.key === activeTargetKey));
       let anchorDelta = 0;
       // User intent, not transient layout geometry, owns bottom following.
       const shouldScrollToBottom = bottomFollowEnabled.value && props.initialAlign === 'end';
@@ -350,7 +354,7 @@ export default {
 
     function alignTarget(key, align = 'start') {
       const scroller = scrollEl.value;
-      const target = activeTargetElement || itemEls.get(String(key));
+      const target = typeof activeTargetElement === 'function' ? activeTargetElement() : (activeTargetElement || itemEls.get(String(key)));
       if (!scroller || !target) return false;
       // Final target geometry includes both root displacement and row growth.
       // Consume queued deltas so a later frame cannot apply either twice.
@@ -367,7 +371,12 @@ export default {
         : align === 'end' && targetHeight <= scrollerHeight
           ? Number(scrollerRect.bottom) - targetHeight
           : scrollerTop;
-      const delta = Number(targetRect.top) - desiredTop;
+      // A transferred anchor must remain visible after reflow: the old lane
+      // can clip more of a paragraph than its entire height in single-column.
+      const offset = typeof activeTargetElement === 'function'
+        ? Math.max(-Math.max(0, targetHeight - 24), Math.min(activeTargetOffset, Math.max(0, scrollerHeight - 24)))
+        : activeTargetOffset;
+      const delta = Number(targetRect.top) - desiredTop - offset;
       if (Math.abs(delta) >= HEIGHT_CHANGE_THRESHOLD) scroller.scrollTop += delta;
       readScrollState();
       return true;
@@ -441,6 +450,7 @@ export default {
       const key = getVirtualItemKey(props.items[safeIndex], safeIndex);
       activeTargetKey = key;
       activeTargetAlign = align;
+      activeTargetOffset = 0;
       activeTargetElement = null;
       scroller.scrollTop = virtualScrollTopForIndex(props.items, safeIndex, heightCache, {
         itemGap: props.itemGap,
@@ -461,11 +471,12 @@ export default {
       return Number.isFinite(index) ? scrollToIndex(index, options) : Promise.resolve(false);
     }
 
-    function anchorTarget(key, targetElement, { align = 'start' } = {}) {
+    function anchorTarget(key, targetElement, { align = 'start', offset = 0 } = {}) {
       const targetKey = String(key || '');
       if (!targetKey || !targetElement) return false;
       activeTargetKey = targetKey;
       activeTargetAlign = align;
+      activeTargetOffset = Number.isFinite(offset) ? offset : 0;
       activeTargetElement = targetElement;
       alignTarget(targetKey, align);
       return true;
