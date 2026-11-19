@@ -40,3 +40,9 @@
 @import './mcp-settings.css';
 /* Shared settings action visuals follow module geometry and state styles. */
 @import './settings-controls.css';
+/* Waiting animations: the shared stage, then one stylesheet per animation. */
+@import './waiting/stage.css';
+@import './waiting/hoops.css';
+@import './waiting/dragon.css';
+@import './waiting/cat.css';
+@import './waiting/dog.css';

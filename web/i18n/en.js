@@ -1055,6 +1055,7 @@ export default {
   'chat.waiting.cliExited': 'Claude process exited, refreshed, waiting for update...',
   'chat.waiting.refresh': 'Refresh',
   'chat.waiting.thinking': 'AI is thinking, please wait...',
+  'chat.waiting.stageIntro': 'Waiting',
 
   // ============ /btw Side Question ============
   'btw.placeholder': 'Ask a side question...',
@@ -1294,6 +1295,7 @@ export default {
   'settings.general.waitingAnimation': 'Waiting animation',
   'settings.general.waitingAnimationChoice.random': 'Random',
   'settings.general.waitingAnimationChoice.hoops': 'Basketball',
+  'settings.general.waitingAnimationChoice.dragon': 'Dragon Ball',
   'settings.general.waitingAnimationChoice.cat': 'Running cat',
   'settings.general.waitingAnimationChoice.off': 'Off',
   'settings.general.workCenter': 'Work Center entry',

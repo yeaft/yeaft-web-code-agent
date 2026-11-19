@@ -20,7 +20,7 @@ import UserShortcutsSettings from './UserShortcutsSettings.js';
 import { loadSandboxState } from '../utils/sandbox-api.js';
 import { confirmDialog } from '../utils/dialog.js';
 import NavigationIcon from './NavigationIcon.js';
-import { WAITING_ANIMATION_CHOICES } from '../utils/waiting-animations.js';
+import { WAITING_ANIMATION_CHOICES } from './waiting/index.js';
 
 export default {
   name: 'SettingsPanel',
@@ -648,7 +648,7 @@ export default {
         { value: 'dark', label: this.$t('settings.general.darkTheme') }
       ];
     },
-    // One entry per candidate in waiting-animations.js, plus rotate and off.
+    // One entry per animation offered by components/waiting, plus random and off.
     waitingAnimationOptions() {
       return WAITING_ANIMATION_CHOICES.map(value => ({ value, label: this.$t('settings.general.waitingAnimationChoice.' + value) }));
     },

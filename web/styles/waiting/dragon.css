@@ -1,0 +1,40 @@
+/* Colours of the Dragon Ball waiting animation (components/waiting/dragon.js).
+   The scene is drawn straight onto the page: two stick figures told apart by
+   their hair, a body tone and a torso colour each, and energy as the only
+   other colour. Bright shapes carry a coloured rim, because a white glow
+   disappears on the light page. --dragon-surface is the page behind the
+   scene, which the lighter tones are mixed toward. */
+
+.dragon-scene {
+  --dragon-ink: var(--text-primary);
+  --dragon-soft: #6f7790;
+  --dragon-surface: var(--bg-main);
+  --dragon-gi: #e8721c;
+  --dragon-armor: #2f55c8;
+  --dragon-ground: #c9c3b9;
+  --dragon-shade: #2c2c2c;
+  --dragon-dust: #b5ada0;
+  --dragon-flash: #ffd451;
+  --dragon-spark: #e07a10;
+  --dragon-beam: #8a3fd8;
+  --dragon-beam-core: #e2c8ff;
+  --dragon-bomb: #2a8be6;
+  --dragon-bomb-core: #d2ebff;
+}
+
+[data-theme="dark"] .dragon-scene {
+  --dragon-ink: var(--text-primary);
+  --dragon-soft: #98a1ba;
+  --dragon-surface: var(--bg-main);
+  --dragon-gi: #e67a26;
+  --dragon-armor: #4670e8;
+  --dragon-ground: #46423c;
+  --dragon-shade: #000000;
+  --dragon-dust: #6f6961;
+  --dragon-flash: #fff0ad;
+  --dragon-spark: #ffae2b;
+  --dragon-beam: #a55cf2;
+  --dragon-beam-core: #f3e6ff;
+  --dragon-bomb: #45a4ff;
+  --dragon-bomb-core: #eef8ff;
+}

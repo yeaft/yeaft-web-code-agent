@@ -1,0 +1,37 @@
+/* Colours of the basketball waiting animation (components/waiting/hoops.js).
+   The scene is drawn straight onto the page: stick figures in the text
+   colours, the court as line art in the border greys, and the ball and rim
+   as the only colour. --hoops-surface is the page behind the scene, which
+   the lighter tones are mixed toward. */
+
+.hoops-scene {
+  --hoops-ink: var(--text-primary);
+  --hoops-soft: var(--text-muted);
+  --hoops-surface: var(--bg-main);
+  --hoops-line: #d6d1c9;
+  --hoops-arc: #aba59b;
+  --hoops-rig: #9a9da3;
+  --hoops-net: #b9b4ab;
+  --hoops-rim: #e4572e;
+  --hoops-ball: #e07a2e;
+  --hoops-seam: #7a3d16;
+  --hoops-dust: #b5ada0;
+  --hoops-shade: #2c2c2c;
+  --hoops-text: var(--text-muted);
+}
+
+[data-theme="dark"] .hoops-scene {
+  --hoops-ink: var(--text-secondary);
+  --hoops-soft: var(--text-muted);
+  --hoops-surface: var(--bg-main);
+  --hoops-line: #3d3935;
+  --hoops-arc: #5d5750;
+  --hoops-rig: #666a72;
+  --hoops-net: #8c877f;
+  --hoops-rim: #db5530;
+  --hoops-ball: #d9772f;
+  --hoops-seam: #5f2d10;
+  --hoops-dust: #6f6961;
+  --hoops-shade: #000000;
+  --hoops-text: var(--text-muted);
+}

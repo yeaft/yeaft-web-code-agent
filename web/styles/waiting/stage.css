@@ -1,0 +1,86 @@
+/* ================================================================
+   WAITING STAGE (components/waiting/stage.js): where canvas waiting
+   animations play. It has no surface of its own: scenes are drawn
+   straight onto the page, and the edges fade so nothing ends at a
+   hard border. A wait opens on a line of text and cuts to the scene.
+   ================================================================ */
+
+.waiting-stage {
+  position: relative;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  max-height: 24px;
+  overflow: hidden;
+  transition: max-height 0.26s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+/* 352 x 160 at most; narrower columns keep the 11:5 picture. */
+.waiting-stage.is-open {
+  width: min(100%, 352px);
+  aspect-ratio: 11 / 5;
+  max-height: 200px;
+}
+
+/* The opening card: one line of text with light passing over it. */
+.waiting-stage-intro {
+  display: block;
+  font-size: 13px;
+  line-height: 24px;
+  white-space: nowrap;
+  color: transparent;
+  background: linear-gradient(100deg, var(--text-muted) 35%, var(--text-primary) 50%, var(--text-muted) 65%) 0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: waiting-stage-sweep 1.4s linear infinite;
+}
+
+@keyframes waiting-stage-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+/* Sized by its width, so it is cropped, not squashed, while the box opens.
+   The mask dissolves all four edges into the page. */
+.waiting-stage-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  aspect-ratio: 11 / 5;
+  -webkit-mask-image:
+    linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent),
+    linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 6px), transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent),
+    linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 6px), transparent);
+  mask-composite: intersect;
+}
+.waiting-stage:not(.is-open) .waiting-stage-canvas { visibility: hidden; }
+
+/* The cut: the scene snaps in as the card gives way. */
+.waiting-stage.is-open.is-cut .waiting-stage-canvas {
+  animation: waiting-stage-cut 0.22s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+@keyframes waiting-stage-cut {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: none; }
+}
+
+/* A stalled connection holds the scene on one frame, drained of colour. */
+.waiting-stage.is-disconnected .waiting-stage-canvas,
+.waiting-stage.is-agent-offline .waiting-stage-canvas,
+.waiting-stage.is-session-lost .waiting-stage-canvas,
+.waiting-stage.is-cli-exited .waiting-stage-canvas {
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .waiting-stage { transition: none; }
+  .waiting-stage-intro { animation: none; color: var(--text-muted); background: none; }
+  .waiting-stage.is-open.is-cut .waiting-stage-canvas { animation: none; }
+}
