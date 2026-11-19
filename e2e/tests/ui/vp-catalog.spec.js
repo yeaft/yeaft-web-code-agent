@@ -405,6 +405,7 @@ test('ordinary Session scenes persist through a live switch and reload without e
   // the menu keeps the original scenes plus the newer scene this Session uses.
   await scene.click();
   await sceneMenu.getByRole('option', { name: 'Primary education', exact: true }).click();
+  await expect(scene).toBeEnabled();
   await expectScene('Primary education');
   expect(fixture.session()).toMatchObject({ config: { sceneId: 'primary-education' } });
   mockAgent.send({ type: 'agent_capabilities_updated', capabilities: [
