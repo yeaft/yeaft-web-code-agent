@@ -158,6 +158,17 @@ describe('Responses strict tool boundary', () => {
     }
     vi.stubGlobal('fetch', vi.fn(async () => json(done([malformed]))));
     await expect(responses().call(options)).rejects.toBeInstanceOf(LLMToolInputError);
+    // Without a content filter an item marked incomplete still rejects the batch as non-retryable tool
+    // input on every ending, never as a retryable transport failure (EOF) or a generic failure.
+    const truncated = { ...good, status: 'incomplete' };
+    for (const ending of [[], [{ type: 'response.failed', response: { error: { code: 'server_error', message: 'boom' } } }],
+      [{ type: 'response.completed', response: done([truncated]) }],
+      [{ type: 'response.incomplete', response: { ...done([truncated]), status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } } }]]) {
+      vi.stubGlobal('fetch', vi.fn(async () => sse([{ type: 'response.output_item.done', output_index: 0, item: truncated }, ...ending])));
+      const result = await collect(responses().stream(options));
+      expect(result.filter(event => event.type === 'tool_call' || event.type === 'error'))
+        .toEqual([{ type: 'error', retryable: false, error: expect.any(LLMToolInputError) }]);
+    }
 
     const filtered = output => ({ id: 'response_filtered', status: 'incomplete', incomplete_details: { reason: 'content_filter' },
       output, usage: { input_tokens: 10, output_tokens: 8 } });

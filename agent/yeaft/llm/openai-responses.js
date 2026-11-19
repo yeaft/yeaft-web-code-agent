@@ -673,6 +673,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
               // A filter verdict judges generated content, not whether a delivered call may run.
               // Run the batch only when every exposed call is strictly complete: no lost delta,
               // no structural error, no arguments in flight and a consistent terminal projection.
+              // A bare terminal projection with no streamed call is deliberately not taken as proof.
               let runnable = !malformedStream && !toolStructureError && toolCallAccum.size === 0 && completedToolCalls.size > 0;
               if (runnable) try {
                 const toolSlots = outputSlots.filter(([, item]) => item?.type === 'function_call');
