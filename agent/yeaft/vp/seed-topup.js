@@ -72,7 +72,7 @@ const SEEDED_VERSIONS_FILE = '.seeded-versions.json';
 const SEEDED_VERSIONS_VERSION = 1;
 
 // Full bilingual bodies written by 0f566fa, v1.0.712, v1.0.713, v1.0.716 and
-// v1.0.719 (unchanged through v1.0.721), keyed by owner. The ledger's short
+// v1.0.719 (unchanged through v1.0.724), keyed by owner. The ledger's short
 // hash is bookkeeping, never proof of body ownership.
 const SHIPPED_BODY_SHA256 = {
   omni: [
