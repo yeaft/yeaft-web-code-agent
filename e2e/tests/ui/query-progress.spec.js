@@ -28,24 +28,32 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   const broker = createVpStatusBroker({ send, now: () => ++now });
   send({ ...event, type: 'vp_turn_start' });
   broker.transition({ sessionId: session.id, vpId: event.vpId, turnId: event.turnId, threadId: event.threadId, state: 'tool' });
+  send({ ...event, stage: 'running', reason: null, failedCalls: 0, toolStats: [] });
+  const progresses = page.locator('.yeaft-query-progress');
+  const progress = progresses.filter({ hasText: '1,234,567' }).first();
+  await expect(progress).toBeVisible();
+  await expect(progress.locator('.yeaft-query-progress-failures-toggle')).toHaveCount(0);
+  const liveStatus = progress.getByRole('status');
+  await expect(liveStatus).toBeEmpty();
+  await expect(liveStatus).toHaveCSS('position', 'absolute');
+  event.revision++;
   send({ ...event, text: 'PRIVATE_PROGRESS_TEXT', input: { secret: 'PRIVATE_PROGRESS_TEXT' } });
   await page.evaluate(agentId => window.Pinia.useVpStore().applySnapshot({ vps: [{
     vpId: 'progress-vp', displayName: 'Software assistant', displayNameZh: '软件全能助手',
     description: 'End-to-end software product, engineering, quality, release and operations',
     descriptionZh: '端到端的软件产品、工程、质量、发布与运行能力',
   }] }, agentId), mockAgent.agentId);
-  const progresses = page.locator('.yeaft-query-progress');
-  const progress = progresses.filter({ hasText: '1,234,567' }).first();
-  await expect(progress).toBeVisible();
   await expect(progress).toContainText('Requests 2');
   await expect(progress).toContainText('1,234,567');
   await expect(progress).toContainText('98,765');
   await expect(page.locator('.yeaft-session-status-pane')).not.toContainText('Software assistant');
   await expect(page.locator('.yeaft-session-activity-elapsed')).toContainText(/Elapsed .+s/);
-  await expect(progress.locator('.yeaft-query-progress-details')).toHaveCount(0);
-  await progress.getByRole('button', { name: 'Details' }).click();
-  await expect(progress).toContainText('Repeated results');
-  await expect(progress).toContainText('New evidence does not mean the task is complete.');
+  await expect(progress.getByRole('button', { name: 'Details', exact: true })).toHaveCount(0);
+  await expect(liveStatus).toHaveText('Progress warning · Repeated tool results');
+  await expect(liveStatus).toBeVisible();
+  const usage = progress.getByRole('group', { name: 'This turn · current thread' });
+  await expect(usage).toHaveAccessibleDescription(/not context size/);
+  await expect(usage.getByText('1,234,567', { exact: true })).toHaveCSS('font-size', '12px');
   await progress.getByRole('button', { name: 'Failed 2, show tool breakdown' }).focus();
   await page.keyboard.press('Enter');
   await expect(progress.locator('.yeaft-query-progress-failures')).toContainText('Bash');
@@ -63,12 +71,11 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   };
   await assertHeader();
   await expect(page.locator('body')).not.toContainText('PRIVATE_PROGRESS_TEXT');
-  send({ ...event, revision: 2, sessionId: 'another-session', modelRequests: 999 });
+  send({ ...event, revision: 3, sessionId: 'another-session', modelRequests: 999 });
   send({ ...event, revision: 0, modelRequests: 999 });
   broker.broadcastSnapshot({ sessionId: session.id });
   broker.broadcastSnapshot();
   await expect(progress).toContainText('Requests 2');
-  await progress.getByRole('button', { name: 'Details' }).click();
   await progress.getByRole('button', { name: 'Failed 2, show tool breakdown' }).click();
   await page.screenshot({ path: info.outputPath('query-progress-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 320, height: 800 });
@@ -87,7 +94,9 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
     await page.screenshot({ path: info.outputPath(`query-progress-${theme}-320.png`), fullPage: true });
   }
   await page.evaluate(() => window.Pinia.useChatStore().changeLocale('zh-CN'));
-  await expect(progress).toContainText('输入 token');
+  await expect(progress.getByRole('group', { name: '当前线程 · 本轮累计' })).toContainText('输入 token');
+  await expect(progress.getByRole('status')).toHaveText('进度警告 · 工具结果重复');
+  await expect(progress.getByRole('button', { name: '运行详情', exact: true })).toHaveCount(0);
   await expect(progress).toContainText('执行');
   await assertHeader();
   expect(await progress.locator('.yeaft-query-progress-failures').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
@@ -95,7 +104,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await page.evaluate(() => window.Pinia.useChatStore().changeLocale('en'));
   // Two live threads, followed by a completed latest thread: the aggregate
   // turnId is null, so recovery must consult the broker's threads[] owners.
-  const parallel = { ...event, turnId: 'parallel-turn', threadId: 'parallel', modelRequests: 7 };
+  const parallel = { ...event, revision: 1, turnId: 'parallel-turn', threadId: 'parallel', modelRequests: 7 };
   send({ ...parallel, type: 'vp_turn_start' });
   send(parallel);
   broker.transition({ ...parallel, state: 'tool' });
@@ -116,7 +125,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   }, mockAgent.agentId);
   await expect.poll(liveOwners).toEqual([
     { turnId: parallel.turnId, authorized: true, revision: 1 },
-    { turnId: event.turnId, authorized: true, revision: 1 },
+    { turnId: event.turnId, authorized: true, revision: 2 },
   ]);
   const generation = await page.evaluate(() => window.Pinia.useChatStore().chatHistoryConnectionGeneration);
   const agentId = mockAgent.agentId;
@@ -128,7 +137,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await mockAgent.connect();
   expect(mockAgent.agentId).toBe(agentId);
   await expect.poll(() => page.evaluate(id => window.Pinia.useChatStore().agents.some(a => a.id === id && a.online), agentId)).toBe(true);
-  send({ ...event, revision: 2 });
+  send({ ...event, revision: 3 });
   send({ ...parallel, revision: 2 });
   broker.transition({ ...event, state: 'streaming' });
   await expect(progresses).toHaveCount(0);
@@ -143,12 +152,12 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   ]);
   await expect(progresses).toHaveCount(0);
   send({ ...parallel, revision: 2 });
-  send({ ...event, revision: 2, stage: 'recovering', reason: 'repeated_failure' });
-  await expect(progress).toContainText('Recovering');
+  send({ ...event, revision: 3, stage: 'recovering', reason: 'repeated_failure' });
+  await expect(progress.getByRole('status')).toHaveText('Recovering · Repeated tool failures');
   await expect(progresses).toHaveCount(2);
   await expect.poll(liveOwners).toEqual([
     { turnId: parallel.turnId, authorized: true, revision: 2 },
-    { turnId: event.turnId, authorized: true, revision: 2 },
+    { turnId: event.turnId, authorized: true, revision: 3 },
   ]);
   // Browser reconnect likewise needs a fresh snapshot, not old observations.
   await page.evaluate(() => { const chat = window.Pinia.useChatStore(); chat.connectionState = 'reconnecting'; chat.chatHistoryConnectionGeneration++; });
@@ -156,7 +165,7 @@ test('native Session progress is ephemeral, scoped and readable in light/dark at
   await page.evaluate(() => { window.Pinia.useChatStore().connectionState = 'connected'; });
   broker.broadcastSnapshot({ sessionId: session.id });
   await expect(progresses).toHaveCount(0);
-  send({ ...event, revision: 3 });
+  send({ ...event, revision: 4 });
   await expect(progress).toBeVisible();
   send({ ...parallel, type: 'vp_turn_end', reason: 'errored' });
   send({ ...event, type: 'vp_turn_end', reason: 'errored' });

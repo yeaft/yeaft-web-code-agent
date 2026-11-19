@@ -3595,42 +3595,57 @@
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   font-size: 11px;
   line-height: 1.45;
-  color: var(--text-secondary);
+  color: var(--progress-text);
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
+  --progress-text: color-mix(in srgb, var(--text-secondary) 82%, var(--text-primary));
 }
-.yeaft-query-progress-tokens { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.yeaft-query-progress-tokens > span { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-.yeaft-query-progress-tokens strong { color: var(--text-primary); font-size: 14px; font-weight: 500; }
-.yeaft-query-progress-label { color: var(--text-muted); }
-.yeaft-query-progress-state { color: var(--text-primary); font-weight: 500; }
-.yeaft-query-progress.is-warning .yeaft-query-progress-state,
-.yeaft-query-progress.is-stopped .yeaft-query-progress-state { color: var(--status-busy); }
-.yeaft-query-progress-counts { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 10px; }
-.yeaft-query-progress-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.yeaft-query-progress .btn-ghost {
-  padding: 1px 3px;
+.yeaft-query-progress-usage { display: grid; gap: 3px; }
+.yeaft-query-progress-tokens {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.yeaft-query-progress-tokens dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.yeaft-query-progress-label { font-weight: 500; }
+.yeaft-query-progress-state { color: color-mix(in srgb, var(--status-busy) 48%, var(--text-primary)); font-weight: 600; }
+/* An empty live region stays mounted without reserving a line during normal progress. */
+.yeaft-query-progress.is-running .yeaft-query-progress-state { position: absolute; }
+.yeaft-query-progress-reason { color: var(--progress-text); font-weight: 400; }
+.yeaft-query-progress-counts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  min-height: 24px;
+}
+.yeaft-query-progress-failures-toggle.btn-ghost {
+  margin-inline-start: auto;
+  padding: 1px 4px;
   border: 0;
   border-radius: var(--response-radius);
   background: transparent;
   font: inherit;
   min-height: 24px;
-  color: var(--text-secondary);
+  color: color-mix(in srgb, var(--error) 65%, var(--text-primary));
   cursor: pointer;
 }
-.yeaft-query-progress .btn-ghost:hover { background: var(--sidebar-hover); color: var(--text-primary); }
-.yeaft-query-progress .btn-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.yeaft-query-progress .has-failures { color: var(--error); }
-.yeaft-query-progress-details-toggle { margin-inline-start: auto; }
-.yeaft-query-progress-details,
+.yeaft-query-progress-failures-toggle.btn-ghost:hover { background: var(--bg-input-wrapper); }
+.yeaft-query-progress-failures-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .yeaft-query-progress-failures { display: flex; flex-direction: column; gap: 4px; }
 .yeaft-query-progress-tool-row { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, minmax(30px, auto)); gap: 6px; padding: 3px 0; }
 .yeaft-query-progress-tool-row > :not(:first-child) { text-align: end; }
 .yeaft-query-progress-tool-row code { min-width: 0; white-space: normal; overflow-wrap: anywhere; color: var(--text-primary); font-size: inherit; }
-.yeaft-query-progress-tool-head { color: var(--text-muted); }
+.yeaft-query-progress-tool-head { font-weight: 500; }
 .yeaft-query-progress-failure-list { max-height: 240px; overflow: auto; }
 @media (max-width: 1024px) {
   /* Narrow screens still need the consolidated announcement/status surface.

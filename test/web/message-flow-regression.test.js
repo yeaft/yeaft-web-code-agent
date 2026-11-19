@@ -421,7 +421,7 @@ describe('message flow regressions', () => {
     expect(await store.switchYeaftModel('proxy/offline', 's', 'xhigh')).toMatchObject({ ok: false, error: { code: 'agent_offline' } });
     expect(pending).toHaveLength(sentCount);
   });
-  it('shows exact turn tokens and independent accessible failure drilldown with bounded metadata', async () => {
+  it('shows exact scoped turn tokens, inline warnings and a failure-only drilldown', async () => {
     const base = { type: 'query_progress', sessionId: 's', vpId: 'v', turnId: 't', threadId: 'main',
       revision: 1, modelRequests: 187, toolExecutions: 363, reusedCalls: 0, repeatedCalls: 0, failedCalls: 5,
       stage: 'running', reason: null, lastEvidenceAt: 100, stagnantBatches: 0 };
@@ -443,7 +443,12 @@ describe('message flow regressions', () => {
       global: { config: { globalProperties: { $t: (key, args = {}) => (en[key] || key).replace(/\{(\w+)\}/g, (_, name) => args[name] ?? '') } } } });
     try {
       expect(pane.get('.yeaft-query-progress-tokens').text()).toContain((1234567).toLocaleString());
-      expect(pane.find('.yeaft-query-progress-details').exists()).toBe(false);
+      expect(pane.get('.yeaft-query-progress-usage').attributes('aria-label')).toBe('This turn · current thread');
+      expect(pane.get('.yeaft-query-progress-usage').attributes('title')).toContain('not context size');
+      expect(pane.find('.yeaft-query-progress-details-toggle').exists()).toBe(false);
+      const liveStatus = pane.get('.yeaft-query-progress-state');
+      expect(liveStatus.attributes('role')).toBe('status');
+      expect(liveStatus.text()).toBe('');
       expect(pane.find('.yeaft-query-progress-failures').exists()).toBe(false);
       expect(pane.find('button button, [role="button"] button').exists()).toBe(false);
       await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
@@ -452,21 +457,29 @@ describe('message flow regressions', () => {
       expect(pane.get('.yeaft-query-progress-failures').text()).toContain('Bash');
       expect(pane.get('.yeaft-query-progress-failures').text()).not.toContain('FileEdit');
       expect(pane.emitted('mention-vp')).toBeUndefined();
-      await pane.get('.yeaft-query-progress-details-toggle').trigger('click');
-      expect(pane.get('.yeaft-query-progress-details').text()).toContain('not context size');
       await pane.get('.yeaft-vp-timeline-abort').trigger('click');
       expect(pane.emitted('stop-turn')).toEqual([[row]]);
       expect(pane.emitted('mention-vp')).toBeUndefined();
+      const recovering = { ...row, observations: [{ ...progress, stage: 'recovering', reason: 'repeated_failure' }] };
+      await pane.setProps({ rows: [recovering] });
+      expect(pane.get('.yeaft-query-progress-state').element).toBe(liveStatus.element);
+      expect(liveStatus.text()).toBe('Recovering · Repeated tool failures');
+      expect(pane.get('.yeaft-query-progress-failures-toggle').attributes('aria-expanded')).toBe('true');
+      expect(pane.get('.yeaft-query-progress').text()).not.toContain('Last new evidence');
       await pane.setProps({ rows: [{ ...row, isStopping: true }] });
       expect(pane.get('.yeaft-vp-timeline-abort').attributes()).toHaveProperty('disabled');
-      await pane.setProps({ rows: [{ ...row, observations: [{ ...base, turnId: 'new' }] }] });
+      const next = { ...base, turnId: 'new' };
+      await pane.setProps({ rows: [{ ...row, observations: [{ ...next, failedCalls: 0 }] }] });
       expect(pane.get('.yeaft-query-progress-tokens').text()).toContain('Not provided');
+      expect(pane.find('.yeaft-query-progress-failures-toggle').exists()).toBe(false);
       expect(pane.find('.yeaft-query-progress-failures').exists()).toBe(false);
+      await pane.setProps({ rows: [{ ...row, observations: [next] }] });
+      expect(pane.get('.yeaft-query-progress-failures-toggle').attributes('aria-expanded')).toBe('false');
       await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
       expect(pane.get('.yeaft-query-progress-failures').text()).toContain('has not provided');
       await pane.setProps({ rows: [{ ...row, observations: [{ ...progress, toolStats: [], toolStatsTruncated: true }] }] });
       await pane.get('.yeaft-query-progress-failures-toggle').trigger('click');
-      expect(pane.get('.yeaft-query-progress-failures').text()).toContain('outside the retained');
+      expect(pane.get('.yeaft-query-progress-failures').text()).toContain('not listed in the available breakdown');
       expect(pane.get('.yeaft-query-progress-failures').text()).toContain('first 128');
     } finally {
       pane.unmount();
