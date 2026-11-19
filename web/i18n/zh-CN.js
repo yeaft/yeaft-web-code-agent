@@ -1261,6 +1261,7 @@ export default {
   'settings.general.waitingAnimation': '等待动画',
   'settings.general.waitingAnimationChoice.random': '随机',
   'settings.general.waitingAnimationChoice.hoops': '篮球',
+  'settings.general.waitingAnimationChoice.dragon': '龙珠',
   'settings.general.waitingAnimationChoice.cat': '小猫',
   'settings.general.waitingAnimationChoice.off': '关闭',
   'settings.general.workCenter': '工作中心入口',

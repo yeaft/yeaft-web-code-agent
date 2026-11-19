@@ -19,9 +19,10 @@
  */
 import cat from './cat.js';
 import dog from './dog.js';
+import dragon from './dragon.js';
 import hoops from './hoops.js';
 
-const ANIMATIONS = [hoops, cat, dog];
+const ANIMATIONS = [hoops, dragon, cat, dog];
 
 /** Ids a user can choose, in the order Settings lists them. */
 export const WAITING_ANIMATIONS = Object.freeze(ANIMATIONS.filter(animation => !animation.hidden).map(animation => animation.id));

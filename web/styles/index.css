@@ -43,5 +43,6 @@
 /* Waiting animations: the shared stage, then one stylesheet per animation. */
 @import './waiting/stage.css';
 @import './waiting/hoops.css';
+@import './waiting/dragon.css';
 @import './waiting/cat.css';
 @import './waiting/dog.css';

@@ -1294,6 +1294,7 @@ export default {
   'settings.general.waitingAnimation': 'Waiting animation',
   'settings.general.waitingAnimationChoice.random': 'Random',
   'settings.general.waitingAnimationChoice.hoops': 'Basketball',
+  'settings.general.waitingAnimationChoice.dragon': 'Dragon Ball',
   'settings.general.waitingAnimationChoice.cat': 'Running cat',
   'settings.general.waitingAnimationChoice.off': 'Off',
   'settings.general.workCenter': 'Work Center entry',

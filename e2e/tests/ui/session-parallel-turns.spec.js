@@ -54,6 +54,12 @@ test('one native Session turn shows its waiting indicator, retains the ordinary 
   // A new choice applies to the wait on screen. Every animation offered in
   // Settings plays without the dots, off leaves the dots alone, and random
   // settles on exactly one animation.
+  await chooseWaitingAnimation('dragon');
+  const dragon = indicator.locator('.dragon-scene');
+  await expect(dragon).toHaveClass(/is-open/);
+  await expect(hoops).toHaveCount(0);
+  await expect(dots).toHaveCount(0);
+  await expect.poll(() => drawnPixels(dragon)).toBeGreaterThan(200);
   await chooseWaitingAnimation('cat');
   await expect(cat).toBeVisible();
   await expect(indicator.locator('.waiting-stage')).toHaveCount(0);
