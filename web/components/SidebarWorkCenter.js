@@ -24,7 +24,7 @@ export default {
             :title="tr('workCenter.title', 'Work Center')"
             :aria-label="tr('workCenter.title', 'Work Center')" @click="open">
       <svg class="sidebar-work-center-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-        <path fill="currentColor" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 5v2h10V8H7zm0 4v2h7v-2H7zm0 4v2h5v-2H7z"/>
+        <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h6M8 17h4"/></g>
       </svg>
     </button>
   `,

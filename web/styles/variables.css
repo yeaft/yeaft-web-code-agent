@@ -20,11 +20,17 @@ input, textarea, [contenteditable] {
 /* ==============================
    Unified Select/Dropdown Styles
    ============================== */
+/* Native selects drop the UA arrow, so draw the same caret ModernSelect uses
+   in the 32px right padding reserved for it. */
 select {
   font-family: inherit;
   font-size: 14px;
   color: var(--text-primary);
-  background: var(--bg-input, var(--bg-main));
+  background-color: var(--bg-input, var(--bg-main));
+  background-image: var(--select-caret);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px 16px;
   border: 1px solid var(--border-color);
   border-radius: 10px;
   padding: 8px 32px 8px 12px;
@@ -36,14 +42,75 @@ select {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+select[multiple],
+select[size]:not([size="1"]) {
+  background-image: none;
+  padding-right: 12px;
+}
+
 select:hover {
   border-color: var(--text-muted);
 }
 
 select:focus {
   outline: none;
-  border-color: var(--accent-blue, #4a9eff);
-  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.12);
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+/* ==============================
+   Shared scale (theme-invariant)
+   One spacing, radius, type, control, motion and focus scale for every
+   module. Module tokens may alias these; new UI should use them directly.
+   ============================== */
+:root {
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Nested corners stay concentric: inner = outer - inset. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  --font-size-2xs: 11px;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 22px;
+  --line-height-tight: 1.3;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.65;
+
+  --control-height-sm: 28px;
+  --control-height-md: 32px;
+  --control-height-lg: 36px;
+  --control-height-xl: 40px;
+  --icon-size-sm: 14px;
+  --icon-size-md: 16px;
+  --icon-size-lg: 18px;
+  --icon-stroke: 1.8;
+
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
 }
 
 select option {
@@ -90,20 +157,24 @@ select option:checked {
   --bg-assistant-msg: transparent;
   --bg-input: #fafaf8;
   --bg-input-wrapper: #eeeee9;
+  /* Text greys carry the same warm hue as the surfaces. Every text tier,
+     including --text-muted metadata, clears 4.5:1 on --bg-main, --bg-sidebar
+     and --bg-elevated (muted was #9a9a9a at 2.7:1). */
   --text-primary: #2c2c2c;
-  --text-secondary: #6b6b6b;
-  --text-muted: #9a9a9a;
+  --text-secondary: #66625c;
+  --text-muted: #726e68;
   --border-color: #e0ddd8;
   --border-light: #eceae5;
   --accent: #2c2c2c;
   --accent-hover: #444444;
   --accent-fg: #ffffff;
-  --accent-blue: #4a7cc9;
+  /* Link / selection / focus blue: 4.9:1 on --bg-main, 5.2:1 under white. */
+  --accent-blue: #3a6cbd;
   /* Shared enabled state for Settings, tasks and plugin switches. */
-  --settings-control-active: #4a7cc9;
+  --settings-control-active: var(--accent-blue);
   --settings-switch-knob: #ffffff;
-  --accent-blue-hover: #3a6ab5;
-  --error: #d65d5d;
+  --accent-blue-hover: #2f5ca6;
+  --error: #b54040;
   --success: #4a9e5c;
   --code-bg: var(--bg-sidebar);
   --code-header-bg: var(--bg-input-wrapper);
@@ -124,6 +195,20 @@ select option:checked {
   --session-active: #e2e0db;
   --modal-overlay-bg: rgba(28, 28, 28, 0.62);
   --modal-shadow: 0 18px 72px rgba(28, 28, 28, 0.28);
+  /* Raised surfaces (dialogs, menus, popovers) and one warm top-down light. */
+  --bg-elevated: #ffffff;
+  --shadow-sm: 0 1px 2px rgba(44, 38, 28, 0.06);
+  --shadow-md: 0 1px 3px rgba(44, 38, 28, 0.06), 0 6px 16px rgba(44, 38, 28, 0.08);
+  --shadow-lg: 0 2px 8px rgba(44, 38, 28, 0.08), 0 16px 48px rgba(44, 38, 28, 0.16);
+  --focus-ring-color: var(--accent-blue);
+  /* ModernSelect's caret, filled with --text-muted, for native selects. */
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='%23726e68' d='M5.25 7.5l4.75 4.75L14.75 7.5z'/%3E%3C/svg%3E");
+  /* Composer: the one raised, writable surface on a conversation screen. */
+  --chat-composer-bg: var(--bg-elevated);
+  --chat-composer-border: var(--border-color);
+  --chat-composer-border-focus: #c9c4bc;
+  --chat-composer-shadow: 0 1px 2px rgba(44, 38, 28, 0.04), 0 4px 14px rgba(44, 38, 28, 0.05);
+  --chat-composer-shadow-focus: 0 1px 2px rgba(44, 38, 28, 0.05), 0 6px 20px rgba(44, 38, 28, 0.08);
   --image-preview-control-size: 44px;
   --image-preview-control-offset: 16px;
   --image-preview-control-radius: 10px;
@@ -183,28 +268,30 @@ select option:checked {
   --border-strong: var(--border-color);
   /* Text */
   --text-tertiary: var(--text-muted);
+  --text-main: var(--text-primary);
+  --bg-secondary: var(--bg-sidebar);
   /* Accents */
   --accent-color: var(--accent);
-  --accent-soft: rgba(74, 124, 201, 0.07);
-  --accent-bg: rgba(74, 124, 201, 0.07);
-  --mention-bg: rgba(74, 124, 201, 0.10);
+  --accent-soft: rgba(58, 108, 189, 0.07);
+  --accent-bg: rgba(58, 108, 189, 0.07);
+  --mention-bg: rgba(58, 108, 189, 0.10);
   --pinned-bg: rgba(163, 129, 51, 0.08);
   --link-color: var(--accent-blue);
   /* Task accent (used by Yeaft task chips) — reuse accent-blue */
   --task-accent: var(--accent-blue);
-  --task-accent-bg: rgba(74, 124, 201, 0.10);
+  --task-accent-bg: rgba(58, 108, 189, 0.10);
   /* Status text/bg */
   --error-text: var(--error);
-  --error-bg: rgba(214, 93, 93, 0.10);
+  --error-bg: rgba(181, 64, 64, 0.10);
   --danger-color: var(--error);
   --warn-text: #b07a1f;
   --warn-bg: rgba(176, 122, 31, 0.10);
   /* Focus ring (theme-aware replacement for hardcoded blue rings) */
-  --focus-ring: rgba(74, 124, 201, 0.18);
+  --focus-ring: rgba(58, 108, 189, 0.18);
   /* Usage / price tags (Copilot model picker; reusable) */
   --tag-low-bg: rgba(74, 158, 92, 0.14);
   --tag-low-fg: var(--success);
-  --tag-medium-bg: rgba(74, 124, 201, 0.14);
+  --tag-medium-bg: rgba(58, 108, 189, 0.14);
   --tag-medium-fg: var(--accent-blue);
   --tag-high-bg: rgba(201, 138, 61, 0.16);
   --tag-high-fg: #c98a3d;
@@ -272,8 +359,10 @@ select option:checked {
   --yeaft-header-folder-max-width: 280px;
   --yeaft-header-folder-font-size: 12px;
   /* Fonts */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  /* System UI fonts with explicit CJK faces so Chinese never falls back to a
+     random serif/bitmap face (Segoe UI and Roboto carry no Han glyphs). */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', 'PingFang SC', 'Microsoft YaHei UI', monospace;
   /* Plugins Center presentation geometry. Keep new UI measurements tokenized. */
   --plugin-center-space-1: 1px;
   --plugin-center-space-2: 2px;
@@ -380,10 +469,12 @@ select option:checked {
   --accent: #d8d5d0;
   --accent-hover: #b5b2ad;
   --accent-fg: #1a1a1a;
-  --accent-blue: #b5b2ad;
+  /* Same blue identity as light, quieter and lifted for dark (7.8:1 on
+     --bg-main); text on it uses --accent-fg. Hover moves lighter, not darker. */
+  --accent-blue: #8db0e2;
   --settings-control-active: var(--accent-blue);
   --settings-switch-knob: #fafaf8;
-  --accent-blue-hover: #9a9792;
+  --accent-blue-hover: #a9c4ec;
   --error: #d09090;
   --success: #7ab87e;
   --code-bg: var(--bg-sidebar);
@@ -405,6 +496,20 @@ select option:checked {
   --session-active: #302e2c;
   --modal-overlay-bg: rgba(8, 8, 8, 0.72);
   --modal-shadow: 0 18px 72px rgba(0, 0, 0, 0.48);
+  /* Dark elevation: higher layers get lighter, not just darker shadows. */
+  --bg-elevated: #232321;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 2px 8px rgba(0, 0, 0, 0.32), 0 16px 48px rgba(0, 0, 0, 0.5);
+  --focus-ring-color: var(--accent-blue);
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='%238a8783' d='M5.25 7.5l4.75 4.75L14.75 7.5z'/%3E%3C/svg%3E");
+  /* Dark composer stays one step lighter than the page; the hairline gives
+     it an edge without a glow. */
+  --chat-composer-bg: var(--bg-input-wrapper);
+  --chat-composer-border: var(--border-color);
+  --chat-composer-border-focus: #4a4743;
+  --chat-composer-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --chat-composer-shadow-focus: 0 1px 2px rgba(0, 0, 0, 0.24), 0 6px 20px rgba(0, 0, 0, 0.28);
   --image-preview-control-size: 44px;
   --image-preview-control-offset: 16px;
   --image-preview-control-radius: 10px;
@@ -460,14 +565,16 @@ select option:checked {
   --border-subtle: var(--border-light);
   --border-strong: var(--border-color);
   --text-tertiary: var(--text-muted);
+  --text-main: var(--text-primary);
+  --bg-secondary: var(--bg-sidebar);
   --accent-color: var(--accent);
-  --accent-soft: rgba(181, 178, 173, 0.08);
-  --accent-bg: rgba(181, 178, 173, 0.08);
-  --mention-bg: rgba(181, 178, 173, 0.12);
+  --accent-soft: rgba(141, 176, 226, 0.08);
+  --accent-bg: rgba(141, 176, 226, 0.08);
+  --mention-bg: rgba(141, 176, 226, 0.12);
   --pinned-bg: rgba(205, 180, 121, 0.10);
   --link-color: var(--accent-blue);
   --task-accent: var(--accent-blue);
-  --task-accent-bg: rgba(181, 178, 173, 0.12);
+  --task-accent-bg: rgba(141, 176, 226, 0.12);
   --error-text: var(--error);
   --error-bg: rgba(208, 144, 144, 0.12);
   --danger-color: var(--error);
@@ -505,11 +612,11 @@ select option:checked {
   --terminal-bg-bright-magenta: #4a3658;
   --terminal-bg-bright-cyan: #304d50;
   --terminal-bg-bright-white: #3a3835;
-  --focus-ring: rgba(181, 178, 173, 0.22);
+  --focus-ring: rgba(141, 176, 226, 0.24);
   /* Usage / price tags (dark) */
   --tag-low-bg: rgba(122, 184, 126, 0.16);
   --tag-low-fg: var(--success);
-  --tag-medium-bg: rgba(181, 178, 173, 0.16);
+  --tag-medium-bg: rgba(141, 176, 226, 0.16);
   --tag-medium-fg: var(--accent-blue);
   --tag-high-bg: rgba(201, 159, 99, 0.18);
   --tag-high-fg: #d6a87a;
@@ -659,13 +766,41 @@ html {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg-main);
   color: var(--text-primary);
   height: 100%;
   height: 100dvh;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   transition: background-color 0.2s, color 0.2s;
+}
+
+/* Form controls inherit the UI face instead of the UA default (Arial on
+   Windows), so mixed Chinese/Latin labels render in one family. */
+button, input, select, textarea {
+  font-family: inherit;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent-blue) 24%, transparent);
+}
+
+/* One keyboard focus ring. Modules may tune offset for inset controls, but
+   the colour and width come from the shared tokens. */
+:where(a[href], button, summary, [role="button"], [role="tab"], [role="menuitem"],
+  [role="option"], [role="switch"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Programmatic focus targets (headings, panes) move the reading position;
+   they are not controls and should not draw a control ring. */
+[tabindex="-1"]:focus {
+  outline: none;
 }
 
 #app {

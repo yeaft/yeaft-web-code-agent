@@ -294,7 +294,7 @@
   border: 1px solid var(--border-color);
   border-radius: 10px;
   background: var(--bg-main);
-  box-shadow: var(--modal-shadow);
+  box-shadow: var(--shadow-md);
 }
 
 .work-center-header-popover label {
@@ -2844,7 +2844,7 @@
   min-width: 0;
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   color: var(--text-primary);
   font: inherit;
   font-size: 13px;
@@ -3421,7 +3421,22 @@
   padding: 6px 12px;
   box-sizing: border-box;
 }
-.work-center-sidebar-header > strong { flex: 1; font-size: 13px; font-weight: 600; }
+.work-center-sidebar-header > strong { flex: 1; font-size: var(--font-size-md); font-weight: 600; }
+/* Same geometry as the Session sidebar (.sidebar-primary-action and section
+   headings), so switching between the two never shifts icons or labels. */
+.work-center-sidebar:not(.collapsed) .work-center-sidebar-header { padding: var(--space-4) var(--space-3) var(--space-2); }
+.work-center-sidebar:not(.collapsed) .work-center-sidebar-create.btn-ghost {
+  gap: var(--space-2-5);
+  min-height: 34px;
+  margin: var(--space-1) var(--space-2) var(--space-2);
+  padding: 0 var(--space-2-5);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  font-weight: 400;
+  line-height: 20px;
+}
+.work-center-sidebar-create.btn-ghost svg { width: var(--icon-size-lg); height: var(--icon-size-lg); color: var(--text-secondary); }
 .work-center-sidebar.collapsed .work-center-sidebar-header { flex-direction: column; padding: 10px 6px; }
 .work-center-sidebar-create {
   width: auto;
@@ -3437,26 +3452,27 @@
 }
 .work-center-sidebar-create svg { flex-shrink: 0; }
 .work-center-sidebar.collapsed .work-center-sidebar-create { margin: 4px 6px 8px; padding: 8px 0; justify-content: center; }
-.work-center-sidebar-scroll { min-height: 0; overflow: auto; padding: 8px 12px 20px; }
-.work-center-sidebar h2 { margin: 0; font-size: 11px; font-weight: 500; color: var(--text-muted); }
-.work-center-agent-list > h2 { padding: 0 8px 8px; }
+.work-center-sidebar-scroll { min-height: 0; overflow: auto; padding: var(--space-2) var(--space-2) var(--space-5); }
+.work-center-sidebar h2 { margin: 0; font-size: var(--font-size-xs); font-weight: 600; color: var(--text-muted); }
+.work-center-agent-list > h2 { padding: 0 var(--space-2-5) var(--space-2); }
 .work-center-agent-row.session-tab {
   display: flex;
   width: 100%;
-  min-height: 36px;
+  min-height: 34px;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--space-2);
+  padding: 0 var(--space-2-5);
   margin: 0 0 2px;
   border: 0;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-md);
+  line-height: 20px;
   text-align: left;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   background: transparent;
 }
 .work-center-agent-row > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.work-center-agent-row small { font-size: 10px; color: var(--text-muted); }
+.work-center-agent-row small { font-size: var(--font-size-2xs); color: var(--text-muted); }
 .work-center-agent-dot.offline { background: var(--text-muted); }
 .work-center-activity { margin-top: 20px; }
 .work-center-activity-heading { display: flex; align-items: center; justify-content: space-between; }
@@ -3466,7 +3482,7 @@
   border: 0; border-radius: var(--radius-sm); background: transparent;
   color: var(--text-muted); font: inherit; cursor: pointer;
 }
-.work-center-activity-disclosure { min-height: 28px; font-size: 11px; }
+.work-center-activity-disclosure { min-height: 28px; font-size: var(--font-size-xs); font-weight: 600; }
 .work-center-activity-disclosure svg, .work-center-item-disclosure svg { flex: 0 0 auto; }
 .work-center-activity-disclosure svg.expanded, .work-center-item-disclosure svg.expanded { transform: rotate(90deg); }
 .work-center-activity-item-row { display: flex; align-items: stretch; border-radius: var(--radius-sm); }

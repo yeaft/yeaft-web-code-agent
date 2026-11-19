@@ -161,7 +161,7 @@
   background: var(--bg-input);
   color: var(--text-primary);
   font-size: 14px;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   transition: border-color 0.2s;
 }
 
@@ -204,7 +204,7 @@
   background: var(--bg-sidebar);
   color: var(--text-primary);
   font-size: 12px;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
 }
@@ -214,45 +214,7 @@
   border-color: var(--text-secondary);
 }
 
-/* Buttons */
-.btn {
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s, opacity 0.2s;
-}
-
-.btn-primary {
-  background: #ffffff;
-  color: #171717;
-  border: none;
-}
-
-[data-theme="light"] .btn-primary {
-  background: #171717;
-  color: #ffffff;
-}
-
-.btn-primary:hover:not(:disabled) {
-  opacity: 0.85;
-}
-
-.btn-primary:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: transparent;
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-}
-
-.btn-secondary:hover {
-  background: var(--bg-user-msg);
-}
+/* Buttons: shared `.btn` / `.btn-*` variants live in controls.css. */
 
 /* Modal Large (for history sessions) */
 .modal-large {
@@ -349,7 +311,7 @@
 .history-session-item .session-id {
   font-size: 11px;
   color: var(--text-secondary);
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   opacity: 0.7;
 }
 
@@ -576,7 +538,7 @@
 
 .folder-path {
   font-size: 13px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   color: var(--text-primary);
   word-break: break-all;
 }
@@ -783,7 +745,7 @@
 .list-item .item-title {
   font-size: 13px;
   color: var(--text-primary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -810,7 +772,7 @@
 
 .session-item-detailed .item-title {
   font-weight: 500;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
 }
 
 .session-item-detailed .item-date {
@@ -859,7 +821,7 @@
 
 .mini-list-item .item-path {
   flex: 1;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1022,6 +984,12 @@
 .prog-col-config .form-group select {
   font-size: 13px;
   padding: 8px 10px;
+}
+
+/* Keep the shared select caret clear of the option text. */
+.modal-col-fixed .form-group select,
+.prog-col-config .form-group select {
+  padding-right: 32px;
 }
 
 .prog-col-config .modal-actions {
@@ -1251,7 +1219,7 @@
 }
 
 .info-value.mono {
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -1279,7 +1247,7 @@
 .usage-text {
   font-size: 11px;
   color: var(--text-secondary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
 }
 
 /* Secondary button style */
@@ -1604,7 +1572,7 @@
   background: var(--bg-input);
   color: var(--text-primary);
   font-size: 14px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -1627,6 +1595,15 @@
 
 .workdir-input-group .resume-input {
   min-width: 0;
+}
+
+/* .resume-input's background shorthand would erase the shared select caret. */
+select.resume-input {
+  padding-right: 32px;
+  background-image: var(--select-caret);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px 16px;
 }
 
 /* Make ModernSelect rows align with input rows — same flex behavior so all
@@ -1784,6 +1761,24 @@
   margin-bottom: 4px;
 }
 
+/* Rows are real buttons so a keyboard can pick a directory or session. */
+button.resume-list-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.resume-list-item:focus-visible {
+  outline-offset: -2px;
+}
+
+button.resume-list-item:disabled {
+  cursor: default;
+}
+
 .resume-list-item:last-child {
   margin-bottom: 0;
 }
@@ -1909,7 +1904,7 @@
 .folder-item-compact .item-path {
   flex: 1;
   font-size: 13px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2129,7 +2124,8 @@ select.modern-select {
   padding: 12px 36px 12px 14px;
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  background: var(--bg-input);
+  background-color: var(--bg-input);
+  background-position: right 12px center;
   color: var(--text-primary);
   font-size: 14px;
   cursor: pointer;
@@ -2160,7 +2156,7 @@ select.modern-select:focus {
   background: var(--bg-input);
   color: var(--text-primary);
   font-size: 14px;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   transition: border-color 0.15s, box-shadow 0.15s;
   box-sizing: border-box;
 }

@@ -758,7 +758,7 @@
   border: 1px solid var(--border-color);
   border-radius: 10px;
   padding: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-md);
   z-index: 100;
   animation: sp-menu-in 0.12s ease;
 }
@@ -898,7 +898,7 @@
 
 .sp-invite-code {
   font-size: 12px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   color: var(--text-primary);
 }
 
@@ -1156,7 +1156,7 @@
   background: var(--bg-main);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-md);
   z-index: 10000;
   min-width: 160px;
   padding: 4px 0;
@@ -1506,7 +1506,7 @@
 .llm-models-textarea {
   min-height: 82px;
   resize: vertical;
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -1687,7 +1687,7 @@
 }
 
 .llm-model-menu .sp-custom-select-option {
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 

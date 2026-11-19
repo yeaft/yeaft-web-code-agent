@@ -103,9 +103,15 @@
   padding: 4px 8px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   color: var(--text-primary);
   font-size: 12px;
+}
+
+.db-filter-select select {
+  padding-right: 26px;
+  background-position: right 6px center;
+  background-size: 14px 14px;
 }
 
 .db-user-active-label {
@@ -240,7 +246,7 @@
 .db-cell-num {
   text-align: right !important;
   font-variant-numeric: tabular-nums;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 12px !important;
 }
 

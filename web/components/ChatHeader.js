@@ -1,7 +1,9 @@
 import { confirmDialog } from '../utils/dialog.js';
+import NavigationIcon from './NavigationIcon.js';
 
 export default {
   name: 'ChatHeader',
+  components: { NavigationIcon },
   emits: ['toggle-sidebar', 'close-pane'],
   props: {
     conversationId: { type: String, default: null },
@@ -14,9 +16,7 @@ export default {
       <!-- Mobile sidebar toggle — hidden on desktop and in split mode -->
       <button class="header-sidebar-toggle" v-if="!store.isSplitMode"
               @click="$emit('toggle-sidebar')">
-        <svg viewBox="0 0 24 24" width="16" height="16">
-          <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
-        </svg>
+        <NavigationIcon name="menu" :size="16" />
       </button>
       <div class="chat-title-group" :title="headerTitle">
         <div class="chat-title">{{ headerTitle }}</div>
@@ -70,7 +70,7 @@ export default {
             <div class="mcp-dropdown-header">
               <span class="mcp-dropdown-title">MCP Servers</span>
               <button class="mcp-dropdown-close" @click="store.mcpPanelOpen = false">
-                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                <NavigationIcon name="close" :size="14" />
               </button>
             </div>
             <div class="mcp-dropdown-body">
@@ -110,7 +110,7 @@ export default {
         </button>
         <!-- Close pane button (split mode only) -->
         <button class="header-action-btn" v-if="showClosePane" @click="$emit('close-pane')" :title="$t('splitScreen.closePane')">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          <NavigationIcon name="close" :size="16" />
         </button>
       </div>
     </header>

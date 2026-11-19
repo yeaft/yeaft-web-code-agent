@@ -1,4 +1,5 @@
 import { sortSessionsByActivity } from '../stores/helpers/session-order.js';
+import NavigationIcon from './NavigationIcon.js';
 
 /**
  * PaneTopBar — top horizontal bar for each split-screen pane (~36px).
@@ -12,6 +13,7 @@ import { sortSessionsByActivity } from '../stores/helpers/session-order.js';
  */
 export default {
   name: 'PaneTopBar',
+  components: { NavigationIcon },
   props: {
     paneId: { type: String, required: true },
     conversationId: { type: String, default: null }
@@ -75,14 +77,14 @@ export default {
           :disabled="onlineAgentCount === 0"
           :title="$t('splitScreen.newChat')"
         >
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+          <NavigationIcon name="add" :size="16" />
         </button>
         <button
           class="ptb-icon-btn ptb-close-btn"
           @click="$emit('close-pane')"
           :title="$t('splitScreen.closePane')"
         >
-          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          <NavigationIcon name="close" :size="14" />
         </button>
       </div>
     </div>

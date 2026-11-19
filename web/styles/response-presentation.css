@@ -115,7 +115,7 @@
 .response-map-caption span { font-size: 12px; color: var(--text-secondary); }
 .response-map-embed iframe { display: block; width: 100%; height: clamp(240px, 45vw, 400px); border: 0; border-radius: var(--response-radius); background: var(--bg-subtle); }
 .response-map-select { display: flex; flex-wrap: wrap; align-items: center; gap: var(--response-space-sm); margin-bottom: var(--response-space-md); font-size: 13px; }
-.response-map-select select { min-width: 0; max-width: 100%; flex: 1; min-height: 44px; padding: var(--response-space-sm); font: inherit; color: var(--text-primary); background: var(--bg-main); border: 1px solid var(--border-color); border-radius: var(--response-radius); }
+.response-map-select select { min-width: 0; max-width: 100%; flex: 1; min-height: 44px; padding: var(--response-space-sm); padding-right: 32px; font: inherit; color: var(--text-primary); background-color: var(--bg-main); border: 1px solid var(--border-color); border-radius: var(--response-radius); }
 .response-map-select select:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 3px; }
 .response-map-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--response-space-sm); margin-top: var(--response-space-sm); font-size: 12px; }
 .response-presentation .response-map-embed :is(.btn-ghost, .btn-secondary, a), .response-card-source a { min-height: 44px; }

@@ -22,6 +22,7 @@ import UnifiedSessionList from './UnifiedSessionList.js';
 import SessionCreateModal from './SessionCreateModal.js';
 import WorkCenterPage from './WorkCenterPage.js';
 import PluginCenterPage from './PluginCenterPage.js';
+import NavigationIcon from './NavigationIcon.js';
 import { shortenPath as shortenPathUtil } from '../utils/path-display.js';
 import { getLastPathSegment as _getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 import { sortSessionsByActivity } from '../stores/helpers/session-order.js';
@@ -30,7 +31,7 @@ import { collapseSidebar } from '../utils/sidebar-collapse.js';
 
 export default {
   name: 'ChatPage',
-  components: { DigitalPersonPage, ScheduledTaskNotifications, FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
+  components: { NavigationIcon, DigitalPersonPage, ScheduledTaskNotifications, FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
@@ -43,7 +44,7 @@ export default {
         <!-- Collapsed Icon Bar -->
         <div class="sidebar-collapsed-bar" v-if="effectiveSidebarCollapsed">
           <button v-if="!store.isSplitMode || store.digitalPersonOpen" class="collapsed-icon-btn" @click="store.toggleSidebar()" :title="$t('chat.sidebar.expand')">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+            <NavigationIcon name="menu" :size="18" />
           </button>
           <button class="collapsed-icon-btn" @click="store.addPanel()" :title="$t('splitScreen.split')">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -52,7 +53,7 @@ export default {
           </button>
           <SidebarDigitalPerson :collapsed="true" />
           <button class="collapsed-icon-btn" @click="onUnifiedCreate" :disabled="onlineAgentCount === 0" :title="$t('chat.sidebar.newConv')">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            <NavigationIcon name="add" :size="18" />
           </button>
           <SidebarWorkCenter
             v-if="store.workCenterUiEnabled"
@@ -93,7 +94,7 @@ export default {
                 @open="store.enterWorkCenter"
               />
               <button class="sidebar-icon-btn" @click="onSidebarCollapse" :title="$t('chat.sidebar.collapse')">
-                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
+                <NavigationIcon name="collapse" :size="18" />
               </button>
             </div>
           </div>
@@ -137,7 +138,7 @@ export default {
 
         <div class="sidebar-bottom">
           <button class="sidebar-nav-item" @click="showSettingsPanel = true">
-            <svg viewBox="0 0 24 24" width="20" height="20"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+            <NavigationIcon name="settings" :size="18" />
             <span>{{ $t('chat.sidebar.settings') }}</span>
             <span v-if="serverVersion" class="sidebar-version">{{ serverVersion }}</span>
           </button>
@@ -212,7 +213,7 @@ export default {
           <!-- Top Controls -->
           <div class="resume-modal-controls">
             <button class="resume-close-btn" @click="closeConversationModal">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+              <NavigationIcon name="close" :size="18" />
             </button>
             <div class="resume-control-row">
               <label class="resume-control-label">Agent</label>
@@ -248,7 +249,7 @@ export default {
                   class="resume-input"
                 >
                 <button class="workdir-browse-btn" @click="openFolderPicker('convModal')" :title="$t('modal.newConv.browse')">
-                  <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                  <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
                 </button>
               </div>
             </div>
@@ -271,15 +272,17 @@ export default {
                   <span class="mini-spinner"></span>
                 </div>
                 <template v-else>
-                  <div
+                  <button
                     v-for="folder in store.folders"
                     :key="folder.name"
+                    type="button"
                     class="resume-list-item folder-item-compact"
+                    :title="folder.path"
                     @click="selectConvModalFolder(folder.path)"
                   >
-                    <div class="item-path">{{ folder.path }}</div>
+                    <span class="item-path">{{ folder.path }}</span>
                     <span class="item-badge">{{ folder.sessionCount }}</span>
-                  </div>
+                  </button>
                   <div class="resume-panel-empty" v-if="store.folders.length === 0">
                     {{ $t('modal.newConv.noWorkDirs') }}
                   </div>
@@ -291,8 +294,8 @@ export default {
             <div class="resume-panel" v-else>
               <div class="resume-panel-header">
                 <div class="resume-panel-header-left">
-                  <button class="refresh-btn-mini" @click="convModalWorkDir = ''; selectedResumeSession = null; historyLoaded = false;" title="返回">
-                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                  <button type="button" class="refresh-btn-mini" @click="convModalWorkDir = ''; selectedResumeSession = null; historyLoaded = false;" :title="$t('common.back')" :aria-label="$t('common.back')">
+                    <NavigationIcon name="back" :size="14" />
                   </button>
                   <span>{{ $t('modal.resume.sessionLabel') }} <span class="header-tag">{{ getLastPathSegment(convModalWorkDir) }}</span></span>
                 </div>
@@ -302,15 +305,16 @@ export default {
                 </button>
               </div>
               <div class="resume-panel-list" v-if="historyLoaded">
-                <div
+                <button
                   v-for="session in store.historySessions"
                   :key="session.sessionId"
+                  type="button"
                   class="resume-list-item session-item-compact"
                   @click="resumeSession(session)"
                 >
-                  <div class="item-name">{{ session.title || $t('modal.resume.untitled') }}</div>
-                  <div class="item-time">{{ formatDate(session.lastModified) }}</div>
-                </div>
+                  <span class="item-name">{{ session.title || $t('modal.resume.untitled') }}</span>
+                  <span class="item-time">{{ formatDate(session.lastModified) }}</span>
+                </button>
                 <div class="resume-panel-empty" v-if="store.historySessions.length === 0 && !store.historySessionsLoading">
                   {{ $t('modal.resume.noSessions') }}
                 </div>
@@ -333,7 +337,7 @@ export default {
               @click="createNewConversation"
               :disabled="!convModalAgent"
             >
-              <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+              <NavigationIcon name="add" :size="16" />
               {{ $t('modal.newConv.create') }}
             </button>
           </div>

@@ -563,6 +563,7 @@ export default {
   'chat.agent.select': 'Select Agent',
   'chat.agent.manage': 'Manage Agents',
   'chat.agent.count': '{count} agents',
+  'chat.agent.countOne': '{count} agent',
   'chat.agent.updatesAvailable': '{count} Agent update(s) available',
   'chat.agent.updateAvailable': 'Update available: v{version}',
   'chat.agent.none': 'No Agents',
@@ -966,7 +967,7 @@ export default {
   'modal.newConv.noWorkDirs': 'No work directories',
   'modal.newConv.selectAgent': 'Please select an online Agent first',
   'modal.newConv.create': 'Create Conversation',
-  'modal.newConv.folderLabel': '📁 Work Directories',
+  'modal.newConv.folderLabel': 'Recent directories',
   'modal.newConv.provider': 'Provider',
   'modal.newConv.model': 'Model',
   'provider.claudeCode': 'Claude Code',
@@ -981,8 +982,8 @@ export default {
   'modal.resume.selectWorkDir': 'Please select a work directory first',
   'modal.resume.noSessions': 'No history sessions in this directory',
   'modal.resume.untitled': 'Untitled Session',
-  'modal.resume.folderLabel': '📁 Work Directories',
-  'modal.resume.sessionLabel': '💬 History Sessions',
+  'modal.resume.folderLabel': 'Work Directories',
+  'modal.resume.sessionLabel': 'Past sessions',
   'modal.resume.selectAgent': 'Please select an online Agent first',
 
   'modal.folderPicker.title': 'Select Work Directory',
@@ -1381,8 +1382,8 @@ export default {
   'yeaft.vp.domain.other': 'Other specialties',
   'yeaft.vp.domain.custom': 'Custom VPs',
   'yeaft.session.create.defaultVpHint': 'The VP that answers when no one is @-mentioned.',
-  'yeaft.session.create.folderLabel': '📁 Work directories',
-  'yeaft.session.create.sessionLabel': '💬 Sessions in this directory',
+  'yeaft.session.create.folderLabel': 'Recent directories',
+  'yeaft.session.create.sessionLabel': 'Sessions in this directory',
   'yeaft.session.create.noWorkDirs': 'No prior sessions yet — pick or type a work directory above.',
   // 'yeaft.session.create.noSessions' removed — the unified single-list UI
   // shows 'yeaft.restore.modal.empty' as the empty-state instead ("No yeaft

@@ -4,9 +4,11 @@ import { parseDiff } from './git/diffParser.js';
 import { createGitOperations } from './git/gitOperations.js';
 import { createFolderPicker } from './git/folderPicker.js';
 import { createRouteBoundWorkbenchStore, isWorkbenchMessageForRoute, workbenchMessageScope } from '../utils/workbench-route.js';
+import NavigationIcon from './NavigationIcon.js';
 
 export default {
   name: 'GitStatusTab',
+  components: { NavigationIcon },
   props: {
     routeKey: { type: String, required: true },
     runtimeProvider: { type: String, required: true },
@@ -236,7 +238,7 @@ export default {
             </div>
             <div class="folder-picker-path">
               <button class="wb-btn-sm" @click="folderPickerNavigateUp" :disabled="!folderPickerPath" :title="$t('modal.folderPicker.parentDir')">
-                <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                <NavigationIcon name="back" :size="12" />
               </button>
               <span class="folder-picker-current">{{ folderPickerPath || $t('common.drives') }}</span>
             </div>

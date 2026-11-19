@@ -4,16 +4,17 @@ import {
   getVisibleTeams
 } from '../utils/expert-roles.js';
 import ExpertRoleEditor from './ExpertRoleEditor.js';
+import NavigationIcon from './NavigationIcon.js';
 
 export default {
   name: 'ExpertPanel',
-  components: { ExpertRoleEditor },
+  components: { NavigationIcon, ExpertRoleEditor },
   template: `
     <div class="expert-panel" :class="{ open: visible }">
       <div class="expert-panel-header">
         <span class="expert-panel-title">{{ $t('expertPanel.title') }}</span>
         <button class="expert-panel-close" @click="$emit('close')">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          <NavigationIcon name="close" :size="16" />
         </button>
       </div>
 
@@ -36,7 +37,7 @@ export default {
       <div v-if="viewingRoleId" class="expert-role-detail">
         <div class="expert-role-detail-header">
           <button class="expert-role-detail-back" @click="viewingRoleId = null">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+            <NavigationIcon name="back" :size="16" />
           </button>
           <span class="expert-role-detail-name">{{ viewingRoleTitle }}</span>
         </div>
@@ -122,7 +123,7 @@ export default {
               <span class="team-header-icon">\u2728</span>
               <span class="team-header-name">{{ $t('expertPanel.customRoles') }}</span>
               <button class="expert-add-role-btn" @click="openEditor(null)" :title="$t('expertPanel.addRole')">
-                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                <NavigationIcon name="add" :size="14" />
               </button>
             </div>
 

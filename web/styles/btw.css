@@ -44,7 +44,7 @@
   font-weight: 700;
   color: var(--accent);
   letter-spacing: 0.5px;
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .btw-close-btn {
@@ -90,7 +90,7 @@
   content: '>';
   margin-right: 6px;
   opacity: 0.5;
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .btw-msg-assistant {
@@ -195,7 +195,7 @@
   font-weight: 700;
   color: var(--accent);
   letter-spacing: 0.5px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   padding: 2px 6px;
   flex-shrink: 0;
 }

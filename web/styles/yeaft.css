@@ -381,9 +381,12 @@
   white-space: nowrap;
 }
 
+/* Status suffix stays on the label line; the model name truncates first. */
 .yeaft-model-refreshing {
-  font-size: 11px;
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .yeaft-model-chevron {
@@ -488,7 +491,7 @@
   border: 1px solid var(--border-color);
   border-radius: 10px;
   padding: 4px;
-  box-shadow: var(--modal-shadow);
+  box-shadow: var(--shadow-md);
   overflow: hidden;
 }
 
@@ -833,7 +836,7 @@
   background: var(--bg-main);
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-md);
   z-index: 60;
   min-width: 120px;
   display: flex;
@@ -1873,7 +1876,7 @@
 .yeaft-settings-field textarea {
   width: 100%;
   padding: 6px 10px;
-  background: var(--bg-input-wrapper);
+  background-color: var(--bg-input-wrapper);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   color: var(--text-primary);
@@ -1883,6 +1886,8 @@
   transition: border-color 0.15s;
   box-sizing: border-box;
 }
+
+.yeaft-settings-field select { padding-right: 32px; }
 
 .yeaft-settings-field input:focus,
 .yeaft-settings-field select:focus,
@@ -3126,7 +3131,7 @@
 
 .group-settings-primary {
   background: var(--accent-blue);
-  color: #ffffff;
+  color: var(--accent-fg);
   border: 1px solid var(--accent-blue);
   border-radius: 6px;
   padding: 6px 16px;

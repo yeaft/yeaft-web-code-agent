@@ -950,7 +950,7 @@
   background: var(--bg-input);
   color: var(--text-primary);
   font-size: 13px;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   outline: none;
 }
 

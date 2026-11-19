@@ -1,7 +1,9 @@
 import { renderMarkdown, renderMermaidIn } from '../utils/markdown.js';
+import NavigationIcon from './NavigationIcon.js';
 
 export default {
   name: 'SubAgentPanel',
+  components: { NavigationIcon },
   props: {
     visible: { type: Boolean, default: false }
   },
@@ -12,14 +14,14 @@ export default {
       <template v-if="store.activeSubagentId && activeAgent">
         <div class="subagent-panel-header subagent-expanded-header">
           <button class="subagent-back-btn" @click="closeExpanded" :aria-label="$t('subAgentPanel.back')">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+            <NavigationIcon name="back" :size="16" />
           </button>
           <span class="subagent-expanded-slug">{{ activeAgent.slug }}</span>
           <span class="subagent-type-badge">{{ activeAgent.type }}</span>
           <span v-if="activeAgent.toolCallCount" class="subagent-type-badge">{{ $t('subAgentPanel.toolCount', { count: activeAgent.toolCallCount }) }}</span>
           <span class="subagent-status-dot" :class="{ 'is-running': activeAgent.status === 'running' }"></span>
           <button class="subagent-panel-close" @click="$emit('close')" :aria-label="$t('common.close')">
-            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            <NavigationIcon name="close" :size="14" />
           </button>
         </div>
         <div class="subagent-messages" ref="messagesRef">
@@ -48,7 +50,7 @@ export default {
             <span class="subagent-panel-count" v-if="allSubagents.length > 0">({{ allSubagents.length }})</span>
           </span>
           <button class="subagent-panel-close" @click="$emit('close')" :aria-label="$t('common.close')">
-            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            <NavigationIcon name="close" :size="14" />
           </button>
         </div>
 

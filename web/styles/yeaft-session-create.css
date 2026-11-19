@@ -116,16 +116,21 @@
 }
 
 .yeaft-session-create-modal .resume-modal-footer {
-  padding: 14px 24px 18px;
+  padding: var(--space-4) var(--space-6) var(--space-5);
   border-top: 0;
 }
 
+/* The primary action matches the 42px field rhythm and corner radius above. */
 .yeaft-session-create-modal .yeaft-create-submit {
   min-width: 116px;
+  min-height: 42px;
+  padding: 0 var(--space-5);
   justify-content: center;
   border: 0;
+  border-radius: 10px;
   background: var(--accent);
   color: var(--accent-fg);
+  font-size: var(--font-size-md);
 }
 
 .yeaft-session-create-modal .yeaft-create-submit:hover:not(:disabled) {

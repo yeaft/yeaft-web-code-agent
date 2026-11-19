@@ -537,11 +537,12 @@
   padding: 10px 12px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   color: var(--text-primary);
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
+select.vp-crud-input { padding-right: 32px; }
 .vp-crud-input:focus,
 .vp-crud-textarea:focus {
   border-color: var(--accent-blue);
@@ -693,7 +694,7 @@
   border-radius: 6px;
   background: var(--bg-user-msg);
   color: var(--text-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.5;
   white-space: pre-wrap;

@@ -15,6 +15,7 @@ import { createFileTabs } from './files/fileTabs.js';
 import { createWsHandler } from './files/wsHandler.js';
 import { directoryBreadcrumbs, normalizeBrowserPath } from '../utils/folder-picker-path.js';
 import { openImagePreview } from '../utils/imagePreview.js';
+import NavigationIcon from './NavigationIcon.js';
 import {
   createRouteBoundWorkbenchStore,
   workbenchRouteKey,
@@ -131,7 +132,7 @@ export function createFileCloseEventHandlers({ liveStore, props, tabs, isDispose
 
 export default {
   name: 'FilesTab',
-  components: { SvgPreview, CsvPreview, FilePreviewFallback, SpreadsheetPreview },
+  components: { NavigationIcon, SvgPreview, CsvPreview, FilePreviewFallback, SpreadsheetPreview },
   props: {
     treeInitiallyVisible: { type: Boolean, default: true },
     routeKey: { type: String, required: true },
@@ -227,7 +228,7 @@ export default {
             <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6 12l-4-4h3V10h2v4h3l-4 4z"/></svg>
           </button>
           <button class="wb-btn-sm" @click="clearSelection" :title="$t('files.clearSelection')">
-            <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            <NavigationIcon name="close" :size="12" />
           </button>
         </div>
         <!-- 操作反馈 -->
@@ -311,7 +312,7 @@ export default {
         <!-- Mobile back navigation bar -->
         <div class="mobile-file-back-bar" v-if="isMobile">
           <button class="mobile-back-btn" @click="mobileGoBack">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+            <NavigationIcon name="back" :size="18" />
             {{ $t('common.back') }}
           </button>
           <span class="mobile-file-name">
@@ -403,7 +404,7 @@ export default {
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M11 6c1.38 0 2.63.56 3.54 1.46L12 10h6V4l-2.05 2.05A6.976 6.976 0 0011 4c-3.53 0-6.43 2.61-6.92 6H6.1A5.002 5.002 0 0111 6zm5.64 9.14A6.98 6.98 0 0011 20c-3.53 0-6.43-2.61-6.92-6h2.02A5.002 5.002 0 0011 18c1.38 0 2.63-.56 3.54-1.46L12 14h6v6l-2.05-2.05c-.27.3-.56.57-.88.82l.57.57z"/></svg>
               </button>
               <button class="find-btn" @click="closeFindBar" :title="$t('common.close') + ' (Esc)'">
-                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                <NavigationIcon name="close" :size="14" />
               </button>
             </div>
             <div class="find-row" v-if="replaceBarVisible">
@@ -514,7 +515,7 @@ export default {
           </div>
           <div class="folder-picker-path">
             <button class="wb-btn-sm" @click="folderPickerNavigateUp" :disabled="!folderPickerPath" :title="$t('modal.folderPicker.parentDir')">
-              <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+              <NavigationIcon name="back" :size="12" />
             </button>
             <span class="folder-picker-current">{{ folderPickerPath || $t('common.drives') }}</span>
           </div>
