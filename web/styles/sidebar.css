@@ -24,6 +24,83 @@
   border-right: 1px solid var(--border-color);
 }
 
+/* Desktop: a width saved on a wide window still leaves the content its 480px
+   (SessionSidebarResizeHandle's min-remaining) when the window narrows, so
+   the rendered width, aria-valuenow and arrow keys always agree. */
+@media (min-width: 769px) {
+  .session-sidebar-shell:not(.collapsed) {
+    width: clamp(220px, var(--session-sidebar-width), max(220px, 100vw - 480px));
+    min-width: clamp(220px, var(--session-sidebar-width), max(220px, 100vw - 480px));
+  }
+}
+
+/* Width divider after a desktop sidebar (SessionSidebarResizeHandle). Zero net
+   width: the hit area overlays the first 8px of the content, leaving the
+   sidebar's 8px scrollbar alone; the line sits on the seam. */
+.session-sidebar-resize-handle {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 8px;
+  margin: 0 -8px 0 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.session-sidebar-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -1px;
+  width: 2px;
+  background: transparent;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+/* Neutral feedback like the other Session dividers; the short delay keeps a
+   pointer that merely crosses the edge from flashing the line. */
+.session-sidebar-resize-handle:hover::after {
+  background: var(--text-muted);
+  transition-delay: 150ms;
+}
+
+.session-sidebar-resize-handle.is-dragging::after {
+  background: var(--text-secondary);
+  transition-delay: 0s;
+}
+
+.session-sidebar-resize-handle:focus-visible {
+  outline: none;
+}
+
+.session-sidebar-resize-handle:focus-visible::after {
+  background: var(--focus-ring-color);
+}
+
+/* Follow the pointer exactly while dragging. */
+.session-sidebar-shell:has(+ .session-sidebar-resize-handle.is-dragging) {
+  transition: none;
+}
+
+@media (pointer: coarse) {
+  .session-sidebar-resize-handle {
+    flex-basis: 16px;
+    margin-right: -16px;
+  }
+}
+
+@media (max-width: 768px) {
+  .session-sidebar-resize-handle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-sidebar-resize-handle::after {
+    transition: none;
+  }
+}
+
 /* Sidebar / Workbench 分隔线 */
 .sidebar-workbench-divider {
   width: 1px;

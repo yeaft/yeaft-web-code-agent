@@ -363,10 +363,10 @@ select option:checked {
   --yeaft-header-folder-max-width: 280px;
   --yeaft-header-folder-font-size: 12px;
   /* Fonts */
-  /* System UI fonts with explicit CJK faces so Chinese never falls back to a
-     random serif/bitmap face (Segoe UI and Roboto carry no Han glyphs). */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', Roboto, 'Helvetica Neue', sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', 'PingFang SC', 'Microsoft YaHei UI', monospace;
+  /* System UI faces. Chinese uses the browser's own CJK fallback for the
+     generic family (Microsoft YaHei on Windows, PingFang on Apple). */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   /* Plugins Center presentation geometry. Keep new UI measurements tokenized. */
   --plugin-center-space-1: 1px;
   --plugin-center-space-2: 2px;
@@ -475,12 +475,13 @@ select option:checked {
   --accent: #d8d5d0;
   --accent-hover: #b5b2ad;
   --accent-fg: #1a1a1a;
-  /* Same blue identity as light, quieter and lifted for dark (7.8:1 on
-     --bg-main); text on it uses --accent-fg. Hover moves lighter, not darker. */
-  --accent-blue: #8db0e2;
+  /* Dark deliberately keeps a neutral warm-grey accent, not blue: focus,
+     selection, links and switches stay quiet on dark surfaces (8.2:1 on
+     --bg-main); text on it uses --accent-fg. */
+  --accent-blue: #b5b2ad;
   --settings-control-active: var(--accent-blue);
   --settings-switch-knob: #fafaf8;
-  --accent-blue-hover: #a9c4ec;
+  --accent-blue-hover: #9a9792;
   --error: #d09090;
   --success: #7ab87e;
   --code-bg: var(--bg-sidebar);
@@ -578,13 +579,13 @@ select option:checked {
   --text-main: var(--text-primary);
   --bg-secondary: var(--bg-sidebar);
   --accent-color: var(--accent);
-  --accent-soft: rgba(141, 176, 226, 0.08);
-  --accent-bg: rgba(141, 176, 226, 0.08);
-  --mention-bg: rgba(141, 176, 226, 0.12);
+  --accent-soft: rgba(181, 178, 173, 0.08);
+  --accent-bg: rgba(181, 178, 173, 0.08);
+  --mention-bg: rgba(181, 178, 173, 0.12);
   --pinned-bg: rgba(205, 180, 121, 0.10);
   --link-color: var(--accent-blue);
   --task-accent: var(--accent-blue);
-  --task-accent-bg: rgba(141, 176, 226, 0.12);
+  --task-accent-bg: rgba(181, 178, 173, 0.12);
   --error-text: var(--error);
   --error-bg: rgba(208, 144, 144, 0.12);
   --danger-color: var(--error);
@@ -622,11 +623,11 @@ select option:checked {
   --terminal-bg-bright-magenta: #4a3658;
   --terminal-bg-bright-cyan: #304d50;
   --terminal-bg-bright-white: #3a3835;
-  --focus-ring: rgba(141, 176, 226, 0.24);
+  --focus-ring: rgba(181, 178, 173, 0.22);
   /* Usage / price tags (dark) */
   --tag-low-bg: rgba(122, 184, 126, 0.16);
   --tag-low-fg: var(--success);
-  --tag-medium-bg: rgba(141, 176, 226, 0.16);
+  --tag-medium-bg: rgba(181, 178, 173, 0.16);
   --tag-medium-fg: var(--accent-blue);
   --tag-high-bg: rgba(201, 159, 99, 0.18);
   --tag-high-fg: #d6a87a;
@@ -782,8 +783,6 @@ body {
   height: 100%;
   height: 100dvh;
   overflow: hidden;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   transition: background-color 0.2s, color 0.2s;

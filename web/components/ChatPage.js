@@ -18,6 +18,7 @@ import SidebarAgentHeader from './SidebarAgentHeader.js';
 import SidebarWorkCenter from './SidebarWorkCenter.js';
 import SidebarDigitalPerson from './SidebarDigitalPerson.js';
 import SessionSidebarShell from './SessionSidebarShell.js';
+import SessionSidebarResizeHandle from './SessionSidebarResizeHandle.js';
 import UnifiedSessionList from './UnifiedSessionList.js';
 import SessionCreateModal from './SessionCreateModal.js';
 import WorkCenterPage from './WorkCenterPage.js';
@@ -31,7 +32,7 @@ import { collapseSidebar } from '../utils/sidebar-collapse.js';
 
 export default {
   name: 'ChatPage',
-  components: { NavigationIcon, DigitalPersonPage, ScheduledTaskNotifications, FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, UnifiedSessionList, SessionCreateModal },
+  components: { NavigationIcon, DigitalPersonPage, ScheduledTaskNotifications, FolderPickerDialog, ChatHeader, MessageList, ChatInput, WorkbenchPanel, WorkCenterPage, PluginCenterPage, SettingsPanel, AgentSettingsPanel, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarAgentHeader, SidebarWorkCenter, SidebarDigitalPerson, SessionSidebarShell, SessionSidebarResizeHandle, UnifiedSessionList, SessionCreateModal },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': store.sessionSidebarOpen }">
 
@@ -39,7 +40,7 @@ export default {
       <div :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" class="sidebar-overlay" v-if="store.sessionSidebarOpen && !store.workCenterOpen" @click="store.closeSessionSidebar()"></div>
 
       <!-- Left Sidebar -->
-      <SessionSidebarShell v-show="!store.workCenterOpen" class="sidebar" :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" :collapsed="effectiveSidebarCollapsed">
+      <SessionSidebarShell id="session-sidebar" v-show="!store.workCenterOpen" class="sidebar" :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" :collapsed="effectiveSidebarCollapsed">
         <template #collapsed>
         <!-- Collapsed Icon Bar -->
         <div class="sidebar-collapsed-bar" v-if="effectiveSidebarCollapsed">
@@ -144,6 +145,8 @@ export default {
           </button>
         </div>
       </SessionSidebarShell>
+      <SessionSidebarResizeHandle v-if="!store.workCenterOpen && !effectiveSidebarCollapsed && !isMobileView"
+        :inert="store.digitalPersonOpen && digitalPersonModalOpen ? true : undefined" controls="session-sidebar" />
 
       <ScheduledTaskNotifications :store="store" />
       <DigitalPersonPage v-if="store.digitalPersonOpen" @toggle-sidebar="store.toggleSessionSidebar()" @interaction-blocked="digitalPersonModalOpen = $event" />
