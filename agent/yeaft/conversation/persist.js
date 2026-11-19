@@ -2306,7 +2306,7 @@ export class ConversationStore {
     return operation;
   }
 
-  /** Idempotent physical cleanup, safe to retry after an interrupted rewrite. */
+  /** Offline cleanup only; caller must stop all writers, including old versions. */
   pruneDeletedSessionTurnRows(sessionId) {
     const { operations } = readSessionTurnDeletions(this.#dir, sessionId);
     if (!operations.length) return;

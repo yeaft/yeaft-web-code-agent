@@ -10,6 +10,8 @@ import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversati
 import { DebugTrace, NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { seedDefaultVps } from '../../../agent/yeaft/vp/seed-defaults.js';
 import { createSessionFromSpec, snapshotSessions } from '../../../agent/yeaft/sessions/session-crud.js';
+import { openSession } from '../../../agent/yeaft/sessions/session-store.js';
+import { pruneDeletedSessionTurnsOffline } from '../../../agent/yeaft/cli.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 
 let root;
@@ -435,6 +437,9 @@ it('deletes a finished Session input, coordinator audit and raw loops, and exclu
   expect(store.loadAllBySession(sessionId)).toEqual([]);
   const sessionDir = join(root, 'sessions', sessionId);
   expect(readdirSync(join(sessionDir, 'debug', 'requests'))).toEqual([]);
+  await send('deleted-client-id', 'deleted-special-request');
+  await bridge.__testDrainVpDrivers();
+  expect(requests).toHaveLength(1);
   await bridge.handleYeaftSessionSend({ sessionId, id: 'next-user', text: 'next question', quote: {
     id: row.id, role: 'user', content: 'deleted-special-request',
   } });
@@ -442,8 +447,13 @@ it('deletes a finished Session input, coordinator audit and raw loops, and exclu
   expect(requests).toHaveLength(2);
   expect(requests[1]).not.toContain('deleted-special');
   const logDir = join(sessionDir, 'messages');
-  const messages = readdirSync(logDir).filter(file => file.endsWith('.jsonl')).map(file => readFileSync(join(logDir, file), 'utf8')).join('\n');
-  expect(messages).not.toContain('deleted-special');
-  expect(messages).toContain('next question');
+  const readLog = () => readdirSync(logDir).filter(file => file.endsWith('.jsonl')).map(file => readFileSync(join(logDir, file), 'utf8')).join('\n');
+  const audit = openSession(join(root, 'sessions'), sessionId);
+  expect(Array.from(audit.streamMessages()).map(row => row.text)).toEqual(['next question']);
+  audit.close();
+  expect(readLog()).toContain('deleted-special'); // Never rewrite shared segments while online.
+  await expect(pruneDeletedSessionTurnsOffline(root, sessionId)).resolves.toBe(1);
+  expect(readLog()).not.toContain('deleted-special');
+  expect(readLog()).toContain('next question');
   await until(() => ctx.outboundSendQueue.length === 0 && !ctx.outboundSendQueueActive);
 });

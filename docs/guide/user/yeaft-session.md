@@ -48,7 +48,9 @@ Existing Sessions keep their complete messages, membership, and custom definitio
 
 在原生 Yeaft Session 空闲时，会话所有者可以在自己发送的消息下选择 **删除轮次** 并确认。选择原始提问或任意一条补充消息，删除的都是整个 Turn：所有用户输入、VP 回复、模型 Loop 及工具调用和返回结果。无法安全确定归属的旧记录不会删除。
 
-删除后，历史、搜索和新的模型请求不再读取该轮次。此操作不能撤销，但不会回滚已经执行的工具操作、修改过的工作区文件，也不会修改早已复制到其他 Session 或后来回复中已经复述的内容。若清理部分本机文件失败，界面会明确提示；该轮次仍不会进入后续上下文。该功能需要 Agent、Server 和 Web 同步更新，不适用于定时任务 Session、数字人或 CLI 对话。
+删除后，历史、搜索、调试面板和新的模型请求不再读取该轮次，独立的 Loop 与工具调试记录也会清理。为避免旧版进程正在写入时丢失其他消息，在线删除不会重写会话的追加日志：历史和模型已无法访问这些记录，但原始字节可能仍在本机。管理员需要进一步清理时，先备份并停止这个数据目录的所有 Agent、CLI 和维护进程，再针对准确的 Session ID 运行 `node agent/yeaft/cli.js --prune-deleted-session-turns-offline <sessionId>`。这不是安全擦除备份或后来请求中已经复制的内容。
+
+此操作不可撤销，不回滚工具已经执行的操作或工作区文件，也不修改已分叉的 Session 或其他回复里的转述。删除入口需要 Agent、Server 和 Web 同步更新，不适用于定时任务 Session、数字人或 CLI 对话。
 
 ## Fork the current Session
 

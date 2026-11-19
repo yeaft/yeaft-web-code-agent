@@ -17,11 +17,17 @@ export function planTurnDeletion({ rows, sessionId, streamId }, messageId) {
     : row.clientMessageId ? scope(row, JSON.stringify(['legacy-client', row.clientMessageId, row.time || row.ts || null]))
       : scope(row, JSON.stringify(['legacy-row', row.id]));
   const human = new Map();
+  const newClientsByRoot = new Map();
   const clients = new Map();
   for (const row of rows.filter(interactive)) {
     const key = rootKey(row);
     human.set(row.id, key);
     const client = scope(row, row.clientMessageId);
+    if (row.userTurnId && client && row.relation !== 'supplement') {
+      const newClients = newClientsByRoot.get(key) || new Set();
+      newClients.add(client);
+      newClientsByRoot.set(key, newClients);
+    }
     if (client) {
       const keys = clients.get(client) || new Set();
       keys.add(key);
@@ -29,6 +35,7 @@ export function planTurnDeletion({ rows, sessionId, streamId }, messageId) {
     }
   }
   const target = human.get(messageId);
+  if ((newClientsByRoot.get(target)?.size || 0) > 1) throw bad();
   const knownRoots = new Set(human.values());
   function explicit(row, seen = new Set()) {
     if (human.has(row.id)) return human.get(row.id);
@@ -54,19 +61,38 @@ export function planTurnDeletion({ rows, sessionId, streamId }, messageId) {
     if (keys.size > 1 && keys.has(target)) throw bad();
     executions.set(exec, keys);
   }
+  // Legacy executions can be interleaved even if their rows predate explicit
+  // causal IDs. Learn every observed boundary first, never choose the last one.
+  const boundaries = new Map();
+  const legacyExecutions = new Map();
+  let current = null;
+  for (const row of rows) {
+    if (interactive(row)) current = row;
+    if (!current || stream(current) !== stream(row)) continue;
+    const boundary = human.get(current.id);
+    boundaries.set(row.id, { boundary, legacy: !current.userTurnId });
+    const key = execution(row);
+    if (!key || direct.get(row.id)) continue;
+    const candidates = legacyExecutions.get(key) || new Set();
+    candidates.add(boundary);
+    legacyExecutions.set(key, candidates);
+  }
+  for (const [key, candidates] of legacyExecutions) {
+    if (executions.has(key)) continue; // An explicit root already owns the execution.
+    if (candidates.size > 1 && candidates.has(target)) throw bad();
+  }
   const removed = new Set();
   const byCall = new Map();
   const unresolvedTools = [];
-  let current = null;
   for (const row of rows) {
-    // Legacy, sequential records without stable metadata use the closest
-    // human boundary from the same origin. Modern turns must prove ownership.
-    if (interactive(row)) current = row;
-    const keys = executions.get(execution(row));
+    const key = execution(row);
+    const keys = executions.get(key);
     const owner = direct.get(row.id) || (keys?.size === 1 ? keys.values().next().value : null);
-    const legacy = !owner && current && !current.userTurnId && stream(current) === stream(row)
-      && ['assistant', 'tool', 'user'].includes(row.role) && !row.causalRootId;
-    if (owner === target || (legacy && human.get(current.id) === target)) removed.add(row.id);
+    const boundary = boundaries.get(row.id);
+    const plausibleLegacy = !owner && boundary?.boundary === target && !row.causalRootId
+      && (!key || legacyExecutions.get(key)?.size === 1) && ['assistant', 'tool', 'user'].includes(row.role);
+    if (owner === target || (plausibleLegacy && boundary.legacy)) removed.add(row.id);
+    else if (plausibleLegacy && row.role === 'assistant' && !row._reflection) throw bad();
     for (const call of Array.isArray(row.toolCalls) ? row.toolCalls : []) {
       if (!call?.id) continue;
       const key = scope(row, call.id);

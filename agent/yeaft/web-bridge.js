@@ -106,7 +106,8 @@ import {
   resolveSessionYeaftDir,
   findExistingSessionYeaftDir,
 } from './sessions/session-crud.js';
-import { openSession, loadSessionMeta, SESSION_META_FILE, pruneDeletedCoordinatorMessages } from './sessions/session-store.js';
+import { openSession, loadSessionMeta, SESSION_META_FILE } from './sessions/session-store.js';
+import { tryAcquireSessionTurnDeletion } from './sessions/session-turn-fence.js';
 import { validateSessionId } from './sessions/ids.js';
 import { publicScheduledTask } from './sessions/scheduled-task-definition.js';
 import { ScheduledTaskScheduler, SCHEDULED_TASK_DISPATCH_GUARD } from './sessions/scheduled-task-scheduler.js';
@@ -4402,7 +4403,7 @@ export async function handleYeaftDeleteTurn(msg = {}) {
   const { sessionId, requestId, messageId } = msg;
   const result = { type: 'yeaft_session_delete_turn_result', sessionId, requestId };
   let operation;
-  let locked = false;
+  let releaseDeletion;
   let cleanupPending = false;
   try {
     const root = ctx.CONFIG?.yeaftDir;
@@ -4418,8 +4419,9 @@ export async function handleYeaftDeleteTurn(msg = {}) {
       || sessionCopyRecoveryTasks(sessionId).length) {
       throw historyError('session_running', 'Stop all work in this Session before deleting a turn.');
     }
+    releaseDeletion = tryAcquireSessionTurnDeletion(sessionDir);
+    if (!releaseDeletion) throw historyError('session_running', 'Stop all work in this Session before deleting a turn.');
     turnDeletionsInProgress.add(sessionId);
-    locked = true;
     const store = new ConversationStore(ownerRoot);
     // Synchronous commit and cache invalidation: no send or task can take a
     // snapshot between these steps. Async cleanup only touches scoped trace IDs.
@@ -4431,9 +4433,7 @@ export async function handleYeaftDeleteTurn(msg = {}) {
     for (const [key, row] of _persistedInboundRows) {
       if (row?.sessionId === sessionId && affected.has(row.id)) _persistedInboundRows.delete(key);
     }
-    const coordinator = sessionContexts.get(sessionId)?.sessionHandle;
-    // The coordinator owns an open append fd. Retire it before rewriting its
-    // log, otherwise later inputs could be written to an unlinked inode.
+    sessionContexts.get(sessionId)?.sessionHandle?.close?.();
     invalidateGroupContext(sessionId, { abortRuntime: true });
     for (const key of vpEngines.keys()) {
       if (key.startsWith(`${sessionId}::`)) retireCachedVpEngine(key, { reason: 'turn_deleted', rescue: false });
@@ -4444,14 +4444,9 @@ export async function handleYeaftDeleteTurn(msg = {}) {
       }
     }
     if (referenceIds.has(operation.turnId)) sessionUserTurns.get(sessionId)?.delete(operation.turnId);
-    const clean = (fn) => {
-      try { fn(); } catch (error) {
-        cleanupPending = true;
-        console.warn('[Yeaft] Session turn cleanup failed:', error?.code || error?.name);
-      }
-    };
-    clean(() => { coordinator?.close?.(); pruneDeletedCoordinatorMessages(sessionDir, operation); });
-    clean(() => store.pruneDeletedSessionTurnRows(sessionId));
+    // Older writers may hold an append fd and do not participate in the
+    // admission lock. Keep segment bytes intact online; the committed journal
+    // is authoritative for history, coordinator replay, search and context.
     try {
       // Debug collection is opt-in. Files from an earlier debug-enabled run
       // still need deletion even when the current runtime uses NullTrace.
@@ -4462,7 +4457,6 @@ export async function handleYeaftDeleteTurn(msg = {}) {
         await scopedTrace.deleteSessionTurns({ sessionId, turnIds: operation.executionIds,
           messageIds: [...operation.anchorMessageIds, ...operation.clientMessageIds] });
       }
-
     } catch (error) {
       cleanupPending = true;
       console.warn('[Yeaft] Session turn trace cleanup failed:', error?.code || error?.name);
@@ -4478,7 +4472,10 @@ export async function handleYeaftDeleteTurn(msg = {}) {
     cleanupPending = true;
     console.warn('[Yeaft] Post-deletion cleanup failed:', error?.code || error?.name);
   } finally {
-    if (locked) turnDeletionsInProgress.delete(sessionId);
+    if (releaseDeletion) {
+      turnDeletionsInProgress.delete(sessionId);
+      releaseDeletion();
+    }
   }
   // Use one stable, opaque notification identity even for legacy/merged turns
   // whose user/VP IDs are not safe (or unique) as wire correlations.
@@ -5960,14 +5957,18 @@ async function dispatchAcceptedSessionSend({
     await withSessionRouting(sessionId, async () => {
       const messageId = ingress.messageId;
       if (ingress.cancelled) return;
+      const ownerRoot = findExistingSessionYeaftDir(yeaftDir, sessionId);
+      const { operations } = readSessionTurnDeletions(ownerRoot, sessionId);
+      // A stale tab must not resurrect the same request by retransmitting its ID.
+      if (operations.some(op => op.clientMessageIds.includes(messageId))) {
+        sendSessionOutputFrame({ type: 'error', code: 'message_deleted', message: 'This request was deleted.', clientMessageId: messageId }, { sessionId });
+        sendSessionOutputFrame({ type: 'result', result_text: '', is_error: true }, { sessionId });
+        return;
+      }
+      if (quote?.id && sessionDeletionProjection(operations).references.has(quote.id)) quote = null;
       const routing = await classifySessionUserInput(sessionId, messageId, text, ingress, turnConfig,
         sceneId ? [] : (mentions.length ? mentions : coord.parseMentions(text)), sceneId);
       if (!routing) return;
-      if (quote?.id) {
-        const ownerRoot = findExistingSessionYeaftDir(yeaftDir, sessionId);
-        const { operations } = readSessionTurnDeletions(ownerRoot, sessionId);
-        if (sessionDeletionProjection(operations).references.has(quote.id)) quote = null;
-      }
       report = coord.ingest({
         id: messageId,
         _userTurnRouting: routing,

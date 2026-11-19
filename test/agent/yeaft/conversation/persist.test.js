@@ -573,7 +573,7 @@ describe('ConversationStore', () => {
 describe('Session turn deletion', () => {
   it('removes an interleaved supplemented turn, rebuilding search while preserving neighboring rows and fork history', async () => {
     const { searchMessages } = await import('../../../../agent/yeaft/conversation/search.js');
-    const { searchConversationIndex, recallConversationTurns } = await import('../../../../agent/yeaft/conversation/history-index.js');
+    const { searchConversationIndex, recallConversationTurns, loadConversationOutlineFromIndex } = await import('../../../../agent/yeaft/conversation/history-index.js');
     const store = new ConversationStore(TEST_DIR);
     const sessionId = 'session_turn_delete';
     const push = (role, content, extra) => store.append({ sessionId, role, content, ...extra });
@@ -603,6 +603,10 @@ describe('Session turn deletion', () => {
     expect((await searchConversationIndex(TEST_DIR, sessionId, 'zebra')).results).toEqual([]);
     expect((await recallConversationTurns(TEST_DIR, sessionId, 'tombstone zebra', { beforeSeq: quote.seq + 1 })).turns).toEqual([]);
     expect(restart.loadAllBySession(sessionId).at(-1)).not.toHaveProperty('quote');
+    push('assistant', 'tombstone late-write', { causalRootId: root.id, turnId: 'old-cli-tail' });
+    const outline = await loadConversationOutlineFromIndex(TEST_DIR, sessionId);
+    expect(JSON.stringify(outline)).not.toContain('zebra');
+    expect(searchMessages(TEST_DIR, 'late-write', 20, { sessionIds: [sessionId] })).toEqual([]);
     expect(restart.loadAllBySession(copied).some(row => row.content.includes('tombstone zebra alpha'))).toBe(true);
     restart.copySession(sessionId, 'session_post_delete_copy');
     expect(restart.loadAllBySession('session_post_delete_copy').map(row => row.content))
@@ -624,4 +628,20 @@ describe('Session turn deletion', () => {
     expect(() => store.deleteSessionTurn(sessionId, second.id)).toThrow(expect.objectContaining({ code: 'ambiguous_turn' }));
     expect(store.loadAllBySession(sessionId).map(row => row.id)).toEqual([first.id, second.id, response.id]);
   });
+
+  it('refuses both legacy roots when an unowned VP execution straddles their boundary', () => {
+    const store = new ConversationStore(TEST_DIR);
+    const sessionId = 'session_straddled';
+    const push = (role, content, extra) => store.append({ sessionId, role, content, ...extra });
+    const a = push('user', 'first request');
+    const first = push('assistant', 'A first output', { turnId: 'legacy-a', speakerVpId: 'omni' });
+    const b = push('user', 'second request');
+    const late = push('assistant', 'A trailing output', { turnId: 'legacy-a', speakerVpId: 'omni' });
+    const last = push('assistant', 'B output', { turnId: 'legacy-b', speakerVpId: 'omni' });
+    for (const id of [a.id, b.id]) {
+      expect(() => store.deleteSessionTurn(sessionId, id)).toThrow(expect.objectContaining({ code: 'ambiguous_turn' }));
+    }
+    expect(store.loadAllBySession(sessionId).map(row => row.id)).toEqual([a.id, first.id, b.id, late.id, last.id]);
+  });
+
 });

@@ -41,8 +41,17 @@ export function commitSessionTurnDeletion(ownerRoot, sessionId, operations, oper
 export function sessionDeletionProjection(operations) {
   const deletedIds = new Set(operations.flatMap(op => op.messageIds));
   const references = new Set(operations.flatMap(op => op.referenceIds));
+  const localTurnIds = new Set(operations.filter(op => op.clientMessageIds.includes(op.turnId)).map(op => op.turnId));
+  const clientIds = new Set(operations.flatMap(op => op.clientMessageIds));
+  const executions = new Set(operations.flatMap(op => op.executionIds));
   const scrub = row => {
     if (!row || deletedIds.has(row.id)) return null;
+    // Old processes may append after the deletion commit. Exclude only exact,
+    // local ownership, never an imported row's coincidentally reused ID.
+    if ((!row.origin || row.origin.sessionId === row.sessionId)
+        && (deletedIds.has(row.causalRootId) || clientIds.has(row.causalRootId)
+          || localTurnIds.has(row.userTurnId) || clientIds.has(row.clientMessageId)
+          || executions.has(row.turnId))) return null;
     if (references.has(row.quote?.id || row.quote?.messageId)) {
       const { quote, ...kept } = row;
       return kept;
@@ -58,4 +67,10 @@ export function sessionTurnTraceTombstones(ownerRoot, sessionId) {
     turnIds: new Set(operations.flatMap(op => op.executionIds)),
     messageIds: new Set(operations.flatMap(op => [...op.anchorMessageIds, ...op.clientMessageIds])),
   };
+}
+
+/** Durable fence for derived context: old summaries may include ANY earlier turn. */
+export function sessionDeletionGeneration(ownerRoot, sessionId) {
+  const { operations } = readSessionTurnDeletions(ownerRoot, sessionId);
+  return operations.at(-1)?.deletionId || (operations.length ? `deleted-${operations.length}` : '');
 }

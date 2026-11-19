@@ -504,6 +504,8 @@ stops or finalizes work no longer needed.`,
       parentVpId: callerScope.parentVpId,
       parentSessionId: callerScope.sessionId,
       parentThreadId: callerScope.parentThreadId,
+      parentCausalRootId: cleanString(ctx?.causalRootId),
+      parentUserTurnId: cleanString(ctx?.userTurnId),
       abortController: new AbortController(),
     };
 

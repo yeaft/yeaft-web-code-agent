@@ -2,6 +2,7 @@ import { Worker } from 'node:worker_threads';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { writeAtomic } from '../storage/atomic.js';
+import { sessionDeletionGeneration } from './turn-deletion-journal.js';
 import { extractRecallTerms, scoreRecallTurn, normalizeRecallLimit } from './recall-relevance.js';
 import {
   HISTORY_INDEX_SCHEMA_VERSION,
@@ -464,7 +465,9 @@ class SessionHistoryIndex {
     try {
       if (op === 'recall-turns') return await this.recall(payload);
       const mutation = readConversationMutationInfo(this.ownerRoot, 'session', this.sessionId);
+      const deletionGeneration = op === 'outline' ? sessionDeletionGeneration(this.ownerRoot, this.sessionId) : '';
       const allowStale = op === 'outline'
+        && !deletionGeneration
         && !payload?.cursor
         && !DESTRUCTIVE_MUTATION_REASONS.has(mutation.reason);
       const waitForBuild = payload?._waitForBuild === true;
@@ -472,6 +475,9 @@ class SessionHistoryIndex {
       try {
         if (allowStale) {
           const result = await worker.request(op, payload);
+          if (sessionDeletionGeneration(this.ownerRoot, this.sessionId) !== deletionGeneration) {
+            return await this.#strictRequest(op, payload);
+          }
           this.#reconcileActiveSource().catch(error => {
             if (!this.closed) {
               console.warn('[history-index] background source reconcile failed:', error?.message || error);
@@ -483,9 +489,7 @@ class SessionHistoryIndex {
       } catch (error) {
         if (error?.code === 'stale_result' || this.closed) throw error;
         await this.rebuild();
-        return allowStale
-          ? this.active.request(op, payload)
-          : this.#strictRequest(op, payload, 0);
+        return this.#strictRequest(op, payload, 0);
       }
     } finally {
       this.leases -= 1;

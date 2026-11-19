@@ -2090,7 +2090,7 @@ export default {
   'yeaft.session.copy': 'Copy session',
   'yeaft.session.forkFromTurn': 'Fork from this turn',
   'yeaft.deleteTurn.action': 'Delete turn',
-  'yeaft.deleteTurn.confirm': 'Permanently delete the entire turn, including this message, any appended messages, and all replies and tool activity? This cannot be undone.',
+  'yeaft.deleteTurn.confirm': 'Delete the entire turn, including this message, any appended messages, and all replies and tool activity? It will not be used in future replies. This cannot be undone.',
   'yeaft.deleteTurn.pending': 'Deleting turn…',
   'yeaft.deleteTurn.refreshing': 'Refreshing Session history…',
   'yeaft.deleteTurn.offline': 'The Agent is offline. Reconnect and try again.',

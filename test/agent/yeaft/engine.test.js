@@ -7,6 +7,7 @@ import { Engine } from '../../../agent/yeaft/engine.js';
 import { AdapterRouter } from '../../../agent/yeaft/llm/router.js';
 import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
 import { closeConversationHistoryIndexes } from '../../../agent/yeaft/conversation/history-index.js';
+import { loadPostCompact, postCompactPath, savePostCompact } from '../../../agent/yeaft/post-compact.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { _setMemCacheForTest } from '../../../agent/yeaft/llm/models-dev.js';
 import { providerProjectionDigest } from '../../../agent/yeaft/llm/provider-state.js';
@@ -115,6 +116,52 @@ describe('Engine', () => {
           { role: 'assistant', content: 'one reply' },
         ]);
       } finally {
+        await closeConversationHistoryIndexes();
+        rmSync(yeaftDir, { recursive: true, force: true });
+      }
+    });
+
+    it('fences old disk and memory compaction, including a background summary finishing after deletion', async () => {
+      const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-delete-compaction-'));
+      const sessionId = 'session_deleted_compact';
+      const artifact = postCompactPath(yeaftDir, { sessionId, vpId: 'omni', threadId: 'main' });
+      const started = Promise.withResolvers();
+      const completion = Promise.withResolvers();
+      const conversationStore = new ConversationStore(yeaftDir);
+      try {
+        const deleted = conversationStore.append({ sessionId, role: 'user', content: 'ERASE_MARKER', userTurnId: 'delete-marker' });
+        await savePostCompact(artifact, { summary: 'ERASE_MARKER old disk summary', sourceTurnId: 'different-turn' });
+        mockAdapter.call = vi.fn(async () => {
+          started.resolve();
+          return completion.promise;
+        });
+        const engine = new Engine({ adapter: mockAdapter, trace, conversationStore, yeaftDir,
+          config: { model: 'test-model', modelInfo: { contextWindow: 50000, maxOutput: 1024 }, maxOutputTokens: 1024 } });
+        const run = async (target, prompt) => {
+          for await (const event of target.query({ sessionId, senderVpId: 'omni', prompt })) {
+            expect(event.type).not.toBe('error');
+          }
+        };
+        mockAdapter.pushResponse([{ type: 'text_delta', text: 'safe reply' }, { type: 'usage', inputTokens: 41000, outputTokens: 10 },
+          { type: 'stop', stopReason: 'end_turn' }]);
+        await run(engine, 'trigger background compact');
+        await started.promise;
+        expect(mockAdapter.callLog[0].system).toContain('ERASE_MARKER old disk summary');
+        conversationStore.deleteSessionTurn(sessionId, deleted.id);
+        completion.resolve({ text: 'ERASE_MARKER late compact' });
+        // Allow the detached completion to reach its write fence before any
+        // later query can advance the in-memory revision on its own.
+        await new Promise(resolve => setImmediate(resolve));
+        expect((await loadPostCompact(artifact)).summary).toBe('ERASE_MARKER old disk summary');
+        const reopened = new Engine({ adapter: mockAdapter, trace, conversationStore, yeaftDir,
+          config: { model: 'test-model', maxOutputTokens: 1024 } });
+        for (const target of [engine, reopened]) {
+          mockAdapter.pushResponse([{ type: 'text_delta', text: 'retained' }, { type: 'stop', stopReason: 'end_turn' }]);
+          await run(target, 'fresh request');
+          expect(JSON.stringify(mockAdapter.callLog.at(-1))).not.toContain('ERASE_MARKER');
+        }
+      } finally {
+        completion.resolve({ text: 'unused' });
         await closeConversationHistoryIndexes();
         rmSync(yeaftDir, { recursive: true, force: true });
       }

@@ -2087,7 +2087,7 @@ export default {
   'yeaft.session.copy': '复制会话',
   'yeaft.session.forkFromTurn': '从此轮分叉',
   'yeaft.deleteTurn.action': '删除轮次',
-  'yeaft.deleteTurn.confirm': '永久删除整个轮次，包括此消息、所有追加消息、回复和工具活动？此操作无法撤销。',
+  'yeaft.deleteTurn.confirm': '删除整个轮次，包括此消息、所有追加消息、回复和工具活动？后续回复将不再使用该轮次。此操作无法撤销。',
   'yeaft.deleteTurn.pending': '正在删除轮次…',
   'yeaft.deleteTurn.refreshing': '正在刷新会话历史…',
   'yeaft.deleteTurn.offline': 'Agent 已离线。请重新连接后再试。',

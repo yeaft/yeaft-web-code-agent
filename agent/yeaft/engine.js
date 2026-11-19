@@ -46,6 +46,8 @@ import {
 } from './history-window.js';
 import { recallConversationTurns } from './conversation/history-index.js';
 import { parseSeqFromId } from './conversation/persist.js';
+import { readSessionTurnDeletions, sessionDeletionGeneration, sessionDeletionProjection } from './conversation/turn-deletion-journal.js';
+import { findExistingSessionYeaftDir } from './sessions/session-crud.js';
 import { hydratePersistedAttachmentHistory } from './attachments.js';
 import { isVpForeign, readContent as readScopeContent } from './memory/store.js';
 import { ActiveMemorySet } from './memory/ams.js';
@@ -783,7 +785,7 @@ export class Engine {
 
   /** Derived post-response summaries, keyed by Session/VP/thread scope. */
   #postCompactSummaries = new Map();
-  #postCompactLoaded = new Set();
+  #postCompactLoaded = new Map();
   #postCompactRevisions = new Map();
 
   /** @type {string} */
@@ -2507,7 +2509,23 @@ export class Engine {
       parentVpId: parentVpIdForNotif,
       threadId: runtimeThreadId,
     };
-    const pendingSubAgentNotifs = isSubAgentTurn ? [] : peekPendingNotifications(notifScope);
+    let pendingSubAgentNotifs = isSubAgentTurn ? [] : peekPendingNotifications(notifScope);
+    if (pendingSubAgentNotifs.length && postCompactScope && postCompactState.deletionGeneration) {
+      const { operations } = readSessionTurnDeletions(postCompactScope.ownerRoot, runtimeSessionId);
+      const { references } = sessionDeletionProjection(operations);
+      const agents = getAgentRegistry();
+      const discarded = [];
+      pendingSubAgentNotifs = pendingSubAgentNotifs.filter(notification => {
+        const child = agents.get(notification.agentId);
+        if (child?.parentSessionId === runtimeSessionId && [child.parentCausalRootId, child.parentUserTurnId,
+          child.delegationIdentity?.queryTurnId].some(id => references.has(id))) {
+          discarded.push(notification.id);
+          return false;
+        }
+        return true;
+      });
+      acknowledgePendingNotifications(notifScope, discarded);
+    }
     const subAgentNotifBlock = formatNotificationsForPrompt(pendingSubAgentNotifs);
 
     let finalUserContent;
@@ -3527,6 +3545,7 @@ export class Engine {
         postCompactCandidate = {
           scope: postCompactScope,
           revision: postCompactState.revision,
+          deletionGeneration: postCompactState.deletionGeneration,
           sessionId: runtimeSessionId,
           turnId: queryTurnId,
           model: currentModel,
@@ -3744,12 +3763,11 @@ export class Engine {
             completeReadResultIds.clear();
             // Persist only a derived cache for future user turns. It is not a
             // transcript row and never creates a second human-authored prompt.
-            if (postCompactScope
-                && this.#postCompactRevisions.get(postCompactScope.key) === postCompactState.revision) {
+            if (postCompactScope) {
               const artifact = { summary, model: currentModel, sourceTurnId: queryTurnId,
                 sourceRevision: postCompactState.revision, contextWindow: currentContextWindow,
-                createdAt: new Date().toISOString() };
-              const current = () => this.#postCompactRevisions.get(postCompactScope.key) === postCompactState.revision;
+                deletionGeneration: postCompactState.deletionGeneration, createdAt: new Date().toISOString() };
+              const current = () => this.#isCurrentPostCompact(postCompactScope, postCompactState);
               try {
                 if (await savePostCompact(postCompactScope.path, artifact, current) && current()) {
                   this.#postCompactSummaries.set(postCompactScope.key, artifact);
@@ -5432,44 +5450,56 @@ export class Engine {
   #postCompactScope({ sessionId, vpId, threadId }) {
     if (!this.#yeaftDir || !sessionId) return null;
     const path = postCompactPath(this.#yeaftDir, { sessionId, vpId, threadId });
-    return { key: path, path };
+    const ownerRoot = findExistingSessionYeaftDir(this.#yeaftDir, sessionId);
+    return { key: path, path, ownerRoot, sessionId };
+  }
+
+  #isCurrentPostCompact(scope, { revision, deletionGeneration }) {
+    return this.#postCompactRevisions.get(scope.key) === revision
+      && sessionDeletionGeneration(scope.ownerRoot, scope.sessionId) === deletionGeneration;
   }
 
   async #beginPostCompactScope(scope) {
-    if (!scope) return { revision: 0, summary: '' };
+    if (!scope) return { revision: 0, summary: '', deletionGeneration: '' };
     const revision = (this.#postCompactRevisions.get(scope.key) || 0) + 1;
+    const deletionGeneration = sessionDeletionGeneration(scope.ownerRoot, scope.sessionId);
+    const state = { revision, deletionGeneration };
     this.#postCompactRevisions.set(scope.key, revision);
-    if (!this.#postCompactLoaded.has(scope.key)) {
-      this.#postCompactLoaded.add(scope.key);
+    if (this.#postCompactLoaded.get(scope.key) !== deletionGeneration) {
+      this.#postCompactSummaries.delete(scope.key);
       const artifact = await loadPostCompact(scope.path);
-      if (artifact) this.#postCompactSummaries.set(scope.key, artifact);
+      if (!this.#isCurrentPostCompact(scope, state)) return { ...state, summary: '' };
+      this.#postCompactLoaded.set(scope.key, deletionGeneration);
+      if (artifact && (artifact.deletionGeneration || '') === deletionGeneration) {
+        this.#postCompactSummaries.set(scope.key, artifact);
+      }
     }
-    return {
-      revision,
-      summary: this.#postCompactSummaries.get(scope.key)?.summary || '',
-    };
+    const artifact = this.#postCompactSummaries.get(scope.key);
+    return { ...state, summary: (artifact?.deletionGeneration || '') === deletionGeneration ? artifact?.summary || '' : '' };
   }
 
   #schedulePostCompact(candidate) {
-    const { scope, revision } = candidate;
+    const { scope, revision, deletionGeneration } = candidate;
     if (!scope || this.#postCompactRevisions.get(scope.key) !== revision) return;
     const compactMaxTokens = Math.max(512, Math.min(4096,
       resolveMaxOutputTokens(candidate.model, candidate.config)));
     const task = async () => {
       try {
+        const current = () => this.#isCurrentPostCompact(scope, candidate);
+        if (!current()) return;
         const summary = await generatePostCompact({
           adapter: candidate.adapter,
           model: candidate.model,
           messages: candidate.messages,
           maxTokens: compactMaxTokens,
         });
-        const current = () => this.#postCompactRevisions.get(scope.key) === revision;
         if (!current()) return;
         const artifact = {
           summary,
           model: candidate.model,
           sourceTurnId: candidate.turnId,
           sourceRevision: revision,
+          deletionGeneration,
           sourceContextTokens: candidate.contextTokens,
           contextWindow: candidate.contextWindow,
           createdAt: new Date().toISOString(),

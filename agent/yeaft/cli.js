@@ -36,9 +36,12 @@ import { listModels, resolveModel, parseModelRef, resolveContextWindow, resolveM
 import { buildSystemPrompt } from './prompts.js';
 import { searchMessages } from './conversation/search.js';
 import { ConversationStore } from './conversation/persist.js';
-import { sessionsRoot, snapshotSessions } from './sessions/session-crud.js';
+import { readSessionTurnDeletions } from './conversation/turn-deletion-journal.js';
+import { removeConversationIndexScope } from './conversation/history-index-state.js';
+import { tryAcquireSessionTurnDeletion } from './sessions/session-turn-fence.js';
+import { sessionsRoot, snapshotSessions, findExistingSessionYeaftDir } from './sessions/session-crud.js';
 import { loadSessionConfig, resolveSessionConfig } from './sessions/session-config.js';
-import { createSession } from './sessions/session-store.js';
+import { createSession, loadSessionMeta, pruneDeletedCoordinatorMessages } from './sessions/session-store.js';
 import { addOrUpdateManifestSession, withSessionManifestLock } from './sessions/session-manifest.js';
 import { validateSessionId } from './sessions/ids.js';
 import {
@@ -76,6 +79,7 @@ export function parseArgs(argv) {
     skipSkills: false,
     compactOrphans: false,
     compactOrphansDry: false,
+    pruneDeletedSessionTurnsOffline: null,
     deleteSession: null,
     sessionId: null,
     workDir: null,
@@ -153,6 +157,9 @@ export function parseArgs(argv) {
         break;
       case '--compact-orphans-dry':
         args.compactOrphansDry = true;
+        break;
+      case '--prune-deleted-session-turns-offline':
+        args.pruneDeletedSessionTurnsOffline = rest[++i] || '';
         break;
       case '--delete-group':
         args.deleteSession = rest[++i] || null;
@@ -942,6 +949,10 @@ async function runStreamJson(config, args) {
     const taskId = context?.task?.id;
     if (!taskId || !context?.content || rescuedTaskIds.has(taskId)) return false;
     if (sessionRunner && !context.vpId) return false;
+    const source = context.task?.source;
+    const lineage = [source?.causalRootId, source?.userTurnId, source?.turnId].filter(Boolean);
+    if (sessionRunner && lineage.length && readSessionTurnDeletions(loaded.yeaftDir, sessionId).operations
+      .some(op => lineage.some(id => op.referenceIds.includes(id)))) return false;
     rescuedTaskIds.add(taskId);
     try {
       const common = {
@@ -1355,8 +1366,38 @@ function installManagedCliSignalCleanup() {
   return dispose;
 }
 
+export async function pruneDeletedSessionTurnsOffline(yeaftDir, sessionId) {
+  if (!validateSessionId(sessionId).ok) throw new Error('An exact native Session ID is required.');
+  const ownerRoot = findExistingSessionYeaftDir(yeaftDir, sessionId);
+  const sessionDir = join(sessionsRoot(ownerRoot), sessionId);
+  if (loadSessionMeta(sessionDir)?.id !== sessionId) throw new Error('Session not found.');
+  const release = tryAcquireSessionTurnDeletion(sessionDir);
+  if (!release) throw new Error('Stop all writers before pruning deleted Session turns.');
+  try {
+    const { operations } = readSessionTurnDeletions(ownerRoot, sessionId);
+    if (operations.length === 0) return 0;
+    new ConversationStore(ownerRoot).pruneDeletedSessionTurnRows(sessionId);
+    for (const op of operations) pruneDeletedCoordinatorMessages(sessionDir, op);
+    // This is a regenerable index; invalidate it rather than editing the FTS tables.
+    removeConversationIndexScope(ownerRoot, sessionId);
+    for (const root of new Set([resolve(yeaftDir), resolve(ownerRoot)])) {
+      const trace = new DebugTrace(root);
+      try {
+        for (const op of operations) await trace.deleteSessionTurns({ sessionId, turnIds: op.executionIds,
+          messageIds: [...op.anchorMessageIds, ...op.clientMessageIds] });
+      } finally { await trace.close(); }
+    }
+    return operations.length;
+  } finally { release(); }
+}
+
 async function main() {
   const args = parseArgs(process.argv);
+  if (args.pruneDeletedSessionTurnsOffline !== null) {
+    const count = await pruneDeletedSessionTurnsOffline(loadConfig().dir, args.pruneDeletedSessionTurnsOffline);
+    console.log(`Pruned stored records for ${count} deleted Session turn(s).`);
+    return;
+  }
 
   // Prime the models.dev community catalog so resolveContextWindow /
   // resolveMaxOutputTokens — called synchronously from loadConfig and the
@@ -1465,6 +1506,7 @@ async function main() {
   console.log('  node cli.js --trace recent            — Recent turns');
   console.log('  node cli.js --trace search "keyword"  — Search traces');
   console.log('  node cli.js --compact-orphans         — Delete orphan messages (no live group)');
+  console.log('  node cli.js --prune-deleted-session-turns-offline <sessionId> — Remove already-deleted records after stopping ALL writers');
   console.log('  node cli.js --compact-orphans-dry     — Preview orphan sweep, no delete');
   console.log('  node cli.js --delete-group <id>       — Hard delete group + cascade messages');
   console.log();
